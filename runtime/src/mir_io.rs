@@ -18,7 +18,7 @@ extern "C" {
 ///
 /// # Safety
 /// `out` is writable for a `String`.
-unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
+pub(crate) unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
     let ptr = if b.is_empty() {
         std::ptr::null_mut()
     } else {
@@ -227,7 +227,7 @@ pub enum KaracBuf {
 ///
 /// # Safety
 /// `s` is a live `String`.
-unsafe fn push_bytes(s: *mut RawVec, b: &[u8]) {
+pub(crate) unsafe fn push_bytes(s: *mut RawVec, b: &[u8]) {
     if b.is_empty() {
         return;
     }
@@ -259,7 +259,7 @@ unsafe fn push_bytes(s: *mut RawVec, b: &[u8]) {
 ///
 /// # Safety
 /// `msg` is writable for a `String`.
-unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 {
+pub(crate) unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 {
     use std::io::ErrorKind as K;
     match e.kind() {
         K::NotFound => 0,
@@ -412,81 +412,6 @@ unsafe fn buf_bytes<'a>(p: *const u8, len: usize) -> &'a [u8] {
     } else {
         // SAFETY: the caller's contract.
         unsafe { std::slice::from_raw_parts(p, len) }
-    }
-}
-
-/// `Command.spawn`: the program, its arguments (`args_len` `String`s at
-/// `args`), its environment (`env_len` `EnvVar`s, a key and a value
-/// `String` each, at `env`) and the `Stdio` of each stream (0 inherit, 1
-/// null, 2 piped). The child's pid lands in `*value`.
-///
-/// # Safety
-/// Each pointer is valid for what it holds; `value` and `msg` as
-/// [`io_code`] has them.
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_process_spawn(
-    prog: *const RawVec,
-    args: *const RawVec,
-    args_len: i64,
-    env: *const u8,
-    env_len: i64,
-    stdin: i64,
-    stdout: i64,
-    stderr: i64,
-    value: *mut i64,
-    msg: *mut RawVec,
-) -> i32 {
-    let mut r = blank();
-    // SAFETY: a MIR `String` is the runtime's `{ptr, len, cap}` descriptor,
-    // and an `EnvVar` two of them; the rest is the caller's contract.
-    unsafe {
-        crate::process::karac_runtime_process_spawn(
-            &mut r,
-            prog.cast(),
-            args.cast(),
-            args_len,
-            env.cast(),
-            env_len,
-            stdin,
-            stdout,
-            stderr,
-        );
-        io_code(&r, value, msg)
-    }
-}
-
-/// A `Child`'s `wait` (op 0) and `try_wait` (1), their status packed into
-/// `*value` as `process.rs` packs it, and `kill` (2); a `ChildStdout` or
-/// `ChildStderr`'s `read_to_string` (3, 4), the text a `String` at `msg`;
-/// a `ChildStdin`'s `write` of the `String` at `data` (5) and `close` (6).
-///
-/// # Safety
-/// `data` is a `String` for op 5; `value` and `msg` as [`io_code`] has them.
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_process(
-    op: i32,
-    pid: i64,
-    data: *const RawVec,
-    value: *mut i64,
-    msg: *mut RawVec,
-) -> i32 {
-    use crate::process as p;
-    let mut r = blank();
-    // SAFETY: the caller's contract, which is each callee's.
-    unsafe {
-        if op == 3 || op == 4 {
-            // An empty read comes back without a buffer.
-            string_of(msg, b"");
-        }
-        match op {
-            0 => p::karac_runtime_process_wait(&mut r, pid),
-            1 => p::karac_runtime_process_try_wait(&mut r, pid),
-            2 => p::karac_runtime_process_kill(&mut r, pid),
-            3 | 4 => p::karac_runtime_process_read_to_string(&mut r, pid, i64::from(op - 3)),
-            5 => p::karac_runtime_process_stdin_write(&mut r, pid, data.cast()),
-            _ => p::karac_runtime_process_stdin_close(pid),
-        }
-        io_code(&r, value, msg)
     }
 }
 

@@ -1,0 +1,339 @@
+// runtime/stdlib/source/process.kara
+//
+// `std.process` on the v2 pipeline (B-2026-10-15-6): the `Command` builder,
+// `Stdio`, the `Child` handle and its pipes, `ExitStatus` and `Output`, as
+// docs/library/io.md § Processes describes them. The MIR pipeline appends
+// this file to a program that names `Command`, `Child`, `Stdio` or
+// `ExitStatus` (`BAKED_SOURCES` in src/mir/lower.rs), and `karac check`
+// reads it for such a program. The legacy pipeline keeps
+// runtime/stdlib/process.kara.
+//
+// `Stdio`, a child and each pipe are handles to state the backend holds:
+// the interpreter's `process_method` tables, or the runtime's
+// `mir_process.rs` boxes. Building and running a command is native; the
+// builder, `status` and `ExitStatus`'s methods are Kāra.
+
+effect resource ProcessTable;
+
+// One change to the child's environment, applied in order at spawn: `op` 0
+// sets `key` to `value`, 1 removes `key`, 2 clears the environment.
+struct EnvVar {
+    key: String,
+    value: String,
+    op: i64,
+}
+
+// How one of a child's standard streams is connected. Build one with a
+// constructor; it is a handle, so it can grow kinds without breaking a
+// program. A stream left unset is inherited, except that `output` pipes
+// stdout and stderr and gives stdin the null device.
+struct Stdio { }
+
+impl Stdio {
+    // The parent's own stream.
+    #[compiler_builtin]
+    fn inherit() -> Stdio { Stdio { } }
+
+    // The null device: reads see end of file, writes are discarded.
+    #[compiler_builtin]
+    fn null() -> Stdio { Stdio { } }
+
+    // A new pipe, which the parent takes with `Child.stdin()`,
+    // `stdout()` or `stderr()` after `spawn`.
+    #[compiler_builtin]
+    fn piped() -> Stdio { Stdio { } }
+
+    // An open file (`<`, `>`, `>>` and `2>` in a shell). Each spawn gets
+    // its own copy of the descriptor.
+    #[compiler_builtin]
+    fn from_file(f: own File) -> Stdio { Stdio { } }
+
+    // Another child's stdout (`a | b`). A pipe goes to one child: spawning
+    // the command a second time fails with `InvalidInput`.
+    #[compiler_builtin]
+    fn from_stdout(o: own ChildStdout) -> Stdio { Stdio { } }
+
+    // Another child's stderr, as `from_stdout`.
+    #[compiler_builtin]
+    fn from_stderr(e: own ChildStderr) -> Stdio { Stdio { } }
+}
+
+// A program to run, its arguments, environment, working directory and
+// streams. Building one touches nothing; `spawn`, `status` and `output` run
+// it. Arguments reach the program verbatim (there is no shell), and a
+// program name without a `/` is looked up on the parent's `PATH`.
+struct Command {
+    program: String,
+    cmd_args: Vec[String],
+    cmd_env: Vec[EnvVar],
+    cmd_dir: Option[String],
+    cmd_stdin: Option[Stdio],
+    cmd_stdout: Option[Stdio],
+    cmd_stderr: Option[Stdio],
+}
+
+// A process `spawn` started. Dropping it neither kills nor waits for the
+// process, which keeps running.
+struct Child {
+    process: ChildProcess,
+}
+
+// The handle inside a `Child`.
+struct ChildProcess { }
+
+// The read end of a child's stdout. Dropping it closes the pipe.
+struct ChildStdout { }
+
+// The read end of a child's stderr. Dropping it closes the pipe.
+struct ChildStderr { }
+
+// The write end of a child's stdin. Dropping it closes the pipe, which the
+// child reads as end of file.
+struct ChildStdin { }
+
+// How a child ended: it exited with a code, or (on Unix) a signal killed
+// it.
+#[derive(Copy, Clone)]
+struct ExitStatus {
+    exited: bool,
+    exit_code: i64,
+    exit_signal: i64,
+}
+
+// What `output` and `wait_with_output` collect: the status and every byte
+// the child wrote to its stdout and stderr.
+struct Output {
+    status: ExitStatus,
+    stdout: Vec[u8],
+    stderr: Vec[u8],
+}
+
+impl Command {
+    fn new(program: Str) -> Command {
+        Command {
+            program: program.to_string(),
+            cmd_args: Vec.new(),
+            cmd_env: Vec.new(),
+            cmd_dir: None,
+            cmd_stdin: None,
+            cmd_stdout: None,
+            cmd_stderr: None,
+        }
+    }
+
+    fn arg(own self, a: Str) -> Command {
+        let mut c = self;
+        c.cmd_args.push(a.to_string());
+        c
+    }
+
+    fn args(own self, a: Slice[Str]) -> Command {
+        let mut c = self;
+        for x in a.iter() {
+            c.cmd_args.push(x.to_string());
+        }
+        c
+    }
+
+    fn env(own self, key: Str, value: Str) -> Command {
+        let mut c = self;
+        c.cmd_env.push(EnvVar { key: key.to_string(), value: value.to_string(), op: 0 });
+        c
+    }
+
+    fn env_remove(own self, key: Str) -> Command {
+        let mut c = self;
+        c.cmd_env.push(EnvVar { key: key.to_string(), value: String.new(), op: 1 });
+        c
+    }
+
+    fn env_clear(own self) -> Command {
+        let mut c = self;
+        c.cmd_env.push(EnvVar { key: String.new(), value: String.new(), op: 2 });
+        c
+    }
+
+    // The child's working directory. A relative program name is still
+    // looked up on `PATH`, not in this directory.
+    fn current_dir(own self, path: Str) -> Command {
+        let mut c = self;
+        c.cmd_dir = Some(path.to_string());
+        c
+    }
+
+    fn stdin(own self, cfg: own Stdio) -> Command {
+        let mut c = self;
+        c.cmd_stdin = Some(cfg);
+        c
+    }
+
+    fn stdout(own self, cfg: own Stdio) -> Command {
+        let mut c = self;
+        c.cmd_stdout = Some(cfg);
+        c
+    }
+
+    fn stderr(own self, cfg: own Stdio) -> Command {
+        let mut c = self;
+        c.cmd_stderr = Some(cfg);
+        c
+    }
+
+    // Starts the program. Fails with `NotFound` when there is no such
+    // program (or working directory), `PermissionDenied` when it cannot be
+    // run, and `Unsupported` where processes cannot be started (wasm).
+    #[compiler_builtin]
+    fn spawn(ref self) -> Result[Child, IoError] with sends(ProcessTable) {
+        Err(IoError.Unsupported)
+    }
+
+    // Runs the program to the end, its streams inherited unless set.
+    fn status(ref self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks {
+        let child = self.spawn()?;
+        child.wait()
+    }
+
+    // Runs the program to the end and collects what it wrote. Unless set,
+    // stdout and stderr are piped and stdin is the null device. Both pipes
+    // are read together, so a child filling one cannot deadlock.
+    #[compiler_builtin]
+    fn output(ref self) -> Result[Output, IoError] with sends(ProcessTable) blocks {
+        Err(IoError.Unsupported)
+    }
+}
+
+impl Child {
+    // The operating system's id for the process.
+    #[compiler_builtin]
+    fn id(ref self) -> i64 { 0 }
+
+    // Waits for the process to end. A piped stdin the parent has not taken
+    // is closed first, so a child reading to end of file can finish. Once
+    // the process has ended, waiting again returns the same status.
+    #[compiler_builtin]
+    fn wait(ref self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks {
+        Err(IoError.Unsupported)
+    }
+
+    // The status if the process has ended, `None` while it runs.
+    #[compiler_builtin]
+    fn try_wait(ref self) -> Result[Option[ExitStatus], IoError] with sends(ProcessTable) {
+        Err(IoError.Unsupported)
+    }
+
+    // Kills the process (`SIGKILL` on Unix). It still has to be waited for.
+    #[compiler_builtin]
+    fn kill(ref self) -> Result[(), IoError] with sends(ProcessTable) {
+        Err(IoError.Unsupported)
+    }
+
+    // Waits for the process and collects the stdout and stderr pipes the
+    // parent has not taken, reading both together.
+    #[compiler_builtin]
+    fn wait_with_output(own self) -> Result[Output, IoError] with sends(ProcessTable) blocks {
+        Err(IoError.Unsupported)
+    }
+
+    // The pipe to the child's stdin, the first time it is asked for; `None`
+    // afterwards, and when stdin was not `Stdio.piped()`.
+    #[compiler_builtin]
+    fn stdin(ref self) -> Option[ChildStdin] { None }
+
+    // The pipe from the child's stdout, taken once as `stdin` is.
+    #[compiler_builtin]
+    fn stdout(ref self) -> Option[ChildStdout] { None }
+
+    // The pipe from the child's stderr, taken once as `stdin` is.
+    #[compiler_builtin]
+    fn stderr(ref self) -> Option[ChildStderr] { None }
+}
+
+impl ChildStdout {
+    // Reads what is available into `buf`, waiting for at least one byte;
+    // 0 means the child closed its end.
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+
+    // Appends everything up to end of file to `buf`; the count read.
+    #[compiler_builtin]
+    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+
+    // Appends everything up to end of file to `buf`, which is left as it
+    // was, with `InvalidUtf8`, when the bytes are not UTF-8.
+    #[compiler_builtin]
+    fn read_to_string(ref self, buf: mut ref String) -> Result[i64, IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+}
+
+impl ChildStderr {
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+
+    #[compiler_builtin]
+    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+
+    #[compiler_builtin]
+    fn read_to_string(ref self, buf: mut ref String) -> Result[i64, IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+}
+
+impl ChildStdin {
+    // Writes some of `buf`, waiting while the pipe is full; the count
+    // written.
+    #[compiler_builtin]
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+
+    #[compiler_builtin]
+    fn write_all(ref self, buf: Slice[u8]) -> Result[(), IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+
+    #[compiler_builtin]
+    fn flush(ref self) -> Result[(), IoError] blocks {
+        Err(IoError.Unsupported)
+    }
+
+    // Closes the pipe now, as dropping it would. Closing twice is `Ok`; a
+    // write after closing fails with `InvalidInput`.
+    #[compiler_builtin]
+    fn close(ref self) -> Result[(), IoError] {
+        Err(IoError.Unsupported)
+    }
+}
+
+impl ExitStatus {
+    // Exited with code 0.
+    fn success(ref self) -> bool {
+        self.exited and self.exit_code == 0
+    }
+
+    // The exit code, or `None` when a signal ended the process.
+    fn code(ref self) -> Option[i32] {
+        if self.exited {
+            Some(self.exit_code as i32)
+        } else {
+            None
+        }
+    }
+
+    // The signal that ended the process (Unix); `None` when it exited.
+    fn signal(ref self) -> Option[i32] {
+        if self.exited {
+            None
+        } else {
+            Some(self.exit_signal as i32)
+        }
+    }
+}

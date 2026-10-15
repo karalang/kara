@@ -1670,6 +1670,7 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "ChildStderr",
             "ChildStdin",
             "ExitStatus",
+            "Output",
         ],
         &["exit"],
     ),

@@ -1,11 +1,12 @@
 fn main() {
-         let cmd = Command.new("/bin/echo").arg("hello-pipe").stdout(Stdio.Piped);
+         let cmd = Command.new("/bin/echo").arg("hello-pipe").stdout(Stdio.piped());
          match cmd.spawn() {
              Ok(child) => {
                  match child.stdout() {
                      Some(out) => {
-                         match out.read_to_string() {
-                             Ok(s) => print(s),
+                         let mut s = String.new();
+                         match out.read_to_string(s) {
+                             Ok(_) => print(s),
                              Err(_) => println("read_err"),
                          }
                      }

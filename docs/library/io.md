@@ -101,7 +101,7 @@ enum SeekFrom { Start, Current, End }
 
 `Start` counts from byte 0 and rejects a negative offset with `InvalidInput`; `Current` and `End` accept negative offsets, so `f.seek(SeekFrom.End, -4)` addresses the last four bytes. `flush` does not make data durable: it pushes userspace buffers to the OS, and only `sync_all` or `sync_data` survive a power failure.
 
-`set_len` with a negative `len` is `InvalidInput`. A write past the end after `set_len` cuts the file fills the gap with zero bytes, as any write past the end does.
+`set_len` with a negative `len` is `InvalidInput`. If `set_len` cuts the file below the cursor, the next write fills the gap between the new end and the cursor with zero bytes, as any write past the end does.
 
 **`OpenOptions`** (in `std.io`) is the general way to open a file. `File.options()` starts with nothing set; each method sets or clears one option and returns the options; `open` opens the file. Building the options touches no file, so only `open` has effects.
 
@@ -122,6 +122,8 @@ The constructors above are shorthands:
 - `File.open(p)` is `File.options().read(true).open(p)`.
 - `File.create(p)` is `File.options().write(true).create(true).truncate(true).open(p)`.
 - `File.append(p)` is `File.options().append(true).create(true).open(p)`.
+
+The equivalence is in behaviour, not effects: `File.open` has `reads(FileSystem)` only, and `File.create` and `File.append` have `writes(FileSystem)` only, where `OpenOptions.open` has both because its options are run-time values.
 
 A file updated in place opens with `File.options().read(true).write(true).open(p)`, so a mistyped path is `NotFound` rather than a new empty file; add `.create(true)` to create it when it is absent. A lock file is `File.options().write(true).create_new(true).open(p)`: only one opener can create it. Reads and writes at an offset that leave the cursor alone (`pread` / `pwrite`) and advisory locks are deferred ([deferred.md](../deferred.md#positional-file-io-and-advisory-locking)).
 
@@ -210,7 +212,121 @@ fn exit(code: i32) -> Never
 
 `std.process.exit` flushes standard output and standard error, then ends the process with `code`. No `Drop` body, `defer` or `errdefer` runs, in any frame. It declares no effects, since ending the process is not a resource access, and it exists on every target. It may be called anywhere, a `Drop` body and the panic handler included.
 
-Exit codes and `main`'s return value are in [design.md §10](../design.md#the-main-function-and-exit-codes). Starting child processes is not yet specified.
+Exit codes and `main`'s return value are in [design.md §10](../design.md#the-main-function-and-exit-codes).
+
+### Running programs
+
+```kara
+impl Command {
+    fn new(program: Str) -> Command
+    fn arg(own self, a: Str) -> Command
+    fn args(own self, a: Slice[Str]) -> Command
+    fn env(own self, key: Str, value: Str) -> Command
+    fn env_remove(own self, key: Str) -> Command
+    fn env_clear(own self) -> Command
+    fn current_dir(own self, path: Str) -> Command
+    fn stdin(own self, s: own Stdio) -> Command
+    fn stdout(own self, s: own Stdio) -> Command
+    fn stderr(own self, s: own Stdio) -> Command
+
+    fn spawn(self) -> Result[Child, IoError] with sends(ProcessTable)
+    fn status(self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks
+    fn output(self) -> Result[Output, IoError] with sends(ProcessTable) blocks
+}
+
+struct Output { status: ExitStatus, stdout: Vec[u8], stderr: Vec[u8] }
+```
+
+A `Command` describes a program to run. Building one touches nothing; `spawn` starts the program and returns a `Child`, `status` runs it to the end, and `output` runs it to the end and collects everything it wrote. There is no shell: each argument reaches the program as it was given, with no splitting, quoting or globbing. A program name without a `/` is looked up on the parent's `PATH` when the command starts, and `current_dir` does not change that lookup. The environment is inherited, changed by `env`, `env_remove` and `env_clear` in the order they were called. On Windows, arguments are quoted by the MSVC C runtime's convention, so a program that parses its command line differently may see different arguments.
+
+`args` takes a `Slice[Str]`, such as `["-l", "-a"]`. To pass a `Vec[String]`, call `arg` for each element:
+
+```kara
+let mut cmd = Command.new("echo");
+for w in words {
+    cmd = cmd.arg(w);
+}
+```
+
+`spawn` fails with `NotFound` when there is no such program or working directory, `PermissionDenied` when the program cannot be run, and `Unsupported` on targets that cannot start processes (wasm). `status` and `output` fail the same ways. They never fail because the program did: a non-zero exit is an `Ok` status.
+
+```kara
+impl Stdio {
+    fn inherit() -> Stdio
+    fn null() -> Stdio
+    fn piped() -> Stdio
+    fn from_file(f: own File) -> Stdio
+    fn from_stdout(o: own ChildStdout) -> Stdio
+    fn from_stderr(e: own ChildStderr) -> Stdio
+}
+```
+
+`Stdio` says where one of a child's standard streams goes. `inherit` shares the parent's stream, `null` is the null device (reads see end of file, writes are discarded), and `piped` makes a pipe that the parent takes from the `Child`. `from_file` connects the stream to an open file, which is a shell's `<`, `>`, `>>` and `2>`: open the file the way the redirection needs (`File.create`, or `OpenOptions` with `append` for `>>`). `from_stdout` and `from_stderr` connect it to another child's pipe, which is a shell's `|`. A stream that is not set is inherited, except that `output` pipes stdout and stderr and gives stdin the null device. A command can be run more than once, and each run gets its own copy of a file. A pipe can go to only one child, so running a command a second time with a `from_stdout` stream fails with `InvalidInput`.
+
+`Stdio` is a type with constructors rather than an enum, so it can gain kinds later without breaking a `match`. Before, it was an enum: `karac fix` rewrites `Stdio.Inherit`, `Stdio.Null` and `Stdio.Piped` to the constructors.
+
+```kara
+impl Child {
+    fn id(self) -> i64
+    fn wait(self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks
+    fn try_wait(self) -> Result[Option[ExitStatus], IoError] with sends(ProcessTable)
+    fn kill(self) -> Result[(), IoError] with sends(ProcessTable)
+    fn wait_with_output(own self) -> Result[Output, IoError] with sends(ProcessTable) blocks
+    fn stdin(self) -> Option[ChildStdin]
+    fn stdout(self) -> Option[ChildStdout]
+    fn stderr(self) -> Option[ChildStderr]
+}
+```
+
+`wait` blocks until the child ends. If the parent has not taken a piped stdin, `wait` closes it first, so a child that reads until end of file can finish. Once the child has ended, waiting again returns the same status. `try_wait` returns `None` while the child runs. `kill` ends the child (`SIGKILL` on Unix, `TerminateProcess` on Windows), and the child must still be waited for. `wait_with_output` waits and collects the stdout and stderr pipes the parent has not taken. It reads both at once, so a child that fills one pipe while the parent reads the other cannot deadlock. `stdin`, `stdout` and `stderr` hand over a piped stream's handle the first time they are called, and return `None` after that or when the stream was not piped.
+
+Dropping a `Child` neither kills nor waits for it: the process keeps running, and on Unix it stays in the process table until the parent exits. Wait for every child you start. The pipes that were not taken close when the `Child` is dropped.
+
+```kara
+impl ChildStdout {        // ChildStderr has the same methods
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, IoError] with receives(self) blocks
+    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, IoError] with receives(self) blocks
+    fn read_to_string(self, buf: mut ref String) -> Result[i64, IoError] with receives(self) blocks
+}
+
+impl ChildStdin {
+    fn write(self, buf: Slice[u8]) -> Result[i64, IoError] with sends(self) blocks
+    fn write_all(self, buf: Slice[u8]) -> Result[(), IoError] with sends(self) blocks
+    fn flush(self) -> Result[(), IoError] with sends(self) blocks
+    fn close(self) -> Result[(), IoError]
+}
+```
+
+The pipe handles read and write bytes as `File` does. `read` waits for at least one byte and returns 0 when the child has closed its end. `read_to_end` and `read_to_string` append everything up to end of file and return the count. `read_to_string` fails with `InvalidUtf8` when the bytes are not UTF-8, and leaves `buf` unchanged when it does. Each pipe is its own resource, so reading one child's stdout does not conflict with writing another child's stdin. Dropping a `ChildStdin` closes the pipe, which the child reads as end of file. `close` does the same thing explicitly. Closing twice is `Ok`, and a write after closing fails with `InvalidInput`.
+
+A child that writes more than a pipe holds (64 KiB on Linux) blocks until the parent reads. A parent that writes to a child's stdin and only then reads its stdout can deadlock with it. Use `output` or `wait_with_output` to read both streams of a child together, or write and read from separate tasks.
+
+```kara
+impl ExitStatus {
+    fn success(self) -> bool
+    fn code(self) -> Option[i32]
+    fn signal(self) -> Option[i32]
+}
+```
+
+`success` is true when the child exited with code 0. `code` is the exit code, or `None` when a signal ended the child. `signal` is that signal on Unix, and is always `None` on Windows. A shell's `$?` is `code`, or 128 plus `signal`. `ExitStatus` is `Copy`. Its fields are not part of the API: the earlier `code` and `success` fields are now methods, and `karac check` says so where one is read.
+
+The shell pipeline `ls | wc -l`:
+
+```kara
+fn count_entries() -> Result[String, IoError] {
+    let mut ls = Command.new("ls").stdout(Stdio.piped()).spawn()?;
+    let wc = Command.new("wc").arg("-l")
+        .stdin(Stdio.from_stdout(ls.stdout().unwrap()))
+        .stdout(Stdio.piped())
+        .spawn()?;
+    let out = wc.wait_with_output()?;
+    ls.wait()?;
+    Ok(String.from_utf8(out.stdout).unwrap_or(String.new()))
+}
+```
+
+Signals other than `kill`, process groups, pseudo-terminals, detached daemons, a free-standing pipe pair, non-UTF-8 arguments and environment, and a `wait` that suspends a task instead of blocking a thread are not in v1; see [deferred.md](../deferred.md#processes-beyond-v1).
 
 ## Examples
 

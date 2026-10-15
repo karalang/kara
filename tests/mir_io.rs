@@ -163,51 +163,57 @@ fn show(e: IoError) -> String {
 }
 
 fn main() {
-    let echo = Command.new("sh".to_string())
-        .arg("-c".to_string())
-        .arg("printf \"$GREETING\" ; exit 3".to_string())
-        .env("GREETING".to_string(), "hi there".to_string())
-        .stdout(Stdio.Piped);
+    let echo = Command.new("sh")
+        .arg("-c")
+        .arg("printf \"$GREETING\" ; exit 3")
+        .env("GREETING", "hi there")
+        .stdout(Stdio.piped());
     match echo.spawn() {
         Ok(child) => {
             match child.stdout() {
-                Some(out) => match out.read_to_string() {
-                    Ok(s) => println(f"read [{s}]"),
-                    Err(e) => println(show(e)),
-                },
+                Some(out) => {
+                    let mut s = String.new();
+                    match out.read_to_string(s) {
+                        Ok(n) => println(f"read [{s}] {n}"),
+                        Err(e) => println(show(e)),
+                    }
+                }
                 None => println("no stdout"),
             }
             match child.stdout() { Some(_) => println("taken twice"), None => println("taken once") }
             match child.wait() {
-                Ok(st) => println(f"exit {st.code} {st.success}"),
+                Ok(st) => println(f"exit {st.code().unwrap()} {st.success()}"),
                 Err(e) => println(show(e)),
             }
-            match child.wait() { Ok(_) => println("waited twice"), Err(e) => println(show(e)) }
+            match child.wait() { Ok(st) => println(f"waited twice {st.code().unwrap()}"), Err(e) => println(show(e)) }
         }
         Err(e) => println(show(e)),
     }
-    let cat = Command.new("cat".to_string()).stdin(Stdio.Piped).stdout(Stdio.Piped);
+    let cat = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped());
     match cat.spawn() {
         Ok(child) => {
             match child.stdin() {
                 Some(w) => {
-                    match w.write("piped through".to_string()) { Ok(_) => println("wrote"), Err(e) => println(show(e)) }
+                    match w.write_all("piped through".bytes()) { Ok(_) => println("wrote"), Err(e) => println(show(e)) }
                     match w.close() { Ok(_) => println("closed"), Err(e) => println(show(e)) }
                 }
                 None => println("no stdin"),
             }
             match child.stdout() {
-                Some(out) => match out.read_to_string() {
-                    Ok(s) => println(f"cat [{s}]"),
-                    Err(e) => println(show(e)),
-                },
+                Some(out) => {
+                    let mut s = String.new();
+                    match out.read_to_string(s) {
+                        Ok(_) => println(f"cat [{s}]"),
+                        Err(e) => println(show(e)),
+                    }
+                }
                 None => println("no stdout"),
             }
-            match child.wait() { Ok(st) => println(f"cat exit {st.code}"), Err(e) => println(show(e)) }
+            match child.wait() { Ok(st) => println(f"cat exit {st.code().unwrap()}"), Err(e) => println(show(e)) }
         }
         Err(e) => println(show(e)),
     }
-    let sleeper = Command.new("sleep".to_string()).arg("5".to_string());
+    let sleeper = Command.new("sleep").arg("5");
     match sleeper.spawn() {
         Ok(child) => {
             match child.try_wait() {
@@ -216,27 +222,132 @@ fn main() {
                 Err(e) => println(show(e)),
             }
             match child.kill() { Ok(_) => println("killed"), Err(e) => println(show(e)) }
-            match child.wait() { Ok(st) => println(f"killed exit {st.code} {st.success}"), Err(e) => println(show(e)) }
+            match child.wait() {
+                Ok(st) => println(f"killed by {st.signal().unwrap()}, code none {st.code().is_none()}, {st.success()}"),
+                Err(e) => println(show(e)),
+            }
         }
         Err(e) => println(show(e)),
     }
-    match Command.new("/nonexistent/program".to_string()).spawn() {
+    match Command.new("/nonexistent/program").spawn() {
         Ok(_) => println("unexpected"),
         Err(e) => println(show(e)),
     }
+    match Command.new("sh").arg("-c").arg("printf out; printf err >&2; exit 4").output() {
+        Ok(o) => println(f"output [{String.from_utf8(o.stdout).unwrap()}] [{String.from_utf8(o.stderr).unwrap()}] {o.status.code().unwrap()}"),
+        Err(e) => println(show(e)),
+    }
+    let mut a = Command.new("printf").arg("a\nb\nc\n").stdout(Stdio.piped()).spawn().unwrap();
+    let b = Command.new("wc").arg("-l")
+        .stdin(Stdio.from_stdout(a.stdout().unwrap()))
+        .stdout(Stdio.piped())
+        .spawn()
+        .unwrap();
+    let out = b.wait_with_output().unwrap();
+    a.wait().unwrap();
+    println(f"a | b [{String.from_utf8(out.stdout).unwrap().trim()}]");
 }
 "#;
 
 /// Spawn with an environment and piped streams, read and write the pipes,
-/// wait, poll, kill, and spawn a missing program, on both backends.
+/// wait, poll, kill, spawn a missing program, collect `output`, and pipe one
+/// child into another, on both backends.
 #[test]
 fn process_natives_match_the_interpreter() {
     let dir = Scratch::new("procs");
     let (interp, built) = interp_and_build(dir.path(), PROCESSES);
     assert_eq!(
         interp,
-        "read [hi there]\ntaken once\nexit 3 false\nnot found\nwrote\nclosed\n\
-         cat [piped through]\ncat exit 0\nstill running\nkilled\nkilled exit -1 false\n\
+        "read [hi there] 8\ntaken once\nexit 3 false\nwaited twice 3\nwrote\nclosed\n\
+         cat [piped through]\ncat exit 0\nstill running\nkilled\n\
+         killed by 9, code none true, false\nnot found\noutput [out] [err] 4\na | b [3]\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
+/// `std.process` beyond the basics (B-2026-10-15-6): a file as a stream
+/// (`>` and `<`), a pipe given to one child only, waiting twice, a read
+/// loop, `read_to_end`, text that is not UTF-8, a dropped or untaken stdin
+/// ending its child, `env_remove`, a dropped child and `Stdio`, and a
+/// missing working directory.
+const PROCESS_SURFACE: &str = r#"
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.InvalidInput => "invalid input".to_string(),
+        IoError.InvalidUtf8 => "invalid utf8".to_string(),
+        IoError.Other(m) => f"other {m}",
+        _ => "some other error".to_string(),
+    }
+}
+
+fn main() {
+    let _ = FileSystem.remove_file("DIR/out.txt");
+    let f = File.create("DIR/out.txt").unwrap();
+    let st = Command.new("printf").args(["%s-%s", "x", "y"]).stdout(Stdio.from_file(f)).status().unwrap();
+    println(f"redirect {st.success()} {FileSystem.read_to_string("DIR/out.txt").unwrap()}");
+    let g = File.open("DIR/out.txt").unwrap();
+    let o = Command.new("cat").stdin(Stdio.from_file(g)).output().unwrap();
+    println(f"from file [{String.from_utf8(o.stdout).unwrap()}]");
+    let mut a = Command.new("printf").arg("abc").stdout(Stdio.piped()).spawn().unwrap();
+    let b = Command.new("cat").stdin(Stdio.from_stdout(a.stdout().unwrap())).stdout(Stdio.piped());
+    let first = b.output().unwrap();
+    println(f"first [{String.from_utf8(first.stdout).unwrap()}]");
+    match b.output() { Ok(_) => println("reused"), Err(e) => println(show(e)) }
+    let st = a.wait().unwrap();
+    let again = a.wait().unwrap();
+    println(f"wait twice {st.code().unwrap()} {again.code().unwrap()}");
+    match a.try_wait() { Ok(Some(s)) => println(f"try after {s.success()}"), Ok(None) => println("none"), Err(e) => println(show(e)) }
+    let c = Command.new("printf").arg("0123456789").stdout(Stdio.piped()).spawn().unwrap();
+    let r = c.stdout().unwrap();
+    let mut buf: Vec[u8] = vec![0, 0, 0, 0];
+    let mut total = 0;
+    loop {
+        let n = r.read(mut buf).unwrap();
+        if n == 0 { break; }
+        total = total + n;
+    }
+    println(f"read loop {total}");
+    c.wait().unwrap();
+    let d = Command.new("printf").arg("\\377\\376").stdout(Stdio.piped()).stderr(Stdio.piped()).spawn().unwrap();
+    let mut s = String.from("keep");
+    match d.stdout().unwrap().read_to_string(s) { Ok(_) => println("utf8?"), Err(e) => println(f"{show(e)} [{s}]") }
+    let mut bytes: Vec[u8] = Vec.new();
+    let n = d.stderr().unwrap().read_to_end(bytes).unwrap();
+    println(f"stderr bytes {n} {bytes.len()}");
+    d.wait().unwrap();
+    let e = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
+    {
+        let w = e.stdin().unwrap();
+        let n = w.write("hello".bytes()).unwrap();
+        w.flush().unwrap();
+        println(f"wrote {n}");
+    }
+    let out = e.wait_with_output().unwrap();
+    println(f"dropped stdin [{String.from_utf8(out.stdout).unwrap()}] {out.status.success()}");
+    let h = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.null()).spawn().unwrap();
+    println(f"wait closes stdin {h.wait().unwrap().success()}");
+    let o = Command.new("sh").arg("-c").arg("echo \"[$KEEP][$GONE]\"").env("KEEP", "k").env("GONE", "g").env_remove("GONE").stdin(Stdio.null()).output().unwrap();
+    println(f"env {String.from_utf8(o.stdout).unwrap().trim()}");
+    let k = Command.new("true").spawn().unwrap();
+    println(f"id positive {k.id() > 0}");
+    let unused = Stdio.piped();
+    match Command.new("true").current_dir("/nonexistent/dir").spawn() { Ok(_) => println("?"), Err(e) => println(show(e)) }
+}
+"#;
+
+#[test]
+fn process_surface_matches_the_interpreter() {
+    let dir = Scratch::new("procsurf");
+    let src = PROCESS_SURFACE.replace("DIR", &dir.path().to_string_lossy());
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(
+        interp,
+        "redirect true x-y\nfrom file [x-y]\nfirst [abc]\ninvalid input\nwait twice 0 0\n\
+         try after true\nread loop 10\ninvalid utf8 [keep]\nstderr bytes 0 0\nwrote 5\n\
+         dropped stdin [hello] true\nwait closes stdin true\nenv [k][]\nid positive true\n\
          not found\n"
     );
     if let Some(built) = built {

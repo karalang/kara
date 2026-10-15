@@ -1,12 +1,13 @@
 
 fn main() {
-    let cmd = Command.new("echo").arg("kara-spawn").stdout(Stdio.Piped);
+    let cmd = Command.new("echo").arg("kara-spawn").stdout(Stdio.piped());
     match cmd.spawn() {
         Ok(child) => {
             match child.stdout() {
                 Some(o) => {
-                    match o.read_to_string() {
-                        Ok(text) => println(f"out={text}"),
+                    let mut text = String.new();
+                    match o.read_to_string(text) {
+                        Ok(_) => println(f"out={text}"),
                         Err(e) => println("read failed"),
                     }
                 }
@@ -18,7 +19,7 @@ fn main() {
                 None => println("taken once"),
             }
             match child.wait() {
-                Ok(st) => println(f"code={st.code} success={st.success}"),
+                Ok(st) => println(f"code={st.code().unwrap_or(-1)} success={st.success()}"),
                 Err(e) => println("wait failed"),
             }
         }
@@ -26,32 +27,33 @@ fn main() {
     }
 
     let ecmd = Command.new("sh").arg("-c").arg("printf %s \"$KARA_E2E\"")
-        .env("KARA_E2E", "env-ok").stdout(Stdio.Piped);
+        .env("KARA_E2E", "env-ok").stdout(Stdio.piped());
     match ecmd.spawn() {
         Ok(child) => {
             match child.stdout() {
                 Some(o) => {
-                    match o.read_to_string() {
-                        Ok(text) => println(f"env={text}"),
+                    let mut text = String.new();
+                    match o.read_to_string(text) {
+                        Ok(_) => println(f"env={text}"),
                         Err(e) => println("env read failed"),
                     }
                 }
                 None => println("no env stdout"),
             }
             match child.wait() {
-                Ok(st) => println(f"env-code={st.code}"),
+                Ok(st) => println(f"env-code={st.code().unwrap_or(-1)}"),
                 Err(e) => println("env wait failed"),
             }
         }
         Err(e) => println("env spawn failed"),
     }
 
-    let cat = Command.new("cat").stdin(Stdio.Piped).stdout(Stdio.Piped);
+    let cat = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped());
     match cat.spawn() {
         Ok(child) => {
             match child.stdin() {
                 Some(sin) => {
-                    match sin.write("through-the-pipe\n") {
+                    match sin.write_all("through-the-pipe\n".bytes()) {
                         Ok(u) => println("wrote"),
                         Err(e) => println("write failed"),
                     }
@@ -64,15 +66,16 @@ fn main() {
             }
             match child.stdout() {
                 Some(o) => {
-                    match o.read_to_string() {
-                        Ok(text) => println(f"cat={text}"),
+                    let mut text = String.new();
+                    match o.read_to_string(text) {
+                        Ok(_) => println(f"cat={text}"),
                         Err(e) => println("cat read failed"),
                     }
                 }
                 None => println("no cat stdout"),
             }
             match child.wait() {
-                Ok(st) => println(f"cat-code={st.code}"),
+                Ok(st) => println(f"cat-code={st.code().unwrap_or(-1)}"),
                 Err(e) => println("cat wait failed"),
             }
         }

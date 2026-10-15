@@ -862,6 +862,19 @@ If either condition is absent, skip — the stdlib trait would be a bet on a sha
 - **Positional reads and writes.** `f.read_at(buf, offset)` / `f.write_at(buf, offset)` (POSIX `pread` / `pwrite`) read or write at an offset without using the cursor. v1 rewrites a page in place with `seek` and then `read` / `write` on a file opened with `File.options().read(true).write(true)` ([library/io.md](library/io.md#files)). Two reasons to wait: a `File` has one owner, so nothing gains from reads that leave the cursor alone; and Windows' `seek_read` moves the cursor where `pread` does not, which needs a portability rule of its own.
 - **Advisory file locking.** `f.lock()` / `f.try_lock()` / `f.unlock()` (`flock`, `LockFileEx`), shared and exclusive. A write-ahead log or a lock file wants it. v1's `File.options().write(true).create_new(true)` makes a lock file that only one process can create, which is the portable half.
 
+### Processes beyond v1
+
+v1's `std.process` starts a program, connects its streams to the parent, a file or another child, and waits for it ([library/io.md](library/io.md#running-programs)). These wait for a use that needs them:
+
+- **Signals other than `kill`.** `SIGTERM` for a graceful stop, `SIGINT`, `SIGHUP`, and sending any signal by number. A supervisor needs them. Windows has no signals, so this needs a portable subset or a Unix-only module.
+- **Process groups and sessions.** `setsid`, `setpgid`, and killing a whole group, so a shell or supervisor can stop a pipeline and everything it started.
+- **Pseudo-terminals.** Running a program that behaves differently on a terminal (an editor, a pager, `ssh`). This needs a `pty` type and platform code.
+- **Detached daemons.** Double-fork and `setsid`, so a child outlives the parent without being reaped.
+- **A free-standing pipe pair.** `pipe()` returning a reader and a writer that are not tied to a child, for wiring a child's stream to a task in the parent.
+- **`args` over owned strings.** `Command.args` takes `Slice[Str]`, so a `Vec[String]` is passed one `arg` at a time. Once a trait for "borrowable as `Str`" exists, `args` takes `Slice[T]` bounded by it, so a `Vec[String]` and a literal array both work. `env` takes a single `Str` pair and needs no change.
+- **Non-UTF-8 arguments and environment.** v1 passes `Str`. A program name, argument or variable that is not UTF-8 needs an `OsStr`-like type.
+- **A `wait` that suspends.** `wait`, `wait_with_output` and the pipe reads block a thread (`blocks`). A form that suspends the calling task instead (`suspends`) comes with the event loop work in M4a.
+
 ### Language-Integrated Query (SQL DSL) and ORM
 
 Whether Kāra grows a language-level query mechanism — either an embedded query syntax (LINQ / F# query expressions / sqlx-style compile-time-checked SQL strings) or a struct-to-table ORM framework (derive-macro-driven mapping, Diesel / SQLAlchemy / ActiveRecord shape).

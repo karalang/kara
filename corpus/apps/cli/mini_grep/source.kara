@@ -412,16 +412,16 @@ impl Regex2 {
 struct Opts { fold: bool, invert: bool, count: bool, list: bool, number: bool, only: bool, context: i64 }
 
 fn sh(script: Str) -> Result[String, String] {
-    let child = match Command.new("sh").arg("-c").arg(script.to_string()).stdout(Stdio.Piped).spawn() {
+    let child = match Command.new("sh").arg("-c").arg(script.to_string()).stdout(Stdio.piped()).spawn() {
         Ok(c) => c,
         Err(_) => return Err("spawn failed".to_string()),
     };
     let out = match child.stdout() {
-        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     match child.wait() {
-        Ok(st) => if st.code == 0 { Ok(out) } else { Err(f"exit {st.code}") },
+        Ok(st) => if st.success() { Ok(out) } else { Err(f"exit {st.code().unwrap_or(-1)}") },
         Err(_) => Err("wait failed".to_string()),
     }
 }

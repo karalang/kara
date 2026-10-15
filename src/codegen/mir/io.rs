@@ -60,9 +60,11 @@ impl<'ctx> Cx<'ctx, '_> {
             ("BufReader" | "BufWriter" | "LinesIter", _) => {
                 self.buf_native(base, method, args, dest)
             }
-            ("Command", "spawn") => self.spawn_native(args, dest).map(Some),
-            ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
-                self.child_native(base, method, args, dest)
+            ("Stdio", _) => self.stdio_native(method, args, dest),
+            ("Command", "spawn" | "output") => self.command_native(method, args, dest).map(Some),
+            ("Child", _) => self.child_native(method, args, dest),
+            ("ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
+                self.pipe_native(method, args, dest)
             }
             ("TcpListener" | "TcpStream", _) => self.tcp_native(base, method, args, dest),
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
@@ -344,15 +346,51 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store_tag(d, dty, none)?;
         self.if_then(more, |cx| {
             let q = cx.offset(d, off)?;
-            cx.store_io_result_at(q, rt, code, value, msg)?;
+            cx.store_io_result_at(q, rt, code, value, msg, None)?;
             cx.store_tag(d, dty, some)
         })?;
         Ok(Some(()))
     }
 
-    /// `Command.spawn` through `karac_mir_process_spawn`, handing it the
-    /// `Command`'s fields where they lie.
-    fn spawn_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+    /// The `Stdio` constructors through `karac_mir_stdio(kind, handle)`,
+    /// which takes a `File` or pipe handed in by move.
+    fn stdio_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let kind: u64 = match method {
+            "inherit" => 0,
+            "null" => 1,
+            "piped" => 2,
+            "from_file" => 3,
+            "from_stdout" | "from_stderr" => 4,
+            _ => return Ok(None),
+        };
+        let handle = if kind >= 3 {
+            // The handle moves in and the runtime takes it, so nothing
+            // drops it here.
+            let a = self.operand_ptr(&args[0])?;
+            self.load_ptr(a)?
+        } else {
+            self.ptr_ty().const_null()
+        };
+        let i32t = self.llcx.i32_type();
+        let f = self.extern_fn(
+            "karac_mir_stdio",
+            self.ptr_ty()
+                .fn_type(&[i32t.into(), self.ptr_ty().into()], false),
+        );
+        let h = self
+            .builder
+            .build_call(f, &[i32t.const_int(kind, false).into(), handle.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic();
+        let d = self.place_ptr(dest)?;
+        self.store(d, h)?;
+        Ok(Some(()))
+    }
+
+    /// `Command.spawn` and `output` through `karac_mir_command`, handing it
+    /// the `Command`'s fields where they lie.
+    fn command_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<()> {
         let (cmd, ty) = self.behind_refs(&args[0])?;
         let fields: Vec<String> = self
             .tys
@@ -380,101 +418,189 @@ impl<'ctx> Cx<'ctx, '_> {
         let (prog, _) = field(self, "program")?;
         let (a, _) = field(self, "cmd_args")?;
         let (env, _) = field(self, "cmd_env")?;
-        let mut vals: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+        let (dir, dt) = field(self, "cmd_dir")?;
+        let dir = self.some_ptr(dir, dt)?;
+        let stdio = self.entry_slot(24, "cmd.stdio")?;
+        for (i, n) in ["cmd_stdin", "cmd_stdout", "cmd_stderr"].iter().enumerate() {
+            let (p, t) = field(self, n)?;
+            let at = self.some_ptr(p, t)?;
+            // A `Stdio` is a non-null handle: `None` is null.
+            let null = self.ptr_ty().const_null();
+            let is = self.builder.build_is_null(at, "").map_err(e)?;
+            let h = self.load_ptr_or(at, is, null)?;
+            self.store(self.offset(stdio, 8 * i as u64)?, h.into())?;
+        }
+        let output = method == "output";
+        let i32t = self.llcx.i32_type();
+        let vals: Vec<BasicMetadataValueEnum<'ctx>> = vec![
             prog.into(),
             self.load_ptr(a)?.into(),
             self.load_i64(self.offset(a, 8)?)?.into(),
             self.load_ptr(env)?.into(),
             self.load_i64(self.offset(env, 8)?)?.into(),
+            dir.into(),
+            stdio.into(),
+            i32t.const_int(u64::from(output), false).into(),
         ];
-        for n in ["cmd_stdin", "cmd_stdout", "cmd_stderr"] {
-            let (p, t) = field(self, n)?;
-            // The runtime's tag is the variant's index.
-            for (k, v) in ["Inherit", "Null", "Piped"].iter().enumerate() {
-                if self.variant_of(t, v)? != k as u32 {
-                    return Err(format!("Stdio.{v} is not variant {k}"));
-                }
-            }
-            let tag = self.load_tag(p, t)?;
-            let tag = self
-                .builder
-                .build_int_z_extend_or_bit_cast(tag, self.llcx.i64_type(), "")
-                .map_err(e)?;
-            vals.push(tag.into());
-        }
-        self.io_call("process_spawn", &vals, args, dest)
+        self.bytes_call("command", &vals, dest)
     }
 
-    /// The methods of a `Child` and its pipes, each a handle holding the
-    /// child's pid: `stdout` / `stderr` / `stdin` take the pipe through
-    /// `karac_runtime_process_take_stream`, the rest go through
-    /// `karac_mir_process`.
-    fn child_native(
+    /// Calls the fallible `karac_mir_{name}(args.., value, out, err, msg)`
+    /// and writes its `Result` at `dest`, an `Output` built from the bytes
+    /// it left at `out` and `err` when that is the payload.
+    fn bytes_call(
         &mut self,
-        base: &str,
-        method: &str,
-        args: &[Operand],
+        name: &str,
+        call_args: &[BasicMetadataValueEnum<'ctx>],
         dest: &Place,
-    ) -> R<Option<()>> {
-        let op: u64 = match (base, method) {
-            ("Child", "wait") => 0,
-            ("Child", "try_wait") => 1,
-            ("Child", "kill") => 2,
-            ("ChildStdout", "read_to_string") => 3,
-            ("ChildStderr", "read_to_string") => 4,
-            ("ChildStdin", "write") => 5,
-            ("ChildStdin", "close") => 6,
-            ("Child", "stdout" | "stderr" | "stdin") => 7,
+    ) -> R<()> {
+        let s = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        let value = self.entry_slot(8, "io.value")?;
+        let out = self.temp(s, "io.out")?;
+        let err = self.temp(s, "io.err")?;
+        let msg = self.temp(s, "io.msg")?;
+        let mut all = call_args.to_vec();
+        all.extend::<[BasicMetadataValueEnum<'ctx>; 4]>([
+            value.into(),
+            out.into(),
+            err.into(),
+            msg.into(),
+        ]);
+        let code = self.rt_int(name, &all, 32)?;
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        self.store_io_result_at(d, dty, code, value, msg, Some((out, err)))
+    }
+
+    /// The methods of a `Child` through `karac_mir_child`; the receiver is
+    /// a struct around its `ChildProcess` handle, by reference.
+    fn child_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let op: u64 = match method {
+            "wait" => 0,
+            "try_wait" => 1,
+            "kill" => 2,
+            "wait_with_output" => 3,
+            "id" => 4,
+            "stdin" => 5,
+            "stdout" => 6,
+            "stderr" => 7,
             _ => return Ok(None),
         };
         let (at, _) = self.behind_refs(&args[0])?;
-        let pid = self.load_i64(at)?;
-        let i64t = self.llcx.i64_type();
-        if op == 7 {
-            let which = match method {
-                "stdout" => 0,
-                "stderr" => 1,
-                _ => 2,
-            };
-            let f = self.extern_fn(
-                "karac_runtime_process_take_stream",
-                i64t.fn_type(&[i64t.into(), i64t.into()], false),
-            );
-            let got = self
-                .builder
-                .build_call(f, &[pid.into(), self.i64(which).into()], "")
-                .map_err(e)?
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_int_value();
-            let dty = self.place_type(dest)?;
-            let d = self.place_ptr(dest)?;
-            let (some, none) = self.option_variants(dty)?;
-            let off = self.field_offset(dty, Some(some), 0)?;
-            let taken = self
-                .builder
-                .build_int_compare(IntPredicate::NE, got, self.i64(0), "")
-                .map_err(e)?;
-            self.store_tag(d, dty, none)?;
-            self.if_then(taken, |cx| {
-                cx.store_tag(d, dty, some)?;
-                cx.store(cx.offset(d, off)?, got.into())
-            })?;
+        let handle = self.load_ptr(at)?;
+        let i32t = self.llcx.i32_type();
+        let call: Vec<BasicMetadataValueEnum<'ctx>> =
+            vec![i32t.const_int(op, false).into(), handle.into()];
+        if op <= 3 {
+            self.bytes_call("child", &call, dest)?;
             return Ok(Some(()));
         }
-        let data = if op == 5 {
-            self.behind_refs(&args[1])?.0
-        } else {
-            self.ptr_ty().const_null()
+        // `id` cannot fail; a pipe is `Some` of its handle, or `None` (0).
+        let s = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        let value = self.entry_slot(8, "io.value")?;
+        let out = self.temp(s, "io.out")?;
+        let msg = self.temp(s, "io.msg")?;
+        let mut all = call;
+        all.extend::<[BasicMetadataValueEnum<'ctx>; 4]>([
+            value.into(),
+            out.into(),
+            out.into(),
+            msg.into(),
+        ]);
+        self.rt_int("child", &all, 32)?;
+        let got = self.load_i64(value)?;
+        let d = self.place_ptr(dest)?;
+        if op == 4 {
+            self.store(d, got.into())?;
+            return Ok(Some(()));
+        }
+        let dty = self.place_type(dest)?;
+        let (some, none) = self.option_variants(dty)?;
+        let off = self.field_offset(dty, Some(some), 0)?;
+        let taken = self
+            .builder
+            .build_int_compare(IntPredicate::NE, got, self.i64(0), "")
+            .map_err(e)?;
+        self.store_tag(d, dty, none)?;
+        self.if_then(taken, |cx| {
+            cx.store_tag(d, dty, some)?;
+            cx.store(cx.offset(d, off)?, got.into())
+        })?;
+        Ok(Some(()))
+    }
+
+    /// The methods of a child's pipes through `karac_mir_pipe(op, handle,
+    /// ptr, len, value, msg)`.
+    fn pipe_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let op: u64 = match method {
+            "read" => 0,
+            "read_to_end" => 1,
+            "read_to_string" => 2,
+            "write" => 3,
+            "write_all" => 4,
+            "flush" => 5,
+            "close" => 6,
+            _ => return Ok(None),
+        };
+        let (at, _) = self.behind_refs(&args[0])?;
+        let handle = self.load_ptr(at)?;
+        let (ptr, len) = match op {
+            0 | 3 | 4 => self.view_of(&args[1])?,
+            1 | 2 => (self.behind_refs(&args[1])?.0, self.i64(0)),
+            _ => (self.ptr_ty().const_null(), self.i64(0)),
         };
         let i32t = self.llcx.i32_type();
         self.io_call(
-            "process",
-            &[i32t.const_int(op, false).into(), pid.into(), data.into()],
+            "pipe",
+            &[
+                i32t.const_int(op, false).into(),
+                handle.into(),
+                ptr.into(),
+                len.into(),
+            ],
             args,
             dest,
         )?;
         Ok(Some(()))
+    }
+
+    /// The payload of the `Option` of type `ty` at `p`, or null for `None`.
+    fn some_ptr(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<PointerValue<'ctx>> {
+        let (some, _) = self.option_variants(ty)?;
+        let tag = self.load_tag(p, ty)?;
+        let is = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                tag.get_type().const_int(u64::from(some), false),
+                "",
+            )
+            .map_err(e)?;
+        let payload = self.offset(p, self.field_offset(ty, Some(some), 0)?)?;
+        let null = self.ptr_ty().const_null();
+        Ok(self
+            .builder
+            .build_select(is, payload, null, "")
+            .map_err(e)?
+            .into_pointer_value())
+    }
+
+    /// The pointer at `p`, or `or` when `skip` (and `p` is not to be read).
+    fn load_ptr_or(
+        &mut self,
+        p: PointerValue<'ctx>,
+        skip: IntValue<'ctx>,
+        or: PointerValue<'ctx>,
+    ) -> R<PointerValue<'ctx>> {
+        let slot = self.entry_slot(8, "io.ptr")?;
+        self.store(slot, or.into())?;
+        let read = self.builder.build_not(skip, "").map_err(e)?;
+        self.if_then(read, |cx| {
+            let v = cx.load_ptr(p)?;
+            cx.store(slot, v.into())
+        })?;
+        self.load_ptr(slot)
     }
 
     /// Calls the fallible `karac_mir_{name}(args.., value, msg)` and writes
@@ -511,10 +637,11 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<()> {
         let dty = self.place_type(dest)?;
         let d = self.place_ptr(dest)?;
-        self.store_io_result_at(d, dty, code, value, msg)
+        self.store_io_result_at(d, dty, code, value, msg, None)
     }
 
-    /// [`Self::store_io_result`] at `d`, a `Result` of type `dty`.
+    /// [`Self::store_io_result`] at `d`, a `Result` of type `dty`; `bytes`
+    /// are where an `Output`'s stdout and stderr were left.
     fn store_io_result_at(
         &mut self,
         d: PointerValue<'ctx>,
@@ -522,6 +649,7 @@ impl<'ctx> Cx<'ctx, '_> {
         code: IntValue<'ctx>,
         value: PointerValue<'ctx>,
         msg: PointerValue<'ctx>,
+        bytes: Option<(PointerValue<'ctx>, PointerValue<'ctx>)>,
     ) -> R<()> {
         let (ok, er) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
         let okt = self
@@ -543,7 +671,7 @@ impl<'ctx> Cx<'ctx, '_> {
         self.if_then(done, |cx| {
             cx.store_tag(d, dty, ok)?;
             let q = cx.offset(d, ok_off)?;
-            cx.store_io_ok(q, okt, value, msg)
+            cx.store_io_ok(q, okt, value, msg, bytes)
         })?;
         for (k, name) in IO_ERRORS.iter().enumerate() {
             let v = self.variant_of(et, name)?;
@@ -571,14 +699,15 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Writes the `Ok` payload of type `okt` at `q` from what the runtime
     /// left: a `String` in `msg`, or a word in `value`, which for an
-    /// `ExitStatus` (in an `Option` or not) is packed as `process.rs`
-    /// packs it.
+    /// `ExitStatus` (in an `Option`, or an `Output` with the bytes at
+    /// `bytes`) is packed as `mir_process.rs` packs it.
     fn store_io_ok(
         &mut self,
         q: PointerValue<'ctx>,
         okt: Ty,
         value: PointerValue<'ctx>,
         msg: PointerValue<'ctx>,
+        bytes: Option<(PointerValue<'ctx>, PointerValue<'ctx>)>,
     ) -> R<()> {
         if matches!(self.tys.kind(okt), TyKind::Intrinsic(IntrinsicTy::String)) {
             return self.copy(q, msg, okt);
@@ -586,9 +715,17 @@ impl<'ctx> Cx<'ctx, '_> {
         let name = self.tys.tcx().adt_of(okt).map(|(adt, _)| adt.name.clone());
         let v = self.load_i64(value)?;
         match name.as_deref() {
-            // `(code << 1) | success`.
-            Some("ExitStatus") => self.store_exit(q, okt, v, 1),
-            // `(code << 2) | (success << 1) | present`.
+            Some("ExitStatus") => self.store_exit(q, okt, v),
+            Some("Output") => {
+                let (out, err) = bytes.ok_or("an Output without its bytes")?;
+                for (n, from) in [("stdout", out), ("stderr", err)] {
+                    let (p, t) = self.named_field(q, okt, n)?;
+                    self.copy(p, from, t)?;
+                }
+                let (p, t) = self.named_field(q, okt, "status")?;
+                self.store_exit(p, t, v)
+            }
+            // The status with its low bit set when present.
             Some("Option") => {
                 let (some, none) = self.option_variants(okt)?;
                 let st = self
@@ -596,8 +733,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .field_ty(okt, Some(some), 0)
                     .ok_or("an option without a payload")?;
                 let off = self.field_offset(okt, Some(some), 0)?;
-                let one = self.i64(1);
-                let present = self.builder.build_and(v, one, "").map_err(e)?;
+                let present = self.builder.build_and(v, self.i64(1), "").map_err(e)?;
                 let present = self
                     .builder
                     .build_int_compare(IntPredicate::NE, present, self.i64(0), "")
@@ -605,9 +741,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store_tag(q, okt, none)?;
                 self.if_then(present, |cx| {
                     cx.store_tag(q, okt, some)?;
-                    let v = cx.builder.build_right_shift(v, one, true, "").map_err(e)?;
                     let p = cx.offset(q, off)?;
-                    cx.store_exit(p, st, v, 1)
+                    cx.store_exit(p, st, v)
                 })
             }
             _ => match self.layout(okt)?.size {
@@ -618,32 +753,52 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
-    /// An `ExitStatus { code, success }` at `p` from `v`: `success` its low
-    /// bit, `code` the rest, shifted down by `shift`.
-    fn store_exit(
-        &mut self,
-        p: PointerValue<'ctx>,
-        ty: Ty,
-        v: IntValue<'ctx>,
-        shift: u64,
-    ) -> R<()> {
+    /// The field `n` of the struct of type `ty` at `p`, and its type.
+    fn named_field(&self, p: PointerValue<'ctx>, ty: Ty, n: &str) -> R<(PointerValue<'ctx>, Ty)> {
+        let k = self
+            .tys
+            .tcx()
+            .adt_of(ty)
+            .and_then(|(adt, _)| adt.variants[0].fields.iter().position(|(f, _)| f == n))
+            .ok_or_else(|| format!("`{}` has no field `{n}`", self.tys.display(ty)))?
+            as u32;
+        let t = self
+            .tys
+            .field_ty(ty, None, k)
+            .ok_or_else(|| format!("`{n}` has no type"))?;
+        Ok((self.offset(p, self.field_offset(ty, None, k)?)?, t))
+    }
+
+    /// An `ExitStatus { exited, exit_code, exit_signal }` at `p` from `v`,
+    /// packed `(code << 16) | (signal << 2) | (exited << 1)`.
+    fn store_exit(&mut self, p: PointerValue<'ctx>, ty: Ty, v: IntValue<'ctx>) -> R<()> {
         let code = self
             .builder
-            .build_right_shift(v, self.i64(shift), true, "")
+            .build_right_shift(v, self.i64(16), true, "")
             .map_err(e)?;
-        let bit = self.builder.build_and(v, self.i64(1), "").map_err(e)?;
-        let success = self
+        let signal = self
             .builder
-            .build_int_truncate(bit, self.llcx.i8_type(), "")
+            .build_right_shift(v, self.i64(2), false, "")
             .map_err(e)?;
-        self.store(
-            self.offset(p, self.field_offset(ty, None, 0)?)?,
-            code.into(),
-        )?;
-        self.store(
-            self.offset(p, self.field_offset(ty, None, 1)?)?,
-            success.into(),
-        )
+        let signal = self
+            .builder
+            .build_and(signal, self.i64(0x3fff), "")
+            .map_err(e)?;
+        let exited = self
+            .builder
+            .build_right_shift(v, self.i64(1), false, "")
+            .map_err(e)?;
+        let exited = self.builder.build_and(exited, self.i64(1), "").map_err(e)?;
+        let exited = self
+            .builder
+            .build_int_truncate(exited, self.llcx.i8_type(), "")
+            .map_err(e)?;
+        let (q, _) = self.named_field(p, ty, "exited")?;
+        self.store(q, exited.into())?;
+        let (q, _) = self.named_field(p, ty, "exit_code")?;
+        self.store(q, code.into())?;
+        let (q, _) = self.named_field(p, ty, "exit_signal")?;
+        self.store(q, signal.into())
     }
 
     /// `TcpListener` / `TcpStream`, through `karac_mir_tcp(op, fd, ptr, len,

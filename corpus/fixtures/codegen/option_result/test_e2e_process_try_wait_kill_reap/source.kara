@@ -17,17 +17,13 @@ fn main() {
                 Err(e) => println("kill failed"),
             }
             match child.wait() {
-                Ok(st) => println(f"success={st.success} code={st.code}"),
+                Ok(st) => println(f"success={st.success()} code={st.code().unwrap_or(-1)}"),
                 Err(e) => println("wait failed"),
             }
+            // Waiting again returns the same status (B-2026-10-15-6).
             match child.wait() {
-                Ok(st) => println("double reap?!"),
-                Err(e) => {
-                    match e {
-                        IoError.NotFound => println("reaped"),
-                        _ => println("unexpected err"),
-                    }
-                }
+                Ok(st) => println(f"waited again success={st.success()}"),
+                Err(e) => println("second wait failed"),
             }
         }
         Err(e) => println("spawn failed"),

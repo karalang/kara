@@ -725,21 +725,21 @@ fn function(fname: Str, args: ref Vec[String]) -> String {
 
 fn shell(cmd: Str) -> (i64, String) {
     let child = match Command.new("sh").arg("-c").arg(cmd.to_string())
-        .stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        .stdout(Stdio.piped()).stderr(Stdio.piped()).spawn() {
         Ok(c) => c,
         Err(_) => return (127, "make: sh: cannot spawn".to_string()),
     };
     let mut text = match child.stdout() {
-        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     let err = match child.stderr() {
-        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     text.push_str(err);
     match child.wait() {
-        Ok(st) => (st.code, text),
+        Ok(st) => ((st.code().unwrap_or(-1) as i64), text),
         Err(_) => (127, text),
     }
 }

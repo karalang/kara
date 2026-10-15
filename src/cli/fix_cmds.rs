@@ -106,7 +106,11 @@ pub(super) fn cmd_debug(input: &str, output: OutputMode) {
 /// `karac check` and must be acted on by hand.
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     let source = read_source(filename);
-    let mut pipeline = Pipeline::new(filename, &source).strict_core();
+    // A program using `std.process` is checked against the v2 library, so
+    // the fixes for its old surface (`Stdio.Piped`) are found (B-2026-10-15-6).
+    let mut pipeline = Pipeline::new(filename, &source)
+        .strict_core()
+        .with_library();
     // Each edit carries the id of the fix it belongs to: a multi-edit
     // envelope is one fix, applied or skipped whole.
     let mut fixes = FixSet::default();
@@ -359,7 +363,9 @@ fn complement_integer_bangs(filename: &str, source: &str, fixes: &mut FixSet) {
     let Some(patched) = apply_edits(source, deduped.iter().map(|(_, e)| e)) else {
         return;
     };
-    let mut pipeline = Pipeline::new(filename, &patched).strict_core();
+    let mut pipeline = Pipeline::new(filename, &patched)
+        .strict_core()
+        .with_library();
     if pipeline.has_parse_errors() {
         return;
     }

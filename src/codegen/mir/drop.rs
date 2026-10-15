@@ -74,6 +74,13 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
     // A `BufWriter` flushes first, ignoring a failure.
     ("BufReader", CellDrop::Free("karac_mir_buf_free")),
     ("BufWriter", CellDrop::Free("karac_mir_buf_free")),
+    // `std.process` (B-2026-10-15-6): a dropped child neither waits nor
+    // kills; a pipe or `Stdio` closes what it holds.
+    ("Stdio", CellDrop::Free("karac_mir_stdio_free")),
+    ("ChildProcess", CellDrop::Free("karac_mir_child_free")),
+    ("ChildStdout", CellDrop::Free("karac_mir_pipe_free")),
+    ("ChildStderr", CellDrop::Free("karac_mir_pipe_free")),
+    ("ChildStdin", CellDrop::Free("karac_mir_pipe_free")),
     ("CString", CellDrop::Free("karac_mir_cstring_free")),
     ("Interner", CellDrop::Free("karac_mir_interner_free")),
     ("OnceLock", CellDrop::Once),

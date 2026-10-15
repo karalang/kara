@@ -389,16 +389,41 @@ impl<'a> super::TypeChecker<'a> {
                 .iter()
                 .map(|(n, _, _)| n.as_str())
                 .collect();
-            self.type_error(
-                format!(
-                    "no field '{}' on struct '{}', available fields: {}",
-                    field,
-                    type_name,
-                    available.join(", ")
-                ),
-                *span,
-                TypeErrorKind::UndefinedField,
+            let message = format!(
+                "no field '{}' on struct '{}', available fields: {}",
+                field,
+                type_name,
+                available.join(", ")
             );
+            // The v2 `ExitStatus` has methods where the legacy one had
+            // fields (B-2026-10-15-6): `success` keeps its meaning as a
+            // call; `code` became an `Option[i32]`.
+            let exit_status = type_name == "ExitStatus" && available.contains(&"exit_code");
+            match field {
+                "success" if exit_status => self.type_error_with_fix_it(
+                    format!("{message}; `success` is a method now: call `success()`"),
+                    *span,
+                    TypeErrorKind::UndefinedField,
+                    super::FixIt {
+                        span: Span {
+                            offset: span.offset + span.length,
+                            length: 0,
+                            ..*span
+                        },
+                        replacement: "()".to_string(),
+                    },
+                ),
+                "code" if exit_status => self.type_error(
+                    format!(
+                        "{message}; `code` is a method now: `code()` is an `Option[i32]`, \
+                         `None` when a signal ended the process (the old field's -1 is \
+                         `code().unwrap_or(-1)`)"
+                    ),
+                    *span,
+                    TypeErrorKind::UndefinedField,
+                ),
+                _ => self.type_error(message, *span, TypeErrorKind::UndefinedField),
+            }
             Type::Error
         } else {
             // Not in the local env, but may be an imported struct — probe the

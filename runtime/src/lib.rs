@@ -122,6 +122,7 @@ pub mod map;
 pub mod mir;
 pub mod mir_io;
 pub mod mir_map;
+pub mod mir_process;
 pub mod mir_task;
 pub mod mutex;
 pub mod once;
@@ -302,8 +303,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_file,
         mir_io::karac_mir_buf,
         mir_io::karac_mir_buf_free,
-        mir_io::karac_mir_process_spawn,
-        mir_io::karac_mir_process,
+        mir_process::karac_mir_stdio,
+        mir_process::karac_mir_stdio_free,
+        mir_process::karac_mir_command,
+        mir_process::karac_mir_child,
+        mir_process::karac_mir_child_free,
+        mir_process::karac_mir_pipe,
+        mir_process::karac_mir_pipe_free,
         mir::karac_mir_fmt_spec,
         mir::karac_mir_deque_slot,
         mir::karac_mir_deque_push,

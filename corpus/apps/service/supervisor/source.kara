@@ -472,7 +472,7 @@ fn start(p: mut ref Prog, now: i64) -> bool {
         cmd = cmd.env(p.env_keys[k].clone(), p.env_vals[k].clone());
     }
     cmd = cmd.env("SUPERVISOR_PROGRAM".to_string(), p.name.clone());
-    let child = match cmd.stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+    let child = match cmd.stdout(Stdio.piped()).stderr(Stdio.piped()).spawn() {
         Ok(c) => c,
         Err(_) => {
             p.events.push(f"start {p.starts}: spawn failed: not found");
@@ -503,11 +503,11 @@ fn give_up_or_retry(p: mut ref Prog, now: i64, why: Str) {
 
 fn finished(p: mut ref Prog, code: i64, now: i64) {
     let out = match p.out {
-        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     let err = match p.err {
-        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     p.child = None;
@@ -559,7 +559,7 @@ fn poll_one(p: mut ref Prog, now: i64) {
             None => return,
         };
         match child.try_wait() {
-            Ok(Some(st)) => finished(p, st.code, now),
+            Ok(Some(st)) => finished(p, (st.code().unwrap_or(-1) as i64), now),
             Ok(None) => {
                 p.child = Some(child);
                 if p.max_runtime_ms > 0 and now - p.started_at >= p.max_runtime_ms {

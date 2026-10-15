@@ -161,12 +161,12 @@ fn show(e: IoError) -> String {
 
 fn run_task(t: ref Task, input: own Option[String]) -> Result[TaskResult, String] {
     let mut cmd = Command.new("sh").arg("-c").arg(t.cmd.clone())
-        .stdout(Stdio.Piped).stderr(Stdio.Piped);
+        .stdout(Stdio.piped()).stderr(Stdio.piped());
     for (k, v) in t.env.iter() {
         cmd = cmd.env(k.clone(), v.clone());
     }
     if input.is_some() {
-        cmd = cmd.stdin(Stdio.Piped);
+        cmd = cmd.stdin(Stdio.piped());
     }
     let child = match cmd.spawn() {
         Ok(c) => c,
@@ -175,7 +175,7 @@ fn run_task(t: ref Task, input: own Option[String]) -> Result[TaskResult, String
     match input {
         Some(text) => match child.stdin() {
             Some(w) => {
-                match w.write(text) {
+                match w.write_all(text.bytes()) {
                     Ok(_) => {}
                     Err(e) => return Err(f"{t.name}: stdin: {show(e)}"),
                 }
@@ -189,15 +189,15 @@ fn run_task(t: ref Task, input: own Option[String]) -> Result[TaskResult, String
         None => {}
     }
     let out = match child.stdout() {
-        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     let err = match child.stderr() {
-        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     let code = match child.wait() {
-        Ok(st) => st.code,
+        Ok(st) => (st.code().unwrap_or(-1) as i64),
         Err(e) => return Err(f"{t.name}: wait: {show(e)}"),
     };
     let status = if code == 0 { "ok" } else { "failed" };

@@ -819,11 +819,12 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("ChildStdin", "write" | "write_all" | "flush" | "close") => {
             vec![(Sends, "Pipe", Some(0)), (Blocks, "", None)]
         }
-        ("ChildStdout" | "ChildStderr", "read" | "read_line" | "read_to_string") => {
+        ("ChildStdout" | "ChildStderr", "read" | "read_to_end" | "read_to_string") => {
             vec![(Receives, "Pipe", Some(0)), (Blocks, "", None), HEAP]
         }
         // Taking a child's pipe hands out a handle; the I/O is on the pipe.
-        ("Child", "stdin" | "stdout" | "stderr" | "id") => vec![HEAP],
+        // A `Stdio` is a handle built from a file or pipe, touching neither.
+        ("Child", "stdin" | "stdout" | "stderr" | "id") | ("Stdio", _) => vec![HEAP],
         // An HTTP request or response is a plain value once received: its
         // accessors and builders only allocate.
         ("Request" | "Response" | "HttpError", _) => vec![HEAP],

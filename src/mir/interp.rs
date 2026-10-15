@@ -894,8 +894,7 @@ struct Interp<'a> {
     files: Vec<Option<std::fs::File>>,
     /// The `BufReader`s and `BufWriter`s, by id - 1; `None` once dropped.
     bufs: Vec<Option<Buf>>,
-    /// The children `Command.spawn` started and their taken pipes, by
-    /// pid, as the runtime's `process.rs` keeps them.
+    /// The `std.process` handles: `Stdio`s, children and their pipes.
     procs: Procs,
     sockets: Sockets,
     /// The `Pool[T]`s, by handle - 1. A pool lives until exit, as legacy's
@@ -1631,7 +1630,8 @@ impl<'a> Interp<'a> {
             ("BufReader" | "BufWriter" | "LinesIter", _) => {
                 self.buf_method(name, base, method, args, ret)
             }
-            ("Command", "spawn") | ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
+            ("Command", "spawn" | "output")
+            | ("Stdio" | "Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
                 self.process_method(name, base, method, args, arg_tys, ret)
             }
             ("TcpListener" | "TcpStream", _) => {
@@ -4086,10 +4086,11 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// `Command.spawn` and the `Child` handle's methods, over pid-keyed
-    /// tables as the runtime's `process.rs` has them: `wait` reaps,
-    /// `try_wait` reaps once the child has exited, `kill` leaves the child
-    /// to be waited for, and each pipe can be taken once.
+    /// `std.process` (B-2026-10-15-6, docs/library/io.md § Processes): the
+    /// `Stdio` constructors, `Command.spawn` / `output`, and the methods of
+    /// a `Child` and its pipes, over the tables in [`Procs`], as the
+    /// runtime's `mir_process.rs` keeps them in boxes. A `Child` is a struct
+    /// around its `ChildProcess` handle.
     fn process_method(
         &mut self,
         name: &str,
@@ -4099,156 +4100,374 @@ impl<'a> Interp<'a> {
         arg_tys: &[Ty],
         ret: Ty,
     ) -> R<Value> {
-        use std::io::{Read, Write};
+        use std::io::Write;
+        if base == "Stdio" {
+            let cfg = match (method, args.first()) {
+                ("inherit", None) => StdioCfg::Inherit,
+                ("null", None) => StdioCfg::Null,
+                ("piped", None) => StdioCfg::Piped,
+                ("from_file", Some(f)) => {
+                    let id = self.handle_id(f, name)?;
+                    let f = usize::try_from(id - 1)
+                        .ok()
+                        .and_then(|i| self.files.get_mut(i))
+                        .and_then(Option::take)
+                        .ok_or_else(|| Stop::Error(format!("{name} of a closed file")))?;
+                    StdioCfg::File(f)
+                }
+                ("from_stdout" | "from_stderr", Some(p)) => {
+                    let id = self.handle_id(p, name)?;
+                    match self.procs.take_pipe(id) {
+                        Some(Pipe::Out(o)) => StdioCfg::Out(Some(o)),
+                        Some(Pipe::Err(e)) => StdioCfg::Err(Some(e)),
+                        _ => return err(format!("{name} of a closed pipe")),
+                    }
+                }
+                _ => return err(format!("call of unknown function {name}")),
+            };
+            self.procs.stdio.push(Some(cfg));
+            return Ok(Value::Agg(vec![Value::Int(self.procs.stdio.len() as i128)]));
+        }
         let Some(recv) = args.first() else {
             return err(format!("{name} needs its receiver"));
         };
         if base == "Command" {
-            let ty = self.deref_ty(arg_tys.first().copied(), name)?;
-            let fields = self.struct_value(recv, name)?;
-            let field = |n: &str| -> R<(Value, Ty)> {
-                let k = self
-                    .tys
-                    .tcx()
-                    .adt_of(ty)
-                    .and_then(|(adt, _)| adt.variants[0].fields.iter().position(|(f, _)| f == n))
-                    .ok_or_else(|| Stop::Error(format!("{name}: a Command without `{n}`")))?;
-                let t = self
-                    .tys
-                    .field_ty(ty, None, k as u32)
-                    .ok_or_else(|| Stop::Error(format!("{name}: `{n}` has no type")))?;
-                Ok((fields[k].clone(), t))
+            let output = method == "output";
+            let res = self
+                .command(name, recv, arg_tys.first().copied(), output)?
+                .and_then(|mut cmd| cmd.spawn());
+            let res = match res {
+                Ok(child) if output => child.wait_with_output().map(Err),
+                Ok(child) => Ok(Ok(child)),
+                Err(e) => Err(e),
             };
-            let mut cmd = std::process::Command::new(self.string_at(&field("program")?.0)?);
-            let (args_v, _) = field("cmd_args")?;
-            let id = self.box_behind(&args_v)?;
-            for a in self.vec_elems(id)?.clone() {
-                cmd.arg(self.string_at(&a)?);
-            }
-            let (env_v, _) = field("cmd_env")?;
-            let id = self.box_behind(&env_v)?;
-            for kv in self.vec_elems(id)?.clone() {
-                let Value::Agg(kv) = kv else {
-                    return err(format!("{name}: an EnvVar holding {kv:?}"));
-                };
-                cmd.env(self.string_at(&kv[0])?, self.string_at(&kv[1])?);
-            }
-            for (i, n) in ["cmd_stdin", "cmd_stdout", "cmd_stderr"].iter().enumerate() {
-                let (v, t) = field(n)?;
-                let Value::Variant(k, _) = v else {
-                    return err(format!("{name}: a Stdio holding {v:?}"));
-                };
-                let which = self
-                    .tys
-                    .tcx()
-                    .adt_of(t)
-                    .and_then(|(adt, _)| adt.variants.get(k as usize).map(|v| v.name.clone()));
-                // Inherit leaves the stream at `std::process`'s default.
-                let cfg = match which.as_deref() {
-                    Some("Null") => std::process::Stdio::null(),
-                    Some("Piped") => std::process::Stdio::piped(),
-                    _ => continue,
-                };
-                match i {
-                    0 => cmd.stdin(cfg),
-                    1 => cmd.stdout(cfg),
-                    _ => cmd.stderr(cfg),
-                };
-            }
-            return match cmd.spawn() {
-                Ok(child) => {
-                    let pid = i64::from(child.id());
-                    self.procs.children.insert(pid, child);
-                    let child = Value::Agg(vec![Value::Int(i128::from(pid))]);
+            return match res {
+                Ok(Ok(child)) => {
+                    self.procs.children.push(Some(child));
+                    let process = Value::Agg(vec![Value::Int(self.procs.children.len() as i128)]);
+                    let child = Value::Agg(vec![process]);
                     self.variant_named(ret, None, "Ok", vec![child])
+                }
+                Ok(Err(out)) => {
+                    let t = self.payload_ty(ret, "Ok")?;
+                    let v = self.output_value(t, out, name)?;
+                    self.variant_named(ret, None, "Ok", vec![v])
                 }
                 Err(e) => self.io_err(ret, e),
             };
         }
-        let pid = match self.struct_value(recv, name)?.as_slice() {
-            [Value::Int(p)] => *p as i64,
-            other => return err(format!("{name} of a handle holding {other:?}")),
-        };
-        let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
-        let exit = |s: std::process::ExitStatus| {
-            Value::Agg(vec![
-                Value::Int(i128::from(s.code().unwrap_or(-1))),
-                Value::Bool(s.success()),
-            ])
-        };
-        let handle = || Value::Agg(vec![Value::Int(i128::from(pid))]);
-        let res: std::io::Result<Value> = match (base, method) {
-            ("Child", "wait") => match self.procs.children.remove(&pid) {
-                Some(mut c) => c.wait().map(exit),
-                None => Err(not_found()),
-            },
-            ("Child", "try_wait") => match self.procs.children.get_mut(&pid) {
-                Some(c) => match c.try_wait() {
-                    Ok(Some(s)) => {
-                        self.procs.children.remove(&pid);
-                        let some = self.payload_ty(ret, "Ok")?;
-                        Ok(self.option(some, Some(exit(s)))?)
+        let id = self.handle_id(recv, name)?;
+        let slot = usize::try_from(id - 1).ok();
+        let closed = || std::io::Error::from(std::io::ErrorKind::InvalidInput);
+        let res: std::io::Result<Value> = match base {
+            "Child" => {
+                /// What a child's method found, before it is a value.
+                enum Got {
+                    Status(std::process::ExitStatus),
+                    Poll(Option<std::process::ExitStatus>),
+                    Unit,
+                    Output(std::process::Output),
+                }
+                let Some(Some(child)) = slot.and_then(|i| self.procs.children.get_mut(i)) else {
+                    return err(format!(
+                        "{name} of a child already waited for with its output"
+                    ));
+                };
+                let got = match method {
+                    "id" => return Ok(Value::Int(i128::from(child.id()))),
+                    "wait" => {
+                        // A held stdin closes first, so the child can see
+                        // the end of its input.
+                        drop(child.stdin.take());
+                        child.wait().map(Got::Status)
                     }
-                    Ok(None) => {
+                    "try_wait" => child.try_wait().map(Got::Poll),
+                    "kill" => child.kill().map(|()| Got::Unit),
+                    "wait_with_output" => {
+                        // The `ChildProcess` is left empty; the caller's
+                        // drop of the `Child` frees its slot.
+                        let child = self.procs.children[id as usize - 1]
+                            .take()
+                            .expect("checked above");
+                        child.wait_with_output().map(Got::Output)
+                    }
+                    "stdin" | "stdout" | "stderr" => {
+                        let pipe = match method {
+                            "stdin" => child.stdin.take().map(|p| Pipe::In(Some(p))),
+                            "stdout" => child.stdout.take().map(Pipe::Out),
+                            _ => child.stderr.take().map(Pipe::Err),
+                        };
+                        let v = pipe.map(|p| {
+                            self.procs.pipes.push(Some(p));
+                            Value::Agg(vec![Value::Int(self.procs.pipes.len() as i128)])
+                        });
+                        return self.option(ret, v);
+                    }
+                    _ => return err(format!("call of unknown function {name}")),
+                };
+                match got {
+                    Ok(Got::Status(s)) => {
+                        let t = self.payload_ty(ret, "Ok")?;
+                        Ok(self.exit_value(t, s, name)?)
+                    }
+                    Ok(Got::Poll(s)) => {
                         let some = self.payload_ty(ret, "Ok")?;
-                        Ok(self.option(some, None)?)
+                        let v = match s {
+                            Some(s) => {
+                                let t = self.payload_ty(some, "Some")?;
+                                Some(self.exit_value(t, s, name)?)
+                            }
+                            None => None,
+                        };
+                        Ok(self.option(some, v)?)
+                    }
+                    Ok(Got::Unit) => Ok(Value::Unit),
+                    Ok(Got::Output(out)) => {
+                        let t = self.payload_ty(ret, "Ok")?;
+                        Ok(self.output_value(t, out, name)?)
                     }
                     Err(e) => Err(e),
-                },
-                None => Err(not_found()),
-            },
-            ("Child", "kill") => match self.procs.children.get_mut(&pid) {
-                Some(c) => c.kill().map(|()| Value::Unit),
-                None => Err(not_found()),
-            },
-            ("Child", "stdout" | "stderr" | "stdin") => {
-                let p = &mut self.procs;
-                let taken = p.children.get_mut(&pid).is_some_and(|c| match method {
-                    "stdout" => c.stdout.take().map(|h| p.stdout.insert(pid, h)).is_some(),
-                    "stderr" => c.stderr.take().map(|h| p.stderr.insert(pid, h)).is_some(),
-                    _ => c.stdin.take().map(|h| p.stdin.insert(pid, h)).is_some(),
-                });
-                return self.option(ret, taken.then(handle));
+                }
             }
-            ("ChildStdout" | "ChildStderr", "read_to_string") => {
-                let h: Option<Box<dyn Read>> = if base == "ChildStdout" {
-                    self.procs.stdout.remove(&pid).map(|h| Box::new(h) as _)
-                } else {
-                    self.procs.stderr.remove(&pid).map(|h| Box::new(h) as _)
+            _ => {
+                let Some(Some(mut pipe)) = slot
+                    .and_then(|i| self.procs.pipes.get_mut(i))
+                    .map(Option::take)
+                else {
+                    return err(format!("{name} of a dropped pipe"));
                 };
-                match h {
-                    Some(mut h) => {
-                        let mut buf = String::new();
-                        h.read_to_string(&mut buf)
-                            .map(|_| self.alloc_box("String", Value::Str(buf)))
+                let res = match (method, &mut pipe, args.get(1)) {
+                    ("read", Pipe::Out(_) | Pipe::Err(_), Some(buf)) => {
+                        let (at, lo, len) = self.view_of(buf)?;
+                        let mut bytes = vec![0u8; len as usize];
+                        match pipe.reader().read(&mut bytes) {
+                            Ok(n) => {
+                                for (i, b) in bytes[..n].iter().enumerate() {
+                                    *self.slot_mut(&at.child(lo + i as u64))? =
+                                        Value::Int(i128::from(*b));
+                                }
+                                Ok(Value::Int(n as i128))
+                            }
+                            Err(e) => Err(e),
+                        }
                     }
-                    None => Err(not_found()),
-                }
-            }
-            ("ChildStdin", "write") => {
-                let Some(data) = args.get(1) else {
-                    return err(format!("{name} takes the data"));
+                    ("read_to_end" | "read_to_string", Pipe::Out(_) | Pipe::Err(_), Some(buf)) => {
+                        let mut bytes = Vec::new();
+                        let got = pipe.reader().read_to_end(&mut bytes).and_then(|n| {
+                            if method == "read_to_string" {
+                                std::str::from_utf8(&bytes).map_err(|e| {
+                                    std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+                                })?;
+                            }
+                            Ok(n)
+                        });
+                        match got {
+                            Ok(n) => {
+                                let b = self.box_behind(buf)?;
+                                match &mut self.live(b)?.value {
+                                    Value::Str(text) => {
+                                        text.push_str(std::str::from_utf8(&bytes).expect("checked"))
+                                    }
+                                    Value::Agg(elems) => elems
+                                        .extend(bytes.iter().map(|b| Value::Int(i128::from(*b)))),
+                                    other => return err(format!("{name} into {other:?}")),
+                                }
+                                Ok(Value::Int(n as i128))
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    ("write" | "write_all", Pipe::In(w), Some(buf)) => {
+                        let (at, lo, len) = self.view_of(buf)?;
+                        let mut bytes = Vec::with_capacity(len as usize);
+                        for i in 0..len {
+                            match self.slot(&at.child(lo + i))? {
+                                Value::Int(b) => bytes.push(b as u8),
+                                other => return err(format!("{name} of a byte holding {other:?}")),
+                            }
+                        }
+                        match (w.as_mut(), method) {
+                            (None, _) => Err(closed()),
+                            (Some(w), "write") => w.write(&bytes).map(|n| Value::Int(n as i128)),
+                            (Some(w), _) => w.write_all(&bytes).map(|()| Value::Unit),
+                        }
+                    }
+                    ("flush", Pipe::In(w), None) => match w.as_mut() {
+                        Some(w) => w.flush().map(|()| Value::Unit),
+                        None => Err(closed()),
+                    },
+                    ("close", Pipe::In(w), None) => {
+                        drop(w.take());
+                        Ok(Value::Unit)
+                    }
+                    _ => return err(format!("call of unknown function {name}")),
                 };
-                let text = self.string_at(data)?;
-                // `data` is `own String`: spent here.
-                if let (Value::Box(_), Some(&t)) = (data, arg_tys.get(1)) {
-                    self.drop_value(data.clone(), t)?;
-                }
-                match self.procs.stdin.get_mut(&pid) {
-                    Some(h) => h.write_all(text.as_bytes()).map(|()| Value::Unit),
-                    None => Err(not_found()),
-                }
+                self.procs.pipes[id as usize - 1] = Some(pipe);
+                res
             }
-            ("ChildStdin", "close") => {
-                self.procs.stdin.remove(&pid);
-                Ok(Value::Unit)
-            }
-            _ => return err(format!("call of unknown function {name}")),
         };
         match res {
             Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
             Err(e) => self.io_err(ret, e),
         }
+    }
+
+    /// The id inside a handle value (a `Stdio`, a pipe, a `File`, or a
+    /// `Child` around its `ChildProcess`), by value or behind references.
+    fn handle_id(&mut self, v: &Value, name: &str) -> R<i128> {
+        let mut v = v.clone();
+        loop {
+            v = match v {
+                Value::Ref(at) => self.slot(&at)?.clone(),
+                Value::Agg(fs) if fs.len() == 1 => fs.into_iter().next().expect("one field"),
+                Value::Int(id) => return Ok(id),
+                other => return err(format!("{name} of a handle holding {other:?}")),
+            };
+        }
+    }
+
+    /// The `std::process::Command` the `Command` value `recv` (of type
+    /// `ty`, possibly behind references) describes, or why it cannot be
+    /// built. For `output`, a stream left unset is piped (stdout, stderr)
+    /// or the null device (stdin).
+    fn command(
+        &mut self,
+        name: &str,
+        recv: &Value,
+        ty: Option<Ty>,
+        output: bool,
+    ) -> R<std::io::Result<std::process::Command>> {
+        let ty = self.deref_ty(ty, name)?;
+        let fields = self.struct_value(recv, name)?;
+        let field = |me: &Self, n: &str| -> R<Value> {
+            let k = me
+                .tys
+                .tcx()
+                .adt_of(ty)
+                .and_then(|(adt, _)| adt.variants[0].fields.iter().position(|(f, _)| f == n))
+                .ok_or_else(|| Stop::Error(format!("{name}: a Command without `{n}`")))?;
+            Ok(fields[k].clone())
+        };
+        let program = field(self, "program")?;
+        let mut cmd = std::process::Command::new(self.string_at(&program)?);
+        let args_v = field(self, "cmd_args")?;
+        let id = self.box_behind(&args_v)?;
+        for a in self.vec_elems(id)?.clone() {
+            cmd.arg(self.string_at(&a)?);
+        }
+        let env_v = field(self, "cmd_env")?;
+        let id = self.box_behind(&env_v)?;
+        for kv in self.vec_elems(id)?.clone() {
+            let Value::Agg(kv) = kv else {
+                return err(format!("{name}: an EnvVar holding {kv:?}"));
+            };
+            let (key, value) = (self.string_at(&kv[0])?, self.string_at(&kv[1])?);
+            match kv[2] {
+                Value::Int(0) => cmd.env(key, value),
+                Value::Int(1) => cmd.env_remove(key),
+                _ => cmd.env_clear(),
+            };
+        }
+        if let Value::Variant(_, held) = field(self, "cmd_dir")? {
+            if let Some(dir) = held.first() {
+                cmd.current_dir(self.string_at(dir)?);
+            }
+        }
+        for (i, n) in ["cmd_stdin", "cmd_stdout", "cmd_stderr"].iter().enumerate() {
+            let cfg = match field(self, n)? {
+                Value::Variant(_, held) if !held.is_empty() => {
+                    let id = self.handle_id(&held[0], name)?;
+                    let cfg = usize::try_from(id - 1)
+                        .ok()
+                        .and_then(|k| self.procs.stdio.get_mut(k))
+                        .and_then(Option::as_mut)
+                        .ok_or_else(|| Stop::Error(format!("{name} of a dropped Stdio")))?;
+                    match cfg.take_std() {
+                        Ok(s) => s,
+                        Err(e) => return Ok(Err(e)),
+                    }
+                }
+                // Unset: what `spawn` and `output` each default to.
+                _ if !output => continue,
+                _ if i == 0 => std::process::Stdio::null(),
+                _ => std::process::Stdio::piped(),
+            };
+            match i {
+                0 => cmd.stdin(cfg),
+                1 => cmd.stdout(cfg),
+                _ => cmd.stderr(cfg),
+            };
+        }
+        Ok(Ok(cmd))
+    }
+
+    /// An `ExitStatus` of type `ty`.
+    fn exit_value(&mut self, ty: Ty, s: std::process::ExitStatus, name: &str) -> R<Value> {
+        let (exited, code, signal) = exit_parts(s);
+        self.struct_by_names(
+            ty,
+            name,
+            vec![
+                ("exited", Value::Bool(exited)),
+                ("exit_code", Value::Int(i128::from(code))),
+                ("exit_signal", Value::Int(i128::from(signal))),
+            ],
+        )
+    }
+
+    /// An `Output` of type `ty`.
+    fn output_value(&mut self, ty: Ty, out: std::process::Output, name: &str) -> R<Value> {
+        let st = self
+            .tys
+            .tcx()
+            .adt_of(ty)
+            .and_then(|(adt, _)| {
+                adt.variants[0]
+                    .fields
+                    .iter()
+                    .position(|(f, _)| f == "status")
+            })
+            .and_then(|k| self.tys.field_ty(ty, None, k as u32))
+            .ok_or_else(|| Stop::Error(format!("{name}: an Output without `status`")))?;
+        let status = self.exit_value(st, out.status, name)?;
+        let bytes = |me: &mut Self, b: Vec<u8>| {
+            let elems = b.into_iter().map(|b| Value::Int(i128::from(b))).collect();
+            me.alloc_box("Vec[u8]", Value::Agg(elems))
+        };
+        let stdout = bytes(self, out.stdout);
+        let stderr = bytes(self, out.stderr);
+        self.struct_by_names(
+            ty,
+            name,
+            vec![("status", status), ("stdout", stdout), ("stderr", stderr)],
+        )
+    }
+
+    /// The struct `ty` from its fields by name, in its declared order.
+    fn struct_by_names(&self, ty: Ty, name: &str, mut parts: Vec<(&str, Value)>) -> R<Value> {
+        let fields: Vec<String> = self
+            .tys
+            .tcx()
+            .adt_of(ty)
+            .map(|(adt, _)| {
+                adt.variants[0]
+                    .fields
+                    .iter()
+                    .map(|(f, _)| f.clone())
+                    .collect()
+            })
+            .ok_or_else(|| {
+                Stop::Error(format!("{name}: {} is not a struct", self.tys.display(ty)))
+            })?;
+        let mut out = Vec::with_capacity(fields.len());
+        for f in &fields {
+            let k = parts
+                .iter()
+                .position(|(n, _)| n == f)
+                .ok_or_else(|| Stop::Error(format!("{name}: no value for `{f}`")))?;
+            out.push(parts.swap_remove(k).1);
+        }
+        Ok(Value::Agg(out))
     }
 
     /// `TcpListener` and `TcpStream`, over `std::net` sockets kept in a table
@@ -8823,6 +9042,26 @@ impl<'a> Interp<'a> {
         let first = match adt.name.as_str() {
             // A `CString` holds its bytes as values.
             "Atomic" | "CString" | "Interner" => return Ok(()),
+            // A dropped child neither waits nor kills; a dropped pipe or
+            // `Stdio` closes what it holds (B-2026-10-15-6).
+            "Stdio" | "ChildProcess" | "ChildStdout" | "ChildStderr" | "ChildStdin" => {
+                if let Value::Agg(fs) = self.slot(addr)? {
+                    if let [Value::Int(id)] = fs.as_slice() {
+                        let i = usize::try_from(*id - 1).ok();
+                        let p = &mut self.procs;
+                        match adt.name.as_str() {
+                            "Stdio" => {
+                                drop(i.and_then(|i| p.stdio.get_mut(i)).and_then(Option::take))
+                            }
+                            "ChildProcess" => {
+                                drop(i.and_then(|i| p.children.get_mut(i)).and_then(Option::take))
+                            }
+                            _ => drop(i.and_then(|i| p.pipes.get_mut(i)).and_then(Option::take)),
+                        }
+                    }
+                }
+                return Ok(());
+            }
             "Sender" | "Receiver" | "File" | "BufReader" | "BufWriter" => {
                 if let Value::Agg(fs) = self.slot(addr)? {
                     if let [Value::Int(id)] = fs.as_slice() {
@@ -10613,14 +10852,88 @@ fn single_scalar(mut it: impl Iterator<Item = char>) -> Option<char> {
     it.next().is_none().then_some(first)
 }
 
-/// The children `Command.spawn` started, by pid, and the pipes taken off
-/// them.
+/// The state behind `std.process` handles, each by id - 1 and `None` once
+/// dropped: `Stdio`s, the children `spawn` started (`None` too once
+/// `wait_with_output` took one), and the pipes taken off them.
 #[derive(Default)]
 struct Procs {
-    children: rustc_hash::FxHashMap<i64, std::process::Child>,
-    stdout: rustc_hash::FxHashMap<i64, std::process::ChildStdout>,
-    stderr: rustc_hash::FxHashMap<i64, std::process::ChildStderr>,
-    stdin: rustc_hash::FxHashMap<i64, std::process::ChildStdin>,
+    stdio: Vec<Option<StdioCfg>>,
+    children: Vec<Option<std::process::Child>>,
+    pipes: Vec<Option<Pipe>>,
+}
+
+impl Procs {
+    fn take_pipe(&mut self, id: i128) -> Option<Pipe> {
+        usize::try_from(id - 1)
+            .ok()
+            .and_then(|i| self.pipes.get_mut(i))
+            .and_then(Option::take)
+    }
+}
+
+/// What a `Stdio` connects a stream to. A pipe goes to the first child
+/// spawned with it.
+enum StdioCfg {
+    Inherit,
+    Null,
+    Piped,
+    File(std::fs::File),
+    Out(Option<std::process::ChildStdout>),
+    Err(Option<std::process::ChildStderr>),
+}
+
+impl StdioCfg {
+    fn take_std(&mut self) -> std::io::Result<std::process::Stdio> {
+        use std::process::Stdio;
+        let given = || {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "this pipe was already given to a child",
+            )
+        };
+        Ok(match self {
+            StdioCfg::Inherit => Stdio::inherit(),
+            StdioCfg::Null => Stdio::null(),
+            StdioCfg::Piped => Stdio::piped(),
+            StdioCfg::File(f) => Stdio::from(f.try_clone()?),
+            StdioCfg::Out(o) => Stdio::from(o.take().ok_or_else(given)?),
+            StdioCfg::Err(e) => Stdio::from(e.take().ok_or_else(given)?),
+        })
+    }
+}
+
+/// A pipe taken off a child. A closed stdin is `In(None)`.
+enum Pipe {
+    Out(std::process::ChildStdout),
+    Err(std::process::ChildStderr),
+    In(Option<std::process::ChildStdin>),
+}
+
+impl Pipe {
+    fn reader(&mut self) -> &mut dyn std::io::Read {
+        match self {
+            Pipe::Out(o) => o,
+            Pipe::Err(e) => e,
+            Pipe::In(_) => unreachable!("a read of a stdin pipe"),
+        }
+    }
+}
+
+/// How a child ended, as `ExitStatus` holds it: whether it exited, its
+/// code, and the signal that ended it (Unix; 0 when it exited).
+fn exit_parts(s: std::process::ExitStatus) -> (bool, i64, i64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        match s.code() {
+            Some(c) => (true, i64::from(c), 0),
+            None => (false, -1, i64::from(s.signal().unwrap_or(0))),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        (true, i64::from(s.code().unwrap_or(-1)), 0)
+    }
 }
 
 /// A socket's descriptor, as the runtime's `event_loop.rs` hands it to

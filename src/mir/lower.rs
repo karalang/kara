@@ -14405,23 +14405,33 @@ pub fn run_source_streaming(src: &str) -> Result<interp::RunResult, String> {
 }
 
 /// Baked library modules appended to a program that names one of their
-/// words.
-const BAKED_SOURCES: &[(&str, &[&str])] = &[
+/// words, with the names that make a program's own declaration of one
+/// replace the module (empty: any type the module declares). A program that
+/// declares one of the module's other names keeps the module, whose item is
+/// renamed ([`rename_clashing_library_items`]).
+const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
     (
         include_str!("../../runtime/stdlib/protobuf.kara"),
         &["ProtoBuf", "ProtoReader", "Message", "proto_schema"],
+        &[],
     ),
     (
-        include_str!("../../runtime/stdlib/process.kara"),
-        &["Command", "Child", "ExitStatus"],
+        // The v2 `std.process` (B-2026-10-15-6); legacy keeps
+        // runtime/stdlib/process.kara. A program's own `Output` or `Child`
+        // is not a replacement for the module.
+        PROCESS_SOURCE,
+        PROCESS_WORDS,
+        &["Command"],
     ),
     (
         include_str!("../../runtime/stdlib/tracing.kara"),
         &["Log", "Span", "Exporter", "with_span"],
+        &[],
     ),
     (
         include_str!("../../runtime/stdlib/cli.kara"),
         &["Parser", "Arg"],
+        &[],
     ),
     (
         include_str!("../../runtime/stdlib/source/serde.kara"),
@@ -14445,8 +14455,23 @@ const BAKED_SOURCES: &[(&str, &[&str])] = &[
             "Json.serialize",
             "Json.deserialize",
         ],
+        &[],
     ),
 ];
+
+/// The v2 `std.process`, and the words that make a program one of its
+/// users.
+const PROCESS_SOURCE: &str = include_str!("../../runtime/stdlib/source/process.kara");
+// A program's own `Child` or `Stdio` is not a use (`names_baked`).
+const PROCESS_WORDS: &[&str] = &["Command", "Child", "Stdio", "ExitStatus"];
+
+/// Whether `src` uses `std.process` as the v2 pipeline appends it, so that
+/// `karac check` reads the library the build runs: the v2 surface
+/// (`Stdio.piped()`, `ExitStatus.code()`) differs from the baked legacy
+/// one the checker otherwise registers (B-2026-10-15-6).
+pub fn uses_v2_process(src: &str) -> bool {
+    names_baked(src, PROCESS_WORDS) && !defines_a_baked_type(src, PROCESS_SOURCE, &["Command"])
+}
 
 /// A library method that keeps its argument (`v.push(x)`, `m.insert(k, v)`,
 /// `tx.send(x)`): the value moves in, where other non-Copy arguments (keys,
@@ -14481,39 +14506,56 @@ fn stores_argument(method: &str) -> bool {
     )
 }
 
-/// Whether the program declares a type the baked file declares. A program
-/// with its own `Command` or `Message` means its own, and appending the
-/// library's would define the name twice.
-fn defines_a_baked_type(src: &str, baked: &str) -> bool {
-    let declared = |text: &str| -> Vec<String> {
-        let mut names = Vec::new();
-        for line in text.lines() {
-            // A top-level function counts too (`tracing.kara`'s `with_span`),
-            // where a method's name does not.
-            let top = !line.starts_with(char::is_whitespace);
-            let line = line
-                .trim_start()
-                .trim_start_matches("pub ")
-                .trim_start_matches("shared ")
-                .trim_start_matches("effect ");
-            let fun = ["fn "];
-            let kinds = ["struct ", "enum ", "trait ", "type ", "resource "];
-            for kw in kinds.iter().chain(if top { &fun[..] } else { &[] }) {
-                if let Some(rest) = line.strip_prefix(kw) {
-                    let name: String = rest
-                        .chars()
-                        .take_while(|c| c.is_alphanumeric() || *c == '_')
-                        .collect();
-                    if !name.is_empty() {
-                        names.push(name);
-                    }
+/// Whether the program declares a type the baked file declares (one of
+/// `owners`, when there are any). A program with its own `Command` or
+/// `Message` means its own, and appending the library's would define the
+/// name twice.
+fn defines_a_baked_type(src: &str, baked: &str, owners: &[&str]) -> bool {
+    let ours = declared_names(src);
+    if !owners.is_empty() {
+        return owners.iter().any(|n| ours.iter().any(|o| o == n));
+    }
+    declared_names(baked).iter().any(|n| ours.contains(n))
+}
+
+/// The types, resources and top-level functions `text` declares.
+fn declared_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in text.lines() {
+        // A top-level function counts too (`tracing.kara`'s `with_span`),
+        // where a method's name does not.
+        let top = !line.starts_with(char::is_whitespace);
+        let line = line
+            .trim_start()
+            .trim_start_matches("pub ")
+            .trim_start_matches("shared ")
+            .trim_start_matches("effect ");
+        let fun = ["fn "];
+        let kinds = ["struct ", "enum ", "trait ", "type ", "resource "];
+        for kw in kinds.iter().chain(if top { &fun[..] } else { &[] }) {
+            if let Some(rest) = line.strip_prefix(kw) {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    names.push(name);
                 }
             }
         }
-        names
-    };
-    let ours = declared(src);
-    declared(baked).iter().any(|n| ours.contains(n))
+    }
+    names
+}
+
+/// Whether `src` names a baked module: it uses one of the module's `words`
+/// that it does not declare itself. A tree's own `struct Child` is not a
+/// use of `std.process`, where a program that builds the library's `Child`
+/// without a `Command` is one.
+fn names_baked(src: &str, words: &[&str]) -> bool {
+    let ours = declared_names(src);
+    words
+        .iter()
+        .any(|w| src.contains(w) && !ours.iter().any(|o| o == w))
 }
 
 /// The appended library's `#[compiler_builtin]` functions are stdlib items,
@@ -14553,10 +14595,10 @@ pub fn library_source(src: &str) -> (String, usize) {
     // `PriorityQueue`'s is appended. Most programs do not, and they are long.
     let baked: Vec<&str> = BAKED_SOURCES
         .iter()
-        .filter(|(text, words)| {
-            words.iter().any(|w| src.contains(w)) && !defines_a_baked_type(src, text)
+        .filter(|(text, words, owners)| {
+            names_baked(src, words) && !defines_a_baked_type(src, text, owners)
         })
-        .map(|(text, _)| *text)
+        .map(|(text, _, _)| *text)
         .collect();
     let mut lib = String::new();
     for (_, text) in crate::prelude::LIBRARY_SOURCES {

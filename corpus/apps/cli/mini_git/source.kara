@@ -398,20 +398,20 @@ fn show(e: IoError) -> String {
 
 fn sh(script: Str) -> Result[String, String] {
     let child = match Command.new("sh").arg("-c").arg(f"mkdir -p {ROOT} && cd {ROOT} && {script}")
-        .stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        .stdout(Stdio.piped()).stderr(Stdio.piped()).spawn() {
         Ok(c) => c,
         Err(e) => return Err(f"spawn: {show(e)}"),
     };
     let out = match child.stdout() {
-        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     let err = match child.stderr() {
-        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
         None => String.new(),
     };
     match child.wait() {
-        Ok(st) => if st.code == 0 { Ok(out) } else { Err(f"exit {st.code}: {err.trim()}") },
+        Ok(st) => if st.success() { Ok(out) } else { Err(f"exit {st.code().unwrap_or(-1)}: {err.trim()}") },
         Err(e) => Err(f"wait: {show(e)}"),
     }
 }

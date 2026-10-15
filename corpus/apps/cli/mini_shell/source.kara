@@ -379,7 +379,7 @@ impl Shell {
     }
 
     fn spawn(self, argv: own Vec[String], input: own Option[String]) -> (String, String, i64) {
-        let mut cmd = Command.new(argv[0].clone()).stdout(Stdio.Piped).stderr(Stdio.Piped);
+        let mut cmd = Command.new(argv[0].clone()).stdout(Stdio.piped()).stderr(Stdio.piped());
         for a in argv[1..argv.len()].iter() {
             cmd = cmd.arg(a.clone());
         }
@@ -389,7 +389,7 @@ impl Shell {
                 None => {}
             }
         }
-        cmd = cmd.stdin(if input.is_some() { Stdio.Piped } else { Stdio.Null });
+        cmd = cmd.stdin(if input.is_some() { Stdio.piped() } else { Stdio.null() });
         let child = match cmd.spawn() {
             Ok(c) => c,
             Err(_) => return (String.new(), f"mini_shell: {argv[0]}: command not found\n", 127),
@@ -397,7 +397,7 @@ impl Shell {
         match input {
             Some(text) => match child.stdin() {
                 Some(w) => {
-                    w.write(text).unwrap_or(());
+                    w.write_all(text.bytes()).unwrap_or(());
                     w.close().unwrap_or(());
                 }
                 None => {}
@@ -405,15 +405,15 @@ impl Shell {
             None => {}
         }
         let out = match child.stdout() {
-            Some(r) => r.read_to_string().unwrap_or(String.new()),
+            Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
             None => String.new(),
         };
         let err = match child.stderr() {
-            Some(r) => r.read_to_string().unwrap_or(String.new()),
+            Some(r) => { let mut s = String.new(); let _ = r.read_to_string(s); s },
             None => String.new(),
         };
         match child.wait() {
-            Ok(st) => (out, err, st.code),
+            Ok(st) => (out, err, (st.code().unwrap_or(-1) as i64)),
             Err(_) => (out, err, 1),
         }
     }

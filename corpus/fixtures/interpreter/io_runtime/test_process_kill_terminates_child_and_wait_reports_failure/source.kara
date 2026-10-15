@@ -7,7 +7,7 @@ fn main() {
                      Err(_) => println("kill_err"),
                  }
                  match child.wait() {
-                     Ok(status) => println(status.success),
+                     Ok(status) => println(status.success()),
                      Err(_) => println("wait_err"),
                  }
              }

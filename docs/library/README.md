@@ -68,7 +68,7 @@ Everything else is imported from a `std.*` module:
 | `std.net` | `TcpListener`, `TcpStream`, `TcpError` |
 | `std.hash` | `Hasher`, `BuildHasher`, `SipHash13BuildHasher`, `FxBuildHasher`, `StableHash` |
 | `std.iter` | `DoubleEndedIterator`, `Extend`, the adapter structs |
-| `std.process` | `exit` |
+| `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |
 | `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Backend`, `Record`, `json_backend`, `text_backend` |
 | `std.secret` | `Secret`, `ConstantTimeEq`, `Zeroize` |
 

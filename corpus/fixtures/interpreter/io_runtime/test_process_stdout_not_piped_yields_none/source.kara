@@ -1,5 +1,5 @@
 fn main() {
-         let cmd = Command.new("/bin/echo").arg("x").stdout(Stdio.Null);
+         let cmd = Command.new("/bin/echo").arg("x").stdout(Stdio.null());
          match cmd.spawn() {
              Ok(child) => {
                  match child.stdout() {

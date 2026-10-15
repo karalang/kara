@@ -8,51 +8,57 @@ fn show(e: IoError) -> String {
 }
 
 fn main() {
-    let echo = Command.new("sh".to_string())
-        .arg("-c".to_string())
-        .arg("printf \"$GREETING\" ; exit 3".to_string())
-        .env("GREETING".to_string(), "hi there".to_string())
-        .stdout(Stdio.Piped);
+    let echo = Command.new("sh")
+        .arg("-c")
+        .arg("printf \"$GREETING\" ; exit 3")
+        .env("GREETING", "hi there")
+        .stdout(Stdio.piped());
     match echo.spawn() {
         Ok(child) => {
             match child.stdout() {
-                Some(out) => match out.read_to_string() {
-                    Ok(s) => println(f"read [{s}]"),
-                    Err(e) => println(show(e)),
-                },
+                Some(out) => {
+                    let mut s = String.new();
+                    match out.read_to_string(s) {
+                        Ok(n) => println(f"read [{s}] {n}"),
+                        Err(e) => println(show(e)),
+                    }
+                }
                 None => println("no stdout"),
             }
             match child.stdout() { Some(_) => println("taken twice"), None => println("taken once") }
             match child.wait() {
-                Ok(st) => println(f"exit {st.code} {st.success}"),
+                Ok(st) => println(f"exit {st.code().unwrap()} {st.success()}"),
                 Err(e) => println(show(e)),
             }
-            match child.wait() { Ok(_) => println("waited twice"), Err(e) => println(show(e)) }
+            match child.wait() { Ok(st) => println(f"waited twice {st.code().unwrap()}"), Err(e) => println(show(e)) }
         }
         Err(e) => println(show(e)),
     }
-    let cat = Command.new("cat".to_string()).stdin(Stdio.Piped).stdout(Stdio.Piped);
+    let cat = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped());
     match cat.spawn() {
         Ok(child) => {
             match child.stdin() {
                 Some(w) => {
-                    match w.write("piped through".to_string()) { Ok(_) => println("wrote"), Err(e) => println(show(e)) }
+                    match w.write_all("piped through".bytes()) { Ok(_) => println("wrote"), Err(e) => println(show(e)) }
                     match w.close() { Ok(_) => println("closed"), Err(e) => println(show(e)) }
                 }
                 None => println("no stdin"),
             }
             match child.stdout() {
-                Some(out) => match out.read_to_string() {
-                    Ok(s) => println(f"cat [{s}]"),
-                    Err(e) => println(show(e)),
-                },
+                Some(out) => {
+                    let mut s = String.new();
+                    match out.read_to_string(s) {
+                        Ok(_) => println(f"cat [{s}]"),
+                        Err(e) => println(show(e)),
+                    }
+                }
                 None => println("no stdout"),
             }
-            match child.wait() { Ok(st) => println(f"cat exit {st.code}"), Err(e) => println(show(e)) }
+            match child.wait() { Ok(st) => println(f"cat exit {st.code().unwrap()}"), Err(e) => println(show(e)) }
         }
         Err(e) => println(show(e)),
     }
-    let sleeper = Command.new("sleep".to_string()).arg("5".to_string());
+    let sleeper = Command.new("sleep").arg("5");
     match sleeper.spawn() {
         Ok(child) => {
             match child.try_wait() {
@@ -61,12 +67,28 @@ fn main() {
                 Err(e) => println(show(e)),
             }
             match child.kill() { Ok(_) => println("killed"), Err(e) => println(show(e)) }
-            match child.wait() { Ok(st) => println(f"killed exit {st.code} {st.success}"), Err(e) => println(show(e)) }
+            match child.wait() {
+                Ok(st) => println(f"killed by {st.signal().unwrap()}, code none {st.code().is_none()}, {st.success()}"),
+                Err(e) => println(show(e)),
+            }
         }
         Err(e) => println(show(e)),
     }
-    match Command.new("/nonexistent/program".to_string()).spawn() {
+    match Command.new("/nonexistent/program").spawn() {
         Ok(_) => println("unexpected"),
         Err(e) => println(show(e)),
     }
+    match Command.new("sh").arg("-c").arg("printf out; printf err >&2; exit 4").output() {
+        Ok(o) => println(f"output [{String.from_utf8(o.stdout).unwrap()}] [{String.from_utf8(o.stderr).unwrap()}] {o.status.code().unwrap()}"),
+        Err(e) => println(show(e)),
+    }
+    let mut a = Command.new("printf").arg("a\nb\nc\n").stdout(Stdio.piped()).spawn().unwrap();
+    let b = Command.new("wc").arg("-l")
+        .stdin(Stdio.from_stdout(a.stdout().unwrap()))
+        .stdout(Stdio.piped())
+        .spawn()
+        .unwrap();
+    let out = b.wait_with_output().unwrap();
+    a.wait().unwrap();
+    println(f"a | b [{String.from_utf8(out.stdout).unwrap().trim()}]");
 }

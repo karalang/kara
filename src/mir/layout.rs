@@ -143,7 +143,8 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
         // A `TaskHandle` points at a block holding its task's result.
         // A `LinesIter` is its `BufReader`'s handle, borrowed.
         "Sender" | "Receiver" | "File" | "CStr" | "CString" | "TaskHandle" | "BufReader"
-        | "BufWriter" | "LinesIter" => Some(Cell::Handle),
+        | "BufWriter" | "LinesIter" | "Stdio" | "ChildProcess" | "ChildStdout" | "ChildStderr"
+        | "ChildStdin" => Some(Cell::Handle),
         "Atomic" | "Mutex" => Some(Cell::Inline(tys.tcx().adt_of(t)?.1.first().copied()?)),
         _ => None,
     }

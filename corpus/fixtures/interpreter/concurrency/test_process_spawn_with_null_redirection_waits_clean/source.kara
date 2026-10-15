@@ -1,11 +1,11 @@
 fn main() {
          let cmd = Command.new("/bin/echo")
              .arg("this-output-is-discarded")
-             .stdout(Stdio.Null);
+             .stdout(Stdio.null());
          match cmd.spawn() {
              Ok(child) => {
                  match child.wait() {
-                     Ok(status) => println(status.success),
+                     Ok(status) => println(status.success()),
                      Err(_) => println("wait_err"),
                  }
              }

@@ -238,6 +238,12 @@ pub const HANDLES: &[&str] = &[
     "Interner",
     "BufReader",
     "BufWriter",
+    // `std.process` (B-2026-10-15-6): a `Stdio`, a child and its pipes.
+    "Stdio",
+    "ChildProcess",
+    "ChildStdout",
+    "ChildStderr",
+    "ChildStdin",
 ];
 
 /// A struct or enum definition as the middle end needs it. Field types are

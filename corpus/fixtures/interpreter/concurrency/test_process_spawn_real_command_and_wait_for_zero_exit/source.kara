@@ -4,8 +4,8 @@ fn main() {
              Ok(child) => {
                  match child.wait() {
                      Ok(status) => {
-                         println(status.code);
-                         println(status.success);
+                         println(f"{status.code().unwrap_or(-1)}");
+                         println(status.success());
                      }
                      Err(_) => println("wait_err"),
                  }

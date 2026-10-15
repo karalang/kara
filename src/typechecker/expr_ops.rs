@@ -1367,6 +1367,32 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
             }
+            // The v2 `Stdio` is a handle with constructors where the legacy
+            // one was an enum (B-2026-10-15-6): `Stdio.Piped` is
+            // `Stdio.piped()`.
+            if type_name == "Stdio" && matches!(member.as_str(), "Inherit" | "Null" | "Piped") {
+                let lower = member.to_lowercase();
+                let constructor = self
+                    .env
+                    .impls
+                    .iter()
+                    .any(|imp| imp.target_type == "Stdio" && imp.methods.contains_key(&lower));
+                if constructor {
+                    self.type_error_with_fix_it(
+                        format!(
+                            "no associated function '{member}' on type 'Stdio'; `Stdio` is \
+                             built by a constructor now: write `Stdio.{lower}()`"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span: *span,
+                            replacement: format!("Stdio.{lower}()"),
+                        },
+                    );
+                    return Type::Error;
+                }
+            }
             if self.is_known_type_name(type_name)
                 && !crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&type_name.as_str())
                 // A comptime-derived type's associated fns (e.g. a derived

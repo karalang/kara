@@ -6,7 +6,7 @@ fn main() {
          match cmd.spawn() {
              Ok(child) => {
                  match child.wait() {
-                     Ok(s) => println(s.success),
+                     Ok(s) => println(s.success()),
                      Err(_) => println("wait_err"),
                  }
              }
