@@ -103,16 +103,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 170 |
 | diagnostics | 163 |
 | crash | 120 |
-| soundness | 108 |
+| soundness | 109 |
 | use-after-free | 91 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2912 |
+| codegen | 2913 |
 | interp | 935 |
-| typecheck | 444 |
+| typecheck | 445 |
 | other | 115 |
 | ownership | 104 |
 | cli | 76 |
@@ -220,6 +220,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-58 | 2026-10-15 | typecheck | low | `f64.from_bits(bits)` (the Rust spelling) is refused with `no associated function 'from_bits' on type 'f64'` and no hint that the library's spelling is `bits.bits_as_f64()` on an `i64`; neither `bits_as_f64` nor `to_bits` appears in design.md, so a binary-format reader has no documented way to decode an IEEE double | — |
 | B-2026-10-15-59 | 2026-10-15 | runtime | medium | The fs library cannot create a symbolic link, see one, or read or set a file's permissions or modification time, so an archive extractor (unzip, tar), an installer or a sync tool cannot restore what the archive records | — |
 | B-2026-10-15-60 | 2026-10-15 | typecheck | low | `karac check` refuses `.to_vec()` on an `Array[T, N]` (`no method 'to_vec' on type 'Array'`), though design.md § Method resolution says an `Array[T, N]` receiver also finds `Slice[T]`'s methods; `a.contains(x)` already resolves that way and `a.as_slice().to_vec()` works. | — |
+| B-2026-10-15-61 | 2026-10-15 | typecheck+codegen | high | `karac check` accepts writing through a read-only `Slice`: `let mut t = s.bytes(); t[i] = x;` and `let mut w = v[0..2]; w[0] = x;` both pass, though `bytes()` and a range subscript give `Slice[T]` and collections.md says writing needs a `mut Slice[T]`. Both backends then write into the source, the String's or the Vec's own buffer, even when it is not `mut`; for `bytes()` the MIR compiled backend writes into the String (a literal's too: `let s = "hello"` then prints `aello`) while `__mir-run` writes into a snapshot copy, so run and build differ | — |
 
 ### Relocated
 
