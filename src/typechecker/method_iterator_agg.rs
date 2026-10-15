@@ -245,26 +245,32 @@ impl<'a> super::TypeChecker<'a> {
         // silent Type::Error leniency as the terminals above). VecDeque is
         // included — same layout, same runtime walk.
         if matches!(method, "join" | "concat") {
-            let elem_is_str = match obj_ty {
+            // Any element with a `Display` form joins, as
+            // docs/library/collections.md gives `join` (B-2026-10-14-67).
+            let elem_ty = match obj_ty {
                 Type::Named { name, args: targs }
                     if matches!(name.as_str(), "Vec" | "VecDeque") && targs.len() == 1 =>
                 {
-                    Some(matches!(targs[0], Type::Str))
+                    Some(targs[0].clone())
                 }
                 Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
                     Type::Named { name, args: targs }
                         if matches!(name.as_str(), "Vec" | "VecDeque") && targs.len() == 1 =>
                     {
-                        Some(matches!(targs[0], Type::Str))
+                        Some(targs[0].clone())
                     }
                     _ => None,
                 },
                 _ => None,
             };
+            let elem_is_str = elem_ty.map(|t| {
+                matches!(t, Type::Str | Type::TypeVar(_) | Type::Error)
+                    || self.type_supports_display(&t)
+            });
             if let Some(is_str) = elem_is_str {
                 if !is_str {
                     self.type_error(
-                        format!("Vec.{method}() requires String elements"),
+                        format!("Vec.{method}() requires elements that implement Display"),
                         *span,
                         TypeErrorKind::TypeMismatch,
                     );

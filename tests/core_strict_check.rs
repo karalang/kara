@@ -4723,3 +4723,59 @@ fn main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-14-67: `join` and `concat` take any element with a `Display`
+/// form; an element without one is refused, naming `Display`.
+#[test]
+fn check_join_of_display_elements() {
+    accepted(
+        "join-str-num",
+        r#"
+fn main() {
+    let s: Str = "a";
+    let mut v: Vec[Str] = Vec.new();
+    v.push(s); v.push(s);
+    println(v.join(" "));
+    println(v[0..2].join(" "));
+    let n: Vec[i64] = vec![1, 2];
+    println(n.join(","));
+    let w = vec!["x".to_string(), "y".to_string()];
+    println(f"{w.join("-")} {w[0..2].join("+")} {w.concat()}");
+}
+"#,
+    );
+    accepted(
+        "join-display",
+        r#"
+struct P { x: i64 }
+impl Display for P {
+    fn to_string(ref self) -> String { f"<{self.x}>" }
+}
+fn main() {
+    let f: Vec[f64] = vec![1.5, 2.0];
+    let c: Vec[char] = vec!['a', 'b'];
+    let b: Vec[bool] = vec![true, false];
+    let p = vec![P { x: 1 }, P { x: 2 }];
+    let e: Vec[i64] = Vec.new();
+    println(f"{f.join(";")}|{c.concat()}|{b.join(" ")}|{p.join(", ")}|{e.join(",")}|");
+}
+"#,
+    );
+    let (dir, path) = fixture(
+        "join-no-display",
+        r#"
+struct Q { x: i64 }
+fn main() {
+    let q = vec![Q { x: 1 }];
+    println(q.join(","));
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success() && err.contains("requires elements that implement Display"),
+        "join-no-display: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

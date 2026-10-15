@@ -63,8 +63,9 @@ impl[T] Slice[T] {
     }
 }
 
-impl Slice[String] {
-    /// The texts, with `sep` between each adjacent pair (B-2026-10-14-4).
+impl[T: Display] Slice[T] {
+    /// The elements' `Display` forms, with `sep` between each adjacent pair
+    /// (B-2026-10-14-4, B-2026-10-14-67).
     fn join(self, sep: Str) -> String {
         let mut out = String.new();
         let mut first = true;
@@ -73,12 +74,12 @@ impl Slice[String] {
                 out.push_str(sep);
             }
             first = false;
-            out.push_str(x);
+            out.push_str(f"{x}");
         }
         out
     }
 
-    /// The texts, with nothing between.
+    /// The elements' `Display` forms, with nothing between.
     fn concat(self) -> String {
         self.join("")
     }

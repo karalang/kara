@@ -400,6 +400,8 @@ impl<'a> super::TypeChecker<'a> {
                 // `f"{x}"` rejected every `F64`, which made the wrapper the
                 // compiler recommends for `Ord` contexts unprintable.
                 "F32" | "F64" | "F16" | "Bf16" if args.is_empty() => true,
+                // `Str`, the string view, displays as its text.
+                "StringSlice" if args.is_empty() => true,
                 _ => {
                     if self.env.has_impl("Display", name, args) {
                         return true;

@@ -1081,6 +1081,10 @@ impl TypeEnv {
             "Hash" => return self.type_supports_hash(ty),
             "Default" => return self.type_supports_default(ty),
             "Fn" | "MutFn" | "OnceFn" => return Self::type_supports_fn_trait(ty, trait_name),
+            // The scalars and strings display without an impl-table entry,
+            // so `impl[T: Display] Slice[T]` (the library's `join`) takes
+            // them (B-2026-10-14-67).
+            "Display" if display_builtin(ty) => return true,
             _ => {}
         }
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
@@ -1313,5 +1317,16 @@ impl TypeEnv {
             (Type::Error, _) | (_, Type::Error) => true,
             _ => types_compatible(&a, &b),
         }
+    }
+}
+
+/// A type that displays with no impl of its own: a scalar, a `String` or a
+/// `Str`, or a reference to one.
+fn display_builtin(ty: &Type) -> bool {
+    match ty {
+        Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char | Type::Str => true,
+        Type::Ref(inner) | Type::MutRef(inner) => display_builtin(inner),
+        Type::Named { name, args } => name == "StringSlice" && args.is_empty(),
+        _ => false,
     }
 }

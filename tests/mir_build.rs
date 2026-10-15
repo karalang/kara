@@ -2451,3 +2451,58 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-14-67: `join` and `concat` take any element with a `Display`
+/// form, on a `Vec` and on a slice of one.
+#[test]
+fn mir_join_of_str_and_number_elements() {
+    let src = r#"
+fn main() {
+    let s: Str = "a";
+    let mut v: Vec[Str] = Vec.new();
+    v.push(s); v.push(s);
+    println(v.join(" "));
+    println(v[0..2].join(" "));
+    let n: Vec[i64] = vec![1, 2];
+    println(n.join(","));
+    let w = vec!["x".to_string(), "y".to_string()];
+    println(f"{w.join("-")} {w[0..2].join("+")} {w.concat()}");
+}
+"#;
+    let want = "a a\na a\n1,2\nx-y x+y xy\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-14-67: `join` and `concat` take any element with a `Display`
+/// form, on a `Vec` and on a slice of one.
+#[test]
+fn mir_join_of_any_display_elements() {
+    let src = r#"
+struct P { x: i64 }
+impl Display for P {
+    fn to_string(ref self) -> String { f"<{self.x}>" }
+}
+fn main() {
+    let f: Vec[f64] = vec![1.5, 2.0];
+    let c: Vec[char] = vec!['a', 'b'];
+    let b: Vec[bool] = vec![true, false];
+    let p = vec![P { x: 1 }, P { x: 2 }];
+    let e: Vec[i64] = Vec.new();
+    println(f"{f.join(";")}|{c.concat()}|{b.join(" ")}|{p.join(", ")}|{e.join(",")}|");
+}
+"#;
+    let want = "1.5;2.0|ab|true false|<1>, <2>||\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -1545,7 +1545,7 @@ impl<'a> super::TypeChecker<'a> {
             // (runtime/stdlib/source/collections.kara), which the MIR
             // pipeline types from source; a check without the library
             // gives them the same signatures (B-2026-10-14-4).
-            "join" | "concat" if matches!(elem, Type::Str) => {
+            "join" | "concat" if matches!(elem, Type::Str) || self.type_supports_display(&elem) => {
                 let want = usize::from(method == "join");
                 if args.len() != want {
                     self.type_error(

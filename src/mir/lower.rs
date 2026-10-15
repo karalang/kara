@@ -11998,7 +11998,25 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // (`impl Reads for Array[i64, 3]`) is recorded as a builtin.
                 let rt = self.expr_ty(object)?;
                 let (_, base) = self.strip_ty_full(rt);
-                if let HK::Slice { elem, .. } = self.tys().tcx().kind(base) {
+                // `join` of a `Vec` of anything but `String`, and `concat` of
+                // any `Vec`, is the library's `impl[T: Display] Slice[T]`
+                // (B-2026-10-14-67); a `Vec[String]`'s `join` is the native.
+                let elem = match self.tys().tcx().kind(base) {
+                    HK::Slice { elem, .. } => Some(elem),
+                    HK::Intrinsic { kind, args }
+                        if matches!(method, "join" | "concat") && kind.name() == "Vec" =>
+                    {
+                        let args = self.tys().tcx().list(args);
+                        match args.as_slice() {
+                            [e] if method == "concat" || self.tys().display(*e) != "String" => {
+                                Some(*e)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(elem) = elem {
                     let lib = self.lcx.fns.iter().find(|(_, i)| {
                         i.impl_slice
                             && i.f.name == method

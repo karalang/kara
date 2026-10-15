@@ -13046,8 +13046,8 @@ fn test_operators_page_carries_no_superseded_wording() {
         "fn main() { let a = [1, 2]; let b = [3, 4]; let c = a.concat(b); }",
     );
     assert!(
-        emitted.contains("Vec.concat() requires String elements"),
-        "`Vec.concat(other)` is no longer the zero-argument String join the \
+        emitted.contains("Vec.concat() expects 0 argument(s), found 1"),
+        "`Vec.concat(other)` is no longer the zero-argument join the \
          page describes in rejection 1 — update that paragraph. Got:\n{emitted}"
     );
 
