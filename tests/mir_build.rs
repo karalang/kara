@@ -2126,3 +2126,253 @@ fn main() {
     assert!(err.contains("(borrow at bb"), "{err}");
     assert!(err.contains(" at 5:"), "{err}");
 }
+
+/// B-2026-10-15-40: a user variant `None` and Option's bare `None` are told apart by the value's type.
+#[test]
+fn mir_user_variant_named_none_does_not_capture_option() {
+    let src = r#"
+enum V { None, Int(i64) }
+fn half(x: i64) -> Option[i64] {
+    if x % 2 == 0 {
+        return Some(x / 2);
+    }
+    None
+}
+fn main() {
+    let v = V.Int(3);
+    match v {
+        V.None => println("none"),
+        V.Int(i) => println(f"int {i}"),
+    }
+    let w = V.None;
+    match w {
+        V.None => println("none"),
+        V.Int(i) => println(f"int {i}"),
+    }
+    let o: Option[i64] = None;
+    println(f"{half(4).unwrap_or(-1)} {half(3).unwrap_or(-1)} {o.is_none()}");
+}
+"#;
+    let want = "int 3\nnone\n2 -1 true\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-15-34: a user `fn format` (or `format_spec`, `panic_message`) does not take the f-string's call.
+#[test]
+fn mir_user_fn_named_like_a_builder_native_is_not_an_f_string() {
+    let src = r#"
+fn format(n: i64) -> String {
+    let s = f"<{n}>";
+    s
+}
+fn format_spec(a: ref String, b: i64) -> String { f"{a}/{b:>4}" }
+fn panic_message(n: i64) -> i64 { n * 2 }
+fn main() {
+    let names = vec!["x".to_string()];
+    println(format(3));
+    println(f"scripts/{names[0]}.lua {format_spec(names[0], 2)} {panic_message(4)}");
+}
+"#;
+    let want = "<3>\nscripts/x.lua x/   2 8\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-15-22: `let mut t = since` with `since: ref i64` binds an `i64` that `t = t + 1` writes.
+#[test]
+fn mir_let_mut_of_a_ref_to_a_copy_value_is_a_counter() {
+    let src = r#"
+fn look(m: ref SortedMap[String, i64], k: Str, dflt: i64) -> i64 {
+    let since = m.get(k).unwrap_or(dflt);
+    let mut t = since;
+    t = t + 1;
+    t += 2;
+    t
+}
+fn main() {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    m.insert("a".to_string(), 5);
+    let since = m.get("a").unwrap_or(9);
+    let mut t = since;
+    t = t + 1;
+    println(f"{t} {since}");
+    let mut u = m.get("a").unwrap_or(9);
+    u = since;
+    u += 1;
+    println(f"{u} {look(m, "a", 0)} {look(m, "b", 10)}");
+}
+"#;
+    let want = "6 5\n6 8 13\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-15-19: a `String` passes as a `Str` parameter of a method called through a trait bound.
+#[test]
+fn mir_string_arg_to_a_str_param_through_a_trait_bound() {
+    let src = r#"
+trait Store {
+    fn get(self, key: Str) -> Option[i64];
+}
+struct Mem { n: i64 }
+impl Store for Mem {
+    fn get(self, key: Str) -> Option[i64] { if key == "a" { Some(self.n) } else { None } }
+}
+struct Line { sku: String }
+struct Service[S: Store] { store: S }
+impl[S: Store] Service[S] {
+    fn price(self, l: ref Line) -> i64 { self.store.get(l.sku).unwrap_or(-1) }
+}
+fn main() {
+    let s = Service { store: Mem { n: 7 } };
+    let a = Line { sku: "a".to_string() };
+    let b = Line { sku: "b".to_string() };
+    println(f"{s.price(a)} {s.price(b)}");
+}
+"#;
+    let want = "7 -1\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-15-33: methods of a `shared struct` called on a borrowed handle, and on one bound by a pattern over a borrowed enum.
+#[test]
+fn mir_methods_on_a_borrowed_shared_handle() {
+    let src = r#"
+enum Val { Int(i64), Nil }
+shared struct T {
+    id: i64,
+    mut arr: Vec[i64],
+}
+impl T {
+    fn noop(ref self, v: i64) {
+        let _ = v;
+    }
+    fn size(ref self) -> i64 {
+        self.arr.len()
+    }
+    fn put(ref self, v: own Val) -> bool {
+        match v {
+            Val.Int(n) => { self.arr.push(n); true }
+            Val.Nil => false,
+        }
+    }
+    fn get(ref self, k: ref Val) -> Val {
+        match k {
+            Val.Int(i) => if *i < self.arr.len() { Val.Int(self.arr[*i]) } else { Val.Nil },
+            Val.Nil => Val.Nil,
+        }
+    }
+}
+enum E { A(T), B }
+fn f(t: ref T) -> i64 {
+    t.noop(5);
+    let n = t.size();
+    t.put(Val.Int(9));
+    let ok = t.put(Val.Nil);
+    match t.get(Val.Int(0)) {
+        Val.Int(x) => println(f"got {x} {ok}"),
+        Val.Nil => println("nil"),
+    }
+    n + t.size()
+}
+fn g(er: ref E) {
+    match er {
+        E.A(h) => { h.put(Val.Int(2)); println(f"h {h.size()}"); }
+        E.B => {}
+    }
+}
+fn main() {
+    let t = T { id: 1, arr: Vec.new() };
+    println(f"{f(t)}");
+    let e = E.A(t);
+    g(e);
+}
+"#;
+    let want = "got 9 false\n1\nh 2\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-15-37: a parameter named `ast` or `compiler` is the parameter, not the comptime module.
+#[test]
+fn mir_a_local_named_ast_or_compiler_shadows_the_comptime_module() {
+    let src = r#"
+struct A { xs: Vec[i64] }
+impl A {
+    fn add(mut ref self, x: i64) -> i64 {
+        self.xs.push(x);
+        self.xs.len()
+    }
+}
+fn f(ast: mut ref A) -> i64 {
+    ast.add(3)
+}
+fn g(compiler: ref A) -> i64 {
+    compiler.xs.len()
+}
+fn main() {
+    let mut a = A { xs: Vec.new() };
+    println(f"{f(mut a)}");
+    let ast = 5;
+    println(f"{ast} {g(a)}");
+}
+"#;
+    let want = "1\n5 1\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-14-66: width and alignment apply to a `Str` hole.
+#[test]
+fn mir_format_width_on_a_str_hole() {
+    let src = r#"
+fn row(name: Str, n: i64) -> String { f"[{name:<6}|{name:>5}|{name:^7}|{n:>4}]" }
+fn main() {
+    let c: Str = "abc";
+    println(f"[{c:<6}]");
+    let s = "hello".to_string();
+    println(row(s, 7));
+    println(row("ab", 12));
+}
+"#;
+    let want = "[abc   ]\n[hello |hello| hello |   7]\n[ab    |   ab|  ab   |  12]\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

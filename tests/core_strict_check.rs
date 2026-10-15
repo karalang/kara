@@ -4541,3 +4541,104 @@ fn a_type_after_an_enum_may_share_a_variant_name() {
          }\n",
     );
 }
+
+/// B-2026-10-15-19: a `String` passes as a `Str` parameter of a method called through a trait bound, as it does on the concrete type.
+#[test]
+fn check_string_arg_to_a_str_param_through_a_trait_bound() {
+    accepted(
+        "str-through-bound",
+        r#"
+trait Store {
+    fn get(self, key: Str) -> Option[i64];
+}
+struct Mem { n: i64 }
+impl Store for Mem {
+    fn get(self, key: Str) -> Option[i64] { if key == "a" { Some(self.n) } else { None } }
+}
+fn look[S: Store](s: ref S, k: ref String) -> i64 {
+    s.get(k).unwrap_or(0)
+}
+fn main() {
+    let m = Mem { n: 7 };
+    let k = "a".to_string();
+    println(f"{m.get(k)} {look(m, k)}");
+}
+"#,
+    );
+}
+
+/// B-2026-10-15-37: a local or parameter named `ast` or `compiler` shadows the comptime module.
+#[test]
+fn check_a_local_named_ast_or_compiler_shadows_the_comptime_module() {
+    accepted(
+        "ast-param",
+        r#"
+struct A { xs: Vec[i64] }
+impl A {
+    fn add(mut ref self, x: i64) -> i64 {
+        self.xs.push(x);
+        self.xs.len()
+    }
+}
+fn f(ast: mut ref A) -> i64 {
+    ast.add(3)
+}
+fn g(compiler: ref A) -> i64 {
+    compiler.xs.len()
+}
+fn main() {
+    let mut a = A { xs: Vec.new() };
+    println(f"{f(mut a)}");
+    let ast = 5;
+    println(f"{ast} {g(a)}");
+}
+"#,
+    );
+}
+
+/// B-2026-10-14-66: width and alignment apply to a `Str` hole.
+#[test]
+fn check_format_width_on_a_str_hole() {
+    accepted(
+        "str-width",
+        r#"
+fn row(name: Str, n: i64) -> String { f"[{name:<6}|{name:>5}|{name:^7}|{n:>4}]" }
+fn main() {
+    let c: Str = "abc";
+    println(f"[{c:<6}]");
+    let s = "hello".to_string();
+    println(row(s, 7));
+    println(row("ab", 12));
+}
+"#,
+    );
+}
+
+/// B-2026-10-15-22: `let mut t = since` with `since: ref i64` is a counter `t = t + 1` writes.
+#[test]
+fn check_let_mut_of_a_ref_to_a_copy_value_is_a_counter() {
+    accepted(
+        "let-mut-ref-copy",
+        r#"
+fn look(m: ref SortedMap[String, i64], k: Str, dflt: i64) -> i64 {
+    let since = m.get(k).unwrap_or(dflt);
+    let mut t = since;
+    t = t + 1;
+    t += 2;
+    t
+}
+fn main() {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    m.insert("a".to_string(), 5);
+    let since = m.get("a").unwrap_or(9);
+    let mut t = since;
+    t = t + 1;
+    println(f"{t} {since}");
+    let mut u = m.get("a").unwrap_or(9);
+    u = since;
+    u += 1;
+    println(f"{u} {look(m, "a", 0)} {look(m, "b", 10)}");
+}
+"#,
+    );
+}

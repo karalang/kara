@@ -498,6 +498,11 @@ impl<'a> super::TypeChecker<'a> {
         if module != "ast" && module != "compiler" {
             return None;
         }
+        // A local or parameter of that name shadows the module, as it does
+        // any other (B-2026-10-15-37).
+        if self.local_scope.lookup(module).is_some() {
+            return None;
+        }
         // Infer args once up front (uniform with the rest of dispatch and so
         // arg-internal diagnostics still fire on the error paths below).
         let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();

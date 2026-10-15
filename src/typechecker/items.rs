@@ -7630,12 +7630,12 @@ impl<'a> super::TypeChecker<'a> {
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
             ),
             StmtKind::Let {
-                is_mut: _,
+                is_mut,
                 pattern,
                 ty,
                 value,
             } => {
-                let expected_ty = if let Some(ty_expr) = ty {
+                let mut expected_ty = if let Some(ty_expr) = ty {
                     // Lower with the enclosing fn's DIM params in scope so a
                     // shape param `let p: Tensor[f32, [D]]` resolves `D`; type
                     // params stay `Named` (B-2026-07-13-5 leg B).
@@ -7650,6 +7650,23 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_uninferrable_binding_origin(pattern, &inferred, value);
                     inferred
                 };
+                // core §5.10: `let mut t = since` with `since: ref i64` keeps a
+                // counter, not a reference: a `mut` binding of a reference to a
+                // `Copy` value reads the value, as `let mut t: i64 = since`
+                // would, so `t = t + 1` assigns an `i64` (B-2026-10-15-22).
+                if *is_mut
+                    && ty.is_none()
+                    && (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                    && matches!(pattern.kind, PatternKind::Binding(_))
+                {
+                    if let Type::Ref(inner) | Type::MutRef(inner) = &expected_ty {
+                        if !matches!(**inner, Type::TypeParam(_) | Type::Error)
+                            && self.is_copy_type_during_check(inner)
+                        {
+                            expected_ty = (**inner).clone();
+                        }
+                    }
+                }
                 // design.md § "The index operator (`expr[i]`)" — a `let`
                 // initializer is the canonical value position, so a non-`Copy`
                 // element read here is rejected (B-2026-08-26-21).

@@ -1079,7 +1079,13 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             for (arg, param) in args.iter().zip(param_types.iter()) {
                 let arg_ty = self.infer_expr(&arg.value);
-                self.check_assignable(param, &arg_ty, arg.value.span);
+                // A `String` passes as a `Str` parameter here as it does on
+                // the concrete type (B-2026-10-15-19).
+                if !(super::exprs::is_str_view(param)
+                    && super::exprs::is_string_place_type(&arg_ty))
+                {
+                    self.check_assignable(param, &arg_ty, arg.value.span);
+                }
                 self.warn_partial_move_of_drop_struct(&arg.value, param);
                 // B-2026-09-06-31 — the borrowed-root twin.
                 //

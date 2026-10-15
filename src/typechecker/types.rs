@@ -633,6 +633,11 @@ pub(super) fn impl_args_match(stored: &[Type], call_site: &[Type]) -> bool {
 /// wrapped-type's methods become reachable.
 pub(super) fn receiver_for_method_lookup(obj_ty: &Type) -> Type {
     match obj_ty {
+        // A borrowed handle of a `shared` type looks up its methods as the
+        // handle does (B-2026-10-15-33).
+        Type::Ref(inner) | Type::MutRef(inner) if matches!(**inner, Type::Shared(_)) => {
+            receiver_for_method_lookup(inner)
+        }
         Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
         Type::Shared(name) => Type::Named {
             name: name.clone(),

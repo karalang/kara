@@ -48,7 +48,8 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
     }
     let is_int = matches!(ty, Type::Int(_) | Type::UInt(_));
     let is_float = matches!(ty, Type::Float(_));
-    let is_str = matches!(ty, Type::Str);
+    // `Str` is the string view, and formats as the string (B-2026-10-14-66).
+    let is_str = matches!(ty, Type::Str) || is_str_view(ty);
     if is_int {
         if fs.precision.is_some() {
             return Err(format!(

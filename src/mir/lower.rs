@@ -326,6 +326,10 @@ fn view_result(t: &ast::TypeExpr, params: &[&str]) -> bool {
     }
 }
 
+/// The natives the builder calls by bare name rather than through a
+/// definition.
+const BUILDER_NATIVES: [&str; 4] = ["format", "format_spec", "panic_message", "dbg"];
+
 struct FnItem<'a> {
     f: &'a Function,
     /// The impl's target type and how many generic parameters the impl
@@ -896,6 +900,17 @@ impl<'a> Lcx<'a> {
                 impl_prim: Some(t), ..
             }) => {
                 let s = format!("{}.{name}", self.tys.display(*t));
+                if args.is_empty() {
+                    s
+                } else {
+                    format!("{s}[{}]", show(args))
+                }
+            }
+            // The builder calls these natives by bare name (an f-string is
+            // `format`), and a body of the same name would take the call:
+            // a user function so named is renamed apart (B-2026-10-15-34).
+            _ if BUILDER_NATIVES.contains(&name.as_str()) => {
+                let s = format!("{name}#fn");
                 if args.is_empty() {
                     s
                 } else {
@@ -3066,10 +3081,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let l = self.user_local(name, t, pattern.id);
                     self.push_scope();
                     // `let idx: i64 = m.get(k).unwrap()` reads the `ref i64`
-                    // (core semantics §5.10).
+                    // (core semantics §5.10), as does `let mut t = since` of a
+                    // `ref i64`, which the checker types `i64`.
                     let vt = self.expr_ty(value)?;
-                    if ty.is_some()
-                        && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                    if !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
                         && matches!(self.tys().tcx().kind(vt), HK::Ref(i) | HK::MutRef(i) if i == t)
                     {
                         let op = self.owned_operand(value, t)?;
