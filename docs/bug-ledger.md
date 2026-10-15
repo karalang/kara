@@ -96,13 +96,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 273 |
+| missing-feature | 274 |
 | codegen-gap | 265 |
 | false-positive | 205 |
 | other | 173 |
 | perf | 170 |
 | diagnostics | 164 |
-| crash | 120 |
+| crash | 121 |
 | soundness | 111 |
 | use-after-free | 91 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2918 |
-| interp | 939 |
-| typecheck | 445 |
+| codegen | 2920 |
+| interp | 940 |
+| typecheck | 446 |
 | other | 115 |
 | ownership | 106 |
 | cli | 76 |
@@ -212,9 +212,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-61 | 2026-10-15 | typecheck+codegen | high | `karac check` accepts writing through a read-only `Slice`: `let mut t = s.bytes(); t[i] = x;` and `let mut w = v[0..2]; w[0] = x;` both pass, though `bytes()` and a range subscript give `Slice[T]` and collections.md says writing needs a `mut Slice[T]`. Both backends then write into the source, the String's or the Vec's own buffer, even when it is not `mut`; for `bytes()` the MIR compiled backend writes into the String (a literal's too: `let s = "hello"` then prints `aello`) while `__mir-run` writes into a snapshot copy, so run and build differ | — |
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
-| B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock; the interpreter does not yet run `TaskGroup.spawn_frame` under the coroutine transform; E0500 for a task spawned on a parameter group asks to declare the captured value before the group | — |
+| B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
 | B-2026-10-15-73 | 2026-10-15 | parser | low | An unsuffixed `i128::MIN`, `-170141183460469231731687303715884105728`, is refused at parse with advice to add a `u128` suffix, although `let w: i128 = -170141183460469231731687303715884105728;` is in range; the `i128`-suffixed spelling works | — |
 | B-2026-10-15-74 | 2026-10-15 | codegen | low | `u128.rotate_left` / `rotate_right` (and `i128`) are not lowered on the compiled v2 backends: `__mir-llvm-run` stops with ``native `u128.rotate_right` is not lowered yet``, while `__mir-run` prints the rotated value | — |
+| B-2026-10-15-75 | 2026-10-15 | codegen | low | Under `KARAC_MIR_COROUTINES=1`, a task body that passes `mut buf` to a suspending call (`conn.read(mut buf)`) gets a coroutine resume function whose MIR copies the saved `mut ref` out of the frame; `karac __mir-run` refuses it as invalid MIR (`copy of (*_1).6 whose type mut ref Array[u8, 4] is not Copy`), while `__mir-llvm-run` runs it | — |
+| B-2026-10-15-76 | 2026-10-15 | typecheck+interp+codegen | medium | The arithmetic operator traits have no associated `Output`: runtime/stdlib/sub.kara declares `fn sub(own self, rhs: own Self) -> Self` (add, mul and div likewise), so `impl Sub for Instant { type Output = Duration; .. }` from design.md § Operator Traits cannot be written and `later - earlier` cannot yield a `Duration` | — |
 
 ### Relocated
 
