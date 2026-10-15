@@ -1,0 +1,715 @@
+// A process supervisor in the style of supervisord: it reads an INI file
+// of programs, starts each one as a real child process, polls them, and
+// applies a restart policy when one exits.
+//
+// Per program: the command (split with shell quoting rules), `autorestart`
+// (true, false, or unexpected: restart only on an exit code not listed in
+// `exitcodes`), `startretries` with a linear backoff, `max_runtime_ms`
+// (kill a child that runs too long), `environment` (KEY=VALUE pairs, quoted
+// values allowed, plus SUPERVISOR_PROGRAM), and `stdout_logfile` with
+// size-based rotation to .1, .2 ... A spawn that fails (a missing binary)
+// counts as a failed start. Unknown keys are warnings; bad values and a
+// program without a command are errors.
+//
+// The supervisor keeps a virtual clock: it sleeps `poll_ms` between polls
+// and adds `poll_ms` to it, so backoff and timeouts are counted in polls
+// and the output is the same however fast the machine is.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-15-10  there is no `Clock.now()`, so time is the virtual
+//                    clock above rather than a monotonic reading
+//   B-2026-10-14-53  `karac check` treats a path passed to `fs.exists`,
+//                    `fs.remove_file`, `fs.rename` as moved, so the paths
+//                    are cloned
+
+const CONFIG: Str = "; supervisor.ini: the programs to keep running
+[supervisor]
+poll_ms = 10
+
+[program:flaky]
+; fails twice, then comes up
+command = sh -c 'n=$(cat flaky.count 2>/dev/null || echo 0); n=$((n+1)); echo $n > flaky.count; echo \"flaky attempt $n\"; [ $n -ge 3 ] && exit 0; exit 1'
+autorestart = unexpected
+startretries = 3
+backoff_ms = 30
+
+[program:broken]
+command = sh -c \"echo 'cannot bind port' >&2; exit 2\"
+autorestart = true
+startretries = 2
+backoff_ms = 20
+
+[program:hang]
+command = sleep 30
+max_runtime_ms = 300
+autorestart = false
+
+[program:chatty]
+command = sh -c 'for i in 1 2 3 4 5 6 7; do echo \"line $i of the chatty log\"; done; echo oops >&2'
+stdout_logfile = chatty.log
+stdout_maxbytes = 60
+stdout_backups = 2
+colour = blue
+
+[program:greeter]
+command = sh -c 'echo \"$GREETING from $SUPERVISOR_PROGRAM (level $LEVEL)\"'
+environment = GREETING=\"hello there\",LEVEL=3
+
+[program:ghost]
+command = /nonexistent/daemon --serve
+startretries = 1
+
+[program:graceful]
+command = sh -c \"echo draining; exit 3\"
+exitcodes = 0,3
+autorestart = unexpected
+
+[program:nocmd]
+autorestart = true
+
+[program:typo]
+command = true
+startretries = lots
+";
+
+enum State { Stopped, Running, Backoff, Exited, Fatal, Killed }
+
+fn state_name(s: ref State) -> String {
+    match s {
+        State.Stopped => "STOPPED".to_string(),
+        State.Running => "RUNNING".to_string(),
+        State.Backoff => "BACKOFF".to_string(),
+        State.Exited => "EXITED".to_string(),
+        State.Fatal => "FATAL".to_string(),
+        State.Killed => "KILLED".to_string(),
+    }
+}
+
+struct Prog {
+    name: String,
+    command: String,
+    has_command: bool,
+    argv: Vec[String],
+    autorestart: String,
+    startretries: i64,
+    backoff_ms: i64,
+    max_runtime_ms: i64,
+    exitcodes: Vec[i64],
+    env_keys: Vec[String],
+    env_vals: Vec[String],
+    logfile: String,
+    maxbytes: i64,
+    backups: i64,
+    state: State,
+    starts: i64,
+    last: String,
+    events: Vec[String],
+    child: Option[Child],
+    out: Option[ChildStdout],
+    err: Option[ChildStderr],
+    started_at: i64,
+    next_start: i64,
+}
+
+fn new_prog(name: Str) -> Prog {
+    let mut codes: Vec[i64] = Vec.new();
+    codes.push(0);
+    Prog {
+        name: name.to_string(),
+        command: String.new(),
+        has_command: false,
+        argv: Vec.new(),
+        autorestart: "unexpected".to_string(),
+        startretries: 3,
+        backoff_ms: 50,
+        max_runtime_ms: 0,
+        exitcodes: codes,
+        env_keys: Vec.new(),
+        env_vals: Vec.new(),
+        logfile: String.new(),
+        maxbytes: 0,
+        backups: 0,
+        state: State.Stopped,
+        starts: 0,
+        last: "-".to_string(),
+        events: Vec.new(),
+        child: None,
+        out: None,
+        err: None,
+        started_at: 0,
+        next_start: 0,
+    }
+}
+
+// ---------------------------------------------------------------- parsing
+
+const SQUOTE: u8 = 39u8;
+const DQUOTE: u8 = 34u8;
+const BACKSLASH: u8 = 92u8;
+
+fn byte_str(b: u8) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    v.push(b);
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+// Split a command line the way a POSIX shell does for words: whitespace
+// separates, single quotes are literal, double quotes allow \" \\ \$ \`,
+// and a backslash outside quotes escapes the next byte.
+fn split_command(s: Str) -> Result[Vec[String], String] {
+    let b = s.bytes();
+    let mut words: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut have = false;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == 32u8 or c == 9u8 {
+            if have {
+                words.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+                cur = Vec.new();
+                have = false;
+            }
+            i += 1;
+        } else if c == SQUOTE {
+            let mut j = i + 1;
+            while j < b.len() and b[j] != SQUOTE {
+                j += 1;
+            }
+            if j >= b.len() {
+                return Err("unterminated single quote".to_string());
+            }
+            for k in i + 1..j {
+                cur.push(b[k]);
+            }
+            have = true;
+            i = j + 1;
+        } else if c == DQUOTE {
+            i += 1;
+            loop {
+                if i >= b.len() {
+                    return Err("unterminated double quote".to_string());
+                }
+                if b[i] == DQUOTE {
+                    break;
+                }
+                let n = if i + 1 < b.len() { b[i + 1] } else { 0u8 };
+                if b[i] == BACKSLASH and (n == DQUOTE or n == BACKSLASH or n == 36u8 or n == 96u8) {
+                    cur.push(n);
+                    i += 2;
+                } else {
+                    cur.push(b[i]);
+                    i += 1;
+                }
+            }
+            have = true;
+            i += 1;
+        } else if c == BACKSLASH and i + 1 < b.len() {
+            cur.push(b[i + 1]);
+            have = true;
+            i += 2;
+        } else {
+            cur.push(c);
+            have = true;
+            i += 1;
+        }
+    }
+    if have {
+        words.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    }
+    Ok(words)
+}
+
+struct EnvPairs { keys: Vec[String], vals: Vec[String] }
+
+fn parse_env(s: Str) -> Result[EnvPairs, String] {
+    let mut out = EnvPairs { keys: Vec.new(), vals: Vec.new() };
+    let mut i = 0;
+    while i < s.len() {
+        let rest = s.substring(i, s.len());
+        let eq = match rest.find("=") {
+            Some(k) => i + k,
+            None => return Err(f"no '=' in environment entry '{rest}'"),
+        };
+        let key = s.substring(i, eq).trim().to_string();
+        i = eq + 1;
+        let mut val = String.new();
+        if i < s.len() and s.substring(i, i + 1) == "\"" {
+            let after = s.substring(i + 1, s.len());
+            let close = match after.find("\"") {
+                Some(k) => i + 1 + k,
+                None => return Err("unterminated quote in environment".to_string()),
+            };
+            val = s.substring(i + 1, close);
+            i = close + 1;
+        } else {
+            let after = s.substring(i, s.len());
+            let j = match after.find(",") {
+                Some(k) => i + k,
+                None => s.len(),
+            };
+            val = s.substring(i, j).trim().to_string();
+            i = j;
+        }
+        out.keys.push(key);
+        out.vals.push(val);
+        if i < s.len() and s.substring(i, i + 1) == "," {
+            i += 1;
+        }
+    }
+    Ok(out)
+}
+
+struct Config { progs: Vec[Prog], poll: i64, warnings: Vec[String], errors: Vec[String] }
+
+fn parse_config(text: Str) -> Config {
+    let mut progs: Vec[Prog] = Vec.new();
+    let mut warnings: Vec[String] = Vec.new();
+    let mut errors: Vec[String] = Vec.new();
+    let mut poll = 10;
+    let mut section = String.new();
+    let mut in_prog = false;
+    let mut n = 0;
+    for raw in text.lines().iter() {
+        n += 1;
+        let mut line = raw.trim().to_string();
+        if line.len() == 0 or line.starts_with(";") or line.starts_with("#") {
+            continue;
+        }
+        match line.find(" ;") {
+            Some(k) => line = line.substring(0, k).trim().to_string(),
+            None => {}
+        }
+        if line.starts_with("[") {
+            if not line.ends_with("]") {
+                errors.push(f"line {n}: bad section header");
+                continue;
+            }
+            section = line.substring(1, line.len() - 1);
+            in_prog = false;
+            if section.starts_with("program:") {
+                progs.push(new_prog(section.substring(8, section.len())));
+                in_prog = true;
+            } else if section != "supervisor" {
+                warnings.push(f"line {n}: unknown section [{section}]");
+            }
+            continue;
+        }
+        let eq = match line.find("=") {
+            Some(k) => k,
+            None => {
+                errors.push(f"line {n}: expected key = value");
+                continue;
+            }
+        };
+        let key = line.substring(0, eq).trim().to_string();
+        let val = line.substring(eq + 1, line.len()).trim().to_string();
+        if section == "supervisor" {
+            match i64.parse(val) {
+                Some(v) => {
+                    if key == "poll_ms" {
+                        poll = v;
+                    } else {
+                        warnings.push(f"line {n}: unknown key '{key}' in [supervisor]");
+                    }
+                }
+                None => warnings.push(f"line {n}: unknown key '{key}' in [supervisor]"),
+            }
+            continue;
+        }
+        if not in_prog {
+            warnings.push(f"line {n}: '{key}' outside a section");
+            continue;
+        }
+        let k = progs.len() - 1;
+        set_key(mut progs[k], key, val, n, mut warnings, mut errors);
+    }
+    let mut kept: Vec[Prog] = Vec.new();
+    for p in progs.into_iter() {
+        if p.has_command {
+            kept.push(p);
+        } else {
+            errors.push(f"[{p.name}]: no command, program skipped");
+        }
+    }
+    Config { progs: kept, poll: poll, warnings: warnings, errors: errors }
+}
+
+fn set_key(p: mut ref Prog, key: Str, val: Str, n: i64, warnings: mut ref Vec[String], errors: mut ref Vec[String]) {
+    if key == "command" {
+        p.command = val.to_string();
+        p.has_command = true;
+        match split_command(val) {
+            Ok(w) => p.argv = w,
+            Err(e) => errors.push(f"line {n} [{p.name}]: {e}"),
+        }
+    } else if key == "autorestart" {
+        if val == "true" or val == "false" or val == "unexpected" {
+            p.autorestart = val.to_string();
+        } else {
+            errors.push(f"line {n} [{p.name}]: autorestart must be true, false or unexpected");
+        }
+    } else if key == "startretries" or key == "backoff_ms" or key == "max_runtime_ms" or key == "stdout_maxbytes" or key == "stdout_backups" {
+        let parsed = i64.parse(val);
+        let ok = match parsed {
+            Some(v) => v >= 0,
+            None => false,
+        };
+        if not ok {
+            errors.push(f"line {n} [{p.name}]: {key} is not a count: '{val}'");
+            return;
+        }
+        let v = parsed.unwrap_or(0);
+        if key == "startretries" {
+            p.startretries = v;
+        } else if key == "backoff_ms" {
+            p.backoff_ms = v;
+        } else if key == "max_runtime_ms" {
+            p.max_runtime_ms = v;
+        } else if key == "stdout_maxbytes" {
+            p.maxbytes = v;
+        } else {
+            p.backups = v;
+        }
+    } else if key == "exitcodes" {
+        let mut codes: Vec[i64] = Vec.new();
+        for part in val.split(",").iter() {
+            match i64.parse(part.trim()) {
+                Some(c) => codes.push(c),
+                None => {
+                    errors.push(f"line {n} [{p.name}]: bad exitcodes '{val}'");
+                    return;
+                }
+            }
+        }
+        p.exitcodes = codes;
+    } else if key == "environment" {
+        match parse_env(val) {
+            Ok(pairs) => {
+                p.env_keys = pairs.keys;
+                p.env_vals = pairs.vals;
+            }
+            Err(e) => errors.push(f"line {n} [{p.name}]: {e}"),
+        }
+    } else if key == "stdout_logfile" {
+        p.logfile = val.to_string();
+    } else {
+        warnings.push(f"line {n}: unknown key '{key}' in [program:{p.name}]");
+    }
+}
+
+// ---------------------------------------------------------------- logs
+
+fn file_size(path: Str) -> i64 {
+    match fs.metadata(path) {
+        Ok(m) => m.len,
+        Err(_) => 0,
+    }
+}
+
+// Append `data` to the program's log a line at a time, rotating the log
+// to .1, .2 ... whenever the next line would take it past `maxbytes`.
+fn rotate(p: ref Prog, data: Str) -> i64 {
+    let mut rotations = 0;
+    let mut start = 0;
+    let b = data.bytes();
+    while start < b.len() {
+        let mut end = start;
+        while end < b.len() and b[end] != 10u8 {
+            end += 1;
+        }
+        if end < b.len() {
+            end += 1;
+        }
+        let line = data.substring(start, end);
+        start = end;
+        let size = file_size(p.logfile);
+        if p.maxbytes > 0 and size > 0 and size + line.len() > p.maxbytes {
+            let mut k = p.backups;
+            while k >= 1 {
+                let src = if k == 1 { p.logfile.clone() } else { f"{p.logfile}.{k - 1}" };
+                let dst = f"{p.logfile}.{k}";
+                if fs.exists(src.clone()) {
+                    if fs.exists(dst.clone()) {
+                        match fs.remove_file(dst.clone()) {
+                            Ok(_) => {}
+                            Err(_) => {}
+                        }
+                    }
+                    match fs.rename(src, dst) {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    }
+                }
+                k -= 1;
+            }
+            if p.backups == 0 and fs.exists(p.logfile) {
+                match fs.remove_file(p.logfile) {
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            rotations += 1;
+        }
+        let old = fs.read_to_string(p.logfile).unwrap_or("".to_string());
+        match fs.write(p.logfile, f"{old}{line}") {
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+    rotations
+}
+
+// ---------------------------------------------------------------- running
+
+fn start(p: mut ref Prog, now: i64) -> bool {
+    p.starts += 1;
+    let mut cmd = Command.new(p.argv[0].clone());
+    for k in 1..p.argv.len() {
+        cmd = cmd.arg(p.argv[k].clone());
+    }
+    for k in 0..p.env_keys.len() {
+        cmd = cmd.env(p.env_keys[k].clone(), p.env_vals[k].clone());
+    }
+    cmd = cmd.env("SUPERVISOR_PROGRAM".to_string(), p.name.clone());
+    let child = match cmd.stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            p.events.push(f"start {p.starts}: spawn failed: not found");
+            return false;
+        }
+    };
+    p.out = child.stdout();
+    p.err = child.stderr();
+    p.child = Some(child);
+    p.state = State.Running;
+    p.started_at = now;
+    p.events.push(f"start {p.starts}: running");
+    true
+}
+
+fn give_up_or_retry(p: mut ref Prog, now: i64, why: Str) {
+    let used = p.starts - 1;
+    if used < p.startretries {
+        let wait = p.backoff_ms * (used + 1);
+        p.state = State.Backoff;
+        p.next_start = now + wait;
+        p.events.push(f"  {why}; retry {used + 1} of {p.startretries} in {wait} ms");
+    } else {
+        p.state = State.Fatal;
+        p.events.push(f"  {why}; gave up after {p.starts} start(s)");
+    }
+}
+
+fn finished(p: mut ref Prog, code: i64, now: i64) {
+    let out = match p.out {
+        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        None => String.new(),
+    };
+    let err = match p.err {
+        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        None => String.new(),
+    };
+    p.child = None;
+    p.out = None;
+    p.err = None;
+    if p.logfile.len() == 0 {
+        for l in out.lines().iter() {
+            p.events.push(f"  | {l}");
+        }
+    } else if out.len() > 0 {
+        let r = rotate(p, out);
+        p.events.push(f"  wrote {out.len()} bytes to {p.logfile}, {r} rotation(s)");
+    }
+    for l in err.lines().iter() {
+        p.events.push(f"  ! {l}");
+    }
+    p.last = f"{code}";
+    let mut expected = false;
+    for c in p.exitcodes.iter() {
+        if *c == code {
+            expected = true;
+        }
+    }
+    let how = if expected { "expected" } else { "unexpected" };
+    if p.autorestart == "true" or (p.autorestart == "unexpected" and not expected) {
+        give_up_or_retry(p, now, f"exited {code} ({how})");
+    } else {
+        p.state = State.Exited;
+        p.events.push(f"  exited {code} ({how})");
+    }
+}
+
+fn is_live(p: ref Prog) -> bool {
+    match p.state {
+        State.Running => true,
+        State.Backoff => true,
+        _ => false,
+    }
+}
+
+fn poll_one(p: mut ref Prog, now: i64) {
+    let running = match p.state {
+        State.Running => true,
+        _ => false,
+    };
+    if running {
+        let child = match p.child.take() {
+            Some(c) => c,
+            None => return,
+        };
+        match child.try_wait() {
+            Ok(Some(st)) => finished(p, st.code, now),
+            Ok(None) => {
+                p.child = Some(child);
+                if p.max_runtime_ms > 0 and now - p.started_at >= p.max_runtime_ms {
+                    let child = match p.child.take() {
+                        Some(c) => c,
+                        None => return,
+                    };
+                    match child.kill() {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    }
+                    match child.wait() {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    }
+                    p.child = None;
+                    p.out = None;
+                    p.err = None;
+                    p.state = State.Killed;
+                    p.last = "killed".to_string();
+                    p.events.push(f"  ran past {p.max_runtime_ms} ms; killed");
+                }
+            }
+            Err(_) => finished(p, -1, now),
+        }
+        return;
+    }
+    let backing_off = match p.state {
+        State.Backoff => true,
+        _ => false,
+    };
+    if backing_off and now >= p.next_start {
+        if not start(p, now) {
+            give_up_or_retry(p, now, "spawn failed");
+        }
+    }
+}
+
+fn supervise(progs: mut ref Vec[Prog], poll: i64) {
+    let mut now = 0;
+    for k in 0..progs.len() {
+        if not start(mut progs[k], now) {
+            give_up_or_retry(mut progs[k], now, "spawn failed");
+        }
+    }
+    loop {
+        let mut live = false;
+        for p in progs.iter() {
+            if is_live(p) {
+                live = true;
+            }
+        }
+        if not live {
+            return;
+        }
+        sleep_ms(poll);
+        now += poll;
+        for k in 0..progs.len() {
+            poll_one(mut progs[k], now);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- report
+
+fn quote_list(v: ref Vec[String]) -> String {
+    let mut s = "[".to_string();
+    for k in 0..v.len() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"'{v[k]}'");
+    }
+    s.push_str("]");
+    s
+}
+
+fn pad(s: Str, w: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < w {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn main() {
+    match fs.write("supervisor.ini", CONFIG) {
+        Ok(_) => {}
+        Err(_) => println("cannot write supervisor.ini"),
+    }
+    let text = fs.read_to_string("supervisor.ini").unwrap_or("".to_string());
+    let cfg = parse_config(text);
+    let mut progs = cfg.progs;
+    println(f"config: {progs.len()} programs, poll every {cfg.poll} ms, {cfg.warnings.len()} warning(s), {cfg.errors.len()} error(s)");
+    for w in cfg.warnings.iter() {
+        println(f"  warning: {w}");
+    }
+    for e in cfg.errors.iter() {
+        println(f"  error: {e}");
+    }
+    for p in progs.iter() {
+        println(f"  {p.name}: {p.argv.len()} words, argv[0]={p.argv[0]}, last=[{p.argv[p.argv.len() - 1]}]");
+    }
+    println("parse checks:");
+    for s in ["a \"b c\" d", "it's", "x\\ y 'z w'", "say \"q\\\"uote\""] {
+        match split_command(s) {
+            Ok(w) => println(f"  [{s}] -> {quote_list(w)}"),
+            Err(e) => println(f"  [{s}] -> error: {e}"),
+        }
+    }
+    for s in ["A=1,B=\"x, y\",C= z ", "NOEQ"] {
+        match parse_env(s) {
+            Ok(pairs) => {
+                let mut shown = "[".to_string();
+                for k in 0..pairs.keys.len() {
+                    if k > 0 {
+                        shown.push_str(", ");
+                    }
+                    shown.push_str(f"('{pairs.keys[k]}', '{pairs.vals[k]}')");
+                }
+                shown.push_str("]");
+                println(f"  env [{s}] -> {shown}");
+            }
+            Err(e) => println(f"  env [{s}] -> error: {e}"),
+        }
+    }
+
+    supervise(mut progs, cfg.poll);
+    println("== events");
+    for p in progs.iter() {
+        println(f"[{p.name}]");
+        for e in p.events.iter() {
+            println(f"  {e}");
+        }
+    }
+    println("== status");
+    println(f"  {pad("name", 9)} {pad("state", 8)} starts  last");
+    for p in progs.iter() {
+        println(f"  {pad(p.name, 9)} {pad(state_name(p.state), 8)} {p.starts:>6}  {p.last}");
+    }
+    println("== chatty logs");
+    for name in ["chatty.log", "chatty.log.1", "chatty.log.2", "chatty.log.3"] {
+        if fs.exists(name.clone()) {
+            let body = fs.read_to_string(name).unwrap_or("".to_string());
+            let lines = body.lines();
+            println(f"  {name}: {lines.len()} lines, first [{lines[0]}]");
+        } else {
+            println(f"  {name}: absent");
+        }
+    }
+    let count = fs.read_to_string("flaky.count").unwrap_or("".to_string());
+    println(f"flaky.count = {count.trim()}");
+}

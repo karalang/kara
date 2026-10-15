@@ -1,0 +1,80 @@
+config: 8 programs, poll every 10 ms, 1 warning(s), 2 error(s)
+  warning: line 28: unknown key 'colour' in [program:chatty]
+  error: line 48 [typo]: startretries is not a count: 'lots'
+  error: [nocmd]: no command, program skipped
+  flaky: 3 words, argv[0]=sh, last=[n=$(cat flaky.count 2>/dev/null || echo 0); n=$((n+1)); echo $n > flaky.count; echo "flaky attempt $n"; [ $n -ge 3 ] && exit 0; exit 1]
+  broken: 3 words, argv[0]=sh, last=[echo 'cannot bind port' >&2; exit 2]
+  hang: 2 words, argv[0]=sleep, last=[30]
+  chatty: 3 words, argv[0]=sh, last=[for i in 1 2 3 4 5 6 7; do echo "line $i of the chatty log"; done; echo oops >&2]
+  greeter: 3 words, argv[0]=sh, last=[echo "$GREETING from $SUPERVISOR_PROGRAM (level $LEVEL)"]
+  ghost: 2 words, argv[0]=/nonexistent/daemon, last=[--serve]
+  graceful: 3 words, argv[0]=sh, last=[echo draining; exit 3]
+  typo: 1 words, argv[0]=true, last=[true]
+parse checks:
+  [a "b c" d] -> ['a', 'b c', 'd']
+  [it's] -> error: unterminated single quote
+  [x\ y 'z w'] -> ['x y', 'z w']
+  [say "q\"uote"] -> ['say', 'q"uote']
+  env [A=1,B="x, y",C= z ] -> [('A', '1'), ('B', 'x, y'), ('C', 'z')]
+  env [NOEQ] -> error: no '=' in environment entry 'NOEQ'
+== events
+[flaky]
+  start 1: running
+    | flaky attempt 1
+    exited 1 (unexpected); retry 1 of 3 in 30 ms
+  start 2: running
+    | flaky attempt 2
+    exited 1 (unexpected); retry 2 of 3 in 60 ms
+  start 3: running
+    | flaky attempt 3
+    exited 0 (expected)
+[broken]
+  start 1: running
+    ! cannot bind port
+    exited 2 (unexpected); retry 1 of 2 in 20 ms
+  start 2: running
+    ! cannot bind port
+    exited 2 (unexpected); retry 2 of 2 in 40 ms
+  start 3: running
+    ! cannot bind port
+    exited 2 (unexpected); gave up after 3 start(s)
+[hang]
+  start 1: running
+    ran past 300 ms; killed
+[chatty]
+  start 1: running
+    wrote 175 bytes to chatty.log, 3 rotation(s)
+    ! oops
+    exited 0 (expected)
+[greeter]
+  start 1: running
+    | hello there from greeter (level 3)
+    exited 0 (expected)
+[ghost]
+  start 1: spawn failed: not found
+    spawn failed; retry 1 of 1 in 50 ms
+  start 2: spawn failed: not found
+    spawn failed; gave up after 2 start(s)
+[graceful]
+  start 1: running
+    | draining
+    exited 3 (expected)
+[typo]
+  start 1: running
+    exited 0 (expected)
+== status
+  name      state    starts  last
+  flaky     EXITED        3  0
+  broken    FATAL         3  2
+  hang      KILLED        1  killed
+  chatty    EXITED        1  0
+  greeter   EXITED        1  0
+  ghost     FATAL         2  -
+  graceful  EXITED        1  3
+  typo      EXITED        1  0
+== chatty logs
+  chatty.log: 1 lines, first [line 7 of the chatty log]
+  chatty.log.1: 2 lines, first [line 5 of the chatty log]
+  chatty.log.2: 2 lines, first [line 3 of the chatty log]
+  chatty.log.3: absent
+flaky.count = 3
