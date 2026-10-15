@@ -1,0 +1,292 @@
+// LeetCode #662: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn width_of_binary_tree_star(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut level: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        level.push((r, 0));
+    }
+    while not level.is_empty() {
+        let first = level[0].1;
+        let last = level[level.len() - 1].1;
+        best = best.max(last - first + 1);
+        let mut next: Vec[(TreeNode, i64)] = Vec.new();
+        for (node, place) in level.iter() {
+            let p = (*place - first) * 2;
+            if let Some(l) = node.left {
+                next.push((l, p));
+            }
+            if let Some(r) = node.right {
+                next.push((r, p + 1));
+            }
+        }
+        level = next;
+    }
+    best
+}
+
+// ---- dfs arm -----------------------------------------------------------
+
+fn width_of_binary_tree_dfs(root: Option[TreeNode]) -> i64 {
+    let mut firsts: Vec[i64] = Vec.new();
+    walk_dfs(root, 0, 0, mut firsts)
+}
+
+fn walk_dfs(node: Option[TreeNode], depth: i64, place: i64, firsts: mut ref Vec[i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            if depth == firsts.len() {
+                firsts.push(place);
+            }
+            let offset = place - firsts[depth];
+            let left = walk_dfs(n.left, depth + 1, offset * 2, firsts);
+            let right = walk_dfs(n.right, depth + 1, offset * 2 + 1, firsts);
+            (offset + 1).max(left).max(right)
+        }
+    }
+}
+
+// ---- queue arm ---------------------------------------------------------
+
+struct Entry {
+    node: TreeNode,
+    depth: i64,
+    place: i64,
+}
+
+fn width_of_binary_tree_queue(root: Option[TreeNode]) -> i64 {
+    let mut queue: Vec[Entry] = Vec.new();
+    if let Some(r) = root {
+        queue.push(Entry { node: r, depth: 0, place: 0 });
+    }
+    let mut firsts: Vec[i64] = Vec.new();
+    let mut best = 0;
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head].node;
+        let depth = queue[head].depth;
+        let place = queue[head].place;
+        head += 1;
+        if depth == firsts.len() {
+            firsts.push(place);
+        }
+        let offset = place - firsts[depth];
+        best = best.max(offset + 1);
+        if let Some(l) = node.left {
+            queue.push(Entry { node: l, depth: depth + 1, place: offset * 2 });
+        }
+        if let Some(r) = node.right {
+            queue.push(Entry { node: r, depth: depth + 1, place: offset * 2 + 1 });
+        }
+    }
+    best
+}
+
+// ---- paths arm ---------------------------------------------------------
+
+fn width_of_binary_tree_paths(root: Option[TreeNode]) -> i64 {
+    let mut lefts: Vec[Vec[i64]] = Vec.new();
+    let mut rights: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    walk_paths(root, false, mut path, mut lefts);
+    walk_paths(root, true, mut path, mut rights);
+    let mut best = 0;
+    for d in 0..lefts.len() {
+        let mut difference = 0;
+        for i in 0..d {
+            difference = difference * 2 + rights[d][i] - lefts[d][i];
+        }
+        best = best.max(difference + 1);
+    }
+    best
+}
+
+fn walk_paths(node: Option[TreeNode], right_first: bool, path: mut ref Vec[i64], firsts: mut ref Vec[Vec[i64]]) {
+    if let Some(n) = node {
+        if path.len() == firsts.len() {
+            firsts.push(path.clone());
+        }
+        let (a, b) = if right_first { (n.right, n.left) } else { (n.left, n.right) };
+        let (da, db) = if right_first { (1, 0) } else { (0, 1) };
+        path.push(da);
+        walk_paths(a, right_first, path, firsts);
+        path.pop();
+        path.push(db);
+        walk_paths(b, right_first, path, firsts);
+        path.pop();
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode]) -> i64 {
+    if which == 0 {
+        width_of_binary_tree_star(root)
+    } else if which == 1 {
+        width_of_binary_tree_dfs(root)
+    } else if which == 2 {
+        width_of_binary_tree_queue(root)
+    } else {
+        width_of_binary_tree_paths(root)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn random_tree(levels: i64, chance: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if levels == 0 {
+        return None;
+    }
+    let n = leaf(next_random(mut seed) % 201 - 100);
+    if next_random(mut seed) % 100 < chance {
+        n.left = random_tree(levels - 1, chance, mut seed);
+    }
+    if next_random(mut seed) % 100 < chance {
+        n.right = random_tree(levels - 1, chance, mut seed);
+    }
+    Some(n)
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+// Every node's place, numbered straight from the root as in a full tree,
+// collected by depth.
+fn places(node: Option[TreeNode], depth: i64, place: i64, out: mut ref Vec[Vec[i64]]) {
+    if let Some(n) = node {
+        if depth == out.len() {
+            out.push(Vec.new());
+        }
+        out[depth].push(place);
+        places(n.left, depth + 1, place * 2, out);
+        places(n.right, depth + 1, place * 2 + 1, out);
+    }
+}
+
+// The definition: each level's widest pair of places, a level's width
+// its last place less its first plus one, for every level.
+fn level_widths(root: Option[TreeNode]) -> Vec[i64] {
+    let mut by_depth: Vec[Vec[i64]] = Vec.new();
+    places(root, 0, 0, mut by_depth);
+    let mut widths: Vec[i64] = Vec.new();
+    for level in by_depth.iter() {
+        let mut lo = level[0];
+        let mut hi = level[0];
+        for p in level.iter() {
+            lo = lo.min(*p);
+            hi = hi.max(*p);
+        }
+        widths.push(hi - lo + 1);
+    }
+    widths
+}
+
+fn level_sizes(node: Option[TreeNode], depth: i64, out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if depth == out.len() {
+            out.push(0);
+        }
+        out[depth] += 1;
+        level_sizes(n.left, depth + 1, out);
+        level_sizes(n.right, depth + 1, out);
+    }
+}
+
+fn main() {
+    // 1000 random trees 1 to 9 levels deep, each child there with chance
+    // 30 to 100 in 100.
+    let cases = 1000;
+    let mut seed: i64 = 662;
+    let mut nodes = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let levels = 1 + next_random(mut seed) % 9;
+        let chance = 30 + next_random(mut seed) % 71;
+        let root = random_tree(levels, chance, mut seed);
+        let widths = level_widths(root);
+        let mut want = 0;
+        for w in widths.iter() {
+            want = want.max(*w);
+        }
+        let mut sizes: Vec[i64] = Vec.new();
+        level_sizes(root, 0, mut sizes);
+        let mut most = 0;
+        for s in sizes.iter() {
+            nodes += *s;
+            most = most.max(*s);
+        }
+        let height = widths.len();
+        // The tree as both children of a new root.
+        let doubled = leaf(0);
+        doubled.left = root;
+        doubled.right = root;
+        // The tree hung at the foot of a chain of 100 random steps.
+        let top = leaf(0);
+        let mut foot = top;
+        for _ in 1..100 {
+            let c = leaf(next_random(mut seed) % 201 - 100);
+            if next_random(mut seed) % 2 == 0 {
+                foot.left = Some(c);
+            } else {
+                foot.right = Some(c);
+            }
+            foot = c;
+        }
+        if next_random(mut seed) % 2 == 0 {
+            foot.left = root;
+        } else {
+            foot.right = root;
+        }
+        for which in 0..4 {
+            let got = answer(which, root);
+            let ok = vec![
+                // P1: the definition's width.
+                got == want,
+                // P2: the mirrored tree is as wide.
+                answer(which, mirrored(root)) == got,
+                // P3: at least the most nodes on one level, at most the
+                // places on the deepest.
+                got >= most and got <= (1 << (height - 1)),
+                // P4: under a new root twice over, the deepest level of
+                // the left copy to that of the right.
+                answer(which, Some(doubled)) == (1 << (height - 1)) + widths[height - 1],
+                // P5: hung 100 levels down, as wide.
+                answer(which, Some(top)) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} trees ({nodes} nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/661-image-smoother/image_smoother_prefix.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "72739d54d"
+extracted_src = "a60f60ae"
+model_rev = "1aa23105"
+model_src = "a60f60ae"

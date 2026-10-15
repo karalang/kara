@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/662-maximum-width-of-binary-tree/bench/maximum_width_of_binary_tree.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "72739d54d"
+extracted_src = "9fcc9da6"
+model_rev = "1aa23105"
+model_src = "9fcc9da6"

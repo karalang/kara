@@ -1,0 +1,96 @@
+// LeetCode #661: Image Smoother -- two-dimensional prefix sums.
+//
+// `total[r][c]` holds the sum of the image above and left of (r, c). Any
+// rectangle's sum is then four lookups, and its cell count is just its
+// width times its height, so each cell costs O(1) after an O(m * n)
+// table.
+
+fn image_smoother(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = img.len();
+    let n = img[0].len();
+    let mut total: Vec[Vec[i64]] = vec![vec![0; n + 1]; m + 1];
+    for r in 0..m {
+        for c in 0..n {
+            total[r + 1][c + 1] = img[r][c] + total[r][c + 1] + total[r + 1][c] - total[r][c];
+        }
+    }
+    let mut out: Vec[Vec[i64]] = vec![vec![0; n]; m];
+    for i in 0..m {
+        for j in 0..n {
+            let top = (i - 1).max(0);
+            let bottom = (i + 2).min(m);
+            let left = (j - 1).max(0);
+            let right = (j + 2).min(n);
+            let sum = total[bottom][right] - total[top][right] - total[bottom][left] + total[top][left];
+            out[i][j] = sum / ((bottom - top) * (right - left));
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(img: Vec[Vec[i64]]) {
+    let out = image_smoother(img);
+    let mut rows: Vec[String] = Vec.new();
+    for row in out.iter() {
+        let mut cells: Vec[String] = Vec.new();
+        for v in row.iter() {
+            cells.push(f"{v}");
+        }
+        rows.push(f"[{cells.join(",")}]");
+    }
+    println(f"{img.len()}x{img[0].len()} -> [{rows.join(",")}]");
+}
+
+fn random_image(m: i64, n: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut img: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(next_random(seed) % 256);
+        }
+        img.push(row);
+    }
+    img
+}
+
+fn checksum(out: Vec[Vec[i64]]) -> i64 {
+    let mut h = 0;
+    for row in out.iter() {
+        for v in row.iter() {
+            h = (h * 31 + v) % 1000000007;
+        }
+    }
+    h
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![vec![1, 1, 1], vec![1, 0, 1], vec![1, 1, 1]]);
+    show(vec![vec![100, 200, 100], vec![200, 50, 200], vec![100, 200, 100]]);
+    // One pixel; one row; one column; two by two; all white.
+    show(vec![vec![7]]);
+    show(vec![vec![0, 10, 20, 255]]);
+    show(vec![vec![3], vec![4], vec![200]]);
+    show(vec![vec![1, 2], vec![3, 5]]);
+    show(vec![vec![255; 4]; 3]);
+    // 200 random images of 1 to 12 by 1 to 12.
+    let mut seed: i64 = 661;
+    let mut sum = 0;
+    for _ in 0..200 {
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        sum = (sum * 7 + checksum(image_smoother(random_image(m, n, mut seed)))) % 1000000007;
+    }
+    println(f"200 random images: checksum {sum}");
+    // The problem's largest, 200 by 200, random; and smoothed again.
+    let once = image_smoother(random_image(200, 200, mut seed));
+    println(f"200x200 random: checksum {checksum(once)}");
+    println(f"smoothed twice: checksum {checksum(image_smoother(once))}");
+}

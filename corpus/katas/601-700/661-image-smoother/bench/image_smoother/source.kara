@@ -1,0 +1,55 @@
+// Benchmark for #661: the ★ arm (each cell's 3x3 window) on a large
+// workload.
+
+fn image_smoother(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = img.len();
+    let n = img[0].len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            let mut sum = 0;
+            let mut count = 0;
+            for r in (i - 1).max(0)..(i + 2).min(m) {
+                for c in (j - 1).max(0)..(j + 2).min(n) {
+                    sum += img[r][c];
+                    count += 1;
+                }
+            }
+            row.push(sum / count);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // One random 1,000 by 1,000 image, smoothed 20 times over, each pass
+    // taking the last one's output; then a checksum of the result.
+    let size = 1000;
+    let passes = 20;
+    let mut seed: i64 = 661;
+    let mut img: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..size {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            row.push(next_random(mut seed) % 256);
+        }
+        img.push(row);
+    }
+    for _ in 0..passes {
+        img = image_smoother(img);
+    }
+    let mut checksum: i64 = 0;
+    for row in img.iter() {
+        for v in row.iter() {
+            checksum = (checksum * 31 + v) % 1000000007;
+        }
+    }
+    println(f"{size}x{size}, {passes} passes: checksum {checksum}");
+}

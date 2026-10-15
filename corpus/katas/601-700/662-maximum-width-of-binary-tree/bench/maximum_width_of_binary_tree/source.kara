@@ -1,0 +1,96 @@
+// Benchmark for #662: the ★ arm (level by level) on a large workload.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn width_of_binary_tree(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut level: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        level.push((r, 0));
+    }
+    while not level.is_empty() {
+        let first = level[0].1;
+        let last = level[level.len() - 1].1;
+        best = best.max(last - first + 1);
+        let mut next: Vec[(TreeNode, i64)] = Vec.new();
+        for (node, place) in level.iter() {
+            let p = (*place - first) * 2;
+            if let Some(l) = node.left {
+                next.push((l, p));
+            }
+            if let Some(r) = node.right {
+                next.push((r, p + 1));
+            }
+        }
+        level = next;
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// `count` nodes, each hung where a random walk down from the root first
+// finds no child, no deeper than `levels` levels; a walk that would go
+// deeper starts again.
+fn grown_tree(count: i64, levels: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = leaf(next_random(mut seed) % 201 - 100);
+    let mut made = 1;
+    while made < count {
+        let mut at = root;
+        let mut depth = 1;
+        let mut placed = false;
+        while not placed and depth < levels {
+            if next_random(mut seed) % 2 == 0 {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(leaf(next_random(mut seed) % 201 - 100));
+                        placed = true;
+                    }
+                }
+            } else {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(leaf(next_random(mut seed) % 201 - 100));
+                        placed = true;
+                    }
+                }
+            }
+            depth += 1;
+        }
+        if placed {
+            made += 1;
+        }
+    }
+    Some(root)
+}
+
+fn main() {
+    // Eight trees of the problem's largest, 3,000 nodes grown at random at
+    // most 31 levels deep, made once; then each round measures one, picked
+    // by the round, and puts its width into a checksum.
+    let mut seed: i64 = 662;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for _ in 0..8 {
+        trees.push(grown_tree(3000, 31, mut seed));
+    }
+    let rounds = 20000;
+    let mut sum = 0;
+    for r in 0..rounds {
+        let w = width_of_binary_tree(trees[r % 8]);
+        sum = (sum * 31 + w + r) % 1000000007;
+    }
+    println(f"8 trees of 3000 nodes, {rounds} rounds: checksum {sum}");
+}

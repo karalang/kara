@@ -1,0 +1,255 @@
+// LeetCode #661: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random images.
+
+// ---- star arm ----------------------------------------------------------
+
+fn image_smoother_star(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = img.len();
+    let n = img[0].len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            let mut sum = 0;
+            let mut count = 0;
+            for r in (i - 1).max(0)..(i + 2).min(m) {
+                for c in (j - 1).max(0)..(j + 2).min(n) {
+                    sum += img[r][c];
+                    count += 1;
+                }
+            }
+            row.push(sum / count);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// ---- prefix arm --------------------------------------------------------
+
+fn image_smoother_prefix(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = img.len();
+    let n = img[0].len();
+    let mut total: Vec[Vec[i64]] = vec![vec![0; n + 1]; m + 1];
+    for r in 0..m {
+        for c in 0..n {
+            total[r + 1][c + 1] = img[r][c] + total[r][c + 1] + total[r + 1][c] - total[r][c];
+        }
+    }
+    let mut out: Vec[Vec[i64]] = vec![vec![0; n]; m];
+    for i in 0..m {
+        for j in 0..n {
+            let top = (i - 1).max(0);
+            let bottom = (i + 2).min(m);
+            let left = (j - 1).max(0);
+            let right = (j + 2).min(n);
+            let sum = total[bottom][right] - total[top][right] - total[bottom][left] + total[top][left];
+            out[i][j] = sum / ((bottom - top) * (right - left));
+        }
+    }
+    out
+}
+
+// ---- rows arm ----------------------------------------------------------
+
+fn image_smoother_rows(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = img.len();
+    let n = img[0].len();
+    let mut across: Vec[Vec[i64]] = Vec.new();
+    for r in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            let mut sum = img[r][c];
+            if c > 0 {
+                sum += img[r][c - 1];
+            }
+            if c + 1 < n {
+                sum += img[r][c + 1];
+            }
+            row.push(sum);
+        }
+        across.push(row);
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        let mut high = 1;
+        let mut sums = across[r].clone();
+        if r > 0 {
+            high += 1;
+            for c in 0..n {
+                sums[c] += across[r - 1][c];
+            }
+        }
+        if r + 1 < m {
+            high += 1;
+            for c in 0..n {
+                sums[c] += across[r + 1][c];
+            }
+        }
+        for c in 0..n {
+            let wide = 3 - if c == 0 { 1 } else { 0 } - if c == n - 1 { 1 } else { 0 };
+            row.push(sums[c] / (high * wide));
+        }
+        out.push(row);
+    }
+    out
+}
+
+// ---- packed arm --------------------------------------------------------
+
+fn image_smoother_packed(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut grid = img.clone();
+    let m = grid.len();
+    let n = grid[0].len();
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0;
+            let mut count = 0;
+            for r in (i - 1).max(0)..(i + 2).min(m) {
+                for c in (j - 1).max(0)..(j + 2).min(n) {
+                    sum += grid[r][c] & 255;
+                    count += 1;
+                }
+            }
+            grid[i][j] = grid[i][j] | ((sum / count) << 8);
+        }
+    }
+    for i in 0..m {
+        for j in 0..n {
+            grid[i][j] = grid[i][j] >> 8;
+        }
+    }
+    grid
+}
+
+// ---- the definition and the properties -------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    match which {
+        0 => image_smoother_star(img),
+        1 => image_smoother_prefix(img),
+        2 => image_smoother_rows(img),
+        _ => image_smoother_packed(img),
+    }
+}
+
+// The definition, with no window: for each cell, look at every cell of
+// the image and keep those at most one row and one column away.
+fn definition(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = img.len();
+    let n = img[0].len();
+    let mut out: Vec[Vec[i64]] = vec![vec![0; n]; m];
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0;
+            let mut count = 0;
+            for r in 0..m {
+                for c in 0..n {
+                    if (r - i).abs() <= 1 and (c - j).abs() <= 1 {
+                        sum += img[r][c];
+                        count += 1;
+                    }
+                }
+            }
+            out[i][j] = sum / count;
+        }
+    }
+    out
+}
+
+fn transposed(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = vec![vec![0; img.len()]; img[0].len()];
+    for r in 0..img.len() {
+        for c in 0..img[0].len() {
+            out[c][r] = img[r][c];
+        }
+    }
+    out
+}
+
+fn mirrored(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out = img.clone();
+    for row in out.iter_mut() {
+        row.reverse();
+    }
+    out
+}
+
+fn main() {
+    // 1,000 random images of 1 to 8 by 1 to 8, pixels from 0 to 255, or
+    // from 0 to 3 so that sums are small and rounding shows.
+    let cases = 1000;
+    let mut seed: i64 = 661;
+    let mut pixels = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let m = 1 + next_random(mut seed) % 8;
+        let n = 1 + next_random(mut seed) % 8;
+        let top = if next_random(mut seed) % 2 == 0 { 255 } else { 3 };
+        let mut img: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(next_random(mut seed) % (top + 1));
+            }
+            img.push(row);
+        }
+        pixels += m * n;
+        let want = definition(img);
+        let flat = vec![vec![next_random(mut seed) % 256; n]; m];
+        for which in 0..4 {
+            let got = answer(which, img);
+            // P5: each cell between the smallest and largest of its
+            // window.
+            let mut bounded = got.len() == m;
+            if bounded {
+                for i in 0..m {
+                    for j in 0..n {
+                        let mut low = 255;
+                        let mut high = 0;
+                        for r in (i - 1).max(0)..(i + 2).min(m) {
+                            for c in (j - 1).max(0)..(j + 2).min(n) {
+                                low = low.min(img[r][c]);
+                                high = high.max(img[r][c]);
+                            }
+                        }
+                        if got[i].len() != n or got[i][j] < low or got[i][j] > high {
+                            bounded = false;
+                        }
+                    }
+                }
+            }
+            let ok = vec![
+                // P1: the definition's image.
+                got == want,
+                // P2: the image transposed smooths to the answer
+                // transposed.
+                answer(which, transposed(img)) == transposed(got),
+                // P3: the image mirrored smooths to the answer mirrored.
+                answer(which, mirrored(img)) == mirrored(got),
+                // P4: a flat image stays as it is.
+                answer(which, flat) == flat,
+                bounded,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} images ({pixels} pixels), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
