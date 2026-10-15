@@ -1,0 +1,160 @@
+== list users
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 45
+  | [{"id":1,"name":"ada"},{"id":2,"name":"bob"}]
+== one user
+  HTTP/1.1 200 OK
+  Server: origin-b2
+  Via: 1.1 kproxy
+  X-Upstream: b2
+  Content-Length: 20
+  | {"id":7,"from":"b2"}
+== dead upstream is skipped
+  [pool api] b4 refused, out for 3
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 20
+  | {"id":8,"from":"b1"}
+== create
+  HTTP/1.1 201 Created
+  Server: origin-b2
+  Via: 1.1 kproxy
+  X-Upstream: b2
+  Content-Length: 35
+  | {"created":{"name":"cy"},"by":"b2"}
+== 503 GET is retried
+  [pool api] b1 answered 503, retrying GET
+  HTTP/1.1 200 OK
+  Server: origin-b2
+  Via: 1.1 kproxy
+  X-Upstream: b2
+  Content-Length: 12
+  | steady on b2
+== 503 POST is not
+  [pool api] b4 refused, out for 3
+  HTTP/1.1 503 Service Unavailable
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 8
+  | draining
+== hop-by-hop headers dropped
+  HTTP/1.1 200 OK
+  Server: origin-b2
+  Via: 1.1 kproxy
+  X-Upstream: b2
+  Content-Length: 97
+  | content-length,host,via,x-forwarded-for,x-forwarded-prefix,x-request-id xff=127.0.0.1 prefix=/api
+== chunked origin reply
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 25
+  | id,name
+1,ada
+2,bob
+3,cy
+
+== static pool is all down
+  [pool static] s1 refused, out for 3
+  HTTP/1.1 502 Bad Gateway
+  Content-Type: text/plain
+  Via: 1.1 kproxy
+  Content-Length: 29
+  | no healthy upstream in static
+== longer prefix wins
+  HTTP/1.1 502 Bad Gateway
+  Content-Type: text/plain
+  Via: 1.1 kproxy
+  Content-Length: 29
+  | no healthy upstream in static
+== no route
+  HTTP/1.1 404 Not Found
+  Content-Type: text/plain
+  Via: 1.1 kproxy
+  Content-Length: 21
+  | no route for /nowhere
+== body too large
+  HTTP/1.1 413 Payload Too Large
+  Content-Type: text/plain
+  Via: 1.1 kproxy
+  Content-Length: 18
+  | body over 64 bytes
+== malformed
+  HTTP/1.1 400 Bad Request
+  Content-Type: text/plain
+  Via: 1.1 kproxy
+  Content-Length: 16
+  | bad request line
+-- b2 shuts down
+== after b2 closes (1)
+  [pool api] b2 refused, out for 3
+  [pool api] b4 refused, out for 3
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 20
+  | {"id":1,"from":"b1"}
+== after b2 closes (2)
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 20
+  | {"id":2,"from":"b1"}
+== after b2 closes (3)
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 20
+  | {"id":3,"from":"b1"}
+== after b2 closes (4)
+  [pool api] b2 refused, out for 3
+  [pool api] b4 refused, out for 3
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 20
+  | {"id":4,"from":"b1"}
+== after b2 closes (5)
+  HTTP/1.1 200 OK
+  Server: origin-b1
+  Via: 1.1 kproxy
+  X-Upstream: b1
+  Content-Length: 20
+  | {"id":5,"from":"b1"}
+-- access log
+GET /api/users -> b1 200 45b tries=1
+GET /api/users/7 -> b2 200 20b tries=1
+GET /api/users/8 -> b1 200 20b tries=2
+POST /api/users -> b2 201 35b tries=1
+GET /api/flaky -> b2 200 12b tries=2
+POST /api/flaky -> b1 503 8b tries=2
+GET /api/headers -> b2 200 97b tries=1
+GET /api/export -> b1 200 25b tries=1
+GET /static/logo.png -> - 502 29b tries=1
+GET /api/admin/stats -> - 502 29b tries=0
+GET /nowhere -> - 404 21b tries=0
+POST /api/users -> - 413 18b tries=0
+? ? -> - 400 16b tries=0
+GET /api/users/1 -> b1 200 20b tries=3
+GET /api/users/2 -> b1 200 20b tries=1
+GET /api/users/3 -> b1 200 20b tries=1
+GET /api/users/4 -> b1 200 20b tries=3
+GET /api/users/5 -> b1 200 20b tries=1
+-- upstreams
+api/b1 served=10 refused=0 down_for=0
+api/b2 served=4 refused=2 down_for=2
+api/b4 served=0 refused=4 down_for=2
+static/s1 served=0 refused=1 down_for=2
+origin b1 saw 10
+origin b2 saw 4

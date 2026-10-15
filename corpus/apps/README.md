@@ -145,6 +145,7 @@ cli/mini_shell      POSIX-flavoured shell: quoting, run-time $VAR/$? expansion, 
 service/config_svc  layered JSON config service over HTTP: Merge Patch layers (defaults, file, CFG_* env), JSON Pointer reads, ETag/If-None-Match, If-Match writes, schema 422s, reload
 cli/csv_query       SQL over CSV files: quoted-field loader with type inference, SELECT/JOIN/WHERE/GROUP BY/HAVING/ORDER BY/LIMIT, NULL logic, LIKE/IN, aggregates
 pipeline/doc_search full-text search: per-document index tasks on a TaskGroup feeding a channel, AND/OR/NOT/phrase/prefix queries ranked by tf-idf, an index file with content hashes, incremental re-index
+service/rev_proxy   reverse proxy over loopback origins: longest-prefix routes, round-robin pools with passive health checks, 503 GET retry, hop-by-hop header stripping, de-chunking, 400/404/413/502
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

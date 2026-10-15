@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 263 |
 | codegen-gap | 259 |
-| false-positive | 186 |
+| false-positive | 188 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 161 |
@@ -112,9 +112,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2895 |
 | interp | 925 |
-| typecheck | 424 |
+| typecheck | 425 |
 | other | 115 |
-| ownership | 96 |
+| ownership | 97 |
 | cli | 76 |
 | runtime | 72 |
 | parser | 63 |
@@ -210,6 +210,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-10 | 2026-10-15 | runtime | medium | Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
 | B-2026-10-15-11 | 2026-10-15 | typecheck | medium | The implemented `TaskGroup` / channel surface is not the one docs/library/concurrency.md specifies, beyond the `channel(cap)` name of B-2026-10-14-48: `TaskGroup.new(limit: 3)` is refused ("expected 0 argument(s), found 1"), `Sender.send` returns `()` where the spec says `Result[(), SendError[T]]`, `Receiver.recv` returns `T` where the spec says `Option[T]`, `Receiver` has no `into_iter` though the spec makes it `IntoIterator`, and a `TaskHandle` cannot be returned from a function ("ScopeLocal type 'TaskHandle' cannot appear in return type") though the spec says it borrows nothing and may outlive its group | — |
 | B-2026-10-15-12 | 2026-10-15 | ownership | medium | `karac check` keeps a closure's borrow of a captured value alive after the closure is gone: `let redo = skip.iter().any(|s| s == d.name); if redo { continue; } kept.push(d);` is refused with "cannot consume `d` while closure at line 8:36 captures `d.name` by `ref` (borrow still live)", though the closure was consumed by `any` on the line before; the same test written as a `for` loop passes, and every MIR surface runs the closure form | — |
+| B-2026-10-15-13 | 2026-10-15 | typecheck | medium | A `mut ref name` pattern binding (core-semantics.md §4.6), the one spelling the spec gives for a mutable borrow of an element or field in a local, passes `karac check` but every MIR surface refuses it with the LEGACY-backend message "`mut ref p` pattern bindings are not supported by the legacy `build` / `run` backends, which would bind a copy; `karac check` accepts them for the v2 backend" | — |
+| B-2026-10-15-14 | 2026-10-15 | ownership | medium | `karac check` refuses a `mut ref` local bound to a projection of a named place, which core-semantics.md §5.1 allows: `let p: mut ref P = w.p; p.n += 5;` is refused twice ("cannot compound-assign through `p` — declared without `mut`", then "value 'w.p' moved here"), and `let p: mut ref P = w.ps[1];` with E_INDEX_MOVE_NON_COPY, while `__mir-run` runs the field form and prints the updated value; there is also no expression form `mut ref place` (only `ref place`), so a mutable borrow of an element has no `let` spelling at all | — |
 
 ### Relocated
 

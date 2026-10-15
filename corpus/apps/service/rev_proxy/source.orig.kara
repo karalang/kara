@@ -1,0 +1,605 @@
+// A reverse proxy in front of real loopback origin servers.
+//
+// Routes pick an upstream pool by longest path prefix. A pool balances
+// round-robin and checks health passively: an upstream that refuses a
+// connection sits out the next three requests through its pool. A GET that
+// gets a 503 is retried on the next upstream; nothing else is. The proxy
+// strips hop-by-hop headers both ways (including any named in Connection),
+// adds X-Forwarded-For, X-Forwarded-Prefix and Via, de-chunks a chunked
+// origin reply, and answers 400/404/413/502 itself.
+//
+// Everything runs in one thread over real sockets: the client writes a
+// request and shuts down its write side, the proxy accepts and reads it,
+// connects to the chosen origin and writes the rewritten request, the
+// origin accepts and answers, and the replies flow back. The kernel buffers
+// each step. One origin is closed halfway through; two are never started.
+
+struct Header { name: String, value: String }
+
+struct Message {
+    start: String,
+    headers: Vec[Header],
+    body: String,
+}
+
+struct Upstream {
+    name: String,
+    addr: String,
+    down_for: i64,
+    refused: i64,
+    served: i64,
+}
+
+struct Cluster {
+    name: String,
+    members: Vec[Upstream],
+    next: i64,
+}
+
+struct Route { prefix: String, pool: i64, strip: bool }
+
+struct Origin { name: String, listener: Option[TcpListener], seen: i64 }
+
+struct LogLine {
+    method: String,
+    path: String,
+    upstream: String,
+    status: i64,
+    bytes: i64,
+    tries: i64,
+}
+
+struct Proxy {
+    listener: TcpListener,
+    addr: String,
+    routes: Vec[Route],
+    pools: Vec[Cluster],
+    log: Vec[LogLine],
+}
+
+const MAX_BODY: i64 = 64;
+const COOLDOWN: i64 = 3;
+
+fn reason(status: i64) -> String {
+    match status {
+        200 => "OK".to_string(),
+        201 => "Created".to_string(),
+        400 => "Bad Request".to_string(),
+        404 => "Not Found".to_string(),
+        413 => "Payload Too Large".to_string(),
+        500 => "Internal Server Error".to_string(),
+        502 => "Bad Gateway".to_string(),
+        503 => "Service Unavailable".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+fn read_all(conn: ref TcpStream) -> Result[String, String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let mut i = 0;
+                while i < n {
+                    bytes.push(buf[i]);
+                    i = i + 1;
+                }
+            }
+            Err(_) => return Err("read failed".to_string()),
+        }
+    }
+    match String.from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(_) => Err("not utf-8".to_string()),
+    }
+}
+
+fn header(m: ref Message, name: Str) -> Option[String] {
+    for h in m.headers.iter() {
+        if h.name.to_lowercase() == name {
+            return Some(h.value.clone());
+        }
+    }
+    None
+}
+
+// Decodes a chunked body: hex size line, data, CRLF, until a zero chunk.
+fn dechunk(raw: Str) -> Result[String, String] {
+    let mut out = String.new();
+    let mut at = 0;
+    loop {
+        let rest = raw[at..raw.len()];
+        let eol = match rest.find("\r\n") {
+            Some(i) => i,
+            None => return Err("chunk size line missing".to_string()),
+        };
+        let size = match i64.from_str_radix(rest[0..eol].trim(), 16) {
+            Some(n) => n,
+            None => return Err(f"bad chunk size [{rest[0..eol]}]"),
+        };
+        if size == 0 {
+            return Ok(out);
+        }
+        let start = eol + 2;
+        if start + size + 2 > rest.len() {
+            return Err("chunk truncated".to_string());
+        }
+        out.push_str(rest[start..start + size]);
+        at = at + start + size + 2;
+    }
+}
+
+// Parses one HTTP/1.1 message (request or response) that fills `raw`.
+fn parse_message(raw: Str) -> Result[Message, String] {
+    let head_end = match raw.find("\r\n\r\n") {
+        Some(i) => i,
+        None => return Err("no end of headers".to_string()),
+    };
+    let lines: Vec[String] = raw[0..head_end].split("\r\n");
+    let mut headers: Vec[Header] = Vec.new();
+    let mut i = 1;
+    while i < lines.len() {
+        match lines[i].find(":") {
+            Some(c) => headers.push(Header {
+                name: lines[i][0..c].trim().to_string(),
+                value: lines[i][c + 1..lines[i].len()].trim().to_string(),
+            }),
+            None => return Err(f"bad header [{lines[i]}]"),
+        }
+        i = i + 1;
+    }
+    let mut m = Message { start: lines[0].clone(), headers: headers, body: String.new() };
+    let rest = raw[head_end + 4..raw.len()];
+    let chunked = match header(m, "transfer-encoding") {
+        Some(v) => v.to_lowercase() == "chunked",
+        None => false,
+    };
+    if chunked {
+        m.body = dechunk(rest)?;
+    } else {
+        let len = match header(m, "content-length") {
+            Some(v) => match i64.parse(v) {
+                Some(n) => n,
+                None => return Err(f"bad content-length [{v}]"),
+            },
+            None => 0,
+        };
+        if len > rest.len() {
+            return Err(f"body short by {len - rest.len()} bytes");
+        }
+        m.body = rest[0..len].to_string();
+    }
+    Ok(m)
+}
+
+// Hop-by-hop headers belong to one connection and are never forwarded,
+// along with any header the Connection header names.
+fn is_hop(name: Str, extra: ref Vec[String]) -> bool {
+    let n = name.to_lowercase();
+    let fixed = ["connection", "keep-alive", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"];
+    for f in fixed {
+        if n == f {
+            return true;
+        }
+    }
+    for e in extra.iter() {
+        if n == e {
+            return true;
+        }
+    }
+    false
+}
+
+fn end_to_end(m: ref Message) -> Vec[Header] {
+    let mut extra: Vec[String] = Vec.new();
+    match header(m, "connection") {
+        Some(v) => {
+            for tok in v.split(",") {
+                extra.push(tok.trim().to_lowercase());
+            }
+        }
+        None => {}
+    }
+    let mut out: Vec[Header] = Vec.new();
+    for h in m.headers.iter() {
+        if not is_hop(h.name, extra) and h.name.to_lowercase() != "content-length" {
+            out.push(Header { name: h.name.clone(), value: h.value.clone() });
+        }
+    }
+    out
+}
+
+fn render(start: Str, headers: ref Vec[Header], body: Str) -> String {
+    let mut s = f"{start}\r\n";
+    for h in headers.iter() {
+        s.push_str(f"{h.name}: {h.value}\r\n");
+    }
+    s.push_str(f"Content-Length: {body.len()}\r\n\r\n");
+    s.push_str(body);
+    s
+}
+
+fn simple(status: i64, body: Str) -> String {
+    let headers = vec![
+        Header { name: "Content-Type".to_string(), value: "text/plain".to_string() },
+        Header { name: "Via".to_string(), value: "1.1 kproxy".to_string() },
+    ];
+    render(f"HTTP/1.1 {status} {reason(status)}", headers, body)
+}
+
+fn status_of(start: Str) -> i64 {
+    let parts: Vec[String] = start.split(" ");
+    if parts.len() < 2 {
+        return 0;
+    }
+    i64.parse(parts[1]).unwrap_or(0)
+}
+
+// ---- origins ----------------------------------------------------------
+
+fn origin_reply(name: Str, req: ref Message) -> String {
+    let parts: Vec[String] = req.start.split(" ");
+    let method = parts[0].clone();
+    let path = parts[1].clone();
+    let mut headers: Vec[Header] = vec![
+        Header { name: "Server".to_string(), value: f"origin-{name}" },
+        Header { name: "Connection".to_string(), value: "close, X-Origin-Trace".to_string() },
+        Header { name: "X-Origin-Trace".to_string(), value: f"{name}-internal" },
+    ];
+    let mut status = 200;
+    let mut body = String.new();
+    if path == "/users" and method == "GET" {
+        body = "[{\"id\":1,\"name\":\"ada\"},{\"id\":2,\"name\":\"bob\"}]".to_string();
+    } else if path == "/users" and method == "POST" {
+        status = 201;
+        body = f"{{\"created\":{req.body},\"by\":\"{name}\"}}";
+    } else if path.starts_with("/users/") {
+        body = f"{{\"id\":{path[7..path.len()]},\"from\":\"{name}\"}}";
+    } else if path == "/flaky" {
+        if name == "b1" {
+            status = 503;
+            body = "draining".to_string();
+        } else {
+            body = f"steady on {name}";
+        }
+    } else if path == "/headers" {
+        let mut names: Vec[String] = Vec.new();
+        for h in req.headers.iter() {
+            names.push(h.name.to_lowercase());
+        }
+        names.sort();
+        let xff = header(req, "x-forwarded-for").unwrap_or("-".to_string());
+        let pre = header(req, "x-forwarded-prefix").unwrap_or("-".to_string());
+        body = f"{names.join(",")} xff={xff} prefix={pre}";
+    } else if path == "/export" {
+        // A streamed reply: chunked, so the proxy has to decode it.
+        headers.push(Header { name: "Transfer-Encoding".to_string(), value: "chunked".to_string() });
+        let mut s = f"HTTP/1.1 200 OK\r\n";
+        for h in headers.iter() {
+            s.push_str(f"{h.name}: {h.value}\r\n");
+        }
+        s.push_str("\r\n");
+        let rows = ["id,name\n", "1,ada\n", "2,bob\n", "3,cy\n"];
+        for r in rows {
+            s.push_str(f"{r.len():x}\r\n{r}\r\n");
+        }
+        s.push_str("0\r\n\r\n");
+        return s;
+    } else {
+        status = 404;
+        body = f"origin {name} has no {path}";
+    }
+    render(f"HTTP/1.1 {status} {reason(status)}", headers, body)
+}
+
+// The origin side of one exchange: accept the proxy's connection, answer it.
+fn serve_origin(origins: mut ref Vec[Origin], name: Str) {
+    for o in origins.iter_mut() {
+        if o.name == name {
+            match o.listener {
+                Some(l) => match l.accept() {
+                    Ok(conn) => {
+                        o.seen += 1;
+                        let out = match read_all(conn) {
+                            Ok(raw) => match parse_message(raw) {
+                                Ok(req) => origin_reply(name, req),
+                                Err(e) => simple(400, e),
+                            },
+                            Err(e) => simple(400, e),
+                        };
+                        match conn.write_all(out.bytes()) {
+                            Ok(_) => {}
+                            Err(_) => println(f"origin {name} write failed"),
+                        }
+                    }
+                    Err(_) => println(f"origin {name} accept failed"),
+                },
+                None => println(f"origin {name} is not listening"),
+            }
+            return;
+        }
+    }
+    println(f"no origin {name}");
+}
+
+// ---- proxy ------------------------------------------------------------
+
+fn pick(pool: mut ref Cluster, tried: ref Vec[bool]) -> Option[i64] {
+    let n = pool.members.len();
+    let mut k = 0;
+    while k < n {
+        let idx = (pool.next + k) % n;
+        if pool.members[idx].down_for == 0 and not tried[idx] {
+            pool.next = (idx + 1) % n;
+            return Some(idx);
+        }
+        k = k + 1;
+    }
+    None
+}
+
+fn route_for(routes: ref Vec[Route], path: Str) -> Option[i64] {
+    let mut best: Option[i64] = None;
+    let mut best_len = 0;
+    let mut i = 0;
+    while i < routes.len() {
+        let p = routes[i].prefix.clone();
+        if path.starts_with(p) and p.len() > best_len {
+            best = Some(i);
+            best_len = p.len();
+        }
+        i = i + 1;
+    }
+    best
+}
+
+// Forwards one request through the chosen pool. Returns the reply for the
+// client, the upstream that produced it ("-" if none) and the number of
+// upstreams tried.
+fn forward(proxy: mut ref Proxy, origins: mut ref Vec[Origin], req: ref Message, method: Str, path: Str) -> (String, String, i64) {
+    let ri = match route_for(proxy.routes, path) {
+        Some(i) => i,
+        None => return (simple(404, f"no route for {path}"), "-".to_string(), 0),
+    };
+    let prefix = proxy.routes[ri].prefix.clone();
+    let strip = proxy.routes[ri].strip;
+    let pi = proxy.routes[ri].pool;
+    let pool = mut ref proxy.pools[pi];
+    for m in pool.members.iter_mut() {
+        if m.down_for > 0 {
+            m.down_for -= 1;
+        }
+    }
+    let upstream_path = if strip {
+        let p = path[prefix.len() - 1..path.len()].to_string();
+        p
+    } else {
+        path.to_string()
+    };
+    let mut headers = end_to_end(req);
+    headers.push(Header { name: "X-Forwarded-For".to_string(), value: "127.0.0.1".to_string() });
+    headers.push(Header { name: "X-Forwarded-Prefix".to_string(), value: prefix[0..prefix.len() - 1].to_string() });
+    headers.push(Header { name: "Via".to_string(), value: "1.1 kproxy".to_string() });
+    let outgoing = render(f"{method} {upstream_path} HTTP/1.1", headers, req.body);
+
+    let mut tried: Vec[bool] = Vec.new();
+    for _ in pool.members.iter() {
+        tried.push(false);
+    }
+    let mut tries = 0;
+    let mut last_reply: Option[(String, String)] = None;
+    loop {
+        let idx = match pick(pool, tried) {
+            Some(i) => i,
+            None => break,
+        };
+        tried[idx] = true;
+        tries += 1;
+        let up = mut ref pool.members[idx];
+        let conn = match TcpStream.connect(up.addr.clone()) {
+            Ok(c) => c,
+            Err(_) => {
+                up.refused += 1;
+                up.down_for = COOLDOWN;
+                println(f"  [pool {pool.name}] {up.name} refused, out for {COOLDOWN}");
+                continue;
+            }
+        };
+        let sent = conn.write_all(outgoing.bytes()).is_ok() and conn.shutdown_write().is_ok();
+        if not sent {
+            println(f"  [pool {pool.name}] {up.name} write failed");
+            continue;
+        }
+        serve_origin(origins, up.name);
+        let raw = match read_all(conn) {
+            Ok(r) => r,
+            Err(e) => {
+                println(f"  [pool {pool.name}] {up.name}: {e}");
+                continue;
+            }
+        };
+        let resp = match parse_message(raw) {
+            Ok(r) => r,
+            Err(e) => {
+                last_reply = Some((simple(502, f"bad upstream reply: {e}"), up.name.clone()));
+                break;
+            }
+        };
+        up.served += 1;
+        let mut out_headers = end_to_end(resp);
+        out_headers.push(Header { name: "Via".to_string(), value: "1.1 kproxy".to_string() });
+        out_headers.push(Header { name: "X-Upstream".to_string(), value: up.name.clone() });
+        let reply = render(resp.start, out_headers, resp.body);
+        if status_of(resp.start) == 503 and method == "GET" {
+            println(f"  [pool {pool.name}] {up.name} answered 503, retrying GET");
+            last_reply = Some((reply, up.name.clone()));
+            continue;
+        }
+        return (reply, up.name.clone(), tries);
+    }
+    match last_reply {
+        Some((r, name)) => (r, name, tries),
+        None => (simple(502, f"no healthy upstream in {pool.name}"), "-".to_string(), tries),
+    }
+}
+
+fn handle_client(proxy: mut ref Proxy, origins: mut ref Vec[Origin]) {
+    let conn = match proxy.listener.accept() {
+        Ok(c) => c,
+        Err(_) => {
+            println("proxy accept failed");
+            return;
+        }
+    };
+    let raw = match read_all(conn) {
+        Ok(r) => r,
+        Err(e) => e,
+    };
+    let (reply, upstream, tries, method, path) = match parse_message(raw) {
+        Ok(req) => {
+            let parts: Vec[String] = req.start.split(" ");
+            if parts.len() != 3 or not parts[2].starts_with("HTTP/1.") {
+                (simple(400, "bad request line"), "-".to_string(), 0, "?".to_string(), "?".to_string())
+            } else if req.body.len() > MAX_BODY {
+                (simple(413, f"body over {MAX_BODY} bytes"), "-".to_string(), 0, parts[0].clone(), parts[1].clone())
+            } else {
+                let (r, u, t) = forward(proxy, origins, req, parts[0], parts[1]);
+                (r, u, t, parts[0].clone(), parts[1].clone())
+            }
+        }
+        Err(e) => (simple(400, e), "-".to_string(), 0, "?".to_string(), "?".to_string()),
+    };
+    let status = status_of(reply);
+    let body_len = match reply.find("\r\n\r\n") {
+        Some(i) => reply.len() - i - 4,
+        None => 0,
+    };
+    proxy.log.push(LogLine { method: method, path: path, upstream: upstream, status: status, bytes: body_len, tries: tries });
+    match conn.write_all(reply.bytes()) {
+        Ok(_) => {}
+        Err(_) => println("proxy write failed"),
+    }
+}
+
+// ---- client -----------------------------------------------------------
+
+fn send(proxy: mut ref Proxy, origins: mut ref Vec[Origin], label: Str, raw: Str) {
+    println(f"== {label}");
+    let client = match TcpStream.connect(proxy.addr.clone()) {
+        Ok(c) => c,
+        Err(_) => {
+            println("client connect failed");
+            return;
+        }
+    };
+    match client.write_all(raw.bytes()) {
+        Ok(_) => {}
+        Err(_) => println("client write failed"),
+    }
+    match client.shutdown_write() {
+        Ok(_) => {}
+        Err(_) => println("client shutdown failed"),
+    }
+    handle_client(proxy, origins);
+    match read_all(client) {
+        Ok(resp) => match parse_message(resp) {
+            Ok(m) => {
+                println(f"  {m.start}");
+                for h in m.headers.iter() {
+                    println(f"  {h.name}: {h.value}");
+                }
+                println(f"  | {m.body}");
+            }
+            Err(e) => println(f"  unparseable reply: {e}"),
+        },
+        Err(e) => println(f"  client read: {e}"),
+    }
+}
+
+fn get(path: Str) -> String {
+    f"GET {path} HTTP/1.1\r\nHost: shop.test\r\nUser-Agent: kclient\r\n\r\n"
+}
+
+fn post(path: Str, body: Str) -> String {
+    f"POST {path} HTTP/1.1\r\nHost: shop.test\r\nContent-Type: application/json\r\nContent-Length: {body.len()}\r\n\r\n{body}"
+}
+
+fn upstream(name: Str, port: i64) -> Upstream {
+    Upstream { name: name.to_string(), addr: f"127.0.0.1:{port}", down_for: 0, refused: 0, served: 0 }
+}
+
+fn origin(name: Str, port: i64) -> Origin {
+    match TcpListener.bind(f"127.0.0.1:{port}") {
+        Ok(l) => Origin { name: name.to_string(), listener: Some(l), seen: 0 },
+        Err(_) => {
+            println(f"origin {name} bind failed");
+            Origin { name: name.to_string(), listener: None, seen: 0 }
+        }
+    }
+}
+
+fn main() {
+    let addr = "127.0.0.1:47737".to_string();
+    let listener = match TcpListener.bind(addr.clone()) {
+        Ok(l) => l,
+        Err(_) => {
+            println("proxy bind failed");
+            return;
+        }
+    };
+    // b4 and s1 are in the pools but nothing ever listens on their ports.
+    let mut origins = vec![origin("b1", 47738), origin("b2", 47739)];
+    let mut proxy = Proxy {
+        listener: listener,
+        addr: addr,
+        routes: vec![
+            Route { prefix: "/api/".to_string(), pool: 0, strip: true },
+            Route { prefix: "/api/admin/".to_string(), pool: 1, strip: false },
+            Route { prefix: "/static/".to_string(), pool: 1, strip: false },
+        ],
+        pools: vec![
+            Cluster { name: "api".to_string(), members: vec![upstream("b1", 47738), upstream("b2", 47739), upstream("b4", 47740)], next: 0 },
+            Cluster { name: "static".to_string(), members: vec![upstream("s1", 47741)], next: 0 },
+        ],
+        log: Vec.new(),
+    };
+
+    send(mut proxy, mut origins, "list users", get("/api/users"));
+    send(mut proxy, mut origins, "one user", get("/api/users/7"));
+    send(mut proxy, mut origins, "dead upstream is skipped", get("/api/users/8"));
+    send(mut proxy, mut origins, "create", post("/api/users", "{\"name\":\"cy\"}"));
+    send(mut proxy, mut origins, "503 GET is retried", get("/api/flaky"));
+    send(mut proxy, mut origins, "503 POST is not", post("/api/flaky", "{}"));
+    send(mut proxy, mut origins, "hop-by-hop headers dropped",
+        "GET /api/headers HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive, X-Session\r\nKeep-Alive: timeout=5\r\nX-Session: s3cret\r\nX-Request-Id: r-42\r\n\r\n");
+    send(mut proxy, mut origins, "chunked origin reply", get("/api/export"));
+    send(mut proxy, mut origins, "static pool is all down", get("/static/logo.png"));
+    send(mut proxy, mut origins, "longer prefix wins", get("/api/admin/stats"));
+    send(mut proxy, mut origins, "no route", get("/nowhere"));
+    send(mut proxy, mut origins, "body too large", post("/api/users", "{\"bio\":\"0123456789012345678901234567890123456789012345678901234567890123\"}"));
+    send(mut proxy, mut origins, "malformed", "BLAH\r\n\r\n");
+
+    println("-- b2 shuts down");
+    origins[1].listener = None;
+    send(mut proxy, mut origins, "after b2 closes (1)", get("/api/users/1"));
+    send(mut proxy, mut origins, "after b2 closes (2)", get("/api/users/2"));
+    send(mut proxy, mut origins, "after b2 closes (3)", get("/api/users/3"));
+    send(mut proxy, mut origins, "after b2 closes (4)", get("/api/users/4"));
+    send(mut proxy, mut origins, "after b2 closes (5)", get("/api/users/5"));
+
+    println("-- access log");
+    for l in proxy.log.iter() {
+        println(f"{l.method} {l.path} -> {l.upstream} {l.status} {l.bytes}b tries={l.tries}");
+    }
+    println("-- upstreams");
+    for p in proxy.pools.iter() {
+        for m in p.members.iter() {
+            println(f"{p.name}/{m.name} served={m.served} refused={m.refused} down_for={m.down_for}");
+        }
+    }
+    for o in origins.iter() {
+        println(f"origin {o.name} saw {o.seen}");
+    }
+}
