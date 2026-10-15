@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 273 |
-| codegen-gap | 264 |
+| codegen-gap | 265 |
 | false-positive | 205 |
 | other | 173 |
 | perf | 170 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2917 |
+| codegen | 2918 |
 | interp | 939 |
 | typecheck | 445 |
 | other | 115 |
@@ -212,13 +212,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-59 | 2026-10-15 | runtime | medium | The fs library cannot create a symbolic link, see one, or read or set a file's permissions or modification time, so an archive extractor (unzip, tar), an installer or a sync tool cannot restore what the archive records | — |
 | B-2026-10-15-60 | 2026-10-15 | typecheck | low | `karac check` refuses `.to_vec()` on an `Array[T, N]` (`no method 'to_vec' on type 'Array'`), though design.md § Method resolution says an `Array[T, N]` receiver also finds `Slice[T]`'s methods; `a.contains(x)` already resolves that way and `a.as_slice().to_vec()` works. | — |
 | B-2026-10-15-61 | 2026-10-15 | typecheck+codegen | high | `karac check` accepts writing through a read-only `Slice`: `let mut t = s.bytes(); t[i] = x;` and `let mut w = v[0..2]; w[0] = x;` both pass, though `bytes()` and a range subscript give `Slice[T]` and collections.md says writing needs a `mut Slice[T]`. Both backends then write into the source, the String's or the Vec's own buffer, even when it is not `mut`; for `bytes()` the MIR compiled backend writes into the String (a literal's too: `let s = "hello"` then prints `aello`) while `__mir-run` writes into a snapshot copy, so run and build differ | — |
-| B-2026-10-15-67 | 2026-10-15 | interp+codegen | medium | `u32.rotate_left` / `u64.rotate_right` (and the other rotate widths) pass `karac check` but neither v2 backend has them: `__mir-run` stops with `call of unknown function u32.rotate_left` and `__mir-llvm-run` with ``native `u32.rotate_left` is not lowered yet`` | — |
-| B-2026-10-15-68 | 2026-10-15 | interp+codegen | medium | `f64.partial_cmp` passes `karac check` but neither v2 backend has it: `__mir-run` stops with `call of unknown function f64.partial_cmp` and `__mir-llvm-run` with ``native `f64.partial_cmp` is not lowered yet``, so the usual float sort `v.sort_by(|a, b| a.partial_cmp(b).unwrap())` runs on no v2 surface | — |
-| B-2026-10-15-69 | 2026-10-15 | interp+codegen | medium | On every v2 surface, `TcpListener.bind("127.0.0.1:0")` prints `BOUND_PORT=<n>` to the program's own stdout, a legacy test-harness convention that docs/library/io.md does not mention: any program that lets the OS choose a port (a test server, a daemon with an ephemeral console, a collector) gets an unrequested line with a random number in its output | — |
+| B-2026-10-15-68 | 2026-10-15 | interp+codegen | medium | `f64.partial_cmp` passes `karac check` but neither v2 backend has it: `__mir-run` stops with `call of unknown function f64.partial_cmp` and `__mir-llvm-run` with ``native `f64.partial_cmp` is not lowered yet``, so the usual float sort `v.sort_by(|a, b| a.partial_cmp(b).unwrap())` runs on no v2 surface — the MIR interpreter half is fixed (96564a9f3b); the LLVM lowering is the remainder | — |
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock; the interpreter does not yet run `TaskGroup.spawn_frame` under the coroutine transform; E0500 for a task spawned on a parameter group asks to declare the captured value before the group | — |
 | B-2026-10-15-73 | 2026-10-15 | parser | low | An unsuffixed `i128::MIN`, `-170141183460469231731687303715884105728`, is refused at parse with advice to add a `u128` suffix, although `let w: i128 = -170141183460469231731687303715884105728;` is in range; the `i128`-suffixed spelling works | — |
+| B-2026-10-15-74 | 2026-10-15 | codegen | low | `u128.rotate_left` / `rotate_right` (and `i128`) are not lowered on the compiled v2 backends: `__mir-llvm-run` stops with ``native `u128.rotate_right` is not lowered yet``, while `__mir-run` prints the rotated value | — |
 
 ### Relocated
 
@@ -4110,6 +4109,8 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-48 | interp+codegen | medium | A user struct named like a library type with a special drop (`Mutex`, `Atomic`, `OnceLock`, `Arena`, `Pool`, `File`) gets that type's drop on both MI… | cba3787150 |
 | B-2026-10-15-49 | interp+codegen | high | A VARIANT PATTERN SPELLED THROUGH A TYPE ALIAS MATCHES EVERY VALUE ON v2: with `enum NetE { A, B(i32) } type OldE = NetE;`, `match v { OldE.A => ..,… | 44cca1211f |
 | B-2026-10-15-54 | parser | low | An unsuffixed integer literal above `i64::MAX` is refused at PARSE even where the expected type is `u64` or `u128`: `let a: u64 = 0xFFFF_FFFF_FFFF_FF… | ce68ce663a |
+| B-2026-10-15-67 | interp+codegen | medium | `u32.rotate_left` / `u64.rotate_right` (and the other rotate widths) pass `karac check` but neither v2 backend has them: `__mir-run` stops with `call… | 96564a9f3b |
+| B-2026-10-15-69 | interp+codegen | medium | On every v2 surface, `TcpListener.bind("127.0.0.1:0")` prints `BOUND_PORT=<n>` to the program's own stdout, a legacy test-harness convention that doc… | 96564a9f3b |
 
 </details>
 
