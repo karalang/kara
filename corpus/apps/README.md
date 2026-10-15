@@ -169,6 +169,7 @@ cli/mini_patch        difflib's unified diff of two service trees, then GNU patc
 cli/mini_sed          a GNU sed 4.9 subset running 68 invocations over an access log, hosts, INI, .env, CSV and CHANGELOG: POSIX leftmost-longest BRE/ERE, ranges, hold space, a/i/c/r/w, -i/-s, GNU error messages; output identical to GNU sed 4.9
 cli/mini_yaml         a PyYAML 6.0.1 safe_load_all port loading k8s, compose, Actions and Ansible files plus YAML 1.1 edge cases and six broken files: scanner, parser, anchors, merge keys, implicit types, PyYAML error marks; output identical to PyYAML + json.dumps
 cli/mini_awk          an awk interpreter running 67 ops one-liners and report scripts over an access log, passwd, CSV, ps and df output: fields, ranges, arrays, user functions, getline, print > file, printf, paragraph mode; output identical to mawk 1.3.4
+cli/mini_textutils    GNU coreutils text tools (sort, cut, uniq, tr, join, numfmt, ...) in pipelines
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

@@ -1,0 +1,2593 @@
+// mini_textutils: the text tools that shell pipelines in deploy scripts,
+// cron jobs and log triage are made of, as one multi-call program
+// answering what GNU coreutils 9.4 answers in the C locale: `sort`,
+// `cut`, `uniq`, `tr`, `wc`, `head`, `tail`, `join`, `comm`, `paste`,
+// `nl`, `tac`, `numfmt` and `cat`. The run writes the input files into
+// `data/` and a `jobs.tsv` of pipelines (one per line, tab-separated
+// arguments, a tab inside an argument written as a vertical tab, stages
+// separated by a `|` argument), then runs each one, feeding each stage's
+// output to the next, and prints what a shell prints: the `$ ...` line,
+// the last stage's stdout, every stage's stderr in order, and `[exit N]`
+// when the last stage's status is not 0.
+//
+// The tools follow GNU's option syntax (clustered short options, values
+// attached or separate, `--long=value`, options after operands) and its
+// messages. `sort` has keys (`-k F.C,F.C` with per-key `n h f r b`
+// options), `-t`, `-n`, `-h`, `-f`, `-r`, `-u`, `-s`, `-b`, `-c` and
+// `-m`, with GNU's last-resort whole-line comparison; `numfmt` rounds
+// away from zero as GNU's default does.
+//
+// expected.out is GNU coreutils 9.4's output on the same files, made by
+// oracle.py.
+
+// ------------------------------------------------------------ bytes and lines
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn push_bytes(v: mut ref Vec[u8], s: Str) {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        v.push(b[i]);
+    }
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_upper(c: u8) -> bool {
+    c >= b'A' and c <= b'Z'
+}
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_alpha(c: u8) -> bool {
+    is_upper(c) or is_lower(c)
+}
+
+// A blank, as sort and join read fields.
+fn is_blank(c: u8) -> bool {
+    c == b' ' or c == b'\t'
+}
+
+// White space, as wc counts words.
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == 11 or c == 12 or c == b'\r'
+}
+
+fn upper(c: u8) -> u8 {
+    if is_lower(c) { c - 32 } else { c }
+}
+
+fn repeat_byte(c: u8, n: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        v.push(c);
+    }
+    from_bytes(v)
+}
+
+fn pad_left(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    if s.len() < width {
+        out.push_str(repeat_byte(b' ', width - s.len()));
+    }
+    out.push_str(s);
+    out
+}
+
+// The lines of a text, without their newlines; a last line with no
+// newline counts as a line.
+fn lines_of(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+fn cmp_bytes(x: ref Vec[u8], y: ref Vec[u8]) -> i64 {
+    let mut i: i64 = 0;
+    while i < x.len() and i < y.len() {
+        if x[i] != y[i] {
+            return if x[i] < y[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    if x.len() == y.len() {
+        return 0;
+    }
+    if x.len() < y.len() { -1 } else { 1 }
+}
+
+fn cmp_str(a: Str, b: Str) -> i64 {
+    let x = to_bytes(a);
+    let y = to_bytes(b);
+    cmp_bytes(x, y)
+}
+
+// A positive decimal number, or -1.
+fn parse_count(s: Str) -> i64 {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return -1;
+    }
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return -1;
+        }
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+// Backslash escapes in a delimiter or a tr set: \n \t \\ \0 and octal.
+fn unescape(s: Str) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'\\' or i + 1 >= b.len() {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let e = b[i + 1];
+        i += 2;
+        if e == b'n' {
+            out.push(10);
+        } else if e == b't' {
+            out.push(9);
+        } else if e == b'r' {
+            out.push(13);
+        } else if e == b'f' {
+            out.push(12);
+        } else if e == b'v' {
+            out.push(11);
+        } else if e == b'a' {
+            out.push(7);
+        } else if e == b'b' {
+            out.push(8);
+        } else if e >= b'0' and e <= b'7' {
+            let mut v = (e - b'0') as i64;
+            let mut k: i64 = 0;
+            while k < 2 and i < b.len() and b[i] >= b'0' and b[i] <= b'7' {
+                v = v * 8 + (b[i] - b'0') as i64;
+                i += 1;
+                k += 1;
+            }
+            out.push((v % 256) as u8);
+        } else {
+            out.push(e);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ a tool's run
+
+// What one stage printed, and its exit status.
+struct Io {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+fn io_new() -> Io {
+    Io { out: String.new(), err: String.new(), status: 0 }
+}
+
+fn fail(tool: Str, msg: Str, status: i64) -> Io {
+    Io { out: String.new(), err: f"{tool}: {msg}\n", status: status }
+}
+
+// A usage error: the message and GNU's pointer to --help.
+fn usage(tool: Str, msg: Str) -> Io {
+    Io { out: String.new(), err: f"{tool}: {msg}\nTry '{tool} --help' for more information.\n", status: 1 }
+}
+
+// A file operand's text: "-" (or no operand) is the stage's input.
+fn read_input(name: Str, stdin: Str, dir: Str) -> Option[String] {
+    if name == "-" {
+        return Some(stdin.to_string());
+    }
+    match fs.read_to_string(f"{dir}/{name}") {
+        Ok(t) => Some(t),
+        Err(_) => None,
+    }
+}
+
+// ------------------------------------------------------------ options
+
+// A command line taken apart the way getopt does: short options
+// (clustered, a value attached or in the next argument), long options
+// (`--name` or `--name=value`), and operands, in any order.
+struct Opts {
+    flags: Vec[u8],
+    keys: Vec[u8],
+    vals: Vec[String],
+    longs: Vec[String],
+    long_vals: Vec[String],
+    operands: Vec[String],
+    error: String,
+}
+
+impl Opts {
+    fn has(ref self, c: u8) -> bool {
+        for i in 0..self.flags.len() {
+            if self.flags[i] == c {
+                return true;
+            }
+        }
+        false
+    }
+
+    // The values given to a short option, in order.
+    fn values(ref self, c: u8) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..self.keys.len() {
+            if self.keys[i] == c {
+                out.push(self.vals[i].clone());
+            }
+        }
+        out
+    }
+
+    fn last(ref self, c: u8) -> Option[String] {
+        let v = self.values(c);
+        if v.len() == 0 {
+            return None;
+        }
+        Some(v[v.len() - 1].clone())
+    }
+
+    fn has_long(ref self, name: Str) -> bool {
+        for i in 0..self.longs.len() {
+            if self.longs[i] == name {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn long(ref self, name: Str) -> Option[String] {
+        let mut found: Option[String] = None;
+        for i in 0..self.longs.len() {
+            if self.longs[i] == name {
+                found = Some(self.long_vals[i].clone());
+            }
+        }
+        found
+    }
+}
+
+// `with_value` lists the short options that take a value.
+fn parse_opts(args: ref Vec[String], with_value: Str) -> Opts {
+    let wv = to_bytes(with_value);
+    let mut o = Opts { flags: Vec.new(), keys: Vec.new(), vals: Vec.new(), longs: Vec.new(), long_vals: Vec.new(), operands: Vec.new(), error: String.new() };
+    let mut i: i64 = 0;
+    let mut only_operands = false;
+    while i < args.len() {
+        let a = args[i].clone();
+        let b = to_bytes(a);
+        i += 1;
+        if only_operands or b.len() < 2 or b[0] != b'-' {
+            o.operands.push(a);
+            continue;
+        }
+        if a == "--" {
+            only_operands = true;
+            continue;
+        }
+        if b[1] == b'-' {
+            let mut eq: i64 = -1;
+            for k in 2..b.len() {
+                if eq < 0 and b[k] == b'=' {
+                    eq = k;
+                }
+            }
+            if eq < 0 {
+                o.longs.push(byte_str(b, 2, b.len()));
+                o.long_vals.push(String.new());
+            } else {
+                o.longs.push(byte_str(b, 2, eq));
+                o.long_vals.push(byte_str(b, eq + 1, b.len()));
+            }
+            continue;
+        }
+        let mut k: i64 = 1;
+        while k < b.len() {
+            let c = b[k];
+            let mut takes = false;
+            for q in 0..wv.len() {
+                if wv[q] == c {
+                    takes = true;
+                }
+            }
+            if not takes {
+                o.flags.push(c);
+                k += 1;
+                continue;
+            }
+            let value = if k + 1 < b.len() {
+                byte_str(b, k + 1, b.len())
+            } else if i < args.len() {
+                i += 1;
+                args[i - 1].clone()
+            } else {
+                o.error = f"option requires an argument -- '{from_bytes(vec![c])}'";
+                String.new()
+            };
+            o.flags.push(c);
+            o.keys.push(c);
+            o.vals.push(value);
+            break;
+        }
+    }
+    o
+}
+
+// ------------------------------------------------------------ sort
+
+// One `-k` key: where it starts and ends, and how it compares. Fields
+// and characters count from 1; an end field of 0 is the end of the
+// line, an end character of 0 the end of the end field.
+#[derive(Copy, Clone)]
+struct Key {
+    sf: i64,
+    sc: i64,
+    ef: i64,
+    ec: i64,
+    numeric: bool,
+    human: bool,
+    fold: bool,
+    rev: bool,
+    blanks: bool,
+}
+
+struct SortCfg {
+    keys: Vec[Key],
+    tab: i64,
+    rev: bool,
+    stable: bool,
+    unique: bool,
+}
+
+fn whole_line_key(global: ref Key) -> Key {
+    Key { sf: 1, sc: 1, ef: 0, ec: 0, numeric: global.numeric, human: global.human, fold: global.fold, rev: global.rev, blanks: global.blanks }
+}
+
+fn read_digits(b: ref Vec[u8], at: i64) -> (i64, i64) {
+    let mut i = at;
+    let mut n: i64 = 0;
+    while i < b.len() and is_digit(b[i]) {
+        n = n * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    (n, i)
+}
+
+// A key's ordering letters; false when one is not a sort option.
+fn key_flags(b: ref Vec[u8], at: i64, k: mut ref Key, own: mut ref bool) -> (bool, i64) {
+    let mut i = at;
+    while i < b.len() and is_alpha(b[i]) {
+        let c = b[i];
+        if c == b'n' {
+            k.numeric = true;
+        } else if c == b'h' {
+            k.human = true;
+        } else if c == b'f' {
+            k.fold = true;
+        } else if c == b'r' {
+            k.rev = true;
+        } else if c == b'b' {
+            k.blanks = true;
+        } else {
+            return (false, i);
+        }
+        *own = true;
+        i += 1;
+    }
+    (true, i)
+}
+
+// `F[.C][opts][,F[.C][opts]]`, or None when it is not one.
+fn parse_key(spec: Str, global: ref Key) -> Option[Key] {
+    let b = to_bytes(spec);
+    let mut k = Key { sf: 0, sc: 1, ef: 0, ec: 0, numeric: false, human: false, fold: false, rev: false, blanks: false };
+    let mut own = false;
+    let mut (sf, i) = read_digits(b, 0);
+    if i == 0 or sf == 0 {
+        return None;
+    }
+    k.sf = sf;
+    if i < b.len() and b[i] == b'.' {
+        let (sc, j) = read_digits(b, i + 1);
+        if j == i + 1 or sc == 0 {
+            return None;
+        }
+        k.sc = sc;
+        i = j;
+    }
+    let (ok, j) = key_flags(b, i, mut k, mut own);
+    if not ok {
+        return None;
+    }
+    i = j;
+    if i < b.len() and b[i] == b',' {
+        let (ef, j2) = read_digits(b, i + 1);
+        if j2 == i + 1 or ef == 0 {
+            return None;
+        }
+        k.ef = ef;
+        i = j2;
+        if i < b.len() and b[i] == b'.' {
+            let (ec, j3) = read_digits(b, i + 1);
+            if j3 == i + 1 {
+                return None;
+            }
+            k.ec = ec;
+            i = j3;
+        }
+        let (ok2, j4) = key_flags(b, i, mut k, mut own);
+        if not ok2 {
+            return None;
+        }
+        i = j4;
+    }
+    if i != b.len() {
+        return None;
+    }
+    if not own {
+        k.numeric = global.numeric;
+        k.human = global.human;
+        k.fold = global.fold;
+        k.rev = global.rev;
+        k.blanks = global.blanks;
+    }
+    Some(k)
+}
+
+// Where a key starts in a line, as GNU's begfield finds it.
+fn key_begin(b: ref Vec[u8], k: Key, tab: i64) -> i64 {
+    let lim = b.len();
+    let mut p: i64 = 0;
+    let mut words = k.sf - 1;
+    while p < lim and words > 0 {
+        if tab >= 0 {
+            while p < lim and b[p] as i64 != tab {
+                p += 1;
+            }
+            if p < lim {
+                p += 1;
+            }
+        } else {
+            while p < lim and is_blank(b[p]) {
+                p += 1;
+            }
+            while p < lim and not is_blank(b[p]) {
+                p += 1;
+            }
+        }
+        words -= 1;
+    }
+    if k.blanks {
+        while p < lim and is_blank(b[p]) {
+            p += 1;
+        }
+    }
+    p += k.sc - 1;
+    if p > lim { lim } else { p }
+}
+
+// Where a key ends, as GNU's limfield finds it.
+fn key_end(b: ref Vec[u8], k: Key, tab: i64) -> i64 {
+    let lim = b.len();
+    if k.ef == 0 {
+        return lim;
+    }
+    let mut words = if k.ec == 0 { k.ef } else { k.ef - 1 };
+    let mut p: i64 = 0;
+    while p < lim and words > 0 {
+        words -= 1;
+        if tab >= 0 {
+            while p < lim and b[p] as i64 != tab {
+                p += 1;
+            }
+            if p < lim and (words > 0 or k.ec != 0) {
+                p += 1;
+            }
+        } else {
+            while p < lim and is_blank(b[p]) {
+                p += 1;
+            }
+            while p < lim and not is_blank(b[p]) {
+                p += 1;
+            }
+        }
+    }
+    if k.ec != 0 {
+        if k.blanks {
+            while p < lim and is_blank(b[p]) {
+                p += 1;
+            }
+        }
+        p += k.ec;
+    }
+    if p > lim { lim } else { p }
+}
+
+// The number at the start of a key (blanks skipped), the way `-n` reads
+// one: an optional minus, digits, an optional fraction. Also returns
+// where it ended.
+fn number_at(b: ref Vec[u8], from: i64, to: i64) -> (f64, i64) {
+    let mut i = from;
+    while i < to and is_blank(b[i]) {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < to and b[i] == b'-' {
+        neg = true;
+        i += 1;
+    }
+    let mut v: f64 = 0.0;
+    let mut any = false;
+    while i < to and is_digit(b[i]) {
+        v = v * 10.0 + (b[i] - b'0') as f64;
+        i += 1;
+        any = true;
+    }
+    if i < to and b[i] == b'.' {
+        let mut scale: f64 = 0.1;
+        let mut j = i + 1;
+        while j < to and is_digit(b[j]) {
+            v += (b[j] - b'0') as f64 * scale;
+            scale = scale / 10.0;
+            j += 1;
+            any = true;
+        }
+        if any {
+            i = j;
+        }
+    }
+    if not any {
+        return (0.0, from);
+    }
+    (if neg { -v } else { v }, i)
+}
+
+fn suffix_rank(c: u8) -> i64 {
+    let units = "KMGTPEZY".bytes();
+    if c == b'k' {
+        return 1;
+    }
+    for i in 0..units.len() {
+        if units[i] == c {
+            return i + 1;
+        }
+    }
+    0
+}
+
+fn cmp_f64(x: f64, y: f64) -> i64 {
+    if x < y {
+        -1
+    } else if x > y {
+        1
+    } else {
+        0
+    }
+}
+
+fn cmp_range(a: ref Vec[u8], a0: i64, a1: i64, b: ref Vec[u8], b0: i64, b1: i64, fold: bool) -> i64 {
+    let mut i = a0;
+    let mut j = b0;
+    while i < a1 and j < b1 {
+        let x = if fold { upper(a[i]) } else { a[i] };
+        let y = if fold { upper(b[j]) } else { b[j] };
+        if x != y {
+            return if x < y { -1 } else { 1 };
+        }
+        i += 1;
+        j += 1;
+    }
+    let la = a1 - i;
+    let lb = b1 - j;
+    if la == lb {
+        0
+    } else if la < lb {
+        -1
+    } else {
+        1
+    }
+}
+
+fn key_cmp(a: ref Vec[u8], b: ref Vec[u8], k: Key, tab: i64) -> i64 {
+    let a0 = key_begin(a, k, tab);
+    let a1e = key_end(a, k, tab);
+    let a1 = if a1e < a0 { a0 } else { a1e };
+    let b0 = key_begin(b, k, tab);
+    let b1e = key_end(b, k, tab);
+    let b1 = if b1e < b0 { b0 } else { b1e };
+    let r = if k.numeric {
+        let (x, _) = number_at(a, a0, a1);
+        let (y, _) = number_at(b, b0, b1);
+        cmp_f64(x, y)
+    } else if k.human {
+        let (x, ae) = number_at(a, a0, a1);
+        let (y, be) = number_at(b, b0, b1);
+        let ra = if ae < a1 and ae > a0 { suffix_rank(a[ae]) } else { 0 };
+        let rb = if be < b1 and be > b0 { suffix_rank(b[be]) } else { 0 };
+        let sa = cmp_f64(x, 0.0);
+        let sb = cmp_f64(y, 0.0);
+        if sa != sb {
+            if sa < sb { -1 } else { 1 }
+        } else if ra != rb {
+            let by_rank = if ra < rb { -1 } else { 1 };
+            if sa < 0 { -by_rank } else { by_rank }
+        } else {
+            cmp_f64(x, y)
+        }
+    } else {
+        cmp_range(a, a0, a1, b, b0, b1, k.fold)
+    };
+    if k.rev { -r } else { r }
+}
+
+// How two lines order: key by key, then (unless -s or -u) the whole
+// lines as bytes.
+fn line_cmp(a: ref Vec[u8], b: ref Vec[u8], cfg: ref SortCfg) -> i64 {
+    for i in 0..cfg.keys.len() {
+        let r = key_cmp(a, b, cfg.keys[i], cfg.tab);
+        if r != 0 {
+            return r;
+        }
+    }
+    if cfg.stable or cfg.unique {
+        return 0;
+    }
+    let r = cmp_bytes(a, b);
+    if cfg.rev { -r } else { r }
+}
+
+// A stable merge sort of line numbers.
+fn merge_sort(n: i64, lines: ref Vec[Vec[u8]], cfg: ref SortCfg) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for i in 0..n {
+        a.push(i);
+    }
+    let mut width: i64 = 1;
+    while width < n {
+        let mut b: Vec[i64] = Vec.new();
+        let mut lo: i64 = 0;
+        while lo < n {
+            let mid = if lo + width < n { lo + width } else { n };
+            let hi = if lo + 2 * width < n { lo + 2 * width } else { n };
+            let mut i = lo;
+            let mut j = mid;
+            while i < mid and j < hi {
+                if line_cmp(lines[a[j]], lines[a[i]], cfg) < 0 {
+                    b.push(a[j]);
+                    j += 1;
+                } else {
+                    b.push(a[i]);
+                    i += 1;
+                }
+            }
+            while i < mid {
+                b.push(a[i]);
+                i += 1;
+            }
+            while j < hi {
+                b.push(a[j]);
+                j += 1;
+            }
+            lo = hi;
+        }
+        a = b;
+        width = width * 2;
+    }
+    a
+}
+
+fn sort_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "kto");
+    if o.error.len() > 0 {
+        return usage("sort", o.error);
+    }
+    let global = Key { sf: 1, sc: 1, ef: 0, ec: 0, numeric: o.has(b'n'), human: o.has(b'h'), fold: o.has(b'f'), rev: o.has(b'r'), blanks: o.has(b'b') };
+    let mut cfg = SortCfg { keys: Vec.new(), tab: -1, rev: o.has(b'r'), stable: o.has(b's'), unique: o.has(b'u') };
+    if let Some(t) = o.last(b't') {
+        let tb = to_bytes(t);
+        if tb.len() != 1 {
+            return fail("sort", "multi-character tab", 2);
+        }
+        cfg.tab = tb[0] as i64;
+    }
+    let specs = o.values(b'k');
+    for i in 0..specs.len() {
+        match parse_key(specs[i], global) {
+            Some(k) => cfg.keys.push(k),
+            None => {
+                let s = specs[i].clone();
+                return fail("sort", f"invalid number at field start: invalid count at start of '{s}'", 2);
+            }
+        }
+    }
+    if cfg.keys.len() == 0 {
+        cfg.keys.push(whole_line_key(global));
+    }
+    let mut names = o.operands.clone();
+    if names.len() == 0 {
+        names.push("-".to_string());
+    }
+    let mut lines: Vec[Vec[u8]] = Vec.new();
+    for f in 0..names.len() {
+        let text = match read_input(names[f], stdin, dir) {
+            Some(t) => t,
+            None => {
+                let nm = names[f].clone();
+                return fail("sort", f"cannot read: {nm}: No such file or directory", 2);
+            }
+        };
+        let ls = lines_of(text);
+        for i in 0..ls.len() {
+            lines.push(to_bytes(ls[i]));
+        }
+        if o.has(b'c') {
+            break;
+        }
+    }
+    let mut io = io_new();
+    if o.has(b'c') {
+        for i in 1..lines.len() {
+            let r = line_cmp(lines[i - 1], lines[i], cfg);
+            if r > 0 or (cfg.unique and r == 0) {
+                let nm = names[0].clone();
+                let text = from_bytes(lines[i].clone());
+                let at = i + 1;
+                return fail("sort", f"{nm}:{at}: disorder: {text}", 1);
+            }
+        }
+        return io;
+    }
+    let order = merge_sort(lines.len(), lines, cfg);
+    for i in 0..order.len() {
+        if cfg.unique and i > 0 and line_cmp(lines[order[i - 1]], lines[order[i]], cfg) == 0 {
+            continue;
+        }
+        io.out.push_str(from_bytes(lines[order[i]].clone()));
+        io.out.push_str("\n");
+    }
+    io
+}
+
+// ------------------------------------------------------------ cut
+
+// A list of 1-based positions: ranges, an open end written as -1.
+struct Ranges {
+    lo: Vec[i64],
+    hi: Vec[i64],
+}
+
+impl Ranges {
+    fn has(ref self, at: i64) -> bool {
+        for i in 0..self.lo.len() {
+            if at >= self.lo[i] and (self.hi[i] < 0 or at <= self.hi[i]) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// `N`, `N-M`, `N-` and `-M`, comma-separated; Err names what was wrong.
+fn parse_ranges(spec: Str, what: Str) -> Result[Ranges, String] {
+    let mut r = Ranges { lo: Vec.new(), hi: Vec.new() };
+    let b = to_bytes(spec);
+    let mut i: i64 = 0;
+    while i <= b.len() {
+        let mut j = i;
+        while j < b.len() and b[j] != b',' {
+            j += 1;
+        }
+        let part = byte_str(b, i, j);
+        let pb = to_bytes(part);
+        let mut dash: i64 = -1;
+        for k in 0..pb.len() {
+            if pb[k] == b'-' and dash < 0 {
+                dash = k;
+            }
+        }
+        let (lo, hi) = if dash < 0 {
+            let n = parse_count(part);
+            (n, n)
+        } else {
+            let a = byte_str(pb, 0, dash);
+            let z = byte_str(pb, dash + 1, pb.len());
+            let lo = if a.len() == 0 { 1 } else { parse_count(a) };
+            let hi = if z.len() == 0 { -1 } else { parse_count(z) };
+            if z.len() > 0 and hi < 0 {
+                return Err(f"invalid {what} range");
+            }
+            (lo, hi)
+        };
+        if lo == 0 or hi == 0 {
+            return Err(f"{what}s are numbered from 1");
+        }
+        if lo < 0 {
+            return Err(f"invalid {what} value '{part}'");
+        }
+        r.lo.push(lo);
+        r.hi.push(hi);
+        i = j + 1;
+    }
+    Ok(r)
+}
+
+fn cut_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "bcfd");
+    if o.error.len() > 0 {
+        return usage("cut", o.error);
+    }
+    let fields = o.last(b'f');
+    let chars = if o.has(b'c') { o.last(b'c') } else { o.last(b'b') };
+    let (spec, what) = match fields {
+        Some(f) => (f, "field"),
+        None => match chars {
+            Some(c) => (c, "byte/character position"),
+            None => return usage("cut", "you must specify a list of bytes, characters, or fields"),
+        },
+    };
+    let by_field = what == "field";
+    let ranges = match parse_ranges(spec, what) {
+        Ok(r) => r,
+        Err(e) => return usage("cut", e),
+    };
+    let delim: u8 = match o.last(b'd') {
+        Some(d) => {
+            let db = to_bytes(d);
+            if db.len() != 1 {
+                return usage("cut", "the delimiter must be a single character");
+            }
+            db[0]
+        }
+        None => b'\t',
+    };
+    let out_delim = match o.long("output-delimiter") {
+        Some(d) => d,
+        None => from_bytes(vec![delim]),
+    };
+    let complement = o.has_long("complement");
+    let only_delimited = o.has(b's');
+    let mut names = o.operands.clone();
+    if names.len() == 0 {
+        names.push("-".to_string());
+    }
+    let mut io = io_new();
+    for f in 0..names.len() {
+        let text = match read_input(names[f], stdin, dir) {
+            Some(t) => t,
+            None => {
+                let nm = names[f].clone();
+                io.err.push_str(f"cut: {nm}: No such file or directory\n");
+                io.status = 1;
+                continue;
+            }
+        };
+        let ls = lines_of(text);
+        for li in 0..ls.len() {
+            let b = to_bytes(ls[li]);
+            if not by_field {
+                let mut v: Vec[u8] = Vec.new();
+                for i in 0..b.len() {
+                    if ranges.has(i + 1) != complement {
+                        v.push(b[i]);
+                    }
+                }
+                io.out.push_str(from_bytes(v));
+                io.out.push_str("\n");
+                continue;
+            }
+            let mut parts: Vec[String] = Vec.new();
+            let mut st: i64 = 0;
+            for i in 0..b.len() {
+                if b[i] == delim {
+                    parts.push(byte_str(b, st, i));
+                    st = i + 1;
+                }
+            }
+            if parts.len() == 0 {
+                if not only_delimited {
+                    io.out.push_str(ls[li]);
+                    io.out.push_str("\n");
+                }
+                continue;
+            }
+            parts.push(byte_str(b, st, b.len()));
+            let mut first = true;
+            for i in 0..parts.len() {
+                if ranges.has(i + 1) != complement {
+                    if not first {
+                        io.out.push_str(out_delim);
+                    }
+                    io.out.push_str(parts[i]);
+                    first = false;
+                }
+            }
+            io.out.push_str("\n");
+        }
+    }
+    io
+}
+
+// ------------------------------------------------------------ uniq
+
+// The part of a line uniq compares: after `fields` fields and `chars`
+// characters.
+fn uniq_key(line: Str, fields: i64, chars: i64, fold: bool) -> Vec[u8] {
+    let b = to_bytes(line);
+    let mut p: i64 = 0;
+    for _ in 0..fields {
+        while p < b.len() and is_blank(b[p]) {
+            p += 1;
+        }
+        while p < b.len() and not is_blank(b[p]) {
+            p += 1;
+        }
+    }
+    p += chars;
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = p;
+    while i < b.len() {
+        out.push(if fold { upper(b[i]) } else { b[i] });
+        i += 1;
+    }
+    out
+}
+
+fn uniq_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "fs");
+    if o.error.len() > 0 {
+        return usage("uniq", o.error);
+    }
+    let fields = match o.last(b'f') {
+        Some(v) => parse_count(v),
+        None => 0,
+    };
+    let chars = match o.last(b's') {
+        Some(v) => parse_count(v),
+        None => 0,
+    };
+    if fields < 0 or chars < 0 {
+        return fail("uniq", "invalid number to skip", 1);
+    }
+    let name = if o.operands.len() > 0 { o.operands[0].clone() } else { "-".to_string() };
+    let text = match read_input(name, stdin, dir) {
+        Some(t) => t,
+        None => return fail("uniq", f"{name}: No such file or directory", 1),
+    };
+    let ls = lines_of(text);
+    let fold = o.has(b'i');
+    let mut io = io_new();
+    let mut i: i64 = 0;
+    while i < ls.len() {
+        let key = uniq_key(ls[i], fields, chars, fold);
+        let mut j = i + 1;
+        while j < ls.len() {
+            let other = uniq_key(ls[j], fields, chars, fold);
+            if cmp_bytes(key, other) != 0 {
+                break;
+            }
+            j += 1;
+        }
+        let count = j - i;
+        let show_it = if o.has(b'd') {
+            count > 1
+        } else if o.has(b'u') {
+            count == 1
+        } else {
+            true
+        };
+        if show_it {
+            if o.has(b'c') {
+                io.out.push_str(pad_left(f"{count}", 7));
+                io.out.push_str(" ");
+            }
+            io.out.push_str(ls[i]);
+            io.out.push_str("\n");
+        }
+        i = j;
+    }
+    io
+}
+
+// ------------------------------------------------------------ tr
+
+fn class_bytes(name: Str) -> Option[Vec[u8]] {
+    let mut v: Vec[u8] = Vec.new();
+    for c in 0..256 {
+        let b = c as u8;
+        let yes = if name == "alpha" {
+            is_alpha(b)
+        } else if name == "upper" {
+            is_upper(b)
+        } else if name == "lower" {
+            is_lower(b)
+        } else if name == "digit" {
+            is_digit(b)
+        } else if name == "alnum" {
+            is_alpha(b) or is_digit(b)
+        } else if name == "space" {
+            is_space(b)
+        } else if name == "blank" {
+            is_blank(b)
+        } else if name == "punct" {
+            b > 32 and b < 127 and not is_alpha(b) and not is_digit(b)
+        } else {
+            return None;
+        };
+        if yes {
+            v.push(b);
+        }
+    }
+    Some(v)
+}
+
+// One character of a set, a backslash escape read as unescape reads it;
+// the byte and where the next one starts.
+fn set_char(b: ref Vec[u8], at: i64) -> (u8, i64) {
+    if b[at] != b'\\' or at + 1 >= b.len() {
+        return (b[at], at + 1);
+    }
+    let mut j = at + 2;
+    if b[at + 1] >= b'0' and b[at + 1] <= b'7' {
+        while j < b.len() and j < at + 4 and b[j] >= b'0' and b[j] <= b'7' {
+            j += 1;
+        }
+    }
+    let e = unescape(byte_str(b, at, j));
+    (e[0], j)
+}
+
+// A tr set spelled out: ranges, classes and escapes.
+fn expand_set(spec: Str) -> Result[Vec[u8], String] {
+    let b = to_bytes(spec);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'[' and i + 1 < b.len() and b[i + 1] == b':' {
+            let mut j = i + 2;
+            while j + 1 < b.len() and not (b[j] == b':' and b[j + 1] == b']') {
+                j += 1;
+            }
+            if j + 1 < b.len() {
+                let name = byte_str(b, i + 2, j);
+                match class_bytes(name) {
+                    Some(v) => {
+                        for k in 0..v.len() {
+                            out.push(v[k]);
+                        }
+                    }
+                    None => return Err(f"invalid character class '{name}'"),
+                }
+                i = j + 2;
+                continue;
+            }
+        }
+        let (c, next) = set_char(b, i);
+        if next + 1 < b.len() and b[next] == b'-' {
+            let (d, after) = set_char(b, next + 1);
+            if d < c {
+                let text = byte_str(b, i, after);
+                return Err(f"range-endpoints of '{text}' are in reverse collating sequence order");
+            }
+            for x in (c as i64)..(d as i64 + 1) {
+                out.push(x as u8);
+            }
+            i = after;
+            continue;
+        }
+        out.push(c);
+        i = next;
+    }
+    Ok(out)
+}
+
+fn complement_of(set: ref Vec[u8]) -> Vec[u8] {
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..256 {
+        seen.push(false);
+    }
+    for i in 0..set.len() {
+        seen[set[i] as i64] = true;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for c in 0..256 {
+        if not seen[c] {
+            out.push(c as u8);
+        }
+    }
+    out
+}
+
+fn member_table(set: ref Vec[u8]) -> Vec[bool] {
+    let mut t: Vec[bool] = Vec.new();
+    for _ in 0..256 {
+        t.push(false);
+    }
+    for i in 0..set.len() {
+        t[set[i] as i64] = true;
+    }
+    t
+}
+
+fn tr_tool(args: ref Vec[String], stdin: Str) -> Io {
+    let o = parse_opts(args, "");
+    if o.error.len() > 0 {
+        return usage("tr", o.error);
+    }
+    let delete = o.has(b'd');
+    let squeeze = o.has(b's');
+    let comp = o.has(b'c') or o.has(b'C');
+    let ops = o.operands.clone();
+    if ops.len() == 0 {
+        return usage("tr", "missing operand");
+    }
+    let translating = not delete and ops.len() >= 1 and not (squeeze and ops.len() == 1);
+    if ops.len() == 1 and (translating or (delete and squeeze)) {
+        let first = ops[0].clone();
+        let why = if translating { "Two strings must be given when translating." } else { "Two strings must be given when deleting and squeezing." };
+        return usage("tr", f"missing operand after '{first}'\n{why}");
+    }
+    let s1 = match expand_set(ops[0]) {
+        Ok(v) => v,
+        Err(e) => return fail("tr", e, 1),
+    };
+    let set1 = if comp { complement_of(s1) } else { s1 };
+    let set2 = if ops.len() > 1 {
+        match expand_set(ops[1]) {
+            Ok(v) => v,
+            Err(e) => return fail("tr", e, 1),
+        }
+    } else {
+        Vec.new()
+    };
+    let in1 = member_table(set1);
+    let mut map: Vec[i64] = Vec.new();
+    for c in 0..256 {
+        map.push(c);
+    }
+    if translating {
+        if set2.len() == 0 {
+            return fail("tr", "when not truncating set1, string2 must be non-empty", 1);
+        }
+        for i in 0..set1.len() {
+            let to = if i < set2.len() { set2[i] } else { set2[set2.len() - 1] };
+            map[set1[i] as i64] = to as i64;
+        }
+    }
+    let squeeze_set = if delete or translating { member_table(set2) } else { member_table(set1) };
+    let b = to_bytes(stdin);
+    let mut out: Vec[u8] = Vec.new();
+    let mut last: i64 = -1;
+    for i in 0..b.len() {
+        let c = b[i] as i64;
+        if delete and in1[c] {
+            continue;
+        }
+        let m = map[c];
+        if squeeze and squeeze_set[m] and m == last {
+            continue;
+        }
+        out.push(m as u8);
+        last = m;
+    }
+    let mut io = io_new();
+    io.out = from_bytes(out);
+    io
+}
+
+// ------------------------------------------------------------ wc
+
+struct Counts {
+    lines: i64,
+    words: i64,
+    bytes: i64,
+}
+
+fn count_text(text: Str) -> Counts {
+    let b = text.bytes();
+    let mut c = Counts { lines: 0, words: 0, bytes: b.len() };
+    let mut in_word = false;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            c.lines += 1;
+        }
+        if is_space(b[i]) {
+            in_word = false;
+        } else if not in_word {
+            in_word = true;
+            c.words += 1;
+        }
+    }
+    c
+}
+
+fn wc_line(c: ref Counts, l: bool, w: bool, by: bool, width: i64, name: Str) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    if l {
+        parts.push(pad_left(f"{c.lines}", width));
+    }
+    if w {
+        parts.push(pad_left(f"{c.words}", width));
+    }
+    if by {
+        parts.push(pad_left(f"{c.bytes}", width));
+    }
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(parts[i]);
+    }
+    if name.len() > 0 {
+        out.push_str(" ");
+        out.push_str(name);
+    }
+    out.push_str("\n");
+    out
+}
+
+fn wc_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "");
+    if o.error.len() > 0 {
+        return usage("wc", o.error);
+    }
+    let mut l = o.has(b'l');
+    let mut w = o.has(b'w');
+    let mut by = o.has(b'c');
+    if not l and not w and not by {
+        l = true;
+        w = true;
+        by = true;
+    }
+    let mut names = o.operands.clone();
+    let from_stdin = names.len() == 0;
+    if from_stdin {
+        names.push("-".to_string());
+    }
+    let mut io = io_new();
+    let mut found: Vec[Counts] = Vec.new();
+    let mut found_names: Vec[String] = Vec.new();
+    let mut size_sum: i64 = 0;
+    let mut any_stdin = false;
+    for f in 0..names.len() {
+        match read_input(names[f], stdin, dir) {
+            Some(t) => {
+                let c = count_text(t);
+                if names[f] == "-" {
+                    any_stdin = true;
+                } else {
+                    size_sum += c.bytes;
+                }
+                found.push(c);
+                found_names.push(if from_stdin { String.new() } else { names[f].clone() });
+            }
+            None => {
+                let nm = names[f].clone();
+                io.err.push_str(f"wc: {nm}: No such file or directory\n");
+                io.status = 1;
+            }
+        }
+    }
+    let selected = (if l { 1 } else { 0 }) + (if w { 1 } else { 0 }) + (if by { 1 } else { 0 });
+    let mut width = f"{size_sum}".len();
+    if any_stdin and width < 7 {
+        width = 7;
+    }
+    if selected == 1 and names.len() == 1 {
+        width = 1;
+    }
+    let mut total = Counts { lines: 0, words: 0, bytes: 0 };
+    for i in 0..found.len() {
+        io.out.push_str(wc_line(found[i], l, w, by, width, found_names[i]));
+        total.lines += found[i].lines;
+        total.words += found[i].words;
+        total.bytes += found[i].bytes;
+    }
+    if names.len() > 1 {
+        io.out.push_str(wc_line(total, l, w, by, width, "total"));
+    }
+    io
+}
+
+// ------------------------------------------------------------ head and tail
+
+// A text's lines with their newlines; the last may have none.
+fn records(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i + 1));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+// head (or tail, `is_tail`): `-n N`, `-n -N` / `-n +N`, `-c N`.
+fn head_tail(args: ref Vec[String], stdin: Str, dir: Str, is_tail: bool) -> Io {
+    let tool = if is_tail { "tail" } else { "head" };
+    let o = parse_opts(args, "nc");
+    if o.error.len() > 0 {
+        return usage(tool, o.error);
+    }
+    let by_bytes = o.last(b'c').is_some() and o.last(b'n').is_none();
+    let spec = if by_bytes {
+        o.last(b'c').unwrap_or("10".to_string())
+    } else {
+        o.last(b'n').unwrap_or("10".to_string())
+    };
+    let sb = to_bytes(spec);
+    let sign: u8 = if sb.len() > 0 and (sb[0] == b'-' or sb[0] == b'+') { sb[0] } else { 0 };
+    let digits = if sign != 0 { byte_str(sb, 1, sb.len()) } else { spec.clone() };
+    let n = parse_count(digits);
+    if n < 0 {
+        let what = if by_bytes { "bytes" } else { "lines" };
+        return fail(tool, f"invalid number of {what}: '{spec}'", 1);
+    }
+    let mut names = o.operands.clone();
+    if names.len() == 0 {
+        names.push("-".to_string());
+    }
+    let mut io = io_new();
+    let headers = names.len() > 1;
+    let mut shown: i64 = 0;
+    for f in 0..names.len() {
+        let text = match read_input(names[f], stdin, dir) {
+            Some(t) => t,
+            None => {
+                let nm = names[f].clone();
+                io.err.push_str(f"{tool}: cannot open '{nm}' for reading: No such file or directory\n");
+                io.status = 1;
+                continue;
+            }
+        };
+        if headers {
+            if shown > 0 {
+                io.out.push_str("\n");
+            }
+            let nm = if names[f] == "-" { "standard input".to_string() } else { names[f].clone() };
+            io.out.push_str(f"==> {nm} <==\n");
+        }
+        shown += 1;
+        if by_bytes {
+            let b = to_bytes(text);
+            let (from, to) = if is_tail {
+                if sign == b'+' {
+                    (if n > 0 { n - 1 } else { 0 }, b.len())
+                } else {
+                    (if n > b.len() { 0 } else { b.len() - n }, b.len())
+                }
+            } else if sign == b'-' {
+                (0, if n > b.len() { 0 } else { b.len() - n })
+            } else {
+                (0, if n > b.len() { b.len() } else { n })
+            };
+            let from2 = if from > to { to } else { from };
+            io.out.push_str(byte_str(b, from2, to));
+            continue;
+        }
+        let rs = records(text);
+        let len = rs.len();
+        let (from, to) = if is_tail {
+            if sign == b'+' {
+                (if n > 0 { n - 1 } else { 0 }, len)
+            } else {
+                (if n > len { 0 } else { len - n }, len)
+            }
+        } else if sign == b'-' {
+            (0, if n > len { 0 } else { len - n })
+        } else {
+            (0, if n > len { len } else { n })
+        };
+        let mut i = from;
+        while i < to {
+            io.out.push_str(rs[i]);
+            i += 1;
+        }
+    }
+    io
+}
+
+// ------------------------------------------------------------ join
+
+// A line's fields: split at `tab`, or (tab < 0) at runs of blanks with
+// leading blanks ignored.
+fn split_fields(line: Str, tab: i64) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut out: Vec[String] = Vec.new();
+    if tab >= 0 {
+        let mut st: i64 = 0;
+        for i in 0..b.len() {
+            if b[i] as i64 == tab {
+                out.push(byte_str(b, st, i));
+                st = i + 1;
+            }
+        }
+        out.push(byte_str(b, st, b.len()));
+        return out;
+    }
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_blank(b[i]) {
+            i += 1;
+        }
+        if i >= b.len() {
+            break;
+        }
+        let st = i;
+        while i < b.len() and not is_blank(b[i]) {
+            i += 1;
+        }
+        out.push(byte_str(b, st, i));
+    }
+    out
+}
+
+fn field_or(fields: ref Vec[String], at: i64, fill: Str) -> String {
+    if at >= 0 and at < fields.len() {
+        fields[at].clone()
+    } else {
+        fill.to_string()
+    }
+}
+
+// The `-o` list: (file, field) pairs, file 0 being the join field.
+fn parse_join_list(spec: Str) -> Option[Vec[(i64, i64)]] {
+    let b = to_bytes(spec);
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b',' or b[i] == b' ' {
+            i += 1;
+            continue;
+        }
+        if b[i] == b'0' {
+            out.push((0, 0));
+            i += 1;
+            continue;
+        }
+        if b[i] != b'1' and b[i] != b'2' {
+            return None;
+        }
+        let file = (b[i] - b'0') as i64;
+        if i + 1 >= b.len() or b[i + 1] != b'.' {
+            return None;
+        }
+        let (n, j) = read_digits(b, i + 2);
+        if j == i + 2 or n == 0 {
+            return None;
+        }
+        out.push((file, n));
+        i = j;
+    }
+    Some(out)
+}
+
+// One output line of join; a side of -1 is absent.
+fn join_line(f1: ref Vec[Vec[String]], i1: i64, j1: i64, f2: ref Vec[Vec[String]], i2: i64, j2: i64, specs: ref Vec[(i64, i64)], has_specs: bool, fill: Str, sep: Str) -> String {
+    let empty: Vec[String] = Vec.new();
+    let a = if i1 >= 0 { f1[i1].clone() } else { empty.clone() };
+    let b = if i2 >= 0 { f2[i2].clone() } else { empty.clone() };
+    let mut parts: Vec[String] = Vec.new();
+    if has_specs {
+        for k in 0..specs.len() {
+            let (file, n) = specs[k];
+            if file == 0 {
+                parts.push(if i1 >= 0 { field_or(a, j1, fill) } else { field_or(b, j2, fill) });
+            } else if file == 1 {
+                parts.push(if i1 >= 0 { field_or(a, n - 1, fill) } else { fill.to_string() });
+            } else {
+                parts.push(if i2 >= 0 { field_or(b, n - 1, fill) } else { fill.to_string() });
+            }
+        }
+    } else {
+        parts.push(if i1 >= 0 { field_or(a, j1, "") } else { field_or(b, j2, "") });
+        for k in 0..a.len() {
+            if k != j1 {
+                parts.push(a[k].clone());
+            }
+        }
+        for k in 0..b.len() {
+            if k != j2 {
+                parts.push(b[k].clone());
+            }
+        }
+    }
+    let mut out = String.new();
+    for k in 0..parts.len() {
+        if k > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[k]);
+    }
+    out.push_str("\n");
+    out
+}
+
+// GNU's order check on reading line `at` of a file: once per file, and
+// (by default) only after an unpairable line has been seen.
+fn join_check(keys: ref Vec[String], lines: ref Vec[String], at: i64, name: Str, seen: bool, warned: mut ref bool, io: mut ref Io) {
+    if at <= 0 or at >= keys.len() or *warned or not seen {
+        return;
+    }
+    if cmp_str(keys[at - 1], keys[at]) > 0 {
+        let line = lines[at].clone();
+        let num = at + 1;
+        io.err.push_str(f"join: {name}:{num}: is not sorted: {line}\n");
+        *warned = true;
+    }
+}
+
+fn join_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "12aeotvj");
+    if o.error.len() > 0 {
+        return usage("join", o.error);
+    }
+    if o.operands.len() != 2 {
+        return usage("join", "missing operand");
+    }
+    let tab: i64 = match o.last(b't') {
+        Some(t) => {
+            let tb = to_bytes(t);
+            if tb.len() != 1 {
+                return fail("join", "multi-character tab", 1);
+            }
+            tb[0] as i64
+        }
+        None => -1,
+    };
+    let sep = if tab >= 0 { from_bytes(vec![tab as u8]) } else { " ".to_string() };
+    let j1 = match o.last(b'1') {
+        Some(v) => parse_count(v) - 1,
+        None => 0,
+    };
+    let j2 = match o.last(b'2') {
+        Some(v) => parse_count(v) - 1,
+        None => 0,
+    };
+    let fill = o.last(b'e').unwrap_or(String.new());
+    let (specs, has_specs) = match o.last(b'o') {
+        Some(s) => match parse_join_list(s) {
+            Some(v) => (v, true),
+            None => return fail("join", f"invalid field specifier: '{s}'", 1),
+        },
+        None => (Vec.new(), false),
+    };
+    let unpaired_only = o.values(b'v');
+    let also = o.values(b'a');
+    let mut a1 = false;
+    let mut a2 = false;
+    for k in 0..unpaired_only.len() {
+        if unpaired_only[k] == "1" { a1 = true; } else { a2 = true; }
+    }
+    for k in 0..also.len() {
+        if also[k] == "1" { a1 = true; } else { a2 = true; }
+    }
+    let pairs = unpaired_only.len() == 0;
+    let name1 = o.operands[0].clone();
+    let name2 = o.operands[1].clone();
+    let t1 = match read_input(name1, stdin, dir) {
+        Some(t) => t,
+        None => return fail("join", f"{name1}: No such file or directory", 1),
+    };
+    let t2 = match read_input(name2, stdin, dir) {
+        Some(t) => t,
+        None => return fail("join", f"{name2}: No such file or directory", 1),
+    };
+    let l1 = lines_of(t1);
+    let l2 = lines_of(t2);
+    let mut f1: Vec[Vec[String]] = Vec.new();
+    let mut k1: Vec[String] = Vec.new();
+    for i in 0..l1.len() {
+        let fs = split_fields(l1[i], tab);
+        k1.push(field_or(fs, j1, ""));
+        f1.push(fs);
+    }
+    let mut f2: Vec[Vec[String]] = Vec.new();
+    let mut k2: Vec[String] = Vec.new();
+    for i in 0..l2.len() {
+        let fs = split_fields(l2[i], tab);
+        k2.push(field_or(fs, j2, ""));
+        f2.push(fs);
+    }
+    let n1 = l1.len();
+    let n2 = l2.len();
+    let mut io = io_new();
+    let mut seen = false;
+    let mut warned1 = false;
+    let mut warned2 = false;
+    let mut p1: i64 = 0;
+    let mut p2: i64 = 0;
+    while p1 < n1 and p2 < n2 {
+        let d = cmp_str(k1[p1], k2[p2]);
+        if d < 0 {
+            if a1 {
+                io.out.push_str(join_line(f1, p1, j1, f2, -1, j2, specs, has_specs, fill, sep));
+            }
+            p1 += 1;
+            join_check(k1, l1, p1, name1, seen, mut warned1, mut io);
+            seen = true;
+            continue;
+        }
+        if d > 0 {
+            if a2 {
+                io.out.push_str(join_line(f1, -1, j1, f2, p2, j2, specs, has_specs, fill, sep));
+            }
+            p2 += 1;
+            join_check(k2, l2, p2, name2, seen, mut warned2, mut io);
+            seen = true;
+            continue;
+        }
+        let mut e1 = p1 + 1;
+        join_check(k1, l1, e1, name1, seen, mut warned1, mut io);
+        while e1 < n1 and cmp_str(k1[e1], k2[p2]) == 0 {
+            e1 += 1;
+            join_check(k1, l1, e1, name1, seen, mut warned1, mut io);
+        }
+        let mut e2 = p2 + 1;
+        join_check(k2, l2, e2, name2, seen, mut warned2, mut io);
+        while e2 < n2 and cmp_str(k2[e2], k1[p1]) == 0 {
+            e2 += 1;
+            join_check(k2, l2, e2, name2, seen, mut warned2, mut io);
+        }
+        if pairs {
+            for x in p1..e1 {
+                for y in p2..e2 {
+                    io.out.push_str(join_line(f1, x, j1, f2, y, j2, specs, has_specs, fill, sep));
+                }
+            }
+        }
+        p1 = e1;
+        p2 = e2;
+    }
+    if p1 < n1 {
+        if p2 < n2 {
+            seen = true;
+        }
+        while p1 < n1 {
+            if a1 {
+                io.out.push_str(join_line(f1, p1, j1, f2, -1, j2, specs, has_specs, fill, sep));
+            }
+            p1 += 1;
+            join_check(k1, l1, p1, name1, seen, mut warned1, mut io);
+        }
+    }
+    if p2 < n2 {
+        if p1 < n1 {
+            seen = true;
+        }
+        while p2 < n2 {
+            if a2 {
+                io.out.push_str(join_line(f1, -1, j1, f2, p2, j2, specs, has_specs, fill, sep));
+            }
+            p2 += 1;
+            join_check(k2, l2, p2, name2, seen, mut warned2, mut io);
+        }
+    }
+    if warned1 or warned2 {
+        io.err.push_str("join: input is not in sorted order\n");
+        io.status = 1;
+    }
+    io
+}
+
+// ------------------------------------------------------------ comm
+
+fn comm_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "");
+    if o.error.len() > 0 {
+        return usage("comm", o.error);
+    }
+    if o.operands.len() != 2 {
+        return usage("comm", "missing operand");
+    }
+    let mut texts: Vec[String] = Vec.new();
+    for f in 0..2 {
+        match read_input(o.operands[f], stdin, dir) {
+            Some(t) => texts.push(t),
+            None => {
+                let nm = o.operands[f].clone();
+                return fail("comm", f"{nm}: No such file or directory", 1);
+            }
+        }
+    }
+    let a = lines_of(texts[0]);
+    let b = lines_of(texts[1]);
+    let show1 = not o.has(b'1');
+    let show2 = not o.has(b'2');
+    let show3 = not o.has(b'3');
+    let pre2 = if show1 { "\t" } else { "" };
+    let mut pre3 = String.new();
+    if show1 {
+        pre3.push_str("\t");
+    }
+    if show2 {
+        pre3.push_str("\t");
+    }
+    let mut io = io_new();
+    let mut i: i64 = 0;
+    let mut j: i64 = 0;
+    while i < a.len() or j < b.len() {
+        let d = if i >= a.len() {
+            1
+        } else if j >= b.len() {
+            -1
+        } else {
+            cmp_str(a[i], b[j])
+        };
+        if d < 0 {
+            if show1 {
+                io.out.push_str(a[i]);
+                io.out.push_str("\n");
+            }
+            i += 1;
+        } else if d > 0 {
+            if show2 {
+                io.out.push_str(pre2);
+                io.out.push_str(b[j]);
+                io.out.push_str("\n");
+            }
+            j += 1;
+        } else {
+            if show3 {
+                io.out.push_str(pre3);
+                io.out.push_str(a[i]);
+                io.out.push_str("\n");
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    io
+}
+
+// ------------------------------------------------------------ paste
+
+fn paste_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "d");
+    if o.error.len() > 0 {
+        return usage("paste", o.error);
+    }
+    let delims = match o.last(b'd') {
+        Some(d) => unescape(d),
+        None => vec![b'\t'],
+    };
+    let mut names = o.operands.clone();
+    if names.len() == 0 {
+        names.push("-".to_string());
+    }
+    let mut files: Vec[Vec[String]] = Vec.new();
+    for f in 0..names.len() {
+        match read_input(names[f], stdin, dir) {
+            Some(t) => files.push(lines_of(t)),
+            None => {
+                let nm = names[f].clone();
+                return fail("paste", f"{nm}: No such file or directory", 1);
+            }
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if o.has(b's') {
+        for f in 0..files.len() {
+            for i in 0..files[f].len() {
+                if i > 0 and delims.len() > 0 {
+                    out.push(delims[(i - 1) % delims.len()]);
+                }
+                push_bytes(mut out, files[f][i]);
+            }
+            out.push(b'\n');
+        }
+    } else {
+        let mut rows: i64 = 0;
+        for f in 0..files.len() {
+            if files[f].len() > rows {
+                rows = files[f].len();
+            }
+        }
+        for r in 0..rows {
+            for f in 0..files.len() {
+                if f > 0 and delims.len() > 0 {
+                    out.push(delims[(f - 1) % delims.len()]);
+                }
+                if r < files[f].len() {
+                    push_bytes(mut out, files[f][r]);
+                }
+            }
+            out.push(b'\n');
+        }
+    }
+    let mut io = io_new();
+    io.out = from_bytes(out);
+    io
+}
+
+// ------------------------------------------------------------ nl and tac
+
+fn nl_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "bnwsv");
+    if o.error.len() > 0 {
+        return usage("nl", o.error);
+    }
+    let style = o.last(b'b').unwrap_or("t".to_string());
+    let format = o.last(b'n').unwrap_or("rn".to_string());
+    let width = match o.last(b'w') {
+        Some(w) => parse_count(w),
+        None => 6,
+    };
+    if width <= 0 {
+        return fail("nl", "invalid line number field width", 1);
+    }
+    let sep = o.last(b's').unwrap_or("\t".to_string());
+    let mut number = match o.last(b'v') {
+        Some(v) => parse_count(v),
+        None => 1,
+    };
+    let name = if o.operands.len() > 0 { o.operands[0].clone() } else { "-".to_string() };
+    let text = match read_input(name, stdin, dir) {
+        Some(t) => t,
+        None => return fail("nl", f"{name}: No such file or directory", 1),
+    };
+    let ls = lines_of(text);
+    let mut io = io_new();
+    for i in 0..ls.len() {
+        let numbered = if style == "a" {
+            true
+        } else if style == "n" {
+            false
+        } else {
+            ls[i].len() > 0
+        };
+        if not numbered {
+            io.out.push_str(repeat_byte(b' ', width + sep.len()));
+            io.out.push_str(ls[i]);
+            io.out.push_str("\n");
+            continue;
+        }
+        let digits = f"{number}";
+        let shown = if format == "rz" {
+            let mut z = String.new();
+            if digits.len() < width {
+                z.push_str(repeat_byte(b'0', width - digits.len()));
+            }
+            z.push_str(digits);
+            z
+        } else if format == "ln" {
+            let mut z = digits.clone();
+            if digits.len() < width {
+                z.push_str(repeat_byte(b' ', width - digits.len()));
+            }
+            z
+        } else {
+            pad_left(digits, width)
+        };
+        io.out.push_str(shown);
+        io.out.push_str(sep);
+        io.out.push_str(ls[i]);
+        io.out.push_str("\n");
+        number += 1;
+    }
+    io
+}
+
+fn tac_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let mut names = args.clone();
+    if names.len() == 0 {
+        names.push("-".to_string());
+    }
+    let mut io = io_new();
+    for f in 0..names.len() {
+        match read_input(names[f], stdin, dir) {
+            Some(t) => {
+                let rs = records(t);
+                let mut i = rs.len();
+                while i > 0 {
+                    i -= 1;
+                    io.out.push_str(rs[i]);
+                }
+            }
+            None => {
+                let nm = names[f].clone();
+                io.err.push_str(f"tac: failed to open '{nm}' for reading: No such file or directory\n");
+                io.status = 1;
+            }
+        }
+    }
+    io
+}
+
+fn cat_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let mut names = args.clone();
+    if names.len() == 0 {
+        names.push("-".to_string());
+    }
+    let mut io = io_new();
+    for f in 0..names.len() {
+        match read_input(names[f], stdin, dir) {
+            Some(t) => io.out.push_str(t),
+            None => {
+                let nm = names[f].clone();
+                io.err.push_str(f"cat: {nm}: No such file or directory\n");
+                io.status = 1;
+            }
+        }
+    }
+    io
+}
+
+// ------------------------------------------------------------ numfmt
+
+fn unit_letter(p: i64) -> String {
+    let units = "KMGTPEZY".bytes();
+    from_bytes(vec![units[p - 1]])
+}
+
+// A number written with a unit, rounded away from zero the way GNU's
+// default --round=from-zero does: one decimal below 10, none above.
+fn scaled(n: i64, base: i64) -> String {
+    if n < base {
+        return f"{n}";
+    }
+    let mut p: i64 = 0;
+    let mut d: i64 = 1;
+    while n / d >= base {
+        d = d * base;
+        p += 1;
+    }
+    let q10 = (n * 10 + d - 1) / d;
+    if q10 < 100 {
+        let whole = q10 / 10;
+        let tenth = q10 % 10;
+        let u = unit_letter(p);
+        return f"{whole}.{tenth}{u}";
+    }
+    let q = (n + d - 1) / d;
+    if q >= base {
+        let u = unit_letter(p + 1);
+        return f"1.0{u}";
+    }
+    let u = unit_letter(p);
+    f"{q}{u}"
+}
+
+// A number with an optional fraction and (for --from) a unit; None when
+// it is not one.
+fn parse_amount(s: Str, from: Str) -> Option[i64] {
+    let b = to_bytes(s);
+    let mut (whole, i) = read_digits(b, 0);
+    if i == 0 {
+        return None;
+    }
+    let mut num = whole;
+    let mut den: i64 = 1;
+    if i < b.len() and b[i] == b'.' {
+        let mut j = i + 1;
+        while j < b.len() and is_digit(b[j]) {
+            num = num * 10 + (b[j] - b'0') as i64;
+            den = den * 10;
+            j += 1;
+        }
+        i = j;
+    }
+    let mut mult: i64 = 1;
+    if i < b.len() {
+        if from == "none" or i + 1 != b.len() {
+            return None;
+        }
+        let rank = suffix_rank(b[i]);
+        if rank == 0 {
+            return None;
+        }
+        let base: i64 = if from == "si" { 1000 } else { 1024 };
+        for _ in 0..rank {
+            mult = mult * base;
+        }
+    }
+    Some((num * mult + den - 1) / den)
+}
+
+fn numfmt_value(s: Str, from: Str, to: Str, suffix: Str, padding: i64) -> Option[String] {
+    let n = parse_amount(s, from)?;
+    let mut text = if to == "iec" {
+        scaled(n, 1024)
+    } else if to == "si" {
+        scaled(n, 1000)
+    } else {
+        f"{n}"
+    };
+    text.push_str(suffix);
+    if padding > 0 {
+        return Some(pad_left(text, padding));
+    }
+    Some(text)
+}
+
+fn numfmt_tool(args: ref Vec[String], stdin: Str) -> Io {
+    let o = parse_opts(args, "");
+    if o.error.len() > 0 {
+        return usage("numfmt", o.error);
+    }
+    let from = o.long("from").unwrap_or("none".to_string());
+    let to = o.long("to").unwrap_or("none".to_string());
+    let suffix = o.long("suffix").unwrap_or(String.new());
+    let padding = match o.long("padding") {
+        Some(p) => parse_count(p),
+        None => 0,
+    };
+    let field = match o.long("field") {
+        Some(f) => parse_count(f),
+        None => 1,
+    };
+    let inputs = if o.operands.len() > 0 { o.operands.clone() } else { lines_of(stdin) };
+    let mut io = io_new();
+    for i in 0..inputs.len() {
+        let b = to_bytes(inputs[i]);
+        let mut p: i64 = 0;
+        let mut k: i64 = 1;
+        while p < b.len() and is_blank(b[p]) {
+            p += 1;
+        }
+        while k < field {
+            while p < b.len() and not is_blank(b[p]) {
+                p += 1;
+            }
+            while p < b.len() and is_blank(b[p]) {
+                p += 1;
+            }
+            k += 1;
+        }
+        let mut e = p;
+        while e < b.len() and not is_blank(b[e]) {
+            e += 1;
+        }
+        let word = byte_str(b, p, e);
+        match numfmt_value(word, from, to, suffix, padding) {
+            Some(v) => {
+                io.out.push_str(byte_str(b, 0, p));
+                io.out.push_str(v);
+                io.out.push_str(byte_str(b, e, b.len()));
+                io.out.push_str("\n");
+            }
+            None => {
+                io.err.push_str(f"numfmt: invalid number: '{word}'\n");
+                io.status = 2;
+                return io;
+            }
+        }
+    }
+    io
+}
+
+// ------------------------------------------------------------ the files
+
+fn file_access_log() -> String {
+    """
+10.0.12.7 - - [14/Oct/2026:09:12:01 +0000] "GET /api/orders HTTP/1.1" 200 1532
+10.0.12.7 - - [14/Oct/2026:09:12:03 +0000] "POST /api/orders HTTP/1.1" 201 88
+192.168.4.21 - alice [14/Oct/2026:09:13:44 +0000] "GET /static/app.js HTTP/2.0" 304 0
+172.16.0.9 - - [14/Oct/2026:09:14:10 +0000] "GET /api/products/991 HTTP/1.1" 404 47
+172.16.0.9 - - [14/Oct/2026:09:14:11 +0000] "GET /api/products/992 HTTP/1.1" 404 47
+10.0.12.8 - - [14/Oct/2026:09:15:00 +0000] "POST /api/checkout HTTP/1.1" 502 166
+192.168.4.21 - alice [14/Oct/2026:09:15:02 +0000] "DELETE /api/cart/7 HTTP/2.0" 204 0
+10.0.12.8 - - [14/Oct/2026:09:15:31 +0000] "POST /api/checkout HTTP/1.1" 503 166
+10.0.12.7 - - [14/Oct/2026:09:16:45 +0000] "GET /healthz HTTP/1.1" 200 2
+10.0.12.10 - - [14/Oct/2026:09:17:02 +0000] "GET /api/orders HTTP/1.1" 200 1490
+
+"""
+}
+
+fn file_cols_txt() -> String {
+    """
+name	age	city
+ann	31	lisbon
+bo	4	oslo
+
+"""
+}
+
+fn file_du_txt() -> String {
+    """
+4.0K	./etc
+1.2G	./var/lib/postgresql
+512M	./var/log
+88K	./home/deploy
+2.5G	./srv/media
+900M	./opt/app
+16K	./tmp
+1.2G	./home/alice
+
+"""
+}
+
+fn file_dups_txt() -> String {
+    """
+error: disk full
+error: disk full
+warn: slow query
+error: disk full
+ERROR: Disk Full
+info: started
+info: started
+info: started
+warn: slow query
+
+"""
+}
+
+fn file_hosts_a_txt() -> String {
+    """
+app-1
+app-2
+cache-1
+db-primary
+lb-1
+worker-3
+
+"""
+}
+
+fn file_hosts_b_txt() -> String {
+    """
+app-2
+app-3
+cache-1
+db-replica
+lb-1
+worker-1
+worker-3
+
+"""
+}
+
+fn file_ids_txt() -> String {
+    """
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+
+"""
+}
+
+fn file_inventory_csv() -> String {
+    """
+sku,name,warehouse,qty,price
+A-100,widget,berlin,120,2.50
+A-101,widget large,berlin,8,4.75
+B-200,gadget,lisbon,35,19.99
+B-201,gadget pro,berlin,3,49.00
+C-300,sprocket,lisbon,1000,0.33
+C-301,sprocket,oslo,250,0.33
+D-400,doohickey,oslo,0,12.00
+
+"""
+}
+
+fn file_mixed_txt() -> String {
+    """
+10
+9
+-3
+  42
+3.5
+abc
+007
+-0.5
+1e3
+
++5
+
+"""
+}
+
+fn file_names_tsv() -> String {
+    """
+u1	Alice
+u2	Bob
+u3	Carol
+u5	Eve
+
+"""
+}
+
+fn file_noeol_txt() -> String {
+    """
+first
+second
+third
+"""
+}
+
+fn file_orders_tsv() -> String {
+    """
+u1	o-100	30.00
+u1	o-104	12.50
+u2	o-101	7.25
+u4	o-102	100.00
+u5	o-103	4.75
+
+"""
+}
+
+fn file_passwd() -> String {
+    """
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+postgres:x:105:112:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash
+alice:x:1000:1000:Alice Liddell,,,:/home/alice:/bin/zsh
+bob:x:1001:1001:Bob Builder:/home/bob:/bin/bash
+deploy:x:1002:1002::/home/deploy:/bin/sh
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+
+"""
+}
+
+fn file_sizes_txt() -> String {
+    """
+1532 orders.json
+88 receipt.txt
+0 empty.log
+1048576 dump-1.bin
+1536 thumb.png
+734003200 backup.tar
+15728640 video.mp4
+1025 notes.md
+999999 almost.bin
+
+"""
+}
+
+fn file_unsorted_tsv() -> String {
+    """
+u2	Bob
+u1	Alice
+
+"""
+}
+
+fn file_versions_txt() -> String {
+    """
+1.10.0 2026-09-30
+1.2.0 2026-03-01
+1.9.3 2026-08-15
+10.0.0 2026-10-10
+1.9.10 2026-09-01
+
+"""
+}
+
+fn file_words_txt() -> String {
+    """
+the quick brown fox jumps over the lazy dog
+The Lazy Dog sleeps; the fox does not.
+  indented line with   extra   spaces
+Zebra apple Mango banana cherry
+
+end of file
+
+"""
+}
+
+fn jobs_tsv() -> String {
+    """
+sort	hosts-b.txt
+sort	-r	words.txt
+sort	-t:	-k3,3n	passwd	|	cut	-d:	-f1,3
+sort	-t:	-k7,7	-k1,1r	passwd	|	cut	-d:	-f1,7
+sort	-n	mixed.txt
+sort	-rn	sizes.txt	|	head	-n	3
+sort	-h	-r	du.txt
+sort	-k2	versions.txt
+sort	-t,	-k3,3	-k4,4nr	inventory.csv
+sort	-f	words.txt
+sort	-u	dups.txt
+sort	-uf	dups.txt
+sort	-t,	-k5,5n	-s	inventory.csv
+sort	-b	-k2,2	words.txt
+sort	-k1.2,1.4	hosts-a.txt
+sort	-c	hosts-b.txt
+sort	-c	versions.txt
+sort	-m	hosts-a.txt	hosts-b.txt
+cut	-d:	-f1,6	passwd
+cut	-d:	-f5-	passwd
+cut	-d,	-f2,4	--output-delimiter= | 	inventory.csv
+cut	-c1-8,30-	access.log
+cut	-d	 	-f1	access.log	|	sort	|	uniq	-c	|	sort	-rn
+cut	-d:	-f1	--complement	passwd
+cut	-d,	-s	-f1	words.txt
+cut	-f2	cols.txt
+cut	-d:	passwd
+cut	-f	0	cols.txt
+uniq	dups.txt
+sort	dups.txt	|	uniq	-c
+sort	dups.txt	|	uniq	-d
+sort	dups.txt	|	uniq	-u
+sort	-f	dups.txt	|	uniq	-ci
+uniq	-f	1	-c	dups.txt
+uniq	-s	6	dups.txt
+cat	words.txt	|	tr	a-z	A-Z
+cat	words.txt	|	tr	-s	 
+cat	words.txt	|	tr	-d	aeiou
+cat	words.txt	|	tr	-cs	[:alpha:]	\\n	|	tr	[:upper:]	[:lower:]	|	sort	|	uniq	-c	|	sort	-k1,1nr	-k2,2	|	head	-n	5
+cat	passwd	|	tr	:	\\t	|	head	-n	2
+cat	inventory.csv	|	tr	-d	\\r	|	tr	,	;
+cat	words.txt	|	tr	abc	x
+cat	words.txt	|	tr	-ds	a-z	 
+cat	noeol.txt	|	tr	\\n	,
+tr	a-z
+tr	z-a	x
+wc	words.txt
+wc	-l	passwd	access.log	noeol.txt
+cat	words.txt	|	wc	-w
+wc	-c	-l	noeol.txt
+cat	access.log	|	wc
+wc	missing.txt	passwd
+head	-n	2	passwd	noeol.txt
+head	-n	-9	ids.txt
+head	-c	20	access.log
+tail	-n	3	ids.txt
+tail	-n	+11	ids.txt
+tail	-n	1	noeol.txt
+tail	-c	7	noeol.txt
+head	-n	x	ids.txt
+join	-t	\u{0b}	names.tsv	orders.tsv
+join	-t	\u{0b}	-a	1	-a	2	-e	NONE	-o	0,1.2,2.2,2.3	names.tsv	orders.tsv
+join	-t	\u{0b}	-v	2	names.tsv	orders.tsv
+join	-t	\u{0b}	-1	1	-2	1	-o	2.2,1.2	orders.tsv	names.tsv
+join	-t	\u{0b}	unsorted.tsv	orders.tsv
+comm	hosts-a.txt	hosts-b.txt
+comm	-12	hosts-a.txt	hosts-b.txt
+comm	-3	hosts-a.txt	hosts-b.txt
+comm	-23	hosts-a.txt	hosts-b.txt
+paste	hosts-a.txt	hosts-b.txt
+paste	-d,	-s	hosts-a.txt
+paste	-d	:-	ids.txt	hosts-a.txt	hosts-b.txt
+cut	-d:	-f1	passwd	|	paste	-s	-d	 
+nl	words.txt
+nl	-b	a	-n	rz	-w	3	-s	. 	hosts-a.txt
+tac	noeol.txt
+tac	hosts-a.txt
+cat	sizes.txt	|	numfmt	--to=iec	--field=1
+cat	sizes.txt	|	numfmt	--to=si	--suffix=B	--field=1	--padding=6
+numfmt	--from=iec	1K	2.5M	1G	512
+cut	-f1	du.txt	|	numfmt	--from=iec	|	paste	-sd+
+numfmt	--to=iec	--padding=8	1023	1024	1536	10240	1048575
+numfmt	abc
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    put("data/access.log", file_access_log())?;
+    put("data/cols.txt", file_cols_txt())?;
+    put("data/du.txt", file_du_txt())?;
+    put("data/dups.txt", file_dups_txt())?;
+    put("data/hosts-a.txt", file_hosts_a_txt())?;
+    put("data/hosts-b.txt", file_hosts_b_txt())?;
+    put("data/ids.txt", file_ids_txt())?;
+    put("data/inventory.csv", file_inventory_csv())?;
+    put("data/mixed.txt", file_mixed_txt())?;
+    put("data/names.tsv", file_names_tsv())?;
+    put("data/noeol.txt", file_noeol_txt())?;
+    put("data/orders.tsv", file_orders_tsv())?;
+    put("data/passwd", file_passwd())?;
+    put("data/sizes.txt", file_sizes_txt())?;
+    put("data/unsorted.tsv", file_unsorted_tsv())?;
+    put("data/versions.txt", file_versions_txt())?;
+    put("data/words.txt", file_words_txt())?;
+    put("jobs.tsv", jobs_tsv())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the pipelines
+
+// Runs one stage: `args[0]` is the tool, `stdin` what the previous stage
+// printed.
+fn run_tool(argv: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let tool = argv[0].clone();
+    let mut args: Vec[String] = Vec.new();
+    for i in 1..argv.len() {
+        args.push(argv[i].clone());
+    }
+    if tool == "sort" {
+        sort_tool(args, stdin, dir)
+    } else if tool == "cut" {
+        cut_tool(args, stdin, dir)
+    } else if tool == "uniq" {
+        uniq_tool(args, stdin, dir)
+    } else if tool == "tr" {
+        tr_tool(args, stdin)
+    } else if tool == "wc" {
+        wc_tool(args, stdin, dir)
+    } else if tool == "head" {
+        head_tail(args, stdin, dir, false)
+    } else if tool == "tail" {
+        head_tail(args, stdin, dir, true)
+    } else if tool == "join" {
+        join_tool(args, stdin, dir)
+    } else if tool == "comm" {
+        comm_tool(args, stdin, dir)
+    } else if tool == "paste" {
+        paste_tool(args, stdin, dir)
+    } else if tool == "nl" {
+        nl_tool(args, stdin, dir)
+    } else if tool == "tac" {
+        tac_tool(args, stdin, dir)
+    } else if tool == "cat" {
+        cat_tool(args, stdin, dir)
+    } else if tool == "numfmt" {
+        numfmt_tool(args, stdin)
+    } else {
+        fail("sh", f"{tool}: command not found", 127)
+    }
+}
+
+// An argument as a shell would need it written.
+fn quote(a: Str) -> String {
+    let b = a.bytes();
+    let mut plain = b.len() > 0;
+    for i in 0..b.len() {
+        let c = b[i];
+        let ok = is_alpha(c) or is_digit(c) or c == b'_' or c == b'.' or c == b'/' or c == b'=' or c == b'+' or c == b':' or c == b',' or c == b'%' or c == b'@' or c == b'-';
+        if not ok {
+            plain = false;
+        }
+    }
+    if plain {
+        return a.to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'\'');
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            push_bytes(mut out, "'\\''");
+        } else {
+            out.push(b[i]);
+        }
+    }
+    out.push(b'\'');
+    from_bytes(out)
+}
+
+// Prints text, marking a missing final newline.
+fn show(text: Str) {
+    print(text);
+    if text.len() > 0 and not text.ends_with("\n") {
+        println("[no newline at end]");
+    }
+}
+
+// A job line's arguments: tab-separated, a vertical tab standing for a
+// tab inside one.
+fn job_args(line: Str) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == b'\t' {
+            out.push(from_bytes(cur));
+            cur = Vec.new();
+        } else if b[i] == 11 {
+            cur.push(b'\t');
+        } else {
+            cur.push(b[i]);
+        }
+    }
+    out.push(from_bytes(cur));
+    out
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let jobs = match fs.read_to_string("jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read jobs.tsv: {e}"),
+    };
+    let lines = lines_of(jobs);
+    for j in 0..lines.len() {
+        let args = job_args(lines[j]);
+        let mut shown = String.new();
+        let mut stages: Vec[Vec[String]] = Vec.new();
+        let mut cur: Vec[String] = Vec.new();
+        for k in 0..args.len() {
+            if k > 0 {
+                shown.push_str(" ");
+            }
+            if args[k] == "|" {
+                shown.push_str("|");
+                stages.push(cur);
+                cur = Vec.new();
+            } else {
+                shown.push_str(quote(args[k]));
+                cur.push(args[k].clone());
+            }
+        }
+        stages.push(cur);
+        println(f"$ {shown}");
+        let mut data = String.new();
+        let mut errs: Vec[String] = Vec.new();
+        let mut status: i64 = 0;
+        for s in 0..stages.len() {
+            let res = run_tool(stages[s], data, "data");
+            data = res.out;
+            errs.push(res.err);
+            status = res.status;
+        }
+        show(data);
+        for e in 0..errs.len() {
+            show(errs[e]);
+        }
+        if status != 0 {
+            println(f"[exit {status}]");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_textutils: {e}");
+    }
+}
