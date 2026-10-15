@@ -1,0 +1,939 @@
+// An HTTP login service that issues and verifies HS256 JSON Web Tokens
+// (RFC 7519), over a real TCP socket.
+//
+// Everything cryptographic is written here from the specs: SHA-256
+// (FIPS 180-4), HMAC (RFC 2104), PBKDF2-HMAC-SHA256 (RFC 8018) for the
+// stored password keys, and unpadded base64url (RFC 4648 §5). Each is
+// checked against published test vectors before the server starts.
+//
+// POST /login takes a form body and returns a token signed with the
+// server's key; GET /me and GET /admin take `Authorization: Bearer`.
+// Verification checks the segment count, the base64url alphabet, that
+// `alg` is HS256 (so an `alg: none` token is refused), the signature in
+// constant time, the issuer, `exp` and `nbf` with 30 s of leeway. The
+// clock is a fixed instant, because the library has no clock yet.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-15-10  there is no `Clock.now()`, so NOW is a constant
+//   B-2026-10-15-24  `match self.vals[i] { JVal.JInt(n) => Some(*n) }`
+//                    passes check but the MIR builder binds `n` as an i64
+//                    and refuses the `*`, so JObj.get_int binds the element
+//                    with `let v = ref self.vals[i]` first
+
+const PORT_ADDR: Str = "127.0.0.1:47744";
+const NOW: i64 = 1760000000;
+const LEEWAY: i64 = 30;
+const TTL: i64 = 900;
+const ISSUER: Str = "kara-auth";
+const SECRET: Str = "correct horse battery staple";
+const ITERATIONS: i64 = 100;
+const HS256: Str = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+
+// ---------------------------------------------------------------- SHA-256
+
+fn round_constants() -> Vec[u32] {
+    let ks = [
+        0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+        0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+        0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+        0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+        0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+        0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+        0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+        0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+    ];
+    let mut v: Vec[u32] = Vec.new();
+    for k in ks {
+        v.push(k);
+    }
+    v
+}
+
+fn rotr(x: u32, n: u32) -> u32 {
+    (x >> n) | (x << (32u32 - n))
+}
+
+fn sha256(k: ref Vec[u32], data: Slice[u8]) -> Vec[u8] {
+    let mut msg: Vec[u8] = Vec.new();
+    for b in data.iter() {
+        msg.push(*b);
+    }
+    let bit_len = data.len() * 8;
+    msg.push(0x80u8);
+    while msg.len() % 64 != 56 {
+        msg.push(0u8);
+    }
+    let mut s = 56;
+    while s >= 0 {
+        msg.push(((bit_len >> s) & 0xFF) as u8);
+        s -= 8;
+    }
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut chunk = 0;
+    while chunk < msg.len() {
+        for i in 0..16 {
+            let at = chunk + 4 * i;
+            w[i] = ((msg[at] as u32) << 24) | ((msg[at + 1] as u32) << 16) | ((msg[at + 2] as u32) << 8) | (msg[at + 3] as u32);
+        }
+        for i in 16..64 {
+            let s0 = rotr(w[i - 15], 7u32) ^ rotr(w[i - 15], 18u32) ^ (w[i - 15] >> 3u32);
+            let s1 = rotr(w[i - 2], 17u32) ^ rotr(w[i - 2], 19u32) ^ (w[i - 2] >> 10u32);
+            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+        for i in 0..64 {
+            let s1 = rotr(e, 6u32) ^ rotr(e, 11u32) ^ rotr(e, 25u32);
+            let ch = (e & f) ^ (~e & g);
+            let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(k[i]).wrapping_add(w[i]);
+            let s0 = rotr(a, 2u32) ^ rotr(a, 13u32) ^ rotr(a, 22u32);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
+        chunk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h.iter() {
+        out.push((*x >> 24u32) as u8);
+        out.push(((*x >> 16u32) & 0xFFu32) as u8);
+        out.push(((*x >> 8u32) & 0xFFu32) as u8);
+        out.push((*x & 0xFFu32) as u8);
+    }
+    out
+}
+
+fn hmac(k: ref Vec[u32], key0: Slice[u8], msg: Slice[u8]) -> Vec[u8] {
+    let mut key: Vec[u8] = Vec.new();
+    if key0.len() > 64 {
+        key = sha256(k, key0);
+    } else {
+        for b in key0.iter() {
+            key.push(*b);
+        }
+    }
+    while key.len() < 64 {
+        key.push(0u8);
+    }
+    let mut inner: Vec[u8] = Vec.new();
+    let mut outer: Vec[u8] = Vec.new();
+    for b in key.iter() {
+        inner.push(*b ^ 0x36u8);
+        outer.push(*b ^ 0x5cu8);
+    }
+    for b in msg.iter() {
+        inner.push(*b);
+    }
+    for b in sha256(k, inner).iter() {
+        outer.push(*b);
+    }
+    sha256(k, outer)
+}
+
+fn pbkdf2(k: ref Vec[u32], password: Slice[u8], salt: Slice[u8], iterations: i64) -> Vec[u8] {
+    let mut first: Vec[u8] = Vec.new();
+    for b in salt.iter() {
+        first.push(*b);
+    }
+    for b in [0u8, 0u8, 0u8, 1u8] {
+        first.push(b);
+    }
+    let mut u = hmac(k, password, first);
+    let mut t = u.clone();
+    for _ in 1..iterations {
+        u = hmac(k, password, u);
+        for i in 0..32 {
+            t[i] = t[i] ^ u[i];
+        }
+    }
+    t
+}
+
+fn same_bytes(a: Slice[u8], b: Slice[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff = diff | (a[i] ^ b[i]);
+    }
+    diff == 0u8
+}
+
+fn hex(b: Slice[u8]) -> String {
+    let digits = "0123456789abcdef";
+    let mut s = String.new();
+    for x in b.iter() {
+        let v = *x as i64;
+        s.push_str(digits.substring(v / 16, v / 16 + 1));
+        s.push_str(digits.substring(v % 16, v % 16 + 1));
+    }
+    s
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(*b);
+    }
+    v
+}
+
+// ---------------------------------------------------------------- base64url
+
+const ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+fn b64url(data: Slice[u8]) -> String {
+    let mut s = String.new();
+    let mut i = 0;
+    while i < data.len() {
+        let n = data.len() - i;
+        let b0 = data[i] as i64;
+        let b1 = if n > 1 { data[i + 1] as i64 } else { 0 };
+        let b2 = if n > 2 { data[i + 2] as i64 } else { 0 };
+        let v = (b0 << 16) | (b1 << 8) | b2;
+        let chars = if n >= 3 { 4 } else { n + 1 };
+        for k in 0..chars {
+            let idx = (v >> (18 - 6 * k)) & 63;
+            s.push_str(ALPHABET.substring(idx, idx + 1));
+        }
+        i += 3;
+    }
+    s
+}
+
+fn b64_value(c: u8) -> i64 {
+    let x = c as i64;
+    if x >= 65 and x <= 90 {
+        x - 65
+    } else if x >= 97 and x <= 122 {
+        x - 71
+    } else if x >= 48 and x <= 57 {
+        x + 4
+    } else if x == 45 {
+        62
+    } else if x == 95 {
+        63
+    } else {
+        -1
+    }
+}
+
+fn unb64url(s: Str) -> Result[Vec[u8], String] {
+    let b = s.bytes();
+    if b.len() % 4 == 1 {
+        return Err("malformed token: bad base64url".to_string());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut acc = 0;
+    let mut bits = 0;
+    for c in b.iter() {
+        let v = b64_value(*c);
+        if v < 0 {
+            return Err("malformed token: bad base64url".to_string());
+        }
+        acc = ((acc << 6) | v) & 0xFFFFFF;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xFF) as u8);
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------- JSON
+
+enum JVal { JStr(String), JInt(i64), JBool(bool), JList(Vec[String]), JNull }
+
+struct JObj { keys: Vec[String], vals: Vec[JVal] }
+
+impl JObj {
+    fn get_str(ref self, key: Str) -> Option[String] {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == key {
+                match self.vals[i] {
+                    JVal.JStr(s) => return Some(s.clone()),
+                    _ => return None,
+                }
+            }
+        }
+        None
+    }
+
+    fn get_int(ref self, key: Str) -> Option[i64] {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == key {
+                let v = ref self.vals[i];
+                match v {
+                    JVal.JInt(n) => return Some(*n),
+                    _ => return None,
+                }
+            }
+        }
+        None
+    }
+
+    fn get_list(ref self, key: Str) -> Vec[String] {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == key {
+                match self.vals[i] {
+                    JVal.JList(v) => return v.clone(),
+                    _ => return Vec.new(),
+                }
+            }
+        }
+        Vec.new()
+    }
+}
+
+struct JParser { b: Vec[u8], at: i64 }
+
+impl JParser {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() and (self.b[self.at] == 32u8 or self.b[self.at] == 10u8 or self.b[self.at] == 9u8 or self.b[self.at] == 13u8) {
+            self.at += 1;
+        }
+    }
+
+    fn eat(mut ref self, c: u8) -> bool {
+        self.ws();
+        if self.at < self.b.len() and self.b[self.at] == c {
+            self.at += 1;
+            return true;
+        }
+        false
+    }
+
+    fn string(mut ref self) -> Option[String] {
+        if not self.eat(34u8) {
+            return None;
+        }
+        let mut out: Vec[u8] = Vec.new();
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == 34u8 {
+                return match String.from_utf8(out) {
+                    Ok(s) => Some(s),
+                    Err(_) => None,
+                };
+            }
+            if c == 92u8 {
+                if self.at >= self.b.len() {
+                    return None;
+                }
+                out.push(self.b[self.at]);
+                self.at += 1;
+            } else {
+                out.push(c);
+            }
+        }
+        None
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let wb = w.bytes();
+        if self.at + wb.len() > self.b.len() {
+            return false;
+        }
+        for i in 0..wb.len() {
+            if self.b[self.at + i] != wb[i] {
+                return false;
+            }
+        }
+        self.at += wb.len();
+        true
+    }
+
+    fn value(mut ref self) -> Option[JVal] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return None;
+        }
+        let c = self.b[self.at];
+        if c == 34u8 {
+            return match self.string() {
+                Some(s) => Some(JVal.JStr(s)),
+                None => None,
+            };
+        }
+        if c == 91u8 {
+            self.at += 1;
+            let mut items: Vec[String] = Vec.new();
+            if self.eat(93u8) {
+                return Some(JVal.JList(items));
+            }
+            loop {
+                match self.string() {
+                    Some(s) => items.push(s),
+                    None => return None,
+                }
+                if self.eat(93u8) {
+                    return Some(JVal.JList(items));
+                }
+                if not self.eat(44u8) {
+                    return None;
+                }
+            }
+        }
+        if self.word("true") {
+            return Some(JVal.JBool(true));
+        }
+        if self.word("false") {
+            return Some(JVal.JBool(false));
+        }
+        if self.word("null") {
+            return Some(JVal.JNull);
+        }
+        let neg = c == 45u8;
+        if neg {
+            self.at += 1;
+        }
+        let start = self.at;
+        let mut n = 0;
+        while self.at < self.b.len() and self.b[self.at] >= 48u8 and self.b[self.at] <= 57u8 {
+            n = n * 10 + (self.b[self.at] as i64) - 48;
+            self.at += 1;
+        }
+        if self.at == start {
+            return None;
+        }
+        Some(JVal.JInt(if neg { -n } else { n }))
+    }
+}
+
+fn parse_obj(bytes: own Vec[u8], what: Str) -> Result[JObj, String] {
+    let bad = f"malformed token: {what} is not a JSON object";
+    let mut p = JParser { b: bytes, at: 0 };
+    let mut obj = JObj { keys: Vec.new(), vals: Vec.new() };
+    if not p.eat(123u8) {
+        return Err(bad);
+    }
+    if not p.eat(125u8) {
+        loop {
+            let key = match p.string() {
+                Some(k) => k,
+                None => return Err(bad),
+            };
+            if not p.eat(58u8) {
+                return Err(bad);
+            }
+            let v = match p.value() {
+                Some(v) => v,
+                None => return Err(bad),
+            };
+            obj.keys.push(key);
+            obj.vals.push(v);
+            if p.eat(125u8) {
+                break;
+            }
+            if not p.eat(44u8) {
+                return Err(bad);
+            }
+        }
+    }
+    p.ws();
+    if p.at != p.b.len() {
+        return Err(bad);
+    }
+    Ok(obj)
+}
+
+fn jq(s: Str) -> String {
+    let mut out = "\"".to_string();
+    out.push_str(s.replace("\\", "\\\\").replace("\"", "\\\""));
+    out.push_str("\"");
+    out
+}
+
+fn jlist(v: ref Vec[String]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(jq(v[i]));
+    }
+    s.push_str("]");
+    s
+}
+
+// ---------------------------------------------------------------- tokens
+
+struct Auth { k: Vec[u32], secret: Vec[u8], users: Vec[User] }
+
+struct User { name: String, salt: String, key: Vec[u8], roles: Vec[String] }
+
+fn claims_json(iss: Str, sub: Str, roles: ref Vec[String], iat: i64, exp: i64, nbf: Option[i64]) -> String {
+    let mut out = f"{{\"iss\":{jq(iss)},\"sub\":{jq(sub)},\"roles\":{jlist(roles)},\"iat\":{iat},\"exp\":{exp}";
+    match nbf {
+        Some(n) => out.push_str(f",\"nbf\":{n}"),
+        None => {}
+    }
+    out.push_str("}");
+    out
+}
+
+fn sign(k: ref Vec[u32], header: Str, claims: Str, key: Slice[u8]) -> String {
+    let h = b64url(header.bytes());
+    let p = b64url(claims.bytes());
+    let signing = f"{h}.{p}";
+    let sig = hmac(k, key, signing.bytes());
+    f"{signing}.{b64url(sig)}"
+}
+
+fn verify(a: ref Auth, token: Str) -> Result[JObj, String] {
+    let parts = token.split(".");
+    if parts.len() != 3 {
+        return Err(f"malformed token: {parts.len()} segments");
+    }
+    let header = parse_obj(unb64url(parts[0])?, "header")?;
+    match header.get_str("alg") {
+        Some(alg) => {
+            if alg != "HS256" {
+                return Err(f"unsupported alg {alg}");
+            }
+        }
+        None => return Err("unsupported alg ?".to_string()),
+    }
+    let signing = f"{parts[0]}.{parts[1]}";
+    let want = hmac(a.k, a.secret, signing.bytes());
+    let got = unb64url(parts[2])?;
+    if not same_bytes(want, got) {
+        return Err("bad signature".to_string());
+    }
+    let c = parse_obj(unb64url(parts[1])?, "claims")?;
+    match c.get_str("iss") {
+        Some(iss) => {
+            if iss != ISSUER {
+                return Err("wrong issuer".to_string());
+            }
+        }
+        None => return Err("wrong issuer".to_string()),
+    }
+    let exp = match c.get_int("exp") {
+        Some(e) => e,
+        None => return Err("no expiry".to_string()),
+    };
+    if NOW > exp + LEEWAY {
+        return Err(f"token expired {NOW - exp}s ago");
+    }
+    match c.get_int("nbf") {
+        Some(nbf) => {
+            if nbf > NOW + LEEWAY {
+                return Err(f"token not valid for another {nbf - NOW}s");
+            }
+        }
+        None => {}
+    }
+    Ok(c)
+}
+
+// ---------------------------------------------------------------- HTTP
+
+fn reason(status: i64) -> Str {
+    if status == 200 {
+        "OK"
+    } else if status == 401 {
+        "Unauthorized"
+    } else if status == 403 {
+        "Forbidden"
+    } else if status == 404 {
+        "Not Found"
+    } else if status == 405 {
+        "Method Not Allowed"
+    } else {
+        "Bad HttpRequest"
+    }
+}
+
+fn response(status: i64, body: Str, extra: Str) -> String {
+    let mut head = f"HTTP/1.1 {status} {reason(status)}\r\nContent-Type: application/json\r\nContent-Length: {body.len()}\r\n";
+    if extra.len() > 0 {
+        head.push_str(f"{extra}\r\n");
+    }
+    f"{head}\r\n{body}"
+}
+
+fn error(status: i64, msg: Str, extra: Str) -> String {
+    response(status, f"{{\"error\":{jq(msg)}}}", extra)
+}
+
+struct HttpRequest { method: String, path: String, auth: String, body: String }
+
+fn form_value(body: Str, key: Str) -> String {
+    for pair in body.split("&").iter() {
+        match pair.find("=") {
+            Some(k) => {
+                if pair.substring(0, k) == key {
+                    return pair.substring(k + 1, pair.len());
+                }
+            }
+            None => {}
+        }
+    }
+    String.new()
+}
+
+fn handle(a: ref Auth, r: ref HttpRequest) -> String {
+    if r.path == "/login" {
+        if r.method != "POST" {
+            return error(405, "use POST", "Allow: POST");
+        }
+        let user = form_value(r.body, "user");
+        let password = form_value(r.body, "password");
+        for u in a.users.iter() {
+            if u.name == user {
+                let key = pbkdf2(a.k, password.bytes(), u.salt.bytes(), ITERATIONS);
+                if same_bytes(key, u.key) {
+                    let claims = claims_json(ISSUER, u.name, u.roles, NOW, NOW + TTL, None);
+                    let tok = sign(a.k, HS256, claims, a.secret);
+                    return response(200, f"{{\"token\":{jq(tok)},\"expires_in\":{TTL}}}", "");
+                }
+            }
+        }
+        return error(401, "invalid credentials", "");
+    }
+    if r.path == "/me" or r.path == "/admin" {
+        if r.method != "GET" {
+            return error(405, "use GET", "Allow: GET");
+        }
+        if not r.auth.starts_with("Bearer ") {
+            return error(401, "missing bearer token", "WWW-Authenticate: Bearer realm=\"kara\"");
+        }
+        let token = r.auth.substring(7, r.auth.len());
+        let c = match verify(a, token) {
+            Ok(c) => c,
+            Err(e) => return error(401, e, "WWW-Authenticate: Bearer error=\"invalid_token\""),
+        };
+        let roles = c.get_list("roles");
+        let sub = c.get_str("sub").unwrap_or("".to_string());
+        if r.path == "/me" {
+            return response(200, f"{{\"sub\":{jq(sub)},\"roles\":{jlist(roles)}}}", "");
+        }
+        let mut admin = false;
+        for role in roles.iter() {
+            if role == "admin" {
+                admin = true;
+            }
+        }
+        if not admin {
+            return error(403, "needs role admin", "");
+        }
+        return response(200, f"{{\"ok\":{jq(f"welcome, admin {sub}")}}}", "");
+    }
+    error(404, f"no route {r.path}", "")
+}
+
+fn find_crlf2(b: ref Vec[u8], from: i64) -> i64 {
+    let mut i = from;
+    while i + 3 < b.len() {
+        if b[i] == 13u8 and b[i + 1] == 10u8 and b[i + 2] == 13u8 and b[i + 3] == 10u8 {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn text_of(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("".to_string())
+}
+
+fn serve(a: ref Auth, data: ref Vec[u8]) -> (String, i64) {
+    let mut out = String.new();
+    let mut at = 0;
+    let mut n = 0;
+    while at < data.len() {
+        let end = find_crlf2(data, at);
+        if end < 0 {
+            break;
+        }
+        let head = text_of(data, at, end);
+        let lines = head.split("\r\n");
+        let first = lines[0].split(" ");
+        let mut r = HttpRequest { method: first[0].clone(), path: first[1].clone(), auth: String.new(), body: String.new() };
+        let mut length = 0;
+        for k in 1..lines.len() {
+            match lines[k].find(":") {
+                Some(c) => {
+                    let name = lines[k].substring(0, c).trim().to_lowercase();
+                    let value = lines[k].substring(c + 1, lines[k].len()).trim().to_string();
+                    if name == "content-length" {
+                        length = i64.parse(value).unwrap_or(0);
+                    } else if name == "authorization" {
+                        r.auth = value;
+                    }
+                }
+                None => {}
+            }
+        }
+        r.body = text_of(data, end + 4, end + 4 + length);
+        at = end + 4 + length;
+        out.push_str(handle(a, r));
+        n += 1;
+    }
+    (out, n)
+}
+
+fn request(method: Str, path: Str, token: Str, body: Str) -> String {
+    let mut r = f"{method} {path} HTTP/1.1\r\nHost: localhost\r\n";
+    if token.len() > 0 {
+        r.push_str(f"Authorization: Bearer {token}\r\n");
+    }
+    if body.len() > 0 {
+        r.push_str(f"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {body.len()}\r\n");
+    }
+    r.push_str("\r\n");
+    r.push_str(body);
+    r
+}
+
+fn read_all(conn: ref TcpStream) -> Vec[u8] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    bytes
+}
+
+struct Reply { status: String, shown: Vec[String], body: String }
+
+fn session(a: ref Auth, listener: ref TcpListener, label: Str, reqs: ref Vec[String]) -> Vec[Reply] {
+    println(f"== {label}");
+    let mut replies: Vec[Reply] = Vec.new();
+    let client = match TcpStream.connect(PORT_ADDR.to_string()) {
+        Ok(c) => c,
+        Err(_) => {
+            println("connect failed");
+            return replies;
+        }
+    };
+    let mut wire = String.new();
+    for r in reqs.iter() {
+        wire.push_str(r);
+    }
+    let sent = client.write_all(wire.bytes()).is_ok() and client.shutdown_write().is_ok();
+    if not sent {
+        println("client write failed");
+    }
+    match listener.accept() {
+        Ok(conn) => {
+            let (out, n) = serve(a, read_all(conn));
+            println(f"  server: {n} requests");
+            match conn.write_all(out.bytes()) {
+                Ok(_) => {}
+                Err(_) => println("server write failed"),
+            }
+        }
+        Err(_) => println("accept failed"),
+    }
+    let got = read_all(client);
+    let mut at = 0;
+    while at < got.len() {
+        let end = find_crlf2(got, at);
+        if end < 0 {
+            break;
+        }
+        let lines = text_of(got, at, end).split("\r\n");
+        let mut length = 0;
+        let mut shown: Vec[String] = Vec.new();
+        for k in 1..lines.len() {
+            match lines[k].find(":") {
+                Some(c) => {
+                    let name = lines[k].substring(0, c);
+                    let value = lines[k].substring(c + 1, lines[k].len()).trim().to_string();
+                    if name == "Content-Length" {
+                        length = i64.parse(value).unwrap_or(0);
+                    } else if name == "WWW-Authenticate" or name == "Allow" {
+                        shown.push(f"{name}: {value}");
+                    }
+                }
+                None => {}
+            }
+        }
+        replies.push(Reply { status: lines[0].clone(), shown: shown, body: text_of(got, end + 4, end + 4 + length) });
+        at = end + 4 + length;
+    }
+    replies
+}
+
+fn show(replies: ref Vec[Reply]) {
+    for r in replies.iter() {
+        println(f"  {r.status}");
+        for h in r.shown.iter() {
+            println(f"    {h}");
+        }
+        println(f"    {r.body}");
+    }
+}
+
+fn token_of(body: Str) -> String {
+    match body.find("\"token\":\"") {
+        Some(k) => {
+            let rest = body.substring(k + 9, body.len());
+            match rest.find("\"") {
+                Some(e) => rest.substring(0, e),
+                None => String.new(),
+            }
+        }
+        None => String.new(),
+    }
+}
+
+fn add_user(a: mut ref Auth, name: Str, password: Str, salt: Str, roles: own Vec[String]) {
+    let key = pbkdf2(a.k, password.bytes(), salt.bytes(), ITERATIONS);
+    a.users.push(User { name: name.to_string(), salt: salt.to_string(), key: key, roles: roles });
+}
+
+fn strings(v: ref Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in v.iter() {
+        out.push(s.to_string());
+    }
+    out
+}
+
+fn decoded(seg: Str) -> String {
+    match unb64url(seg) {
+        Ok(b) => String.from_utf8(b).unwrap_or("?".to_string()),
+        Err(e) => e,
+    }
+}
+
+fn main() {
+    let k = round_constants();
+    println(f"sha256('') = {hex(sha256(k, "".bytes()))}");
+    println(f"sha256('abc') = {hex(sha256(k, "abc".bytes()))}");
+    println(f"sha256(56 bytes) = {hex(sha256(k, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".bytes()))}");
+    let mut thousand: Vec[u8] = Vec.new();
+    for _ in 0..1000 {
+        thousand.push(97u8);
+    }
+    println(f"sha256('a' * 1000) = {hex(sha256(k, thousand))}");
+    println(f"hmac rfc4231 #2 = {hex(hmac(k, "Jefe".bytes(), "what do ya want for nothing?".bytes()))}");
+    let mut long_key: Vec[u8] = Vec.new();
+    for _ in 0..131 {
+        long_key.push(0xAAu8);
+    }
+    println(f"hmac rfc4231 #6 = {hex(hmac(k, long_key, "Test Using Larger Than Block-Size Key - Hash Key First".bytes()))}");
+    println(f"pbkdf2 c=1 = {hex(pbkdf2(k, "password".bytes(), "salt".bytes(), 1))}");
+    println(f"pbkdf2 c=2 = {hex(pbkdf2(k, "password".bytes(), "salt".bytes(), 2))}");
+    let mut samples: Vec[Vec[u8]] = Vec.new();
+    samples.push(Vec.new());
+    samples.push(bytes_of("f"));
+    samples.push(bytes_of("fo"));
+    samples.push(bytes_of("foo"));
+    let mut odd: Vec[u8] = Vec.new();
+    odd.push(0xFBu8);
+    odd.push(0xFFu8);
+    odd.push(0xBFu8);
+    samples.push(odd);
+    for s in samples.iter() {
+        println(f"b64url({hex(s)}) = [{b64url(s)}]");
+    }
+
+    let mut a = Auth { k: k.clone(), secret: bytes_of(SECRET), users: Vec.new() };
+    add_user(mut a, "alice", "wonderland", "s4lt-a", strings(["admin", "dev"]));
+    add_user(mut a, "bob", "builder", "s4lt-b", strings(["dev"]));
+    println(f"users: alice key {hex(a.users[0].key).substring(0, 16)}..., bob key {hex(a.users[1].key).substring(0, 16)}...");
+
+    let listener = match TcpListener.bind(PORT_ADDR.to_string()) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+
+    let mut logins: Vec[String] = Vec.new();
+    logins.push(request("POST", "/login", "", "user=alice&password=wonderland"));
+    logins.push(request("POST", "/login", "", "user=alice&password=guess"));
+    logins.push(request("POST", "/login", "", "user=mallory&password=x"));
+    logins.push(request("POST", "/login", "", "user=bob&password=builder"));
+    logins.push(request("GET", "/login", "", ""));
+    let r = session(a, listener, "logins", logins);
+    show(r);
+    let alice = token_of(r[0].body);
+    let bob = token_of(r[3].body);
+    let parts = alice.split(".");
+    println(f"  alice token: {alice.len()} chars, header {decoded(parts[0])}");
+    println(f"  claims {decoded(parts[1])}");
+    println(f"  signature {parts[2]}");
+
+    let admin_only = strings(["admin"]);
+    let dev_only = strings(["dev"]);
+    let forged = claims_json(ISSUER, "alice", admin_only, NOW, NOW + TTL, None).replace("alice", "mallory");
+    let tampered = f"{parts[0]}.{b64url(forged.bytes())}.{parts[2]}";
+    let none = f"{b64url("{\"alg\":\"none\",\"typ\":\"JWT\"}".bytes())}.{parts[1]}.";
+    let other = sign(k, HS256, claims_json(ISSUER, "alice", admin_only, NOW, NOW + TTL, None), "some other key".bytes());
+    let old = sign(k, HS256, claims_json(ISSUER, "alice", dev_only, NOW - 1020, NOW - 120, None), a.secret);
+    let grace = sign(k, HS256, claims_json(ISSUER, "alice", dev_only, NOW - 910, NOW - 10, None), a.secret);
+    let early = sign(k, HS256, claims_json(ISSUER, "alice", dev_only, NOW, NOW + TTL, Some(NOW + 600)), a.secret);
+    let foreign = sign(k, HS256, claims_json("evil", "alice", dev_only, NOW, NOW + TTL, None), a.secret);
+
+    let mut routes: Vec[String] = Vec.new();
+    routes.push(request("GET", "/me", alice, ""));
+    routes.push(request("GET", "/admin", alice, ""));
+    routes.push(request("GET", "/me", bob, ""));
+    routes.push(request("GET", "/admin", bob, ""));
+    routes.push(request("GET", "/me", "", ""));
+    routes.push(request("PUT", "/me", alice, ""));
+    routes.push(request("GET", "/nope", alice, ""));
+    show(session(a, listener, "protected routes", routes));
+
+    let mut attacks: Vec[String] = Vec.new();
+    attacks.push(request("GET", "/admin", tampered, ""));
+    attacks.push(request("GET", "/admin", none, ""));
+    attacks.push(request("GET", "/admin", other, ""));
+    attacks.push(request("GET", "/me", old, ""));
+    attacks.push(request("GET", "/me", grace, ""));
+    attacks.push(request("GET", "/me", early, ""));
+    attacks.push(request("GET", "/me", foreign, ""));
+    attacks.push(request("GET", "/me", "abc.def", ""));
+    attacks.push(request("GET", "/me", "e!x.y.z", ""));
+    attacks.push(request("GET", "/me", "a.b.c.d", ""));
+    show(session(a, listener, "attacks and edge cases", attacks));
+}

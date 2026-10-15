@@ -1,0 +1,79 @@
+sha256('') = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+sha256('abc') = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+sha256(56 bytes) = 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+sha256('a' * 1000) = 41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3
+hmac rfc4231 #2 = 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+hmac rfc4231 #6 = 60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54
+pbkdf2 c=1 = 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b
+pbkdf2 c=2 = ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43
+b64url() = []
+b64url(66) = [Zg]
+b64url(666f) = [Zm8]
+b64url(666f6f) = [Zm9v]
+b64url(fbffbf) = [-_-_]
+users: alice key 716499b65720e7e7..., bob key c7b724e9084fe771...
+== logins
+  server: 5 requests
+  HTTP/1.1 200 OK
+    {"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJrYXJhLWF1dGgiLCJzdWIiOiJhbGljZSIsInJvbGVzIjpbImFkbWluIiwiZGV2Il0sImlhdCI6MTc2MDAwMDAwMCwiZXhwIjoxNzYwMDAwOTAwfQ.cS8f1-MukZ4LE44kAEv_if-efQADaOPC79nuGZqskCE","expires_in":900}
+  HTTP/1.1 401 Unauthorized
+    {"error":"invalid credentials"}
+  HTTP/1.1 401 Unauthorized
+    {"error":"invalid credentials"}
+  HTTP/1.1 200 OK
+    {"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJrYXJhLWF1dGgiLCJzdWIiOiJib2IiLCJyb2xlcyI6WyJkZXYiXSwiaWF0IjoxNzYwMDAwMDAwLCJleHAiOjE3NjAwMDA5MDB9.wAv7BpD1iElM53iseTs4-wqq6Hk13bZ1Y5bWPBHl85E","expires_in":900}
+  HTTP/1.1 405 Method Not Allowed
+    Allow: POST
+    {"error":"use POST"}
+  alice token: 203 chars, header {"alg":"HS256","typ":"JWT"}
+  claims {"iss":"kara-auth","sub":"alice","roles":["admin","dev"],"iat":1760000000,"exp":1760000900}
+  signature cS8f1-MukZ4LE44kAEv_if-efQADaOPC79nuGZqskCE
+== protected routes
+  server: 7 requests
+  HTTP/1.1 200 OK
+    {"sub":"alice","roles":["admin","dev"]}
+  HTTP/1.1 200 OK
+    {"ok":"welcome, admin alice"}
+  HTTP/1.1 200 OK
+    {"sub":"bob","roles":["dev"]}
+  HTTP/1.1 403 Forbidden
+    {"error":"needs role admin"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer realm="kara"
+    {"error":"missing bearer token"}
+  HTTP/1.1 405 Method Not Allowed
+    Allow: GET
+    {"error":"use GET"}
+  HTTP/1.1 404 Not Found
+    {"error":"no route /nope"}
+== attacks and edge cases
+  server: 10 requests
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"bad signature"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"unsupported alg none"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"bad signature"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"token expired 120s ago"}
+  HTTP/1.1 200 OK
+    {"sub":"alice","roles":["dev"]}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"token not valid for another 600s"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"wrong issuer"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"malformed token: 2 segments"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"malformed token: bad base64url"}
+  HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token"
+    {"error":"malformed token: 4 segments"}

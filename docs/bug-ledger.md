@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 730 |
-| run-vs-build | 605 |
+| run-vs-build | 606 |
 | leak | 603 |
 | double-free | 427 |
 | missing-feature | 266 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2897 |
-| interp | 927 |
-| typecheck | 431 |
+| codegen | 2898 |
+| interp | 928 |
+| typecheck | 432 |
 | other | 115 |
 | ownership | 100 |
 | cli | 76 |
@@ -213,6 +213,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-21 | 2026-10-15 | effect | medium | A call through a generic bound is charged the effects of EVERY impl of the trait method instead of the instance's (design.md §12 Trait methods and generic calls): `pub fn mem_only(m: mut ref Mem) with allocates(Heap) { store_twice(mut m); }` is refused as performing writes(FileSystem), which only the other impl (`Disk`) does; `karac check` also prints a bogus "mutual recursion group" note pairing `MemStore.get` with `FileStore.get` | — |
 | B-2026-10-15-22 | 2026-10-15 | typecheck+interp+codegen | medium | `let since = m.get(k).unwrap_or(9); let mut t = since; t = t + 1;` passes `karac check` but every MIR surface stops with an internal error, "invalid MIR: main: bb7[1]: assigning i64 to _8 of type ref i64": `since` and `t` are typed `ref i64` (the `Option[ref i64]` of `get`), so the assignment of an `i64` to `t` builds ill-typed MIR | — |
 | B-2026-10-15-23 | 2026-10-15 | ownership | medium | `karac check` calls the argument of two built-in String methods MOVED, though every MIR surface runs the program: `line.find(op)` moves `op` when `line` is a `Str` (a parameter; a `String` receiver is fine), and `t.replacen("%", s, 1)` moves a `String` `s` on any receiver, so a later `op.len()` or a second `replacen` with the same stem is refused | — |
+| B-2026-10-15-24 | 2026-10-15 | typecheck+interp+codegen | medium | `match v[i] { J.I(n) => Some(*n), .. }` on an index place passes `karac check` (which binds `n` as a `ref i64`) but every MIR surface stops with "unary '*' requires 'ref T', 'mut ref T', or a raw pointer, found 'i64'": the MIR builder binds a Copy payload of an index-place scrutinee BY VALUE, though `let x = ref v[i]; match x { J.I(n) => *n }` binds it as a ref on MIR too | — |
 
 ### Relocated
 
