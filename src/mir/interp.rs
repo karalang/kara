@@ -4799,7 +4799,7 @@ impl<'a> Interp<'a> {
     ) -> R<Value> {
         match (base, method) {
             ("TaskGroup", "new") => Ok(Value::Agg(vec![Value::Int(0)])),
-            ("TaskGroup", "cancel" | "drop") => Ok(Value::Unit),
+            ("TaskGroup", "cancel" | "drop" | "end") => Ok(Value::Unit),
             ("TaskGroup", "spawn") => {
                 let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
                     return err(format!("{name} takes a closure"));
@@ -9767,6 +9767,8 @@ impl<'a> Interp<'a> {
         let wait = match (base, method, rest) {
             // A handle holds its task's result: the spawn ran the task.
             ("TaskHandle", "join", _) => None,
+            // A group's tasks ran at their spawns, so none is running.
+            ("TaskGroup", "spawn_frame" | "end", _) => None,
             ("Receiver" | "Channel", "recv" | "recv_blocking", [r, ..]) => {
                 Some(Wait::Recv(self.chan_id(Some(r), &callee)?))
             }

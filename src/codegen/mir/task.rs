@@ -84,9 +84,21 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
             }
             ("TcpStream", "connect", _) => self.llcx.bool_type().const_int(1, false),
+            ("TaskGroup", "spawn_frame" | "end", [g, ..]) => {
+                let g = self.group_handle(g)?;
+                let end = i8t.const_int(u64::from(method == "end"), false);
+                self.rt_flag("ready_group", &[g.into(), end.into()])?
+            }
             _ => return Err(format!("__ready of {name}, which does not suspend")),
         };
         self.store_bool(dest, r)
+    }
+
+    /// The runtime state a `TaskGroup` operand (the group, or a reference
+    /// to it) points at.
+    fn group_handle(&mut self, g: &Operand) -> R<PointerValue<'ctx>> {
+        let (at, _) = self.behind_refs(g)?;
+        self.load_ptr(at)
     }
 
     /// Reports a readiness codegen worked out to the executor, which notes
@@ -103,7 +115,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// fresh frame of that resume body's frame type, holding the closure in
     /// its field 1, queued with the executor; the handle is its block.
     pub(super) fn spawn_frame(&mut self, args: &[Operand], dest: &Place) -> R<()> {
-        let [_, name, closure] = args else {
+        let [group, name, closure] = args else {
             return Err("spawn_frame takes a group, a resume body and a closure".into());
         };
         let resume = Self::str_operand(name)?.to_string();
@@ -131,17 +143,19 @@ impl<'ctx> Cx<'ctx, '_> {
         let block = call_malloc(self, off + self.layout(held)?.size, "task")?;
         self.store(block, self.i64(RUNNING).into())?;
         let poll = self.task_poll(&resume, true);
+        let g = self.group_handle(group)?;
         let p = self.ptr_ty();
         let spawn = self.extern_fn(
             "karac_mir_task_spawn",
             self.llcx
                 .void_type()
-                .fn_type(&[p.into(), p.into(), p.into()], false),
+                .fn_type(&[p.into(), p.into(), p.into(), p.into()], false),
         );
         self.builder
             .build_call(
                 spawn,
                 &[
+                    g.into(),
                     poll.as_global_value().as_pointer_value().into(),
                     frame.into(),
                     block.into(),

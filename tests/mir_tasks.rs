@@ -249,3 +249,118 @@ fn main() {
         "{out}"
     );
 }
+
+/// `TaskGroup.new(limit: n)` lets at most `n` of its tasks run at once
+/// (B-2026-10-15-30): with a limit of 1, each spawn waits for the task
+/// before it, so the pauses run one after another.
+#[test]
+fn mir_task_group_limit_bounds_running_tasks() {
+    let src = r#"
+fn work(name: Str) -> i64 { println(f"{name} start"); sleep_ms(150); println(f"{name} end"); 1 }
+fn main() {
+    let group = TaskGroup.new(limit: 1);
+    let a = group.spawn(|| work("a"));
+    let b = group.spawn(|| work("b"));
+    let c = group.spawn(|| work("c"));
+    println(f"{a.join() + b.join() + c.join()}");
+}
+"#;
+    let Some((out, took)) = build_and_run("limit_one", src) else {
+        return;
+    };
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "a start\na end\nb start\nb end\nc start\nc end\n3\n"
+    );
+    assert!(took >= Duration::from_millis(420), "ran in {took:?}");
+}
+
+/// With a limit of 2, four pauses of 300ms take two rounds: more than one
+/// pause and less than four.
+#[test]
+fn mir_task_group_limit_two_runs_two_at_once() {
+    let src = r#"
+fn main() {
+    let group = TaskGroup.new(limit: 2);
+    let mut hs: Vec[TaskHandle[i64]] = Vec.new();
+    for i in 0..4 {
+        hs.push(group.spawn(|| { sleep_ms(300); i }));
+    }
+    let mut total = 0;
+    for h in hs.into_iter() {
+        total = total + h.join();
+    }
+    println(f"{total}");
+}
+"#;
+    let Some((out, took)) = build_and_run("limit_two", src) else {
+        return;
+    };
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "6\n");
+    assert!(
+        took >= Duration::from_millis(550) && took < Duration::from_millis(1100),
+        "ran in {took:?}"
+    );
+}
+
+/// Dropping a group joins every task it started, joined or not, before the
+/// scope that owns it goes on (docs/library/concurrency.md § TaskGroup).
+#[test]
+fn mir_task_group_drop_waits_for_its_tasks() {
+    let src = r#"
+fn main() {
+    {
+        let group = TaskGroup.new();
+        let _h = group.spawn(|| { sleep_ms(100); println("slow task done"); 1 });
+        group.spawn(|| { println("quick task done"); 2 });
+        println("scope ends");
+    }
+    println("after the group");
+}
+"#;
+    let Some(out) = stdout_of("group_end", src) else {
+        return;
+    };
+    assert_eq!(
+        out,
+        "scope ends\nquick task done\nslow task done\nafter the group\n"
+    );
+}
+
+/// A task whose closure moves a capture out takes its environment by value,
+/// and still runs as a task: the producer owns the only `Sender`, so the
+/// channel closes when it returns and `into_iter` ends.
+#[test]
+fn mir_task_that_moves_its_sender_closes_the_channel() {
+    let src = r#"
+fn main() {
+    let (tx, rx) = channel(1);
+    let group = TaskGroup.new();
+    group.spawn(|| {
+        let tx = tx;
+        for i in 0..3 {
+            tx.send(i).unwrap();
+            println(f"sent {i}");
+        }
+    });
+    for v in rx.into_iter() {
+        println(f"got {v}");
+    }
+    println("closed");
+}
+"#;
+    let Some(out) = stdout_of("moved_sender", src) else {
+        return;
+    };
+    assert_eq!(out, "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 2\nclosed\n");
+}

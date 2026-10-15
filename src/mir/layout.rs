@@ -141,11 +141,12 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
     // A user type of a library type's name is laid out by its fields.
     match tys.adt(a).library_name()? {
         // A `CStr` / `CString` is a pointer to NUL-terminated bytes.
-        // A `TaskHandle` points at a block holding its task's result.
+        // A `TaskHandle` points at a block holding its task's result, a
+        // `TaskGroup` at the runtime's count of its running tasks.
         // A `LinesIter` is its `BufReader`'s handle, borrowed.
-        "Sender" | "Receiver" | "File" | "CStr" | "CString" | "TaskHandle" | "BufReader"
-        | "BufWriter" | "LinesIter" | "Stdio" | "ChildProcess" | "ChildStdout" | "ChildStderr"
-        | "ChildStdin" => Some(Cell::Handle),
+        "Sender" | "Receiver" | "File" | "CStr" | "CString" | "TaskHandle" | "TaskGroup"
+        | "BufReader" | "BufWriter" | "LinesIter" | "Stdio" | "ChildProcess" | "ChildStdout"
+        | "ChildStderr" | "ChildStdin" => Some(Cell::Handle),
         "Atomic" | "Mutex" => Some(Cell::Inline(tys.tcx().adt_of(t)?.1.first().copied()?)),
         _ => None,
     }

@@ -34,6 +34,7 @@ pub fn suspends_native(name: &str) -> bool {
         ("Receiver" | "Channel", "recv" | "recv_blocking")
             | ("Sender" | "Channel", "send")
             | ("TaskHandle", "join")
+            | ("TaskGroup", "spawn_frame" | "end")
             | ("TcpListener", "accept")
             | ("TcpStream", "read" | "connect")
     )
@@ -187,6 +188,77 @@ fn insert_ready_loops(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
     Ok(())
 }
 
+/// The native a group's drop waits on first: `TaskGroup.end(&g)` completes
+/// once every task `g` started has returned (B-2026-10-15-30).
+pub const GROUP_END: &str = "TaskGroup.end";
+
+/// Whether `ty` is the library's `TaskGroup`.
+fn is_task_group(tys: &TyInterner, ty: Ty) -> bool {
+    matches!(tys.kind(ty), TyKind::Adt(a) if tys.adt(a).library_name() == Some("TaskGroup"))
+}
+
+/// Puts a call to [`GROUP_END`] before each drop of a `TaskGroup` in
+/// `body`, so dropping a group waits for its tasks:
+///
+/// ```text
+/// drop(g) -> next      becomes      r = &g; _ = TaskGroup.end(move r) -> d
+///                                   d: drop(g) -> next
+/// ```
+fn insert_group_ends(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
+    for i in 0..body.blocks.len() {
+        let t = &body.blocks[i].terminator;
+        let TerminatorKind::Drop { place, unwind, .. } = &t.kind else {
+            continue;
+        };
+        let pt = super::place_ty::place_ty(body, tys, place)?.ty;
+        if !is_task_group(tys, pt) {
+            continue;
+        }
+        let (place, unwind, si) = (place.clone(), *unwind, t.source_info);
+        let mut new_local = |ty: Ty| {
+            body.locals.push(LocalDecl {
+                ty,
+                mutability: Mutability::Mut,
+                kind: LocalKind::Temp,
+                source_info: si,
+            });
+            Local(body.locals.len() as u32 - 1)
+        };
+        let r = new_local(tys.intern(TyKind::Ref(pt)));
+        let u = new_local(tys.unit());
+        let d = BasicBlock(body.blocks.len() as u32);
+        let drop = std::mem::replace(
+            &mut body.blocks[i].terminator,
+            Terminator {
+                kind: TerminatorKind::Call {
+                    func: Operand::Const(Const {
+                        ty: tys.unit(),
+                        kind: ConstKind::FnDef(InstanceId {
+                            def: DefId(0),
+                            args: vec![],
+                            name: GROUP_END.to_string(),
+                        }),
+                    }),
+                    args: vec![Operand::Move(Place::local(r))],
+                    destination: Place::local(u),
+                    target: Some(d),
+                    unwind,
+                },
+                source_info: si,
+            },
+        );
+        body.blocks[i].statements.push(Statement {
+            kind: StatementKind::Assign(Place::local(r), Rvalue::Ref(BorrowKind::Shared, place)),
+            source_info: si,
+        });
+        body.blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: drop,
+        });
+    }
+    Ok(())
+}
+
 /// The callee a `Call` names directly, if it names one.
 fn direct_callee(func: &Operand) -> Option<&str> {
     match func {
@@ -250,13 +322,15 @@ pub fn task_name(closure_body: &str) -> String {
 /// `TaskGroup.spawn(g, move c)` whose `c` is made in the same body by a
 /// closure aggregate, with the block of the call and that closure's body.
 fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String)> {
-    // A closure's body takes its environment first, by reference; the
-    // environment's type tells a generic closure's instances apart.
+    // A closure's body takes its environment first, by reference, or by
+    // value when it moves a capture out; the environment's type tells a
+    // generic closure's instances apart.
     let body_of = |def: DefId, env: Ty| {
         bodies.iter().find(|b| {
-            b.instance.def == def
-                && b.arg_count >= 1
-                && matches!(tys.kind(b.local(Local(1)).ty), TyKind::Ref(t) if t == env)
+            b.instance.def == def && b.arg_count >= 1 && {
+                let first = b.local(Local(1)).ty;
+                first == env || matches!(tys.kind(first), TyKind::Ref(t) if t == env)
+            }
         })
     };
     let mut out = Vec::new();
@@ -300,21 +374,18 @@ fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String)>
     out
 }
 
-/// `C#task`, for the closure body `c` (see `task_name`).
+/// `C#task`, for the closure body `c` (see `task_name`). A closure that
+/// takes its environment by value (it moves a capture out) is called with
+/// it, and drops it itself: `C#task(env) { _0 = C(move env); return }`.
 fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
     let si = SourceInfo {
         span: c.span,
         scope: SourceScope(0),
     };
     let env_ref = c.local(Local(1)).ty;
-    let env = match tys.kind(env_ref) {
-        TyKind::Ref(t) => t,
-        _ => {
-            return Err(format!(
-                "{} does not take its closure by reference",
-                c.instance.name
-            ))
-        }
+    let (env, by_ref) = match tys.kind(env_ref) {
+        TyKind::Ref(t) => (t, true),
+        _ => (env_ref, false),
     };
     let decl = |ty, kind| LocalDecl {
         ty,
@@ -327,25 +398,20 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
         source_info: si,
     };
     let unit = tys.unit();
-    Ok(Body {
-        instance: InstanceId {
-            def: DefId(0),
-            args: vec![],
-            name: task_name(&c.instance.name),
-        },
-        locals: vec![
-            decl(c.return_ty(), LocalKind::ReturnPlace),
-            decl(
-                env,
-                LocalKind::Arg {
-                    name: "env".into(),
-                    node: NodeId(0),
-                },
-            ),
-            decl(env_ref, LocalKind::Temp),
-        ],
-        arg_count: 1,
-        blocks: vec![
+    let call = |arg: Local, target| {
+        term(TerminatorKind::Call {
+            func: Operand::Const(Const {
+                ty: unit,
+                kind: ConstKind::FnDef(c.instance.clone()),
+            }),
+            args: vec![Operand::Move(Place::local(arg))],
+            destination: Place::local(Local::RETURN_PLACE),
+            target: Some(target),
+            unwind: UnwindAction::Abort,
+        })
+    };
+    let blocks = if by_ref {
+        vec![
             BasicBlockData {
                 statements: vec![Statement {
                     kind: StatementKind::Assign(
@@ -354,16 +420,7 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
                     ),
                     source_info: si,
                 }],
-                terminator: term(TerminatorKind::Call {
-                    func: Operand::Const(Const {
-                        ty: unit,
-                        kind: ConstKind::FnDef(c.instance.clone()),
-                    }),
-                    args: vec![Operand::Move(Place::local(Local(2)))],
-                    destination: Place::local(Local::RETURN_PLACE),
-                    target: Some(BasicBlock(1)),
-                    unwind: UnwindAction::Abort,
-                }),
+                terminator: call(Local(2), BasicBlock(1)),
             },
             BasicBlockData {
                 statements: vec![],
@@ -377,7 +434,41 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
                 statements: vec![],
                 terminator: term(TerminatorKind::Return),
             },
-        ],
+        ]
+    } else {
+        vec![
+            BasicBlockData {
+                statements: vec![],
+                terminator: call(Local(1), BasicBlock(1)),
+            },
+            BasicBlockData {
+                statements: vec![],
+                terminator: term(TerminatorKind::Return),
+            },
+        ]
+    };
+    let mut locals = vec![
+        decl(c.return_ty(), LocalKind::ReturnPlace),
+        decl(
+            env,
+            LocalKind::Arg {
+                name: "env".into(),
+                node: NodeId(0),
+            },
+        ),
+    ];
+    if by_ref {
+        locals.push(decl(env_ref, LocalKind::Temp));
+    }
+    Ok(Body {
+        instance: InstanceId {
+            def: DefId(0),
+            args: vec![],
+            name: task_name(&c.instance.name),
+        },
+        locals,
+        arg_count: 1,
+        blocks,
         scopes: c.scopes.clone(),
         phase: c.phase,
         span: c.span,
@@ -669,6 +760,9 @@ pub fn transform(
     let tasks = rewrite_spawns(&mut bodies, tys)?;
     let task_names: BTreeSet<String> = tasks.iter().map(|b| b.instance.name.clone()).collect();
     bodies.extend(tasks);
+    for b in &mut bodies {
+        insert_group_ends(b, tys)?;
+    }
     let mut set = coroutines(&bodies);
     set.extend(task_names.iter().cloned());
     let bodies = bodies.as_slice();

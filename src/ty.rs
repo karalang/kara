@@ -224,7 +224,7 @@ pub const LIBRARY_CELLS: &[&str] = &["Mutex"];
 /// `Channel` end is what closes the channel and frees what is still queued
 /// in it, a dropped `File` (or `BufReader` / `BufWriter`, a writer
 /// flushing first) closes the file, a dropped `TaskHandle`
-/// detaches its task, and the rest free the runtime allocation behind the
+/// detaches its task, a dropped `TaskGroup` has joined its tasks, and the rest free the runtime allocation behind the
 /// handle (their held values, when those need dropping, go first).
 pub const HANDLES: &[&str] = &[
     "Sender",
@@ -235,6 +235,8 @@ pub const HANDLES: &[&str] = &[
     "OnceCell",
     "Arena",
     "TaskHandle",
+    // A group's drop frees its runtime state (B-2026-10-15-30).
+    "TaskGroup",
     "Interner",
     "BufReader",
     "BufWriter",

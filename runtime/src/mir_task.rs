@@ -30,7 +30,18 @@ enum Wait {
     Task,
 }
 
+/// A `TaskGroup` (B-2026-10-15-30): how many of its tasks may run at once
+/// and how many do. Its handle is a pointer to this, freed once the group
+/// has dropped and its last task has returned.
+struct Group {
+    limit: i64,
+    live: i64,
+    dropped: bool,
+}
+
 struct Task {
+    /// The group that spawned it, or null for `main`.
+    group: *mut Group,
     poll: TaskPoll,
     a: *mut u8,
     b: *mut u8,
@@ -60,15 +71,89 @@ fn bump() {
     EXEC.with(|e| e.borrow_mut().progress += 1);
 }
 
-/// Queues a task.
+/// `TaskGroup.new(limit: n)`: a group that lets at most `limit` of its
+/// tasks run at once.
+#[no_mangle]
+pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
+    Box::into_raw(Box::new(Group {
+        limit,
+        live: 0,
+        dropped: false,
+    })) as *mut u8
+}
+
+/// A group's drop. Under the executor its tasks have all returned (the
+/// coroutine transform waits for that first); one still running frees the
+/// group when it returns.
 ///
 /// # Safety
-/// `poll(a, b)` may be called until it answers 1.
+/// `g` is a live group handle, dropped once.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_task_spawn(poll: TaskPoll, a: *mut u8, b: *mut u8) {
+pub unsafe extern "C" fn karac_mir_group_drop(g: *mut u8) {
+    let g = g as *mut Group;
+    // SAFETY: the caller's contract.
+    unsafe {
+        if (*g).live == 0 {
+            drop(Box::from_raw(g));
+        } else {
+            (*g).dropped = true;
+        }
+    }
+}
+
+/// `__ready("TaskGroup.spawn_frame", g)` (`end` 0): whether `g` runs fewer
+/// than its limit of tasks; `__ready("TaskGroup.end", g)` (`end` 1):
+/// whether all its tasks have returned, before it drops.
+///
+/// # Safety
+/// `g` is a live group handle.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
+    // SAFETY: the caller's contract.
+    let g = unsafe { &*(g as *const Group) };
+    let ready = if end != 0 {
+        g.live == 0
+    } else {
+        g.live < g.limit
+    };
+    note(ready, Wait::Task)
+}
+
+/// A task of `group` returned.
+fn task_done(group: *mut Group) {
+    if group.is_null() {
+        return;
+    }
+    // SAFETY: a group outlives its tasks (`karac_mir_group_drop`).
+    unsafe {
+        (*group).live -= 1;
+        if (*group).dropped && (*group).live == 0 {
+            drop(Box::from_raw(group));
+        }
+    }
+}
+
+/// Queues a task of the group `group` (null for `main`).
+///
+/// # Safety
+/// `poll(a, b)` may be called until it answers 1; `group` is null or a
+/// live group handle.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_task_spawn(
+    group: *mut u8,
+    poll: TaskPoll,
+    a: *mut u8,
+    b: *mut u8,
+) {
+    let group = group as *mut Group;
+    if !group.is_null() {
+        // SAFETY: the caller's contract.
+        unsafe { (*group).live += 1 };
+    }
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
         e.queue.push_back(Task {
+            group,
             poll,
             a,
             b,
@@ -88,7 +173,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(poll: TaskPoll, a: *mut u8, b: *mu
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut u8) {
     // SAFETY: the caller's contract.
-    unsafe { karac_mir_task_spawn(poll, a, b) };
+    unsafe { karac_mir_task_spawn(std::ptr::null_mut(), poll, a, b) };
     // Tasks suspended in a row with nothing happening in between.
     let mut idle = 0usize;
     loop {
@@ -110,6 +195,7 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             (e.progress, e.cur.take())
         });
         if done {
+            task_done(t.group);
             bump();
             idle = 0;
             continue;
@@ -313,8 +399,14 @@ mod tests {
         // SAFETY: `b` holds the two children's counters.
         let c = b as *mut u32;
         unsafe {
-            karac_mir_task_spawn(yielder, std::ptr::without_provenance_mut(1), c as *mut u8);
             karac_mir_task_spawn(
+                std::ptr::null_mut(),
+                yielder,
+                std::ptr::without_provenance_mut(1),
+                c as *mut u8,
+            );
+            karac_mir_task_spawn(
+                std::ptr::null_mut(),
                 yielder,
                 std::ptr::without_provenance_mut(2),
                 c.add(1) as *mut u8,

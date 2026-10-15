@@ -1014,13 +1014,31 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<Option<()>> {
         let dty = self.place_type(dest)?;
         match (base, method, args) {
-            // `limit` (B-2026-10-15-11) is accepted; every task runs to
-            // completion at its spawn, so none waits on it.
+            // The runtime counts a group's running tasks against its
+            // `limit`, which a spawn waits on under the executor
+            // (B-2026-10-15-30); a plain spawn runs its task to completion,
+            // so none waits on it there.
             ("TaskGroup", "new", [] | [_]) => {
+                let limit = match args {
+                    [l] => self.int_arg(l)?,
+                    _ => self.i64(i64::MAX as u64),
+                };
+                let p = self.ptr_ty();
+                let f = self.extern_fn(
+                    "karac_mir_group_new",
+                    p.fn_type(&[self.llcx.i64_type().into()], false),
+                );
+                let g = self
+                    .builder
+                    .build_call(f, &[limit.into()], "group")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic();
                 let d = self.place_ptr(dest)?;
-                self.store(d, self.i64(0).into())?;
+                self.store(d, g)?;
             }
-            ("TaskGroup", "cancel" | "drop", _) => {}
+            // `end` waits in its readiness loop; the drop frees the group.
+            ("TaskGroup", "cancel" | "drop" | "end", _) => {}
             ("TaskGroup", "spawn", [_, f]) => {
                 let held = self
                     .tys

@@ -86,19 +86,15 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
     ("OnceLock", CellDrop::Once),
     ("OnceCell", CellDrop::Once),
     ("TaskHandle", CellDrop::Boxed),
+    // Its tasks have returned: the transform waits for that first.
+    ("TaskGroup", CellDrop::Free("karac_mir_group_drop")),
     ("Arena", CellDrop::Arena),
 ];
 
 /// Library types whose builtin `Drop` does nothing here, as in the
 /// interpreter: a `critical_section` guard (interrupts were never masked),
-/// the handles of registries that outlive them, and a `TaskGroup`, whose
-/// tasks all ran when they were spawned.
-const NOOP_DROPS: &[&str] = &[
-    "CriticalSectionGuard",
-    "Semaphore",
-    "RateLimiter",
-    "TaskGroup",
-];
+/// and the handles of registries that outlive them.
+const NOOP_DROPS: &[&str] = &["CriticalSectionGuard", "Semaphore", "RateLimiter"];
 
 const ONCE_GET: &str = "karac_runtime_once_get";
 const ONCE_FREE: &str = "karac_runtime_once_free";
