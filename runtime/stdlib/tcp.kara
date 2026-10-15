@@ -215,7 +215,7 @@ impl TcpStream {
     // Stub body never executes — codegen replaces via
     // `lower_tcp_stream_shutdown_write`.
     #[compiler_builtin]
-    fn shutdown_write(ref self) -> Result[Unit, TcpError] {
+    fn shutdown_write(ref self) -> Result[(), TcpError] {
         Result.Err(TcpError.Other(-1))
     }
 

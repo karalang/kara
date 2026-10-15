@@ -2045,9 +2045,7 @@ impl<'a> Interp<'a> {
                 self.vec_more_method(ty_name, method, args, arg_tys)
             }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
-            ("FileSystem", "write" | "read_to_string" | "read_lines") => {
-                self.fs_method(method, args, ret)
-            }
+            ("FileSystem", m) if FS_METHODS.contains(&m) => self.fs_method(method, args, ret),
             (t, "parse" | "from_str_radix") if t == "f64" || int_width(t).is_some() => {
                 self.parse_number(t, method, &args, ret)
             }
@@ -5357,15 +5355,47 @@ impl<'a> Interp<'a> {
     /// failure is an `Err(IoError)` with legacy's variant for its kind.
     fn fs_method(&mut self, method: &str, args: Vec<Value>, ret: Ty) -> R<Value> {
         let name = format!("FileSystem.{method}");
-        let res = match (method, args.as_slice()) {
-            ("write", [path, text]) => {
-                let (path, text) = (self.string_at(path)?, self.string_at(text)?);
-                std::fs::write(path, text).map(|()| None)
-            }
-            ("read_to_string" | "read_lines", [path]) => {
-                let path = self.string_at(path)?;
-                std::fs::read_to_string(path).map(Some)
-            }
+        let paths = args
+            .iter()
+            .map(|a| self.string_at(a))
+            .collect::<R<Vec<String>>>()?;
+        let res = match (method, paths.as_slice()) {
+            ("write", [path, text]) => std::fs::write(path, text).map(|()| None),
+            ("read_to_string" | "read_lines", [path]) => std::fs::read_to_string(path).map(Some),
+            ("exists", [path]) => return Ok(Value::Bool(std::fs::metadata(path).is_ok())),
+            ("metadata", [path]) => match crate::mir::fs::metadata(path) {
+                Ok(m) => {
+                    let v = Value::Agg(vec![
+                        Value::Int(m[0] as i128),
+                        Value::Bool(m[1] != 0),
+                        Value::Bool(m[2] != 0),
+                        Value::Int(m[3] as i128),
+                    ]);
+                    return self.variant_named(ret, None, "Ok", vec![v]);
+                }
+                Err(e) => Err(e),
+            },
+            ("read_dir", [path]) => match crate::mir::fs::read_dir(path) {
+                Ok(names) => {
+                    let names = names
+                        .into_iter()
+                        .map(|n| self.alloc_box("String", Value::Str(n)))
+                        .collect();
+                    let v = self.alloc_box("Vec[String]", Value::Agg(names));
+                    return self.variant_named(ret, None, "Ok", vec![v]);
+                }
+                Err(e) => Err(e),
+            },
+            ("create_dir", [p]) => std::fs::create_dir(p).map(|()| None),
+            ("create_dir_all", [p]) => std::fs::create_dir_all(p).map(|()| None),
+            ("remove_file", [p]) => std::fs::remove_file(p).map(|()| None),
+            ("remove_dir", [p]) => std::fs::remove_dir(p).map(|()| None),
+            ("remove_dir_all", [p]) => std::fs::remove_dir_all(p).map(|()| None),
+            ("rename", [from, to]) => std::fs::rename(from, to).map(|()| None),
+            ("copy", [from, to]) => match std::fs::copy(from, to) {
+                Ok(n) => return self.variant_named(ret, None, "Ok", vec![Value::Int(n as i128)]),
+                Err(e) => Err(e),
+            },
             _ => return err(format!("{name}: wrong arguments")),
         };
         match res {
@@ -10558,6 +10588,23 @@ impl Sockets {
 }
 
 /// `Vec` methods [`Interp::vec_more_method`] implements.
+/// The `fs` functions the interpreter runs (`fs_method`).
+const FS_METHODS: &[&str] = &[
+    "write",
+    "read_to_string",
+    "read_lines",
+    "exists",
+    "metadata",
+    "read_dir",
+    "create_dir",
+    "create_dir_all",
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "rename",
+    "copy",
+];
+
 const VEC_MORE_METHODS: &[&str] = &[
     "sort",
     "sort_unstable",

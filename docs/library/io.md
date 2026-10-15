@@ -38,8 +38,39 @@ The `fs` alias reaches the path-based functions:
 
 ```kara
 fn fs.read_to_string(path: Str) -> Result[String, IoError] with reads(FileSystem) blocks
+fn fs.read_lines(path: Str) -> Result[Vec[String], IoError] with reads(FileSystem) blocks
 fn fs.write(path: Str, content: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+
+fn fs.exists(path: Str) -> bool with reads(FileSystem) blocks
+fn fs.metadata(path: Str) -> Result[Metadata, IoError] with reads(FileSystem) blocks
+fn fs.read_dir(path: Str) -> Result[Vec[String], IoError] with reads(FileSystem) blocks
+
+fn fs.create_dir(path: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.create_dir_all(path: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.remove_file(path: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.remove_dir(path: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.remove_dir_all(path: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.rename(from: Str, to: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.copy(from: Str, to: Str) -> Result[i64, IoError] with reads(FileSystem) writes(FileSystem) blocks
 ```
+
+`read_lines` splits on `\n` and drops a trailing `\r` from each line.
+
+**`exists` returns `false` on any error**, a permission error included, so it cannot tell "absent" from "cannot look". A tool that must know the difference calls `metadata` and matches `NotFound`.
+
+**`metadata`** follows symbolic links and returns:
+
+```kara
+struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64 }
+```
+
+`len` is the size in bytes and `modified_ms` the last modification time in milliseconds since the Unix epoch (negative before it). Fields will be added; build a `Metadata` only by calling `metadata`.
+
+**`read_dir`** returns the names of the entries (not paths), without `.` and `..`, **sorted byte-wise on their UTF-8 names**, so a program lists a directory the same way on every OS. A name that is not valid UTF-8 makes the call fail with `InvalidUtf8`.
+
+`create_dir` fails with `AlreadyExists` if the path exists; `create_dir_all` creates the missing parents and succeeds if the directory is already there. `remove_dir` removes an empty directory only; `remove_dir_all` removes a directory and everything under it, without following symbolic links out of it.
+
+**`rename`** replaces `to` if it exists. On one file system it is atomic, which makes "write a temporary file, then rename it over the target" the way to update a file safely; it is not atomic across file systems, where it may fail. On Windows it fails if `to` is a directory, and replacing an existing file can fail while another process holds it open. `copy` copies a file's contents and permissions and returns the number of bytes copied.
 
 **Paths are borrowed.** Every function that takes a path or a name takes it as `Str`, and so do the `File` constructors. Opening a file reads the path and does not consume it, so the caller keeps its `String`.
 

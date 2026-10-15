@@ -94,8 +94,65 @@ impl FileSystem {
     }
 
     #[compiler_builtin]
-    fn write(path: Str, contents: Str) -> Result[Unit, IoError] { Err(IoError.Other("placeholder")) }
+    fn write(path: Str, contents: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    // The rest of the file system surface (docs/library/io.md § Files,
+    // B-2026-10-14-54). `exists` is `false` on any error; `read_dir` gives
+    // the entry names sorted byte-wise.
+    #[compiler_builtin]
+    fn exists(path: Str) -> bool with reads(FileSystem) { false }
+
+    #[compiler_builtin]
+    fn metadata(path: Str) -> Result[Metadata, IoError] with reads(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn read_dir(path: Str) -> Result[Vec[String], IoError] with reads(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn create_dir(path: Str) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn create_dir_all(path: Str) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn remove_file(path: Str) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn remove_dir(path: Str) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn remove_dir_all(path: Str) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn rename(from: Str, to: Str) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn copy(from: Str, to: Str) -> Result[i64, IoError] with reads(FileSystem) writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
 }
+
+// What `fs.metadata(path)` returns (it follows symbolic links): the size
+// in bytes, the kind, and the modification time in milliseconds since the
+// Unix epoch. Fields will be added, so build one only by calling
+// `metadata`.
+struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64 }
 
 // Phase 8 `File` handle slice F1 (2026-05-26): stateful file I/O. The
 // struct body is empty by design — like `Map[K,V]` / `Sender[T]` /
@@ -137,7 +194,7 @@ impl File {
     fn write(ref self, buf: Slice[u8]) -> Result[i64, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn flush(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn flush(ref self) -> Result[(), IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Durability. `flush` is NOT a substitute: it pushes userspace
     // buffers and never the OS page cache, so flushed-only data is
@@ -148,10 +205,10 @@ impl File {
     // durable than it claims. design.md § cancellation safety names
     // these two as the caller's durability obligation before a yield.
     #[compiler_builtin]
-    fn sync_all(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn sync_all(ref self) -> Result[(), IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn sync_data(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn sync_data(ref self) -> Result[(), IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // B-2026-08-10-3 — random access. Returns the NEW absolute position
     // from the start of the file, so the common "where am I?" query is

@@ -56,7 +56,7 @@ impl Semaphore {
     // interpreter an exhausted semaphore returns immediately (no peer
     // can free a permit mid-call).
     #[compiler_builtin]
-    fn acquire(ref self, timeout: i64) -> Result[Unit, SemaphoreError] {
+    fn acquire(ref self, timeout: i64) -> Result[(), SemaphoreError] {
         Err(SemaphoreError.Timeout)
     }
 

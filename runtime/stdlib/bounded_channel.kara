@@ -56,7 +56,7 @@ impl[T] BoundedChannel[T] {
     // the buffer is at capacity (immediately for `FailFast`; also for
     // `Block` under v1's collapsed single-threaded semantics).
     #[compiler_builtin]
-    fn send(ref self, value: own T) -> Result[Unit, ChannelError] {
+    fn send(ref self, value: own T) -> Result[(), ChannelError] {
         Err(ChannelError.Full)
     }
 

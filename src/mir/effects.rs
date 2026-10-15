@@ -840,12 +840,25 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ],
         // Paths name files by string value, which a key cannot follow: the
         // whole file system is the resource.
-        ("fs" | "FileSystem", "write" | "append" | "remove" | "create_dir") => {
+        (
+            "fs" | "FileSystem",
+            "write" | "append" | "remove" | "create_dir" | "create_dir_all" | "remove_file"
+            | "remove_dir" | "remove_dir_all" | "rename",
+        ) => {
             vec![(Writes, "FileSystem", None), (Blocks, "", None), HEAP]
         }
-        ("fs" | "FileSystem", "read_to_string" | "read" | "read_lines" | "exists") => {
+        (
+            "fs" | "FileSystem",
+            "read_to_string" | "read" | "read_lines" | "exists" | "metadata" | "read_dir",
+        ) => {
             vec![(Reads, "FileSystem", None), (Blocks, "", None), HEAP]
         }
+        ("fs" | "FileSystem", "copy") => vec![
+            (Reads, "FileSystem", None),
+            (Writes, "FileSystem", None),
+            (Blocks, "", None),
+            HEAP,
+        ],
         ("File", "open") => vec![(Reads, "FileSystem", None), (Blocks, "", None), HEAP],
         ("File", "create") => vec![(Writes, "FileSystem", None), (Blocks, "", None), HEAP],
         // Seeking moves the open file's position, which every later read

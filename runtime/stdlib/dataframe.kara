@@ -134,7 +134,7 @@ impl DataFrame {
     // cells with Rust `Display` (tracker: phase-11-stdlib-longtail.md
     // § Arrow IPC and Parquet, CSV leg).
     #[compiler_builtin]
-    fn write_csv(ref self, path: own String) -> Result[Unit, IoError] with writes(FileSystem) {
+    fn write_csv(ref self, path: own String) -> Result[(), IoError] with writes(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
 

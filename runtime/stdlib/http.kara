@@ -295,7 +295,7 @@ impl Server {
     // take over the canary role.
     #[unstable(note: "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers")]
     #[compiler_builtin]
-    fn serve_static(addr: own String, body: own String) -> Result[Unit, HttpError] {
+    fn serve_static(addr: own String, body: own String) -> Result[(), HttpError] {
         Err(HttpError { message: "" })
     }
 
@@ -335,7 +335,7 @@ impl Server {
     // item); v1 surfaces the abort to operators via a non-zero exit
     // code on the server binary.
     #[compiler_builtin]
-    fn serve(addr: own String, handler: own Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve(addr: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 
@@ -352,7 +352,7 @@ impl Server {
     // so a single bad client cannot kill the accept loop. Same
     // `BOUND_PORT=<n>` stdout convention as `serve`.
     #[compiler_builtin]
-    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 
@@ -385,7 +385,7 @@ impl Server {
     // WebSocket-over-HTTP/2 (RFC 8441) is out of scope for v1 — only
     // HTTP/1.1 connections take the upgrade path.
     #[compiler_builtin]
-    fn serve_ws(addr: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve_ws(addr: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 
@@ -398,7 +398,7 @@ impl Server {
     // advertises no h2): a WebSocket upgrade is an h1 mechanism, so h2
     // workloads belong on `serve_tls`.
     #[compiler_builtin]
-    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 }

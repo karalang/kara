@@ -228,7 +228,7 @@ impl Child {
     // is not reaped — the caller still needs `wait` / `try_wait`
     // to remove the entry from the side table.
     #[compiler_builtin]
-    fn kill(ref self) -> Result[Unit, IoError] with sends(ProcessTable) {
+    fn kill(ref self) -> Result[(), IoError] with sends(ProcessTable) {
         Err(IoError.NotFound)
     }
 
@@ -281,7 +281,7 @@ impl ChildStdin {
     // parks the calling thread when the OS pipe buffer is full until
     // the child drains it.
     #[compiler_builtin]
-    fn write(ref self, data: own String) -> Result[Unit, IoError] blocks {
+    fn write(ref self, data: own String) -> Result[(), IoError] blocks {
         Err(IoError.NotFound)
     }
 
@@ -289,7 +289,7 @@ impl ChildStdin {
     // way to let a child that reads-to-EOF finish). Idempotent: closing
     // an already-closed / taken handle is a no-op `Ok`.
     #[compiler_builtin]
-    fn close(ref self) -> Result[Unit, IoError] {
+    fn close(ref self) -> Result[(), IoError] {
         Err(IoError.NotFound)
     }
 }

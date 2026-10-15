@@ -448,9 +448,10 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
-    /// `FileSystem.write` / `read_to_string` / `read_lines` through
-    /// `karac_mir_fs`, as the interpreter's `fs_method`: `Ok` of nothing,
-    /// the text, or its lines; `Err` of the failure's `IoError`.
+    /// The `fs` functions through `karac_mir_fs`, as the interpreter's
+    /// `fs_method`: `exists`' bool, or `Ok` of nothing, the text, its lines
+    /// or a directory's names, `copy`'s count or `metadata`'s `Metadata`;
+    /// `Err` of the failure's `IoError`.
     pub(super) fn fs_native(
         &mut self,
         method: &str,
@@ -461,6 +462,16 @@ impl<'ctx> Cx<'ctx, '_> {
             "write" => 0,
             "read_to_string" => 1,
             "read_lines" => 2,
+            "exists" => 3,
+            "metadata" => 4,
+            "read_dir" => 5,
+            "create_dir" => 6,
+            "create_dir_all" => 7,
+            "remove_file" => 8,
+            "remove_dir" => 9,
+            "remove_dir_all" => 10,
+            "rename" => 11,
+            "copy" => 12,
             _ => return Ok(None),
         };
         let dty = self.place_type(dest)?;
@@ -474,6 +485,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 .intern(TyKind::Intrinsic(crate::mir::ty::IntrinsicTy::String)),
             "fs",
         )?;
+        let value = self.entry_slot(32, "fs.value")?;
         let i32t = self.llcx.i32_type();
         let code = self.rt_int(
             "fs",
@@ -484,11 +496,20 @@ impl<'ctx> Cx<'ctx, '_> {
                 tp.into(),
                 tn.into(),
                 out.into(),
+                value.into(),
             ],
             32,
         )?;
         self.drop_moved(args)?;
         let d = self.place_ptr(dest)?;
+        if op == 3 {
+            let b = self
+                .builder
+                .build_int_truncate(code, self.llcx.i8_type(), "")
+                .map_err(e)?;
+            self.store(d, b.into())?;
+            return Ok(Some(()));
+        }
         let (ok, er) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
         let okt = self
             .tys
@@ -507,8 +528,31 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store_tag(d, dty, er)?;
         self.if_then(done, |cx| {
             cx.store_tag(d, dty, ok)?;
-            if op != 0 {
-                cx.copy(cx.offset(d, ok_off)?, out, okt)?;
+            let at = cx.offset(d, ok_off)?;
+            match op {
+                1 | 2 | 5 => cx.copy(at, out, okt)?,
+                12 => {
+                    let n = cx.load_i64(value)?;
+                    cx.store(at, n.into())?;
+                }
+                4 => {
+                    // `Metadata { len, is_file, is_dir, modified_ms }`.
+                    for i in 0..4u32 {
+                        let w = cx.offset(value, 8 * i as u64)?;
+                        let w = cx.load_i64(w)?;
+                        let f = cx.offset(at, cx.field_offset(okt, None, i)?)?;
+                        let v: inkwell::values::BasicValueEnum = if i == 1 || i == 2 {
+                            cx.builder
+                                .build_int_truncate(w, cx.llcx.i8_type(), "")
+                                .map_err(e)?
+                                .into()
+                        } else {
+                            w.into()
+                        };
+                        cx.store(f, v)?;
+                    }
+                }
+                _ => {}
             }
             Ok(())
         })?;

@@ -80,10 +80,10 @@ impl[W] BufWriter[W] {
     // `#[cancel_unsafe_until(method = "flush")]` cancel-safety annotation.
     #[compiler_builtin]
     #[cancel_unsafe_until(method: "flush")]
-    fn write_all(ref self, buf: Slice[u8]) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn write_all(ref self, buf: Slice[u8]) -> Result[(), IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Flush all buffered bytes to the underlying writer. Returns Unit on
     // success. Mirrors Rust's `Write::flush`.
     #[compiler_builtin]
-    fn flush(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn flush(ref self) -> Result[(), IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 }

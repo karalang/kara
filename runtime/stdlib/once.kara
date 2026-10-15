@@ -111,9 +111,9 @@ impl[T] OnceLock[T] {
     // the cell was already filled, return `Err(AlreadySetError {
     // rejected: value })` handing the rejected value back. Body is a
     // never-evaluated placeholder (a self-call so it stays type-correct
-    // as `Result[Unit, AlreadySetError[T]]`).
+    // as `Result[(), AlreadySetError[T]]`).
     #[compiler_builtin]
-    fn set(ref self, value: own T) -> Result[Unit, AlreadySetError[T]] {
+    fn set(ref self, value: own T) -> Result[(), AlreadySetError[T]] {
         self.set(value)
     }
 
@@ -152,7 +152,7 @@ impl[T] OnceCell[T] {
     }
 
     #[compiler_builtin]
-    fn set(ref self, value: own T) -> Result[Unit, AlreadySetError[T]] {
+    fn set(ref self, value: own T) -> Result[(), AlreadySetError[T]] {
         self.set(value)
     }
 

@@ -1380,17 +1380,24 @@ extern "C" {
     fn free(ptr: *mut core::ffi::c_void);
 }
 
-/// `FileSystem.write(path, text)` (`op` 0), `read_to_string(path)` (1) or
-/// `read_lines(path)` (2) on the real file system. Returns -1 on success,
-/// with the text read as a `String` (or its lines as a `Vec[String]`) at
-/// `out`; otherwise the index of the failure's `IoError` variant (in
-/// declaration order: `NotFound`, `PermissionDenied`, `AlreadyExists`,
-/// `UnexpectedEof`, `InvalidUtf8`, `Interrupted`, `Other`), with `Other`'s
-/// message as a `String` at `out`.
+/// The `fs` functions, by `op`: `write(path, text)` (0),
+/// `read_to_string(path)` (1), `read_lines(path)` (2), `exists(path)` (3),
+/// `metadata(path)` (4), `read_dir(path)` (5), `create_dir` (6),
+/// `create_dir_all` (7), `remove_file` (8), `remove_dir` (9),
+/// `remove_dir_all` (10), `rename(path, text)` (11) and `copy(path, text)`
+/// (12), on the real file system (docs/library/io.md § Files). Returns -1
+/// on success, with the text read as a `String` (or the lines or entry
+/// names as a `Vec[String]`) at `out`, `copy`'s byte count at `value[0]`,
+/// or `metadata`'s size, is-file, is-dir and modification time (ms since
+/// the Unix epoch) at `value[0..4]`; `exists` returns 1 or 0. Otherwise the
+/// index of the failure's `IoError` variant (in declaration order:
+/// `NotFound`, `PermissionDenied`, `AlreadyExists`, `UnexpectedEof`,
+/// `InvalidUtf8`, `Interrupted`, `Other`), with `Other`'s message as a
+/// `String` at `out`. The interpreter's twin is src/mir/fs.rs.
 ///
 /// # Safety
 /// Each pointer is readable for its length; `out` is writable for a
-/// `String` or `Vec`.
+/// `String` or `Vec`, and `value` for four `i64`s.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_fs(
     op: i32,
@@ -1399,34 +1406,55 @@ pub unsafe extern "C" fn karac_mir_fs(
     text: *const u8,
     text_len: usize,
     out: *mut RawVec,
+    value: *mut i64,
 ) -> i32 {
     use std::io::ErrorKind as K;
     // SAFETY: the caller's contract.
     let path = String::from_utf8_lossy(unsafe { bytes(path, path_len) }).into_owned();
-    let res = match op {
-        // SAFETY: as above.
-        0 => std::fs::write(&path, unsafe { bytes(text, text_len) }).map(|()| None),
-        _ => std::fs::read_to_string(&path).map(Some),
+    // SAFETY: as above.
+    let text = unsafe { bytes(text, text_len) };
+    let to = || String::from_utf8_lossy(text).into_owned();
+    let lines_out = |lines: &[&str]| {
+        // SAFETY: `out` is writable for a `Vec` of `String`s.
+        unsafe {
+            karac_mir_vec_alloc(out, lines.len(), std::mem::size_of::<RawVec>());
+            let buf = (*out).ptr.cast::<RawVec>();
+            for (i, l) in lines.iter().enumerate() {
+                string_of(buf.add(i), l.as_bytes());
+            }
+        }
+    };
+    let res: std::io::Result<()> = match op {
+        0 => std::fs::write(&path, text),
+        1 | 2 => std::fs::read_to_string(&path).map(|t| {
+            if op == 2 {
+                lines_out(&t.lines().collect::<Vec<_>>());
+            } else {
+                // SAFETY: `out` is writable for a `String`.
+                unsafe { string_of(out, t.as_bytes()) };
+            }
+        }),
+        3 => return std::fs::metadata(&path).is_ok() as i32,
+        4 => fs_metadata(&path).map(|m| {
+            for (i, w) in m.iter().enumerate() {
+                // SAFETY: `value` is writable for four `i64`s.
+                unsafe { *value.add(i) = *w };
+            }
+        }),
+        5 => fs_read_dir(&path).map(|names| {
+            lines_out(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        }),
+        6 => std::fs::create_dir(&path),
+        7 => std::fs::create_dir_all(&path),
+        8 => std::fs::remove_file(&path),
+        9 => std::fs::remove_dir(&path),
+        10 => std::fs::remove_dir_all(&path),
+        11 => std::fs::rename(&path, to()),
+        // SAFETY: `value` is writable for an `i64`.
+        _ => std::fs::copy(&path, to()).map(|n| unsafe { *value = n as i64 }),
     };
     let e = match res {
-        Ok(None) => return -1,
-        Ok(Some(t)) if op == 2 => {
-            let lines: Vec<&str> = t.lines().collect();
-            // SAFETY: `out` is writable for a `Vec` of `String`s.
-            unsafe {
-                karac_mir_vec_alloc(out, lines.len(), std::mem::size_of::<RawVec>());
-                let buf = (*out).ptr.cast::<RawVec>();
-                for (i, l) in lines.iter().enumerate() {
-                    string_of(buf.add(i), l.as_bytes());
-                }
-            }
-            return -1;
-        }
-        Ok(Some(t)) => {
-            // SAFETY: `out` is writable for a `String`.
-            unsafe { string_of(out, t.as_bytes()) };
-            return -1;
-        }
+        Ok(()) => return -1,
         Err(e) => e,
     };
     match e.kind() {
@@ -1442,6 +1470,31 @@ pub unsafe extern "C" fn karac_mir_fs(
             6
         }
     }
+}
+
+/// `fs.metadata`: size, is-file, is-dir, modification time in ms since the
+/// Unix epoch; follows symbolic links.
+fn fs_metadata(path: &str) -> std::io::Result<[i64; 4]> {
+    let m = std::fs::metadata(path)?;
+    let ms = match m.modified()?.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_millis() as i64,
+        Err(e) => -(e.duration().as_millis() as i64),
+    };
+    Ok([m.len() as i64, m.is_file() as i64, m.is_dir() as i64, ms])
+}
+
+/// `fs.read_dir`: the entry names sorted byte-wise; a name that is not
+/// UTF-8 is an `InvalidData` error.
+fn fs_read_dir(path: &str) -> std::io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        let name = entry?.file_name().into_string().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "a file name is not UTF-8")
+        })?;
+        names.push(name);
+    }
+    names.sort();
+    Ok(names)
 }
 
 /// A `VecDeque`: a ring of `cap` slots from which `len` elements, starting

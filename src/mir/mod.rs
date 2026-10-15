@@ -14,6 +14,7 @@ pub mod counters;
 pub mod effects;
 pub mod elaborate;
 pub mod flags;
+pub mod fs;
 pub mod interp;
 pub mod layout;
 pub mod lower;

@@ -917,3 +917,54 @@ fn buffered_readers_and_writers_run() {
         assert_eq!(built, interp);
     }
 }
+
+/// The file system beyond read and write (docs/library/io.md § Files,
+/// B-2026-10-14-54): `exists`, `metadata`, a sorted `read_dir`,
+/// `create_dir` / `create_dir_all`, `remove_file` / `remove_dir` /
+/// `remove_dir_all`, `rename` and `copy`, their `IoError`s, and a
+/// `Result[(), IoError]` passed to a function that names `()`.
+const FS: &str = r#"
+fn show(r: Result[(), IoError]) -> String {
+    match r { Ok(_) => "ok".to_string(), Err(e) => match e { IoError.NotFound => "notfound".to_string(), IoError.AlreadyExists => "exists".to_string(), _ => "other".to_string() } }
+}
+fn main() {
+    println(f"{fs.exists("DIR/work")}");
+    println(show(fs.create_dir("DIR/work")));
+    println(show(fs.create_dir("DIR/work")));
+    println(show(fs.create_dir_all("DIR/work/a/b")));
+    fs.write("DIR/work/b.txt", "hello").unwrap();
+    fs.write("DIR/work/a.txt", "hi").unwrap();
+    match fs.read_dir("DIR/work") { Ok(ns) => println(ns.join(",")), Err(_) => println("err") }
+    match fs.metadata("DIR/work/b.txt") {
+        Ok(m) => println(f"{m.len} {m.is_file} {m.is_dir} {m.modified_ms > 0}"),
+        Err(_) => println("err"),
+    }
+    match fs.metadata("DIR/work/a") { Ok(m) => println(f"{m.is_file} {m.is_dir}"), Err(_) => println("err") }
+    match fs.copy("DIR/work/b.txt", "DIR/work/c.txt") { Ok(n) => println(f"copied {n}"), Err(_) => println("err") }
+    println(show(fs.rename("DIR/work/c.txt", "DIR/work/d.txt")));
+    println(f"{fs.exists("DIR/work/c.txt")} {fs.exists("DIR/work/d.txt")}");
+    println(fs.read_to_string("DIR/work/d.txt").unwrap());
+    println(show(fs.remove_file("DIR/work/d.txt")));
+    println(show(fs.remove_file("DIR/work/d.txt")));
+    println(show(fs.remove_dir("DIR/work/a/b")));
+    println(show(fs.remove_dir("DIR/work")));
+    println(show(fs.remove_dir_all("DIR/work")));
+    println(f"{fs.exists("DIR/work")}");
+    match fs.metadata("nope") { Ok(_) => println("?"), Err(IoError.NotFound) => println("notfound"), Err(_) => println("other") }
+}
+"#;
+
+#[test]
+fn file_system_natives_match_the_interpreter() {
+    let dir = Scratch::new("fs");
+    let src = FS.replace("DIR", &dir.path().to_string_lossy());
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(
+        interp,
+        "false\nok\nexists\nok\na,a.txt,b.txt\n5 true false true\nfalse true\ncopied 5\nok\n\
+         false true\nhello\nok\nnotfound\nok\nother\nok\nfalse\nnotfound\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
