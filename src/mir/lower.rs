@@ -1755,6 +1755,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if let Some(l) = self.self_local {
                     return Ok(self.b.local_ty(l));
                 }
+                if let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) {
+                    if let Some(p) = self.captured.get(sym).cloned() {
+                        return Ok(self.place_type(&p));
+                    }
+                }
             }
             ExprKind::FieldAccess { .. } => {
                 if let Some((t, _)) = self.int_limit_of(e) {
@@ -3811,9 +3816,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(&Res::Def(d)) if self.lcx.statics.contains_key(&d) => Ok(self.static_place(d)),
                 _ => self.temp_place(e),
             },
+            // Inside a closure `self` is one of its captures.
             ExprKind::SelfValue => match self.self_local {
                 Some(l) => Ok(Place::local(l)),
-                None => self.unsupported(e.span, "`self` here"),
+                None => match self.lcx.res.get(&e.id) {
+                    Some(Res::Local(sym)) if self.captured.contains_key(sym) => {
+                        Ok(self.captured[sym].clone())
+                    }
+                    _ => self.unsupported(e.span, "`self` here"),
+                },
             },
             ExprKind::FieldAccess { object, field } => {
                 // A field of a `shared` value is written through any
@@ -12546,9 +12557,17 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// they first appear (core semantics §9.4).
     fn closure_captures(&self, body: &Expr) -> Vec<SymbolId> {
         let mut out = Vec::new();
+        // The method's `self` is not a named local: its uses are found by
+        // kind (B-2026-10-15-4).
+        let selves = match self.self_local {
+            Some(_) => crate::span_visitor::self_value_ids(body),
+            None => Vec::new(),
+        };
         for id in crate::span_visitor::expr_node_ids(body) {
             if let Some(Res::Local(sym)) = self.lcx.res.get(&id) {
-                let outer = self.locals.contains_key(sym) || self.captured.contains_key(sym);
+                let outer = self.locals.contains_key(sym)
+                    || self.captured.contains_key(sym)
+                    || selves.contains(&id);
                 if outer && !out.contains(sym) {
                     out.push(*sym);
                 }
@@ -12641,7 +12660,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let go =
             |x: &'a Expr, c: bool, out: &mut FxHashSet<SymbolId>| self.mv_expr(x, c, caps, out);
         match &e.kind {
-            ExprKind::Identifier(_) => {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => {
                 if let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) {
                     if ctx && caps.contains(sym) {
                         out.insert(*sym);
@@ -12848,9 +12867,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             Vec::new()
         };
         for sym in captured {
-            let place = match self.locals.get(&sym) {
-                Some(&l) => Place::local(l),
-                None => self.captured[&sym].clone(),
+            let place = match (self.locals.get(&sym), self.captured.get(&sym)) {
+                (Some(&l), _) => Place::local(l),
+                (None, Some(p)) => p.clone(),
+                // Only the method's `self` is captured without a local.
+                (None, None) => match self.self_local {
+                    Some(l) => Place::local(l),
+                    None => return self.unsupported(e.span, "this capture"),
+                },
             };
             let t = self.place_type(&place);
             let name = self
@@ -12859,7 +12883,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .iter()
                 .find(|(_, s)| **s == sym)
                 .map(|((_, n), _)| n.clone())
-                .unwrap_or_default();
+                .unwrap_or_else(|| "self".to_string());
             let declared = match capture_mode {
                 Some(ast::CaptureMode::Own) => Some(OwnershipMode::Own),
                 Some(ast::CaptureMode::Ref) => Some(OwnershipMode::Ref),

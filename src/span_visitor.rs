@@ -925,6 +925,23 @@ pub fn expr_node_ids(e: &Expr) -> Vec<NodeId> {
     ids.0
 }
 
+/// The ids of the `self` expressions in `e`.
+pub fn self_value_ids(e: &Expr) -> Vec<NodeId> {
+    struct Ids(Vec<NodeId>);
+    impl MutVisitor for Ids {
+        fn span(&mut self, _: &mut Span) {}
+        fn expr(&mut self, e: &mut Expr) {
+            if matches!(e.kind, ExprKind::SelfValue) {
+                self.0.push(e.id);
+            }
+        }
+    }
+    let mut copy = e.clone();
+    let mut ids = Ids(Vec::new());
+    walk_expr_mut(&mut copy, &mut ids);
+    ids.0
+}
+
 fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
     visit.expr(e);
     visit.span(&mut e.span);

@@ -1840,3 +1840,47 @@ true
         }
     }
 }
+
+/// A closure inside a method captures `self` like any other place it reads
+/// (B-2026-10-15-4): by reference for a call or a read, through a nested
+/// closure, and mutably when the body writes one of its fields.
+#[test]
+fn mir_closure_in_a_method_captures_self() {
+    let src = r#"
+struct S { k: i64, name: String }
+impl S {
+    fn add(self, x: i64) -> i64 { x + self.k }
+    fn all(self, v: ref Vec[i64]) -> Vec[i64] {
+        v.iter().map(|x| self.add(*x)).collect()
+    }
+    fn nested(self, v: ref Vec[i64]) -> i64 {
+        v.iter().map(|x| v.iter().map(|y| self.add(*x * *y)).sum()).sum()
+    }
+    fn tag(self, v: ref Vec[i64]) -> Vec[String] {
+        v.iter().filter(|x| *x > self.k).map(|x| f"{self.name}{x}").collect()
+    }
+    fn bump(mut ref self, v: ref Vec[i64]) {
+        v.iter().for_each(|x| { self.k += *x; });
+    }
+}
+fn main() {
+    let mut s = S { k: 10, name: "n".to_string() };
+    let v: Vec[i64] = vec![1, 2, 11];
+    let r = s.all(v);
+    println(f"{r[0]} {r[1]} {r[2]}");
+    println(f"{s.nested(v)}");
+    let t = s.tag(v);
+    println(f"{t.len()} {t[0]}");
+    s.bump(v);
+    println(f"{s.k}");
+}
+"#;
+    let want = "11 12 21\n286\n1 n11\n24\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
