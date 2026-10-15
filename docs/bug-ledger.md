@@ -98,12 +98,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 271 |
 | codegen-gap | 262 |
-| false-positive | 202 |
+| false-positive | 204 |
 | other | 172 |
 | perf | 167 |
 | diagnostics | 162 |
 | crash | 120 |
-| soundness | 107 |
+| soundness | 108 |
 | use-after-free | 91 |
 
 ### By surface
@@ -112,12 +112,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2910 |
 | interp | 935 |
-| typecheck | 440 |
+| typecheck | 442 |
 | other | 115 |
 | ownership | 103 |
 | cli | 76 |
 | runtime | 72 |
-| parser | 66 |
+| parser | 67 |
 | autopar | 59 |
 | resolver | 42 |
 | effect | 32 |
@@ -216,6 +216,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-48 | 2026-10-15 | interp+codegen | medium | A user struct named like a library type with a special drop (`Mutex`, `Atomic`, `OnceLock`, `Arena`, `Pool`, `File`) gets that type's drop on both MIR backends, chosen by name: `struct Mutex { required: bool, actions: Vec[i64] }` is never dropped (`__mir-run` reports the Vec leaked at exit; `__mir-llvm-run` emits no drop call at all), and the other names leak, stop with "has no type argument", or panic in the runtime | — |
 | B-2026-10-15-50 | 2026-10-15 | typecheck | medium | Constructing a variant through a type alias (`type OldE = NetE; Err(OldE.B(7))`) passes `karac check` but fails every backend: "a type that failed to check is not lowered yet" on __mir-run / __mir-llvm-run, "path 'OldE.B' has no interpreter evaluation rule" on the legacy interpreter | — |
 | B-2026-10-15-51 | 2026-10-15 | typecheck | low | An unsuffixed integer literal on the LEFT of `&`, `|` or `^` is typed `i64` even when the other operand is `u8`: `0xC0 | c` and `let x: u8 = 0x80 | (c & 0x3F)` are refused with "implicit coercion from 'i64' to 'u8' would narrow", while `c | 0xC0`, `1 + c` and `200 - c` pass | — |
+| B-2026-10-15-52 | 2026-10-15 | typecheck | low | An `if` expression takes its type from an unsuffixed integer literal in its FIRST branch: `let x = if c { 0 } else { y }` with `y: u128` (or `u8`) types `x` as `i64` and is refused where `x` is used as the other type ("implicit coercion from 'i64' to 'u128' would narrow"), while `if c { y } else { 0 }` passes | — |
+| B-2026-10-15-53 | 2026-10-15 | typecheck | medium | `karac check` accepts `&`, `|` and `^` between two DIFFERENT integer types, such as `a & b` with `a: u128` and `b: i64`, which it refuses for `+`; every v2 surface then stops with "invalid MIR: binary operands of different types u128 and i64" | — |
+| B-2026-10-15-54 | 2026-10-15 | parser | low | An unsuffixed integer literal above `i64::MAX` is refused at PARSE even where the expected type is `u64` or `u128`: `let a: u64 = 0xFFFF_FFFF_FFFF_FFFF;` and `let b: u128 = 18446744073709551616;` fail with "integer literal ... is out of range for i64", although design.md says the type comes from inference and the range is checked against that type | — |
 
 ### Relocated
 

@@ -1,0 +1,792 @@
+== addresses
+'192.0.2.1'
+  IPv4Address('192.0.2.1') v4 int=3221225985
+  exploded=192.0.2.1 compressed=192.0.2.1
+  reverse=1.2.0.192.in-addr.arpa
+  packed=b'\xc0\x00\x02\x01'
+  private
+'10.1.2.3'
+  IPv4Address('10.1.2.3') v4 int=167838211
+  exploded=10.1.2.3 compressed=10.1.2.3
+  reverse=3.2.1.10.in-addr.arpa
+  packed=b'\n\x01\x02\x03'
+  private
+'0.0.0.0'
+  IPv4Address('0.0.0.0') v4 int=0
+  exploded=0.0.0.0 compressed=0.0.0.0
+  reverse=0.0.0.0.in-addr.arpa
+  packed=b'\x00\x00\x00\x00'
+  private unspecified
+'255.255.255.255'
+  IPv4Address('255.255.255.255') v4 int=4294967295
+  exploded=255.255.255.255 compressed=255.255.255.255
+  reverse=255.255.255.255.in-addr.arpa
+  packed=b'\xff\xff\xff\xff'
+  private reserved
+'127.0.0.1'
+  IPv4Address('127.0.0.1') v4 int=2130706433
+  exploded=127.0.0.1 compressed=127.0.0.1
+  reverse=1.0.0.127.in-addr.arpa
+  packed=b'\x7f\x00\x00\x01'
+  private loopback
+'169.254.10.20'
+  IPv4Address('169.254.10.20') v4 int=2851998228
+  exploded=169.254.10.20 compressed=169.254.10.20
+  reverse=20.10.254.169.in-addr.arpa
+  packed=b'\xa9\xfe\n\x14'
+  private link_local
+'224.0.0.251'
+  IPv4Address('224.0.0.251') v4 int=3758096635
+  exploded=224.0.0.251 compressed=224.0.0.251
+  reverse=251.0.0.224.in-addr.arpa
+  packed=b'\xe0\x00\x00\xfb'
+  global multicast
+'100.64.1.1'
+  IPv4Address('100.64.1.1') v4 int=1681916161
+  exploded=100.64.1.1 compressed=100.64.1.1
+  reverse=1.1.64.100.in-addr.arpa
+  packed=b'd@\x01\x01'
+  -
+'192.0.0.9'
+  IPv4Address('192.0.0.9') v4 int=3221225481
+  exploded=192.0.0.9 compressed=192.0.0.9
+  reverse=9.0.0.192.in-addr.arpa
+  packed=b'\xc0\x00\x00\t'
+  global
+'198.51.100.7'
+  IPv4Address('198.51.100.7') v4 int=3325256711
+  exploded=198.51.100.7 compressed=198.51.100.7
+  reverse=7.100.51.198.in-addr.arpa
+  packed=b'\xc63d\x07'
+  private
+'8.8.8.8'
+  IPv4Address('8.8.8.8') v4 int=134744072
+  exploded=8.8.8.8 compressed=8.8.8.8
+  reverse=8.8.8.8.in-addr.arpa
+  packed=b'\x08\x08\x08\x08'
+  global
+'240.1.2.3'
+  IPv4Address('240.1.2.3') v4 int=4026597891
+  exploded=240.1.2.3 compressed=240.1.2.3
+  reverse=3.2.1.240.in-addr.arpa
+  packed=b'\xf0\x01\x02\x03'
+  private reserved
+'1.2.3'
+  ValueError: '1.2.3' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '1.2.3'
+  IPv6Address: AddressValueError: At least 3 parts expected in '1.2.3'
+'1.2.3.4.5'
+  ValueError: '1.2.3.4.5' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '1.2.3.4.5'
+  IPv6Address: AddressValueError: At least 3 parts expected in '1.2.3.4.5'
+'1.2..4'
+  ValueError: '1.2..4' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Empty octet not permitted in '1.2..4'
+  IPv6Address: AddressValueError: At least 3 parts expected in '1.2..4'
+'01.2.3.4'
+  ValueError: '01.2.3.4' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Leading zeros are not permitted in '01' in '01.2.3.4'
+  IPv6Address: AddressValueError: At least 3 parts expected in '01.2.3.4'
+'256.1.1.1'
+  ValueError: '256.1.1.1' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Octet 256 (> 255) not permitted in '256.1.1.1'
+  IPv6Address: AddressValueError: At least 3 parts expected in '256.1.1.1'
+'1.2.3.4444'
+  ValueError: '1.2.3.4444' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: At most 3 characters permitted in '4444' in '1.2.3.4444'
+  IPv6Address: AddressValueError: At least 3 parts expected in '1.2.3.4444'
+'1.2.3.x'
+  ValueError: '1.2.3.x' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Only decimal digits permitted in 'x' in '1.2.3.x'
+  IPv6Address: AddressValueError: At least 3 parts expected in '1.2.3.x'
+'1.2.3.4/24'
+  ValueError: '1.2.3.4/24' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Unexpected '/' in '1.2.3.4/24'
+  IPv6Address: AddressValueError: Unexpected '/' in '1.2.3.4/24'
+''
+  ValueError: '' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Address cannot be empty
+  IPv6Address: AddressValueError: Address cannot be empty
+'2001:db8::1'
+  IPv6Address('2001:db8::1') v6 int=42540766411282592856903984951653826561
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0001 compressed=2001:db8::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa
+  packed=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  private
+'2001:DB8:0:0:0:0:0:1'
+  IPv6Address('2001:db8::1') v6 int=42540766411282592856903984951653826561
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0001 compressed=2001:db8::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa
+  packed=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  private
+'::'
+  IPv6Address('::') v6 int=0
+  exploded=0000:0000:0000:0000:0000:0000:0000:0000 compressed=::
+  reverse=0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa
+  packed=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+  private reserved unspecified
+'::1'
+  IPv6Address('::1') v6 int=1
+  exploded=0000:0000:0000:0000:0000:0000:0000:0001 compressed=::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa
+  packed=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  private loopback reserved
+'fe80::1%eth0'
+  IPv6Address('fe80::1%eth0') v6 int=338288524927261089654018896841347694593
+  exploded=fe80:0000:0000:0000:0000:0000:0000:0001%eth0 compressed=fe80::1%eth0
+  reverse=0.h.t.e.%.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.e.f.ip6.arpa
+  packed=b'\xfe\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  private link_local
+  scope_id='eth0'
+'fe80::1%'
+  ValueError: 'fe80::1%' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in 'fe80::1%'
+  IPv6Address: AddressValueError: Invalid IPv6 address: "'fe80::1%'"
+'::ffff:192.0.2.128'
+  IPv6Address('::ffff:192.0.2.128') v6 int=281473902969472
+  exploded=0000:0000:0000:0000:0000:ffff:192.0.2.128 compressed=::ffff:192.0.2.128
+  reverse=0.8.2.0.0.0.0.c.f.f.f.f.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa
+  packed=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xc0\x00\x02\x80'
+  private
+  ipv4_mapped=IPv4Address('192.0.2.128')
+'::ffff:c000:280'
+  IPv6Address('::ffff:192.0.2.128') v6 int=281473902969472
+  exploded=0000:0000:0000:0000:0000:ffff:192.0.2.128 compressed=::ffff:192.0.2.128
+  reverse=0.8.2.0.0.0.0.c.f.f.f.f.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa
+  packed=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xc0\x00\x02\x80'
+  private
+  ipv4_mapped=IPv4Address('192.0.2.128')
+'2001:0:4136:e378:8000:63bf:3fff:fdd2'
+  IPv6Address('2001:0:4136:e378:8000:63bf:3fff:fdd2') v6 int=42540488182158724593221357832373272018
+  exploded=2001:0000:4136:e378:8000:63bf:3fff:fdd2 compressed=2001:0:4136:e378:8000:63bf:3fff:fdd2
+  reverse=2.d.d.f.f.f.f.3.f.b.3.6.0.0.0.8.8.7.3.e.6.3.1.4.0.0.0.0.1.0.0.2.ip6.arpa
+  packed=b' \x01\x00\x00A6\xe3x\x80\x00c\xbf?\xff\xfd\xd2'
+  private
+  teredo=(IPv4Address('65.54.227.120'), IPv4Address('192.0.2.45'))
+'2002:c000:0204::1'
+  IPv6Address('2002:c000:204::1') v6 int=42549574682102084431821433448024768513
+  exploded=2002:c000:0204:0000:0000:0000:0000:0001 compressed=2002:c000:204::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4.0.2.0.0.0.0.c.2.0.0.2.ip6.arpa
+  packed=b' \x02\xc0\x00\x02\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  private
+  sixtofour=IPv4Address('192.0.2.4')
+'ff02::1'
+  IPv6Address('ff02::1') v6 int=338963523518870617245727861364146307073
+  exploded=ff02:0000:0000:0000:0000:0000:0000:0001 compressed=ff02::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.2.0.f.f.ip6.arpa
+  packed=b'\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  global multicast
+'fec0::1'
+  IPv6Address('fec0::1') v6 int=338620831926207318622244848606417780737
+  exploded=fec0:0000:0000:0000:0000:0000:0000:0001 compressed=fec0::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.c.e.f.ip6.arpa
+  packed=b'\xfe\xc0\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  global site_local
+'2001:db8:0:0:1:0:0:1'
+  IPv6Address('2001:db8::1:0:0:1') v6 int=42540766411282592856904266426630537217
+  exploded=2001:0db8:0000:0000:0001:0000:0000:0001 compressed=2001:db8::1:0:0:1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa
+  packed=b' \x01\r\xb8\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x01'
+  private
+'2001:db8::1:0:0:1'
+  IPv6Address('2001:db8::1:0:0:1') v6 int=42540766411282592856904266426630537217
+  exploded=2001:0db8:0000:0000:0001:0000:0000:0001 compressed=2001:db8::1:0:0:1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa
+  packed=b' \x01\r\xb8\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x01'
+  private
+'1:0:0:2:0:0:0:3'
+  IPv6Address('1:0:0:2::3') v6 int=5192296858534864522018643748323331
+  exploded=0001:0000:0000:0002:0000:0000:0000:0003 compressed=1:0:0:2::3
+  reverse=3.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.2.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.ip6.arpa
+  packed=b'\x00\x01\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x03'
+  global reserved
+'0:0:0:0:0:0:0:0'
+  IPv6Address('::') v6 int=0
+  exploded=0000:0000:0000:0000:0000:0000:0000:0000 compressed=::
+  reverse=0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa
+  packed=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+  private reserved unspecified
+'fd12:3456:789a:1::1'
+  IPv6Address('fd12:3456:789a:1::1') v6 int=336389205813283084628800618700287770625
+  exploded=fd12:3456:789a:0001:0000:0000:0000:0001 compressed=fd12:3456:789a:1::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.a.9.8.7.6.5.4.3.2.1.d.f.ip6.arpa
+  packed=b'\xfd\x124Vx\x9a\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01'
+  private
+'2001:4860:4860::8888'
+  IPv6Address('2001:4860:4860::8888') v6 int=42541956123769884636017138956568135816
+  exploded=2001:4860:4860:0000:0000:0000:0000:8888 compressed=2001:4860:4860::8888
+  reverse=8.8.8.8.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.6.8.4.0.6.8.4.1.0.0.2.ip6.arpa
+  packed=b' \x01H`H`\x00\x00\x00\x00\x00\x00\x00\x00\x88\x88'
+  global
+'64:ff9b:1::1'
+  IPv6Address('64:ff9b:1::1') v6 int=524413980668812575603097810486951937
+  exploded=0064:ff9b:0001:0000:0000:0000:0000:0001 compressed=64:ff9b:1::1
+  reverse=1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.b.9.f.f.4.6.0.0.ip6.arpa
+  packed=b'\x00d\xff\x9b\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  private reserved
+'::ffff:10.0.0.1'
+  IPv6Address('::ffff:10.0.0.1') v6 int=281470849515521
+  exploded=0000:0000:0000:0000:0000:ffff:10.0.0.1 compressed=::ffff:10.0.0.1
+  reverse=1.0.0.0.0.0.a.0.f.f.f.f.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa
+  packed=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\n\x00\x00\x01'
+  private
+  ipv4_mapped=IPv4Address('10.0.0.1')
+'2001:db8:::1'
+  ValueError: '2001:db8:::1' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '2001:db8:::1'
+  IPv6Address: AddressValueError: At most one '::' permitted in '2001:db8:::1'
+'2001:db8::1::1'
+  ValueError: '2001:db8::1::1' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '2001:db8::1::1'
+  IPv6Address: AddressValueError: At most one '::' permitted in '2001:db8::1::1'
+'1:2:3:4:5:6:7'
+  ValueError: '1:2:3:4:5:6:7' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '1:2:3:4:5:6:7'
+  IPv6Address: AddressValueError: Exactly 8 parts expected without '::' in '1:2:3:4:5:6:7'
+'1:2:3:4:5:6:7:8:9'
+  ValueError: '1:2:3:4:5:6:7:8:9' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '1:2:3:4:5:6:7:8:9'
+  IPv6Address: AddressValueError: Exactly 8 parts expected without '::' in '1:2:3:4:5:6:7:8:9'
+':1:2:3:4:5:6:7'
+  ValueError: ':1:2:3:4:5:6:7' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in ':1:2:3:4:5:6:7'
+  IPv6Address: AddressValueError: Leading ':' only permitted as part of '::' in ':1:2:3:4:5:6:7'
+'1:2:3:4:5:6:7:'
+  ValueError: '1:2:3:4:5:6:7:' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '1:2:3:4:5:6:7:'
+  IPv6Address: AddressValueError: Trailing ':' only permitted as part of '::' in '1:2:3:4:5:6:7:'
+'12345::'
+  ValueError: '12345::' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '12345::'
+  IPv6Address: AddressValueError: At most 4 characters permitted in '12345' in '12345::'
+'2001:dg8::1'
+  ValueError: '2001:dg8::1' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '2001:dg8::1'
+  IPv6Address: AddressValueError: Only hex digits permitted in 'dg8' in '2001:dg8::1'
+'::1.2.3.256'
+  ValueError: '::1.2.3.256' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Only decimal digits permitted in '::1' in '::1.2.3.256'
+  IPv6Address: AddressValueError: Octet 256 (> 255) not permitted in '1.2.3.256' in '::1.2.3.256'
+'1:2:3:4:5:6:7::8'
+  ValueError: '1:2:3:4:5:6:7::8' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '1:2:3:4:5:6:7::8'
+  IPv6Address: AddressValueError: Expected at most 7 other parts with '::' in '1:2:3:4:5:6:7::8'
+'1:2:3:4:5:6:1.2.3.4'
+  IPv6Address('1:2:3:4:5:6:102:304') v6 int=5192455318486707404433266449711876
+  exploded=0001:0002:0003:0004:0005:0006:0102:0304 compressed=1:2:3:4:5:6:102:304
+  reverse=4.0.3.0.2.0.1.0.6.0.0.0.5.0.0.0.4.0.0.0.3.0.0.0.2.0.0.0.1.0.0.0.ip6.arpa
+  packed=b'\x00\x01\x00\x02\x00\x03\x00\x04\x00\x05\x00\x06\x01\x02\x03\x04'
+  global reserved
+'::ffff:1.2.3'
+  ValueError: '::ffff:1.2.3' does not appear to be an IPv4 or IPv6 address
+  IPv4Address: AddressValueError: Expected 4 octets in '::ffff:1.2.3'
+  IPv6Address: AddressValueError: Expected 4 octets in '1.2.3' in '::ffff:1.2.3'
+== networks
+'192.0.2.0/24'
+  IPv4Network('192.0.2.0/24') prefixlen=24 num_addresses=256
+  netmask=255.255.255.0 hostmask=0.0.0.255
+  with_netmask=192.0.2.0/255.255.255.0 with_hostmask=192.0.2.0/0.0.0.255
+  network=192.0.2.0 broadcast=192.0.2.255 last=192.0.2.255
+  hosts=192.0.2.1 192.0.2.2 192.0.2.3
+  exploded=192.0.2.0/24
+  private
+  supernet=192.0.2.0/23 subnets=192.0.2.0/25 192.0.2.128/25
+'192.0.2.0/255.255.255.0'
+  IPv4Network('192.0.2.0/24') prefixlen=24 num_addresses=256
+  netmask=255.255.255.0 hostmask=0.0.0.255
+  with_netmask=192.0.2.0/255.255.255.0 with_hostmask=192.0.2.0/0.0.0.255
+  network=192.0.2.0 broadcast=192.0.2.255 last=192.0.2.255
+  hosts=192.0.2.1 192.0.2.2 192.0.2.3
+  exploded=192.0.2.0/24
+  private
+  supernet=192.0.2.0/23 subnets=192.0.2.0/25 192.0.2.128/25
+'192.0.2.0/0.0.0.255'
+  IPv4Network('192.0.2.0/24') prefixlen=24 num_addresses=256
+  netmask=255.255.255.0 hostmask=0.0.0.255
+  with_netmask=192.0.2.0/255.255.255.0 with_hostmask=192.0.2.0/0.0.0.255
+  network=192.0.2.0 broadcast=192.0.2.255 last=192.0.2.255
+  hosts=192.0.2.1 192.0.2.2 192.0.2.3
+  exploded=192.0.2.0/24
+  private
+  supernet=192.0.2.0/23 subnets=192.0.2.0/25 192.0.2.128/25
+'192.0.2.1/24'
+  ValueError: 192.0.2.1/24 has host bits set
+  IPv4Network: ValueError: 192.0.2.1/24 has host bits set
+  IPv6Network: AddressValueError: At least 3 parts expected in '192.0.2.1'
+'192.0.2.1/24 loose'
+  IPv4Network('192.0.2.0/24') prefixlen=24 num_addresses=256
+  netmask=255.255.255.0 hostmask=0.0.0.255
+  with_netmask=192.0.2.0/255.255.255.0 with_hostmask=192.0.2.0/0.0.0.255
+  network=192.0.2.0 broadcast=192.0.2.255 last=192.0.2.255
+  hosts=192.0.2.1 192.0.2.2 192.0.2.3
+  exploded=192.0.2.0/24
+  private
+  supernet=192.0.2.0/23 subnets=192.0.2.0/25 192.0.2.128/25
+'10.0.0.0/8'
+  IPv4Network('10.0.0.0/8') prefixlen=8 num_addresses=16777216
+  netmask=255.0.0.0 hostmask=0.255.255.255
+  with_netmask=10.0.0.0/255.0.0.0 with_hostmask=10.0.0.0/0.255.255.255
+  network=10.0.0.0 broadcast=10.255.255.255 last=10.255.255.255
+  hosts=10.0.0.1 10.0.0.2 10.0.0.3
+  exploded=10.0.0.0/8
+  private
+  supernet=10.0.0.0/7 subnets=10.0.0.0/9 10.128.0.0/9
+'172.16.0.0/12'
+  IPv4Network('172.16.0.0/12') prefixlen=12 num_addresses=1048576
+  netmask=255.240.0.0 hostmask=0.15.255.255
+  with_netmask=172.16.0.0/255.240.0.0 with_hostmask=172.16.0.0/0.15.255.255
+  network=172.16.0.0 broadcast=172.31.255.255 last=172.31.255.255
+  hosts=172.16.0.1 172.16.0.2 172.16.0.3
+  exploded=172.16.0.0/12
+  private
+  supernet=172.0.0.0/11 subnets=172.16.0.0/13 172.24.0.0/13
+'192.168.1.128/25'
+  IPv4Network('192.168.1.128/25') prefixlen=25 num_addresses=128
+  netmask=255.255.255.128 hostmask=0.0.0.127
+  with_netmask=192.168.1.128/255.255.255.128 with_hostmask=192.168.1.128/0.0.0.127
+  network=192.168.1.128 broadcast=192.168.1.255 last=192.168.1.255
+  hosts=192.168.1.129 192.168.1.130 192.168.1.131
+  exploded=192.168.1.128/25
+  private
+  supernet=192.168.1.0/24 subnets=192.168.1.128/26 192.168.1.192/26
+'192.168.1.0/31'
+  IPv4Network('192.168.1.0/31') prefixlen=31 num_addresses=2
+  netmask=255.255.255.254 hostmask=0.0.0.1
+  with_netmask=192.168.1.0/255.255.255.254 with_hostmask=192.168.1.0/0.0.0.1
+  network=192.168.1.0 broadcast=192.168.1.1 last=192.168.1.1
+  hosts=192.168.1.0 192.168.1.1
+  exploded=192.168.1.0/31
+  private
+  supernet=192.168.1.0/30 subnets=192.168.1.0/32 192.168.1.1/32
+'192.168.1.7/32'
+  IPv4Network('192.168.1.7/32') prefixlen=32 num_addresses=1
+  netmask=255.255.255.255 hostmask=0.0.0.0
+  with_netmask=192.168.1.7/255.255.255.255 with_hostmask=192.168.1.7/0.0.0.0
+  network=192.168.1.7 broadcast=192.168.1.7 last=192.168.1.7
+  hosts=192.168.1.7
+  exploded=192.168.1.7/32
+  private
+  supernet=192.168.1.6/31 subnets=192.168.1.7/32
+'0.0.0.0/0'
+  IPv4Network('0.0.0.0/0') prefixlen=0 num_addresses=4294967296
+  netmask=0.0.0.0 hostmask=255.255.255.255
+  with_netmask=0.0.0.0/0.0.0.0 with_hostmask=0.0.0.0/255.255.255.255
+  network=0.0.0.0 broadcast=255.255.255.255 last=255.255.255.255
+  hosts=0.0.0.1 0.0.0.2 0.0.0.3
+  exploded=0.0.0.0/0
+  global
+  supernet=0.0.0.0/0 subnets=0.0.0.0/1 128.0.0.0/1
+'100.64.0.0/10'
+  IPv4Network('100.64.0.0/10') prefixlen=10 num_addresses=4194304
+  netmask=255.192.0.0 hostmask=0.63.255.255
+  with_netmask=100.64.0.0/255.192.0.0 with_hostmask=100.64.0.0/0.63.255.255
+  network=100.64.0.0 broadcast=100.127.255.255 last=100.127.255.255
+  hosts=100.64.0.1 100.64.0.2 100.64.0.3
+  exploded=100.64.0.0/10
+  -
+  supernet=100.0.0.0/9 subnets=100.64.0.0/11 100.96.0.0/11
+'224.0.0.0/4'
+  IPv4Network('224.0.0.0/4') prefixlen=4 num_addresses=268435456
+  netmask=240.0.0.0 hostmask=15.255.255.255
+  with_netmask=224.0.0.0/240.0.0.0 with_hostmask=224.0.0.0/15.255.255.255
+  network=224.0.0.0 broadcast=239.255.255.255 last=239.255.255.255
+  hosts=224.0.0.1 224.0.0.2 224.0.0.3
+  exploded=224.0.0.0/4
+  global multicast
+  supernet=224.0.0.0/3 subnets=224.0.0.0/5 232.0.0.0/5
+'127.0.0.0/8'
+  IPv4Network('127.0.0.0/8') prefixlen=8 num_addresses=16777216
+  netmask=255.0.0.0 hostmask=0.255.255.255
+  with_netmask=127.0.0.0/255.0.0.0 with_hostmask=127.0.0.0/0.255.255.255
+  network=127.0.0.0 broadcast=127.255.255.255 last=127.255.255.255
+  hosts=127.0.0.1 127.0.0.2 127.0.0.3
+  exploded=127.0.0.0/8
+  private loopback
+  supernet=126.0.0.0/7 subnets=127.0.0.0/9 127.128.0.0/9
+'192.0.2.0/33'
+  ValueError: '192.0.2.0/33' does not appear to be an IPv4 or IPv6 network
+  IPv4Network: NetmaskValueError: '33' is not a valid netmask
+  IPv6Network: AddressValueError: At least 3 parts expected in '192.0.2.0'
+'192.0.2.0/-1'
+  ValueError: '192.0.2.0/-1' does not appear to be an IPv4 or IPv6 network
+  IPv4Network: NetmaskValueError: '-1' is not a valid netmask
+  IPv6Network: AddressValueError: At least 3 parts expected in '192.0.2.0'
+'192.0.2.0/ 24'
+  ValueError: '192.0.2.0/' does not appear to be an IPv4 or IPv6 network
+  IPv4Network: NetmaskValueError: '' is not a valid netmask
+  IPv6Network: AddressValueError: At least 3 parts expected in '192.0.2.0'
+'192.0.2.0/255.0.255.0'
+  ValueError: '192.0.2.0/255.0.255.0' does not appear to be an IPv4 or IPv6 network
+  IPv4Network: NetmaskValueError: '255.0.255.0' is not a valid netmask
+  IPv6Network: AddressValueError: At least 3 parts expected in '192.0.2.0'
+'192.0.2.0/24/24'
+  ValueError: '192.0.2.0/24/24' does not appear to be an IPv4 or IPv6 network
+  IPv4Network: AddressValueError: Only one '/' permitted in '192.0.2.0/24/24'
+  IPv6Network: AddressValueError: Only one '/' permitted in '192.0.2.0/24/24'
+'2001:db8::/32'
+  IPv6Network('2001:db8::/32') prefixlen=32 num_addresses=79228162514264337593543950336
+  netmask=ffff:ffff:: hostmask=::ffff:ffff:ffff:ffff:ffff:ffff
+  with_netmask=2001:db8::/ffff:ffff:: with_hostmask=2001:db8::/::ffff:ffff:ffff:ffff:ffff:ffff
+  network=2001:db8:: broadcast=2001:db8:ffff:ffff:ffff:ffff:ffff:ffff last=2001:db8:ffff:ffff:ffff:ffff:ffff:ffff
+  hosts=2001:db8::1 2001:db8::2 2001:db8::3
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0000/32
+  private
+  supernet=2001:db8::/31 subnets=2001:db8::/33 2001:db8:8000::/33
+'2001:db8::/64'
+  IPv6Network('2001:db8::/64') prefixlen=64 num_addresses=18446744073709551616
+  netmask=ffff:ffff:ffff:ffff:: hostmask=::ffff:ffff:ffff:ffff
+  with_netmask=2001:db8::/ffff:ffff:ffff:ffff:: with_hostmask=2001:db8::/::ffff:ffff:ffff:ffff
+  network=2001:db8:: broadcast=2001:db8::ffff:ffff:ffff:ffff last=2001:db8::ffff:ffff:ffff:ffff
+  hosts=2001:db8::1 2001:db8::2 2001:db8::3
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0000/64
+  private
+  supernet=2001:db8::/63 subnets=2001:db8::/65 2001:db8:0:0:8000::/65
+'2001:db8::1/64'
+  ValueError: 2001:db8::1/64 has host bits set
+  IPv4Network: AddressValueError: Expected 4 octets in '2001:db8::1'
+  IPv6Network: ValueError: 2001:db8::1/64 has host bits set
+'2001:db8::1/64 loose'
+  IPv6Network('2001:db8::/64') prefixlen=64 num_addresses=18446744073709551616
+  netmask=ffff:ffff:ffff:ffff:: hostmask=::ffff:ffff:ffff:ffff
+  with_netmask=2001:db8::/ffff:ffff:ffff:ffff:: with_hostmask=2001:db8::/::ffff:ffff:ffff:ffff
+  network=2001:db8:: broadcast=2001:db8::ffff:ffff:ffff:ffff last=2001:db8::ffff:ffff:ffff:ffff
+  hosts=2001:db8::1 2001:db8::2 2001:db8::3
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0000/64
+  private
+  supernet=2001:db8::/63 subnets=2001:db8::/65 2001:db8:0:0:8000::/65
+'2001:db8::/127'
+  IPv6Network('2001:db8::/127') prefixlen=127 num_addresses=2
+  netmask=ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe hostmask=::1
+  with_netmask=2001:db8::/ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe with_hostmask=2001:db8::/::1
+  network=2001:db8:: broadcast=2001:db8::1 last=2001:db8::1
+  hosts=2001:db8:: 2001:db8::1
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0000/127
+  private
+  supernet=2001:db8::/126 subnets=2001:db8::/128 2001:db8::1/128
+'2001:db8::5/128'
+  IPv6Network('2001:db8::5/128') prefixlen=128 num_addresses=1
+  netmask=ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff hostmask=::
+  with_netmask=2001:db8::5/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff with_hostmask=2001:db8::5/::
+  network=2001:db8::5 broadcast=2001:db8::5 last=2001:db8::5
+  hosts=2001:db8::5
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0005/128
+  private
+  supernet=2001:db8::4/127 subnets=2001:db8::5/128
+'::/0'
+  IPv6Network('::/0') prefixlen=0 num_addresses=340282366920938463463374607431768211456
+  netmask=:: hostmask=ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  with_netmask=::/:: with_hostmask=::/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  network=:: broadcast=ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff last=ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  hosts=::1 ::2 ::3
+  exploded=0000:0000:0000:0000:0000:0000:0000:0000/0
+  global
+  supernet=::/0 subnets=::/1 8000::/1
+'fe80::%eth0/64'
+  IPv6Network('fe80::%eth0/64') prefixlen=64 num_addresses=18446744073709551616
+  netmask=ffff:ffff:ffff:ffff:: hostmask=::ffff:ffff:ffff:ffff
+  with_netmask=fe80::%eth0/ffff:ffff:ffff:ffff:: with_hostmask=fe80::%eth0/::ffff:ffff:ffff:ffff
+  network=fe80::%eth0 broadcast=fe80::ffff:ffff:ffff:ffff last=fe80::ffff:ffff:ffff:ffff
+  hosts=fe80::1 fe80::2 fe80::3
+  exploded: AddressValueError: Only hex digits permitted in '%eth0' in 'fe80::%eth0'
+  private link_local
+  supernet=fe80::/63 subnets=fe80::/65 fe80::8000:0:0:0/65
+'::ffff:0:0/96'
+  IPv6Network('::ffff:0.0.0.0/96') prefixlen=96 num_addresses=4294967296
+  netmask=ffff:ffff:ffff:ffff:ffff:ffff:: hostmask=::ffff:ffff
+  with_netmask=::ffff:0.0.0.0/ffff:ffff:ffff:ffff:ffff:ffff:: with_hostmask=::ffff:0.0.0.0/::ffff:ffff
+  network=::ffff:0.0.0.0 broadcast=::ffff:255.255.255.255 last=::ffff:255.255.255.255
+  hosts=::ffff:0.0.0.1 ::ffff:0.0.0.2 ::ffff:0.0.0.3
+  exploded=0000:0000:0000:0000:0000:ffff:0000:0000/96
+  private
+  supernet=::fffe:0:0/95 subnets=::ffff:0.0.0.0/97 ::ffff:128.0.0.0/97
+'fc00::/7'
+  IPv6Network('fc00::/7') prefixlen=7 num_addresses=2658455991569831745807614120560689152
+  netmask=fe00:: hostmask=1ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  with_netmask=fc00::/fe00:: with_hostmask=fc00::/1ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  network=fc00:: broadcast=fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff last=fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  hosts=fc00::1 fc00::2 fc00::3
+  exploded=fc00:0000:0000:0000:0000:0000:0000:0000/7
+  private
+  supernet=fc00::/6 subnets=fc00::/8 fd00::/8
+'2001:db8::/129'
+  ValueError: '2001:db8::/129' does not appear to be an IPv4 or IPv6 network
+  IPv4Network: AddressValueError: Expected 4 octets in '2001:db8::'
+  IPv6Network: NetmaskValueError: '129' is not a valid netmask
+'2001:db8::/ffff::'
+  ValueError: '2001:db8::/ffff::' does not appear to be an IPv4 or IPv6 network
+  IPv4Network: AddressValueError: Expected 4 octets in '2001:db8::'
+  IPv6Network: NetmaskValueError: 'ffff::' is not a valid netmask
+== operations
+> subnets 192.0.2.0/24 26
+  192.0.2.0/26
+  192.0.2.64/26
+  192.0.2.128/26
+  192.0.2.192/26
+  (4 subnets)
+> subnets 10.0.0.0/8 24
+  10.0.0.0/24
+  10.0.1.0/24
+  10.0.2.0/24
+  10.0.3.0/24
+  ... 10.255.255.0/24
+  (65536 subnets)
+> subnets 2001:db8::/48 64
+  2001:db8::/64
+  2001:db8:0:1::/64
+  2001:db8:0:2::/64
+  2001:db8:0:3::/64
+  ... 2001:db8:0:ffff::/64
+  (65536 subnets)
+> subnets 192.0.2.0/24 23
+  ValueError: new prefix must be longer
+> subnets 192.0.2.7/32 30
+  192.0.2.7/32
+  (1 subnets)
+> supernet 192.0.2.0/24 4
+  192.0.0.0/20
+> supernet 2001:db8:abcd::/48 16
+  2001:db8::/32
+> supernet 10.0.0.0/8 9
+  ValueError: current prefixlen is 8, cannot have a prefixlen_diff of 9
+> exclude 192.0.2.0/24 192.0.2.64/27
+  192.0.2.128/25
+  192.0.2.0/26
+  192.0.2.96/27
+> exclude 10.0.0.0/30 10.0.0.2/32
+  10.0.0.0/31
+  10.0.0.3/32
+> exclude 192.0.2.0/24 192.0.3.0/28
+  ValueError: 192.0.3.0/28 not contained in 192.0.2.0/24
+> exclude 2001:db8::/120 2001:db8::80/125
+  2001:db8::/121
+  2001:db8::c0/122
+  2001:db8::a0/123
+  2001:db8::90/124
+  2001:db8::88/125
+> collapse 192.0.2.0/26 192.0.2.64/26 192.0.2.128/26 192.0.2.192/26
+  192.0.2.0/24
+> collapse 10.0.0.0/24 10.0.1.0/24 10.0.0.0/23 10.0.3.0/24
+  10.0.0.0/23 10.0.3.0/24
+> collapse 192.0.2.1 192.0.2.2 192.0.2.3 192.0.2.4 192.0.2.5 192.0.2.6 192.0.2.7 192.0.2.8
+  192.0.2.1/32 192.0.2.2/31 192.0.2.4/30 192.0.2.8/32
+> collapse 2001:db8::/33 2001:db8:8000::/33 2001:db9::/32
+  2001:db8::/31
+> collapse 10.0.0.0/8 2001:db8::/32
+  TypeError: 2001:db8::/32 and 10.0.0.0/8 are not of the same version
+> summarize 192.0.2.0 192.0.2.130
+  192.0.2.0/25 192.0.2.128/31 192.0.2.130/32
+> summarize 10.0.0.1 10.0.0.254
+  10.0.0.1/32 10.0.0.2/31 10.0.0.4/30 10.0.0.8/29 10.0.0.16/28 10.0.0.32/27 10.0.0.64/26 10.0.0.128/26 10.0.0.192/27 10.0.0.224/28 10.0.0.240/29 10.0.0.248/30 10.0.0.252/31 10.0.0.254/32
+> summarize 2001:db8::1 2001:db8::ff
+  2001:db8::1/128 2001:db8::2/127 2001:db8::4/126 2001:db8::8/125 2001:db8::10/124 2001:db8::20/123 2001:db8::40/122 2001:db8::80/121
+> summarize 0.0.0.0 255.255.255.255
+  0.0.0.0/0
+> summarize 10.0.0.5 10.0.0.1
+  ValueError: last IP address must be greater than first
+> contains 192.0.2.0/24 192.0.2.77
+  True
+> contains 192.0.2.0/24 192.0.3.1
+  False
+> contains 2001:db8::/32 2001:db8:ffff::1
+  True
+> contains 10.0.0.0/8 ::ffff:10.0.0.1
+  False
+> overlaps 10.0.0.0/8 10.255.0.0/16
+  True
+> overlaps 10.0.0.0/24 10.0.1.0/24
+  False
+> subnet_of 10.1.0.0/16 10.0.0.0/8
+  True
+> subnet_of 10.0.0.0/8 10.1.0.0/16
+  False
+> subnet_of 10.0.0.0/8 2001:db8::/32
+  TypeError: 10.0.0.0/8 and 2001:db8::/32 are not of the same version
+> sort 10.0.1.0/24 10.0.0.0/16 10.0.0.0/24 9.0.0.0/8 10.0.0.0/8 10.0.0.128/25
+  9.0.0.0/8 10.0.0.0/8 10.0.0.0/16 10.0.0.0/24 10.0.0.128/25 10.0.1.0/24
+> add 192.0.2.255 1
+  IPv4Address('192.0.3.0')
+> add 255.255.255.255 1
+  AddressValueError: 4294967296 (>= 2**32) is not permitted as an IPv4 address
+> add 0.0.0.0 -1
+  AddressValueError: -1 (< 0) is not permitted as an IPv4 address
+> add 2001:db8::ffff 1
+  IPv6Address('2001:db8::1:0')
+> add ::ffff:10.0.0.255 1
+  IPv6Address('::ffff:10.0.1.0')
+> add ::1 -2
+  AddressValueError: -1 (< 0) is not permitted as an IPv6 address
+> interface 192.0.2.5/24
+  IPv4Interface('192.0.2.5/24') ip=192.0.2.5 network=192.0.2.0/24
+  with_prefixlen=192.0.2.5/24 with_netmask=192.0.2.5/255.255.255.0 with_hostmask=192.0.2.5/0.0.0.255
+  exploded=192.0.2.5/24
+> interface 192.0.2.5/255.255.255.192
+  IPv4Interface('192.0.2.5/26') ip=192.0.2.5 network=192.0.2.0/26
+  with_prefixlen=192.0.2.5/26 with_netmask=192.0.2.5/255.255.255.192 with_hostmask=192.0.2.5/0.0.0.63
+  exploded=192.0.2.5/26
+> interface 2001:db8::5/64
+  IPv6Interface('2001:db8::5/64') ip=2001:db8::5 network=2001:db8::/64
+  with_prefixlen=2001:db8::5/64 with_netmask=2001:db8::5/ffff:ffff:ffff:ffff:: with_hostmask=2001:db8::5/::ffff:ffff:ffff:ffff
+  exploded=2001:0db8:0000:0000:0000:0000:0000:0005/64
+> interface fe80::1%eth0/64
+  IPv6Interface('fe80::1%eth0/64') ip=fe80::1 network=fe80::/64
+  with_prefixlen=fe80::1/64 with_netmask=fe80::1/ffff:ffff:ffff:ffff:: with_hostmask=fe80::1/::ffff:ffff:ffff:ffff
+  exploded=fe80:0000:0000:0000:0000:0000:0000:0001%eth0/64
+> interface 192.0.2.5
+  IPv4Interface('192.0.2.5/32') ip=192.0.2.5 network=192.0.2.5/32
+  with_prefixlen=192.0.2.5/32 with_netmask=192.0.2.5/255.255.255.255 with_hostmask=192.0.2.5/0.0.0.0
+  exploded=192.0.2.5/32
+> format 192.0.2.1 s
+  192.0.2.1
+> format 192.0.2.1 b
+  11000000000000000000001000000001
+> format 192.0.2.1 #_b
+  0b1100_0000_0000_0000_0000_0010_0000_0001
+> format 192.0.2.1 x
+  c0000201
+> format 192.0.2.1 #X
+  0XC0000201
+> format 192.0.2.1 n
+  11000000000000000000001000000001
+> format 2001:db8::1 n
+  20010db8000000000000000000000001
+> format 2001:db8::1 #_x
+  0x2001_0db8_0000_0000_0000_0000_0000_0001
+> format 2001:db8::1 _X
+  2001_0DB8_0000_0000_0000_0000_0000_0001
+== plan
+pool 10.20.0.0/16 (65536 addresses)
+pool fd00:1234::/48 (1208925819614629174706176 addresses)
+reserve infra 10.20.0.0/24
+alloc web 10.20.4.0/22 (from 10.20.4.0/22)
+alloc db 10.20.1.0/24 (from 10.20.1.0/24)
+alloc pods 10.20.64.0/18 (from 10.20.64.0/18)
+alloc vpn 10.20.16.0/20 (from 10.20.16.0/20)
+alloc web6 fd00:1234::/64 (from fd00:1234::/48)
+alloc mgmt 10.20.2.0/27 (from 10.20.2.0/23)
+alloc pods6 fd00:1234:0:100::/56 (from fd00:1234:0:100::/56)
+reserve lab: 10.20.0.128/25 overlaps infra (10.20.0.0/24)
+reserve edge 10.20.255.0/24
+alloc huge: no free /15 in the IPv4 pools
+alloc bad: /33 is not a valid IPv4 prefix
+alloc bad6: /129 is not a valid IPv6 prefix
+show
+  IPv4:
+    pool 10.20.0.0/16: 22304/65536 used (34%)
+      10.20.0.0/24 infra
+      10.20.1.0/24 db
+      10.20.2.0/27 mgmt
+      10.20.4.0/22 web
+      10.20.16.0/20 vpn
+      10.20.64.0/18 pods
+      10.20.255.0/24 edge
+      10.20.2.32/27 free
+      10.20.2.64/26 free
+      10.20.2.128/25 free
+      10.20.3.0/24 free
+      10.20.8.0/21 free
+      10.20.32.0/19 free
+      10.20.128.0/18 free
+      10.20.192.0/19 free
+      10.20.224.0/20 free
+      10.20.240.0/21 free
+      10.20.248.0/22 free
+      10.20.252.0/23 free
+      10.20.254.0/24 free
+  IPv6:
+    pool fd00:1234::/48: 4740813226943354765312/1208925819614629174706176 used (0%)
+      fd00:1234::/64 web6
+      fd00:1234:0:100::/56 pods6
+      fd00:1234:0:1::/64 free
+      fd00:1234:0:2::/63 free
+      fd00:1234:0:4::/62 free
+      fd00:1234:0:8::/61 free
+      fd00:1234:0:10::/60 free
+      fd00:1234:0:20::/59 free
+      fd00:1234:0:40::/58 free
+      fd00:1234:0:80::/57 free
+      fd00:1234:0:200::/55 free
+      fd00:1234:0:400::/54 free
+      fd00:1234:0:800::/53 free
+      fd00:1234:0:1000::/52 free
+      fd00:1234:0:2000::/51 free
+      fd00:1234:0:4000::/50 free
+      fd00:1234:0:8000::/49 free
+free db 10.20.1.0/24
+free nope: no such allocation
+alloc cache 10.20.2.128/25 (from 10.20.2.128/25)
+alloc db2 10.20.252.0/23 (from 10.20.252.0/23)
+show
+  IPv4:
+    pool 10.20.0.0/16: 22688/65536 used (34%)
+      10.20.0.0/24 infra
+      10.20.2.0/27 mgmt
+      10.20.2.128/25 cache
+      10.20.4.0/22 web
+      10.20.16.0/20 vpn
+      10.20.64.0/18 pods
+      10.20.252.0/23 db2
+      10.20.255.0/24 edge
+      10.20.1.0/24 free
+      10.20.2.32/27 free
+      10.20.2.64/26 free
+      10.20.3.0/24 free
+      10.20.8.0/21 free
+      10.20.32.0/19 free
+      10.20.128.0/18 free
+      10.20.192.0/19 free
+      10.20.224.0/20 free
+      10.20.240.0/21 free
+      10.20.248.0/22 free
+      10.20.254.0/24 free
+  IPv6:
+    pool fd00:1234::/48: 4740813226943354765312/1208925819614629174706176 used (0%)
+      fd00:1234::/64 web6
+      fd00:1234:0:100::/56 pods6
+      fd00:1234:0:1::/64 free
+      fd00:1234:0:2::/63 free
+      fd00:1234:0:4::/62 free
+      fd00:1234:0:8::/61 free
+      fd00:1234:0:10::/60 free
+      fd00:1234:0:20::/59 free
+      fd00:1234:0:40::/58 free
+      fd00:1234:0:80::/57 free
+      fd00:1234:0:200::/55 free
+      fd00:1234:0:400::/54 free
+      fd00:1234:0:800::/53 free
+      fd00:1234:0:1000::/52 free
+      fd00:1234:0:2000::/51 free
+      fd00:1234:0:4000::/50 free
+      fd00:1234:0:8000::/49 free
+== firewall
+rule 1: allow tcp any -> 10.20.4.0/22 ports 80,443
+rule 2: ValueError: no allocation named 'db', skipped
+rule 3: allow udp 10.20.16.0/20 -> any ports 53
+rule 4: deny tcp 203.0.113.0/24 -> any ports any
+rule 5: allow tcp 2001:db8::/32 -> fd00:1234::/64 ports 443
+rule 6: allow icmp any -> any ports any
+rule 7: allow tcp 10.20.2.0/27 -> 10.20.64.0/18 ports 22,6443,10250-10259
+rule 8: deny any any -> any ports any
+  allow   rule 1 tcp 198.51.100.20:51000 -> 10.20.4.10:443 (private)
+  allow   rule 1 tcp 203.0.113.9:40000 -> 10.20.4.10:443 (private)
+  deny    rule 4 tcp 203.0.113.9:40001 -> 10.20.4.11:22 (private)
+  deny    rule 8 tcp 10.20.0.15:33000 -> 10.20.8.5:5432 (private)
+  deny    rule 8 tcp 10.20.4.10:33001 -> 10.20.8.5:5432 (private)
+  allow   rule 3 udp 10.20.16.3:5353 -> 8.8.8.8:53 (private)
+  deny    rule 8 udp 10.20.16.3:5353 -> 8.8.4.4:123 (private)
+  allow   rule 5 tcp [2001:db8:1::77]:50000 -> [fd00:1234::10]:443 (private)
+  deny    rule 8 tcp [2001:db9::77]:50000 -> [fd00:1234::10]:443 (global)
+  allow   rule 6 icmp 100.64.3.3:0 -> 10.20.4.10:0 (shared)
+  allow   rule 7 tcp 10.20.2.5:60000 -> 10.20.64.9:6443 (private)
+  allow   rule 7 tcp 10.20.2.5:60001 -> 10.20.64.9:10255 (private)
+  deny    rule 8 tcp 10.20.2.5:60002 -> 10.20.64.9:10260 (private)
+  deny    rule 8 tcp 45.33.32.156:1234 -> 10.20.64.9:22 (global)
+  deny    rule 8 tcp 45.33.32.157:1234 -> 10.20.64.9:22 (global)
+  deny    rule 8 tcp 45.33.32.158:1234 -> 10.20.64.9:22 (global)
+  deny    rule 8 tcp 45.33.32.159:1234 -> 10.20.64.9:22 (global)
+  deny    rule 8 tcp 45.33.32.200:1234 -> 10.20.64.9:22 (global)
+  deny    rule 8 tcp [fe80::1%eth0]:546 -> [ff02::1:2]:547 (private)
+  error   tcp 192.168.1.300:80 -> 10.20.4.10:80: ValueError: '192.168.1.300' does not appear to be an IPv4 or IPv6 address
+  error   tcp 10.20.4.10 -> 10.20.8.5:5432: ValueError: no port in '10.20.4.10'
+hits: 1=2 3=1 4=1 5=1 6=1 7=2 8=11
+blocklist v4 (global sources): 45.33.32.156/30 45.33.32.200/32
+blocklist v6 (global sources): 2001:db9::77/128

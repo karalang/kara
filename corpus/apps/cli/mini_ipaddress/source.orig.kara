@@ -1,0 +1,2581 @@
+// mini_ipaddress: IP addresses and networks as Python 3.13's ipaddress
+// module handles them, with an address planner and a firewall on top:
+// - IPv4 and IPv6 parsing with every AddressValueError and
+//   NetmaskValueError message, scope ids, IPv4-mapped, 6to4 and Teredo
+//   addresses, the compressed and exploded forms, reverse pointers,
+//   packed bytes, the is_* properties and __format__;
+// - networks from prefix lengths, netmasks and hostmasks, strict and
+//   loose, with hosts, subnets, supernet, address_exclude,
+//   collapse_addresses, summarize_address_range and ordering;
+// - interfaces;
+// - an IPAM that allocates best-fit blocks from IPv4 and IPv6 pools and
+//   frees them, and an ACL that resolves allocation names, decides a
+//   connection log first-match and builds a blocklist.
+//
+// The inputs are the files in data/. expected.out is the output of
+// oracle.py, the same program written with ipaddress.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+// ------------------------------------------------------------ errors and numbers
+
+// A raised exception: its class name and its message.
+#[derive(Clone)]
+struct IpError {
+    kind: String,
+    msg: String,
+}
+
+fn raise(kind: Str, msg: own String) -> IpError {
+    IpError { kind: kind.to_string(), msg: msg }
+}
+
+fn ave(msg: own String) -> IpError {
+    raise("AddressValueError", msg)
+}
+
+fn nve(msg: own String) -> IpError {
+    raise("NetmaskValueError", msg)
+}
+
+fn ve(msg: own String) -> IpError {
+    raise("ValueError", msg)
+}
+
+fn te(msg: own String) -> IpError {
+    raise("TypeError", msg)
+}
+
+fn show_err(e: ref IpError) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// AddressValueError and NetmaskValueError are what ip_address and
+// ip_network catch before they try the other version.
+fn is_addr_or_mask(e: ref IpError) -> bool {
+    e.kind == "AddressValueError" or e.kind == "NetmaskValueError"
+}
+
+fn u128_max() -> u128 {
+    (0xFFFF_FFFF_FFFF_FFFFu128 << 64) | 0xFFFF_FFFF_FFFF_FFFFu128
+}
+
+fn all_ones(v: i64) -> u128 {
+    if v == 4 { 0xFFFF_FFFFu128 } else { u128_max() }
+}
+
+fn max_plen(v: i64) -> i64 {
+    if v == 4 { 32 } else { 128 }
+}
+
+// (1 << n) - 1, also for n = 128.
+fn low_ones(n: i64) -> u128 {
+    if n >= 128 { u128_max() } else { (1u128 << n) - 1 }
+}
+
+fn bit_length(x: u128) -> i64 {
+    let mut n: i64 = 0;
+    let mut y = x;
+    while y > 0 {
+        y = y >> 1;
+        n += 1;
+    }
+    n
+}
+
+// _count_righthand_zero_bits
+fn zero_bits(x: u128, bits: i64) -> i64 {
+    if x == 0 {
+        return bits;
+    }
+    let mut n: i64 = 0;
+    let mut y = x;
+    while y & 1 == 0 {
+        y = y >> 1;
+        n += 1;
+    }
+    if n < bits { n } else { bits }
+}
+
+fn hex_str(x: u128) -> String {
+    if x == 0 {
+        return "0".to_string();
+    }
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    let mut y = x;
+    while y > 0 {
+        out.push(hex[(y & 15) as i64]);
+        y = y >> 4;
+    }
+    out.reverse();
+    from_bytes(out)
+}
+
+// `n` digits in base 2 or 16, with leading zeros.
+fn digits(x: u128, n: i64, base: i64, up: bool) -> String {
+    let hex = to_bytes(if up { "0123456789ABCDEF" } else { "0123456789abcdef" });
+    let shift: i64 = if base == 2 { 1 } else { 4 };
+    let mask: u128 = if base == 2 { 1 } else { 15 };
+    let mut out: Vec[u8] = Vec.new();
+    let mut y = x;
+    for _ in 0..n {
+        out.push(hex[(y & mask) as i64]);
+        y = y >> shift;
+    }
+    out.reverse();
+    from_bytes(out)
+}
+
+// A decimal string plus a small number, for a value past 2**128.
+fn dec_add(a: Str, n: i64) -> String {
+    let b = to_bytes(a);
+    let mut out: Vec[u8] = Vec.new();
+    let mut carry = n;
+    let mut i = b.len() - 1;
+    while i >= 0 or carry > 0 {
+        let d = if i >= 0 { (b[i] - b'0') as i64 } else { 0 };
+        let s = d + carry;
+        out.push(b'0' + (s % 10) as u8);
+        carry = s / 10;
+        i -= 1;
+    }
+    out.reverse();
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ addresses
+
+#[derive(Clone)]
+struct Addr {
+    v: i64,
+    ip: u128,
+    // the IPv6 zone after `%`, "" for none
+    scope: String,
+}
+
+fn addr_of(v: i64, ip: u128) -> Addr {
+    Addr { v: v, ip: ip, scope: String.new() }
+}
+
+fn v4_str(ip: u128) -> String {
+    f"{(ip >> 24) & 255}.{(ip >> 16) & 255}.{(ip >> 8) & 255}.{ip & 255}"
+}
+
+// _compress_hextets: the longest run of two or more zeros becomes "".
+fn compress(ip: u128) -> String {
+    let mut h: Vec[String] = Vec.new();
+    let mut k: i64 = 112;
+    while k >= 0 {
+        h.push(hex_str((ip >> k) & 0xFFFF));
+        k -= 16;
+    }
+    let mut best_start: i64 = -1;
+    let mut best_len: i64 = 0;
+    let mut start: i64 = -1;
+    let mut len: i64 = 0;
+    for i in 0..h.len() {
+        if h[i] == "0" {
+            len += 1;
+            if start == -1 {
+                start = i;
+            }
+            if len > best_len {
+                best_len = len;
+                best_start = start;
+            }
+        } else {
+            len = 0;
+            start = -1;
+        }
+    }
+    if best_len > 1 {
+        let end = best_start + best_len;
+        let mut out: Vec[String] = Vec.new();
+        if best_start == 0 {
+            out.push(String.new());
+        }
+        for i in 0..best_start {
+            out.push(h[i].clone());
+        }
+        out.push(String.new());
+        for i in end..h.len() {
+            out.push(h[i].clone());
+        }
+        if end == h.len() {
+            out.push(String.new());
+        }
+        return join(out, ":");
+    }
+    join(h, ":")
+}
+
+// _string_from_ip_int
+fn plain_str(v: i64, ip: u128) -> String {
+    if v == 4 { v4_str(ip) } else { compress(ip) }
+}
+
+fn is_mapped(a: ref Addr) -> bool {
+    a.v == 6 and (a.ip >> 32) == 0xFFFF
+}
+
+fn mapped_v4(a: ref Addr) -> Addr {
+    addr_of(4, a.ip & 0xFFFF_FFFF)
+}
+
+// str(address)
+fn addr_str(a: ref Addr) -> String {
+    if a.v == 4 {
+        return v4_str(a.ip);
+    }
+    let s = if is_mapped(a) { f"{compress(a.ip >> 32)}:{v4_str(a.ip & 0xFFFF_FFFF)}" } else { compress(a.ip) };
+    if a.scope.len() > 0 { f"{s}%{a.scope}" } else { s }
+}
+
+fn addr_repr(a: ref Addr) -> String {
+    f"IPv{a.v}Address({py_repr(addr_str(a))})"
+}
+
+// The eight hextets in full, as the exploded form spells them.
+fn raw_exploded(ip: u128) -> String {
+    let mut h: Vec[String] = Vec.new();
+    let mut k: i64 = 112;
+    while k >= 0 {
+        h.push(digits((ip >> k) & 0xFFFF, 4, 16, false));
+        k -= 16;
+    }
+    join(h, ":")
+}
+
+fn addr_exploded(a: ref Addr) -> String {
+    if a.v == 4 {
+        return v4_str(a.ip);
+    }
+    if is_mapped(a) {
+        return f"{slice(raw_exploded(a.ip), 0, 30)}{v4_str(a.ip & 0xFFFF_FFFF)}";
+    }
+    let s = raw_exploded(a.ip);
+    if a.scope.len() > 0 { f"{s}%{a.scope}" } else { s }
+}
+
+// The characters of `s` from the last, without colons, joined by dots.
+fn reverse_dotted(s: Str) -> String {
+    let cps = code_points(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = cps.len() - 1;
+    let mut first = true;
+    while i >= 0 {
+        if cps[i] != 58 {
+            if not first {
+                out.push(b'.');
+            }
+            push_code_point(mut out, cps[i]);
+            first = false;
+        }
+        i -= 1;
+    }
+    from_bytes(out)
+}
+
+fn reverse_pointer(a: ref Addr) -> String {
+    if a.v == 4 {
+        let o = split_on(v4_str(a.ip), b'.');
+        return f"{o[3]}.{o[2]}.{o[1]}.{o[0]}.in-addr.arpa";
+    }
+    if is_mapped(a) {
+        let raw = f"{slice(raw_exploded(a.ip), 0, 30)}{digits(a.ip & 0xFFFF_FFFF, 8, 16, false)}";
+        return f"{reverse_dotted(raw)}.ip6.arpa";
+    }
+    f"{reverse_dotted(addr_exploded(a))}.ip6.arpa"
+}
+
+fn packed(a: ref Addr) -> Vec[u8] {
+    let n: i64 = if a.v == 4 { 4 } else { 16 };
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = (n - 1) * 8;
+    while k >= 0 {
+        out.push(((a.ip >> k) & 255) as u8);
+        k -= 8;
+    }
+    out
+}
+
+// ------------------------------------------------------------ parsing
+
+fn all_ascii_digits(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return false;
+    }
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn digits_value(s: Str) -> u128 {
+    let b = to_bytes(s);
+    let mut n: u128 = 0;
+    for i in 0..b.len() {
+        n = n * 10 + (b[i] - b'0') as u128;
+    }
+    n
+}
+
+// _parse_octet, with its message before " in %r" is added.
+fn parse_octet(s: Str) -> Result[u128, String] {
+    if s.len() == 0 {
+        return Err("Empty octet not permitted".to_string());
+    }
+    if not all_ascii_digits(s) {
+        return Err(f"Only decimal digits permitted in {py_repr(s)}");
+    }
+    if s.len() > 3 {
+        return Err(f"At most 3 characters permitted in {py_repr(s)}");
+    }
+    if s != "0" and first_byte(s) == b'0' {
+        return Err(f"Leading zeros are not permitted in {py_repr(s)}");
+    }
+    let n = digits_value(s);
+    if n > 255 {
+        return Err(f"Octet {n} (> 255) not permitted");
+    }
+    Ok(n)
+}
+
+// _BaseV4._ip_int_from_string
+fn v4_int(s: Str) -> Result[u128, IpError] {
+    if s.len() == 0 {
+        return Err(ave("Address cannot be empty".to_string()));
+    }
+    let octets = split_on(s, b'.');
+    if octets.len() != 4 {
+        return Err(ave(f"Expected 4 octets in {py_repr(s)}"));
+    }
+    let mut ip: u128 = 0;
+    for i in 0..4 {
+        match parse_octet(octets[i]) {
+            Ok(n) => ip = (ip << 8) | n,
+            Err(m) => return Err(ave(f"{m} in {py_repr(s)}")),
+        }
+    }
+    Ok(ip)
+}
+
+// _parse_hextet
+fn parse_hextet(s: Str) -> Result[u128, String] {
+    let cps = code_points(s);
+    let mut n: u128 = 0;
+    for i in 0..cps.len() {
+        let c = cps[i];
+        if c >= 128 or not is_hex(c as u8) {
+            return Err(f"Only hex digits permitted in {py_repr(s)}");
+        }
+    }
+    if cps.len() > 4 {
+        return Err(f"At most 4 characters permitted in {py_repr(s)}");
+    }
+    if cps.len() == 0 {
+        return Err("invalid literal for int() with base 16: ''".to_string());
+    }
+    for i in 0..cps.len() {
+        n = n * 16 + hex_val(cps[i] as u8) as u128;
+    }
+    Ok(n)
+}
+
+// str.split(sep, maxsplit)
+fn split_max(s: Str, sep: u8, max: i64) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep and out.len() < max {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+// _BaseV6._ip_int_from_string
+fn v6_int(s: Str) -> Result[u128, IpError] {
+    let r = py_repr(s);
+    if s.len() == 0 {
+        return Err(ave("Address cannot be empty".to_string()));
+    }
+    let cps = code_points(s);
+    if cps.len() > 45 {
+        return Err(ave(f"At most 45 characters expected in {r}"));
+    }
+    let mut parts = split_max(s, b':', 9);
+    if parts.len() < 3 {
+        return Err(ave(f"At least 3 parts expected in {r}"));
+    }
+    let last = parts[parts.len() - 1].clone();
+    if has_byte(last, b'.') {
+        parts.pop();
+        let v4 = match v4_addr(last) {
+            Ok(a) => a.ip,
+            Err(e) => return Err(ave(f"{e.msg} in {r}")),
+        };
+        parts.push(hex_str((v4 >> 16) & 0xFFFF));
+        parts.push(hex_str(v4 & 0xFFFF));
+    }
+    if parts.len() > 9 {
+        return Err(ave(f"At most 8 colons permitted in {r}"));
+    }
+    let n = parts.len();
+    let mut skip: i64 = -1;
+    for i in 1..n - 1 {
+        if parts[i].len() == 0 {
+            if skip >= 0 {
+                return Err(ave(f"At most one '::' permitted in {r}"));
+            }
+            skip = i;
+        }
+    }
+    let mut hi: i64 = 0;
+    let mut lo: i64 = 0;
+    let mut skipped: i64 = 0;
+    if skip >= 0 {
+        hi = skip;
+        lo = n - skip - 1;
+        if parts[0].len() == 0 {
+            hi -= 1;
+            if hi > 0 {
+                return Err(ave(f"Leading ':' only permitted as part of '::' in {r}"));
+            }
+        }
+        if parts[n - 1].len() == 0 {
+            lo -= 1;
+            if lo > 0 {
+                return Err(ave(f"Trailing ':' only permitted as part of '::' in {r}"));
+            }
+        }
+        skipped = 8 - (hi + lo);
+        if skipped < 1 {
+            return Err(ave(f"Expected at most 7 other parts with '::' in {r}"));
+        }
+    } else {
+        if n != 8 {
+            return Err(ave(f"Exactly 8 parts expected without '::' in {r}"));
+        }
+        if parts[0].len() == 0 {
+            return Err(ave(f"Leading ':' only permitted as part of '::' in {r}"));
+        }
+        if parts[n - 1].len() == 0 {
+            return Err(ave(f"Trailing ':' only permitted as part of '::' in {r}"));
+        }
+        hi = n;
+    }
+    let mut ip: u128 = 0;
+    for i in 0..hi {
+        match parse_hextet(parts[i]) {
+            Ok(h) => ip = (ip << 16) | h,
+            Err(m) => return Err(ave(f"{m} in {r}")),
+        }
+    }
+    if skipped < 8 {
+        ip = ip << (16 * skipped);
+    }
+    for i in n - lo..n {
+        match parse_hextet(parts[i]) {
+            Ok(h) => ip = (ip << 16) | h,
+            Err(m) => return Err(ave(f"{m} in {r}")),
+        }
+    }
+    Ok(ip)
+}
+
+// IPv4Address(str)
+fn v4_addr(s: Str) -> Result[Addr, IpError] {
+    if has_byte(s, b'/') {
+        return Err(ave(f"Unexpected '/' in {py_repr(s)}"));
+    }
+    Ok(addr_of(4, v4_int(s)?))
+}
+
+// IPv6Address(str), with _split_scope_id
+fn v6_addr(s: Str) -> Result[Addr, IpError] {
+    if has_byte(s, b'/') {
+        return Err(ave(f"Unexpected '/' in {py_repr(s)}"));
+    }
+    let (addr, sep, scope) = partition(s, b'%');
+    if sep and (scope.len() == 0 or has_byte(scope, b'%')) {
+        return Err(ave(f"Invalid IPv6 address: \"{py_repr(s)}\""));
+    }
+    let ip = v6_int(addr)?;
+    Ok(Addr { v: 6, ip: ip, scope: scope })
+}
+
+fn parse_addr(v: i64, s: Str) -> Result[Addr, IpError] {
+    if v == 4 { v4_addr(s) } else { v6_addr(s) }
+}
+
+fn ip_address(s: Str) -> Result[Addr, IpError] {
+    for v in [4, 6] {
+        match parse_addr(v, s) {
+            Ok(a) => return Ok(a),
+            Err(e) => {
+                if not is_addr_or_mask(e) {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(ve(f"{py_repr(s)} does not appear to be an IPv4 or IPv6 address"))
+}
+
+// ------------------------------------------------------------ netmasks
+
+fn mask_of(v: i64, plen: i64) -> u128 {
+    let all = all_ones(v);
+    if plen >= max_plen(v) { all } else { all ^ (all >> plen) }
+}
+
+fn bad_netmask(s: Str) -> IpError {
+    nve(f"{py_repr(s)} is not a valid netmask")
+}
+
+fn prefix_from_prefix_string(v: i64, s: Str) -> Result[i64, IpError] {
+    if not all_ascii_digits(s) or s.len() > 4 {
+        return Err(bad_netmask(s));
+    }
+    let n = digits_value(s) as i64;
+    if n > max_plen(v) {
+        return Err(bad_netmask(s));
+    }
+    Ok(n)
+}
+
+// _prefix_from_ip_int: -1 when the mask mixes zeroes and ones.
+fn prefix_from_ip_int(v: i64, ip: u128) -> i64 {
+    let trailing = zero_bits(ip, max_plen(v));
+    let plen = max_plen(v) - trailing;
+    let leading = if trailing >= 128 { 0 } else { ip >> trailing };
+    if leading != low_ones(plen) {
+        return -1;
+    }
+    plen
+}
+
+// _prefix_from_ip_string: a netmask, else a hostmask.
+fn prefix_from_ip_string(v: i64, s: Str) -> Result[i64, IpError] {
+    let ip = match v4_int(s) {
+        Ok(n) => n,
+        Err(_) => return Err(bad_netmask(s)),
+    };
+    let p = prefix_from_ip_int(v, ip);
+    if p >= 0 {
+        return Ok(p);
+    }
+    let q = prefix_from_ip_int(v, ip ^ all_ones(v));
+    if q >= 0 {
+        return Ok(q);
+    }
+    Err(bad_netmask(s))
+}
+
+fn make_netmask(v: i64, s: Str) -> Result[i64, IpError] {
+    match prefix_from_prefix_string(v, s) {
+        Ok(p) => Ok(p),
+        Err(e) => if v == 4 { prefix_from_ip_string(v, s) } else { Err(e) },
+    }
+}
+
+// ------------------------------------------------------------ networks
+
+#[derive(Clone)]
+struct Net {
+    // the network address, which keeps a scope id it was written with
+    addr: Addr,
+    plen: i64,
+}
+
+fn net_of(v: i64, ip: u128, plen: i64) -> Net {
+    Net { addr: addr_of(v, ip), plen: plen }
+}
+
+fn netmask(n: ref Net) -> u128 {
+    mask_of(n.addr.v, n.plen)
+}
+
+fn hostmask(n: ref Net) -> u128 {
+    netmask(n) ^ all_ones(n.addr.v)
+}
+
+fn broadcast(n: ref Net) -> u128 {
+    n.addr.ip | hostmask(n)
+}
+
+fn net_str(n: ref Net) -> String {
+    f"{addr_str(n.addr)}/{n.plen}"
+}
+
+fn net_repr(n: ref Net) -> String {
+    f"IPv{n.addr.v}Network({py_repr(net_str(n))})"
+}
+
+fn net_mask_str(n: ref Net) -> String {
+    plain_str(n.addr.v, netmask(n))
+}
+
+fn net_hostmask_str(n: ref Net) -> String {
+    plain_str(n.addr.v, hostmask(n))
+}
+
+fn num_addresses(n: ref Net) -> u128 {
+    broadcast(n) - n.addr.ip + 1
+}
+
+// The address part and the mask part of "addr[/mask]".
+fn split_addr_prefix(s: Str) -> Result[Vec[String], IpError] {
+    let parts = split_on(s, b'/');
+    if parts.len() > 2 {
+        return Err(ave(f"Only one '/' permitted in {py_repr(s)}"));
+    }
+    Ok(parts)
+}
+
+// IPv4Network(str, strict) and IPv6Network(str, strict)
+fn parse_net(v: i64, s: Str, strict: bool) -> Result[Net, IpError] {
+    let parts = split_addr_prefix(s)?;
+    let mut a = parse_addr(v, parts[0])?;
+    let plen = if parts.len() == 2 { make_netmask(v, parts[1])? } else { max_plen(v) };
+    let mask = mask_of(v, plen);
+    if a.ip & mask != a.ip {
+        if strict {
+            return Err(ve(f"{addr_str(a)}/{plen} has host bits set"));
+        }
+        a = addr_of(v, a.ip & mask);
+    }
+    Ok(Net { addr: a, plen: plen })
+}
+
+fn ip_network(s: Str, strict: bool) -> Result[Net, IpError] {
+    for v in [4, 6] {
+        match parse_net(v, s, strict) {
+            Ok(n) => return Ok(n),
+            Err(e) => {
+                if not is_addr_or_mask(e) {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(ve(f"{py_repr(s)} does not appear to be an IPv4 or IPv6 network"))
+}
+
+// `a in n`
+fn contains(n: ref Net, a: ref Addr) -> bool {
+    n.addr.v == a.v and (a.ip & netmask(n)) == n.addr.ip
+}
+
+fn net_eq(a: ref Net, b: ref Net) -> bool {
+    a.addr.v == b.addr.v and a.addr.ip == b.addr.ip and a.addr.scope == b.addr.scope and a.plen == b.plen
+}
+
+// _BaseNetwork.__lt__, for networks of one version
+fn net_lt(a: ref Net, b: ref Net) -> bool {
+    if a.addr.ip != b.addr.ip {
+        return a.addr.ip < b.addr.ip;
+    }
+    netmask(a) < netmask(b)
+}
+
+fn sort_nets(v: own Vec[Net]) -> Vec[Net] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and net_lt(v[j], v[j - 1]) {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+fn same_version_error(a: Str, b: Str) -> IpError {
+    te(f"{a} and {b} are not of the same version")
+}
+
+fn subnet_of(a: ref Net, b: ref Net) -> Result[bool, IpError] {
+    if a.addr.v != b.addr.v {
+        return Err(same_version_error(net_str(a), net_str(b)));
+    }
+    Ok(b.addr.ip <= a.addr.ip and broadcast(b) >= broadcast(a))
+}
+
+fn overlaps(a: ref Net, b: ref Net) -> bool {
+    let ab = addr_of(a.addr.v, broadcast(a));
+    let bb = addr_of(b.addr.v, broadcast(b));
+    contains(b, a.addr) or contains(b, ab) or contains(a, b.addr) or contains(a, bb)
+}
+
+// subnets(new_prefix=p)
+fn subnets(n: ref Net, p: i64) -> Result[Vec[Net], IpError] {
+    let v = n.addr.v;
+    let mut out: Vec[Net] = Vec.new();
+    if n.plen == max_plen(v) {
+        out.push(n.clone());
+        return Ok(out);
+    }
+    if p < n.plen {
+        return Err(ve("new prefix must be longer".to_string()));
+    }
+    if p > max_plen(v) {
+        return Err(ve(f"prefix length diff {p} is invalid for netblock {net_str(n)}"));
+    }
+    let count = 1u128 << (p - n.plen);
+    let step = 1u128 << (max_plen(v) - p);
+    let mut k: u128 = 0;
+    while k < count {
+        out.push(net_of(v, n.addr.ip + k * step, p));
+        k += 1;
+    }
+    Ok(out)
+}
+
+// subnets(): the two halves.
+fn halves(n: ref Net) -> Vec[Net] {
+    match subnets(n, n.plen + 1) {
+        Ok(v) => v,
+        Err(_) => Vec.new(),
+    }
+}
+
+// supernet(prefixlen_diff=d)
+fn supernet(n: ref Net, d: i64) -> Result[Net, IpError] {
+    if n.plen == 0 {
+        return Ok(n.clone());
+    }
+    let p = n.plen - d;
+    if p < 0 {
+        return Err(ve(f"current prefixlen is {n.plen}, cannot have a prefixlen_diff of {d}"));
+    }
+    let m = if d >= 128 { 0 } else { netmask(n) << d };
+    Ok(net_of(n.addr.v, n.addr.ip & m, p))
+}
+
+fn supernet1(n: ref Net) -> Net {
+    match supernet(n, 1) {
+        Ok(s) => s,
+        Err(_) => n.clone(),
+    }
+}
+
+// address_exclude
+fn exclude(a: ref Net, b: ref Net) -> Result[Vec[Net], IpError] {
+    if a.addr.v != b.addr.v {
+        return Err(same_version_error(net_str(a), net_str(b)));
+    }
+    if not subnet_of(b, a)? {
+        return Err(ve(f"{net_str(b)} not contained in {net_str(a)}"));
+    }
+    let mut out: Vec[Net] = Vec.new();
+    if net_eq(a, b) {
+        return Ok(out);
+    }
+    let mut h = halves(a);
+    while not net_eq(h[0], b) and not net_eq(h[1], b) {
+        if subnet_of(b, h[0])? {
+            out.push(h[1].clone());
+            h = halves(h[0]);
+        } else if subnet_of(b, h[1])? {
+            out.push(h[0].clone());
+            h = halves(h[1]);
+        } else {
+            return Err(raise("AssertionError", "Error performing exclusion".to_string()));
+        }
+    }
+    if net_eq(h[0], b) {
+        out.push(h[1].clone());
+    } else {
+        out.push(h[0].clone());
+    }
+    Ok(out)
+}
+
+// summarize_address_range
+fn summarize(first: ref Addr, last: ref Addr) -> Result[Vec[Net], IpError] {
+    if first.v != last.v {
+        return Err(same_version_error(addr_str(first), addr_str(last)));
+    }
+    if first.ip > last.ip {
+        return Err(ve("last IP address must be greater than first".to_string()));
+    }
+    let v = first.v;
+    let bits = max_plen(v);
+    let mut out: Vec[Net] = Vec.new();
+    let mut f = first.ip;
+    let l = last.ip;
+    loop {
+        let span = l - f;
+        let fit = if span == u128_max() { 128 } else { bit_length(span + 1) - 1 };
+        let z = zero_bits(f, bits);
+        let nbits = if z < fit { z } else { fit };
+        out.push(net_of(v, f, bits - nbits));
+        let add = low_ones(nbits);
+        if f + add == all_ones(v) or f + add >= l {
+            break;
+        }
+        f = f + add + 1;
+    }
+    Ok(out)
+}
+
+// _collapse_addresses_internal
+fn collapse_nets(nets: ref Vec[Net]) -> Vec[Net] {
+    let mut to_merge: Vec[Net] = nets.clone();
+    let mut keys: Vec[Net] = Vec.new();
+    let mut vals: Vec[Net] = Vec.new();
+    while to_merge.len() > 0 {
+        let net = to_merge[to_merge.len() - 1].clone();
+        to_merge.pop();
+        let sup = supernet1(net);
+        let mut at: i64 = -1;
+        for k in 0..keys.len() {
+            if net_eq(keys[k], sup) {
+                at = k;
+            }
+        }
+        if at < 0 {
+            keys.push(sup);
+            vals.push(net);
+        } else if not net_eq(vals[at], net) {
+            keys.remove(at);
+            vals.remove(at);
+            to_merge.push(sup);
+        }
+    }
+    let sorted = sort_nets(vals);
+    let mut out: Vec[Net] = Vec.new();
+    for i in 0..sorted.len() {
+        if out.len() > 0 and broadcast(out[out.len() - 1]) >= broadcast(sorted[i]) {
+            continue;
+        }
+        out.push(sorted[i].clone());
+    }
+    out
+}
+
+// An address or a network, as collapse_addresses takes them.
+#[derive(Clone)]
+struct Item {
+    is_net: bool,
+    addr: Addr,
+    net: Net,
+}
+
+fn addr_item(a: ref Addr) -> Item {
+    Item { is_net: false, addr: a.clone(), net: net_of(a.v, a.ip, max_plen(a.v)) }
+}
+
+fn net_item(n: ref Net) -> Item {
+    Item { is_net: true, addr: n.addr.clone(), net: n.clone() }
+}
+
+fn item_str(it: ref Item) -> String {
+    if it.is_net { net_str(it.net) } else { addr_str(it.addr) }
+}
+
+fn collapse(items: ref Vec[Item]) -> Result[Vec[Net], IpError] {
+    let mut ips: Vec[Addr] = Vec.new();
+    let mut ip_items: Vec[Item] = Vec.new();
+    let mut nets: Vec[Net] = Vec.new();
+    for i in 0..items.len() {
+        let it = items[i].clone();
+        let v = it.addr.v;
+        if not it.is_net or it.net.plen == max_plen(v) {
+            if ips.len() > 0 and ips[ips.len() - 1].v != v {
+                return Err(same_version_error(item_str(it), item_str(ip_items[ip_items.len() - 1])));
+            }
+            ips.push(it.addr.clone());
+            ip_items.push(it);
+        } else {
+            if nets.len() > 0 and nets[nets.len() - 1].addr.v != v {
+                return Err(same_version_error(net_str(it.net), net_str(nets[nets.len() - 1])));
+            }
+            nets.push(it.net.clone());
+        }
+    }
+    // sorted(set(ips))
+    let mut uniq: Vec[Addr] = Vec.new();
+    for i in 0..ips.len() {
+        let mut seen = false;
+        for k in 0..uniq.len() {
+            if uniq[k].ip == ips[i].ip and uniq[k].scope == ips[i].scope {
+                seen = true;
+            }
+        }
+        if not seen {
+            uniq.push(ips[i].clone());
+        }
+    }
+    for i in 1..uniq.len() {
+        let mut j = i;
+        while j > 0 and uniq[j].ip < uniq[j - 1].ip {
+            uniq.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut all: Vec[Net] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..uniq.len() {
+        let end_run = i + 1 == uniq.len() or uniq[i + 1].ip != uniq[i].ip + 1;
+        if end_run {
+            let r = summarize(uniq[st], uniq[i])?;
+            for k in 0..r.len() {
+                all.push(r[k].clone());
+            }
+            st = i + 1;
+        }
+    }
+    for i in 0..nets.len() {
+        all.push(nets[i].clone());
+    }
+    Ok(collapse_nets(all))
+}
+
+// ------------------------------------------------------------ interfaces
+
+#[derive(Clone)]
+struct Iface {
+    addr: Addr,
+    net: Net,
+}
+
+fn parse_iface(v: i64, s: Str) -> Result[Iface, IpError] {
+    let parts = split_addr_prefix(s)?;
+    let a = parse_addr(v, parts[0])?;
+    let plen = if parts.len() == 2 { make_netmask(v, parts[1])? } else { max_plen(v) };
+    let mask = mask_of(v, plen);
+    let na = if a.ip & mask != a.ip { addr_of(v, a.ip & mask) } else { a.clone() };
+    Ok(Iface { addr: a, net: Net { addr: na, plen: plen } })
+}
+
+fn ip_interface(s: Str) -> Result[Iface, IpError] {
+    for v in [4, 6] {
+        match parse_iface(v, s) {
+            Ok(i) => return Ok(i),
+            Err(e) => {
+                if not is_addr_or_mask(e) {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(ve(f"{py_repr(s)} does not appear to be an IPv4 or IPv6 interface"))
+}
+
+// ------------------------------------------------------------ special ranges
+
+fn cidr(s: Str) -> Net {
+    match ip_network(s, true) {
+        Ok(n) => n,
+        Err(_) => net_of(4, 0, 0),
+    }
+}
+
+fn in_cidr(a: ref Addr, s: Str) -> bool {
+    contains(cidr(s), a)
+}
+
+fn in_any(a: ref Addr, list: ref Vec[String]) -> bool {
+    for i in 0..list.len() {
+        if in_cidr(a, list[i]) {
+            return true;
+        }
+    }
+    false
+}
+
+fn words(s: Str) -> Vec[String] {
+    split_ws(s)
+}
+
+// The not globally reachable blocks of the IANA special-purpose registries,
+// and their exceptions, as ipaddress lists them.
+fn private_nets(v: i64) -> Vec[String] {
+    if v == 4 {
+        words("0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.0.170/31 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 240.0.0.0/4 255.255.255.255/32")
+    } else {
+        words("::1/128 ::/128 ::ffff:0:0/96 64:ff9b:1::/48 100::/64 2001::/23 2001:db8::/32 2002::/16 3fff::/20 fc00::/7 fe80::/10")
+    }
+}
+
+fn private_exceptions(v: i64) -> Vec[String] {
+    if v == 4 {
+        words("192.0.0.9/32 192.0.0.10/32")
+    } else {
+        words("2001:1::1/128 2001:1::2/128 2001:3::/32 2001:4:112::/48 2001:20::/28 2001:30::/28")
+    }
+}
+
+fn reserved_v6() -> Vec[String] {
+    words("::/8 100::/8 200::/7 400::/6 800::/5 1000::/4 4000::/3 6000::/3 8000::/3 A000::/3 C000::/3 E000::/4 F000::/5 F800::/6 FE00::/9")
+}
+
+// The is_* properties of an address. An IPv4-mapped address answers with
+// its IPv4 address's, except for is_site_local.
+fn addr_flag(a: ref Addr, name: Str) -> bool {
+    if is_mapped(a) and name != "site_local" {
+        return addr_flag(mapped_v4(a), name);
+    }
+    let v4 = a.v == 4;
+    if name == "private" {
+        return in_any(a, private_nets(a.v)) and not in_any(a, private_exceptions(a.v));
+    }
+    if name == "global" {
+        if v4 {
+            return not in_cidr(a, "100.64.0.0/10") and not addr_flag(a, "private");
+        }
+        return not addr_flag(a, "private");
+    }
+    if name == "multicast" {
+        return in_cidr(a, if v4 { "224.0.0.0/4" } else { "ff00::/8" });
+    }
+    if name == "loopback" {
+        return if v4 { in_cidr(a, "127.0.0.0/8") } else { a.ip == 1 };
+    }
+    if name == "link_local" {
+        return in_cidr(a, if v4 { "169.254.0.0/16" } else { "fe80::/10" });
+    }
+    if name == "reserved" {
+        return if v4 { in_cidr(a, "240.0.0.0/4") } else { in_any(a, reserved_v6()) };
+    }
+    if name == "unspecified" {
+        return a.ip == 0;
+    }
+    if name == "site_local" {
+        return not v4 and in_cidr(a, "fec0::/10");
+    }
+    false
+}
+
+// The is_* properties of a network.
+fn net_flag(n: ref Net, name: Str) -> bool {
+    let v = n.addr.v;
+    let first = n.addr.clone();
+    let last = addr_of(v, broadcast(n));
+    if name == "private" {
+        let p = private_nets(v);
+        let x = private_exceptions(v);
+        let mut any = false;
+        for i in 0..p.len() {
+            let pn = cidr(p[i]);
+            if contains(pn, first) and contains(pn, last) {
+                any = true;
+            }
+        }
+        for i in 0..x.len() {
+            let xn = cidr(x[i]);
+            if contains(xn, first) or contains(xn, last) {
+                return false;
+            }
+        }
+        return any;
+    }
+    if name == "global" {
+        if v == 4 and in_cidr(first, "100.64.0.0/10") and in_cidr(last, "100.64.0.0/10") {
+            return false;
+        }
+        return not net_flag(n, "private");
+    }
+    if name == "site_local" and v == 4 {
+        return false;
+    }
+    addr_flag(first, name) and addr_flag(last, name)
+}
+
+fn flag_names() -> Vec[String] {
+    words("private global multicast loopback link_local reserved unspecified site_local")
+}
+
+fn addr_flags(a: ref Addr) -> String {
+    let names = flag_names();
+    let mut on: Vec[String] = Vec.new();
+    for i in 0..names.len() {
+        // IPv4Address has no is_site_local
+        if a.v == 4 and names[i] == "site_local" {
+            continue;
+        }
+        if addr_flag(a, names[i]) {
+            on.push(names[i].clone());
+        }
+    }
+    if on.len() == 0 { "-".to_string() } else { join(on, " ") }
+}
+
+fn net_flags(n: ref Net) -> String {
+    let names = flag_names();
+    let mut on: Vec[String] = Vec.new();
+    for i in 0..names.len() {
+        if net_flag(n, names[i]) {
+            on.push(names[i].clone());
+        }
+    }
+    if on.len() == 0 { "-".to_string() } else { join(on, " ") }
+}
+
+// ------------------------------------------------------------ format and arithmetic
+
+fn group4(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if i > 0 and (b.len() - i) % 4 == 0 {
+            out.push(b'_');
+        }
+        out.push(b[i]);
+    }
+    from_bytes(out)
+}
+
+// _BaseAddress.__format__ for `s` and `[#][_](b|x|X|n)`.
+fn format_addr(a: ref Addr, spec: Str) -> Result[String, IpError] {
+    if spec.len() == 0 or spec == "s" {
+        return Ok(addr_str(a));
+    }
+    let b = to_bytes(spec);
+    let mut i: i64 = 0;
+    let alt = i < b.len() and b[i] == b'#';
+    if alt {
+        i += 1;
+    }
+    let grouping = i < b.len() and b[i] == b'_';
+    if grouping {
+        i += 1;
+    }
+    if i + 1 != b.len() or not has_byte("xbnX", b[i]) {
+        return Err(te(f"unsupported format string passed to IPv{a.v}Address.__format__"));
+    }
+    let mut kind = b[i];
+    if kind == b'n' {
+        kind = if a.v == 4 { b'b' } else { b'x' };
+    }
+    let mut d = if kind == b'b' { digits(a.ip, max_plen(a.v), 2, false) } else { digits(a.ip, max_plen(a.v) / 4, 16, kind == b'X') };
+    if grouping {
+        d = group4(d);
+    }
+    if alt {
+        let p = if kind == b'b' { "0b" } else if kind == b'X' { "0X" } else { "0x" };
+        return Ok(f"{p}{d}");
+    }
+    Ok(d)
+}
+
+// address + n
+fn addr_add(a: ref Addr, n: i64) -> Result[Addr, IpError] {
+    let v = a.v;
+    if n >= 0 {
+        let m = n as u128;
+        if a.ip > all_ones(v) - m {
+            let value = if v == 4 { f"{a.ip + m}" } else { dec_add(f"{a.ip}", n) };
+            return Err(ave(f"{value} (>= 2**{max_plen(v)}) is not permitted as an IPv{v} address"));
+        }
+        return Ok(addr_of(v, a.ip + m));
+    }
+    let m = (0 - n) as u128;
+    if m > a.ip {
+        return Err(ave(f"-{m - a.ip} (< 0) is not permitted as an IPv{v} address"));
+    }
+    Ok(addr_of(v, a.ip - m))
+}
+
+fn iface_str(i: ref Iface) -> String {
+    f"{addr_str(i.addr)}/{i.net.plen}"
+}
+
+fn iface_exploded(i: ref Iface) -> String {
+    let a = i.addr.clone();
+    if a.v == 4 {
+        return iface_str(i);
+    }
+    if is_mapped(a) {
+        return f"{slice(raw_exploded(a.ip), 0, 30)}{v4_str(a.ip & 0xFFFF_FFFF)}";
+    }
+    let scope = if a.scope.len() > 0 { f"%{a.scope}" } else { String.new() };
+    f"{raw_exploded(a.ip)}{scope}/{i.net.plen}"
+}
+
+// IPv6Network.exploded re-parses str(network_address), scope and all.
+fn net_exploded(n: ref Net) -> Result[String, IpError] {
+    if n.addr.v == 4 {
+        return Ok(net_str(n));
+    }
+    let ip = v6_int(addr_str(n.addr))?;
+    Ok(f"{raw_exploded(ip)}/{n.plen}")
+}
+
+// The first `k` of hosts().
+fn first_hosts(n: ref Net, k: i64) -> Vec[Addr] {
+    let v = n.addr.v;
+    let mut out: Vec[Addr] = Vec.new();
+    if n.plen == max_plen(v) {
+        out.push(n.addr.clone());
+        return out;
+    }
+    let lo = if n.plen == max_plen(v) - 1 { n.addr.ip } else { n.addr.ip + 1 };
+    let hi = if n.plen == max_plen(v) - 1 or v == 6 { broadcast(n) } else { broadcast(n) - 1 };
+    let mut x = lo;
+    while x <= hi and out.len() < k {
+        out.push(addr_of(v, x));
+        x += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ the reports
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn show_addresses() -> Result[(), String] {
+    println("== addresses");
+    let lines = lines_of(read("data/addresses.txt")?);
+    for i in 0..lines.len() {
+        let s = lines[i].clone();
+        println(py_repr(s));
+        let a = match ip_address(s) {
+            Ok(a) => a,
+            Err(e) => {
+                println(f"  {show_err(e)}");
+                for v in [4, 6] {
+                    match parse_addr(v, s) {
+                        Ok(_) => {}
+                        Err(e) => println(f"  IPv{v}Address: {show_err(e)}"),
+                    }
+                }
+                continue;
+            }
+        };
+        println(f"  {addr_repr(a)} v{a.v} int={a.ip}");
+        println(f"  exploded={addr_exploded(a)} compressed={addr_str(a)}");
+        println(f"  reverse={reverse_pointer(a)}");
+        println(f"  packed={bytes_repr(packed(a))}");
+        println(f"  {addr_flags(a)}");
+        if a.v == 6 {
+            if is_mapped(a) {
+                println(f"  ipv4_mapped={addr_repr(mapped_v4(a))}");
+            }
+            if (a.ip >> 112) == 0x2002 {
+                println(f"  sixtofour={addr_repr(addr_of(4, (a.ip >> 80) & 0xFFFF_FFFF))}");
+            }
+            if (a.ip >> 96) == 0x2001_0000 {
+                let server = addr_of(4, (a.ip >> 64) & 0xFFFF_FFFF);
+                let client = addr_of(4, (a.ip & 0xFFFF_FFFF) ^ 0xFFFF_FFFF);
+                println(f"  teredo=({addr_repr(server)}, {addr_repr(client)})");
+            }
+            if a.scope.len() > 0 {
+                println(f"  scope_id={py_repr(a.scope)}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn net_list(v: ref Vec[Net]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        out.push(net_str(v[i]));
+    }
+    join(out, " ")
+}
+
+fn show_networks() -> Result[(), String] {
+    println("== networks");
+    let lines = lines_of(read("data/networks.txt")?);
+    for i in 0..lines.len() {
+        let line = lines[i].clone();
+        let (s, _, mode) = partition(line, b' ');
+        let strict = mode != "loose";
+        println(py_repr(line));
+        let n = match ip_network(s, strict) {
+            Ok(n) => n,
+            Err(e) => {
+                println(f"  {show_err(e)}");
+                for v in [4, 6] {
+                    match parse_net(v, s, strict) {
+                        Ok(_) => {}
+                        Err(e) => println(f"  IPv{v}Network: {show_err(e)}"),
+                    }
+                }
+                continue;
+            }
+        };
+        let net = n.addr.clone();
+        let v = net.v;
+        println(f"  {net_repr(n)} prefixlen={n.plen} num_addresses={num_addresses(n)}");
+        println(f"  netmask={net_mask_str(n)} hostmask={net_hostmask_str(n)}");
+        println(f"  with_netmask={addr_str(net)}/{net_mask_str(n)} with_hostmask={addr_str(net)}/{net_hostmask_str(n)}");
+        let last = addr_str(addr_of(v, broadcast(n)));
+        println(f"  network={addr_str(net)} broadcast={last} last={last}");
+        let hosts = first_hosts(n, 3);
+        let mut hs: Vec[String] = Vec.new();
+        for k in 0..hosts.len() {
+            hs.push(addr_str(hosts[k]));
+        }
+        println(f"  hosts={join(hs, " ")}");
+        match net_exploded(n) {
+            Ok(x) => println(f"  exploded={x}"),
+            Err(e) => println(f"  exploded: {show_err(e)}"),
+        }
+        println(f"  {net_flags(n)}");
+        let halves = halves(n);
+        let mut two: Vec[Net] = Vec.new();
+        for k in 0..halves.len() {
+            if k < 2 {
+                two.push(halves[k].clone());
+            }
+        }
+        println(f"  supernet={net_str(supernet1(n))} subnets={net_list(two)}");
+    }
+    Ok(())
+}
+
+fn py_int_or(s: Str) -> Result[i64, IpError] {
+    match py_int(s) {
+        Some(n) => Ok(n),
+        None => Err(ve(f"invalid literal for int() with base 10: {py_repr(s)}")),
+    }
+}
+
+fn addr_or_net(s: Str) -> Result[Item, IpError] {
+    if has_byte(s, b'/') {
+        let n = ip_network(s, true)?;
+        return Ok(net_item(n));
+    }
+    let a = ip_address(s)?;
+    Ok(addr_item(a))
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn op(w: ref Vec[String]) -> Result[(), IpError] {
+    let cmd = w[0].clone();
+    if cmd == "subnets" {
+        let n = ip_network(w[1], true)?;
+        let subs = subnets(n, py_int_or(w[2])?)?;
+        for k in 0..subs.len() {
+            if k < 4 {
+                println(f"  {net_str(subs[k])}");
+            }
+        }
+        if subs.len() > 4 {
+            println(f"  ... {net_str(subs[subs.len() - 1])}");
+        }
+        println(f"  ({subs.len()} subnets)");
+    } else if cmd == "supernet" {
+        let n = ip_network(w[1], true)?;
+        println(f"  {net_str(supernet(n, py_int_or(w[2])?)?)}");
+    } else if cmd == "exclude" {
+        let a = ip_network(w[1], true)?;
+        let b = ip_network(w[2], true)?;
+        let r = exclude(a, b)?;
+        for k in 0..r.len() {
+            println(f"  {net_str(r[k])}");
+        }
+    } else if cmd == "collapse" {
+        let mut items: Vec[Item] = Vec.new();
+        for k in 1..w.len() {
+            items.push(addr_or_net(w[k])?);
+        }
+        println(f"  {net_list(collapse(items)?)}");
+    } else if cmd == "summarize" {
+        let f = ip_address(w[1])?;
+        let l = ip_address(w[2])?;
+        println(f"  {net_list(summarize(f, l)?)}");
+    } else if cmd == "contains" {
+        let n = ip_network(w[1], true)?;
+        let a = ip_address(w[2])?;
+        println(f"  {py_bool(contains(n, a))}");
+    } else if cmd == "overlaps" {
+        let a = ip_network(w[1], true)?;
+        let b = ip_network(w[2], true)?;
+        println(f"  {py_bool(overlaps(a, b))}");
+    } else if cmd == "subnet_of" {
+        let a = ip_network(w[1], true)?;
+        let b = ip_network(w[2], true)?;
+        println(f"  {py_bool(subnet_of(a, b)?)}");
+    } else if cmd == "sort" {
+        let mut nets: Vec[Net] = Vec.new();
+        for k in 1..w.len() {
+            nets.push(ip_network(w[k], true)?);
+        }
+        println(f"  {net_list(sort_nets(nets))}");
+    } else if cmd == "add" {
+        let a = ip_address(w[1])?;
+        println(f"  {addr_repr(addr_add(a, py_int_or(w[2])?)?)}");
+    } else if cmd == "interface" {
+        let i = ip_interface(w[1])?;
+        let v = i.addr.v;
+        let plain = plain_str(v, i.addr.ip);
+        let mask = net_mask_str(i.net);
+        let host = net_hostmask_str(i.net);
+        println(f"  IPv{v}Interface({py_repr(iface_str(i))}) ip={addr_str(addr_of(v, i.addr.ip))} network={net_str(i.net)}");
+        println(f"  with_prefixlen={plain}/{i.net.plen} with_netmask={plain}/{mask} with_hostmask={plain}/{host}");
+        println(f"  exploded={iface_exploded(i)}");
+    } else if cmd == "format" {
+        let a = ip_address(w[1])?;
+        println(f"  {format_addr(a, w[2])?}");
+    }
+    Ok(())
+}
+
+fn show_ops() -> Result[(), String] {
+    println("== operations");
+    let lines = lines_of(read("data/ops.txt")?);
+    for i in 0..lines.len() {
+        println(f"> {lines[i]}");
+        if let Err(e) = op(split_ws(lines[i])) {
+            println(f"  {show_err(e)}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the files
+
+// data/acl.txt
+fn file_0() -> String {
+    """
+# action proto source destination ports
+allow tcp any @web 80,443
+allow tcp @infra @db 5432
+allow udp @vpn any 53
+deny  tcp 203.0.113.0/24 any any
+allow tcp 2001:db8::/32 @web6 443
+allow icmp any any any
+allow tcp @mgmt @pods 22,6443,10250-10259
+deny  any any any any
+
+"""
+}
+
+// data/addresses.txt
+fn file_1() -> String {
+    """
+192.0.2.1
+10.1.2.3
+0.0.0.0
+255.255.255.255
+127.0.0.1
+169.254.10.20
+224.0.0.251
+100.64.1.1
+192.0.0.9
+198.51.100.7
+8.8.8.8
+240.1.2.3
+1.2.3
+1.2.3.4.5
+1.2..4
+01.2.3.4
+256.1.1.1
+1.2.3.4444
+1.2.3.x
+1.2.3.4/24
+
+2001:db8::1
+2001:DB8:0:0:0:0:0:1
+::
+::1
+fe80::1%eth0
+fe80::1%
+::ffff:192.0.2.128
+::ffff:c000:280
+2001:0:4136:e378:8000:63bf:3fff:fdd2
+2002:c000:0204::1
+ff02::1
+fec0::1
+2001:db8:0:0:1:0:0:1
+2001:db8::1:0:0:1
+1:0:0:2:0:0:0:3
+0:0:0:0:0:0:0:0
+fd12:3456:789a:1::1
+2001:4860:4860::8888
+64:ff9b:1::1
+::ffff:10.0.0.1
+2001:db8:::1
+2001:db8::1::1
+1:2:3:4:5:6:7
+1:2:3:4:5:6:7:8:9
+:1:2:3:4:5:6:7
+1:2:3:4:5:6:7:
+12345::
+2001:dg8::1
+::1.2.3.256
+1:2:3:4:5:6:7::8
+1:2:3:4:5:6:1.2.3.4
+::ffff:1.2.3
+
+"""
+}
+
+// data/conns.txt
+fn file_2() -> String {
+    """
+tcp 198.51.100.20:51000 -> 10.20.4.10:443
+tcp 203.0.113.9:40000 -> 10.20.4.10:443
+tcp 203.0.113.9:40001 -> 10.20.4.11:22
+tcp 10.20.0.15:33000 -> 10.20.8.5:5432
+tcp 10.20.4.10:33001 -> 10.20.8.5:5432
+udp 10.20.16.3:5353 -> 8.8.8.8:53
+udp 10.20.16.3:5353 -> 8.8.4.4:123
+tcp [2001:db8:1::77]:50000 -> [fd00:1234::10]:443
+tcp [2001:db9::77]:50000 -> [fd00:1234::10]:443
+icmp 100.64.3.3:0 -> 10.20.4.10:0
+tcp 10.20.2.5:60000 -> 10.20.64.9:6443
+tcp 10.20.2.5:60001 -> 10.20.64.9:10255
+tcp 10.20.2.5:60002 -> 10.20.64.9:10260
+tcp 45.33.32.156:1234 -> 10.20.64.9:22
+tcp 45.33.32.157:1234 -> 10.20.64.9:22
+tcp 45.33.32.158:1234 -> 10.20.64.9:22
+tcp 45.33.32.159:1234 -> 10.20.64.9:22
+tcp 45.33.32.200:1234 -> 10.20.64.9:22
+tcp [fe80::1%eth0]:546 -> [ff02::1:2]:547
+tcp 192.168.1.300:80 -> 10.20.4.10:80
+tcp 10.20.4.10 -> 10.20.8.5:5432
+
+"""
+}
+
+// data/networks.txt
+fn file_3() -> String {
+    """
+192.0.2.0/24
+192.0.2.0/255.255.255.0
+192.0.2.0/0.0.0.255
+192.0.2.1/24
+192.0.2.1/24 loose
+10.0.0.0/8
+172.16.0.0/12
+192.168.1.128/25
+192.168.1.0/31
+192.168.1.7/32
+0.0.0.0/0
+100.64.0.0/10
+224.0.0.0/4
+127.0.0.0/8
+192.0.2.0/33
+192.0.2.0/-1
+192.0.2.0/ 24
+192.0.2.0/255.0.255.0
+192.0.2.0/24/24
+2001:db8::/32
+2001:db8::/64
+2001:db8::1/64
+2001:db8::1/64 loose
+2001:db8::/127
+2001:db8::5/128
+::/0
+fe80::%eth0/64
+::ffff:0:0/96
+fc00::/7
+2001:db8::/129
+2001:db8::/ffff::
+
+"""
+}
+
+// data/ops.txt
+fn file_4() -> String {
+    """
+subnets 192.0.2.0/24 26
+subnets 10.0.0.0/8 24
+subnets 2001:db8::/48 64
+subnets 192.0.2.0/24 23
+subnets 192.0.2.7/32 30
+supernet 192.0.2.0/24 4
+supernet 2001:db8:abcd::/48 16
+supernet 10.0.0.0/8 9
+exclude 192.0.2.0/24 192.0.2.64/27
+exclude 10.0.0.0/30 10.0.0.2/32
+exclude 192.0.2.0/24 192.0.3.0/28
+exclude 2001:db8::/120 2001:db8::80/125
+collapse 192.0.2.0/26 192.0.2.64/26 192.0.2.128/26 192.0.2.192/26
+collapse 10.0.0.0/24 10.0.1.0/24 10.0.0.0/23 10.0.3.0/24
+collapse 192.0.2.1 192.0.2.2 192.0.2.3 192.0.2.4 192.0.2.5 192.0.2.6 192.0.2.7 192.0.2.8
+collapse 2001:db8::/33 2001:db8:8000::/33 2001:db9::/32
+collapse 10.0.0.0/8 2001:db8::/32
+summarize 192.0.2.0 192.0.2.130
+summarize 10.0.0.1 10.0.0.254
+summarize 2001:db8::1 2001:db8::ff
+summarize 0.0.0.0 255.255.255.255
+summarize 10.0.0.5 10.0.0.1
+contains 192.0.2.0/24 192.0.2.77
+contains 192.0.2.0/24 192.0.3.1
+contains 2001:db8::/32 2001:db8:ffff::1
+contains 10.0.0.0/8 ::ffff:10.0.0.1
+overlaps 10.0.0.0/8 10.255.0.0/16
+overlaps 10.0.0.0/24 10.0.1.0/24
+subnet_of 10.1.0.0/16 10.0.0.0/8
+subnet_of 10.0.0.0/8 10.1.0.0/16
+subnet_of 10.0.0.0/8 2001:db8::/32
+sort 10.0.1.0/24 10.0.0.0/16 10.0.0.0/24 9.0.0.0/8 10.0.0.0/8 10.0.0.128/25
+add 192.0.2.255 1
+add 255.255.255.255 1
+add 0.0.0.0 -1
+add 2001:db8::ffff 1
+add ::ffff:10.0.0.255 1
+add ::1 -2
+interface 192.0.2.5/24
+interface 192.0.2.5/255.255.255.192
+interface 2001:db8::5/64
+interface fe80::1%eth0/64
+interface 192.0.2.5
+format 192.0.2.1 s
+format 192.0.2.1 b
+format 192.0.2.1 #_b
+format 192.0.2.1 x
+format 192.0.2.1 #X
+format 192.0.2.1 n
+format 2001:db8::1 n
+format 2001:db8::1 #_x
+format 2001:db8::1 _X
+
+"""
+}
+
+// data/plan.txt
+fn file_5() -> String {
+    """
+pool 10.20.0.0/16
+pool fd00:1234::/48
+reserve infra 10.20.0.0/24
+alloc web v4 /22
+alloc db v4 /24
+alloc pods v4 /18
+alloc vpn v4 /20
+alloc web6 v6 /64
+alloc mgmt v4 /27
+alloc pods6 v6 /56
+reserve lab 10.20.0.128/25
+reserve edge 10.20.255.0/24
+alloc huge v4 /15
+alloc bad v4 /33
+alloc bad6 v6 /129
+show
+free db
+free nope
+alloc cache v4 /25
+alloc db2 v4 /23
+show
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/acl.txt", file_0())?;
+    put("data/addresses.txt", file_1())?;
+    put("data/conns.txt", file_2())?;
+    put("data/networks.txt", file_3())?;
+    put("data/ops.txt", file_4())?;
+    put("data/plan.txt", file_5())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the address plan
+
+// The pools, the free blocks and the allocations of both versions.
+struct Plan {
+    pools4: Vec[Net],
+    pools6: Vec[Net],
+    free4: Vec[Net],
+    free6: Vec[Net],
+    // the allocations in the order they were made
+    names: Vec[String],
+    nets: Vec[Net],
+}
+
+fn collapse_list(nets: ref Vec[Net]) -> Vec[Net] {
+    let mut items: Vec[Item] = Vec.new();
+    for i in 0..nets.len() {
+        items.push(net_item(nets[i]));
+    }
+    match collapse(items) {
+        Ok(v) => v,
+        Err(_) => nets.clone(),
+    }
+}
+
+impl Plan {
+    fn pools(ref self, v: i64) -> Vec[Net] {
+        if v == 4 { self.pools4.clone() } else { self.pools6.clone() }
+    }
+
+    fn free(ref self, v: i64) -> Vec[Net] {
+        if v == 4 { self.free4.clone() } else { self.free6.clone() }
+    }
+
+    fn set_free(mut ref self, v: i64, f: own Vec[Net]) {
+        if v == 4 {
+            self.free4 = f;
+        } else {
+            self.free6 = f;
+        }
+    }
+
+    fn add_free(mut ref self, v: i64, nets: ref Vec[Net]) {
+        let mut all = self.free(v);
+        for i in 0..nets.len() {
+            all.push(nets[i].clone());
+        }
+        self.set_free(v, collapse_list(all));
+    }
+
+    fn find(ref self, name: Str) -> i64 {
+        for i in 0..self.names.len() {
+            if self.names[i] == name {
+                return i;
+            }
+        }
+        -1
+    }
+
+    // Carve `net` out of the free block that holds it.
+    fn take(mut ref self, name: Str, net: ref Net) -> bool {
+        let v = net.addr.v;
+        let mut free = self.free(v);
+        for i in 0..free.len() {
+            let b = free[i].clone();
+            let inside = match subnet_of(net, b) {
+                Ok(x) => x,
+                Err(_) => false,
+            };
+            if inside {
+                free.remove(i);
+                self.set_free(v, free);
+                let rest = match exclude(b, net) {
+                    Ok(r) => r,
+                    Err(_) => Vec.new(),
+                };
+                self.add_free(v, rest);
+                let at = self.find(name);
+                if at >= 0 {
+                    self.nets[at] = net.clone();
+                } else {
+                    self.names.push(name.to_string());
+                    self.nets.push(net.clone());
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    fn show(ref self) {
+        for v in [4, 6] {
+            println(f"  IPv{v}:");
+            let pools = self.pools(v);
+            let free = self.free(v);
+            for pi in 0..pools.len() {
+                let p = pools[pi].clone();
+                let mut inside: Vec[i64] = Vec.new();
+                for i in 0..self.nets.len() {
+                    let n = self.nets[i].clone();
+                    if n.addr.v == v and subnet_of(n, p) == Ok(true) {
+                        inside.push(i);
+                    }
+                }
+                for i in 1..inside.len() {
+                    let mut j = i;
+                    while j > 0 and self.before(inside[j], inside[j - 1]) {
+                        inside.swap(j - 1, j);
+                        j -= 1;
+                    }
+                }
+                let mut used: u128 = 0;
+                for i in 0..inside.len() {
+                    used += num_addresses(self.nets[inside[i]]);
+                }
+                let total = num_addresses(p);
+                println(f"    pool {net_str(p)}: {used}/{total} used ({used * 100 / total}%)");
+                for i in 0..inside.len() {
+                    println(f"      {net_str(self.nets[inside[i]])} {self.names[inside[i]]}");
+                }
+                for i in 0..free.len() {
+                    if subnet_of(free[i], p) == Ok(true) {
+                        println(f"      {net_str(free[i])} free");
+                    }
+                }
+            }
+        }
+    }
+
+    // (network, name) order
+    fn before(ref self, a: i64, b: i64) -> bool {
+        let na = self.nets[a].clone();
+        let nb = self.nets[b].clone();
+        if net_lt(na, nb) {
+            return true;
+        }
+        if net_lt(nb, na) {
+            return false;
+        }
+        self.names[a] < self.names[b]
+    }
+}
+
+fn show_plan() -> Result[Plan, String] {
+    println("== plan");
+    let mut plan = Plan { pools4: Vec.new(), pools6: Vec.new(), free4: Vec.new(), free6: Vec.new(), names: Vec.new(), nets: Vec.new() };
+    let lines = lines_of(read("data/plan.txt")?);
+    for li in 0..lines.len() {
+        let w = split_ws(lines[li]);
+        let cmd = w[0].clone();
+        if cmd == "pool" {
+            let n = match ip_network(w[1], true) {
+                Ok(n) => n,
+                Err(e) => return Err(show_err(e)),
+            };
+            let v = n.addr.v;
+            if v == 4 {
+                plan.pools4.push(n.clone());
+            } else {
+                plan.pools6.push(n.clone());
+            }
+            let mut one: Vec[Net] = Vec.new();
+            one.push(n.clone());
+            plan.add_free(v, one);
+            println(f"pool {net_str(n)} ({num_addresses(n)} addresses)");
+        } else if cmd == "reserve" {
+            let name = w[1].clone();
+            let n = match ip_network(w[2], true) {
+                Ok(n) => n,
+                Err(e) => return Err(show_err(e)),
+            };
+            let mut clash: i64 = -1;
+            for i in 0..plan.nets.len() {
+                let o = plan.nets[i].clone();
+                if clash < 0 and o.addr.v == n.addr.v and overlaps(o, n) {
+                    clash = i;
+                }
+            }
+            if clash >= 0 {
+                println(f"reserve {name}: {net_str(n)} overlaps {plan.names[clash]} ({net_str(plan.nets[clash])})");
+            } else if plan.take(name, n) {
+                println(f"reserve {name} {net_str(n)}");
+            } else {
+                println(f"reserve {name}: {net_str(n)} is outside every pool");
+            }
+        } else if cmd == "alloc" {
+            let name = w[1].clone();
+            let v = digits_value(slice_from(w[2], 1)) as i64;
+            let p = digits_value(slice_from(w[3], 1)) as i64;
+            if p > max_plen(v) {
+                println(f"alloc {name}: /{p} is not a valid IPv{v} prefix");
+                continue;
+            }
+            let free = plan.free(v);
+            let mut best: i64 = -1;
+            for i in 0..free.len() {
+                if free[i].plen <= p and (best < 0 or free[i].plen > free[best].plen) {
+                    best = i;
+                }
+            }
+            if best < 0 {
+                println(f"alloc {name}: no free /{p} in the IPv{v} pools");
+                continue;
+            }
+            let block = free[best].clone();
+            let net = net_of(v, block.addr.ip, p);
+            plan.take(name, net);
+            println(f"alloc {name} {net_str(net)} (from {net_str(block)})");
+        } else if cmd == "free" {
+            let name = w[1].clone();
+            let at = plan.find(name);
+            if at < 0 {
+                println(f"free {name}: no such allocation");
+                continue;
+            }
+            let n = plan.nets[at].clone();
+            plan.names.remove(at);
+            plan.nets.remove(at);
+            let mut one: Vec[Net] = Vec.new();
+            one.push(n.clone());
+            plan.add_free(n.addr.v, one);
+            println(f"free {name} {net_str(n)}");
+        } else if cmd == "show" {
+            println("show");
+            plan.show();
+        }
+    }
+    Ok(plan)
+}
+
+// ------------------------------------------------------------ the firewall
+
+struct Rule {
+    k: i64,
+    action: String,
+    proto: String,
+    any_src: bool,
+    src: Net,
+    any_dst: bool,
+    dst: Net,
+    // (lo, hi) pairs; empty for any port
+    ports: Vec[i64],
+}
+
+// A rule's source or destination: `any`, `@allocation` or a network.
+fn endpoint(s: Str, plan: ref Plan) -> Result[(bool, Net), IpError] {
+    if s == "any" {
+        return Ok((true, net_of(4, 0, 0)));
+    }
+    if first_byte(s) == b'@' {
+        let name = slice_from(s, 1);
+        let at = plan.find(name);
+        if at < 0 {
+            return Err(ve(f"no allocation named {py_repr(name)}"));
+        }
+        return Ok((false, plan.nets[at].clone()));
+    }
+    Ok((false, ip_network(s, true)?))
+}
+
+fn parse_ports(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if s == "any" {
+        return out;
+    }
+    let parts = split_on(s, b',');
+    for i in 0..parts.len() {
+        let (lo, dash, hi) = partition(parts[i], b'-');
+        out.push(digits_value(lo) as i64);
+        out.push(digits_value(if dash { hi } else { lo.clone() }) as i64);
+    }
+    out
+}
+
+fn ports_str(p: ref Vec[i64]) -> String {
+    if p.len() == 0 {
+        return "any".to_string();
+    }
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < p.len() {
+        out.push(if p[i] == p[i + 1] { f"{p[i]}" } else { f"{p[i]}-{p[i + 1]}" });
+        i += 2;
+    }
+    join(out, ",")
+}
+
+fn side_str(any: bool, n: ref Net) -> String {
+    if any { "any".to_string() } else { net_str(n) }
+}
+
+fn split_hostport(s: Str) -> Result[(Addr, i64), IpError] {
+    let mut host = String.new();
+    let mut port = String.new();
+    let mut found = false;
+    if first_byte(s) == b'[' {
+        let rest = slice_from(s, 1);
+        let at = find_str(rest, "]:");
+        if at >= 0 {
+            host = slice(rest, 0, at);
+            port = slice_from(rest, at + 2);
+            found = true;
+        }
+    } else {
+        let (h, sep, p) = rpartition(s, b':');
+        host = h;
+        port = p;
+        found = sep;
+    }
+    if not found {
+        return Err(ve(f"no port in {py_repr(s)}"));
+    }
+    let a = ip_address(host)?;
+    Ok((a, py_int_or(port)?))
+}
+
+fn hostport(a: ref Addr, port: i64) -> String {
+    if a.v == 6 { f"[{addr_str(a)}]:{port}" } else { f"{addr_str(a)}:{port}" }
+}
+
+fn pad_right(s: Str, n: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < n {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn show_firewall(plan: ref Plan) -> Result[(), String] {
+    println("== firewall");
+    let mut rules: Vec[Rule] = Vec.new();
+    let mut k: i64 = 0;
+    let acl = lines_of(read("data/acl.txt")?);
+    for li in 0..acl.len() {
+        let line = acl[li].clone();
+        if first_byte(line) == b'#' {
+            continue;
+        }
+        k += 1;
+        let w = split_ws(line);
+        let src = match endpoint(w[2], plan) {
+            Ok(x) => x,
+            Err(e) => {
+                println(f"rule {k}: {show_err(e)}, skipped");
+                continue;
+            }
+        };
+        let dst = match endpoint(w[3], plan) {
+            Ok(x) => x,
+            Err(e) => {
+                println(f"rule {k}: {show_err(e)}, skipped");
+                continue;
+            }
+        };
+        let (any_src, src_net) = src;
+        let (any_dst, dst_net) = dst;
+        let r = Rule { k: k, action: w[0].clone(), proto: w[1].clone(), any_src: any_src, src: src_net, any_dst: any_dst, dst: dst_net, ports: parse_ports(w[4]) };
+        println(f"rule {k}: {r.action} {r.proto} {side_str(r.any_src, r.src)} -> {side_str(r.any_dst, r.dst)} ports {ports_str(r.ports)}");
+        rules.push(r);
+    }
+    let mut hit_keys: Vec[String] = Vec.new();
+    let mut hit_counts: Vec[i64] = Vec.new();
+    let mut denied4: Vec[Item] = Vec.new();
+    let mut denied6: Vec[Item] = Vec.new();
+    let conns = lines_of(read("data/conns.txt")?);
+    for li in 0..conns.len() {
+        let line = conns[li].clone();
+        let w = split_ws(line);
+        let proto = w[0].clone();
+        let (src, sport) = match split_hostport(w[1]) {
+            Ok(x) => x,
+            Err(e) => {
+                println(f"  error   {line}: {show_err(e)}");
+                continue;
+            }
+        };
+        let (dst, dport) = match split_hostport(w[3]) {
+            Ok(x) => x,
+            Err(e) => {
+                println(f"  error   {line}: {show_err(e)}");
+                continue;
+            }
+        };
+        let mut verdict = "deny".to_string();
+        let mut which = "-".to_string();
+        for ri in 0..rules.len() {
+            let r = rules[ri].clone();
+            if r.proto != "any" and r.proto != proto {
+                continue;
+            }
+            if not r.any_src and not contains(r.src, src) {
+                continue;
+            }
+            if not r.any_dst and not contains(r.dst, dst) {
+                continue;
+            }
+            if r.ports.len() > 0 {
+                let mut ok = false;
+                let mut i: i64 = 0;
+                while i < r.ports.len() {
+                    if r.ports[i] <= dport and dport <= r.ports[i + 1] {
+                        ok = true;
+                    }
+                    i += 2;
+                }
+                if not ok {
+                    continue;
+                }
+            }
+            verdict = r.action.clone();
+            which = f"{r.k}";
+            break;
+        }
+        let mut at: i64 = -1;
+        for i in 0..hit_keys.len() {
+            if hit_keys[i] == which {
+                at = i;
+            }
+        }
+        if at < 0 {
+            hit_keys.push(which.clone());
+            hit_counts.push(1);
+        } else {
+            hit_counts[at] += 1;
+        }
+        let scope = if addr_flag(src, "global") { "global" } else if addr_flag(src, "private") { "private" } else { "shared" };
+        println(f"  {pad_right(verdict, 7)} rule {which} {proto} {hostport(src, sport)} -> {hostport(dst, dport)} ({scope})");
+        if verdict == "deny" and addr_flag(src, "global") {
+            if src.v == 4 {
+                denied4.push(addr_item(src));
+            } else {
+                denied6.push(addr_item(src));
+            }
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..hit_keys.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 and hit_keys[order[j]] < hit_keys[order[j - 1]] {
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..order.len() {
+        parts.push(f"{hit_keys[order[i]]}={hit_counts[order[i]]}");
+    }
+    println(f"hits: {join(parts, " ")}");
+    for v in [4, 6] {
+        let items = if v == 4 { denied4.clone() } else { denied6.clone() };
+        let list = match collapse(items) {
+            Ok(x) => net_list(x),
+            Err(e) => show_err(e),
+        };
+        let shown = if list.len() > 0 { list } else { "-".to_string() };
+        println(f"blocklist v{v} (global sources): {shown}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    show_addresses()?;
+    show_networks()?;
+    show_ops()?;
+    let plan = show_plan()?;
+    show_firewall(plan)
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_ipaddress: {e}");
+    }
+}

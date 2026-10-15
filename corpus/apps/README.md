@@ -182,6 +182,7 @@ cli/mini_argparse       command-line parsing, help and errors as Python's argpar
 cli/mini_urlparse       URLs as Python 3.13's urllib.parse: split, join, quoting, queries, an access-log report
 cli/mini_mime           base64, base32, base16, Ascii85, base85, hex, CRCs and quoted-printable as Python does them; a MIME packer and reader
 cli/mini_cookies        SimpleCookie load, quoting, morsels and output as Python does them; an RFC 6265 cookie jar
+cli/mini_ipaddress      IPv4 and IPv6 addresses and networks as Python's ipaddress module; an IPAM and a firewall
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
