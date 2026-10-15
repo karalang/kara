@@ -168,6 +168,7 @@ cli/mini_jq           a jq 1.7 subset running 47 invocations over pod, release, 
 cli/mini_patch        difflib's unified diff of two service trees, then GNU patch -p1 applying it: clean, -R, a drifted copy with offsets and a reject file, a malformed patch and garbage; output identical to difflib and GNU patch 2.7.6
 cli/mini_sed          a GNU sed 4.9 subset running 68 invocations over an access log, hosts, INI, .env, CSV and CHANGELOG: POSIX leftmost-longest BRE/ERE, ranges, hold space, a/i/c/r/w, -i/-s, GNU error messages; output identical to GNU sed 4.9
 cli/mini_yaml         a PyYAML 6.0.1 safe_load_all port loading k8s, compose, Actions and Ansible files plus YAML 1.1 edge cases and six broken files: scanner, parser, anchors, merge keys, implicit types, PyYAML error marks; output identical to PyYAML + json.dumps
+cli/mini_awk          an awk interpreter running 67 ops one-liners and report scripts over an access log, passwd, CSV, ps and df output: fields, ranges, arrays, user functions, getline, print > file, printf, paragraph mode; output identical to mawk 1.3.4
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
