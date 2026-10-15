@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 265 |
+| missing-feature | 266 |
 | codegen-gap | 259 |
 | false-positive | 188 |
 | other | 172 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2895 |
-| interp | 925 |
-| typecheck | 428 |
+| codegen | 2896 |
+| interp | 926 |
+| typecheck | 429 |
 | other | 115 |
 | ownership | 98 |
 | cli | 76 |
@@ -215,6 +215,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-15 | 2026-10-15 | typecheck | low | The string library has no reverse search: docs/library/strings.md lists `find` but no `rfind`, `rsplit_once`, `split_once` or `strip_suffix`, and there is no path module, so taking a path's parent directory, a file's extension or the last field of a line means scanning the bytes by hand | — |
 | B-2026-10-15-16 | 2026-10-15 | typecheck+ownership | medium | `let v = m.get(k).unwrap_or(String.new());` binds a borrow of a temporary (core-semantics.md §5.1: `String.new()` in a `ref` slot is a temporary), but `karac check` passes it; every MIR surface then refuses the whole program with `borrow check main: bb10[term]: drop of _9 while it is borrowed (borrow at bb9[0]) [E0516]`, which names a basic block and no source line | — |
 | B-2026-10-15-17 | 2026-10-15 | typecheck | low | The library has no byte encodings or digests: docs/library/ defines no base64, no hex encode/decode, and no SHA-1 / SHA-256, so a WebSocket handshake, HTTP basic auth, a JWT, an ETag or a content-addressed store each needs its own hand-written SHA-1 and base64 | — |
+| B-2026-10-15-18 | 2026-10-15 | typecheck+interp+codegen | medium | There is no UDP socket: docs/library/io.md § Networking defines only `TcpListener` and `TcpStream`, and `UdpSocket.bind(..)` is "undefined name 'UdpSocket'" in check and on every MIR surface, so DNS, statsd, syslog, NTP, DHCP, mDNS and QUIC clients and servers cannot be written | — |
 
 ### Relocated
 

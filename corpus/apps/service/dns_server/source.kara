@@ -1,0 +1,983 @@
+// An authoritative DNS server for one zone, over TCP (RFC 1035, RFC 7766).
+//
+// The zone is written as a master file, read back and parsed: $ORIGIN,
+// $TTL, relative and absolute names, `@`, A, AAAA, CNAME, MX, NS, TXT, SOA
+// and a wildcard. Queries arrive over a real loopback socket as
+// length-prefixed messages, several pipelined on one connection. The server
+// answers with the AA flag, compresses names with pointers, follows CNAME
+// chains inside the zone, synthesises wildcard answers, and returns
+// NXDOMAIN or NODATA with the SOA, REFUSED outside the zone, FORMERR for a
+// malformed message and NOTIMP for an opcode other than QUERY. The client
+// decodes every reply, compression pointers included, and prints it the way
+// `dig` would.
+//
+// UDP is the usual transport, but the library has no UDP socket
+// (B-2026-10-15-18), so this is DNS over TCP, which every resolver also
+// speaks.
+
+const ZONE: Str = "$ORIGIN example.test.
+$TTL 300
+@        IN SOA ns1 hostmaster 2026101501 7200 900 1209600 60
+@        IN NS  ns1
+@        IN NS  ns2.backup.test.
+@        IN MX  10 mail
+@        IN MX  20 mail.backup.test.
+ns1      IN A   10.0.0.53
+www      IN A   10.0.0.10
+www      IN A   10.0.0.11
+www      IN AAAA 2001:db8:0:0:0:0:0:10
+api  600 IN CNAME edge
+edge     IN CNAME www
+mail     IN A   10.0.0.25
+v6       IN AAAA 2001:0db8:0000:0000:0001:0000:0000:0001
+txt      IN TXT \"hello world\" \"v=spf1 -all\"
+*.dev    IN A   10.0.9.9
+gone     IN CNAME old.elsewhere.test.
+";
+
+const T_A: i64 = 1;
+const T_NS: i64 = 2;
+const T_CNAME: i64 = 5;
+const T_SOA: i64 = 6;
+const T_MX: i64 = 15;
+const T_TXT: i64 = 16;
+const T_AAAA: i64 = 28;
+const T_ANY: i64 = 255;
+
+fn type_name(t: i64) -> String {
+    match t {
+        1 => "A".to_string(),
+        2 => "NS".to_string(),
+        5 => "CNAME".to_string(),
+        6 => "SOA".to_string(),
+        15 => "MX".to_string(),
+        16 => "TXT".to_string(),
+        28 => "AAAA".to_string(),
+        255 => "ANY".to_string(),
+        _ => f"TYPE{t}",
+    }
+}
+
+fn type_code(s: Str) -> Option[i64] {
+    let names = ["A", "NS", "CNAME", "SOA", "MX", "TXT", "AAAA", "ANY"];
+    let codes = [1, 2, 5, 6, 15, 16, 28, 255];
+    for i in 0..names.len() {
+        if names[i] == s {
+            return Some(codes[i]);
+        }
+    }
+    None
+}
+
+fn rcode_name(r: i64) -> String {
+    match r {
+        0 => "NOERROR".to_string(),
+        1 => "FORMERR".to_string(),
+        3 => "NXDOMAIN".to_string(),
+        4 => "NOTIMP".to_string(),
+        5 => "REFUSED".to_string(),
+        _ => f"RCODE{r}",
+    }
+}
+
+// ---- record data ------------------------------------------------------
+
+enum Data {
+    Addr4(Vec[u8]),
+    Addr6(Vec[u8]),
+    Name(String),
+    Mx(i64, String),
+    Txt(Vec[String]),
+    Soa(String, String, Vec[i64]),
+}
+
+struct Record { name: String, ttl: i64, rtype: i64, data: Data }
+
+fn parse_ipv4(s: Str) -> Option[Vec[u8]] {
+    let parts: Vec[String] = s.split(".");
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for p in parts.iter() {
+        match i64.parse(p) {
+            Some(n) => {
+                if n < 0 or n > 255 {
+                    return None;
+                }
+                out.push(n as u8);
+            }
+            None => return None,
+        }
+    }
+    Some(out)
+}
+
+fn hex_digit(c: u8) -> Option[i64] {
+    if c >= 48u8 and c <= 57u8 {
+        Some((c - 48u8) as i64)
+    } else if c >= 97u8 and c <= 102u8 {
+        Some((c - 87u8) as i64)
+    } else if c >= 65u8 and c <= 70u8 {
+        Some((c - 55u8) as i64)
+    } else {
+        None
+    }
+}
+
+fn parse_group(g: Str) -> Option[i64] {
+    if g.len() == 0 or g.len() > 4 {
+        return None;
+    }
+    let mut v = 0;
+    for c in g.bytes() {
+        v = v * 16 + hex_digit(c)?;
+    }
+    Some(v)
+}
+
+fn parse_ipv6(s: Str) -> Option[Vec[u8]] {
+    let mut groups: Vec[i64] = Vec.new();
+    match s.find("::") {
+        Some(i) => {
+            let left = s[0..i];
+            let right = s[i + 2..s.len()];
+            let mut l: Vec[i64] = Vec.new();
+            let mut r: Vec[i64] = Vec.new();
+            if left.len() > 0 {
+                for g in left.split(":") {
+                    l.push(parse_group(g)?);
+                }
+            }
+            if right.len() > 0 {
+                for g in right.split(":") {
+                    r.push(parse_group(g)?);
+                }
+            }
+            if l.len() + r.len() > 7 {
+                return None;
+            }
+            for g in l.iter() {
+                groups.push(g);
+            }
+            for _ in 0..8 - l.len() - r.len() {
+                groups.push(0);
+            }
+            for g in r.iter() {
+                groups.push(g);
+            }
+        }
+        None => {
+            for g in s.split(":") {
+                groups.push(parse_group(g)?);
+            }
+        }
+    }
+    if groups.len() != 8 {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for g in groups.iter() {
+        out.push((g >> 8) as u8);
+        out.push((g & 0xff) as u8);
+    }
+    Some(out)
+}
+
+// RFC 5952: lowercase, no leading zeros, the longest run of two or more
+// zero groups (the first one on a tie) becomes "::".
+fn format_ipv6(b: Slice[u8]) -> String {
+    let mut g: Vec[i64] = Vec.new();
+    for i in 0..8 {
+        g.push(((b[2 * i] as i64) << 8) | (b[2 * i + 1] as i64));
+    }
+    let mut best = -1;
+    let mut best_len = 1;
+    let mut i = 0;
+    while i < 8 {
+        if g[i] == 0 {
+            let mut j = i;
+            while j < 8 and g[j] == 0 {
+                j = j + 1;
+            }
+            if j - i > best_len {
+                best = i;
+                best_len = j - i;
+            }
+            i = j;
+        } else {
+            i = i + 1;
+        }
+    }
+    let mut out = String.new();
+    let mut k = 0;
+    while k < 8 {
+        if k == best {
+            out.push_str("::");
+            k = k + best_len;
+            continue;
+        }
+        if out.len() > 0 and not out.ends_with(":") {
+            out.push(':');
+        }
+        out.push_str(f"{g[k]:x}");
+        k = k + 1;
+    }
+    out
+}
+
+fn format_ipv4(b: Slice[u8]) -> String {
+    f"{b[0]}.{b[1]}.{b[2]}.{b[3]}"
+}
+
+// ---- zone file --------------------------------------------------------
+
+struct Zone { origin: String, records: Vec[Record] }
+
+fn absolute(name: Str, origin: Str) -> String {
+    if name == "@" {
+        origin.to_string()
+    } else if name.ends_with(".") {
+        name.to_lowercase()
+    } else {
+        f"{name.to_lowercase()}.{origin}"
+    }
+}
+
+// Splits a zone line into fields, keeping quoted strings whole.
+fn fields(line: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut quoted = false;
+    let mut in_field = false;
+    for c in line.chars() {
+        if quoted {
+            if c == '"' {
+                quoted = false;
+                out.push(cur);
+                cur = String.new();
+                in_field = false;
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            quoted = true;
+            in_field = true;
+        } else if c == ' ' or c == '\t' {
+            if in_field {
+                out.push(cur);
+                cur = String.new();
+                in_field = false;
+            }
+        } else if c == ';' {
+            break;
+        } else {
+            cur.push(c);
+            in_field = true;
+        }
+    }
+    if in_field {
+        out.push(cur);
+    }
+    out
+}
+
+fn parse_zone(text: Str) -> Result[Zone, String] {
+    let mut origin = String.new();
+    let mut ttl = 3600;
+    let mut records: Vec[Record] = Vec.new();
+    let mut line_no = 0;
+    for line in text.lines() {
+        line_no += 1;
+        let f = fields(line);
+        if f.len() == 0 {
+            continue;
+        }
+        if f[0] == "$ORIGIN" {
+            origin = f[1].to_lowercase();
+            continue;
+        }
+        if f[0] == "$TTL" {
+            ttl = match i64.parse(f[1]) {
+                Some(n) => n,
+                None => return Err(f"line {line_no}: bad $TTL"),
+            };
+            continue;
+        }
+        let name = absolute(f[0], origin);
+        let mut at = 1;
+        let mut rttl = ttl;
+        match i64.parse(f[at]) {
+            Some(n) => {
+                rttl = n;
+                at += 1;
+            }
+            None => {}
+        }
+        if f[at] == "IN" {
+            at += 1;
+        }
+        let rtype = match type_code(f[at]) {
+            Some(t) => t,
+            None => return Err(f"line {line_no}: unknown type {f[at]}"),
+        };
+        at += 1;
+        let need = if rtype == T_MX { 2 } else if rtype == T_SOA { 7 } else { 1 };
+        if f.len() < at + need {
+            return Err(f"line {line_no}: {type_name(rtype)} needs {need} fields");
+        }
+        let data = if rtype == T_A {
+            match parse_ipv4(f[at]) {
+                Some(b) => Data.Addr4(b),
+                None => return Err(f"line {line_no}: bad IPv4 address {f[at]}"),
+            }
+        } else if rtype == T_AAAA {
+            match parse_ipv6(f[at]) {
+                Some(b) => Data.Addr6(b),
+                None => return Err(f"line {line_no}: bad IPv6 address {f[at]}"),
+            }
+        } else if rtype == T_MX {
+            match i64.parse(f[at]) {
+                Some(p) => Data.Mx(p, absolute(f[at + 1], origin)),
+                None => return Err(f"line {line_no}: bad MX preference"),
+            }
+        } else if rtype == T_TXT {
+            let mut parts: Vec[String] = Vec.new();
+            for k in at..f.len() {
+                parts.push(f[k].clone());
+            }
+            Data.Txt(parts)
+        } else if rtype == T_SOA {
+            let mut nums: Vec[i64] = Vec.new();
+            for k in at + 2..at + 7 {
+                match i64.parse(f[k]) {
+                    Some(n) => nums.push(n),
+                    None => return Err(f"line {line_no}: bad SOA number {f[k]}"),
+                }
+            }
+            Data.Soa(absolute(f[at], origin), absolute(f[at + 1], origin), nums)
+        } else {
+            Data.Name(absolute(f[at], origin))
+        };
+        records.push(Record { name: name, ttl: rttl, rtype: rtype, data: data });
+    }
+    if origin.len() == 0 {
+        return Err("no $ORIGIN".to_string());
+    }
+    Ok(Zone { origin: origin, records: records })
+}
+
+// ---- wire format ------------------------------------------------------
+
+struct Writer { buf: Vec[u8], names: SortedMap[String, i64] }
+
+impl Writer {
+    fn u8(mut ref self, v: i64) {
+        self.buf.push((v & 0xff) as u8);
+    }
+
+    fn u16(mut ref self, v: i64) {
+        self.buf.push(((v >> 8) & 0xff) as u8);
+        self.buf.push((v & 0xff) as u8);
+    }
+
+    fn u32(mut ref self, v: i64) {
+        self.u16((v >> 16) & 0xffff);
+        self.u16(v & 0xffff);
+    }
+
+    // Writes a name, pointing back at any suffix already written.
+    fn name(mut ref self, name: Str) {
+        let mut rest = name.to_string();
+        while rest.len() > 0 and rest != "." {
+            match self.names.get(rest) {
+                Some(off) => {
+                    self.u16(0xc000 | off);
+                    return;
+                }
+                None => {}
+            }
+            if self.buf.len() < 0x3fff {
+                self.names.insert(rest.clone(), self.buf.len());
+            }
+            let dot = rest.find(".").unwrap_or(rest.len());
+            let label = rest[0..dot].to_string();
+            self.u8(label.len());
+            for b in label.bytes() {
+                self.buf.push(b);
+            }
+            rest = if dot + 1 >= rest.len() { String.new() } else { rest[dot + 1..rest.len()].to_string() };
+        }
+        self.u8(0);
+    }
+}
+
+fn write_rdata(w: mut ref Writer, d: ref Data) {
+    let len_at = w.buf.len();
+    w.u16(0);
+    match d {
+        Data.Addr4(b) => {
+            for x in b.iter() {
+                w.buf.push(x);
+            }
+        }
+        Data.Addr6(b) => {
+            for x in b.iter() {
+                w.buf.push(x);
+            }
+        }
+        Data.Name(n) => w.name(n),
+        Data.Mx(p, n) => {
+            w.u16(p);
+            w.name(n);
+        }
+        Data.Txt(parts) => {
+            for p in parts.iter() {
+                w.u8(p.len());
+                for b in p.bytes() {
+                    w.buf.push(b);
+                }
+            }
+        }
+        Data.Soa(m, r, nums) => {
+            w.name(m);
+            w.name(r);
+            for n in nums.iter() {
+                w.u32(n);
+            }
+        }
+    }
+    let n = w.buf.len() - len_at - 2;
+    w.buf[len_at] = ((n >> 8) & 0xff) as u8;
+    w.buf[len_at + 1] = (n & 0xff) as u8;
+}
+
+fn write_rr(w: mut ref Writer, owner: Str, r: ref Record) {
+    w.name(owner);
+    w.u16(r.rtype);
+    w.u16(1);
+    w.u32(r.ttl);
+    write_rdata(w, r.data);
+}
+
+struct Reader { buf: Vec[u8], pos: i64 }
+
+impl Reader {
+    fn u8(mut ref self) -> Result[i64, String] {
+        if self.pos >= self.buf.len() {
+            return Err("message truncated".to_string());
+        }
+        let v = self.buf[self.pos] as i64;
+        self.pos += 1;
+        Ok(v)
+    }
+
+    fn u16(mut ref self) -> Result[i64, String] {
+        let hi = self.u8()?;
+        let lo = self.u8()?;
+        Ok((hi << 8) | lo)
+    }
+
+    fn u32(mut ref self) -> Result[i64, String] {
+        let hi = self.u16()?;
+        let lo = self.u16()?;
+        Ok((hi << 16) | lo)
+    }
+
+    // Reads a name, following compression pointers, which may only point
+    // backwards (so a loop cannot form).
+    fn name(mut ref self) -> Result[String, String] {
+        let mut out = String.new();
+        let mut at = self.pos;
+        let mut jumped = false;
+        let mut hops = 0;
+        loop {
+            if at >= self.buf.len() {
+                return Err("name runs off the end".to_string());
+            }
+            let len = self.buf[at] as i64;
+            if len == 0 {
+                if not jumped {
+                    self.pos = at + 1;
+                }
+                break;
+            }
+            if (len & 0xc0) == 0xc0 {
+                if at + 1 >= self.buf.len() {
+                    return Err("pointer cut short".to_string());
+                }
+                let target = ((len & 0x3f) << 8) | (self.buf[at + 1] as i64);
+                if target >= at or hops > 20 {
+                    return Err("bad compression pointer".to_string());
+                }
+                if not jumped {
+                    self.pos = at + 2;
+                }
+                jumped = true;
+                hops += 1;
+                at = target;
+                continue;
+            }
+            if len > 63 or at + 1 + len > self.buf.len() {
+                return Err("bad label".to_string());
+            }
+            for k in 0..len {
+                out.push((self.buf[at + 1 + k] as char).to_ascii_lowercase());
+            }
+            out.push('.');
+            at = at + 1 + len;
+        }
+        if out.len() == 0 {
+            out.push('.');
+        }
+        Ok(out)
+    }
+}
+
+// ---- server -----------------------------------------------------------
+
+struct Query { id: i64, opcode: i64, rd: bool, qname: String, qtype: i64 }
+
+fn parse_query(msg: Slice[u8]) -> Result[Query, (i64, String)] {
+    let mut buf: Vec[u8] = Vec.new();
+    for b in msg {
+        buf.push(b);
+    }
+    let mut r = Reader { buf: buf, pos: 0 };
+    let id = match r.u16() {
+        Ok(v) => v,
+        Err(e) => return Err((-1, e)),
+    };
+    let fail = |e: String| (id, e);
+    let flags = r.u16().map_err(fail)?;
+    let qd = r.u16().map_err(fail)?;
+    r.u16().map_err(fail)?;
+    r.u16().map_err(fail)?;
+    r.u16().map_err(fail)?;
+    if (flags & 0x8000) != 0 {
+        return Err((id, "a response, not a query".to_string()));
+    }
+    let opcode = (flags >> 11) & 0xf;
+    if qd != 1 {
+        return Err((id, f"{qd} questions"));
+    }
+    let qname = r.name().map_err(fail)?;
+    let qtype = r.u16().map_err(fail)?;
+    let qclass = r.u16().map_err(fail)?;
+    if qclass != 1 {
+        return Err((id, f"class {qclass}"));
+    }
+    Ok(Query { id: id, opcode: opcode, rd: (flags & 0x0100) != 0, qname: qname, qtype: qtype })
+}
+
+fn in_zone(name: Str, origin: Str) -> bool {
+    name == origin or name.ends_with(f".{origin}")
+}
+
+fn name_exists(zone: ref Zone, name: Str) -> bool {
+    for r in zone.records.iter() {
+        if r.name == name or r.name.ends_with(f".{name}") {
+            return true;
+        }
+    }
+    false
+}
+
+// The records at `name`, or the wildcard's at `*.<parent>` when `name`
+// itself has none (RFC 4592, simplified to one level).
+fn owner_records(zone: ref Zone, name: Str) -> (Vec[i64], bool) {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..zone.records.len() {
+        if zone.records[i].name == name {
+            out.push(i);
+        }
+    }
+    if out.len() > 0 or name_exists(zone, name) {
+        return (out, false);
+    }
+    match name.find(".") {
+        Some(dot) => {
+            let wild = f"*{name[dot..name.len()]}";
+            for i in 0..zone.records.len() {
+                if zone.records[i].name == wild {
+                    out.push(i);
+                }
+            }
+        }
+        None => {}
+    }
+    let synthesised = out.len() > 0;
+    (out, synthesised)
+}
+
+fn soa_index(zone: ref Zone) -> i64 {
+    for i in 0..zone.records.len() {
+        if zone.records[i].rtype == T_SOA {
+            return i;
+        }
+    }
+    -1
+}
+
+fn header(w: mut ref Writer, id: i64, opcode: i64, aa: bool, rd: bool, rcode: i64, qd: i64, an: i64, ns: i64) {
+    w.u16(id);
+    let mut flags = 0x8000 | (opcode << 11) | rcode;
+    if aa {
+        flags = flags | 0x0400;
+    }
+    if rd {
+        flags = flags | 0x0100;
+    }
+    w.u16(flags);
+    w.u16(qd);
+    w.u16(an);
+    w.u16(ns);
+    w.u16(0);
+}
+
+fn error_reply(id: i64, opcode: i64, rcode: i64) -> Vec[u8] {
+    let mut w = Writer { buf: Vec.new(), names: SortedMap.new() };
+    header(mut w, if id < 0 { 0 } else { id }, opcode, false, false, rcode, 0, 0, 0);
+    w.buf
+}
+
+fn answer(zone: ref Zone, msg: Slice[u8]) -> (Vec[u8], String) {
+    let q = match parse_query(msg) {
+        Ok(q) => q,
+        Err((id, e)) => return (error_reply(id, 0, 1), f"FORMERR ({e})"),
+    };
+    if q.opcode != 0 {
+        return (error_reply(q.id, q.opcode, 4), f"NOTIMP (opcode {q.opcode})");
+    }
+    if not in_zone(q.qname, zone.origin) {
+        let mut w = Writer { buf: Vec.new(), names: SortedMap.new() };
+        header(mut w, q.id, 0, false, q.rd, 5, 1, 0, 0);
+        w.name(q.qname);
+        w.u16(q.qtype);
+        w.u16(1);
+        return (w.buf, f"REFUSED {q.qname}");
+    }
+    // Follow CNAMEs while they stay in the zone.
+    let mut answers: Vec[(String, i64)] = Vec.new();
+    let mut name = q.qname.clone();
+    let mut rcode = 0;
+    let mut chased = 0;
+    loop {
+        let (idx, _) = owner_records(zone, name);
+        if idx.len() == 0 {
+            if not name_exists(zone, name) {
+                rcode = 3;
+            }
+            break;
+        }
+        let mut cname: Option[String] = None;
+        for i in idx.iter() {
+            let r = ref zone.records[i];
+            if r.rtype == T_CNAME and q.qtype != T_CNAME {
+                answers.push((name.clone(), i));
+                match r.data {
+                    Data.Name(n) => cname = Some(n.clone()),
+                    _ => {}
+                }
+            }
+        }
+        match cname {
+            Some(target) => {
+                chased += 1;
+                if chased > 8 or not in_zone(target, zone.origin) {
+                    break;
+                }
+                name = target;
+                continue;
+            }
+            None => {}
+        }
+        for i in idx.iter() {
+            let t = zone.records[i].rtype;
+            if t == q.qtype or q.qtype == T_ANY {
+                answers.push((name.clone(), i));
+            }
+        }
+        break;
+    }
+    let soa = soa_index(zone);
+    let with_soa = answers.len() == 0;
+    let mut w = Writer { buf: Vec.new(), names: SortedMap.new() };
+    header(mut w, q.id, 0, true, q.rd, rcode, 1, answers.len(), if with_soa { 1 } else { 0 });
+    w.name(q.qname);
+    w.u16(q.qtype);
+    w.u16(1);
+    for (owner, i) in answers.iter() {
+        write_rr(mut w, owner, zone.records[i]);
+    }
+    if with_soa {
+        write_rr(mut w, zone.origin, zone.records[soa]);
+    }
+    let what = if rcode == 3 { "NXDOMAIN" } else if answers.len() == 0 { "NODATA" } else { "NOERROR" };
+    (w.buf, f"{what} {q.qname} {type_name(q.qtype)} answers={answers.len()}")
+}
+
+// ---- client -----------------------------------------------------------
+
+fn query(id: i64, name: Str, qtype: i64) -> Vec[u8] {
+    let mut w = Writer { buf: Vec.new(), names: SortedMap.new() };
+    w.u16(id);
+    w.u16(0x0100);
+    w.u16(1);
+    w.u16(0);
+    w.u16(0);
+    w.u16(0);
+    w.name(name);
+    w.u16(qtype);
+    w.u16(1);
+    w.buf
+}
+
+fn rdata_text(r: mut ref Reader, rtype: i64, len: i64) -> Result[String, String] {
+    let end = r.pos + len;
+    let text = if rtype == T_A {
+        let mut b: Vec[u8] = Vec.new();
+        for _ in 0..4 {
+            b.push(r.u8()? as u8);
+        }
+        format_ipv4(b)
+    } else if rtype == T_AAAA {
+        let mut b: Vec[u8] = Vec.new();
+        for _ in 0..16 {
+            b.push(r.u8()? as u8);
+        }
+        format_ipv6(b)
+    } else if rtype == T_MX {
+        let p = r.u16()?;
+        f"{p} {r.name()?}"
+    } else if rtype == T_TXT {
+        let mut parts: Vec[String] = Vec.new();
+        while r.pos < end {
+            let n = r.u8()?;
+            let mut s = String.new();
+            for _ in 0..n {
+                s.push(r.u8()? as u8 as char);
+            }
+            parts.push(f"\"{s}\"");
+        }
+        parts.join(" ")
+    } else if rtype == T_SOA {
+        let m = r.name()?;
+        let rn = r.name()?;
+        let mut nums: Vec[String] = Vec.new();
+        for _ in 0..5 {
+            nums.push(f"{r.u32()?}");
+        }
+        f"{m} {rn} {nums.join(" ")}"
+    } else if rtype == T_NS or rtype == T_CNAME {
+        r.name()?
+    } else {
+        r.pos = end;
+        "?".to_string()
+    };
+    if r.pos != end {
+        return Err(f"rdata length {len} but read {len - (end - r.pos)}");
+    }
+    Ok(text)
+}
+
+fn print_reply(msg: Slice[u8]) -> Result[(), String] {
+    let mut buf: Vec[u8] = Vec.new();
+    for b in msg {
+        buf.push(b);
+    }
+    let mut r = Reader { buf: buf, pos: 0 };
+    let id = r.u16()?;
+    let flags = r.u16()?;
+    let qd = r.u16()?;
+    let an = r.u16()?;
+    let ns = r.u16()?;
+    let ar = r.u16()?;
+    let mut fl: Vec[String] = vec!["qr".to_string()];
+    if (flags & 0x0400) != 0 {
+        fl.push("aa".to_string());
+    }
+    if (flags & 0x0100) != 0 {
+        fl.push("rd".to_string());
+    }
+    println(f"  ;; id {id} {rcode_name(flags & 0xf)} flags: {fl.join(" ")}; QUERY: {qd}, ANSWER: {an}, AUTHORITY: {ns}, ADDITIONAL: {ar}");
+    for _ in 0..qd {
+        let n = r.name()?;
+        let t = r.u16()?;
+        r.u16()?;
+        println(f"  ;{n} IN {type_name(t)}");
+    }
+    for k in 0..an + ns {
+        let n = r.name()?;
+        let t = r.u16()?;
+        r.u16()?;
+        let ttl = r.u32()?;
+        let len = r.u16()?;
+        let text = rdata_text(mut r, t, len)?;
+        let section = if k < an { "" } else { "auth " };
+        println(f"  {section}{n} {ttl} IN {type_name(t)} {text}");
+    }
+    if r.pos != r.buf.len() {
+        return Err(f"{r.buf.len() - r.pos} trailing bytes");
+    }
+    println(f"  ;; {msg.len()} bytes");
+    Ok(())
+}
+
+fn frame_msg(out: mut ref Vec[u8], msg: Slice[u8]) {
+    out.push(((msg.len() >> 8) & 0xff) as u8);
+    out.push((msg.len() & 0xff) as u8);
+    for b in msg {
+        out.push(b);
+    }
+}
+
+fn read_all(conn: ref TcpStream) -> Vec[u8] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    bytes
+}
+
+// Splits a stream of 2-byte length-prefixed messages.
+fn unframe(bytes: Slice[u8]) -> (Vec[Vec[u8]], i64) {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut at = 0;
+    while at + 2 <= bytes.len() {
+        let n = ((bytes[at] as i64) << 8) | (bytes[at + 1] as i64);
+        if at + 2 + n > bytes.len() {
+            break;
+        }
+        let mut m: Vec[u8] = Vec.new();
+        for k in at + 2..at + 2 + n {
+            m.push(bytes[k]);
+        }
+        out.push(m);
+        at = at + 2 + n;
+    }
+    (out, bytes.len() - at)
+}
+
+fn session(listener: ref TcpListener, zone: ref Zone, label: Str, msgs: ref Vec[Vec[u8]]) {
+    println(f"== {label}");
+    let client = match TcpStream.connect("127.0.0.1:47743".to_string()) {
+        Ok(c) => c,
+        Err(_) => {
+            println("connect failed");
+            return;
+        }
+    };
+    let mut wire: Vec[u8] = Vec.new();
+    for m in msgs.iter() {
+        frame_msg(mut wire, m);
+    }
+    let sent = client.write_all(wire).is_ok() and client.shutdown_write().is_ok();
+    if not sent {
+        println("client write failed");
+    }
+    match listener.accept() {
+        Ok(conn) => {
+            let (queries, leftover) = unframe(read_all(conn));
+            let mut out: Vec[u8] = Vec.new();
+            for q in queries.iter() {
+                let (reply, log) = answer(zone, q);
+                println(f"  server: {log}");
+                frame_msg(mut out, reply);
+            }
+            if leftover > 0 {
+                println(f"  server: dropped {leftover} bytes of a cut-off message");
+            }
+            match conn.write_all(out) {
+                Ok(_) => {}
+                Err(_) => println("server write failed"),
+            }
+        }
+        Err(_) => println("accept failed"),
+    }
+    let (replies, _) = unframe(read_all(client));
+    for m in replies.iter() {
+        match print_reply(m) {
+            Ok(_) => {}
+            Err(e) => println(f"  bad reply: {e}"),
+        }
+    }
+}
+
+fn main() {
+    match fs.write("zone.db".to_string(), ZONE.to_string()) {
+        Ok(_) => {}
+        Err(_) => {
+            println("cannot write zone.db");
+            return;
+        }
+    }
+    let text = match fs.read_to_string("zone.db".to_string()) {
+        Ok(t) => t,
+        Err(_) => {
+            println("cannot read zone.db");
+            return;
+        }
+    };
+    let zone = match parse_zone(text) {
+        Ok(z) => z,
+        Err(e) => {
+            println(f"zone: {e}");
+            return;
+        }
+    };
+    println(f"zone {zone.origin}: {zone.records.len()} records");
+    let bad = parse_zone("$ORIGIN x.test.\nwww IN A 10.0.0.300\n");
+    match bad {
+        Ok(_) => println("bad zone accepted"),
+        Err(e) => println(f"bad zone refused: {e}"),
+    }
+
+    let listener = match TcpListener.bind("127.0.0.1:47743".to_string()) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+    session(listener, zone, "pipelined lookups", vec![
+        query(1, "www.example.test.", T_A),
+        query(2, "WWW.Example.Test.", T_AAAA),
+        query(3, "example.test.", T_MX),
+        query(4, "example.test.", T_NS),
+        query(5, "v6.example.test.", T_AAAA),
+        query(6, "txt.example.test.", T_TXT),
+    ]);
+    session(listener, zone, "cnames, wildcards, misses", vec![
+        query(7, "api.example.test.", T_A),
+        query(8, "api.example.test.", T_CNAME),
+        query(9, "build.dev.example.test.", T_A),
+        query(10, "gone.example.test.", T_A),
+        query(11, "nope.example.test.", T_A),
+        query(12, "mail.example.test.", T_MX),
+        query(13, "example.test.", T_SOA),
+        query(14, "www.example.test.", T_ANY),
+    ]);
+    let mut opcode2 = query(16, "www.example.test.", T_A);
+    opcode2[2] = 0x11u8;
+    let mut loop_ptr = query(17, "www.example.test.", T_A);
+    loop_ptr[12] = 0xc0u8;
+    loop_ptr[13] = 0x0cu8;
+    let mut cut = query(18, "www.example.test.", T_A);
+    cut.truncate(20);
+    session(listener, zone, "errors", vec![
+        query(15, "www.other.test.", T_A),
+        opcode2,
+        loop_ptr,
+        cut,
+    ]);
+}

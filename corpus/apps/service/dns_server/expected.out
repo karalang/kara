@@ -1,0 +1,96 @@
+zone example.test.: 16 records
+bad zone refused: line 2: bad IPv4 address 10.0.0.300
+== pipelined lookups
+  server: NOERROR www.example.test. A answers=2
+  server: NOERROR www.example.test. AAAA answers=1
+  server: NOERROR example.test. MX answers=2
+  server: NOERROR example.test. NS answers=2
+  server: NOERROR v6.example.test. AAAA answers=1
+  server: NOERROR txt.example.test. TXT answers=1
+  ;; id 1 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 0
+  ;www.example.test. IN A
+  www.example.test. 300 IN A 10.0.0.10
+  www.example.test. 300 IN A 10.0.0.11
+  ;; 66 bytes
+  ;; id 2 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+  ;www.example.test. IN AAAA
+  www.example.test. 300 IN AAAA 2001:db8::10
+  ;; 62 bytes
+  ;; id 3 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 0
+  ;example.test. IN MX
+  example.test. 300 IN MX 10 mail.example.test.
+  example.test. 300 IN MX 20 mail.backup.test.
+  ;; 79 bytes
+  ;; id 4 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 0
+  ;example.test. IN NS
+  example.test. 300 IN NS ns1.example.test.
+  example.test. 300 IN NS ns2.backup.test.
+  ;; 73 bytes
+  ;; id 5 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+  ;v6.example.test. IN AAAA
+  v6.example.test. 300 IN AAAA 2001:db8::1:0:0:1
+  ;; 61 bytes
+  ;; id 6 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+  ;txt.example.test. IN TXT
+  txt.example.test. 300 IN TXT "hello world" "v=spf1 -all"
+  ;; 70 bytes
+== cnames, wildcards, misses
+  server: NOERROR api.example.test. A answers=4
+  server: NOERROR api.example.test. CNAME answers=1
+  server: NOERROR build.dev.example.test. A answers=1
+  server: NOERROR gone.example.test. A answers=1
+  server: NXDOMAIN nope.example.test. A answers=0
+  server: NODATA mail.example.test. MX answers=0
+  server: NOERROR example.test. SOA answers=1
+  server: NOERROR www.example.test. ANY answers=3
+  ;; id 7 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 4, AUTHORITY: 0, ADDITIONAL: 0
+  ;api.example.test. IN A
+  api.example.test. 600 IN CNAME edge.example.test.
+  edge.example.test. 300 IN CNAME www.example.test.
+  www.example.test. 300 IN A 10.0.0.10
+  www.example.test. 300 IN A 10.0.0.11
+  ;; 103 bytes
+  ;; id 8 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+  ;api.example.test. IN CNAME
+  api.example.test. 600 IN CNAME edge.example.test.
+  ;; 53 bytes
+  ;; id 9 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+  ;build.dev.example.test. IN A
+  build.dev.example.test. 300 IN A 10.0.9.9
+  ;; 56 bytes
+  ;; id 10 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+  ;gone.example.test. IN A
+  gone.example.test. 300 IN CNAME old.elsewhere.test.
+  ;; 63 bytes
+  ;; id 11 NXDOMAIN flags: qr aa rd; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 0
+  ;nope.example.test. IN A
+  auth example.test. 300 IN SOA ns1.example.test. hostmaster.example.test. 2026101501 7200 900 1209600 60
+  ;; 86 bytes
+  ;; id 12 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 0
+  ;mail.example.test. IN MX
+  auth example.test. 300 IN SOA ns1.example.test. hostmaster.example.test. 2026101501 7200 900 1209600 60
+  ;; 86 bytes
+  ;; id 13 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+  ;example.test. IN SOA
+  example.test. 300 IN SOA ns1.example.test. hostmaster.example.test. 2026101501 7200 900 1209600 60
+  ;; 81 bytes
+  ;; id 14 NOERROR flags: qr aa rd; QUERY: 1, ANSWER: 3, AUTHORITY: 0, ADDITIONAL: 0
+  ;www.example.test. IN ANY
+  www.example.test. 300 IN A 10.0.0.10
+  www.example.test. 300 IN A 10.0.0.11
+  www.example.test. 300 IN AAAA 2001:db8::10
+  ;; 94 bytes
+== errors
+  server: REFUSED www.other.test.
+  server: NOTIMP (opcode 2)
+  server: FORMERR (bad compression pointer)
+  server: FORMERR (bad label)
+  ;; id 15 REFUSED flags: qr rd; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0
+  ;www.other.test. IN A
+  ;; 32 bytes
+  ;; id 16 NOTIMP flags: qr; QUERY: 0, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0
+  ;; 12 bytes
+  ;; id 17 FORMERR flags: qr; QUERY: 0, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0
+  ;; 12 bytes
+  ;; id 18 FORMERR flags: qr; QUERY: 0, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0
+  ;; 12 bytes

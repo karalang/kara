@@ -148,6 +148,7 @@ pipeline/doc_search full-text search: per-document index tasks on a TaskGroup fe
 service/rev_proxy   reverse proxy over loopback origins: longest-prefix routes, round-robin pools with passive health checks, 503 GET retry, hop-by-hop header stripping, de-chunking, 400/404/413/502
 cli/mini_git        a small git writing a real .git: own SHA-1 and zlib inflate (stored/fixed/dynamic), binary trees, commit ids matching real git, status, diff, checkout, fsck
 service/ws_chat     WebSocket chat server (RFC 6455): own SHA-1 + base64 handshake, masked and fragmented frames, ping/pong, close codes 1001/1002/1007/1009, a room with /nick /who /history
+service/dns_server  authoritative DNS over TCP (RFC 7766): zone-file parser, name compression, CNAME chasing, wildcards, NXDOMAIN/NODATA with SOA, REFUSED/NOTIMP/FORMERR, RFC 5952 AAAA text
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
