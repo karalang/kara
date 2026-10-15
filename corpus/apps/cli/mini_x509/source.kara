@@ -1,0 +1,2640 @@
+// mini_x509: OpenSSL 3.0's `x509`, `asn1parse` and `verify` commands,
+// written from RFC 5280, X.690 (DER), FIPS 180-4 and PKCS #1:
+// - a DER reader, PEM and base64, distinguished names, times, RSA and EC
+//   keys, and the extensions a web PKI uses (subject alternative names,
+//   basic constraints, key usage, extended key usage, key identifiers,
+//   CRL distribution points, authority information access, policies);
+// - `x509 -text` in OpenSSL's layout, `-subject`, `-dates`, `-serial`,
+//   `-ext`, SHA-1 and SHA-256 fingerprints, and the -checkhost, -checkip
+//   and -checkemail matchers with RFC 6125 wildcards;
+// - `asn1parse -i`;
+// - `verify`: chain building through untrusted intermediates, CA and
+//   path-length checks, purposes, key usage, hostnames, validity at a
+//   given time, and RSA PKCS #1 v1.5 signatures checked with Montgomery
+//   multiplication, reported with OpenSSL's error codes and order.
+//
+// The inputs are the certificates in data/, made with Python's
+// cryptography. expected.out is the output of oracle.py, the same
+// program in Python, and is byte-identical to OpenSSL 3.0.13's.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+
+// ------------------------------------------------------------ SHA-1 and SHA-256 (FIPS 180-4)
+
+const MASK32: i64 = 0xFFFFFFFF;
+
+fn rotr(x: i64, n: i64) -> i64 {
+    ((x >> n) | (x << (32 - n))) & MASK32
+}
+
+fn rotl(x: i64, n: i64) -> i64 {
+    ((x << n) | (x >> (32 - n))) & MASK32
+}
+
+// The message padded to whole 64-byte blocks, with its bit length.
+fn md_pad(msg: ref Vec[u8]) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % 64 != 56 {
+        m.push(0);
+    }
+    let mut k = 56;
+    while k >= 0 {
+        m.push(((bits >> k) & 0xFF) as u8);
+        k -= 8;
+    }
+    m
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> i64 {
+    (b[i] as i64) << 24 | (b[i + 1] as i64) << 16 | (b[i + 2] as i64) << 8 | b[i + 3] as i64
+}
+
+fn push_be32(out: mut ref Vec[u8], x: i64) {
+    out.push(((x >> 24) & 0xFF) as u8);
+    out.push(((x >> 16) & 0xFF) as u8);
+    out.push(((x >> 8) & 0xFF) as u8);
+    out.push((x & 0xFF) as u8);
+}
+
+const SHA256_K: Array[i64, 64] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+fn sha256(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg);
+    let mut h: Vec[i64] = Vec.new();
+    for x in [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19] {
+        h.push(x);
+    }
+    let mut w: Vec[i64] = Vec.new();
+    for _ in 0..64 {
+        w.push(0);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = rotr(w[t - 15], 7) ^ rotr(w[t - 15], 18) ^ (w[t - 15] >> 3);
+            let s1 = rotr(w[t - 2], 17) ^ rotr(w[t - 2], 19) ^ (w[t - 2] >> 10);
+            w[t] = (w[t - 16] + s0 + w[t - 7] + s1) & MASK32;
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+        for t in 0..64 {
+            let s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+            let ch = (e & f) ^ ((e ^ MASK32) & g);
+            let t1 = (hh + s1 + ch + SHA256_K[t] + w[t]) & MASK32;
+            let s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = (s0 + maj) & MASK32;
+            hh = g;
+            g = f;
+            f = e;
+            e = (d + t1) & MASK32;
+            d = c;
+            c = b;
+            b = a;
+            a = (t1 + t2) & MASK32;
+        }
+        h[0] = (h[0] + a) & MASK32;
+        h[1] = (h[1] + b) & MASK32;
+        h[2] = (h[2] + c) & MASK32;
+        h[3] = (h[3] + d) & MASK32;
+        h[4] = (h[4] + e) & MASK32;
+        h[5] = (h[5] + f) & MASK32;
+        h[6] = (h[6] + g) & MASK32;
+        h[7] = (h[7] + hh) & MASK32;
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg);
+    let mut h: Vec[i64] = Vec.new();
+    for x in [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0] {
+        h.push(x);
+    }
+    let mut w: Vec[i64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = rotl(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let (f, k) = if t < 20 {
+                ((b & c) | ((b ^ MASK32) & d), 0x5A827999)
+            } else if t < 40 {
+                (b ^ c ^ d, 0x6ED9EBA1)
+            } else if t < 60 {
+                ((b & c) | (b & d) | (c & d), 0x8F1BBCDC)
+            } else {
+                (b ^ c ^ d, 0xCA62C1D6)
+            };
+            let tmp = (rotl(a, 5) + f + e + k + w[t]) & MASK32;
+            e = d;
+            d = c;
+            c = rotl(b, 30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = (h[0] + a) & MASK32;
+        h[1] = (h[1] + b) & MASK32;
+        h[2] = (h[2] + c) & MASK32;
+        h[3] = (h[3] + d) & MASK32;
+        h[4] = (h[4] + e) & MASK32;
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ base64
+
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// Strict base64, as Python's b64decode(validate=True) reads it.
+fn b64_decode(s: ref Vec[u8]) -> Option[Vec[u8]] {
+    if s.len() % 4 != 0 {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < s.len() {
+        let mut acc: i64 = 0;
+        let mut pad: i64 = 0;
+        for k in 0..4 {
+            let c = s[i + k];
+            if c == b'=' {
+                // padding only at the very end
+                if i + 4 != s.len() or k < 2 {
+                    return None;
+                }
+                pad += 1;
+                acc = acc << 6;
+            } else {
+                if pad > 0 {
+                    return None;
+                }
+                let v = b64_value(c);
+                if v < 0 {
+                    return None;
+                }
+                acc = acc << 6 | v;
+            }
+        }
+        out.push(((acc >> 16) & 0xFF) as u8);
+        if pad < 2 {
+            out.push(((acc >> 8) & 0xFF) as u8);
+        }
+        if pad < 1 {
+            out.push((acc & 0xFF) as u8);
+        }
+        i += 4;
+    }
+    Some(out)
+}
+
+// ------------------------------------------------------------ RSA arithmetic
+
+// Unsigned numbers as little-endian 30-bit limbs, so that a limb product
+// and its carries fit in an i64.
+const LIMB: i64 = 30;
+const MASK: i64 = 0x3FFFFFFF;
+
+fn limbs_of(b: ref Vec[u8], k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..k {
+        out.push(0);
+    }
+    let mut bit: i64 = 0;
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        let v = b[i] as i64;
+        let li = bit / LIMB;
+        let sh = bit % LIMB;
+        out[li] = out[li] | ((v << sh) & MASK);
+        if sh + 8 > LIMB and li + 1 < k {
+            out[li + 1] = out[li + 1] | (v >> (LIMB - sh));
+        }
+        bit += 8;
+        i -= 1;
+    }
+    out
+}
+
+fn bytes_of_limbs(x: ref Vec[i64], nbytes: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = nbytes - 1;
+    while i >= 0 {
+        let bit = i * 8;
+        let li = bit / LIMB;
+        let sh = bit % LIMB;
+        let mut v = if li < x.len() { x[li] >> sh } else { 0 };
+        if sh + 8 > LIMB and li + 1 < x.len() {
+            v = v | (x[li + 1] << (LIMB - sh));
+        }
+        out.push((v & 0xFF) as u8);
+        i -= 1;
+    }
+    out
+}
+
+// Whether x (k + 1 limbs, the top one possibly nonzero) is at least n.
+fn at_least(x: ref Vec[i64], n: ref Vec[i64]) -> bool {
+    let k = n.len();
+    if x[k] != 0 {
+        return true;
+    }
+    let mut i = k - 1;
+    while i >= 0 {
+        if x[i] != n[i] {
+            return x[i] > n[i];
+        }
+        i -= 1;
+    }
+    true
+}
+
+fn sub_in_place(x: mut ref Vec[i64], n: ref Vec[i64]) {
+    let mut borrow: i64 = 0;
+    for i in 0..n.len() {
+        let mut d = x[i] - n[i] - borrow;
+        if d < 0 {
+            d += MASK + 1;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        x[i] = d;
+    }
+    x[n.len()] -= borrow;
+}
+
+// A modulus with its Montgomery constants, kept per public key the way
+// OpenSSL keeps a BN_MONT_CTX, since R^2 mod n costs more than a check.
+struct Mont {
+    key: Vec[u8],
+    n: Vec[i64],
+    np: i64,
+    r2: Vec[i64],
+}
+
+fn mont_setup(key: ref Vec[u8], n: own Vec[i64]) -> Mont {
+    let k = n.len();
+    // n[0]^-1 mod 2^30 by Newton's iteration, then its negation
+    let mut inv: i64 = 1;
+    for _ in 0..5 {
+        let t = (n[0] * inv) & MASK;
+        inv = (inv * ((2 - t) & MASK)) & MASK;
+    }
+    let np = (MASK + 1 - inv) & MASK;
+    // R^2 mod n, R = 2^(30k): double 1 up to R * 2^j, where 30k = j * 2^m,
+    // then square m times, since mont_mul(R * 2^j, R * 2^j) = R * 2^(2j)
+    let shift = LIMB * k;
+    let mut j = shift;
+    let mut sq: i64 = 0;
+    while j % 2 == 0 {
+        j = j / 2;
+        sq += 1;
+    }
+    let mut r: Vec[i64] = Vec.new();
+    for _ in 0..k + 1 {
+        r.push(0);
+    }
+    r[0] = 1;
+    for _ in 0..shift + j {
+        let mut carry: i64 = 0;
+        for i in 0..k + 1 {
+            let v = r[i] * 2 + carry;
+            r[i] = v & MASK;
+            carry = v >> LIMB;
+        }
+        if at_least(r, n) {
+            sub_in_place(mut r, n);
+        }
+    }
+    r.pop();
+    let mut m = Mont { key: key.clone(), n: n, np: np, r2: Vec.new() };
+    for _ in 0..sq {
+        r = mont_mul(m, r, r);
+    }
+    m.r2 = r;
+    m
+}
+
+// a * b / R mod n
+fn mont_mul(m: ref Mont, a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let n = ref m.n;
+    let k = n.len();
+    let mut t: Vec[i64] = Vec.new();
+    for _ in 0..k + 2 {
+        t.push(0);
+    }
+    for i in 0..k {
+        let ai = a[i];
+        let mut c: i64 = 0;
+        for j in 0..k {
+            let s = t[j] + ai * b[j] + c;
+            t[j] = s & MASK;
+            c = s >> LIMB;
+        }
+        let s = t[k] + c;
+        t[k] = s & MASK;
+        t[k + 1] += s >> LIMB;
+        let q = (t[0] * m.np) & MASK;
+        let mut c2 = (t[0] + q * n[0]) >> LIMB;
+        for j in 1..k {
+            let s2 = t[j] + q * n[j] + c2;
+            t[j - 1] = s2 & MASK;
+            c2 = s2 >> LIMB;
+        }
+        let s3 = t[k] + c2;
+        t[k - 1] = s3 & MASK;
+        t[k] = t[k + 1] + (s3 >> LIMB);
+        t[k + 1] = 0;
+    }
+    t.pop();
+    if at_least(t, n) {
+        sub_in_place(mut t, n);
+    }
+    t.pop();
+    t
+}
+
+// base^e mod n, as big-endian bytes the length of n.
+fn mod_pow(cache: mut ref Vec[Mont], n_bytes: ref Vec[u8], base: ref Vec[u8], e: i64) -> Vec[u8] {
+    // a whole number of 4-limb groups, so 30k has trailing zeros to spare
+    let k = ((n_bytes.len() * 8 + LIMB - 1) / LIMB + 3) / 4 * 4;
+    let mut at: i64 = -1;
+    for i in 0..cache.len() {
+        if cache[i].key == n_bytes {
+            at = i;
+        }
+    }
+    if at < 0 {
+        cache.push(mont_setup(n_bytes, limbs_of(n_bytes, k)));
+        at = cache.len() - 1;
+    }
+    let m = ref cache[at];
+    let x = mont_mul(m, limbs_of(base, k), m.r2);
+    let mut top: i64 = 62;
+    while top > 0 and (e >> top) & 1 == 0 {
+        top -= 1;
+    }
+    let mut acc = x.clone();
+    let mut bit = top - 1;
+    while bit >= 0 {
+        acc = mont_mul(m, acc, acc);
+        if (e >> bit) & 1 == 1 {
+            acc = mont_mul(m, acc, x);
+        }
+        bit -= 1;
+    }
+    let mut one: Vec[i64] = Vec.new();
+    for _ in 0..k {
+        one.push(0);
+    }
+    one[0] = 1;
+    bytes_of_limbs(mont_mul(m, acc, one), n_bytes.len())
+}
+
+// ------------------------------------------------------------ DER (X.690)
+
+#[derive(Clone)]
+struct Node {
+    tag: i64,
+    start: i64,
+    hl: i64,
+    len: i64,
+    kids: Vec[Node],
+}
+
+fn body(n: ref Node, d: ref Vec[u8]) -> Vec[u8] {
+    sub_bytes(d, n.start + n.hl, n.start + n.hl + n.len)
+}
+
+fn node_end(n: ref Node) -> i64 {
+    n.start + n.hl + n.len
+}
+
+fn sub_bytes(d: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = from;
+    while i < to {
+        v.push(d[i]);
+        i += 1;
+    }
+    v
+}
+
+// One TLV at pos, with everything inside a constructed one.
+fn parse_der(d: ref Vec[u8], pos: i64, end: i64) -> Option[Node] {
+    if pos + 2 > end {
+        return None;
+    }
+    let tag = d[pos] as i64;
+    let b = d[pos + 1] as i64;
+    let mut hl: i64 = 2;
+    let mut length: i64 = 0;
+    if b < 0x80 {
+        length = b;
+    } else {
+        let n = b & 0x7F;
+        if n == 0 or n > 4 or pos + 2 + n > end {
+            return None;
+        }
+        for i in 0..n {
+            length = length << 8 | d[pos + 2 + i] as i64;
+        }
+        hl = 2 + n;
+    }
+    if pos + hl + length > end {
+        return None;
+    }
+    let mut node = Node { tag: tag, start: pos, hl: hl, len: length, kids: Vec.new() };
+    if tag & 0x20 != 0 {
+        let mut p = pos + hl;
+        while p < pos + hl + length {
+            let k = parse_der(d, p, pos + hl + length)?;
+            p = node_end(k);
+            node.kids.push(k);
+        }
+    }
+    Some(node)
+}
+
+fn parse_all(d: ref Vec[u8]) -> Option[Node] {
+    parse_der(d, 0, d.len())
+}
+
+// (short name, long name) of the object identifiers OpenSSL names here.
+// B-2026-10-14-43: a literal pattern cannot match a `Str`, so the match
+// is on a copy. B-2026-10-14-68: the literals in `Some((.., ..))` stay
+// `String` against `Option[(Str, Str)]`, so the names are `String`.
+fn oid_names(oid: Str) -> Option[(String, String)] {
+    match oid.to_string() {
+        "2.5.4.6" => Some(("C", "countryName")),
+        "2.5.4.8" => Some(("ST", "stateOrProvinceName")),
+        "2.5.4.7" => Some(("L", "localityName")),
+        "2.5.4.10" => Some(("O", "organizationName")),
+        "2.5.4.11" => Some(("OU", "organizationalUnitName")),
+        "2.5.4.3" => Some(("CN", "commonName")),
+        "1.2.840.113549.1.9.1" => Some(("emailAddress", "emailAddress")),
+        "1.2.840.113549.1.1.1" => Some(("rsaEncryption", "rsaEncryption")),
+        "1.2.840.113549.1.1.11" => Some(("RSA-SHA256", "sha256WithRSAEncryption")),
+        "1.2.840.10045.2.1" => Some(("id-ecPublicKey", "id-ecPublicKey")),
+        "1.2.840.10045.3.1.7" => Some(("prime256v1", "prime256v1")),
+        "2.5.29.17" => Some(("subjectAltName", "X509v3 Subject Alternative Name")),
+        "2.5.29.19" => Some(("basicConstraints", "X509v3 Basic Constraints")),
+        "2.5.29.15" => Some(("keyUsage", "X509v3 Key Usage")),
+        "2.5.29.37" => Some(("extendedKeyUsage", "X509v3 Extended Key Usage")),
+        "2.5.29.14" => Some(("subjectKeyIdentifier", "X509v3 Subject Key Identifier")),
+        "2.5.29.35" => Some(("authorityKeyIdentifier", "X509v3 Authority Key Identifier")),
+        "2.5.29.31" => Some(("crlDistributionPoints", "X509v3 CRL Distribution Points")),
+        "2.5.29.32" => Some(("certificatePolicies", "X509v3 Certificate Policies")),
+        "1.3.6.1.5.5.7.1.1" => Some(("authorityInfoAccess", "Authority Information Access")),
+        "1.3.6.1.5.5.7.3.1" => Some(("serverAuth", "TLS Web Server Authentication")),
+        "1.3.6.1.5.5.7.3.2" => Some(("clientAuth", "TLS Web Client Authentication")),
+        "1.3.6.1.5.5.7.3.3" => Some(("codeSigning", "Code Signing")),
+        "1.3.6.1.5.5.7.3.4" => Some(("emailProtection", "E-mail Protection")),
+        "1.3.6.1.5.5.7.3.8" => Some(("timeStamping", "Time Stamping")),
+        "1.3.6.1.5.5.7.3.9" => Some(("OCSPSigning", "OCSP Signing")),
+        "1.3.6.1.5.5.7.48.1" => Some(("OCSP", "OCSP")),
+        "1.3.6.1.5.5.7.48.2" => Some(("caIssuers", "CA Issuers")),
+        _ => None,
+    }
+}
+
+fn short_name(oid: Str) -> String {
+    match oid_names(oid) {
+        Some((s, _)) => s,
+        None => oid.to_string(),
+    }
+}
+
+fn long_name(oid: Str) -> String {
+    match oid_names(oid) {
+        Some((_, l)) => l,
+        None => oid.to_string(),
+    }
+}
+
+fn oid_str(b: ref Vec[u8]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut v: i64 = 0;
+    let mut first = true;
+    for c in b {
+        v = v << 7 | (c as i64 & 0x7F);
+        if c & 0x80 == 0 {
+            if first {
+                let x = if v < 40 { 0 } else if v < 80 { 1 } else { 2 };
+                parts.push(f"{x}");
+                parts.push(f"{v - 40 * x}");
+                first = false;
+            } else {
+                parts.push(f"{v}");
+            }
+            v = 0;
+        }
+    }
+    join(parts, ".")
+}
+
+fn hexc(b: ref Vec[u8], up: bool) -> String {
+    let mut out = String.new();
+    for i in 0..b.len() {
+        if i > 0 {
+            out.push_str(":");
+        }
+        if up {
+            out.push_str(f"{b[i]:02X}");
+        } else {
+            out.push_str(f"{b[i]:02x}");
+        }
+    }
+    out
+}
+
+fn be_int(b: ref Vec[u8]) -> i64 {
+    let mut v: i64 = 0;
+    for c in b {
+        v = v << 8 | c as i64;
+    }
+    v
+}
+
+// ------------------------------------------------------------ certificates
+
+#[derive(Clone)]
+struct Ext {
+    oid: String,
+    critical: bool,
+    value: Vec[u8],
+}
+
+#[derive(Clone)]
+struct Cert {
+    der: Vec[u8],
+    tbs: Vec[u8],
+    sig_alg: String,
+    sig: Vec[u8],
+    version: i64,
+    serial: Vec[u8],
+    tbs_alg: String,
+    issuer: String,
+    issuer_der: Vec[u8],
+    not_before: i64,
+    nb_text: String,
+    not_after: i64,
+    na_text: String,
+    subject: String,
+    subject_der: Vec[u8],
+    key_alg: String,
+    curve: String,
+    key_bytes: Vec[u8],
+    n: Vec[u8],
+    e: i64,
+    exts: Vec[Ext],
+}
+
+fn text_of(d: ref Vec[u8], n: ref Node) -> String {
+    lossy(body(n, d))
+}
+
+// Text from bytes, with U+FFFD standing in when they are not UTF-8.
+fn lossy(b: Vec[u8]) -> String {
+    String.from_utf8(b).unwrap_or("\u{FFFD}".to_string())
+}
+
+// A distinguished name as OpenSSL's default `-nameopt oneline` prints it.
+fn dn(d: ref Vec[u8], n: ref Node) -> String {
+    let mut out: Vec[String] = Vec.new();
+    for rdn in n.kids {
+        for atv in rdn.kids {
+            let oid = oid_str(body(atv.kids[0], d));
+            out.push(f"{short_name(oid)} = {text_of(d, atv.kids[1])}");
+        }
+    }
+    join(out, ", ")
+}
+
+const MONTHS: Array[Str, 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+fn digits(s: ref Vec[u8], from: i64, to: i64) -> i64 {
+    let mut v: i64 = 0;
+    for i in from..to {
+        v = v * 10 + (s[i] - b'0') as i64;
+    }
+    v
+}
+
+// Days from 1970-01-01, by Howard Hinnant's days_from_civil.
+fn epoch(y0: i64, mo: i64, da: i64, hh: i64, mi: i64, ss: i64) -> i64 {
+    let y = if mo <= 2 { y0 - 1 } else { y0 };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let mp = if mo > 2 { mo - 3 } else { mo + 9 };
+    let doy = (153 * mp + 2) / 5 + da - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    days * 86400 + hh * 3600 + mi * 60 + ss
+}
+
+// A UTCTime or GeneralizedTime: seconds since the epoch, and as printed.
+fn time_of(d: ref Vec[u8], n: ref Node) -> (i64, String) {
+    let s = body(n, d);
+    let mut y: i64 = 0;
+    let mut i: i64 = 0;
+    if n.tag == 0x17 {
+        y = digits(s, 0, 2);
+        y += if y < 50 { 2000 } else { 1900 };
+        i = 2;
+    } else {
+        y = digits(s, 0, 4);
+        i = 4;
+    }
+    let mo = digits(s, i, i + 2);
+    let da = digits(s, i + 2, i + 4);
+    let hh = digits(s, i + 4, i + 6);
+    let mi = digits(s, i + 6, i + 8);
+    let ss = digits(s, i + 8, i + 10);
+    (epoch(y, mo, da, hh, mi, ss), f"{MONTHS[mo - 1]} {da:2} {hh:02}:{mi:02}:{ss:02} {y} GMT")
+}
+
+fn load_cert(d: ref Vec[u8]) -> Option[Cert] {
+    let root = parse_all(d)?;
+    if root.tag != 0x30 or root.kids.len() != 3 {
+        return None;
+    }
+    let tbs = ref root.kids[0];
+    let k = ref tbs.kids;
+    let mut i: i64 = 0;
+    let mut version: i64 = 1;
+    if k[0].tag == 0xA0 {
+        version = body(k[0].kids[0], d)[0] as i64 + 1;
+        i = 1;
+    }
+    let (nb, nb_text) = time_of(d, k[i + 3].kids[0]);
+    let (na, na_text) = time_of(d, k[i + 3].kids[1]);
+    let spki = ref k[i + 5];
+    let alg = ref spki.kids[0];
+    let key_alg = oid_str(body(alg.kids[0], d));
+    let curve = if alg.kids.len() > 1 and alg.kids[1].tag == 6 { oid_str(body(alg.kids[1], d)) } else { String.new() };
+    let bits = body(spki.kids[1], d);
+    let key_bytes = sub_bytes(bits, 1, bits.len());
+    let mut n: Vec[u8] = Vec.new();
+    let mut e: i64 = 0;
+    if key_alg == "1.2.840.113549.1.1.1" {
+        let kn = parse_all(key_bytes)?;
+        n = body(kn.kids[0], key_bytes);
+        e = be_int(body(kn.kids[1], key_bytes));
+    }
+    let mut exts: Vec[Ext] = Vec.new();
+    for j in i + 6..k.len() {
+        if k[j].tag == 0xA3 {
+            for x in k[j].kids[0].kids {
+                let crit = x.kids.len() == 3 and body(x.kids[1], d)[0] != 0;
+                exts.push(Ext {
+                    oid: oid_str(body(x.kids[0], d)),
+                    critical: crit,
+                    value: body(x.kids[x.kids.len() - 1], d),
+                });
+            }
+        }
+    }
+    let sig = body(root.kids[2], d);
+    Some(Cert {
+        der: d.clone(),
+        tbs: sub_bytes(d, tbs.start, node_end(tbs)),
+        sig_alg: oid_str(body(root.kids[1].kids[0], d)),
+        sig: sub_bytes(sig, 1, sig.len()),
+        version: version,
+        serial: body(k[i], d),
+        tbs_alg: oid_str(body(k[i + 1].kids[0], d)),
+        issuer: dn(d, k[i + 2]),
+        issuer_der: sub_bytes(d, k[i + 2].start, node_end(k[i + 2])),
+        not_before: nb,
+        nb_text: nb_text,
+        not_after: na,
+        na_text: na_text,
+        subject: dn(d, k[i + 4]),
+        subject_der: sub_bytes(d, k[i + 4].start, node_end(k[i + 4])),
+        key_alg: key_alg,
+        curve: curve,
+        key_bytes: key_bytes,
+        n: n,
+        e: e,
+        exts: exts,
+    })
+}
+
+fn find_ext(c: ref Cert, oid: Str) -> Option[Vec[u8]] {
+    for x in c.exts {
+        if x.oid == oid {
+            return Some(x.value.clone());
+        }
+    }
+    None
+}
+
+// ------------------------------------------------------------ extension values
+
+const KU_NAMES: Array[Str, 9] = ["Digital Signature", "Non Repudiation", "Key Encipherment", "Data Encipherment",
+    "Key Agreement", "Certificate Sign", "CRL Sign", "Encipher Only", "Decipher Only"];
+
+// The bits set in a key usage, numbered from the top of the first byte.
+fn key_usage(v: ref Vec[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = match parse_all(v) {
+        Some(n) => n,
+        None => return out,
+    };
+    let b = body(n, v);
+    for k in 0..9 {
+        let byte = k / 8;
+        if byte < b.len() - 1 and (b[1 + byte] as i64) & (0x80 >> (k % 8)) != 0 {
+            out.push(k);
+        }
+    }
+    out
+}
+
+fn basic_constraints(v: ref Vec[u8]) -> (bool, i64) {
+    let mut ca = false;
+    let mut plen: i64 = -1;
+    if let Some(n) = parse_all(v) {
+        for k in n.kids {
+            if k.tag == 1 {
+                ca = body(k, v)[0] != 0;
+            } else if k.tag == 2 {
+                plen = be_int(body(k, v));
+            }
+        }
+    }
+    (ca, plen)
+}
+
+fn ip_text(b: ref Vec[u8]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    if b.len() == 4 {
+        for x in b {
+            parts.push(f"{x}");
+        }
+        return join(parts, ".");
+    }
+    let mut i: i64 = 0;
+    while i < 16 {
+        let g = (b[i] as i64) << 8 | b[i + 1] as i64;
+        parts.push(f"{g:X}");
+        i += 2;
+    }
+    join(parts, ":")
+}
+
+#[derive(Clone)]
+struct GenName {
+    kind: String,
+    text: String,
+    raw: Vec[u8],
+}
+
+fn general_names(v: ref Vec[u8], kids: ref Vec[Node]) -> Vec[GenName] {
+    let mut out: Vec[GenName] = Vec.new();
+    for g in kids {
+        let t = g.tag & 0x1F;
+        let b = body(g, v);
+        let kind = if t == 1 {
+            "email"
+        } else if t == 2 {
+            "DNS"
+        } else if t == 6 {
+            "URI"
+        } else if t == 7 {
+            "IP Address"
+        } else {
+            "othername"
+        };
+        let text = if t == 7 {
+            ip_text(b)
+        } else if t == 1 or t == 2 or t == 6 {
+            lossy(b.clone())
+        } else {
+            "<unsupported>".to_string()
+        };
+        out.push(GenName { kind: kind.to_string(), text: text, raw: b });
+    }
+    out
+}
+
+fn gn_text(g: ref GenName) -> String {
+    f"{g.kind}:{g.text}"
+}
+
+fn eku(v: ref Vec[u8]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let Some(n) = parse_all(v) {
+        for k in n.kids {
+            out.push(oid_str(body(k, v)));
+        }
+    }
+    out
+}
+
+fn ext_lines(oid: Str, v: ref Vec[u8]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = match parse_all(v) {
+        Some(n) => n,
+        None => {
+            out.push(hexc(v, false));
+            return out;
+        }
+    };
+    if oid == "2.5.29.17" {
+        let mut parts: Vec[String] = Vec.new();
+        for g in general_names(v, n.kids) {
+            parts.push(gn_text(g));
+        }
+        out.push(join(parts, ", "));
+    } else if oid == "2.5.29.19" {
+        let (ca, plen) = basic_constraints(v);
+        if not ca {
+            out.push("CA:FALSE".to_string());
+        } else if plen >= 0 {
+            out.push(f"CA:TRUE, pathlen:{plen}");
+        } else {
+            out.push("CA:TRUE".to_string());
+        }
+    } else if oid == "2.5.29.15" {
+        let mut parts: Vec[String] = Vec.new();
+        for k in key_usage(v) {
+            // B-2026-10-06-107: `KU_NAMES[k].to_string()` is read as a type
+            let name = KU_NAMES[k];
+            parts.push(name.to_string());
+        }
+        out.push(join(parts, ", "));
+    } else if oid == "2.5.29.37" {
+        let mut parts: Vec[String] = Vec.new();
+        for o in eku(v) {
+            parts.push(long_name(o));
+        }
+        out.push(join(parts, ", "));
+    } else if oid == "2.5.29.14" {
+        out.push(hexc(body(n, v), true));
+    } else if oid == "2.5.29.35" {
+        for k in n.kids {
+            if k.tag == 0x80 {
+                out.push(hexc(body(k, v), true));
+                break;
+            }
+        }
+    } else if oid == "2.5.29.31" {
+        for dp in n.kids {
+            for f in dp.kids {
+                if f.tag == 0xA0 {
+                    out.push("Full Name:".to_string());
+                    for g in general_names(v, f.kids[0].kids) {
+                        out.push(f"  {gn_text(g)}");
+                    }
+                }
+            }
+        }
+    } else if oid == "1.3.6.1.5.5.7.1.1" {
+        for ad in n.kids {
+            let method = oid_str(body(ad.kids[0], v));
+            let one: Vec[Node] = ad.kids[1..2].to_vec();
+            let g = general_names(v, one);
+            out.push(f"{long_name(method)} - {gn_text(g[0])}");
+        }
+    } else if oid == "2.5.29.32" {
+        for p in n.kids {
+            out.push(f"Policy: {oid_str(body(p.kids[0], v))}");
+        }
+    } else {
+        out.push(hexc(v, false));
+    }
+    out
+}
+
+// ------------------------------------------------------------ printing
+
+fn hex_block(b: ref Vec[u8], per: i64, indent: i64) -> String {
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        out.push_str(rjust("", indent));
+        let end = if i + per < b.len() { i + per } else { b.len() };
+        for j in i..end {
+            out.push_str(f"{b[j]:02x}");
+            if j + 1 < b.len() {
+                out.push_str(":");
+            }
+        }
+        out.push_str("\n");
+        i += per;
+    }
+    out
+}
+
+fn strip_zeros(b: ref Vec[u8]) -> Vec[u8] {
+    let mut i: i64 = 0;
+    while i + 1 < b.len() and b[i] == 0 {
+        i += 1;
+    }
+    sub_bytes(b, i, b.len())
+}
+
+fn serial_text(s: ref Vec[u8]) -> String {
+    let neg = s[0] & 0x80 != 0;
+    let v = strip_zeros(s);
+    if v.len() <= 8 and not neg {
+        let n = be_int(v);
+        return f" {n} (0x{n:x})\n";
+    }
+    f"\n            {hexc(v, false)}\n"
+}
+
+fn bit_length(b: u8) -> i64 {
+    let mut n: i64 = 0;
+    let mut x = b as i64;
+    while x > 0 {
+        n += 1;
+        x = x >> 1;
+    }
+    n
+}
+
+fn print_text(c: ref Cert) -> String {
+    let mut s = "Certificate:\n    Data:\n".to_string();
+    s.push_str(f"        Version: {c.version} (0x{c.version - 1:x})\n");
+    s.push_str("        Serial Number:");
+    s.push_str(serial_text(c.serial));
+    s.push_str(f"        Signature Algorithm: {long_name(c.tbs_alg)}\n");
+    s.push_str(f"        Issuer: {c.issuer}\n");
+    s.push_str("        Validity\n");
+    s.push_str(f"            Not Before: {c.nb_text}\n");
+    s.push_str(f"            Not After : {c.na_text}\n");
+    s.push_str(f"        Subject: {c.subject}\n");
+    s.push_str("        Subject Public Key Info:\n");
+    s.push_str(f"            Public Key Algorithm: {long_name(c.key_alg)}\n");
+    if c.n.len() > 0 {
+        // the modulus keeps one zero byte when its top bit is set
+        let mut i: i64 = 0;
+        while i + 1 < c.n.len() and c.n[i] == 0 and c.n[i + 1] & 0x80 == 0 {
+            i += 1;
+        }
+        let n = sub_bytes(c.n, i, c.n.len());
+        let bits = if n[0] != 0 { (n.len() - 1) * 8 + bit_length(n[0]) } else { (n.len() - 1) * 8 };
+        s.push_str(f"                Public-Key: ({bits} bit)\n");
+        s.push_str("                Modulus:\n");
+        s.push_str(hex_block(n, 15, 20));
+        s.push_str(f"                Exponent: {c.e} (0x{c.e:x})\n");
+    } else {
+        s.push_str("                Public-Key: (256 bit)\n");
+        s.push_str("                pub:\n");
+        s.push_str(hex_block(c.key_bytes, 15, 20));
+        s.push_str(f"                ASN1 OID: {long_name(c.curve)}\n");
+        s.push_str("                NIST CURVE: P-256\n");
+    }
+    if c.exts.len() > 0 {
+        s.push_str("        X509v3 extensions:\n");
+        for x in c.exts {
+            let crit = if x.critical { "critical" } else { "" };
+            s.push_str(f"            {long_name(x.oid)}: {crit}\n");
+            for l in ext_lines(x.oid, x.value) {
+                s.push_str(f"                {l}\n");
+            }
+        }
+    }
+    s.push_str(f"    Signature Algorithm: {long_name(c.sig_alg)}\n");
+    s.push_str("    Signature Value:\n");
+    s.push_str(hex_block(c.sig, 18, 8));
+    s
+}
+
+// ------------------------------------------------------------ files
+
+struct Job {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+fn is_file_path(p: Str) -> bool {
+    match fs.metadata(p.to_string()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    }
+}
+
+fn find_from(b: ref Vec[u8], pat: Str, from: i64) -> i64 {
+    let mut i = from;
+    while i <= b.len() {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+const BEGIN: Str = "-----BEGIN CERTIFICATE-----";
+const END: Str = "-----END CERTIFICATE-----";
+
+// Every certificate in a PEM file, or the one in a DER file; None when
+// the file cannot be opened.
+fn read_certs(path: Str) -> Option[Vec[Cert]] {
+    let full = f"data/{path}";
+    if not is_file_path(full) {
+        return None;
+    }
+    let data = match fs.read_bytes(full) {
+        Ok(d) => d,
+        Err(_) => return None,
+    };
+    let mut certs: Vec[Cert] = Vec.new();
+    let mut at = find_from(data, BEGIN, 0);
+    if at < 0 {
+        if let Some(c) = load_cert(data) {
+            certs.push(c);
+        }
+        return Some(certs);
+    }
+    while at >= 0 {
+        let from = at + BEGIN.len();
+        let end = find_from(data, END, from);
+        if end < 0 {
+            break;
+        }
+        let mut b64: Vec[u8] = Vec.new();
+        for i in from..end {
+            if not is_ws(data[i]) {
+                b64.push(data[i]);
+            }
+        }
+        let der = match b64_decode(b64) {
+            Some(d) => d,
+            None => break,
+        };
+        match load_cert(der) {
+            Some(c) => certs.push(c),
+            None => break,
+        }
+        at = find_from(data, BEGIN, end);
+    }
+    Some(certs)
+}
+
+fn first_cert(job: mut ref Job, path: Str) -> Option[Cert] {
+    let certs = match read_certs(path) {
+        Some(c) => c,
+        None => {
+            job.err.push_str(f"Could not open file or uri for loading certificate from {path}\nUnable to load certificate\n");
+            job.status = 1;
+            return None;
+        }
+    };
+    if certs.len() == 0 {
+        job.err.push_str(f"Could not read certificate from {path}\nUnable to load certificate\n");
+        job.status = 1;
+        return None;
+    }
+    Some(certs[0].clone())
+}
+
+// ------------------------------------------------------------ matching
+
+fn host_match(pattern: Str, host: Str) -> bool {
+    let p = lower(pattern);
+    let h = lower(host);
+    if p == h {
+        return true;
+    }
+    let dots = split_on(p, b'.').len() - 1;
+    if starts_with(p, "*.") and dots >= 2 {
+        let dot = find_byte(h, b'.');
+        return dot > 0 and slice_from(h, dot) == slice_from(p, 1);
+    }
+    false
+}
+
+fn sans(c: ref Cert) -> Vec[GenName] {
+    match find_ext(c, "2.5.29.17") {
+        Some(v) => match parse_all(v) {
+            Some(n) => general_names(v, n.kids),
+            None => Vec.new(),
+        },
+        None => Vec.new(),
+    }
+}
+
+fn check_host(c: ref Cert, host: Str) -> bool {
+    let mut any_dns = false;
+    for g in sans(c) {
+        if g.kind == "DNS" {
+            any_dns = true;
+            if host_match(g.text, host) {
+                return true;
+            }
+        }
+    }
+    if any_dns {
+        return false;
+    }
+    for p in split_on_str(c.subject, ", ") {
+        if starts_with(p, "CN = ") and host_match(slice_from(p, 5), host) {
+            return true;
+        }
+    }
+    false
+}
+
+fn split_on_str(s: Str, sep: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, sep) {
+            out.push(byte_str(b, st, i));
+            i += sep.len();
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn hex_num(s: Str) -> i64 {
+    let mut v: i64 = 0;
+    for c in to_bytes(s) {
+        v = v * 16 + hex_val(c) as i64;
+    }
+    v
+}
+
+fn parse_ip(s: Str) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    if not has_byte(s, b':') {
+        for x in split_on(s, b'.') {
+            out.push(py_int(x).unwrap_or(0) as u8);
+        }
+        return out;
+    }
+    let at = find_str(s, "::");
+    let mut head: Vec[i64] = Vec.new();
+    let mut tail: Vec[i64] = Vec.new();
+    let (h, t) = if at >= 0 { (slice(s, 0, at), slice_from(s, at + 2)) } else { (s.to_string(), String.new()) };
+    for x in split_on(h, b':') {
+        if x.len() > 0 {
+            head.push(hex_num(x));
+        }
+    }
+    for x in split_on(t, b':') {
+        if x.len() > 0 {
+            tail.push(hex_num(x));
+        }
+    }
+    let mut groups = head.clone();
+    for _ in 0..8 - head.len() - tail.len() {
+        groups.push(0);
+    }
+    groups.extend(tail);
+    for g in groups {
+        out.push(((g >> 8) & 0xFF) as u8);
+        out.push((g & 0xFF) as u8);
+    }
+    out
+}
+
+fn does(ok: bool) -> Str {
+    if ok { "does" } else { "does NOT" }
+}
+
+fn x509_cmd(job: mut ref Job, args: ref Vec[String]) {
+    let mut path = String.new();
+    let mut acts: Vec[(String, String)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let a = args[i].clone();
+        if a == "-in" or a == "-inform" or a == "-ext" or a == "-checkhost" or a == "-checkip" or a == "-checkemail" {
+            if a == "-in" {
+                path = args[i + 1].clone();
+            } else if a != "-inform" {
+                acts.push((a, args[i + 1].clone()));
+            }
+            i += 2;
+            continue;
+        }
+        if a != "-noout" {
+            acts.push((a, String.new()));
+        }
+        i += 1;
+    }
+    let c = match first_cert(mut job, path) {
+        Some(c) => c,
+        None => return,
+    };
+    let mut digest = "sha1".to_string();
+    for (a, _) in acts {
+        if a == "-sha256" or a == "-sha1" {
+            digest = slice_from(a, 1);
+        }
+    }
+    for (a, v) in acts {
+        if a == "-text" {
+            job.out.push_str(print_text(c));
+        } else if a == "-subject" {
+            job.out.push_str(f"subject={c.subject}\n");
+        } else if a == "-issuer" {
+            job.out.push_str(f"issuer={c.issuer}\n");
+        } else if a == "-serial" {
+            job.out.push_str(f"serial={upper(join(split_on(hexc(strip_zeros(c.serial), false), b':'), ""))}\n");
+        } else if a == "-dates" {
+            job.out.push_str(f"notBefore={c.nb_text}\nnotAfter={c.na_text}\n");
+        } else if a == "-enddate" {
+            job.out.push_str(f"notAfter={c.na_text}\n");
+        } else if a == "-fingerprint" {
+            if digest == "sha1" {
+                job.out.push_str(f"SHA1 Fingerprint={hexc(sha1(c.der), true)}\n");
+            } else {
+                job.out.push_str(f"{digest} Fingerprint={hexc(sha256(c.der), true)}\n");
+            }
+        } else if a == "-ext" {
+            let want = split_on(v, b',');
+            for x in c.exts {
+                if want.contains(short_name(x.oid)) {
+                    let crit = if x.critical { "critical" } else { "" };
+                    job.out.push_str(f"{long_name(x.oid)}: {crit}\n");
+                    for l in ext_lines(x.oid, x.value) {
+                        job.out.push_str(f"    {l}\n");
+                    }
+                }
+            }
+        } else if a == "-checkhost" {
+            job.out.push_str(f"Hostname {v} {does(check_host(c, v))} match certificate\n");
+        } else if a == "-checkip" {
+            let want = parse_ip(v);
+            let mut ok = false;
+            for g in sans(c) {
+                if g.kind == "IP Address" and g.raw == want {
+                    ok = true;
+                }
+            }
+            job.out.push_str(f"IP {v} {does(ok)} match certificate\n");
+        } else if a == "-checkemail" {
+            let mut ok = false;
+            for g in sans(c) {
+                if g.kind == "email" and lower(g.text) == lower(v) {
+                    ok = true;
+                }
+            }
+            job.out.push_str(f"Email {v} {does(ok)} match certificate\n");
+        }
+    }
+}
+
+// ------------------------------------------------------------ asn1parse
+
+fn tag_name(t: i64) -> String {
+    let n = match t {
+        1 => "BOOLEAN",
+        2 => "INTEGER",
+        3 => "BIT STRING",
+        4 => "OCTET STRING",
+        5 => "NULL",
+        6 => "OBJECT",
+        12 => "UTF8STRING",
+        16 => "SEQUENCE",
+        17 => "SET",
+        19 => "PRINTABLESTRING",
+        22 => "IA5STRING",
+        23 => "UTCTIME",
+        24 => "GENERALIZEDTIME",
+        _ => return f"<ASN1 {t}>",
+    };
+    n.to_string()
+}
+
+fn asn1_lines(d: ref Vec[u8], n: ref Node, depth: i64, out: mut ref String) {
+    let name = if n.tag & 0xC0 == 0x80 { f"cont [ {n.tag & 0x1F} ]" } else { tag_name(n.tag & 0x1F) };
+    let kind = if n.tag & 0x20 != 0 { "cons" } else { "prim" };
+    out.push_str(f"{n.start:5}:d={ljust(f"{depth}", 2)} hl={n.hl} l={n.len:4} {kind}: {rjust("", depth)}{ljust(name, 18)}");
+    let b = body(n, d);
+    let t = n.tag;
+    if t == 2 {
+        out.push_str(":");
+        for x in b {
+            out.push_str(f"{x:02X}");
+        }
+    } else if t == 6 {
+        out.push_str(f":{long_name(oid_str(b))}");
+    } else if t == 12 or t == 19 or t == 22 or t == 23 or t == 24 {
+        out.push_str(f":{lossy(b)}");
+    }
+    out.push_str("\n");
+    for k in n.kids {
+        asn1_lines(d, k, depth + 1, mut out);
+    }
+}
+
+fn asn1parse_cmd(job: mut ref Job, args: ref Vec[String]) {
+    let mut path = String.new();
+    for i in 0..args.len() {
+        if args[i] == "-in" {
+            path = args[i + 1].clone();
+        }
+    }
+    let certs = read_certs(path).unwrap_or(Vec.new());
+    if certs.len() == 0 {
+        job.err.push_str("Error reading certificate\n");
+        job.status = 1;
+        return;
+    }
+    let d = ref certs[0].der;
+    if let Some(n) = parse_all(d) {
+        asn1_lines(d, n, 0, mut job.out);
+    }
+}
+
+// ------------------------------------------------------------ verify
+
+fn error_text(code: i64) -> Str {
+    match code {
+        7 => "certificate signature failure",
+        9 => "certificate is not yet valid",
+        10 => "certificate has expired",
+        18 => "self-signed certificate",
+        19 => "self-signed certificate in certificate chain",
+        20 => "unable to get local issuer certificate",
+        25 => "path length constraint exceeded",
+        26 => "unsuitable certificate purpose",
+        32 => "key usage does not include certificate signing",
+        62 => "hostname mismatch",
+        79 => "invalid CA certificate",
+        _ => "unknown error",
+    }
+}
+
+// The errors the verify command's callback lets the check continue past.
+fn continues(code: i64) -> bool {
+    code == 9 or code == 10 or code == 18 or code == 25 or code == 26 or code == 79
+}
+
+// DigestInfo for SHA-256, ahead of the hash in a PKCS #1 v1.5 signature.
+const SHA256_PREFIX: Array[u8, 19] = [0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04,
+    0x02, 0x01, 0x05, 0x00, 0x04, 0x20];
+
+fn bytes_less(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+    }
+    false
+}
+
+fn rsa_verify(cache: mut ref Vec[Mont], issuer: ref Cert, c: ref Cert) -> bool {
+    let n = strip_zeros(issuer.n);
+    let k = n.len();
+    if c.sig.len() != k or not bytes_less(c.sig, n) {
+        return false;
+    }
+    let em = mod_pow(mut cache, n, c.sig, issuer.e);
+    let mut want: Vec[u8] = Vec.new();
+    want.push(0);
+    want.push(1);
+    for _ in 0..k - 3 - 19 - 32 {
+        want.push(0xFF);
+    }
+    want.push(0);
+    for x in SHA256_PREFIX {
+        want.push(x);
+    }
+    want.extend(sha256(c.tbs));
+    em == want
+}
+
+fn self_issued(c: ref Cert) -> bool {
+    c.subject_der == c.issuer_der
+}
+
+fn ku_has(c: ref Cert, bit: i64) -> bool {
+    match find_ext(c, "2.5.29.15") {
+        Some(v) => key_usage(v).contains(bit),
+        None => true,
+    }
+}
+
+fn is_ca(c: ref Cert) -> bool {
+    match find_ext(c, "2.5.29.19") {
+        Some(v) => {
+            let (ca, _) = basic_constraints(v);
+            ca
+        }
+        None => false,
+    }
+}
+
+fn path_len(c: ref Cert) -> i64 {
+    match find_ext(c, "2.5.29.19") {
+        Some(v) => {
+            let (_, p) = basic_constraints(v);
+            p
+        }
+        None => -1,
+    }
+}
+
+fn eku_allows(c: ref Cert, oid: Str) -> bool {
+    match find_ext(c, "2.5.29.37") {
+        Some(v) => eku(v).contains(oid.to_string()),
+        None => true,
+    }
+}
+
+// Reports an error at depth i, and whether the check goes on.
+fn report(job: mut ref Job, failed: mut ref bool, c: ref Cert, i: i64, code: i64) -> bool {
+    job.err.push_str(f"{c.subject}\nerror {code} at {i} depth lookup: {error_text(code)}\n");
+    failed = true;
+    continues(code)
+}
+
+fn fail(job: mut ref Job, path: Str) -> bool {
+    job.err.push_str(f"error {path}: verification failed\n");
+    false
+}
+
+fn in_chain(chain: ref Vec[Cert], c: ref Cert) -> bool {
+    for x in chain {
+        if x.der == c.der {
+            return true;
+        }
+    }
+    false
+}
+
+struct Opts {
+    trusted: Vec[Cert],
+    untrusted: Vec[Cert],
+    at: i64,
+    purpose: String,
+    host: String,
+}
+
+fn verify_one(job: mut ref Job, cache: mut ref Vec[Mont], path: Str, o: ref Opts) -> bool {
+    let certs = match read_certs(path) {
+        Some(c) => c,
+        None => {
+            job.err.push_str(f"Could not open file or uri for loading certificate from {path}\n");
+            return fail(mut job, path);
+        }
+    };
+    if certs.len() == 0 {
+        job.err.push_str(f"Could not read certificate from {path}\nUnable to load certificate\n");
+        return fail(mut job, path);
+    }
+    let leaf = certs[0].clone();
+    let mut failed = false;
+    // build the chain: untrusted issuers first, then a trusted one
+    let mut chain: Vec[Cert] = Vec.new();
+    chain.push(leaf.clone());
+    let mut anchored = false;
+    loop {
+        let top = chain[chain.len() - 1].clone();
+        let mut tr: Option[Cert] = None;
+        for t in o.trusted {
+            if tr.is_none() and t.subject_der == top.issuer_der {
+                tr = Some(t.clone());
+            }
+        }
+        if let Some(t) = tr {
+            if not (self_issued(top) and in_chain(o.trusted, top)) {
+                chain.push(t);
+            }
+            anchored = true;
+            break;
+        }
+        if self_issued(top) {
+            break;
+        }
+        let mut next: Option[Cert] = None;
+        for u in o.untrusted {
+            if next.is_none() and u.subject_der == top.issuer_der and not in_chain(chain, u) {
+                next = Some(u.clone());
+            }
+        }
+        match next {
+            Some(u) => chain.push(u),
+            None => break,
+        }
+    }
+    if not anchored {
+        let depth = chain.len() - 1;
+        let top = chain[depth].clone();
+        if self_issued(top) {
+            let code = if chain.len() == 1 { 18 } else { 19 };
+            if not report(mut job, mut failed, top, depth, code) {
+                return fail(mut job, path);
+            }
+        } else {
+            report(mut job, mut failed, top, depth, 20);
+            return fail(mut job, path);
+        }
+    }
+    // extensions: CA flags, purpose, path lengths
+    let mut plen: i64 = 0;
+    for i in 0..chain.len() {
+        let c = ref chain[i];
+        if i > 0 and not is_ca(c) {
+            if not report(mut job, mut failed, c, i, 79) {
+                return fail(mut job, path);
+            }
+        }
+        if o.purpose.len() > 0 and i == 0 and not eku_allows(c, "1.3.6.1.5.5.7.3.1") {
+            if not report(mut job, mut failed, c, i, 26) {
+                return fail(mut job, path);
+            }
+        }
+        if i > 1 and path_len(c) >= 0 and plen > path_len(c) {
+            if not report(mut job, mut failed, c, i, 25) {
+                return fail(mut job, path);
+            }
+        }
+        if i > 0 and not self_issued(c) {
+            plen += 1;
+        }
+    }
+    if o.host.len() > 0 and not check_host(leaf, o.host) {
+        if not report(mut job, mut failed, leaf, 0, 62) {
+            return fail(mut job, path);
+        }
+    }
+    // signatures and validity, from the anchor down
+    let mut i = chain.len() - 1;
+    while i >= 0 {
+        let c = ref chain[i];
+        if i + 1 < chain.len() {
+            let issuer = ref chain[i + 1];
+            if not ku_has(issuer, 5) {
+                if not report(mut job, mut failed, issuer, i + 1, 32) {
+                    return fail(mut job, path);
+                }
+            }
+            if not rsa_verify(mut cache, issuer, c) {
+                if not report(mut job, mut failed, c, i, 7) {
+                    return fail(mut job, path);
+                }
+            }
+        }
+        if o.at < c.not_before {
+            if not report(mut job, mut failed, c, i, 9) {
+                return fail(mut job, path);
+            }
+        }
+        if o.at > c.not_after {
+            if not report(mut job, mut failed, c, i, 10) {
+                return fail(mut job, path);
+            }
+        }
+        i -= 1;
+    }
+    if failed {
+        return fail(mut job, path);
+    }
+    job.out.push_str(f"{path}: OK\n");
+    true
+}
+
+fn verify_cmd(job: mut ref Job, cache: mut ref Vec[Mont], args: ref Vec[String]) {
+    let mut o = Opts { trusted: Vec.new(), untrusted: Vec.new(), at: 0, purpose: String.new(), host: String.new() };
+    let mut files: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let a = args[i].clone();
+        if a == "-CAfile" {
+            o.trusted.extend(read_certs(args[i + 1]).unwrap_or(Vec.new()));
+            i += 2;
+        } else if a == "-untrusted" {
+            o.untrusted.extend(read_certs(args[i + 1]).unwrap_or(Vec.new()));
+            i += 2;
+        } else if a == "-attime" {
+            o.at = py_int(args[i + 1]).unwrap_or(0);
+            i += 2;
+        } else if a == "-purpose" {
+            o.purpose = args[i + 1].clone();
+            i += 2;
+        } else if a == "-verify_hostname" {
+            o.host = args[i + 1].clone();
+            i += 2;
+        } else {
+            files.push(a);
+            i += 1;
+        }
+    }
+    let mut ok = true;
+    for f in files {
+        if not verify_one(mut job, mut cache, f, o) {
+            ok = false;
+        }
+    }
+    if not ok {
+        job.status = 2;
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/api-ec.pem
+fn file_0() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIICpTCCAY2gAwIBAgIFASNFZ4kwDQYJKoZIhvcNAQELBQAwVjELMAkGA1UEBhMC
+VVMxFjAUBgNVBAoMDUthcmEgVGVzdCBQS0kxEDAOBgNVBAsMB0lzc3VpbmcxHTAb
+BgNVBAMMFEthcmEgSXNzdWluZyBDQSAyMDI2MB4XDTI2MDkxNTAwMDAwMFoXDTI2
+MTIxNDAwMDAwMFowOTELMAkGA1UEBhMCVVMxEjAQBgNVBAoMCUthcmEgU2hvcDEW
+MBQGA1UEAwwNYXBpLmthcmEudGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IA
+BAn7CEOnkf6REkNENsLwy3CuDRSymkKG9d68a3/CkteLZ3j/lccCXnslcy3YEpx8
+cf6RiMtisYU6yejxaGmllOCjYjBgMBgGA1UdEQQRMA+CDWFwaS5rYXJhLnRlc3Qw
+DgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMB8GA1UdIwQYMBaA
+FAJFrAnkgYjKDEkf9GrxmImJ4AAMMA0GCSqGSIb3DQEBCwUAA4IBAQBwAwcj/IjU
+FrOBSzuBqKT937NyKfJsDbsbW6yREbbHNLPHQ1drqZ0tUvlHvzi9qwkSlANMLwrl
+ZOwKI0YSHbzSZy0Cx1rXrjUJezZ1nQpJjlkyNhArcg4tfoJ6V8STqtaEmlAJU0MS
+6wxpAgZDC8hu4ktbPcwybp7fyaCGdolSewN2IFS3c+03WTRRJAUx/K9VDwSHRU+1
+PJ9ImkTi60NiapvioVeS2EnuFBMhNEybxRjZNBgJkeZc3sOuOSUrZe3cLNR+EFeP
+2uDFEs+25FvvqiBMLSDSZVW5Y3GafN1GFOKDw6H54hviSGDXb1nOtzqb3t3LnlEj
+iCCVNUWfNkiF
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/chain.pem
+fn file_1() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIEijCCA3KgAwIBAgIKChssPU5fYHGCkzANBgkqhkiG9w0BAQsFADBWMQswCQYD
+VQQGEwJVUzEWMBQGA1UECgwNS2FyYSBUZXN0IFBLSTEQMA4GA1UECwwHSXNzdWlu
+ZzEdMBsGA1UEAwwUS2FyYSBJc3N1aW5nIENBIDIwMjYwHhcNMjYwOTAxMTIwMDAw
+WhcNMjYxMjAxMTIwMDAwWjBnMQswCQYDVQQGEwJVUzETMBEGA1UECAwKQ2FsaWZv
+cm5pYTEWMBQGA1UEBwwNU2FuIEZyYW5jaXNjbzESMBAGA1UECgwJS2FyYSBTaG9w
+MRcwFQYDVQQDDA5zaG9wLmthcmEudGVzdDCCASIwDQYJKoZIhvcNAQEBBQADggEP
+ADCCAQoCggEBALHyk74+5gcCK8bdeTDGVcKZOVu1E72rbc9cCRU7jZ+oWmNTJY5G
+Y53jGq15PFYPJF+zAy940cBm1HY486jU77s90goWHDvmcICcaOsh5Iq4YqUpf7/m
+7UHYgx/PXZcBjiCukm+CgKsYQqK/BHtG/GbFA8yS5AocjUb7kiF0TBaEFu1w+D4V
+Wfv2OMumfGTwGohrz3Xb08v024eHwEAd1wosPhsA4oxjI+TB41ECPW3IZJL9rifp
+iMHl7NtO3I3tQCrgY21HV0/giUfWNrM/xrSTaQxrfCgpo/h5CP+HxgpyhLcjXHVH
+uJwQUGLiEpOMj35zlUEARP+Mlh8JYf18/gMCAwEAAaOCAUcwggFDME4GA1UdEQRH
+MEWCDnNob3Aua2FyYS50ZXN0ghAqLnNob3Aua2FyYS50ZXN0gglrYXJhLnRlc3SH
+BMAAAgqHECABDbgAAAAAAAAAAAAAABAwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8E
+BAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBQY
+SBhE4qL3gzFkvl2gY4R71xcJxDAfBgNVHSMEGDAWgBQCRawJ5IGIygxJH/Rq8ZiJ
+ieAADDBfBggrBgEFBQcBAQRTMFEwIQYIKwYBBQUHMAGGFWh0dHA6Ly9vY3NwLmth
+cmEudGVzdDAsBggrBgEFBQcwAoYgaHR0cDovL3BraS5rYXJhLnRlc3QvaXNzdWlu
+Zy5jcnQwEwYDVR0gBAwwCjAIBgZngQwBAgIwDQYJKoZIhvcNAQELBQADggEBAJ28
+MkJPKZ2BK+zUf6/JWngrww7BEi2QaMaKw3XC516jW4wyzYjzbgN84qOlMsbS90JK
+5QF2gKCvz8ym4hW5Df3M209eE8/C2CA9mTwMo1bw70HlLWuuLu1i4ODdwU5scfLW
+T6r6nx77Y34DwXPn5L4RDs+lTSxXPt7vqGJIMH3w1k7YaJqKJwLq1bKn0V1t6Ip1
+cFU57KQzuulQAN2LWYgFKFMtYE6lKN9/oHGc/IRB4NiymTYzRMGLLDaE3QD8ZNv2
+cFxGozMqIdmbPKojELLvI9bDvJx+P04ddhwr+vhbee53RRUBSJiPU2xGbYTJ3LjA
+u9EOYs+ZhkcHDI2xU7c=
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIEqTCCApGgAwIBAgICEAAwDQYJKoZIhvcNAQELBQAwPzELMAkGA1UEBhMCVVMx
+FjAUBgNVBAoMDUthcmEgVGVzdCBQS0kxGDAWBgNVBAMMD0thcmEgUm9vdCBDQSBS
+MTAeFw0yNjAxMDEwMDAwMDBaFw0zMTAxMDEwMDAwMDBaMFYxCzAJBgNVBAYTAlVT
+MRYwFAYDVQQKDA1LYXJhIFRlc3QgUEtJMRAwDgYDVQQLDAdJc3N1aW5nMR0wGwYD
+VQQDDBRLYXJhIElzc3VpbmcgQ0EgMjAyNjCCASIwDQYJKoZIhvcNAQEBBQADggEP
+ADCCAQoCggEBANJ2A8xDX3zloSZ/K0pByYTMKGYNhm6DrCG3PFWLxLswMH8dbOfy
+I9fcpdQqBd9uCPeQHw3vSHHzrOaewgmiorldnUhgch8mChBeVrEQxLzSjBkG7yE6
+ydx5vekwV4UW8RGp+uKFEIWCxWUcECR4hvWfYQdG/mlBgIzcUYM92Kgp4RAHcgsC
+P8/KjfzKBnUvWm9vWxIYHtFKxnikQwqNt+PCSo0YD2ekEcl1KW3Fr+sBJ2McdXXj
+jB0ZvNBNdmw8/DzAdsm8GCEG/SO6boE0hqL4CkOAgCn1xR08M24Sm/nSglGfFuGZ
+0N3X4HGcuAydLZxTZeukPj73v1bzQgRIbBsCAwEAAaOBlzCBlDASBgNVHRMBAf8E
+CDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUAkWsCeSBiMoMSR/0
+avGYiYngAAwwHwYDVR0jBBgwFoAU82MU44hw6h+T1bfpyd7+hGsWwXYwLgYDVR0f
+BCcwJTAjoCGgH4YdaHR0cDovL2NybC5rYXJhLnRlc3Qvcm9vdC5jcmwwDQYJKoZI
+hvcNAQELBQADggIBACitmBuFIBG9wmc6TEiOBHQoCmJ5rAli2+3le9Phi8kk+Rxk
+byQqtvrhXquonvMi+6k/Sf4G/yxqntXeH686dym3MM8a/pMRjy57Tse2I/v/0qKY
+xXe38TSa49fz0wjjyh1enCSm9rx3qf6BXC1PP1V9mefHJchtIuv+YLXwEHurecNr
+wQBc7rGdeXFuCwtDBlZP6W7OH3ZJmJGMj75nvFFu3nt0Pd9zwh5Kbijx3CSkNtcL
+MSLnVZOuNOhGQ1TY9jOXSCy0jbmwItyktZmX0iA6OEer6xLPIGv+wLIYFr4VWszw
+4nNslSkkGSduAWff9/XYRm9BzJV0yACMfGQqKxT1QysM75QZ+NmLsvLwS32KbeL5
+yeVhJdW6MZKnU37Rp8C/QguGqHJMiz6WPYOmpA1mgK9/pHc52L1N1OzjWCboGLZO
+5lI+jZ0//IpAtNM6id7VY3o00I2o9A36Kf7+mWa+P526o0vhGwM9y+VDUeybIV9X
+1D5D0dkraJCfvtyiTx9g0Au0Q4CzbLOBeAOeKlRscpXLHDn0B7eC41raMhrDBeSa
+edEvQ92JUti8+GPnV8FXx5KhSd5S2rZRKvpzH4dxQYOXo0DlTSPM5E9JaeQaS9FY
+R/gBPX11jbqyrG3deO7hPxY8h+dM58py0BwcBLaK1H7DPBDr8j1jlMc+ncju
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/client.pem
+fn file_2() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIDozCCAougAwIBAgIBfzANBgkqhkiG9w0BAQsFADBWMQswCQYDVQQGEwJVUzEW
+MBQGA1UECgwNS2FyYSBUZXN0IFBLSTEQMA4GA1UECwwHSXNzdWluZzEdMBsGA1UE
+AwwUS2FyYSBJc3N1aW5nIENBIDIwMjYwHhcNMjYwMjAxMDAwMDAwWhcNMjcwMjAx
+MDAwMDAwWjBVMRIwEAYDVQQKDAlLYXJhIFNob3AxDDAKBgNVBAsMA09wczETMBEG
+A1UEAwwKZGVwbG95LWJvdDEcMBoGCSqGSIb3DQEJARYNYm90QGthcmEudGVzdDCC
+ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAN6TCTGEHr/QLiTl3hTnoSK6
+HOJYCnC5nWtwhZeOn6WvSFuXUyymwGHCZLYps+pDzqSJom70wG2mihYnPeHJP1ty
+oRDAIDWJBz+8MKT+gbPxTpd9P1U0rOEk7ygTKbVJICiXVsIyq8peCK3XuN1TesiF
+mLtFVa2hBl8wetheIgei7qpJRyZ2XaMyKwz5ZHR5ry9UFYFMxRzl5XYLfkxuj75p
+D0iTpxbVqOdOmjLkuF3lGKbUw1sFWPrJ26G+ZyooD8g7X2JBl1LE1AOjnmDUHNbQ
+ssOi0TQrSWa6ohen9LQ98rUOVT/7O6yWhhUFlPT0rBtPnzy5qwdMmTmgKj+o/dUC
+AwEAAaN9MHswMwYDVR0RBCwwKoENYm90QGthcmEudGVzdIYZc3BpZmZlOi8va2Fy
+YS50ZXN0L2RlcGxveTAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUH
+AwIwHwYDVR0jBBgwFoAUAkWsCeSBiMoMSR/0avGYiYngAAwwDQYJKoZIhvcNAQEL
+BQADggEBALqKJqpjFYvVGdXcmJOabcmrAH8UWFt6qBLI7hlyfLlzv+8bYkuL2t1k
+BlDYQvqeE7aY9wOoQaACOx86+2xF75uNmeDQhxKuOxUFBrg8EKQPFFh4lejM2tAv
+3B9sC9XV39YLHn/OYdC6XTMuPfXB2gCMgANBWbPkLG2Yi2SIKnF7xWIBjoZjh2DS
+AimCBkUfIQg7y3l30660sWuBIY0iCCRuZHZRta3lILXx+5Di1cQPTHypDRJwQ/N3
+fb+vnoENxknfSTxeLEXKAIl8sU0OrIO/W2C2/m3GqDB1T55Wv1h4/jDV1u5RFdp9
+2jw//P1aqzmTQfwMNRYJx1AnJ8sW1a4=
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/garbage.pem
+fn file_3() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+not base64 at all!!
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/issuing.pem
+fn file_4() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIEqTCCApGgAwIBAgICEAAwDQYJKoZIhvcNAQELBQAwPzELMAkGA1UEBhMCVVMx
+FjAUBgNVBAoMDUthcmEgVGVzdCBQS0kxGDAWBgNVBAMMD0thcmEgUm9vdCBDQSBS
+MTAeFw0yNjAxMDEwMDAwMDBaFw0zMTAxMDEwMDAwMDBaMFYxCzAJBgNVBAYTAlVT
+MRYwFAYDVQQKDA1LYXJhIFRlc3QgUEtJMRAwDgYDVQQLDAdJc3N1aW5nMR0wGwYD
+VQQDDBRLYXJhIElzc3VpbmcgQ0EgMjAyNjCCASIwDQYJKoZIhvcNAQEBBQADggEP
+ADCCAQoCggEBANJ2A8xDX3zloSZ/K0pByYTMKGYNhm6DrCG3PFWLxLswMH8dbOfy
+I9fcpdQqBd9uCPeQHw3vSHHzrOaewgmiorldnUhgch8mChBeVrEQxLzSjBkG7yE6
+ydx5vekwV4UW8RGp+uKFEIWCxWUcECR4hvWfYQdG/mlBgIzcUYM92Kgp4RAHcgsC
+P8/KjfzKBnUvWm9vWxIYHtFKxnikQwqNt+PCSo0YD2ekEcl1KW3Fr+sBJ2McdXXj
+jB0ZvNBNdmw8/DzAdsm8GCEG/SO6boE0hqL4CkOAgCn1xR08M24Sm/nSglGfFuGZ
+0N3X4HGcuAydLZxTZeukPj73v1bzQgRIbBsCAwEAAaOBlzCBlDASBgNVHRMBAf8E
+CDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUAkWsCeSBiMoMSR/0
+avGYiYngAAwwHwYDVR0jBBgwFoAU82MU44hw6h+T1bfpyd7+hGsWwXYwLgYDVR0f
+BCcwJTAjoCGgH4YdaHR0cDovL2NybC5rYXJhLnRlc3Qvcm9vdC5jcmwwDQYJKoZI
+hvcNAQELBQADggIBACitmBuFIBG9wmc6TEiOBHQoCmJ5rAli2+3le9Phi8kk+Rxk
+byQqtvrhXquonvMi+6k/Sf4G/yxqntXeH686dym3MM8a/pMRjy57Tse2I/v/0qKY
+xXe38TSa49fz0wjjyh1enCSm9rx3qf6BXC1PP1V9mefHJchtIuv+YLXwEHurecNr
+wQBc7rGdeXFuCwtDBlZP6W7OH3ZJmJGMj75nvFFu3nt0Pd9zwh5Kbijx3CSkNtcL
+MSLnVZOuNOhGQ1TY9jOXSCy0jbmwItyktZmX0iA6OEer6xLPIGv+wLIYFr4VWszw
+4nNslSkkGSduAWff9/XYRm9BzJV0yACMfGQqKxT1QysM75QZ+NmLsvLwS32KbeL5
+yeVhJdW6MZKnU37Rp8C/QguGqHJMiz6WPYOmpA1mgK9/pHc52L1N1OzjWCboGLZO
+5lI+jZ0//IpAtNM6id7VY3o00I2o9A36Kf7+mWa+P526o0vhGwM9y+VDUeybIV9X
+1D5D0dkraJCfvtyiTx9g0Au0Q4CzbLOBeAOeKlRscpXLHDn0B7eC41raMhrDBeSa
+edEvQ92JUti8+GPnV8FXx5KhSd5S2rZRKvpzH4dxQYOXo0DlTSPM5E9JaeQaS9FY
+R/gBPX11jbqyrG3deO7hPxY8h+dM58py0BwcBLaK1H7DPBDr8j1jlMc+ncju
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/jobs.txt
+fn file_5() -> String {
+    """
+# mini_x509 jobs: each line is an openssl command run from data/
+x509 -in root.pem -noout -text
+x509 -in issuing.pem -noout -text
+x509 -in shop.pem -noout -text
+x509 -in client.pem -noout -text
+x509 -in api-ec.pem -noout -text
+x509 -in localhost.pem -noout -text
+x509 -in shop.der -inform DER -noout -subject -issuer -serial -dates
+x509 -in chain.pem -noout -subject -enddate
+x509 -in shop.pem -noout -fingerprint -sha256
+x509 -in root.pem -noout -fingerprint
+x509 -in shop.pem -noout -ext subjectAltName,keyUsage
+x509 -in shop.pem -noout -checkhost www.shop.kara.test
+x509 -in shop.pem -noout -checkhost a.b.shop.kara.test
+x509 -in shop.pem -noout -checkhost KARA.test
+x509 -in shop.pem -noout -checkip 192.0.2.10
+x509 -in shop.pem -noout -checkip 2001:db8::11
+x509 -in client.pem -noout -checkemail bot@kara.test
+x509 -in tampered.pem -noout -subject
+x509 -in garbage.pem -noout -text
+x509 -in notes.txt -noout -text
+x509 -in missing.pem -noout -text
+asn1parse -in localhost.pem -i
+verify -attime 1792022400 -CAfile root.pem -untrusted issuing.pem shop.pem client.pem api-ec.pem
+verify -attime 1792022400 -CAfile root.pem -untrusted issuing.pem old.pem
+verify -attime 1792022400 -CAfile root.pem -untrusted issuing.pem tampered.pem
+verify -attime 1792022400 -CAfile root.pem shop.pem
+verify -attime 1792022400 -CAfile root.pem -untrusted issuing.pem -untrusted shop.pem rogue.pem
+verify -attime 1792022400 -CAfile root.pem -untrusted issuing.pem -purpose sslserver client.pem
+verify -attime 1792022400 -CAfile root.pem -untrusted issuing.pem -verify_hostname evil.test shop.pem
+verify -attime 1792022400 -CAfile root.pem -untrusted issuing.pem -verify_hostname x.shop.kara.test shop.pem
+verify -attime 1792022400 localhost.pem
+verify -attime 1792022400 -CAfile localhost.pem localhost.pem
+verify -attime 1767225599 -CAfile root.pem root.pem
+
+"""
+}
+
+// data/localhost.pem
+fn file_6() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIICojCCAYqgAwIBAgICMDkwDQYJKoZIhvcNAQELBQAwFDESMBAGA1UEAwwJbG9j
+YWxob3N0MB4XDTI1MDYwMTAwMDAwMFoXDTM1MDYwMTAwMDAwMFowFDESMBAGA1UE
+AwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxgGd
+WaowLxi1ofs1AyLKfk3dFHFZlo/Qks7AH83nTjjrsOUGYotoEwT1saORZg2HcNF7
+zjKJTclci6U+G80rcqnv4597dhX9pznCdFqtGgxJAqglNzNcEKKYMbnWM9FeBpEV
+w9/WYHMQUk1muz5K9lrZFrrO6FBZQIKH0kumuRjaKnaqgqq8TIrFoPZ2UIax76uT
+nuged2vL84pov8SkeCt9VKH5vIWbjMhcu8TMDnWXehBJKBzmkWeK9+EMq8hd80t9
+uELOaMqkqUIZ7NSv91SigUJnOL9ASlmb/qxwH2gQUML5/CrDuzXpqYJnP4lxf+pC
+ybI6rxSHa+49FwEmhQIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQATffNo64dNf3jL
+7qFq7Ryl7TDbWkFpStEjp95+rbEBjskkcxWEQPhQJoDN3ZLpr8iNcSQqYC2m6R6V
+Rdow50tPcVXF4NqQNoujh79PIW5bg3gc0f9jrk4Yrm+nTaYumvBqiiD2OMbS2Q5S
+WYFyvBb54LWwo39WNt2B9Pm24CoguxR1P9xTEAxQWg2cUV6H/zUwJ9DY+OgRbD89
+0Us/Tvvj7oUPeb7jFuEsym/pJ+AmFTAwIURpdnrx5YZ+YqjLkEtttEaG8zhAV55x
+NF/0AdyIrtIzoc0sbDZFsRGpaCbT8rPbUDrShONEe7eqnzYaWOY+5Vl4xcrdAkvz
+OWvy9pIW
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/notes.txt
+fn file_7() -> String {
+    """
+no certificate here
+
+"""
+}
+
+// data/old.pem
+fn file_8() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIDRzCCAi+gAwIBAgIBQjANBgkqhkiG9w0BAQsFADBWMQswCQYDVQQGEwJVUzEW
+MBQGA1UECgwNS2FyYSBUZXN0IFBLSTEQMA4GA1UECwwHSXNzdWluZzEdMBsGA1UE
+AwwUS2FyYSBJc3N1aW5nIENBIDIwMjYwHhcNMjYwMTAxMDAwMDAwWhcNMjYwNDAx
+MDAwMDAwWjA5MQswCQYDVQQGEwJVUzESMBAGA1UECgwJS2FyYSBTaG9wMRYwFAYD
+VQQDDA1vbGQua2FyYS50ZXN0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKC
+AQEAktVjLnP1IHWuIVBIRiKe56sZTAJs9fcerH/mIEgAzCVAszo9GCzgowLJjyPz
+mbd6B0auVp41oI66snC90UeaZBT0gXTNgnVKgXHg722YDlg+hYKAwzh/ncNq1kGJ
+MMjKRiqsqfOxrn0wt5wefWPpg4XtxLpsXMYiZWB55WejJILxnH6YoTLWedkFofZg
+AZor63UoTQMUCChho9ICHlzbx0skyv8pJJiMaEW7NiF3ENKSDDSqt3Sc9toj9bHH
+3u+1lNy82XFbJSkvzyE9BXK8txmGZUD3NQSamsSF3NT0I5WELfpoUig6jXbamOFE
+ite3dgIjYVguojmCEiFjlyPfQwIDAQABoz0wOzAYBgNVHREEETAPgg1vbGQua2Fy
+YS50ZXN0MB8GA1UdIwQYMBaAFAJFrAnkgYjKDEkf9GrxmImJ4AAMMA0GCSqGSIb3
+DQEBCwUAA4IBAQAnVXp/hYTSQlqz1xE4IJOpEFZIobkosycZ2rcXiJyp6Q/QxkOY
+W6zjF/x5E7wyBCQDlIUhjB42BDBxYlLQ8OXhKZfy+mvqBWxwd7ljpwz2YBCjmf4v
+zcdWMo+vwYZ1Gzmt5bxX6JhMWv7EwaO0Fy+ICaXwVvF8d0ClZg23jKx2iutjlnPk
+LN6eJRHwM/MhXRgwy7wt2wcJ2K7NGJBklt9FV2fRWXOWwi8Od0F/rq/IB1JFzSPs
+HPIvuZ8w+KCHb4GwwcMIOF0ZgBSP20yLiy2mxwqwzgj7qqmhriWXc6uN2ii65vt6
+WJbZBivLUr/M4V4NFwXPUjBUr/I7jpOvpIw5
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/rogue.pem
+fn file_9() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIDKjCCAhKgAwIBAgICBmYwDQYJKoZIhvcNAQELBQAwZzELMAkGA1UEBhMCVVMx
+EzARBgNVBAgMCkNhbGlmb3JuaWExFjAUBgNVBAcMDVNhbiBGcmFuY2lzY28xEjAQ
+BgNVBAoMCUthcmEgU2hvcDEXMBUGA1UEAwwOc2hvcC5rYXJhLnRlc3QwHhcNMjYw
+OTAyMDAwMDAwWhcNMjYxMTAxMDAwMDAwWjApMQ0wCwYDVQQKDARFdmlsMRgwFgYD
+VQQDDA9yb2d1ZS5rYXJhLnRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+AoIBAQDDu/b074wsOgDh09euN8u515A/DAHfho8QtjuJn/lHZrc03pYdFMfYXwIV
+WlAIPHSpMMu9KxyZt1X0uuu8O8JLc/V1SfFAb/0TxUEkb4NDpYVFHEvgixz+WuG3
+psf8hg+CnvPawba3NYm/WWCbVKc5G0ZgZpTlod6l0nZ5S68QqxX5DyUCIJkwv1HS
+S6/dElPy8xHBE1fdFxevDwcn4SwDr9XKvmfeDXARcrvKjPLuXdocR5iNjpqXo9Qb
+GYjWk2gRH0hycAKO4dpbq2dIe7nyPn4wL/YbK4aLF3nGV1WkT7n0o718nxHma4Kp
+9Vg8qZ1rpIFaGvAZJSzdsl11qg1xAgMBAAGjHjAcMBoGA1UdEQQTMBGCD3JvZ3Vl
+LmthcmEudGVzdDANBgkqhkiG9w0BAQsFAAOCAQEALW7gmWXp8i6iEFVN87ounGFp
+bytt7tdCz8RmnAQQpoEcKUl7QuAhPQmQMjn82mhxM5BbSATKgx1nWXfI3Cz53snc
+WDFKPhr3ud5GXI6Yk+YWHaRYdxRbeep7MZ7UFEyr2ecvfrnB4KOLCkGJRxo4Rsw4
+ZZabt1Mlz6LHLCoORCvpH7aomAPJQiY/t1Tb1tecfIKFlIKPd6pmOwvTG42bXc4/
+pWPFFllrYEPwgxolAvQR7zLgPXXvOQHmQ3OUVXY7P94WEyXF3pQcDoW7GOWYEl61
+sM1RorjAFEBFSS5+5/rLlDnu6ZTko4CvHiQqJE3go2CPLCQB61KiUzAnLVyQzQ==
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/root.pem
+fn file_10() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIFOzCCAyOgAwIBAgIBATANBgkqhkiG9w0BAQsFADA/MQswCQYDVQQGEwJVUzEW
+MBQGA1UECgwNS2FyYSBUZXN0IFBLSTEYMBYGA1UEAwwPS2FyYSBSb290IENBIFIx
+MB4XDTI2MDEwMTAwMDAwMFoXDTQ2MDEwMTAwMDAwMFowPzELMAkGA1UEBhMCVVMx
+FjAUBgNVBAoMDUthcmEgVGVzdCBQS0kxGDAWBgNVBAMMD0thcmEgUm9vdCBDQSBS
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAKH9e+hfRgYah7KPscS1
+9lVx8fRu4jipOWPJQmAylpT3LQxFI/TcpPBkrRtVnZfUWxm6RLNZkZ1AJSsdgeb2
+NaODe7QQaqqPeo7ROpBQPyjcoKJ2x3+aWF4GuZBu0qA2AaMaTCkO99jy++RIpAbN
+R6u1cnDAJsS2kkVNdB1gq62YP0Dye9vNkVs5qqwcNh/WFeuvJxax2cGp4V26Y2+D
+fCLsRtFk023qkW53552T+2t5pNFmnDlXPEJCokcHVlyz4+K3+DalNBiOPPWATVMP
+ZHDlZ9DYvw+5FMWrZgksMdmyOvpChuW5+T+1I87CoGWm0c+BiC9A1ilvF5w2BAY+
+Qa3UH99RlZTh5kSETGhBuuoqRdrdPcph7TSv3vtmyohgboChjZr5jYgEqeS7Z4rQ
+0iFp9aFjcC6YH0PXWOLO7GR4V6BJYh/U7k+w0CZEHzQpAkqaG/mlL4D5h11LNhnZ
+We/UashfvHGR3eA2IaO81mVEVVFMa1MrTg+02rv4wIx8g6qYiyq+wR1sVvgGu0Am
+utyP3LpYSrqZD5UoVBr25jXjBcvj19nonnxOp4e5Buz7NP5dx6iHehmINKMxXINf
+xe2sXfYq/xJLAyCdtPNGZ2MI7AVrCBLo0FRYdIrDlx3pL9mhZ8tD7nnMJd7+CmpX
+I81pS1t5vIl+bVW1P2tkx03/AgMBAAGjQjBAMA8GA1UdEwEB/wQFMAMBAf8wDgYD
+VR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTzYxTjiHDqH5PVt+nJ3v6EaxbBdjANBgkq
+hkiG9w0BAQsFAAOCAgEAjk25LirgYpSIzSCItjrvuPthCwTLYkd6NB05P6+OwvfO
+vt3yD1E1snd+AVcy1CKnxWaO4n5LBGB9p/yjeuiCnNfmkVVTTF17ysgcU2oQZ6cH
+5YWVG3GuuwvIeSbAdyQyoG6i47uwWXAWj92OMiaB/qNxl3p2n03JHATYr6TTqY4j
+50zdoHw0Q1AE7gFukxGe14Dk6JCHxRG07Q1N6TIeINXJi5r9vOtsZ9GLy0RcaFJZ
+Zm9dL50YlAKmDoygwA+vrDtBErE84cdk6opFNWYEpM/Uf9URUrTK2HVd+nHSZElH
+o9Hcgeyzknpiv5vjSOXLC2ymCUBRYxHwzVdleXhq0nrjlC4wvGMOGZiigwFtriQQ
+rDWMoEBQZAnG7b+qWKDJfCLnjiSxMDnnSn/PRrl4lpc0ywX8awO1oFK1T5b172HM
+ywBS/quyLSAqYdnb9f7MjJv0cGlpeeO+dyCjXjHji0OdvPwIRv5wd9Gm0l8Z15QP
+79SN3lTJQTRGzeV90UbeXg3V8DFmONNuo91hm2qVfmDxHN1PRaHk9b1V1tXIaViD
+pmd/DfWKUY/Rwvm7ewqcm+nLrl2aEJT7u7NwL8W2yhLsLJGNkvWeoMpnQaNxSc6d
++tFYN1PU+8yBp1l+z7QxKtyX/uVXjGMspOhA0LDXKRR7HYkvgsmwPLtOKmt2JxU=
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/shop.der
+fn file_11() -> String {
+    """
+3082048a30820372a003020102020a0a1b2c3d4e5f60718293300d06092a864886f70d01010b05003056310b30090603
+5504061302555331163014060355040a0c0d4b617261205465737420504b493110300e060355040b0c0749737375696e
+67311d301b06035504030c144b6172612049737375696e672043412032303236301e170d323630393031313230303030
+5a170d3236313230313132303030305a3067310b30090603550406130255533113301106035504080c0a43616c69666f
+726e69613116301406035504070c0d53616e204672616e636973636f31123010060355040a0c094b6172612053686f70
+3117301506035504030c0e73686f702e6b6172612e7465737430820122300d06092a864886f70d01010105000382010f
+003082010a0282010100b1f293be3ee607022bc6dd7930c655c299395bb513bdab6dcf5c09153b8d9fa85a6353258e46
+639de31aad793c560f245fb3032f78d1c066d47638f3a8d4efbb3dd20a161c3be670809c68eb21e48ab862a5297fbfe6
+ed41d8831fcf5d97018e20ae926f8280ab1842a2bf047b46fc66c503cc92e40a1c8d46fb9221744c168416ed70f83e15
+59fbf638cba67c64f01a886bcf75dbd3cbf4db8787c0401dd70a2c3e1b00e28c6323e4c1e351023d6dc86492fdae27e9
+88c1e5ecdb4edc8ded402ae0636d47574fe08947d636b33fc6b493690c6b7c2829a3f87908ff87c60a7284b7235c7547
+b89c105062e212938c8f7e7395410044ff8c961f0961fd7cfe030203010001a382014730820143304e0603551d110447
+3045820e73686f702e6b6172612e7465737482102a2e73686f702e6b6172612e7465737482096b6172612e7465737487
+04c000020a871020010db8000000000000000000000010300c0603551d130101ff04023000300e0603551d0f0101ff04
+04030205a0301d0603551d250416301406082b0601050507030106082b06010505070302301d0603551d0e0416041418
+481844e2a2f7833164be5da063847bd71709c4301f0603551d230418301680140245ac09e48188ca0c491ff46af19889
+89e0000c305f06082b0601050507010104533051302106082b060105050730018615687474703a2f2f6f6373702e6b61
+72612e74657374302c06082b060105050730028620687474703a2f2f706b692e6b6172612e746573742f69737375696e
+672e63727430130603551d20040c300a3008060667810c010202300d06092a864886f70d01010b050003820101009dbc
+32424f299d812becd47fafc95a782bc30ec1122d9068c68ac375c2e75ea35b8c32cd88f36e037ce2a3a532c6d2f7424a
+e5017680a0afcfcca6e215b90dfdccdb4f5e13cfc2d8203d993c0ca356f0ef41e52d6bae2eed62e0e0ddc14e6c71f2d6
+4faafa9f1efb637e03c173e7e4be110ecfa54d2c573edeefa86248307df0d64ed8689a8a2702ead5b2a7d15d6de88a75
+705539eca433bae95000dd8b59880528532d604ea528df7fa0719cfc8441e0d8b299363344c18b2c3684dd00fc64dbf6
+705c46a3332a21d99b3caa2310b2ef23d6c3bc9c7e3f4e1d761c2bfaf85b79ee7745150148988f536c466d84c9dcb8c0
+bbd10e62cf998647070c8db153b7
+"""
+}
+
+// data/shop.pem
+fn file_12() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIEijCCA3KgAwIBAgIKChssPU5fYHGCkzANBgkqhkiG9w0BAQsFADBWMQswCQYD
+VQQGEwJVUzEWMBQGA1UECgwNS2FyYSBUZXN0IFBLSTEQMA4GA1UECwwHSXNzdWlu
+ZzEdMBsGA1UEAwwUS2FyYSBJc3N1aW5nIENBIDIwMjYwHhcNMjYwOTAxMTIwMDAw
+WhcNMjYxMjAxMTIwMDAwWjBnMQswCQYDVQQGEwJVUzETMBEGA1UECAwKQ2FsaWZv
+cm5pYTEWMBQGA1UEBwwNU2FuIEZyYW5jaXNjbzESMBAGA1UECgwJS2FyYSBTaG9w
+MRcwFQYDVQQDDA5zaG9wLmthcmEudGVzdDCCASIwDQYJKoZIhvcNAQEBBQADggEP
+ADCCAQoCggEBALHyk74+5gcCK8bdeTDGVcKZOVu1E72rbc9cCRU7jZ+oWmNTJY5G
+Y53jGq15PFYPJF+zAy940cBm1HY486jU77s90goWHDvmcICcaOsh5Iq4YqUpf7/m
+7UHYgx/PXZcBjiCukm+CgKsYQqK/BHtG/GbFA8yS5AocjUb7kiF0TBaEFu1w+D4V
+Wfv2OMumfGTwGohrz3Xb08v024eHwEAd1wosPhsA4oxjI+TB41ECPW3IZJL9rifp
+iMHl7NtO3I3tQCrgY21HV0/giUfWNrM/xrSTaQxrfCgpo/h5CP+HxgpyhLcjXHVH
+uJwQUGLiEpOMj35zlUEARP+Mlh8JYf18/gMCAwEAAaOCAUcwggFDME4GA1UdEQRH
+MEWCDnNob3Aua2FyYS50ZXN0ghAqLnNob3Aua2FyYS50ZXN0gglrYXJhLnRlc3SH
+BMAAAgqHECABDbgAAAAAAAAAAAAAABAwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8E
+BAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBQY
+SBhE4qL3gzFkvl2gY4R71xcJxDAfBgNVHSMEGDAWgBQCRawJ5IGIygxJH/Rq8ZiJ
+ieAADDBfBggrBgEFBQcBAQRTMFEwIQYIKwYBBQUHMAGGFWh0dHA6Ly9vY3NwLmth
+cmEudGVzdDAsBggrBgEFBQcwAoYgaHR0cDovL3BraS5rYXJhLnRlc3QvaXNzdWlu
+Zy5jcnQwEwYDVR0gBAwwCjAIBgZngQwBAgIwDQYJKoZIhvcNAQELBQADggEBAJ28
+MkJPKZ2BK+zUf6/JWngrww7BEi2QaMaKw3XC516jW4wyzYjzbgN84qOlMsbS90JK
+5QF2gKCvz8ym4hW5Df3M209eE8/C2CA9mTwMo1bw70HlLWuuLu1i4ODdwU5scfLW
+T6r6nx77Y34DwXPn5L4RDs+lTSxXPt7vqGJIMH3w1k7YaJqKJwLq1bKn0V1t6Ip1
+cFU57KQzuulQAN2LWYgFKFMtYE6lKN9/oHGc/IRB4NiymTYzRMGLLDaE3QD8ZNv2
+cFxGozMqIdmbPKojELLvI9bDvJx+P04ddhwr+vhbee53RRUBSJiPU2xGbYTJ3LjA
+u9EOYs+ZhkcHDI2xU7c=
+-----END CERTIFICATE-----
+
+"""
+}
+
+// data/tampered.pem
+fn file_13() -> String {
+    """
+-----BEGIN CERTIFICATE-----
+MIIEijCCA3KgAwIBAgIKChssPU5fYHGCkzANBgkqhkiG9w0BAQsFADBWMQswCQYD
+VQQGEwJVUzEWMBQGA1UECgwNS2FyYSBUZXN0IFBLSTEQMA4GA1UECwwHSXNzdWlu
+ZzEdMBsGA1UEAwwUS2FyYSBJc3N1aW5nIENBIDIwMjYwHhcNMjYwOTAxMTIwMDAw
+WhcNMjYxMjAxMTIwMDAwWjBnMQswCQYDVQQGEwJVUzETMBEGA1UECAwKQ2FsaWZv
+cm5pYTEWMBQGA1UEBwwNc2FuIEZyYW5jaXNjbzESMBAGA1UECgwJS2FyYSBTaG9w
+MRcwFQYDVQQDDA5zaG9wLmthcmEudGVzdDCCASIwDQYJKoZIhvcNAQEBBQADggEP
+ADCCAQoCggEBALHyk74+5gcCK8bdeTDGVcKZOVu1E72rbc9cCRU7jZ+oWmNTJY5G
+Y53jGq15PFYPJF+zAy940cBm1HY486jU77s90goWHDvmcICcaOsh5Iq4YqUpf7/m
+7UHYgx/PXZcBjiCukm+CgKsYQqK/BHtG/GbFA8yS5AocjUb7kiF0TBaEFu1w+D4V
+Wfv2OMumfGTwGohrz3Xb08v024eHwEAd1wosPhsA4oxjI+TB41ECPW3IZJL9rifp
+iMHl7NtO3I3tQCrgY21HV0/giUfWNrM/xrSTaQxrfCgpo/h5CP+HxgpyhLcjXHVH
+uJwQUGLiEpOMj35zlUEARP+Mlh8JYf18/gMCAwEAAaOCAUcwggFDME4GA1UdEQRH
+MEWCDnNob3Aua2FyYS50ZXN0ghAqLnNob3Aua2FyYS50ZXN0gglrYXJhLnRlc3SH
+BMAAAgqHECABDbgAAAAAAAAAAAAAABAwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8E
+BAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBQY
+SBhE4qL3gzFkvl2gY4R71xcJxDAfBgNVHSMEGDAWgBQCRawJ5IGIygxJH/Rq8ZiJ
+ieAADDBfBggrBgEFBQcBAQRTMFEwIQYIKwYBBQUHMAGGFWh0dHA6Ly9vY3NwLmth
+cmEudGVzdDAsBggrBgEFBQcwAoYgaHR0cDovL3BraS5rYXJhLnRlc3QvaXNzdWlu
+Zy5jcnQwEwYDVR0gBAwwCjAIBgZngQwBAgIwDQYJKoZIhvcNAQELBQADggEBAJ28
+MkJPKZ2BK+zUf6/JWngrww7BEi2QaMaKw3XC516jW4wyzYjzbgN84qOlMsbS90JK
+5QF2gKCvz8ym4hW5Df3M209eE8/C2CA9mTwMo1bw70HlLWuuLu1i4ODdwU5scfLW
+T6r6nx77Y34DwXPn5L4RDs+lTSxXPt7vqGJIMH3w1k7YaJqKJwLq1bKn0V1t6Ip1
+cFU57KQzuulQAN2LWYgFKFMtYE6lKN9/oHGc/IRB4NiymTYzRMGLLDaE3QD8ZNv2
+cFxGozMqIdmbPKojELLvI9bDvJx+P04ddhwr+vhbee53RRUBSJiPU2xGbYTJ3LjA
+u9EOYs+ZhkcHDI2xU7c=
+-----END CERTIFICATE-----
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// The bytes a block of hex digits spells; line breaks are skipped.
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut digits: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if is_hex(b[i]) {
+            digits.push(hex_val(b[i]));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/api-ec.pem", file_0())?;
+    put("data/chain.pem", file_1())?;
+    put("data/client.pem", file_2())?;
+    put("data/garbage.pem", file_3())?;
+    put("data/issuing.pem", file_4())?;
+    put("data/jobs.txt", file_5())?;
+    put("data/localhost.pem", file_6())?;
+    put("data/notes.txt", file_7())?;
+    put("data/old.pem", file_8())?;
+    put("data/rogue.pem", file_9())?;
+    put("data/root.pem", file_10())?;
+    put_bytes("data/shop.der", unhex(file_11()))?;
+    put("data/shop.pem", file_12())?;
+    put("data/tampered.pem", file_13())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.txt: {e}"),
+    };
+    let mut cache: Vec[Mont] = Vec.new();
+    for line in lines_of(text) {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let mut job = Job { out: String.new(), err: String.new(), status: 0 };
+        let w = split_on(line, b' ');
+        let rest: Vec[String] = w[1..].to_vec();
+        if w[0] == "x509" {
+            x509_cmd(mut job, rest);
+        } else if w[0] == "asn1parse" {
+            asn1parse_cmd(mut job, rest);
+        } else if w[0] == "verify" {
+            verify_cmd(mut job, mut cache, rest);
+        }
+        let mut out = f"$ openssl {line}\n";
+        out.push_str(job.out);
+        out.push_str(job.err);
+        if job.status != 0 {
+            out.push_str(f"[exit status {job.status}]\n");
+        }
+        println(out);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
