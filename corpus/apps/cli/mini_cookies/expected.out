@@ -1,0 +1,202 @@
+== load
+'sid=abc123; theme=dark'
+  <SimpleCookie: sid='abc123' theme='dark'>
+  'sid': value='abc123' coded='abc123'
+  'theme': value='dark' coded='dark'
+  | Set-Cookie: sid=abc123
+  | Set-Cookie: theme=dark
+' a=1 ;b=2;   c=3 '
+  <SimpleCookie: a='1' b='2' c='3'>
+  'a': value='1' coded='1'
+  'b': value='2' coded='2'
+  'c': value='3' coded='3'
+  | Set-Cookie: a=1
+  | Set-Cookie: b=2
+  | Set-Cookie: c=3
+'quoted="hello world"; esc="a\\"b\\\\c\\012d"'
+  CookieError: Control characters are not allowed in cookies 'esc' 'a"b\\c\nd' '"a\\"b\\\\c\\012d"'
+  <SimpleCookie: quoted='hello world'>
+  'quoted': value='hello world' coded='"hello world"'
+  | Set-Cookie: quoted="hello world"
+'chips="\\303\\251t\\303\\251"'
+  <SimpleCookie: chips='Ã©tÃ©'>
+  'chips': value='Ã©tÃ©' coded='"\\303\\251t\\303\\251"'
+  | Set-Cookie: chips="\303\251t\303\251"
+'k=v; Path=/; Domain=example.com; Max-Age=3600; Secure; HttpOnly; SameSite=Lax'
+  <SimpleCookie: k='v'>
+  'k': value='v' coded='v' path='/' domain='example.com' max-age='3600' secure=True httponly=True samesite='Lax'
+  | Set-Cookie: k=v; Domain=example.com; HttpOnly; Max-Age=3600; Path=/; SameSite=Lax; Secure
+'k=v; expires=Wed, 21 Oct 2026 07:28:00 GMT; path=/docs'
+  <SimpleCookie: k='v'>
+  'k': value='v' coded='v' expires='Wed, 21 Oct 2026 07:28:00 GMT' path='/docs'
+  | Set-Cookie: k=v; expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/docs
+'k=v; expires=Thursday, 22-Oct-2026 07:28:00 GMT'
+  <SimpleCookie: k='v'>
+  'k': value='v' coded='v' expires='Thursday, 22-Oct-2026 07:28:00 GMT'
+  | Set-Cookie: k=v; expires=Thursday, 22-Oct-2026 07:28:00 GMT
+'k=v; expires=Wed, 21 Oct 2026 07:28 GMT'
+  <SimpleCookie: >
+'Path=/; k=v'
+  <SimpleCookie: >
+'k=v; Domain'
+  <SimpleCookie: >
+'k=v; $Path=/x; $Version=1'
+  <SimpleCookie: k='v'>
+  'k': value='v' coded='v' path='/x' version='1'
+  | Set-Cookie: k=v; Path=/x; Version=1
+'k=v; $Foo=1'
+  CookieError: Invalid attribute 'foo'
+  <SimpleCookie: k='v'>
+  'k': value='v' coded='v'
+  | Set-Cookie: k=v
+'$Version=1; k=v'
+  <SimpleCookie: k='v'>
+  'k': value='v' coded='v'
+  | Set-Cookie: k=v
+'a<b=1; c=2'
+  CookieError: Illegal key 'a<b'
+  <SimpleCookie: >
+'a=1; c d=2'
+  <SimpleCookie: >
+'a=1 b=2'
+  <SimpleCookie: a='1' b='2'>
+  'a': value='1' coded='1'
+  'b': value='2' coded='2'
+  | Set-Cookie: a=1
+  | Set-Cookie: b=2
+'k=v; comment=hello there'
+  <SimpleCookie: >
+'k=[1,2]; m={x:1}'
+  <SimpleCookie: k='[1,2]' m='{x:1}'>
+  'k': value='[1,2]' coded='[1,2]'
+  'm': value='{x:1}' coded='{x:1}'
+  | Set-Cookie: k=[1,2]
+  | Set-Cookie: m={x:1}
+'k=a=b=c'
+  <SimpleCookie: k='a=b=c'>
+  'k': value='a=b=c' coded='a=b=c'
+  | Set-Cookie: k=a=b=c
+'k'
+  <SimpleCookie: >
+';;a=1'
+  <SimpleCookie: >
+'k=v; secure=1; httponly'
+  <SimpleCookie: k='v'>
+  'k': value='v' coded='v' secure='1' httponly=True
+  | Set-Cookie: k=v; HttpOnly; Secure
+'=v'
+  <SimpleCookie: >
+'a=1; a=2; A=3'
+  <SimpleCookie: A='3' a='2'>
+  'a': value='2' coded='2'
+  'A': value='3' coded='3'
+  | Set-Cookie: A=3
+  | Set-Cookie: a=2
+'x="unterminated; y=2'
+  <SimpleCookie: >
+'w=1;\ttab=2'
+  <SimpleCookie: tab='2' w='1'>
+  'w': value='1' coded='1'
+  'tab': value='2' coded='2'
+  | Set-Cookie: tab=2
+  | Set-Cookie: w=1
+== build
+c['café'] = 'x': CookieError: Illegal key 'café'
+c['path'] = 'x': CookieError: Attempt to set a reserved key 'path'
+c['a b'] = 'x': CookieError: Illegal key 'a b'
+c['sid']['bogus'] = 1: CookieError: Invalid attribute 'bogus'
+c['ctl'] = 'a\nb': CookieError: Control characters are not allowed in cookies 'ctl' 'a\nb' '"a\\012b"'
+c['sid']['domain'] = 'ex\x01.com': CookieError: Control characters are not allowed in cookies 'domain' 'ex\x01.com'
+c['sid']['VERSION'] = '1': ok
+<SimpleCookie: empty='' latin='café \\ back' n='42' pref='dark mode; "x"' sid='abc123' sym='a:b|c~d'>
+  'sid': value='abc123' coded='abc123' path='/' max-age=3600 secure=True httponly=True version='1' samesite='Strict'
+  'pref': value='dark mode; "x"' coded='"dark mode\\073 \\"x\\""' expires='Thu, 01 Jan 2027 00:00:00 GMT' comment="user's choice" domain='example.com'
+  'n': value='42' coded='42'
+  'latin': value='café \\ back' coded='"caf\\351 \\\\ back"'
+  'empty': value='' coded='""'
+  'sym': value='a:b|c~d' coded='a:b|c~d'
+| Set-Cookie: empty=""
+| Set-Cookie: latin="caf\351 \\ back"
+| Set-Cookie: n=42
+| Set-Cookie: pref="dark mode\073 \"x\""; Comment="user's choice"; Domain=example.com; expires=Thu, 01 Jan 2027 00:00:00 GMT
+| Set-Cookie: sid=abc123; HttpOnly; Max-Age=3600; Path=/; SameSite=Strict; Secure; Version=1
+| Set-Cookie: sym=a:b|c~d
+| Cookie: empty=""
+| Cookie: latin="caf\351 \\ back"
+| Cookie: n=42
+| Cookie: pref="dark mode\073 \"x\""
+| Cookie: sid=abc123; HttpOnly; Path=/
+| Cookie: sym=a:b|c~d
+<Morsel: pref="dark mode\073 \"x\""; Comment="user's choice"; Domain=example.com; expires=Thu, 01 Jan 2027 00:00:00 GMT>
+
+        <script type="text/javascript">
+        <!-- begin hiding
+        document.cookie = decodeURIComponent("sid%3Dabc123%3B%20HttpOnly%3B%20Max-Age%3D3600%3B%20Path%3D%2F%3B%20SameSite%3DStrict%3B%20Secure%3B%20Version%3D1");
+        // end hiding -->
+        </script>
+        |
+== jar
+-- at 1760000000
+-- response from https://shop.example.com/catalog/shoes/index.html
+  sid: stored for shop.example.com/
+  'cart=3 items; Max-Age=600': nothing parsed
+  lang: stored for .example.com/
+  trk: rejected, domain 'tracker.net' does not match 'shop.example.com'
+  wide: rejected, domain 'com' is too broad
+  promo: stored for shop.example.com/catalog/shoes
+  banner: stored for shop.example.com/catalog
+  views: stored for shop.example.com/catalog/shoes/
+  Priority: stored for shop.example.com/catalog/shoes
+-- request to https://shop.example.com/catalog/shoes/item.html
+  Cookie: views=7; promo="10% off"; Priority=High; banner=summer; sid=s1; lang=de
+-- request to https://shop.example.com/catalog/
+  Cookie: banner=summer; sid=s1; lang=de
+-- request to https://shop.example.com/catalogue
+  Cookie: sid=s1; lang=de
+-- request to http://shop.example.com/catalog/shoes/x
+  Cookie: views=7; promo="10% off"; Priority=High; banner=summer; lang=de
+-- request to https://blog.example.com/
+  Cookie: lang=de
+-- request to https://example.com/
+  Cookie: lang=de
+-- request to https://evil-example.com/
+  (no cookies)
+-- response from http://shop.example.com/login
+  sid: rejected, Secure from an insecure origin
+  csrf: stored for shop.example.com/login
+  lang: stored for .example.com/
+-- jar
+  example.com/ lang=fr session
+  shop.example.com/ sid=s1 session secure httponly host-only
+  shop.example.com/catalog banner=summer expires in 32567680s host-only
+  shop.example.com/catalog/shoes Priority=High session host-only
+  shop.example.com/catalog/shoes promo="10% off" expires in 83200s host-only
+  shop.example.com/catalog/shoes/ views=7 session host-only
+  shop.example.com/login csrf=t0k session host-only
+-- at 1760000500
+-- request to https://shop.example.com/catalog/shoes/item.html
+  Cookie: views=7; promo="10% off"; Priority=High; banner=summer; sid=s1; lang=fr
+-- at 1760000700
+-- request to https://shop.example.com/catalog/shoes/item.html
+  Cookie: views=7; promo="10% off"; Priority=High; banner=summer; sid=s1; lang=fr
+-- response from https://shop.example.com/logout
+  sid: deleted
+  lang: deleted
+  banner: Max-Age 'abc' ignored
+  banner: stored for shop.example.com/catalog
+  'views; Path=/catalog/shoes/': nothing parsed
+  '<bad>=1': CookieError: Illegal key '<bad>'
+-- jar
+  shop.example.com/catalog banner=autumn session host-only
+  shop.example.com/catalog/shoes Priority=High session host-only
+  shop.example.com/catalog/shoes promo="10% off" expires in 82500s host-only
+  shop.example.com/catalog/shoes/ views=7 session host-only
+  shop.example.com/login csrf=t0k session host-only
+-- at 1792531681
+-- request to https://shop.example.com/catalog/shoes/item.html
+  Cookie: views=7; Priority=High; banner=autumn
+-- jar
+  shop.example.com/catalog banner=autumn session host-only
+  shop.example.com/catalog/shoes Priority=High session host-only
+  shop.example.com/catalog/shoes/ views=7 session host-only
+  shop.example.com/login csrf=t0k session host-only

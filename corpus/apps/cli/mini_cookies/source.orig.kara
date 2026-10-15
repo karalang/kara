@@ -1,0 +1,1603 @@
+// mini_cookies: HTTP cookies as Python 3.13's http.cookies handles them,
+// and a browser's cookie jar on top:
+// - SimpleCookie.load: the _CookiePattern regex ported as a backtracking
+//   matcher (its lazy key, quoted values, the Expires date form, and the
+//   end at a space, `;` or the end of the header), `$` attributes,
+//   reserved attributes and flags, and loads that stop half way;
+// - _quote and _unquote with their octal escapes;
+// - Morsel attributes and their errors, output, OutputString with an
+//   attribute filter, repr and js_output;
+// - a jar with RFC 6265's domain and path matching, default paths,
+//   host-only cookies, Secure, Max-Age and Expires against a clock,
+//   replacement and deletion, and the order a request sends cookies in.
+//
+// The program loads the Cookie headers in data/headers.txt, builds a set
+// of cookies by hand, then replays the responses and requests in
+// data/jar.txt. expected.out is the output of oracle.py, the same
+// program written with http.cookies.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+fn always_safe(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+// quote: every byte of the UTF-8 that is neither always safe nor in
+// `safe` becomes %XX.
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    let sb = to_bytes(safe);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        let mut ok = c < 128 and always_safe(c);
+        for k in 0..sb.len() {
+            if sb[k] < 128 and sb[k] == c {
+                ok = true;
+            }
+        }
+        if ok {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ code points
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn has_control(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] < 32 or b[i] == 127 {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ quoting
+
+// _LegalChars: what a key, or a value that needs no quotes, is made of.
+fn is_legal_char(c: i64) -> bool {
+    if c >= 128 {
+        return false;
+    }
+    let b = c as u8;
+    is_alnum(b) or has_byte("!#$%&'*+-.^_`|~:", b)
+}
+
+fn is_legal_key(s: Str) -> bool {
+    let cps = code_points(s);
+    if cps.len() == 0 {
+        return false;
+    }
+    for i in 0..cps.len() {
+        if not is_legal_char(cps[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_unescaped(c: i64) -> bool {
+    is_legal_char(c) or (c < 128 and has_byte(" ()/<=>?@[]{}", c as u8))
+}
+
+// _quote: a value that is not a legal key goes in double quotes, with
+// `"` and `\` escaped and the other bytes below 256 written in octal.
+fn cookie_quote(s: Str) -> String {
+    if is_legal_key(s) {
+        return s.to_string();
+    }
+    let cps = code_points(s);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'"');
+    for i in 0..cps.len() {
+        let c = cps[i];
+        if c == 34 {
+            push_str_bytes(mut out, "\\\"");
+        } else if c == 92 {
+            push_str_bytes(mut out, "\\\\");
+        } else if is_unescaped(c) or c >= 256 {
+            push_code_point(mut out, c);
+        } else {
+            out.push(b'\\');
+            out.push(b'0' + (c / 64) as u8);
+            out.push(b'0' + ((c / 8) % 8) as u8);
+            out.push(b'0' + (c % 8) as u8);
+        }
+    }
+    out.push(b'"');
+    from_bytes(out)
+}
+
+fn is_octal(c: u8) -> bool {
+    c >= b'0' and c <= b'7'
+}
+
+// _unquote: strip the quotes, and replace \ooo and \x as _unquote_sub does.
+fn cookie_unquote(s: Str) -> String {
+    let b = to_bytes(s);
+    if b.len() < 2 or b[0] != b'"' or b[b.len() - 1] != b'"' {
+        return s.to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let end = b.len() - 1;
+    let mut i: i64 = 1;
+    while i < end {
+        let c = b[i];
+        if c == b'\\' and i + 3 < end + 1 and b[i + 1] >= b'0' and b[i + 1] <= b'3' and is_octal(b[i + 2]) and is_octal(b[i + 3]) {
+            let n = ((b[i + 1] - b'0') as i64) * 64 + ((b[i + 2] - b'0') as i64) * 8 + (b[i + 3] - b'0') as i64;
+            push_code_point(mut out, n);
+            i += 4;
+        } else if c == b'\\' and i + 1 < end and b[i + 1] != b'\n' {
+            // (.) takes one character, which may be several bytes
+            i += 1;
+            let mut j = i + 1;
+            while j < end and b[j] >= 0x80 and b[j] < 0xC0 {
+                j += 1;
+            }
+            for k in i..j {
+                out.push(b[k]);
+            }
+            i = j;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ morsels
+
+const RESERVED: Array[Str, 9] = ["expires", "path", "comment", "domain", "max-age", "secure", "httponly", "version", "samesite"];
+const RESERVED_NAMES: Array[Str, 9] = ["expires", "Path", "Comment", "Domain", "Max-Age", "Secure", "HttpOnly", "Version", "SameSite"];
+// The reserved keys in sorted order, as OutputString walks them.
+const SORTED_ATTRS: Array[i64, 9] = [2, 3, 0, 6, 4, 1, 8, 5, 7];
+
+fn reserved_index(k: Str) -> i64 {
+    let l = lower(k);
+    for i in 0..RESERVED.len() {
+        if l == RESERVED[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+fn is_flag(i: i64) -> bool {
+    i == 5 or i == 6
+}
+
+#[derive(Clone)]
+enum Attr {
+    Text(String),
+    Int(i64),
+    Flag(bool),
+}
+
+fn attr_str(a: ref Attr) -> String {
+    match a {
+        Attr.Text(s) => s.clone(),
+        Attr.Int(n) => f"{n}",
+        Attr.Flag(b) => if b { "True".to_string() } else { "False".to_string() },
+    }
+}
+
+fn attr_repr(a: ref Attr) -> String {
+    match a {
+        Attr.Text(s) => py_repr(s),
+        _ => attr_str(a),
+    }
+}
+
+fn attr_is_empty(a: ref Attr) -> bool {
+    match a {
+        Attr.Text(s) => s.len() == 0,
+        _ => false,
+    }
+}
+
+fn attr_truthy(a: ref Attr) -> bool {
+    match a {
+        Attr.Text(s) => s.len() > 0,
+        Attr.Int(n) => n != 0,
+        Attr.Flag(b) => b,
+    }
+}
+
+#[derive(Clone)]
+struct Morsel {
+    key: String,
+    value: String,
+    coded: String,
+    attrs: Vec[Attr],
+}
+
+fn new_morsel() -> Morsel {
+    let mut attrs: Vec[Attr] = Vec.new();
+    for _ in 0..9 {
+        attrs.push(Attr.Text(String.new()));
+    }
+    Morsel { key: String.new(), value: String.new(), coded: String.new(), attrs: attrs }
+}
+
+impl Morsel {
+    // Morsel.__setitem__
+    fn set_attr(mut ref self, k: Str, v: own Attr) -> Result[(), String] {
+        let at = reserved_index(k);
+        if at < 0 {
+            return Err(f"Invalid attribute {py_repr(lower(k))}");
+        }
+        if has_control(k) or has_control(attr_str(v)) {
+            return Err(f"Control characters are not allowed in cookies {py_repr(lower(k))} {attr_repr(v)}");
+        }
+        self.attrs[at] = v;
+        Ok(())
+    }
+
+    fn attr(ref self, k: Str) -> Attr {
+        self.attrs[reserved_index(k)].clone()
+    }
+
+    fn text(ref self, k: Str) -> String {
+        attr_str(self.attrs[reserved_index(k)])
+    }
+
+    // OutputString, with the attributes limited to `only` when it is
+    // not empty.
+    fn output_string(ref self, only: ref Vec[String]) -> String {
+        let mut result: Vec[String] = Vec.new();
+        result.push(f"{self.key}={self.coded}");
+        for s in 0..SORTED_ATTRS.len() {
+            let i = SORTED_ATTRS[s];
+            let v = self.attrs[i].clone();
+            if attr_is_empty(v) {
+                continue;
+            }
+            if only.len() > 0 and not contains_str(only, RESERVED[i]) {
+                continue;
+            }
+            let name = RESERVED_NAMES[i];
+            if i == 2 {
+                match v {
+                    Attr.Text(t) => result.push(f"{name}={cookie_quote(t)}"),
+                    _ => result.push(f"{name}={attr_str(v)}"),
+                }
+            } else if is_flag(i) {
+                if attr_truthy(v) {
+                    result.push(name.to_string());
+                }
+            } else {
+                result.push(f"{name}={attr_str(v)}");
+            }
+        }
+        join(result, "; ")
+    }
+
+    fn output(ref self, only: ref Vec[String], header: Str) -> String {
+        f"{header} {self.output_string(only)}"
+    }
+
+    fn js_output(ref self) -> Result[String, String] {
+        let s = self.output_string(Vec.new());
+        if has_control(s) {
+            return Err("Control characters are not allowed in cookies".to_string());
+        }
+        let enc = quote(s, "");
+        Ok(f"\n        <script type=\"text/javascript\">\n        <!-- begin hiding\n        document.cookie = decodeURIComponent(\"{enc}\");\n        // end hiding -->\n        </script>\n        ")
+    }
+}
+
+// ------------------------------------------------------------ the cookie
+
+// A SimpleCookie: morsels by key, in the order they were first set.
+struct Cookie {
+    morsels: Vec[Morsel],
+}
+
+impl Cookie {
+    fn find(ref self, key: Str) -> i64 {
+        for i in 0..self.morsels.len() {
+            if self.morsels[i].key == key {
+                return i;
+            }
+        }
+        -1
+    }
+
+    // BaseCookie.__set and Morsel.set
+    fn set_coded(mut ref self, key: Str, value: Str, coded: Str) -> Result[(), String] {
+        if reserved_index(key) >= 0 {
+            return Err(f"Attempt to set a reserved key {py_repr(key)}");
+        }
+        if not is_legal_key(key) {
+            return Err(f"Illegal key {py_repr(key)}");
+        }
+        if has_control(key) or has_control(value) or has_control(coded) {
+            return Err(f"Control characters are not allowed in cookies {py_repr(key)} {py_repr(value)} {py_repr(coded)}");
+        }
+        let at = self.find(key);
+        if at >= 0 {
+            self.morsels[at].value = value.to_string();
+            self.morsels[at].coded = coded.to_string();
+            return Ok(());
+        }
+        let mut m = new_morsel();
+        m.key = key.to_string();
+        m.value = value.to_string();
+        m.coded = coded.to_string();
+        self.morsels.push(m);
+        Ok(())
+    }
+
+    // c[key] = value, through SimpleCookie.value_encode
+    fn set(mut ref self, key: Str, value: Str) -> Result[(), String] {
+        self.set_coded(key, value, cookie_quote(value))
+    }
+
+    fn set_attr(mut ref self, key: Str, k: Str, v: own Attr) -> Result[(), String] {
+        let at = self.find(key);
+        self.morsels[at].set_attr(k, v)
+    }
+
+    // The morsels sorted by key.
+    fn sorted(ref self) -> Vec[i64] {
+        let mut order: Vec[i64] = Vec.new();
+        for i in 0..self.morsels.len() {
+            order.push(i);
+        }
+        for i in 1..order.len() {
+            let mut j = i;
+            while j > 0 and self.morsels[order[j - 1]].key > self.morsels[order[j]].key {
+                order.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        order
+    }
+
+    fn repr(ref self) -> String {
+        let order = self.sorted();
+        let mut l: Vec[String] = Vec.new();
+        for k in 0..order.len() {
+            let m = self.morsels[order[k]].clone();
+            l.push(f"{m.key}={py_repr(m.value)}");
+        }
+        f"<SimpleCookie: {join(l, " ")}>"
+    }
+
+    fn output(ref self, only: ref Vec[String], header: Str) -> Result[Vec[String], String] {
+        let order = self.sorted();
+        let mut out: Vec[String] = Vec.new();
+        for k in 0..order.len() {
+            let line = self.morsels[order[k]].output(only, header);
+            if has_control(line) {
+                return Err("Control characters are not allowed in cookies".to_string());
+            }
+            out.push(line);
+        }
+        Ok(out)
+    }
+}
+
+// ------------------------------------------------------------ _CookiePattern
+
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn is_legal_key_char(c: u8) -> bool {
+    is_word(c) or has_byte("!#%&'~_`><@,:/$*+-.^|)(?}{=", c)
+}
+
+fn is_legal_value_char(c: u8) -> bool {
+    is_legal_key_char(c) or c == b'[' or c == b']'
+}
+
+// `\s*(\s+|;|$)` from `pos`: where the match ends, or -1.
+fn match_end(b: ref Vec[u8], pos: i64) -> i64 {
+    let mut q = pos;
+    while q < b.len() and is_space(b[q]) {
+        q += 1;
+    }
+    if q < b.len() and b[q] == b';' {
+        return q + 1;
+    }
+    if q == b.len() {
+        return q;
+    }
+    if q > pos {
+        // \s* gives back one space for \s+
+        return q;
+    }
+    -1
+}
+
+// The ends a `val` can have from `v`, in the order the regex tries them.
+fn value_ends(b: ref Vec[u8], v: i64) -> Vec[i64] {
+    let n = b.len();
+    let mut ends: Vec[i64] = Vec.new();
+    // "(?:[^\\"]|\\.)*"
+    if v < n and b[v] == b'"' {
+        let mut j = v + 1;
+        loop {
+            if j >= n {
+                break;
+            }
+            if b[j] == b'"' {
+                ends.push(j + 1);
+                break;
+            }
+            if b[j] == b'\\' {
+                if j + 1 < n and b[j + 1] != b'\n' {
+                    j += 2;
+                    continue;
+                }
+                break;
+            }
+            j += 1;
+        }
+    }
+    // (\w{3,6}day|\w{3}),\s[\w\d\s-]{9,11}\s[\d:]{8}\sGMT
+    let mut day_ends: Vec[i64] = Vec.new();
+    let mut c: i64 = 6;
+    while c >= 3 {
+        let mut ok = v + c + 3 <= n;
+        if ok {
+            for k in v..v + c {
+                if not is_word(b[k]) {
+                    ok = false;
+                }
+            }
+        }
+        if ok and starts_at(b, v + c, "day") {
+            day_ends.push(v + c + 3);
+        }
+        c -= 1;
+    }
+    if v + 3 <= n and is_word(b[v]) and is_word(b[v + 1]) and is_word(b[v + 2]) {
+        day_ends.push(v + 3);
+    }
+    for d in 0..day_ends.len() {
+        let p = day_ends[d];
+        if not (p + 1 < n and b[p] == b',' and is_space(b[p + 1])) {
+            continue;
+        }
+        let mut m: i64 = 11;
+        while m >= 9 {
+            let q = p + 2;
+            let mut ok = q + m <= n;
+            if ok {
+                for k in q..q + m {
+                    if not (is_word(b[k]) or is_space(b[k]) or b[k] == b'-') {
+                        ok = false;
+                    }
+                }
+            }
+            let r = q + m;
+            if ok and r + 1 + 8 + 1 + 3 <= n and is_space(b[r]) {
+                for k in r + 1..r + 9 {
+                    if not (is_digit(b[k]) or b[k] == b':') {
+                        ok = false;
+                    }
+                }
+                if ok and is_space(b[r + 9]) and starts_at(b, r + 10, "GMT") {
+                    ends.push(r + 13);
+                }
+            }
+            m -= 1;
+        }
+    }
+    // [legal value chars]*
+    let mut run = v;
+    while run < n and is_legal_value_char(b[run]) {
+        run += 1;
+    }
+    let mut e = run;
+    while e >= v {
+        ends.push(e);
+        e -= 1;
+    }
+    ends
+}
+
+struct PatMatch {
+    key: String,
+    val: Option[String],
+    end: i64,
+}
+
+// _CookiePattern.match(s, i).
+fn cookie_match(b: ref Vec[u8], i: i64) -> Option[PatMatch] {
+    let n = b.len();
+    let mut st = i;
+    while st < n and is_space(b[st]) {
+        st += 1;
+    }
+    let mut run = st;
+    while run < n and is_legal_key_char(b[run]) {
+        run += 1;
+    }
+    // the key is lazy: the shortest that lets the rest match
+    for key_end in st + 1..run + 1 {
+        // the optional `\s*=\s*val` group, tried first
+        let mut p = key_end;
+        while p < n and is_space(b[p]) {
+            p += 1;
+        }
+        if p < n and b[p] == b'=' {
+            let mut smax = p + 1;
+            while smax < n and is_space(b[smax]) {
+                smax += 1;
+            }
+            let mut v = smax;
+            while v >= p + 1 {
+                let ends = value_ends(b, v);
+                for k in 0..ends.len() {
+                    let e = match_end(b, ends[k]);
+                    if e >= 0 {
+                        return Some(PatMatch { key: byte_str(b, st, key_end), val: Some(byte_str(b, v, ends[k])), end: e });
+                    }
+                }
+                v -= 1;
+            }
+        }
+        let e = match_end(b, key_end);
+        if e >= 0 {
+            return Some(PatMatch { key: byte_str(b, st, key_end), val: None, end: e });
+        }
+    }
+    None
+}
+
+// What __parse_string collects before it sets anything.
+enum Item {
+    Attribute(String, Attr),
+    KeyValue(String, String),
+}
+
+// BaseCookie.load on a string.
+fn load(c: mut ref Cookie, text: Str) -> Result[(), String] {
+    let b = to_bytes(text);
+    let n = b.len();
+    let mut i: i64 = 0;
+    let mut items: Vec[Item] = Vec.new();
+    let mut morsel_seen = false;
+    while i >= 0 and i < n {
+        let m = match cookie_match(b, i) {
+            Some(m) => m,
+            None => break,
+        };
+        i = m.end;
+        let key = m.key.clone();
+        if first_byte(key) == b'$' {
+            if not morsel_seen {
+                continue;
+            }
+            let v = match m.val {
+                Some(v) => Attr.Text(v),
+                None => Attr.Text(String.new()),
+            };
+            items.push(Item.Attribute(slice_from(key, 1), v));
+        } else if reserved_index(key) >= 0 {
+            if not morsel_seen {
+                return Ok(());
+            }
+            match m.val {
+                None => {
+                    if is_flag(reserved_index(key)) {
+                        items.push(Item.Attribute(key, Attr.Flag(true)));
+                    } else {
+                        return Ok(());
+                    }
+                }
+                Some(v) => items.push(Item.Attribute(key, Attr.Text(cookie_unquote(v)))),
+            }
+        } else if let Some(v) = m.val {
+            items.push(Item.KeyValue(key, v));
+            morsel_seen = true;
+        } else {
+            return Ok(());
+        }
+    }
+    let mut current = String.new();
+    for k in 0..items.len() {
+        match items[k].clone() {
+            Item.Attribute(name, v) => c.set_attr(current, name, v)?,
+            Item.KeyValue(key, v) => {
+                c.set_coded(key, cookie_unquote(v), v)?;
+                current = key;
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ dates and URLs
+
+const MONTHS: Array[Str, 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Days since 1970-01-01 of a proleptic Gregorian date.
+fn days_from_civil(year: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn all_digits(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return false;
+    }
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn digits_value(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+fn month_index(s: Str) -> i64 {
+    for i in 0..MONTHS.len() {
+        if s == MONTHS[i] {
+            return i;
+        }
+    }
+    -1
+}
+
+// "Wdy, DD Mon YYYY HH:MM:SS GMT", with `-` or a space between the date
+// parts, as seconds since the epoch.
+fn parse_http_date(s: Str) -> Option[i64] {
+    let (_, comma, rest) = partition(s, b',');
+    if not comma {
+        return None;
+    }
+    let parts = split_ws(replace_byte(rest, b'-', " "));
+    if parts.len() != 5 or parts[4] != "GMT" {
+        return None;
+    }
+    let month = month_index(parts[1]);
+    if month < 0 {
+        return None;
+    }
+    if not (all_digits(parts[0]) and all_digits(parts[2])) {
+        return None;
+    }
+    let hms = split_on(parts[3], b':');
+    if hms.len() != 3 {
+        return None;
+    }
+    for i in 0..3 {
+        if not all_digits(hms[i]) {
+            return None;
+        }
+    }
+    let days = days_from_civil(digits_value(parts[2]), month + 1, digits_value(parts[0]));
+    Some(days * 86400 + digits_value(hms[0]) * 3600 + digits_value(hms[1]) * 60 + digits_value(hms[2]))
+}
+
+// (scheme, host without its port and lower-cased, path without its query)
+fn split_url(url: Str) -> (String, String, String) {
+    let at = find_str(url, "://");
+    let scheme = if at >= 0 { slice(url, 0, at) } else { url.to_string() };
+    let rest = if at >= 0 { slice_from(url, at + 3) } else { String.new() };
+    let (host, _, path) = partition(rest, b'/');
+    let (p, _, _) = partition(path, b'?');
+    let (h, _, _) = partition(host, b':');
+    (scheme, lower(h), f"/{p}")
+}
+
+// RFC 6265's default-path: the request path up to its last slash.
+fn default_path(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut slashes: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'/' {
+            slashes += 1;
+        }
+    }
+    if not starts_with(path, "/") or slashes == 1 {
+        return "/".to_string();
+    }
+    slice(path, 0, rfind_byte(path, b'/'))
+}
+
+fn ends_with(s: Str, pat: Str) -> bool {
+    let b = to_bytes(s);
+    let p = to_bytes(pat);
+    p.len() <= b.len() and starts_at(b, b.len() - p.len(), pat)
+}
+
+fn domain_match(host: Str, domain: Str) -> bool {
+    host == domain or ends_with(host, f".{domain}")
+}
+
+fn path_match(req: Str, cpath: Str) -> bool {
+    if req == cpath {
+        return true;
+    }
+    if starts_with(req, cpath) {
+        return ends_with(cpath, "/") or byte_at(req, cpath.len()) == b'/';
+    }
+    false
+}
+
+// ------------------------------------------------------------ the jar
+
+#[derive(Clone)]
+struct Stored {
+    name: String,
+    // the coded value, as the header carried it
+    value: String,
+    domain: String,
+    path: String,
+    host_only: bool,
+    secure: bool,
+    httponly: bool,
+    expiry: Option[i64],
+    created: i64,
+}
+
+fn expired(k: ref Stored, now: i64) -> bool {
+    match k.expiry {
+        Some(e) => e <= now,
+        None => false,
+    }
+}
+
+struct Jar {
+    // in creation order
+    cookies: Vec[Stored],
+    now: i64,
+    serial: i64,
+}
+
+impl Jar {
+    // One Set-Cookie header from a response to `url`.
+    fn store(mut ref self, url: Str, header: Str) {
+        let (scheme, host, path) = split_url(url);
+        let mut c = Cookie { morsels: Vec.new() };
+        if let Err(e) = load(mut c, header) {
+            println(f"  {py_repr(header)}: CookieError: {e}");
+            return;
+        }
+        if c.morsels.len() == 0 {
+            println(f"  {py_repr(header)}: nothing parsed");
+            return;
+        }
+        for mi in 0..c.morsels.len() {
+            let m = c.morsels[mi].clone();
+            let name = m.key.clone();
+            let mut domain = lower(m.text("domain"));
+            while first_byte(domain) == b'.' {
+                domain = slice_from(domain, 1);
+            }
+            let mut host_only = true;
+            if domain.len() > 0 {
+                if not has_byte(domain, b'.') {
+                    println(f"  {name}: rejected, domain {py_repr(domain)} is too broad");
+                    continue;
+                }
+                if not domain_match(host, domain) {
+                    println(f"  {name}: rejected, domain {py_repr(domain)} does not match {py_repr(host)}");
+                    continue;
+                }
+                host_only = false;
+            } else {
+                domain = host.clone();
+            }
+            let mpath = m.text("path");
+            let cpath = if starts_with(mpath, "/") { mpath } else { default_path(path) };
+            let secure = attr_truthy(m.attr("secure"));
+            if secure and scheme != "https" {
+                println(f"  {name}: rejected, Secure from an insecure origin");
+                continue;
+            }
+            let mut expiry: Option[i64] = None;
+            let max_age = m.text("max-age");
+            if max_age.len() > 0 {
+                match py_int(max_age) {
+                    Some(age) => expiry = Some(if age > 0 { self.now + age } else { 0 }),
+                    None => println(f"  {name}: Max-Age {py_repr(max_age)} ignored"),
+                }
+            }
+            let expires = m.text("expires");
+            if expiry.is_none() and expires.len() > 0 {
+                expiry = parse_http_date(expires);
+                if expiry.is_none() {
+                    println(f"  {name}: Expires {py_repr(expires)} ignored");
+                }
+            }
+            let mut old: i64 = -1;
+            for k in 0..self.cookies.len() {
+                if self.cookies[k].name == name and self.cookies[k].domain == domain and self.cookies[k].path == cpath {
+                    old = k;
+                }
+            }
+            let mut old_created: i64 = 0;
+            if old >= 0 {
+                old_created = self.cookies[old].created;
+                self.cookies.remove(old);
+            }
+            let gone = match expiry {
+                Some(e) => e <= self.now,
+                None => false,
+            };
+            if gone {
+                let what = if old >= 0 { "deleted" } else { "already expired" };
+                println(f"  {name}: {what}");
+                continue;
+            }
+            self.serial += 1;
+            let created = if old >= 0 { old_created } else { self.serial };
+            let dot = if host_only { "" } else { "." };
+            println(f"  {name}: stored for {dot}{domain}{cpath}");
+            self.cookies.push(Stored { name: name, value: m.coded.clone(), domain: domain, path: cpath, host_only: host_only, secure: secure, httponly: attr_truthy(m.attr("httponly")), expiry: expiry, created: created });
+        }
+    }
+
+    // The Cookie header a request to `url` carries.
+    fn header_for(ref self, url: Str) -> String {
+        let (scheme, host, path) = split_url(url);
+        let mut out: Vec[Stored] = Vec.new();
+        for i in 0..self.cookies.len() {
+            let k = self.cookies[i].clone();
+            if expired(k, self.now) {
+                continue;
+            }
+            if k.host_only and host != k.domain {
+                continue;
+            }
+            if not k.host_only and not domain_match(host, k.domain) {
+                continue;
+            }
+            if not path_match(path, k.path) {
+                continue;
+            }
+            if k.secure and scheme != "https" {
+                continue;
+            }
+            out.push(k);
+        }
+        // longer paths first, then the older cookie
+        for i in 1..out.len() {
+            let mut j = i;
+            while j > 0 and (out[j - 1].path.len() < out[j].path.len() or (out[j - 1].path.len() == out[j].path.len() and out[j - 1].created > out[j].created)) {
+                out.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..out.len() {
+            parts.push(f"{out[i].name}={out[i].value}");
+        }
+        join(parts, "; ")
+    }
+
+    fn dump(ref self) {
+        let mut live: Vec[Stored] = Vec.new();
+        for i in 0..self.cookies.len() {
+            if not expired(self.cookies[i], self.now) {
+                live.push(self.cookies[i].clone());
+            }
+        }
+        for i in 1..live.len() {
+            let mut j = i;
+            while j > 0 and after(live[j - 1], live[j]) {
+                live.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        for i in 0..live.len() {
+            let k = live[i].clone();
+            let mut flags: Vec[String] = Vec.new();
+            if k.secure {
+                flags.push("secure".to_string());
+            }
+            if k.httponly {
+                flags.push("httponly".to_string());
+            }
+            if k.host_only {
+                flags.push("host-only".to_string());
+            }
+            let exp = match k.expiry {
+                Some(e) => f"expires in {e - self.now}s",
+                None => "session".to_string(),
+            };
+            println(rstrip(f"  {k.domain}{k.path} {k.name}={k.value} {exp} {join(flags, " ")}"));
+        }
+    }
+}
+
+// The dump order: (domain, path, name).
+fn after(a: ref Stored, b: ref Stored) -> bool {
+    if a.domain != b.domain {
+        return a.domain > b.domain;
+    }
+    if a.path != b.path {
+        return a.path > b.path;
+    }
+    a.name > b.name
+}
+
+fn rstrip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut e = b.len();
+    while e > 0 and is_ws(b[e - 1]) {
+        e -= 1;
+    }
+    byte_str(b, 0, e)
+}
+
+// ------------------------------------------------------------ the files
+
+// data/headers.txt
+fn file_0() -> String {
+    """
+sid=abc123; theme=dark
+ a=1 ;b=2;   c=3 
+quoted=\"hello world\"; esc=\"a\\\"b\\\\c\\012d\"
+chips=\"\\303\\251t\\303\\251\"
+k=v; Path=/; Domain=example.com; Max-Age=3600; Secure; HttpOnly; SameSite=Lax
+k=v; expires=Wed, 21 Oct 2026 07:28:00 GMT; path=/docs
+k=v; expires=Thursday, 22-Oct-2026 07:28:00 GMT
+k=v; expires=Wed, 21 Oct 2026 07:28 GMT
+Path=/; k=v
+k=v; Domain
+k=v; $Path=/x; $Version=1
+k=v; $Foo=1
+$Version=1; k=v
+a<b=1; c=2
+a=1; c d=2
+a=1 b=2
+k=v; comment=hello there
+k=[1,2]; m={x:1}
+k=a=b=c
+k
+;;a=1
+k=v; secure=1; httponly
+=v
+a=1; a=2; A=3
+x=\"unterminated; y=2
+w=1;	tab=2
+
+"""
+}
+
+// data/jar.txt
+fn file_1() -> String {
+    """
+at 1760000000
+resp https://shop.example.com/catalog/shoes/index.html
+Set-Cookie: sid=s1; Path=/; Secure; HttpOnly; SameSite=Lax
+Set-Cookie: cart=3 items; Max-Age=600
+Set-Cookie: lang=de; Domain=.example.com; Path=/
+Set-Cookie: trk=1; Domain=tracker.net
+Set-Cookie: wide=1; Domain=com
+Set-Cookie: promo=\"10% off\"; Expires=Fri, 10 Oct 2025 08:00:00 GMT
+Set-Cookie: banner=summer; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/catalog
+Set-Cookie: views=7; Path=/catalog/shoes/; Priority=High
+req https://shop.example.com/catalog/shoes/item.html
+req https://shop.example.com/catalog/
+req https://shop.example.com/catalogue
+req http://shop.example.com/catalog/shoes/x
+req https://blog.example.com/
+req https://example.com/
+req https://evil-example.com/
+resp http://shop.example.com/login
+Set-Cookie: sid=hijack; Path=/; Secure
+Set-Cookie: csrf=t0k; Path=/login
+Set-Cookie: lang=fr; Domain=example.com; Path=/
+dump
+at 1760000500
+req https://shop.example.com/catalog/shoes/item.html
+at 1760000700
+req https://shop.example.com/catalog/shoes/item.html
+resp https://shop.example.com/logout
+Set-Cookie: sid=; Path=/; Max-Age=0
+Set-Cookie: lang=x; Domain=example.com; Path=/; Max-Age=-1
+Set-Cookie: banner=autumn; Path=/catalog; Max-Age=abc
+Set-Cookie: views; Path=/catalog/shoes/
+Set-Cookie: <bad>=1
+dump
+at 1792531681
+req https://shop.example.com/catalog/shoes/item.html
+dump
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/headers.txt", file_0())?;
+    put("data/jar.txt", file_1())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the report
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn show_morsels(c: ref Cookie) {
+    for i in 0..c.morsels.len() {
+        let m = c.morsels[i].clone();
+        let mut attrs: Vec[String] = Vec.new();
+        for k in 0..RESERVED.len() {
+            if not attr_is_empty(m.attrs[k]) {
+                attrs.push(f"{RESERVED[k]}={attr_repr(m.attrs[k])}");
+            }
+        }
+        println(rstrip(f"  {py_repr(m.key)}: value={py_repr(m.value)} coded={py_repr(m.coded)} {join(attrs, " ")}"));
+    }
+}
+
+fn show_load() -> Result[(), String] {
+    println("== load");
+    let lines = lines_of(read("data/headers.txt")?);
+    for i in 0..lines.len() {
+        println(py_repr(lines[i]));
+        let mut c = Cookie { morsels: Vec.new() };
+        match load(mut c, lines[i]) {
+            Ok(_) => {}
+            Err(e) => println(f"  CookieError: {e}"),
+        }
+        println(f"  {c.repr()}");
+        show_morsels(c);
+        let out = c.output(Vec.new(), "Set-Cookie:")?;
+        for k in 0..out.len() {
+            println(f"  | {out[k]}");
+        }
+    }
+    Ok(())
+}
+
+fn attempt(label: Str, r: own Result[(), String]) {
+    match r {
+        Ok(_) => println(f"{label}: ok"),
+        Err(e) => println(f"{label}: CookieError: {e}"),
+    }
+}
+
+fn show_build() -> Result[(), String] {
+    println("== build");
+    let mut c = Cookie { morsels: Vec.new() };
+    c.set("sid", "abc123")?;
+    c.set_attr("sid", "path", Attr.Text("/".to_string()))?;
+    c.set_attr("sid", "max-age", Attr.Int(3600))?;
+    c.set_attr("sid", "httponly", Attr.Flag(true))?;
+    c.set_attr("sid", "secure", Attr.Flag(true))?;
+    c.set_attr("sid", "samesite", Attr.Text("Strict".to_string()))?;
+    c.set("pref", "dark mode; \"x\"")?;
+    c.set_attr("pref", "expires", Attr.Text("Thu, 01 Jan 2027 00:00:00 GMT".to_string()))?;
+    c.set_attr("pref", "comment", Attr.Text("user's choice".to_string()))?;
+    c.set_attr("pref", "Domain", Attr.Text("example.com".to_string()))?;
+    c.set("n", "42")?;
+    c.set("latin", "café \\ back")?;
+    c.set("empty", "")?;
+    c.set("sym", "a:b|c~d")?;
+    attempt("c['café'] = 'x'", c.set("café", "x"));
+    attempt("c['path'] = 'x'", c.set("path", "x"));
+    attempt("c['a b'] = 'x'", c.set("a b", "x"));
+    attempt("c['sid']['bogus'] = 1", c.set_attr("sid", "bogus", Attr.Int(1)));
+    attempt("c['ctl'] = 'a\\nb'", c.set("ctl", "a\nb"));
+    attempt("c['sid']['domain'] = 'ex\\x01.com'", c.set_attr("sid", "domain", Attr.Text("ex\u{01}.com".to_string())));
+    attempt("c['sid']['VERSION'] = '1'", c.set_attr("sid", "VERSION", Attr.Text("1".to_string())));
+    println(c.repr());
+    show_morsels(c);
+    let all = c.output(Vec.new(), "Set-Cookie:")?;
+    for k in 0..all.len() {
+        println(f"| {all[k]}");
+    }
+    let mut only: Vec[String] = Vec.new();
+    only.push("path".to_string());
+    only.push("httponly".to_string());
+    let some = c.output(only, "Cookie:")?;
+    for k in 0..some.len() {
+        println(f"| {some[k]}");
+    }
+    let pref = c.morsels[c.find("pref")].clone();
+    println(f"<Morsel: {pref.output_string(Vec.new())}>");
+    let sid = c.morsels[c.find("sid")].clone();
+    println(f"{sid.js_output()?}|");
+    Ok(())
+}
+
+fn show_jar() -> Result[(), String] {
+    println("== jar");
+    let mut jar = Jar { cookies: Vec.new(), now: 0, serial: 0 };
+    let mut url = String.new();
+    let lines = lines_of(read("data/jar.txt")?);
+    for i in 0..lines.len() {
+        let (word, _, rest) = partition(lines[i], b' ');
+        if word == "at" {
+            jar.now = digits_value(rest);
+            println(f"-- at {jar.now}");
+        } else if word == "resp" {
+            url = rest.clone();
+            println(f"-- response from {url}");
+        } else if word == "Set-Cookie:" {
+            jar.store(url, rest);
+        } else if word == "req" {
+            let h = jar.header_for(rest);
+            println(f"-- request to {rest}");
+            if h.len() > 0 {
+                println(f"  Cookie: {h}");
+            } else {
+                println("  (no cookies)");
+            }
+        } else if word == "dump" {
+            println("-- jar");
+            jar.dump();
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    show_load()?;
+    show_build()?;
+    show_jar()
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_cookies: {e}");
+    }
+}
