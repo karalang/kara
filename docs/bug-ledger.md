@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 266 |
 | codegen-gap | 259 |
-| false-positive | 191 |
+| false-positive | 192 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 162 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 927 |
 | typecheck | 431 |
 | other | 115 |
-| ownership | 99 |
+| ownership | 100 |
 | cli | 76 |
 | runtime | 72 |
 | parser | 63 |
@@ -218,6 +218,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-20 | 2026-10-15 | ownership | medium | `karac check` reports "value 'i' is moved inside a loop and not assigned again before the next iteration" for a binding declared INSIDE the loop body, when it is mutated inside an `if` before the move: `for k in ks.iter() { let mut i = It { n: k }; if k > 1 { i.n -= 1; } s.take(i); }` is refused, while the same body without the `if` (or with `i.n -= if k > 1 { 1 } else { 0 };`) passes, and every MIR surface runs the refused form | — |
 | B-2026-10-15-21 | 2026-10-15 | effect | medium | A call through a generic bound is charged the effects of EVERY impl of the trait method instead of the instance's (design.md §12 Trait methods and generic calls): `pub fn mem_only(m: mut ref Mem) with allocates(Heap) { store_twice(mut m); }` is refused as performing writes(FileSystem), which only the other impl (`Disk`) does; `karac check` also prints a bogus "mutual recursion group" note pairing `MemStore.get` with `FileStore.get` | — |
 | B-2026-10-15-22 | 2026-10-15 | typecheck+interp+codegen | medium | `let since = m.get(k).unwrap_or(9); let mut t = since; t = t + 1;` passes `karac check` but every MIR surface stops with an internal error, "invalid MIR: main: bb7[1]: assigning i64 to _8 of type ref i64": `since` and `t` are typed `ref i64` (the `Option[ref i64]` of `get`), so the assignment of an `i64` to `t` builds ill-typed MIR | — |
+| B-2026-10-15-23 | 2026-10-15 | ownership | medium | `karac check` calls the argument of two built-in String methods MOVED, though every MIR surface runs the program: `line.find(op)` moves `op` when `line` is a `Str` (a parameter; a `String` receiver is fine), and `t.replacen("%", s, 1)` moves a `String` `s` on any receiver, so a later `op.len()` or a second `replacen` with the same stem is refused | — |
 
 ### Relocated
 

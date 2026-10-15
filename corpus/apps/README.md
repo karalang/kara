@@ -152,6 +152,7 @@ service/dns_server  authoritative DNS over TCP (RFC 7766): zone-file parser, nam
 service/inventory   order service generic over a Store trait (memory + append-log file store with compaction and torn-write recovery), Money with Add/Sub/Display, idempotent commands, all-or-nothing reservations
 cli/cron_sched      cron scheduler: 5-field crontab with names/ranges/steps/macros and the Vixie dom-or-dow rule, hand-written days-from-civil, missed-run catch-up over sh, a state file
 cli/tar_gz          ustar archiver + gzip/DEFLATE codec from the RFCs: LZ77 hash chains, stored/fixed/dynamic blocks, puff-style inflater; real tar and gzip read its output
+cli/mini_make       a small make: pattern rules, order-only prereqs, $@ $< $^ $*, wildcard/patsubst/notdir/words, -n/-f, mtimes via fs.metadata; output matches GNU Make 4.3
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

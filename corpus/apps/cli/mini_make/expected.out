@@ -1,0 +1,73 @@
+== make 
+mkdir -p build
+tr a-z A-Z < src/a.c > build/a.o
+tr a-z A-Z < src/b.c > build/b.o
+tr a-z A-Z < src/main.c > build/main.o
+link build/app from 3 objects
+cat build/a.o build/b.o build/main.o > build/app
+(exit 0)
+== make 
+make: Nothing to be done for 'all'.
+(exit 0)
+== make 
+tr a-z A-Z < src/b.c > build/b.o
+link build/app from 3 objects
+cat build/a.o build/b.o build/main.o > build/app
+(exit 0)
+== make build/b.o
+make: 'build/b.o' is up to date.
+(exit 0)
+== make 
+tr a-z A-Z < src/a.c > build/a.o
+tr a-z A-Z < src/b.c > build/b.o
+tr a-z A-Z < src/main.c > build/main.o
+link build/app from 3 objects
+cat build/a.o build/b.o build/main.o > build/app
+(exit 0)
+== make check
+4
+false
+make: [Makefile:30: check] Error 1 (ignored)
+check -v -x done
+(exit 0)
+== make print-OBJS
+OBJS = build/a.o build/b.o build/main.o
+(exit 0)
+== make print-LATE
+LATE = early later
+(exit 0)
+== make missing
+make: *** No rule to make target 'missing'.  Stop.
+(exit 2)
+== make -f broken.mk a
+make: Circular b <- a dependency dropped.
+echo b
+b
+echo a
+a
+(exit 0)
+== make -f broken.mk c
+make: *** No rule to make target 'nothere', needed by 'c'.  Stop.
+(exit 2)
+== make -f broken.mk d
+exit 3
+make: *** [broken.mk:8: d] Error 3
+(exit 2)
+== make -n
+tr a-z A-Z < src/a.c > build/a.o
+echo "link build/app from 3 objects"
+cat build/a.o build/b.o build/main.o > build/app
+printf '%s\n' a.o b.o main.o > build/manifest.txt
+(exit 0)
+== make clean
+rm -rf build
+(exit 0)
+== make -n
+mkdir -p build
+tr a-z A-Z < src/a.c > build/a.o
+tr a-z A-Z < src/b.c > build/b.o
+tr a-z A-Z < src/main.c > build/main.o
+echo "link build/app from 3 objects"
+cat build/a.o build/b.o build/main.o > build/app
+printf '%s\n' a.o b.o main.o > build/manifest.txt
+(exit 0)

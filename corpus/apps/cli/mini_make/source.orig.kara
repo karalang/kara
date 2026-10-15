@@ -1,0 +1,850 @@
+// A small make: reads a Makefile, builds a dependency graph, and runs the
+// recipes of out-of-date targets through `sh`, comparing file mtimes.
+//
+// It supports recursive (`=`), simple (`:=`) and appending (`+=`)
+// variables, `$(VAR)` / `${VAR}` / computed names such as `$($*)`, the
+// automatic variables `$@ $< $^ $*`, the functions `wildcard`,
+// `patsubst`, `notdir` and `words`, pattern rules (`build/%.o: src/%.c`),
+// order-only prerequisites (`| build`), `.PHONY`, the recipe prefixes `@`
+// (silent) and `-` (ignore errors), `-n` (dry run) and `-f FILE`. It
+// reports circular dependencies, missing rules and failing recipes in GNU
+// make's words. For the scenario in main() its output is byte-identical to
+// GNU Make 4.3's.
+
+const MAKEFILE: Str = "# \"compile\" upper-cases a source file, \"link\" concatenates objects.
+CC = tr a-z A-Z
+SRCS := $(wildcard src/*.c)
+OBJS = $(patsubst src/%.c,build/%.o,$(SRCS))
+OUT = build/app
+FLAGS = -v
+FLAGS += -x
+LATE = $(EARLY) later
+EARLY := early
+
+.PHONY: all clean check
+
+all: $(OUT) build/manifest.txt
+
+$(OUT): $(OBJS) | build
+\t@echo \"link $@ from $(words $^) objects\"
+\tcat $^ > $@
+
+build/%.o: src/%.c src/common.h | build
+\t$(CC) < $< > $@
+
+build/manifest.txt: $(OBJS)
+\t@printf '%s\\n' $(notdir $^) > $@
+
+build:
+\tmkdir -p build
+
+check: all
+\t@grep -c . $(OUT)
+\t-false
+\t@echo \"check $(FLAGS) done\"
+
+clean:
+\trm -rf build
+
+print-%:
+\t@echo '$* = $($*)'
+";
+
+const BROKEN: Str = "a: b
+\techo a
+b: a
+\techo b
+c: nothere
+\techo c
+d:
+\texit 3
+\techo unreachable
+";
+
+const DOLLAR: u8 = 36u8;
+const LPAREN: u8 = 40u8;
+const RPAREN: u8 = 41u8;
+const LBRACE: u8 = 123u8;
+const RBRACE: u8 = 125u8;
+const COMMA: u8 = 44u8;
+const SPACE: u8 = 32u8;
+const TAB: u8 = 9u8;
+
+struct Var { value: String, recursive: bool }
+
+struct Rule {
+    prereqs: Vec[String],
+    order_only: Vec[String],
+    recipe: Vec[String],
+    lines: Vec[i64],
+}
+
+// The automatic variables of the recipe being expanded; `on` is false
+// while parsing, where they expand to nothing.
+struct Auto { on: bool, target: String, first: String, all: String, stem: String }
+
+fn no_auto() -> Auto {
+    Auto { on: false, target: String.new(), first: String.new(), all: String.new(), stem: String.new() }
+}
+
+fn words(s: Str) -> Vec[String] {
+    let b = s.bytes();
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        while i < b.len() and (b[i] == SPACE or b[i] == TAB) {
+            i += 1;
+        }
+        let start = i;
+        while i < b.len() and b[i] != SPACE and b[i] != TAB {
+            i += 1;
+        }
+        if i > start {
+            out.push(s.substring(start, i));
+        }
+    }
+    out
+}
+
+fn join(v: ref Vec[String]) -> String {
+    let mut s = String.new();
+    for w in v.iter() {
+        if s.len() > 0 {
+            s.push_str(" ");
+        }
+        s.push_str(w);
+    }
+    s
+}
+
+fn contains(v: ref Vec[String], x: Str) -> bool {
+    for w in v.iter() {
+        if w == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn match_paren(s: Str, i: i64) -> Result[i64, String] {
+    let b = s.bytes();
+    let open = b[i];
+    let close = if open == LPAREN { RPAREN } else { RBRACE };
+    let mut depth = 0;
+    let mut j = i;
+    while j < b.len() {
+        if b[j] == open {
+            depth += 1;
+        } else if b[j] == close {
+            depth -= 1;
+            if depth == 0 {
+                return Ok(j);
+            }
+        }
+        j += 1;
+    }
+    Err("unterminated variable reference".to_string())
+}
+
+fn split_args(s: Str) -> Vec[String] {
+    let b = s.bytes();
+    let mut out: Vec[String] = Vec.new();
+    let mut depth = 0;
+    let mut start = 0;
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == LPAREN or c == LBRACE {
+            depth += 1;
+        } else if c == RPAREN or c == RBRACE {
+            depth -= 1;
+        }
+        if c == COMMA and depth == 0 {
+            out.push(s.substring(start, i));
+            start = i + 1;
+        }
+    }
+    out.push(s.substring(start, b.len()));
+    out
+}
+
+// A glob with `*` as its only wildcard.
+fn glob_match(pat: Str, name: Str) -> bool {
+    let parts = pat.split("*");
+    if parts.len() == 1 {
+        return pat == name;
+    }
+    let last = parts[parts.len() - 1].clone();
+    if not name.starts_with(parts[0]) or not name.ends_with(last) {
+        return false;
+    }
+    let mut at = parts[0].len();
+    let end = name.len() - last.len();
+    for k in 1..parts.len() - 1 {
+        let p = parts[k].clone();
+        let rest = name.substring(at, name.len());
+        match rest.find(p) {
+            None => return false,
+            Some(off) => {
+                if at + off + p.len() > end {
+                    return false;
+                }
+                at = at + off + p.len();
+            }
+        }
+    }
+    at <= end
+}
+
+fn pattern_stem(pat: Str, word: Str) -> Option[String] {
+    let k = match pat.find("%") {
+        Some(k) => k,
+        None => return None,
+    };
+    let pre = pat.substring(0, k);
+    let suf = pat.substring(k + 1, pat.len());
+    if word.len() >= pre.len() + suf.len() and word.starts_with(pre) and word.ends_with(suf) {
+        return Some(word.substring(pre.len(), word.len() - suf.len()));
+    }
+    None
+}
+
+fn mtime(path: Str) -> i64 {
+    match fs.metadata(path) {
+        Ok(m) => m.modified_ms,
+        Err(_) => -1,
+    }
+}
+
+struct Found { ok: bool, rule: i64, stem: String, prereqs: Vec[String], order: Vec[String] }
+
+struct Make {
+    path: String,
+    dry: bool,
+    vars: Map[String, Var],
+    rules: Map[String, Rule],
+    pat_names: Vec[String],
+    pat_rules: Vec[Rule],
+    phony: Vec[String],
+    goal: String,
+    done: Map[String, bool],
+    ran: i64,
+    out: Vec[String],
+}
+
+impl Make {
+    // ------------------------------------------------ expansion
+
+    fn expand(ref self, s: Str, auto: ref Auto) -> Result[String, String] {
+        let b = s.bytes();
+        let mut out = String.new();
+        let mut i = 0;
+        let mut plain = 0;
+        while i < b.len() {
+            if b[i] != DOLLAR or i + 1 >= b.len() {
+                i += 1;
+                continue;
+            }
+            out.push_str(s.substring(plain, i));
+            let n = b[i + 1];
+            if n == DOLLAR {
+                out.push_str("$");
+                i += 2;
+            } else if n == LPAREN or n == LBRACE {
+                let j = match_paren(s, i + 1)?;
+                out.push_str(self.reference(s.substring(i + 2, j), auto)?);
+                i = j + 1;
+            } else {
+                out.push_str(self.lookup(s.substring(i + 1, i + 2), auto)?);
+                i += 2;
+            }
+            plain = i;
+        }
+        out.push_str(s.substring(plain, b.len()));
+        Ok(out)
+    }
+
+    fn lookup(ref self, name: Str, auto: ref Auto) -> Result[String, String] {
+        if auto.on {
+            if name == "@" {
+                return Ok(auto.target.clone());
+            }
+            if name == "<" {
+                return Ok(auto.first.clone());
+            }
+            if name == "^" {
+                return Ok(auto.all.clone());
+            }
+            if name == "*" {
+                return Ok(auto.stem.clone());
+            }
+        }
+        match self.vars.get(name) {
+            None => Ok(String.new()),
+            Some(v) => {
+                if v.recursive {
+                    self.expand(v.value, auto)
+                } else {
+                    Ok(v.value.clone())
+                }
+            }
+        }
+    }
+
+    fn reference(ref self, inner: Str, auto: ref Auto) -> Result[String, String] {
+        match inner.find(" ") {
+            Some(sp) => {
+                let fname = inner.substring(0, sp);
+                if fname == "wildcard" or fname == "patsubst" or fname == "notdir" or fname == "words" {
+                    let mut args: Vec[String] = Vec.new();
+                    for a in split_args(inner.substring(sp + 1, inner.len())).iter() {
+                        args.push(self.expand(a, auto)?);
+                    }
+                    return Ok(function(fname, args));
+                }
+            }
+            None => {}
+        }
+        let name = self.expand(inner, auto)?;
+        self.lookup(name, auto)
+    }
+
+    // ------------------------------------------------ parsing
+
+    fn parse(mut ref self, text: Str) -> Result[(), String] {
+        // The rule whose recipe lines follow: its targets, and whether it
+        // is a pattern rule.
+        let mut current: Vec[String] = Vec.new();
+        let mut current_pattern = false;
+        let mut n = 0;
+        for raw in text.lines().iter() {
+            n += 1;
+            if raw.starts_with("\t") and current.len() > 0 {
+                let cmd = raw.substring(1, raw.len());
+                self.add_recipe(current, current_pattern, cmd, n);
+                continue;
+            }
+            let line = match raw.find("#") {
+                Some(h) => raw.substring(0, h),
+                None => raw.clone(),
+            };
+            if line.trim().len() == 0 {
+                continue;
+            }
+            if self.assignment(line)? {
+                current = Vec.new();
+                continue;
+            }
+            let colon = match line.find(":") {
+                Some(c) => c,
+                None => return Err(f"{self.path}:{n}: *** missing separator.  Stop."),
+            };
+            let targets = words(self.expand(line.substring(0, colon), no_auto())?);
+            let mut rest = line.substring(colon + 1, line.len());
+            let mut inline = String.new();
+            match rest.find(";") {
+                Some(semi) => {
+                    inline = rest.substring(semi + 1, rest.len()).trim().to_string();
+                    rest = rest.substring(0, semi);
+                }
+                None => {}
+            }
+            let (normal, order) = match rest.find("|") {
+                Some(bar) => (rest.substring(0, bar), rest.substring(bar + 1, rest.len())),
+                None => (rest.clone(), String.new()),
+            };
+            let prereqs = words(self.expand(normal, no_auto())?);
+            let order_only = words(self.expand(order, no_auto())?);
+            if targets.len() == 1 and targets[0] == ".PHONY" {
+                for p in prereqs.iter() {
+                    self.phony.push(p.clone());
+                }
+                current = Vec.new();
+                continue;
+            }
+            current = targets.clone();
+            current_pattern = false;
+            for t in targets.iter() {
+                let rule = Rule { prereqs: prereqs.clone(), order_only: order_only.clone(), recipe: Vec.new(), lines: Vec.new() };
+                if t.contains("%") {
+                    self.pat_names.push(t.clone());
+                    self.pat_rules.push(rule);
+                    current_pattern = true;
+                } else {
+                    if self.goal.len() == 0 and not t.starts_with(".") {
+                        self.goal = t.clone();
+                    }
+                    match self.rules.remove(t) {
+                        None => {
+                            self.rules.insert(t.clone(), rule);
+                        }
+                        Some(old) => {
+                            let mut merged = old;
+                            for p in prereqs.iter() {
+                                merged.prereqs.push(p.clone());
+                            }
+                            for p in order_only.iter() {
+                                merged.order_only.push(p.clone());
+                            }
+                            self.rules.insert(t.clone(), merged);
+                        }
+                    }
+                }
+            }
+            if inline.len() > 0 {
+                self.add_recipe(current, current_pattern, inline, n);
+            }
+        }
+        Ok(())
+    }
+
+    fn add_recipe(mut ref self, targets: ref Vec[String], pattern: bool, cmd: Str, line: i64) {
+        if pattern {
+            let k = self.pat_rules.len() - 1;
+            add_line(mut self.pat_rules[k], cmd, line);
+            return;
+        }
+        for t in targets.iter() {
+            match self.rules.remove(t) {
+                Some(r) => {
+                    let mut r = r;
+                    add_line(mut r, cmd, line);
+                    self.rules.insert(t.clone(), r);
+                }
+                None => {}
+            }
+        }
+    }
+
+    fn assignment(mut ref self, line: Str) -> Result[bool, String] {
+        for op in [":=", "+=", "="] {
+            match line.find(op) {
+                None => {}
+                Some(k) => {
+                    if k == 0 {
+                        continue;
+                    }
+                    let head = line.substring(0, k);
+                    let name = head.trim().to_string();
+                    if name.len() == 0 or not is_name(name) or head.contains(":") {
+                        return Ok(false);
+                    }
+                    let value = line.substring(k + op.len(), line.len()).trim().to_string();
+                    if op == ":=" {
+                        let v = self.expand(value, no_auto())?;
+                        self.vars.insert(name, Var { value: v, recursive: false });
+                    } else if op == "=" {
+                        self.vars.insert(name, Var { value: value, recursive: true });
+                    } else {
+                        match self.vars.remove(name) {
+                            None => {
+                                self.vars.insert(name, Var { value: value, recursive: true });
+                            }
+                            Some(old) => {
+                                let added = if old.recursive { value } else { self.expand(value, no_auto())? };
+                                let joined = f"{old.value} {added}".trim().to_string();
+                                self.vars.insert(name, Var { value: joined, recursive: old.recursive });
+                            }
+                        }
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    // ------------------------------------------------ building
+
+    fn has_rule(ref self, target: Str) -> bool {
+        match self.rules.get(target) {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    fn find_rule(ref self, target: Str) -> Found {
+        let mut explicit_prereqs: Vec[String] = Vec.new();
+        let mut explicit_order: Vec[String] = Vec.new();
+        let mut explicit = false;
+        match self.rules.get(target) {
+            Some(r) => {
+                if r.recipe.len() > 0 {
+                    return Found { ok: true, rule: -1, stem: String.new(), prereqs: r.prereqs.clone(), order: r.order_only.clone() };
+                }
+                explicit = true;
+                explicit_prereqs = r.prereqs.clone();
+                explicit_order = r.order_only.clone();
+            }
+            None => {}
+        }
+        for k in 0..self.pat_names.len() {
+            let stem = match pattern_stem(self.pat_names[k], target) {
+                Some(s) => s,
+                None => continue,
+            };
+            let mut pre: Vec[String] = Vec.new();
+            let mut usable = true;
+            for p in self.pat_rules[k].prereqs.iter() {
+                let q = p.replacen("%", stem, 1);
+                if mtime(q) < 0 and not self.has_rule(q) {
+                    usable = false;
+                }
+                pre.push(q);
+            }
+            if not usable {
+                continue;
+            }
+            for p in explicit_prereqs.iter() {
+                pre.push(p.clone());
+            }
+            let mut ord: Vec[String] = Vec.new();
+            for p in self.pat_rules[k].order_only.iter() {
+                ord.push(p.replacen("%", stem, 1));
+            }
+            for p in explicit_order.iter() {
+                ord.push(p.clone());
+            }
+            return Found { ok: true, rule: k, stem: stem, prereqs: pre, order: ord };
+        }
+        Found { ok: explicit, rule: -1, stem: String.new(), prereqs: explicit_prereqs, order: explicit_order }
+    }
+
+    fn recipe_of(ref self, target: Str, rule: i64) -> Rule {
+        if rule >= 0 {
+            let r = ref self.pat_rules[rule];
+            return Rule { prereqs: Vec.new(), order_only: Vec.new(), recipe: r.recipe.clone(), lines: r.lines.clone() };
+        }
+        match self.rules.get(target) {
+            Some(r) => Rule { prereqs: Vec.new(), order_only: Vec.new(), recipe: r.recipe.clone(), lines: r.lines.clone() },
+            None => Rule { prereqs: Vec.new(), order_only: Vec.new(), recipe: Vec.new(), lines: Vec.new() },
+        }
+    }
+
+    fn build(mut ref self, target: Str, parent: Str, stack: mut ref Vec[String]) -> Result[bool, String] {
+        match self.done.get(target) {
+            Some(d) => return Ok(*d),
+            None => {}
+        }
+        let found = self.find_rule(target);
+        if not found.ok {
+            if mtime(target) >= 0 {
+                self.done.insert(target.to_string(), false);
+                return Ok(false);
+            }
+            if parent.len() == 0 {
+                return Err(f"*** No rule to make target '{target}'.  Stop.");
+            }
+            return Err(f"*** No rule to make target '{target}', needed by '{parent}'.  Stop.");
+        }
+        stack.push(target.to_string());
+        let mut changed = false;
+        let mut kept: Vec[String] = Vec.new();
+        let mut all = found.prereqs.clone();
+        for p in found.order.iter() {
+            all.push(p.clone());
+        }
+        for p in all.iter() {
+            if contains(stack, p) {
+                self.out.push(f"make: Circular {target} <- {p} dependency dropped.");
+                continue;
+            }
+            let normal = contains(found.prereqs, p);
+            let remade = self.build(p, target, mut stack)?;
+            if remade and normal {
+                changed = true;
+            }
+            if normal {
+                kept.push(p.clone());
+            }
+        }
+        stack.pop();
+        let mine = mtime(target);
+        let mut need = contains(self.phony, target) or mine < 0 or changed;
+        if not need {
+            for p in kept.iter() {
+                if mtime(p) > mine {
+                    need = true;
+                }
+            }
+        }
+        let rule = self.recipe_of(target, found.rule);
+        if need and rule.recipe.len() > 0 {
+            let mut uniq: Vec[String] = Vec.new();
+            for p in kept.iter() {
+                if not contains(uniq, p) {
+                    uniq.push(p.clone());
+                }
+            }
+            let first = if kept.len() > 0 { kept[0].clone() } else { String.new() };
+            let auto = Auto { on: true, target: target.to_string(), first: first, all: join(uniq), stem: found.stem.clone() };
+            for k in 0..rule.recipe.len() {
+                let cmd = self.expand(rule.recipe[k], auto)?;
+                self.run(cmd, target, rule.lines[k])?;
+            }
+        }
+        self.done.insert(target.to_string(), need);
+        Ok(need)
+    }
+
+    fn run(mut ref self, cmd0: Str, target: Str, line: i64) -> Result[(), String] {
+        let mut silent = false;
+        let mut ignore = false;
+        let mut cmd = cmd0.to_string();
+        loop {
+            if cmd.starts_with("@") {
+                silent = true;
+            } else if cmd.starts_with("-") {
+                ignore = true;
+            } else if not cmd.starts_with("+") {
+                break;
+            }
+            cmd = cmd.substring(1, cmd.len());
+        }
+        let cmd = cmd.trim().to_string();
+        self.ran += 1;
+        if self.dry or not silent {
+            self.out.push(cmd.clone());
+        }
+        if self.dry {
+            return Ok(());
+        }
+        let (code, text) = shell(cmd);
+        for l in text.lines().iter() {
+            self.out.push(l.clone());
+        }
+        if code != 0 {
+            if ignore {
+                self.out.push(f"make: [{self.path}:{line}: {target}] Error {code} (ignored)");
+            } else {
+                return Err(f"*** [{self.path}:{line}: {target}] Error {code}");
+            }
+        }
+        Ok(())
+    }
+
+    fn has_recipe(ref self, goal: Str) -> bool {
+        match self.rules.get(goal) {
+            Some(r) => r.recipe.len() > 0,
+            None => {
+                for p in self.pat_names.iter() {
+                    match pattern_stem(p, goal) {
+                        Some(_) => return true,
+                        None => {}
+                    }
+                }
+                false
+            }
+        }
+    }
+}
+
+fn add_line(r: mut ref Rule, cmd: Str, line: i64) {
+    r.recipe.push(cmd.to_string());
+    r.lines.push(line);
+}
+
+fn is_name(s: Str) -> bool {
+    for b in s.bytes() {
+        let c = *b as i64;
+        let ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+        if not ok {
+            return false;
+        }
+    }
+    true
+}
+
+fn function(fname: Str, args: ref Vec[String]) -> String {
+    if fname == "wildcard" {
+        let mut found: Vec[String] = Vec.new();
+        for pat in words(args[0]).iter() {
+            let mut slash = -1;
+            let b = pat.bytes();
+            for i in 0..b.len() {
+                if b[i] == 47u8 {
+                    slash = i;
+                }
+            }
+            let dir = if slash >= 0 { pat.substring(0, slash) } else { ".".to_string() };
+            let base = pat.substring(slash + 1, pat.len());
+            let names = match fs.read_dir(dir.clone()) {
+                Ok(v) => v,
+                Err(_) => Vec.new(),
+            };
+            for nm in names.iter() {
+                if glob_match(base, nm) {
+                    found.push(if slash < 0 { nm.clone() } else { f"{dir}/{nm}" });
+                }
+            }
+        }
+        return join(found);
+    }
+    if fname == "patsubst" {
+        let pat = args[0].trim().to_string();
+        let rep = args[1].trim().to_string();
+        let mut out: Vec[String] = Vec.new();
+        for w in words(args[2]).iter() {
+            if pat.contains("%") {
+                match pattern_stem(pat, w) {
+                    Some(stem) => out.push(rep.replacen("%", stem, 1)),
+                    None => out.push(w.clone()),
+                }
+            } else if w == pat {
+                out.push(rep.clone());
+            } else {
+                out.push(w.clone());
+            }
+        }
+        return join(out);
+    }
+    if fname == "notdir" {
+        let mut out: Vec[String] = Vec.new();
+        for w in words(args[0]).iter() {
+            let b = w.bytes();
+            let mut start = 0;
+            for i in 0..b.len() {
+                if b[i] == 47u8 {
+                    start = i + 1;
+                }
+            }
+            out.push(w.substring(start, w.len()));
+        }
+        return join(out);
+    }
+    f"{words(args[0]).len()}"
+}
+
+fn shell(cmd: Str) -> (i64, String) {
+    let child = match Command.new("sh").arg("-c").arg(cmd.to_string())
+        .stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        Ok(c) => c,
+        Err(_) => return (127, "make: sh: cannot spawn".to_string()),
+    };
+    let mut text = match child.stdout() {
+        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        None => String.new(),
+    };
+    let err = match child.stderr() {
+        Some(r) => r.read_to_string().unwrap_or("".to_string()),
+        None => String.new(),
+    };
+    text.push_str(err);
+    match child.wait() {
+        Ok(st) => (st.code, text),
+        Err(_) => (127, text),
+    }
+}
+
+fn make(args: ref Vec[String]) {
+    let mut path = "Makefile".to_string();
+    let mut dry = false;
+    let mut goals: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-f" {
+            path = args[i + 1].clone();
+            i += 2;
+        } else if args[i] == "-n" {
+            dry = true;
+            i += 1;
+        } else {
+            goals.push(args[i].clone());
+            i += 1;
+        }
+    }
+    let mut m = Make {
+        path: path,
+        dry: dry,
+        vars: Map.new(),
+        rules: Map.new(),
+        pat_names: Vec.new(),
+        pat_rules: Vec.new(),
+        phony: Vec.new(),
+        goal: String.new(),
+        done: Map.new(),
+        ran: 0,
+        out: Vec.new(),
+    };
+    let code = match run_make(mut m, goals) {
+        Ok(_) => 0,
+        Err(e) => {
+            m.out.push(f"make: {e}");
+            2
+        }
+    };
+    println(f"== make {join(args)}");
+    for l in m.out.iter() {
+        println(l);
+    }
+    println(f"(exit {code})");
+}
+
+fn run_make(m: mut ref Make, goals0: ref Vec[String]) -> Result[(), String] {
+    let text = match fs.read_to_string(m.path.clone()) {
+        Ok(t) => t,
+        Err(_) => return Err(f"{m.path}: No such file or directory"),
+    };
+    m.parse(text)?;
+    let mut goals = goals0.clone();
+    if goals.len() == 0 {
+        goals.push(m.goal.clone());
+    }
+    for g in goals.iter() {
+        let before = m.ran;
+        let mut stack: Vec[String] = Vec.new();
+        m.build(g, "", mut stack)?;
+        if m.ran == before {
+            if m.has_recipe(g) and not contains(m.phony, g) {
+                m.out.push(f"make: '{g}' is up to date.");
+            } else {
+                m.out.push(f"make: Nothing to be done for '{g}'.");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn args_of(s: Str) -> Vec[String] {
+    words(s)
+}
+
+fn put(path: Str, text: Str) {
+    match fs.write(path, text) {
+        Ok(_) => {}
+        Err(_) => println(f"cannot write {path}"),
+    }
+}
+
+fn main() {
+    put("Makefile", MAKEFILE);
+    put("broken.mk", BROKEN);
+    match fs.create_dir_all("src") {
+        Ok(_) => {}
+        Err(_) => println("cannot make src/"),
+    }
+    put("src/a.c", "int a = 1;\n#include \"common.h\"\n");
+    put("src/b.c", "int b = 2;\n");
+    put("src/main.c", "int main(void);\n");
+    put("src/common.h", "#define K 3\n");
+    make(args_of(""));
+    make(args_of(""));
+    put("src/b.c", "int b = 20;\n");
+    make(args_of(""));
+    make(args_of("build/b.o"));
+    put("src/common.h", "#define K 4\n");
+    make(args_of(""));
+    make(args_of("check"));
+    make(args_of("print-OBJS"));
+    make(args_of("print-LATE"));
+    make(args_of("missing"));
+    make(args_of("-f broken.mk a"));
+    make(args_of("-f broken.mk c"));
+    make(args_of("-f broken.mk d"));
+    match fs.remove_file("build/a.o") {
+        Ok(_) => {}
+        Err(_) => println("cannot remove build/a.o"),
+    }
+    make(args_of("-n"));
+    make(args_of("clean"));
+    make(args_of("-n"));
+}
