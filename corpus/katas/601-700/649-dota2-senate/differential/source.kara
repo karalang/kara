@@ -1,0 +1,269 @@
+// LeetCode #649: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random cases.
+
+// ---- star arm ----------------------------------------------------------
+
+fn predict_party_victory_star(senate: String) -> String {
+    let bytes = senate.bytes();
+    let n = bytes.len();
+    let mut radiant: VecDeque[i64] = VecDeque.new();
+    let mut dire: VecDeque[i64] = VecDeque.new();
+    for i in 0..n {
+        if bytes[i] == b'R' {
+            radiant.push_back(i);
+        } else {
+            dire.push_back(i);
+        }
+    }
+    while radiant.len() > 0 and dire.len() > 0 {
+        let r = radiant.pop_front().unwrap();
+        let d = dire.pop_front().unwrap();
+        if r < d {
+            radiant.push_back(r + n);
+        } else {
+            dire.push_back(d + n);
+        }
+    }
+    if radiant.len() > 0 { "Radiant".to_string() } else { "Dire".to_string() }
+}
+
+// ---- bans arm ----------------------------------------------------------
+
+fn predict_party_victory_bans(senate: String) -> String {
+    let mut queue: VecDeque[u8] = VecDeque.new();
+    let mut radiant = 0;
+    let mut dire = 0;
+    for b in senate.bytes().iter() {
+        queue.push_back(*b);
+        if *b == b'R' {
+            radiant += 1;
+        } else {
+            dire += 1;
+        }
+    }
+    let mut ban_radiant = 0;
+    let mut ban_dire = 0;
+    while radiant > 0 and dire > 0 {
+        let s = queue.pop_front().unwrap();
+        if s == b'R' {
+            if ban_radiant > 0 {
+                ban_radiant -= 1;
+                radiant -= 1;
+            } else {
+                ban_dire += 1;
+                queue.push_back(s);
+            }
+        } else if ban_dire > 0 {
+            ban_dire -= 1;
+            dire -= 1;
+        } else {
+            ban_radiant += 1;
+            queue.push_back(s);
+        }
+    }
+    if radiant > 0 { "Radiant".to_string() } else { "Dire".to_string() }
+}
+
+// ---- rounds arm --------------------------------------------------------
+
+fn predict_party_victory_rounds(senate: String) -> String {
+    let bytes = senate.bytes();
+    let n = bytes.len();
+    let mut voting = vec![true; n];
+    loop {
+        for i in 0..n {
+            if not voting[i] {
+                continue;
+            }
+            let mut j = (i + 1) % n;
+            while j != i and not (voting[j] and bytes[j] != bytes[i]) {
+                j = (j + 1) % n;
+            }
+            if j == i {
+                return if bytes[i] == b'R' { "Radiant".to_string() } else { "Dire".to_string() };
+            }
+            voting[j] = false;
+        }
+    }
+}
+
+// ---- rebuild arm -------------------------------------------------------
+
+fn predict_party_victory_rebuild(senate: String) -> String {
+    let mut current = senate.clone();
+    let mut ban_radiant = 0;
+    let mut ban_dire = 0;
+    loop {
+        let mut next = String.new();
+        let mut radiant = 0;
+        let mut dire = 0;
+        for b in current.bytes().iter() {
+            if *b == b'R' {
+                if ban_radiant > 0 {
+                    ban_radiant -= 1;
+                } else {
+                    ban_dire += 1;
+                    next.push('R');
+                    radiant += 1;
+                }
+            } else if ban_dire > 0 {
+                ban_dire -= 1;
+            } else {
+                ban_radiant += 1;
+                next.push('D');
+                dire += 1;
+            }
+        }
+        if dire == 0 {
+            return "Radiant".to_string();
+        }
+        if radiant == 0 {
+            return "Dire".to_string();
+        }
+        current = next;
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, senate: String) -> String {
+    if which == 0 {
+        predict_party_victory_star(senate)
+    } else if which == 1 {
+        predict_party_victory_bans(senate)
+    } else if which == 2 {
+        predict_party_victory_rounds(senate)
+    } else {
+        predict_party_victory_rebuild(senate)
+    }
+}
+
+// The party that wins from here with both playing their best: the
+// senators still voting are the bits of `mask` and `pos` is the one due
+// to vote. When they are all one party it wins; otherwise the senator
+// tries banning each other senator, of either party, and its party wins
+// if any of those moves wins.
+fn best(bytes: Slice[u8], mask: i64, pos: i64, memo: mut ref Map[i64, u8]) -> u8 {
+    let n = bytes.len();
+    let key = mask * 16 + pos;
+    if memo.contains_key(key) {
+        return memo[key];
+    }
+    let mut parties = 0;
+    for i in 0..n {
+        if (mask >> i) & 1 == 1 {
+            parties = parties | if bytes[i] == b'R' { 1 } else { 2 };
+        }
+    }
+    let me = bytes[pos];
+    let mut result = if me == b'R' { b'D' } else { b'R' };
+    if parties != 3 {
+        result = me;
+    } else {
+        for j in 0..n {
+            if j != pos and (mask >> j) & 1 == 1 {
+                let rest = mask & ~(1 << j);
+                let mut next = (pos + 1) % n;
+                while (rest >> next) & 1 == 0 {
+                    next = (next + 1) % n;
+                }
+                if best(bytes, rest, next, mut memo) == me {
+                    result = me;
+                    break;
+                }
+            }
+        }
+    }
+    memo.insert(key, result);
+    result
+}
+
+// The definition: every way the game can be played, from the first seat.
+fn definition(senate: String) -> String {
+    let mut memo: Map[i64, u8] = Map.new();
+    let n = senate.len();
+    if best(senate.bytes(), (1 << n) - 1, 0, mut memo) == b'R' { "Radiant".to_string() } else { "Dire".to_string() }
+}
+
+fn letter(party: String) -> char {
+    if party == "Radiant" { 'R' } else { 'D' }
+}
+
+fn main() {
+    let count_cases = 1000;
+    let mut seed: i64 = 6490;
+    let mut checks = 0;
+    let mut seats = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count_cases {
+        // 1 to 9 senators, each Radiant with a chance from 0 to 100
+        // percent.
+        let n = 1 + next_random(mut seed) % 9;
+        let radiant = next_random(mut seed) % 101;
+        let mut senate = String.new();
+        for _ in 0..n {
+            senate.push(if next_random(mut seed) % 100 < radiant { 'R' } else { 'D' });
+        }
+        seats += n;
+        let bytes = senate.bytes();
+        let mut swapped = String.new();
+        for i in 0..n {
+            swapped.push(if bytes[i] == b'R' { 'D' } else { 'R' });
+        }
+        let want = definition(senate);
+        for which in 0..4 {
+            let got = answer(which, senate);
+            let won = letter(got);
+            let lost = if won == 'R' { b'D' } else { b'R' };
+            let mut appended = senate.clone();
+            appended.push(won);
+            let mut prepended = String.new();
+            prepended.push(won);
+            prepended.push_str(senate);
+            // The senate without the losing party's last senator, if it
+            // has one.
+            let mut last = -1;
+            for i in 0..n {
+                if bytes[i] == lost {
+                    last = i;
+                }
+            }
+            let mut fewer = String.new();
+            for i in 0..n {
+                if i != last {
+                    fewer.push(bytes[i] as char);
+                }
+            }
+            let flipped = answer(which, swapped);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: the parties swapped swap the winner.
+                flipped != got and (flipped == "Radiant" or flipped == "Dire"),
+                // P3: one more of the winners, voting last, still wins.
+                answer(which, appended) == got,
+                // P4: one more of the winners, voting first, still wins.
+                answer(which, prepended) == got,
+                // P5: the losers' last senator taken away, the same winner.
+                last == -1 or answer(which, fewer) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count_cases} cases ({seats} senators), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

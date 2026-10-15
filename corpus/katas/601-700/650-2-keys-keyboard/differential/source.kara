@@ -1,0 +1,188 @@
+// LeetCode #650: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random cases.
+
+// ---- star arm ----------------------------------------------------------
+
+fn min_steps_star(n: i64) -> i64 {
+    let mut rest = n;
+    let mut steps = 0;
+    let mut p = 2;
+    while p * p <= rest {
+        while rest % p == 0 {
+            steps += p;
+            rest /= p;
+        }
+        p += 1;
+    }
+    if rest > 1 {
+        steps += rest;
+    }
+    steps
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn min_steps_table(n: i64) -> i64 {
+    let mut best = vec![0; n + 1];
+    for i in 2..n + 1 {
+        best[i] = i;
+        let mut d = 2;
+        while d * d <= i {
+            if i % d == 0 {
+                best[i] = best[i].min(best[d] + i / d).min(best[i / d] + d);
+            }
+            d += 1;
+        }
+    }
+    best[n]
+}
+
+// ---- search arm --------------------------------------------------------
+
+fn min_steps_search(n: i64) -> i64 {
+    if n == 1 {
+        return 0;
+    }
+    let mut seen = vec![false; (n + 1) * (n + 1)];
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    queue.push_back((1, 0, 0));
+    seen[n + 1] = true;
+    while queue.len() > 0 {
+        let (screen, clip, steps) = queue.pop_front().unwrap();
+        if screen == n {
+            return steps;
+        }
+        if clip != screen and not seen[screen * (n + 1) + screen] {
+            seen[screen * (n + 1) + screen] = true;
+            queue.push_back((screen, screen, steps + 1));
+        }
+        if clip > 0 and screen + clip <= n and not seen[(screen + clip) * (n + 1) + clip] {
+            seen[(screen + clip) * (n + 1) + clip] = true;
+            queue.push_back((screen + clip, clip, steps + 1));
+        }
+    }
+    -1
+}
+
+// ---- divide arm --------------------------------------------------------
+
+fn min_steps_divide(n: i64) -> i64 {
+    if n == 1 {
+        return 0;
+    }
+    let mut d = n / 2;
+    while d > 1 and n % d != 0 {
+        d -= 1;
+    }
+    if d <= 1 {
+        n
+    } else {
+        n / d + min_steps_divide(d)
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        min_steps_star(n)
+    } else if which == 1 {
+        min_steps_table(n)
+    } else if which == 2 {
+        min_steps_search(n)
+    } else {
+        min_steps_divide(n)
+    }
+}
+
+// The definition: the key presses tried a step at a time from one 'A'
+// and an empty clipboard, every screen and clipboard reached kept in a
+// set, until `n` is on the screen. Screens past `n` are dropped, since
+// no key lowers the count.
+fn definition(n: i64) -> i64 {
+    let mut reached: Set[(i64, i64)] = Set.new();
+    let mut level: Vec[(i64, i64)] = Vec.new();
+    level.push((1, 0));
+    reached.insert((1, 0));
+    let mut steps = 0;
+    loop {
+        for state in level.iter() {
+            if state.0 == n {
+                return steps;
+            }
+        }
+        let mut next: Vec[(i64, i64)] = Vec.new();
+        for state in level.iter() {
+            let copied = (state.0, state.0);
+            let pasted = (state.0 + state.1, state.1);
+            if not reached.contains(copied) {
+                reached.insert(copied);
+                next.push(copied);
+            }
+            if pasted.0 <= n and not reached.contains(pasted) {
+                reached.insert(pasted);
+                next.push(pasted);
+            }
+        }
+        level = next;
+        steps += 1;
+    }
+}
+
+fn is_prime(n: i64) -> bool {
+    if n < 2 {
+        return false;
+    }
+    let mut d = 2;
+    while d * d <= n {
+        if n % d == 0 {
+            return false;
+        }
+        d += 1;
+    }
+    true
+}
+
+fn main() {
+    // Every count from 1 to 300.
+    let count_cases = 300;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for n in 1..count_cases + 1 {
+        let want = definition(n);
+        for which in 0..4 {
+            let got = answer(which, n);
+            // P2: a count made of two factors takes the steps of the two.
+            let mut split = true;
+            for a in 2..n {
+                if n % a == 0 and answer(which, a) + answer(which, n / a) != got {
+                    split = false;
+                }
+            }
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                split,
+                // P3: never more than one Copy All and `n - 1` Pastes.
+                n == 1 or got <= n,
+                // P4: exactly `n` steps for a prime and for 4, and fewer
+                // for any other count above 1.
+                n == 1 or (got == n) == (is_prime(n) or n == 4),
+                // P5: doubling the count adds two steps.
+                answer(which, 2 * n) == got + 2,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count_cases} counts, 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,33 @@
+// Benchmark for #650: the ★ arm (the sum of the prime factors) on a
+// large workload.
+
+fn min_steps(n: i64) -> i64 {
+    let mut rest = n;
+    let mut steps = 0;
+    let mut p = 2;
+    while p * p <= rest {
+        while rest % p == 0 {
+            steps += p;
+            rest /= p;
+        }
+        p += 1;
+    }
+    if rest > 1 {
+        steps += rest;
+    }
+    steps
+}
+
+fn main() {
+    // The fewest steps for every count from 1 to 1,000,000, added up and
+    // put into a checksum in order.
+    let limit: i64 = 1000000;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for n in 1..limit + 1 {
+        let steps = min_steps(n);
+        total += steps;
+        checksum = (checksum * 31 + steps) % 1000000007;
+    }
+    println(f"1 to {limit}: total {total}, checksum {checksum}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/650-2-keys-keyboard/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:set", "lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "7245065b6"
+extracted_src = "96f7145c"
+model_rev = "1aa23105"
+model_src = "96f7145c"

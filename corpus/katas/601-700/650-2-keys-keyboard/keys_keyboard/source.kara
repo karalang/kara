@@ -1,0 +1,60 @@
+// LeetCode #650: 2 Keys Keyboard -- the sum of the prime factors.
+//
+// Getting from `a` copies of 'A' to `a * k` takes one Copy All and
+// `k - 1` Pastes, `k` steps, and any way of reaching `n` is a chain of
+// such multiplications. Splitting a factor `p * q` into two steps costs
+// `p + q`, never more than `p * q` once both are 2 or more, so the best
+// chain multiplies by primes only, and the answer is the sum of the
+// prime factors of `n`, counted with repeats. O(sqrt(n)) time.
+
+fn min_steps(n: i64) -> i64 {
+    let mut rest = n;
+    let mut steps = 0;
+    let mut p = 2;
+    while p * p <= rest {
+        while rest % p == 0 {
+            steps += p;
+            rest /= p;
+        }
+        p += 1;
+    }
+    if rest > 1 {
+        steps += rest;
+    }
+    steps
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"{n} -> {min_steps(n)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3);
+    show(1);
+    // The smallest copy; powers of 2 and 3; a product of two primes; a
+    // square of a prime; the largest prime and the largest count allowed,
+    // with a few large counts between.
+    show(2);
+    show(16);
+    show(27);
+    show(6);
+    show(35);
+    show(49);
+    show(997);
+    show(961);
+    show(768);
+    show(999);
+    show(1000);
+    // Every count from 1 to 200: the total and a checksum of the answers.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..201 {
+        let s = min_steps(n);
+        total += s;
+        checksum = (checksum * 31 + s) % 1000000007;
+    }
+    println(f"1 to 200: total {total}, checksum {checksum}");
+}

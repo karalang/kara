@@ -1,0 +1,57 @@
+// LeetCode #650: 2 Keys Keyboard -- peeling off the largest proper
+// divisor.
+//
+// If `d` is the largest divisor of `n` below `n`, the last Copy All was
+// best made at `d`: `n / d` is then the smallest factor, a prime, and the
+// remaining steps are `n / d` plus the steps to reach `d`. A prime has no
+// divisor but 1, and needs `n` steps. O(n) time in the worst case.
+
+fn min_steps(n: i64) -> i64 {
+    if n == 1 {
+        return 0;
+    }
+    let mut d = n / 2;
+    while d > 1 and n % d != 0 {
+        d -= 1;
+    }
+    if d <= 1 {
+        n
+    } else {
+        n / d + min_steps(d)
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"{n} -> {min_steps(n)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3);
+    show(1);
+    // The smallest copy; powers of 2 and 3; a product of two primes; a
+    // square of a prime; the largest prime and the largest count allowed,
+    // with a few large counts between.
+    show(2);
+    show(16);
+    show(27);
+    show(6);
+    show(35);
+    show(49);
+    show(997);
+    show(961);
+    show(768);
+    show(999);
+    show(1000);
+    // Every count from 1 to 200: the total and a checksum of the answers.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..201 {
+        let s = min_steps(n);
+        total += s;
+        checksum = (checksum * 31 + s) % 1000000007;
+    }
+    println(f"1 to 200: total {total}, checksum {checksum}");
+}

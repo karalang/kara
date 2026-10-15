@@ -1,0 +1,67 @@
+// LeetCode #650: 2 Keys Keyboard -- a breadth-first search of the screen.
+//
+// A state is the count on the screen and the count on the clipboard. From
+// it, Copy All makes the clipboard the screen and Paste adds the
+// clipboard to the screen; counts past `n` can never come back down, so
+// they are dropped. The first state reached with `n` on the screen gives
+// the answer. O(n^2) states at most.
+
+fn min_steps(n: i64) -> i64 {
+    if n == 1 {
+        return 0;
+    }
+    let mut seen = vec![false; (n + 1) * (n + 1)];
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    queue.push_back((1, 0, 0));
+    seen[n + 1] = true;
+    while queue.len() > 0 {
+        let (screen, clip, steps) = queue.pop_front().unwrap();
+        if screen == n {
+            return steps;
+        }
+        if clip != screen and not seen[screen * (n + 1) + screen] {
+            seen[screen * (n + 1) + screen] = true;
+            queue.push_back((screen, screen, steps + 1));
+        }
+        if clip > 0 and screen + clip <= n and not seen[(screen + clip) * (n + 1) + clip] {
+            seen[(screen + clip) * (n + 1) + clip] = true;
+            queue.push_back((screen + clip, clip, steps + 1));
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"{n} -> {min_steps(n)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3);
+    show(1);
+    // The smallest copy; powers of 2 and 3; a product of two primes; a
+    // square of a prime; the largest prime and the largest count allowed,
+    // with a few large counts between.
+    show(2);
+    show(16);
+    show(27);
+    show(6);
+    show(35);
+    show(49);
+    show(997);
+    show(961);
+    show(768);
+    show(999);
+    show(1000);
+    // Every count from 1 to 200: the total and a checksum of the answers.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..201 {
+        let s = min_steps(n);
+        total += s;
+        checksum = (checksum * 31 + s) % 1000000007;
+    }
+    println(f"1 to 200: total {total}, checksum {checksum}");
+}

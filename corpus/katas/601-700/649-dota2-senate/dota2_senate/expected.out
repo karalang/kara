@@ -1,0 +1,14 @@
+RD -> Radiant
+RDD -> Dire
+R -> Radiant
+D -> Dire
+DRR -> Radiant
+RRDDD -> Radiant
+DDRRR -> Dire
+RRDDDD -> Dire
+RDRDRDRD -> Radiant
+DRRDRDRDRDDRDRDR -> Radiant
+300 random senates: Radiant wins 136, checksum 710192694
+10000 senators at 50%: Radiant
+10000 senators at 45%: Dire
+10000 senators at 55%: Radiant

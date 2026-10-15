@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 261 |
 | false-positive | 195 |
 | other | 172 |
-| perf | 166 |
+| perf | 167 |
 | diagnostics | 162 |
 | crash | 119 |
 | soundness | 105 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2904 |
+| codegen | 2905 |
 | interp | 931 |
 | typecheck | 434 |
 | other | 115 |
@@ -220,6 +220,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-33 | 2026-10-15 | interp+codegen | high | Some method calls on a BORROWED handle of a `shared struct` fail the MIR build with "a type that failed to check is not lowered yet" on `__mir-run`, `__mir-llvm-run` and `__mir-llvm-asan`, though `karac check` passes and `karac run --interp` runs them: with `t: ref T` (or `t` bound by a pattern over a borrowed enum), `t.noop(5)` (a `ref self` method returning unit), `t.put(v)` returning `bool`, and `t.get(k)` returning an enum all fail, while `t.size()` returning `i64` builds and the same calls on an OWNED handle (`let h = t.clone(); h.put(v)`) work | — |
 | B-2026-10-15-34 | 2026-10-15 | interp+codegen | medium | On the MIR backends an f-string can call a USER function named `format` in place of the formatting it lowers to: `fn format(n: i64) -> String { f"<{n}>" }` fails with "format takes 1 arguments, got 3" on `__mir-run` and "Incorrect number of arguments passed to called function" (`call void @kara.format(ptr %ret, ptr %arg, ptr %arg1, ptr %arg2)`) on `__mir-llvm-run` and `__mir-llvm-asan`; `karac check` passes and `karac run --interp` prints `<3>` | — |
 | B-2026-10-15-35 | 2026-10-15 | codegen | low | A bare variant pattern whose name a struct also holds passes `karac check` but stops the MIR builder with "this variant is not lowered yet": with `enum Block { Heading(i64), Rule }` and `struct Heading { level: i64 }`, `match b { Heading(n) => .., Rule => .. }` on a `Block` fails on `__mir-run` and `__mir-llvm-run` whichever is declared first; the qualified `Block.Heading(n)` runs | — |
+| B-2026-10-15-36 | 2026-10-15 | codegen | low | On the MIR compiled backend, `best[i] = best[i].max(x)` in an inner loop reloads the `Vec`'s data pointer and length and loads and stores `best[i]` through memory on every step: kata 651's bench runs 1.90-2.07 s on `karac build --mir` against 0.59-0.67 s on legacy `karac build`, 0.41-0.50 s in C and 0.66-0.69 s in Rust; the same loop with the running max in a local runs 0.72 s | — |
 
 ### Relocated
 

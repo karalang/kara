@@ -1,0 +1,105 @@
+// LeetCode #649: Dota2 Senate -- one queue and bans owed.
+//
+// All the senators wait in one queue in voting order, with a count of the
+// bans each party owes. A senator at the front whose party is owed a ban
+// is struck out, paying one off; anyone else bans the next opponent to
+// come, adding to the count the other party owes, and goes to the back.
+// It ends when one party has no senator left. O(n) time.
+
+fn predict_party_victory(senate: String) -> String {
+    let mut queue: VecDeque[u8] = VecDeque.new();
+    let mut radiant = 0;
+    let mut dire = 0;
+    for b in senate.bytes().iter() {
+        queue.push_back(*b);
+        if *b == b'R' {
+            radiant += 1;
+        } else {
+            dire += 1;
+        }
+    }
+    let mut ban_radiant = 0;
+    let mut ban_dire = 0;
+    while radiant > 0 and dire > 0 {
+        let s = queue.pop_front().unwrap();
+        if s == b'R' {
+            if ban_radiant > 0 {
+                ban_radiant -= 1;
+                radiant -= 1;
+            } else {
+                ban_dire += 1;
+                queue.push_back(s);
+            }
+        } else if ban_dire > 0 {
+            ban_dire -= 1;
+            dire -= 1;
+        } else {
+            ban_radiant += 1;
+            queue.push_back(s);
+        }
+    }
+    if radiant > 0 { "Radiant".to_string() } else { "Dire".to_string() }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(senate: String) {
+    println(f"{senate} -> {predict_party_victory(senate)}");
+}
+
+// `n` senators, each Radiant with chance `radiant` / 100.
+fn random_senate(n: i64, radiant: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        if next_random(mut seed) % 100 < radiant {
+            s.push('R');
+        } else {
+            s.push('D');
+        }
+    }
+    s
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("RD");
+    show("RDD");
+    // One senator of each party; the second party to vote outnumbering
+    // the first; the first outnumbered three to two but winning, either
+    // way round; outnumbered four to two and losing; parties by turns; a
+    // long mixed senate.
+    show("R");
+    show("D");
+    show("DRR");
+    show("RRDDD");
+    show("DDRRR");
+    show("RRDDDD");
+    show("RDRDRDRD");
+    show("DRRDRDRDRDDRDRDR");
+    // 300 random senates of 1 to 30, each senator Radiant with a chance
+    // from 0 to 100 percent: the Radiant wins and a checksum of the
+    // winners in order.
+    let mut seed: i64 = 649;
+    let mut wins = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let radiant = next_random(mut seed) % 101;
+        let won = predict_party_victory(random_senate(n, radiant, mut seed)) == "Radiant";
+        if won {
+            wins += 1;
+        }
+        checksum = (checksum * 2 + if won { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"300 random senates: Radiant wins {wins}, checksum {checksum}");
+    // The problem's largest, 10,000 senators, Radiant with chances of 50,
+    // 45 and 55 percent.
+    for radiant in [50, 45, 55] {
+        println(f"10000 senators at {radiant}%: {predict_party_victory(random_senate(10000, radiant, mut seed))}");
+    }
+}

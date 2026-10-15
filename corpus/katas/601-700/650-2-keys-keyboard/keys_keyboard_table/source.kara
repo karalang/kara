@@ -1,0 +1,57 @@
+// LeetCode #650: 2 Keys Keyboard -- the best for every count.
+//
+// `best[i]` is the fewest steps to `i` copies. The last Copy All before
+// reaching `i` was made at some divisor `d` of `i`, after which `i / d - 1`
+// Pastes finish the job, so `best[i]` is the least of `best[d] + i / d`
+// over the divisors `d` below `i`; with no other divisor than 1 it is
+// `i`. O(n sqrt(n)) time, O(n) space.
+
+fn min_steps(n: i64) -> i64 {
+    let mut best = vec![0; n + 1];
+    for i in 2..n + 1 {
+        best[i] = i;
+        let mut d = 2;
+        while d * d <= i {
+            if i % d == 0 {
+                best[i] = best[i].min(best[d] + i / d).min(best[i / d] + d);
+            }
+            d += 1;
+        }
+    }
+    best[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"{n} -> {min_steps(n)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3);
+    show(1);
+    // The smallest copy; powers of 2 and 3; a product of two primes; a
+    // square of a prime; the largest prime and the largest count allowed,
+    // with a few large counts between.
+    show(2);
+    show(16);
+    show(27);
+    show(6);
+    show(35);
+    show(49);
+    show(997);
+    show(961);
+    show(768);
+    show(999);
+    show(1000);
+    // Every count from 1 to 200: the total and a checksum of the answers.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..201 {
+        let s = min_steps(n);
+        total += s;
+        checksum = (checksum * 31 + s) % 1000000007;
+    }
+    println(f"1 to 200: total {total}, checksum {checksum}");
+}
