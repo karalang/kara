@@ -171,6 +171,7 @@ cli/mini_yaml         a PyYAML 6.0.1 safe_load_all port loading k8s, compose, Ac
 cli/mini_awk          an awk interpreter running 67 ops one-liners and report scripts over an access log, passwd, CSV, ps and df output: fields, ranges, arrays, user functions, getline, print > file, printf, paragraph mode; output identical to mawk 1.3.4
 cli/mini_textutils    GNU coreutils text tools (sort, cut, uniq, tr, wc, head, tail, join, comm, paste, nl, tac, numfmt) running 83 shell pipelines; output identical to coreutils 9.4
 cli/mini_crawl         a site crawler and link checker with robots.txt, URL normalization, base and canonical links and a sitemap; ports html.parser, urllib.parse and urllib.robotparser; output identical to the same crawler in Python 3.13
+cli/mini_bc            an arbitrary-precision calculator: bc's whole language, its scale rules, obase and ibase, wrapped output and error recovery; output identical to GNU bc 1.07.1
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
