@@ -1,0 +1,2417 @@
+// mini_hashsum: GNU coreutils 9.4's checksum tools, md5sum, sha1sum,
+// sha224sum, sha256sum, sha384sum, sha512sum, b2sum, cksum and sum,
+// with every digest written here from its specification:
+// - MD5 (RFC 1321), SHA-1 and the SHA-2 family (FIPS 180-4), BLAKE2b
+//   with any digest length (RFC 7693), the POSIX cksum CRC, and the BSD
+//   and System V sums;
+// - the untagged and BSD-tagged output forms, hex and base64 digests,
+//   and the escaping of file names that hold a backslash or a newline;
+// - checking (-c) a list of checksums, including cksum -c's mixed
+//   algorithms, with --quiet, --status, --warn, --strict and
+//   --ignore-missing, and coreutils' messages and exit codes.
+//
+// The inputs are the files in data/, with checksum lists made by
+// coreutils 9.4. expected.out is the output of oracle.py, the same
+// program in Python, and is byte-identical to the real tools.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+
+// ------------------------------------------------------------ MD5 (RFC 1321)
+
+const MD5_S: Array[i64, 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+const MD5_K: Array[u32, 64] = [
+    0xd76aa478u32, 0xe8c7b756u32, 0x242070dbu32, 0xc1bdceeeu32, 0xf57c0fafu32, 0x4787c62au32, 0xa8304613u32, 0xfd469501u32,
+    0x698098d8u32, 0x8b44f7afu32, 0xffff5bb1u32, 0x895cd7beu32, 0x6b901122u32, 0xfd987193u32, 0xa679438eu32, 0x49b40821u32,
+    0xf61e2562u32, 0xc040b340u32, 0x265e5a51u32, 0xe9b6c7aau32, 0xd62f105du32, 0x02441453u32, 0xd8a1e681u32, 0xe7d3fbc8u32,
+    0x21e1cde6u32, 0xc33707d6u32, 0xf4d50d87u32, 0x455a14edu32, 0xa9e3e905u32, 0xfcefa3f8u32, 0x676f02d9u32, 0x8d2a4c8au32,
+    0xfffa3942u32, 0x8771f681u32, 0x6d9d6122u32, 0xfde5380cu32, 0xa4beea44u32, 0x4bdecfa9u32, 0xf6bb4b60u32, 0xbebfbc70u32,
+    0x289b7ec6u32, 0xeaa127fau32, 0xd4ef3085u32, 0x04881d05u32, 0xd9d4d039u32, 0xe6db99e5u32, 0x1fa27cf8u32, 0xc4ac5665u32,
+    0xf4292244u32, 0x432aff97u32, 0xab9423a7u32, 0xfc93a039u32, 0x655b59c3u32, 0x8f0ccc92u32, 0xffeff47du32, 0x85845dd1u32,
+    0x6fa87e4fu32, 0xfe2ce6e0u32, 0xa3014314u32, 0x4e0811a1u32, 0xf7537e82u32, 0xbd3af235u32, 0x2ad7d2bbu32, 0xeb86d391u32,
+];
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+fn le32(b: ref Vec[u8], i: i64) -> u32 {
+    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+
+fn le64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    let mut k: i64 = 7;
+    while k >= 0 {
+        v = (v << 8) | (b[i + k] as u64);
+        k -= 1;
+    }
+    v
+}
+
+fn push_le32(out: mut ref Vec[u8], x: u32) {
+    for k in 0..4 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+    }
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+fn md5(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, false);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32] {
+        h.push(x);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        for i in 0..64 {
+            let mut f: u32 = 0;
+            let mut g: i64 = 0;
+            if i < 16 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                g = i;
+            } else if i < 32 {
+                f = (d & b) | ((d ^ 0xFFFFFFFFu32) & c);
+                g = (5 * i + 1) % 16;
+            } else if i < 48 {
+                f = b ^ c ^ d;
+                g = (3 * i + 5) % 16;
+            } else {
+                f = c ^ (b | (d ^ 0xFFFFFFFFu32));
+                g = (7 * i) % 16;
+            }
+            let x = a.wrapping_add(f).wrapping_add(MD5_K[i]).wrapping_add(le32(m, blk + 4 * g));
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(x.rotate_left(MD5_S[i] as u32));
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_le32(mut out, x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ SHA-1 and SHA-2 (FIPS 180-4)
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let mut f: u32 = 0;
+            let mut k: u32 = 0;
+            if t < 20 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                k = 0x5A827999u32;
+            } else if t < 40 {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1u32;
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCu32;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6u32;
+            }
+            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[t]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// SHA-256, or SHA-224 with its own initial values and a shorter result.
+fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    if is224 {
+        for x in [0xc1059ed8u32, 0x367cd507u32, 0x3070dd17u32, 0xf70e5939u32, 0xffc00b31u32, 0x68581511u32, 0x64f98fa7u32, 0xbefa4fa4u32] {
+            h.push(x);
+        }
+    } else {
+        for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+            h.push(x);
+        }
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u32] = h.clone();
+        for t in 0..64 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFu32) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is224 { 7 } else { 8 };
+    for i in 0..n {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SHA384_IV: Array[u64, 8] = [
+    0xcbbb9d5dc1059ed8u64, 0x629a292a367cd507u64, 0x9159015a3070dd17u64, 0x152fecd8f70e5939u64,
+    0x67332667ffc00b31u64, 0x8eb44a8768581511u64, 0xdb0c2e0d64f98fa7u64, 0x47b5481dbefa4fa4u64,
+];
+
+// SHA-512, or SHA-384 with its own initial values and a shorter result.
+fn sha512_family(msg: ref Vec[u8], is384: bool) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if is384 { SHA384_IV[i] } else { SHA512_IV[i] });
+    }
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        for t in 16..80 {
+            let s0 = w[t - 15].rotate_right(1) ^ w[t - 15].rotate_right(8) ^ (w[t - 15] >> 7u64);
+            let s1 = w[t - 2].rotate_right(19) ^ w[t - 2].rotate_right(61) ^ (w[t - 2] >> 6u64);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u64] = h.clone();
+        for t in 0..80 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is384 { 6 } else { 8 };
+    for i in 0..n {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ BLAKE2b (RFC 7693)
+
+const SIGMA: Array[i64, 192] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
+    11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4,
+    7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8,
+    9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13,
+    2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9,
+    12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11,
+    13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10,
+    6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5,
+    10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
+];
+
+fn mix(v: mut ref Vec[u64], a: i64, b: i64, c: i64, d: i64, x: u64, y: u64) {
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
+    v[d] = (v[d] ^ v[a]).rotate_right(32);
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = (v[b] ^ v[c]).rotate_right(24);
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
+    v[d] = (v[d] ^ v[a]).rotate_right(16);
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = (v[b] ^ v[c]).rotate_right(63);
+}
+
+fn compress_b2(h: mut ref Vec[u64], blk: ref Vec[u8], at: i64, t: i64, last: bool) {
+    let mut v: Vec[u64] = h.clone();
+    for i in 0..8 {
+        v.push(SHA512_IV[i]);
+    }
+    v[12] = v[12] ^ (t as u64);
+    if last {
+        v[14] = v[14] ^ 0xFFFFFFFFFFFFFFFFu64;
+    }
+    let mut m: Vec[u64] = Vec.new();
+    for i in 0..16 {
+        m.push(le64(blk, at + 8 * i));
+    }
+    for r in 0..12 {
+        let s = r * 16;
+        mix(mut v, 0, 4, 8, 12, m[SIGMA[s]], m[SIGMA[s + 1]]);
+        mix(mut v, 1, 5, 9, 13, m[SIGMA[s + 2]], m[SIGMA[s + 3]]);
+        mix(mut v, 2, 6, 10, 14, m[SIGMA[s + 4]], m[SIGMA[s + 5]]);
+        mix(mut v, 3, 7, 11, 15, m[SIGMA[s + 6]], m[SIGMA[s + 7]]);
+        mix(mut v, 0, 5, 10, 15, m[SIGMA[s + 8]], m[SIGMA[s + 9]]);
+        mix(mut v, 1, 6, 11, 12, m[SIGMA[s + 10]], m[SIGMA[s + 11]]);
+        mix(mut v, 2, 7, 8, 13, m[SIGMA[s + 12]], m[SIGMA[s + 13]]);
+        mix(mut v, 3, 4, 9, 14, m[SIGMA[s + 14]], m[SIGMA[s + 15]]);
+    }
+    for i in 0..8 {
+        h[i] = h[i] ^ v[i] ^ v[i + 8];
+    }
+}
+
+// BLAKE2b with an nbytes-long digest and no key.
+fn blake2b(msg: ref Vec[u8], nbytes: i64) -> Vec[u8] {
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(SHA512_IV[i]);
+    }
+    h[0] = h[0] ^ 0x01010000u64 ^ (nbytes as u64);
+    let n = msg.len();
+    let mut off: i64 = 0;
+    while n - off > 128 {
+        compress_b2(mut h, msg, off, off + 128, false);
+        off += 128;
+    }
+    let mut last: Vec[u8] = Vec.new();
+    for i in off..n {
+        last.push(msg[i]);
+    }
+    while last.len() < 128 {
+        last.push(0);
+    }
+    compress_b2(mut h, last, 0, n, true);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..nbytes {
+        out.push(((h[i / 8] >> ((8 * (i % 8)) as u64)) & 0xFFu64) as u8);
+    }
+    out
+}
+
+// ------------------------------------------------------------ cksum's CRC and the old sums
+
+// The POSIX cksum CRC: CRC-32 MSB first over the data and then its
+// length, least significant byte first, complemented.
+fn crc_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for i in 0..256 {
+        let mut c = i << 24;
+        for _ in 0..8 {
+            if c & 0x80000000 != 0 {
+                c = ((c << 1) ^ 0x04C11DB7) & 0xFFFFFFFF;
+            } else {
+                c = (c << 1) & 0xFFFFFFFF;
+            }
+        }
+        t.push(c);
+    }
+    t
+}
+
+fn crc_cksum(t: ref Vec[i64], data: ref Vec[u8]) -> i64 {
+    let mut c: i64 = 0;
+    for b in data {
+        c = ((c << 8) & 0xFFFFFFFF) ^ t[(c >> 24) ^ (b as i64)];
+    }
+    let mut n = data.len();
+    while n > 0 {
+        c = ((c << 8) & 0xFFFFFFFF) ^ t[(c >> 24) ^ (n & 0xFF)];
+        n = n >> 8;
+    }
+    c ^ 0xFFFFFFFF
+}
+
+fn bsd_sum(data: ref Vec[u8]) -> i64 {
+    let mut s: i64 = 0;
+    for b in data {
+        s = (s >> 1) + ((s & 1) << 15);
+        s = (s + (b as i64)) & 0xFFFF;
+    }
+    s
+}
+
+fn sysv_sum(data: ref Vec[u8]) -> i64 {
+    let mut s: i64 = 0;
+    for b in data {
+        s += b as i64;
+    }
+    let r = (s & 0xFFFF) + ((s & 0xFFFFFFFF) >> 16);
+    (r & 0xFFFF) + (r >> 16)
+}
+
+// ------------------------------------------------------------ hex and base64
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(f"{x:02x}");
+    }
+    s
+}
+
+const B64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(b: ref Vec[u8]) -> String {
+    let alpha = to_bytes(B64_ALPHABET);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let n = b.len() - i;
+        let x0 = b[i] as i64;
+        let x1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let x2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let v = (x0 << 16) | (x1 << 8) | x2;
+        out.push(alpha[(v >> 18) & 63]);
+        out.push(alpha[(v >> 12) & 63]);
+        out.push(if n > 1 { alpha[(v >> 6) & 63] } else { b'=' });
+        out.push(if n > 2 { alpha[v & 63] } else { b'=' });
+        i += 3;
+    }
+    from_bytes(out)
+}
+
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// A base64 digest of exactly nbytes, written canonically.
+fn b64_digest(s: Str, nbytes: i64) -> Option[Vec[u8]] {
+    let b = to_bytes(s);
+    if b.len() != (nbytes + 2) / 3 * 4 {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let mut v: i64 = 0;
+        let mut pads: i64 = 0;
+        for k in 0..4 {
+            let c = b[i + k];
+            if c == b'=' {
+                if i + 4 != b.len() {
+                    return None;
+                }
+                pads += 1;
+                v = v << 6;
+            } else {
+                let x = b64_value(c);
+                if x < 0 or pads > 0 {
+                    return None;
+                }
+                v = (v << 6) | x;
+            }
+        }
+        out.push(((v >> 16) & 0xFF) as u8);
+        if pads < 2 {
+            out.push(((v >> 8) & 0xFF) as u8);
+        }
+        if pads < 1 {
+            out.push((v & 0xFF) as u8);
+        }
+        i += 4;
+    }
+    if out.len() != nbytes or b64_encode(out) != s {
+        return None;
+    }
+    Some(out)
+}
+
+// ------------------------------------------------------------ the algorithms
+
+const ALGOS: Array[Str, 11] = ["bsd", "sysv", "crc", "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "blake2b", "sm3"];
+
+fn tag_of(algo: Str) -> String {
+    if algo == "md5" {
+        "MD5".to_string()
+    } else if algo == "sha1" {
+        "SHA1".to_string()
+    } else if algo == "sha224" {
+        "SHA224".to_string()
+    } else if algo == "sha256" {
+        "SHA256".to_string()
+    } else if algo == "sha384" {
+        "SHA384".to_string()
+    } else if algo == "sha512" {
+        "SHA512".to_string()
+    } else if algo == "blake2b" {
+        "BLAKE2b".to_string()
+    } else if algo == "sm3" {
+        "SM3".to_string()
+    } else {
+        String.new()
+    }
+}
+
+fn bits_of(algo: Str) -> i64 {
+    if algo == "md5" {
+        128
+    } else if algo == "sha1" {
+        160
+    } else if algo == "sha224" {
+        224
+    } else if algo == "sha256" or algo == "sm3" {
+        256
+    } else if algo == "sha384" {
+        384
+    } else if algo == "sha512" or algo == "blake2b" {
+        512
+    } else {
+        0
+    }
+}
+
+// The algorithm each program uses: cksum and sum have their own.
+fn algo_of_prog(prog: Str) -> String {
+    if prog == "md5sum" {
+        "md5".to_string()
+    } else if prog == "sha1sum" {
+        "sha1".to_string()
+    } else if prog == "sha224sum" {
+        "sha224".to_string()
+    } else if prog == "sha256sum" {
+        "sha256".to_string()
+    } else if prog == "sha384sum" {
+        "sha384".to_string()
+    } else if prog == "sha512sum" {
+        "sha512".to_string()
+    } else if prog == "b2sum" {
+        "blake2b".to_string()
+    } else if prog == "sum" {
+        "bsd".to_string()
+    } else {
+        "crc".to_string()
+    }
+}
+
+fn digest(algo: Str, bits: i64, data: ref Vec[u8]) -> Vec[u8] {
+    if algo == "md5" {
+        md5(data)
+    } else if algo == "sha1" {
+        sha1(data)
+    } else if algo == "sha224" {
+        sha256_family(data, true)
+    } else if algo == "sha256" {
+        sha256_family(data, false)
+    } else if algo == "sha384" {
+        sha512_family(data, true)
+    } else if algo == "sha512" {
+        sha512_family(data, false)
+    } else {
+        blake2b(data, bits / 8)
+    }
+}
+
+fn tag_name(algo: Str, bits: i64) -> String {
+    if algo == "blake2b" and bits != 512 {
+        return f"BLAKE2b-{bits}";
+    }
+    tag_of(algo)
+}
+
+// ------------------------------------------------------------ file names
+
+fn needs_escape(name: Str) -> bool {
+    has_byte(name, b'\\') or has_byte(name, b'\n') or has_byte(name, b'\r')
+}
+
+fn escape(name: Str) -> String {
+    let mut out = String.new();
+    for c in name.bytes() {
+        if c == b'\\' {
+            out.push_str("\\\\");
+        } else if c == b'\n' {
+            out.push_str("\\n");
+        } else if c == b'\r' {
+            out.push_str("\\r");
+        } else {
+            out.push(c as char);
+        }
+    }
+    out
+}
+
+fn unescape(name: Str) -> Option[String] {
+    let b = to_bytes(name);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'\\' {
+            if i + 1 >= b.len() {
+                return None;
+            }
+            let n = b[i + 1];
+            if n == b'\\' {
+                out.push(b'\\');
+            } else if n == b'n' {
+                out.push(b'\n');
+            } else if n == b'r' {
+                out.push(b'\r');
+            } else {
+                return None;
+            }
+            i += 2;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    Some(from_bytes(out))
+}
+
+// ------------------------------------------------------------ the tools
+
+struct Job {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+struct Opts {
+    check: bool,
+    tag: bool,
+    base64: bool,
+    quiet: bool,
+    status: bool,
+    warn: bool,
+    strict: bool,
+    ignore_missing: bool,
+}
+
+fn path_kind(p: Str) -> i64 {
+    match fs.metadata(p.to_string()) {
+        Ok(m) => if m.is_dir { 2 } else if m.is_file { 1 } else { 0 },
+        Err(_) => 0,
+    }
+}
+
+fn read_file(job: mut ref Job, prog: Str, f: Str) -> Option[Vec[u8]] {
+    let path = f"data/{f}";
+    let kind = path_kind(path);
+    if kind == 2 {
+        job.err.push_str(f"{prog}: {f}: Is a directory\n");
+        return None;
+    }
+    if kind == 0 {
+        job.err.push_str(f"{prog}: {f}: No such file or directory\n");
+        return None;
+    }
+    match fs.read_bytes(path) {
+        Ok(b) => Some(b),
+        Err(e) => {
+            job.err.push_str(f"{prog}: {f}: {e}\n");
+            None
+        }
+    }
+}
+
+fn is_hex_str(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.bytes() {
+        if not is_hex(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn hex_decode(s: Str) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn decode_digest(dg: Str, bits: i64) -> Option[Vec[u8]] {
+    let n = bits / 8;
+    if dg.len() == 2 * n and is_hex_str(dg) {
+        return Some(hex_decode(dg));
+    }
+    b64_digest(dg, n)
+}
+
+// One line of a checksum list, read.
+struct SumLine {
+    algo: String,
+    bits: i64,
+    expect: Vec[u8],
+    name: String,
+}
+
+// The tagged form, ALGO (name) = digest, after its algorithm name.
+fn parse_tagged(algo: Str, rest0: Str, escaped: bool) -> Option[SumLine] {
+    let mut rest = rest0.to_string();
+    let mut bits = bits_of(algo);
+    if algo == "blake2b" and starts_with(rest, "-") {
+        let b = to_bytes(rest);
+        let mut j: i64 = 1;
+        while j < b.len() and is_digit(b[j]) {
+            j += 1;
+        }
+        if j == 1 {
+            return None;
+        }
+        bits = py_int(slice(rest, 1, j))?;
+        if bits % 8 != 0 or bits == 0 or bits > 512 {
+            return None;
+        }
+        rest = slice_from(rest, j);
+    }
+    if starts_with(rest, " ") {
+        rest = slice_from(rest, 1);
+    }
+    if not starts_with(rest, "(") {
+        return None;
+    }
+    rest = slice_from(rest, 1);
+    let k = rfind_str(rest, ") = ");
+    if k < 0 {
+        return None;
+    }
+    let mut name = slice(rest, 0, k);
+    let expect = decode_digest(slice_from(rest, k + 4), bits)?;
+    if escaped {
+        name = unescape(name)?;
+    }
+    Some(SumLine { algo: algo.to_string(), bits: bits, expect: expect, name: name })
+}
+
+fn rfind_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut i = s.len() - pat.len();
+    while i >= 0 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+// algo is empty for cksum -c, which takes it from each tagged line.
+fn parse_line(line: Str, algo: Str, bits: i64) -> Option[SumLine] {
+    let lb = to_bytes(line);
+    let mut i: i64 = 0;
+    while i < lb.len() and (lb[i] == b' ' or lb[i] == b'\t') {
+        i += 1;
+    }
+    let mut s = slice_from(line, i);
+    let mut escaped = false;
+    if starts_with(s, "\\") {
+        escaped = true;
+        s = slice_from(s, 1);
+    }
+    let mut cands: Vec[String] = Vec.new();
+    if algo.len() > 0 {
+        cands.push(algo.to_string());
+    } else {
+        for a in ALGOS {
+            if tag_of(a).len() > 0 {
+                cands.push(a.to_string());
+            }
+        }
+    }
+    for a in cands {
+        let t = tag_of(a);
+        if t.len() > 0 and starts_with(s, t) {
+            let rest = slice_from(s, t.len());
+            let b = to_bytes(rest);
+            let looks = starts_with(rest, "(") or starts_with(rest, " (") or (a == "blake2b" and b.len() > 1 and b[0] == b'-');
+            if looks {
+                return parse_tagged(a, rest, escaped);
+            }
+        }
+    }
+    if algo.len() == 0 {
+        return None;
+    }
+    let sb = to_bytes(s);
+    let mut j: i64 = 0;
+    while j < sb.len() and sb[j] != b' ' and sb[j] != b'\t' {
+        j += 1;
+    }
+    let expect = decode_digest(slice(s, 0, j), bits)?;
+    if j + 2 > sb.len() or sb[j] != b' ' or (sb[j + 1] != b' ' and sb[j + 1] != b'*') {
+        return None;
+    }
+    let mut name = slice_from(s, j + 2);
+    if name.len() == 0 {
+        return None;
+    }
+    if escaped {
+        name = unescape(name)?;
+    }
+    Some(SumLine { algo: algo.to_string(), bits: bits, expect: expect, name: name })
+}
+
+fn check_lists(job: mut ref Job, prog: Str, algo: Str, bits: i64, files: ref Vec[String], o: ref Opts) {
+    for sf in files {
+        let path = f"data/{sf}";
+        if path_kind(path) != 1 {
+            job.err.push_str(f"{prog}: {sf}: No such file or directory\n");
+            set_exit(job, 1);
+            continue;
+        }
+        let text = match fs.read_bytes(path) {
+            Ok(b) => from_bytes(b),
+            Err(_) => String.new(),
+        };
+        let lines = split_on(text, b'\n');
+        let mut nlines = lines.len();
+        if nlines > 0 and lines[nlines - 1].len() == 0 {
+            nlines -= 1;
+        }
+        let mut bad_format: i64 = 0;
+        let mut bad_read: i64 = 0;
+        let mut mismatch: i64 = 0;
+        let mut good: i64 = 0;
+        let mut verified: i64 = 0;
+        for ln in 0..nlines {
+            let line = ref lines[ln];
+            if line.len() == 0 or starts_with(line, "#") {
+                continue;
+            }
+            let Some(e) = parse_line(line, algo, bits) else {
+                bad_format += 1;
+                if o.warn {
+                    let what = if algo.len() > 0 { f"{tag_of(algo)} " } else { String.new() };
+                    job.err.push_str(f"{prog}: {sf}: {ln + 1}: improperly formatted {what}checksum line\n");
+                }
+                continue;
+            };
+            good += 1;
+            let shown = if needs_escape(e.name) { f"\\{escape(e.name)}" } else { e.name.clone() };
+            let fp = f"data/{e.name}";
+            if path_kind(fp) != 1 {
+                if o.ignore_missing {
+                    continue;
+                }
+                job.err.push_str(f"{prog}: {e.name}: No such file or directory\n");
+                if not o.status {
+                    job.out.push_str(f"{shown}: FAILED open or read\n");
+                }
+                bad_read += 1;
+                continue;
+            }
+            verified += 1;
+            let data = match fs.read_bytes(fp) {
+                Ok(b) => b,
+                Err(_) => Vec.new(),
+            };
+            if digest(e.algo, e.bits, data) != e.expect {
+                mismatch += 1;
+                if not o.status {
+                    job.out.push_str(f"{shown}: FAILED\n");
+                }
+            } else if not o.status and not o.quiet {
+                job.out.push_str(f"{shown}: OK\n");
+            }
+        }
+        if good == 0 {
+            job.err.push_str(f"{prog}: {sf}: no properly formatted checksum lines found\n");
+            set_exit(job, 1);
+            continue;
+        }
+        if not o.status {
+            if bad_format > 0 {
+                job.err.push_str(f"{prog}: WARNING: {bad_format} {plural(bad_format, "line is", "lines are")} improperly formatted\n");
+            }
+            if bad_read > 0 {
+                job.err.push_str(f"{prog}: WARNING: {bad_read} listed {plural(bad_read, "file", "files")} could not be read\n");
+            }
+            if mismatch > 0 {
+                job.err.push_str(f"{prog}: WARNING: {mismatch} computed {plural(mismatch, "checksum", "checksums")} did NOT match\n");
+            }
+        }
+        if o.ignore_missing and verified == 0 {
+            job.err.push_str(f"{prog}: {sf}: no file was verified\n");
+            set_exit(job, 1);
+        }
+        if bad_read > 0 or mismatch > 0 or (o.strict and bad_format > 0) {
+            set_exit(job, 1);
+        }
+    }
+}
+
+fn set_exit(job: mut ref Job, rc: i64) {
+    if rc > job.status {
+        job.status = rc;
+    }
+}
+
+fn run_tool(job: mut ref Job, t: ref Vec[i64], prog: Str, args: ref Vec[String]) {
+    let mut algo = algo_of_prog(prog);
+    let mut bits = bits_of(algo);
+    let mut o = Opts { check: false, tag: prog == "cksum", base64: false, quiet: false, status: false, warn: false, strict: false, ignore_missing: false };
+    let mut length = String.new();
+    let mut files: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let a = ref args[i];
+        if a == "-c" or a == "--check" {
+            o.check = true;
+        } else if a == "--tag" {
+            o.tag = true;
+        } else if a == "--untagged" {
+            o.tag = false;
+        } else if a == "--base64" {
+            o.base64 = true;
+        } else if a == "--quiet" {
+            o.quiet = true;
+        } else if a == "--status" {
+            o.status = true;
+        } else if a == "-w" or a == "--warn" {
+            o.warn = true;
+        } else if a == "--strict" {
+            o.strict = true;
+        } else if a == "--ignore-missing" {
+            o.ignore_missing = true;
+        } else if a == "-s" and prog == "sum" {
+            algo = "sysv".to_string();
+        } else if a == "-r" and prog == "sum" {
+            algo = "bsd".to_string();
+        } else if a == "-l" {
+            i += 1;
+            length = args[i].clone();
+        } else if a == "-a" {
+            i += 1;
+            let name = ref args[i];
+            let mut known = false;
+            for x in ALGOS {
+                if x == name {
+                    known = true;
+                }
+            }
+            if not known {
+                job.err.push_str(f"cksum: invalid argument ‘{name}’ for ‘--algorithm’\nValid arguments are:\n");
+                for x in ALGOS {
+                    job.err.push_str(f"  - ‘{x}’\n");
+                }
+                job.err.push_str("Try 'cksum --help' for more information.\n");
+                set_exit(job, 1);
+                return;
+            }
+            algo = name.clone();
+            bits = bits_of(algo);
+        } else {
+            files.push(a.clone());
+        }
+        i += 1;
+    }
+    if length.len() > 0 {
+        let n = py_int(length).unwrap_or(-1);
+        if n % 8 != 0 or n <= 0 or n > 512 {
+            job.err.push_str(f"{prog}: invalid length: ‘{length}’\n");
+            if n % 8 != 0 {
+                job.err.push_str(f"{prog}: length is not a multiple of 8\n");
+            } else {
+                job.err.push_str(f"{prog}: maximum digest length for ‘BLAKE2b’ is 512 bits\n");
+            }
+            set_exit(job, 1);
+            return;
+        }
+        bits = n;
+    }
+    if o.check {
+        let a = if prog == "cksum" { String.new() } else { algo.clone() };
+        check_lists(job, prog, a, bits, files, o);
+        return;
+    }
+    for f in files {
+        let Some(data) = read_file(job, prog, f) else {
+            set_exit(job, 1);
+            continue;
+        };
+        let n = data.len();
+        if algo == "crc" {
+            job.out.push_str(f"{crc_cksum(t, data)} {n} {f}\n");
+        } else if algo == "bsd" {
+            let s = bsd_sum(data);
+            job.out.push_str(f"{s:05} {(n + 1023) / 1024:5} {f}\n");
+        } else if algo == "sysv" {
+            job.out.push_str(f"{sysv_sum(data)} {(n + 511) / 512} {f}\n");
+        } else {
+            let d = digest(algo, bits, data);
+            let ds = if o.base64 { b64_encode(d) } else { hex_of(d) };
+            let esc = needs_escape(f);
+            let name = if esc { escape(f) } else { f.clone() };
+            let pre = if esc { "\\" } else { "" };
+            if o.tag {
+                job.out.push_str(f"{pre}{tag_name(algo, bits)} ({name}) = {ds}\n");
+            } else {
+                job.out.push_str(f"{pre}{ds}  {name}\n");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/B2SUMS
+fn file_0() -> String {
+    """
+09eb46e8d88f80908953d3833ba289685328cd109576a1f99d38420f4f766a84f48032386d113a2a9e2ef78c205efeaa18d43c7918bbdb92fe33fdb9d9e528a7  README
+996e2390fd4bfb4254fe7e1fba56bf806065155494de71ea692a3c0cc72442db79bcf382e4f60453872009938dfe3fd2487b49c9fb2af9a021647b126181213f  release/notes.md
+
+"""
+}
+
+// data/CHECKSUMS
+fn file_1() -> String {
+    """
+SHA512 (README) = 28ed85cc22b5de61781d9da5f8cd3993e8538337f641aee0d8e99640f358c2398684bfc92933657c9ca6b7ffb6d21be71261b55780927a2add4c1960cb04a614
+SHA256 (LICENSE) = bqcuW8l2kexs/4jA65OSH77OpsRFeu1CLaqZoJNScbE=
+BLAKE2b-256 (empty.dat) = 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8
+SHA1 (release/kara.sig) = b84036e7029ee633d76c413f5bf000491a68d41b
+SHA224 (release/notes.md) = 6076b0f8aa1507824cac29264cbac511205c8c38309d07129d36b187
+SHA384 (README) = 64d6f645c389ca8aa1519339398230024b74dc47ac1fb0f521fb52c38055101b2e3bdab16b80ef97b8d408eddefc5b9b
+MD5 (release/notes.md) = deadbeef
+
+"""
+}
+
+// data/LICENSE
+fn file_2() -> String {
+    """
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software.
+
+"""
+}
+
+// data/MD5SUMS
+fn file_3() -> String {
+    """
+MD5 (README) = 7189cb10d8f675b0173d2a9038411de8
+MD5 (LICENSE) = c87175bd41f7e958bffbe17f72b24083
+MD5 (empty.dat) = d41d8cd98f00b204e9800998ecf8427e
+
+"""
+}
+
+// data/README
+fn file_4() -> String {
+    """
+kara 1.4.0
+
+A compiler for the Kara language.
+See release/notes.md for what changed.
+
+"""
+}
+
+// data/SHA1SUMS
+fn file_5() -> String {
+    """
+\\c921fb1def5125b3e7c0d4609c3a00ff5973fe38  odd\\\\name.txt
+81c45ca4589b33f42d69d08c4f1682856a3e7223  README
+
+"""
+}
+
+// data/SHA256SUMS
+fn file_6() -> String {
+    """
+b274b2061ead1ca5ef9fc76e452fb2eb10465b19980f492648abf4881722cc2e  README
+6ea72e5bc97691ec6cff88c0eb93921fbecea6c4457aed422daa99a0935271b1  LICENSE
+81727cb88c7e22c9a236de958ba570a3d5531f6cc3f63ee641565df3b34eff5b  release/kara-1.4.0.tar
+52c016d875f0912efb297e4aba3b3d71a598a341374db269cd2fa8eacd14cae6  release/notes.md
+d26755d067e73ab51a1fea3838f5782db919eb7b675c9cb76c0114eef25bfb2f  release/kara.sig
+
+"""
+}
+
+// data/SHA256SUMS.bad
+fn file_7() -> String {
+    """
+b274b2061ead1ca5ef9fc76e452fb2eb10465b19980f492648abf4881722cc2e  README
+6ea72e5bc97691ec6cff88c0eb93921fbecea6c4457aed422daa99a0935271b1  LICENSE
+0000000000000000000000000000000000000000000000000000000000000000  release/kara-1.4.0.tar
+52c016d875f0912efb297e4aba3b3d71a598a341374db269cd2fa8eacd14cae6  release/notes.md
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  release/kara-1.3.9.tar
+this is not a checksum line
+
+d26755d067e73ab51a1fea3838f5782db919eb7b675c9cb76c0114eef25bfb2f  release/kara.sig
+
+"""
+}
+
+// data/empty.dat
+fn file_8() -> String {
+    """
+
+"""
+}
+
+// data/jobs.txt
+fn file_9() -> String {
+    """
+# mini_hashsum jobs: each line runs from data/
+md5sum README LICENSE empty.dat
+sha1sum README odd\\name.txt
+sha224sum README
+sha256sum release/kara-1.4.0.tar release/notes.md
+sha384sum README empty.dat
+sha512sum README
+sha512sum --tag README LICENSE
+b2sum README empty.dat
+b2sum -l 256 README
+b2sum -l 160 --tag README
+b2sum -l 100 README
+cksum README LICENSE empty.dat release/kara-1.4.0.tar
+cksum -a sysv README LICENSE
+cksum -a bsd README release/kara-1.4.0.tar
+sum README LICENSE
+sum -s release/kara-1.4.0.tar
+cksum -a sha256 README LICENSE
+cksum -a sha256 --untagged README
+cksum -a sha512 --base64 README
+cksum -a blake2b -l 128 README empty.dat
+cksum -a md5 --base64 --untagged empty.dat
+cksum -a sha3 README
+sha256sum release
+sha256sum missing.dat README
+sha256sum -c SHA256SUMS
+sha256sum -c SHA256SUMS.bad
+sha256sum -c --quiet SHA256SUMS.bad
+sha256sum -c --status SHA256SUMS.bad
+sha256sum -c --ignore-missing SHA256SUMS.bad
+sha256sum -c --strict SHA256SUMS.bad
+sha256sum -c -w SHA256SUMS.bad
+md5sum -c MD5SUMS
+sha1sum -c SHA1SUMS
+b2sum -c B2SUMS
+cksum -c CHECKSUMS
+md5sum -c SHA256SUMS
+sha256sum -c missing.sums
+sha256sum -c empty.dat
+sha256sum -c SHA256SUMS MD5SUMS
+
+"""
+}
+
+// data/odd\name.txt
+fn file_10() -> String {
+    """
+a file whose name has a backslash
+
+"""
+}
+
+// data/release/kara-1.4.0.tar
+fn file_11() -> String {
+    """
+82b70eee7f1a5039bef07ec2347f066ed08f5dc7512447e3404300026b6e545594a065685d64c4980bb8d4544a8721a9
+9a01ad219eb59cf6a15ef6f15a1d830bb7ce09d6bbc004e7175c643c7decb0b580ec37bc9712dd2e6aaeb94bae8d2f9f
+a29c5a284c9ef7521829cf1079b080e9d74a1c10fcab6a4243d33656debe4c1ed79648e856e8f9a2f58c95f0ce4b39c1
+5bffad5c2dfb8bb820b6119cba8ff88796ae5b05f280a68ced93b6b28cb0d1b358e6baab485565b9f49028d557d79a8a
+0e6451e15c705c15f173541b4438a25cf76312d4eeb3c2246879bf00b3cf8ed13abf129a3097ad96b442d6d1bdef4850
+c3f465442eb300c337a648a6c0dbdd73fc95f5c2c451859afe80d40aa39dfb9249f40c3ee37d961445c806f58c7cf212
+7dfa894f9296fcf33c08409990ac970dedb3b843120181e9376107dbdaf6c5f3c86497ee219b01dd92f19f4954f4fea9
+4ed9182375882b200daadb23cff9193f3e70384495e04c5d5ed352226d1637c2248f1d3ccc4405dd2ea1fafab4bf1c46
+964d947086207882914478bee8c75b4309ae2b122e3fe87ac7ecf5a5370fc41b4ddb723b2afb6c47c0b57894aab2c5c1
+45b797ddb9126e5cca203112105f676414faf6b200daf099dba5eeec33624f5124bfc5f04d82388e52927810f610b0bc
+a11e0be9f14f3ca695e87a5311660c7628cdba9f5eefb99022ef537b596a16dc8a03ec1fe7d2561711b3302479fb2ff1
+1b7c19fecb1e1882d0e49c1a13635bce60772ba0372c52266d08e1b7f9d8c043069de5723b479ff72c86cea0434229f1
+7d2bdb7d8d1ffc7f186692bf3224d7a0c20092430ee2490918da8936c342a4219c564686fea59211200e0e3e1942b6df
+840876db40b967a9b706535330895749e4dedb3caaa2e474ecde57e21852f2fb003540d61a6a001078f6b5c9ed6e678d
+669bb67bbbb47f1ffdcdb249497afac3133056cb329066a5f4f02e65c005355ec70ba20d9fc4f3cce61f4bd5b90a6991
+92270d2cb6d39d078c7824132d99b36af72f3d7aafd8c901c7c15b6aa4c5a537bf7f336c969c89275527d35e7320d0d5
+76d9f77d9ad68f2ba95fd70f4c3b975ede61a634a9271ff84625a360efc475f433006350392fab4dbc35e1a55d34bb34
+216469a5bf58ea2a7dceeec0023cbf4301fdc3af24fb97083bf5b564afc34894ff2d3897d0ac20dd1970d7798a254a8a
+31f4dd5cc57d2fe7b6422a0248b8080a80eac4281b6f63e206f12b8ef00b1b51c9de126e0cd7d3ddc10755ad4b9b61d8
+27bd6ec9d7618a47f0ba92013f56ea2725c312d14c6409fca2ea45ef7927ba0f075edb2b8843beab6d4d962e913836cc
+bf9bbcf4e37b47860806c54479f61c04076cd677789d1c7a13c5b10a98e1e6343fbd8dc7c19a5527e51c6cc73299bfd1
+46e9b320fd016ae8151e2d3baf49bfae868df7493f86800c81c6557d86e05a461ab53f04e916fd140dd23cd3e2713820
+2f1522eb9b238b3dcf9c84e8989900a5feeec24f6e86a169ea2d4cb428d9e0ca596447fb56e4b0084ade89fc6e7a56d6
+80a096376484d9b787f92c3b38ac3134915b19c458ab8533d1a8319f2095acd2d120219a235c1430d035ecd52473d70d
+9437a5b926eec234577d3a302ac2df3a8b9ce8db146b44c35c62a624479c1bee9ce282915583e9f0ce324467ea34e377
+447f552de483ed53f6359880b61a3e690cacf6fa90aa1d9344d796d4bd4194631000f9519fd590d7ecaea70751fd00f7
+eebf167401f53d67565779cc34c5d5758c05687822bfde9c7230bee31f85014bd91ded0761613658eae0f0f494260cee
+680ae36721ae6633bd2d5870ca0111db1d9960c7c8553ac4606f43cee64bd10d8ce967882f77d8d5e36167a780176252
+bb30ddb949935d034cd93503eea628f94dbc031dbdf487e7a8d357c9dae10875f5963724f7702aa03029a6d059a4b315
+9e3f2a2b14f9f06ee29b4dd98ee6247c942e9a25c095d33151b1d92daf6bb635eca632fea712e71d74929e87ebb12fe7
+d364cfda3f4320e0a5139cbad7375904e4499c1537182229969591dd7611dde99752aacaeeec135abbf2a32d38e08bbd
+ae3bc7cde687424aeab68e5c58d204cda182634fdfe83c92c1126363cf7cff0d3a9c32adacb153061764ff108bf36817
+72a9a071bce908103e62379f3d7e2138b3ac82d2568a9c21c8597bfb059cf0761c6fc43190f8128501ea4b3d297ea3bc
+7bf90300a4c9b4a2896e97e74c046574029a2d747969c46f904669563cf971e09c82285fee30b1f3079a0754519fc28e
+f0ac4463e463340aff5c960f658a528dcc8a28b49f397c0a758fc1e28322f5caf84ccff41fcb166784a959bcdc53c476
+1f9074d5fbf55aeff6fbe27a79a5704b2b3ee4ef054b07f947391721dae15e3d0aaadfad7253fcfca519a304ff156861
+818e98757be322fef477a8d4846ebadf00a13d4c79a19278b57f9635f5813c8916493533e0994a71a2a65e16dcd9c401
+3a84c82c3103a09dee474cba9b8e2adfda03e8f59ef3329d267dd8383579c762f2bb674b0f0c3dcfd305efac77a0fc84
+6b74f9f78123882b95dd17ef1b581977d94c6ab37820db5c72e4fb44e353b9f73aef9824eca5b87c258fbe9d13b1beb0
+5773c3d2be88d7d2705c0faf163064daf33adb63bd70ca3912c1a174b250d3aa8e9ffca7577617eba7712cfeb7982d9a
+4ba8f954f265c9e08a0d6336d5500aa8820d0bb7df3a705ea39368ca5246f793cbe8a487a1a91191caf1798626372a35
+d036b844fed712f1bea4833e633afe4222b29041771ac63843e5276ee1268b01336b74defe9a387547f8bcff0947d088
+4410c613d457b7eaf5fad774a7b3f3da3d0d0b62e447a8a7d228ad8bc7263f2725244a2561ffdfb0c37cbc61622b9e88
+11d3c670a4404c0667e1641800bf83fdfcfc25e727a25815200ba6313af20479ec0d79c0b33a143964f0a38a71baed6b
+78625a643fc6f2088bf568077109da4f49c48658af36a18666b9be5edc55fa7fab1c549482483ae0263e4082b9881ce1
+74f177ed595284bc67db0f1789aed574bd3802efa53faeebfdc6289dfa6cda821625b9addbbc83643380418449286228
+55be24428588d83cc291c8e2df7d2a426bbc777f88c153ebb4d7c4458eb028aa52c821c43a975a0efe6508e2ff21a9a8
+507ae1049850f133d0b2be4c847c7e5d4a5b85d8fbe77a5ad3134959be6300966aca0543e2824e2de8aa51206fe162b6
+ffeb264a8d204b2d352985dbed7377f2dcfb23caee9da67df004450e8bb024e5c272ee2bfb7fabdec86d5db3a47366fb
+26a7dc924887b687b8bc611ac044c6985706a8a04047acd57aacca7e7d9cfe436bcb3d4999db132d8cad4dd86a08f0af
+4dbcc81257909ee1290c5835290915addee78fb8cbd0148e315567c2b1096a4a2d6784469bc5961fe35c429440b17d65
+e0577bfbff407073489c70a6d95f105d9afbe91d8989fa9c18042d776560fb8868507664a95fcfed0cb35a3e53b5ca53
+d57d01eb887fd02525486d44da6bc8deed4d5ce6af058f8c9dde311cb396a82f3b4ab0f1946e2417de607959a93f0a0b
+291cb684d6983d01dbaf1c030e98be5bd0b5a1b63c7eb050db6465f683a6e7f5d28085909b628a6cc762f8109ab8f2bc
+e9cf8dd997b264f8fcbd0716408eebcd329f64394d46de61a4a246efcd6b78ba130dc9d6a915f00d64f526beaa7031f2
+5465f219ed79b33811641054f028cfe03faf7b60815b6379c2db5feac56d22db1ec3cc2960ff95dc8780a1f7214638aa
+3b4d3a0e2ad30d9c3687870e82ade784f537449193ed9c0e46f130be5c8e838fcb1fce5cc623ee5514d5c52c97ac2713
+1bb5b0b8d028426393ba7433d05923aebb121dba29380fbe442a45559ae4736a1b0fec8124fb43145648235799916afd
+7a5dfbdc854fc5efad6555147a61942316995c743dc8139e3c6e08cc24d2ab351dd11a95535a708e6cedb6f0a18e68d7
+7df47666bd3f53861a03b9f3a949bc5e84a64b1a943bd6581396d3eee5de47fc724c5d7b74f29f189035d34b084b7634
+a10f42b30d4f93820b166d0686033e5ae9b77fa918aca15cdfae29fd60571558f296cbe2c6ccac5caf757bee69f69f07
+1814ef36932feec4272028a599930e2ce433e471606f39b1c9ac5a2d9b8b4344ab059ea5b2a8a8f569d1a10aca3f2ad6
+05e30f473eb3cf5afd0519288e38aac3ca2e843630e917c76204ef5a85f6340e6405804c6f6336f7069923146a363bf2
+df795f4c96ff10e9d0ce321fa87133e339b06807c71370b3832de80713f5f9f1e387eb0511952dbe9d59b39904ccc383
+0b86475caaaba1eed42353aedbb436422597870f22b6f349a12bff67ab54bf78b4521b36d72e4e9d2a87b19e650e643a
+29d44ee6e47cc50878ef112cf961d87d1d2ac47fe11588b03e833ce3e4621cca4e1e85982698386059c289dc3cd5338f
+24034839982dba8310de57687e9b15995f381651ef13b8d8206e808f6cc4a8f1cb31e40cd3488d5d003de0977ac28d4c
+a5cab9817a36c6110edc3d6891a4aa45e2676883cad90cb7ba3aaa70a9ce893d79ad776d41c26ac4f831f4e353c9c25b
+b67257dd81310a55b908430fa0cbe221bf236d5186cc0f4bba650285443e69392f50b7a70da1f20dd3c3010939b5dd39
+bc5ab1d5d4cc3b62f7bb0f694484635f597e376928fa315390031cda9a0b34001258820fb0e654bde698d47c4a5a7647
+6a4a4e35c7ff6a29ac36eab9fd143785189d8ff0772586ae78f77b6067041ce0af8118a993551345a3aafd4f5d5639a6
+586a7a0c4ef23d3a58210a6c4b7b8be0c7065bc2636594283d93ca051f09407734aad4adf7dc1d9245e1f07335d30ff3
+3529d84597ea292e550dd959b1925a3e5a3a36567d25bedfe15afc3970803f8931925707773c47abc4ea162522125d6f
+d23cd6aab41a75ca2163770d2a15e46136da03793338c7c80e9fbe60f02bc7329ec36432be8a2a9b9294d34176da890e
+3265cfb0fe31dbea71a2d31492f4ab09e64be00c57c03b6a996d20f34a380b3795fa13da684d7c0370dde0e0d1a0fa11
+4156526b1577de1d00a0299f11398e2a38fc478adcf7d8e709e41759473f8ae1fe512aefb72e8d747f2a3ba7072a582c
+d6f43e25273a5fe88462271f8b1b40a056a2aabbea88056cd6ecc5e6afb6a64c81e400a15ebc83217fe867b6f7847306
+81029dd3b0567ab56cb7c28dfe212f8b4635f638292763e1ef79254252a053a6cc719946a69cea6251fbe1eda9324aa2
+a283aaa068269df4e035de88a62755a6a3491b0f56c7b2d2ffa7da5125e3ad1b0a002dd04fe6885d7ab9ad614e7489ae
+da9402a4fbb4276ce5520eb468e1392a662f2dee47ccaf6ed9af4c562ba27962df7dcb2d952e073ee39f73e3bffe70ab
+a8a51d52fec054d82560d93824816d20d6fcc6d9fb6423616b90a20ee6867603d4dd7002b8572cf6da92067a44405cae
+8847f93f2fafaa7dff92ecec0d60399c982cb6211e528ea4fffad191e6ddbd0c36b58a674a972e394640108d7ff2945f
+6336d6e7e778c2554493bdd759e9929fa0e5fac16a94dc3c24f0000d2b26d113ae805452bf447dd738066132fbfb59d5
+8128f5e4ce22859b13ca7f8ba679c10201a6a1d5069e9baf0d664fcf0b33bba5fa7668956103f5d11514b4ee35e0edc1
+e8d04f9a80164406412dc63ac46e55a3c8b2cdbd199e39251efef6a66c9bb805329fe99cdf4a3aa7e605136f6f155454
+470b182039e30abcf39a63cb415590105919d829d2823859e911fd09fa8aada0b04e8ff3a9bb91dd64087f282240c21a
+160887910b6a552a5ea0660e182bae50d74fb82f9e2f61467da2835f3c2d75ac7b15794339cb0b1dab3adc99beca112b
+ce721540f615290103193304d147a5876d6beb321f7947e1bddb4e4e0ac71ee35aae684f1456e1cfdf41f5709008ebeb
+a9655452c48aaea4eff123d9119e81852c904767e96eed217a66775891749df9a14c933445043dac6c86b538696fc280
+d17dd00621c834e1d6e36865a5f246947d0afd73fb4a489885b389dbba03bf3f0f666807b395eae0b4a7ef06eb41b8dd
+ed7a5e9171c91d1480faa387383ee99cc839583a85defb562b89c1ced51fc2151b0b0defc4379fa70063456766844eb3
+9877eaf454917de4c91c09bac7cdbf3a7eb97e0f97818723a471d584691dd4b653565f7564017158db52072cb842bde4
+191f47eb34d9dbdaa4f64aaf3cb0619434971ef464f4adb6bbc95175f54b87fed2a18cf978bbd7b6fe0e17787ef272ea
+ea622e8f7ddfa1cc9919ffa15b3123267617cd353367b57ac28e8519fa96ff139d0c24693de7ff0da96dc55805a73060
+9e06fbd5748d9be99a7f456bafd647c95a92c72c1cb8e3b6d5f66c9318576411b7d911c9e89a167760ad0d949b92447a
+1059b646cf9b7fed76c96b4d766d736da158d53bf6025984b88fd2fd7389cb3a94d543cd378c8243b1730eb7c13c9711
+accc70e02756fd4cd2cae19a570c42bda56a7ff367c653cfaa0cbfe1d43b5a37ceb3fc7b1d09b21cb9384dd99a803d14
+64727775aca6c8ba09d5b0d6b7051b372321098db9cb47e1f9a6b196c51d77bdc55d416419cdbe9667de095bb06b8ba6
+906f36271ad9e6c371cb2525a3220eb65e9eaf3a44b7ef6c1018f0a0343e01e99c82dbec5e63b9efe2d023b76e4de97a
+9eba1cb91571aa1b708c443e283c6ef29d429e51d47be4381032a2308e75fc468e0828bfe4947e1a31839eda5dfff478
+f7f03b6a32b36343bc2d3d797ecd6b1691a01dcf1bf5ce8d34c5bfa8ec785c74abe3367d0eb9ebd8c6cf52200821b591
+8a3c423ef3419570abffb670ad45a3ed4753ed14214c087a126b62fa570dcc3dcf180bedc09a036dc32f5804f663fc7f
+1465699a0cf7418bf43ed4e3b1b718f8adb2a66c87ab16bb53f1cf729cf08fb5b81c06694132bd08a10c44173a4061ad
+0a401bd935f9c7f25f8c390778543d7341b4144825f83443b800f27e4efdf0373830726367b8db9acf2ffc1e6120a919
+0685fec82f2706e984b8e7c4a15f0d957152382bcd83cad73b606de5b2b0a8289c9e50eff1293f3f35700eae384165ee
+028ff79160a77cafd4dfcf6ac241fb9015d3765e51d7cbffb5ecba146ca0a22a381ba886f4bed51b630a2259267b6c80
+f3d796e06d371398d928be3bb2ac9d9bd260eeb722ef3b9408d260ad368bbe39f56e019615e16919f2d4364aae689efa
+a7bc0a1f61dad157277dcebc2a6a80c7625c55a791736473cc663ede48fed63d788f1bc3323136318f034f61e5fbb921
+2b40087958e960da3211bd44ac363b0e1bf7f7ab8a19f5eb5ba1009ac57026b6ac9133135a13c22e1f577b226ba787a6
+dc9c52a9e0ecc38d02d195ae1343de62595c322693a951758e2fc199c12cf24a49e1b5ebe9a007380070c3ec24239887
+c352dfbf2db584605da947a5da13b7a7a6613b7b6a2842f401cb2ae33ba630a6d8e6087a46b37ac6872e0e42db56f006
+2e684261539a3ba768c1d5a6c81cd10b9ca2949cf32a1ff658152b7ecdab17138216b4560b5ebead5a40bbc4b6bae203
+15dd44e87e179aef0b5dc166d499d49366cbddf93b1644ec7c09bcb4c6085f6a4199fa03edb98773d50565884d474ce2
+87a84e50b18ac98a3f0fe9b69b5c3685343f192cd683ea5a4d6ecb58c964d6654fc58b6f9fadebd42c7c1a10dbd53e37
+4cbe7d861a0f7898971b87c9a2f4d08d3aa698f4afe26d290c4b042ecdd91abfeaf2e1e74873f6b0df07c5ef7821e1d5
+d1f29a11e54517a97f20c8c25195adc0edef4a12f2d71bb613224970cbd2e6775601330336c2e7682658c8cd63414d5b
+1d820b4872f89887dcce9cfbb5559da498a5363645bb6582e46958664d709fc44a1942d7f3a5e3a37e31be998b16d534
+c39eb0fbb6adbed49f0856dfda5496ba0fa5546f1e14a4b2f0fcf3ac2f1a75b4b9e04eb220983ea6af6a16e5a89362d4
+0c4d433c5eaba9aed02d570d777b5686aa8370c2b570b63f2d468351277460a89bb503c74d95e99ca154090880532539
+6c7843fbca886d6084446bde488a3757eba94197815dcf0e2a39b20c41874f35e897cfea64601088d3283fee176e5ffb
+1d10d6d0e9dd937f69adbf06611964db5687641800e075cbc94b4d233fa441188c0395b2e7754b1dbf5df116367e3072
+254e119d7e0fae96552ccdf6f20da0d4466b66b737ec9aa68cee3781738d05b27e4de05d5660f40abc358df8bae28668
+728d648603c00c655b7dcecc57919e8ca5c4afb199802b256a841defd67da176a1edeca3951d65f2a47055bebf3be749
+b4730975267ec425b377e1b57ed0261dce1971027edcea3ac797817041519faa5c57cd3c0e39b63b989205ce7e54a31a
+c24b296eb75288582550a62b2c4271bd4d5ab46de0591923ce981d7950f6e70ad1f0e5118cddbda2352310371899a152
+97e1a36c4d69e7fb0d66d3ecca2075549c92e766be9656ef0748e63f210c283cb19e3f4e0ad0a4d3edaf760591f053c0
+44fa662e348129e07e52e7a2b8611ca9ba52bd83a373b2c56a9c3f8f089668ed5e4eae9a16f30a5989280c001f85d2f3
+537f45ae4d230b08aefffe2c5781e0cce779aee7db760ab99a7ad3e962db1ca64fd80f7486ef168616f4ddc04a6613fa
+512a5fc9d86d84b94fe3605ff15affe5d435d710e9942e97b996da251630d03e0ac6379a829b9fb89333b9e1d1b5475d
+bfbaf32b5fa50b6be37f9cc53d1d378ec52d2a11f1c127fbd0f77fc1b5f63a0a7e10fc3cf0c223c077c8bf2d6e2b82e2
+4c96cb83717d66a8e18dc7d63a14afe0c3494bb810417549fe56f77fb41396ce725c1626808b8712a96e560140e7b8ed
+8158517547d46a82188407b646a5cc9969164953c1e7c4ab9a0ff220800ef795ad1089338a2fd4f97de149e0b3295f84
+de87e8f2e57ce34cb152ff679ad51131d635a77b79436336333415c5b1d1c0d34120a8f792b35fa8be69fb054494af60
+84e35281537c741335961d22e9c4c5f204f96152af1da818596abdfa4bc42dfb560e535087fb143458641f401b8d6fde
+1ba5634106100e526eac67bcc003cabf9a7244b42790fee46366644e227e6030e6f410ada7efb70ee75695db048f3b48
+018ea0ebc11525b16d5af7d5fef1b2b1ce54a3ddd36687cf4dc7e0e89b7625f08b17ca228eb59be64c1d32fe02ccaf14
+ca6a5d0f4b83960e58cf3f8d2990b434bfbbd5bbb047346516871ae2fff29fc58945de44c7d95023144db33d985d2675
+ad13e2aa9073215466f83a4e12e98d45cb08f7a45f51a77e1dae297b7cdc9e6619ce83f1de6e856aadc1614015c1481b
+26d642ccd4cd60a0efe90dca2ef086e809a0fa5c92fa50191ca97d3e87215382ae067402db992c604e4182180e41c649
+70aa5fb6e263fad20c79d3a1d18f17ef84e6e7bf79a4a422242bf958bf7aa558986ff894a1047068df59f08727e32d42
+5c26dedb2673469cd148b830e2ba7ad2260d48f0e7edc8dbb3b4391100200ebf38df39a12494771c0339bb9fe0fb7ed8
+be070cd527435c3a471edf8af9cdc9ac1d912f2f0471cd936182762436f6c6300e0817ef9cfb84ce5e915204793dad67
+3d934e7ec78da62b1541c568bbab68d8554a07cc56feaeaa5699974e68d726154cd0dbcaa92b9c78a4fcfd2a8d5e221d
+079b2c897376f3bd8cffe2110be949b0537e66df78ab11ad9636d75cb896ec98bfc7aa0cd052179f1cb307f6aa74bfa1
+864228dc7f6a8be5faf871d8fbac77bb4f0660a6d88458ca8c774b7e5689e8d4b718f24a131b1c6a667dfd7b815dbf10
+a5832fba314d4deebc5b528a3d1ba40c3823504b0a90e0dcb211f67a58f5312f69429f554e0fd15d089b61cc348d312b
+8b904f3566340c26401b81d3e5bde7ee940c0eb6205ae37e6a519305b6f2f2a1e4949e76a12b1a0046fc5f904ea13269
+b71df8ae214ab190eff924fecc99de139eb2f2e677f64e57b448f22b8f7bb11c90f57d88011e82dd1e4f0398d2d476ff
+d931778f0655a1d333110a10a5021734731847c35fac483a3df7d09932f9e913f1615e582f7476d3f82c9e8bf2750d5b
+991d781a8560dc4338a35592b201ebee7c1c528e4d1d6636008f172c8f31eaf159d903713208bbacad89097fb9fe443f
+1e876be84125e481b5b05db82e6156b743626eecbff76db1abadcfdc4cad41604863f98c54e91866d483b690fbec0328
+85287b42a11efd29ece4fb1c2fd6fcdefb1c1d0d5f7c1cd4088a1b7c40ec2a1fbbb18d4e4d575a536d479be893e4139d
+49149ec916240d121dfab8831389ca5e7a9f8593ab5638637e9cfe5c24a3bb83b0f2078344e10b01658efca2a006b5c8
+083d720173ab309a28a3cbd6a9e883d97925c216d3e311d43b6806765394582344370044db27545ebc7a2f8d8992d84d
+30069db6cc87b74dc0653955c8a053b091ac3f8049358d226d79aa7c4f1f39ba282b0b10e6ea696bc155250295721f88
+7a1dd5cf01b027f2fa0c4d343f6e6a8446dffc76fbecfb38428934117ae9dd71fea51970dc7882abf45cbd924a96d74d
+eeab8d2b1843e69e462ad55ab7d1bdceb735c7862e27bce48e50f04771e00c4653105ec7a0ddf91498b2ad5f905c1aa7
+0a0a2f116db8a27d9b08656ea044a35164d0a19f1ad74985bda62fc94f5bb94424bddd76bc05de6070f2b02fc9dacb9f
+2568149b68a624e503a18e24195579f375512417978b821c5fee3cd93ced45762a6e83506d526e82ad8e8049fc5a2b63
+1588bfaa4d46a454c220b902c0bde044b3758dbacaf709a3bb41572afffa313e6b7d3592b27a9ee978a34a02e6558461
+6921c22780bf475997d46bdab6f686668f8ccf522caa4f68c393230b6f0fe8d38bfabf6db2816be78975eb96c2fb9363
+2fed40b547a8c256037f5504b883cde119c3f64ae2bc44310a72a2ef073d4d31759ec793a2ece5211d72e6467bd5ba47
+52f848d31aa102a3cad0e2d89c4a6db642ed785e4982373c93b91604942785e9572fc44996ed728476eb966ef85e44fa
+da3c66566d8b7819d0a7c42cfdad038856dd852d648ee96986be7aa258cea50cfa70c7c2a695900e0790cece135d254c
+1bd946a647abaa6b96e8d02c25679a60379c5c23c2d3ea98621ae0d20ecafed9f2f041823f9589486a6decb0e7afc5cf
+a47b6e48493e902966729151da18eb909606b1a85a3a213a507cf21638d080d5252595cc09854f12427ea905d28f036f
+f79cb37955b3129f2873690410311d7906c461b8af231ddcf3267ff061bffa90e3cb983e1a8cbd5d126bd6c1c34bebd5
+5ed87137790e332c2990d83d69b1a5bc489852ee5dc703778692a9f0e11514df97e5b34a9468127b02878620f60dcc51
+c4e4a66872a7697b531892dbc2f6f3fbb25c412d3ab4d09ac23cd60c3de0142d1b9911840fd3e6be6d70375d31196c33
+1db429c496893d6eb818ac6e22659888a5f382e2e86db2f670e7e54e515fb88b7e4a820de11a016b245c9ab94aeedf4e
+75e5b9b90e4321157f92c370dd32b78a0d3a3ce3d2e6c2a27d3ff28d7fb98fc41332d86481579fb2f75a89dd62609683
+a3d96474ae192c68d0cece102025e9ce18305f4ce9368407743a2dee562033cbd50713e7cd2c99b2a38a278f489f94be
+6d44f8cb920974bea7c36aaad77ed7b591a61ae8430f2b8adf020c2a250429e6c72eae6f8d6f63d1d7626f2c5e15a86e
+be60b1935335dd4a0d72c96bb008404480bd70a6c763c494dd24f9ca728c449565761c76f1afb16974b0590253806fc9
+3253a1eec27a2d3b5d110ad4693fcbaf186ad9bcf54d58c66871cc76e968b1430c3627d20f8f41070bd2042742159d31
+8aa7c8942b56508549492112996d67d1af8bdcf4e559ff6bee0667628f9df22e254c65640698d392a133608f349377d4
+0f26efc6c250ecd3a6e535b0a6a1ac56f32a9ba4ce196fcdac4774a966dfe8fa5391989d973eec6eb2459855c83c6cc6
+007019a31501d844b2cd50ed9285c2075f1017affde4b800230c74e6c2f771ca40e19511fb52b9b8b049751a0d7ec8ac
+5036038187742ba4313592abde3fcb39d954e0f4585ca5dd06968d8c1b6905978db18031c81af74d51a5607f1fa35728
+3e64c2d95671d32297d3fde277797d60fbc79a9c3a665b15a60c2aabd45394b9c5757892c8a5d54e3c6375df78c965a9
+b6678d6f5b0d0e8fd49570564ad53022901ffee2ece7b539d0639269983306755eb40d77b1ed1053db37bb691c6f693b
+f470e2b59096b470b260a108c6cacd9a6955f162e6ba2c8e4fa5643c77bdca42f778e0aba68b4353b57811ac46fe740e
+ffa51fdf1b3ef9d7474b567d5ea636d491c7b675be06829cc5064dac30ae12b9d231bd7e5a1d70aafb1285c99a998aed
+fd51deeb129652861451b62be43831f6468cd5edcac31506c76c473770e09be232b21a0c96cfd47733ed3f0bda46af22
+92af3500e7fc079717266b61dfd44825721a07a062a01efc24e908a29ab57355178e6c5748efd01e02604eb0ebd04766
+9476bcfa6571b791f90a61714ee84ed46ec07c127b02a20631850f76d807931b3890cf55591a389cc3b6e4dc429f088b
+694ca784832cfe3b02d0bcfd6db833f6906db62723e9fedb65b3b39fe5f7eab00b5501724a7d0a725ab0c7f143526bcc
+dab3122fba52160b1dbfa9cae001a3c8d26dcbd84bdcc6912422436efcaf6535dae3444fc4f7870684cf9f6ccb2f3b5d
+e9a59d99292b9e55c4752495c579257b24d2fd05032fdf4bb10462b617780930cd16977eef7e866cbeb02722965ec9fc
+150da6f707931fbc2fedf454bdbb0da37fd9bc744c3a79564325d99c0143669621d05c8de9f6e23906210ee5cadbfe56
+7344e40c2961200bcbe3386dc56611f6143b066679a406a848b29299e4e71608cd997a61f758999f97257cb486fa03fe
+1b2006a9624bf76ab28fa1ebb5b6f5362bd9ffcccb28ec7693e62aaeee9873ca3c5ddd1b9cc2318524e47bfc1970a18a
+63221553018a3e43b44a0b59983e1c2e3fd2799ab55e7ac1b92937d7344ee01e34468532d0fc2371ddb990448e09e1b5
+2b9db76dff120ac2ce7e1325f1779f4c9e7b075fe818a78c9c5b0a193ed092ddc416b3bff17a1000aae1f718fe398a54
+e35d41c28c990dd1002deae7181053d5b5223d36e417992174329e077c970d40c978bd9341331a770da7925f4915b5a4
+49f63a2ee5075976e982a7911552329fa3b0e0c85b4f321532a2b9b531bf33f6339d506fd494a6619c9549780dfab463
+bb2d8d62401ebe3a232ef17f70c24c5f602a5dd063236e06342759c5a351811295d6dde2443b107aa1b54c9ef14f1757
+b45f8e89337c0f434a26852160733257687efad38f80d985c69abf70d10df29e3c7d3b29ba40df700e74e509392c3ef8
+5e00b17d97b9b25badd95cba4890de3096c7b529f0f51f69db7d462d785eabd7ed946f55a034b6996e57172a978343d5
+b8fcddaf7b29941720b3918659c47b28ff198b6cdb72b8c56b7015917977b4c387e362d9a68c5010a24525357871e993
+a4bf4ca0e280d3a8b0759dc664b486dcad64304e38980b9a6098c52c97ae994027259120db62d4c045bd413bb4a928d0
+cf78c1f53e956732b7e56e8252fe70bc86ba47c5704e4a3aff7db7225046c0cb8360837c8310041db73c8da46715b52b
+bcd826284e40c3d377786e16bc6f8c47663080677a2b8d14676a063ca249f77fe616ac9d78a27aa2370cbceef23e79ed
+8e747553c64781edc7906e736eec579689ae1814403ab121cfd07f3cf9b21bb82971bec6ab687bc2e97bc77207bd2c5e
+2f7498d2e7ff9ade9c3a5555b0e6a05e12e5c2e66d90bd99b13f27537c99198dd3f3d8fbb2fbad00a00688cb815c1f45
+e7672ad3a5df18788e8226bfb193b037abd26deb9258c9ddf1d3894549ab3aa05bee0cd49d9f6d7eea694e9aac58cbd1
+d7e89680e39dd0532a59d8819697c3af34db25b2a3e35ab691cb4e92f2a6af4d3a07e93a13a63c3353c519a0faaa9693
+c35018b0a3227ba1d1c2e65ee9618356133ab25ab1e3f6bf4ca588713938c9896ee159cb831b0565eaaf50ef464d7b65
+52af5602ab24d834dc5770ffa50469e9823261d284a3ee3ed557fb4c8087f457d74ffe0776a1f2c0a5dc44800f8cb159
+5cd4e10a514bf11b34a57fcf7cb333ef4bcf7b3eb33d52dda19a3b1a166ae4cc373c99e916836f1e76a58e573d3153f8
+94a33ba937acab7a207ccdffeabb193ec9006da2153ecb5a1ed2b5597d2464a2f1f6327201db9a8693a8937f86e13d67
+b11405cda79369b98584b1455d31328b3e81f1b7a989fd02b93340cabcdcffbd89f1eaccfd6bd3558aeeed6eb5862ec4
+fb72522a86c4410fa0f93dc979c1a2cf5724bcbcddb0591ffc92342c7712b1ffaf4560bc45f6d23e4cc0e14c2c256bcf
+27fe6d6355c03ec6fe308f80fa3c7519a101e32e226359445555d293b78a28db60f722845018784295bb105aa322b7ce
+6cb9786cb6e73c85c869487f6f4fbbba1dae455ba927f7b10151be80e70b2045d78aed7d5e6f17e7d794a2aab757fbd0
+7cc7f30bde5a4df53df65899734eafd5a05b82589900db8d9165d4226e19b6e26a6a651c627665bb4645a3d2c257b6e4
+e12d7a8aa58a39d51c82c300e6e8539a6911c604201ca070ffe0487a6dad96ebaf59e9b6a75f3998bd64955f0361953b
+4ee93423fa697aa44f711a965c07e132b9cf75d3ca2834440b37dcee8a03e7185ace2fbc1bfc98135432f9d0282e4591
+08e5d234921b2dfb152194d0f21c7866faeb65895da8502e2325b679affea7bf4c1884edb94134ac0ba0319a6efae7d2
+14ea3784a975cafeddf2f49d31afff86ff91b875e23acea1360f08b20074c228f1817c2f3120ba970cd5085c9966dcc3
+17e9a2dd636b47e32f49dc7327d7d15ad54e9821202dcd54cd73ca0907dd73b35ac15f9ba8bb14747133b85de6e86469
+79bccefd5139e1a4043eda3a4a1fd2716eeaffbd2fb0cb6a426c28e91c6ce171c603451ae2deb600ddd5149d9747f717
+47bb52086a079d6c1b396e4ec83ebf2d10d1f80dc2220f216da182500142acc1aea48c0d8b42bc54c95788c93515e592
+d3c4e4009bac087ad791d9070e1989fafdd2b405db276434392e34e13e3e55dda4b779e1f51372711f3406a875868368
+e3bc5f0746d7f9f3113af3d23daa98eb656f434f053115bc23fef1065572e0370e20a9ee59437db415580b0485c6f5b4
+733a7eb7f034f58e350aae7116b65eafe4d0da5e60c2363a3da40223afc486c7bbb2b525e3982be0dd3f47d5948c8938
+55486cd01396f83f00a59e9c68024d3a8139decbbed355c54a03d1b0522a39edc559109b0f9f94b3db24a1908fdae11b
+34650d5f12aaffb82013572fc4d26d45a6ee542f96e77da6627ded3e633aa5bc2adf9095a67bb4d8300ba13a0dab0030
+3a22802183ac3e1e91881acdf44fa594fb9e11a86419cfc4d07dde8cd2bf7a29a3deab5d22aabba72073e87f1934860a
+8399393e63a21329ae2ee325469922a5d40881e990ea166cc0f61d8686ae1524372c32a591ee29ab77a7542b0111299b
+6fa2cae4bfebf365117e15bda4016d9089a00322483f9da0ba52997ad282aa9edf58cd8ed81935772a6f511a69c6eefc
+050ffdc9a15363503a04a42e78ff5c84d61c2c4874a2b37f44e1484bc88522e078f35348d994673f1114c6ef9d638f18
+1b3a30fd5850174f1f2927c7f8c266225239e4b85a8cdc5dc2511a1a257c1a513466d16da6c57ab78a58300cf22edf24
+d68b6ae708a01faaa90acbe4f9241cfa0a6093ea25bad43693db169c3409caf588f77cde2a4e1028351cde560bc80962
+36b803f7bb0ec4473aec6d2df31d5c3d4a5f417d29805c5a90020174f2d8b4b415ca840d2c30840593c3a681f4a76621
+ef6742095ed97a2dace227bb37475ecfcbddfcb3d0d2d5bfe423b7174917830d4a2d27b7e3c669d2cb6e818d0209d61e
+8b4469955cebe3efe67c891c0d9d9659ef2323a9d087281f04090961e19567f8ea5f60465635d25bca9193aceae7a123
+1a09466c807edd21dcd5a781e010e673b667344c96bab4f92ad128053968bee905164e208e4abccdea063e01fa636ae6
+adb2cf9c60a9996efb02d55cc82ee8226779179cc35a9c98147373aa3b178c646a7b320b93c612da21532658f7808d07
+ecec7d956a1972d20e1bb374ff0f387441b244f706bfe2fcf8256e25eb541e8fecbb8322ea937a854234e5eda1f140f7
+f79bdef8e60d3971c68be56388088c4fe81a9b4b74d9bcc2b7bec0e228140ce27422164d6314683b2fea14d6b7a06d4d
+91a1c985e4ecb60a49490751d8a90eca7b5eac4a5403e4e348ccb4bd3841421437f502c1e9e0f1efeaa00f59b8ac9ae6
+b33c6ff55cd22afc51e125a6880a1d7481f021fdb9fcfff62d8e254a8b19ef8768c25d35f752d36735c9261b0c70e117
+0abc8f890997c82c83f43e2d0a50257100e54d8b11900fc4c1b2e91436b7fb28365511a2f1304dceeb29056c9c4476c2
+6c26135af83bf0ac4039f027e3c0005bb85f99e992c0227d6c508564330e4609a997b0b95815c23187774fcbb3f75005
+3a0b447ca9de04b9becea7f90b88d9538ef31445617ed4bd01a671b1f923651774e1dab3ba24c45fdd59e53617c47bb4
+19a62e4215f19e66fc30e7a29ad28a0263969d8c378e8bfa7713d28f256ce93a9c274e0717fc8c536a8f7255e41561e6
+ab41f1014e2c5fb0dd5ee6b78d6644ef251aa28357a49fe81ef0c0d99e9ca2f350e3530f13f9e58ae3ec29b183853dd6
+d406643cf726dd108ac9646696f966cbbdc712ff6ea8961d454bccd5be23eea517e9b11f9a94a9e65f7bbf1eab67b87d
+31e383e4f71edf7b8c1a972c273e459b5d68be920855d6e2034db2095b6f15898d6164e92bc548b0dcbad58e27493385
+066a21474ba60979d8f70dbd79dd276744ad8d07fec940e4f365e4fe7f74b19cdf8e490a7cd32bcfb402682d143a9cc8
+b1587017562a3588be534c8bf442c3a9a98a5bd7d5c4ef2ef76613c7878eafd2d38a40ccd618f16d55e0e578013a0bdb
+548dc0da356768e1acbf2a1c4ffcb4054726f3c5e31418549741f7d2a64b7ffbfe3df2ea7de11f61746567a9acf38b3b
+f34e6ae25d116ca988af24d6a4d28fcfb50ca9f2c59dd7b73efb285df845fd28b91f6d1dd35cde63807aa293aa0c077d
+26d608fdce9c4f57721b714ccea5451c7b266534662949843d5d432cda8080483d114e029b53e97ea4153b140f9e1658
+3b943f2abbd59672d7cbdb8c867847f5115eaf3329928498f83cee77dbac448985b5da24e245618b14610b26487bba02
+809bde50f7930b8202258cf5abaa981b8084b1f3c625e3efbf7672bdbce64766977130dec8ec263d0620d0d38f4cc278
+67dc121454f691f18b302e6dedb3b0bf5f2ac91e1586776cbcc4724cc674ac3600eed681316d09ca73fcc3fd3c6c5f4f
+a20b8de855d652333410b99dd6e5d0525cad1a74a10afce839a81fa39ed9b55cc1e6d8e918a5e88c24e3587d1b676f9a
+3839e566b871df21962c1f56916bf2cf5a83527c7f2c8a691b522ff6a23784d9f76ce484812a48539bceb3b9853f0cd4
+cad016aeda9f2b8cf72f737d4c05528b7ec2bb9b17c47fff1bb8d476bfc1ac44b34f9d6ff68d433a9f6ad42f0f42680f
+a10e28e7424ffa31bb70241cbe573c2f8b5b5eb19b716ada218abb23160f21624c43b6380c8a6e0b7416734cc6cfc791
+2f1b6ec465c8939fe20dfafa5df05c1b13fdf9b673bb60b040c900beb2111c876b8e54b545ffec389eea0a51dfa3c40d
+05739d9373ea4069ade539659573f24435ad5c4e3c0fbd16257b0ce7b50ab58de12a5cb8369132729b8a74ab4dbe2e05
+06e2b20509debffcbbfd682740342517240e6184f7e215ba91c5e93e4d16c7668cdfd92151de5950d281a32cfd4a96f1
+f8ae46363d711d986be04a6e7031338eda3a3be2dac940846a6c97695bf7245a12f8647552fa6ba1c3c012ba73c3ac90
+3805c574fe572f7a7b7c2645a91cb478ef99a71b408478dcb3d1975aa24d4ff7f5f5be4111169f0539d11785669545e8
+c64add1c98eb877305c25c3a9e02874afda074a2303af152686b33b0c0f0d822c7dceb4b3204dc80a8f7f19e3590260b
+b21f60cb4a644fa70c7a2395cfe717209b2590e2bbbd6d6a71a5a7117c52bc70d6ece70ae4e342634b275d89f99afba5
+272a1bdbd30de66a6cc7e3575ea3ee7886af8266518b4425cc8fb32f37fee7288b33250a6f87e33b3767592403d7d547
+5b38f319badcfdcec7bd36b1afe59d9f6740d9fe54b54ded07b30a9f4e2dcdaa24a6c4282b29994cc1f134b73f96b495
+d8afc3c27817d5f8fd96d03cb24dc520c4af146716bcaf46eabdcb13938fe967ab337cf643e7128febddbbba83ee4436
+c84fa525792acb5029d4d81d2b019f1c963b2e07a6cbd2aac41e1d5e4433f23f27f9e1d40ba5b0fa4bf8c36eff38741e
+21a0610f73ba15e29f0d0d4c458b84779e854cf53ad3c1a7d3c0b1b0de0f5b817c25b3655b4e45b22160980bf7e9ae1a
+e8b77f9c621ce358c1c33653295867eb736707a55f00b3978a9ab20118adcbe5a47ba87bc7004b41e61e9dfb7b4f4517
+3e6700d0ea8c62b2fec0658c682ca81d64c2aab7a1d5f8159b27c28502a7883955d55754a184c571bce3985bb48b8eb3
+f4f07cc5fc5c5c7e125613e88ac8fd7da6e96f49e01087aaac27a8b21656e057a77027cbf8a4623094a2932315af8f40
+ba00f4679a19f2ffc28add611e19e4fbd4dc27030372986931490f7defb511ba2b8f9a1d0d169fb49ad510ac64f68c8d
+820c86b937221459f38979cbbea0266db5c8a3c4678652274e73f8fe5e63af48ddcfbdd190826fb650764c7b0ce4286a
+f2f3d2d08133d57eba9d9af394cb97c60eb03db24b7d5ffe05f96cb49691cd4dfe87ab3a9253d5144fd37d8cd4b585d7
+d6fbee8266dd411ed8265023dd0f0d6ac5446d003bc8f4a8f0ae05e7be6cd61e0bf1976a1715bfb562aebc0c83a7fed8
+e9b4c6ee86eea274ef52d9b803fd31b1ba37b6456e240b6f61fd7281c365eb77b794db8eb93c15f0edfb9927a486b396
+52bc7efb5a4e39f0526745046d1715dbfa1e44815aac1f6d77420962d7ed5acb4ad40215547888773300b74cb49767bb
+6074d1d5c1112ff11ed2d01a5914a4920fa06b2c083f450bd93fa16a7967dcf6a8874f6eb04bd1718179aa17d01263d5
+85a1b7966d786f5b83dbba64a95188bf98081e568162efd168ad83ffb05fa2c49c533fa0c148ff5689db800630086778
+ea7911b1dfcb7e967dc72bdf16b4eedeaf9d12e4252dc744dc313fb4e04eed6779f836294a31fcf0a29a62f195010fb6
+94da980057a5f9f4db07c3d6e88c9090e3c3e4fe9a6598930cfb2d80ffdcfa2dc6e96f868d1cc9b90837bf28952943be
+35cc2a1dc96a0665248da66c053303cdf9ee9a698feddcfc288db6a62cda18f40a987f1165bff0b25379a5ac1ea4ae71
+66713e20ea3f8945c08c3324b0a47b41ee0ebf0d778e7a9a29735725a814528976b5bd0b425c309b9c204819e5a0e12b
+58d2edd1ce6df15072f54242f7f0ab0aef8b27193adcbd97de373816eb24fc5215979eab04b8414acdcf08394fa15f2e
+dc746c026f548ffd0ddbd90d8cf0ef42bf7fe1277e649ffb039d0313cc697733f765265c04e50af1bc76835264b916c8
+914011b109ac2ba4dab43932870948f900f3d6d1a5e561bd26e256a0c833487ea4779102879218d132f0d0ff17c1df4a
+2aabd189bdd5d751cb6db36ee79d90e3702355be1a09afdf6b3b62b4eb3e5eed281ebc19284c4a4bd68847411ab539c2
+6ceb40f995a82e5c129e38f162b86875f5574307ef32f8e365d2845cc0cebd1897072efe9805b598af8b9aac209b76ab
+694d70c957561db4bc8f628c48224a5dbc6b606c10dfebdeba4ed7e6145fbf9e98ba0bf537ee4cbb1e168de41744c785
+6c213604d1c707a762bdf2454b19b9efa4cf0d74fab6bac24dad9c8e4a2481f779ef5807e2eff17a111c2e04da2d3c60
+1c8a49687d1333912b8034a650a039f567167d2a235e9902246237a4a47bea9fb741d59f4df799552c2a461ace2f9399
+b366eebbe1514b043ff8b0f1b357ed28de93af5f58fa500b72471dbef2a6c87dc91583af10994bdceadb9617e318dcd0
+bc233ec090d4b945120471aeb3253514ff90e9a9cba14bbee0a137c5487d25cbdede84ad72f25c1d00b57156a687601a
+c39a8496a7a9c3200b0b2de5b2455632d8f4d500a0b6334d158aa413eb7ff48800e400ed8e6b2ece56e363dca898c4a2
+f6eeecf92218202393e4dc15ae7ff31b844c65ed1ade81c31c6446d496fa617ccb7c88aae0bff05a6217ded13680ed94
+6d7aba3affb7aa68a5418804b328f29d58e1d5618115441d8e4f2e9a0684544520b0b96a0eb79db2b645ba0146d66548
+757a71169b6da7479b78d85bdff815ae174ba2632420bca9bcb2570af3f2df4c2f4fdae6840f3211b89caf9d43b83d48
+ba51c8a02d16aab82ec79ea0f1e25955efff5c9b97d0b2978d87799628800e17c44f39ba0bc78c7d9b3f7ad1afe7f28c
+f7871e559b6196b8ccef87c26f3f80d6f12ca1a760504a47c5d629e2a64a97c3d0bdad06394b763ed720158884e42b03
+484feb6e1ae978eda3bcf01334371b2f17ca9b4ae8e43a9299ba53689e025e6f2147924102e26078e5f85d36723c3f09
+56c150c36a15cfd7ebabc9ec1250c6c0b6f53c4a8cdf31fb22350232d51052a48814a01e931a0677e7b2868666b24512
+efb0f30ac37c9431e10f8c93522b3eeed00f836500da8e160881f00ccf11d08e9139b6bc9894a8591ca01612058e6db0
+66b8a25eb94013d8be899741c9c02e2cb972b779fb4349e027c21edd358dd2bd1282300f8ff6f034a6ed47fecf1b5b7a
+1c3d38f55bf96345f01c424b9ea9e3bb7a597b6cc667fe89426266a4ed0a965f37f567beb4e5728f8facd5c9991db6c7
+d8a44a5c14b3040e6b3df1bc09ec9b2e9158e0933384e717a14ec8262bd26ffcf4e70f22eaf67c789b37bf0524c395ca
+484030484a21fe8c6b18350b04c21a955332111f7bdf0f9b58d17309cb12a1ce52a329173f3f77341004a08319057625
+170852aa9a3c3cf60abba654eebb39e6655166a522e99c19996b05d1d0257367d21829b9d36c8f2947da4054aea0e5cd
+61846cc40a4edfd74c0f175219dbe062830fa694b9aeee8d5ce28465016e2e4e4c1e7f38c564bf06c1303efcea97b48a
+f8e27f4735e9675d338387b51a944d95527ca528859896c451037bc25d043717537a1a83c7b27b8b50138ad8d93d7bcf
+447c43d6c90f36de3b4f2800d46b0bb168b4099ed859cb933287828f3db24d431e2559d9a9c0387dae736f3f327bacd8
+d90e3465a4585ddfe5333a05ffaeb4c4a95cf40cb0562134694a019607e0140445e4dcdeb9e21e10555a9e1b714092f6
+83e2f9e3270275ab479441518d8ae9a55695d4e787959c5eae3bd02c09ebe17a00977d2799541a715b51c743e00de3fb
+617cd92465ccd0673a77dd249fb5246244ed03fd5a12a4a541004bf81b39c0419f0ec05963f21e938d2febec5537f5fd
+bd7d99576bc9015870024152f841e6e9e121316d22a422c2c9cf07b693bbd7225b20763d490a8931e8c0346fc611b842
+4f09a29a5282c460bd67372849592b9b5704c5e19d4f786ade9853c4e7fde1c66ab975122d1c24a86e848d916a5ac487
+106ddbadfb77fc89501f75ae7c34a73e373509c7eb81003ec58680a8a4906c1b0881dc29cd0ef69bfc2c9576127b1ae9
+c60cde05ba605fced0edb6ff0ca2ca0cec96e8aa3ad98c84d8cf847d7db19d5bc53bf65de7a44572853ae233af774234
+4cfdbb598ada65c77c5018a30dbe8717cca011645c7937b6c82dda40695c4e27d3897c600a760a2cfe3c6620dea34f7d
+3d2b948a55d2a7e769b0928273ad03351a70be46a0b1b04c50f0f083e6d3ac198c29624439de09f18245869f688be1fe
+d61794400e0255562cf05deec77b1d48d0b284a5efdc72e887ef719e5826699f614f0efa6be292da02cabb1043719fb5
+1351abd5f6103b727cc18ffa98585bfdc5bd607f3316c61a5d0fa722c29a56d6c983b519c60475bb03fa5b20ba494594
+d8eea9c97addf9bbb6e93477d6d79a18fdf5c526e6b8db40678592390742d6d4d600b0c494a5be206a154b6adf4b8667
+639647d3ac4bc477cfcd7d3217e9368d1bbefa8bda4402511a0b8bb4f1267260e1a0ab6f6f5aa6f39ef905104837a86c
+987d8eb3871748dd7417d3f3a083e6fa3b1cf693dfb40f357c5aeadf9ca8ab65e52ad40a1a2a18219d927a99f8ecc83e
+5251cc7285b7df184dd6c2da5b8b80acd84cb31ad424337017823ea1c4acbf9a62d5274fa5cfa6211ff28a4220bfca20
+7a9c59726ef489bc7cca94f62bfb719d5c2bef5af1f8ee71a946cdf6023bfb5bccfe09eeca0e9d5fc29523b5f1d51da0
+798c9e49100144319555678a993ead4420ae95d714cdd399766591c3ca8716b5cbf63798d4250cfe461d5a89bc8827db
+8e64e4d943055cdf94340049257bd90ce51cb80206b01ad3d974d49424dccca2ea4ec6ae9158abcfd45b1009b3db9143
+93267c31bd19fd220684cc3ca799f973e73eafd0de16c8969d7bbdf8b4f1518cf38119dab83ba454c8b0d903bd5a1ce7
+ef613626bd764908b9256526967ae0e175c619a85566e73ababded8e93977974f90c59ea0b7379912a0cea678d7333bc
+d7080d71ea527db78cda1a81ba027a9e5e02d370b03866e5b4d1e9774e406bc51b44f2ec57d1724a0bf1695a15107a5b
+1ee48cbeb30c5d120c07e75fb75ad41b3cfcd9f069f23a77766e7409d87c91a7acb90667917efedc0689c45df0ac08f8
+cf21059294e21484de25214fe0854f8a7e990da3ed338da661556865c106e81463bbe728c4732d0c302eb387e9c7789f
+bccb3d37cf4d8fb424ab44a3e8b645edf4cbb01464891069a6e9c8e2565b771f11fabaf520d57c97a28d11f2fb6d77fa
+f1bf0796c34348939285f0ec954f305c126ecba2cbc637d7297038dbf982ea935eed1e0c39b41326884ad88feae7c610
+d5a597df7f635031d61b65af1597cbe0c67b3f04b776d9c8862e9bd9868794e22f34d8e36141b17b3d344f9a709978af
+c0f874c81a59f0f3702c9ba841ee1b1899b5f9e018f965b3d76dd64e86ffb3f4216bbda5266ec474c74d7ac038eb86c0
+e0a60d46f9a851e92a5db27182ef1ac01ad7342e6b6c46f7197e22a1e72d728e8f0eb87a5576a144e01fe061ef006004
+091f9cceabd7ace74e008c532d509eb1dab4b0367601623adfae01b776e3610bd75ed880470c28c6c0a4f731750d70a9
+fdbb261290a4ee2a13fc1879e585a1db7b86af3e7ab2a056cf818beec28864e065eed381b7117b91e6f9714d5d1c4b75
+cc83856d5b47831d854e25f3f782c1e63bf581645550c66daaa8b92cc353192715d134f73c857c9c70762da353d24e43
+f5f70e30d1d96e63fe95d66cb60b86e08f8feca4459ebbca3e91ee935d57045bdee1ec9a685b49ec8ff7b95811045a53
+f04c19d6357447ea958da1bd08e5dddfe1722e7d7d1aca502d559fa300289b7c91d8a6fc6babc5708e06ee16ff7dbf27
+05648dab58593afcb4f5701aaf7b3f2f3b78f915e31bf63645a7733eea8a4ddee10dfe4e9c7eb84e6faae33131b43bb5
+59b035a074fccd304c794fbc783b7bb0d902b192f0d25d2ff10c2df885b42b8e73e05cdb5ca66304ca391a3be1915d0a
+8853ec37068dc8f980ada6f52ffe99cfb4808981c9bea5c5e56a24265f11248ad695c4597bededea268de6affab58379
+8861870fe36dda38b0921efc5c49b704838117e87be616963a6235b34f8492955543c12c82020b93bb6c676eb0302b4a
+e0a2f3708bfe5c1ec3d0061095c3daf1d79d677c1fc053b659444a7b0aca78e8d880071d32d1a1631017eef564b7ec21
+88cc1c2957d1ba8fccafddc4ff9f7cf85190bd827472e6ee95206bbcfa3a8db15edb1edf173fa808083a61c6f665cf81
+39f05f30bc35874aa9b28e9129d3a186badfa1b7706881f5c23b02f4a1829c8123335c70e3d125ceab6c1c51284e377f
+194c07aeee0611705fc0d9c5af3bdbcd19909977f8c3b4a5e1c3c3492d27abf53e870394fc42e094c8d41e326233cc89
+2fd7ba7ef5332a844d90820dc1bde2e1c2aa85019193ec529ab7e969059acb5737b9b6ddff41a23d48c8c9bf4dfb1552
+f340c412b8a61d02f766004d72d9269f819c652a33f5c54bbc2d37f1d7d2099c156e7f3c91f81ad935507f26d4b008c6
+0c0464ccb9cda196dd58b33755deb80a0f9d9576963cfa8ac30506e72f294c39beb31e96d2d0fcd2419e3b65ba1bafa0
+432badd631a46eb993cacc559671c49e04b74ae6dbeca97f860f11a0a392d8558a46213fe00a2cc1e706816d9ac4b694
+375e154012ae85b7992d7a8e8a7a0815ae697e65436ff99013d3d39d43f208966f9cdac8a2bdf139b9ff0ffc3e465625
+3936b1f70a560a1788fbf509e7d96622f949a906fb09a9880804beb5a66164a9e032cf45b0805928179acf98d55ba349
+9debf67f20dcd7fd15d5915fe3ceb1cb0f6c845928e928d5c7fc86b7f523eee599e9789fad441aee377993becf95e508
+a93823b36238d87d5ff4e59928369edf96d7dfd263fecd9882462c55e3f4a5b6549af7825a2d40e4b1f4906ed2d510a3
+62fa918bbb70ce2e54843497bc1a4e600d906f9c2a11c478bf738955484bbf0f99355b387409b5770f3e3bce22d6e9ff
+fa7e6efe677ec22b803f03fa48169d7542fcce504d7c2ccbafcdfcf0f2ab011eca8d9b3d168863ba45e6db42c6a66861
+3f55d54bf19be474364bb440c1167d90fe9c331a9de882f8a97f4cc14303b537442610a464f538933f245af42de646e6
+7c228c6bde05a150836b076e03c82acfd15c6d3873be1a7698961a1392d87ea2cafca45a7ff65fbac53ea1d339be5422
+cca6498e79fbdd6cb7e7afe12624e75fb92fb392bf2ec5c7a39c65d11477fd5e1acd1d9a2ee568bf3b6c3f00c4eb5e9b
+06183f19e00c30f2fd88192ce59c741c1654b3574c63864ee5798c4b64f221f10116698d15b9cf78649d436f6c63ad17
+ddcb36f801172d254be2707385357703eab71972528fe5acec79f0342f64cb7192930f56501773798790b9fd3de30536
+af66e6dc0f5523cb0c18e70ad55524fdf10e530ab70fd422bea1975320a86e61b7d61b1728f176547cedbb9750b9742f
+e3ce9744eaf07860541b0ea09b9958fa20192a91fabe6f1ed845a42c00d8aca43be829ba1c13ddd87d1facb480d2bb7d
+755d71e62cc51ece25085dc53ce487ab76e0ef2723659bdadd1a93139fb1293d5e3689b398013527d47bb6ee12e03755
+3cb0899b21b5e1b80427f238bbd9c8d0b3e9e58ddf65a8051168bf3188d86c3f1351aed962f70f68eeac02820bf9c7ce
+cccd4c1f3f722a66d3a7f21eb19f71b9200b6aa4d0810027c1cc1c9119fd8e8738e4626d5efec68d180c323f57e45e71
+f1cdf27b96ba6a99cefd7ddc5995b4717658d5ff8103f88ca4c6a3b6e46ce17bf8f9037f64f4b40cc904b2b63b0f510c
+31d5ee897dd88af11520e74f215f81d144940f5ced3638dc604e9aca9d4bc4410747aa24eebbde24d24c4df1b392dba5
+3026816f6d88c546896e8b379a598ce60a39141be43605ea9969ff020098e7d9ea38062b6ff55978dfaaccd5dd72306a
+e9dd4adc1533cbe37d9b18bcd46a16afd6fcca0f416bd6455bcf6aba849fe3186018a94f079f2de909e1bcaafb14a465
+5a36859ad2c85620fc92ba5d4194795ed4f1db4e06b5a3a3ef3e310752ebe64718c2c6d01f6873947aa314e3855bf0ea
+2ea911aa4f6c32559eb0b05bedd50a55f7d948a843bfa267cb4c1636e5ec36a585bd6b875511c228aad77a8ec605ed7f
+a38372ce16d76abcd37aec476c69c86b56b6136010bcf2e078bdd4f067d2259da7c3c1b10324780503c2d6bbeb2b93fd
+d5956da8b934a6bd77809894b24e9b8248cb1f76f56de5fead6c496b05a212a1af41f1d16ec2946ce8a653c84157ec4c
+9b2081e6a10eb8dc337b954f20cc3ec0d97f6960c2bdd01631319825e63afe11ddcd50b5de1f605b1d647a870e2eaa8d
+6eacd76020bc4d8c81fe75bfd8cbb566055351c6230a9d381ff5258f9566fdbef8f67a6996a6a81c95a7c801a78a3951
+129213831981ba56f619bc36805ac9c32698f08e6874a2117ffb1abe341282f33a9409c1b62f4c55e3a88cf08405cca5
+364d478b7825992d73859314f5100ead7e84fb14fdb9c3edcc9dbc9aa783f5c6a0cc0e00e514f0facb6e9498ea09b4c3
+2fd07881afadc5d1d8c3437646781031dcb87ee1ef85369c2e5668d9caab5455f3f52fbb0c3685b9bf09b130d85b082d
+241d656a95a9460c60754548a1db0c8ed856bb7fb6f224485aee627c36c0124bff39136dedc5a22099894b09aac76631
+40cb44581dd527a100868f1240ae57e2b6ea8351bde70b0b6d26a595f7cbec0e78f136790d9cf6afac34fbfb0a16651d
+39a93ede4cd3f3ab7a4f47961ceadaaa87c67358e30b44d64c3aee1393f0d1e9138265bb37fcad83aba51a51ee3686f6
+79f3db254176c27dfa22f274550db4fdf5009e0b62c9ac26c986bbff826c2fb77fb49440264bdcc1c7bf188df4028854
+cfa37b3489433585815314d44ca5f630f6153bde56beaa2ac935ad7e598e9e1319dd256cd1c2a68e28ae4d8018fb4b0c
+abf3241883abefa02927e9cd82481875982318aa7278ff2b44ab66bd55132570243a8b30ad34a096b3c49375d7c8207b
+b7949ef34e3fef14696d5df6ec5196192cb598999f9274e85a6cfedd091d8e395a53e2a162af485a661a03a399500733
+4be575abf7a02307eae966826b41c3e8e8886c5c821c5a208cd4964a395bb628e25b7583243da104baff9c6917fd96f6
+465cca9ff2a9e0b5382391c85872689f6c8ab2e939ff76a8b2ee2b97d299818582ecb08a6bf2d30e23907997cc0fd521
+e103beb27b28aca071f85cc1c079444f65d6d14842dd10c3e5d0958a54a9a95cef6f987da6e1f64cac9840b1c981fbfd
+92e5eb8ef28899b02652682dab94650fcc4833a6827e51e2b0c18c05665fb68fedd10b1d669b7eca1fb002e3b5712fc8
+9cce04c7ff9ad1041674e0e59841a496d81faa50860bfa55cb995668e6c5a9ca805a5c5a19de7a979525d357001b724b
+4865b65d6377aca53012804880bc451716ec4d99e4fbe1281beb289f30394a2c4ad2df29ff7e2bf33363b07ddad501e2
+9042f8356f1998fb8715efd8deee65847876cbc032f91c3063d84dfb9afedea03b6c1ab319cac9254c87b96c450cc44d
+e7f4da8f9d995678b10bc540cdcff137c04a58c2a6d1fe9ccc4f61d87beddca3f5880040d76d5be296d0d1e6ea02ddbc
+e5dbd590e9724a0fa0b2473d8a3600a4020fbc6cd1a1107910d0a5199eaba2e9315cbbfc21f73b89b346ae701dc520db
+4a96aae215c5d650cf24057e64cba11da46fc5fd7619e2cd55fb23b366f37505d1108efcb0e37816927e047ba530e3c7
+d275c354cd86e85808069ff56e3fa8213325484bd25a6c7b2c4c11a3d50e5d2d196d7b38d0cee7fad6337da9a85ba557
+e8d50cfee4c481e02ab82c61d8cd55ab9277406d05a6245baa708829df66fbc28b6637987a8f90951445cbfe687351a8
+f46a65d3b8580cc7aa2cf4c1a4734a2493edad590d2011f619cf34cde56e48958c26ac7ff417b828bd58160b3d52b8f8
+231fe35656a4aebe6f48990087411d8d38b41f9960036c7aa2cd1ce142776b1a0d0f7d8d6b27e5872618968d74b991a0
+f7beb508a356623a04d5cf9eed380e076fea827ffd35aa51f60ced8be48321556f5552709bacfd1bff216e18e7a28da1
+034d4d2642eb142af4279f7935c1cf62ac28b4dbc5de3844c0cb6ab78791453572a4670739e905256757a868878f2363
+dbc43cabfd521c203b3b790ed3b9b34783a787801359b7345453f1fbc67af9f394554aff5af06f74ff8c941d15a1f622
+448f764a312d1aba158fbdb6602b8fb4c44ec0516870c733889bb18c0a2fd3c61707172bc04a15765561bf8edb860c7d
+ce1e65c3f38dce42e08bd713575c95327193ec74d617c2ef12c739c8d887b8ccfa7810b6be61487c1f38ba6d3b01f800
+cb0b38bdaa6d5bd17fd69541b78a94dc812657c762bbe6a653f19a8a959a1156
+"""
+}
+
+// data/release/kara.sig
+fn file_12() -> String {
+    """
+4dde9c73d4061842dd27d98748b0ab7febad6c0a82537f1a26734c71f71eb5466f8052d93f726e421e1838b92f2af1a1
+b8bbfe3e11efed83477a91bb1609c4959cf34f6b2423b040699491854c383d65c1430289f9e6ce0faf83810c78cffbe2
+8acee4e24427e2b4d81933fca5d3ccefcad99034c8e7d93059c2a8fd5c95d719f1
+"""
+}
+
+// data/release/notes.md
+fn file_13() -> String {
+    """
+- change 0: fixed item 776
+- change 1: fixed item 652
+- change 2: fixed item 607
+- change 3: fixed item 379
+- change 4: fixed item 912
+- change 5: fixed item 960
+- change 6: fixed item 494
+- change 7: fixed item 27
+- change 8: fixed item 577
+- change 9: fixed item 300
+- change 10: fixed item 649
+- change 11: fixed item 585
+- change 12: fixed item 645
+- change 13: fixed item 661
+- change 14: fixed item 878
+- change 15: fixed item 219
+- change 16: fixed item 754
+- change 17: fixed item 469
+- change 18: fixed item 558
+- change 19: fixed item 737
+- change 20: fixed item 744
+- change 21: fixed item 83
+- change 22: fixed item 889
+- change 23: fixed item 120
+- change 24: fixed item 529
+- change 25: fixed item 238
+- change 26: fixed item 929
+- change 27: fixed item 787
+- change 28: fixed item 32
+- change 29: fixed item 127
+- change 30: fixed item 649
+- change 31: fixed item 342
+- change 32: fixed item 380
+- change 33: fixed item 745
+- change 34: fixed item 671
+- change 35: fixed item 60
+- change 36: fixed item 301
+- change 37: fixed item 55
+- change 38: fixed item 168
+- change 39: fixed item 2
+- change 40: fixed item 407
+- change 41: fixed item 956
+- change 42: fixed item 862
+- change 43: fixed item 967
+- change 44: fixed item 893
+- change 45: fixed item 228
+- change 46: fixed item 2
+- change 47: fixed item 205
+- change 48: fixed item 599
+- change 49: fixed item 334
+- change 50: fixed item 366
+- change 51: fixed item 358
+- change 52: fixed item 717
+- change 53: fixed item 799
+- change 54: fixed item 350
+- change 55: fixed item 235
+- change 56: fixed item 990
+- change 57: fixed item 29
+- change 58: fixed item 800
+- change 59: fixed item 916
+- change 60: fixed item 946
+- change 61: fixed item 238
+- change 62: fixed item 11
+- change 63: fixed item 592
+- change 64: fixed item 244
+- change 65: fixed item 821
+- change 66: fixed item 167
+- change 67: fixed item 103
+- change 68: fixed item 402
+- change 69: fixed item 477
+- change 70: fixed item 169
+- change 71: fixed item 467
+- change 72: fixed item 704
+- change 73: fixed item 5
+- change 74: fixed item 432
+- change 75: fixed item 945
+- change 76: fixed item 236
+- change 77: fixed item 9
+- change 78: fixed item 98
+- change 79: fixed item 919
+- change 80: fixed item 57
+- change 81: fixed item 288
+- change 82: fixed item 883
+- change 83: fixed item 99
+- change 84: fixed item 777
+- change 85: fixed item 311
+- change 86: fixed item 80
+- change 87: fixed item 238
+- change 88: fixed item 909
+- change 89: fixed item 56
+- change 90: fixed item 742
+- change 91: fixed item 138
+- change 92: fixed item 791
+- change 93: fixed item 430
+- change 94: fixed item 558
+- change 95: fixed item 839
+- change 96: fixed item 327
+- change 97: fixed item 433
+- change 98: fixed item 960
+- change 99: fixed item 320
+- change 100: fixed item 608
+- change 101: fixed item 100
+- change 102: fixed item 178
+- change 103: fixed item 870
+- change 104: fixed item 812
+- change 105: fixed item 955
+- change 106: fixed item 187
+- change 107: fixed item 736
+- change 108: fixed item 56
+- change 109: fixed item 706
+- change 110: fixed item 915
+- change 111: fixed item 952
+- change 112: fixed item 399
+- change 113: fixed item 969
+- change 114: fixed item 40
+- change 115: fixed item 516
+- change 116: fixed item 583
+- change 117: fixed item 820
+- change 118: fixed item 326
+- change 119: fixed item 224
+- change 120: fixed item 717
+- change 121: fixed item 54
+- change 122: fixed item 721
+- change 123: fixed item 138
+- change 124: fixed item 724
+- change 125: fixed item 557
+- change 126: fixed item 838
+- change 127: fixed item 862
+- change 128: fixed item 446
+- change 129: fixed item 937
+- change 130: fixed item 725
+- change 131: fixed item 405
+- change 132: fixed item 765
+- change 133: fixed item 698
+- change 134: fixed item 908
+- change 135: fixed item 431
+- change 136: fixed item 42
+- change 137: fixed item 189
+- change 138: fixed item 843
+- change 139: fixed item 767
+- change 140: fixed item 783
+- change 141: fixed item 717
+- change 142: fixed item 184
+- change 143: fixed item 225
+- change 144: fixed item 854
+- change 145: fixed item 945
+- change 146: fixed item 313
+- change 147: fixed item 584
+- change 148: fixed item 257
+- change 149: fixed item 896
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// The bytes a block of hex digits spells; line breaks are skipped.
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut digits: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if is_hex(b[i]) {
+            digits.push(hex_val(b[i]));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/B2SUMS", file_0())?;
+    put("data/CHECKSUMS", file_1())?;
+    put("data/LICENSE", file_2())?;
+    put("data/MD5SUMS", file_3())?;
+    put("data/README", file_4())?;
+    put("data/SHA1SUMS", file_5())?;
+    put("data/SHA256SUMS", file_6())?;
+    put("data/SHA256SUMS.bad", file_7())?;
+    put("data/empty.dat", file_8())?;
+    put("data/jobs.txt", file_9())?;
+    put("data/odd\\name.txt", file_10())?;
+    make_dir("data/release")?;
+    put_bytes("data/release/kara-1.4.0.tar", unhex(file_11()))?;
+    put_bytes("data/release/kara.sig", unhex(file_12()))?;
+    put("data/release/notes.md", file_13())?;
+    Ok(())
+}
+
+// The names of the input files.
+fn data_names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("B2SUMS".to_string());
+    v.push("CHECKSUMS".to_string());
+    v.push("LICENSE".to_string());
+    v.push("MD5SUMS".to_string());
+    v.push("README".to_string());
+    v.push("SHA1SUMS".to_string());
+    v.push("SHA256SUMS".to_string());
+    v.push("SHA256SUMS.bad".to_string());
+    v.push("empty.dat".to_string());
+    v.push("jobs.txt".to_string());
+    v.push("odd\\name.txt".to_string());
+    v.push("release/kara-1.4.0.tar".to_string());
+    v.push("release/kara.sig".to_string());
+    v.push("release/notes.md".to_string());
+    v
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.txt: {e}"),
+    };
+    let jobs = lines_of(text);
+    let t = crc_table();
+    for line in jobs {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let mut job = Job { out: String.new(), err: String.new(), status: 0 };
+        let w = split_on(line, b' ');
+        let rest: Vec[String] = w[1..].to_vec();
+        run_tool(mut job, t, w[0], rest);
+        let mut out = f"$ {line}\n";
+        out.push_str(job.out);
+        out.push_str(job.err);
+        if job.status != 0 {
+            out.push_str(f"[exit status {job.status}]\n");
+        }
+        println(out);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}

@@ -1,0 +1,221 @@
+$ md5sum README LICENSE empty.dat
+7189cb10d8f675b0173d2a9038411de8  README
+c87175bd41f7e958bffbe17f72b24083  LICENSE
+d41d8cd98f00b204e9800998ecf8427e  empty.dat
+
+$ sha1sum README odd\name.txt
+81c45ca4589b33f42d69d08c4f1682856a3e7223  README
+\c921fb1def5125b3e7c0d4609c3a00ff5973fe38  odd\\name.txt
+
+$ sha224sum README
+bc1ddfdef6bf3e51a11d30b2ab4deeb458d3e94255fb322f62a774ce  README
+
+$ sha256sum release/kara-1.4.0.tar release/notes.md
+81727cb88c7e22c9a236de958ba570a3d5531f6cc3f63ee641565df3b34eff5b  release/kara-1.4.0.tar
+52c016d875f0912efb297e4aba3b3d71a598a341374db269cd2fa8eacd14cae6  release/notes.md
+
+$ sha384sum README empty.dat
+54d6f645c389ca8aa1519339398230024b74dc47ac1fb0f521fb52c38055101b2e3bdab16b80ef97b8d408eddefc5b9b  README
+38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b  empty.dat
+
+$ sha512sum README
+28ed85cc22b5de61781d9da5f8cd3993e8538337f641aee0d8e99640f358c2398684bfc92933657c9ca6b7ffb6d21be71261b55780927a2add4c1960cb04a614  README
+
+$ sha512sum --tag README LICENSE
+SHA512 (README) = 28ed85cc22b5de61781d9da5f8cd3993e8538337f641aee0d8e99640f358c2398684bfc92933657c9ca6b7ffb6d21be71261b55780927a2add4c1960cb04a614
+SHA512 (LICENSE) = ae652888410a670dc19cbfe3684810b7d6518a998ee2ed9bc904ab88cede32b4cfdadc1557bcfbb6b4e96de78c020e08a421b40327012b9e2a44d2abb2f0827d
+
+$ b2sum README empty.dat
+09eb46e8d88f80908953d3833ba289685328cd109576a1f99d38420f4f766a84f48032386d113a2a9e2ef78c205efeaa18d43c7918bbdb92fe33fdb9d9e528a7  README
+786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce  empty.dat
+
+$ b2sum -l 256 README
+753288f932d74a57b49db3ba81cb6cdd07a605fb5313e9db6ca9b5719cecb7fe  README
+
+$ b2sum -l 160 --tag README
+BLAKE2b-160 (README) = bfb544bee5aa1bead9dab73759c7fbf4593fa9bd
+
+$ b2sum -l 100 README
+b2sum: invalid length: ‘100’
+b2sum: length is not a multiple of 8
+[exit status 1]
+
+$ cksum README LICENSE empty.dat release/kara-1.4.0.tar
+2766459374 85 README
+3809556768 1140 LICENSE
+4294967295 0 empty.dat
+54631173 20000 release/kara-1.4.0.tar
+
+$ cksum -a sysv README LICENSE
+7253 1 README
+39813 3 LICENSE
+
+$ cksum -a bsd README release/kara-1.4.0.tar
+34798     1 README
+22601    20 release/kara-1.4.0.tar
+
+$ sum README LICENSE
+34798     1 README
+37578     2 LICENSE
+
+$ sum -s release/kara-1.4.0.tar
+4067 40 release/kara-1.4.0.tar
+
+$ cksum -a sha256 README LICENSE
+SHA256 (README) = b274b2061ead1ca5ef9fc76e452fb2eb10465b19980f492648abf4881722cc2e
+SHA256 (LICENSE) = 6ea72e5bc97691ec6cff88c0eb93921fbecea6c4457aed422daa99a0935271b1
+
+$ cksum -a sha256 --untagged README
+b274b2061ead1ca5ef9fc76e452fb2eb10465b19980f492648abf4881722cc2e  README
+
+$ cksum -a sha512 --base64 README
+SHA512 (README) = KO2FzCK13mF4HZ2l+M05k+hTgzf2Qa7g2OmWQPNYwjmGhL/JKTNlfJymt/+20hvnEmG1V4CSeirdTBlgywSmFA==
+
+$ cksum -a blake2b -l 128 README empty.dat
+BLAKE2b-128 (README) = 2e4ce8f9afcd36b07c731f605f3531ea
+BLAKE2b-128 (empty.dat) = cae66941d9efbd404e4d88758ea67670
+
+$ cksum -a md5 --base64 --untagged empty.dat
+1B2M2Y8AsgTpgAmY7PhCfg==  empty.dat
+
+$ cksum -a sha3 README
+cksum: invalid argument ‘sha3’ for ‘--algorithm’
+Valid arguments are:
+  - ‘bsd’
+  - ‘sysv’
+  - ‘crc’
+  - ‘md5’
+  - ‘sha1’
+  - ‘sha224’
+  - ‘sha256’
+  - ‘sha384’
+  - ‘sha512’
+  - ‘blake2b’
+  - ‘sm3’
+Try 'cksum --help' for more information.
+[exit status 1]
+
+$ sha256sum release
+sha256sum: release: Is a directory
+[exit status 1]
+
+$ sha256sum missing.dat README
+b274b2061ead1ca5ef9fc76e452fb2eb10465b19980f492648abf4881722cc2e  README
+sha256sum: missing.dat: No such file or directory
+[exit status 1]
+
+$ sha256sum -c SHA256SUMS
+README: OK
+LICENSE: OK
+release/kara-1.4.0.tar: OK
+release/notes.md: OK
+release/kara.sig: OK
+
+$ sha256sum -c SHA256SUMS.bad
+README: OK
+LICENSE: OK
+release/kara-1.4.0.tar: FAILED
+release/notes.md: OK
+release/kara-1.3.9.tar: FAILED open or read
+release/kara.sig: OK
+sha256sum: release/kara-1.3.9.tar: No such file or directory
+sha256sum: WARNING: 1 line is improperly formatted
+sha256sum: WARNING: 1 listed file could not be read
+sha256sum: WARNING: 1 computed checksum did NOT match
+[exit status 1]
+
+$ sha256sum -c --quiet SHA256SUMS.bad
+release/kara-1.4.0.tar: FAILED
+release/kara-1.3.9.tar: FAILED open or read
+sha256sum: release/kara-1.3.9.tar: No such file or directory
+sha256sum: WARNING: 1 line is improperly formatted
+sha256sum: WARNING: 1 listed file could not be read
+sha256sum: WARNING: 1 computed checksum did NOT match
+[exit status 1]
+
+$ sha256sum -c --status SHA256SUMS.bad
+sha256sum: release/kara-1.3.9.tar: No such file or directory
+[exit status 1]
+
+$ sha256sum -c --ignore-missing SHA256SUMS.bad
+README: OK
+LICENSE: OK
+release/kara-1.4.0.tar: FAILED
+release/notes.md: OK
+release/kara.sig: OK
+sha256sum: WARNING: 1 line is improperly formatted
+sha256sum: WARNING: 1 computed checksum did NOT match
+[exit status 1]
+
+$ sha256sum -c --strict SHA256SUMS.bad
+README: OK
+LICENSE: OK
+release/kara-1.4.0.tar: FAILED
+release/notes.md: OK
+release/kara-1.3.9.tar: FAILED open or read
+release/kara.sig: OK
+sha256sum: release/kara-1.3.9.tar: No such file or directory
+sha256sum: WARNING: 1 line is improperly formatted
+sha256sum: WARNING: 1 listed file could not be read
+sha256sum: WARNING: 1 computed checksum did NOT match
+[exit status 1]
+
+$ sha256sum -c -w SHA256SUMS.bad
+README: OK
+LICENSE: OK
+release/kara-1.4.0.tar: FAILED
+release/notes.md: OK
+release/kara-1.3.9.tar: FAILED open or read
+release/kara.sig: OK
+sha256sum: release/kara-1.3.9.tar: No such file or directory
+sha256sum: SHA256SUMS.bad: 6: improperly formatted SHA256 checksum line
+sha256sum: WARNING: 1 line is improperly formatted
+sha256sum: WARNING: 1 listed file could not be read
+sha256sum: WARNING: 1 computed checksum did NOT match
+[exit status 1]
+
+$ md5sum -c MD5SUMS
+README: OK
+LICENSE: OK
+empty.dat: OK
+
+$ sha1sum -c SHA1SUMS
+\odd\\name.txt: OK
+README: OK
+
+$ b2sum -c B2SUMS
+README: OK
+release/notes.md: OK
+
+$ cksum -c CHECKSUMS
+README: OK
+LICENSE: OK
+empty.dat: OK
+release/kara.sig: OK
+release/notes.md: OK
+README: FAILED
+cksum: WARNING: 1 line is improperly formatted
+cksum: WARNING: 1 computed checksum did NOT match
+[exit status 1]
+
+$ md5sum -c SHA256SUMS
+md5sum: SHA256SUMS: no properly formatted checksum lines found
+[exit status 1]
+
+$ sha256sum -c missing.sums
+sha256sum: missing.sums: No such file or directory
+[exit status 1]
+
+$ sha256sum -c empty.dat
+sha256sum: empty.dat: no properly formatted checksum lines found
+[exit status 1]
+
+$ sha256sum -c SHA256SUMS MD5SUMS
+README: OK
+LICENSE: OK
+release/kara-1.4.0.tar: OK
+release/notes.md: OK
+release/kara.sig: OK
+sha256sum: MD5SUMS: no properly formatted checksum lines found
+[exit status 1]
+

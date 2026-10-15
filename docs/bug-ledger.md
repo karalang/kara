@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 272 |
-| codegen-gap | 262 |
+| codegen-gap | 263 |
 | false-positive | 205 |
 | other | 172 |
 | perf | 170 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2913 |
-| interp | 935 |
+| codegen | 2914 |
+| interp | 936 |
 | typecheck | 445 |
 | other | 115 |
 | ownership | 104 |
@@ -221,6 +221,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-59 | 2026-10-15 | runtime | medium | The fs library cannot create a symbolic link, see one, or read or set a file's permissions or modification time, so an archive extractor (unzip, tar), an installer or a sync tool cannot restore what the archive records | — |
 | B-2026-10-15-60 | 2026-10-15 | typecheck | low | `karac check` refuses `.to_vec()` on an `Array[T, N]` (`no method 'to_vec' on type 'Array'`), though design.md § Method resolution says an `Array[T, N]` receiver also finds `Slice[T]`'s methods; `a.contains(x)` already resolves that way and `a.as_slice().to_vec()` works. | — |
 | B-2026-10-15-61 | 2026-10-15 | typecheck+codegen | high | `karac check` accepts writing through a read-only `Slice`: `let mut t = s.bytes(); t[i] = x;` and `let mut w = v[0..2]; w[0] = x;` both pass, though `bytes()` and a range subscript give `Slice[T]` and collections.md says writing needs a `mut Slice[T]`. Both backends then write into the source, the String's or the Vec's own buffer, even when it is not `mut`; for `bytes()` the MIR compiled backend writes into the String (a literal's too: `let s = "hello"` then prints `aello`) while `__mir-run` writes into a snapshot copy, so run and build differ | — |
+| B-2026-10-15-67 | 2026-10-15 | interp+codegen | medium | `u32.rotate_left` / `u64.rotate_right` (and the other rotate widths) pass `karac check` but neither v2 backend has them: `__mir-run` stops with `call of unknown function u32.rotate_left` and `__mir-llvm-run` with ``native `u32.rotate_left` is not lowered yet`` | — |
 
 ### Relocated
 
