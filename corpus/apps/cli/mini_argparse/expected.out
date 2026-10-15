@@ -1,0 +1,516 @@
+# pkg: the main parser
+$ pkg --help
+  |usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  |           [--index-url URL] [--timeout TIMEOUT]
+  |           COMMAND ...
+  |
+  |A small package manager. It installs, removes and lists packages from a
+  |configured index, and keeps a lock file next to the project.
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  |  -V, --version         show program's version number and exit
+  |  -v, --verbose         print more output; repeat for even more (-vv)
+  |  -q, --quiet           print only errors
+  |  -C, --directory DIR   run as if started in DIR
+  |  --color {auto,always,never}
+  |                        when to color the output (default: auto)
+  |  --index-url URL       base URL of the package index
+  |  --timeout TIMEOUT     network timeout in seconds
+  |
+  |commands:
+  |  COMMAND
+  |    install (i, add)    install packages
+  |    remove (rm)         remove packages
+  |    list                list installed packages
+  |    search              search the index
+  |    config              read and write settings
+  |    run                 run a script from the project file
+  |
+  |Run "pkg COMMAND --help" for the options of one command.
+  exit 0
+$ pkg -V
+  |pkg 2.4.1
+  exit 0
+$ pkg --version
+  |pkg 2.4.1
+  exit 0
+$ pkg
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: the following arguments are required: COMMAND
+  exit 2
+$ pkg install requests
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['requests'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg -v install requests flask
+  Namespace(verbose=1, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['requests', 'flask'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg -vvv -q i 'flask>=3,<4' "jinja2 == 3.1"
+  Namespace(verbose=3, quiet=True, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='i', packages=['flask>=3,<4', 'jinja2 == 3.1'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg -qv add -U -j8 --target=/opt/lib numpy
+  Namespace(verbose=1, quiet=True, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='add', packages=['numpy'], upgrade=True, requirements=[], no_deps=False, jobs=8, target='/opt/lib', user=False, system=False, handler='install')
+$ pkg --verbose --verbose install --jobs=2 -r base.txt -r dev.txt pandas
+  Namespace(verbose=2, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['pandas'], upgrade=False, requirements=['base.txt', 'dev.txt'], no_deps=False, jobs=2, target=None, user=False, system=False, handler='install')
+$ pkg -C/srv/app --color never install --no-deps --user six
+  Namespace(verbose=0, quiet=False, directory='/srv/app', color='never', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['six'], upgrade=False, requirements=[], no_deps=True, jobs=4, target=None, user=True, system=False, handler='install')
+$ pkg --directory /srv/app --timeout 2.5 install six
+  Namespace(verbose=0, quiet=False, directory='/srv/app', color='auto', index_url='https://pkg.example.org/simple', timeout=2.5, command='install', packages=['six'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg --timeout 1e3 install six
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=1000.0, command='install', packages=['six'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg --timeout soon install six
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: argument --timeout: invalid float value: 'soon'
+  exit 2
+$ pkg --color=sometimes install six
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: argument --color: invalid choice: 'sometimes' (choose from 'auto', 'always', 'never')
+  exit 2
+$ pkg --col always install six
+  Namespace(verbose=0, quiet=False, directory='.', color='always', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['six'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg --in https://mirror.example.org install six
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://mirror.example.org', timeout=15.0, command='install', packages=['six'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg --index https://mirror.example.org/ install six
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://mirror.example.org/', timeout=15.0, command='install', packages=['six'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg -C install six
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: argument COMMAND: invalid choice: 'six' (choose from 'install', 'i', 'add', 'remove', 'rm', 'list', 'search', 'config', 'run')
+  exit 2
+$ pkg install
+  !usage: pkg install [-h] [-U] [-r FILE] [--no-deps] [-j JOBS] [--target TARGET]
+  !                   [--user | --system]
+  !                   PACKAGE [PACKAGE ...]
+  !pkg install: error: the following arguments are required: PACKAGE
+  exit 2
+$ pkg install --user --system six
+  !usage: pkg install [-h] [-U] [-r FILE] [--no-deps] [-j JOBS] [--target TARGET]
+  !                   [--user | --system]
+  !                   PACKAGE [PACKAGE ...]
+  !pkg install: error: argument --system: not allowed with argument --user
+  exit 2
+$ pkg install --system --user six
+  !usage: pkg install [-h] [-U] [-r FILE] [--no-deps] [-j JOBS] [--target TARGET]
+  !                   [--user | --system]
+  !                   PACKAGE [PACKAGE ...]
+  !pkg install: error: argument --user: not allowed with argument --system
+  exit 2
+$ pkg install -j four six
+  !usage: pkg install [-h] [-U] [-r FILE] [--no-deps] [-j JOBS] [--target TARGET]
+  !                   [--user | --system]
+  !                   PACKAGE [PACKAGE ...]
+  !pkg install: error: argument -j/--jobs: invalid int value: 'four'
+  exit 2
+$ pkg install -j -3 six
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['six'], upgrade=False, requirements=[], no_deps=False, jobs=-3, target=None, user=False, system=False, handler='install')
+$ pkg install --up six
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['six'], upgrade=True, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg install --frobnicate six
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: unrecognized arguments: --frobnicate
+  exit 2
+$ pkg --frobnicate install six
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: unrecognized arguments: --frobnicate
+  exit 2
+$ pkg install six seven -- --weird-name
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['six', 'seven', '--weird-name'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg install -- -dash-name
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='install', packages=['-dash-name'], upgrade=False, requirements=[], no_deps=False, jobs=4, target=None, user=False, system=False, handler='install')
+$ pkg frob
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: argument COMMAND: invalid choice: 'frob' (choose from 'install', 'i', 'add', 'remove', 'rm', 'list', 'search', 'config', 'run')
+  exit 2
+$ pkg install --help
+  |usage: pkg install [-h] [-U] [-r FILE] [--no-deps] [-j JOBS] [--target TARGET]
+  |                   [--user | --system]
+  |                   PACKAGE [PACKAGE ...]
+  |
+  |Install packages and their dependencies.
+  |
+  |positional arguments:
+  |  PACKAGE               a package name, optionally with a version such as
+  |                        requests==2.31 or a range such as 'flask>=3,<4'
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  |  -U, --upgrade         upgrade packages that are already installed
+  |  -r, --requirement FILE
+  |                        install from the given requirements file; may be given
+  |                        more than once
+  |  --no-deps             don't install dependencies
+  |  -j, --jobs JOBS       number of parallel downloads (default: 4)
+  |  --target TARGET       install into this directory instead of the environment
+  |  --user                install for the current user
+  |  --system              install for all users
+  exit 0
+$ pkg i -h
+  |usage: pkg install [-h] [-U] [-r FILE] [--no-deps] [-j JOBS] [--target TARGET]
+  |                   [--user | --system]
+  |                   PACKAGE [PACKAGE ...]
+  |
+  |Install packages and their dependencies.
+  |
+  |positional arguments:
+  |  PACKAGE               a package name, optionally with a version such as
+  |                        requests==2.31 or a range such as 'flask>=3,<4'
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  |  -U, --upgrade         upgrade packages that are already installed
+  |  -r, --requirement FILE
+  |                        install from the given requirements file; may be given
+  |                        more than once
+  |  --no-deps             don't install dependencies
+  |  -j, --jobs JOBS       number of parallel downloads (default: 4)
+  |  --target TARGET       install into this directory instead of the environment
+  |  --user                install for the current user
+  |  --system              install for all users
+  exit 0
+$ pkg remove -y left-pad
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='remove', packages=['left-pad'], yes=True, keep_config=True, handler='remove')
+$ pkg rm --no-keep-config left-pad is-even
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='rm', packages=['left-pad', 'is-even'], yes=False, keep_config=False, handler='remove')
+$ pkg remove --keep-config=yes left-pad
+  !usage: pkg remove [-h] [-y] [--keep-config | --no-keep-config]
+  !                  PACKAGE [PACKAGE ...]
+  !pkg remove: error: argument --keep-config/--no-keep-config: ignored explicit argument 'yes'
+  exit 2
+$ pkg remove
+  !usage: pkg remove [-h] [-y] [--keep-config | --no-keep-config]
+  !                  PACKAGE [PACKAGE ...]
+  !pkg remove: error: the following arguments are required: PACKAGE
+  exit 2
+$ pkg list
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='list', pattern='*', format='columns', outdated=False, exclude=None, handler='list')
+$ pkg list 'django*' --format json --outdated
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='list', pattern='django*', format='json', outdated=True, exclude=None, handler='list')
+$ pkg list --exclude pip setuptools --exclude wheel
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='list', pattern='*', format='columns', outdated=False, exclude=['pip', 'setuptools', 'wheel'], handler='list')
+$ pkg list --exclude
+  !usage: pkg list [-h] [--format {columns,json,freeze}] [--outdated]
+  !                [--exclude PKG [PKG ...]]
+  !                [pattern]
+  !pkg list: error: argument --exclude: expected at least one argument
+  exit 2
+$ pkg list a b
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: unrecognized arguments: b
+  exit 2
+$ pkg search web framework --limit 5 --sort updated -i
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='search', query=['web', 'framework'], limit=5, sort='updated', case_insensitive=True, handler='search')
+$ pkg search web --limit 0
+  !usage: pkg search [-h] [--limit N] [--sort {name,downloads,updated}] [-i]
+  !                  query [query ...]
+  !pkg search: error: argument --limit: must be a positive integer, got 0
+  exit 2
+$ pkg search web --limit lots
+  !usage: pkg search [-h] [--limit N] [--sort {name,downloads,updated}] [-i]
+  !                  query [query ...]
+  !pkg search: error: argument --limit: invalid positive_int value: 'lots'
+  exit 2
+$ pkg search --sort size web
+  !usage: pkg search [-h] [--limit N] [--sort {name,downloads,updated}] [-i]
+  !                  query [query ...]
+  !pkg search: error: argument --sort: invalid choice: 'size' (choose from 'name', 'downloads', 'updated')
+  exit 2
+$ pkg search
+  !usage: pkg search [-h] [--limit N] [--sort {name,downloads,updated}] [-i]
+  !                  query [query ...]
+  !pkg search: error: the following arguments are required: query
+  exit 2
+$ pkg config
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='config', config_command=None, handler='config')
+$ pkg config get index-url
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='config', config_command='get', handler='config', key='index-url')
+$ pkg config set index-url https://mirror.example.org --global
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='config', config_command='set', handler='config', key='index-url', value='https://mirror.example.org', scope='global')
+$ pkg config set timeout
+  !usage: pkg config set [-h] [--global] key value
+  !pkg config set: error: the following arguments are required: value
+  exit 2
+$ pkg config unset a b c
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='config', config_command='unset', handler='config', key=['a', 'b', 'c'])
+$ pkg config list
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='config', config_command='list', handler='config')
+$ pkg config list extra
+  !usage: pkg [-h] [-V] [-v] [-q] [-C DIR] [--color {auto,always,never}]
+  !           [--index-url URL] [--timeout TIMEOUT]
+  !           COMMAND ...
+  !pkg: error: unrecognized arguments: extra
+  exit 2
+$ pkg config delete key
+  !usage: pkg config [-h] {get,set,unset,list} ...
+  !pkg config: error: argument config_command: invalid choice: 'delete' (choose from 'get', 'set', 'unset', 'list')
+  exit 2
+$ pkg config --help
+  |usage: pkg config [-h] {get,set,unset,list} ...
+  |
+  |positional arguments:
+  |  {get,set,unset,list}
+  |    get                 print a setting
+  |    set                 change a setting
+  |    unset               remove a setting
+  |    list                print all settings
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  exit 0
+$ pkg config set --help
+  |usage: pkg config set [-h] [--global] key value
+  |
+  |positional arguments:
+  |  key
+  |  value
+  |
+  |options:
+  |  -h, --help  show this help message and exit
+  |  --global    change the user-wide setting
+  exit 0
+$ pkg run test
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='run', script='test', args=[], handler='run')
+$ pkg run test --watch -k slow
+  Namespace(verbose=0, quiet=False, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='run', script='test', args=['--watch', '-k', 'slow'], handler='run')
+$ pkg -q run lint --fix src/
+  Namespace(verbose=0, quiet=True, directory='.', color='auto', index_url='https://pkg.example.org/simple', timeout=15.0, command='run', script='lint', args=['--fix', 'src/'], handler='run')
+$ pkg run
+  !usage: pkg run [-h] script ...
+  !pkg run: error: the following arguments are required: script
+  exit 2
+$ pkg list --help
+  |usage: pkg list [-h] [--format {columns,json,freeze}] [--outdated]
+  |                [--exclude PKG [PKG ...]]
+  |                [pattern]
+  |
+  |positional arguments:
+  |  pattern               only packages whose names match this glob
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  |  --format {columns,json,freeze}
+  |                        output format
+  |  --outdated            only packages with a newer version on the index
+  |  --exclude PKG [PKG ...]
+  |                        leave these packages out
+  exit 0
+$ pkg remove --help
+  |usage: pkg remove [-h] [-y] [--keep-config | --no-keep-config]
+  |                  PACKAGE [PACKAGE ...]
+  |
+  |positional arguments:
+  |  PACKAGE
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  |  -y, --yes             don't ask for confirmation
+  |  --keep-config, --no-keep-config
+  |                        keep the package's configuration files
+  exit 0
+$ pkg search --help
+  |usage: pkg search [-h] [--limit N] [--sort {name,downloads,updated}] [-i]
+  |                  query [query ...]
+  |
+  |positional arguments:
+  |  query
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  |  --limit N             show at most N results
+  |  --sort {name,downloads,updated}
+  |  -i                    ignore case
+  exit 0
+$ pkg run --help
+  |usage: pkg run [-h] script ...
+  |
+  |positional arguments:
+  |  script
+  |  args        arguments passed on to the script
+  |
+  |options:
+  |  -h, --help  show this help message and exit
+  exit 0
+# backup: one parser with a required group
+$ backup --help
+  |usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  |              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  |              [--notify [EMAIL]] [--tz-offset HOURS]
+  |              source dest
+  |
+  |Copy a directory tree into a dated, compressed archive.
+  |
+  |positional arguments:
+  |  source                directory to back up
+  |  dest                  where to write the archive
+  |
+  |options:
+  |  -h, --help            show this help message and exit
+  |  --full                copy everything
+  |  --incremental         copy what changed since the last backup
+  |  --since DATE          copy what changed since DATE
+  |  -x, --exclude GLOB    skip files matching GLOB
+  |  --keep N              keep the newest N archives and delete the older ones
+  |  -n, --dry-run         show what would be copied
+  |  --rate MIN MAX        limit the bandwidth to between MIN and MAX KiB/s
+  |  --notify [EMAIL]      mail a report when done (to root@localhost if no
+  |                        address is given)
+  |  --tz-offset HOURS     hours to add to file times
+  |
+  |compression:
+  |  Archives are compressed with zstd. Level 0 stores the files uncompressed.
+  |
+  |  -l, --level {0,1,3,9,19}
+  |                        zstd level (default: 3)
+  |  --dedupe              store identical files once
+  |
+  |examples:
+  |  backup --full /home /mnt/disk
+  |  backup --since 2024-01-01 --exclude '*.tmp' /etc /mnt/disk
+  exit 0
+$ backup --full /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=None, keep=7, dry_run=False, rate=None, notify=None, tz_offset=0)
+$ backup --incremental -n -x '*.tmp' -x .cache /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=False, incremental=True, since=None, level=3, dedupe=False, exclude=['*.tmp', '.cache'], keep=7, dry_run=True, rate=None, notify=None, tz_offset=0)
+$ backup --since 2024-01-01 --level 19 --dedupe /etc /mnt/disk
+  Namespace(source='/etc', dest='/mnt/disk', full=False, incremental=False, since='2024-01-01', level=19, dedupe=True, exclude=None, keep=7, dry_run=False, rate=None, notify=None, tz_offset=0)
+$ backup --since 2024-13-01 /etc /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument --since: not a date: '2024-13-01' (expected YYYY-MM-DD)
+  exit 2
+$ backup --since yesterday /etc /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument --since: not a date: 'yesterday' (expected YYYY-MM-DD)
+  exit 2
+$ backup /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: one of the arguments --full --incremental --since is required
+  exit 2
+$ backup --full --incremental /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument --incremental: not allowed with argument --full
+  exit 2
+$ backup --full /home
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: the following arguments are required: dest
+  exit 2
+$ backup --full
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: the following arguments are required: source, dest
+  exit 2
+$ backup --full -l 5 /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument -l/--level: invalid choice: '5' (choose from '0', '1', '3', '9', '19')
+  exit 2
+$ backup --full -l x /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument -l/--level: invalid int value: 'x'
+  exit 2
+$ backup --full --rate 100 500 /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=None, keep=7, dry_run=False, rate=[100, 500], notify=None, tz_offset=0)
+$ backup --full --rate 100 /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument --rate: invalid int value: '/home'
+  exit 2
+$ backup --full --rate 100 fast /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument --rate: invalid int value: 'fast'
+  exit 2
+$ backup --full --notify /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: the following arguments are required: dest
+  exit 2
+$ backup --full --notify ops@example.org /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=None, keep=7, dry_run=False, rate=None, notify='ops@example.org', tz_offset=0)
+$ backup --full --notify=ops@example.org /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=None, keep=7, dry_run=False, rate=None, notify='ops@example.org', tz_offset=0)
+$ backup --full --tz-offset -2 /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=None, keep=7, dry_run=False, rate=None, notify=None, tz_offset=-2)
+$ backup --full --tz-offset=-2 /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=None, keep=7, dry_run=False, rate=None, notify=None, tz_offset=-2)
+$ backup --full /home /mnt/disk -5
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: unrecognized arguments: -5
+  exit 2
+$ backup --full --d /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: ambiguous option: --d could match --dedupe, --dry-run
+  exit 2
+$ backup --full --de /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=True, exclude=None, keep=7, dry_run=False, rate=None, notify=None, tz_offset=0)
+$ backup --full --keep 3 --keep 4 /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=None, keep=4, dry_run=False, rate=None, notify=None, tz_offset=0)
+$ backup --full -nx '*.log' /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=3, dedupe=False, exclude=['*.log'], keep=7, dry_run=True, rate=None, notify=None, tz_offset=0)
+$ backup --full -nl9 /home /mnt/disk
+  Namespace(source='/home', dest='/mnt/disk', full=True, incremental=False, since=None, level=9, dedupe=False, exclude=None, keep=7, dry_run=True, rate=None, notify=None, tz_offset=0)
+$ backup --full -n=yes /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument -n/--dry-run: ignored explicit argument 'yes'
+  exit 2
+$ backup --full --dry-run=yes /home /mnt/disk
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: argument -n/--dry-run: ignored explicit argument 'yes'
+  exit 2
+$ backup --inc /home /mnt/disk extra
+  !usage: backup [-h] (--full | --incremental | --since DATE) [-l {0,1,3,9,19}]
+  !              [--dedupe] [-x GLOB] [--keep N] [-n] [--rate MIN MAX]
+  !              [--notify [EMAIL]] [--tz-offset HOURS]
+  !              source dest
+  !backup: error: unrecognized arguments: extra
+  exit 2

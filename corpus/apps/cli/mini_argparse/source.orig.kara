@@ -1,0 +1,2923 @@
+// mini_argparse: the command-line parsing every tool needs, as Python
+// 3.13's argparse does it:
+// - options and positionals; store, store_const, store_true/false,
+//   append, append_const, extend, count, help, version, and --flag /
+//   --no-flag pairs; nargs ?, *, +, N and REMAINDER; types, choices,
+//   defaults and metavars;
+// - argparse's matching of argument strings to actions: abbreviated long
+//   options, combined short flags (-vvv, -nl9), -j8 and --jobs=8, `--`,
+//   negative numbers, unknown options passed up as unrecognized;
+// - subcommands with aliases, nested subcommands and their defaults;
+// - mutually exclusive groups, required ones too, and argument groups;
+// - the help formatter: usage lines wrapped as argparse wraps them,
+//   help columns, textwrap's line breaking, raw descriptions;
+// - every error message, with the usage line and exit status 2.
+//
+// The program runs the command lines in data/cases.txt against two CLIs,
+// a package manager with subcommands and a backup tool. expected.out is
+// the output of oracle.py, the same CLIs built with argparse.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+// str.isidentifier, for ASCII.
+fn is_identifier(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 or not (is_alpha(b[0]) or b[0] == b'_') {
+        return false;
+    }
+    for i in 1..b.len() {
+        if not (is_alnum(b[i]) or b[i] == b'_') {
+            return false;
+        }
+    }
+    true
+}
+
+// int(): white space around, a sign, and digits with single underscores
+// between them.
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The digits of a float literal from `i`, with single underscores between
+// them; the index after them, and the digits without underscores.
+fn float_digits(b: ref Vec[u8], i0: i64, out: mut ref Vec[u8]) -> i64 {
+    let mut i = i0;
+    while i < b.len() {
+        if is_digit(b[i]) {
+            out.push(b[i]);
+            i += 1;
+        } else if b[i] == b'_' and i > i0 and is_digit(b[i - 1]) and i + 1 < b.len() and is_digit(b[i + 1]) {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+// float(): a decimal literal with an optional exponent.
+fn py_float(s: Str) -> Option[f64] {
+    let b = to_bytes(strip(s));
+    let mut clean: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        clean.push(b[i]);
+        i += 1;
+    }
+    let st = clean.len();
+    i = float_digits(b, i, mut clean);
+    let int_digits = clean.len() - st;
+    let mut frac_digits: i64 = 0;
+    if i < b.len() and b[i] == b'.' {
+        clean.push(b'.');
+        let before = clean.len();
+        i = float_digits(b, i + 1, mut clean);
+        frac_digits = clean.len() - before;
+    }
+    if int_digits == 0 and frac_digits == 0 {
+        return None;
+    }
+    if i < b.len() and (b[i] == b'e' or b[i] == b'E') {
+        clean.push(b'e');
+        i += 1;
+        if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+            clean.push(b[i]);
+            i += 1;
+        }
+        let before = clean.len();
+        i = float_digits(b, i, mut clean);
+        if clean.len() == before {
+            return None;
+        }
+    }
+    if i != b.len() {
+        return None;
+    }
+    f64.parse(from_bytes(clean))
+}
+
+// shlex.split, for words, quotes and backslashes.
+fn shlex_split(line: Str) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut out: Vec[String] = Vec.new();
+    let mut word: Vec[u8] = Vec.new();
+    let mut in_word = false;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\'' {
+            in_word = true;
+            i += 1;
+            while i < b.len() and b[i] != b'\'' {
+                word.push(b[i]);
+                i += 1;
+            }
+            i += 1;
+        } else if c == b'"' {
+            in_word = true;
+            i += 1;
+            while i < b.len() and b[i] != b'"' {
+                if b[i] == b'\\' and i + 1 < b.len() and (b[i + 1] == b'"' or b[i + 1] == b'\\') {
+                    i += 1;
+                }
+                word.push(b[i]);
+                i += 1;
+            }
+            i += 1;
+        } else if c == b'\\' and i + 1 < b.len() {
+            in_word = true;
+            word.push(b[i + 1]);
+            i += 2;
+        } else if is_ws(c) {
+            if in_word {
+                out.push(from_bytes(word.clone()));
+                word.clear();
+                in_word = false;
+            }
+            i += 1;
+        } else {
+            in_word = true;
+            word.push(c);
+            i += 1;
+        }
+    }
+    if in_word {
+        out.push(from_bytes(word));
+    }
+    out
+}
+
+// ------------------------------------------------------------ values
+
+// What a namespace attribute holds.
+#[derive(Clone)]
+enum Value {
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Null,
+    List(Vec[Value]),
+    Suppress,
+}
+
+fn value_repr(v: ref Value) -> String {
+    match ref v {
+        Value.Str(s) => py_repr(s),
+        Value.List(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for i in 0..items.len() {
+                parts.push(value_repr(items[i]));
+            }
+            f"[{join(parts, ", ")}]"
+        }
+        _ => value_str(v),
+    }
+}
+
+// str()
+fn value_str(v: ref Value) -> String {
+    match ref v {
+        Value.Str(s) => s.clone(),
+        Value.Int(n) => f"{n}",
+        Value.Float(x) => f"{x}",
+        Value.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        Value.Null => "None".to_string(),
+        Value.List(_) => value_repr(v),
+        Value.Suppress => "==SUPPRESS==".to_string(),
+    }
+}
+
+fn value_eq(a: ref Value, b: ref Value) -> bool {
+    match (a, b) {
+        (Value.Str(x), Value.Str(y)) => x == y,
+        (Value.Int(x), Value.Int(y)) => x == y,
+        (Value.Float(x), Value.Float(y)) => x == y,
+        (Value.Int(x), Value.Float(y)) => (x as f64) == y,
+        (Value.Float(x), Value.Int(y)) => x == (y as f64),
+        (Value.Bool(x), Value.Bool(y)) => x == y,
+        (Value.Null, Value.Null) => true,
+        _ => false,
+    }
+}
+
+fn strs(v: ref Vec[String]) -> Value {
+    let mut items: Vec[Value] = Vec.new();
+    for i in 0..v.len() {
+        items.push(Value.Str(v[i].clone()));
+    }
+    Value.List(items)
+}
+
+// ------------------------------------------------------------ actions
+
+// nargs: a count, or one of these
+const NARGS_NONE: i64 = -1;
+const OPTIONAL: i64 = -2;
+const ZERO_OR_MORE: i64 = -3;
+const ONE_OR_MORE: i64 = -4;
+const REMAINDER: i64 = -5;
+const PARSER: i64 = -6;
+const NARGS_SUPPRESS: i64 = -7;
+
+// the action classes
+const STORE: i64 = 0;
+const STORE_CONST: i64 = 1;
+const STORE_TRUE: i64 = 2;
+const STORE_FALSE: i64 = 3;
+const APPEND: i64 = 4;
+const APPEND_CONST: i64 = 5;
+const COUNT: i64 = 6;
+const HELP: i64 = 7;
+const VERSION: i64 = 8;
+const PARSERS: i64 = 9;
+const EXTEND: i64 = 10;
+const BOOL_OPT: i64 = 11;
+
+// the type functions
+const T_STR: i64 = 0;
+const T_INT: i64 = 1;
+const T_FLOAT: i64 = 2;
+const T_POSITIVE_INT: i64 = 3;
+const T_DATE: i64 = 4;
+
+const SUPPRESS: Str = "==SUPPRESS==";
+
+#[derive(Clone)]
+struct Action {
+    kind: i64,
+    option_strings: Vec[String],
+    dest: String,
+    nargs: i64,
+    konst: Value,
+    default: Value,
+    ty: i64,
+    has_type: bool,
+    choices: Vec[Value],
+    has_choices: bool,
+    required: bool,
+    help: Option[String],
+    // empty for no metavar; more than one, or `metavar_tuple`, for a tuple
+    metavar: Vec[String],
+    metavar_tuple: bool,
+    version: String,
+}
+
+// An action as add_argument makes it, before add() works out its dest.
+fn act(names: ref Vec[String], kind: i64) -> Action {
+    let mut opts = names.clone();
+    if kind == BOOL_OPT {
+        opts = Vec.new();
+        for i in 0..names.len() {
+            opts.push(names[i].clone());
+            if starts_with(names[i], "--") {
+                opts.push(f"--no-{slice_from(names[i], 2)}");
+            }
+        }
+    }
+    let nargs = if kind == STORE or kind == APPEND or kind == EXTEND {
+        NARGS_NONE
+    } else if kind == PARSERS {
+        PARSER
+    } else {
+        0
+    };
+    let konst = if kind == STORE_TRUE {
+        Value.Bool(true)
+    } else if kind == STORE_FALSE {
+        Value.Bool(false)
+    } else {
+        Value.Null
+    };
+    let default = if kind == STORE_TRUE {
+        Value.Bool(false)
+    } else if kind == STORE_FALSE {
+        Value.Bool(true)
+    } else if kind == HELP or kind == VERSION {
+        Value.Suppress
+    } else {
+        Value.Null
+    };
+    let dest = if kind == HELP or kind == VERSION { SUPPRESS.to_string() } else { String.new() };
+    let help = if kind == VERSION { Some("show program's version number and exit".to_string()) } else { None };
+    Action {
+        kind: kind,
+        option_strings: opts,
+        dest: dest,
+        nargs: nargs,
+        konst: konst,
+        default: default,
+        ty: T_STR,
+        has_type: false,
+        choices: Vec.new(),
+        has_choices: false,
+        required: false,
+        help: help,
+        metavar: Vec.new(),
+        metavar_tuple: false,
+        version: String.new(),
+    }
+}
+
+fn type_name(a: ref Action) -> String {
+    if not a.has_type {
+        return "None".to_string();
+    }
+    let names = ["str", "int", "float", "positive_int", "date"];
+    names[a.ty].to_string()
+}
+
+// _get_action_name: how errors name an action.
+fn action_name(a: ref Action) -> Option[String] {
+    if a.option_strings.len() > 0 {
+        return Some(join(a.option_strings, "/"));
+    }
+    if a.metavar.len() > 0 {
+        let m = a.metavar.clone();
+        if not a.metavar_tuple {
+            return Some(m[0].clone());
+        }
+        if (a.nargs == ZERO_OR_MORE and m.len() == 2) or a.nargs == ONE_OR_MORE {
+            return Some(f"{m[0]}[, {m[1]}]");
+        }
+        return Some(join(m, ", "));
+    }
+    if a.dest != SUPPRESS {
+        return Some(a.dest.clone());
+    }
+    if a.has_choices {
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..a.choices.len() {
+            parts.push(value_str(a.choices[i]));
+        }
+        return Some(f"{{{join(parts, ",")}}}");
+    }
+    None
+}
+
+// ------------------------------------------------------------ parsers
+
+#[derive(Clone)]
+struct Group {
+    title: Option[String],
+    description: Option[String],
+    actions: Vec[i64],
+}
+
+#[derive(Clone)]
+struct Mutex {
+    required: bool,
+    actions: Vec[i64],
+}
+
+#[derive(Clone)]
+struct Parser {
+    prog: String,
+    description: Option[String],
+    epilog: Option[String],
+    // RawDescriptionHelpFormatter
+    raw: bool,
+    actions: Vec[Action],
+    // _option_string_actions, in insertion order
+    opt_names: Vec[String],
+    opt_actions: Vec[i64],
+    groups: Vec[Group],
+    mutexes: Vec[Mutex],
+    // set_defaults
+    def_keys: Vec[String],
+    def_vals: Vec[Value],
+    has_negative_number_optionals: bool,
+    // the subparsers action: its prog prefix, its names (aliases
+    // included) and their parsers, and the help lines of its choices
+    sub_prefix: String,
+    sub_names: Vec[String],
+    sub_parsers: Vec[i64],
+    pseudo: Vec[Action],
+}
+
+// `^-\d+$|^-\d*\.\d+$`
+fn is_negative_number(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() < 2 or b[0] != b'-' {
+        return false;
+    }
+    let mut i: i64 = 1;
+    let mut digits: i64 = 0;
+    while i < b.len() and is_digit(b[i]) {
+        i += 1;
+        digits += 1;
+    }
+    if i == b.len() {
+        return digits > 0;
+    }
+    if b[i] != b'.' {
+        return false;
+    }
+    i += 1;
+    let st = i;
+    while i < b.len() and is_digit(b[i]) {
+        i += 1;
+    }
+    i == b.len() and i > st
+}
+
+impl Parser {
+    fn find_option(ref self, s: Str) -> i64 {
+        for i in 0..self.opt_names.len() {
+            if self.opt_names[i] == s {
+                return self.opt_actions[i];
+            }
+        }
+        -1
+    }
+
+    fn action(ref self, i: i64) -> Action {
+        self.actions[i].clone()
+    }
+
+    // _add_action, into a group and a mutually exclusive group.
+    fn add_action(mut ref self, a: own Action, group: i64, mutex: i64) -> i64 {
+        let idx = self.actions.len();
+        let positional = a.option_strings.len() == 0;
+        for i in 0..a.option_strings.len() {
+            self.opt_names.push(a.option_strings[i].clone());
+            self.opt_actions.push(idx);
+            if is_negative_number(a.option_strings[i]) {
+                self.has_negative_number_optionals = true;
+            }
+        }
+        self.actions.push(a);
+        let g = if group >= 0 { group } else if positional { 0 } else { 1 };
+        self.groups[g].actions.push(idx);
+        if mutex >= 0 {
+            self.mutexes[mutex].actions.push(idx);
+        }
+        idx
+    }
+
+    // add_argument: a positional when the one name has no `-`.
+    fn add_to(mut ref self, a: own Action, group: i64, mutex: i64) -> i64 {
+        let mut a = a;
+        if a.option_strings.len() == 1 and first_byte(a.option_strings[0]) != b'-' {
+            a.dest = a.option_strings[0].clone();
+            a.option_strings = Vec.new();
+            let n = a.nargs;
+            a.required = not (n == OPTIONAL or n == ZERO_OR_MORE or n == REMAINDER or n == NARGS_SUPPRESS or n == 0);
+        } else if a.dest.len() == 0 {
+            let mut name = a.option_strings[0].clone();
+            for i in 0..a.option_strings.len() {
+                if a.option_strings[i].len() > 1 and byte_at(a.option_strings[i], 1) == b'-' {
+                    name = a.option_strings[i].clone();
+                    break;
+                }
+            }
+            let b = to_bytes(name);
+            let mut st: i64 = 0;
+            while st < b.len() and b[st] == b'-' {
+                st += 1;
+            }
+            let mut d: Vec[u8] = Vec.new();
+            for i in st..b.len() {
+                d.push(if b[i] == b'-' { b'_' } else { b[i] });
+            }
+            a.dest = from_bytes(d);
+        }
+        self.add_action(a, group, mutex)
+    }
+
+    fn add(mut ref self, a: own Action) -> i64 {
+        self.add_to(a, -1, -1)
+    }
+
+    fn add_group(mut ref self, title: Str, description: Option[String]) -> i64 {
+        self.groups.push(Group { title: Some(title.to_string()), description: description, actions: Vec.new() });
+        self.groups.len() - 1
+    }
+
+    fn add_mutex(mut ref self, required: bool) -> i64 {
+        self.mutexes.push(Mutex { required: required, actions: Vec.new() });
+        self.mutexes.len() - 1
+    }
+
+    fn set_default(mut ref self, k: Str, v: own Value) {
+        let mut found = false;
+        for i in 0..self.def_keys.len() {
+            if self.def_keys[i] == k {
+                self.def_vals[i] = v.clone();
+                found = true;
+            }
+        }
+        if not found {
+            self.def_keys.push(k.to_string());
+            self.def_vals.push(v.clone());
+        }
+        for i in 0..self.actions.len() {
+            if self.actions[i].dest == k {
+                self.actions[i].default = v.clone();
+            }
+        }
+    }
+
+    fn positional_actions(ref self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for i in 0..self.actions.len() {
+            if self.actions[i].option_strings.len() == 0 {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    fn optional_actions(ref self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for i in 0..self.actions.len() {
+            if self.actions[i].option_strings.len() > 0 {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    // add_subparsers
+    fn add_subparsers(mut ref self, dest: Str, title: Option[String], metavar: Option[String], required: bool) -> i64 {
+        let group = match title {
+            Some(t) => self.add_group(t, None),
+            None => 0,
+        };
+        let pos = self.positional_actions();
+        self.sub_prefix = strip(self.format_usage_with(pos, ""));
+        let mut a = act(Vec.new(), PARSERS);
+        a.dest = dest.to_string();
+        a.required = required;
+        a.has_choices = true;
+        if let Some(m) = metavar {
+            a.metavar = [m];
+        }
+        self.add_action(a, group, -1)
+    }
+
+    fn register_sub(mut ref self, name: Str, aliases: ref Vec[String], help: Option[String], parser: i64) {
+        self.sub_names.push(name.to_string());
+        self.sub_parsers.push(parser);
+        for i in 0..aliases.len() {
+            self.sub_names.push(aliases[i].clone());
+            self.sub_parsers.push(parser);
+        }
+        // the choices of the subparsers action are its names
+        for i in 0..self.actions.len() {
+            if self.actions[i].kind == PARSERS {
+                self.actions[i].choices = into_list_of(strs(self.sub_names));
+            }
+        }
+        if let Some(h) = help {
+            let mut metavar = name.to_string();
+            if aliases.len() > 0 {
+                metavar = f"{name} ({join(aliases, ", ")})";
+            }
+            let mut p = act(Vec.new(), STORE);
+            p.dest = name.to_string();
+            p.metavar = [metavar];
+            p.help = Some(h);
+            self.pseudo.push(p);
+        }
+    }
+}
+
+fn into_list_of(v: own Value) -> Vec[Value] {
+    match v {
+        Value.List(items) => items,
+        _ => Vec.new(),
+    }
+}
+
+// All the parsers of one program; a subcommand's parser is named by its
+// index here.
+struct Cli {
+    parsers: Vec[Parser],
+}
+
+impl Cli {
+    fn new_parser(mut ref self, prog: Str, description: Option[String], epilog: Option[String], raw: bool) -> i64 {
+        let groups = [
+            Group { title: Some("positional arguments".to_string()), description: None, actions: Vec.new() },
+            Group { title: Some("options".to_string()), description: None, actions: Vec.new() },
+        ];
+        let mut p = Parser {
+            prog: prog.to_string(),
+            description: description,
+            epilog: epilog,
+            raw: raw,
+            actions: Vec.new(),
+            opt_names: Vec.new(),
+            opt_actions: Vec.new(),
+            groups: groups,
+            mutexes: Vec.new(),
+            def_keys: Vec.new(),
+            def_vals: Vec.new(),
+            has_negative_number_optionals: false,
+            sub_prefix: String.new(),
+            sub_names: Vec.new(),
+            sub_parsers: Vec.new(),
+            pseudo: Vec.new(),
+        };
+        let mut h = act(["-h".to_string(), "--help".to_string()], HELP);
+        h.help = Some("show this help message and exit".to_string());
+        p.add(h);
+        self.parsers.push(p);
+        self.parsers.len() - 1
+    }
+
+    fn add_parser(mut ref self, parent: i64, name: Str, aliases: ref Vec[String], help: Option[String], description: Option[String]) -> i64 {
+        let prog = f"{self.parsers[parent].sub_prefix} {name}";
+        let idx = self.new_parser(prog, description, None, false);
+        self.parsers[parent].register_sub(name, aliases, help, idx);
+        idx
+    }
+}
+
+// ------------------------------------------------------------ textwrap
+
+fn is_word_char(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// `[\w!"'&.,?]`
+fn is_word_punct(c: u8) -> bool {
+    is_word_char(c) or c == b'!' or c == b'"' or c == b'\'' or c == b'&' or c == b'.' or c == b',' or c == b'?'
+}
+
+// `[^\d\W]`
+fn is_letter(c: u8) -> bool {
+    is_word_char(c) and not is_digit(c)
+}
+
+fn letter_at(b: ref Vec[u8], i: i64) -> bool {
+    i >= 0 and i < b.len() and is_letter(b[i])
+}
+
+// `-{2,}\w` at `i`
+fn em_dash_at(b: ref Vec[u8], i: i64) -> bool {
+    let mut j = i;
+    while j < b.len() and b[j] == b'-' {
+        j += 1;
+    }
+    j - i >= 2 and j < b.len() and is_word_char(b[j])
+}
+
+// TextWrapper.wordsep_re.split: white space, em-dashes, and words broken
+// after the hyphens of compound words.
+fn split_chunks(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let n = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut p: i64 = 0;
+    while p < n {
+        if is_ws(b[p]) {
+            let mut q = p;
+            while q < n and is_ws(b[q]) {
+                q += 1;
+            }
+            out.push(byte_str(b, p, q));
+            p = q;
+            continue;
+        }
+        if p > 0 and is_word_punct(b[p - 1]) and em_dash_at(b, p) {
+            let mut q = p;
+            while q < n and b[q] == b'-' {
+                q += 1;
+            }
+            out.push(byte_str(b, p, q));
+            p = q;
+            continue;
+        }
+        let mut k = p + 1;
+        let mut end: i64 = n;
+        while k <= n {
+            if k < n and b[k] == b'-' {
+                let behind = (letter_at(b, k - 2) and letter_at(b, k - 1)) or (letter_at(b, k - 3) and k >= 2 and b[k - 2] == b'-' and letter_at(b, k - 1));
+                let ahead = letter_at(b, k + 1) and (letter_at(b, k + 2) or (k + 2 < n and b[k + 2] == b'-' and letter_at(b, k + 3)));
+                if behind and ahead {
+                    end = k + 1;
+                    break;
+                }
+            }
+            if k == n or is_ws(b[k]) {
+                end = k;
+                break;
+            }
+            if is_word_punct(b[k - 1]) and em_dash_at(b, k) {
+                end = k;
+                break;
+            }
+            k += 1;
+        }
+        out.push(byte_str(b, p, end));
+        p = end;
+    }
+    out
+}
+
+fn is_blank(s: Str) -> bool {
+    strip(s).len() == 0
+}
+
+// The last `-` in s[0..to], or -1.
+fn rfind_hyphen(s: Str, to: i64) -> i64 {
+    let b = to_bytes(s);
+    let mut i = if to < b.len() { to } else { b.len() };
+    while i > 0 {
+        i -= 1;
+        if b[i] == b'-' {
+            return i;
+        }
+    }
+    -1
+}
+
+// TextWrapper.wrap with break_long_words and break_on_hyphens.
+fn wrap(text: Str, width: i64, initial: Str, subsequent: Str) -> Vec[String] {
+    let mut chunks = split_chunks(text);
+    let mut ci: i64 = 0;
+    let mut lines: Vec[String] = Vec.new();
+    while ci < chunks.len() {
+        let mut cur: Vec[String] = Vec.new();
+        let mut cur_len: i64 = 0;
+        let indent = if lines.len() > 0 { subsequent.to_string() } else { initial.to_string() };
+        let w = width - indent.len();
+        if is_blank(chunks[ci]) and lines.len() > 0 {
+            ci += 1;
+        }
+        while ci < chunks.len() {
+            let l = chunks[ci].len();
+            if cur_len + l <= w {
+                cur.push(chunks[ci].clone());
+                cur_len += l;
+                ci += 1;
+            } else {
+                break;
+            }
+        }
+        if ci < chunks.len() and chunks[ci].len() > w {
+            // _handle_long_word
+            let space_left = if w < 1 { 1 } else { w - cur_len };
+            if space_left > 0 {
+                let chunk = chunks[ci].clone();
+                let mut end = space_left;
+                if chunk.len() > space_left {
+                    let hyphen = rfind_hyphen(chunk, space_left);
+                    if hyphen > 0 {
+                        let cb = to_bytes(chunk);
+                        let mut other = false;
+                        for j in 0..hyphen {
+                            if cb[j] != b'-' {
+                                other = true;
+                            }
+                        }
+                        if other {
+                            end = hyphen + 1;
+                        }
+                    }
+                }
+                let cb = to_bytes(chunk);
+                cur.push(byte_str(cb, 0, end));
+                chunks[ci] = byte_str(cb, end, cb.len());
+            } else if cur.len() == 0 {
+                cur.push(chunks[ci].clone());
+                ci += 1;
+            }
+            cur_len = 0;
+            for j in 0..cur.len() {
+                cur_len += cur[j].len();
+            }
+        }
+        if cur.len() > 0 and is_blank(cur[cur.len() - 1]) {
+            cur_len -= cur[cur.len() - 1].len();
+            cur.pop();
+        }
+        if cur.len() > 0 {
+            lines.push(f"{indent}{join(cur, "")}");
+        }
+    }
+    lines
+}
+
+// `\s+` to one space, and stripped.
+fn squash_ws(text: Str) -> String {
+    join(split_ws(text), " ")
+}
+
+// `\n\n\n+` to `\n\n`
+fn collapse_breaks(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'\n' {
+            let mut j = i;
+            while j < b.len() and b[j] == b'\n' {
+                j += 1;
+            }
+            let n = if j - i >= 3 { 2 } else { j - i };
+            for _ in 0..n {
+                out.push(b'\n');
+            }
+            i = j;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+fn strip_newlines(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and b[i] == b'\n' {
+        i += 1;
+    }
+    while j > i and b[j - 1] == b'\n' {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+// HelpFormatter.format_help on the root section's items.
+fn finish_help(items: Str) -> String {
+    if items.len() == 0 {
+        return String.new();
+    }
+    let help = collapse_breaks(f"\n{items}\n");
+    f"{strip_newlines(help)}\n"
+}
+
+// `text % params`, for %(name)s and %%.
+fn percent_format(text: Str, keys: ref Vec[String], vals: ref Vec[String]) -> String {
+    let b = to_bytes(text);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'%' and i + 1 < b.len() and b[i + 1] == b'%' {
+            out.push_str("%");
+            i += 2;
+        } else if b[i] == b'%' and i + 1 < b.len() and b[i + 1] == b'(' {
+            let close = find_byte_from(b, b')', i + 2);
+            let name = byte_str(b, i + 2, close);
+            for k in 0..keys.len() {
+                if keys[k] == name {
+                    out.push_str(vals[k]);
+                }
+            }
+            // the conversion, `s`
+            i = close + 2;
+        } else {
+            let st = i;
+            while i < b.len() and b[i] != b'%' {
+                i += 1;
+            }
+            out.push_str(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn find_byte_from(b: ref Vec[u8], c: u8, from: i64) -> i64 {
+    for i in from..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    b.len()
+}
+
+// ------------------------------------------------------------ the help formatter
+
+const WIDTH: i64 = 78;
+const MAX_HELP_POSITION: i64 = 24;
+
+// _metavar_formatter: the metavar, `{choices}` or the default, as a
+// tuple of `size`.
+fn metavars(a: ref Action, default: Str, size: i64) -> Vec[String] {
+    if a.metavar.len() > 0 and a.metavar_tuple {
+        return a.metavar.clone();
+    }
+    let one = if a.metavar.len() > 0 {
+        a.metavar[0].clone()
+    } else if a.has_choices {
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..a.choices.len() {
+            parts.push(value_str(a.choices[i]));
+        }
+        f"{{{join(parts, ",")}}}"
+    } else {
+        default.to_string()
+    };
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..size {
+        out.push(one.clone());
+    }
+    out
+}
+
+fn format_args(a: ref Action, default: Str) -> String {
+    let n = a.nargs;
+    if n == NARGS_NONE {
+        return metavars(a, default, 1)[0].clone();
+    }
+    if n == OPTIONAL {
+        return f"[{metavars(a, default, 1)[0]}]";
+    }
+    if n == ZERO_OR_MORE {
+        let m = metavars(a, default, 1);
+        if m.len() == 2 {
+            return f"[{m[0]} [{m[1]} ...]]";
+        }
+        return f"[{m[0]} ...]";
+    }
+    if n == ONE_OR_MORE {
+        let m = metavars(a, default, 2);
+        return f"{m[0]} [{m[1]} ...]";
+    }
+    if n == REMAINDER {
+        return "...".to_string();
+    }
+    if n == PARSER {
+        return f"{metavars(a, default, 1)[0]} ...";
+    }
+    if n == NARGS_SUPPRESS {
+        return String.new();
+    }
+    join(metavars(a, default, n), " ")
+}
+
+fn invocation(a: ref Action) -> String {
+    if a.option_strings.len() == 0 {
+        return join(metavars(a, a.dest, 1), " ");
+    }
+    if a.nargs == 0 {
+        return join(a.option_strings, ", ");
+    }
+    f"{join(a.option_strings, ", ")} {format_args(a, upper(a.dest))}"
+}
+
+// Action.format_usage
+fn usage_of_flag(a: ref Action) -> String {
+    if a.kind == BOOL_OPT {
+        return join(a.option_strings, " | ");
+    }
+    a.option_strings[0].clone()
+}
+
+// _expand_help: `help % vars(action)`.
+fn expand_help(a: ref Action, prog: Str) -> String {
+    let mut keys: Vec[String] = Vec.new();
+    let mut vals: Vec[String] = Vec.new();
+    keys.push("prog".to_string());
+    vals.push(prog.to_string());
+    keys.push("dest".to_string());
+    vals.push(a.dest.clone());
+    keys.push("default".to_string());
+    vals.push(value_str(a.default));
+    keys.push("const".to_string());
+    vals.push(value_str(a.konst));
+    keys.push("type".to_string());
+    vals.push(type_name(a));
+    keys.push("metavar".to_string());
+    vals.push(if a.metavar.len() > 0 { a.metavar[0].clone() } else { "None".to_string() });
+    let mut choices: Vec[String] = Vec.new();
+    for i in 0..a.choices.len() {
+        choices.push(value_str(a.choices[i]));
+    }
+    keys.push("choices".to_string());
+    vals.push(if a.has_choices { join(choices, ", ") } else { "None".to_string() });
+    let help = match ref a.help {
+        Some(h) => h.clone(),
+        None => String.new(),
+    };
+    percent_format(help, keys, vals)
+}
+
+// One usage line wrapping, get_lines.
+fn get_lines(parts: ref Vec[String], indent: Str, prefix: Option[String], text_width: i64) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    let mut line: Vec[String] = Vec.new();
+    let indent_length = indent.len();
+    let mut line_len = match ref prefix {
+        Some(p) => p.len() - 1,
+        None => indent_length - 1,
+    };
+    for i in 0..parts.len() {
+        if line_len + 1 + parts[i].len() > text_width and line.len() > 0 {
+            lines.push(f"{indent}{join(line, " ")}");
+            line = Vec.new();
+            line_len = indent_length - 1;
+        }
+        line.push(parts[i].clone());
+        line_len += parts[i].len() + 1;
+    }
+    if line.len() > 0 {
+        lines.push(f"{indent}{join(line, " ")}");
+    }
+    if prefix.is_some() {
+        lines[0] = slice_from(lines[0], indent_length);
+    }
+    lines
+}
+
+fn sub_list(v: ref Vec[String], from: i64, to: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in from..to {
+        out.push(v[i].clone());
+    }
+    out
+}
+
+impl Parser {
+    // _get_actions_usage_parts_with_split: the usage parts, and where the
+    // positionals start among them.
+    fn usage_parts(ref self, actions: ref Vec[i64], opt_count: i64) -> (Vec[String], i64) {
+        let n = actions.len();
+        let mut in_group: Vec[bool] = Vec.new();
+        for _ in 0..n {
+            in_group.push(false);
+        }
+        let mut ins_start: Vec[i64] = Vec.new();
+        let mut ins_end: Vec[i64] = Vec.new();
+        let mut ins_group: Vec[i64] = Vec.new();
+        for g in 0..self.mutexes.len() {
+            let ga = self.mutexes[g].actions.clone();
+            let mut start: i64 = -1;
+            for k in 0..n {
+                if actions[k] == ga[0] {
+                    start = k;
+                    break;
+                }
+            }
+            if start < 0 {
+                continue;
+            }
+            let end = start + ga.len();
+            if end > n {
+                continue;
+            }
+            let mut same = true;
+            for k in 0..ga.len() {
+                if actions[start + k] != ga[k] {
+                    same = false;
+                }
+            }
+            if same {
+                for k in start..end {
+                    in_group[k] = true;
+                }
+                ins_start.push(start);
+                ins_end.push(end);
+                ins_group.push(g);
+            }
+        }
+        let mut parts: Vec[String] = Vec.new();
+        let mut alive: Vec[bool] = Vec.new();
+        for k in 0..n {
+            let a = self.action(actions[k]);
+            let mut part = String.new();
+            if a.option_strings.len() == 0 {
+                part = format_args(a, a.dest);
+                let pb = to_bytes(part);
+                if in_group[k] and pb.len() >= 2 and pb[0] == b'[' and pb[pb.len() - 1] == b']' {
+                    part = byte_str(pb, 1, pb.len() - 1);
+                }
+            } else {
+                if a.nargs == 0 {
+                    part = usage_of_flag(a);
+                } else {
+                    part = f"{a.option_strings[0]} {format_args(a, upper(a.dest))}";
+                }
+                if not a.required and not in_group[k] {
+                    part = f"[{part}]";
+                }
+            }
+            parts.push(part);
+            alive.push(true);
+        }
+        // the groups, from the last one back
+        let mut order: Vec[i64] = Vec.new();
+        for i in 0..ins_start.len() {
+            order.push(i);
+        }
+        for i in 1..order.len() {
+            let mut j = i;
+            while j > 0 and (ins_start[order[j - 1]] < ins_start[order[j]] or (ins_start[order[j - 1]] == ins_start[order[j]] and ins_end[order[j - 1]] < ins_end[order[j]])) {
+                order.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        let mut separated: Vec[bool] = Vec.new();
+        for _ in 0..n {
+            separated.push(false);
+        }
+        for oi in 0..order.len() {
+            let start = ins_start[order[oi]];
+            let end = ins_end[order[oi]];
+            let required = self.mutexes[ins_group[order[oi]]].required;
+            let mut gp: Vec[String] = Vec.new();
+            for k in start..end {
+                if alive[k] {
+                    gp.push(parts[k].clone());
+                }
+            }
+            let size = gp.len();
+            let (open, close) = if required {
+                if size > 1 { ("(", ")") } else { ("", "") }
+            } else {
+                ("[", "]")
+            };
+            gp[0] = f"{open}{gp[0]}";
+            gp[size - 1] = f"{gp[size - 1]}{close}";
+            for j in 0..size - 1 {
+                let i = start + j;
+                if not separated[i] {
+                    parts[i] = f"{gp[j]} |";
+                    separated[i] = true;
+                }
+            }
+            parts[start + size - 1] = gp[size - 1].clone();
+            for i in start + size..end {
+                alive[i] = false;
+            }
+        }
+        let mut pos_start: i64 = 0;
+        for k in 0..opt_count {
+            if alive[k] {
+                pos_start += 1;
+            }
+        }
+        let mut out: Vec[String] = Vec.new();
+        for k in 0..n {
+            if alive[k] {
+                out.push(parts[k].clone());
+            }
+        }
+        (out, pos_start)
+    }
+
+    // _format_usage at the root, with no usage given.
+    fn usage_text(ref self, actions: ref Vec[i64], prefix: Str) -> String {
+        let prog = self.prog.clone();
+        if actions.len() == 0 {
+            return f"{prefix}{prog}\n\n";
+        }
+        let mut optionals: Vec[i64] = Vec.new();
+        let mut positionals: Vec[i64] = Vec.new();
+        for i in 0..actions.len() {
+            if self.actions[actions[i]].option_strings.len() > 0 {
+                optionals.push(actions[i]);
+            } else {
+                positionals.push(actions[i]);
+            }
+        }
+        let mut all = optionals.clone();
+        for i in 0..positionals.len() {
+            all.push(positionals[i]);
+        }
+        let (parts, _) = self.usage_parts(all, 0);
+        let action_usage = join(parts, " ");
+        let mut usage = if action_usage.len() > 0 { f"{prog} {action_usage}" } else { prog.clone() };
+        let text_width = WIDTH;
+        if prefix.len() + usage.len() > text_width {
+            let (parts, pos_start) = self.usage_parts(all, optionals.len());
+            let opt_parts = sub_list(parts, 0, pos_start);
+            let pos_parts = sub_list(parts, pos_start, parts.len());
+            let mut lines: Vec[String] = Vec.new();
+            if 4 * (prefix.len() + prog.len()) <= 3 * text_width {
+                let indent = spaces(prefix.len() + prog.len() + 1);
+                if opt_parts.len() > 0 {
+                    let mut first = [prog.clone()];
+                    for i in 0..opt_parts.len() {
+                        first.push(opt_parts[i].clone());
+                    }
+                    lines = get_lines(first, indent, Some(prefix.to_string()), text_width);
+                    let more = get_lines(pos_parts, indent, None, text_width);
+                    for i in 0..more.len() {
+                        lines.push(more[i].clone());
+                    }
+                } else if pos_parts.len() > 0 {
+                    let mut first = [prog.clone()];
+                    for i in 0..pos_parts.len() {
+                        first.push(pos_parts[i].clone());
+                    }
+                    lines = get_lines(first, indent, Some(prefix.to_string()), text_width);
+                } else {
+                    lines = [prog.clone()];
+                }
+            } else {
+                let indent = spaces(prefix.len());
+                let mut both = opt_parts.clone();
+                for i in 0..pos_parts.len() {
+                    both.push(pos_parts[i].clone());
+                }
+                let mut body = get_lines(both, indent, None, text_width);
+                if body.len() > 1 {
+                    body = get_lines(opt_parts, indent, None, text_width);
+                    let more = get_lines(pos_parts, indent, None, text_width);
+                    for i in 0..more.len() {
+                        body.push(more[i].clone());
+                    }
+                }
+                lines = [prog.clone()];
+                for i in 0..body.len() {
+                    lines.push(body[i].clone());
+                }
+            }
+            usage = join(lines, "\n");
+        }
+        f"{prefix}{usage}\n\n"
+    }
+
+    fn all_actions(ref self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for i in 0..self.actions.len() {
+            out.push(i);
+        }
+        out
+    }
+
+    fn format_usage_with(ref self, actions: ref Vec[i64], prefix: Str) -> String {
+        finish_help(self.usage_text(actions, prefix))
+    }
+
+    fn format_usage(ref self) -> String {
+        self.format_usage_with(self.all_actions(), "usage: ")
+    }
+
+    // _format_text
+    fn format_text(ref self, text: Str, indent: i64) -> String {
+        let mut t = text.to_string();
+        if find_str(t, "%(prog)") >= 0 {
+            t = percent_format(t, ["prog".to_string()], [self.prog.clone()]);
+        }
+        let text_width = if WIDTH - indent > 11 { WIDTH - indent } else { 11 };
+        let ind = spaces(indent);
+        let filled = if self.raw {
+            // RawDescriptionHelpFormatter keeps the lines
+            let mut out = String.new();
+            let tb = to_bytes(t);
+            let mut st: i64 = 0;
+            for i in 0..tb.len() {
+                if tb[i] == b'\n' {
+                    out.push_str(ind);
+                    out.push_str(byte_str(tb, st, i + 1));
+                    st = i + 1;
+                }
+            }
+            if st < tb.len() {
+                out.push_str(ind);
+                out.push_str(byte_str(tb, st, tb.len()));
+            }
+            out
+        } else {
+            join(wrap(squash_ws(t), text_width, ind, ind), "\n")
+        };
+        f"{filled}\n\n"
+    }
+
+    fn format_action(ref self, a: ref Action, indent: i64, max_len: i64) -> String {
+        let help_position = if max_len + 2 < MAX_HELP_POSITION { max_len + 2 } else { MAX_HELP_POSITION };
+        let help_width = if WIDTH - help_position > 11 { WIDTH - help_position } else { 11 };
+        let action_width = help_position - indent - 2;
+        let header = invocation(a);
+        let help = match ref a.help {
+            Some(h) => h.clone(),
+            None => String.new(),
+        };
+        let mut out = String.new();
+        let mut indent_first: i64 = 0;
+        if help.len() == 0 {
+            out = f"{spaces(indent)}{header}\n";
+        } else if header.len() <= action_width {
+            out = f"{spaces(indent)}{header}{spaces(action_width - header.len())}  ";
+        } else {
+            out = f"{spaces(indent)}{header}\n";
+            indent_first = help_position;
+        }
+        if help.len() > 0 and strip(help).len() > 0 {
+            let text = expand_help(a, self.prog);
+            if text.len() > 0 {
+                let lines = wrap(squash_ws(text), help_width, "", "");
+                out.push_str(f"{spaces(indent_first)}{lines[0]}\n");
+                for i in 1..lines.len() {
+                    out.push_str(f"{spaces(help_position)}{lines[i]}\n");
+                }
+            }
+        } else if not out.ends_with("\n") {
+            out.push_str("\n");
+        }
+        if a.kind == PARSERS {
+            for i in 0..self.pseudo.len() {
+                out.push_str(self.format_action(self.pseudo[i], indent + 2, max_len));
+            }
+        }
+        out
+    }
+
+    fn format_help(ref self) -> String {
+        // the longest invocation, as add_argument measured them
+        let mut max_len: i64 = 0;
+        for g in 0..self.groups.len() {
+            let ga = self.groups[g].actions.clone();
+            for k in 0..ga.len() {
+                let a = self.action(ga[k]);
+                let l = invocation(a).len() + 2;
+                if l > max_len {
+                    max_len = l;
+                }
+                if a.kind == PARSERS {
+                    for i in 0..self.pseudo.len() {
+                        let l = invocation(self.pseudo[i]).len() + 4;
+                        if l > max_len {
+                            max_len = l;
+                        }
+                    }
+                }
+            }
+        }
+        let mut items = self.usage_text(self.all_actions(), "usage: ");
+        if let Some(d) = self.description.clone() {
+            items.push_str(self.format_text(d, 0));
+        }
+        for g in 0..self.groups.len() {
+            let group = self.groups[g].clone();
+            let mut body = String.new();
+            if let Some(d) = group.description {
+                body.push_str(self.format_text(d, 2));
+            }
+            for k in 0..group.actions.len() {
+                body.push_str(self.format_action(self.action(group.actions[k]), 2, max_len));
+            }
+            if body.len() > 0 {
+                let heading = match group.title {
+                    Some(t) => f"{t}:\n",
+                    None => String.new(),
+                };
+                items.push_str(f"\n{heading}{body}\n");
+            }
+        }
+        if let Some(e) = self.epilog.clone() {
+            items.push_str(self.format_text(e, 0));
+        }
+        finish_help(items)
+    }
+
+    fn format_version(ref self, version: Str) -> String {
+        finish_help(self.format_text(version, 0))
+    }
+}
+
+// ------------------------------------------------------------ the namespace
+
+#[derive(Clone)]
+struct Namespace {
+    keys: Vec[String],
+    vals: Vec[Value],
+    // the action whose default the value still is, or -1
+    origin: Vec[i64],
+}
+
+impl Namespace {
+    fn find(ref self, k: Str) -> i64 {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == k {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn has(ref self, k: Str) -> bool {
+        self.find(k) >= 0
+    }
+
+    fn get(ref self, k: Str) -> Value {
+        let i = self.find(k);
+        if i < 0 { Value.Null } else { self.vals[i].clone() }
+    }
+
+    fn set_from(mut ref self, k: Str, v: own Value, origin: i64) {
+        let i = self.find(k);
+        if i >= 0 {
+            self.vals[i] = v;
+            self.origin[i] = origin;
+        } else {
+            self.keys.push(k.to_string());
+            self.vals.push(v);
+            self.origin.push(origin);
+        }
+    }
+
+    fn set(mut ref self, k: Str, v: own Value) {
+        self.set_from(k, v, -1);
+    }
+
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        let mut star: Vec[String] = Vec.new();
+        for i in 0..self.keys.len() {
+            if is_identifier(self.keys[i]) {
+                parts.push(f"{self.keys[i]}={value_repr(self.vals[i])}");
+            } else {
+                star.push(f"{py_repr(self.keys[i])}: {value_repr(self.vals[i])}");
+            }
+        }
+        if star.len() > 0 {
+            parts.push(f"**{{{join(star, ", ")}}}");
+        }
+        f"Namespace({join(parts, ", ")})"
+    }
+}
+
+// ------------------------------------------------------------ parsing
+
+// What ends a parse early: an ArgumentError's text, or a SystemExit with
+// what was printed.
+#[derive(Clone)]
+enum Fail {
+    Arg(String),
+    Exit(Exit),
+}
+
+#[derive(Clone)]
+struct Exit {
+    status: i64,
+    out: String,
+    err: String,
+}
+
+fn arg_error(a: ref Action, msg: Str) -> Fail {
+    match action_name(a) {
+        Some(n) => Fail.Arg(f"argument {n}: {msg}"),
+        None => Fail.Arg(msg.to_string()),
+    }
+}
+
+// One way to read an option string: its action (-1 for none), the option
+// string, and the explicit argument after it.
+#[derive(Clone)]
+struct OptTuple {
+    action: i64,
+    option: String,
+    sep: Option[String],
+    explicit: Option[String],
+}
+
+fn opt_tuple(action: i64, option: Str, sep: Option[String], explicit: Option[String]) -> OptTuple {
+    OptTuple { action: action, option: option.to_string(), sep: sep, explicit: explicit }
+}
+
+// str.partition('=')
+fn partition_eq(s: Str) -> (String, Option[String], Option[String]) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == b'=' {
+            return (byte_str(b, 0, i), Some("=".to_string()), Some(byte_str(b, i + 1, b.len())));
+        }
+    }
+    (s.to_string(), None, None)
+}
+
+// One pattern item: `[chars]{min,max}`, max -1 for no limit.
+#[derive(Clone)]
+struct Item {
+    chars: String,
+    min: i64,
+    max: i64,
+}
+
+fn item(chars: Str, min: i64, max: i64) -> Item {
+    Item { chars: chars.to_string(), min: min, max: max }
+}
+
+// _get_nargs_pattern as items.
+fn nargs_pattern(a: ref Action) -> Vec[Item] {
+    let n = a.nargs;
+    let opt = a.option_strings.len() > 0;
+    let mut v: Vec[Item] = Vec.new();
+    if n == NARGS_NONE {
+        if opt {
+            v.push(item("A", 1, 1));
+        } else {
+            v.push(item("-", 0, -1));
+            v.push(item("A", 1, 1));
+            v.push(item("-", 0, -1));
+        }
+    } else if n == OPTIONAL {
+        if opt {
+            v.push(item("A", 0, 1));
+        } else {
+            v.push(item("-", 0, -1));
+            v.push(item("A", 0, 1));
+            v.push(item("-", 0, -1));
+        }
+    } else if n == ZERO_OR_MORE {
+        if opt {
+            v.push(item("A", 0, -1));
+        } else {
+            v.push(item("-", 0, -1));
+            v.push(item("A-", 0, -1));
+        }
+    } else if n == ONE_OR_MORE {
+        if opt {
+            v.push(item("A", 1, -1));
+        } else {
+            v.push(item("-", 0, -1));
+            v.push(item("A", 1, 1));
+            v.push(item("A-", 0, -1));
+        }
+    } else if n == REMAINDER {
+        if opt {
+            v.push(item("AO", 0, -1));
+        } else {
+            v.push(item("AO-", 0, -1));
+        }
+    } else if n == PARSER {
+        if opt {
+            v.push(item("A", 1, 1));
+            v.push(item("AO", 0, -1));
+        } else {
+            v.push(item("-", 0, -1));
+            v.push(item("A", 1, 1));
+            v.push(item("AO-", 0, -1));
+        }
+    } else if n == NARGS_SUPPRESS {
+        if not opt {
+            v.push(item("-", 0, -1));
+        }
+    } else {
+        if opt {
+            v.push(item("AO", n, n));
+        } else {
+            for _ in 0..n {
+                v.push(item("-", 0, -1));
+                v.push(item("A", 1, 1));
+            }
+            v.push(item("-", 0, -1));
+        }
+    }
+    v
+}
+
+// re.match of the items against the pattern from `pos`, greedy with
+// backtracking; the length each item took.
+fn match_items(items: ref Vec[Item], k: i64, pat: ref Vec[u8], pos: i64, lens: mut ref Vec[i64]) -> bool {
+    if k == items.len() {
+        return true;
+    }
+    let it = items[k].clone();
+    let cb = to_bytes(it.chars);
+    let mut n: i64 = 0;
+    while (it.max < 0 or n < it.max) and pos + n < pat.len() and find_byte_from(cb, pat[pos + n], 0) < cb.len() {
+        n += 1;
+    }
+    if n < it.min {
+        return false;
+    }
+    let mut c = n;
+    while c >= it.min {
+        lens[k] = c;
+        if match_items(items, k + 1, pat, pos + c, lens) {
+            return true;
+        }
+        c -= 1;
+    }
+    false
+}
+
+// The groups of several actions' patterns matched in order; each group's
+// length, or None.
+fn match_groups(groups: ref Vec[Vec[Item]], pat: Str) -> Option[Vec[i64]] {
+    let mut items: Vec[Item] = Vec.new();
+    let mut owner: Vec[i64] = Vec.new();
+    for g in 0..groups.len() {
+        for i in 0..groups[g].len() {
+            items.push(groups[g][i].clone());
+            owner.push(g);
+        }
+    }
+    let mut lens: Vec[i64] = Vec.new();
+    for _ in 0..items.len() {
+        lens.push(0);
+    }
+    if not match_items(items, 0, to_bytes(pat), 0, mut lens) {
+        return None;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..groups.len() {
+        out.push(0);
+    }
+    for i in 0..items.len() {
+        out[owner[i]] += lens[i];
+    }
+    Some(out)
+}
+
+// The state of one _parse_known_args.
+struct State {
+    args: Vec[String],
+    pattern: String,
+    is_opt: Vec[bool],
+    tuples: Vec[Vec[OptTuple]],
+    seen: Vec[bool],
+    seen_non_default: Vec[bool],
+    ns: Namespace,
+    extras: Vec[String],
+    positionals: Vec[i64],
+}
+
+struct Parsed {
+    ns: Namespace,
+    extras: Vec[String],
+}
+
+impl Parser {
+    // _get_option_tuples
+    fn option_tuples(ref self, s: Str) -> Vec[OptTuple] {
+        let mut result: Vec[OptTuple] = Vec.new();
+        if byte_at(s, 1) == b'-' {
+            let (prefix, sep, explicit) = partition_eq(s);
+            for i in 0..self.opt_names.len() {
+                if starts_with(self.opt_names[i], prefix) {
+                    result.push(opt_tuple(self.opt_actions[i], self.opt_names[i], sep.clone(), explicit.clone()));
+                }
+            }
+        } else {
+            let (prefix, sep, explicit) = partition_eq(s);
+            let sb = to_bytes(s);
+            let short = byte_str(sb, 0, 2);
+            let short_explicit = byte_str(sb, 2, sb.len());
+            for i in 0..self.opt_names.len() {
+                if self.opt_names[i] == short {
+                    result.push(opt_tuple(self.opt_actions[i], self.opt_names[i], Some(String.new()), Some(short_explicit.clone())));
+                } else if starts_with(self.opt_names[i], prefix) {
+                    result.push(opt_tuple(self.opt_actions[i], self.opt_names[i], sep.clone(), explicit.clone()));
+                }
+            }
+        }
+        result
+    }
+
+    // _parse_optional: None for a positional string.
+    fn parse_optional(ref self, s: Str) -> Option[Vec[OptTuple]] {
+        if s.len() == 0 or first_byte(s) != b'-' {
+            return None;
+        }
+        let exact = self.find_option(s);
+        if exact >= 0 {
+            return Some([opt_tuple(exact, s, None, None)]);
+        }
+        if s.len() == 1 {
+            return None;
+        }
+        let (option, sep, explicit) = partition_eq(s);
+        if sep.is_some() {
+            let a = self.find_option(option);
+            if a >= 0 {
+                return Some([opt_tuple(a, option, sep, explicit)]);
+            }
+        }
+        let tuples = self.option_tuples(s);
+        if tuples.len() > 0 {
+            return Some(tuples);
+        }
+        if is_negative_number(s) and not self.has_negative_number_optionals {
+            return None;
+        }
+        if find_byte_from(to_bytes(s), b' ', 0) < s.len() {
+            return None;
+        }
+        Some([opt_tuple(-1, s, None, None)])
+    }
+
+    // _match_argument
+    fn match_argument(ref self, a: ref Action, pat: Str) -> Result[i64, Fail] {
+        match match_groups([nargs_pattern(a)], pat) {
+            Some(lens) => Ok(lens[0]),
+            None => {
+                let n = a.nargs;
+                let msg = if n == NARGS_NONE {
+                    "expected one argument".to_string()
+                } else if n == OPTIONAL {
+                    "expected at most one argument".to_string()
+                } else if n == ONE_OR_MORE {
+                    "expected at least one argument".to_string()
+                } else if n == 1 {
+                    "expected 1 argument".to_string()
+                } else {
+                    f"expected {n} arguments"
+                };
+                Err(arg_error(a, msg))
+            }
+        }
+    }
+
+    // _match_arguments_partial
+    fn match_partial(ref self, actions: ref Vec[i64], pat: Str) -> Vec[i64] {
+        let mut i = actions.len();
+        while i > 0 {
+            let mut groups: Vec[Vec[Item]] = Vec.new();
+            for k in 0..i {
+                groups.push(nargs_pattern(self.actions[actions[k]]));
+            }
+            if let Some(result) = match_groups(groups, pat) {
+                let mut result = result;
+                let mut end: i64 = 0;
+                for k in 0..result.len() {
+                    end += result[k];
+                }
+                if end < pat.len() and byte_at(pat, end) == b'O' {
+                    while result.len() > 0 and result[result.len() - 1] == 0 {
+                        result.pop();
+                    }
+                }
+                return result;
+            }
+            i -= 1;
+        }
+        Vec.new()
+    }
+
+    // _get_value: the type function.
+    fn get_value(ref self, a: ref Action, s: Str) -> Result[Value, Fail] {
+        let invalid = arg_error(a, f"invalid {type_name(a)} value: {py_repr(s)}");
+        if a.ty == T_INT {
+            return match py_int(s) {
+                Some(n) => Ok(Value.Int(n)),
+                None => Err(invalid),
+            };
+        }
+        if a.ty == T_FLOAT {
+            return match py_float(s) {
+                Some(x) => Ok(Value.Float(x)),
+                None => Err(invalid),
+            };
+        }
+        if a.ty == T_POSITIVE_INT {
+            let n = match py_int(s) {
+                Some(n) => n,
+                None => return Err(invalid),
+            };
+            if n <= 0 {
+                return Err(arg_error(a, f"must be a positive integer, got {n}"));
+            }
+            return Ok(Value.Int(n));
+        }
+        if a.ty == T_DATE {
+            let parts = split_on(s, b'-');
+            let mut ok = parts.len() == 3 and parts[0].len() == 4;
+            if ok {
+                for i in 0..3 {
+                    let pb = to_bytes(parts[i]);
+                    if pb.len() == 0 {
+                        ok = false;
+                    }
+                    for k in 0..pb.len() {
+                        if not is_digit(pb[k]) {
+                            ok = false;
+                        }
+                    }
+                }
+            }
+            if ok {
+                let m = py_int(parts[1]).unwrap_or(0);
+                let d = py_int(parts[2]).unwrap_or(0);
+                ok = m >= 1 and m <= 12 and d >= 1 and d <= 31;
+            }
+            if not ok {
+                return Err(arg_error(a, f"not a date: {py_repr(s)} (expected YYYY-MM-DD)"));
+            }
+            return Ok(Value.Str(s.to_string()));
+        }
+        Ok(Value.Str(s.to_string()))
+    }
+
+    // _check_value
+    fn check_value(ref self, a: ref Action, v: ref Value) -> Result[(), Fail] {
+        if not a.has_choices {
+            return Ok(());
+        }
+        for i in 0..a.choices.len() {
+            if value_eq(a.choices[i], v) {
+                return Ok(());
+            }
+        }
+        let mut names: Vec[String] = Vec.new();
+        for i in 0..a.choices.len() {
+            names.push(py_repr(value_str(a.choices[i])));
+        }
+        Err(arg_error(a, f"invalid choice: {py_repr(value_str(v))} (choose from {join(names, ", ")})"))
+    }
+
+    // _get_values
+    fn get_values(ref self, a: ref Action, args: ref Vec[String]) -> Result[Value, Fail] {
+        let n = a.nargs;
+        if args.len() == 0 and n == OPTIONAL {
+            let v = if a.option_strings.len() > 0 { a.konst.clone() } else { a.default.clone() };
+            if let Value.Str(s) = v {
+                let got = self.get_value(a, s)?;
+                self.check_value(a, got)?;
+                return Ok(got);
+            }
+            return Ok(v);
+        }
+        if args.len() == 0 and n == ZERO_OR_MORE and a.option_strings.len() == 0 {
+            if let Value.Null = a.default {
+                return Ok(Value.List(Vec.new()));
+            }
+            self.check_value(a, a.default)?;
+            return Ok(a.default.clone());
+        }
+        if args.len() == 1 and (n == NARGS_NONE or n == OPTIONAL) {
+            let v = self.get_value(a, args[0])?;
+            self.check_value(a, v)?;
+            return Ok(v);
+        }
+        if n == REMAINDER {
+            let mut items: Vec[Value] = Vec.new();
+            for i in 0..args.len() {
+                items.push(self.get_value(a, args[i])?);
+            }
+            return Ok(Value.List(items));
+        }
+        if n == PARSER {
+            let mut items: Vec[Value] = Vec.new();
+            for i in 0..args.len() {
+                items.push(self.get_value(a, args[i])?);
+            }
+            self.check_value(a, items[0])?;
+            return Ok(Value.List(items));
+        }
+        if n == NARGS_SUPPRESS {
+            return Ok(Value.Suppress);
+        }
+        let mut items: Vec[Value] = Vec.new();
+        for i in 0..args.len() {
+            items.push(self.get_value(a, args[i])?);
+        }
+        for i in 0..items.len() {
+            self.check_value(a, items[i])?;
+        }
+        Ok(Value.List(items))
+    }
+
+    fn error(ref self, msg: Str) -> Exit {
+        Exit { status: 2, out: String.new(), err: f"{self.format_usage()}{self.prog}: error: {msg}\n" }
+    }
+
+    // The actions that may not appear with `a`.
+    fn conflicts(ref self, a: i64) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for g in 0..self.mutexes.len() {
+            let ga = self.mutexes[g].actions.clone();
+            for i in 0..ga.len() {
+                if ga[i] == a {
+                    for k in 0..ga.len() {
+                        if k != i {
+                            out.push(ga[k]);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    // Action.__call__
+    fn call_action(ref self, cli: ref Cli, st: mut ref State, ai: i64, values: own Value, option: Str) -> Result[(), Fail] {
+        let a = self.action(ai);
+        let k = a.kind;
+        if k == STORE {
+            st.ns.set(a.dest, values);
+        } else if k == STORE_CONST or k == STORE_TRUE or k == STORE_FALSE {
+            st.ns.set(a.dest, a.konst.clone());
+        } else if k == APPEND or k == APPEND_CONST or k == EXTEND {
+            let mut items = match st.ns.get(a.dest) {
+                Value.List(items) => items,
+                _ => Vec.new(),
+            };
+            if k == APPEND {
+                items.push(values);
+            } else if k == APPEND_CONST {
+                items.push(a.konst.clone());
+            } else {
+                let more = into_list_of(values);
+                for i in 0..more.len() {
+                    items.push(more[i].clone());
+                }
+            }
+            st.ns.set(a.dest, Value.List(items));
+        } else if k == COUNT {
+            let n = match st.ns.get(a.dest) {
+                Value.Int(n) => n,
+                _ => 0,
+            };
+            st.ns.set(a.dest, Value.Int(n + 1));
+        } else if k == HELP {
+            return Err(Fail.Exit(Exit { status: 0, out: self.format_help(), err: String.new() }));
+        } else if k == VERSION {
+            return Err(Fail.Exit(Exit { status: 0, out: self.format_version(a.version), err: String.new() }));
+        } else if k == BOOL_OPT {
+            st.ns.set(a.dest, Value.Bool(not starts_with(option, "--no-")));
+        } else if k == PARSERS {
+            let words = into_list_of(values);
+            let name = value_str(words[0]);
+            let mut rest: Vec[String] = Vec.new();
+            for i in 1..words.len() {
+                rest.push(value_str(words[i]));
+            }
+            if a.dest != SUPPRESS {
+                st.ns.set(a.dest, Value.Str(name.clone()));
+            }
+            let mut sub: i64 = -1;
+            for i in 0..self.sub_names.len() {
+                if self.sub_names[i] == name {
+                    sub = self.sub_parsers[i];
+                }
+            }
+            let parsed = match cli.parsers[sub].parse_known_args(cli, rest) {
+                Ok(p) => p,
+                Err(e) => return Err(Fail.Exit(e)),
+            };
+            for i in 0..parsed.ns.keys.len() {
+                st.ns.set(parsed.ns.keys[i], parsed.ns.vals[i].clone());
+            }
+            for i in 0..parsed.extras.len() {
+                st.extras.push(parsed.extras[i].clone());
+            }
+        }
+        Ok(())
+    }
+
+    // take_action
+    fn take_action(ref self, cli: ref Cli, st: mut ref State, ai: i64, args: ref Vec[String], option: Str) -> Result[(), Fail] {
+        let a = self.action(ai);
+        st.seen[ai] = true;
+        let values = self.get_values(a, args)?;
+        if a.option_strings.len() > 0 or args.len() > 0 {
+            st.seen_non_default[ai] = true;
+            let others = self.conflicts(ai);
+            for i in 0..others.len() {
+                if st.seen_non_default[others[i]] {
+                    let name = action_name(self.actions[others[i]]).unwrap_or("None".to_string());
+                    return Err(arg_error(a, f"not allowed with argument {name}"));
+                }
+            }
+        }
+        if let Value.Suppress = values {
+            return Ok(());
+        }
+        self.call_action(cli, st, ai, values, option)
+    }
+
+    // consume_optional
+    fn consume_optional(ref self, cli: ref Cli, st: mut ref State, start: i64) -> Result[i64, Fail] {
+        let tuples = st.tuples[start].clone();
+        if tuples.len() > 1 {
+            let mut names: Vec[String] = Vec.new();
+            for i in 0..tuples.len() {
+                names.push(tuples[i].option.clone());
+            }
+            return Err(Fail.Arg(f"ambiguous option: {st.args[start]} could match {join(names, ", ")}"));
+        }
+        let t = tuples[0].clone();
+        let mut action = t.action;
+        let mut option = t.option.clone();
+        let mut sep = t.sep.clone();
+        let mut explicit = t.explicit.clone();
+        let mut todo_actions: Vec[i64] = Vec.new();
+        let mut todo_args: Vec[Vec[String]] = Vec.new();
+        let mut todo_options: Vec[String] = Vec.new();
+        let mut stop: i64 = 0;
+        loop {
+            if action < 0 {
+                st.extras.push(st.args[start].clone());
+                return Ok(start + 1);
+            }
+            let a = self.action(action);
+            match explicit.clone() {
+                Some(ex) => {
+                    let count = self.match_argument(a, "A")?;
+                    if count == 0 and byte_at(option, 1) != b'-' and ex.len() > 0 {
+                        let has_sep = match ref sep {
+                            Some(s) => s.len() > 0,
+                            None => false,
+                        };
+                        if has_sep or first_byte(ex) == b'-' {
+                            return Err(arg_error(a, f"ignored explicit argument {py_repr(ex)}"));
+                        }
+                        todo_actions.push(action);
+                        todo_args.push(Vec.new());
+                        todo_options.push(option.clone());
+                        let ch = byte_str(to_bytes(option), 0, 1);
+                        let eb = to_bytes(ex);
+                        option = f"{ch}{byte_str(eb, 0, 1)}";
+                        let next = self.find_option(option);
+                        if next >= 0 {
+                            action = next;
+                            let rest = byte_str(eb, 1, eb.len());
+                            if rest.len() == 0 {
+                                sep = None;
+                                explicit = None;
+                            } else if first_byte(rest) == b'=' {
+                                sep = Some("=".to_string());
+                                explicit = Some(slice_from(rest, 1));
+                            } else {
+                                sep = Some(String.new());
+                                explicit = Some(rest);
+                            }
+                        } else {
+                            st.extras.push(f"{ch}{ex}");
+                            stop = start + 1;
+                            break;
+                        }
+                    } else if count == 1 {
+                        stop = start + 1;
+                        todo_actions.push(action);
+                        todo_args.push([ex]);
+                        todo_options.push(option.clone());
+                        break;
+                    } else {
+                        return Err(arg_error(a, f"ignored explicit argument {py_repr(ex)}"));
+                    }
+                }
+                None => {
+                    let from = start + 1;
+                    let selected = slice_from(st.pattern, from);
+                    let count = self.match_argument(a, selected)?;
+                    stop = from + count;
+                    let mut args: Vec[String] = Vec.new();
+                    for i in from..stop {
+                        args.push(st.args[i].clone());
+                    }
+                    todo_actions.push(action);
+                    todo_args.push(args);
+                    todo_options.push(option.clone());
+                    break;
+                }
+            }
+        }
+        for i in 0..todo_actions.len() {
+            self.take_action(cli, st, todo_actions[i], todo_args[i], todo_options[i])?;
+        }
+        Ok(stop)
+    }
+
+    // consume_positionals
+    fn consume_positionals(ref self, cli: ref Cli, st: mut ref State, start0: i64) -> Result[i64, Fail] {
+        let mut start = start0;
+        let selected = slice_from(st.pattern, start);
+        let counts = self.match_partial(st.positionals, selected);
+        let positionals = st.positionals.clone();
+        for i in 0..counts.len() {
+            let ai = positionals[i];
+            let a = self.action(ai);
+            let count = counts[i];
+            let mut args: Vec[String] = Vec.new();
+            for k in start..start + count {
+                args.push(st.args[k].clone());
+            }
+            let pb = to_bytes(st.pattern);
+            if a.nargs == PARSER {
+                if pb[start] == b'-' {
+                    args.remove(0);
+                }
+            } else if a.nargs != REMAINDER {
+                let mut dash = false;
+                for k in start..start + count {
+                    if pb[k] == b'-' {
+                        dash = true;
+                    }
+                }
+                if dash {
+                    for k in 0..args.len() {
+                        if args[k] == "--" {
+                            args.remove(k);
+                            break;
+                        }
+                    }
+                }
+            }
+            start += count;
+            self.take_action(cli, st, ai, args, "")?;
+        }
+        let mut rest: Vec[i64] = Vec.new();
+        for i in counts.len()..positionals.len() {
+            rest.push(positionals[i]);
+        }
+        st.positionals = rest;
+        Ok(start)
+    }
+
+    // _parse_known_args
+    fn parse_known(ref self, cli: ref Cli, args: ref Vec[String], ns: own Namespace) -> Result[Parsed, Fail] {
+        let mut pattern = String.new();
+        let mut is_opt: Vec[bool] = Vec.new();
+        let mut tuples: Vec[Vec[OptTuple]] = Vec.new();
+        let mut i: i64 = 0;
+        while i < args.len() {
+            if args[i] == "--" {
+                pattern.push_str("-");
+                is_opt.push(false);
+                tuples.push(Vec.new());
+                i += 1;
+                while i < args.len() {
+                    pattern.push_str("A");
+                    is_opt.push(false);
+                    tuples.push(Vec.new());
+                    i += 1;
+                }
+                break;
+            }
+            match self.parse_optional(args[i]) {
+                Some(t) => {
+                    pattern.push_str("O");
+                    is_opt.push(true);
+                    tuples.push(t);
+                }
+                None => {
+                    pattern.push_str("A");
+                    is_opt.push(false);
+                    tuples.push(Vec.new());
+                }
+            }
+            i += 1;
+        }
+        let mut seen: Vec[bool] = Vec.new();
+        for _ in 0..self.actions.len() {
+            seen.push(false);
+        }
+        let mut st = State {
+            args: args.clone(),
+            pattern: pattern,
+            is_opt: is_opt,
+            tuples: tuples,
+            seen: seen.clone(),
+            seen_non_default: seen,
+            ns: ns,
+            extras: Vec.new(),
+            positionals: self.positional_actions(),
+        };
+        let mut max_option: i64 = -1;
+        for k in 0..st.is_opt.len() {
+            if st.is_opt[k] {
+                max_option = k;
+            }
+        }
+        let mut start: i64 = 0;
+        while start <= max_option {
+            let mut next = start;
+            while next <= max_option and not st.is_opt[next] {
+                next += 1;
+            }
+            if start != next {
+                let end = self.consume_positionals(cli, mut st, start)?;
+                if end > start {
+                    start = end;
+                    continue;
+                }
+                start = end;
+            }
+            if not st.is_opt[start] {
+                for k in start..next {
+                    st.extras.push(st.args[k].clone());
+                }
+                start = next;
+            }
+            start = self.consume_optional(cli, mut st, start)?;
+        }
+        let stop = self.consume_positionals(cli, mut st, start)?;
+        for k in stop..st.args.len() {
+            st.extras.push(st.args[k].clone());
+        }
+        let mut required: Vec[String] = Vec.new();
+        for ai in 0..self.actions.len() {
+            if st.seen[ai] {
+                continue;
+            }
+            let a = self.action(ai);
+            if a.required {
+                required.push(action_name(a).unwrap_or("None".to_string()));
+            } else if let Value.Str(d) = a.default.clone() {
+                let at = st.ns.find(a.dest);
+                if at >= 0 and st.ns.origin[at] == ai {
+                    let v = self.get_value(a, d)?;
+                    st.ns.set(a.dest, v);
+                }
+            }
+        }
+        if required.len() > 0 {
+            return Err(Fail.Arg(f"the following arguments are required: {join(required, ", ")}"));
+        }
+        for g in 0..self.mutexes.len() {
+            let m = self.mutexes[g].clone();
+            if not m.required {
+                continue;
+            }
+            let mut any = false;
+            for k in 0..m.actions.len() {
+                if st.seen_non_default[m.actions[k]] {
+                    any = true;
+                }
+            }
+            if not any {
+                let mut names: Vec[String] = Vec.new();
+                for k in 0..m.actions.len() {
+                    names.push(action_name(self.actions[m.actions[k]]).unwrap_or("None".to_string()));
+                }
+                return Err(Fail.Arg(f"one of the arguments {join(names, " ")} is required"));
+            }
+        }
+        Ok(Parsed { ns: st.ns, extras: st.extras })
+    }
+
+    // parse_known_args: a fresh namespace with the defaults.
+    fn parse_known_args(ref self, cli: ref Cli, args: ref Vec[String]) -> Result[Parsed, Exit] {
+        let mut ns = Namespace { keys: Vec.new(), vals: Vec.new(), origin: Vec.new() };
+        for i in 0..self.actions.len() {
+            let a = self.action(i);
+            if a.dest != SUPPRESS and not ns.has(a.dest) {
+                if let Value.Suppress = a.default {
+                } else {
+                    ns.set_from(a.dest, a.default.clone(), i);
+                }
+            }
+        }
+        for i in 0..self.def_keys.len() {
+            if not ns.has(self.def_keys[i]) {
+                ns.set(self.def_keys[i], self.def_vals[i].clone());
+            }
+        }
+        match self.parse_known(cli, args, ns) {
+            Ok(p) => Ok(p),
+            Err(Fail.Arg(m)) => Err(self.error(m)),
+            Err(Fail.Exit(e)) => Err(e),
+        }
+    }
+
+    fn parse_args(ref self, cli: ref Cli, args: ref Vec[String]) -> Result[Namespace, Exit] {
+        let p = self.parse_known_args(cli, args)?;
+        if p.extras.len() > 0 {
+            return Err(self.error(f"unrecognized arguments: {join(p.extras, " ")}"));
+        }
+        Ok(p.ns)
+    }
+}
+
+// ------------------------------------------------------------ the two CLIs
+
+fn names(v: ref Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        out.push(v[i].to_string());
+    }
+    out
+}
+
+fn text_values(v: ref Vec[Str]) -> Vec[Value] {
+    let mut out: Vec[Value] = Vec.new();
+    for i in 0..v.len() {
+        out.push(Value.Str(v[i].to_string()));
+    }
+    out
+}
+
+fn helped(names: ref Vec[String], kind: i64, help: Str) -> Action {
+    let mut a = act(names, kind);
+    a.help = Some(help.to_string());
+    a
+}
+
+fn pkg() -> Cli {
+    let mut cli = Cli { parsers: Vec.new() };
+    let p = cli.new_parser("pkg", Some("A small package manager. It installs, removes and lists packages from a configured index, and keeps a lock file next to the project.".to_string()), Some("Run \"%(prog)s COMMAND --help\" for the options of one command.".to_string()), false);
+    let mut a = act(names(["-V", "--version"]), VERSION);
+    a.version = "%(prog)s 2.4.1".to_string();
+    cli.parsers[p].add(a);
+    let mut a = helped(names(["-v", "--verbose"]), COUNT, "print more output; repeat for even more (-vv)");
+    a.default = Value.Int(0);
+    cli.parsers[p].add(a);
+    cli.parsers[p].add(helped(names(["-q", "--quiet"]), STORE_TRUE, "print only errors"));
+    let mut a = helped(names(["-C", "--directory"]), STORE, "run as if started in %(metavar)s");
+    a.metavar = ["DIR".to_string()];
+    a.default = Value.Str(".".to_string());
+    cli.parsers[p].add(a);
+    let mut a = helped(names(["--color"]), STORE, "when to color the output (default: %(default)s)");
+    a.choices = text_values(["auto", "always", "never"]);
+    a.has_choices = true;
+    a.default = Value.Str("auto".to_string());
+    cli.parsers[p].add(a);
+    let mut a = helped(names(["--index-url"]), STORE, "base URL of the package index");
+    a.metavar = ["URL".to_string()];
+    a.default = Value.Str("https://pkg.example.org/simple".to_string());
+    cli.parsers[p].add(a);
+    let mut a = helped(names(["--timeout"]), STORE, "network timeout in seconds");
+    a.ty = T_FLOAT;
+    a.has_type = true;
+    a.default = Value.Float(15.0);
+    cli.parsers[p].add(a);
+    cli.parsers[p].add_subparsers("command", Some("commands".to_string()), Some("COMMAND".to_string()), true);
+
+    let ins = cli.add_parser(p, "install", names(["i", "add"]), Some("install packages".to_string()), Some("Install packages and their dependencies.".to_string()));
+    let mut a = helped(names(["packages"]), STORE, "a package name, optionally with a version such as requests==2.31 or a range such as 'flask>=3,<4'");
+    a.nargs = ONE_OR_MORE;
+    a.metavar = ["PACKAGE".to_string()];
+    cli.parsers[ins].add(a);
+    cli.parsers[ins].add(helped(names(["-U", "--upgrade"]), STORE_TRUE, "upgrade packages that are already installed"));
+    let mut a = helped(names(["-r", "--requirement"]), APPEND, "install from the given requirements file; may be given more than once");
+    a.default = Value.List(Vec.new());
+    a.metavar = ["FILE".to_string()];
+    a.dest = "requirements".to_string();
+    cli.parsers[ins].add(a);
+    cli.parsers[ins].add(helped(names(["--no-deps"]), STORE_TRUE, "don't install dependencies"));
+    let mut a = helped(names(["-j", "--jobs"]), STORE, "number of parallel downloads (default: %(default)s)");
+    a.ty = T_INT;
+    a.has_type = true;
+    a.default = Value.Str("4".to_string());
+    cli.parsers[ins].add(a);
+    cli.parsers[ins].add(helped(names(["--target"]), STORE, "install into this directory instead of the environment"));
+    let wher = cli.parsers[ins].add_mutex(false);
+    cli.parsers[ins].add_to(helped(names(["--user"]), STORE_TRUE, "install for the current user"), -1, wher);
+    cli.parsers[ins].add_to(helped(names(["--system"]), STORE_TRUE, "install for all users"), -1, wher);
+    cli.parsers[ins].set_default("handler", Value.Str("install".to_string()));
+
+    let rm = cli.add_parser(p, "remove", names(["rm"]), Some("remove packages".to_string()), None);
+    let mut a = act(names(["packages"]), STORE);
+    a.nargs = ONE_OR_MORE;
+    a.metavar = ["PACKAGE".to_string()];
+    cli.parsers[rm].add(a);
+    cli.parsers[rm].add(helped(names(["-y", "--yes"]), STORE_TRUE, "don't ask for confirmation"));
+    let mut a = helped(names(["--keep-config"]), BOOL_OPT, "keep the package's configuration files");
+    a.default = Value.Bool(true);
+    cli.parsers[rm].add(a);
+    cli.parsers[rm].set_default("handler", Value.Str("remove".to_string()));
+
+    let ls = cli.add_parser(p, "list", Vec.new(), Some("list installed packages".to_string()), None);
+    let mut a = helped(names(["pattern"]), STORE, "only packages whose names match this glob");
+    a.nargs = OPTIONAL;
+    a.default = Value.Str("*".to_string());
+    cli.parsers[ls].add(a);
+    let mut a = helped(names(["--format"]), STORE, "output format");
+    a.choices = text_values(["columns", "json", "freeze"]);
+    a.has_choices = true;
+    a.default = Value.Str("columns".to_string());
+    cli.parsers[ls].add(a);
+    cli.parsers[ls].add(helped(names(["--outdated"]), STORE_TRUE, "only packages with a newer version on the index"));
+    let mut a = helped(names(["--exclude"]), EXTEND, "leave these packages out");
+    a.nargs = ONE_OR_MORE;
+    a.metavar = ["PKG".to_string()];
+    cli.parsers[ls].add(a);
+    cli.parsers[ls].set_default("handler", Value.Str("list".to_string()));
+
+    let se = cli.add_parser(p, "search", Vec.new(), Some("search the index".to_string()), None);
+    let mut a = act(names(["query"]), STORE);
+    a.nargs = ONE_OR_MORE;
+    cli.parsers[se].add(a);
+    let mut a = helped(names(["--limit"]), STORE, "show at most N results");
+    a.ty = T_POSITIVE_INT;
+    a.has_type = true;
+    a.default = Value.Int(20);
+    a.metavar = ["N".to_string()];
+    cli.parsers[se].add(a);
+    let mut a = act(names(["--sort"]), STORE);
+    a.choices = text_values(["name", "downloads", "updated"]);
+    a.has_choices = true;
+    a.default = Value.Str("downloads".to_string());
+    cli.parsers[se].add(a);
+    let mut a = helped(names(["-i"]), STORE_TRUE, "ignore case");
+    a.dest = "case_insensitive".to_string();
+    cli.parsers[se].add(a);
+    cli.parsers[se].set_default("handler", Value.Str("search".to_string()));
+
+    let cfg = cli.add_parser(p, "config", Vec.new(), Some("read and write settings".to_string()), None);
+    cli.parsers[cfg].add_subparsers("config_command", None, None, false);
+    let g = cli.add_parser(cfg, "get", Vec.new(), Some("print a setting".to_string()), None);
+    cli.parsers[g].add(act(names(["key"]), STORE));
+    let s = cli.add_parser(cfg, "set", Vec.new(), Some("change a setting".to_string()), None);
+    cli.parsers[s].add(act(names(["key"]), STORE));
+    cli.parsers[s].add(act(names(["value"]), STORE));
+    let mut a = helped(names(["--global"]), STORE_CONST, "change the user-wide setting");
+    a.dest = "scope".to_string();
+    a.konst = Value.Str("global".to_string());
+    a.default = Value.Str("project".to_string());
+    cli.parsers[s].add(a);
+    let u = cli.add_parser(cfg, "unset", Vec.new(), Some("remove a setting".to_string()), None);
+    let mut a = act(names(["key"]), STORE);
+    a.nargs = ONE_OR_MORE;
+    cli.parsers[u].add(a);
+    cli.add_parser(cfg, "list", Vec.new(), Some("print all settings".to_string()), None);
+    cli.parsers[cfg].set_default("handler", Value.Str("config".to_string()));
+
+    let run = cli.add_parser(p, "run", Vec.new(), Some("run a script from the project file".to_string()), None);
+    cli.parsers[run].add(act(names(["script"]), STORE));
+    let mut a = helped(names(["args"]), STORE, "arguments passed on to the script");
+    a.nargs = REMAINDER;
+    cli.parsers[run].add(a);
+    cli.parsers[run].set_default("handler", Value.Str("run".to_string()));
+    cli
+}
+
+fn backup() -> Cli {
+    let mut cli = Cli { parsers: Vec.new() };
+    let b = cli.new_parser("backup", Some("Copy a directory tree into a dated, compressed archive.".to_string()), Some("examples:\n  backup --full /home /mnt/disk\n  backup --since 2024-01-01 --exclude '*.tmp' /etc /mnt/disk\n".to_string()), true);
+    cli.parsers[b].add(helped(names(["source"]), STORE, "directory to back up"));
+    cli.parsers[b].add(helped(names(["dest"]), STORE, "where to write the archive"));
+    let mode = cli.parsers[b].add_mutex(true);
+    cli.parsers[b].add_to(helped(names(["--full"]), STORE_TRUE, "copy everything"), -1, mode);
+    cli.parsers[b].add_to(helped(names(["--incremental"]), STORE_TRUE, "copy what changed since the last backup"), -1, mode);
+    let mut a = helped(names(["--since"]), STORE, "copy what changed since DATE");
+    a.metavar = ["DATE".to_string()];
+    a.ty = T_DATE;
+    a.has_type = true;
+    cli.parsers[b].add_to(a, -1, mode);
+    let comp = cli.parsers[b].add_group("compression", Some("Archives are compressed with zstd. Level 0 stores the files uncompressed.".to_string()));
+    let mut a = helped(names(["-l", "--level"]), STORE, "zstd level (default: %(default)s)");
+    a.ty = T_INT;
+    a.has_type = true;
+    a.choices = [Value.Int(0), Value.Int(1), Value.Int(3), Value.Int(9), Value.Int(19)];
+    a.has_choices = true;
+    a.default = Value.Int(3);
+    cli.parsers[b].add_to(a, comp, -1);
+    cli.parsers[b].add_to(helped(names(["--dedupe"]), STORE_TRUE, "store identical files once"), comp, -1);
+    let mut a = helped(names(["-x", "--exclude"]), APPEND, "skip files matching GLOB");
+    a.metavar = ["GLOB".to_string()];
+    cli.parsers[b].add(a);
+    let mut a = helped(names(["--keep"]), STORE, "keep the newest N archives and delete the older ones");
+    a.ty = T_INT;
+    a.has_type = true;
+    a.default = Value.Int(7);
+    a.metavar = ["N".to_string()];
+    cli.parsers[b].add(a);
+    cli.parsers[b].add(helped(names(["-n", "--dry-run"]), STORE_TRUE, "show what would be copied"));
+    let mut a = helped(names(["--rate"]), STORE, "limit the bandwidth to between MIN and MAX KiB/s");
+    a.nargs = 2;
+    a.ty = T_INT;
+    a.has_type = true;
+    a.metavar = ["MIN".to_string(), "MAX".to_string()];
+    a.metavar_tuple = true;
+    cli.parsers[b].add(a);
+    let mut a = helped(names(["--notify"]), STORE, "mail a report when done (to %(const)s if no address is given)");
+    a.nargs = OPTIONAL;
+    a.konst = Value.Str("root@localhost".to_string());
+    a.metavar = ["EMAIL".to_string()];
+    cli.parsers[b].add(a);
+    let mut a = helped(names(["--tz-offset"]), STORE, "hours to add to file times");
+    a.ty = T_INT;
+    a.has_type = true;
+    a.default = Value.Int(0);
+    a.metavar = ["HOURS".to_string()];
+    cli.parsers[b].add(a);
+    cli
+}
+
+// ------------------------------------------------------------ the files
+
+// data/cases.txt
+fn file_0() -> String {
+    """
+# pkg: the main parser
+pkg --help
+pkg -V
+pkg --version
+pkg
+pkg install requests
+pkg -v install requests flask
+pkg -vvv -q i 'flask>=3,<4' \"jinja2 == 3.1\"
+pkg -qv add -U -j8 --target=/opt/lib numpy
+pkg --verbose --verbose install --jobs=2 -r base.txt -r dev.txt pandas
+pkg -C/srv/app --color never install --no-deps --user six
+pkg --directory /srv/app --timeout 2.5 install six
+pkg --timeout 1e3 install six
+pkg --timeout soon install six
+pkg --color=sometimes install six
+pkg --col always install six
+pkg --in https://mirror.example.org install six
+pkg --index https://mirror.example.org/ install six
+pkg -C install six
+pkg install
+pkg install --user --system six
+pkg install --system --user six
+pkg install -j four six
+pkg install -j -3 six
+pkg install --up six
+pkg install --frobnicate six
+pkg --frobnicate install six
+pkg install six seven -- --weird-name
+pkg install -- -dash-name
+pkg frob
+pkg install --help
+pkg i -h
+pkg remove -y left-pad
+pkg rm --no-keep-config left-pad is-even
+pkg remove --keep-config=yes left-pad
+pkg remove
+pkg list
+pkg list 'django*' --format json --outdated
+pkg list --exclude pip setuptools --exclude wheel
+pkg list --exclude
+pkg list a b
+pkg search web framework --limit 5 --sort updated -i
+pkg search web --limit 0
+pkg search web --limit lots
+pkg search --sort size web
+pkg search
+pkg config
+pkg config get index-url
+pkg config set index-url https://mirror.example.org --global
+pkg config set timeout
+pkg config unset a b c
+pkg config list
+pkg config list extra
+pkg config delete key
+pkg config --help
+pkg config set --help
+pkg run test
+pkg run test --watch -k slow
+pkg -q run lint --fix src/
+pkg run
+pkg list --help
+pkg remove --help
+pkg search --help
+pkg run --help
+# backup: one parser with a required group
+backup --help
+backup --full /home /mnt/disk
+backup --incremental -n -x '*.tmp' -x .cache /home /mnt/disk
+backup --since 2024-01-01 --level 19 --dedupe /etc /mnt/disk
+backup --since 2024-13-01 /etc /mnt/disk
+backup --since yesterday /etc /mnt/disk
+backup /home /mnt/disk
+backup --full --incremental /home /mnt/disk
+backup --full /home
+backup --full
+backup --full -l 5 /home /mnt/disk
+backup --full -l x /home /mnt/disk
+backup --full --rate 100 500 /home /mnt/disk
+backup --full --rate 100 /home /mnt/disk
+backup --full --rate 100 fast /home /mnt/disk
+backup --full --notify /home /mnt/disk
+backup --full --notify ops@example.org /home /mnt/disk
+backup --full --notify=ops@example.org /home /mnt/disk
+backup --full --tz-offset -2 /home /mnt/disk
+backup --full --tz-offset=-2 /home /mnt/disk
+backup --full /home /mnt/disk -5
+backup --full --d /home /mnt/disk
+backup --full --de /home /mnt/disk
+backup --full --keep 3 --keep 4 /home /mnt/disk
+backup --full -nx '*.log' /home /mnt/disk
+backup --full -nl9 /home /mnt/disk
+backup --full -n=yes /home /mnt/disk
+backup --full --dry-run=yes /home /mnt/disk
+backup --inc /home /mnt/disk extra
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/cases.txt", file_0())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the runs
+
+fn read_file(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn print_block(text: Str, mark: Str) {
+    let ls = lines_of(text);
+    for i in 0..ls.len() {
+        println(f"  {mark}{ls[i]}");
+    }
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let cases = lines_of(read_file("data/cases.txt")?);
+    for c in 0..cases.len() {
+        let line = cases[c].clone();
+        if line.len() == 0 {
+            continue;
+        }
+        if first_byte(line) == b'#' {
+            println(line);
+            continue;
+        }
+        let argv = shlex_split(line);
+        let cli = if argv[0] == "pkg" { pkg() } else { backup() };
+        let mut args: Vec[String] = Vec.new();
+        for i in 1..argv.len() {
+            args.push(argv[i].clone());
+        }
+        println(f"$ {line}");
+        match cli.parsers[0].parse_args(cli, args) {
+            Ok(ns) => println(f"  {ns.repr()}"),
+            Err(e) => {
+                print_block(e.out, "|");
+                print_block(e.err, "!");
+                println(f"  exit {e.status}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_argparse: {e}");
+    }
+}

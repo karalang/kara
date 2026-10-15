@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 732 |
 | run-vs-build | 606 |
-| leak | 603 |
+| leak | 604 |
 | double-free | 427 |
 | missing-feature | 271 |
 | codegen-gap | 262 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2908 |
-| interp | 933 |
+| codegen | 2909 |
+| interp | 934 |
 | typecheck | 438 |
 | other | 115 |
 | ownership | 103 |
@@ -214,6 +214,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-45 | 2026-10-15 | typecheck | medium | karac check in library mode accepts a call to a method that does not exist on a #[derive(Serialize)] struct; the build then fails | — |
 | B-2026-10-15-46 | 2026-10-15 | parser | medium | AN EMPTY BODY AFTER AN UPPERCASE NAME IN A CONDITION PARSES AS AN EMPTY STRUCT LITERAL, so `if c == EOL { } else { .. }` and `while c == MAX_LEN { }` fail `karac check` and every MIR surface with `Expected LeftBrace, found Else` (or at the next statement); design.md says a `{` after a name in a condition always starts the body | — |
 | B-2026-10-15-47 | 2026-10-15 | typecheck | low | A STRUCT UPDATE WHOSE BASE IS A CALL (`Dialect { quoting: Q, ..excel() }`) IS REFUSED BY `karac check` AND EVERY MIR SURFACE, and the error says the spread is "parsed but NOT applied -- no field is copied from the base", which reads as the whole feature being missing; design.md lets `..base` be any expression of the struct's type | — |
+| B-2026-10-15-48 | 2026-10-15 | interp+codegen | medium | A user struct named like a library type with a special drop (`Mutex`, `Atomic`, `OnceLock`, `Arena`, `Pool`, `File`) gets that type's drop on both MIR backends, chosen by name: `struct Mutex { required: bool, actions: Vec[i64] }` is never dropped (`__mir-run` reports the Vec leaked at exit; `__mir-llvm-run` emits no drop call at all), and the other names leak, stop with "has no type argument", or panic in the runtime | — |
 
 ### Relocated
 
