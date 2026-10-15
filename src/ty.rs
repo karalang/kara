@@ -261,6 +261,16 @@ pub struct AdtDef {
     /// Derives `Copy` (`Option` is `Copy` without saying so, core
     /// semantics §1.1); an instance is `Copy` when its arguments are too.
     pub is_copy: bool,
+    /// Declared in the user's program, so a library type's name means
+    /// nothing here: a user `struct Pool` is not the library's `Pool`.
+    pub user: bool,
+}
+
+impl AdtDef {
+    /// The library type's name, when this is a library type.
+    pub fn library_name(&self) -> Option<&str> {
+        (!self.user).then_some(self.name.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -863,10 +873,11 @@ impl TyCtxt {
                 // A library cell keeps values of its type argument in place
                 // of its fields (the MIR interpreter's `once_method` and
                 // `arena_method`).
-                if HANDLES.contains(&adt.name.as_str()) {
+                let lib = adt.library_name().unwrap_or("");
+                if HANDLES.contains(&lib) {
                     return true;
                 }
-                if LIBRARY_CELLS.contains(&adt.name.as_str()) {
+                if LIBRARY_CELLS.contains(&lib) {
                     return args.first().is_some_and(|&t| self.needs_drop_in(t, outer));
                 }
                 outer.push(ty);
@@ -1238,6 +1249,7 @@ mod tests {
             ],
             has_drop_impl: false,
             is_copy: false,
+            user: false,
         });
         let of_int = tcx.adt(DefId(2), &[tcx.i64()]);
         let of_str = tcx.adt(DefId(2), &[tcx.str()]);

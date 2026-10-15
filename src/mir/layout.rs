@@ -138,7 +138,8 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
     let TyKind::Adt(a) = tys.kind(t) else {
         return None;
     };
-    match tys.adt(a).name.as_str() {
+    // A user type of a library type's name is laid out by its fields.
+    match tys.adt(a).library_name()? {
         // A `CStr` / `CString` is a pointer to NUL-terminated bytes.
         // A `TaskHandle` points at a block holding its task's result.
         // A `LinesIter` is its `BufReader`'s handle, borrowed.

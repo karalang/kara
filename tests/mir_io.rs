@@ -1220,3 +1220,48 @@ fn open_options_set_len_and_bytes_match_the_interpreter() {
         assert_eq!(built, interp);
     }
 }
+
+/// A user type with a library type's name is the user's: nested in an
+/// aggregate it drops through its own fields, not the library's handle
+/// (B-2026-10-15-48, and Thread A's `Pool` report).
+#[test]
+fn user_types_named_like_library_handles_drop_as_their_own() {
+    let dir = Scratch::new("shadow");
+    let src = r#"
+struct Loud { id: i64 }
+impl Drop for Loud {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+struct Pool { n: Vec[i64], l: Loud }
+struct File { name: String, l: Loud }
+struct W { p: Pool, f: File }
+struct Mutex { required: bool, l: Loud }
+struct Atomic { l: Loud }
+struct OnceLock { l: Loud }
+struct Arena { l: Loud }
+fn main() {
+    let m = Mutex { required: true, l: Loud { id: 4 } };
+    println(f"{m.required}");
+    let a = Atomic { l: Loud { id: 5 } };
+    let o = OnceLock { l: Loud { id: 6 } };
+    let r = Arena { l: Loud { id: 7 } };
+    let w = W { p: Pool { n: vec![1, 2], l: Loud { id: 1 } }, f: File { name: "x".to_string(), l: Loud { id: 2 } } };
+    println(f"{w.p.n.len()} {w.f.name}");
+    let v = vec![Pool { n: vec![3], l: Loud { id: 3 } }];
+    println(f"{v[0].n[0]}");
+}
+"#;
+    let (interp, built) = interp_and_build(dir.path(), src);
+    // Each `Loud` drops once, through its user type's own fields.
+    let mut drops: Vec<&str> = interp.lines().filter(|l| l.starts_with("drop")).collect();
+    drops.sort();
+    assert_eq!(
+        drops,
+        ["drop 1", "drop 2", "drop 3", "drop 4", "drop 5", "drop 6", "drop 7"],
+        "{interp}"
+    );
+    assert!(interp.starts_with("true\n2 x\n3\n"), "{interp}");
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}

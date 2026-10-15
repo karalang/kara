@@ -9039,7 +9039,8 @@ impl<'a> Interp<'a> {
         }
         // The library cells keep their contents where the type's fields
         // would be (`atomic_method`, `once_method`, `arena_method`).
-        let first = match adt.name.as_str() {
+        // A user type of a library type's name is not that library type.
+        let first = match adt.library_name().unwrap_or("") {
             // A `CString` holds its bytes as values.
             "Atomic" | "CString" | "Interner" => return Ok(()),
             // A dropped child neither waits nor kills; a dropped pipe or
@@ -11463,6 +11464,7 @@ fn main() -> () {
             }],
             has_drop_impl: true,
             is_copy: false,
+            user: false,
         });
         let rt = tys.intern(TyKind::Adt(r));
         let rref = tys.intern(TyKind::MutRef(rt));
@@ -11729,6 +11731,7 @@ exit main
             }],
             has_drop_impl: false,
             is_copy: false,
+            user: false,
         });
         w.tys.intern(TyKind::Shared(n))
     }

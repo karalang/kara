@@ -229,10 +229,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 if let Some(rt) = self.cell_drop(a) {
                     return self.drop_cell(p, ty, rt);
                 }
-                if self.tys.adt(a).name == "Atomic" {
+                // A library type's own drop, never a user type's of the
+                // same name.
+                let lib = self.tys.adt(a).library_name().unwrap_or("").to_string();
+                if lib == "Atomic" {
                     return Ok(());
                 }
-                if self.tys.adt(a).name == "Mutex" {
+                if lib == "Mutex" {
                     // A `Mutex[T]` holds its `T` in place.
                     if let Some(held) = self
                         .tys
@@ -246,7 +249,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                     return Ok(());
                 }
-                match self.tys.adt(a).name.as_str() {
+                match lib.as_str() {
                     // The pool's own reference, or the connection's value
                     // back to its pool (`pool.rs`).
                     "Pool" => {
@@ -259,7 +262,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                     _ => {}
                 }
-                if NOOP_DROPS.contains(&self.tys.adt(a).name.as_str()) {
+                if NOOP_DROPS.contains(&lib.as_str()) {
                     return Ok(());
                 }
                 if self.adt_has_drop_body(a)? {
@@ -326,7 +329,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// How the runtime drops the library cell `a`, if it is one.
     fn cell_drop(&self, a: AdtId) -> Option<CellDrop> {
-        let name = self.tys.adt(a).name.clone();
+        let name = self.tys.adt(a).library_name()?.to_string();
         LIBRARY_CELLS
             .iter()
             .find(|(n, _)| *n == name)

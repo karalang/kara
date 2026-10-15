@@ -109,6 +109,36 @@ pub fn lower_program<'a>(
     hir: TypedHir,
     capture_modes: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
 ) -> Lowered {
+    lower_program_with_library(program, source, None, tc, defs, res, rr, hir, capture_modes)
+}
+
+/// [`lower_program`] of a program whose first `user_len` bytes of `source`
+/// are the user's and the rest the appended library ([`library_source`]):
+/// a type the user declares is the user's whatever its name.
+#[allow(clippy::too_many_arguments)]
+pub fn lower_program_with_library<'a>(
+    program: &'a ast::Program,
+    source: &'a str,
+    user_len: Option<usize>,
+    tc: &'a TypeCheckResult,
+    defs: &ProgramDefs,
+    res: &FxHashMap<NodeId, Res>,
+    rr: &ResolveResult,
+    hir: TypedHir,
+    capture_modes: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+) -> Lowered {
+    let user_types: FxHashSet<String> = match user_len {
+        Some(n) => program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::StructDef(s) if s.span.offset < n => Some(s.name.clone()),
+                Item::EnumDef(e) if e.span.offset < n => Some(e.name.clone()),
+                _ => None,
+            })
+            .collect(),
+        None => FxHashSet::default(),
+    };
     let TypedHir {
         tcx,
         node_types,
@@ -118,6 +148,7 @@ pub fn lower_program<'a>(
     let mut lcx = Lcx {
         tc,
         source,
+        user_types,
         refined: program
             .items
             .iter()
@@ -425,6 +456,9 @@ struct Lcx<'a> {
     tc: &'a TypeCheckResult,
     /// The checked source text, for `dbg(e)`'s rendering of `e`.
     source: &'a str,
+    /// The structs and enums the user's program declares, as opposed to
+    /// the appended library's (`lower_program_with_library`).
+    user_types: FxHashSet<String>,
     /// The `where` predicate of each refinement and distinct type that has
     /// one, which making a value of it checks.
     refined: FxHashMap<String, &'a Expr>,
@@ -1467,6 +1501,9 @@ impl<'a> Lcx<'a> {
             });
         }
         let has_drop_impl = tc.drop_method_keys.contains_key(&name);
+        // Declared in the program rather than the library, whatever its
+        // name.
+        let user = self.user_types.contains(&name);
         if is_enum && tc.display_snake_case_enums.contains(&name) {
             self.program
                 .display_styles
@@ -1494,6 +1531,7 @@ impl<'a> Lcx<'a> {
             variants: vdefs,
             has_drop_impl,
             is_copy: copy || (is_enum && matches!(name.as_str(), "Option" | "Result")),
+            user,
         });
         if has_drop_impl {
             let drop_fn = self
@@ -9877,10 +9915,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                         // through a borrow.)
                         let declared_own = owns.get(i).copied().unwrap_or(false) && {
                             let (_, b) = self.strip_ty_full(t);
-                            self.tys()
-                                .tcx()
-                                .adt_of(b)
-                                .is_some_and(|(a, _)| crate::ty::HANDLES.contains(&a.name.as_str()))
+                            self.tys().tcx().adt_of(b).is_some_and(|(a, _)| {
+                                a.library_name()
+                                    .is_some_and(|n| crate::ty::HANDLES.contains(&n))
+                            })
                         };
                         // A closure moves in, as into a library method.
                         let moves = stores
@@ -14939,9 +14977,10 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
     let res = crate::node_res::node_res(&r, &defs, 0, None);
     let hir = crate::typed_hir::build(&tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
     let own = crate::ownershipcheck(&program, &tc);
-    let mut lowered = lower_program(
+    let mut lowered = lower_program_with_library(
         &program,
         &src,
+        Some(user_len),
         &tc,
         &defs,
         &res,
