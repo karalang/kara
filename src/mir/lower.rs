@@ -9539,7 +9539,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if let Some((d, f)) = def {
                         if let Some(mode) = f.self_param.clone() {
                             let inst_args = self.instance_args(e.span, &substs)?;
-                            let recv = match self.self_mode(f, mode, vt) {
+                            let mode = self.self_mode(f, mode, vt);
+                            // A constant array's `Slice[T]` methods take a
+                            // view of it (`AA.iter()`; B-2026-10-14-52).
+                            let as_slice = self.lcx.fns[&d].impl_slice
+                                && !matches!(self.tys().tcx().kind(vt), HK::Slice { .. });
+                            if let (true, Some(&elem)) = (as_slice, inst_args.first()) {
+                                let mutable = matches!(mode, SelfParam::MutRef);
+                                let slice_t = self.tys().tcx().intern(HK::Slice { elem, mutable });
+                                let s = self.slice_view_of(Place::local(tmp), vt, slice_t, mutable);
+                                let recv = self.slice_receiver(s, slice_t, &mode);
+                                return self.def_call(e, d, f, inst_args, Some(recv), args, dest);
+                            }
+                            let recv = match mode {
                                 SelfParam::Owned => Operand::Move(Place::local(tmp)),
                                 SelfParam::Ref => self.ref_to(Place::local(tmp), vt),
                                 SelfParam::MutRef => {
@@ -10574,6 +10586,48 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// or (`range`) the part from `start` to `end`: the library's
     /// `as_slice` / `as_mut_slice`, or `slice` / `slice_mut` with `usize`
     /// bounds (an open end is the length).
+    /// A view of the whole of the collection at `p` (of type `ct`) as
+    /// `slice_t`.
+    fn slice_view_of(&mut self, p: Place, ct: Ty, slice_t: Ty, mutable: bool) -> Local {
+        let rt = self.tys().tcx().reference(ct, mutable);
+        let kind = if mutable {
+            BorrowKind::Mut
+        } else {
+            BorrowKind::Shared
+        };
+        let name = self.tys().display(ct);
+        let s = self.temp(slice_t);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(kind, p));
+        let method = if mutable { "as_mut_slice" } else { "as_slice" };
+        self.call_native(
+            &format!("{name}.{method}"),
+            vec![Operand::Move(Place::local(r))],
+            Place::local(s),
+        );
+        s
+    }
+
+    /// The receiver a `Slice[T]` method of mode `mode` takes from the view
+    /// `s`.
+    fn slice_receiver(&mut self, s: Local, slice_t: Ty, mode: &SelfParam) -> Operand {
+        match mode {
+            SelfParam::Owned => Operand::Move(Place::local(s)),
+            SelfParam::Ref | SelfParam::MutRef => {
+                let mutable = matches!(mode, SelfParam::MutRef);
+                let rt = self.tys().tcx().reference(slice_t, mutable);
+                let r = self.temp(rt);
+                let kind = if mutable {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                self.assign(r, Rvalue::Ref(kind, Place::local(s)));
+                Operand::Move(Place::local(r))
+            }
+        }
+    }
+
     fn slice_view(
         &mut self,
         coll: &'a Expr,
@@ -10596,18 +10650,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             BorrowKind::Shared
         };
         let name = self.tys().display(ct);
-        let s = self.temp(slice_t);
         let Some((start, end, inclusive)) = range else {
-            let r = self.temp(rt);
-            self.assign(r, Rvalue::Ref(kind, p));
-            let method = if mutable { "as_mut_slice" } else { "as_slice" };
-            self.call_native(
-                &format!("{name}.{method}"),
-                vec![Operand::Move(Place::local(r))],
-                Place::local(s),
-            );
-            return Ok(s);
+            return Ok(self.slice_view_of(p, ct, slice_t, mutable));
         };
+        let s = self.temp(slice_t);
         let lo = match start {
             Some(x) => {
                 let o = self.expr_operand(x)?;
@@ -12152,20 +12198,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                             let mutable = matches!(m, SelfParam::MutRef);
                             let slice_t = self.tys().tcx().intern(HK::Slice { elem, mutable });
                             let s = self.slice_view(object, None, slice_t, mutable)?;
-                            Some(match m {
-                                SelfParam::Owned => Operand::Move(Place::local(s)),
-                                _ => {
-                                    let rt = self.tys().tcx().reference(slice_t, mutable);
-                                    let r = self.temp(rt);
-                                    let kind = if mutable {
-                                        BorrowKind::Mut
-                                    } else {
-                                        BorrowKind::Shared
-                                    };
-                                    self.assign(r, Rvalue::Ref(kind, Place::local(s)));
-                                    Operand::Move(Place::local(r))
-                                }
-                            })
+                            Some(self.slice_receiver(s, slice_t, m))
                         }
                     }
                     _ => None,

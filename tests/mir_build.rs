@@ -1657,3 +1657,33 @@ fn mir_type_error_carries_its_line_and_column() {
     let err = karac::mir::lower::build_source(SRC).err().expect("refused");
     assert!(err.starts_with("typecheck: 3:"), "{err}");
 }
+
+/// A constant array's `Slice` methods take a view of it, as a local's do
+/// (B-2026-10-14-52).
+#[test]
+fn mir_const_array_receiver_of_a_slice_method_is_viewed() {
+    const SRC: &str = r#"
+const AA: Array[i64, 3] = [1, 2, 3];
+const PS: Array[(Str, i64), 2] = [("a", 1), ("b", 2)];
+
+fn main() {
+    let mut s = 0;
+    for x in AA.iter() {
+        s += *x;
+    }
+    println(f"{s}");
+    println(AA.iter().count());
+    for (k, v) in PS.iter() {
+        println(f"{k}={v}");
+    }
+}
+"#;
+    let want = "6\n3\na=1\nb=2\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
