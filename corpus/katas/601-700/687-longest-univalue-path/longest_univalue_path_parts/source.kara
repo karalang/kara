@@ -1,0 +1,236 @@
+// LeetCode #687: Longest Univalue Path -- the longest path in each part.
+//
+// Keep only the edges between a parent and a child of the same value:
+// the tree falls apart into pieces, each itself a tree of one value. The
+// answer is the longest path within any piece, its diameter: from any
+// node, the farthest node is one end of a longest path, and the
+// farthest from that is the other end. Two breadth-first searches per
+// piece. O(nodes) time and space.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// The node farthest from `start` within its piece, and how far it is.
+fn farthest(adj: ref Vec[Vec[i64]], start: i64, seen: mut ref Vec[i64], mark: i64) -> (i64, i64) {
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    seen[start] = mark;
+    queue.push_back((start, 0));
+    let mut last = (start, 0);
+    while let Some((v, d)) = queue.pop_front() {
+        last = (v, d);
+        for w in adj[v].iter() {
+            if seen[*w] != mark {
+                seen[*w] = mark;
+                queue.push_back((*w, d + 1));
+            }
+        }
+    }
+    last
+}
+
+fn longest_univalue_path(root: Option[TreeNode]) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, -1));
+    }
+    let mut values: Vec[i64] = Vec.new();
+    while let Some((n, parent)) = stack.pop() {
+        let id = adj.len();
+        adj.push(Vec.new());
+        values.push(n.val);
+        if parent >= 0 and values[parent] == n.val {
+            adj[parent].push(id);
+            adj[id].push(parent);
+        }
+        if let Some(c) = n.left {
+            stack.push((c, id));
+        }
+        if let Some(c) = n.right {
+            stack.push((c, id));
+        }
+    }
+    let count = adj.len();
+    let mut seen: Vec[i64] = vec![-1; count];
+    let mut done: Vec[bool] = vec![false; count];
+    let mut best = 0;
+    for v in 0..count {
+        if not done[v] {
+            let (end, _) = farthest(adj, v, mut seen, 2 * v);
+            let (_, length) = farthest(adj, end, mut seen, 2 * v + 1);
+            if length > best {
+                best = length;
+            }
+            let mut queue: Vec[i64] = vec![v];
+            done[v] = true;
+            while let Some(u) = queue.pop() {
+                for w in adj[u].iter() {
+                    if not done[*w] {
+                        done[*w] = true;
+                        queue.push(*w);
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+fn show(name: String, root: Option[TreeNode]) {
+    println(f"{name}: {longest_univalue_path(root)}");
+}
+
+// The tree of `n` nodes whose shape is number `shape` among the
+// catalan[n] shapes, its values taken in preorder from the binary digits
+// of `code`, 1 for a 0 digit and 2 for a 1.
+fn build(n: i64, shape: i64, catalan: ref Vec[i64], code: mut ref i64) -> Option[TreeNode] {
+    if n == 0 {
+        return None;
+    }
+    let mut k = 0;
+    let mut rest = shape;
+    while rest >= catalan[k] * catalan[n - 1 - k] {
+        rest -= catalan[k] * catalan[n - 1 - k];
+        k += 1;
+    }
+    let node = leaf(1 + *code % 2);
+    *code /= 2;
+    node.left = build(k, rest / catalan[n - 1 - k], catalan, code);
+    node.right = build(n - 1 - k, rest % catalan[n - 1 - k], catalan, code);
+    Some(node)
+}
+
+// A random tree at most `levels` deep: each child is there with chance
+// `chance` in 100, its value from 1 to `values`.
+fn random_tree(seed: mut ref i64, levels: i64, values: i64, chance: i64) -> TreeNode {
+    let n = leaf(1 + next_random(seed) % values);
+    if levels > 1 {
+        if next_random(seed) % 100 < chance {
+            n.left = Some(random_tree(seed, levels - 1, values, chance));
+        }
+        if next_random(seed) % 100 < chance {
+            n.right = Some(random_tree(seed, levels - 1, values, chance));
+        }
+    }
+    n
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("[5,4,5,1,1,null,5]", from_level(vec![Some(5), Some(4), Some(5), Some(1), Some(1), None, Some(5)]));
+    show("[1,4,5,4,4,null,5]", from_level(vec![Some(1), Some(4), Some(5), Some(4), Some(4), None, Some(5)]));
+    // No tree, one node, a path that bends at the root, two runs of one
+    // value split by another, and the longest run below a root that
+    // differs from it.
+    show("[]", from_level(vec![]));
+    show("[1]", from_level(vec![Some(1)]));
+    show("[1,1,1,1,null,null,1]", from_level(vec![Some(1), Some(1), Some(1), Some(1), None, None, Some(1)]));
+    show("[1,1,1,2,null,null,2,1,null,null,1]", from_level(vec![Some(1), Some(1), Some(1), Some(2), None, None, Some(2), Some(1), None, None, Some(1)]));
+    show("[1,2,3,2,2,3,3,2,2,2,2]", from_level(vec![Some(1), Some(2), Some(3), Some(2), Some(2), Some(3), Some(3), Some(2), Some(2), Some(2), Some(2)]));
+    show("[-5,-5,-5,1000,-5,-5]", from_level(vec![Some(-5), Some(-5), Some(-5), Some(1000), Some(-5), Some(-5)]));
+
+    // A zigzag of 1,000 nodes of one value, then with one node changed.
+    let top = leaf(7);
+    let mut at = top;
+    let mut middle = top;
+    for i in 1..1000 {
+        let c = leaf(7);
+        if i % 2 == 0 {
+            at.left = Some(c);
+        } else {
+            at.right = Some(c);
+        }
+        if i == 600 {
+            middle = c;
+        }
+        at = c;
+    }
+    let before = longest_univalue_path(Some(top));
+    middle.val = 8;
+    println(f"zigzag of 1000: {before}, with node 600 changed: {longest_univalue_path(Some(top))}");
+
+    // A full tree of 15 levels holding one value.
+    let mut seed = 687;
+    let full = random_tree(mut seed, 15, 1, 100);
+    println(f"full 15 levels of one value: {longest_univalue_path(Some(full))}");
+
+    // Every tree of 1 to 6 nodes with values 1 and 2.
+    let mut catalan: Vec[i64] = vec![1];
+    for n in 1..7 {
+        let mut c = 0;
+        for k in 0..n {
+            c += catalan[k] * catalan[n - 1 - k];
+        }
+        catalan.push(c);
+    }
+    let mut counts: Vec[i64] = vec![0; 6];
+    let mut trees = 0;
+    let mut sum = 0;
+    for n in 1..7 {
+        for shape in 0..catalan[n] {
+            for values in 0..(1 << n) {
+                let mut code = values;
+                let t = build(n, shape, catalan, mut code);
+                let r = longest_univalue_path(t);
+                counts[r] += 1;
+                trees += 1;
+                sum = (sum * 31 + r + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"all {trees} trees of 1 to 6 nodes over values 1 and 2, by answer 0 to 5: {counts}, checksum {sum}");
+
+    // 1,000 random trees up to 8 levels, values 1 to 1, 2 or 3.
+    let mut checksum = 0;
+    for _ in 0..1000 {
+        let values = 1 + next_random(mut seed) % 3;
+        let chance = 50 + next_random(mut seed) % 40;
+        let t = random_tree(mut seed, 8, values, chance);
+        checksum = (checksum * 31 + longest_univalue_path(Some(t)) + 1) % 1000000007;
+    }
+    println(f"1000 random trees: checksum {checksum}");
+}

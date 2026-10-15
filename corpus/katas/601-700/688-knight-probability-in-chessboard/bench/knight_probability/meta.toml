@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/688-knight-probability-in-chessboard/bench/knight_probability.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "7e52125b4"
+extracted_src = "31c42356"
+model_rev = "583cfb0d"
+model_src = "31c42356"

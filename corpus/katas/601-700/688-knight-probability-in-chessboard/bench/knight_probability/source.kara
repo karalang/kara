@@ -1,0 +1,62 @@
+// LeetCode #688: Knight Probability in Chessboard -- the chances, forward.
+// Bench.
+//
+// 60 queries, boards of 15 to 25 squares a side and 50 to 100 moves from
+// a random start, are drawn once; then 50 rounds answer every query.
+
+fn knight_probability(n: i64, k: i64, row: i64, column: i64) -> f64 {
+    let dr = [2, 1, -1, -2, -2, -1, 1, 2];
+    let dc = [1, 2, 2, 1, -1, -2, -2, -1];
+    let mut board: Vec[f64] = vec![0.0; n * n];
+    board[row * n + column] = 1.0;
+    for _ in 0..k {
+        let mut next: Vec[f64] = vec![0.0; n * n];
+        for r in 0..n {
+            for c in 0..n {
+                let p = board[r * n + c];
+                if p > 0.0 {
+                    for m in 0..8 {
+                        let r2 = r + dr[m];
+                        let c2 = c + dc[m];
+                        if r2 >= 0 and r2 < n and c2 >= 0 and c2 < n {
+                            next[r2 * n + c2] += p / 8.0;
+                        }
+                    }
+                }
+            }
+        }
+        board = next;
+    }
+    let mut total = 0.0;
+    for p in board.iter() {
+        total += *p;
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 60;
+    let rounds = 50;
+    let mut seed = 688;
+    let mut queries: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for _ in 0..count {
+        let n = 15 + next_random(mut seed) % 11;
+        let k = 50 + next_random(mut seed) % 51;
+        let row = next_random(mut seed) % n;
+        let column = next_random(mut seed) % n;
+        queries.push((n, k, row, column));
+    }
+    let mut sum = 0.0;
+    for _ in 0..rounds {
+        for q in 0..count {
+            let (n, k, row, column) = queries[q];
+            sum += knight_probability(n, k, row, column);
+        }
+    }
+    println(f"{count * rounds} queries answered, sum {sum:.6}");
+}

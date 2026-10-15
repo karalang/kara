@@ -1,0 +1,15 @@
+n = 3, k = 2, start (0, 0): 0.06250
+n = 1, k = 0, start (0, 0): 1.00000
+n = 1, k = 1, start (0, 0): 0.00000
+n = 2, k = 3, start (1, 0): 0.00000
+n = 3, k = 1, start (1, 1): 0.00000
+n = 8, k = 0, start (7, 7): 1.00000
+n = 8, k = 1, start (3, 4): 1.00000
+n = 8, k = 30, start (0, 0): 0.00006
+n = 25, k = 100, start (12, 12): 0.04743
+n = 25, k = 100, start (0, 0): 0.00122
+n = 25, k = 100, start (24, 13): 0.00770
+3 x 3 from a corner, times 4^k: k = 1: 1.00000, k = 10: 1.00000, k = 50: 1.00000, k = 100: 1.00000
+1428 small queries: 36 certain to fall off, 234 certain to stay, sum 518.33530
+12 x 12, 20 moves, every start: lowest 0.00982, highest 0.09859, sum 7.31770
+200 random queries: sum 38.72524

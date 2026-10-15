@@ -1,0 +1,81 @@
+// LeetCode #687: Longest Univalue Path -- one walk, two arms per node.
+// Bench.
+//
+// 100 random trees of up to 16 levels, values 1 and 2, are built once;
+// then 30 rounds answer every tree.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn longest_univalue_path(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    arm(root, mut best);
+    best
+}
+
+// The node's longest downward path of its own value, in edges; `best`
+// takes the longest path that bends at the node.
+fn arm(node: Option[TreeNode], best: mut ref i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let l = arm(n.left, best);
+            let r = arm(n.right, best);
+            let mut left = 0;
+            let mut right = 0;
+            if let Some(c) = n.left {
+                if c.val == n.val {
+                    left = l + 1;
+                }
+            }
+            if let Some(c) = n.right {
+                if c.val == n.val {
+                    right = r + 1;
+                }
+            }
+            if left + right > *best {
+                *best = left + right;
+            }
+            left.max(right)
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_tree(seed: mut ref i64, levels: i64) -> TreeNode {
+    let n = TreeNode { val: 1 + next_random(seed) % 2, left: None, right: None };
+    if levels > 1 {
+        if next_random(seed) % 100 < 88 {
+            n.left = Some(random_tree(seed, levels - 1));
+        }
+        if next_random(seed) % 100 < 88 {
+            n.right = Some(random_tree(seed, levels - 1));
+        }
+    }
+    n
+}
+
+fn main() {
+    let count = 100;
+    let rounds = 30;
+    let mut seed = 687;
+    let mut trees: Vec[TreeNode] = Vec.new();
+    for _ in 0..count {
+        trees.push(random_tree(mut seed, 16));
+    }
+    let mut sum = 0;
+    for r in 0..rounds {
+        for c in 0..count {
+            let k = longest_univalue_path(Some(trees[c]));
+            sum = (sum * 31 + k + r) % 1000000007;
+        }
+    }
+    println(f"{count * rounds} trees answered, checksum {sum}");
+}

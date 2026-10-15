@@ -1,0 +1,12 @@
+[5,4,5,1,1,null,5]: 2
+[1,4,5,4,4,null,5]: 2
+[]: 0
+[1]: 0
+[1,1,1,1,null,null,1]: 4
+[1,1,1,2,null,null,2,1,null,null,1]: 2
+[1,2,3,2,2,3,3,2,2,2,2]: 4
+[-5,-5,-5,1000,-5,-5]: 4
+zigzag of 1000: 999, with node 600 changed: 599
+full 15 levels of one value: 28
+all 10066 trees of 1 to 6 nodes over values 1 and 2, by answer 0 to 5: [392, 3644, 3570, 1700, 632, 128], checksum 680861597
+1000 random trees: checksum 37222231

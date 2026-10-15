@@ -1,0 +1,264 @@
+// LeetCode #688: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random queries.
+
+// ---- star arm ----------------------------------------------------------
+
+fn knight_probability_star(n: i64, k: i64, row: i64, column: i64) -> f64 {
+    let dr = [2, 1, -1, -2, -2, -1, 1, 2];
+    let dc = [1, 2, 2, 1, -1, -2, -2, -1];
+    let mut board: Vec[f64] = vec![0.0; n * n];
+    board[row * n + column] = 1.0;
+    for _ in 0..k {
+        let mut next: Vec[f64] = vec![0.0; n * n];
+        for r in 0..n {
+            for c in 0..n {
+                let p = board[r * n + c];
+                if p > 0.0 {
+                    for m in 0..8 {
+                        let r2 = r + dr[m];
+                        let c2 = c + dc[m];
+                        if r2 >= 0 and r2 < n and c2 >= 0 and c2 < n {
+                            next[r2 * n + c2] += p / 8.0;
+                        }
+                    }
+                }
+            }
+        }
+        board = next;
+    }
+    let mut total = 0.0;
+    for p in board.iter() {
+        total += *p;
+    }
+    total
+}
+
+// ---- back arm ----------------------------------------------------------
+
+fn knight_probability_back(n: i64, k: i64, row: i64, column: i64) -> f64 {
+    let dr = [2, 1, -1, -2, -2, -1, 1, 2];
+    let dc = [1, 2, 2, 1, -1, -2, -2, -1];
+    let mut stay: Vec[f64] = vec![1.0; n * n];
+    for _ in 0..k {
+        let mut next: Vec[f64] = vec![0.0; n * n];
+        for r in 0..n {
+            for c in 0..n {
+                let mut sum = 0.0;
+                for m in 0..8 {
+                    let r2 = r + dr[m];
+                    let c2 = c + dc[m];
+                    if r2 >= 0 and r2 < n and c2 >= 0 and c2 < n {
+                        sum += stay[r2 * n + c2];
+                    }
+                }
+                next[r * n + c] = sum / 8.0;
+            }
+        }
+        stay = next;
+    }
+    stay[row * n + column]
+}
+
+// ---- memo arm ----------------------------------------------------------
+
+fn knight_probability_memo(n: i64, k: i64, row: i64, column: i64) -> f64 {
+    let mut memo: Vec[f64] = vec![-1.0; (k + 1) * n * n];
+    chance_memo(n, k, row, column, mut memo)
+}
+
+fn chance_memo(n: i64, left: i64, r: i64, c: i64, memo: mut ref Vec[f64]) -> f64 {
+    if r < 0 or r >= n or c < 0 or c >= n {
+        return 0.0;
+    }
+    if left == 0 {
+        return 1.0;
+    }
+    let at = (left * n + r) * n + c;
+    if memo[at] >= 0.0 {
+        return memo[at];
+    }
+    let sum = chance_memo(n, left - 1, r + 2, c + 1, memo)
+        + chance_memo(n, left - 1, r + 1, c + 2, memo)
+        + chance_memo(n, left - 1, r - 1, c + 2, memo)
+        + chance_memo(n, left - 1, r - 2, c + 1, memo)
+        + chance_memo(n, left - 1, r - 2, c - 1, memo)
+        + chance_memo(n, left - 1, r - 1, c - 2, memo)
+        + chance_memo(n, left - 1, r + 1, c - 2, memo)
+        + chance_memo(n, left - 1, r + 2, c - 1, memo);
+    memo[at] = sum / 8.0;
+    sum / 8.0
+}
+
+// ---- count arm ---------------------------------------------------------
+
+fn knight_probability_count(n: i64, k: i64, row: i64, column: i64) -> f64 {
+    let dr = [2, 1, -1, -2, -2, -1, 1, 2];
+    let dc = [1, 2, 2, 1, -1, -2, -2, -1];
+    let mut walks: Vec[f64] = vec![0.0; n * n];
+    walks[row * n + column] = 1.0;
+    let mut all = 1.0;
+    for _ in 0..k {
+        let mut next: Vec[f64] = vec![0.0; n * n];
+        for r in 0..n {
+            for c in 0..n {
+                let w = walks[r * n + c];
+                if w > 0.0 {
+                    for m in 0..8 {
+                        let r2 = r + dr[m];
+                        let c2 = c + dc[m];
+                        if r2 >= 0 and r2 < n and c2 >= 0 and c2 < n {
+                            next[r2 * n + c2] += w;
+                        }
+                    }
+                }
+            }
+        }
+        walks = next;
+        all *= 8.0;
+    }
+    let mut on = 0.0;
+    for w in walks.iter() {
+        on += *w;
+    }
+    on / all
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, n: i64, k: i64, row: i64, column: i64) -> f64 {
+    if which == 0 {
+        knight_probability_star(n, k, row, column)
+    } else if which == 1 {
+        knight_probability_back(n, k, row, column)
+    } else if which == 2 {
+        knight_probability_memo(n, k, row, column)
+    } else {
+        knight_probability_count(n, k, row, column)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 0.000000000001
+}
+
+// The definition: every one of the 8^k move sequences, read as the k
+// digits of a number in base 8, walked from the start; the share of
+// them that never leave the board.
+fn definition(n: i64, k: i64, row: i64, column: i64) -> f64 {
+    let jumps = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+    let mut all = 1;
+    for _ in 0..k {
+        all *= 8;
+    }
+    let mut stayed = 0;
+    for sequence in 0..all {
+        let mut digits = sequence;
+        let mut r = row;
+        let mut c = column;
+        let mut on = true;
+        for _ in 0..k {
+            let (a, b) = jumps[digits % 8];
+            digits = digits / 8;
+            r += a;
+            c += b;
+            if r < 0 or r >= n or c < 0 or c >= n {
+                on = false;
+            }
+        }
+        if on {
+            stayed += 1;
+        }
+    }
+    stayed as f64 / all as f64
+}
+
+// The start square under one of the board's eight symmetries, `which`
+// from 1 to 7: transposed if bit 0, rows reversed if bit 1, columns
+// reversed if bit 2.
+fn symmetric(n: i64, which: i64, row: i64, column: i64) -> (i64, i64) {
+    let mut r = row;
+    let mut c = column;
+    if which % 2 == 1 {
+        let t = r;
+        r = c;
+        c = t;
+    }
+    if (which / 2) % 2 == 1 {
+        r = n - 1 - r;
+    }
+    if (which / 4) % 2 == 1 {
+        c = n - 1 - c;
+    }
+    (r, c)
+}
+
+fn main() {
+    let mut seed = 6880;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 900;
+    let mut small = 0;
+    for q in 0..cases {
+        let big = q % 3 == 2;
+        let n = if big { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 8 };
+        let k = if big { next_random(mut seed) % 11 } else { next_random(mut seed) % 5 };
+        let row = next_random(mut seed) % n;
+        let column = next_random(mut seed) % n;
+        let want = if big { -1.0 } else { definition(n, k, row, column) };
+        if not big {
+            small += 1;
+        }
+        let (sr, sc) = symmetric(n, 1 + next_random(mut seed) % 7, row, column);
+        for which in 0..arms {
+            let got = answer(which, n, k, row, column);
+            // P1: the definition's answer, on up to 8 squares a side and 4 moves.
+            if not big {
+                checks += 1;
+                if not near(got, want) {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the start moved by a symmetry of the board answers the same.
+            checks += 1;
+            if not near(answer(which, n, k, sr, sc), got) {
+                fails[1] += 1;
+            }
+            // P3: one move more is the average over the eight first moves
+            // of one move less from where each lands, 0 off the board.
+            checks += 1;
+            let mut sum = 0.0;
+            for (a, b) in [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)] {
+                let r = row + a;
+                let c = column + b;
+                if r >= 0 and r < n and c >= 0 and c < n {
+                    sum += answer(which, n, k, r, c);
+                }
+            }
+            if not near(answer(which, n, k + 1, row, column), sum / 8.0) {
+                fails[2] += 1;
+            }
+            // P4: a move more never raises the chance, and a board one
+            // square larger each way, the start where it was, never lowers it.
+            checks += 1;
+            if answer(which, n, k + 1, row, column) > got + 0.000000000001 or answer(which, n + 1, k, row, column) < got - 0.000000000001 {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} queries ({small} against the definition), {arms} arms, {checks} checks, {total} failures");
+}

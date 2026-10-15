@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/687-longest-univalue-path/bench/longest_univalue_path.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "7e52125b4"
+extracted_src = "c62a5719"
+model_rev = "583cfb0d"
+model_src = "c62a5719"

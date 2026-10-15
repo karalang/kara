@@ -1,0 +1,126 @@
+// LeetCode #688: Knight Probability in Chessboard -- the chances, backward.
+//
+// Work out, for every square at once, the chance that a knight standing
+// there stays on the board for s more moves: 1 for s = 0, and for each
+// further move an eighth of the sum over its targets that are on the
+// board. The answer is the start square's chance for s = k. O(k x n^2)
+// time, two boards of n^2, and the same table answers every start.
+
+fn knight_probability(n: i64, k: i64, row: i64, column: i64) -> f64 {
+    let dr = [2, 1, -1, -2, -2, -1, 1, 2];
+    let dc = [1, 2, 2, 1, -1, -2, -2, -1];
+    let mut stay: Vec[f64] = vec![1.0; n * n];
+    for _ in 0..k {
+        let mut next: Vec[f64] = vec![0.0; n * n];
+        for r in 0..n {
+            for c in 0..n {
+                let mut sum = 0.0;
+                for m in 0..8 {
+                    let r2 = r + dr[m];
+                    let c2 = c + dc[m];
+                    if r2 >= 0 and r2 < n and c2 >= 0 and c2 < n {
+                        sum += stay[r2 * n + c2];
+                    }
+                }
+                next[r * n + c] = sum / 8.0;
+            }
+        }
+        stay = next;
+    }
+    stay[row * n + column]
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64, row: i64, column: i64) {
+    println(f"n = {n}, k = {k}, start ({row}, {column}): {knight_probability(n, k, row, column):.5}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3, 2, 0, 0);
+    show(1, 0, 0, 0);
+    // A board too small for any move, the 3 x 3 centre that no move
+    // leaves from, no moves at all, a square all eight moves stay on,
+    // and long walks on the largest board, from its centre and a corner.
+    show(1, 1, 0, 0);
+    show(2, 3, 1, 0);
+    show(3, 1, 1, 1);
+    show(8, 0, 7, 7);
+    show(8, 1, 3, 4);
+    show(8, 30, 0, 0);
+    show(25, 100, 12, 12);
+    show(25, 100, 0, 0);
+    show(25, 100, 24, 13);
+
+    // From a corner of 3 x 3, every square but the centre has exactly two
+    // moves on the board, so k moves stay on with chance 1 / 4^k; times
+    // 4^k, that is 1 whatever k is.
+    let mut line = String.new();
+    for k in [1, 10, 50, 100] {
+        let mut scale = 1.0;
+        for _ in 0..k {
+            scale *= 4.0;
+        }
+        if k != 1 {
+            line.push_str(",");
+        }
+        line.push_str(f" k = {k}: {knight_probability(3, k, 0, 2) * scale:.5}");
+    }
+    println(f"3 x 3 from a corner, times 4^k:{line}");
+
+    // Every start on every board of 1 to 8 squares a side, 0 to 6 moves.
+    let mut queries = 0;
+    let mut zeros = 0;
+    let mut ones = 0;
+    let mut sum = 0.0;
+    for n in 1..9 {
+        for k in 0..7 {
+            for r in 0..n {
+                for c in 0..n {
+                    let p = knight_probability(n, k, r, c);
+                    queries += 1;
+                    if p == 0.0 {
+                        zeros += 1;
+                    }
+                    if p == 1.0 {
+                        ones += 1;
+                    }
+                    sum += p;
+                }
+            }
+        }
+    }
+    println(f"{queries} small queries: {zeros} certain to fall off, {ones} certain to stay, sum {sum:.5}");
+
+    // Every start on a 12 x 12 board, 20 moves.
+    let mut low = 1.0;
+    let mut high = 0.0;
+    let mut total = 0.0;
+    for r in 0..12 {
+        for c in 0..12 {
+            let p = knight_probability(12, 20, r, c);
+            low = low.min(p);
+            high = high.max(p);
+            total += p;
+        }
+    }
+    println(f"12 x 12, 20 moves, every start: lowest {low:.5}, highest {high:.5}, sum {total:.5}");
+
+    // 200 random queries up to the largest board and 50 moves.
+    let mut seed = 688;
+    let mut checksum = 0.0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 25;
+        let k = next_random(mut seed) % 51;
+        let r = next_random(mut seed) % n;
+        let c = next_random(mut seed) % n;
+        checksum += knight_probability(n, k, r, c);
+    }
+    println(f"200 random queries: sum {checksum:.5}");
+}

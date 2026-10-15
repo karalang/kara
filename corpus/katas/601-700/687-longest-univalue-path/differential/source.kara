@@ -1,0 +1,360 @@
+// LeetCode #687: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn longest_univalue_path_star(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    arm_star(root, mut best);
+    best
+}
+
+// The node's longest downward path of its own value, in edges; `best`
+// takes the longest path that bends at the node.
+fn arm_star(node: Option[TreeNode], best: mut ref i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let l = arm_star(n.left, best);
+            let r = arm_star(n.right, best);
+            let mut left = 0;
+            let mut right = 0;
+            if let Some(c) = n.left {
+                if c.val == n.val {
+                    left = l + 1;
+                }
+            }
+            if let Some(c) = n.right {
+                if c.val == n.val {
+                    right = r + 1;
+                }
+            }
+            if left + right > *best {
+                *best = left + right;
+            }
+            left.max(right)
+        }
+    }
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn longest_univalue_path_stack(root: Option[TreeNode]) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    let mut lefts: Vec[i64] = Vec.new();
+    let mut rights: Vec[i64] = Vec.new();
+    // Each entry: a node and its parent's number with the side it hangs
+    // on (0 left, 1 right), or -1 for the root.
+    let mut stack: Vec[(TreeNode, i64, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, -1, 0));
+    }
+    while let Some((n, parent, side)) = stack.pop() {
+        let id = values.len();
+        values.push(n.val);
+        lefts.push(-1);
+        rights.push(-1);
+        if parent >= 0 {
+            if side == 0 {
+                lefts[parent] = id;
+            } else {
+                rights[parent] = id;
+            }
+        }
+        if let Some(c) = n.right {
+            stack.push((c, id, 1));
+        }
+        if let Some(c) = n.left {
+            stack.push((c, id, 0));
+        }
+    }
+    let count = values.len();
+    let mut arms: Vec[i64] = vec![0; count];
+    let mut best = 0;
+    let mut i = count - 1;
+    while i >= 0 {
+        let mut left = 0;
+        let mut right = 0;
+        if lefts[i] >= 0 and values[lefts[i]] == values[i] {
+            left = arms[lefts[i]] + 1;
+        }
+        if rights[i] >= 0 and values[rights[i]] == values[i] {
+            right = arms[rights[i]] + 1;
+        }
+        if left + right > best {
+            best = left + right;
+        }
+        arms[i] = left.max(right);
+        i -= 1;
+    }
+    best
+}
+
+// ---- naive arm ---------------------------------------------------------
+
+// The longest downward path from `node` whose nodes all hold `v`, in
+// nodes: 0 when `node` itself does not hold `v`.
+fn reach_naive(node: Option[TreeNode], v: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            if n.val != v {
+                0
+            } else {
+                1 + reach_naive(n.left, v).max(reach_naive(n.right, v))
+            }
+        }
+    }
+}
+
+fn longest_univalue_path_naive(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(n) => {
+            let here = reach_naive(n.left, n.val) + reach_naive(n.right, n.val);
+            here.max(longest_univalue_path_naive(n.left)).max(longest_univalue_path_naive(n.right))
+        }
+    }
+}
+
+// ---- parts arm ---------------------------------------------------------
+
+// The node farthest from `start` within its piece, and how far it is.
+fn farthest_parts(adj: ref Vec[Vec[i64]], start: i64, seen: mut ref Vec[i64], mark: i64) -> (i64, i64) {
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    seen[start] = mark;
+    queue.push_back((start, 0));
+    let mut last = (start, 0);
+    while let Some((v, d)) = queue.pop_front() {
+        last = (v, d);
+        for w in adj[v].iter() {
+            if seen[*w] != mark {
+                seen[*w] = mark;
+                queue.push_back((*w, d + 1));
+            }
+        }
+    }
+    last
+}
+
+fn longest_univalue_path_parts(root: Option[TreeNode]) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, -1));
+    }
+    let mut values: Vec[i64] = Vec.new();
+    while let Some((n, parent)) = stack.pop() {
+        let id = adj.len();
+        adj.push(Vec.new());
+        values.push(n.val);
+        if parent >= 0 and values[parent] == n.val {
+            adj[parent].push(id);
+            adj[id].push(parent);
+        }
+        if let Some(c) = n.left {
+            stack.push((c, id));
+        }
+        if let Some(c) = n.right {
+            stack.push((c, id));
+        }
+    }
+    let count = adj.len();
+    let mut seen: Vec[i64] = vec![-1; count];
+    let mut done: Vec[bool] = vec![false; count];
+    let mut best = 0;
+    for v in 0..count {
+        if not done[v] {
+            let (end, _) = farthest_parts(adj, v, mut seen, 2 * v);
+            let (_, length) = farthest_parts(adj, end, mut seen, 2 * v + 1);
+            if length > best {
+                best = length;
+            }
+            let mut queue: Vec[i64] = vec![v];
+            done[v] = true;
+            while let Some(u) = queue.pop() {
+                for w in adj[u].iter() {
+                    if not done[*w] {
+                        done[*w] = true;
+                        queue.push(*w);
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode]) -> i64 {
+    if which == 0 {
+        longest_univalue_path_star(root)
+    } else if which == 1 {
+        longest_univalue_path_stack(root)
+    } else if which == 2 {
+        longest_univalue_path_naive(root)
+    } else {
+        longest_univalue_path_parts(root)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A random tree at most `levels` deep: each child is there with chance
+// `chance` in 100, its value from 1 to `values`.
+fn random_tree(seed: mut ref i64, levels: i64, values: i64, chance: i64) -> TreeNode {
+    let n = leaf(1 + next_random(seed) % values);
+    if levels > 1 {
+        if next_random(seed) % 100 < chance {
+            n.left = Some(random_tree(seed, levels - 1, values, chance));
+        }
+        if next_random(seed) % 100 < chance {
+            n.right = Some(random_tree(seed, levels - 1, values, chance));
+        }
+    }
+    n
+}
+
+// A copy of the tree, every value plus `add`, left and right swapped
+// throughout when `mirror`.
+fn copy(node: Option[TreeNode], add: i64, mirror: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let c = leaf(n.val + add);
+            let l = copy(n.left, add, mirror);
+            let r = copy(n.right, add, mirror);
+            if mirror {
+                c.left = r;
+                c.right = l;
+            } else {
+                c.left = l;
+                c.right = r;
+            }
+            Some(c)
+        }
+    }
+}
+
+// Every node, its value and its parent's index (-1 for the root).
+fn flatten(node: Option[TreeNode], parent: i64, values: mut ref Vec[i64], parents: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        let id = values.len();
+        values.push(n.val);
+        parents.push(parent);
+        flatten(n.left, id, values, parents);
+        flatten(n.right, id, values, parents);
+    }
+}
+
+// The definition: over every pair of nodes, the path between them, up
+// from each to their lowest common ancestor; the longest, in edges,
+// whose nodes all hold one value.
+fn definition(root: Option[TreeNode]) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    let mut parents: Vec[i64] = Vec.new();
+    flatten(root, -1, mut values, mut parents);
+    let count = values.len();
+    let mut depth: Vec[i64] = vec![0; count];
+    for v in 1..count {
+        depth[v] = depth[parents[v]] + 1;
+    }
+    let mut best = 0;
+    for u in 0..count {
+        for v in u + 1..count {
+            let mut a = u;
+            let mut b = v;
+            let mut same = values[a] == values[b];
+            let mut edges = 0;
+            while a != b {
+                if depth[a] >= depth[b] {
+                    a = parents[a];
+                } else {
+                    b = parents[b];
+                }
+                edges += 1;
+                if values[a] != values[u] or values[b] != values[u] {
+                    same = false;
+                }
+            }
+            if same and edges > best {
+                best = edges;
+            }
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 6870;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1500;
+    let mut small = 0;
+    for c in 0..cases {
+        let levels = if c % 3 == 2 { 6 + next_random(mut seed) % 5 } else { 1 + next_random(mut seed) % 5 };
+        let values = 1 + next_random(mut seed) % 3;
+        let chance = 40 + next_random(mut seed) % 60;
+        let t = Some(random_tree(mut seed, levels, values, chance));
+        let other = Some(random_tree(mut seed, levels, values, chance));
+        let want = if levels <= 5 { definition(t) } else { -1 };
+        if levels <= 5 {
+            small += 1;
+        }
+        let add = next_random(mut seed) % 1000 - 500;
+        let joined = leaf(0);
+        joined.left = copy(t, 0, false);
+        joined.right = copy(other, 0, false);
+        for which in 0..arms {
+            let got = answer(which, t);
+            // P1: the definition's answer, on up to 5 levels.
+            if want != -1 {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the mirror image answers the same.
+            checks += 1;
+            if answer(which, copy(t, 0, true)) != got {
+                fails[1] += 1;
+            }
+            // P3: every value moved by the same amount changes nothing.
+            checks += 1;
+            if answer(which, copy(t, add, false)) != got {
+                fails[2] += 1;
+            }
+            // P4: two trees joined under a root of a value neither has:
+            // the longer of their two answers.
+            checks += 1;
+            if answer(which, Some(joined)) != got.max(answer(which, other)) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for k in 0..4 {
+        if fails[k] > 0 {
+            report.push_str(f"P{k + 1}: {fails[k]} failures | ");
+        }
+        total += fails[k];
+    }
+    println(f"{report}{cases} trees ({small} against the definition), {arms} arms, {checks} checks, {total} failures");
+}
