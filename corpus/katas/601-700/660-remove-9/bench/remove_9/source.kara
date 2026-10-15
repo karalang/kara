@@ -1,0 +1,26 @@
+// Benchmark for #660: the ★ arm (base 9, read as base 10) on a large
+// workload.
+
+fn new_integer(n: i64) -> i64 {
+    let mut rest = n;
+    let mut place = 1;
+    let mut out = 0;
+    while rest > 0 {
+        out += rest % 9 * place;
+        rest /= 9;
+        place *= 10;
+    }
+    out
+}
+
+fn main() {
+    // 50,000,000 values of `n`, every 16th from 1 to 800,000,000, each
+    // answer put into a checksum.
+    let count = 50000000;
+    let mut checksum: i64 = 0;
+    for i in 0..count {
+        let n = 1 + i * 16;
+        checksum = (checksum * 31 + new_integer(n)) % 1000000007;
+    }
+    println(f"{count} values of n: checksum {checksum}");
+}

@@ -1,0 +1,64 @@
+// LeetCode #660: Remove 9 -- base 9 as text.
+//
+// The same fact as the ★ arm, through strings: write `n`'s base-9
+// digits into a `String`, most significant first, and parse that string
+// back with `i64.parse`. O(log n).
+
+fn new_integer(n: i64) -> i64 {
+    let mut digits: Vec[String] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(f"{rest % 9}");
+        rest /= 9;
+    }
+    digits.reverse();
+    i64.parse(digits.join("")).unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn has_nine(x: i64) -> bool {
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == 9 {
+            return true;
+        }
+        rest /= 10;
+    }
+    false
+}
+
+fn main() {
+    // The two LeetCode examples.
+    println(f"n = 9 -> {new_integer(9)}");
+    println(f"n = 10 -> {new_integer(10)}");
+    // The first numbers; the edges of the powers of 9; the largest `n`.
+    for n in vec![1, 8, 80, 81, 728, 729, 6560, 6561, 800000000] {
+        println(f"n = {n} -> {new_integer(n)}");
+    }
+    // Every `n` from 1 to 20,000 against counting up, skipping numbers
+    // with a 9.
+    let mut x = 0;
+    let mut agree = 0;
+    let mut sum = 0;
+    for n in 1..20001 {
+        x += 1;
+        while has_nine(x) {
+            x += 1;
+        }
+        let got = new_integer(n);
+        if got == x {
+            agree += 1;
+        }
+        sum = (sum * 31 + got) % 1000000007;
+    }
+    println(f"n = 1 to 20000: {agree} agree with counting up, checksum {sum}");
+    // 1,000 values of `n` spread up to 800,000,000.
+    let mut sum = 0;
+    let mut n = 7;
+    for _ in 0..1000 {
+        n = (n * 7919 + 104729) % 800000000 + 1;
+        sum = (sum * 31 + new_integer(n)) % 1000000007;
+    }
+    println(f"1000 spread values: checksum {sum}");
+}

@@ -1,0 +1,96 @@
+// LeetCode #660: Remove 9 -- binary search on a count.
+//
+// `free_up_to(x)` counts the numbers from 1 to `x` with no 9, digit by
+// digit from the top: each smaller digit at a place frees every
+// combination below it, and a 9 in `x` stops the count there. The answer
+// is the smallest `x` whose count reaches `n`. O(log^2 n).
+
+fn new_integer(n: i64) -> i64 {
+    let mut low = 1;
+    let mut high = n * 2;
+    while free_up_to(high) < n {
+        high *= 2;
+    }
+    while low < high {
+        let middle = (low + high) / 2;
+        if free_up_to(middle) >= n {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    low
+}
+
+fn free_up_to(x: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = x;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    // Counts 0 too, taken off at the end.
+    let mut count = 0;
+    let mut whole = true;
+    for i in 0..digits.len() {
+        let below = 9.pow((digits.len() - 1 - i) as u32);
+        count += digits[i].min(9) * below;
+        if digits[i] == 9 {
+            whole = false;
+            break;
+        }
+    }
+    if whole {
+        count += 1;
+    }
+    count - 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn has_nine(x: i64) -> bool {
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == 9 {
+            return true;
+        }
+        rest /= 10;
+    }
+    false
+}
+
+fn main() {
+    // The two LeetCode examples.
+    println(f"n = 9 -> {new_integer(9)}");
+    println(f"n = 10 -> {new_integer(10)}");
+    // The first numbers; the edges of the powers of 9; the largest `n`.
+    for n in vec![1, 8, 80, 81, 728, 729, 6560, 6561, 800000000] {
+        println(f"n = {n} -> {new_integer(n)}");
+    }
+    // Every `n` from 1 to 20,000 against counting up, skipping numbers
+    // with a 9.
+    let mut x = 0;
+    let mut agree = 0;
+    let mut sum = 0;
+    for n in 1..20001 {
+        x += 1;
+        while has_nine(x) {
+            x += 1;
+        }
+        let got = new_integer(n);
+        if got == x {
+            agree += 1;
+        }
+        sum = (sum * 31 + got) % 1000000007;
+    }
+    println(f"n = 1 to 20000: {agree} agree with counting up, checksum {sum}");
+    // 1,000 values of `n` spread up to 800,000,000.
+    let mut sum = 0;
+    let mut n = 7;
+    for _ in 0..1000 {
+        n = (n * 7919 + 104729) % 800000000 + 1;
+        sum = (sum * 31 + new_integer(n)) % 1000000007;
+    }
+    println(f"1000 spread values: checksum {sum}");
+}

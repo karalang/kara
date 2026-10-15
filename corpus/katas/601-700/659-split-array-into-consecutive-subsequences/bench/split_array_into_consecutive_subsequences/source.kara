@@ -1,0 +1,76 @@
+// Benchmark for #659: the ★ arm (greedy) on a large workload.
+
+fn is_possible(nums: Vec[i64]) -> bool {
+    let mut left: Map[i64, i64] = Map.new();
+    for x in nums.iter() {
+        *left.entry(x).or_insert(0) += 1;
+    }
+    let mut ends: Map[i64, i64] = Map.new();
+    for x in nums.iter() {
+        if count(left, x) == 0 {
+            continue;
+        }
+        *left.entry(x).or_insert(0) -= 1;
+        if count(ends, x - 1) > 0 {
+            *ends.entry(x - 1).or_insert(0) -= 1;
+            *ends.entry(x).or_insert(0) += 1;
+        } else if count(left, x + 1) > 0 and count(left, x + 2) > 0 {
+            *left.entry(x + 1).or_insert(0) -= 1;
+            *left.entry(x + 2).or_insert(0) -= 1;
+            *ends.entry(x + 2).or_insert(0) += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+fn count(m: Map[i64, i64], k: i64) -> i64 {
+    match m.get(k) {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // Eight sorted arrays of runs of 3 to 5 consecutive numbers, 25,000
+    // runs each, starting anywhere from 0 to 20,000, the odd ones with a
+    // lone 30,000 at the end that no sequence can take, made once; then
+    // 40 rounds each ask whether one, picked by the round, splits, and put
+    // the answer into a checksum.
+    let inputs = 8;
+    let rounds = 40;
+    let mut seed: i64 = 659;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for k in 0..inputs {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..25000 {
+            let start = next_random(mut seed) % 20001;
+            let length = 3 + next_random(mut seed) % 3;
+            for v in start..start + length {
+                nums.push(v);
+            }
+        }
+        if k % 2 == 1 {
+            nums.push(30000);
+        }
+        nums.sort();
+        arrays.push(nums);
+    }
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let pick = (r * 3) % inputs;
+        let ok = is_possible(arrays[pick]);
+        if ok {
+            yes += 1;
+        }
+        checksum = (checksum * 31 + arrays[pick].len() * 2 + if ok { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"{inputs} arrays, {rounds} rounds: {yes} split, checksum {checksum}");
+}

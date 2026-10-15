@@ -1,0 +1,14 @@
+[1,2,3,3,4,5] -> true
+[1,2,3,3,4,4,5,5] -> true
+[1,2,3,4,4,5] -> false
+[7] -> false
+[-1,0,1] -> true
+[1,2,4] -> false
+[1,1,2,2,3,3] -> true
+[1,2,3,4,5,6] -> true
+[1,2,3,4,5,5,6] -> false
+300 random arrays: 121 can be split, checksum 102926533
+10000 numbers from runs, cut to fit: false
+7957 numbers from runs: true
+the same with one number repeated: true
+10000 copies of one number: false

@@ -1,0 +1,178 @@
+// LeetCode #660: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on many values of n.
+
+// ---- star arm ----------------------------------------------------------
+
+fn new_integer_star(n: i64) -> i64 {
+    let mut rest = n;
+    let mut place = 1;
+    let mut out = 0;
+    while rest > 0 {
+        out += rest % 9 * place;
+        rest /= 9;
+        place *= 10;
+    }
+    out
+}
+
+// ---- top arm -----------------------------------------------------------
+
+fn new_integer_top(n: i64) -> i64 {
+    let mut power = 1;
+    while power * 9 <= n {
+        power *= 9;
+    }
+    let mut rest = n;
+    let mut out = 0;
+    while power > 0 {
+        out = out * 10 + rest / power;
+        rest %= power;
+        power /= 9;
+    }
+    out
+}
+
+// ---- search arm --------------------------------------------------------
+
+fn new_integer_search(n: i64) -> i64 {
+    let mut low = 1;
+    let mut high = n * 2;
+    while free_up_to_search(high) < n {
+        high *= 2;
+    }
+    while low < high {
+        let middle = (low + high) / 2;
+        if free_up_to_search(middle) >= n {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    low
+}
+
+fn free_up_to_search(x: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = x;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    // Counts 0 too, taken off at the end.
+    let mut count = 0;
+    let mut whole = true;
+    for i in 0..digits.len() {
+        let below = 9.pow((digits.len() - 1 - i) as u32);
+        count += digits[i].min(9) * below;
+        if digits[i] == 9 {
+            whole = false;
+            break;
+        }
+    }
+    if whole {
+        count += 1;
+    }
+    count - 1
+}
+
+// ---- text arm ----------------------------------------------------------
+
+fn new_integer_text(n: i64) -> i64 {
+    let mut digits: Vec[String] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(f"{rest % 9}");
+        rest /= 9;
+    }
+    digits.reverse();
+    i64.parse(digits.join("")).unwrap()
+}
+
+// ---- the definition and the properties -------------------------------
+
+fn answer(which: i64, n: i64) -> i64 {
+    match which {
+        0 => new_integer_star(n),
+        1 => new_integer_top(n),
+        2 => new_integer_search(n),
+        _ => new_integer_text(n),
+    }
+}
+
+fn has_nine(x: i64) -> bool {
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == 9 {
+            return true;
+        }
+        rest /= 10;
+    }
+    false
+}
+
+fn main() {
+    // Every `n` from 1 to 3,000, held to the definition: counting up and
+    // skipping numbers with a 9. Then 1,000 values spread up to
+    // 800,000,000, held to the other four properties only.
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    let mut counted = 0;
+    let mut spread = 7;
+    for case in 0..4000 {
+        let mut n = case + 1;
+        if case < 3000 {
+            counted += 1;
+            while has_nine(counted) {
+                counted += 1;
+            }
+        } else {
+            spread = (spread * 7919 + 104729) % 799999999 + 1;
+            n = spread;
+        }
+        for which in 0..4 {
+            let got = answer(which, n);
+            let next = answer(which, n + 1);
+            // P3: the next answer is the next number with no 9.
+            let mut adjacent = next > got;
+            if adjacent and next - got <= 2000 {
+                for between in got + 1..next {
+                    if not has_nine(between) {
+                        adjacent = false;
+                    }
+                }
+            }
+            // P4: nine times `m` gives ten times `m`'s answer.
+            let m = n / 9 + 1;
+            let scaled = 9 * m > 800000000 or answer(which, 9 * m) == 10 * answer(which, m);
+            // P5: as many decimal digits as `n` has base-9 digits.
+            let mut power9 = 1;
+            let mut power10 = 1;
+            while power9 * 9 <= n {
+                power9 *= 9;
+                power10 *= 10;
+            }
+            let ok = vec![
+                // P1: counting up, where it was done.
+                case >= 3000 or got == counted,
+                // P2: no 9 in the answer.
+                not has_nine(got),
+                adjacent,
+                scaled,
+                power10 <= got and got < power10 * 10,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"4000 values of n, 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

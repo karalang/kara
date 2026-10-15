@@ -1,0 +1,66 @@
+// LeetCode #660: Remove 9 -- base 9, read as base 10.
+//
+// The numbers with no 9 in them, counted from 0, are exactly the numbers
+// whose decimal digits are base-9 digits, in order. So the n-th of them
+// is n written in base 9 and read back in base 10: peel off base-9
+// digits from the bottom and lay them down as decimal digits. O(log n).
+
+fn new_integer(n: i64) -> i64 {
+    let mut rest = n;
+    let mut place = 1;
+    let mut out = 0;
+    while rest > 0 {
+        out += rest % 9 * place;
+        rest /= 9;
+        place *= 10;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn has_nine(x: i64) -> bool {
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == 9 {
+            return true;
+        }
+        rest /= 10;
+    }
+    false
+}
+
+fn main() {
+    // The two LeetCode examples.
+    println(f"n = 9 -> {new_integer(9)}");
+    println(f"n = 10 -> {new_integer(10)}");
+    // The first numbers; the edges of the powers of 9; the largest `n`.
+    for n in vec![1, 8, 80, 81, 728, 729, 6560, 6561, 800000000] {
+        println(f"n = {n} -> {new_integer(n)}");
+    }
+    // Every `n` from 1 to 20,000 against counting up, skipping numbers
+    // with a 9.
+    let mut x = 0;
+    let mut agree = 0;
+    let mut sum = 0;
+    for n in 1..20001 {
+        x += 1;
+        while has_nine(x) {
+            x += 1;
+        }
+        let got = new_integer(n);
+        if got == x {
+            agree += 1;
+        }
+        sum = (sum * 31 + got) % 1000000007;
+    }
+    println(f"n = 1 to 20000: {agree} agree with counting up, checksum {sum}");
+    // 1,000 values of `n` spread up to 800,000,000.
+    let mut sum = 0;
+    let mut n = 7;
+    for _ in 0..1000 {
+        n = (n * 7919 + 104729) % 800000000 + 1;
+        sum = (sum * 31 + new_integer(n)) % 1000000007;
+    }
+    println(f"1000 spread values: checksum {sum}");
+}

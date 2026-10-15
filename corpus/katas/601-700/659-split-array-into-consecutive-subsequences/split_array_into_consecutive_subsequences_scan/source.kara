@@ -1,0 +1,142 @@
+// LeetCode #659: Split Array into Consecutive Subsequences -- a list of
+// open sequences.
+//
+// Keep the sequences still open as `(end, length)` pairs. Each number
+// joins the shortest open sequence ending just before it, or opens a new
+// one. A sequence whose end falls two or more behind the current number
+// can never grow again, so it is closed then, and must be 3 long by
+// that point. O(n * open sequences).
+
+struct Open {
+    end: i64,
+    length: i64,
+}
+
+fn is_possible(nums: Vec[i64]) -> bool {
+    let mut open: Vec[Open] = Vec.new();
+    for x in nums.iter() {
+        let mut kept: Vec[Open] = Vec.new();
+        for s in open.iter() {
+            if s.end < x - 1 {
+                if s.length < 3 {
+                    return false;
+                }
+            } else {
+                kept.push(Open { end: s.end, length: s.length });
+            }
+        }
+        open = kept;
+        let mut best = -1;
+        for i in 0..open.len() {
+            if open[i].end == x - 1 and (best == -1 or open[i].length < open[best].length) {
+                best = i;
+            }
+        }
+        if best == -1 {
+            open.push(Open { end: x, length: 1 });
+        } else {
+            open[best].end = x;
+            open[best].length += 1;
+        }
+    }
+    for s in open.iter() {
+        if s.length < 3 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut cells: Vec[String] = Vec.new();
+    for x in nums.iter() {
+        cells.push(f"{x}");
+    }
+    println(f"[{cells.join(",")}] -> {is_possible(nums)}");
+}
+
+// Runs of 3 to 5 consecutive numbers starting anywhere from `low` to
+// `low + spread`, `runs` of them, sorted together.
+fn random_runs(runs: i64, low: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..runs {
+        let start = low + next_random(seed) % (spread + 1);
+        let length = 3 + next_random(seed) % 3;
+        for v in start..start + length {
+            nums.push(v);
+        }
+    }
+    nums.sort();
+    nums
+}
+
+fn main() {
+    // The three LeetCode examples.
+    show(vec![1, 2, 3, 3, 4, 5]);
+    show(vec![1, 2, 3, 3, 4, 4, 5, 5]);
+    show(vec![1, 2, 3, 4, 4, 5]);
+    // One number; three in a row; three with a gap; two runs that share
+    // values; a run that must be cut in two; a short run at the end.
+    show(vec![7]);
+    show(vec![-1, 0, 1]);
+    show(vec![1, 2, 4]);
+    show(vec![1, 1, 2, 2, 3, 3]);
+    show(vec![1, 2, 3, 4, 5, 6]);
+    show(vec![1, 2, 3, 4, 5, 5, 6]);
+    // 300 random arrays: half made of runs, a third of those with one
+    // number dropped or repeated; half at random from a narrow range.
+    let mut seed: i64 = 659;
+    let mut yes = 0;
+    let mut sum = 0;
+    for k in 0..300 {
+        let mut nums: Vec[i64] = Vec.new();
+        if k % 2 == 0 {
+            nums = random_runs(1 + next_random(mut seed) % 8, -10, 20, mut seed);
+            if k % 6 == 0 {
+                let at = next_random(mut seed) % nums.len();
+                if next_random(mut seed) % 2 == 0 {
+                    nums.remove(at);
+                } else {
+                    nums.insert(at, nums[at]);
+                }
+            }
+        } else {
+            for _ in 0..1 + next_random(mut seed) % 30 {
+                nums.push(next_random(mut seed) % 12);
+            }
+            nums.sort();
+        }
+        if nums.is_empty() {
+            nums.push(0);
+        }
+        let ok = is_possible(nums);
+        if ok {
+            yes += 1;
+        }
+        sum = (sum * 7 + nums.len() * 2 + if ok { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"300 random arrays: {yes} can be split, checksum {sum}");
+    // The problem's largest, 10,000 numbers from -1,000 to 1,000: runs,
+    // runs with one number repeated, and one value 10,000 times.
+    let nums = random_runs(2500, -1000, 1995, mut seed);
+    let mut cut = nums.clone();
+    while cut.len() > 10000 {
+        cut.pop();
+    }
+    println(f"{cut.len()} numbers from runs, cut to fit: {is_possible(cut)}");
+    let mut whole = random_runs(2000, -1000, 1995, mut seed);
+    while whole.len() > 9999 {
+        whole = random_runs(2000, -1000, 1995, mut seed);
+    }
+    println(f"{whole.len()} numbers from runs: {is_possible(whole)}");
+    whole.insert(5000, whole[5000]);
+    println(f"the same with one number repeated: {is_possible(whole)}");
+    println(f"10000 copies of one number: {is_possible(vec![0; 10000])}");
+}

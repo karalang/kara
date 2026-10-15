@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/660-remove-9/remove_9_text.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c9ac82159"
+extracted_src = "31c9b2b9"
+model_rev = "1aa23105"
+model_src = "31c9b2b9"

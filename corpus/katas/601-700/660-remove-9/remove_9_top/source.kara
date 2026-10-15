@@ -1,0 +1,70 @@
+// LeetCode #660: Remove 9 -- digit by digit from the top.
+//
+// Below 10^k there are 9^k numbers with no 9 (0 included). Find the
+// largest power of 9 not above `n`, then for each power down to 1 the
+// digit is how many whole blocks of that size fit in what is left:
+// that many blocks of 9-free numbers are skipped by stepping that digit.
+// O(log n).
+
+fn new_integer(n: i64) -> i64 {
+    let mut power = 1;
+    while power * 9 <= n {
+        power *= 9;
+    }
+    let mut rest = n;
+    let mut out = 0;
+    while power > 0 {
+        out = out * 10 + rest / power;
+        rest %= power;
+        power /= 9;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn has_nine(x: i64) -> bool {
+    let mut rest = x;
+    while rest > 0 {
+        if rest % 10 == 9 {
+            return true;
+        }
+        rest /= 10;
+    }
+    false
+}
+
+fn main() {
+    // The two LeetCode examples.
+    println(f"n = 9 -> {new_integer(9)}");
+    println(f"n = 10 -> {new_integer(10)}");
+    // The first numbers; the edges of the powers of 9; the largest `n`.
+    for n in vec![1, 8, 80, 81, 728, 729, 6560, 6561, 800000000] {
+        println(f"n = {n} -> {new_integer(n)}");
+    }
+    // Every `n` from 1 to 20,000 against counting up, skipping numbers
+    // with a 9.
+    let mut x = 0;
+    let mut agree = 0;
+    let mut sum = 0;
+    for n in 1..20001 {
+        x += 1;
+        while has_nine(x) {
+            x += 1;
+        }
+        let got = new_integer(n);
+        if got == x {
+            agree += 1;
+        }
+        sum = (sum * 31 + got) % 1000000007;
+    }
+    println(f"n = 1 to 20000: {agree} agree with counting up, checksum {sum}");
+    // 1,000 values of `n` spread up to 800,000,000.
+    let mut sum = 0;
+    let mut n = 7;
+    for _ in 0..1000 {
+        n = (n * 7919 + 104729) % 800000000 + 1;
+        sum = (sum * 31 + new_integer(n)) % 1000000007;
+    }
+    println(f"1000 spread values: checksum {sum}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/659-split-array-into-consecutive-subsequences/split_array_into_consecutive_subsequences.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c9ac82159"
+extracted_src = "7f42a770"
+model_rev = "1aa23105"
+model_src = "7f42a770"
