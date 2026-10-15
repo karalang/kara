@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 272 |
+| missing-feature | 273 |
 | codegen-gap | 264 |
 | false-positive | 205 |
 | other | 173 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2916 |
-| interp | 938 |
+| codegen | 2917 |
+| interp | 939 |
 | typecheck | 445 |
 | other | 115 |
 | ownership | 106 |
@@ -196,7 +196,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-17 | 2026-10-15 | typecheck | low | The library has no byte encodings or digests: docs/library/ defines no base64, no hex encode/decode, and no SHA-1 / SHA-256, so a WebSocket handshake, HTTP basic auth, a JWT, an ETag or a content-addressed store each needs its own hand-written SHA-1 and base64 | — |
 | B-2026-10-15-20 | 2026-10-15 | ownership | medium | `karac check` reports "value 'i' is moved inside a loop and not assigned again before the next iteration" for a binding declared INSIDE the loop body, when it is mutated inside an `if` before the move: `for k in ks.iter() { let mut i = It { n: k }; if k > 1 { i.n -= 1; } s.take(i); }` is refused, while the same body without the `if` (or with `i.n -= if k > 1 { 1 } else { 0 };`) passes, and every MIR surface runs the refused form | — |
 | B-2026-10-15-23 | 2026-10-15 | ownership | medium | `karac check` calls the argument of two built-in String methods MOVED, though every MIR surface runs the program: `line.find(op)` moves `op` when `line` is a `Str` (a parameter; a `String` receiver is fine), and `t.replacen("%", s, 1)` moves a `String` `s` on any receiver, so a later `op.len()` or a second `replacen` with the same stem is refused | — |
-| B-2026-10-15-30 | 2026-10-15 | interp+codegen | medium | On the v2 backends a channel never waits. A `send` to a full channel returns `Err(SendError.Full(v))` where the spec's `send` waits for room. A `recv` on an empty channel whose senders are alive returns `None` where it should wait (or panic as a deadlock when no task can run). `TaskGroup.new(limit: n)` accepts the limit without bounding how many tasks run at once | — |
 | B-2026-10-15-31 | 2026-10-15 | typecheck | medium | `karac check` keeps a `ref` borrow live past a `return`: with `let t = ref self.toks[self.p];` read by several `if` branches that each end in `return self.add(..)` (a `mut ref self` method), every branch but the last is refused with "cannot call `.add` ... while `ref t` borrows `self.toks[..]`: `t` is used after this", where the later use is in a LATER branch the returning path never reaches; core-semantics.md §5.6 makes a borrow live only to its last use. All four running surfaces accept the program | — |
 | B-2026-10-15-32 | 2026-10-15 | ownership | medium | `karac check` treats a pattern binding as moving its owned scrutinee on EVERY path: `match v { V.Text(s) => s, V.Int(_) => show(v) }` and `if let V.Text(s) = v { return s; } show(v)` are refused with "value 'v' moved here, used again here ... (a binding in that pattern moves its part out)" at the use in the arm or path where nothing was bound, though core-semantics.md §4.6 says a plain binding moves its part "on that path". All four running surfaces accept both | — |
 | B-2026-10-15-35 | 2026-10-15 | codegen | low | A bare variant pattern whose name a struct also holds passes `karac check` but stops the MIR builder with "this variant is not lowered yet": with `enum Block { Heading(i64), Rule }` and `struct Heading { level: i64 }`, `match b { Heading(n) => .., Rule => .. }` on a `Block` fails on `__mir-run` and `__mir-llvm-run` whichever is declared first; the qualified `Block.Heading(n)` runs | — |
@@ -222,6 +221,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-69 | 2026-10-15 | interp+codegen | medium | On every v2 surface, `TcpListener.bind("127.0.0.1:0")` prints `BOUND_PORT=<n>` to the program's own stdout, a legacy test-harness convention that docs/library/io.md does not mention: any program that lets the OS choose a port (a test server, a daemon with an ephemeral console, a collector) gets an unrequested line with a random number in its output | — |
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
+| B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock; the interpreter does not yet run `TaskGroup.spawn_frame` under the coroutine transform; E0500 for a task spawned on a parameter group asks to declare the captured value before the group | — |
 
 ### Relocated
 
@@ -4098,6 +4098,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-27 | codegen | high | A closure that escapes inside a value (stored in a struct in a returned `Vec`) captures BY REFERENCE on v2, though core-semantics.md §9.3 says an esc… | 057e29e74f |
 | B-2026-10-15-28 | typecheck | low | The library has no read-write or positional file access: io.md's `File` opens for reading, for writing with truncation, or for appending, and has no… | 8117615568 |
 | B-2026-10-15-29 | resolver | medium | A top-level type declared AFTER an enum that has a variant of the same name is refused as "'Heading' is already defined in this scope" by `karac chec… | abbdbaf131 |
+| B-2026-10-15-30 | interp+codegen | medium | On the v2 backends a channel never waits | 968707afd3 |
 | B-2026-10-15-33 | interp+codegen | high | Some method calls on a BORROWED handle of a `shared struct` fail the MIR build with "a type that failed to check is not lowered yet" on `__mir-run`,… | 83b41fb1d0 |
 | B-2026-10-15-34 | interp+codegen | medium | On the MIR backends an f-string can call a USER function named `format` in place of the formatting it lowers to: `fn format(n: i64) -> String { f"<{n… | 83b41fb1d0 |
 | B-2026-10-15-37 | typecheck | medium | A method call on a LOCAL or PARAMETER named `ast` or `compiler` is refused with E_COMPTIME_MODULE_AT_RUNTIME ("the `ast` module is only available ins… | 83b41fb1d0 |
