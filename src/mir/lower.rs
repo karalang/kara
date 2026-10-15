@@ -13896,6 +13896,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                         matches!(self.tys().tcx().kind(b), HK::Adt { .. }) && !self.is_copy(b)
                     };
                     let stores = stores || declared_own;
+                    // A function value stored in a collection of `Fn(..)`
+                    // (`v.push(w)`) is erased to the element type, as
+                    // `vec![w]` erases it (B-2026-10-15-26).
+                    let stored_fn = if stores {
+                        self.lib_param_tys(base, method)
+                            .and_then(|ps| ps.get(i).copied())
+                            .filter(|&pt| matches!(self.tys().tcx().kind(pt), HK::Fn { .. }))
+                    } else {
+                        None
+                    };
+                    if let Some(pt) = stored_fn {
+                        rest.push(self.arg_operand(&a.value, pt)?);
+                        continue;
+                    }
                     if self.is_fn_typed(a.value.id)
                         || matches!(a.value.kind, ExprKind::Closure { .. })
                     {

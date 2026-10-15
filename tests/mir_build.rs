@@ -2030,3 +2030,40 @@ fn main() {
         }
     }
 }
+
+/// A function value pushed into a `Vec[Fn(..)]` or inserted into a
+/// `Map[K, Fn(..)]` is erased to the element type, as `vec![f]` erases it,
+/// so calling it back through an index or `get` works (B-2026-10-15-26):
+/// a named fn, closures with and without captures, and a `let`-bound one.
+#[test]
+fn mir_function_value_stored_by_push_is_callable() {
+    let src = r#"
+fn w(n: i64) -> i64 { n + 1 }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(w);
+    v.push(|n| n * 2);
+    let k = 5;
+    v.push(|n| n + k);
+    println(f"{v[0](7)} {v[1](7)} {v[2](7)}");
+    let mut s: Vec[Fn(i64) -> String with allocates(Heap)] = Vec.new();
+    let tag = "t".to_string();
+    s.push(|n| f"{tag}{n}");
+    let f: Fn(i64) -> String with allocates(Heap) = |n| f"f{n}";
+    s.push(f);
+    println(f"{s[0](1)} {(s[1])(2)} {s.len()}");
+    let mut m: Map[String, Fn(i64) -> i64] = Map.new();
+    m.insert("w".to_string(), w);
+    m.insert("d".to_string(), |n| n * 2);
+    println(f"{m.get("w").unwrap()(1)} {m.get("d").unwrap()(4)}");
+}
+"#;
+    let want = "8 14 12\nt1 f2 2\n2 8\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
