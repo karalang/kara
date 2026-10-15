@@ -78,10 +78,11 @@ fn the_mir_typecheck_records_task_captures_that_move() {
     let parsed = karac::parse(src);
     let resolved = karac::resolve(&parsed.program);
     let tc = karac::typecheck_with_library_source(&parsed.program, &resolved);
-    let moved: Vec<&(String, String)> = tc.core_task_moved_captures.values().flatten().collect();
+    let moved: Vec<&(String, String, bool)> =
+        tc.core_task_moved_captures.values().flatten().collect();
     assert_eq!(
         moved,
-        vec![&("data".to_string(), "g".to_string())],
+        vec![&("data".to_string(), "g".to_string(), false)],
         "only `data` drops before `g`"
     );
 }
