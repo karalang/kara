@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/689-maximum-sum-of-3-non-overlapping-subarrays/bench/max_sum_of_three_subarrays.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "aec4d15cc"
+extracted_src = "f07c7d21"
+model_rev = "583cfb0d"
+model_src = "f07c7d21"

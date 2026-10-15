@@ -1,0 +1,80 @@
+// LeetCode #689: Maximum Sum of 3 Non-Overlapping Subarrays -- best to
+// each side. Bench.
+//
+// 100 arrays of 20,000 values from 1 to 65535, each with a k from 1 to
+// 1,000, are built once; then 20 rounds answer every array.
+
+fn max_sum_of_three_subarrays(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let count = n - k + 1;
+    let mut w: Vec[i64] = vec![0; count];
+    let mut sum = 0;
+    for i in 0..n {
+        sum += nums[i];
+        if i >= k {
+            sum -= nums[i - k];
+        }
+        if i >= k - 1 {
+            w[i - k + 1] = sum;
+        }
+    }
+    let mut left: Vec[i64] = vec![0; count];
+    let mut best = 0;
+    for i in 0..count {
+        if w[i] > w[best] {
+            best = i;
+        }
+        left[i] = best;
+    }
+    let mut right: Vec[i64] = vec![0; count];
+    best = count - 1;
+    let mut i = count - 1;
+    while i >= 0 {
+        if w[i] >= w[best] {
+            best = i;
+        }
+        right[i] = best;
+        i -= 1;
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut top = -1;
+    for j in k..count - k {
+        let a = left[j - k];
+        let c = right[j + k];
+        let total = w[a] + w[j] + w[c];
+        if total > top {
+            top = total;
+            answer = vec![a, j, c];
+        }
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 100;
+    let rounds = 20;
+    let mut seed = 689;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut ks: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..20000 {
+            nums.push(1 + next_random(mut seed) % 65535);
+        }
+        arrays.push(nums);
+        ks.push(1 + next_random(mut seed) % 1000);
+    }
+    let mut sum = 0;
+    for r in 0..rounds {
+        for c in 0..count {
+            let got = max_sum_of_three_subarrays(arrays[c], ks[c]);
+            sum = (sum * 31 + got[0] + got[1] + got[2] + r) % 1000000007;
+        }
+    }
+    println(f"{count * rounds} arrays answered, checksum {sum}");
+}

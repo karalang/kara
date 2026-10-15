@@ -1,0 +1,84 @@
+// LeetCode #690: Employee Importance -- breadth first, by id. Bench.
+//
+// 30 companies of 2,000 people, ids 1 to 2000 in random order, each
+// person under a random earlier one, are built once, with 100 random
+// people to ask about in each; then 80 rounds ask about all of them.
+
+struct Employee {
+    id: i64,
+    importance: i64,
+    subordinates: Vec[i64],
+}
+
+fn get_importance(employees: Vec[Employee], id: i64) -> i64 {
+    let mut at: Vec[i64] = vec![-1; 2001];
+    for i in 0..employees.len() {
+        at[employees[i].id] = i;
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(id);
+    let mut sum = 0;
+    while let Some(next) = queue.pop_front() {
+        let e = ref employees[at[next]];
+        sum += e.importance;
+        for s in e.subordinates.iter() {
+            queue.push_back(*s);
+        }
+    }
+    sum
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 30;
+    let rounds = 80;
+    let size = 2000;
+    let mut seed = 690;
+    let mut companies: Vec[Vec[Employee]] = Vec.new();
+    let mut questions: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut ids: Vec[i64] = Vec.new();
+        for i in 1..size + 1 {
+            ids.push(i);
+        }
+        for i in 0..size {
+            let j = i + next_random(mut seed) % (size - i);
+            let t = ids[i];
+            ids[i] = ids[j];
+            ids[j] = t;
+        }
+        let mut subs: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..size {
+            subs.push(Vec.new());
+        }
+        for i in 1..size {
+            let boss = next_random(mut seed) % i;
+            subs[boss].push(ids[i]);
+        }
+        let mut company: Vec[Employee] = Vec.new();
+        for i in 0..size {
+            let importance = next_random(mut seed) % 201 - 100;
+            company.push(Employee { id: ids[i], importance: importance, subordinates: subs[i].clone() });
+        }
+        companies.push(company);
+        let mut ask: Vec[i64] = Vec.new();
+        for _ in 0..100 {
+            ask.push(1 + next_random(mut seed) % size);
+        }
+        questions.push(ask);
+    }
+    let mut sum = 0;
+    for r in 0..rounds {
+        for c in 0..count {
+            for q in 0..100 {
+                let got = get_importance(companies[c], questions[c][q]);
+                sum = (sum * 31 + got + 1000000 + r) % 1000000007;
+            }
+        }
+    }
+    println(f"{count * rounds * 100} questions answered, checksum {sum}");
+}

@@ -1,0 +1,7 @@
+example 1: 11
+example 2: -3
+alone: -100
+gaps: 7 -> -9, 3 -> -4, 12 -> -6, 1 -> 100
+chain of 2000: from 1 2000, from 1001 1000, from 2000 1
+one over 1999: from 1 -665, from 2 -98
+2000 random questions: checksum 948337630

@@ -1,0 +1,145 @@
+// LeetCode #689: Maximum Sum of 3 Non-Overlapping Subarrays -- best to
+// each side.
+//
+// Work out every window's sum once. For each index, keep the best
+// window starting at or before it, and the best starting at or after
+// it, the earliest on a tie. Then try every window as the middle one:
+// the best window ending before it, the middle, and the best starting
+// after it. Taking only a strictly larger total keeps the earliest
+// middle, which with the earliest sides is the smallest answer in
+// lexicographic order. O(n) time and space.
+
+fn max_sum_of_three_subarrays(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let count = n - k + 1;
+    let mut w: Vec[i64] = vec![0; count];
+    let mut sum = 0;
+    for i in 0..n {
+        sum += nums[i];
+        if i >= k {
+            sum -= nums[i - k];
+        }
+        if i >= k - 1 {
+            w[i - k + 1] = sum;
+        }
+    }
+    let mut left: Vec[i64] = vec![0; count];
+    let mut best = 0;
+    for i in 0..count {
+        if w[i] > w[best] {
+            best = i;
+        }
+        left[i] = best;
+    }
+    let mut right: Vec[i64] = vec![0; count];
+    best = count - 1;
+    let mut i = count - 1;
+    while i >= 0 {
+        if w[i] >= w[best] {
+            best = i;
+        }
+        right[i] = best;
+        i -= 1;
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut top = -1;
+    for j in k..count - k {
+        let a = left[j - k];
+        let c = right[j + k];
+        let total = w[a] + w[j] + w[c];
+        if total > top {
+            top = total;
+            answer = vec![a, j, c];
+        }
+    }
+    answer
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    let mut text = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            text.push_str(",");
+        }
+        text.push_str(f"{nums[i]}");
+    }
+    println(f"[{text}], k = {k} -> {max_sum_of_three_subarrays(nums, k)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 2, 1, 2, 6, 7, 5, 1], 2);
+    show(vec![1, 2, 1, 2, 1, 2, 1, 2, 1], 2);
+    // Exactly three windows, one value throughout, singles, a tie between
+    // two answers where the smaller one must win, a tie between taking the
+    // best window and leaving it out, and the largest values.
+    show(vec![4, 9, 1], 1);
+    show(vec![3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3], 3);
+    show(vec![1, 3, 2, 4, 1, 5], 1);
+    show(vec![5, 1, 5, 1, 5, 1, 5], 1);
+    show(vec![1, 5, 5, 1, 1, 1, 1], 2);
+    show(vec![65535, 65535, 65535, 65535, 65535, 65535], 2);
+
+    // Every array of 3 to 8 values from 1 to 3, every k that fits.
+    let mut queries = 0;
+    let mut checksum = 0;
+    for n in 3..9 {
+        let mut all = 1;
+        for _ in 0..n {
+            all *= 3;
+        }
+        for code in 0..all {
+            let mut nums: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                nums.push(1 + c % 3);
+                c = c / 3;
+            }
+            for k in 1..n / 3 + 1 {
+                let got = max_sum_of_three_subarrays(nums, k);
+                queries += 1;
+                checksum = (checksum * 31 + got[0] * 64 + got[1] * 8 + got[2]) % 1000000007;
+            }
+        }
+    }
+    println(f"{queries} small queries: checksum {checksum}");
+
+    // 300 random arrays of up to 300 values from 1 to 65535.
+    let mut seed = 689;
+    checksum = 0;
+    for _ in 0..300 {
+        let n = 3 + next_random(mut seed) % 298;
+        let k = 1 + next_random(mut seed) % (n / 3);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % 65535);
+        }
+        let got = max_sum_of_three_subarrays(nums, k);
+        checksum = (checksum * 31 + got[0] * 90000 + got[1] * 300 + got[2]) % 1000000007;
+    }
+    println(f"300 random arrays: checksum {checksum}");
+
+    // 2,000 random values, from k = 1 to the largest k that fits; then
+    // 2,000 equal values.
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..2000 {
+        big.push(1 + next_random(mut seed) % 65535);
+    }
+    let mut line = String.new();
+    for k in [1, 10, 100, 500, 666] {
+        if k != 1 {
+            line.push_str(";");
+        }
+        line.push_str(f" k = {k}: {max_sum_of_three_subarrays(big, k)}");
+    }
+    println(f"2000 random values:{line}");
+    let ones: Vec[i64] = vec![1; 2000];
+    println(f"2000 ones, k = 7: {max_sum_of_three_subarrays(ones, 7)}");
+}

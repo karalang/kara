@@ -1,0 +1,302 @@
+// LeetCode #689: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn max_sum_of_three_subarrays_star(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let count = n - k + 1;
+    let mut w: Vec[i64] = vec![0; count];
+    let mut sum = 0;
+    for i in 0..n {
+        sum += nums[i];
+        if i >= k {
+            sum -= nums[i - k];
+        }
+        if i >= k - 1 {
+            w[i - k + 1] = sum;
+        }
+    }
+    let mut left: Vec[i64] = vec![0; count];
+    let mut best = 0;
+    for i in 0..count {
+        if w[i] > w[best] {
+            best = i;
+        }
+        left[i] = best;
+    }
+    let mut right: Vec[i64] = vec![0; count];
+    best = count - 1;
+    let mut i = count - 1;
+    while i >= 0 {
+        if w[i] >= w[best] {
+            best = i;
+        }
+        right[i] = best;
+        i -= 1;
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut top = -1;
+    for j in k..count - k {
+        let a = left[j - k];
+        let c = right[j + k];
+        let total = w[a] + w[j] + w[c];
+        if total > top {
+            top = total;
+            answer = vec![a, j, c];
+        }
+    }
+    answer
+}
+
+// ---- dp arm ------------------------------------------------------------
+
+fn max_sum_of_three_subarrays_dp(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let count = n - k + 1;
+    let mut w: Vec[i64] = vec![0; count];
+    let mut sum = 0;
+    for i in 0..n {
+        sum += nums[i];
+        if i >= k {
+            sum -= nums[i - k];
+        }
+        if i >= k - 1 {
+            w[i - k + 1] = sum;
+        }
+    }
+    // Row t of `best` holds positions 0 to count + k; -1 marks t windows
+    // that cannot fit, since every sum here is positive.
+    let size = count + k + 1;
+    let mut best: Vec[i64] = vec![-1; 4 * size];
+    for i in 0..size {
+        best[i] = 0;
+    }
+    for t in 1..4 {
+        let mut i = count - 1;
+        while i >= 0 {
+            let mut here = best[t * size + i + 1];
+            let rest = best[(t - 1) * size + i + k];
+            if rest >= 0 and w[i] + rest > here {
+                here = w[i] + rest;
+            }
+            best[t * size + i] = here;
+            i -= 1;
+        }
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut start = 0;
+    let mut t = 3;
+    while t > 0 {
+        let want = best[t * size + start];
+        let mut i = start;
+        while best[(t - 1) * size + i + k] < 0 or w[i] + best[(t - 1) * size + i + k] != want {
+            i += 1;
+        }
+        answer.push(i);
+        start = i + k;
+        t -= 1;
+    }
+    answer
+}
+
+// ---- sliding arm -------------------------------------------------------
+
+fn max_sum_of_three_subarrays_sliding(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut sum1 = 0;
+    let mut sum2 = 0;
+    let mut sum3 = 0;
+    let mut best1 = 0;
+    let mut best12 = 0;
+    let mut best123 = 0;
+    let mut at1 = 0;
+    let mut at12 = (0, k);
+    let mut at123 = (0, k, 2 * k);
+    for i in 2 * k..n {
+        sum1 += nums[i - 2 * k];
+        sum2 += nums[i - k];
+        sum3 += nums[i];
+        if i >= 3 * k - 1 {
+            if sum1 > best1 {
+                best1 = sum1;
+                at1 = i - 3 * k + 1;
+            }
+            if best1 + sum2 > best12 {
+                best12 = best1 + sum2;
+                at12 = (at1, i - 2 * k + 1);
+            }
+            if best12 + sum3 > best123 {
+                best123 = best12 + sum3;
+                at123 = (at12.0, at12.1, i - k + 1);
+            }
+            sum1 -= nums[i - 3 * k + 1];
+            sum2 -= nums[i - 2 * k + 1];
+            sum3 -= nums[i - k + 1];
+        }
+    }
+    vec![at123.0, at123.1, at123.2]
+}
+
+// ---- scan arm ----------------------------------------------------------
+
+fn max_sum_of_three_subarrays_scan(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let count = n - k + 1;
+    let mut w: Vec[i64] = Vec.new();
+    for s in 0..count {
+        let mut sum = 0;
+        for i in s..s + k {
+            sum += nums[i];
+        }
+        w.push(sum);
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut top = -1;
+    for j in k..count - k {
+        let mut a = 0;
+        for i in 0..j - k + 1 {
+            if w[i] > w[a] {
+                a = i;
+            }
+        }
+        let mut c = j + k;
+        for i in j + k..count {
+            if w[i] > w[c] {
+                c = i;
+            }
+        }
+        let total = w[a] + w[j] + w[c];
+        if total > top {
+            top = total;
+            answer = vec![a, j, c];
+        }
+    }
+    answer
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, nums: Vec[i64], k: i64) -> Vec[i64] {
+    if which == 0 {
+        max_sum_of_three_subarrays_star(nums, k)
+    } else if which == 1 {
+        max_sum_of_three_subarrays_dp(nums, k)
+    } else if which == 2 {
+        max_sum_of_three_subarrays_sliding(nums, k)
+    } else {
+        max_sum_of_three_subarrays_scan(nums, k)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The sum of the three windows starting at `starts`, or -1 if they are
+// not three starts in order, k apart or more, inside the array.
+fn total(nums: Vec[i64], k: i64, starts: Vec[i64]) -> i64 {
+    if starts.len() != 3 or starts[0] < 0 or starts[1] < starts[0] + k or starts[2] < starts[1] + k or starts[2] + k > nums.len() {
+        return -1;
+    }
+    let mut sum = 0;
+    for s in starts.iter() {
+        for i in *s..*s + k {
+            sum += nums[i];
+        }
+    }
+    sum
+}
+
+// The definition: every three starts a, b, c with b >= a + k and
+// c >= b + k, in lexicographic order, each summed from scratch; the
+// first with the largest sum.
+fn definition(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut best: Vec[i64] = Vec.new();
+    let mut top = -1;
+    for a in 0..n {
+        for b in a + k..n {
+            for c in b + k..n - k + 1 {
+                let sum = total(nums, k, vec![a, b, c]);
+                if sum > top {
+                    top = sum;
+                    best = vec![a, b, c];
+                }
+            }
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 6890;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1500;
+    let mut small = 0;
+    for q in 0..cases {
+        let big = q % 3 == 2;
+        let n = if big { 3 + next_random(mut seed) % 118 } else { 3 + next_random(mut seed) % 12 };
+        let k = 1 + next_random(mut seed) % (n / 3);
+        let top = if big and q % 2 == 0 { 1000 } else { 1 + next_random(mut seed) % 4 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % top);
+        }
+        let want = if big { Vec.new() } else { definition(nums, k) };
+        if not big {
+            small += 1;
+        }
+        // Three random starts that fit, for P2.
+        let a = next_random(mut seed) % (n - 3 * k + 1);
+        let b = a + k + next_random(mut seed) % (n - 3 * k - a + 1);
+        let c = b + k + next_random(mut seed) % (n - k - b - k + 1);
+        let other = total(nums, k, vec![a, b, c]);
+        let shift = 1 + next_random(mut seed) % 100;
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            shifted.push(nums[i] + shift);
+            reversed.push(nums[n - 1 - i]);
+        }
+        for which in 0..arms {
+            let got = answer(which, nums, k);
+            let sum = total(nums, k, got);
+            // P1: the definition's answer, on up to 14 values.
+            if not big {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: three starts that fit, and a sum no random three beat.
+            checks += 1;
+            if sum < 0 or sum < other {
+                fails[1] += 1;
+            }
+            // P3: every value raised by the same amount changes nothing.
+            checks += 1;
+            if answer(which, shifted, k) != got {
+                fails[2] += 1;
+            }
+            // P4: the array reversed answers the same sum.
+            checks += 1;
+            if total(reversed, k, answer(which, reversed, k)) != sum {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut all = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        all += fails[p];
+    }
+    println(f"{report}{cases} arrays ({small} against the definition), {arms} arms, {checks} checks, {all} failures");
+}

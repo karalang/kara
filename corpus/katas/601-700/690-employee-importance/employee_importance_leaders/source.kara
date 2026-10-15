@@ -1,0 +1,113 @@
+// LeetCode #690: Employee Importance -- up from everyone.
+//
+// Turn the lists round: record each employee's direct leader. Then, for
+// every employee, climb from them through their leaders; if the climb
+// passes the given id, they are in its tree and their importance
+// counts. No list of subordinates is followed downward. O(n x depth)
+// time, O(2000) space.
+
+struct Employee {
+    id: i64,
+    importance: i64,
+    subordinates: Vec[i64],
+}
+
+fn get_importance(employees: Vec[Employee], id: i64) -> i64 {
+    let mut leader: Vec[i64] = vec![0; 2001];
+    for e in employees.iter() {
+        for s in e.subordinates.iter() {
+            leader[*s] = e.id;
+        }
+    }
+    let mut sum = 0;
+    for e in employees.iter() {
+        let mut up = e.id;
+        while up != 0 and up != id {
+            up = leader[up];
+        }
+        if up == id {
+            sum += e.importance;
+        }
+    }
+    sum
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn emp(id: i64, importance: i64, subordinates: own Vec[i64]) -> Employee {
+    Employee { id: id, importance: importance, subordinates: subordinates }
+}
+
+fn main() {
+    // The two LeetCode examples.
+    println(f"example 1: {get_importance(vec![emp(1, 5, vec![2, 3]), emp(2, 3, vec![]), emp(3, 3, vec![])], 1)}");
+    println(f"example 2: {get_importance(vec![emp(1, 2, vec![5]), emp(5, -3, vec![])], 5)}");
+    // One employee alone, a leaf, a negative total, ids out of order and
+    // far apart, and the leader listed after the people under them.
+    println(f"alone: {get_importance(vec![emp(2000, -100, vec![])], 2000)}");
+    let gaps = vec![emp(1999, 4, vec![]), emp(7, -9, vec![1999, 3]), emp(3, 2, vec![12]), emp(12, -6, vec![]), emp(1, 100, vec![])];
+    println(f"gaps: 7 -> {get_importance(gaps, 7)}, 3 -> {get_importance(gaps, 3)}, 12 -> {get_importance(gaps, 12)}, 1 -> {get_importance(gaps, 1)}");
+
+    // A chain of 2,000, each the leader of the next, importance 1 each.
+    let mut chain: Vec[Employee] = Vec.new();
+    for i in 1..2001 {
+        let subs: Vec[i64] = if i < 2000 { vec![i + 1] } else { vec![] };
+        chain.push(emp(i, 1, subs));
+    }
+    println(f"chain of 2000: from 1 {get_importance(chain, 1)}, from 1001 {get_importance(chain, 1001)}, from 2000 {get_importance(chain, 2000)}");
+
+    // One leader over 1,999 others.
+    let mut flat: Vec[Employee] = Vec.new();
+    let mut under: Vec[i64] = Vec.new();
+    for i in 2..2001 {
+        under.push(i);
+        flat.push(emp(i, i % 201 - 100, vec![]));
+    }
+    flat.push(emp(1, 0, under));
+    println(f"one over 1999: from 1 {get_importance(flat, 1)}, from 2 {get_importance(flat, 2)}");
+
+    // 100 random companies of up to 300 people, ids drawn from 1 to 2000
+    // in random order, each person under a random earlier one or no one;
+    // 20 random people asked about in each.
+    let mut seed = 690;
+    let mut checksum = 0;
+    let mut asked = 0;
+    for _ in 0..100 {
+        let n = 1 + next_random(mut seed) % 300;
+        let mut ids: Vec[i64] = Vec.new();
+        for i in 1..2001 {
+            ids.push(i);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (2000 - i);
+            let t = ids[i];
+            ids[i] = ids[j];
+            ids[j] = t;
+        }
+        let mut subs: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            subs.push(Vec.new());
+        }
+        for i in 1..n {
+            if next_random(mut seed) % 10 != 0 {
+                let boss = next_random(mut seed) % i;
+                subs[boss].push(ids[i]);
+            }
+        }
+        let mut company: Vec[Employee] = Vec.new();
+        for i in 0..n {
+            company.push(emp(ids[i], next_random(mut seed) % 201 - 100, subs[i].clone()));
+        }
+        for _ in 0..20 {
+            let who = ids[next_random(mut seed) % n];
+            checksum = (checksum * 31 + get_importance(company, who) + 1000000) % 1000000007;
+            asked += 1;
+        }
+    }
+    println(f"{asked} random questions: checksum {checksum}");
+}

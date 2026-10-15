@@ -1,0 +1,237 @@
+// LeetCode #690: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random companies.
+
+struct Employee {
+    id: i64,
+    importance: i64,
+    subordinates: Vec[i64],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn get_importance_star(employees: Vec[Employee], id: i64) -> i64 {
+    let mut at: Map[i64, i64] = Map.new();
+    for i in 0..employees.len() {
+        at.insert(employees[i].id, i);
+    }
+    total_star(employees, at, id)
+}
+
+fn total_star(employees: ref Vec[Employee], at: ref Map[i64, i64], id: i64) -> i64 {
+    let e = ref employees[at[id]];
+    let mut sum = e.importance;
+    for s in e.subordinates.iter() {
+        sum += total_star(employees, at, *s);
+    }
+    sum
+}
+
+// ---- bfs arm -----------------------------------------------------------
+
+fn get_importance_bfs(employees: Vec[Employee], id: i64) -> i64 {
+    let mut at: Vec[i64] = vec![-1; 2001];
+    for i in 0..employees.len() {
+        at[employees[i].id] = i;
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(id);
+    let mut sum = 0;
+    while let Some(next) = queue.pop_front() {
+        let e = ref employees[at[next]];
+        sum += e.importance;
+        for s in e.subordinates.iter() {
+            queue.push_back(*s);
+        }
+    }
+    sum
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn get_importance_stack(employees: Vec[Employee], id: i64) -> i64 {
+    let mut at: Map[i64, i64] = Map.new();
+    for i in 0..employees.len() {
+        at.insert(employees[i].id, i);
+    }
+    let mut stack: Vec[i64] = vec![id];
+    let mut sum = 0;
+    while let Some(next) = stack.pop() {
+        let e = ref employees[at[next]];
+        sum += e.importance;
+        for s in e.subordinates.iter() {
+            stack.push(*s);
+        }
+    }
+    sum
+}
+
+// ---- leaders arm -------------------------------------------------------
+
+fn get_importance_leaders(employees: Vec[Employee], id: i64) -> i64 {
+    let mut leader: Vec[i64] = vec![0; 2001];
+    for e in employees.iter() {
+        for s in e.subordinates.iter() {
+            leader[*s] = e.id;
+        }
+    }
+    let mut sum = 0;
+    for e in employees.iter() {
+        let mut up = e.id;
+        while up != 0 and up != id {
+            up = leader[up];
+        }
+        if up == id {
+            sum += e.importance;
+        }
+    }
+    sum
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, employees: Vec[Employee], id: i64) -> i64 {
+    if which == 0 {
+        get_importance_star(employees, id)
+    } else if which == 1 {
+        get_importance_bfs(employees, id)
+    } else if which == 2 {
+        get_importance_stack(employees, id)
+    } else {
+        get_importance_leaders(employees, id)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn emp(id: i64, importance: i64, subordinates: own Vec[i64]) -> Employee {
+    Employee { id: id, importance: importance, subordinates: subordinates }
+}
+
+// The definition: mark the given id, then go over the whole list again
+// and again, marking the subordinates of everyone marked, until a pass
+// marks no one new; the sum over everyone marked.
+fn definition(employees: Vec[Employee], id: i64) -> i64 {
+    let mut marked: Vec[bool] = vec![false; 2001];
+    marked[id] = true;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for e in employees.iter() {
+            if marked[e.id] {
+                for s in e.subordinates.iter() {
+                    if not marked[*s] {
+                        marked[*s] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut sum = 0;
+    for e in employees.iter() {
+        if marked[e.id] {
+            sum += e.importance;
+        }
+    }
+    sum
+}
+
+fn main() {
+    let mut seed = 6900;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1200;
+    for _ in 0..cases {
+        let n = 1 + next_random(mut seed) % 60;
+        let mut ids: Vec[i64] = Vec.new();
+        for i in 1..2001 {
+            ids.push(i);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (2000 - i);
+            let t = ids[i];
+            ids[i] = ids[j];
+            ids[j] = t;
+        }
+        let mut subs: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            subs.push(Vec.new());
+        }
+        let spread = 1 + next_random(mut seed) % 5;
+        for i in 1..n {
+            if next_random(mut seed) % 8 != 0 {
+                let boss = if i > spread { i - 1 - next_random(mut seed) % spread } else { next_random(mut seed) % i };
+                subs[boss].push(ids[i]);
+            }
+        }
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 201 - 100);
+        }
+        let mut company: Vec[Employee] = Vec.new();
+        let mut negated: Vec[Employee] = Vec.new();
+        for i in 0..n {
+            company.push(emp(ids[i], values[i], subs[i].clone()));
+            negated.push(emp(ids[i], -values[i], subs[i].clone()));
+        }
+        // The same company listed in another order.
+        let mut order: Vec[i64] = Vec.new();
+        for i in 0..n {
+            order.push(i);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            let t = order[i];
+            order[i] = order[j];
+            order[j] = t;
+        }
+        let mut shuffled: Vec[Employee] = Vec.new();
+        for i in 0..n {
+            shuffled.push(emp(ids[order[i]], values[order[i]], subs[order[i]].clone()));
+        }
+        let pick = next_random(mut seed) % n;
+        let who = ids[pick];
+        let want = definition(company, who);
+        for which in 0..arms {
+            let got = answer(which, company, who);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the list in another order answers the same.
+            checks += 1;
+            if answer(which, shuffled, who) != got {
+                fails[1] += 1;
+            }
+            // P3: one's own importance plus each direct subordinate's answer.
+            checks += 1;
+            let mut sum = values[pick];
+            for s in subs[pick].iter() {
+                sum += answer(which, company, *s);
+            }
+            if got != sum {
+                fails[2] += 1;
+            }
+            // P4: every importance negated negates the answer.
+            checks += 1;
+            if answer(which, negated, who) != -got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} companies, {arms} arms, {checks} checks, {total} failures");
+}
