@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 262 |
 | false-positive | 204 |
 | other | 172 |
-| perf | 168 |
+| perf | 169 |
 | diagnostics | 162 |
 | crash | 120 |
 | soundness | 108 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2911 |
+| codegen | 2912 |
 | interp | 935 |
 | typecheck | 442 |
 | other | 115 |
 | ownership | 103 |
 | cli | 76 |
-| runtime | 73 |
+| runtime | 74 |
 | parser | 67 |
 | autopar | 59 |
 | resolver | 42 |
@@ -218,6 +218,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-53 | 2026-10-15 | typecheck | medium | `karac check` accepts `&`, `|` and `^` between two DIFFERENT integer types, such as `a & b` with `a: u128` and `b: i64`, which it refuses for `+`; every v2 surface then stops with "invalid MIR: binary operands of different types u128 and i64" | — |
 | B-2026-10-15-54 | 2026-10-15 | parser | low | An unsuffixed integer literal above `i64::MAX` is refused at PARSE even where the expected type is `u64` or `u128`: `let a: u64 = 0xFFFF_FFFF_FFFF_FFFF;` and `let b: u128 = 18446744073709551616;` fail with "integer literal ... is out of range for i64", although design.md says the type comes from inference and the range is checked against that type | — |
 | B-2026-10-15-55 | 2026-10-15 | codegen+runtime | medium | On the MIR compiled backend, `starts_with`, `contains`, `ends_with` and String `<` each call out to the runtime (`karac_mir_str_test`) where legacy inlines a length test and memcmp. Kata 677's bench makes 48.2M such calls, 45% of its instructions are their own cost (3.73G against legacy's 2.16G), and it runs at about 1.5 times legacy, the M2 bar | — |
+| B-2026-10-15-56 | 2026-10-15 | codegen+runtime | low | On the MIR compiled backend, the first allocation of a pushed `Vec` (`karac_mir_vec_reserve`) and every `Vec` clone (`karac_mir_vec_alloc`) are out-of-line runtime calls costing some 40 to 70 instructions each beyond the allocator, so kata 679's bench, which builds millions of two- to four-element `Vec[f64]`, runs 17.1G instructions against legacy's 12.9G: 1.5x legacy, at the M2 bar | — |
 
 ### Relocated
 
