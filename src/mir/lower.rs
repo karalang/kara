@@ -17051,7 +17051,9 @@ fn main() {
     }
 
     #[test]
-    fn optional_chains_prefix_literals_and_string_loops() {
+    fn question_member_chains_prefix_literals_and_string_loops() {
+        // `?` is postfix: `u.address?.city?.name` propagates
+        // (B-2026-10-14-50), so the chains live in `Option` functions.
         let src = r#"
 struct City { name: String, zip: i64 }
 struct Address { city: Option[City], tag: String }
@@ -17060,11 +17062,13 @@ fn mk(i: i64) -> User {
     if i == 0 { return User { address: None }; }
     User { address: Some(Address { city: Some(City { name: f"c{i}", zip: i }), tag: f"t" }) }
 }
+fn name_of(u: own User) -> Option[String] { Some(u.address?.city?.name) }
+fn tag_of(w: own User) -> Option[String] { Some(w.address?.tag) }
 fn main() {
     let u = mk(1);
-    match u.address?.city?.name { Some(n) => println(n), None => println("none") }
+    match name_of(u) { Some(n) => println(n), None => println("none") }
     let w = mk(0);
-    println(w.address?.tag);
+    println(tag_of(w));
     let s = Set[1, 1, 2];
     let d = VecDeque[4, 5];
     let e: VecDeque[i64] = VecDeque[];
