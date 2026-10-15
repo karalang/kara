@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | missing-feature | 269 |
-| codegen-gap | 260 |
+| codegen-gap | 261 |
 | false-positive | 195 |
 | other | 172 |
 | perf | 166 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2903 |
+| codegen | 2904 |
 | interp | 931 |
 | typecheck | 434 |
 | other | 115 |
@@ -211,16 +211,15 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-22 | 2026-10-15 | typecheck+interp+codegen | medium | `let since = m.get(k).unwrap_or(9); let mut t = since; t = t + 1;` passes `karac check` but every MIR surface stops with an internal error, "invalid MIR: main: bb7[1]: assigning i64 to _8 of type ref i64": `since` and `t` are typed `ref i64` (the `Option[ref i64]` of `get`), so the assignment of an `i64` to `t` builds ill-typed MIR | — |
 | B-2026-10-15-23 | 2026-10-15 | ownership | medium | `karac check` calls the argument of two built-in String methods MOVED, though every MIR surface runs the program: `line.find(op)` moves `op` when `line` is a `Str` (a parameter; a `String` receiver is fine), and `t.replacen("%", s, 1)` moves a `String` `s` on any receiver, so a later `op.len()` or a second `replacen` with the same stem is refused | — |
 | B-2026-10-15-24 | 2026-10-15 | typecheck+interp+codegen | medium | `match v[i] { J.I(n) => Some(*n), .. }` on an index place passes `karac check` (which binds `n` as a `ref i64`) but every MIR surface stops with "unary '*' requires 'ref T', 'mut ref T', or a raw pointer, found 'i64'": the MIR builder binds a Copy payload of an index-place scrutinee BY VALUE, though `let x = ref v[i]; match x { J.I(n) => *n }` binds it as a ref on MIR too | — |
-| B-2026-10-15-25 | 2026-10-15 | parser | medium | A closure parameter annotated with a mode does not parse: `|v: own Vec[i64]| v.len()` is "Expected Pipe, found Identifier" at the type, though design.md § Function values gives `|x: own T| body` as the way to set one parameter's mode and shows `|v: own Vec[i64]| sort(v)` twice | — |
 | B-2026-10-15-26 | 2026-10-15 | codegen | high | Calling an element of a `Vec[Fn(..)]` filled by `push` fails on every v2 surface though `karac check` passes: `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(w); v[0](7)` is "call through Fn(..w..), which is not a function value" on `__mir-run`, a silent exit 101 on `__mir-llvm-run` and an ASan stack-buffer-overflow; the same Vec built with `vec![w]` works, as does a closure in a struct field | — |
 | B-2026-10-15-27 | 2026-10-15 | codegen | high | A closure that escapes inside a value (stored in a struct in a returned `Vec`) captures BY REFERENCE on v2, though core-semantics.md §9.3 says an escaping closure captures every place by move: the captured owned `String` dangles after the function returns (`__mir-run` "dangling reference to a local of a function that returned", ASan heap-use-after-free); `karac check` refuses the program with the legacy backend's `escaping_closure` deferral | — |
 | B-2026-10-15-28 | 2026-10-15 | typecheck | low | The library has no read-write or positional file access: io.md's `File` opens for reading, for writing with truncation, or for appending, and has no `set_len`, so a page-based store (SQLite, LMDB, bbolt, a B+tree index) cannot rewrite one page in place or trim a torn log tail; it must rewrite the whole file. There is also no byte-level `fs.read`/`fs.write` beside the String ones | — |
-| B-2026-10-15-29 | 2026-10-15 | resolver | medium | A top-level type declared AFTER an enum that has a variant of the same name is refused as "'Heading' is already defined in this scope" by `karac check`, `__mir-run` and `__mir-llvm-run`, while the same program with the type declared BEFORE the enum is accepted and runs; so the common `enum Shape { Circle(Circle), .. }` shape works or fails depending on declaration order | — |
 | B-2026-10-15-30 | 2026-10-15 | interp+codegen | medium | On the v2 backends a channel never waits. A `send` to a full channel returns `Err(SendError.Full(v))` where the spec's `send` waits for room. A `recv` on an empty channel whose senders are alive returns `None` where it should wait (or panic as a deadlock when no task can run). `TaskGroup.new(limit: n)` accepts the limit without bounding how many tasks run at once | — |
 | B-2026-10-15-31 | 2026-10-15 | typecheck | medium | `karac check` keeps a `ref` borrow live past a `return`: with `let t = ref self.toks[self.p];` read by several `if` branches that each end in `return self.add(..)` (a `mut ref self` method), every branch but the last is refused with "cannot call `.add` ... while `ref t` borrows `self.toks[..]`: `t` is used after this", where the later use is in a LATER branch the returning path never reaches; core-semantics.md §5.6 makes a borrow live only to its last use. All four running surfaces accept the program | — |
 | B-2026-10-15-32 | 2026-10-15 | ownership | medium | `karac check` treats a pattern binding as moving its owned scrutinee on EVERY path: `match v { V.Text(s) => s, V.Int(_) => show(v) }` and `if let V.Text(s) = v { return s; } show(v)` are refused with "value 'v' moved here, used again here ... (a binding in that pattern moves its part out)" at the use in the arm or path where nothing was bound, though core-semantics.md §4.6 says a plain binding moves its part "on that path". All four running surfaces accept both | — |
 | B-2026-10-15-33 | 2026-10-15 | interp+codegen | high | Some method calls on a BORROWED handle of a `shared struct` fail the MIR build with "a type that failed to check is not lowered yet" on `__mir-run`, `__mir-llvm-run` and `__mir-llvm-asan`, though `karac check` passes and `karac run --interp` runs them: with `t: ref T` (or `t` bound by a pattern over a borrowed enum), `t.noop(5)` (a `ref self` method returning unit), `t.put(v)` returning `bool`, and `t.get(k)` returning an enum all fail, while `t.size()` returning `i64` builds and the same calls on an OWNED handle (`let h = t.clone(); h.put(v)`) work | — |
 | B-2026-10-15-34 | 2026-10-15 | interp+codegen | medium | On the MIR backends an f-string can call a USER function named `format` in place of the formatting it lowers to: `fn format(n: i64) -> String { f"<{n}>" }` fails with "format takes 1 arguments, got 3" on `__mir-run` and "Incorrect number of arguments passed to called function" (`call void @kara.format(ptr %ret, ptr %arg, ptr %arg1, ptr %arg2)`) on `__mir-llvm-run` and `__mir-llvm-asan`; `karac check` passes and `karac run --interp` prints `<3>` | — |
+| B-2026-10-15-35 | 2026-10-15 | codegen | low | A bare variant pattern whose name a struct also holds passes `karac check` but stops the MIR builder with "this variant is not lowered yet": with `enum Block { Heading(i64), Rule }` and `struct Heading { level: i64 }`, `match b { Heading(n) => .., Rule => .. }` on a `Block` fails on `__mir-run` and `__mir-llvm-run` whichever is declared first; the qualified `Block.Heading(n)` runs | — |
 
 ### Relocated
 
@@ -4076,6 +4075,8 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-9 | interp+codegen | medium | The spec's channel constructor `channel(cap) -> (Sender[T], Receiver[T])` (docs/library/concurrency.md, imported from `std.sync`) does not exist, and… | 803e7dac6a |
 | B-2026-10-15-11 | typecheck | medium | The implemented `TaskGroup` / channel surface is not the one docs/library/concurrency.md specifies, beyond the `channel(cap)` name of B-2026-10-14-48… | 803e7dac6a |
 | B-2026-10-15-21 | effect | medium | A call through a generic bound is charged the effects of EVERY impl of the trait method instead of the instance's (design.md §12 Trait methods and ge… | 8d40e1a762 |
+| B-2026-10-15-25 | parser | medium | A closure parameter annotated with a mode does not parse: `\|v: own Vec[i64]\| v.len()` is "Expected Pipe, found Identifier" at the type, though design… | abbdbaf131 |
+| B-2026-10-15-29 | resolver | medium | A top-level type declared AFTER an enum that has a variant of the same name is refused as "'Heading' is already defined in this scope" by `karac chec… | abbdbaf131 |
 
 </details>
 
