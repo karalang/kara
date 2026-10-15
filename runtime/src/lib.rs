@@ -748,6 +748,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(
         karac_runtime_env_set,
         karac_runtime_clock_now,
+        karac_runtime_clock_monotonic_ns,
+        karac_runtime_clock_wall_ns,
         karac_runtime_rand_next_u64,
         karac_runtime_env_args_into,
         karac_runtime_env_var,
@@ -1247,6 +1249,25 @@ pub extern "C" fn karac_runtime_clock_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// `Clock.monotonic_ns()` — nanoseconds since the first reading, from the
+/// monotonic clock; the MIR interpreter's `("Clock", "monotonic_ns")`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_clock_monotonic_ns() -> i64 {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let origin = ORIGIN.get_or_init(std::time::Instant::now);
+    origin.elapsed().as_nanos() as i64
+}
+
+/// `Clock.wall_ns()` — nanoseconds since the Unix epoch, 0 before it; the
+/// MIR interpreter's `("Clock", "wall_ns")`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_clock_wall_ns() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
         .unwrap_or(0)
 }
 

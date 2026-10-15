@@ -310,6 +310,16 @@ struct Clock { }
 impl Clock {
     #[compiler_builtin]
     fn now() -> i64 { 0 }
+
+    // Nanoseconds from an arbitrary origin fixed for the process; never
+    // goes backwards. For measuring intervals (`Instant`).
+    #[compiler_builtin]
+    fn monotonic_ns() -> i64 { 0 }
+
+    // Nanoseconds since the Unix epoch, from the system clock, which may
+    // jump (`SystemTime`). 0 for a clock set before the epoch.
+    #[compiler_builtin]
+    fn wall_ns() -> i64 { 0 }
 }
 
 struct RandomSource { }

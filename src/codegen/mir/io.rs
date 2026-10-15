@@ -76,9 +76,14 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("Server", "serve") => self.serve_native(args, dest).map(Some),
             ("Request", _) => self.request_native(method, args, dest),
-            ("Clock", "now") => {
+            ("Clock", "now" | "monotonic_ns" | "wall_ns") => {
                 let i64t = self.llcx.i64_type();
-                let f = self.extern_fn("karac_runtime_clock_now", i64t.fn_type(&[], false));
+                let name = match method {
+                    "now" => "karac_runtime_clock_now",
+                    "monotonic_ns" => "karac_runtime_clock_monotonic_ns",
+                    _ => "karac_runtime_clock_wall_ns",
+                };
+                let f = self.extern_fn(name, i64t.fn_type(&[], false));
                 let v = self
                     .builder
                     .build_call(f, &[], "")

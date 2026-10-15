@@ -1356,6 +1356,18 @@ impl<'a> Interp<'a> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| i128::from(d.as_secs())),
             )),
+            // As the runtime's `karac_runtime_clock_monotonic_ns` /
+            // `_wall_ns`: the origin is the first reading.
+            ("Clock", "monotonic_ns") => {
+                static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+                let origin = ORIGIN.get_or_init(std::time::Instant::now);
+                Ok(Value::Int(origin.elapsed().as_nanos() as i64 as i128))
+            }
+            ("Clock", "wall_ns") => Ok(Value::Int(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as i64 as i128),
+            )),
             ("RandomSource", "next_u64") => {
                 // Xorshift64 from a clock seed, as legacy's.
                 let mut x = self.rand;

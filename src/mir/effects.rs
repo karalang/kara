@@ -736,7 +736,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("format", "") | (_, "to_string") => vec![HEAP],
         ("Env", "args" | "var") => vec![(Reads, "Env", None), HEAP],
         ("Env", "set" | "remove") => vec![(Writes, "Env", None), HEAP],
-        ("Clock", "now") => vec![(Reads, "Clock", None)],
+        ("Clock", "now" | "monotonic_ns" | "wall_ns") => vec![(Reads, "Clock", None)],
         // Drawing a number advances the source, so two draws on one source
         // keep their order (legacy called this a read).
         ("RandomSource", "next_u64" | "next_i64" | "next_f64") => {

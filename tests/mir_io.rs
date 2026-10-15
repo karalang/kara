@@ -633,6 +633,37 @@ fn udp_and_socket_options_match_the_interpreter() {
     }
 }
 
+/// `Clock.monotonic_ns` and `Clock.wall_ns`, the nanosecond readings
+/// `Instant` and `SystemTime` are built on (`clock.` reaches them too).
+const CLOCKS: &str = r#"
+fn main() {
+    let a = Clock.monotonic_ns();
+    let mut spin = 0;
+    while spin < 100000 {
+        spin = spin + 1;
+    }
+    let b = clock.monotonic_ns();
+    let w = Clock.wall_ns();
+    let s = clock.now();
+    println(f"monotonic: {b >= a}, {a >= 0}");
+    println(f"wall after 2026: {w > 1767225600000000000}");
+    println(f"wall agrees with now: {w / 1000000000 - s <= 1}");
+}
+"#;
+
+#[test]
+fn nanosecond_clocks_match_the_interpreter() {
+    let dir = Scratch::new("clocks");
+    let (interp, built) = interp_and_build(dir.path(), CLOCKS);
+    assert_eq!(
+        interp,
+        "monotonic: true, true\nwall after 2026: true\nwall agrees with now: true\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
 /// A loopback HTTP/1.1 server for the client test, on its own thread:
 /// `GET /hello` is "hi", `GET /empty` empty, any other `GET` a 404, `POST`
 /// echoes its body and `PUT` its method, body and `X-Echo` header (as a
