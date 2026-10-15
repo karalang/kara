@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 260 |
+| missing-feature | 262 |
 | codegen-gap | 259 |
 | false-positive | 185 |
 | other | 172 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2894 |
-| interp | 924 |
+| codegen | 2895 |
+| interp | 925 |
 | typecheck | 423 |
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
-| runtime | 71 |
+| runtime | 72 |
 | parser | 63 |
 | autopar | 59 |
 | resolver | 40 |
@@ -178,7 +178,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 | B-2026-10-14-43 | 2026-10-14 | typecheck | medium | A string literal pattern does not take the `Str` type of its scrutinee: `match s.as_str() { "Year" => ... }`, or a match on a `Str` parameter, is refused with "expected 'StringSlice', found 'String'" by `karac check` and by the MIR front end, while the same match on a `String` works | — |
 | B-2026-10-14-47 | 2026-10-14 | resolver+typecheck+interp | low | `IndexSet` (design.md § `Index` and `IndexMut`: `c[key] = value` calls `IndexSet.index_set(c, key, value)` when `c`'s type implements it, else `*IndexMut.index_mut(c, key) = value`) does not exist: the stdlib declares no `IndexSet` trait, so a user keyed container cannot take `c[k] = v` for a key that is not present yet, and the user `Index` / `IndexMut` support B-2026-10-14-37 added writes only through `index_mut` | — |
-| B-2026-10-14-48 | 2026-10-14 | resolver | medium | The library module paths of docs/library/README.md do not resolve: `import std.sync.{channel, Sender, Receiver}` (concurrency.md's own example), `import std.net.{TcpListener, TcpError}`, `import std.io.{File}` and `import std.sync.{TaskGroup}` / `{Mutex}` all stop with `unknown module` on `karac check` and the MIR pipeline, and the spec's channel constructor `channel(cap)` is an undefined name: the implementation has the names as globals and channels only as the older `Channel.new()` / `Channel.bounded(cap)` | — |
 | B-2026-10-14-49 | 2026-10-14 | interp+codegen | high | `TaskGroup.spawn` runs its task to completion before returning on both v2 backends (and on legacy `--interp`), where docs/library/concurrency.md says it "starts `f` as a task that runs concurrently with the caller": a server task that blocks in `accept` while client tasks connect never returns, so the spec's own accept-loop shape, and any task that waits on another task, hangs the program | — |
 | B-2026-10-14-51 | 2026-10-14 | ownership | medium | `karac check` refuses binding a range view of a FIELD to a local in a method, `let s = self.bytes[a..b]; s` (and `Ok(s)`), with "slice from temporary value escapes the enclosing statement", though `self.bytes` is a place and not a temporary; the same body returned without the binding passes, and every MIR surface accepts both | — |
 | B-2026-10-14-52 | 2026-10-14 | codegen | high | `CONST.iter()` on a `const` array runs ZERO iterations on the MIR compiled backends: `const AA: Array[i64, 3] = [1, 2, 3]; for x in AA.iter() { s += *x; }` leaves `s` at 0 under `karac __mir-llvm-run` and `karac build --mir` with no error, and `__mir-llvm-asan` reports a stack-buffer-overflow READ of size 16, because the call passes an 8-byte pointer to the array where `Slice[i64].iter` reads a 16-byte (ptr, len) slice | — |
@@ -186,7 +185,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-54 | 2026-10-14 | runtime | medium | The file system library is two functions: docs/library/io.md specifies only `fs.read_to_string` and `fs.write` (v2 adds `read_lines`), so a Kāra program cannot list a directory, create or remove a directory, remove, rename or copy a file, test whether a path exists, or read a file's size or modification time without shelling out to `sh` | — |
 | B-2026-10-14-55 | 2026-10-14 | typecheck | medium | `karac check` accepts ANY method name on the ambient resources `fs`, `env` and `stdout`: `fs.bogus_op("x".to_string())` and `env.bogus_op()` print `All checks passed.`, and the program fails only when run (MIR build: "a type that failed to check is not lowered yet"; interpreter: "ambient resource 'FileSystem' has no default method 'bogus_op' yet") | — |
 | B-2026-10-14-56 | 2026-10-14 | codegen | medium | The MIR builder refuses a `match` on a field reached through a call that returns a `ref`: `match m.get(k).unwrap().v { V.T(_) => 1, V.L(_) => 2 }` and `match first(xs).v { .. }` (with `fn first(v: ref Vec[It]) -> ref It`) stop with "cannot move a non-`Copy` value out of a borrowed place" even when no pattern binds anything, while `karac check` accepts them and `match xs[0].v` / `let it = m.get(k).unwrap(); match it.v` build | — |
-| B-2026-10-14-57 | 2026-10-14 | parser | low | `let (mut a, b) = ..` (Rust's spelling) is refused with "'mut' is a reserved keyword and cannot be used as an identifier", which does not say that syntax.md puts `mut` before the whole pattern (`let mut (a, b) = ..`) or offer that fix | — |
 | B-2026-10-14-58 | 2026-10-14 | effect | medium | `karac check` refuses a function that calls a RECURSIVE allocating function as a value for a bare `Fn(..)` slot ("argument 1 has effect allocates(Heap) not declared in slot [pure]"; for a `let g: Fn(i64) -> String = show;` binding too), though design.md § Effects says `allocates(Heap)` and `panics` are default-permitted in function types; the same function without the recursive callee is accepted | — |
 | B-2026-10-14-59 | 2026-10-14 | typecheck | medium | A closure with an early `return None;` and a tail `Some(..)` is refused with "closure returns conflicting types: 'Option[String]' vs 'Option[T]'" (and "cannot infer type parameter 'T'" when the `return` carries the `Some`), by `karac check` and the MIR typecheck alike; closures cannot declare a return type, so the only way out is annotating the binding with a full `Fn(..)` type | — |
 | B-2026-10-14-60 | 2026-10-14 | ownership | medium | `karac check` refuses the basic find-and-return-a-reference lookup: `for (k, it) in v.iter() { if k == name { return Some(it); } }` in `fn pick(v: ref Vec[(String, i64)], name: Str) -> Option[ref i64]` (and `for s in v.iter() { return Some(s); }` into `Option[ref String]`) is "returned borrowed collection holds an element that borrows function-local storage" plus `borrow_projection_copy` "cannot move 'it'", though the element borrows the caller's `v`; the MIR backends run it | — |
@@ -208,6 +206,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-6 | 2026-10-15 | runtime | medium | Child processes have no library spec, and the implemented `Command` cannot connect one child's stdout to another's stdin: docs/library has no process section (io.md specifies files, stdin/stdout and sockets only), `Stdio` is `Inherit | Null | Piped` with no way to pass a `ChildStdout` as a stdin, and there is no `current_dir`, so a shell pipeline must buffer each stage's whole output in the parent | — |
 | B-2026-10-15-7 | 2026-10-15 | typecheck | medium | `karac check` refuses a `match v[i]` arm that only READS its binding with `==` or in an f-string: `match v[0] { Tok.Sym(t) => t == s, .. }` and `Tok.Sym(t) => println(f"{t}")` are E_INDEX_MOVE_NON_COPY ("this arm consumes `t`"), as is `Tok.Sym(ref t) => t == s`, though design.md says `==` borrows its operands and core-semantics.md §4.6 makes a binding into a borrowed place a `ref`; `t.len()` in the same position is accepted, and every MIR surface runs all of them | — |
 | B-2026-10-15-8 | 2026-10-15 | interp | medium | A user `struct Unit` with a heap field breaks the MIR interpreter on any `fs.write` result: with `struct Unit { n: Vec[i64] }` in scope, `match fs.write("x.txt", s) { Ok(_) => .., Err(_) => .. }` stops `__mir-run` with "run: in main at bb20[term]: ADT place holds Unit", because the library's `Result[Unit, IoError]` resolves `Unit` to the user's type; `karac check` passes with no prelude_shadow warning (it warns for `Parser`), and the compiled MIR surfaces run it | — |
+| B-2026-10-15-9 | 2026-10-15 | interp+codegen | medium | The spec's channel constructor `channel(cap) -> (Sender[T], Receiver[T])` (docs/library/concurrency.md, imported from `std.sync`) does not exist, and a full bounded channel DROPS the sent value where the spec's `send` waits and `try_send` returns it in `SendError.Full`; programs use the older `Channel.new()` / `Channel.bounded(cap)` | — |
+| B-2026-10-15-10 | 2026-10-15 | runtime | medium | Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
 
 ### Relocated
 
@@ -4048,7 +4048,9 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-14-44 | typecheck | medium | The `std.io` / `std.net` library signatures disagree with docs/library/io.md: `File.open` / `create` / `append`, `fs.read_to_string` and `fs.write` t… | 3ce50ff51e |
 | B-2026-10-14-45 | interp+codegen | medium | `BufReader` and `BufWriter` (docs/library/io.md § Buffered I/O) do not exist on either v2 backend: `karac check` accepts `BufReader.new(f)`, `read_li… | c274de40ea |
 | B-2026-10-14-46 | typecheck+cli | medium | A type error stopping the MIR pipeline is printed with no location: `karac __mir-run` / `__mir-llvm-run` / `__mir-llvm-asan` print `error[mir]: typec… | 46c2c35d7c |
+| B-2026-10-14-48 | resolver | medium | The library module paths of docs/library/README.md do not resolve: `import std.sync.{channel, Sender, Receiver}` (concurrency.md's own example), `imp… | 793fb3f7fe |
 | B-2026-10-14-50 | parser+typecheck | medium | `f()?.x` and `f()?.m()` are parsed as the removed optional-chaining operator `?.` instead of `(f()?).x`, so `?` followed by a member access is refuse… | 980724f583 |
+| B-2026-10-14-57 | parser | low | `let (mut a, b) = ..` (Rust's spelling) is refused with "'mut' is a reserved keyword and cannot be used as an identifier", which does not say that sy… | fd130d00ec |
 | B-2026-10-15-2 | typecheck | high | `collect`'s `C: FromIterator[V]` bound is never checked on the library pipeline when only the context solves `C`: `let s: String = words.iter().map(\|… | 6e47e41e3b |
 
 </details>
