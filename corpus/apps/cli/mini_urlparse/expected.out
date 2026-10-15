@@ -1,0 +1,626 @@
+== split
+'http://www.python.org/doc/#frag'
+  split SplitResult(scheme='http', netloc='www.python.org', path='/doc/', query='', fragment='frag')
+  parse ParseResult(scheme='http', netloc='www.python.org', path='/doc/', params='', query='', fragment='frag')
+  username=None password=None hostname='www.python.org' port=None
+  unsplit 'http://www.python.org/doc/#frag'
+  defrag DefragResult(url='http://www.python.org/doc/', fragment='frag')
+'HTTPS://User:Pa%20ss@WWW.Example.COM:8443/a/b;p=1/c;q=2?x=1&y=2#top'
+  split SplitResult(scheme='https', netloc='User:Pa%20ss@WWW.Example.COM:8443', path='/a/b;p=1/c;q=2', query='x=1&y=2', fragment='top')
+  parse ParseResult(scheme='https', netloc='User:Pa%20ss@WWW.Example.COM:8443', path='/a/b;p=1/c', params='q=2', query='x=1&y=2', fragment='top')
+  username='User' password='Pa%20ss' hostname='www.example.com' port=8443
+  unsplit 'https://User:Pa%20ss@WWW.Example.COM:8443/a/b;p=1/c;q=2?x=1&y=2#top'
+  defrag DefragResult(url='https://User:Pa%20ss@WWW.Example.COM:8443/a/b;p=1/c;q=2?x=1&y=2', fragment='top')
+'https://example.com:443'
+  split SplitResult(scheme='https', netloc='example.com:443', path='', query='', fragment='')
+  parse ParseResult(scheme='https', netloc='example.com:443', path='', params='', query='', fragment='')
+  username=None password=None hostname='example.com' port=443
+  unsplit 'https://example.com:443'
+  defrag DefragResult(url='https://example.com:443', fragment='')
+'http://[::1]:8080/path'
+  split SplitResult(scheme='http', netloc='[::1]:8080', path='/path', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='[::1]:8080', path='/path', params='', query='', fragment='')
+  username=None password=None hostname='::1' port=8080
+  unsplit 'http://[::1]:8080/path'
+  defrag DefragResult(url='http://[::1]:8080/path', fragment='')
+'http://[FE80::822A:A8FF:FE49:470C%tESt]:1234/keys'
+  split SplitResult(scheme='http', netloc='[FE80::822A:A8FF:FE49:470C%tESt]:1234', path='/keys', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='[FE80::822A:A8FF:FE49:470C%tESt]:1234', path='/keys', params='', query='', fragment='')
+  username=None password=None hostname='fe80::822a:a8ff:fe49:470c%tESt' port=1234
+  unsplit 'http://[FE80::822A:A8FF:FE49:470C%tESt]:1234/keys'
+  defrag DefragResult(url='http://[FE80::822A:A8FF:FE49:470C%tESt]:1234/keys', fragment='')
+'http://[2001:db8::7]/c=GB?objectClass?one'
+  split SplitResult(scheme='http', netloc='[2001:db8::7]', path='/c=GB', query='objectClass?one', fragment='')
+  parse ParseResult(scheme='http', netloc='[2001:db8::7]', path='/c=GB', params='', query='objectClass?one', fragment='')
+  username=None password=None hostname='2001:db8::7' port=None
+  unsplit 'http://[2001:db8::7]/c=GB?objectClass?one'
+  defrag DefragResult(url='http://[2001:db8::7]/c=GB?objectClass?one', fragment='')
+'http://[::ffff:192.0.2.1]/'
+  split SplitResult(scheme='http', netloc='[::ffff:192.0.2.1]', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='[::ffff:192.0.2.1]', path='/', params='', query='', fragment='')
+  username=None password=None hostname='::ffff:192.0.2.1' port=None
+  unsplit 'http://[::ffff:192.0.2.1]/'
+  defrag DefragResult(url='http://[::ffff:192.0.2.1]/', fragment='')
+'http://[v1.fe80::a+en1]/'
+  split SplitResult(scheme='http', netloc='[v1.fe80::a+en1]', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='[v1.fe80::a+en1]', path='/', params='', query='', fragment='')
+  username=None password=None hostname='v1.fe80::a+en1' port=None
+  unsplit 'http://[v1.fe80::a+en1]/'
+  defrag DefragResult(url='http://[v1.fe80::a+en1]/', fragment='')
+'http://[192.0.2.1]/'
+  Error: ValueError: An IPv4 address cannot be in brackets
+'http://[::1/'
+  Error: ValueError: Invalid IPv6 URL
+'http://::1]/'
+  Error: ValueError: Invalid IPv6 URL
+'http://x[::1]/'
+  Error: ValueError: Invalid IPv6 URL
+'http://[::1]x/'
+  Error: ValueError: Invalid IPv6 URL
+'http://[1:2:3:4:5:6:7:8:9]/'
+  Error: ValueError: '1:2:3:4:5:6:7:8:9' does not appear to be an IPv4 or IPv6 address
+'http://[vz.x]/'
+  Error: ValueError: IPvFuture address is invalid
+'http://host:port/'
+  split SplitResult(scheme='http', netloc='host:port', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='host:port', path='/', params='', query='', fragment='')
+  username=None password=None hostname='host' port=Error: ValueError: Port could not be cast to integer value as 'port'
+  unsplit 'http://host:port/'
+  defrag DefragResult(url='http://host:port/', fragment='')
+'http://host:99999/'
+  split SplitResult(scheme='http', netloc='host:99999', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='host:99999', path='/', params='', query='', fragment='')
+  username=None password=None hostname='host' port=Error: ValueError: Port out of range 0-65535
+  unsplit 'http://host:99999/'
+  defrag DefragResult(url='http://host:99999/', fragment='')
+'http://host:/'
+  split SplitResult(scheme='http', netloc='host:', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='host:', path='/', params='', query='', fragment='')
+  username=None password=None hostname='host' port=None
+  unsplit 'http://host:/'
+  defrag DefragResult(url='http://host:/', fragment='')
+'http://host:0080/'
+  split SplitResult(scheme='http', netloc='host:0080', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='host:0080', path='/', params='', query='', fragment='')
+  username=None password=None hostname='host' port=80
+  unsplit 'http://host:0080/'
+  defrag DefragResult(url='http://host:0080/', fragment='')
+'http://user@host'
+  split SplitResult(scheme='http', netloc='user@host', path='', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='user@host', path='', params='', query='', fragment='')
+  username='user' password=None hostname='host' port=None
+  unsplit 'http://user@host'
+  defrag DefragResult(url='http://user@host', fragment='')
+'http://user:@host'
+  split SplitResult(scheme='http', netloc='user:@host', path='', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='user:@host', path='', params='', query='', fragment='')
+  username='user' password='' hostname='host' port=None
+  unsplit 'http://user:@host'
+  defrag DefragResult(url='http://user:@host', fragment='')
+'http://:pw@host'
+  split SplitResult(scheme='http', netloc=':pw@host', path='', query='', fragment='')
+  parse ParseResult(scheme='http', netloc=':pw@host', path='', params='', query='', fragment='')
+  username='' password='pw' hostname='host' port=None
+  unsplit 'http://:pw@host'
+  defrag DefragResult(url='http://:pw@host', fragment='')
+'http://a@b@c/d'
+  split SplitResult(scheme='http', netloc='a@b@c', path='/d', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='a@b@c', path='/d', params='', query='', fragment='')
+  username='a@b' password=None hostname='c' port=None
+  unsplit 'http://a@b@c/d'
+  defrag DefragResult(url='http://a@b@c/d', fragment='')
+'ftp://ftp.is.co.za/rfc/rfc1808.txt'
+  split SplitResult(scheme='ftp', netloc='ftp.is.co.za', path='/rfc/rfc1808.txt', query='', fragment='')
+  parse ParseResult(scheme='ftp', netloc='ftp.is.co.za', path='/rfc/rfc1808.txt', params='', query='', fragment='')
+  username=None password=None hostname='ftp.is.co.za' port=None
+  unsplit 'ftp://ftp.is.co.za/rfc/rfc1808.txt'
+  defrag DefragResult(url='ftp://ftp.is.co.za/rfc/rfc1808.txt', fragment='')
+'mailto:John.Doe@example.com'
+  split SplitResult(scheme='mailto', netloc='', path='John.Doe@example.com', query='', fragment='')
+  parse ParseResult(scheme='mailto', netloc='', path='John.Doe@example.com', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'mailto:John.Doe@example.com'
+  defrag DefragResult(url='mailto:John.Doe@example.com', fragment='')
+'news:comp.infosystems.www.servers.unix'
+  split SplitResult(scheme='news', netloc='', path='comp.infosystems.www.servers.unix', query='', fragment='')
+  parse ParseResult(scheme='news', netloc='', path='comp.infosystems.www.servers.unix', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'news:comp.infosystems.www.servers.unix'
+  defrag DefragResult(url='news:comp.infosystems.www.servers.unix', fragment='')
+'tel:+1-816-555-1212'
+  split SplitResult(scheme='tel', netloc='', path='+1-816-555-1212', query='', fragment='')
+  parse ParseResult(scheme='tel', netloc='', path='+1-816-555-1212', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'tel:+1-816-555-1212'
+  defrag DefragResult(url='tel:+1-816-555-1212', fragment='')
+'telnet://192.0.2.16:80/'
+  split SplitResult(scheme='telnet', netloc='192.0.2.16:80', path='/', query='', fragment='')
+  parse ParseResult(scheme='telnet', netloc='192.0.2.16:80', path='/', params='', query='', fragment='')
+  username=None password=None hostname='192.0.2.16' port=80
+  unsplit 'telnet://192.0.2.16:80/'
+  defrag DefragResult(url='telnet://192.0.2.16:80/', fragment='')
+'urn:oasis:names:specification:docbook:dtd:xml:4.1.2'
+  split SplitResult(scheme='urn', netloc='', path='oasis:names:specification:docbook:dtd:xml:4.1.2', query='', fragment='')
+  parse ParseResult(scheme='urn', netloc='', path='oasis:names:specification:docbook:dtd:xml:4.1.2', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'urn:oasis:names:specification:docbook:dtd:xml:4.1.2'
+  defrag DefragResult(url='urn:oasis:names:specification:docbook:dtd:xml:4.1.2', fragment='')
+'file:///etc/hosts'
+  split SplitResult(scheme='file', netloc='', path='/etc/hosts', query='', fragment='')
+  parse ParseResult(scheme='file', netloc='', path='/etc/hosts', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'file:///etc/hosts'
+  defrag DefragResult(url='file:///etc/hosts', fragment='')
+'file:/etc/hosts'
+  split SplitResult(scheme='file', netloc='', path='/etc/hosts', query='', fragment='')
+  parse ParseResult(scheme='file', netloc='', path='/etc/hosts', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'file:///etc/hosts'
+  defrag DefragResult(url='file:/etc/hosts', fragment='')
+'file://localhost/c:/WINDOWS/clock.avi'
+  split SplitResult(scheme='file', netloc='localhost', path='/c:/WINDOWS/clock.avi', query='', fragment='')
+  parse ParseResult(scheme='file', netloc='localhost', path='/c:/WINDOWS/clock.avi', params='', query='', fragment='')
+  username=None password=None hostname='localhost' port=None
+  unsplit 'file://localhost/c:/WINDOWS/clock.avi'
+  defrag DefragResult(url='file://localhost/c:/WINDOWS/clock.avi', fragment='')
+'//www.example.com/path?q'
+  split SplitResult(scheme='', netloc='www.example.com', path='/path', query='q', fragment='')
+  parse ParseResult(scheme='', netloc='www.example.com', path='/path', params='', query='q', fragment='')
+  username=None password=None hostname='www.example.com' port=None
+  unsplit '//www.example.com/path?q'
+  defrag DefragResult(url='//www.example.com/path?q', fragment='')
+'/just/a/path;params?query#frag'
+  split SplitResult(scheme='', netloc='', path='/just/a/path;params', query='query', fragment='frag')
+  parse ParseResult(scheme='', netloc='', path='/just/a/path', params='params', query='query', fragment='frag')
+  username=None password=None hostname=None port=None
+  unsplit '/just/a/path;params?query#frag'
+  defrag DefragResult(url='/just/a/path;params?query', fragment='frag')
+'relative/path'
+  split SplitResult(scheme='', netloc='', path='relative/path', query='', fragment='')
+  parse ParseResult(scheme='', netloc='', path='relative/path', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'relative/path'
+  defrag DefragResult(url='relative/path', fragment='')
+'path:with:colons'
+  split SplitResult(scheme='path', netloc='', path='with:colons', query='', fragment='')
+  parse ParseResult(scheme='path', netloc='', path='with:colons', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'path:with:colons'
+  defrag DefragResult(url='path:with:colons', fragment='')
+'1http://not-a-scheme/'
+  split SplitResult(scheme='', netloc='', path='1http://not-a-scheme/', query='', fragment='')
+  parse ParseResult(scheme='', netloc='', path='1http://not-a-scheme/', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit '1http://not-a-scheme/'
+  defrag DefragResult(url='1http://not-a-scheme/', fragment='')
+'git+ssh://git@github.com/user/repo.git'
+  split SplitResult(scheme='git+ssh', netloc='git@github.com', path='/user/repo.git', query='', fragment='')
+  parse ParseResult(scheme='git+ssh', netloc='git@github.com', path='/user/repo.git', params='', query='', fragment='')
+  username='git' password=None hostname='github.com' port=None
+  unsplit 'git+ssh://git@github.com/user/repo.git'
+  defrag DefragResult(url='git+ssh://git@github.com/user/repo.git', fragment='')
+'svn+ssh://svn.example.org/trunk'
+  split SplitResult(scheme='svn+ssh', netloc='svn.example.org', path='/trunk', query='', fragment='')
+  parse ParseResult(scheme='svn+ssh', netloc='svn.example.org', path='/trunk', params='', query='', fragment='')
+  username=None password=None hostname='svn.example.org' port=None
+  unsplit 'svn+ssh://svn.example.org/trunk'
+  defrag DefragResult(url='svn+ssh://svn.example.org/trunk', fragment='')
+'sip:alice@atlanta.com;transport=tcp'
+  split SplitResult(scheme='sip', netloc='', path='alice@atlanta.com;transport=tcp', query='', fragment='')
+  parse ParseResult(scheme='sip', netloc='', path='alice@atlanta.com', params='transport=tcp', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'sip:alice@atlanta.com;transport=tcp'
+  defrag DefragResult(url='sip:alice@atlanta.com;transport=tcp', fragment='')
+'http://example.com/a;b;c/d;e?f#g#h'
+  split SplitResult(scheme='http', netloc='example.com', path='/a;b;c/d;e', query='f', fragment='g#h')
+  parse ParseResult(scheme='http', netloc='example.com', path='/a;b;c/d', params='e', query='f', fragment='g#h')
+  username=None password=None hostname='example.com' port=None
+  unsplit 'http://example.com/a;b;c/d;e?f#g#h'
+  defrag DefragResult(url='http://example.com/a;b;c/d;e?f', fragment='g#h')
+'http://example.com/?'
+  split SplitResult(scheme='http', netloc='example.com', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='example.com', path='/', params='', query='', fragment='')
+  username=None password=None hostname='example.com' port=None
+  unsplit 'http://example.com/'
+  defrag DefragResult(url='http://example.com/?', fragment='')
+'http://example.com/#'
+  split SplitResult(scheme='http', netloc='example.com', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='example.com', path='/', params='', query='', fragment='')
+  username=None password=None hostname='example.com' port=None
+  unsplit 'http://example.com/'
+  defrag DefragResult(url='http://example.com/', fragment='')
+'http://example.com?#'
+  split SplitResult(scheme='http', netloc='example.com', path='', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='example.com', path='', params='', query='', fragment='')
+  username=None password=None hostname='example.com' port=None
+  unsplit 'http://example.com'
+  defrag DefragResult(url='http://example.com', fragment='')
+'  \x01http://leading.example/  '
+  split SplitResult(scheme='http', netloc='leading.example', path='/  ', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='leading.example', path='/  ', params='', query='', fragment='')
+  username=None password=None hostname='leading.example' port=None
+  unsplit 'http://leading.example/  '
+  defrag DefragResult(url='  \x01http://leading.example/  ', fragment='')
+'ht\ttp://tab\n.exam\rple/'
+  split SplitResult(scheme='http', netloc='tab.example', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='tab.example', path='/', params='', query='', fragment='')
+  username=None password=None hostname='tab.example' port=None
+  unsplit 'http://tab.example/'
+  defrag DefragResult(url='ht\ttp://tab\n.exam\rple/', fragment='')
+'HTTP://EXAMPLE.COM/%7Euser'
+  split SplitResult(scheme='http', netloc='EXAMPLE.COM', path='/%7Euser', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='EXAMPLE.COM', path='/%7Euser', params='', query='', fragment='')
+  username=None password=None hostname='example.com' port=None
+  unsplit 'http://EXAMPLE.COM/%7Euser'
+  defrag DefragResult(url='HTTP://EXAMPLE.COM/%7Euser', fragment='')
+'javascript:alert(1)'
+  split SplitResult(scheme='javascript', netloc='', path='alert(1)', query='', fragment='')
+  parse ParseResult(scheme='javascript', netloc='', path='alert(1)', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'javascript:alert(1)'
+  defrag DefragResult(url='javascript:alert(1)', fragment='')
+'data:text/plain;base64,SGVsbG8='
+  split SplitResult(scheme='data', netloc='', path='text/plain;base64,SGVsbG8=', query='', fragment='')
+  parse ParseResult(scheme='data', netloc='', path='text/plain;base64,SGVsbG8=', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'data:text/plain;base64,SGVsbG8='
+  defrag DefragResult(url='data:text/plain;base64,SGVsbG8=', fragment='')
+'http://example.com:8080:9090/'
+  split SplitResult(scheme='http', netloc='example.com:8080:9090', path='/', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='example.com:8080:9090', path='/', params='', query='', fragment='')
+  username=None password=None hostname='example.com' port=Error: ValueError: Port could not be cast to integer value as '8080:9090'
+  unsplit 'http://example.com:8080:9090/'
+  defrag DefragResult(url='http://example.com:8080:9090/', fragment='')
+'http:///triple/slash'
+  split SplitResult(scheme='http', netloc='', path='/triple/slash', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='', path='/triple/slash', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'http:///triple/slash'
+  defrag DefragResult(url='http:///triple/slash', fragment='')
+'http:'
+  split SplitResult(scheme='http', netloc='', path='', query='', fragment='')
+  parse ParseResult(scheme='http', netloc='', path='', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit 'http://'
+  defrag DefragResult(url='http:', fragment='')
+''
+  split SplitResult(scheme='', netloc='', path='', query='', fragment='')
+  parse ParseResult(scheme='', netloc='', path='', params='', query='', fragment='')
+  username=None password=None hostname=None port=None
+  unsplit ''
+  defrag DefragResult(url='', fragment='')
+== join
+-- base 'http://a/b/c/d;p?q'
+  'g:h' -> 'g:h'
+  'g' -> 'http://a/b/c/g'
+  './g' -> 'http://a/b/c/g'
+  'g/' -> 'http://a/b/c/g/'
+  '/g' -> 'http://a/g'
+  '//g' -> 'http://g'
+  '?y' -> 'http://a/b/c/d;p?y'
+  'g?y' -> 'http://a/b/c/g?y'
+  '#s' -> 'http://a/b/c/d;p?q#s'
+  'g#s' -> 'http://a/b/c/g#s'
+  'g?y#s' -> 'http://a/b/c/g?y#s'
+  ';x' -> 'http://a/b/c/;x'
+  'g;x' -> 'http://a/b/c/g;x'
+  'g;x?y#s' -> 'http://a/b/c/g;x?y#s'
+  '' -> 'http://a/b/c/d;p?q'
+  '.' -> 'http://a/b/c/'
+  './' -> 'http://a/b/c/'
+  '..' -> 'http://a/b/'
+  '../' -> 'http://a/b/'
+  '../g' -> 'http://a/b/g'
+  '../..' -> 'http://a/'
+  '../../' -> 'http://a/'
+  '../../g' -> 'http://a/g'
+  '../../../g' -> 'http://a/g'
+  '../../../../g' -> 'http://a/g'
+  '/./g' -> 'http://a/g'
+  '/../g' -> 'http://a/g'
+  'g.' -> 'http://a/b/c/g.'
+  '.g' -> 'http://a/b/c/.g'
+  'g..' -> 'http://a/b/c/g..'
+  '..g' -> 'http://a/b/c/..g'
+  './../g' -> 'http://a/b/g'
+  './g/.' -> 'http://a/b/c/g/'
+  'g/./h' -> 'http://a/b/c/g/h'
+  'g/../h' -> 'http://a/b/c/h'
+  'g;x=1/./y' -> 'http://a/b/c/g;x=1/y'
+  'g;x=1/../y' -> 'http://a/b/c/y'
+  'g?y/./x' -> 'http://a/b/c/g?y/./x'
+  'g?y/../x' -> 'http://a/b/c/g?y/../x'
+  'g#s/./x' -> 'http://a/b/c/g#s/./x'
+  'g#s/../x' -> 'http://a/b/c/g#s/../x'
+  'http:g' -> 'http://a/b/c/g'
+  'http://other/x/../y' -> 'http://other/x/../y'
+  'https://a/b' -> 'https://a/b'
+-- base 'http://a/b/c/'
+  'd' -> 'http://a/b/c/d'
+  '../../../..' -> 'http://a/'
+  '//' -> 'http://a/b/c/'
+-- base 'https://shop.example.com/catalog/shoes/index.html?page=2'
+  '../bags/' -> 'https://shop.example.com/catalog/bags/'
+  'item.html?id=7#reviews' -> 'https://shop.example.com/catalog/shoes/item.html?id=7#reviews'
+  '/' -> 'https://shop.example.com/'
+  'mailto:x@y' -> 'mailto:x@y'
+  '#top' -> 'https://shop.example.com/catalog/shoes/index.html?page=2#top'
+-- base 'mailto:a@b'
+  'c@d' -> 'c@d'
+-- base ''
+  'anything' -> 'anything'
+-- base 'file:///home/user/docs/'
+  '../music/song.mp3' -> 'file:///home/user/music/song.mp3'
+-- base 'svn+ssh://svn.example.org/repo/trunk/src/'
+  '../../branches/x' -> 'svn+ssh://svn.example.org/repo/branches/x'
+-- base 'tel:+1'
+  '2' -> '2'
+== quote
+'abc def'
+  quote 'abc%20def'
+  quote safe='' 'abc%20def'
+  quote_plus 'abc+def'
+  unquote 'abc def'
+  unquote_plus 'abc def'
+'/path/to/file name.txt'
+  quote '/path/to/file%20name.txt'
+  quote safe='' '%2Fpath%2Fto%2Ffile%20name.txt'
+  quote_plus '%2Fpath%2Fto%2Ffile+name.txt'
+  unquote '/path/to/file name.txt'
+  unquote_plus '/path/to/file name.txt'
+'a+b=c&d'
+  quote 'a%2Bb%3Dc%26d'
+  quote safe='' 'a%2Bb%3Dc%26d'
+  quote_plus 'a%2Bb%3Dc%26d'
+  unquote 'a+b=c&d'
+  unquote_plus 'a b=c&d'
+'~user/_.-'
+  quote '~user/_.-'
+  quote safe='' '~user%2F_.-'
+  quote_plus '~user%2F_.-'
+  unquote '~user/_.-'
+  unquote_plus '~user/_.-'
+'100% sure?'
+  quote '100%25%20sure%3F'
+  quote safe='' '100%25%20sure%3F'
+  quote_plus '100%25+sure%3F'
+  unquote '100% sure?'
+  unquote_plus '100% sure?'
+'café crème'
+  quote 'caf%C3%A9%20cr%C3%A8me'
+  quote safe='' 'caf%C3%A9%20cr%C3%A8me'
+  quote_plus 'caf%C3%A9+cr%C3%A8me'
+  unquote 'café crème'
+  unquote_plus 'café crème'
+'日本語/テスト'
+  quote '%E6%97%A5%E6%9C%AC%E8%AA%9E/%E3%83%86%E3%82%B9%E3%83%88'
+  quote safe='' '%E6%97%A5%E6%9C%AC%E8%AA%9E%2F%E3%83%86%E3%82%B9%E3%83%88'
+  quote_plus '%E6%97%A5%E6%9C%AC%E8%AA%9E%2F%E3%83%86%E3%82%B9%E3%83%88'
+  unquote '日本語/テスト'
+  unquote_plus '日本語/テスト'
+'emoji 😀!'
+  quote 'emoji%20%F0%9F%98%80%21'
+  quote safe='' 'emoji%20%F0%9F%98%80%21'
+  quote_plus 'emoji+%F0%9F%98%80%21'
+  unquote 'emoji 😀!'
+  unquote_plus 'emoji 😀!'
+'%41%42%43'
+  quote '%2541%2542%2543'
+  quote safe='' '%2541%2542%2543'
+  quote_plus '%2541%2542%2543'
+  unquote 'ABC'
+  unquote_plus 'ABC'
+'%7e%7E%zz%4'
+  quote '%257e%257E%25zz%254'
+  quote safe='' '%257e%257E%25zz%254'
+  quote_plus '%257e%257E%25zz%254'
+  unquote '~~%zz%4'
+  unquote_plus '~~%zz%4'
+'%C3%A9t%C3%A9'
+  quote '%25C3%25A9t%25C3%25A9'
+  quote safe='' '%25C3%25A9t%25C3%25A9'
+  quote_plus '%25C3%25A9t%25C3%25A9'
+  unquote 'été'
+  unquote_plus 'été'
+'%E6%97%A5%E6%9C'
+  quote '%25E6%2597%25A5%25E6%259C'
+  quote safe='' '%25E6%2597%25A5%25E6%259C'
+  quote_plus '%25E6%2597%25A5%25E6%259C'
+  unquote '日�'
+  unquote_plus '日�'
+'%FF%C3(%80'
+  quote '%25FF%25C3%28%2580'
+  quote safe='' '%25FF%25C3%28%2580'
+  quote_plus '%25FF%25C3%28%2580'
+  unquote '��(�'
+  unquote_plus '��(�'
+'%C3é%A9'
+  quote '%25C3%C3%A9%25A9'
+  quote safe='' '%25C3%C3%A9%25A9'
+  quote_plus '%25C3%C3%A9%25A9'
+  unquote '�é�'
+  unquote_plus '�é�'
+'%E0%80%AF'
+  quote '%25E0%2580%25AF'
+  quote safe='' '%25E0%2580%25AF'
+  quote_plus '%25E0%2580%25AF'
+  unquote '���'
+  unquote_plus '���'
+'%ED%A0%80x'
+  quote '%25ED%25A0%2580x'
+  quote safe='' '%25ED%25A0%2580x'
+  quote_plus '%25ED%25A0%2580x'
+  unquote '���x'
+  unquote_plus '���x'
+'%F4%90%80%80'
+  quote '%25F4%2590%2580%2580'
+  quote safe='' '%25F4%2590%2580%2580'
+  quote_plus '%25F4%2590%2580%2580'
+  unquote '����'
+  unquote_plus '����'
+'%C2%A0nbsp'
+  quote '%25C2%25A0nbsp'
+  quote safe='' '%25C2%25A0nbsp'
+  quote_plus '%25C2%25A0nbsp'
+  unquote '\xa0nbsp'
+  unquote_plus '\xa0nbsp'
+'a%2Bb+c'
+  quote 'a%252Bb%2Bc'
+  quote safe='' 'a%252Bb%2Bc'
+  quote_plus 'a%252Bb%2Bc'
+  unquote 'a+b+c'
+  unquote_plus 'a+b c'
+'[]{}|\\^`"\'<>'
+  quote '%5B%5D%7B%7D%7C%5C%5E%60%22%27%3C%3E'
+  quote safe='' '%5B%5D%7B%7D%7C%5C%5E%60%22%27%3C%3E'
+  quote_plus '%5B%5D%7B%7D%7C%5C%5E%60%22%27%3C%3E'
+  unquote '[]{}|\\^`"\'<>'
+  unquote_plus '[]{}|\\^`"\'<>'
+== query
+'a=1&b=2&a=3'
+  qsl [('a', '1'), ('b', '2'), ('a', '3')]
+  qsl blank [('a', '1'), ('b', '2'), ('a', '3')]
+  qsl strict [('a', '1'), ('b', '2'), ('a', '3')]
+  qsl ';' [('a', '1&b=2&a=3')]
+  qs {'a': ['1', '3'], 'b': ['2']}
+  encode 'a=1&b=2&a=3'
+  encode doseq 'a=1&a=3&b=2'
+  encode quote 'a=1&b=2&a=3'
+'name=John+Doe&city=New%20York'
+  qsl [('name', 'John Doe'), ('city', 'New York')]
+  qsl blank [('name', 'John Doe'), ('city', 'New York')]
+  qsl strict [('name', 'John Doe'), ('city', 'New York')]
+  qsl ';' [('name', 'John Doe&city=New York')]
+  qs {'name': ['John Doe'], 'city': ['New York']}
+  encode 'name=John+Doe&city=New+York'
+  encode doseq 'name=John+Doe&city=New+York'
+  encode quote 'name=John%20Doe&city=New%20York'
+'empty=&flag&x=1'
+  qsl [('x', '1')]
+  qsl blank [('empty', ''), ('flag', ''), ('x', '1')]
+  qsl strict Error: ValueError: bad query field: 'flag'
+  qsl ';' [('empty', '&flag&x=1')]
+  qs {'empty': [''], 'flag': [''], 'x': ['1']}
+  encode 'empty=&flag=&x=1'
+  encode doseq 'empty=&flag=&x=1'
+  encode quote 'empty=&flag=&x=1'
+'=nokey&k='
+  qsl [('', 'nokey')]
+  qsl blank [('', 'nokey'), ('k', '')]
+  qsl strict [('', 'nokey'), ('k', '')]
+  qsl ';' [('', 'nokey&k=')]
+  qs {'': ['nokey'], 'k': ['']}
+  encode '=nokey&k='
+  encode doseq '=nokey&k='
+  encode quote '=nokey&k='
+'&&a=1&&'
+  qsl [('a', '1')]
+  qsl blank [('a', '1')]
+  qsl strict Error: ValueError: bad query field: ''
+  qsl ';' [('&&a', '1&&')]
+  qs {'a': ['1']}
+  encode 'a=1'
+  encode doseq 'a=1'
+  encode quote 'a=1'
+'q=%E2%9C%93&lang=de-DE'
+  qsl [('q', '✓'), ('lang', 'de-DE')]
+  qsl blank [('q', '✓'), ('lang', 'de-DE')]
+  qsl strict [('q', '✓'), ('lang', 'de-DE')]
+  qsl ';' [('q', '✓&lang=de-DE')]
+  qs {'q': ['✓'], 'lang': ['de-DE']}
+  encode 'q=%E2%9C%93&lang=de-DE'
+  encode doseq 'q=%E2%9C%93&lang=de-DE'
+  encode quote 'q=%E2%9C%93&lang=de-DE'
+'x=1;y=2'
+  qsl [('x', '1;y=2')]
+  qsl blank [('x', '1;y=2')]
+  qsl strict [('x', '1;y=2')]
+  qsl ';' [('x', '1'), ('y', '2')]
+  qs {'x': ['1;y=2']}
+  encode 'x=1%3By%3D2'
+  encode doseq 'x=1%3By%3D2'
+  encode quote 'x=1%3By%3D2'
+'plus=a%2Bb+c&eq=a=b=c'
+  qsl [('plus', 'a+b c'), ('eq', 'a=b=c')]
+  qsl blank [('plus', 'a+b c'), ('eq', 'a=b=c')]
+  qsl strict [('plus', 'a+b c'), ('eq', 'a=b=c')]
+  qsl ';' [('plus', 'a+b c&eq=a=b=c')]
+  qs {'plus': ['a+b c'], 'eq': ['a=b=c']}
+  encode 'plus=a%2Bb+c&eq=a%3Db%3Dc'
+  encode doseq 'plus=a%2Bb+c&eq=a%3Db%3Dc'
+  encode quote 'plus=a%2Bb%20c&eq=a%3Db%3Dc'
+'k=caf%C3%A9&bad=%FF'
+  qsl [('k', 'café'), ('bad', '�')]
+  qsl blank [('k', 'café'), ('bad', '�')]
+  qsl strict [('k', 'café'), ('bad', '�')]
+  qsl ';' [('k', 'café&bad=�')]
+  qs {'k': ['café'], 'bad': ['�']}
+  encode 'k=caf%C3%A9&bad=%EF%BF%BD'
+  encode doseq 'k=caf%C3%A9&bad=%EF%BF%BD'
+  encode quote 'k=caf%C3%A9&bad=%EF%BF%BD'
+''
+  qsl []
+  qsl blank []
+  qsl strict []
+  qsl ';' []
+  qs {}
+  encode ''
+  encode doseq ''
+  encode quote ''
+== report
+203.0.113.5 GET 200 site https://shop.example.com/catalog/shoes/index.html?page=2&sort=price
+  referer https://www.google.com/search?hl=en&q=running+shoes
+203.0.113.5 GET 200 site https://shop.example.com/catalog/shoes/item.html?id=7&ref=list
+  referer https://shop.example.com/catalog/shoes/index.html?page=2
+198.51.100.23 POST 302 site https://shop.example.com/cart/add?id=7&qty=2
+  referer https://shop.example.com/catalog/shoes/item.html?id=7
+198.51.100.23 GET 200 site https://shop.example.com/cart/
+192.0.2.44 GET 200 site https://shop.example.com/search?page=&q=caf%C3%A9+cr%C3%A8me&q=t%C3%A9
+  referer http://bing.com/search?q=cafe
+192.0.2.44 GET 200 site https://shop.example.com/catalog/bags/
+  referer https://shop.example.com/search?q=caf%C3%A9
+192.0.2.99 GET 304 site https://shop.example.com/static/~logo.png
+  referer https://shop.example.com/
+192.0.2.99 GET 404 OFFSITE https://evil.example/phish
+192.0.2.99 GET 200 site https://shop.example.com/search?debug=&q=a%26b%3Dc
+  referer https://news.ycombinator.com/item?id=1
+203.0.113.5 GET 200 site https://shop.example.com/catalog/shoes/index.html?page=2&sort=price
+  referer https://www.google.com/search?hl=en&q=running+shoes
+203.0.113.7 GET 400 site https://shop.example.com/etc/passwd
+  referer http://[2001:db8::1]:8080/x
+203.0.113.7 GET 400 site https://shop.example.com/x
+  referer 'http://[::1/x': Error: ValueError: Invalid IPv6 URL
+-- data/out/pages.txt
+2 https://shop.example.com/catalog/shoes/index.html
+2 https://shop.example.com/search
+1 https://shop.example.com/cart/
+1 https://shop.example.com/cart/add
+1 https://shop.example.com/catalog/bags/
+1 https://shop.example.com/catalog/shoes/item.html
+1 https://shop.example.com/static/~logo.png
+-- data/out/terms.txt
+q=running+shoes&n=2
+q=a%26b%3Dc&n=1
+q=cafe&n=1
+q=caf%C3%A9+cr%C3%A8me&n=1
+q=t%C3%A9&n=1
+-- referers
+4 shop.example.com
+2 google.com
+1 2001:db8::1
+1 bing.com
+1 news.ycombinator.com
+-- params
+3 'page'
+3 'q'
+2 'id'
+2 'sort'
+1 'debug'
+1 'qty'
+1 'ref'
+-- terms read back
+2 'running shoes'
+1 'a&b=c'
+1 'cafe'
+1 'café crème'
+1 'té'

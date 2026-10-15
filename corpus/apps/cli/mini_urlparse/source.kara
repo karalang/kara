@@ -1,0 +1,1718 @@
+// mini_urlparse: URLs as Python 3.13's urllib.parse takes them apart and
+// puts them back together:
+// - urlsplit and urlparse, with their quirks: the scheme test, the
+//   netloc, `;params` for the schemes that have them, white space and
+//   control characters stripped, bracketed IPv6 hosts and IPvFuture
+//   checked as ipaddress checks them, and every ValueError;
+// - username, password, hostname and port, port's errors included;
+// - urlunsplit, urlunparse, urldefrag and urljoin, with urljoin's
+//   resolution of `.` and `..` (RFC 3986 section 5.4's examples among
+//   the cases);
+// - quote, quote_plus, unquote and unquote_plus, with UTF-8 and the
+//   decoder's U+FFFD for each bad sequence;
+// - parse_qsl and parse_qs (blank values, strict parsing, separators)
+//   and urlencode, with and without doseq.
+//
+// The program runs the cases in data/urls.txt, joins.txt, quotes.txt and
+// queries.txt, then reads a web server's access log: it resolves every
+// request against the site, canonicalizes the URLs, counts pages, query
+// parameters, referring hosts and search terms, writes two reports under
+// data/out and reads them back. expected.out is the output of oracle.py,
+// the same program written with urllib.parse.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+// The data files spell tabs, line ends and control characters as \t,
+// \n, \r and \xNN.
+fn unescape(line: Str) -> String {
+    let b = to_bytes(line);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' and i + 1 < b.len() {
+            let n = b[i + 1];
+            if n == b't' {
+                out.push(b'\t');
+                i += 2;
+                continue;
+            }
+            if n == b'n' {
+                out.push(b'\n');
+                i += 2;
+                continue;
+            }
+            if n == b'r' {
+                out.push(b'\r');
+                i += 2;
+                continue;
+            }
+            if n == b'\\' {
+                out.push(b'\\');
+                i += 2;
+                continue;
+            }
+            if n == b'x' and i + 3 < b.len() {
+                out.push(hex_val(b[i + 2]) * 16 + hex_val(b[i + 3]));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    from_bytes(out)
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+// becomes one U+FFFD, as CPython's decoder does it.
+fn utf8_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let mut need: i64 = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            }
+            if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            }
+            if c == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_str_bytes(mut out, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut ok = true;
+        for k in 0..need {
+            if j >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[j];
+            let (l, h) = if k == 0 { (lo, hi) } else { (0x80 as u8, 0xBF as u8) };
+            if d < l or d > h {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            for k in i..j {
+                out.push(b[k]);
+            }
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+// A stable sort of (name, count) pairs: the highest count first, then
+// by name.
+fn sort_counts(names: ref Vec[String], counts: ref Vec[i64]) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..names.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 {
+            let a = order[j - 1];
+            let b = order[j];
+            let after = counts[a] < counts[b] or (counts[a] == counts[b] and names[a] > names[b]);
+            if not after {
+                break;
+            }
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    order
+}
+
+fn bump(names: mut ref Vec[String], counts: mut ref Vec[i64], name: Str) {
+    for i in 0..names.len() {
+        if names[i] == name {
+            counts[i] += 1;
+            return;
+        }
+    }
+    names.push(name.to_string());
+    counts.push(1);
+}
+
+// ------------------------------------------------------------ ipaddress
+
+// IPv4Address's parser: four decimal octets, no leading zeros.
+fn is_ipv4(s: Str) -> bool {
+    let parts = split_on(s, b'.');
+    if parts.len() != 4 {
+        return false;
+    }
+    for i in 0..parts.len() {
+        let b = to_bytes(parts[i]);
+        if b.len() == 0 or b.len() > 3 {
+            return false;
+        }
+        let mut n: i64 = 0;
+        for k in 0..b.len() {
+            if not is_digit(b[k]) {
+                return false;
+            }
+            n = n * 10 + (b[k] - b'0') as i64;
+        }
+        if n > 255 or (b.len() > 1 and b[0] == b'0') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_hextet(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 or b.len() > 4 {
+        return false;
+    }
+    for k in 0..b.len() {
+        if not is_hex(b[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+// IPv6Address's parser: at most one `::`, eight hextets in all, an IPv4
+// tail, and a `%scope`.
+fn is_ipv6(s: Str) -> bool {
+    let (addr, has_scope, scope) = partition(s, b'%');
+    if has_scope and (scope.len() == 0 or has_byte(scope, b'%')) {
+        return false;
+    }
+    let mut parts = split_on(addr, b':');
+    if parts.len() < 3 {
+        return false;
+    }
+    let last = parts[parts.len() - 1].clone();
+    if has_byte(last, b'.') {
+        if not is_ipv4(last) {
+            return false;
+        }
+        parts.pop();
+        parts.push("0".to_string());
+        parts.push("0".to_string());
+    }
+    if parts.len() > 9 {
+        return false;
+    }
+    let n = parts.len();
+    let mut skip: i64 = -1;
+    for i in 1..n - 1 {
+        if parts[i].len() == 0 {
+            if skip >= 0 {
+                return false;
+            }
+            skip = i;
+        }
+    }
+    let mut hi = n;
+    let mut lo: i64 = 0;
+    if skip >= 0 {
+        hi = skip;
+        lo = n - skip - 1;
+        if parts[0].len() == 0 {
+            hi -= 1;
+            if hi > 0 {
+                return false;
+            }
+        }
+        if parts[n - 1].len() == 0 {
+            lo -= 1;
+            if lo > 0 {
+                return false;
+            }
+        }
+        if 8 - (hi + lo) < 1 {
+            return false;
+        }
+    } else if n != 8 or parts[0].len() == 0 or parts[n - 1].len() == 0 {
+        return false;
+    }
+    for i in 0..hi {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    for i in n - lo..n {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// urllib.parse's _check_bracketed_host.
+fn check_bracketed_host(host: Str) -> Result[(), String] {
+    let b = to_bytes(host);
+    if b.len() > 0 and (b[0] == b'v' or b[0] == b'V') {
+        // \A[vV][a-fA-F0-9]+\..+\Z
+        let mut i: i64 = 1;
+        while i < b.len() and is_hex(b[i]) {
+            i += 1;
+        }
+        if i == 1 or i >= b.len() or b[i] != b'.' or i + 1 >= b.len() {
+            return Err("IPvFuture address is invalid".to_string());
+        }
+        return Ok(());
+    }
+    if is_ipv4(host) {
+        return Err("An IPv4 address cannot be in brackets".to_string());
+    }
+    if not is_ipv6(host) {
+        return Err(f"{py_repr(host)} does not appear to be an IPv4 or IPv6 address");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ split and parse
+
+fn uses_relative(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss"], s)
+}
+
+fn uses_netloc(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file", "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtsps", "rtspu", "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss", "itms-services"], s)
+}
+
+fn uses_params(s: Str) -> bool {
+    contains_str(["", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu", "sip", "sips", "mms", "sftp", "tel"], s)
+}
+
+fn is_scheme_char(c: u8) -> bool {
+    is_alnum(c) or c == b'+' or c == b'-' or c == b'.'
+}
+
+#[derive(Clone)]
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+#[derive(Clone)]
+struct Parsed {
+    scheme: String,
+    netloc: String,
+    path: String,
+    params: String,
+    query: String,
+    fragment: String,
+}
+
+impl Split {
+    fn repr(ref self) -> String {
+        f"SplitResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+
+    // _userinfo
+    fn username(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (user, _, _) = partition(userinfo, b':');
+        Some(user)
+    }
+
+    fn password(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (_, have_password, password) = partition(userinfo, b':');
+        if have_password { Some(password) } else { None }
+    }
+
+    // _hostinfo: the host and the port as written.
+    fn hostinfo(ref self) -> (String, Option[String]) {
+        let (_, _, hostinfo) = rpartition(self.netloc, b'@');
+        let (_, have_open_br, bracketed) = partition(hostinfo, b'[');
+        let mut host = String.new();
+        let mut port = String.new();
+        if have_open_br {
+            let (h, _, rest) = partition(bracketed, b']');
+            let (_, _, p) = partition(rest, b':');
+            host = h;
+            port = p;
+        } else {
+            let (h, _, p) = partition(hostinfo, b':');
+            host = h;
+            port = p;
+        }
+        if port.len() == 0 { (host, None) } else { (host, Some(port)) }
+    }
+
+    fn hostname(ref self) -> Option[String] {
+        let (host, _) = self.hostinfo();
+        if host.len() == 0 {
+            return None;
+        }
+        // a scope's zone keeps its case
+        let (h, percent, zone) = partition(host, b'%');
+        if percent { Some(f"{lower(h)}%{zone}") } else { Some(lower(h)) }
+    }
+
+    fn port(ref self) -> Result[Option[i64], String] {
+        let (_, port) = self.hostinfo();
+        let p = match port {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let b = to_bytes(p);
+        let mut n: i64 = 0;
+        for i in 0..b.len() {
+            if not is_digit(b[i]) {
+                return Err(f"Port could not be cast to integer value as {py_repr(p)}");
+            }
+            if n <= 1000000 {
+                n = n * 10 + (b[i] - b'0') as i64;
+            }
+        }
+        if n > 65535 {
+            return Err("Port out of range 0-65535".to_string());
+        }
+        Ok(Some(n))
+    }
+}
+
+impl Parsed {
+    fn repr(ref self) -> String {
+        f"ParseResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, params={py_repr(self.params)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+}
+
+// _splitnetloc: the netloc runs to the first of / ? #.
+fn split_netloc(url: Str, start: i64) -> (String, String) {
+    let b = to_bytes(url);
+    let mut delim = b.len();
+    for i in start..b.len() {
+        if b[i] == b'/' or b[i] == b'?' or b[i] == b'#' {
+            delim = i;
+            break;
+        }
+    }
+    (byte_str(b, start, delim), byte_str(b, delim, b.len()))
+}
+
+fn check_bracketed_netloc(netloc: Str) -> Result[(), String] {
+    let (_, _, host_and_port) = rpartition(netloc, b'@');
+    let (before, have_open_br, bracketed) = partition(host_and_port, b'[');
+    if have_open_br {
+        if before.len() > 0 {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        let (host, _, port) = partition(bracketed, b']');
+        if port.len() > 0 and first_byte(port) != b':' {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        return check_bracketed_host(host);
+    }
+    let (host, _, _) = partition(host_and_port, b':');
+    check_bracketed_host(host)
+}
+
+fn urlsplit(url_in: Str, scheme_in: Str) -> Result[Split, String] {
+    // lstrip the C0 controls and space, then drop every tab and line end
+    let ub = to_bytes(url_in);
+    let mut st: i64 = 0;
+    while st < ub.len() and ub[st] <= 32 {
+        st += 1;
+    }
+    let mut kept: Vec[u8] = Vec.new();
+    for i in st..ub.len() {
+        let c = ub[i];
+        if c != b'\t' and c != b'\r' and c != b'\n' {
+            kept.push(c);
+        }
+    }
+    let mut url = from_bytes(kept);
+    let mut scheme = strip_scheme(scheme_in);
+    let mut netloc = String.new();
+    let mut query = String.new();
+    let mut fragment = String.new();
+    let i = find_byte(url, b':');
+    if i > 0 and is_alpha(first_byte(url)) {
+        let b = to_bytes(url);
+        let mut all = true;
+        for k in 0..i {
+            if not is_scheme_char(b[k]) {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            scheme = lower(byte_str(b, 0, i));
+            url = byte_str(b, i + 1, b.len());
+        }
+    }
+    if starts_with(url, "//") {
+        let (n, rest) = split_netloc(url, 2);
+        netloc = n;
+        url = rest;
+        let open = has_byte(netloc, b'[');
+        let close = has_byte(netloc, b']');
+        if open != close {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        if open and close {
+            check_bracketed_netloc(netloc)?;
+        }
+    }
+    if has_byte(url, b'#') {
+        let (u, _, f) = partition(url, b'#');
+        url = u;
+        fragment = f;
+    }
+    if has_byte(url, b'?') {
+        let (u, _, q) = partition(url, b'?');
+        url = u;
+        query = q;
+    }
+    Ok(Split { scheme: scheme, netloc: netloc, path: url, query: query, fragment: fragment })
+}
+
+// The scheme argument: C0 controls and space stripped at both ends, tabs
+// and line ends dropped.
+fn strip_scheme(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and b[st] <= 32 {
+        st += 1;
+    }
+    while en > st and b[en - 1] <= 32 {
+        en -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in st..en {
+        if b[i] != b'\t' and b[i] != b'\r' and b[i] != b'\n' {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+// _splitparams: the params follow the `;` in the last segment.
+fn split_params(url: Str) -> (String, String) {
+    let i = if has_byte(url, b'/') {
+        let b = to_bytes(url);
+        let mut at: i64 = -1;
+        for k in rfind_byte(url, b'/')..b.len() {
+            if b[k] == b';' {
+                at = k;
+                break;
+            }
+        }
+        if at < 0 {
+            return (url.to_string(), String.new());
+        }
+        at
+    } else {
+        find_byte(url, b';')
+    };
+    (slice(url, 0, i), slice_from(url, i + 1))
+}
+
+fn urlparse(url: Str, scheme: Str) -> Result[Parsed, String] {
+    let s = urlsplit(url, scheme)?;
+    let mut path = s.path.clone();
+    let mut params = String.new();
+    if uses_params(s.scheme) and has_byte(path, b';') {
+        let (p, a) = split_params(path);
+        path = p;
+        params = a;
+    }
+    Ok(Parsed { scheme: s.scheme, netloc: s.netloc, path: path, params: params, query: s.query, fragment: s.fragment })
+}
+
+fn urlunsplit(scheme: Str, netloc: Str, path: Str, query: Str, fragment: Str) -> String {
+    let mut url = path.to_string();
+    if netloc.len() > 0 {
+        if url.len() > 0 and first_byte(url) != b'/' {
+            url = f"/{url}";
+        }
+        url = f"//{netloc}{url}";
+    } else if starts_with(url, "//") {
+        url = f"//{url}";
+    } else if scheme.len() > 0 and uses_netloc(scheme) and (url.len() == 0 or first_byte(url) == b'/') {
+        url = f"//{url}";
+    }
+    if scheme.len() > 0 {
+        url = f"{scheme}:{url}";
+    }
+    if query.len() > 0 {
+        url = f"{url}?{query}";
+    }
+    if fragment.len() > 0 {
+        url = f"{url}#{fragment}";
+    }
+    url
+}
+
+fn unsplit(s: ref Split) -> String {
+    urlunsplit(s.scheme, s.netloc, s.path, s.query, s.fragment)
+}
+
+fn urlunparse(p: ref Parsed) -> String {
+    let path = if p.params.len() > 0 { f"{p.path};{p.params}" } else { p.path.clone() };
+    urlunsplit(p.scheme, p.netloc, path, p.query, p.fragment)
+}
+
+fn urljoin(base: Str, url: Str) -> Result[String, String] {
+    if base.len() == 0 {
+        return Ok(url.to_string());
+    }
+    if url.len() == 0 {
+        return Ok(base.to_string());
+    }
+    let b = urlparse(base, "")?;
+    let mut u = urlparse(url, b.scheme)?;
+    if u.scheme != b.scheme or not uses_relative(u.scheme) {
+        return Ok(url.to_string());
+    }
+    if uses_netloc(u.scheme) {
+        if u.netloc.len() > 0 {
+            return Ok(urlunparse(u));
+        }
+        u.netloc = b.netloc.clone();
+    }
+    if u.path.len() == 0 and u.params.len() == 0 {
+        u.path = b.path.clone();
+        u.params = b.params.clone();
+        if u.query.len() == 0 {
+            u.query = b.query.clone();
+        }
+        return Ok(urlunparse(u));
+    }
+    let mut base_parts = split_on(b.path, b'/');
+    if base_parts[base_parts.len() - 1].len() > 0 {
+        // the last segment is not a directory
+        base_parts.pop();
+    }
+    let mut segments: Vec[String] = Vec.new();
+    if first_byte(u.path) == b'/' {
+        segments = split_on(u.path, b'/');
+    } else {
+        let rel = split_on(u.path, b'/');
+        let mut all = base_parts.clone();
+        for i in 0..rel.len() {
+            all.push(rel[i].clone());
+        }
+        // drop the empty segments between the first and the last
+        for i in 0..all.len() {
+            if i == 0 or i == all.len() - 1 or all[i].len() > 0 {
+                segments.push(all[i].clone());
+            }
+        }
+    }
+    let mut resolved: Vec[String] = Vec.new();
+    for i in 0..segments.len() {
+        if segments[i] == ".." {
+            if resolved.len() > 0 {
+                resolved.pop();
+            }
+        } else if segments[i] != "." {
+            resolved.push(segments[i].clone());
+        }
+    }
+    let last = segments[segments.len() - 1].clone();
+    if last == "." or last == ".." {
+        resolved.push(String.new());
+    }
+    let joined = join(resolved, "/");
+    u.path = if joined.len() > 0 { joined } else { "/".to_string() };
+    Ok(urlunparse(u))
+}
+
+fn urldefrag(url: Str) -> Result[(String, String), String] {
+    if not has_byte(url, b'#') {
+        return Ok((url.to_string(), String.new()));
+    }
+    let mut p = urlparse(url, "")?;
+    let frag = p.fragment.clone();
+    p.fragment = String.new();
+    Ok((urlunparse(p), frag))
+}
+
+// ------------------------------------------------------------ quoting
+
+fn always_safe(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+// quote: every byte of the UTF-8 that is neither always safe nor in
+// `safe` becomes %XX.
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    let sb = to_bytes(safe);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        let mut ok = c < 128 and always_safe(c);
+        for k in 0..sb.len() {
+            if sb[k] < 128 and sb[k] == c {
+                ok = true;
+            }
+        }
+        if ok {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn quote_plus(s: Str, safe: Str) -> String {
+    if not has_byte(s, b' ') {
+        return quote(s, safe);
+    }
+    replace_byte(quote(s, f"{safe} "), b' ', "+")
+}
+
+// _unquote_impl on ASCII: %XX with two hex digits is a byte, anything
+// else stays as written.
+fn unquote_bytes(b: ref Vec[u8], from: i64, to: i64, out: mut ref Vec[u8]) {
+    let mut i = from;
+    while i < to {
+        if b[i] == b'%' and i + 2 < to and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push(hex_val(b[i + 1]) * 16 + hex_val(b[i + 2]));
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+}
+
+// unquote: the ASCII runs are unquoted and decoded as UTF-8 one run at a
+// time; the rest is kept as it is.
+fn unquote(s: Str) -> String {
+    if not has_byte(s, b'%') {
+        return s.to_string();
+    }
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let st = i;
+        if b[i] < 128 {
+            while i < b.len() and b[i] < 128 {
+                i += 1;
+            }
+            let mut run: Vec[u8] = Vec.new();
+            unquote_bytes(b, st, i, mut run);
+            push_str_bytes(mut out, utf8_replace(run));
+        } else {
+            while i < b.len() and b[i] >= 128 {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    from_bytes(out)
+}
+
+fn unquote_plus(s: Str) -> String {
+    unquote(replace_byte(s, b'+', " "))
+}
+
+// ------------------------------------------------------------ queries
+
+#[derive(Clone)]
+struct Pair {
+    name: String,
+    value: String,
+}
+
+fn parse_qsl(qs: Str, keep_blank: bool, strict: bool, sep: Str) -> Result[Vec[Pair], String] {
+    let mut r: Vec[Pair] = Vec.new();
+    if qs.len() == 0 {
+        return Ok(r);
+    }
+    let fields = split_on(qs, first_byte(sep));
+    for i in 0..fields.len() {
+        let nv = fields[i].clone();
+        if nv.len() == 0 and not strict {
+            continue;
+        }
+        let (name, has_eq, value) = partition(nv, b'=');
+        if not has_eq and strict {
+            return Err(f"bad query field: {py_repr(nv)}");
+        }
+        if value.len() > 0 or keep_blank {
+            r.push(Pair { name: unquote_plus(name), value: unquote_plus(value) });
+        }
+    }
+    Ok(r)
+}
+
+fn pairs_repr(v: ref Vec[Pair]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        parts.push(f"({py_repr(v[i].name)}, {py_repr(v[i].value)})");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// parse_qs: the values of each name, the names in the order first seen.
+struct Multi {
+    names: Vec[String],
+    values: Vec[Vec[String]],
+}
+
+impl Multi {
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..self.names.len() {
+            let mut vs: Vec[String] = Vec.new();
+            let list = self.values[i].clone();
+            for k in 0..list.len() {
+                vs.push(py_repr(list[k]));
+            }
+            parts.push(f"{py_repr(self.names[i])}: [{join(vs, ", ")}]");
+        }
+        f"{{{join(parts, ", ")}}}"
+    }
+}
+
+fn parse_qs(pairs: ref Vec[Pair]) -> Multi {
+    let mut m = Multi { names: Vec.new(), values: Vec.new() };
+    for i in 0..pairs.len() {
+        let mut at: i64 = -1;
+        for k in 0..m.names.len() {
+            if m.names[k] == pairs[i].name {
+                at = k;
+            }
+        }
+        if at < 0 {
+            m.names.push(pairs[i].name.clone());
+            m.values.push(Vec.new());
+            at = m.names.len() - 1;
+        }
+        m.values[at].push(pairs[i].value.clone());
+    }
+    m
+}
+
+// urlencode over pairs, with quote_plus or quote.
+fn urlencode(pairs: ref Vec[Pair], safe: Str, plus: bool) -> String {
+    let mut l: Vec[String] = Vec.new();
+    for i in 0..pairs.len() {
+        let k = if plus { quote_plus(pairs[i].name, safe) } else { quote(pairs[i].name, safe) };
+        let v = if plus { quote_plus(pairs[i].value, safe) } else { quote(pairs[i].value, safe) };
+        l.push(f"{k}={v}");
+    }
+    join(l, "&")
+}
+
+// urlencode(d, doseq=True): one name=value for each value in the lists.
+fn urlencode_multi(m: ref Multi) -> String {
+    let mut pairs: Vec[Pair] = Vec.new();
+    for i in 0..m.names.len() {
+        let list = m.values[i].clone();
+        for k in 0..list.len() {
+            pairs.push(Pair { name: m.names[i].clone(), value: list[k].clone() });
+        }
+    }
+    urlencode(pairs, "", true)
+}
+
+// ------------------------------------------------------------ the files
+
+// data/access.log
+fn file_0() -> String {
+    """
+203.0.113.5 - - [15/Oct/2026:10:00:01 +0000] \"GET /catalog/./shoes/../shoes/index.html?page=2&sort=price HTTP/1.1\" 200 5120 \"https://www.Google.com/search?q=running+shoes&hl=en\" \"Mozilla/5.0\"
+203.0.113.5 - - [15/Oct/2026:10:00:03 +0000] \"GET /catalog/shoes/item.html?id=7&ref=list HTTP/1.1\" 200 2048 \"https://shop.example.com/catalog/shoes/index.html?page=2\" \"Mozilla/5.0\"
+198.51.100.23 - alice [15/Oct/2026:10:01:10 +0000] \"POST /cart/add?id=7&qty=2 HTTP/1.1\" 302 0 \"https://shop.example.com:443/catalog/shoes/item.html?id=7\" \"curl/8.0\"
+198.51.100.23 - alice [15/Oct/2026:10:01:11 +0000] \"GET /cart/ HTTP/1.1\" 200 900 \"-\" \"curl/8.0\"
+192.0.2.44 - - [15/Oct/2026:10:02:00 +0000] \"GET /search?q=caf%C3%A9+cr%C3%A8me&q=t%C3%A9&page= HTTP/1.1\" 200 3000 \"http://bing.com/search?q=cafe\" \"Mozilla/5.0\"
+192.0.2.44 - - [15/Oct/2026:10:02:05 +0000] \"GET /catalog/bags/../../catalog/bags/ HTTP/1.1\" 200 4000 \"https://SHOP.example.com/search?q=caf%C3%A9\" \"Mozilla/5.0\"
+192.0.2.99 - - [15/Oct/2026:10:03:00 +0000] \"GET /static/%7Elogo.png HTTP/1.1\" 304 0 \"https://shop.example.com/\" \"Mozilla/5.0\"
+192.0.2.99 - - [15/Oct/2026:10:03:01 +0000] \"GET //evil.example/phish HTTP/1.1\" 404 0 \"-\" \"Mozilla/5.0\"
+192.0.2.99 - - [15/Oct/2026:10:03:02 +0000] \"GET /search?q=a%26b%3Dc&debug HTTP/1.1\" 200 100 \"https://news.ycombinator.com/item?id=1\" \"Mozilla/5.0\"
+203.0.113.5 - - [15/Oct/2026:10:04:00 +0000] \"GET /catalog/shoes/index.html?sort=price&page=2 HTTP/1.1\" 200 5120 \"https://www.google.com/search?hl=en&q=running%20shoes\" \"Mozilla/5.0\"
+203.0.113.7 - - [15/Oct/2026:10:05:00 +0000] \"GET /a/b/../../../../etc/passwd HTTP/1.1\" 400 0 \"http://[2001:db8::1]:8080/x\" \"scanner\"
+203.0.113.7 - - [15/Oct/2026:10:05:01 +0000] \"GET /x HTTP/1.1\" 400 0 \"http://[::1/x\" \"scanner\"
+
+"""
+}
+
+// data/joins.txt
+fn file_1() -> String {
+    """
+base http://a/b/c/d;p?q
+g:h
+g
+./g
+g/
+/g
+//g
+?y
+g?y
+#s
+g#s
+g?y#s
+;x
+g;x
+g;x?y#s
+<empty>
+.
+./
+..
+../
+../g
+../..
+../../
+../../g
+../../../g
+../../../../g
+/./g
+/../g
+g.
+.g
+g..
+..g
+./../g
+./g/.
+g/./h
+g/../h
+g;x=1/./y
+g;x=1/../y
+g?y/./x
+g?y/../x
+g#s/./x
+g#s/../x
+http:g
+http://other/x/../y
+https://a/b
+base http://a/b/c/
+d
+../../../..
+//
+base https://shop.example.com/catalog/shoes/index.html?page=2
+../bags/
+item.html?id=7#reviews
+/
+mailto:x@y
+#top
+base mailto:a@b
+c@d
+base
+anything
+base file:///home/user/docs/
+../music/song.mp3
+base svn+ssh://svn.example.org/repo/trunk/src/
+../../branches/x
+base tel:+1
+2
+
+"""
+}
+
+// data/queries.txt
+fn file_2() -> String {
+    """
+a=1&b=2&a=3
+name=John+Doe&city=New%20York
+empty=&flag&x=1
+=nokey&k=
+&&a=1&&
+q=%E2%9C%93&lang=de-DE
+x=1;y=2
+plus=a%2Bb+c&eq=a=b=c
+k=caf%C3%A9&bad=%FF
+<empty>
+
+"""
+}
+
+// data/quotes.txt
+fn file_3() -> String {
+    """
+abc def
+/path/to/file name.txt
+a+b=c&d
+~user/_.-
+100% sure?
+café crème
+日本語/テスト
+emoji 😀!
+%41%42%43
+%7e%7E%zz%4
+%C3%A9t%C3%A9
+%E6%97%A5%E6%9C
+%FF%C3(%80
+%C3é%A9
+%E0%80%AF
+%ED%A0%80x
+%F4%90%80%80
+%C2%A0nbsp
+a%2Bb+c
+[]{}|\\^`\"'<>
+
+"""
+}
+
+// data/urls.txt
+fn file_4() -> String {
+    """
+http://www.python.org/doc/#frag
+HTTPS://User:Pa%20ss@WWW.Example.COM:8443/a/b;p=1/c;q=2?x=1&y=2#top
+https://example.com:443
+http://[::1]:8080/path
+http://[FE80::822A:A8FF:FE49:470C%tESt]:1234/keys
+http://[2001:db8::7]/c=GB?objectClass?one
+http://[::ffff:192.0.2.1]/
+http://[v1.fe80::a+en1]/
+http://[192.0.2.1]/
+http://[::1/
+http://::1]/
+http://x[::1]/
+http://[::1]x/
+http://[1:2:3:4:5:6:7:8:9]/
+http://[vz.x]/
+http://host:port/
+http://host:99999/
+http://host:/
+http://host:0080/
+http://user@host
+http://user:@host
+http://:pw@host
+http://a@b@c/d
+ftp://ftp.is.co.za/rfc/rfc1808.txt
+mailto:John.Doe@example.com
+news:comp.infosystems.www.servers.unix
+tel:+1-816-555-1212
+telnet://192.0.2.16:80/
+urn:oasis:names:specification:docbook:dtd:xml:4.1.2
+file:///etc/hosts
+file:/etc/hosts
+file://localhost/c:/WINDOWS/clock.avi
+//www.example.com/path?q
+/just/a/path;params?query#frag
+relative/path
+path:with:colons
+1http://not-a-scheme/
+git+ssh://git@github.com/user/repo.git
+svn+ssh://svn.example.org/trunk
+sip:alice@atlanta.com;transport=tcp
+http://example.com/a;b;c/d;e?f#g#h
+http://example.com/?
+http://example.com/#
+http://example.com?#
+  \\x01http://leading.example/  
+ht\\ttp://tab\\n.exam\\rple/
+HTTP://EXAMPLE.COM/%7Euser
+javascript:alert(1)
+data:text/plain;base64,SGVsbG8=
+http://example.com:8080:9090/
+http:///triple/slash
+http:
+
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/access.log", file_0())?;
+    put("data/joins.txt", file_1())?;
+    put("data/queries.txt", file_2())?;
+    put("data/quotes.txt", file_3())?;
+    put("data/urls.txt", file_4())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the cases
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn show_split() -> Result[(), String] {
+    println("== split");
+    let lines = lines_of(read("data/urls.txt")?);
+    for i in 0..lines.len() {
+        let url = unescape(lines[i]);
+        println(py_repr(url));
+        let s = match urlsplit(url, "") {
+            Ok(s) => s,
+            Err(e) => {
+                println(f"  Error: ValueError: {e}");
+                continue;
+            }
+        };
+        println(f"  split {s.repr()}");
+        println(f"  parse {urlparse(url, "")?.repr()}");
+        let port = match s.port() {
+            Ok(Some(p)) => f"{p}",
+            Ok(None) => "None".to_string(),
+            Err(e) => f"Error: ValueError: {e}",
+        };
+        println(f"  username={opt_repr(s.username())} password={opt_repr(s.password())} hostname={opt_repr(s.hostname())} port={port}");
+        println(f"  unsplit {py_repr(unsplit(s))}");
+        let (u, f) = urldefrag(url)?;
+        println(f"  defrag DefragResult(url={py_repr(u)}, fragment={py_repr(f)})");
+    }
+    Ok(())
+}
+
+fn show_join() -> Result[(), String] {
+    println("== join");
+    let lines = lines_of(read("data/joins.txt")?);
+    let mut base = String.new();
+    for i in 0..lines.len() {
+        let line = lines[i].clone();
+        if line == "base" or starts_with(line, "base ") {
+            base = slice_from(line, 5);
+            println(f"-- base {py_repr(base)}");
+            continue;
+        }
+        let rel = if line == "<empty>" { String.new() } else { line };
+        println(f"  {py_repr(rel)} -> {py_repr(urljoin(base, rel)?)}");
+    }
+    Ok(())
+}
+
+fn show_quote() -> Result[(), String] {
+    println("== quote");
+    let lines = lines_of(read("data/quotes.txt")?);
+    for i in 0..lines.len() {
+        let t = lines[i].clone();
+        println(py_repr(t));
+        println(f"  quote {py_repr(quote(t, "/"))}");
+        println(f"  quote safe='' {py_repr(quote(t, ""))}");
+        println(f"  quote_plus {py_repr(quote_plus(t, ""))}");
+        println(f"  unquote {py_repr(unquote(t))}");
+        println(f"  unquote_plus {py_repr(unquote_plus(t))}");
+    }
+    Ok(())
+}
+
+fn show_query() -> Result[(), String] {
+    println("== query");
+    let lines = lines_of(read("data/queries.txt")?);
+    for i in 0..lines.len() {
+        let q = if lines[i] == "<empty>" { String.new() } else { lines[i].clone() };
+        println(py_repr(q));
+        println(f"  qsl {pairs_repr(parse_qsl(q, false, false, "&")?)}");
+        let kept = parse_qsl(q, true, false, "&")?;
+        println(f"  qsl blank {pairs_repr(kept)}");
+        match parse_qsl(q, true, true, "&") {
+            Ok(v) => println(f"  qsl strict {pairs_repr(v)}"),
+            Err(e) => println(f"  qsl strict Error: ValueError: {e}"),
+        }
+        println(f"  qsl ';' {pairs_repr(parse_qsl(q, false, false, ";")?)}");
+        let d = parse_qs(kept);
+        println(f"  qs {d.repr()}");
+        println(f"  encode {py_repr(urlencode(kept, "", true))}");
+        println(f"  encode doseq {py_repr(urlencode_multi(d))}");
+        println(f"  encode quote {py_repr(urlencode(kept, "/", false))}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the access log
+
+const SITE: Str = "https://shop.example.com/";
+
+// The URL with its host lower-cased, a default port dropped, its path
+// unquoted and quoted again, its query sorted by name and no fragment.
+fn canonical(url: Str) -> Result[String, String] {
+    let s = urlsplit(url, "")?;
+    let mut host = s.hostname().unwrap_or(String.new());
+    if has_byte(host, b':') {
+        host = f"[{host}]";
+    }
+    let port = s.port()?;
+    let netloc = match port {
+        None => host,
+        Some(p) => {
+            let default = (s.scheme == "http" and p == 80) or (s.scheme == "https" and p == 443);
+            if default { host } else { f"{host}:{p}" }
+        }
+    };
+    let mut path = quote(unquote(s.path), "/");
+    if path.len() == 0 {
+        path = "/".to_string();
+    }
+    // sorted() on the names, which is stable
+    let mut pairs = parse_qsl(s.query, true, false, "&")?;
+    for i in 1..pairs.len() {
+        let mut j = i;
+        while j > 0 and pairs[j - 1].name > pairs[j].name {
+            pairs.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    Ok(urlunsplit(s.scheme, netloc, path, urlencode(pairs, "", true), ""))
+}
+
+struct Hit {
+    ip: String,
+    method: String,
+    target: String,
+    status: i64,
+    referer: String,
+}
+
+// A line of the combined log format.
+fn parse_log_line(line: Str) -> Hit {
+    let q = split_on(line, b'"');
+    let head = split_ws(q[0]);
+    let request = split_on(q[1], b' ');
+    let tail = split_ws(q[2]);
+    let mut status: i64 = 0;
+    let sb = to_bytes(tail[0]);
+    for i in 0..sb.len() {
+        status = status * 10 + (sb[i] - b'0') as i64;
+    }
+    Hit { ip: head[0].clone(), method: request[0].clone(), target: request[1].clone(), status: status, referer: q[3].clone() }
+}
+
+fn write_file(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn show_report() -> Result[(), String] {
+    println("== report");
+    let mut pages: Vec[String] = Vec.new();
+    let mut page_n: Vec[i64] = Vec.new();
+    let mut hosts: Vec[String] = Vec.new();
+    let mut host_n: Vec[i64] = Vec.new();
+    let mut terms: Vec[String] = Vec.new();
+    let mut term_n: Vec[i64] = Vec.new();
+    let mut params: Vec[String] = Vec.new();
+    let mut param_n: Vec[i64] = Vec.new();
+    let lines = lines_of(read("data/access.log")?);
+    for i in 0..lines.len() {
+        let r = parse_log_line(lines[i]);
+        let url = urljoin(SITE, r.target)?;
+        let s = urlsplit(url, "")?;
+        let where_ = if s.netloc == "shop.example.com" { "site" } else { "OFFSITE" };
+        let c = canonical(url)?;
+        println(f"{r.ip} {r.method} {r.status} {where_} {c}");
+        if where_ == "site" and r.status < 400 {
+            bump(mut pages, mut page_n, urlsplit(c, "")?.path);
+        }
+        let qs = parse_qsl(s.query, true, false, "&")?;
+        for k in 0..qs.len() {
+            bump(mut params, mut param_n, qs[k].name);
+            if qs[k].name == "q" and s.path == "/search" {
+                bump(mut terms, mut term_n, qs[k].value);
+            }
+        }
+        if r.referer == "-" {
+            continue;
+        }
+        let rs = match urlsplit(r.referer, "") {
+            Ok(rs) => rs,
+            Err(e) => {
+                println(f"  referer {py_repr(r.referer)}: Error: ValueError: {e}");
+                continue;
+            }
+        };
+        let rc = match canonical(r.referer) {
+            Ok(rc) => rc,
+            Err(e) => {
+                println(f"  referer {py_repr(r.referer)}: Error: ValueError: {e}");
+                continue;
+            }
+        };
+        println(f"  referer {rc}");
+        let mut rh = rs.hostname().unwrap_or(String.new());
+        if starts_with(rh, "www.") {
+            rh = slice_from(rh, 4);
+        }
+        bump(mut hosts, mut host_n, rh);
+        if rh == "google.com" or rh == "bing.com" {
+            let rq = parse_qsl(rs.query, false, false, "&")?;
+            for k in 0..rq.len() {
+                if rq[k].name == "q" {
+                    bump(mut terms, mut term_n, rq[k].value);
+                }
+            }
+        }
+    }
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    let mut out = String.new();
+    let order = sort_counts(pages, page_n);
+    for k in 0..order.len() {
+        let i = order[k];
+        out.push_str(f"{page_n[i]} {urljoin(SITE, quote(pages[i], "/"))?}\n");
+    }
+    write_file("data/out/pages.txt", out)?;
+    let mut out = String.new();
+    let order = sort_counts(terms, term_n);
+    for k in 0..order.len() {
+        let i = order[k];
+        let pairs = [Pair { name: "q".to_string(), value: terms[i].clone() }, Pair { name: "n".to_string(), value: f"{term_n[i]}" }];
+        out.push_str(f"{urlencode(pairs, "", true)}\n");
+    }
+    write_file("data/out/terms.txt", out)?;
+    let names = ["pages.txt", "terms.txt"];
+    for k in 0..names.len() {
+        println(f"-- data/out/{names[k]}");
+        let back = lines_of(read(f"data/out/{names[k]}")?);
+        for i in 0..back.len() {
+            println(back[i]);
+        }
+    }
+    println("-- referers");
+    let order = sort_counts(hosts, host_n);
+    for k in 0..order.len() {
+        println(f"{host_n[order[k]]} {hosts[order[k]]}");
+    }
+    println("-- params");
+    let order = sort_counts(params, param_n);
+    for k in 0..order.len() {
+        println(f"{param_n[order[k]]} {py_repr(params[order[k]])}");
+    }
+    println("-- terms read back");
+    let back = lines_of(read("data/out/terms.txt")?);
+    for i in 0..back.len() {
+        // dict(parse_qsl(line)): the last value of a name wins
+        let pairs = parse_qsl(back[i], false, false, "&")?;
+        let mut q = String.new();
+        let mut n = String.new();
+        for k in 0..pairs.len() {
+            if pairs[k].name == "q" {
+                q = pairs[k].value.clone();
+            }
+            if pairs[k].name == "n" {
+                n = pairs[k].value.clone();
+            }
+        }
+        println(f"{n} {py_repr(q)}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    show_split()?;
+    show_join()?;
+    show_quote()?;
+    show_query()?;
+    show_report()?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_urlparse: {e}");
+    }
+}
