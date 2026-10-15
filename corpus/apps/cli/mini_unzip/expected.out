@@ -1,0 +1,406 @@
+$ zipinfo infozip.zip
+Archive:  infozip.zip
+Zip file size: 3956 bytes, number of entries: 9
+drwxr-xr-x  3.0 unx        0 bx stor 26-Oct-01 09:30 proj/
+-rw-r--r--  3.0 unx      700 bx stor 26-Oct-01 09:30 proj/logo.bin
+drwxr-xr-x  3.0 unx        0 bx stor 26-Oct-01 09:30 proj/src/
+-rw-r--r--  3.0 unx       36 tx stor 26-Oct-01 09:30 proj/src/main.kara
+-rw-r--r--  3.0 unx     1534 tx defN 26-Oct-01 09:30 proj/src/util.kara
+lrwxrwxrwx  3.0 unx       13 bx stor 26-Oct-01 09:30 proj/link.kara
+-rw-r--r--  3.0 unx        0 bx stor 26-Oct-01 09:30 proj/empty.txt
+drwxr-xr-x  3.0 unx        0 bx stor 26-Oct-01 09:30 proj/docs/
+-rw-r--r--  3.0 unx     8070 tx defN 26-Oct-01 09:30 proj/docs/guide.md
+9 files, 10353 bytes uncompressed, 2533 bytes compressed:  75.5%
+
+$ zipinfo stream.zip
+Archive:  stream.zip
+Zip file size: 431 bytes, number of entries: 3
+?rw-------  2.0 unx      300 bl defN 26-Oct-02 11:45 café/naïve.txt
+?rw-------  2.0 unx       15 bl stor 26-Oct-02 11:46 notes/readme.txt
+drwxr-xr-x  2.0 unx        0 bl stor 26-Oct-02 11:40 notes/
+3 files, 315 bytes uncompressed, 32 bytes compressed:  89.8%
+
+$ zipinfo zip64.zip
+Archive:  zip64.zip
+Zip file size: 1280 bytes, number of entries: 2
+-rw-r--r--  4.5 unx     1024 b- stor 26-Oct-03 08:00 big/part1.dat
+-rw-r--r--  2.0 unx       45 b- defN 26-Oct-03 08:00 big/part2.dat
+2 files, 1069 bytes uncompressed, 1034 bytes compressed:  3.3%
+
+$ zipinfo secret.zip
+Archive:  secret.zip
+Zip file size: 1894 bytes, number of entries: 2
+-rw-r--r--  3.0 unx       36 TX stor 26-Oct-01 09:30 proj/src/main.kara
+-rw-r--r--  3.0 unx     8070 TX defN 26-Oct-01 09:30 proj/docs/guide.md
+2 files, 8106 bytes uncompressed, 1488 bytes compressed:  81.6%
+
+$ zipinfo evil.zip
+Archive:  evil.zip
+Zip file size: 591 bytes, number of entries: 5
+-rw-r--r--  2.0 unx        5 b- stor 26-Oct-04 12:00 ok.txt
+-rw-r--r--  2.0 unx        8 b- stor 26-Oct-04 12:00 ../escape.txt
+-rw-r--r--  2.0 unx        9 b- stor 26-Oct-04 12:00 sub/../../../tmp/evil.sh
+-rw-r--r--  2.0 unx       18 b- stor 26-Oct-04 12:00 /etc/cron.d/job
+-rw-r--r--  2.0 unx        7 b- stor 26-Oct-04 12:00 sub/inner.txt
+5 files, 47 bytes uncompressed, 47 bytes compressed:  0.0%
+
+$ unzip -l infozip.zip
+Archive:  infozip.zip
+release 1.4
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+        0  2026-10-01 09:30   proj/
+      700  2026-10-01 09:30   proj/logo.bin
+        0  2026-10-01 09:30   proj/src/
+       36  2026-10-01 09:30   proj/src/main.kara
+     1534  2026-10-01 09:30   proj/src/util.kara
+       13  2026-10-01 09:30   proj/link.kara
+        0  2026-10-01 09:30   proj/empty.txt
+        0  2026-10-01 09:30   proj/docs/
+     8070  2026-10-01 09:30   proj/docs/guide.md
+---------                     -------
+    10353                     9 files
+
+$ unzip -l stream.zip
+Archive:  stream.zip
+made by zipfile
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+      300  2026-10-02 11:45   café/naïve.txt
+       15  2026-10-02 11:46   notes/readme.txt
+the readme
+        0  2026-10-02 11:40   notes/
+---------                     -------
+      315                     3 files
+
+$ unzip -l infozip.zip nosuch.txt proj/logo.bin
+Archive:  infozip.zip
+release 1.4
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+      700  2026-10-01 09:30   proj/logo.bin
+---------                     -------
+      700                     1 file
+
+$ unzip -l infozip.zip nosuch.txt
+Archive:  infozip.zip
+release 1.4
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+---------                     -------
+        0                     0 files
+[exit status 11]
+
+$ unzip -v infozip.zip nosuch.txt proj/*.bin
+Archive:  infozip.zip
+release 1.4
+ Length   Method    Size  Cmpr    Date    Time   CRC-32   Name
+--------  ------  ------- ---- ---------- ----- --------  ----
+     700  Stored      700   0% 2026-10-01 09:30 b2c3aafc  proj/logo.bin
+--------          -------  ---                            -------
+     700              700   0%                            1 file
+
+$ unzip -t infozip.zip nosuch.txt proj/logo.bin
+Archive:  infozip.zip
+release 1.4
+    testing: proj/logo.bin            OK
+caution: filename not matched:  nosuch.txt
+At least one error was detected in infozip.zip.
+[exit status 11]
+
+$ unzip -v infozip.zip
+Archive:  infozip.zip
+release 1.4
+ Length   Method    Size  Cmpr    Date    Time   CRC-32   Name
+--------  ------  ------- ---- ---------- ----- --------  ----
+       0  Stored        0   0% 2026-10-01 09:30 00000000  proj/
+     700  Stored      700   0% 2026-10-01 09:30 b2c3aafc  proj/logo.bin
+       0  Stored        0   0% 2026-10-01 09:30 00000000  proj/src/
+      36  Stored       36   0% 2026-10-01 09:30 1456bb1e  proj/src/main.kara
+    1534  Defl:N      332  78% 2026-10-01 09:30 1dab4d43  proj/src/util.kara
+      13  Stored       13   0% 2026-10-01 09:30 d6994ac7  proj/link.kara
+       0  Stored        0   0% 2026-10-01 09:30 00000000  proj/empty.txt
+       0  Stored        0   0% 2026-10-01 09:30 00000000  proj/docs/
+    8070  Defl:N     1452  82% 2026-10-01 09:30 8e39a3a1  proj/docs/guide.md
+--------          -------  ---                            -------
+   10353             2533  76%                            9 files
+
+$ unzip -v zip64.zip
+Archive:  zip64.zip
+ Length   Method    Size  Cmpr    Date    Time   CRC-32   Name
+--------  ------  ------- ---- ---------- ----- --------  ----
+    1024  Stored     1024   0% 2026-10-03 08:00 e7ff28b4  big/part1.dat
+      45  Defl:N       10  78% 2026-10-03 08:00 0f8d0ddb  big/part2.dat
+--------          -------  ---                            -------
+    1069             1034   3%                            2 files
+
+$ unzip -v plain.zip
+Archive:  plain.zip
+ Length   Method    Size  Cmpr    Date    Time   CRC-32   Name
+--------  ------  ------- ---- ---------- ----- --------  ----
+      36  Stored       36   0% 2026-10-01 09:30 1456bb1e  proj/src/main.kara
+       0  Stored        0   0% 2026-10-01 09:30 00000000  proj/empty.txt
+--------          -------  ---                            -------
+      36               36   0%                            2 files
+
+$ unzip -t infozip.zip
+Archive:  infozip.zip
+release 1.4
+    testing: proj/                    OK
+    testing: proj/logo.bin            OK
+    testing: proj/src/                OK
+    testing: proj/src/main.kara       OK
+    testing: proj/src/util.kara       OK
+    testing: proj/link.kara           OK
+    testing: proj/empty.txt           OK
+    testing: proj/docs/               OK
+    testing: proj/docs/guide.md       OK
+No errors detected in compressed data of infozip.zip.
+
+$ unzip -t stream.zip
+Archive:  stream.zip
+made by zipfile
+    testing: café/naïve.txt         OK
+    testing: notes/readme.txt         OK
+    testing: notes/                   OK
+No errors detected in compressed data of stream.zip.
+
+$ unzip -t zip64.zip
+Archive:  zip64.zip
+    testing: big/part1.dat            OK
+    testing: big/part2.dat            OK
+No errors detected in compressed data of zip64.zip.
+
+$ unzip -t badcrc.zip
+Archive:  badcrc.zip
+release 1.4
+    testing: proj/                    OK
+    testing: proj/logo.bin            OK
+    testing: proj/src/                OK
+    testing: proj/src/main.kara       bad CRC 0eaaeb15  (should be 1456bb1e)
+    testing: proj/src/util.kara       OK
+    testing: proj/link.kara           OK
+    testing: proj/empty.txt           OK
+    testing: proj/docs/               OK
+    testing: proj/docs/guide.md       OK
+At least one error was detected in badcrc.zip.
+[exit status 2]
+
+$ unzip -t -P hunter2 secret.zip
+Archive:  secret.zip
+    testing: proj/src/main.kara       OK
+    testing: proj/docs/guide.md       OK
+No errors detected in compressed data of secret.zip.
+
+$ unzip -t -P letmein secret.zip
+Archive:  secret.zip
+   skipping: proj/src/main.kara      incorrect password
+   skipping: proj/docs/guide.md      incorrect password
+Caution:  zero files tested in secret.zip.
+2 files skipped because of incorrect password.
+[exit status 82]
+
+$ unzip -t sfx.zip
+Archive:  sfx.zip
+release 1.4
+warning [sfx.zip]:  128 extra bytes at beginning or within zipfile
+  (attempting to process anyway)
+    testing: proj/                    OK
+    testing: proj/logo.bin            OK
+    testing: proj/src/                OK
+    testing: proj/src/main.kara       OK
+    testing: proj/src/util.kara       OK
+    testing: proj/link.kara           OK
+    testing: proj/empty.txt           OK
+    testing: proj/docs/               OK
+    testing: proj/docs/guide.md       OK
+No errors detected in compressed data of sfx.zip.
+[exit status 1]
+
+$ unzip -l sfx.zip
+Archive:  sfx.zip
+release 1.4
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+        0  2026-10-01 09:30   proj/
+      700  2026-10-01 09:30   proj/logo.bin
+        0  2026-10-01 09:30   proj/src/
+       36  2026-10-01 09:30   proj/src/main.kara
+     1534  2026-10-01 09:30   proj/src/util.kara
+       13  2026-10-01 09:30   proj/link.kara
+        0  2026-10-01 09:30   proj/empty.txt
+        0  2026-10-01 09:30   proj/docs/
+     8070  2026-10-01 09:30   proj/docs/guide.md
+---------                     -------
+    10353                     9 files
+warning [sfx.zip]:  128 extra bytes at beginning or within zipfile
+  (attempting to process anyway)
+[exit status 1]
+
+$ unzip -t trunc.zip
+Archive:  trunc.zip
+  End-of-central-directory signature not found.  Either this file is not
+  a zipfile, or it constitutes one disk of a multi-part archive.  In the
+  latter case the central directory and zipfile comment will be found on
+  the last disk(s) of this archive.
+unzip:  cannot find zipfile directory in one of trunc.zip or
+        trunc.zip.zip, and cannot find trunc.zip.ZIP, period.
+[exit status 9]
+
+$ unzip -l trunc.zip
+Archive:  trunc.zip
+  End-of-central-directory signature not found.  Either this file is not
+  a zipfile, or it constitutes one disk of a multi-part archive.  In the
+  latter case the central directory and zipfile comment will be found on
+  the last disk(s) of this archive.
+unzip:  cannot find zipfile directory in one of trunc.zip or
+        trunc.zip.zip, and cannot find trunc.zip.ZIP, period.
+[exit status 9]
+
+$ unzip -l missing.zip
+unzip:  cannot find or open missing.zip, missing.zip.zip or missing.zip.ZIP.
+[exit status 9]
+
+$ unzip -l notes.txt
+Archive:  notes.txt
+  End-of-central-directory signature not found.  Either this file is not
+  a zipfile, or it constitutes one disk of a multi-part archive.  In the
+  latter case the central directory and zipfile comment will be found on
+  the last disk(s) of this archive.
+unzip:  cannot find zipfile directory in one of notes.txt or
+        notes.txt.zip, and cannot find notes.txt.ZIP, period.
+[exit status 9]
+
+$ unzip -p stream.zip café/naïve.txt
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+déjà vu
+
+$ unzip -p -P hunter2 secret.zip proj/src/main.kara
+fn main() {
+    println("hello");
+}
+
+$ unzip -p stream.zip nosuch
+caution: filename not matched:  nosuch
+[exit status 11]
+
+$ unzip -d out/nested plain.zip
+Archive:  plain.zip
+checkdir:  cannot create extraction directory: out/nested
+           No such file or directory
+[exit status 2]
+
+$ unzip -d out-infozip infozip.zip
+Archive:  infozip.zip
+release 1.4
+   creating: out-infozip/proj/
+ extracting: out-infozip/proj/logo.bin  
+   creating: out-infozip/proj/src/
+ extracting: out-infozip/proj/src/main.kara  
+  inflating: out-infozip/proj/src/util.kara  
+    linking: out-infozip/proj/link.kara  -> src/main.kara 
+ extracting: out-infozip/proj/empty.txt  
+   creating: out-infozip/proj/docs/
+  inflating: out-infozip/proj/docs/guide.md  
+finishing deferred symbolic links:
+  out-infozip/proj/link.kara -> src/main.kara
+
+$ tree out-infozip
+     dir            proj/
+     dir            proj/docs/
+    8070  8e39a3a1  proj/docs/guide.md
+       0  00000000  proj/empty.txt
+      13  d6994ac7  proj/link.kara
+     700  b2c3aafc  proj/logo.bin
+     dir            proj/src/
+      36  1456bb1e  proj/src/main.kara
+    1534  1dab4d43  proj/src/util.kara
+
+$ unzip -d out-stream stream.zip
+Archive:  stream.zip
+made by zipfile
+  inflating: out-stream/café/naïve.txt  
+ extracting: out-stream/notes/readme.txt  
+
+$ tree out-stream
+     dir            café/
+     300  024603d5  café/naïve.txt
+     dir            notes/
+      15  c9abfe28  notes/readme.txt
+
+$ unzip -d out-evil evil.zip
+Archive:  evil.zip
+ extracting: out-evil/ok.txt         
+warning:  skipped "../" path component(s) in ../escape.txt
+ extracting: out-evil/escape.txt     
+warning:  skipped "../" path component(s) in sub/../../../tmp/evil.sh
+ extracting: out-evil/sub/tmp/evil.sh  
+ extracting: out-evil/etc/cron.d/job  
+ extracting: out-evil/sub/inner.txt  
+warning:  stripped absolute path spec from /etc/cron.d/job
+[exit status 1]
+
+$ tree out-evil
+       8  0dd7eab3  escape.txt
+     dir            etc/
+     dir            etc/cron.d/
+      18  0f0072c8  etc/cron.d/job
+       5  2c685daf  ok.txt
+     dir            sub/
+       7  fe618ff4  sub/inner.txt
+     dir            sub/tmp/
+       9  f3468515  sub/tmp/evil.sh
+
+$ unzip -P hunter2 -d out-secret secret.zip
+Archive:  secret.zip
+ extracting: out-secret/proj/src/main.kara  
+  inflating: out-secret/proj/docs/guide.md  
+
+$ tree out-secret
+     dir            proj/
+     dir            proj/docs/
+    8070  8e39a3a1  proj/docs/guide.md
+     dir            proj/src/
+      36  1456bb1e  proj/src/main.kara
+
+$ unzip -d out-bad badcrc.zip proj/src/main.kara proj/src/util.kara
+Archive:  badcrc.zip
+release 1.4
+ extracting: out-bad/proj/src/main.kara    inflating: out-bad/proj/src/util.kara  
+ bad CRC 0eaaeb15  (should be 1456bb1e)
+[exit status 2]
+
+$ tree out-bad
+     dir            proj/
+     dir            proj/src/
+      36  0eaaeb15  proj/src/main.kara
+    1534  1dab4d43  proj/src/util.kara
+

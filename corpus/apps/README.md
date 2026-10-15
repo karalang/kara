@@ -190,6 +190,7 @@ cli/mini_logging        a service's logs through Python's logging: handlers, rot
 cli/mini_datetime       strptime, strftime, fromisoformat, timedelta and a log normalizer
 cli/mini_sqlite         SQLite file reader: pages, overflow, records, freelist, pointer map, b-tree seeks
 cli/mini_readelf        GNU readelf for x86-64 ELF, checksec, loader version and symbol checks, gnu-hash lookups
+cli/mini_unzip          Info-ZIP unzip and zipinfo: inflate, ZipCrypto, zip64, data descriptors, zip-slip defences, sfx offsets
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

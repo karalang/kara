@@ -1,0 +1,2251 @@
+// mini_unzip: Info-ZIP unzip 6.0 and zipinfo, written from PKWARE's
+// APPNOTE, RFC 1951 and Info-ZIP's output formats:
+// - zipinfo's one-line listing, and unzip's -l, -v and -t, with the
+//   archive and file comments;
+// - an inflater (stored, fixed and dynamic Huffman blocks) and CRC-32
+//   checks, traditional PKWARE (ZipCrypto) decryption with -P, data
+//   descriptors, and zip64 sizes and end records;
+// - extraction with -d, including Info-ZIP's zip-slip defences (`..`
+//   components dropped, a leading `/` stripped) and deferred links;
+// - Info-ZIP's errors, warnings and exit codes on a bad CRC, a wrong
+//   password, a self-extractor's stub, a file that is not a zip
+//   archive, and unmatched names.
+//
+// The inputs are the archives in data/, made by Info-ZIP zip 3.0 and
+// Python's zipfile. expected.out is the output of oracle.py, the same
+// program in Python, and is byte-identical to the real unzip and zipinfo.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+
+// ------------------------------------------------------------ CRC-32
+
+fn crc_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c: i64 = n;
+        for _ in 0..8 {
+            c = if c & 1 == 1 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+        }
+        t.push(c);
+    }
+    t
+}
+
+fn crc_byte(t: ref Vec[i64], crc: i64, b: i64) -> i64 {
+    t[(crc ^ b) & 0xFF] ^ (crc >> 8)
+}
+
+fn crc32(t: ref Vec[i64], data: ref Vec[u8]) -> i64 {
+    let mut c: i64 = 0xFFFFFFFF;
+    for b in data {
+        c = crc_byte(t, c, b as i64);
+    }
+    c ^ 0xFFFFFFFF
+}
+
+fn u16(b: ref Vec[u8], i: i64) -> i64 {
+    b[i] as i64 | (b[i + 1] as i64) << 8
+}
+
+fn u32(b: ref Vec[u8], i: i64) -> i64 {
+    u16(b, i) | u16(b, i + 2) << 16
+}
+
+fn u64(b: ref Vec[u8], i: i64) -> i64 {
+    u32(b, i) | u32(b, i + 4) << 32
+}
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+fn bytes_of(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    let end = if to > b.len() { b.len() } else { to };
+    let mut i = from;
+    while i < end {
+        v.push(b[i]);
+        i += 1;
+    }
+    v
+}
+
+// Text from bytes, with U+FFFD for anything that is not UTF-8.
+fn lossy(b: ref Vec[u8]) -> String {
+    match String.from_utf8(b.clone()) {
+        Ok(s) => s,
+        Err(_) => {
+            let mut out = String.new();
+            for c in b {
+                if c < 0x80 {
+                    out.push_str(byte_str(vec_of(c), 0, 1));
+                } else {
+                    out.push_str("\u{FFFD}");
+                }
+            }
+            out
+        }
+    }
+}
+
+fn vec_of(c: u8) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    v.push(c);
+    v
+}
+
+// ------------------------------------------------------------ inflate (RFC 1951)
+
+struct Bits {
+    data: Vec[u8],
+    pos: i64,
+    bit: i64,
+    nbits: i64,
+    bad: bool,
+}
+
+fn need(br: mut ref Bits, n: i64) -> bool {
+    while br.nbits < n {
+        if br.pos >= br.data.len() {
+            br.bad = true;
+            return false;
+        }
+        br.bit = br.bit | (br.data[br.pos] as i64) << br.nbits;
+        br.pos += 1;
+        br.nbits += 8;
+    }
+    true
+}
+
+fn get_bits(br: mut ref Bits, n: i64) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+    if not need(mut br, n) {
+        return 0;
+    }
+    let v = br.bit & ((1 << n) - 1);
+    br.bit = br.bit >> n;
+    br.nbits -= n;
+    v
+}
+
+// A canonical Huffman code: how many codes of each length, and the
+// symbols in code order.
+struct Huff {
+    count: Vec[i64],
+    symbol: Vec[i64],
+}
+
+fn huff(lengths: ref Vec[i64]) -> Huff {
+    let mut count = zeros(16);
+    for l in lengths {
+        count[l] += 1;
+    }
+    count[0] = 0;
+    let mut offs = zeros(16);
+    for i in 1..16 {
+        offs[i] = offs[i - 1] + count[i - 1];
+    }
+    let mut symbol = zeros(lengths.len());
+    for s in 0..lengths.len() {
+        let l = lengths[s];
+        if l != 0 {
+            symbol[offs[l]] = s;
+            offs[l] += 1;
+        }
+    }
+    Huff { count: count, symbol: symbol }
+}
+
+fn decode(br: mut ref Bits, h: ref Huff) -> i64 {
+    let mut code: i64 = 0;
+    let mut first: i64 = 0;
+    let mut index: i64 = 0;
+    for l in 1..16 {
+        code = code | get_bits(mut br, 1);
+        if br.bad {
+            return -1;
+        }
+        let count = h.count[l];
+        if code - count < first {
+            return h.symbol[index + (code - first)];
+        }
+        index += count;
+        first += count;
+        first = first << 1;
+        code = code << 1;
+    }
+    -1
+}
+
+const LEN_BASE: Array[i64, 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
+    67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA: Array[i64, 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+    5, 5, 5, 5, 0];
+const DIST_BASE: Array[i64, 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const DIST_EXTRA: Array[i64, 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+    10, 11, 11, 12, 12, 13, 13];
+const CL_ORDER: Array[i64, 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+fn codes(br: mut ref Bits, out: mut ref Vec[u8], lit: ref Huff, dist: ref Huff) -> bool {
+    loop {
+        let sym = decode(mut br, lit);
+        if sym < 0 {
+            return false;
+        }
+        if sym < 256 {
+            out.push(sym as u8);
+        } else if sym == 256 {
+            return true;
+        } else {
+            let s = sym - 257;
+            if s >= 29 {
+                return false;
+            }
+            let n = LEN_BASE[s] + get_bits(mut br, LEN_EXTRA[s]);
+            let d = decode(mut br, dist);
+            if d < 0 or d >= 30 {
+                return false;
+            }
+            let back = DIST_BASE[d] + get_bits(mut br, DIST_EXTRA[d]);
+            if br.bad or back > out.len() {
+                return false;
+            }
+            for _ in 0..n {
+                let c = out[out.len() - back];
+                out.push(c);
+            }
+        }
+    }
+}
+
+fn repeat_len(n: i64, l: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(l);
+    }
+    v
+}
+
+// The bytes `data` inflates to, and whether it was a whole stream.
+fn inflate(data: Vec[u8]) -> (Vec[u8], bool) {
+    let mut br = Bits { data: data, pos: 0, bit: 0, nbits: 0, bad: false };
+    let mut out: Vec[u8] = Vec.new();
+    let mut fl = repeat_len(144, 8);
+    fl.extend(repeat_len(112, 9));
+    fl.extend(repeat_len(24, 7));
+    fl.extend(repeat_len(8, 8));
+    let fixed_lit = huff(fl);
+    let fixed_dist = huff(repeat_len(30, 5));
+    loop {
+        let last = get_bits(mut br, 1);
+        let kind = get_bits(mut br, 2);
+        if br.bad {
+            return (out, false);
+        }
+        if kind == 0 {
+            br.bit = 0;
+            br.nbits = 0;
+            if br.pos + 4 > br.data.len() {
+                return (out, false);
+            }
+            let n = u16(br.data, br.pos);
+            let nn = u16(br.data, br.pos + 2);
+            if n != (nn ^ 0xFFFF) or br.pos + 4 + n > br.data.len() {
+                return (out, false);
+            }
+            for i in 0..n {
+                out.push(br.data[br.pos + 4 + i]);
+            }
+            br.pos += 4 + n;
+        } else if kind == 1 {
+            if not codes(mut br, mut out, fixed_lit, fixed_dist) {
+                return (out, false);
+            }
+        } else if kind == 2 {
+            let nlen = get_bits(mut br, 5) + 257;
+            let ndist = get_bits(mut br, 5) + 1;
+            let ncode = get_bits(mut br, 4) + 4;
+            let mut cl = zeros(19);
+            for i in 0..ncode {
+                cl[CL_ORDER[i]] = get_bits(mut br, 3);
+            }
+            let clh = huff(cl);
+            let mut lengths: Vec[i64] = Vec.new();
+            while lengths.len() < nlen + ndist {
+                let sym = decode(mut br, clh);
+                if sym < 0 {
+                    return (out, false);
+                }
+                if sym < 16 {
+                    lengths.push(sym);
+                } else if sym == 16 {
+                    if lengths.len() == 0 {
+                        return (out, false);
+                    }
+                    let prev = lengths[lengths.len() - 1];
+                    lengths.extend(repeat_len(3 + get_bits(mut br, 2), prev));
+                } else if sym == 17 {
+                    lengths.extend(repeat_len(3 + get_bits(mut br, 3), 0));
+                } else {
+                    lengths.extend(repeat_len(11 + get_bits(mut br, 7), 0));
+                }
+            }
+            if lengths.len() > nlen + ndist or br.bad {
+                return (out, false);
+            }
+            let lit = huff(lengths[0..nlen].to_vec());
+            let dist = huff(lengths[nlen..].to_vec());
+            if not codes(mut br, mut out, lit, dist) {
+                return (out, false);
+            }
+        } else {
+            return (out, false);
+        }
+        if last == 1 {
+            return (out, true);
+        }
+    }
+}
+
+// ------------------------------------------------------------ ZipCrypto
+
+struct Keys {
+    k0: i64,
+    k1: i64,
+    k2: i64,
+}
+
+fn update_keys(t: ref Vec[i64], k: mut ref Keys, c: i64) {
+    k.k0 = crc_byte(t, k.k0, c);
+    k.k1 = ((k.k1 + (k.k0 & 0xFF)) * 134775813 + 1) & 0xFFFFFFFF;
+    k.k2 = crc_byte(t, k.k2, k.k1 >> 24);
+}
+
+fn new_keys(t: ref Vec[i64], password: Str) -> Keys {
+    let mut k = Keys { k0: 305419896, k1: 591751049, k2: 878082192 };
+    for c in to_bytes(password) {
+        update_keys(t, mut k, c as i64);
+    }
+    k
+}
+
+fn decrypt(t: ref Vec[i64], k: mut ref Keys, data: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for b in data {
+        let x = (k.k2 | 2) & 0xFFFF;
+        let p = b as i64 ^ (((x * (x ^ 1)) >> 8) & 0xFF);
+        update_keys(t, mut k, p);
+        out.push(p as u8);
+    }
+    out
+}
+
+// ------------------------------------------------------------ the archive
+
+#[derive(Clone)]
+struct Entry {
+    made_by: i64,
+    flags: i64,
+    method: i64,
+    time: i64,
+    date: i64,
+    crc: i64,
+    csize: i64,
+    usize: i64,
+    internal: i64,
+    external: i64,
+    offset: i64,
+    name: String,
+    has_extra: bool,
+    comment: String,
+}
+
+struct Archive {
+    name: String,
+    size: i64,
+    data: Vec[u8],
+    error: String,
+    comment: String,
+    extra_bytes: i64,
+    entries: Vec[Entry],
+}
+
+fn eocd_text() -> String {
+    "  End-of-central-directory signature not found.  Either this file is not\n  a zipfile, or it constitutes one disk of a multi-part archive.  In the\n  latter case the central directory and zipfile comment will be found on\n  the last disk(s) of this archive.\n".to_string()
+}
+
+fn open_archive(name: Str, data: Vec[u8]) -> Archive {
+    let mut a = Archive {
+        name: name.to_string(),
+        size: data.len(),
+        data: data,
+        error: String.new(),
+        comment: String.new(),
+        extra_bytes: 0,
+        entries: Vec.new(),
+    };
+    let d = ref a.data;
+    // the end record is in the last 22 + 65535 bytes
+    let mut at: i64 = -1;
+    let mut i = d.len() - 22;
+    let stop = if d.len() - 22 - 65535 > 0 { d.len() - 22 - 65535 } else { 0 };
+    while i >= stop {
+        if d[i] == 0x50 and d[i + 1] == 0x4B and d[i + 2] == 5 and d[i + 3] == 6 {
+            at = i;
+            break;
+        }
+        i -= 1;
+    }
+    if at < 0 {
+        a.error = "eocd".to_string();
+        return a;
+    }
+    let mut count = u16(d, at + 10);
+    let mut cd_size = u32(d, at + 12);
+    let mut cd_off = u32(d, at + 16);
+    let clen = u16(d, at + 20);
+    a.comment = lossy(bytes_of(d, at + 22, at + 22 + clen));
+    let mut end = at;
+    // a zip64 end record, through its locator
+    if at >= 20 and u32(d, at - 20) == 0x07064B50 {
+        let z = u64(d, at - 12);
+        if z + 56 <= d.len() and u32(d, z) == 0x06064B50 {
+            count = u64(d, z + 32);
+            cd_size = u64(d, z + 40);
+            cd_off = u64(d, z + 48);
+            end = z;
+        }
+    }
+    // a self-extractor's stub shifts every offset
+    a.extra_bytes = end - cd_size - cd_off;
+    let mut p = cd_off + a.extra_bytes;
+    for _ in 0..count {
+        if p + 46 > d.len() or u32(d, p) != 0x02014B50 {
+            a.error = "cd".to_string();
+            return a;
+        }
+        let nlen = u16(d, p + 28);
+        let xlen = u16(d, p + 30);
+        let klen = u16(d, p + 32);
+        let mut e = Entry {
+            made_by: u16(d, p + 4),
+            flags: u16(d, p + 8),
+            method: u16(d, p + 10),
+            time: u16(d, p + 12),
+            date: u16(d, p + 14),
+            crc: u32(d, p + 16),
+            csize: u32(d, p + 20),
+            usize: u32(d, p + 24),
+            internal: u16(d, p + 36),
+            external: u32(d, p + 38),
+            offset: u32(d, p + 42),
+            name: lossy(bytes_of(d, p + 46, p + 46 + nlen)),
+            has_extra: xlen > 0,
+            comment: String.new(),
+        };
+        let mut x = p + 46 + nlen;
+        let xend = x + xlen;
+        while x + 4 <= xend {
+            let tag = u16(d, x);
+            let size = u16(d, x + 2);
+            if tag == 1 {
+                let mut q = x + 4;
+                if e.usize == 0xFFFFFFFF {
+                    e.usize = u64(d, q);
+                    q += 8;
+                }
+                if e.csize == 0xFFFFFFFF {
+                    e.csize = u64(d, q);
+                    q += 8;
+                }
+                if e.offset == 0xFFFFFFFF {
+                    e.offset = u64(d, q);
+                }
+            }
+            x += 4 + size;
+        }
+        e.comment = lossy(bytes_of(d, xend, xend + klen));
+        a.entries.push(e);
+        p = xend + klen;
+    }
+    a
+}
+
+fn is_dir(e: ref Entry) -> bool {
+    e.name.ends_with("/")
+}
+
+fn is_link(e: ref Entry) -> bool {
+    e.made_by >> 8 == 3 and (e.external >> 16) & 0o170000 == 0o120000
+}
+
+fn encrypted(e: ref Entry) -> bool {
+    e.flags & 1 != 0
+}
+
+// The entry's compressed bytes, past its local header.
+fn raw_data(a: ref Archive, e: ref Entry) -> Option[Vec[u8]] {
+    let p = e.offset + a.extra_bytes;
+    let d = ref a.data;
+    if p + 30 > d.len() or u32(d, p) != 0x04034B50 {
+        return None;
+    }
+    let start = p + 30 + u16(d, p + 26) + u16(d, p + 28);
+    Some(bytes_of(d, start, start + e.csize))
+}
+
+enum Status {
+    Good,
+    Password,
+    BadCrc,
+    Bad,
+}
+
+// The entry's contents, and whether they could be read.
+fn contents(t: ref Vec[i64], a: ref Archive, e: ref Entry, password: ref Option[String]) -> (Status, Vec[u8]) {
+    let mut raw = match raw_data(a, e) {
+        Some(r) => r,
+        None => return (Status.Bad, Vec.new()),
+    };
+    if encrypted(e) {
+        let pw = match password {
+            Some(p) => p.clone(),
+            None => return (Status.Password, Vec.new()),
+        };
+        let mut k = new_keys(t, pw);
+        let head = decrypt(t, mut k, bytes_of(raw, 0, 12));
+        let check = if e.flags & 8 != 0 { (e.time >> 8) & 0xFF } else { e.crc >> 24 };
+        if head.len() < 12 or head[11] as i64 != check {
+            return (Status.Password, Vec.new());
+        }
+        raw = decrypt(t, mut k, bytes_of(raw, 12, raw.len()));
+    }
+    let data = if e.method == 0 {
+        raw
+    } else if e.method == 8 {
+        let (out, whole) = inflate(raw);
+        if not whole {
+            return (Status.Bad, out);
+        }
+        out
+    } else {
+        return (Status.Bad, Vec.new());
+    };
+    if crc32(t, data) != e.crc {
+        return (Status.BadCrc, data);
+    }
+    (Status.Good, data)
+}
+
+// ------------------------------------------------------------ dates, modes, ratios
+
+const MONTHS: Array[Str, 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+fn hhmm(e: ref Entry) -> String {
+    f"{e.time >> 11:02}:{(e.time >> 5) & 63:02}"
+}
+
+fn iso_date(e: ref Entry) -> String {
+    let y = 1980 + (e.date >> 9);
+    f"{y:04}-{(e.date >> 5) & 15:02}-{e.date & 31:02} {hhmm(e)}"
+}
+
+fn short_date(e: ref Entry) -> String {
+    let y = (1980 + (e.date >> 9)) % 100;
+    let m = (e.date >> 5) & 15;
+    f"{y:02}-{MONTHS[m - 1]}-{e.date & 31:02} {hhmm(e)}"
+}
+
+fn mode_str(e: ref Entry) -> String {
+    if e.made_by >> 8 != 3 {
+        // an MS-DOS attribute byte
+        let attr = e.external & 0xFF;
+        let mut s = String.new();
+        s.push_str(if attr & 0x10 != 0 { "dr" } else { "-r" });
+        s.push_str(if attr & 1 != 0 { "-" } else { "w" });
+        s.push_str(if attr & 0x10 != 0 { "x" } else { "-" });
+        return s;
+    }
+    let m = e.external >> 16;
+    let kind = m & 0o170000;
+    let mut s = if kind == 0o040000 {
+        "d"
+    } else if kind == 0o100000 {
+        "-"
+    } else if kind == 0o120000 {
+        "l"
+    } else if kind == 0o020000 {
+        "c"
+    } else if kind == 0o060000 {
+        "b"
+    } else if kind == 0o010000 {
+        "p"
+    } else if kind == 0o140000 {
+        "s"
+    } else {
+        "?"
+    }.to_string();
+    for sh in [6, 3, 0] {
+        let bits = (m >> sh) & 7;
+        s.push_str(if bits & 4 != 0 { "r" } else { "-" });
+        s.push_str(if bits & 2 != 0 { "w" } else { "-" });
+        s.push_str(if bits & 1 != 0 { "x" } else { "-" });
+    }
+    s
+}
+
+fn os_name(n: i64) -> String {
+    if n == 0 {
+        "fat"
+    } else if n == 3 {
+        "unx"
+    } else if n == 7 {
+        "mac"
+    } else if n == 10 {
+        "ntf"
+    } else if n == 19 {
+        "osx"
+    } else {
+        "???"
+    }.to_string()
+}
+
+// Info-ZIP's ratio(): the space saved, in tenths of a percent, rounded.
+fn ratio(uc: i64, c: i64) -> i64 {
+    if uc == 0 {
+        return 0;
+    }
+    if uc > 2000000 {
+        let denom = uc / 1000;
+        return if uc >= c { (uc - c + (denom >> 1)) / denom } else { -((c - uc + (denom >> 1)) / denom) };
+    }
+    let denom = uc;
+    if uc >= c { (1000 * (uc - c) + (denom >> 1)) / denom } else { -((1000 * (c - uc) + (denom >> 1)) / denom) }
+}
+
+fn percent(uc: i64, c: i64) -> String {
+    let r = ratio(uc, c);
+    if r < 0 {
+        let n = (-r + 5) / 10;
+        return f"-{n:2}";
+    }
+    f"{(r + 5) / 10:3}"
+}
+
+fn method_name(e: ref Entry, long: bool) -> String {
+    if e.method == 0 {
+        return if long { "Stored" } else { "stor" }.to_string();
+    }
+    if e.method == 8 {
+        let level = slice("NXFS", (e.flags >> 1) & 3, ((e.flags >> 1) & 3) + 1);
+        return if long { f"Defl:{level}" } else { f"def{level}" };
+    }
+    if long { f"Unk:{e.method:03}" } else { f"u{e.method:03}" }
+}
+
+// ------------------------------------------------------------ name matching
+
+// Info-ZIP's wildcards: `*` and `?` match `/` too.
+fn wild(p: ref Vec[u8], i: i64, s: ref Vec[u8], j: i64) -> bool {
+    if i == p.len() {
+        return j == s.len();
+    }
+    if p[i] == b'*' {
+        let mut k = j;
+        while k <= s.len() {
+            if wild(p, i + 1, s, k) {
+                return true;
+            }
+            k += 1;
+        }
+        return false;
+    }
+    if j == s.len() {
+        return false;
+    }
+    if p[i] == b'[' {
+        let mut end = i + 1;
+        while end < p.len() and p[end] != b']' {
+            end += 1;
+        }
+        if end < p.len() and end > i + 1 {
+            let mut k = i + 1;
+            let neg = p[k] == b'!' or p[k] == b'^';
+            if neg {
+                k += 1;
+            }
+            let mut hit = false;
+            while k < end {
+                if k + 2 < end and p[k + 1] == b'-' {
+                    hit = hit or (p[k] <= s[j] and s[j] <= p[k + 2]);
+                    k += 3;
+                } else {
+                    hit = hit or p[k] == s[j];
+                    k += 1;
+                }
+            }
+            return hit != neg and wild(p, end + 1, s, j + 1);
+        }
+    }
+    if p[i] == b'?' or p[i] == s[j] {
+        return wild(p, i + 1, s, j + 1);
+    }
+    false
+}
+
+fn matches(pat: Str, name: Str) -> bool {
+    wild(to_bytes(pat), 0, to_bytes(name), 0)
+}
+
+// The entries the patterns pick (all of them when there are none), and
+// the patterns that matched nothing.
+fn selected(a: ref Archive, pats: ref Vec[String]) -> (Vec[Entry], Vec[String]) {
+    if pats.len() == 0 {
+        return (a.entries.clone(), Vec.new());
+    }
+    let mut used: Vec[bool] = Vec.new();
+    for _ in pats {
+        used.push(false);
+    }
+    let mut out: Vec[Entry] = Vec.new();
+    for e in a.entries {
+        let mut hit = false;
+        for i in 0..pats.len() {
+            if matches(pats[i], e.name) {
+                used[i] = true;
+                hit = true;
+            }
+        }
+        if hit {
+            out.push(e.clone());
+        }
+    }
+    let mut unmatched: Vec[String] = Vec.new();
+    for i in 0..pats.len() {
+        if not used[i] {
+            unmatched.push(pats[i].clone());
+        }
+    }
+    (out, unmatched)
+}
+
+// ------------------------------------------------------------ the commands
+
+struct Job {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+fn raise_status(job: mut ref Job, s: i64) {
+    if job.status < s {
+        job.status = s;
+    }
+}
+
+fn is_dir_path(p: Str) -> bool {
+    match fs.metadata(p.to_string()) {
+        Ok(m) => m.is_dir,
+        Err(_) => false,
+    }
+}
+
+fn is_file_path(p: Str) -> bool {
+    match fs.metadata(p.to_string()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    }
+}
+
+fn load(job: mut ref Job, name: Str, tool: Str) -> Option[Archive] {
+    let path = f"data/{name}";
+    if not is_file_path(path) {
+        job.err.push_str(f"{tool}:  cannot find or open {name}, {name}.zip or {name}.ZIP.\n");
+        job.status = 9;
+        return None;
+    }
+    match fs.read_bytes(path) {
+        Ok(d) => Some(open_archive(name, d)),
+        Err(e) => {
+            job.err.push_str(f"{tool}:  cannot read {name}: {e}\n");
+            job.status = 9;
+            None
+        }
+    }
+}
+
+fn eocd_error(job: mut ref Job, a: ref Archive, tool: Str, to_err: bool) {
+    let n = a.name.clone();
+    let text = eocd_text()
+        + f"{tool}:  cannot find zipfile directory in one of {n} or\n        {n}.zip, and cannot find {n}.ZIP, period.\n";
+    if to_err {
+        job.err.push_str(text);
+    } else {
+        job.out.push_str(text);
+    }
+    job.status = 9;
+}
+
+fn sfx_warning(a: ref Archive) -> String {
+    f"warning [{a.name}]:  {a.extra_bytes} extra bytes at beginning or within zipfile\n  (attempting to process anyway)\n"
+}
+
+fn files_word(n: i64) -> String {
+    f"{n} {plural(n, "file", "files")}"
+}
+
+fn zipinfo(job: mut ref Job, args: ref Vec[String]) {
+    let a = match load(mut job, args[0], "zipinfo") {
+        Some(a) => a,
+        None => return,
+    };
+    job.out.push_str(f"Archive:  {a.name}\n");
+    if a.error.len() > 0 {
+        eocd_error(mut job, a, "zipinfo", false);
+        return;
+    }
+    if a.extra_bytes != 0 {
+        job.out.push_str(sfx_warning(a));
+        job.status = 1;
+    }
+    job.out.push_str(f"Zip file size: {a.size} bytes, number of entries: {a.entries.len()}\n");
+    let mut tu: i64 = 0;
+    let mut tc: i64 = 0;
+    for e in a.entries {
+        let v = e.made_by & 0xFF;
+        let mut kind = if e.internal & 1 == 1 { "t" } else { "b" }.to_string();
+        if encrypted(e) {
+            kind = upper(kind);
+        }
+        let desc = e.flags & 8 != 0;
+        let x = if e.has_extra { if desc { "X" } else { "x" } } else { if desc { "l" } else { "-" } };
+        job.out.push_str(f"{mode_str(e)}  {v / 10}.{v % 10} {os_name(e.made_by >> 8)} {e.usize:8} {kind}{x} ");
+        job.out.push_str(f"{method_name(e, false)} {short_date(e)} {e.name}\n");
+        tu += e.usize;
+        // zipinfo leaves out the 12-byte encryption headers
+        tc += if encrypted(e) { e.csize - 12 } else { e.csize };
+    }
+    let r = ratio(tu, tc);
+    let sign = if r < 0 { "-" } else { "" };
+    let ar = if r < 0 { -r } else { r };
+    job.out.push_str(f"{files_word(a.entries.len())}, {tu} bytes uncompressed, {tc} bytes compressed:  {sign}{ar / 10}.{ar % 10}%\n");
+}
+
+fn list_cmd(job: mut ref Job, args: ref Vec[String], verbose: bool) {
+    let a = match load(mut job, args[0], "unzip") {
+        Some(a) => a,
+        None => return,
+    };
+    job.out.push_str(f"Archive:  {a.name}\n");
+    if a.error.len() > 0 {
+        eocd_error(mut job, a, "unzip", true);
+        return;
+    }
+    if a.comment.len() > 0 {
+        job.out.push_str(f"{a.comment}\n");
+    }
+    let pats: Vec[String] = args[1..].to_vec();
+    let (entries, _) = selected(a, pats);
+    let mut tu: i64 = 0;
+    let mut tc: i64 = 0;
+    if verbose {
+        job.out.push_str(" Length   Method    Size  Cmpr    Date    Time   CRC-32   Name\n");
+        job.out.push_str("--------  ------  ------- ---- ---------- ----- --------  ----\n");
+    } else {
+        job.out.push_str("  Length      Date    Time    Name\n");
+        job.out.push_str("---------  ---------- -----   ----\n");
+    }
+    for e in entries {
+        if verbose {
+            job.out.push_str(f"{e.usize:8}  {method_name(e, true):<6} {e.csize:8} {percent(e.usize, e.csize)}% ");
+            job.out.push_str(f"{iso_date(e)} {e.crc:08x}  {e.name}\n");
+        } else {
+            job.out.push_str(f"{e.usize:9}  {iso_date(e)}   {e.name}\n");
+        }
+        if e.comment.len() > 0 {
+            job.out.push_str(f"{e.comment}\n");
+        }
+        tu += e.usize;
+        tc += e.csize;
+    }
+    let files = files_word(entries.len());
+    if verbose {
+        job.out.push_str("--------          -------  ---                            -------\n");
+        job.out.push_str(f"{tu:8}         {tc:8} {percent(tu, tc)}%                            {files}\n");
+    } else {
+        job.out.push_str("---------                     -------\n");
+        job.out.push_str(f"{tu:9}                     {files}\n");
+    }
+    if a.extra_bytes != 0 {
+        job.err.push_str(sfx_warning(a));
+        job.status = 1;
+    }
+    if pats.len() > 0 and entries.len() == 0 {
+        job.status = 11;
+    }
+}
+
+fn test_cmd(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String], password: ref Option[String]) {
+    let a = match load(mut job, args[0], "unzip") {
+        Some(a) => a,
+        None => return,
+    };
+    job.out.push_str(f"Archive:  {a.name}\n");
+    if a.error.len() > 0 {
+        eocd_error(mut job, a, "unzip", false);
+        return;
+    }
+    if a.comment.len() > 0 {
+        job.out.push_str(f"{a.comment}\n");
+    }
+    if a.extra_bytes != 0 {
+        job.out.push_str(sfx_warning(a));
+        job.status = 1;
+    }
+    let pats: Vec[String] = args[1..].to_vec();
+    let (entries, unmatched) = selected(a, pats);
+    let mut errors: i64 = 0;
+    let mut tested: i64 = 0;
+    let mut skipped: i64 = 0;
+    for e in entries {
+        let (st, data) = contents(t, a, e, password);
+        match st {
+            Status.Password => {
+                job.out.push_str(f"   skipping: {ljust(e.name, 22)}  incorrect password\n");
+                skipped += 1;
+            }
+            Status.Good => {
+                tested += 1;
+                job.out.push_str(f"    testing: {ljust(e.name, 22)}   OK\n");
+            }
+            Status.BadCrc => {
+                tested += 1;
+                errors += 1;
+                job.out.push_str(f"    testing: {ljust(e.name, 22)}   bad CRC {crc32(t, data):08x}  (should be {e.crc:08x})\n");
+            }
+            Status.Bad => {
+                tested += 1;
+                errors += 1;
+                job.out.push_str(f"    testing: {ljust(e.name, 22)}   error:  invalid compressed data to inflate\n");
+            }
+        }
+    }
+    for p in unmatched {
+        job.out.push_str(f"caution: filename not matched:  {p}\n");
+    }
+    if tested == 0 and skipped > 0 {
+        job.out.push_str(f"Caution:  zero files tested in {a.name}.\n");
+    } else if errors > 0 or unmatched.len() > 0 {
+        job.out.push_str(f"At least one error was detected in {a.name}.\n");
+    } else {
+        job.out.push_str(f"No errors detected in compressed data of {a.name}.\n");
+    }
+    if skipped > 0 {
+        job.out.push_str(f"{files_word(skipped)} skipped because of incorrect password.\n");
+    }
+    if unmatched.len() > 0 {
+        job.status = 11;
+    } else if errors > 0 {
+        job.status = 2;
+    } else if skipped > 0 {
+        job.status = 82;
+    }
+}
+
+fn pipe_cmd(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String], password: ref Option[String]) {
+    let a = match load(mut job, args[0], "unzip") {
+        Some(a) => a,
+        None => return,
+    };
+    if a.error.len() > 0 {
+        job.out.push_str(f"Archive:  {a.name}\n");
+        eocd_error(mut job, a, "unzip", false);
+        return;
+    }
+    let pats: Vec[String] = args[1..].to_vec();
+    let (entries, unmatched) = selected(a, pats);
+    for e in entries {
+        let (st, data) = contents(t, a, e, password);
+        match st {
+            Status.Password => {}
+            _ => job.out.push_str(lossy(data)),
+        }
+    }
+    for p in unmatched {
+        job.err.push_str(f"caution: filename not matched:  {p}\n");
+    }
+    if unmatched.len() > 0 {
+        job.status = 11;
+    }
+}
+
+// The path an entry extracts to: Info-ZIP drops `..` components and a
+// leading `/`, and says so.
+fn safe_name(job: mut ref Job, name: Str) -> String {
+    let parts = split_on(name, b'/');
+    let absolute = starts_with(name, "/");
+    let mut kept: Vec[String] = Vec.new();
+    let mut dotdot = false;
+    for p in parts {
+        if p == ".." {
+            dotdot = true;
+        } else if p == "." or (p.len() == 0 and kept.len() == 0) {
+            continue;
+        } else {
+            kept.push(p);
+        }
+    }
+    if dotdot {
+        job.out.push_str(f"warning:  skipped \"../\" path component(s) in {name}\n");
+        raise_status(mut job, 1);
+    }
+    if absolute {
+        job.err.push_str(f"warning:  stripped absolute path spec from {name}\n");
+        raise_status(mut job, 1);
+    }
+    join(kept, "/")
+}
+
+fn make_parents(path: Str) {
+    let parts = split_on(path, b'/');
+    let mut d = String.new();
+    for i in 0..parts.len() - 1 {
+        if i > 0 {
+            d.push_str("/");
+        }
+        d.push_str(parts[i]);
+        if not is_dir_path(d) {
+            let _ = fs.create_dir(d.clone());
+        }
+    }
+}
+
+fn write_file(job: mut ref Job, path: Str, data: Vec[u8]) {
+    make_parents(path);
+    if let Err(e) = fs.write_bytes(path.to_string(), data) {
+        job.err.push_str(f"error:  cannot create {path}: {e}\n");
+        raise_status(mut job, 2);
+    }
+}
+
+struct Link {
+    shown: String,
+    path: String,
+    target: String,
+}
+
+fn extract_cmd(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String], password: ref Option[String], dest: Str) {
+    let a = match load(mut job, args[0], "unzip") {
+        Some(a) => a,
+        None => return,
+    };
+    job.out.push_str(f"Archive:  {a.name}\n");
+    if a.error.len() > 0 {
+        eocd_error(mut job, a, "unzip", false);
+        return;
+    }
+    if a.comment.len() > 0 {
+        job.out.push_str(f"{a.comment}\n");
+    }
+    if a.extra_bytes != 0 {
+        job.out.push_str(sfx_warning(a));
+        job.status = 1;
+    }
+    let root = f"data/{dest}";
+    if not is_dir_path(root) {
+        if let Err(_) = fs.create_dir(root.clone()) {
+            job.err.push_str(f"checkdir:  cannot create extraction directory: {dest}\n           No such file or directory\n");
+            job.status = 2;
+            return;
+        }
+    }
+    let pats: Vec[String] = args[1..].to_vec();
+    let (entries, unmatched) = selected(a, pats);
+    let mut links: Vec[Link] = Vec.new();
+    for e in entries {
+        let rel = safe_name(mut job, e.name);
+        let shown = f"{dest}/{rel}";
+        let path = f"{root}/{rel}";
+        if is_dir(e) {
+            let d = trim_end_slash(path);
+            if not is_dir_path(d) {
+                make_parents(d);
+                let _ = fs.create_dir(d.clone());
+                job.out.push_str(f"   creating: {shown}\n");
+            }
+            continue;
+        }
+        let (st, data) = contents(t, a, e, password);
+        match st {
+            Status.Password => {
+                job.err.push_str(f"   skipping: {ljust(shown, 22)}  incorrect password\n");
+                raise_status(mut job, 1);
+                continue;
+            }
+            _ => {}
+        }
+        if is_link(e) {
+            let target = lossy(data);
+            job.out.push_str(f"    linking: {ljust(shown, 22)}  -> {target} \n");
+            links.push(Link { shown: shown, path: path, target: target });
+            continue;
+        }
+        let verb = if e.method == 0 { " extracting: " } else { "  inflating: " };
+        job.out.push_str(f"{verb}{ljust(shown, 22)}  ");
+        let crc = crc32(t, data);
+        write_file(mut job, path, data);
+        match st {
+            Status.Good => job.out.push_str("\n"),
+            Status.BadCrc => {
+                job.err.push_str(f" bad CRC {crc:08x}  (should be {e.crc:08x})\n");
+                job.status = 2;
+            }
+            _ => {
+                job.err.push_str("  error:  invalid compressed data to inflate\n");
+                job.status = 2;
+            }
+        }
+    }
+    if links.len() > 0 {
+        job.out.push_str("finishing deferred symbolic links:\n");
+        for l in links {
+            job.out.push_str(f"  {l.shown} -> {l.target}\n");
+            // no symlinks here: the link is written as a file holding
+            // its target, as Info-ZIP does where links are unsupported
+            write_file(mut job, l.path, to_bytes(l.target));
+        }
+    }
+    for p in unmatched {
+        job.err.push_str(f"caution: filename not matched:  {p}\n");
+        job.status = 11;
+    }
+}
+
+fn trim_end_slash(s: Str) -> String {
+    let mut out = s.to_string();
+    while out.ends_with("/") {
+        out = slice(out, 0, out.len() - 1);
+    }
+    out
+}
+
+fn unzip(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String]) {
+    let mut mode = "x".to_string();
+    let mut password: Option[String] = None;
+    let mut dest = String.new();
+    let mut rest: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let w = args[i].clone();
+        if w == "-l" or w == "-v" or w == "-t" or w == "-p" {
+            mode = slice(w, 1, 2);
+        } else if w == "-P" {
+            password = Some(args[i + 1].clone());
+            i += 1;
+        } else if w == "-d" {
+            dest = args[i + 1].clone();
+            i += 1;
+        } else {
+            rest.push(w);
+        }
+        i += 1;
+    }
+    if mode == "l" or mode == "v" {
+        list_cmd(mut job, rest, mode == "v");
+    } else if mode == "t" {
+        test_cmd(t, mut job, rest, password);
+    } else if mode == "p" {
+        pipe_cmd(t, mut job, rest, password);
+    } else {
+        extract_cmd(t, mut job, rest, password, dest);
+    }
+}
+
+struct Row {
+    key: String,
+    line: String,
+}
+
+fn walk(t: ref Vec[i64], d: Str, rel: Str, rows: mut ref Vec[Row]) {
+    let names = match fs.read_dir(d.to_string()) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    for n in names {
+        let p = f"{d}/{n}";
+        let r = if rel.len() == 0 { n.clone() } else { f"{rel}/{n}" };
+        if is_dir_path(p) {
+            rows.push(Row { key: f"{r}/", line: f"     dir            {r}/\n" });
+            walk(t, p, r, mut rows);
+        } else {
+            let data = match fs.read_bytes(p) {
+                Ok(b) => b,
+                Err(_) => Vec.new(),
+            };
+            rows.push(Row { key: r.clone(), line: f"{data.len():8}  {crc32(t, data):08x}  {r}\n" });
+        }
+    }
+}
+
+fn tree(t: ref Vec[i64], job: mut ref Job, root: Str) {
+    let base = f"data/{root}";
+    if not is_dir_path(base) {
+        job.out.push_str(f"tree: {root}: no such directory\n");
+        return;
+    }
+    let mut rows: Vec[Row] = Vec.new();
+    walk(t, base, "", mut rows);
+    rows.sort_by(|x, y| x.key.cmp(y.key));
+    for r in rows {
+        job.out.push_str(r.line);
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/badcrc.zip
+fn file_0() -> String {
+    """
+504b03040a0000000000c64b415d00000000000000000000000005001c0070726f6a2f55540900032428be6aede0d06a
+75780b000104000000000400000000504b03040a0000000000c64b415dfcaac3b2bc020000bc0200000d001c0070726f
+6a2f6c6f676f2e62696e55540900032428be6a2428be6a75780b0001040000000004000000005d6f15cc50c4b73f4c7e
+621513a53cc7e99cd79d7fd9c7bce4e05b0b01faee78e4ea5bf2cc362241b7dcbb2ee21414422aa0281bc1450d213863
+43fb93547121b38151a58ce94982f56a8679a3be12655dce528ea7c056873a18b8e73581c9be87c0bc4ab8a929e2755a
+1897819ea00011714c94ddd5ba1843fa74170b1b01b59b36b672d39a4468bbf35144077c4ce631204a8acd87051cb3e3
+fc7f5400161f0ccf5f79511d35066448d366d4599e209918f403c0dfee29e75973358576133fab861a88df87976f2b07
+5685786751a762c7a87ac2f0f1030ddf779d6cc827574a100d393652b0480e0f154615221721ba6621c4367e69683911
+112c93f43343326896a3acd8850ab3839018bca4f3930fd30fdf32b1f0186e2e9357df0067931b02b2fb30fb5efdb185
+51916d76ff543829fb35a7b630cdca2cd80cbe699b86db57c277eb4011b2a74fe6a556ede0837640abec7962889a4f4f
+7ea7b25278a7608434543464c44d4b9a98de8c6437368f69c6ed1106ccdf7197ed0b4883cf027cdcd775755c3fe8dda0
+8532d67ccc5080d8f7e90ad15da705c7fa3613806f5266b233e968f308bdafd2e96b5ec83eb61c818cc3cc1f0626d6d7
+b48737729bcd70c8ec6c54422362f0734ab4d3ef9640f0b57588c081da5ff6018fb77d9aa4f5f8db2bb94e9bc51d2ba6
+47b007056b2496803349775fe7b14e6ace552e9865fd6d28e03b3c87d67747f2fc1df7ef49fb7eff540352a4effe97ee
+bfdad6265cb80e0a17a930f7f849116dd440ad30bbaef26b91deafd8801a9495b5fcceaa8bb068fc3ca962a299412c14
+cccf19cc9937031761f31ec04b2a6c14ea59335c12d73306bc479e849a5ed711a30adc1bfe143cd7cfe42207c64ff3d3
+342af16c4d07da02043e2d6f3e42f1098d7ce65f19bb4a2b96ffeb821a10051f0728c79f9f54f91ea1bce0f0554a3bb9
+53d5f4c5e78baa958f1faa074d9edb7ec0c6504b03040a0000000000c64b415d00000000000000000000000009001c00
+70726f6a2f7372632f55540900032428be6aede0d06a75780b000104000000000400000000504b03040a0000000000c6
+4b415d1ebb5614240000002400000012001c0070726f6a2f7372632f6d61696e2e6b61726155540900032428be6a2428
+be6a75780b000104000000000400000000666e206d61696e2829207b0a202020205072696e746c6e282268656c6c6f22
+293b0a7d0a504b0304140000000800c64b415d434dab1d4c010000fe05000012001c0070726f6a2f7372632f7574696c
+2e6b61726155540900032428be6a2428be6a75780b0001040000000004000000007594bd4ec6300c45779e22233f428a
+7d933461e0712ab1307f12e2dd894de32eb943d5e5c8b5efb17b7ea7333f3f3ed2572b2fe9fdd3dee9273dd26bcae96d
+3ebf4fe744648fc844e442748fe844ca85608f6022e342ca1e29f6a1763175cfd4c968bd98b667da64b0ea1c7be6b08e
+573f7dcff4c9b435d6d83363327da5232464b1942547ce2c684f5aa31a095b2c6d29ab3121810b3cce35a390d0c5531f
+2b2e21b98b071fc90b895e9afb896a247db1f8b5476f44809801684c4a1cc870e1b1a3c4829a851216945850b3504a54
+632bef3bdf576f4a2ca859a8ba26556241cd423d566e4a2ca8596861418905350bedae462ca85938eede8805350bc73d
+29b1a07e0a911b880598851116402cc02c8c700a62017e0b395604ecefe3c79063e3403cc0af4162814144a0faa98609
+101368cec57981a880a910c4b582b840ffbffd9897c880c990eaff923f504b03040a0000000000c64b415dc74a99d60d
+0000000d0000000e001c0070726f6a2f6c696e6b2e6b61726155540900032428be6a2428be6a75780b00010400000000
+04000000007372632f6d61696e2e6b617261504b03040a0000000000c64b415d0000000000000000000000000e001c00
+70726f6a2f656d7074792e74787455540900032428be6a2428be6a75780b000104000000000400000000504b03040a00
+00000000c64b415d0000000000000000000000000a001c0070726f6a2f646f63732f55540900032428be6aede0d06a75
+780b000104000000000400000000504b0304140000000800c64b415da1a3398eac050000861f000012001c0070726f6a
+2f646f63732f67756964652e6d6455540900032428be6a2428be6a75780b0001040000000004000000007d995b6edc30
+0c45ffb98ad99a8d0e9aa2491ba0ee8f575f8f2991e7924a8164e28c65898fcbcb87cfe7b13dbe6f1f1fdbe375f5be7d
+ecdfb6c7f6fef9b63df6d7373f7e1fe3ea7c7dfcdc3e3fe7fdd72dfbf67c3fe481f97bffe37773a367acbd37322c1a47
+8f3f3cc7affd3337c0c176ef3db4f8fcf3e3fdf7af47ea951a8c2dc68afbfb71dcbdd2b0c83fc75d3fea7c8a2a1f7fb9
+a9cbe1d7befc78834143f97b13bfe58bfdfafe7a08364ceac25fa7c0860b05f0fcb5f6fecfe6025fbeabdc6998332f7d
+9730ae0db1f329dfeae459675502d796874e617ccdf51cf776575e5f5e3f73a1df37f1c0906fac782d4edb9eb9118ce1
+1e8505fc1eb133b72b969e968022d5486e4879bc7ded42da094913ecfe0cf6f64f8904029c062e381f7f5db1220b5ce4
+f106975ff2c1b31a7dd73d1a1420368678f858965533678c0f35a07ce314a082da460cdbfa093f2929c29f9a020d13e5
+a38630dc8b16fd733ebfabf0366300d80d90436cda22bc62ea8424d412067e284ea83b9ca9fe7d2b3f883cdac7afdd21
+63737cb5621597ce3f45d3601a7ff45a0a9e085b246b949c60644a902cbf261d2f30795b82a6e2b56847ecd50dc2c807
+a37c327cb8939f1e977e4d12644211e19bd8c00813188d5dd872e69d54c2bdc81cac1e11d410044c3891178c124cc789
+dcfe70e411887dab01d403d6b43c1dd98deaa0f235d3fad888882e60cf58b616746a8a5adbf89378e8de0401009d7119
+88d7d00f890cffc75a0970dcaad8bc4548e367ec483897882a6cb70bcb28bf037e9ac5188ac301904358b5542999ffa6
+c019e0850026b2e0547862d2860d3c1f5cb22880f662863d0df8bf14d9927731df2a4019c85309a9712272aa2be5be50
+14730bf9b9dff5e0a846e332664c6414a9214df5a74d344e8a3d80564d01ad8cd67cabac44720b63a5815b0662783000
+506ab04234652694626402e418af3c47c5994e83e4b4262540e40754ac2f0b598a39e96a6cc56a8fc4a824a336cde8ca
+b4ef7961951110fa8052d8572b9edb3312eff0107bbe5e21259e5da72e77015a6b73905cc2e696259eb43cc54c518808
+2e5d9049c37090a3a02433128e3445919e12095d05429c3a1848e358241f69c099ea7884a997986527c1a606446396d1
+aef2a2be6d151dfd9eb122f5b182a7209dc5bc46afeb028fa3a22de0d00e916515038fd1a1aa95625a12a6acb49aa57b
+3b90a583d2612369dda2561c640fda38edc1deb38a853016d3ca22e95248a5a5dd173e10278e2a5fb9b4f0a426f792d9
+4de9256014e45fd940e2c3121bbb9ca7e0120f48e84caf0a0fa8db16c499e770338b955ad4e92023cd4b7c9698205041
+3b75cc2091305581239279a88cd688bd3a853600985808beaa353260c42e3a37c22a001aa15d7a795a7c911cc5b0f3f7
+4a040cc01a172b0640db237c9c0eed245e7aa9a3171c0ed2452d95c56bd02cab479d975a2b7febe44400426907a35942
+a1b24dcf44ec0305e008c7e500659137b3fa964217b9b3fba89fdfc71f25c5f5594683242ec3f8d62384072e06b5d08e
+10306db1942de852ce840e1d4f3cab7c19c899a8fb444425f8f2feaa93e85343291f8e526ec878f15023b515263ad7e9
+a3f648c4491f5b09d466c3b22a74b30a0c078081c05c5f55a6d196b614dec8f6d80aafc3e4565bd6dae516f9abff0988
+e48956c5adaaf7d993d7717c1f717690f9cff9fcb233ae5533a4001f457f9e28a2d5e80c5eb7847fedc0faa5dab00d60
+163e33c9e787d6bab467198a064e17af2970183301310db5e45d4d2e5abc3d2a6d87904b75874e39c4c13060a7028a24
+822df2aaf621ba676dc817f3d596c668ee5623aca0dcd0c5aa1e4bce489004959aa8bfb6acbd1ac6fe24b4c41b51ba1a
+18ce9db41d2e2d741fafa99c7815d2e089c8970b1263af5ca86ca2b00c27be18e93c5ba7a203fcf9db87af198123cf95
+bc5be65fa94ceebe1872b45a408b90b94f7b9fa5bdfba28944d9842c51869bab7782edade2a2990d1a09e3458bb478f9
+920a3048fe01504b01021e030a0000000000c64b415d000000000000000000000000050018000000000000001000ed41
+0000000070726f6a2f55540500032428be6a75780b000104000000000400000000504b01021e030a0000000000c64b41
+5dfcaac3b2bc020000bc0200000d0018000000000000000000a4813f00000070726f6a2f6c6f676f2e62696e55540500
+032428be6a75780b000104000000000400000000504b01021e030a0000000000c64b415d000000000000000000000000
+090018000000000000001000ed414203000070726f6a2f7372632f55540500032428be6a75780b000104000000000400
+000000504b01021e030a0000000000c64b415d1ebb56142400000024000000120018000000000001000000a481850300
+0070726f6a2f7372632f6d61696e2e6b61726155540500032428be6a75780b000104000000000400000000504b01021e
+03140000000800c64b415d434dab1d4c010000fe050000120018000000000001000000a481f503000070726f6a2f7372
+632f7574696c2e6b61726155540500032428be6a75780b000104000000000400000000504b01021e030a0000000000c6
+4b415dc74a99d60d0000000d0000000e0018000000000000000000ffa18d05000070726f6a2f6c696e6b2e6b61726155
+540500032428be6a75780b000104000000000400000000504b01021e030a0000000000c64b415d000000000000000000
+0000000e0018000000000000000000a481e205000070726f6a2f656d7074792e74787455540500032428be6a75780b00
+0104000000000400000000504b01021e030a0000000000c64b415d0000000000000000000000000a0018000000000000
+001000ed412a06000070726f6a2f646f63732f55540500032428be6a75780b000104000000000400000000504b01021e
+03140000000800c64b415da1a3398eac050000861f0000120018000000000001000000a4816e06000070726f6a2f646f
+63732f67756964652e6d6455540500032428be6a75780b000104000000000400000000504b05060000000009000900ed
+020000660c00000b0072656c6561736520312e34
+"""
+}
+
+// data/evil.zip
+fn file_1() -> String {
+    """
+504b03041400000000000060445daf5d682c0500000005000000060000006f6b2e74787466696e650a504b0304140000
+0000000060445db3ead70d08000000080000000d0000002e2e2f6573636170652e7478746f7574736964650a504b0304
+1400000000000060445d158546f30900000009000000180000007375622f2e2e2f2e2e2f2e2e2f746d702f6576696c2e
+7368726d202d7266207e0a504b03041400000000000060445dc872000f12000000120000000f0000002f6574632f6372
+6f6e2e642f6a6f622a202a202a202a202a20726f6f742069640a504b03041400000000000060445df48f61fe07000000
+070000000d0000007375622f696e6e65722e747874696e736964650a504b010214031400000000000060445daf5d682c
+0500000005000000060000000000000000000000a481000000006f6b2e747874504b010214031400000000000060445d
+b3ead70d08000000080000000d0000000000000000000000a481290000002e2e2f6573636170652e747874504b010214
+031400000000000060445d158546f30900000009000000180000000000000000000000a4815c0000007375622f2e2e2f
+2e2e2f2e2e2f746d702f6576696c2e7368504b010214031400000000000060445dc872000f12000000120000000f0000
+000000000000000000a4819b0000002f6574632f63726f6e2e642f6a6f62504b010214031400000000000060445df48f
+61fe07000000070000000d0000000000000000000000a481da0000007375622f696e6e65722e747874504b0506000000
+00050005002d0100000c0100000000
+"""
+}
+
+// data/infozip.zip
+fn file_2() -> String {
+    """
+504b03040a0000000000c64b415d00000000000000000000000005001c0070726f6a2f55540900032428be6aede0d06a
+75780b000104000000000400000000504b03040a0000000000c64b415dfcaac3b2bc020000bc0200000d001c0070726f
+6a2f6c6f676f2e62696e55540900032428be6a2428be6a75780b0001040000000004000000005d6f15cc50c4b73f4c7e
+621513a53cc7e99cd79d7fd9c7bce4e05b0b01faee78e4ea5bf2cc362241b7dcbb2ee21414422aa0281bc1450d213863
+43fb93547121b38151a58ce94982f56a8679a3be12655dce528ea7c056873a18b8e73581c9be87c0bc4ab8a929e2755a
+1897819ea00011714c94ddd5ba1843fa74170b1b01b59b36b672d39a4468bbf35144077c4ce631204a8acd87051cb3e3
+fc7f5400161f0ccf5f79511d35066448d366d4599e209918f403c0dfee29e75973358576133fab861a88df87976f2b07
+5685786751a762c7a87ac2f0f1030ddf779d6cc827574a100d393652b0480e0f154615221721ba6621c4367e69683911
+112c93f43343326896a3acd8850ab3839018bca4f3930fd30fdf32b1f0186e2e9357df0067931b02b2fb30fb5efdb185
+51916d76ff543829fb35a7b630cdca2cd80cbe699b86db57c277eb4011b2a74fe6a556ede0837640abec7962889a4f4f
+7ea7b25278a7608434543464c44d4b9a98de8c6437368f69c6ed1106ccdf7197ed0b4883cf027cdcd775755c3fe8dda0
+8532d67ccc5080d8f7e90ad15da705c7fa3613806f5266b233e968f308bdafd2e96b5ec83eb61c818cc3cc1f0626d6d7
+b48737729bcd70c8ec6c54422362f0734ab4d3ef9640f0b57588c081da5ff6018fb77d9aa4f5f8db2bb94e9bc51d2ba6
+47b007056b2496803349775fe7b14e6ace552e9865fd6d28e03b3c87d67747f2fc1df7ef49fb7eff540352a4effe97ee
+bfdad6265cb80e0a17a930f7f849116dd440ad30bbaef26b91deafd8801a9495b5fcceaa8bb068fc3ca962a299412c14
+cccf19cc9937031761f31ec04b2a6c14ea59335c12d73306bc479e849a5ed711a30adc1bfe143cd7cfe42207c64ff3d3
+342af16c4d07da02043e2d6f3e42f1098d7ce65f19bb4a2b96ffeb821a10051f0728c79f9f54f91ea1bce0f0554a3bb9
+53d5f4c5e78baa958f1faa074d9edb7ec0c6504b03040a0000000000c64b415d00000000000000000000000009001c00
+70726f6a2f7372632f55540900032428be6aede0d06a75780b000104000000000400000000504b03040a0000000000c6
+4b415d1ebb5614240000002400000012001c0070726f6a2f7372632f6d61696e2e6b61726155540900032428be6a2428
+be6a75780b000104000000000400000000666e206d61696e2829207b0a202020207072696e746c6e282268656c6c6f22
+293b0a7d0a504b0304140000000800c64b415d434dab1d4c010000fe05000012001c0070726f6a2f7372632f7574696c
+2e6b61726155540900032428be6a2428be6a75780b0001040000000004000000007594bd4ec6300c45779e22233f428a
+7d933461e0712ab1307f12e2dd894de32eb943d5e5c8b5efb17b7ea7333f3f3ed2572b2fe9fdd3dee9273dd26bcae96d
+3ebf4fe744648fc844e442748fe844ca85608f6022e342ca1e29f6a1763175cfd4c968bd98b667da64b0ea1c7be6b08e
+573f7dcff4c9b435d6d83363327da5232464b1942547ce2c684f5aa31a095b2c6d29ab3121810b3cce35a390d0c5531f
+2b2e21b98b071fc90b895e9afb896a247db1f8b5476f44809801684c4a1cc870e1b1a3c4829a851216945850b3504a54
+632bef3bdf576f4a2ca859a8ba26556241cd423d566e4a2ca8596861418905350bedae462ca85938eede8805350bc73d
+29b1a07e0a911b880598851116402cc02c8c700a62017e0b395604ecefe3c79063e3403cc0af4162814144a0faa98609
+101368cec57981a880a910c4b582b840ffbffd9897c880c990eaff923f504b03040a0000000000c64b415dc74a99d60d
+0000000d0000000e001c0070726f6a2f6c696e6b2e6b61726155540900032428be6a2428be6a75780b00010400000000
+04000000007372632f6d61696e2e6b617261504b03040a0000000000c64b415d0000000000000000000000000e001c00
+70726f6a2f656d7074792e74787455540900032428be6a2428be6a75780b000104000000000400000000504b03040a00
+00000000c64b415d0000000000000000000000000a001c0070726f6a2f646f63732f55540900032428be6aede0d06a75
+780b000104000000000400000000504b0304140000000800c64b415da1a3398eac050000861f000012001c0070726f6a
+2f646f63732f67756964652e6d6455540900032428be6a2428be6a75780b0001040000000004000000007d995b6edc30
+0c45ffb98ad99a8d0e9aa2491ba0ee8f575f8f2991e7924a8164e28c65898fcbcb87cfe7b13dbe6f1f1fdbe375f5be7d
+ecdfb6c7f6fef9b63df6d7373f7e1fe3ea7c7dfcdc3e3fe7fdd72dfbf67c3fe481f97bffe37773a367acbd37322c1a47
+8f3f3cc7affd3337c0c176ef3db4f8fcf3e3fdf7af47ea951a8c2dc68afbfb71dcbdd2b0c83fc75d3fea7c8a2a1f7fb9
+a9cbe1d7befc78834143f97b13bfe58bfdfafe7a08364ceac25fa7c0860b05f0fcb5f6fecfe6025fbeabdc6998332f7d
+9730ae0db1f329dfeae459675502d796874e617ccdf51cf776575e5f5e3f73a1df37f1c0906fac782d4edb9eb9118ce1
+1e8505fc1eb133b72b969e968022d5486e4879bc7ded42da094913ecfe0cf6f64f8904029c062e381f7f5db1220b5ce4
+f106975ff2c1b31a7dd73d1a1420368678f858965533678c0f35a07ce314a082da460cdbfa093f2929c29f9a020d13e5
+a38630dc8b16fd733ebfabf0366300d80d90436cda22bc62ea8424d412067e284ea83b9ca9fe7d2b3f883cdac7afdd21
+63737cb5621597ce3f45d3601a7ff45a0a9e085b246b949c60644a902cbf261d2f30795b82a6e2b56847ecd50dc2c807
+a37c327cb8939f1e977e4d12644211e19bd8c00813188d5dd872e69d54c2bdc81cac1e11d410044c3891178c124cc789
+dcfe70e411887dab01d403d6b43c1dd98deaa0f235d3fad888882e60cf58b616746a8a5adbf89378e8de0401009d7119
+88d7d00f890cffc75a0970dcaad8bc4548e367ec483897882a6cb70bcb28bf037e9ac5188ac301904358b5542999ffa6
+c019e0850026b2e0547862d2860d3c1f5cb22880f662863d0df8bf14d9927731df2a4019c85309a9712272aa2be5be50
+14730bf9b9dff5e0a846e332664c6414a9214df5a74d344e8a3d80564d01ad8cd67cabac44720b63a5815b0662783000
+506ab04234652694626402e418af3c47c5994e83e4b4262540e40754ac2f0b598a39e96a6cc56a8fc4a824a336cde8ca
+b4ef7961951110fa8052d8572b9edb3312eff0107bbe5e21259e5da72e77015a6b73905cc2e696259eb43cc54c518808
+2e5d9049c37090a3a02433128e3445919e12095d05429c3a1848e358241f69c099ea7884a997986527c1a606446396d1
+aef2a2be6d151dfd9eb122f5b182a7209dc5bc46afeb028fa3a22de0d00e916515038fd1a1aa95625a12a6acb49aa57b
+3b90a583d2612369dda2561c640fda38edc1deb38a853016d3ca22e95248a5a5dd173e10278e2a5fb9b4f0a426f792d9
+4de9256014e45fd940e2c3121bbb9ca7e0120f48e84caf0a0fa8db16c499e770338b955ad4e92023cd4b7c9698205041
+3b75cc2091305581239279a88cd688bd3a853600985808beaa353260c42e3a37c22a001aa15d7a795a7c911cc5b0f3f7
+4a040cc01a172b0640db237c9c0eed245e7aa9a3171c0ed2452d95c56bd02cab479d975a2b7febe44400426907a35942
+a1b24dcf44ec0305e008c7e500659137b3fa964217b9b3fba89fdfc71f25c5f5594683242ec3f8d62384072e06b5d08e
+10306db1942de852ce840e1d4f3cab7c19c899a8fb444425f8f2feaa93e85343291f8e526ec878f15023b515263ad7e9
+a3f648c4491f5b09d466c3b22a74b30a0c078081c05c5f55a6d196b614dec8f6d80aafc3e4565bd6dae516f9abff0988
+e48956c5adaaf7d993d7717c1f717690f9cff9fcb233ae5533a4001f457f9e28a2d5e80c5eb7847fedc0faa5dab00d60
+163e33c9e787d6bab467198a064e17af2970183301310db5e45d4d2e5abc3d2a6d87904b75874e39c4c13060a7028a24
+822df2aaf621ba676dc817f3d596c668ee5623aca0dcd0c5aa1e4bce489004959aa8bfb6acbd1ac6fe24b4c41b51ba1a
+18ce9db41d2e2d741fafa99c7815d2e089c8970b1263af5ca86ca2b00c27be18e93c5ba7a203fcf9db87af198123cf95
+bc5be65fa94ceebe1872b45a408b90b94f7b9fa5bdfba28944d9842c51869bab7782edade2a2990d1a09e3458bb478f9
+920a3048fe01504b01021e030a0000000000c64b415d000000000000000000000000050018000000000000001000ed41
+0000000070726f6a2f55540500032428be6a75780b000104000000000400000000504b01021e030a0000000000c64b41
+5dfcaac3b2bc020000bc0200000d0018000000000000000000a4813f00000070726f6a2f6c6f676f2e62696e55540500
+032428be6a75780b000104000000000400000000504b01021e030a0000000000c64b415d000000000000000000000000
+090018000000000000001000ed414203000070726f6a2f7372632f55540500032428be6a75780b000104000000000400
+000000504b01021e030a0000000000c64b415d1ebb56142400000024000000120018000000000001000000a481850300
+0070726f6a2f7372632f6d61696e2e6b61726155540500032428be6a75780b000104000000000400000000504b01021e
+03140000000800c64b415d434dab1d4c010000fe050000120018000000000001000000a481f503000070726f6a2f7372
+632f7574696c2e6b61726155540500032428be6a75780b000104000000000400000000504b01021e030a0000000000c6
+4b415dc74a99d60d0000000d0000000e0018000000000000000000ffa18d05000070726f6a2f6c696e6b2e6b61726155
+540500032428be6a75780b000104000000000400000000504b01021e030a0000000000c64b415d000000000000000000
+0000000e0018000000000000000000a481e205000070726f6a2f656d7074792e74787455540500032428be6a75780b00
+0104000000000400000000504b01021e030a0000000000c64b415d0000000000000000000000000a0018000000000000
+001000ed412a06000070726f6a2f646f63732f55540500032428be6a75780b000104000000000400000000504b01021e
+03140000000800c64b415da1a3398eac050000861f0000120018000000000001000000a4816e06000070726f6a2f646f
+63732f67756964652e6d6455540500032428be6a75780b000104000000000400000000504b05060000000009000900ed
+020000660c00000b0072656c6561736520312e34
+"""
+}
+
+// data/jobs.txt
+fn file_3() -> String {
+    """
+# mini_unzip jobs: each line is a command run from data/
+zipinfo infozip.zip
+zipinfo stream.zip
+zipinfo zip64.zip
+zipinfo secret.zip
+zipinfo evil.zip
+unzip -l infozip.zip
+unzip -l stream.zip
+unzip -l infozip.zip nosuch.txt proj/logo.bin
+unzip -l infozip.zip nosuch.txt
+unzip -v infozip.zip nosuch.txt proj/*.bin
+unzip -t infozip.zip nosuch.txt proj/logo.bin
+unzip -v infozip.zip
+unzip -v zip64.zip
+unzip -v plain.zip
+unzip -t infozip.zip
+unzip -t stream.zip
+unzip -t zip64.zip
+unzip -t badcrc.zip
+unzip -t -P hunter2 secret.zip
+unzip -t -P letmein secret.zip
+unzip -t sfx.zip
+unzip -l sfx.zip
+unzip -t trunc.zip
+unzip -l trunc.zip
+unzip -l missing.zip
+unzip -l notes.txt
+unzip -p stream.zip café/naïve.txt
+unzip -p -P hunter2 secret.zip proj/src/main.kara
+unzip -p stream.zip nosuch
+unzip -d out/nested plain.zip
+unzip -d out-infozip infozip.zip
+tree out-infozip
+unzip -d out-stream stream.zip
+tree out-stream
+unzip -d out-evil evil.zip
+tree out-evil
+unzip -P hunter2 -d out-secret secret.zip
+tree out-secret
+unzip -d out-bad badcrc.zip proj/src/main.kara proj/src/util.kara
+tree out-bad
+
+"""
+}
+
+// data/notes.txt
+fn file_4() -> String {
+    """
+not a zip file, just notes
+not a zip file, just notes
+not a zip file, just notes
+not a zip file, just notes
+
+"""
+}
+
+// data/plain.zip
+fn file_5() -> String {
+    """
+504b03040a0000000000c64b415d1ebb561424000000240000001200000070726f6a2f7372632f6d61696e2e6b617261
+666e206d61696e2829207b0a202020207072696e746c6e282268656c6c6f22293b0a7d0a504b03040a0000000000c64b
+415d0000000000000000000000000e00000070726f6a2f656d7074792e747874504b01021e030a0000000000c64b415d
+1ebb56142400000024000000120000000000000000000000a4810000000070726f6a2f7372632f6d61696e2e6b617261
+504b01021e030a0000000000c64b415d0000000000000000000000000e0000000000000000000000a481540000007072
+6f6a2f656d7074792e747874504b050600000000020002007c000000800000000000
+"""
+}
+
+// data/secret.zip
+fn file_6() -> String {
+    """
+504b03040a0009000000c64b415d1ebb5614300000002400000012001c0070726f6a2f7372632f6d61696e2e6b617261
+55540900032428be6aede0d06a75780b000104000000000400000000da81918c3e0f28a753a35c580d7a49dd8187d30c
+ed9d5504714089088500303ad940c1eee0ffc8e7a9ea70620b10bb28504b07081ebb56143000000024000000504b0304
+140009000800c64b415da1a3398eb8050000861f000012001c0070726f6a2f646f63732f67756964652e6d6455540900
+032428be6aede0d06a75780b000104000000000400000000d783068965542f488d97b46b747c748ace71c3062801781c
+5a2e54855672f9e7d04de296fa3015f55e5178a4f4d157b2ae24bef6e6b0ae30cb0612f16668190b4804478dcf61eeb7
+098315c0f5a5a2cef9c1784eda4d78acc1f91ba4e523f133a0311b21701ae561766beb93eb26d40ba12124d504d7b1da
+4a76b8beb9de0291d1a3eb5ff9ee17245df018442e3cf08784c896dfc74652ff7d813b3baee3d1cac6fee667b3920994
+0270baa6be1d6e1eda52e102086dada13dab99525ce5b5ab6f76938e5ec509cd6294401e8131db5508900f56f243909d
+3e055b3c5f00bf5c6627b1e3b240c87d4959c1f28b4cf7e2d112c197359f0bd7562fcd76c74283ac9a4352bd191beca9
+4bd652e949a11e74d4a073db4f2fbe691d27174342f7412ec64c068105a7d25ed0e506cf6fba28e1ab3e2c164c6f7b36
+5fd1dfc495d8b73b05252a3e94f1677c0b45a289a4be9a728564b94518532f0f57bd90261f1f52a72b498051b0777d85
+93dfce62e3344bd301fa1a8307dcba7a8110c5e98f0821f42d29db7f6f3cdaa761555136948c1b7dda9c3ceccb112c55
+7fd9f0e1b4c18d191a800a6456f79678f0dcb0369ce5989c1c6993603dc6d91cbc774224b976b3b4c4c8b375e240dd14
+abacaeeccf65f3e180d08311d79b9e9cffccd86ebd12908970df4876e6c0cdb9b51ae084e5c833f14809a3b0339ef96e
+9ae9a1d6f5310bc1a39028d28cf0652bc0b7a65a9c6c706dc4ada711e5c89720ae450120ecfd39bac1aa088cb951a88e
+2ac5d297a6d2a3e0afbf521eea049f1d032b22c54ebc7eca461b3608c3e7bbbdf4cb5ac0251ee7668b4ef48a6e038e54
+31bf830e765c7b18563d0b423558c064620235feb9d127750b04fd68b366407e15fa61807b5914f6e5b46ae01d7f0aab
+ec4af0a97567df2972bf7f1de720e4a7ba186f7154de324f1eb56c713d5da302ab35982ce14b411611e4348960d97509
+ff9cc5695997cec3a655363271ec0d599d730d2c4f75a26abd7c2c2f1a39ee7acbc9d6604aaa1ba426b78166127c98e6
+3e331b0b80e7e5b07f8e5cb3190d17ad0e2f21690863e7be1d37372a28d7c7eee2ca48a990c1fd370b4fe59ae4850074
+cf42afd9cf4869b5932bfa97bcd978327cb6ce9a2c30da8bee08170f15120853adb7bab6b567e0c8eee98ec225f75b96
+2c719394bf7ecd5504edc6896802b696d4f850fdef3165ce8384d319a536a51fd0a8479c2b08ed82554e13f1cc868bca
+65ca84b7b7760b05898b4f3b1ff464f275ae2db6a6cafa8c54ed10ccfadb38c93911c7bd68953facecd51f7112815cf6
+a9393460d9c0a40d57c94f604a12b656e3de6d3f42a36895313d4bcc752d362093cbb48e19beb3b5ae763ba186fa4536
+377acfe15713ec6ef91246c952dce754dc499288674d1709366ff793249fc3c046ae19d6fb7761d6ce4f3a32053dc1e2
+f3d4d4e8fd1e19879c58fb056eb2faf474e4e8c94c1dfd0667c425d609e5a16ca5960fe831177ffdac71328009ed9977
+f542370280d721b7716ee6ad4d7706d4f6ce9a2d239fa747387790913a23755a0715016ccbccea21f0792c29274612b6
+f868ff393168cc6783ac3c34c0c05a1a1ed02ac3e0210d6f34ba6204607dbec3249a97b0cf286ac5335b6ffc2f26db47
+46c2919e2c7b906ea5606bc7c8c1272bea8ec49154a5c2d5623a83639db4b9da1fad081c2dc38cea693c9d170f734cb9
+b84253209f219f5ec391d419d5b1a25f58938e71f1a5536719ed366ae66ae4b76fe13bda9fa3cffd5ff016303d916aaf
+1cebd03ec85a72a98cbc3a0b6602ab7cedf2a462700348d3f1236b1783e2f330253ecefe69155a9dbe575aeb18f96a18
+9388b17d2674e0df7c541b2a8379d739069af1b57352938492f8ee48229cd989a42f84d6f5522fd1c64eab38145e29f4
+5e02d7549078ca0d0303e66f0fa53c62eedbbcf84837334e3d1c44397c3ddcc7b6acfcf18ac8cfca939b5573ce20bf77
+370b4f4729cb5b761b35e6dfeadac22e3be12f345b60d3e9fbed105362754d138ed8560e7a2f0029d5cb76db802950d6
+504b0708a1a3398eb8050000861f0000504b01021e030a0009000000c64b415d1ebb5614300000002400000012001800
+0000000001000000a4810000000070726f6a2f7372632f6d61696e2e6b61726155540500032428be6a75780b00010400
+0000000400000000504b01021e03140009000800c64b415da1a3398eb8050000861f0000120018000000000001000000
+a4818c00000070726f6a2f646f63732f67756964652e6d6455540500032428be6a75780b000104000000000400000000
+504b05060000000002000200b0000000a00600000000
+"""
+}
+
+// data/sfx.zip
+fn file_7() -> String {
+    """
+23212f62696e2f73680a6563686f202773656c662d65787472616374696e672073747562270a6578697420300a000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000504b03040a0000000000c64b415d0000
+0000000000000000000005001c0070726f6a2f55540900032428be6aede0d06a75780b00010400000000040000000050
+4b03040a0000000000c64b415dfcaac3b2bc020000bc0200000d001c0070726f6a2f6c6f676f2e62696e555409000324
+28be6a2428be6a75780b0001040000000004000000005d6f15cc50c4b73f4c7e621513a53cc7e99cd79d7fd9c7bce4e0
+5b0b01faee78e4ea5bf2cc362241b7dcbb2ee21414422aa0281bc1450d21386343fb93547121b38151a58ce94982f56a
+8679a3be12655dce528ea7c056873a18b8e73581c9be87c0bc4ab8a929e2755a1897819ea00011714c94ddd5ba1843fa
+74170b1b01b59b36b672d39a4468bbf35144077c4ce631204a8acd87051cb3e3fc7f5400161f0ccf5f79511d35066448
+d366d4599e209918f403c0dfee29e75973358576133fab861a88df87976f2b075685786751a762c7a87ac2f0f1030ddf
+779d6cc827574a100d393652b0480e0f154615221721ba6621c4367e69683911112c93f43343326896a3acd8850ab383
+9018bca4f3930fd30fdf32b1f0186e2e9357df0067931b02b2fb30fb5efdb18551916d76ff543829fb35a7b630cdca2c
+d80cbe699b86db57c277eb4011b2a74fe6a556ede0837640abec7962889a4f4f7ea7b25278a7608434543464c44d4b9a
+98de8c6437368f69c6ed1106ccdf7197ed0b4883cf027cdcd775755c3fe8dda08532d67ccc5080d8f7e90ad15da705c7
+fa3613806f5266b233e968f308bdafd2e96b5ec83eb61c818cc3cc1f0626d6d7b48737729bcd70c8ec6c54422362f073
+4ab4d3ef9640f0b57588c081da5ff6018fb77d9aa4f5f8db2bb94e9bc51d2ba647b007056b2496803349775fe7b14e6a
+ce552e9865fd6d28e03b3c87d67747f2fc1df7ef49fb7eff540352a4effe97eebfdad6265cb80e0a17a930f7f849116d
+d440ad30bbaef26b91deafd8801a9495b5fcceaa8bb068fc3ca962a299412c14cccf19cc9937031761f31ec04b2a6c14
+ea59335c12d73306bc479e849a5ed711a30adc1bfe143cd7cfe42207c64ff3d3342af16c4d07da02043e2d6f3e42f109
+8d7ce65f19bb4a2b96ffeb821a10051f0728c79f9f54f91ea1bce0f0554a3bb953d5f4c5e78baa958f1faa074d9edb7e
+c0c6504b03040a0000000000c64b415d00000000000000000000000009001c0070726f6a2f7372632f55540900032428
+be6aede0d06a75780b000104000000000400000000504b03040a0000000000c64b415d1ebb5614240000002400000012
+001c0070726f6a2f7372632f6d61696e2e6b61726155540900032428be6a2428be6a75780b0001040000000004000000
+00666e206d61696e2829207b0a202020207072696e746c6e282268656c6c6f22293b0a7d0a504b0304140000000800c6
+4b415d434dab1d4c010000fe05000012001c0070726f6a2f7372632f7574696c2e6b61726155540900032428be6a2428
+be6a75780b0001040000000004000000007594bd4ec6300c45779e22233f428a7d933461e0712ab1307f12e2dd894de3
+2eb943d5e5c8b5efb17b7ea7333f3f3ed2572b2fe9fdd3dee9273dd26bcae96d3ebf4fe744648fc844e442748fe844ca
+85608f6022e342ca1e29f6a1763175cfd4c968bd98b667da64b0ea1c7be6b08e573f7dcff4c9b435d6d83363327da523
+2464b1942547ce2c684f5aa31a095b2c6d29ab3121810b3cce35a390d0c5531f2b2e21b98b071fc90b895e9afb896a24
+7db1f8b5476f44809801684c4a1cc870e1b1a3c4829a851216945850b3504a54632bef3bdf576f4a2ca859a8ba265562
+41cd423d566e4a2ca8596861418905350bedae462ca85938eede8805350bc73d29b1a07e0a911b880598851116402cc0
+2c8c700a62017e0b395604ecefe3c79063e3403cc0af4162814144a0faa98609101368cec57981a880a910c4b582b840
+ffbffd9897c880c990eaff923f504b03040a0000000000c64b415dc74a99d60d0000000d0000000e001c0070726f6a2f
+6c696e6b2e6b61726155540900032428be6a2428be6a75780b0001040000000004000000007372632f6d61696e2e6b61
+7261504b03040a0000000000c64b415d0000000000000000000000000e001c0070726f6a2f656d7074792e7478745554
+0900032428be6a2428be6a75780b000104000000000400000000504b03040a0000000000c64b415d0000000000000000
+000000000a001c0070726f6a2f646f63732f55540900032428be6aede0d06a75780b000104000000000400000000504b
+0304140000000800c64b415da1a3398eac050000861f000012001c0070726f6a2f646f63732f67756964652e6d645554
+0900032428be6a2428be6a75780b0001040000000004000000007d995b6edc300c45ffb98ad99a8d0e9aa2491ba0ee8f
+575f8f2991e7924a8164e28c65898fcbcb87cfe7b13dbe6f1f1fdbe375f5be7decdfb6c7f6fef9b63df6d7373f7e1fe3
+ea7c7dfcdc3e3fe7fdd72dfbf67c3fe481f97bffe37773a367acbd37322c1a478f3f3cc7affd3337c0c176ef3db4f8fc
+f3e3fdf7af47ea951a8c2dc68afbfb71dcbdd2b0c83fc75d3fea7c8a2a1f7fb9a9cbe1d7befc78834143f97b13bfe58b
+fdfafe7a08364ceac25fa7c0860b05f0fcb5f6fecfe6025fbeabdc6998332f7d9730ae0db1f329dfeae459675502d796
+874e617ccdf51cf776575e5f5e3f73a1df37f1c0906fac782d4edb9eb9118ce11e8505fc1eb133b72b969e968022d548
+6e4879bc7ded42da094913ecfe0cf6f64f8904029c062e381f7f5db1220b5ce4f106975ff2c1b31a7dd73d1a14203686
+78f858965533678c0f35a07ce314a082da460cdbfa093f2929c29f9a020d13e5a38630dc8b16fd733ebfabf0366300d8
+0d90436cda22bc62ea8424d412067e284ea83b9ca9fe7d2b3f883cdac7afdd2163737cb5621597ce3f45d3601a7ff45a
+0a9e085b246b949c60644a902cbf261d2f30795b82a6e2b56847ecd50dc2c807a37c327cb8939f1e977e4d12644211e1
+9bd8c00813188d5dd872e69d54c2bdc81cac1e11d410044c3891178c124cc789dcfe70e411887dab01d403d6b43c1dd9
+8deaa0f235d3fad888882e60cf58b616746a8a5adbf89378e8de0401009d711988d7d00f890cffc75a0970dcaad8bc45
+48e367ec483897882a6cb70bcb28bf037e9ac5188ac301904358b5542999ffa6c019e0850026b2e0547862d2860d3c1f
+5cb22880f662863d0df8bf14d9927731df2a4019c85309a9712272aa2be5be5014730bf9b9dff5e0a846e332664c6414
+a9214df5a74d344e8a3d80564d01ad8cd67cabac44720b63a5815b0662783000506ab04234652694626402e418af3c47
+c5994e83e4b4262540e40754ac2f0b598a39e96a6cc56a8fc4a824a336cde8cab4ef7961951110fa8052d8572b9edb33
+12eff0107bbe5e21259e5da72e77015a6b73905cc2e696259eb43cc54c5188082e5d9049c37090a3a02433128e344591
+9e12095d05429c3a1848e358241f69c099ea7884a997986527c1a606446396d1aef2a2be6d151dfd9eb122f5b182a720
+9dc5bc46afeb028fa3a22de0d00e916515038fd1a1aa95625a12a6acb49aa57b3b90a583d2612369dda2561c640fda38
+edc1deb38a853016d3ca22e95248a5a5dd173e10278e2a5fb9b4f0a426f792d94de9256014e45fd940e2c3121bbb9ca7
+e0120f48e84caf0a0fa8db16c499e770338b955ad4e92023cd4b7c96982050413b75cc2091305581239279a88cd688bd
+3a853600985808beaa353260c42e3a37c22a001aa15d7a795a7c911cc5b0f3f74a040cc01a172b0640db237c9c0eed24
+5e7aa9a3171c0ed2452d95c56bd02cab479d975a2b7febe44400426907a35942a1b24dcf44ec0305e008c7e500659137
+b3fa964217b9b3fba89fdfc71f25c5f5594683242ec3f8d62384072e06b5d08e10306db1942de852ce840e1d4f3cab7c
+19c899a8fb444425f8f2feaa93e85343291f8e526ec878f15023b515263ad7e9a3f648c4491f5b09d466c3b22a74b30a
+0c078081c05c5f55a6d196b614dec8f6d80aafc3e4565bd6dae516f9abff0988e48956c5adaaf7d993d7717c1f717690
+f9cff9fcb233ae5533a4001f457f9e28a2d5e80c5eb7847fedc0faa5dab00d60163e33c9e787d6bab467198a064e17af
+2970183301310db5e45d4d2e5abc3d2a6d87904b75874e39c4c13060a7028a24822df2aaf621ba676dc817f3d596c668
+ee5623aca0dcd0c5aa1e4bce489004959aa8bfb6acbd1ac6fe24b4c41b51ba1a18ce9db41d2e2d741fafa99c7815d2e0
+89c8970b1263af5ca86ca2b00c27be18e93c5ba7a203fcf9db87af198123cf95bc5be65fa94ceebe1872b45a408b90b9
+4f7b9fa5bdfba28944d9842c51869bab7782edade2a2990d1a09e3458bb478f9920a3048fe01504b01021e030a000000
+0000c64b415d000000000000000000000000050018000000000000001000ed410000000070726f6a2f55540500032428
+be6a75780b000104000000000400000000504b01021e030a0000000000c64b415dfcaac3b2bc020000bc0200000d0018
+000000000000000000a4813f00000070726f6a2f6c6f676f2e62696e55540500032428be6a75780b0001040000000004
+00000000504b01021e030a0000000000c64b415d000000000000000000000000090018000000000000001000ed414203
+000070726f6a2f7372632f55540500032428be6a75780b000104000000000400000000504b01021e030a0000000000c6
+4b415d1ebb56142400000024000000120018000000000001000000a4818503000070726f6a2f7372632f6d61696e2e6b
+61726155540500032428be6a75780b000104000000000400000000504b01021e03140000000800c64b415d434dab1d4c
+010000fe050000120018000000000001000000a481f503000070726f6a2f7372632f7574696c2e6b6172615554050003
+2428be6a75780b000104000000000400000000504b01021e030a0000000000c64b415dc74a99d60d0000000d0000000e
+0018000000000000000000ffa18d05000070726f6a2f6c696e6b2e6b61726155540500032428be6a75780b0001040000
+00000400000000504b01021e030a0000000000c64b415d0000000000000000000000000e0018000000000000000000a4
+81e205000070726f6a2f656d7074792e74787455540500032428be6a75780b000104000000000400000000504b01021e
+030a0000000000c64b415d0000000000000000000000000a0018000000000000001000ed412a06000070726f6a2f646f
+63732f55540500032428be6a75780b000104000000000400000000504b01021e03140000000800c64b415da1a3398eac
+050000861f0000120018000000000001000000a4816e06000070726f6a2f646f63732f67756964652e6d645554050003
+2428be6a75780b000104000000000400000000504b05060000000009000900ed020000660c00000b0072656c65617365
+20312e34
+"""
+}
+
+// data/stream.zip
+fn file_8() -> String {
+    """
+504b0304140008080800a45d425d00000000000000000000000010000000636166c3a92f6e61c3af76652e7478744b39
+bc32ebf00285b252ae945116011600504b0708d5034602110000002c010000504b0304140008000000c05d425d000000
+000000000000000000100000006e6f7465732f726561646d652e74787452656164206d652066697273742e0a504b0708
+28feabc90f0000000f000000504b0304140008000000005d425d000000000000000000000000060000006e6f7465732f
+504b0708000000000000000000000000504b01021403140008080800a45d425dd5034602110000002c01000010000000
+0000000000000000800100000000636166c3a92f6e61c3af76652e747874504b01021403140008000000c05d425d28fe
+abc90f0000000f000000100000000a0000000000000080014f0000006e6f7465732f726561646d652e74787474686520
+726561646d65504b01021403140008000000005d425d000000000000000000000000060000000000000000001000ed41
+9c0000006e6f7465732f504b05060000000003000300ba000000d00000000f006d616465206279207a697066696c65
+"""
+}
+
+// data/trunc.zip
+fn file_9() -> String {
+    """
+504b03040a0000000000c64b415d00000000000000000000000005001c0070726f6a2f55540900032428be6aede0d06a
+75780b000104000000000400000000504b03040a0000000000c64b415dfcaac3b2bc020000bc0200000d001c0070726f
+6a2f6c6f676f2e62696e55540900032428be6a2428be6a75780b0001040000000004000000005d6f15cc50c4b73f4c7e
+621513a53cc7e99cd79d7fd9c7bce4e05b0b01faee78e4ea5bf2cc362241b7dcbb2ee21414422aa0281bc1450d213863
+43fb93547121b38151a58ce94982f56a8679a3be12655dce528ea7c056873a18b8e73581c9be87c0bc4ab8a929e2755a
+1897819ea00011714c94ddd5ba1843fa74170b1b01b59b36b672d39a4468bbf35144077c4ce631204a8acd87051cb3e3
+fc7f5400161f0ccf5f79511d35066448d366d4599e209918f403c0dfee29e75973358576133fab861a88df87976f2b07
+5685786751a762c7a87ac2f0f1030ddf779d6cc827574a100d393652b0480e0f154615221721ba6621c4367e69683911
+112c93f43343326896a3acd8850ab3839018bca4f3930fd30fdf32b1f0186e2e9357df0067931b02b2fb30fb5efdb185
+51916d76ff543829fb35a7b630cdca2cd80cbe699b86db57c277eb4011b2a74fe6a556ede0837640abec7962889a4f4f
+7ea7b25278a7608434543464c44d4b9a98de8c6437368f69c6ed1106ccdf7197ed0b4883cf027cdcd775755c3fe8dda0
+8532d67ccc5080d8f7e90ad15da705c7fa3613806f5266b233e968f308bdafd2e96b5ec83eb61c818cc3cc1f0626d6d7
+b48737729bcd70c8ec6c54422362f0734ab4d3ef9640f0b57588c081da5ff6018fb77d9aa4f5f8db2bb94e9bc51d2ba6
+47b007056b2496803349775fe7b14e6ace552e9865fd6d28e03b3c87d67747f2fc1df7ef49fb7eff540352a4effe97ee
+bfdad6265cb80e0a17a930f7f849116dd440ad30bbaef26b91deafd8801a9495b5fcceaa8bb068fc3ca962a299412c14
+cccf19cc9937031761f31ec04b2a6c14ea59335c12d73306bc479e849a5ed711a30adc1bfe143cd7cfe42207c64ff3d3
+342af16c4d07da02043e2d6f3e42f1098d7ce65f19bb4a2b96ffeb821a10051f0728c79f9f54f91ea1bce0f0554a3bb9
+53d5f4c5e78baa958f1faa074d9edb7ec0c6504b03040a0000000000c64b415d00000000000000000000000009001c00
+70726f6a2f7372632f55540900032428be6aede0d06a75780b000104000000000400000000504b03040a0000000000c6
+4b415d1ebb5614240000002400000012001c0070726f6a2f7372632f6d61696e2e6b61726155540900032428be6a2428
+be6a75780b000104000000000400000000666e206d61696e2829207b0a202020207072696e746c6e282268656c6c6f22
+293b0a7d0a504b0304140000000800c64b415d434dab1d4c010000fe05000012001c0070726f6a2f7372632f7574696c
+2e6b61726155540900032428be6a2428be6a75780b0001040000000004000000007594bd4ec6300c45779e22233f428a
+7d933461e0712ab1307f12e2dd894de32eb943d5e5c8b5efb17b7ea7333f3f3ed2572b2fe9fdd3dee9273dd26bcae96d
+3ebf4fe744648fc844e442748fe844ca85608f6022e342ca1e29f6a1763175cfd4c968bd98b667da64b0ea1c7be6b08e
+573f7dcff4c9b435d6d83363327da5232464b1942547ce2c684f5aa31a095b2c6d29ab3121810b3cce35a390d0c5531f
+2b2e21b98b071fc90b895e9afb896a247db1f8b5476f44809801684c4a1cc870e1b1a3c4829a851216945850b3504a54
+632bef3bdf576f4a2ca859a8ba26556241cd423d566e4a2ca8596861418905350bedae462ca85938eede8805350bc73d
+29b1a07e0a911b880598851116402cc02c8c700a62017e0b395604ecefe3c79063e3403cc0af4162814144a0faa98609
+101368cec57981a880a910c4b582b840ffbffd9897c880c990eaff923f504b03040a0000000000c64b415dc74a99d60d
+0000000d0000000e001c0070726f6a2f6c696e6b2e6b61726155540900032428be6a2428be6a75780b00010400000000
+04000000007372632f6d61696e2e6b617261504b03040a0000000000c64b415d0000000000000000000000000e001c00
+70726f6a2f656d7074792e74787455540900032428be6a2428be6a75780b000104000000000400000000504b03040a00
+00000000c64b415d0000000000000000000000000a001c0070726f6a2f646f63732f55540900032428be6aede0d06a75
+780b000104000000000400000000504b0304140000000800c64b415da1a3398eac050000861f000012001c0070726f6a
+2f646f63732f67756964652e6d6455540900032428be6a2428be6a75780b0001040000000004000000007d995b6edc30
+0c45ffb98ad99a8d0e9aa2491ba0ee8f575f8f2991e7924a8164e28c65898fcbcb87cfe7b13dbe6f1f1fdbe375f5be7d
+ecdfb6c7f6fef9b63df6d7373f7e1fe3ea7c7dfcdc3e3fe7fdd72dfbf67c3fe481f97bffe37773a367acbd37322c1a47
+8f3f3cc7affd3337c0c176ef3db4f8fcf3e3fdf7af47ea951a8c2dc68afbfb71dcbdd2b0c83fc75d3fea7c8a2a1f7fb9
+a9cbe1d7befc78834143f97b13bfe58bfdfafe7a08364ceac25fa7c0860b05f0fcb5f6fecfe6025fbeabdc6998332f7d
+9730ae0db1f329dfeae459675502d796874e617ccdf51cf776575e5f5e3f73a1df37f1c0906fac782d4edb9eb9118ce1
+1e8505fc1eb133b72b969e968022d5486e4879bc7ded42da094913ecfe0cf6f6
+"""
+}
+
+// data/zip64.zip
+fn file_10() -> String {
+    """
+504b03042d00000000000040435db428ffe7ffffffffffffffff0d0014006269672f70617274312e6461740100100000
+040000000000000004000000000000303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630
+31323334353637383961626364656630313233343536373839616263646566504b03041400000008000140435ddb0d8d
+0f0a0000002d0000000d0000006269672f70617274322e6461742b49cccce12a21920000504b01022d032d0000000000
+0040435db428ffe700040000000400000d0000000000000000000000a481000000006269672f70617274312e64617450
+4b010214031400000008000140435ddb0d8d0f0a0000002d0000000d0000000000000000000000a4813f040000626967
+2f70617274322e646174504b0506000000000200020076000000740400000000
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// The bytes a block of hex digits spells; line breaks are skipped.
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut digits: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if is_hex(b[i]) {
+            digits.push(hex_val(b[i]));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put_bytes("data/badcrc.zip", unhex(file_0()))?;
+    put_bytes("data/evil.zip", unhex(file_1()))?;
+    put_bytes("data/infozip.zip", unhex(file_2()))?;
+    put("data/jobs.txt", file_3())?;
+    put("data/notes.txt", file_4())?;
+    put_bytes("data/plain.zip", unhex(file_5()))?;
+    put_bytes("data/secret.zip", unhex(file_6()))?;
+    put_bytes("data/sfx.zip", unhex(file_7()))?;
+    put_bytes("data/stream.zip", unhex(file_8()))?;
+    put_bytes("data/trunc.zip", unhex(file_9()))?;
+    put_bytes("data/zip64.zip", unhex(file_10()))?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+// A fresh start for the extraction jobs, as after unpacking data/.
+fn clear_outputs(jobs: ref Vec[String]) {
+    for line in jobs {
+        let w = split_on(line, b' ');
+        for i in 0..w.len() {
+            if w[i] == "-d" and i + 1 < w.len() {
+                let (top, _, _) = partition(w[i + 1], b'/');
+                let path = f"data/{top}";
+                if is_dir_path(path) {
+                    let _ = fs.remove_dir_all(path);
+                }
+            }
+        }
+    }
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.txt: {e}"),
+    };
+    let jobs = lines_of(text);
+    clear_outputs(jobs);
+    let t = crc_table();
+    for line in jobs {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let mut job = Job { out: String.new(), err: String.new(), status: 0 };
+        let w = split_on(line, b' ');
+        let rest: Vec[String] = w[1..].to_vec();
+        if w[0] == "zipinfo" {
+            zipinfo(mut job, rest);
+        } else if w[0] == "unzip" {
+            unzip(t, mut job, rest);
+        } else if w[0] == "tree" {
+            tree(t, mut job, rest[0]);
+        }
+        let mut out = f"$ {line}\n";
+        out.push_str(job.out);
+        out.push_str(job.err);
+        if job.status != 0 {
+            out.push_str(f"[exit status {job.status}]\n");
+        }
+        println(out);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
