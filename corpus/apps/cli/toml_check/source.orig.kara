@@ -1,0 +1,1427 @@
+// toml_check: a TOML 1.0 parser and validator that reads real config
+// files (a Cargo manifest, a pyproject, the TOML tour) and prints every
+// leaf with its type, then rejects 27 malformed documents with the line
+// and reason.
+//
+// The document is an arena: tables are (keys, values) in insertion order
+// and arrays are lists, addressed by index, and a value is a TVal. The
+// redefinition rules follow tomllib: a table header or a dotted key marks
+// its path EXPLICIT, an inline table or array marks its subtree FROZEN,
+// the containers a dotted key creates become EXPLICIT at the next header,
+// and an array-of-tables header clears the flags under its path. Dates
+// and times are validated (month lengths, leap years) and normalised the
+// way Python's isoformat prints them; integers are range-checked to i64.
+//
+// The output matches the Python mirror byte for byte, and
+// check_tomllib.py renders tomllib's own parse of the three documents
+// with the mirror's renderer and finds the same leaves.
+
+enum TVal {
+    Text(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Moment(String, String),
+    Arr(i64),
+    Tab(i64),
+}
+
+fn tab_id(v: ref TVal) -> i64 {
+    match v {
+        TVal.Tab(t) => *t,
+        _ => -1,
+    }
+}
+
+fn arr_id(v: ref TVal) -> i64 {
+    match v {
+        TVal.Arr(a) => *a,
+        _ => -1,
+    }
+}
+
+fn is_composite(v: ref TVal) -> bool {
+    tab_id(v) >= 0 or arr_id(v) >= 0
+}
+
+// ------------------------------------------------------------ the arena
+
+struct Table { keys: Vec[String], vals: Vec[TVal] }
+
+fn empty_table() -> Table {
+    Table { keys: Vec.new(), vals: Vec.new() }
+}
+
+impl Table {
+    fn find(ref self, key: Str) -> i64 {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == key {
+                return i;
+            }
+        }
+        -1
+    }
+}
+
+struct Doc { tables: Vec[Table], arrays: Vec[Vec[TVal]] }
+
+fn new_doc() -> Doc {
+    let mut d = Doc { tables: Vec.new(), arrays: Vec.new() };
+    d.tables.push(empty_table());
+    d
+}
+
+impl Doc {
+    fn new_table(mut ref self) -> i64 {
+        self.tables.push(empty_table());
+        self.tables.len() - 1
+    }
+
+    fn new_array(mut ref self, items: own Vec[TVal]) -> i64 {
+        self.arrays.push(items);
+        self.arrays.len() - 1
+    }
+
+    fn find(ref self, tid: i64, key: Str) -> i64 {
+        self.tables[tid].find(key)
+    }
+
+    fn set(mut ref self, tid: i64, key: own String, val: own TVal) {
+        self.tables[tid].keys.push(key);
+        self.tables[tid].vals.push(val);
+    }
+
+    fn tab_at(ref self, tid: i64, i: i64) -> i64 {
+        let v = ref self.tables[tid].vals[i];
+        tab_id(v)
+    }
+
+    fn arr_at(ref self, tid: i64, i: i64) -> i64 {
+        let v = ref self.tables[tid].vals[i];
+        arr_id(v)
+    }
+
+    // The table a header walks into through entry i: the value itself, or
+    // the last element of an array of tables. -1 when it is neither.
+    fn table_of(ref self, tid: i64, i: i64) -> i64 {
+        let t = self.tab_at(tid, i);
+        if t >= 0 {
+            return t;
+        }
+        let a = self.arr_at(tid, i);
+        if a < 0 {
+            return -1;
+        }
+        let items = ref self.arrays[a];
+        if items.len() == 0 {
+            return -1;
+        }
+        let last = ref items[items.len() - 1];
+        tab_id(last)
+    }
+
+    // The table at `path`, created as needed.
+    fn nest(mut ref self, path: ref Vec[String]) -> Result[i64, String] {
+        let mut cur: i64 = 0;
+        for k in path.iter() {
+            let i = self.find(cur, k);
+            if i < 0 {
+                let t = self.new_table();
+                self.set(cur, k.clone(), TVal.Tab(t));
+                cur = t;
+                continue;
+            }
+            let t = self.table_of(cur, i);
+            if t < 0 {
+                return Err("cannot overwrite a value".to_string());
+            }
+            cur = t;
+        }
+        Ok(cur)
+    }
+
+    fn append_table(mut ref self, path: ref Vec[String]) -> Result[(), String] {
+        let up = prefix(path, path.len() - 1);
+        let parent = self.nest(up)?;
+        let last = path[path.len() - 1].clone();
+        let i = self.find(parent, last);
+        let t = self.new_table();
+        if i < 0 {
+            let mut items: Vec[TVal] = Vec.new();
+            items.push(TVal.Tab(t));
+            let a = self.new_array(items);
+            self.set(parent, last, TVal.Arr(a));
+            return Ok(());
+        }
+        let a = self.arr_at(parent, i);
+        if a < 0 {
+            return Err("cannot append to a non-array".to_string());
+        }
+        self.arrays[a].push(TVal.Tab(t));
+        Ok(())
+    }
+}
+
+fn prefix(path: ref Vec[String], n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..n {
+        out.push(path[i].clone());
+    }
+    out
+}
+
+fn joined(a: ref Vec[String], b: ref Vec[String]) -> Vec[String] {
+    let mut out = prefix(a, a.len());
+    for k in b.iter() {
+        out.push(k.clone());
+    }
+    out
+}
+
+// ------------------------------------------------------------ flags
+
+const FROZEN: i64 = 1;
+const EXPLICIT: i64 = 2;
+
+fn pkey(path: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for i in 0..path.len() {
+        if i > 0 {
+            out.push('\u{0}');
+        }
+        out.push_str(path[i]);
+    }
+    out
+}
+
+// `exact` holds flags on one path, `rec` flags on a path and everything
+// under it; `pending` the containers dotted keys made since the last header.
+struct Flags { exact: Map[String, i64], rec: Map[String, i64], pending: Vec[Vec[String]] }
+
+fn new_flags() -> Flags {
+    Flags { exact: Map.new(), rec: Map.new(), pending: Vec.new() }
+}
+
+impl Flags {
+    fn set(mut ref self, path: ref Vec[String], flag: i64, recursive: bool) {
+        let k = pkey(path);
+        if recursive {
+            let old: i64 = self.rec.get(k).unwrap_or(0);
+            self.rec.insert(k, old | flag);
+        } else {
+            let old: i64 = self.exact.get(k).unwrap_or(0);
+            self.exact.insert(k, old | flag);
+        }
+    }
+
+    fn is_set(ref self, path: ref Vec[String], flag: i64) -> bool {
+        if path.len() == 0 {
+            return false;
+        }
+        for i in 1..path.len() {
+            let up = prefix(path, i);
+            let r: i64 = self.rec.get(pkey(up)).unwrap_or(0);
+            if (r & flag) != 0 {
+                return true;
+            }
+        }
+        let k = pkey(path);
+        let a: i64 = self.exact.get(k).unwrap_or(0);
+        let b: i64 = self.rec.get(k).unwrap_or(0);
+        ((a | b) & flag) != 0
+    }
+
+    fn unset_all(mut ref self, path: ref Vec[String]) {
+        let k = pkey(path);
+        let under = f"{k}\u{0}";
+        let mut gone: Vec[String] = Vec.new();
+        for x in self.exact.keys() {
+            if x == k or x.starts_with(under) {
+                gone.push(x.clone());
+            }
+        }
+        for x in gone.iter() {
+            self.exact.remove(x);
+        }
+        let mut gone2: Vec[String] = Vec.new();
+        for x in self.rec.keys() {
+            if x == k or x.starts_with(under) {
+                gone2.push(x.clone());
+            }
+        }
+        for x in gone2.iter() {
+            self.rec.remove(x);
+        }
+    }
+
+    fn finalize(mut ref self) {
+        for i in 0..self.pending.len() {
+            let p = self.pending[i].clone();
+            self.set(p, EXPLICIT, false);
+        }
+        self.pending.clear();
+    }
+}
+
+// ------------------------------------------------------------ characters
+
+fn is_bare(c: char) -> bool {
+    match c {
+        'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' => true,
+        _ => false,
+    }
+}
+
+fn is_digit(c: char) -> bool {
+    match c {
+        '0'..='9' => true,
+        _ => false,
+    }
+}
+
+fn digit_of(c: char) -> i64 {
+    match c {
+        '0'..='9' => c as i64 - '0' as i64,
+        'a'..='f' => c as i64 - 'a' as i64 + 10,
+        'A'..='F' => c as i64 - 'A' as i64 + 10,
+        _ => -1,
+    }
+}
+
+fn all_digits(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if not is_digit(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// The value of s[a..b] when it is all ASCII digits, else -1.
+fn digits_value(s: Str, a: i64, b: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    if a < 0 or b > cs.len() or a >= b {
+        return -1;
+    }
+    let mut v: i64 = 0;
+    for i in a..b {
+        if not is_digit(cs[i]) {
+            return -1;
+        }
+        v = v * 10 + digit_of(cs[i]);
+    }
+    v
+}
+
+// Digits below `base`, with single underscores only between digits.
+fn digits_ok(s: Str, base: i64) -> bool {
+    if s.len() == 0 or s.starts_with("_") or s.ends_with("_") {
+        return false;
+    }
+    let mut prev = ' ';
+    for c in s.chars() {
+        if c == '_' {
+            if prev == '_' {
+                return false;
+            }
+        } else {
+            let d = digit_of(c);
+            if d < 0 or d >= base {
+                return false;
+            }
+        }
+        prev = c;
+    }
+    true
+}
+
+fn index_of(s: Str, a: char, b: char) -> i64 {
+    let mut i: i64 = 0;
+    for c in s.chars() {
+        if c == a or c == b {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn quote(s: Str) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if o < 32 or o == 127 {
+            out.push_str(f"\\u{o:04x}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn show_key(k: Str) -> String {
+    if k.len() > 0 and k.chars().all(|c| is_bare(c)) {
+        return k.to_string();
+    }
+    quote(k)
+}
+
+fn dotted(path: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for i in 0..path.len() {
+        if i > 0 {
+            out.push('.');
+        }
+        out.push_str(show_key(path[i]));
+    }
+    out
+}
+
+// ------------------------------------------------------------ the parser
+
+struct TomlParser { s: Vec[char], p: i64, doc: Doc, flags: Flags, rest: String, offset_ok: bool }
+
+impl TomlParser {
+    fn line(ref self) -> i64 {
+        let end = if self.p < self.s.len() { self.p } else { self.s.len() };
+        let mut n: i64 = 1;
+        for i in 0..end {
+            if self.s[i] == '\n' {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    fn err(ref self, msg: Str) -> String {
+        f"line {self.line()}: {msg}"
+    }
+
+    fn peek_at(ref self, k: i64) -> Option[char] {
+        let i = self.p + k;
+        if i < self.s.len() { Some(self.s[i]) } else { None }
+    }
+
+    fn peek(ref self) -> Option[char] {
+        self.peek_at(0)
+    }
+
+    fn next_is(ref self, c: char) -> bool {
+        self.peek() == Some(c)
+    }
+
+    fn triple(ref self, q: char) -> bool {
+        self.peek_at(0) == Some(q) and self.peek_at(1) == Some(q) and self.peek_at(2) == Some(q)
+    }
+
+    fn starts(ref self, lit: Str) -> bool {
+        let mut i: i64 = 0;
+        for c in lit.chars() {
+            if self.peek_at(i) != Some(c) {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    fn text(ref self, a: i64, b: i64) -> String {
+        let mut out = String.new();
+        for i in a..b {
+            out.push(self.s[i]);
+        }
+        out
+    }
+
+    fn ws(mut ref self) {
+        while self.next_is(' ') or self.next_is('\t') {
+            self.p += 1;
+        }
+    }
+
+    fn comment(mut ref self) -> Result[(), String] {
+        if not self.next_is('#') {
+            return Ok(());
+        }
+        while let Some(c) = self.peek() {
+            if c == '\n' {
+                break;
+            }
+            let o = c as i64;
+            if (o < 32 and c != '\t') or o == 127 {
+                return Err(self.err("control character in a comment"));
+            }
+            self.p += 1;
+        }
+        Ok(())
+    }
+
+    // whitespace, newlines and comments, as inside an array
+    fn ws_nl(mut ref self) -> Result[(), String] {
+        loop {
+            self.ws();
+            self.comment()?;
+            if self.next_is('\n') {
+                self.p += 1;
+                continue;
+            }
+            return Ok(());
+        }
+    }
+
+    // ---- keys
+
+    fn key_part(mut ref self) -> Result[String, String] {
+        if self.next_is('"') {
+            return self.basic_string();
+        }
+        if self.next_is('\'') {
+            return self.literal_string();
+        }
+        let st = self.p;
+        while self.p < self.s.len() and is_bare(self.s[self.p]) {
+            self.p += 1;
+        }
+        if self.p == st {
+            return Err(self.err("expected a key"));
+        }
+        Ok(self.text(st, self.p))
+    }
+
+    fn key(mut ref self) -> Result[Vec[String], String] {
+        let mut parts: Vec[String] = Vec.new();
+        parts.push(self.key_part()?);
+        loop {
+            self.ws();
+            if not self.next_is('.') {
+                return Ok(parts);
+            }
+            self.p += 1;
+            self.ws();
+            parts.push(self.key_part()?);
+        }
+    }
+
+    // ---- strings
+
+    fn check_char(ref self, c: char, multiline: bool) -> Result[(), String] {
+        let o = c as i64;
+        if (o < 32 and c != '\t' and not (multiline and c == '\n')) or o == 127 {
+            return Err(self.err("control character in a string"));
+        }
+        Ok(())
+    }
+
+    fn escape(mut ref self) -> Result[char, String] {
+        self.p += 1;
+        let c = match self.peek() {
+            Some(c) => c,
+            None => return Err(self.err("bad escape \\")),
+        };
+        let simple = match c {
+            'b' => Some('\u{8}'),
+            't' => Some('\t'),
+            'n' => Some('\n'),
+            'f' => Some('\u{c}'),
+            'r' => Some('\r'),
+            '"' => Some('"'),
+            '\\' => Some('\\'),
+            _ => None,
+        };
+        if let Some(e) = simple {
+            self.p += 1;
+            return Ok(e);
+        }
+        if c == 'u' or c == 'U' {
+            let n: i64 = if c == 'u' { 4 } else { 8 };
+            let mut cp: i64 = 0;
+            for j in 0..n {
+                let d = match self.peek_at(1 + j) {
+                    Some(h) => digit_of(h),
+                    None => -1,
+                };
+                if d < 0 {
+                    return Err(self.err("bad unicode escape"));
+                }
+                cp = cp * 16 + d;
+            }
+            if cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF) {
+                return Err(self.err("escape is not a unicode scalar value"));
+            }
+            self.p += 1 + n;
+            return match char.try_from(cp as u32) {
+                Ok(ch) => Ok(ch),
+                Err(_) => Err(self.err("escape is not a unicode scalar value")),
+            };
+        }
+        Err(self.err(f"bad escape \\{c}"))
+    }
+
+    fn basic_string(mut ref self) -> Result[String, String] {
+        self.p += 1;
+        let mut out = String.new();
+        loop {
+            let c = match self.peek() {
+                Some(c) => c,
+                None => return Err(self.err("unterminated string")),
+            };
+            if c == '\n' {
+                return Err(self.err("unterminated string"));
+            }
+            if c == '"' {
+                self.p += 1;
+                return Ok(out);
+            }
+            if c == '\\' {
+                out.push(self.escape()?);
+                continue;
+            }
+            self.check_char(c, false)?;
+            out.push(c);
+            self.p += 1;
+        }
+    }
+
+    fn literal_string(mut ref self) -> Result[String, String] {
+        self.p += 1;
+        let st = self.p;
+        loop {
+            let c = match self.peek() {
+                Some(c) => c,
+                None => return Err(self.err("unterminated string")),
+            };
+            if c == '\n' {
+                return Err(self.err("unterminated string"));
+            }
+            if c == '\'' {
+                let s = self.text(st, self.p);
+                self.p += 1;
+                return Ok(s);
+            }
+            self.check_char(c, false)?;
+            self.p += 1;
+        }
+    }
+
+    fn multiline(mut ref self, quote: char) -> Result[String, String] {
+        self.p += 3;
+        if self.next_is('\n') {
+            self.p += 1;
+        }
+        let mut out = String.new();
+        loop {
+            let c = match self.peek() {
+                Some(c) => c,
+                None => return Err(self.err("unterminated string")),
+            };
+            if self.triple(quote) {
+                self.p += 3;
+                let mut extra = 0;
+                while extra < 2 and self.next_is(quote) {
+                    self.p += 1;
+                    extra += 1;
+                }
+                for _ in 0..extra {
+                    out.push(quote);
+                }
+                return Ok(out);
+            }
+            if c == '\\' and quote == '"' {
+                // a line-ending backslash trims the newline and the
+                // whitespace after it
+                let mut q = self.p + 1;
+                while q < self.s.len() and (self.s[q] == ' ' or self.s[q] == '\t') {
+                    q += 1;
+                }
+                if q < self.s.len() and self.s[q] == '\n' {
+                    self.p = q;
+                    while self.next_is(' ') or self.next_is('\t') or self.next_is('\n') {
+                        self.p += 1;
+                    }
+                    continue;
+                }
+                out.push(self.escape()?);
+                continue;
+            }
+            self.check_char(c, true)?;
+            out.push(c);
+            self.p += 1;
+        }
+    }
+
+    // ---- values
+
+    fn value(mut ref self) -> Result[TVal, String] {
+        if self.triple('"') {
+            return Ok(TVal.Text(self.multiline('"')?));
+        }
+        if self.next_is('"') {
+            return Ok(TVal.Text(self.basic_string()?));
+        }
+        if self.triple('\'') {
+            return Ok(TVal.Text(self.multiline('\'')?));
+        }
+        if self.next_is('\'') {
+            return Ok(TVal.Text(self.literal_string()?));
+        }
+        if self.starts("true") {
+            self.p += 4;
+            return Ok(TVal.Bool(true));
+        }
+        if self.starts("false") {
+            self.p += 5;
+            return Ok(TVal.Bool(false));
+        }
+        if self.next_is('[') {
+            return self.array();
+        }
+        if self.next_is('{') {
+            return self.inline_table();
+        }
+        self.scalar()
+    }
+
+    fn array(mut ref self) -> Result[TVal, String] {
+        self.p += 1;
+        let mut items: Vec[TVal] = Vec.new();
+        loop {
+            self.ws_nl()?;
+            if self.next_is(']') {
+                self.p += 1;
+                return Ok(TVal.Arr(self.doc.new_array(items)));
+            }
+            if self.peek().is_none() {
+                return Err(self.err("unclosed array"));
+            }
+            items.push(self.value()?);
+            self.ws_nl()?;
+            if self.next_is(',') {
+                self.p += 1;
+            } else if self.next_is(']') {
+                self.p += 1;
+                return Ok(TVal.Arr(self.doc.new_array(items)));
+            } else {
+                return Err(self.err("expected ',' or ']' in an array"));
+            }
+        }
+    }
+
+    fn inline_table(mut ref self) -> Result[TVal, String] {
+        self.p += 1;
+        let tid = self.doc.new_table();
+        let mut flags = new_flags();
+        self.ws();
+        if self.next_is('}') {
+            self.p += 1;
+            return Ok(TVal.Tab(tid));
+        }
+        loop {
+            self.ws();
+            let k = self.key()?;
+            self.ws();
+            if not self.next_is('=') {
+                return Err(self.err("expected '=' after a key"));
+            }
+            self.p += 1;
+            self.ws();
+            let v = self.value()?;
+            let up = prefix(k, k.len() - 1);
+            let parent = self.nest_in(tid, up)?;
+            if flags.is_set(up, FROZEN) {
+                return Err(self.err("cannot change an inline table"));
+            }
+            let last = k[k.len() - 1].clone();
+            if self.doc.find(parent, last) >= 0 {
+                return Err(self.err(f"duplicate key {show_key(last)}"));
+            }
+            let composite = is_composite(v);
+            self.doc.set(parent, last, v);
+            if composite {
+                flags.set(k, FROZEN, true);
+            }
+            self.ws();
+            if self.next_is('}') {
+                self.p += 1;
+                return Ok(TVal.Tab(tid));
+            }
+            if not self.next_is(',') {
+                if self.next_is('\n') {
+                    return Err(self.err("newline in an inline table"));
+                }
+                return Err(self.err("expected ',' or '}' in an inline table"));
+            }
+            self.p += 1;
+            self.ws();
+            if self.next_is('}') {
+                return Err(self.err("trailing comma in an inline table"));
+            }
+            if self.next_is('\n') {
+                return Err(self.err("newline in an inline table"));
+            }
+        }
+    }
+
+    fn nest_in(mut ref self, tid: i64, path: ref Vec[String]) -> Result[i64, String] {
+        let mut cur = tid;
+        for k in path.iter() {
+            let i = self.doc.find(cur, k);
+            if i < 0 {
+                let t = self.doc.new_table();
+                self.doc.set(cur, k.clone(), TVal.Tab(t));
+                cur = t;
+                continue;
+            }
+            let t = self.doc.tab_at(cur, i);
+            if t < 0 {
+                return Err(self.err("cannot overwrite a value"));
+            }
+            cur = t;
+        }
+        Ok(cur)
+    }
+
+    fn skip_token(mut ref self) {
+        while let Some(c) = self.peek() {
+            if c == ' ' or c == '\t' or c == '\n' or c == ',' or c == ']' or c == '}' or c == '#' {
+                break;
+            }
+            self.p += 1;
+        }
+    }
+
+    fn scalar(mut ref self) -> Result[TVal, String] {
+        let st = self.p;
+        self.skip_token();
+        let mut tok = self.text(st, self.p);
+        // a date-time may hold one space between the date and the time
+        let digit_next = match self.peek_at(1) {
+            Some(c) => is_digit(c),
+            None => false,
+        };
+        if tok.len() == 10 and tok.substring(4, 5) == "-" and self.next_is(' ') and digit_next {
+            self.p += 1;
+            let st2 = self.p;
+            self.skip_token();
+            tok = f"{tok}T{self.text(st2, self.p)}";
+        }
+        if tok.len() == 0 {
+            return Err(self.err("expected a value"));
+        }
+        if tok.len() >= 5 and tok.substring(4, 5) == "-" and all_digits(tok.substring(0, 4)) {
+            return self.datetime(tok);
+        }
+        if tok.len() >= 3 and tok.substring(2, 3) == ":" and all_digits(tok.substring(0, 2)) {
+            let t = self.time(tok)?;
+            return Ok(TVal.Moment("time-local".to_string(), t));
+        }
+        self.number(tok)
+    }
+
+    fn two(ref self, s: Str, at: i64, lo: i64, hi: i64, what: Str) -> Result[i64, String] {
+        let v = digits_value(s, at, at + 2);
+        if v < 0 or v < lo or v > hi {
+            return Err(self.err(f"invalid {what} in {s}"));
+        }
+        Ok(v)
+    }
+
+    // HH:MM:SS[.frac], normalised; what follows is left in `rest`
+    fn time(mut ref self, s: Str) -> Result[String, String] {
+        let cs: Vec[char] = s.chars().collect();
+        if cs.len() < 8 or cs[2] != ':' or cs[5] != ':' {
+            return Err(self.err(f"invalid time {s}"));
+        }
+        self.two(s, 0, 0, 23, "hour")?;
+        self.two(s, 3, 0, 59, "minute")?;
+        self.two(s, 6, 0, 59, "second")?;
+        let mut out = s.substring(0, 8);
+        let mut i: i64 = 8;
+        if i < cs.len() and cs[i] == '.' {
+            i += 1;
+            let mut frac = String.new();
+            while i < cs.len() and is_digit(cs[i]) {
+                if frac.len() < 6 {
+                    frac.push(cs[i]);
+                }
+                i += 1;
+            }
+            if frac.len() == 0 {
+                return Err(self.err(f"invalid time {s}"));
+            }
+            while frac.len() < 6 {
+                frac.push('0');
+            }
+            if frac != "000000" {
+                out = f"{out}.{frac}";
+            }
+        }
+        let rest = s.substring(i, s.len());
+        if rest.len() > 0 and not self.offset_ok {
+            return Err(self.err(f"invalid time {s}"));
+        }
+        self.rest = rest;
+        Ok(out)
+    }
+
+    fn datetime(mut ref self, s: Str) -> Result[TVal, String] {
+        let cs: Vec[char] = s.chars().collect();
+        if cs.len() < 10 or cs[4] != '-' or cs[7] != '-' or not all_digits(s.substring(0, 4)) {
+            return Err(self.err(f"invalid date {s}"));
+        }
+        let y = digits_value(s, 0, 4);
+        let m = self.two(s, 5, 1, 12, "month")?;
+        let leap = y % 4 == 0 and (y % 100 != 0 or y % 400 == 0);
+        let days: Array[i64, 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        self.two(s, 8, 1, days[m - 1], "day")?;
+        let date = s.substring(0, 10);
+        if cs.len() == 10 {
+            return Ok(TVal.Moment("date-local".to_string(), date));
+        }
+        if cs[10] != 'T' and cs[10] != 't' {
+            return Err(self.err(f"invalid date {s}"));
+        }
+        self.offset_ok = true;
+        let t = self.time(s.substring(11, s.len()))?;
+        self.offset_ok = false;
+        let rest = self.rest.clone();
+        if rest.len() == 0 {
+            return Ok(TVal.Moment("datetime-local".to_string(), f"{date}T{t}"));
+        }
+        if rest == "Z" or rest == "z" {
+            return Ok(TVal.Moment("datetime".to_string(), f"{date}T{t}+00:00"));
+        }
+        let rc: Vec[char] = rest.chars().collect();
+        if rc.len() == 6 and (rc[0] == '+' or rc[0] == '-') and rc[3] == ':' {
+            let hh = self.two(rest, 1, 0, 23, "offset")?;
+            let mm = self.two(rest, 4, 0, 59, "offset")?;
+            let sign = if rc[0] == '-' and (hh != 0 or mm != 0) { "-" } else { "+" };
+            return Ok(TVal.Moment("datetime".to_string(), f"{date}T{t}{sign}{hh:02}:{mm:02}"));
+        }
+        Err(self.err(f"invalid offset in {s}"))
+    }
+
+    fn radix(ref self, tok: Str, base: i64) -> Result[TVal, String] {
+        let body = tok.substring(2, tok.len());
+        if not digits_ok(body, base) {
+            return Err(self.err(f"invalid number {tok}"));
+        }
+        let mut v: i64 = 0;
+        for c in body.chars() {
+            if c == '_' {
+                continue;
+            }
+            let d = digit_of(c);
+            if v > (I64_MAX - d) / base {
+                return Err(self.err(f"integer out of range {tok}"));
+            }
+            v = v * base + d;
+        }
+        Ok(TVal.Int(v))
+    }
+
+    fn number(ref self, tok: Str) -> Result[TVal, String] {
+        if tok == "inf" or tok == "+inf" {
+            return Ok(TVal.Float(1.0 / 0.0));
+        }
+        if tok == "-inf" {
+            return Ok(TVal.Float(-1.0 / 0.0));
+        }
+        if tok == "nan" or tok == "+nan" or tok == "-nan" {
+            return Ok(TVal.Float(0.0 / 0.0));
+        }
+        if tok.starts_with("0x") {
+            return self.radix(tok, 16);
+        }
+        if tok.starts_with("0o") {
+            return self.radix(tok, 8);
+        }
+        if tok.starts_with("0b") {
+            return self.radix(tok, 2);
+        }
+        let neg = tok.starts_with("-");
+        let t = if neg or tok.starts_with("+") { tok.substring(1, tok.len()) } else { tok.to_string() };
+        // split into the integer part, the fraction and the exponent
+        let e = index_of(t, 'e', 'E');
+        let mantissa = if e >= 0 { t.substring(0, e) } else { t.clone() };
+        let d = index_of(mantissa, '.', '.');
+        let ip = if d >= 0 { mantissa.substring(0, d) } else { mantissa.clone() };
+        if not digits_ok(ip, 10) or (ip.len() > 1 and ip.starts_with("0")) {
+            return Err(self.err(f"invalid number {tok}"));
+        }
+        if d >= 0 and not digits_ok(mantissa.substring(d + 1, mantissa.len()), 10) {
+            return Err(self.err(f"invalid number {tok}"));
+        }
+        if e >= 0 {
+            let x = t.substring(e + 1, t.len());
+            let unsigned = if x.starts_with("+") or x.starts_with("-") { x.substring(1, x.len()) } else { x.clone() };
+            if not digits_ok(unsigned, 10) {
+                return Err(self.err(f"invalid number {tok}"));
+            }
+        }
+        if d < 0 and e < 0 {
+            // accumulate on the negative side, which holds i64's minimum
+            let mut v: i64 = 0;
+            for c in ip.chars() {
+                if c == '_' {
+                    continue;
+                }
+                let dg = digit_of(c);
+                if v < (I64_MIN + dg) / 10 {
+                    return Err(self.err(f"integer out of range {tok}"));
+                }
+                v = v * 10 - dg;
+            }
+            if not neg {
+                if v == I64_MIN {
+                    return Err(self.err(f"integer out of range {tok}"));
+                }
+                v = -v;
+            }
+            return Ok(TVal.Int(v));
+        }
+        match f64.parse(tok.replace("_", "")) {
+            Some(x) => Ok(TVal.Float(x)),
+            None => Err(self.err(f"invalid number {tok}")),
+        }
+    }
+}
+
+const I64_MAX: i64 = 9223372036854775807;
+const I64_MIN: i64 = -9223372036854775807 - 1;
+
+fn parse(src: Str) -> Result[Doc, String] {
+    let norm = src.replace("\r\n", "\n");
+    let mut p = TomlParser { s: norm.chars().collect(), p: 0, doc: new_doc(), flags: new_flags(), rest: String.new(), offset_ok: false };
+    let mut header: Vec[String] = Vec.new();
+    loop {
+        p.ws();
+        let c = match p.peek() {
+            Some(c) => c,
+            None => break,
+        };
+        if c == '\n' {
+            p.p += 1;
+            continue;
+        }
+        if c == '[' {
+            p.flags.finalize();
+            if p.peek_at(1) == Some('[') {
+                p.p += 2;
+                p.ws();
+                let k = p.key()?;
+                p.ws();
+                if not p.starts("]]") {
+                    return Err(p.err("expected ']]' after an array of tables"));
+                }
+                p.p += 2;
+                if p.flags.is_set(k, FROZEN) {
+                    return Err(p.err(f"cannot append to {dotted(k)}, a static array"));
+                }
+                p.flags.unset_all(k);
+                p.flags.set(k, EXPLICIT, false);
+                match p.doc.append_table(k) {
+                    Ok(_) => {}
+                    Err(e) => return Err(p.err(e)),
+                }
+                header = k;
+            } else {
+                p.p += 1;
+                p.ws();
+                let k = p.key()?;
+                p.ws();
+                if not p.next_is(']') {
+                    return Err(p.err("expected ']' after a table name"));
+                }
+                p.p += 1;
+                if p.flags.is_set(k, EXPLICIT) or p.flags.is_set(k, FROZEN) {
+                    return Err(p.err(f"table {dotted(k)} defined twice"));
+                }
+                p.flags.set(k, EXPLICIT, false);
+                match p.doc.nest(k) {
+                    Ok(_) => {}
+                    Err(e) => return Err(p.err(e)),
+                }
+                header = k;
+            }
+        } else if c != '#' {
+            let k = p.key()?;
+            p.ws();
+            if not p.next_is('=') {
+                return Err(p.err("expected '=' after a key"));
+            }
+            p.p += 1;
+            p.ws();
+            let missing = match p.peek() {
+                Some(c2) => c2 == '\n' or c2 == '#',
+                None => true,
+            };
+            if missing {
+                return Err(p.err("expected a value"));
+            }
+            let v = p.value()?;
+            for i in 1..k.len() {
+                let cont = joined(header, prefix(k, i));
+                if p.flags.is_set(cont, EXPLICIT) {
+                    return Err(p.err(f"cannot redefine table {dotted(cont)} with a dotted key"));
+                }
+                p.flags.pending.push(cont);
+            }
+            let full = joined(header, k);
+            let parent_path = prefix(full, full.len() - 1);
+            if p.flags.is_set(parent_path, FROZEN) {
+                return Err(p.err(f"cannot change {dotted(parent_path)}, an inline value"));
+            }
+            let parent = match p.doc.nest(parent_path) {
+                Ok(t) => t,
+                Err(e) => return Err(p.err(e)),
+            };
+            let last = k[k.len() - 1].clone();
+            if p.doc.find(parent, last) >= 0 {
+                return Err(p.err(f"duplicate key {dotted(full)}"));
+            }
+            if is_composite(v) {
+                p.flags.set(full, FROZEN, true);
+            }
+            p.doc.set(parent, last, v);
+        }
+        p.ws();
+        p.comment()?;
+        let ended = match p.peek() {
+            Some(c3) => c3 != '\n',
+            None => break,
+        };
+        if ended {
+            return Err(p.err("expected the end of the line"));
+        }
+        p.p += 1;
+    }
+    Ok(p.doc)
+}
+
+// ------------------------------------------------------------ rendering
+
+fn fmt_float(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "inf".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-inf".to_string();
+    }
+    f"{x}"
+}
+
+fn render_value(doc: ref Doc, path: Str, v: ref TVal, out: mut ref Vec[String]) {
+    match v {
+        TVal.Tab(t) => {
+            let tb = ref doc.tables[*t];
+            if tb.keys.len() == 0 {
+                out.push(f"{path} = table {{}}");
+            }
+            for i in 0..tb.keys.len() {
+                let sub = if path.len() == 0 { show_key(tb.keys[i]) } else { f"{path}.{show_key(tb.keys[i])}" };
+                render_value(doc, sub, tb.vals[i], out);
+            }
+        }
+        TVal.Arr(a) => {
+            let items = ref doc.arrays[*a];
+            out.push(f"{path} = array[{items.len()}]");
+            for i in 0..items.len() {
+                render_value(doc, f"{path}[{i}]", items[i], out);
+            }
+        }
+        TVal.Text(s) => out.push(f"{path} = string {quote(s)}"),
+        TVal.Int(n) => out.push(f"{path} = integer {n}"),
+        TVal.Float(x) => out.push(f"{path} = float {fmt_float(*x)}"),
+        TVal.Bool(b) => out.push(f"{path} = bool {b}"),
+        TVal.Moment(kind, text) => out.push(f"{path} = {kind} {text}"),
+    }
+}
+
+fn render(doc: ref Doc) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let root = TVal.Tab(0);
+    render_value(doc, "", root, mut out);
+    out
+}
+
+// ------------------------------------------------------------ the documents
+fn cargo_toml() -> String {
+    """
+[package]
+name = "kara-demo"
+version = "0.3.1"
+edition = "2021"
+authors = ["Ada <ada@example.com>", "Grace <grace@example.com>"]
+description = \"\"\"\\
+    A demo crate that does \\
+    several things.\\
+    \"\"\"
+license = 'MIT OR Apache-2.0'
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net"] }
+log = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "cli"
+path = "src/bin/cli.rs"
+required-features = ["full"]
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+
+[features]
+default = []
+full = ["serde", "tokio"]  # everything
+
+"""
+}
+
+fn pyproject_toml() -> String {
+    """
+# Project metadata
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kara-tools"
+version = "1.2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",  # HTTP
+    "rich",
+    # a comment between elements
+    "typer[all]>=0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
+
+[project.scripts]
+kara-tools = "kara_tools.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+"""
+}
+
+fn tour_toml() -> String {
+    """
+title = "TOML Example"
+
+[owner]
+name = "Tom Preston-Werner"
+dob = 1979-05-27T07:32:00-08:00
+
+[database]
+enabled = true
+ports = [ 8000, 8001, 8002 ]
+data = [ ["delta", "phi"], [3.14] ]
+temp_targets = { cpu = 79.5, case = 72.0 }
+
+[servers]
+
+[servers.alpha]
+ip = "10.0.0.1"
+role = "frontend"
+
+[servers.beta]
+ip = "10.0.0.2"
+role = "backend"
+
+[numbers]
+hex = 0xDEAD_BEEF
+oct = 0o755
+bin = 0b1101_0110
+million = 1_000_000
+plus = +99
+minus = -17
+zero = 0
+floats = [+1.0, 3.1415, -0.01, 5e+22, 1e06, -2E-2, 6.626e-34, 224_617.445_991_228]
+special = [inf, -inf, nan, +inf]
+
+[strings]
+escapes = "tab\\tquote\\" backslash\\\\ e-acute \\u00E9 smile \\U0001F600"
+winpath = 'C:\\Users\\nodejs\\templates'
+regex = '<\\i\\c*\\s*>'
+lines = \"\"\"
+Roses are red
+Violets are blue\"\"\"
+quotes = \"\"\"Here are two quotation marks: "". Simple enough.\"\"\"
+five = \"\"\"""five quotes\"\"\"""
+raw = '''
+The first newline is
+trimmed in raw strings.
+   All other whitespace
+   is preserved.
+'''
+empty = ""
+
+[dates]
+odt1 = 1979-05-27T07:32:00Z
+odt2 = 1979-05-27T00:32:00.999999-07:00
+odt3 = 1979-05-27 07:32:00+05:30
+ldt = 1979-05-27T07:32:00.5
+ld = 1979-05-27
+lt = 07:32:00
+lt2 = 00:32:00.999999999
+
+[keys]
+"" = "blank"
+"127.0.0.1" = "localhost"
+site."google.com" = true
+3.14159 = "pi"
+fruit.apple.color = "red"
+fruit.apple.taste.sweet = true
+
+[[fruits]]
+name = "apple"
+
+[fruits.physical]
+color = "red"
+shape = "round"
+
+[[fruits.varieties]]
+name = "red delicious"
+
+[[fruits.varieties]]
+name = "granny smith"
+
+[[fruits]]
+name = "banana"
+
+[[fruits.varieties]]
+name = "plantain"
+
+[a.b.c]
+deep = 1
+
+[a]
+shallow = 2
+
+"""
+}
+
+fn bad_cases() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("duplicate key", "a = 1\nb = 2\na = 3\n"));
+    v.push(("table twice", "[a]\nx = 1\n[a]\ny = 2\n"));
+    v.push(("dotted, then table", "a.b = 1\n[a]\n"));
+    v.push(("table, then dotted redefinition", "[x]\ny.z = 1\n[x.y]\n"));
+    v.push(("header into inline table", "a = { b = 1 }\n[a.c]\n"));
+    v.push(("dotted into inline table", "a = { b = 1 }\na.c = 2\n"));
+    v.push(("array of tables over a static array", "fruit = []\n[[fruit]]\n"));
+    v.push(("table over a value", "a = 1\n[a]\n"));
+    v.push(("leading zero", "n = 012\n"));
+    v.push(("double underscore", "n = 1__2\n"));
+    v.push(("leading underscore", "n = _1\n"));
+    v.push(("bare fraction", "f = .5\n"));
+    v.push(("trailing dot", "f = 5.\n"));
+    v.push(("empty exponent", "f = 1e\n"));
+    v.push(("unterminated string", "s = \"abc\n"));
+    v.push(("bad escape", "s = \"a\\qb\"\n"));
+    v.push(("surrogate escape", "s = \"\\uD800\"\n"));
+    v.push(("month 13", "d = 1979-13-27\n"));
+    v.push(("february 30", "d = 2023-02-30\n"));
+    v.push(("missing value", "a =\n"));
+    v.push(("newline in inline table", "a = { b = 1,\n c = 2 }\n"));
+    v.push(("trailing comma in inline table", "a = { b = 1, }\n"));
+    v.push(("key without value", "[t]\nkey\n"));
+    v.push(("two values on a line", "a = 1 b = 2\n"));
+    v.push(("unclosed array", "a = [1, 2\n"));
+    v.push(("hex overflow", "n = 0x8000_0000_0000_0000\n"));
+    v.push(("dotted into a value", "a = 1\na.b = 2\n"));
+    v
+}
+
+fn main() {
+    let names: Array[Str, 3] = ["Cargo.toml", "pyproject.toml", "tour.toml"];
+    let texts: Array[String, 3] = [cargo_toml(), pyproject_toml(), tour_toml()];
+    let bad = bad_cases();
+    match fs.create_dir_all("conf".to_string()) {
+        Ok(_) => {}
+        Err(e) => {
+            println(f"cannot create conf: {e}");
+            return;
+        }
+    }
+    for i in 0..3 {
+        fs.write(f"conf/{names[i]}", texts[i].clone()).unwrap();
+    }
+    for i in 0..bad.len() {
+        fs.write(f"conf/bad-{i:02}.toml", bad[i].1.clone()).unwrap();
+    }
+    let mut listing = match fs.read_dir("conf".to_string()) {
+        Ok(v) => v,
+        Err(e) => {
+            println(f"cannot list conf: {e}");
+            return;
+        }
+    };
+    listing.sort();
+    for name in listing.iter() {
+        let src = match fs.read_to_string(f"conf/{name}") {
+            Ok(s) => s,
+            Err(e) => {
+                println(f"== {name}: cannot read: {e}");
+                continue;
+            }
+        };
+        if name.starts_with("bad-") {
+            let label = bad[digits_value(name, 4, 6)].0.clone();
+            match parse(src) {
+                Ok(_) => println(f"== {name} ({label}): ACCEPTED"),
+                Err(e) => println(f"== {name} ({label}): {e}"),
+            }
+            continue;
+        }
+        match parse(src) {
+            Ok(doc) => {
+                let lines = render(doc);
+                println(f"== {name}: {src.len()} bytes, {lines.len()} leaves");
+                for ln in lines.iter() {
+                    println(f"  {ln}");
+                }
+            }
+            Err(e) => println(f"== {name}: {e}"),
+        }
+    }
+}

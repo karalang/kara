@@ -1,0 +1,51 @@
+# toml_check
+
+A TOML 1.0 parser and validator. It writes three real config files to
+`conf/` (a Cargo manifest, a pyproject and the TOML tour) plus 27
+malformed documents, then reads the directory back in sorted order. For
+each good file it prints every leaf with its path and type. For each bad
+one it prints the line and the reason it was rejected.
+
+**The parser.**
+- The document is an arena. Tables are `(keys, values)` in insertion order
+  and arrays are lists, both addressed by index; a value is a `TVal`.
+- Strings: basic, literal, and both multi-line forms, including the
+  line-ending backslash and the rule that allows up to two extra quotes
+  before the closing delimiter. Escapes include `\uXXXX` and `\UXXXXXXXX`,
+  and surrogates are refused.
+- Numbers: decimal, hex, octal and binary, with the underscore and
+  leading-zero rules. Integers are range-checked to i64. `inf` and `nan`
+  are accepted.
+- Dates and times: all four kinds. Month lengths and leap years are
+  checked, and the value is normalised the way Python's `isoformat`
+  prints it (`T` separator, `Z` as `+00:00`, the fraction cut to six
+  digits).
+- Redefinition rules follow tomllib. A header or dotted key marks its
+  path explicit, and an inline table or array freezes its subtree. The
+  tables a dotted key creates become explicit at the next header, and an
+  array-of-tables header clears the flags under its path.
+
+**Oracle.** `toml_check.py` is a port, and `expected.out` is its output.
+`check_tomllib.py` checks that port against Python's own `tomllib`:
+- tomllib's parse of the three good documents, rendered with the port's
+  renderer, gives the same leaves;
+- tomllib rejects 26 of the 27 bad documents. The exception is the hex
+  overflow, because tomllib reads integers of any size, where TOML 1.0
+  requires an error outside i64.
+
+## Edits from toml_check.orig.kara to toml_check.kara
+
+There were no author errors. The original runs correctly on every MIR
+surface; only `karac check` refuses it.
+
+Compiler gaps, worked around and listed in the source header:
+- **B-2026-10-14-70:** check refuses `p.flags.pending.push(cont)` with the
+  legacy chained-receiver lint, so `Flags` has a `defer` method.
+- **B-2026-10-15-20:** check says a binding declared inside the loop body
+  "is moved inside a loop and not assigned again", when it is read in an
+  early-return branch and then moved into a method's `own` parameter. The
+  same body calling a free function passes. `cont` is cloned at the move,
+  and the duplicate-key message reads the key from the path again. I
+  added this case to that row.
+
+Written 2026-10-15 by the real-world apps thread; karac at fee58fc7e2.

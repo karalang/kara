@@ -1,0 +1,160 @@
+== Cargo.toml: 685 bytes, 32 leaves
+  package.name = string "kara-demo"
+  package.version = string "0.3.1"
+  package.edition = string "2021"
+  package.authors = array[2]
+  package.authors[0] = string "Ada <ada@example.com>"
+  package.authors[1] = string "Grace <grace@example.com>"
+  package.description = string "A demo crate that does several things."
+  package.license = string "MIT OR Apache-2.0"
+  dependencies.serde.version = string "1.0"
+  dependencies.serde.features = array[1]
+  dependencies.serde.features[0] = string "derive"
+  dependencies.tokio.version = string "1"
+  dependencies.tokio.default-features = bool false
+  dependencies.tokio.features = array[2]
+  dependencies.tokio.features[0] = string "rt"
+  dependencies.tokio.features[1] = string "net"
+  dependencies.log = string "0.4"
+  dev-dependencies.criterion = string "0.5"
+  bin = array[2]
+  bin[0].name = string "server"
+  bin[0].path = string "src/bin/server.rs"
+  bin[1].name = string "cli"
+  bin[1].path = string "src/bin/cli.rs"
+  bin[1].required-features = array[1]
+  bin[1].required-features[0] = string "full"
+  profile.release.lto = bool true
+  profile.release.opt-level = integer 3
+  profile.release.codegen-units = integer 1
+  features.default = array[0]
+  features.full = array[2]
+  features.full[0] = string "serde"
+  features.full[1] = string "tokio"
+== bad-00.toml (duplicate key): line 3: duplicate key a
+== bad-01.toml (table twice): line 3: table a defined twice
+== bad-02.toml (dotted, then table): line 2: table a defined twice
+== bad-03.toml (table, then dotted redefinition): line 3: table x.y defined twice
+== bad-04.toml (header into inline table): line 2: table a.c defined twice
+== bad-05.toml (dotted into inline table): line 2: cannot change a, an inline value
+== bad-06.toml (array of tables over a static array): line 2: cannot append to fruit, a static array
+== bad-07.toml (table over a value): line 2: cannot overwrite a value
+== bad-08.toml (leading zero): line 1: invalid number 012
+== bad-09.toml (double underscore): line 1: invalid number 1__2
+== bad-10.toml (leading underscore): line 1: invalid number _1
+== bad-11.toml (bare fraction): line 1: invalid number .5
+== bad-12.toml (trailing dot): line 1: invalid number 5.
+== bad-13.toml (empty exponent): line 1: invalid number 1e
+== bad-14.toml (unterminated string): line 1: unterminated string
+== bad-15.toml (bad escape): line 1: bad escape \q
+== bad-16.toml (surrogate escape): line 1: escape is not a unicode scalar value
+== bad-17.toml (month 13): line 1: invalid month in 1979-13-27
+== bad-18.toml (february 30): line 1: invalid day in 2023-02-30
+== bad-19.toml (missing value): line 1: expected a value
+== bad-20.toml (newline in inline table): line 1: newline in an inline table
+== bad-21.toml (trailing comma in inline table): line 1: trailing comma in an inline table
+== bad-22.toml (key without value): line 2: expected '=' after a key
+== bad-23.toml (two values on a line): line 1: expected the end of the line
+== bad-24.toml (unclosed array): line 2: expected ',' or ']' in an array
+== bad-25.toml (hex overflow): line 1: integer out of range 0x8000_0000_0000_0000
+== bad-26.toml (dotted into a value): line 2: cannot overwrite a value
+== pyproject.toml: 588 bytes, 24 leaves
+  build-system.requires = array[2]
+  build-system.requires[0] = string "setuptools>=68"
+  build-system.requires[1] = string "wheel"
+  build-system.build-backend = string "setuptools.build_meta"
+  project.name = string "kara-tools"
+  project.version = string "1.2.0"
+  project.requires-python = string ">=3.11"
+  project.dependencies = array[3]
+  project.dependencies[0] = string "requests>=2.31"
+  project.dependencies[1] = string "rich"
+  project.dependencies[2] = string "typer[all]>=0.9"
+  project.optional-dependencies.dev = array[2]
+  project.optional-dependencies.dev[0] = string "pytest>=8"
+  project.optional-dependencies.dev[1] = string "ruff"
+  project.scripts.kara-tools = string "kara_tools.cli:main"
+  tool.ruff.line-length = integer 100
+  tool.ruff.target-version = string "py311"
+  tool.ruff.lint.select = array[3]
+  tool.ruff.lint.select[0] = string "E"
+  tool.ruff.lint.select[1] = string "F"
+  tool.ruff.lint.select[2] = string "I"
+  tool.ruff.lint.ignore = array[0]
+  tool.ruff.lint.per-file-ignores."tests/*" = array[1]
+  tool.ruff.lint.per-file-ignores."tests/*"[0] = string "S101"
+== tour.toml: 1559 bytes, 74 leaves
+  title = string "TOML Example"
+  owner.name = string "Tom Preston-Werner"
+  owner.dob = datetime 1979-05-27T07:32:00-08:00
+  database.enabled = bool true
+  database.ports = array[3]
+  database.ports[0] = integer 8000
+  database.ports[1] = integer 8001
+  database.ports[2] = integer 8002
+  database.data = array[2]
+  database.data[0] = array[2]
+  database.data[0][0] = string "delta"
+  database.data[0][1] = string "phi"
+  database.data[1] = array[1]
+  database.data[1][0] = float 3.14
+  database.temp_targets.cpu = float 79.5
+  database.temp_targets.case = float 72.0
+  servers.alpha.ip = string "10.0.0.1"
+  servers.alpha.role = string "frontend"
+  servers.beta.ip = string "10.0.0.2"
+  servers.beta.role = string "backend"
+  numbers.hex = integer 3735928559
+  numbers.oct = integer 493
+  numbers.bin = integer 214
+  numbers.million = integer 1000000
+  numbers.plus = integer 99
+  numbers.minus = integer -17
+  numbers.zero = integer 0
+  numbers.floats = array[8]
+  numbers.floats[0] = float 1.0
+  numbers.floats[1] = float 3.1415
+  numbers.floats[2] = float -0.01
+  numbers.floats[3] = float 5e+22
+  numbers.floats[4] = float 1000000.0
+  numbers.floats[5] = float -0.02
+  numbers.floats[6] = float 6.626e-34
+  numbers.floats[7] = float 224617.445991228
+  numbers.special = array[4]
+  numbers.special[0] = float inf
+  numbers.special[1] = float -inf
+  numbers.special[2] = float nan
+  numbers.special[3] = float inf
+  strings.escapes = string "tab\tquote\" backslash\\ e-acute é smile 😀"
+  strings.winpath = string "C:\\Users\\nodejs\\templates"
+  strings.regex = string "<\\i\\c*\\s*>"
+  strings.lines = string "Roses are red\nViolets are blue"
+  strings.quotes = string "Here are two quotation marks: \"\". Simple enough."
+  strings.five = string "\"\"five quotes\"\""
+  strings.raw = string "The first newline is\ntrimmed in raw strings.\n   All other whitespace\n   is preserved.\n"
+  strings.empty = string ""
+  dates.odt1 = datetime 1979-05-27T07:32:00+00:00
+  dates.odt2 = datetime 1979-05-27T00:32:00.999999-07:00
+  dates.odt3 = datetime 1979-05-27T07:32:00+05:30
+  dates.ldt = datetime-local 1979-05-27T07:32:00.500000
+  dates.ld = date-local 1979-05-27
+  dates.lt = time-local 07:32:00
+  dates.lt2 = time-local 00:32:00.999999
+  keys."" = string "blank"
+  keys."127.0.0.1" = string "localhost"
+  keys.site."google.com" = bool true
+  keys.3.14159 = string "pi"
+  keys.fruit.apple.color = string "red"
+  keys.fruit.apple.taste.sweet = bool true
+  fruits = array[2]
+  fruits[0].name = string "apple"
+  fruits[0].physical.color = string "red"
+  fruits[0].physical.shape = string "round"
+  fruits[0].varieties = array[2]
+  fruits[0].varieties[0].name = string "red delicious"
+  fruits[0].varieties[1].name = string "granny smith"
+  fruits[1].name = string "banana"
+  fruits[1].varieties = array[1]
+  fruits[1].varieties[0].name = string "plantain"
+  a.b.c.deep = integer 1
+  a.shallow = integer 2
