@@ -315,7 +315,7 @@ The shell pipeline `ls | wc -l`:
 
 ```kara
 fn count_entries() -> Result[String, IoError] {
-    let mut ls = Command.new("ls").stdout(Stdio.piped()).spawn()?;
+    let ls = Command.new("ls").stdout(Stdio.piped()).spawn()?;
     let wc = Command.new("wc").arg("-l")
         .stdin(Stdio.from_stdout(ls.stdout().unwrap()))
         .stdout(Stdio.piped())
