@@ -11,7 +11,8 @@
 // compiled backend reaches the runtime's `karac_mir_tcp` / `karac_mir_udp`.
 
 // Why a network operation failed. The causes a program branches on have
-// variants; any other carries the OS error code in `Other`.
+// variants; any other carries the OS error code in `Other` (-1 when the OS
+// gave none).
 enum NetError {
     // A signal interrupted the call; retrying it is safe.
     Interrupted,
@@ -28,6 +29,9 @@ enum NetError {
     // A non-blocking socket had nothing to do. v1 sockets block, so no v1
     // operation returns it.
     WouldBlock,
+    // An argument the operation refuses: an address that does not parse,
+    // or a timeout below 1 ms.
+    InvalidInput,
 }
 
 // The name before UDP; `TcpError` is `NetError` until M3.
@@ -97,7 +101,7 @@ impl TcpStream {
 
     // How long a `read` waits before failing with `TimedOut`, in
     // milliseconds; `None` waits for ever. A timeout below 1 ms fails with
-    // `Other(-1)`.
+    // `InvalidInput`.
     #[compiler_builtin]
     fn set_read_timeout(ref self, ms: Option[i64]) -> Result[(), NetError] {
         Err(NetError.Other(-1))

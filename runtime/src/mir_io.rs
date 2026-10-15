@@ -422,8 +422,9 @@ unsafe fn buf_bytes<'a>(p: *const u8, len: usize) -> &'a [u8] {
 /// A negative return is success, with the descriptor or byte count in
 /// `value`; otherwise it is the `NetError` variant, 0 `Interrupted`, 1
 /// `Other` (its `i32` in `value`), 2 `AddrInUse`, 3 `ConnectionRefused`,
-/// 4 `PermissionDenied` and 5 `TimedOut` (a read past the timeout
-/// `set_read_timeout` set), as the MIR interpreter's `tcp_method` has them.
+/// 4 `PermissionDenied`, 5 `TimedOut` (a read past the timeout
+/// `set_read_timeout` set) and 7 `InvalidInput` (an address that does not
+/// parse), as the MIR interpreter's `tcp_method` has them.
 ///
 /// # Safety
 ///
@@ -454,9 +455,17 @@ pub unsafe extern "C" fn karac_mir_tcp(
         n if timed_out(-n) => (5, 0),
         n => (1, -n),
     };
+    // An address that does not parse is refused here, before the runtime
+    // folds it into its other failures.
+    // SAFETY: the caller's contract.
+    let parses = || unsafe {
+        std::str::from_utf8(buf_bytes(ptr, len.max(0) as usize))
+            .is_ok_and(|t| t.parse::<std::net::SocketAddr>().is_ok())
+    };
     // SAFETY: the caller's contract, which is each callee's.
     let (code, v) = unsafe {
         match op {
+            0 | 1 if !parses() => (7, 0),
             0 => built(ev::karac_runtime_tcp_bind(ptr, len)),
             1 => built(ev::karac_runtime_tcp_connect(ptr, len)),
             2 => built(ev::karac_runtime_tcp_accept(fd)),
@@ -535,7 +544,8 @@ unsafe fn borrowed<T: std::os::fd::FromRawFd>(fd: i64) -> std::mem::ManuallyDrop
 /// len)`, 7 `recv(fd, ptr, len)`, 8 `UdpSocket.local_addr(fd)`,
 /// 9 `UdpSocket.set_read_timeout(fd)` and 10 `UdpSocket.try_clone(fd)`.
 /// A timeout is `len` milliseconds when `addr_len` is 1, and none when it
-/// is 0. Results as `karac_mir_tcp`'s, with an address (`local_addr`,
+/// is 0; one below 1 ms, like an address that does not parse, is
+/// `InvalidInput`. Results as `karac_mir_tcp`'s, with an address (`local_addr`,
 /// `recv_from`'s sender) as a fresh `String` at `out`.
 ///
 /// # Safety
@@ -578,7 +588,7 @@ pub unsafe extern "C" fn karac_mir_net(
     let timeout = || match (addr_len, len) {
         (0, _) => Ok(None),
         (_, ms) if ms >= 1 => Ok(Some(std::time::Duration::from_millis(ms as u64))),
-        _ => Err((1, -1)),
+        _ => Err((7, 0)),
     };
     let addr_out = |a: std::io::Result<std::net::SocketAddr>| match a {
         Ok(a) => {
@@ -596,13 +606,13 @@ pub unsafe extern "C" fn karac_mir_net(
             0 => addr_out(borrowed::<TcpListener>(fd).local_addr()),
             1 => timeout().and_then(|t| unit(borrowed::<TcpStream>(fd).set_read_timeout(t))),
             2 => match text(ptr, len) {
-                None => Err((1, -1)),
+                None => Err((7, 0)),
                 Some(at) => UdpSocket::bind(at)
                     .map(|s| i64::from(s.into_raw_fd()))
                     .map_err(|e| net_cause(&e)),
             },
             3 => match text(addr, addr_len) {
-                None => Err((1, -1)),
+                None => Err((7, 0)),
                 Some(at) => count(borrowed::<UdpSocket>(fd).send_to(bytes(), at)),
             },
             4 => match borrowed::<UdpSocket>(fd).recv_from(bytes_mut()) {
@@ -610,7 +620,7 @@ pub unsafe extern "C" fn karac_mir_net(
                 Err(e) => Err(net_cause(&e)),
             },
             5 => match text(addr, addr_len) {
-                None => Err((1, -1)),
+                None => Err((7, 0)),
                 Some(at) => unit(borrowed::<UdpSocket>(fd).connect(at)),
             },
             6 => count(borrowed::<UdpSocket>(fd).send(bytes())),

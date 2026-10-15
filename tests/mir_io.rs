@@ -369,6 +369,7 @@ fn show(e: TcpError) -> String {
         TcpError.PermissionDenied => "denied".to_string(),
         TcpError.TimedOut => "timed out".to_string(),
         TcpError.WouldBlock => "would block".to_string(),
+        TcpError.InvalidInput => "invalid input".to_string(),
     }
 }
 
@@ -460,7 +461,7 @@ fn tcp_natives_match_the_interpreter() {
     assert_eq!(
         interp,
         "bound\naddr in use\nconnected\naccepted\nsent 4\nclone sent 1\nshut\n\
-         got [ping!]\nrefused\nother -1\nbound again after the drop\n"
+         got [ping!]\nrefused\ninvalid input\nbound again after the drop\n"
     );
     if let Some(built) = built {
         assert_eq!(built, interp);
@@ -481,6 +482,7 @@ fn show(e: NetError) -> String {
         NetError.PermissionDenied => "denied".to_string(),
         NetError.TimedOut => "timed out".to_string(),
         NetError.WouldBlock => "would block".to_string(),
+        NetError.InvalidInput => "invalid input".to_string(),
     }
 }
 
@@ -624,8 +626,8 @@ fn udp_and_socket_options_match_the_interpreter() {
     assert_eq!(
         unported(&interp),
         "ports differ: true\nsent 11\ngot 8 [hello wo] from a: true\nconnected\n\
-         sent 4\ngot [pong]\nother -1\ntimeout set\ntimed out\nclone at a: true\n\
-         addr in use\nother -1\ntcp timeout set\ntimed out\ntcp timeout cleared\n\
+         sent 4\ngot [pong]\ninvalid input\ntimeout set\ntimed out\nclone at a: true\n\
+         addr in use\ninvalid input\ntcp timeout set\ntimed out\ntcp timeout cleared\n\
          tcp sent 1\ntcp got 1\nrefused, through the alias\n"
     );
     if let Some(built) = built {

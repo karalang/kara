@@ -35,7 +35,7 @@ pub(super) const IO_ERRORS: [&str; 9] = [
 ];
 
 /// The `NetError` variants by the runtime's code for them.
-const NET_ERRORS: [&str; 7] = [
+const NET_ERRORS: [&str; 8] = [
     "Interrupted",
     "Other",
     "AddrInUse",
@@ -43,6 +43,7 @@ const NET_ERRORS: [&str; 7] = [
     "PermissionDenied",
     "TimedOut",
     "WouldBlock",
+    "InvalidInput",
 ];
 
 impl<'ctx> Cx<'ctx, '_> {

@@ -4530,7 +4530,7 @@ impl<'a> Interp<'a> {
             ("UdpSocket", "bind", [addr]) => {
                 let text = self.spent_string(addr, arg_tys.first())?;
                 match text.parse::<std::net::SocketAddr>() {
-                    Err(_) => Err(("Other", Some(-1))),
+                    Err(_) => Err(("InvalidInput", None)),
                     Ok(at) => match std::net::UdpSocket::bind(at) {
                         Ok(u) => Ok(self.sockets.udp(u)),
                         Err(e) => Err(cause(&e)),
@@ -4547,7 +4547,7 @@ impl<'a> Interp<'a> {
                 }
                 // An IP literal and a port, as the runtime parses it.
                 match text.parse::<std::net::SocketAddr>() {
-                    Err(_) => Err(("Other", Some(-1))),
+                    Err(_) => Err(("InvalidInput", None)),
                     Ok(at) if method == "bind" => match std::net::TcpListener::bind(at) {
                         Ok(l) => {
                             if text.rsplit(':').next() == Some("0") {
@@ -4594,7 +4594,7 @@ impl<'a> Interp<'a> {
                     ("TcpStream" | "UdpSocket", "set_read_timeout", [ms]) => {
                         let t = arg_tys.get(1).copied();
                         match self.timeout_arg(ms, t)? {
-                            Err(()) => Err(("Other", Some(-1))),
+                            Err(()) => Err(("InvalidInput", None)),
                             Ok(d) if base == "TcpStream" => match self.sockets.streams.get(&fd) {
                                 Some(s) => unit(s.set_read_timeout(d)),
                                 None => Err(not_open()),
@@ -4616,7 +4616,7 @@ impl<'a> Interp<'a> {
                             (Some(u), None) => count(u.send(&bytes)),
                             (Some(u), Some(to)) => match to.parse::<std::net::SocketAddr>() {
                                 Ok(at) => count(u.send_to(&bytes, at)),
-                                Err(_) => Err(("Other", Some(-1))),
+                                Err(_) => Err(("InvalidInput", None)),
                             },
                         }
                     }
@@ -4627,7 +4627,7 @@ impl<'a> Interp<'a> {
                             to.parse::<std::net::SocketAddr>(),
                         ) {
                             (None, _) => Err(not_open()),
-                            (Some(_), Err(_)) => Err(("Other", Some(-1))),
+                            (Some(_), Err(_)) => Err(("InvalidInput", None)),
                             (Some(u), Ok(at)) => unit(u.connect(at)),
                         }
                     }

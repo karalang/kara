@@ -214,6 +214,7 @@ enum NetError {
     PermissionDenied,
     TimedOut,
     WouldBlock,
+    InvalidInput,
     Other(i32),
 }
 
@@ -226,9 +227,9 @@ type TcpError = NetError;
 
 **UDP.** A `UdpSocket` sends and receives datagrams, each one `send_to` or `send` call. UDP does not guarantee delivery or order: a datagram may be lost, duplicated or overtaken by a later one. `recv_from` waits for one datagram, stores it in `buf` and returns the number of bytes stored and the sender's address. A datagram longer than `buf` is cut to fit and the rest is lost, which is not an error, so the count is the bytes stored, not the datagram's size. `connect` sets the peer that `send` sends to, and after it `recv` takes datagrams from that peer only.
 
-**Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `Other(-1)`. Inside a task, a `TcpStream.read` waits for data without the timeout for now ([deferred.md](../deferred.md#networking-beyond-v1)).
+**Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `InvalidInput`. Inside a task, a `TcpStream.read` waits for data without the timeout for now ([deferred.md](../deferred.md#networking-beyond-v1)).
 
-**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `Other` carries the OS error code, or -1 when there is none, such as for an address that does not parse. `TcpError` is the earlier name of `NetError`, kept until M3.
+**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, or a timeout below 1 ms. `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
 
 ## Processes
 
