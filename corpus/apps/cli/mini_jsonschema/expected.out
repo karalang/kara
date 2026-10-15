@@ -1,0 +1,223 @@
+$ validate schemas/order.schema.json docs/order-ok.json docs/order-us.json docs/order-bad.json docs/order-empty.json docs/order-array.json
+docs/order-ok.json: valid
+docs/order-us.json: valid
+docs/order-bad.json: 18 errors
+  $: Additional properties are not allowed ('source', 'trackingId' were unexpected) (additionalProperties)
+  $: 'giftMessage' is a dependency of 'giftWrap' (dependentRequired)
+  $.coupon: 'save10' does not match '^[A-Z0-9]+$' (properties/coupon/pattern)
+  $.currency: 'usd' is not one of ['USD', 'EUR', 'GBP', 'JPY'] (properties/currency/enum)
+  $.customer.name: '' should be non-empty (properties/customer/properties/name/minLength)
+  $.id: 'ORD-12' does not match '^ord_[0-9a-f]{8}$' (properties/id/pattern)
+  $.items[0].price: 19.99 is not a multiple of 0.01 (properties/items/items/properties/price/multipleOf)
+  $.items[0].qty: 0 is less than the minimum of 1 (properties/items/items/properties/qty/minimum)
+  $.items[0].sku: 'TEA-42' does not match '^[A-Z]{3}-\\d{4}$' (properties/items/items/properties/sku/pattern)
+  $.items[1].discount: 1 is greater than or equal to the maximum of 1 (properties/items/items/properties/discount/exclusiveMaximum)
+  $.items[1].price: -3 is less than or equal to the minimum of 0 (properties/items/items/properties/price/exclusiveMinimum)
+  $.items[1].qty: 2.5 is not of type 'integer' (properties/items/items/properties/qty/type)
+  $.items[2]: Additional properties are not allowed ('colour' was unexpected) (properties/items/items/additionalProperties)
+  $.items[2].qty: 101 is greater than the maximum of 100 (properties/items/items/properties/qty/maximum)
+  $.items[3]: 'price' is a required property (properties/items/items/required)
+  $.items[3]: 'sku' is a required property (properties/items/items/required)
+  $.notes: 5 is not of type 'string', 'null' (properties/notes/type)
+  $.shipping.postcode: '9021' does not match '^\\d{5}(-\\d{4})?$' (properties/shipping/then/properties/postcode/pattern)
+docs/order-empty.json: 4 errors
+  $.customer: 'ana@example.com' is not of type 'object' (properties/customer/type)
+  $.items: [] should be non-empty (properties/items/minItems)
+  $.shipping: 'line1' is a required property (properties/shipping/required)
+  $.shipping.postcode: '10115 Berlin-Mitte' is too long (properties/shipping/else/properties/postcode/maxLength)
+docs/order-array.json: 1 error
+  $: [{'id': 'ord_00000001'}] is not of type 'object' (type)
+[exit status 1]
+
+$ validate --best schemas/order.schema.json docs/order-bad.json docs/order-empty.json docs/order-array.json
+docs/order-bad.json: $: 'giftMessage' is a dependency of 'giftWrap'
+docs/order-empty.json: $.shipping: 'line1' is a required property
+docs/order-array.json: $: [{'id': 'ord_00000001'}] is not of type 'object'
+[exit status 1]
+
+$ validate schemas/package.schema.json docs/package-ok.json docs/package-bad.json docs/package-license.json docs/package-license2.json
+docs/package-ok.json: valid
+docs/package-bad.json: 10 errors
+  $.bin: {} is not valid under any of the given schemas (properties/bin/oneOf)
+    - $.bin: {} is not of type 'string' (0/type)
+    - $.bin: {} should be non-empty (1/minProperties)
+  $.dependencies: 'Express' does not match any of the regexes: '^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$' (properties/dependencies/additionalProperties)
+  $.dependencies.lodash: 4 is not of type 'string' (properties/dependencies/patternProperties/^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$/type)
+  $.engines: {'node': '>=18', 'npm': '>=9', 'yarn': '1', 'pnpm': '8'} has too many properties (properties/engines/maxProperties)
+  $.files: [] should be non-empty (properties/files/minItems)
+  $.keywords: ['http', 'client', 'http'] has non-unique elements (properties/keywords/uniqueItems)
+  $.license: 'GPL' is not valid under any of the given schemas (properties/license/anyOf)
+    - $.license: 'GPL' is not one of ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause', 'UNLICENSED'] (0/enum)
+    - $.license: 'GPL' does not match '^SEE LICEN[CS]E IN ' (1/pattern)
+    - $.license: 'GPL' is not of type 'object' (2/type)
+  $.name: 'My_Package' does not match '^(?:@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$' (properties/name/pattern)
+  $.scripts.test: ['jest'] is not of type 'string' (properties/scripts/additionalProperties/type)
+  $.version: '1.02.3' does not match '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$' (properties/version/pattern)
+docs/package-license.json: valid
+docs/package-license2.json: 5 errors
+  $.keywords: [1, True, 1.0, 'x'] has non-unique elements (properties/keywords/uniqueItems)
+  $.keywords[0]: 1 is not of type 'string' (properties/keywords/items/type)
+  $.keywords[1]: True is not of type 'string' (properties/keywords/items/type)
+  $.keywords[2]: 1.0 is not of type 'string' (properties/keywords/items/type)
+  $.license: {'url': 'https://example.com/license'} is not valid under any of the given schemas (properties/license/anyOf)
+    - $.license: {'url': 'https://example.com/license'} is not one of ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause', 'UNLICENSED'] (0/enum)
+    - $.license: {'url': 'https://example.com/license'} is not of type 'string' (0/type)
+    - $.license: {'url': 'https://example.com/license'} is not of type 'string' (1/type)
+    - $.license: 'type' is a required property (2/required)
+[exit status 1]
+
+$ validate --best schemas/package.schema.json docs/package-bad.json docs/package-license2.json
+docs/package-bad.json: $.version: '1.02.3' does not match '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$'
+docs/package-license2.json: $.license: 'type' is a required property
+[exit status 1]
+
+$ validate schemas/deployment.schema.json docs/deploy-ok.json docs/deploy-bad.json docs/deploy-two-apps.json docs/deploy-no-app.json
+docs/deploy-ok.json: valid
+docs/deploy-bad.json: 20 errors
+  $.apiVersion: 'apps/v1' was expected (properties/apiVersion/const)
+  $.metadata.labels: '-bad' does not match '^[a-z0-9A-Z]([-a-z0-9A-Z_./]*[a-z0-9A-Z])?$' (properties/metadata/properties/labels/propertyNames/pattern)
+  $.metadata.labels.team: 7 is not of type 'string' (properties/metadata/properties/labels/additionalProperties/type)
+  $.metadata.name: 'Checkout_API' does not match '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' (properties/metadata/properties/name/pattern)
+  $.spec.replicas: -1 is less than the minimum of 0 (properties/spec/properties/replicas/minimum)
+  $.spec.selector: {} should be non-empty (properties/spec/properties/selector/minProperties)
+  $.spec.strategy: {'type': 'Recreate', 'rollingUpdate': {'maxSurge': '25 percent'}} should not be valid under {'required': ['rollingUpdate']} (properties/spec/properties/strategy/then/not)
+  $.spec.strategy.rollingUpdate.maxSurge: '25 percent' is not valid under any of the given schemas (properties/spec/properties/strategy/properties/rollingUpdate/properties/maxSurge/oneOf)
+    - $.spec.strategy.rollingUpdate.maxSurge: '25 percent' is not of type 'integer' (0/type)
+    - $.spec.strategy.rollingUpdate.maxSurge: '25 percent' does not match '^\\d+%$' (1/pattern)
+  $.spec.template.spec.containers: [{'name': 'web', 'image': '', 'ports': [{'containerPort': 70000}, {'protocol': 'HTTP'}], 'env': [{'name': 'A'}, {'name': 'B', 'value': '1', 'valueFrom': {}}, {'value': 'x'}], 'resources': {'limits': {'cpu': '1.5 cores', 'memory': '1Gb', 'gpu': 1}}}] does not contain items matching the given schema (properties/spec/properties/template/properties/spec/properties/containers/contains)
+  $.spec.template.spec.containers[0].env[0]: {'name': 'A'} is not valid under any of the given schemas (properties/spec/properties/template/properties/spec/properties/containers/items/properties/env/items/oneOf)
+    - $.spec.template.spec.containers[0].env[0]: 'value' is a required property (0/required)
+    - $.spec.template.spec.containers[0].env[0]: 'valueFrom' is a required property (1/required)
+  $.spec.template.spec.containers[0].env[1]: {'name': 'B', 'value': '1', 'valueFrom': {}} is valid under each of {'required': ['valueFrom']}, {'required': ['value']} (properties/spec/properties/template/properties/spec/properties/containers/items/properties/env/items/oneOf)
+  $.spec.template.spec.containers[0].env[2]: 'name' is a required property (properties/spec/properties/template/properties/spec/properties/containers/items/properties/env/items/required)
+  $.spec.template.spec.containers[0].image: '' should be non-empty (properties/spec/properties/template/properties/spec/properties/containers/items/properties/image/minLength)
+  $.spec.template.spec.containers[0].ports[0].containerPort: 70000 is greater than the maximum of 65535 (properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports/items/properties/containerPort/maximum)
+  $.spec.template.spec.containers[0].ports[1]: 'containerPort' is a required property (properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports/items/required)
+  $.spec.template.spec.containers[0].ports[1].protocol: 'HTTP' is not one of ['TCP', 'UDP', 'SCTP'] (properties/spec/properties/template/properties/spec/properties/containers/items/properties/ports/items/properties/protocol/enum)
+  $.spec.template.spec.containers[0].resources.limits: Additional properties are not allowed ('gpu' was unexpected) (properties/spec/properties/template/properties/spec/properties/containers/items/properties/resources/properties/limits/additionalProperties)
+  $.spec.template.spec.containers[0].resources.limits.cpu: '1.5 cores' does not match '^\\d+(\\.\\d+)?m?$' (properties/spec/properties/template/properties/spec/properties/containers/items/properties/resources/properties/limits/properties/cpu/pattern)
+  $.spec.template.spec.containers[0].resources.limits.memory: '1Gb' does not match '^\\d+(Ki|Mi|Gi|K|M|G)?$' (properties/spec/properties/template/properties/spec/properties/containers/items/properties/resources/properties/limits/properties/memory/pattern)
+  $.spec.template.spec.restartPolicy: 'Sometimes' is not one of ['Always', 'OnFailure', 'Never'] (properties/spec/properties/template/properties/spec/properties/restartPolicy/enum)
+docs/deploy-two-apps.json: 2 errors
+  $.spec.strategy.rollingUpdate.maxSurge: 1.5 is not valid under any of the given schemas (properties/spec/properties/strategy/properties/rollingUpdate/properties/maxSurge/oneOf)
+    - $.spec.strategy.rollingUpdate.maxSurge: 1.5 is not of type 'integer' (0/type)
+    - $.spec.strategy.rollingUpdate.maxSurge: 1.5 is not of type 'string' (1/type)
+  $.spec.template.spec.containers: Too many items match the given schema (expected at most 1) (properties/spec/properties/template/properties/spec/properties/containers/contains)
+docs/deploy-no-app.json: 3 errors
+  $.kind: 'Deployment' was expected (properties/kind/const)
+  $.metadata.labels: 'a-label-name-that-is-far-too-long-for-kubernetes-to-accept-at-all' is too long (properties/metadata/properties/labels/propertyNames/maxLength)
+  $.spec.template.spec.containers: [{'name': 'sidecar', 'image': 's:1'}] does not contain items matching the given schema (properties/spec/properties/template/properties/spec/properties/containers/contains)
+[exit status 1]
+
+$ validate --best schemas/deployment.schema.json docs/deploy-bad.json docs/deploy-two-apps.json docs/deploy-no-app.json
+docs/deploy-bad.json: $.apiVersion: 'apps/v1' was expected
+docs/deploy-two-apps.json: $.spec.template.spec.containers: Too many items match the given schema (expected at most 1)
+docs/deploy-no-app.json: $.kind: 'Deployment' was expected
+[exit status 1]
+
+$ validate schemas/config.schema.json docs/config-ok.json docs/config-bad.json docs/config-edge.json docs/config-empty.json docs/config-strings.json
+docs/config-ok.json: valid
+docs/config-bad.json: 19 errors
+  $: 'debug', 'verbose' do not match any of the regexes: '^x-' (additionalProperties)
+  $: False schema does not allow {'user': 'admin'} (properties)
+  $.admins: Too few items match the given schema (expected at least 2 but only 1 matched) (properties/admins/contains)
+  $.backoff: [1, 2.5] is expected to be empty (properties/backoff/maxItems)
+  $.level: 'trace' is not one of ['debug', 'info', 'warn', 'error', 0, None] (properties/level/enum)
+  $.limits: 'maxConnections' is too long (properties/limits/propertyNames/maxLength)
+  $.limits: 'RPS' does not match '^[a-z_]+$' (properties/limits/propertyNames/pattern)
+  $.limits: 'maxConnections' does not match '^[a-z_]+$' (properties/limits/propertyNames/pattern)
+  $.limits.RPS: 2.5 is not of type 'integer' (properties/limits/additionalProperties/type)
+  $.limits.burst: 0 is less than or equal to the minimum of 0 (properties/limits/additionalProperties/exclusiveMinimum)
+  $.listen: Expected at most 2 items but found 1 extra: 'tcp' (properties/listen/items)
+  $.listen[0]: 'localhost' does not match '^(\\d{1,3}\\.){3}\\d{1,3}$' (properties/listen/prefixItems/0/pattern)
+  $.listen[1]: 0 is less than the minimum of 1 (properties/listen/prefixItems/1/minimum)
+  $.mode: {'tls': True, 'versions': [1.2, 1.3]} was expected (properties/mode/const)
+  $.ratio: 0.3 is not a multiple of 0.1 (properties/ratio/multipleOf)
+  $.tags: ['a', 1, 1.0, True, False] is too long (properties/tags/maxItems)
+  $.tags: ['a', 1, 1.0, True, False] has non-unique elements (properties/tags/uniqueItems)
+  $.token: 'changeme' should not be valid under {'pattern': '^(changeme|secret|password)$'} (properties/token/not)
+  $.workers: 7 is not a multiple of 2 (properties/workers/multipleOf)
+docs/config-edge.json: 5 errors
+  $.admins: ['a@b.c'] does not contain items matching the given schema (properties/admins/contains)
+  $.limits: {} should be non-empty (properties/limits/minProperties)
+  $.ratio: 1.0000001 is greater than the maximum of 1 (properties/ratio/maximum)
+  $.ratio: 1.0000001 is not a multiple of 0.1 (properties/ratio/multipleOf)
+  $.tags: [{'a': 1, 'b': 2}, {'b': 2, 'a': 1}] has non-unique elements (properties/tags/uniqueItems)
+docs/config-empty.json: 1 error
+  $: {} should be non-empty (minProperties)
+docs/config-strings.json: 3 errors
+  $: "it's", 'unknown key' do not match any of the regexes: '^x-' (additionalProperties)
+  $.level: 'it\'s "quoted"' is not one of ['debug', 'info', 'warn', 'error', 0, None] (properties/level/enum)
+  $.tags: ['café', 'café', '日本', '\\back'] has non-unique elements (properties/tags/uniqueItems)
+[exit status 1]
+
+$ validate --best schemas/config.schema.json docs/config-bad.json docs/config-edge.json docs/config-strings.json
+docs/config-bad.json: $: False schema does not allow {'user': 'admin'}
+docs/config-edge.json: $.tags: [{'a': 1, 'b': 2}, {'b': 2, 'a': 1}] has non-unique elements
+docs/config-strings.json: $: "it's", 'unknown key' do not match any of the regexes: '^x-'
+[exit status 1]
+
+$ validate schemas/workflow.schema.json docs/workflow-ok.json docs/workflow-bad.json docs/workflow-on.json docs/workflow-on2.json
+docs/workflow-ok.json: valid
+docs/workflow-bad.json: 10 errors
+  $.jobs: '2nd-job' does not match any of the regexes: '^[_a-zA-Z][a-zA-Z0-9_-]*$' (properties/jobs/additionalProperties)
+  $.jobs.build.steps[0]: {'name': 'both', 'uses': 'actions/checkout@v4', 'run': 'make'} should not be valid under {'required': ['uses', 'run']} (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/steps/items/not)
+  $.jobs.build.steps[1]: {'name': 'neither'} is not valid under any of the given schemas (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/steps/items/anyOf)
+    - $.jobs.build.steps[1]: 'uses' is a required property (0/required)
+    - $.jobs.build.steps[1]: 'run' is a required property (1/required)
+  $.jobs.build.steps[2]: 'uses' is a required property (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/steps/items/dependentSchemas/with/required)
+  $.jobs.build.steps[3].uses: 'checkout' does not match '^[\\w.-]+/[\\w.-]+(/[\\w./-]+)?@[\\w.-]+$|^docker://' (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/steps/items/properties/uses/pattern)
+  $.jobs.build['runs-on']: 22.04 is not of type 'string', 'array' (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/runs-on/type)
+  $.jobs.build['timeout-minutes']: 0 is less than or equal to the minimum of 0 (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/timeout-minutes/exclusiveMinimum)
+  $.jobs.lint: 'runs-on' is a required property (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/required)
+  $.jobs.lint.needs[0]: 1 is not of type 'string' (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/needs/items/type)
+  $.on: ['push', 'merge'] is not valid under any of the given schemas (properties/on/oneOf)
+    - $.on: ['push', 'merge'] is not one of ['push', 'pull_request', 'schedule', 'workflow_dispatch', 'release'] (0/enum)
+    - $.on: ['push', 'merge'] is not of type 'object' (2/type)
+    - $.on[1]: 'merge' is not one of ['push', 'pull_request', 'schedule', 'workflow_dispatch', 'release'] (1/items/enum)
+docs/workflow-on.json: 2 errors
+  $.jobs: {} should be non-empty (properties/jobs/minProperties)
+  $.on: 'nightly' is not valid under any of the given schemas (properties/on/oneOf)
+    - $.on: 'nightly' is not one of ['push', 'pull_request', 'schedule', 'workflow_dispatch', 'release'] (0/enum)
+    - $.on: 'nightly' is not of type 'array' (1/type)
+    - $.on: 'nightly' is not of type 'object' (2/type)
+docs/workflow-on2.json: 2 errors
+  $.jobs.a['timeout-minutes']: 361 is greater than the maximum of 360 (properties/jobs/patternProperties/^[_a-zA-Z][a-zA-Z0-9_-]*$/properties/timeout-minutes/maximum)
+  $.on: {'push': {}, 'cron': '0 0 * * *'} is not valid under any of the given schemas (properties/on/oneOf)
+    - $.on: {'push': {}, 'cron': '0 0 * * *'} is not one of ['push', 'pull_request', 'schedule', 'workflow_dispatch', 'release'] (0/enum)
+    - $.on: {'push': {}, 'cron': '0 0 * * *'} is not of type 'array' (1/type)
+    - $.on: 'cron' is not one of ['push', 'pull_request', 'schedule', 'workflow_dispatch', 'release'] (2/propertyNames/enum)
+[exit status 1]
+
+$ validate --best schemas/workflow.schema.json docs/workflow-bad.json docs/workflow-on.json docs/workflow-on2.json
+docs/workflow-bad.json: $.on[1]: 'merge' is not one of ['push', 'pull_request', 'schedule', 'workflow_dispatch', 'release']
+docs/workflow-on.json: $.on: 'nightly' is not valid under any of the given schemas
+docs/workflow-on2.json: $.on: {'push': {}, 'cron': '0 0 * * *'} is not valid under any of the given schemas
+[exit status 1]
+
+$ validate schemas/config.schema.json docs/broken-comma.json docs/broken-trailing.json docs/broken-quote.json docs/broken-string.json docs/broken-extra.json docs/broken-empty.json docs/broken-escape.json docs/broken-number.json docs/broken-colon.json docs/broken-literal.json
+docs/broken-comma.json: Expecting ',' delimiter: line 4 column 3 (char 48)
+docs/broken-trailing.json: Illegal trailing comma before end of object: line 1 column 33 (char 32)
+docs/broken-quote.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+docs/broken-string.json: Invalid control character at: line 1 column 23 (char 22)
+docs/broken-extra.json: Extra data: line 1 column 10 (char 9)
+docs/broken-empty.json: Expecting value: line 1 column 1 (char 0)
+docs/broken-escape.json: Invalid \escape: line 1 column 13 (char 12)
+docs/broken-number.json: Expecting ',' delimiter: line 1 column 14 (char 13)
+docs/broken-colon.json: Expecting ':' delimiter: line 1 column 12 (char 11)
+docs/broken-literal.json: Expecting value: line 1 column 11 (char 10)
+[exit status 2]
+
+$ validate schemas/order.schema.json docs/missing.json docs/order-ok.json
+docs/missing.json: No such file or directory
+docs/order-ok.json: valid
+[exit status 2]
+
+$ validate schemas/missing.schema.json docs/order-ok.json
+schemas/missing.schema.json: No such file or directory
+[exit status 2]
+
+$ validate schemas/order.schema.json
+usage: validate [--best] SCHEMA DOC...
+[exit status 2]
+

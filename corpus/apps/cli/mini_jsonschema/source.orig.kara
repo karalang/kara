@@ -1,0 +1,3662 @@
+// mini_jsonschema: a JSON Schema validator (draft 2020-12) that reports what
+// Python's jsonschema 4.26 reports. It runs the `validate` commands in
+// data/jobs.txt over five schemas from real kinds of use (an orders API, a
+// package.json, a Kubernetes Deployment, a service config and a GitHub
+// Actions workflow) and the documents they check:
+// - its own JSON decoder, with Python's json error messages and positions;
+// - Python's repr of the decoded values, which jsonschema's messages use;
+// - a backtracking matcher for the regex subset schema patterns use;
+// - the keywords: type, enum, const, the numeric and length bounds,
+//   multipleOf (with float division), pattern, items, prefixItems,
+//   contains with min/maxContains, uniqueItems, properties,
+//   patternProperties, additionalProperties, propertyNames, required,
+//   dependentRequired, dependentSchemas, allOf, anyOf, oneOf, not,
+//   if/then/else, boolean schemas and local $ref;
+// - jsonschema's error paths (json_path and schema path), the sub-errors
+//   of anyOf and oneOf, and best_match's relevance order.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+// ------------------------------------------------------------ JSON values
+
+// Every decoded value is a node in one arena; a value is its index.
+// Objects keep their keys in document order, as Python's dict does, and a
+// string node per key so `propertyNames` can validate a key as a value.
+const K_NULL: i64 = 0;
+const K_BOOL: i64 = 1;
+const K_INT: i64 = 2;
+const K_FLOAT: i64 = 3;
+const K_STR: i64 = 4;
+const K_ARR: i64 = 5;
+const K_OBJ: i64 = 6;
+
+struct Node {
+    kind: i64,
+    b: bool,
+    i: i64,
+    f: f64,
+    s: String,
+    kids: Vec[i64],
+    keys: Vec[String],
+    key_nodes: Vec[i64],
+}
+
+struct Store {
+    nodes: Vec[Node],
+}
+
+fn new_node(kind: i64) -> Node {
+    Node { kind: kind, b: false, i: 0, f: 0.0, s: String.new(), kids: Vec.new(), keys: Vec.new(), key_nodes: Vec.new() }
+}
+
+fn add(a: mut ref Store, n: own Node) -> i64 {
+    a.nodes.push(n);
+    a.nodes.len() - 1
+}
+
+fn kind_of(a: ref Store, v: i64) -> i64 {
+    a.nodes[v].kind
+}
+
+// The value of key `k` in object `o`, or -1.
+fn get(a: ref Store, o: i64, k: Str) -> i64 {
+    let n = ref a.nodes[o];
+    if n.kind != K_OBJ {
+        return -1;
+    }
+    for j in 0..n.keys.len() {
+        if n.keys[j] == k {
+            return n.kids[j];
+        }
+    }
+    -1
+}
+
+fn has(a: ref Store, o: i64, k: Str) -> bool {
+    get(a, o, k) >= 0
+}
+
+// ------------------------------------------------------------ decoding
+
+// Python's json module: its scanner's error messages and positions, which
+// count characters, not bytes.
+struct Bad {
+    msg: String,
+    pos: i64,
+}
+
+struct Dec {
+    s: Vec[i64],
+}
+
+fn cp_at(d: ref Dec, i: i64) -> i64 {
+    if i < d.s.len() { d.s[i] } else { -1 }
+}
+
+fn is_json_ws(c: i64) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13
+}
+
+fn skip_ws(d: ref Dec, i: i64) -> i64 {
+    let mut j = i;
+    while j < d.s.len() and is_json_ws(d.s[j]) {
+        j += 1;
+    }
+    j
+}
+
+fn starts_at_cp(d: ref Dec, i: i64, word: Str) -> bool {
+    let w = to_bytes(word);
+    if i + w.len() > d.s.len() {
+        return false;
+    }
+    for j in 0..w.len() {
+        if d.s[i + j] != w[j] as i64 {
+            return false;
+        }
+    }
+    true
+}
+
+fn bad(msg: Str, pos: i64) -> Bad {
+    Bad { msg: msg.to_string(), pos: pos }
+}
+
+fn hex4(d: ref Dec, i: i64) -> Result[i64, Bad] {
+    let mut v: i64 = 0;
+    for j in 0..4 {
+        let c = cp_at(d, i + j);
+        if c < 0 or c > 127 or not is_hex(c as u8) {
+            return Err(bad("Invalid \\uXXXX escape", i - 1));
+        }
+        v = v * 16 + hex_val(c as u8) as i64;
+    }
+    Ok(v)
+}
+
+fn escape_char(c: i64) -> i64 {
+    if c == 34 or c == 92 or c == 47 {
+        c
+    } else if c == 98 {
+        8
+    } else if c == 102 {
+        12
+    } else if c == 110 {
+        10
+    } else if c == 114 {
+        13
+    } else if c == 116 {
+        9
+    } else {
+        -1
+    }
+}
+
+// `end` is just past the opening quote. Returns the string and the index
+// just past the closing quote.
+fn scan_string(d: ref Dec, start: i64) -> Result[(String, i64), Bad] {
+    let begin = start - 1;
+    let mut end = start;
+    let mut o: Vec[u8] = Vec.new();
+    loop {
+        if end >= d.s.len() {
+            return Err(bad("Unterminated string starting at", begin));
+        }
+        let c = d.s[end];
+        if c == 34 {
+            return Ok((from_bytes(o), end + 1));
+        }
+        if c == 92 {
+            if end + 1 >= d.s.len() {
+                return Err(bad("Unterminated string starting at", begin));
+            }
+            let e = d.s[end + 1];
+            if e != 117 {
+                let r = escape_char(e);
+                if r < 0 {
+                    return Err(bad("Invalid \\escape", end));
+                }
+                o.push(r as u8);
+                end += 2;
+                continue;
+            }
+            let mut u = hex4(d, end + 2)?;
+            end += 6;
+            if u >= 0xD800 and u <= 0xDBFF and cp_at(d, end) == 92 and cp_at(d, end + 1) == 117 {
+                let u2 = hex4(d, end + 2)?;
+                if u2 >= 0xDC00 and u2 <= 0xDFFF {
+                    u = 0x10000 + (((u - 0xD800) << 10) | (u2 - 0xDC00));
+                    end += 6;
+                }
+            }
+            push_code_point(mut o, u);
+            continue;
+        }
+        if c < 0x20 {
+            return Err(bad("Invalid control character at", end));
+        }
+        push_code_point(mut o, c);
+        end += 1;
+    }
+}
+
+fn is_dcp(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn scan_number(d: ref Dec, a: mut ref Store, i: i64) -> Option[(i64, i64)] {
+    let mut j = i;
+    if cp_at(d, j) == 45 {
+        j += 1;
+    }
+    if not is_dcp(cp_at(d, j)) {
+        return None;
+    }
+    if cp_at(d, j) == 48 {
+        j += 1;
+    } else {
+        while is_dcp(cp_at(d, j)) {
+            j += 1;
+        }
+    }
+    let mut is_float = false;
+    if cp_at(d, j) == 46 and is_dcp(cp_at(d, j + 1)) {
+        j += 2;
+        while is_dcp(cp_at(d, j)) {
+            j += 1;
+        }
+        is_float = true;
+    }
+    let e = cp_at(d, j);
+    if e == 101 or e == 69 {
+        let mut k = j + 1;
+        if cp_at(d, k) == 43 or cp_at(d, k) == 45 {
+            k += 1;
+        }
+        if is_dcp(cp_at(d, k)) {
+            while is_dcp(cp_at(d, k)) {
+                k += 1;
+            }
+            j = k;
+            is_float = true;
+        }
+    }
+    let mut tb: Vec[u8] = Vec.new();
+    for p in i..j {
+        tb.push(d.s[p] as u8);
+    }
+    let text = from_bytes(tb);
+    if is_float {
+        let mut n = new_node(K_FLOAT);
+        n.f = match f64.parse(text) {
+            Ok(x) => x,
+            Err(_) => 0.0,
+        };
+        return Some((add(a, n), j));
+    }
+    let mut n = new_node(K_INT);
+    n.i = match i64.parse(text) {
+        Ok(x) => x,
+        Err(_) => 0,
+    };
+    Some((add(a, n), j))
+}
+
+fn scan_value(d: ref Dec, a: mut ref Store, i: i64) -> Result[(i64, i64), Bad] {
+    if i >= d.s.len() {
+        return Err(bad("Expecting value", i));
+    }
+    let c = d.s[i];
+    if c == 34 {
+        let (t, e) = scan_string(d, i + 1)?;
+        let mut n = new_node(K_STR);
+        n.s = t;
+        return Ok((add(a, n), e));
+    }
+    if c == 123 {
+        return scan_object(d, a, i + 1);
+    }
+    if c == 91 {
+        return scan_array(d, a, i + 1);
+    }
+    if starts_at_cp(d, i, "null") {
+        return Ok((add(a, new_node(K_NULL)), i + 4));
+    }
+    if starts_at_cp(d, i, "true") {
+        let mut n = new_node(K_BOOL);
+        n.b = true;
+        return Ok((add(a, n), i + 4));
+    }
+    if starts_at_cp(d, i, "false") {
+        return Ok((add(a, new_node(K_BOOL)), i + 5));
+    }
+    if let Some(r) = scan_number(d, a, i) {
+        return Ok(r);
+    }
+    Err(bad("Expecting value", i))
+}
+
+// Python's dict keeps a repeated key at its first position, with the last value.
+fn put_key(a: mut ref Store, o: i64, k: own String, v: i64) {
+    for j in 0..a.nodes[o].keys.len() {
+        if a.nodes[o].keys[j] == k {
+            a.nodes[o].kids[j] = v;
+            return;
+        }
+    }
+    let mut kn = new_node(K_STR);
+    kn.s = k.clone();
+    let kid = add(a, kn);
+    a.nodes[o].keys.push(k);
+    a.nodes[o].kids.push(v);
+    a.nodes[o].key_nodes.push(kid);
+}
+
+fn scan_object(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), Bad] {
+    let o = add(a, new_node(K_OBJ));
+    let mut end = start;
+    let mut nc = cp_at(d, end);
+    if nc != 34 {
+        if is_json_ws(nc) {
+            end = skip_ws(d, end);
+            nc = cp_at(d, end);
+        }
+        if nc == 125 {
+            return Ok((o, end + 1));
+        }
+        if nc != 34 {
+            return Err(bad("Expecting property name enclosed in double quotes", end));
+        }
+    }
+    end += 1;
+    loop {
+        let (key, e1) = scan_string(d, end)?;
+        end = e1;
+        if cp_at(d, end) != 58 {
+            end = skip_ws(d, end);
+            if cp_at(d, end) != 58 {
+                return Err(bad("Expecting ':' delimiter", end));
+            }
+        }
+        end += 1;
+        end = skip_ws(d, end);
+        let (v, e2) = scan_value(d, a, end)?;
+        end = e2;
+        put_key(a, o, key, v);
+        end = skip_ws(d, end);
+        nc = cp_at(d, end);
+        end += 1;
+        if nc == 125 {
+            return Ok((o, end));
+        }
+        if nc != 44 {
+            return Err(bad("Expecting ',' delimiter", end - 1));
+        }
+        let comma = end - 1;
+        end = skip_ws(d, end);
+        nc = cp_at(d, end);
+        end += 1;
+        if nc != 34 {
+            if nc == 125 {
+                return Err(bad("Illegal trailing comma before end of object", comma));
+            }
+            return Err(bad("Expecting property name enclosed in double quotes", end - 1));
+        }
+    }
+}
+
+fn scan_array(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), Bad] {
+    let arr = add(a, new_node(K_ARR));
+    let mut end = skip_ws(d, start);
+    if cp_at(d, end) == 93 {
+        return Ok((arr, end + 1));
+    }
+    loop {
+        let (v, e1) = scan_value(d, a, end)?;
+        end = e1;
+        a.nodes[arr].kids.push(v);
+        end = skip_ws(d, end);
+        let nc = cp_at(d, end);
+        end += 1;
+        if nc == 93 {
+            return Ok((arr, end));
+        }
+        if nc != 44 {
+            return Err(bad("Expecting ',' delimiter", end - 1));
+        }
+        let comma = end - 1;
+        end = skip_ws(d, end);
+        if cp_at(d, end) == 93 {
+            return Err(bad("Illegal trailing comma before end of array", comma));
+        }
+    }
+}
+
+fn decode(a: mut ref Store, text: Str) -> Result[i64, String] {
+    let d = Dec { s: code_points(text) };
+    let i = skip_ws(d, 0);
+    let r = scan_value(d, a, i);
+    match r {
+        Ok((v, end)) => {
+            let e = skip_ws(d, end);
+            if e != d.s.len() {
+                return Err(where_msg(d, "Extra data", e));
+            }
+            Ok(v)
+        }
+        Err(b) => Err(where_msg(d, b.msg, b.pos)),
+    }
+}
+
+// "msg: line L column C (char P)", as json.JSONDecodeError prints itself.
+fn where_msg(d: ref Dec, msg: Str, pos: i64) -> String {
+    let mut line: i64 = 1;
+    let mut last_nl: i64 = -1;
+    for j in 0..pos {
+        if d.s[j] == 10 {
+            line += 1;
+            last_nl = j;
+        }
+    }
+    let col = pos - last_nl;
+    f"{msg}: line {line} column {col} (char {pos})"
+}
+
+// ------------------------------------------------------------ Python's repr
+
+fn repr_float(f: f64) -> String {
+    f"{f}"
+}
+
+fn py_value(a: ref Store, v: i64) -> String {
+    let n = ref a.nodes[v];
+    if n.kind == K_NULL {
+        return "None".to_string();
+    }
+    if n.kind == K_BOOL {
+        return if n.b { "True".to_string() } else { "False".to_string() };
+    }
+    if n.kind == K_INT {
+        return f"{n.i}";
+    }
+    if n.kind == K_FLOAT {
+        return repr_float(n.f);
+    }
+    if n.kind == K_STR {
+        return py_repr(n.s);
+    }
+    let mut parts: Vec[String] = Vec.new();
+    if n.kind == K_ARR {
+        for k in n.kids {
+            parts.push(py_value(a, k));
+        }
+        return "[" + join(parts, ", ") + "]";
+    }
+    for j in 0..n.keys.len() {
+        parts.push(py_repr(n.keys[j]) + ": " + py_value(a, n.kids[j]));
+    }
+    "{" + join(parts, ", ") + "}"
+}
+// ------------------------------------------------------------ patterns
+
+// A backtracking matcher for the part of Python's `re` that schema patterns
+// use: literals, `.`, classes with ranges and negation, `\d \w \s` and
+// their negations (ASCII), groups and `(?:...)`, `|`, `* + ? {n} {n,} {n,m}`
+// and their lazy forms, `^`, and `$`, which also matches before a final
+// newline. A pattern compiles to instructions; counted repeats are expanded.
+const OP_CHAR: i64 = 0;
+const OP_ANY: i64 = 1;
+const OP_SET: i64 = 2;
+const OP_SPLIT: i64 = 3;
+const OP_JMP: i64 = 4;
+const OP_BOL: i64 = 5;
+const OP_EOL: i64 = 6;
+const OP_MATCH: i64 = 7;
+
+#[derive(Clone)]
+struct Ins {
+    op: i64,
+    c: i64,
+    x: i64,
+    y: i64,
+    neg: bool,
+    ranges: Vec[i64],
+}
+
+fn ins(op: i64, c: i64, x: i64, y: i64) -> Ins {
+    Ins { op: op, c: c, x: x, y: y, neg: false, ranges: Vec.new() }
+}
+
+struct Rx {
+    src: Vec[i64],
+    p: i64,
+    prog: Vec[Ins],
+}
+
+fn rx_peek(r: ref Rx) -> i64 {
+    if r.p < r.src.len() { r.src[r.p] } else { -1 }
+}
+
+// A copy of `body` moved by `d` instructions, its jumps retargeted.
+fn shifted(body: ref Vec[Ins], d: i64) -> Vec[Ins] {
+    let mut o: Vec[Ins] = Vec.new();
+    for b in body {
+        let mut n = b.clone();
+        if n.op == OP_SPLIT or n.op == OP_JMP {
+            n.x += d;
+            n.y += d;
+        }
+        o.push(n);
+    }
+    o
+}
+
+fn take_from(r: mut ref Rx, start: i64) -> Vec[Ins] {
+    let mut body: Vec[Ins] = Vec.new();
+    for j in start..r.prog.len() {
+        body.push(r.prog[j].clone());
+    }
+    while r.prog.len() > start {
+        r.prog.pop();
+    }
+    body
+}
+
+fn rx_alt(r: mut ref Rx) {
+    let mut start = r.prog.len();
+    rx_seq(r);
+    if rx_peek(r) != 124 {
+        return;
+    }
+    let mut jumps: Vec[i64] = Vec.new();
+    while rx_peek(r) == 124 {
+        r.p += 1;
+        let body = take_from(r, start);
+        let n = body.len();
+        r.prog.push(ins(OP_SPLIT, 0, start + 1, start + 2 + n));
+        r.prog.extend(shifted(body, 1));
+        jumps.push(r.prog.len());
+        r.prog.push(ins(OP_JMP, 0, -1, -1));
+        start = r.prog.len();
+        rx_seq(r);
+    }
+    let end = r.prog.len();
+    for j in jumps {
+        r.prog[j].x = end;
+    }
+}
+
+fn rx_seq(r: mut ref Rx) {
+    while r.p < r.src.len() and rx_peek(r) != 124 and rx_peek(r) != 41 {
+        rx_repeat(r);
+    }
+}
+
+fn add_ranges(o: mut ref Vec[i64], e: i64) {
+    // d w s
+    if e == 100 {
+        o.extend(vec![48, 57]);
+    } else if e == 119 {
+        o.extend(vec![48, 57, 65, 90, 95, 95, 97, 122]);
+    } else {
+        o.extend(vec![9, 13, 32, 32]);
+    }
+}
+
+fn is_class_esc(e: i64) -> bool {
+    e == 100 or e == 68 or e == 119 or e == 87 or e == 115 or e == 83
+}
+
+fn rx_atom(r: mut ref Rx) {
+    let c = r.src[r.p];
+    r.p += 1;
+    if c == 40 {
+        if rx_peek(r) == 63 and r.p + 1 < r.src.len() and r.src[r.p + 1] == 58 {
+            r.p += 2;
+        }
+        rx_alt(r);
+        r.p += 1;
+    } else if c == 94 {
+        r.prog.push(ins(OP_BOL, 0, 0, 0));
+    } else if c == 36 {
+        r.prog.push(ins(OP_EOL, 0, 0, 0));
+    } else if c == 46 {
+        r.prog.push(ins(OP_ANY, 0, 0, 0));
+    } else if c == 91 {
+        let set = rx_class(r);
+        r.prog.push(set);
+    } else if c == 92 {
+        let e = r.src[r.p];
+        r.p += 1;
+        if is_class_esc(e) {
+            let mut set = ins(OP_SET, 0, 0, 0);
+            set.neg = e < 97;
+            add_ranges(mut set.ranges, e | 32);
+            r.prog.push(set);
+        } else {
+            r.prog.push(ins(OP_CHAR, e, 0, 0));
+        }
+    } else {
+        r.prog.push(ins(OP_CHAR, c, 0, 0));
+    }
+}
+
+fn rx_class(r: mut ref Rx) -> Ins {
+    let mut set = ins(OP_SET, 0, 0, 0);
+    if rx_peek(r) == 94 {
+        set.neg = true;
+        r.p += 1;
+    }
+    let mut first = true;
+    while first or rx_peek(r) != 93 {
+        first = false;
+        let mut c = r.src[r.p];
+        r.p += 1;
+        if c == 92 {
+            let e = r.src[r.p];
+            r.p += 1;
+            if e == 100 or e == 119 or e == 115 {
+                add_ranges(mut set.ranges, e);
+                continue;
+            }
+            c = e;
+        }
+        if rx_peek(r) == 45 and r.p + 1 < r.src.len() and r.src[r.p + 1] != 93 {
+            r.p += 1;
+            let mut hi = r.src[r.p];
+            r.p += 1;
+            if hi == 92 {
+                hi = r.src[r.p];
+                r.p += 1;
+            }
+            set.ranges.push(c);
+            set.ranges.push(hi);
+        } else {
+            set.ranges.push(c);
+            set.ranges.push(c);
+        }
+    }
+    r.p += 1;
+    set
+}
+
+fn rx_number(r: mut ref Rx) -> i64 {
+    let mut n: i64 = 0;
+    while r.p < r.src.len() and is_dcp(r.src[r.p]) {
+        n = n * 10 + r.src[r.p] - 48;
+        r.p += 1;
+    }
+    n
+}
+
+fn rx_repeat(r: mut ref Rx) {
+    let start = r.prog.len();
+    rx_atom(r);
+    let c = rx_peek(r);
+    let mut lo: i64 = 0;
+    let mut hi: i64 = -1;
+    if c == 123 {
+        r.p += 1;
+        lo = rx_number(r);
+        hi = lo;
+        if rx_peek(r) == 44 {
+            r.p += 1;
+            hi = if rx_peek(r) == 125 { -1 } else { rx_number(r) };
+        }
+        r.p += 1;
+    } else if c == 42 {
+        r.p += 1;
+    } else if c == 43 {
+        r.p += 1;
+        lo = 1;
+    } else if c == 63 {
+        r.p += 1;
+        hi = 1;
+    } else {
+        return;
+    }
+    let mut lazy = false;
+    if rx_peek(r) == 63 {
+        lazy = true;
+        r.p += 1;
+    }
+    let body = take_from(r, start);
+    let n = body.len();
+    for _ in 0..lo {
+        let at = r.prog.len();
+        r.prog.extend(shifted(body, at - start));
+    }
+    if hi == -1 {
+        let l = r.prog.len();
+        if lazy {
+            r.prog.push(ins(OP_SPLIT, 0, l + 2 + n, l + 1));
+        } else {
+            r.prog.push(ins(OP_SPLIT, 0, l + 1, l + 2 + n));
+        }
+        r.prog.extend(shifted(body, l + 1 - start));
+        r.prog.push(ins(OP_JMP, 0, l, l));
+        return;
+    }
+    let mut ends: Vec[i64] = Vec.new();
+    for _ in 0..(hi - lo) {
+        let l = r.prog.len();
+        ends.push(l);
+        r.prog.push(ins(OP_SPLIT, 0, 0, 0));
+        r.prog.extend(shifted(body, l + 1 - start));
+    }
+    let end = r.prog.len();
+    for l in ends {
+        if lazy {
+            r.prog[l].x = end;
+            r.prog[l].y = l + 1;
+        } else {
+            r.prog[l].x = l + 1;
+            r.prog[l].y = end;
+        }
+    }
+}
+
+fn compile_rx(pattern: Str) -> Vec[Ins] {
+    let mut r = Rx { src: code_points(pattern), p: 0, prog: Vec.new() };
+    rx_alt(mut r);
+    r.prog.push(ins(OP_MATCH, 0, 0, 0));
+    r.prog
+}
+
+fn in_set(i: ref Ins, c: i64) -> bool {
+    let mut hit = false;
+    let mut j: i64 = 0;
+    while j + 1 < i.ranges.len() {
+        if i.ranges[j] <= c and c <= i.ranges[j + 1] {
+            hit = true;
+        }
+        j += 2;
+    }
+    hit != i.neg
+}
+
+fn run_at(prog: ref Vec[Ins], s: ref Vec[i64], start: i64) -> bool {
+    let mut stack: Vec[(i64, i64)] = vec![(0, start)];
+    while stack.len() > 0 {
+        let mut (pc, sp) = stack.pop().unwrap();
+        loop {
+            let op = prog[pc].op;
+            if op == OP_MATCH {
+                return true;
+            }
+            if op == OP_CHAR {
+                if sp < s.len() and s[sp] == prog[pc].c {
+                    pc += 1;
+                    sp += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_ANY {
+                if sp < s.len() and s[sp] != 10 {
+                    pc += 1;
+                    sp += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_SET {
+                if sp < s.len() and in_set(prog[pc], s[sp]) {
+                    pc += 1;
+                    sp += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_BOL {
+                if sp == 0 {
+                    pc += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_EOL {
+                if sp == s.len() or (sp == s.len() - 1 and s[sp] == 10) {
+                    pc += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_JMP {
+                pc = prog[pc].x;
+                continue;
+            }
+            stack.push((prog[pc].y, sp));
+            pc = prog[pc].x;
+        }
+    }
+    false
+}
+
+// re.search: the pattern matches somewhere in the text.
+fn search(pattern: Str, text: Str) -> bool {
+    let prog = compile_rx(pattern);
+    let s = code_points(text);
+    for i in 0..(s.len() + 1) {
+        if run_at(prog, s, i) {
+            return true;
+        }
+    }
+    false
+}
+// ------------------------------------------------------------ errors
+
+// One path step: an array index, or an object key when `idx` is -1.
+#[derive(Clone)]
+struct Step {
+    idx: i64,
+    key: String,
+}
+
+fn key_step(k: Str) -> Step {
+    Step { idx: -1, key: k.to_string() }
+}
+
+fn idx_step(i: i64) -> Step {
+    Step { idx: i, key: String.new() }
+}
+
+// A ValidationError. Errors live in a pool and refer to each other, and to
+// values, by index. `path` and `schema_path` are relative, as jsonschema
+// keeps them; `context` holds the sub-errors of an anyOf or oneOf.
+struct VErr {
+    message: String,
+    path: Vec[Step],
+    schema_path: Vec[Step],
+    validator: String,
+    validator_set: bool,
+    inst: i64,
+    schema: i64,
+    context: Vec[i64],
+}
+
+struct ErrPool {
+    errs: Vec[VErr],
+}
+
+fn new_err(p: mut ref ErrPool, msg: own String) -> i64 {
+    p.errs.push(VErr {
+        message: msg,
+        path: Vec.new(),
+        schema_path: Vec.new(),
+        validator: String.new(),
+        validator_set: false,
+        inst: -1,
+        schema: -1,
+        context: Vec.new(),
+    });
+    p.errs.len() - 1
+}
+
+fn one(p: mut ref ErrPool, msg: own String) -> Vec[i64] {
+    vec![new_err(p, msg)]
+}
+
+// ------------------------------------------------------------ types and equality
+
+fn is_type(a: ref Store, v: i64, t: Str) -> bool {
+    let k = a.nodes[v].kind;
+    if t == "null" {
+        k == K_NULL
+    } else if t == "boolean" {
+        k == K_BOOL
+    } else if t == "integer" {
+        if k == K_INT {
+            true
+        } else if k == K_FLOAT {
+            let f = a.nodes[v].f;
+            f == f and f != 1.0 / 0.0 and f != -1.0 / 0.0 and (f as i64) as f64 == f
+        } else {
+            false
+        }
+    } else if t == "number" {
+        k == K_INT or k == K_FLOAT
+    } else if t == "string" {
+        k == K_STR
+    } else if t == "array" {
+        k == K_ARR
+    } else if t == "object" {
+        k == K_OBJ
+    } else {
+        false
+    }
+}
+
+fn num(a: ref Store, v: i64) -> f64 {
+    if a.nodes[v].kind == K_INT { a.nodes[v].i as f64 } else { a.nodes[v].f }
+}
+
+fn num_lt(a: ref Store, x: i64, y: i64) -> bool {
+    if a.nodes[x].kind == K_INT and a.nodes[y].kind == K_INT {
+        return a.nodes[x].i < a.nodes[y].i;
+    }
+    num(a, x) < num(a, y)
+}
+
+fn is_num_kind(k: i64) -> bool {
+    k == K_INT or k == K_FLOAT
+}
+
+// jsonschema's `equal`: 1 equals 1.0, but true is not 1.
+fn equal(a: ref Store, x: i64, y: i64) -> bool {
+    let kx = a.nodes[x].kind;
+    let ky = a.nodes[y].kind;
+    if kx == K_STR or ky == K_STR {
+        return kx == ky and a.nodes[x].s == a.nodes[y].s;
+    }
+    if kx == K_ARR and ky == K_ARR {
+        let n = a.nodes[x].kids.len();
+        if n != a.nodes[y].kids.len() {
+            return false;
+        }
+        for j in 0..n {
+            if not equal(a, a.nodes[x].kids[j], a.nodes[y].kids[j]) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if kx == K_OBJ and ky == K_OBJ {
+        let n = a.nodes[x].keys.len();
+        if n != a.nodes[y].keys.len() {
+            return false;
+        }
+        for j in 0..n {
+            let w = get(a, y, a.nodes[x].keys[j]);
+            if w < 0 or not equal(a, a.nodes[x].kids[j], w) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if kx == K_BOOL or ky == K_BOOL {
+        return kx == ky and a.nodes[x].b == a.nodes[y].b;
+    }
+    if kx == K_NULL or ky == K_NULL {
+        return kx == ky;
+    }
+    if is_num_kind(kx) and is_num_kind(ky) {
+        if kx == K_INT and ky == K_INT {
+            return a.nodes[x].i == a.nodes[y].i;
+        }
+        return num(a, x) == num(a, y);
+    }
+    false
+}
+
+fn str_len(s: Str) -> i64 {
+    code_points(s).len()
+}
+
+// ------------------------------------------------------------ the validator
+
+struct V {
+    a: Store,
+    root: i64,
+}
+
+// A local `$ref`: `#` or a JSON pointer into the root schema.
+fn resolve(v: ref V, r: Str) -> i64 {
+    let mut node = v.root;
+    if r == "#" {
+        return node;
+    }
+    let segs = split_on(slice_from(r, 2), b'/');
+    for raw in segs {
+        let seg = replace_all(replace_all(raw, "~1", "/"), "~0", "~");
+        if v.a.nodes[node].kind == K_OBJ {
+            node = get(v.a, node, seg);
+        } else {
+            node = v.a.nodes[node].kids[py_int(seg).unwrap_or(0)];
+        }
+        if node < 0 {
+            return -1;
+        }
+    }
+    node
+}
+
+fn replace_all(s: Str, from: Str, to: Str) -> String {
+    let b = to_bytes(s);
+    let mut o = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, from) {
+            o.push_str(to);
+            i += from.len();
+        } else {
+            o.push_str(byte_str(b, i, i + 1));
+            i += 1;
+        }
+    }
+    o
+}
+
+// jsonschema's iter_errors and descend: each keyword of the schema, in the
+// schema's order, with the keyword stamped onto its errors.
+fn errors(v: ref V, p: mut ref ErrPool, inst: i64, schema: i64) -> Vec[i64] {
+    let sn = ref v.a.nodes[schema];
+    if sn.kind == K_BOOL {
+        if sn.b {
+            return Vec.new();
+        }
+        let e = new_err(p, f"False schema does not allow {py_value(v.a, inst)}");
+        p.errs[e].validator_set = true;
+        p.errs[e].inst = inst;
+        p.errs[e].schema = schema;
+        return vec![e];
+    }
+    let mut res: Vec[i64] = Vec.new();
+    for j in 0..sn.keys.len() {
+        let k = ref sn.keys[j];
+        let errs = keyword(v, p, k, sn.kids[j], inst, schema);
+        for e in errs {
+            if not p.errs[e].validator_set {
+                p.errs[e].validator = k.clone();
+                p.errs[e].validator_set = true;
+            }
+            if p.errs[e].inst < 0 {
+                p.errs[e].inst = inst;
+            }
+            if p.errs[e].schema < 0 {
+                p.errs[e].schema = schema;
+            }
+            if k != "if" and k != "$ref" {
+                p.errs[e].schema_path.insert(0, key_step(k));
+            }
+            res.push(e);
+        }
+    }
+    res
+}
+
+fn descend(v: ref V, p: mut ref ErrPool, inst: i64, schema: i64, path: Option[Step], schema_path: Option[Step]) -> Vec[i64] {
+    let errs = errors(v, p, inst, schema);
+    if v.a.nodes[schema].kind == K_BOOL {
+        return errs;
+    }
+    for e in errs {
+        if let Some(s) = path {
+            p.errs[e].path.insert(0, s.clone());
+        }
+        if let Some(s) = schema_path {
+            p.errs[e].schema_path.insert(0, s.clone());
+        }
+    }
+    errs
+}
+
+fn valid(v: ref V, p: mut ref ErrPool, inst: i64, schema: i64) -> bool {
+    let mark = p.errs.len();
+    let n = errors(v, p, inst, schema).len();
+    while p.errs.len() > mark {
+        p.errs.pop();
+    }
+    n == 0
+}
+
+fn keyword(v: ref V, p: mut ref ErrPool, k: Str, val: i64, inst: i64, schema: i64) -> Vec[i64] {
+    let a = ref v.a;
+    let ik = a.nodes[inst].kind;
+    let vn = ref a.nodes[val];
+    let none: Vec[i64] = Vec.new();
+    if k == "$ref" {
+        let target = resolve(v, vn.s);
+        return descend(v, p, inst, target, None, None);
+    }
+    if k == "type" {
+        let mut types: Vec[String] = Vec.new();
+        if vn.kind == K_STR {
+            types.push(vn.s.clone());
+        } else {
+            for t in vn.kids {
+                types.push(a.nodes[t].s.clone());
+            }
+        }
+        for t in types {
+            if is_type(a, inst, t) {
+                return none;
+            }
+        }
+        let mut reprs: Vec[String] = Vec.new();
+        for t in types {
+            reprs.push(py_repr(t));
+        }
+        return one(p, f"{py_value(a, inst)} is not of type {comma(reprs)}");
+    }
+    if k == "enum" {
+        for e in vn.kids {
+            if equal(a, e, inst) {
+                return none;
+            }
+        }
+        return one(p, f"{py_value(a, inst)} is not one of {py_value(a, val)}");
+    }
+    if k == "const" {
+        if equal(a, inst, val) {
+            return none;
+        }
+        return one(p, f"{py_value(a, val)} was expected");
+    }
+    if k == "minimum" or k == "maximum" or k == "exclusiveMinimum" or k == "exclusiveMaximum" {
+        if not is_type(a, inst, "number") {
+            return none;
+        }
+        let iv = py_value(a, inst);
+        let lim = py_value(a, val);
+        if k == "minimum" and num_lt(a, inst, val) {
+            return one(p, f"{iv} is less than the minimum of {lim}");
+        }
+        if k == "maximum" and num_lt(a, val, inst) {
+            return one(p, f"{iv} is greater than the maximum of {lim}");
+        }
+        if k == "exclusiveMinimum" and not num_lt(a, val, inst) {
+            return one(p, f"{iv} is less than or equal to the minimum of {lim}");
+        }
+        if k == "exclusiveMaximum" and not num_lt(a, inst, val) {
+            return one(p, f"{iv} is greater than or equal to the maximum of {lim}");
+        }
+        return none;
+    }
+    if k == "multipleOf" {
+        if not is_type(a, inst, "number") {
+            return none;
+        }
+        let mut failed = false;
+        if vn.kind == K_FLOAT {
+            let q = num(a, inst) / vn.f;
+            failed = (q as i64) as f64 != q;
+        } else if ik == K_INT {
+            failed = a.nodes[inst].i % vn.i != 0;
+        } else {
+            let x = a.nodes[inst].f;
+            let m = vn.i as f64;
+            failed = x - ((x / m) as i64) as f64 * m != 0.0;
+        }
+        if failed {
+            return one(p, f"{py_value(a, inst)} is not a multiple of {py_value(a, val)}");
+        }
+        return none;
+    }
+    if k == "minLength" or k == "maxLength" {
+        if ik != K_STR {
+            return none;
+        }
+        let n = str_len(a.nodes[inst].s);
+        if k == "minLength" and n < vn.i {
+            let m = if vn.i == 1 { "should be non-empty" } else { "is too short" };
+            return one(p, f"{py_value(a, inst)} {m}");
+        }
+        if k == "maxLength" and n > vn.i {
+            let m = if vn.i == 0 { "is expected to be empty" } else { "is too long" };
+            return one(p, f"{py_value(a, inst)} {m}");
+        }
+        return none;
+    }
+    if k == "pattern" {
+        if ik == K_STR and not search(vn.s, a.nodes[inst].s) {
+            return one(p, f"{py_value(a, inst)} does not match {py_repr(vn.s)}");
+        }
+        return none;
+    }
+    if k == "minItems" or k == "maxItems" {
+        if ik != K_ARR {
+            return none;
+        }
+        let n = a.nodes[inst].kids.len();
+        if k == "minItems" and n < vn.i {
+            let m = if vn.i == 1 { "should be non-empty" } else { "is too short" };
+            return one(p, f"{py_value(a, inst)} {m}");
+        }
+        if k == "maxItems" and n > vn.i {
+            let m = if vn.i == 0 { "is expected to be empty" } else { "is too long" };
+            return one(p, f"{py_value(a, inst)} {m}");
+        }
+        return none;
+    }
+    if k == "uniqueItems" {
+        if vn.kind == K_BOOL and vn.b and ik == K_ARR {
+            let xs = ref a.nodes[inst].kids;
+            for x in 0..xs.len() {
+                for y in (x + 1)..xs.len() {
+                    if equal(a, xs[x], xs[y]) {
+                        return one(p, f"{py_value(a, inst)} has non-unique elements");
+                    }
+                }
+            }
+        }
+        return none;
+    }
+    if k == "minProperties" or k == "maxProperties" {
+        if ik != K_OBJ {
+            return none;
+        }
+        let n = a.nodes[inst].keys.len();
+        if k == "minProperties" and n < vn.i {
+            let m = if vn.i == 1 { "should be non-empty" } else { "does not have enough properties" };
+            return one(p, f"{py_value(a, inst)} {m}");
+        }
+        if k == "maxProperties" and n > vn.i {
+            let m = if vn.i == 0 { "is expected to be empty" } else { "has too many properties" };
+            return one(p, f"{py_value(a, inst)} {m}");
+        }
+        return none;
+    }
+    if k == "required" {
+        let mut res: Vec[i64] = Vec.new();
+        if ik != K_OBJ {
+            return res;
+        }
+        for r in vn.kids {
+            let name = ref a.nodes[r].s;
+            if not has(a, inst, name) {
+                res.push(new_err(p, f"{py_repr(name)} is a required property"));
+            }
+        }
+        return res;
+    }
+    if k == "properties" {
+        let mut res: Vec[i64] = Vec.new();
+        if ik != K_OBJ {
+            return res;
+        }
+        for j in 0..vn.keys.len() {
+            let w = get(a, inst, vn.keys[j]);
+            if w >= 0 {
+                res.extend(descend(v, p, w, vn.kids[j], Some(key_step(vn.keys[j])), Some(key_step(vn.keys[j]))));
+            }
+        }
+        return res;
+    }
+    if k == "patternProperties" {
+        let mut res: Vec[i64] = Vec.new();
+        if ik != K_OBJ {
+            return res;
+        }
+        let keys = ref a.nodes[inst].keys;
+        for j in 0..vn.keys.len() {
+            for q in 0..keys.len() {
+                if search(vn.keys[j], keys[q]) {
+                    res.extend(descend(v, p, a.nodes[inst].kids[q], vn.kids[j], Some(key_step(keys[q])), Some(key_step(vn.keys[j]))));
+                }
+            }
+        }
+        return res;
+    }
+    if k == "additionalProperties" {
+        return additional(v, p, val, inst, schema);
+    }
+    if k == "propertyNames" {
+        let mut res: Vec[i64] = Vec.new();
+        if ik != K_OBJ {
+            return res;
+        }
+        for kn in a.nodes[inst].key_nodes {
+            res.extend(descend(v, p, kn, val, None, None));
+        }
+        return res;
+    }
+    if k == "items" {
+        return items(v, p, val, inst, schema);
+    }
+    if k == "prefixItems" {
+        let mut res: Vec[i64] = Vec.new();
+        if ik != K_ARR {
+            return res;
+        }
+        let xs = ref a.nodes[inst].kids;
+        let n = if xs.len() < vn.kids.len() { xs.len() } else { vn.kids.len() };
+        for j in 0..n {
+            res.extend(descend(v, p, xs[j], vn.kids[j], Some(idx_step(j)), Some(idx_step(j))));
+        }
+        return res;
+    }
+    if k == "contains" {
+        return contains(v, p, val, inst, schema);
+    }
+    if k == "dependentRequired" {
+        let mut res: Vec[i64] = Vec.new();
+        if ik != K_OBJ {
+            return res;
+        }
+        for j in 0..vn.keys.len() {
+            if not has(a, inst, vn.keys[j]) {
+                continue;
+            }
+            for d in a.nodes[vn.kids[j]].kids {
+                let dep = ref a.nodes[d].s;
+                if not has(a, inst, dep) {
+                    res.push(new_err(p, f"{py_repr(dep)} is a dependency of {py_repr(vn.keys[j])}"));
+                }
+            }
+        }
+        return res;
+    }
+    if k == "dependentSchemas" {
+        let mut res: Vec[i64] = Vec.new();
+        if ik != K_OBJ {
+            return res;
+        }
+        for j in 0..vn.keys.len() {
+            if has(a, inst, vn.keys[j]) {
+                res.extend(descend(v, p, inst, vn.kids[j], None, Some(key_step(vn.keys[j]))));
+            }
+        }
+        return res;
+    }
+    if k == "allOf" {
+        let mut res: Vec[i64] = Vec.new();
+        for j in 0..vn.kids.len() {
+            res.extend(descend(v, p, inst, vn.kids[j], None, Some(idx_step(j))));
+        }
+        return res;
+    }
+    if k == "anyOf" {
+        let mut all: Vec[i64] = Vec.new();
+        for j in 0..vn.kids.len() {
+            let errs = descend(v, p, inst, vn.kids[j], None, Some(idx_step(j)));
+            if errs.len() == 0 {
+                return none;
+            }
+            all.extend(errs);
+        }
+        let e = new_err(p, f"{py_value(a, inst)} is not valid under any of the given schemas");
+        p.errs[e].context = all;
+        return vec![e];
+    }
+    if k == "oneOf" {
+        return one_of(v, p, val, inst);
+    }
+    if k == "not" {
+        if valid(v, p, inst, val) {
+            return one(p, f"{py_value(a, inst)} should not be valid under {py_value(a, val)}");
+        }
+        return none;
+    }
+    if k == "if" {
+        if valid(v, p, inst, val) {
+            let t = get(a, schema, "then");
+            if t >= 0 {
+                return descend(v, p, inst, t, None, Some(key_step("then")));
+            }
+        } else {
+            let e = get(a, schema, "else");
+            if e >= 0 {
+                return descend(v, p, inst, e, None, Some(key_step("else")));
+            }
+        }
+        return none;
+    }
+    none
+}
+
+fn additional(v: ref V, p: mut ref ErrPool, val: i64, inst: i64, schema: i64) -> Vec[i64] {
+    let a = ref v.a;
+    let mut res: Vec[i64] = Vec.new();
+    if a.nodes[inst].kind != K_OBJ {
+        return res;
+    }
+    let props = get(a, schema, "properties");
+    let pats = get(a, schema, "patternProperties");
+    let joined = if pats >= 0 { join(a.nodes[pats].keys, "|") } else { String.new() };
+    let mut extras: Vec[String] = Vec.new();
+    for key in a.nodes[inst].keys {
+        if props >= 0 and has(a, props, key) {
+            continue;
+        }
+        if joined.len() > 0 and search(joined, key) {
+            continue;
+        }
+        extras.push(key.clone());
+    }
+    let vn = ref a.nodes[val];
+    if vn.kind == K_OBJ {
+        for key in extras {
+            res.extend(descend(v, p, get(a, inst, key), val, Some(key_step(key)), None));
+        }
+        return res;
+    }
+    if vn.kind != K_BOOL or vn.b or extras.len() == 0 {
+        return res;
+    }
+    extras.sort();
+    let mut reprs: Vec[String] = Vec.new();
+    for x in extras {
+        reprs.push(py_repr(x));
+    }
+    if pats >= 0 {
+        let verb = if extras.len() == 1 { "does" } else { "do" };
+        let mut pl: Vec[String] = a.nodes[pats].keys.clone();
+        pl.sort();
+        let mut prs: Vec[String] = Vec.new();
+        for x in pl {
+            prs.push(py_repr(x));
+        }
+        return one(p, f"{comma(reprs)} {verb} not match any of the regexes: {comma(prs)}");
+    }
+    let verb = if extras.len() == 1 { "was" } else { "were" };
+    one(p, f"Additional properties are not allowed ({comma(reprs)} {verb} unexpected)")
+}
+
+fn items(v: ref V, p: mut ref ErrPool, val: i64, inst: i64, schema: i64) -> Vec[i64] {
+    let a = ref v.a;
+    let mut res: Vec[i64] = Vec.new();
+    if a.nodes[inst].kind != K_ARR {
+        return res;
+    }
+    let pre = get(a, schema, "prefixItems");
+    let prefix = if pre >= 0 { a.nodes[pre].kids.len() } else { 0 };
+    let xs = ref a.nodes[inst].kids;
+    let total = xs.len();
+    let extra = total - prefix;
+    if extra <= 0 {
+        return res;
+    }
+    let vn = ref a.nodes[val];
+    if vn.kind == K_BOOL and not vn.b {
+        let rest = if extra == 1 {
+            py_value(a, xs[prefix])
+        } else {
+            let mut parts: Vec[String] = Vec.new();
+            for j in prefix..total {
+                parts.push(py_value(a, xs[j]));
+            }
+            "[" + join(parts, ", ") + "]"
+        };
+        let item = if prefix != 1 { "items" } else { "item" };
+        return one(p, f"Expected at most {prefix} {item} but found {extra} extra: {rest}");
+    }
+    for j in prefix..total {
+        res.extend(descend(v, p, xs[j], val, Some(idx_step(j)), None));
+    }
+    res
+}
+
+fn contains(v: ref V, p: mut ref ErrPool, val: i64, inst: i64, schema: i64) -> Vec[i64] {
+    let a = ref v.a;
+    let none: Vec[i64] = Vec.new();
+    if a.nodes[inst].kind != K_ARR {
+        return none;
+    }
+    let xs = ref a.nodes[inst].kids;
+    let mn = get(a, schema, "minContains");
+    let mx = get(a, schema, "maxContains");
+    let min_c = if mn >= 0 { a.nodes[mn].i } else { 1 };
+    let max_c = if mx >= 0 { a.nodes[mx].i } else { xs.len() };
+    let mut matches: i64 = 0;
+    for w in xs {
+        if valid(v, p, w, val) {
+            matches += 1;
+            if matches > max_c {
+                let e = new_err(p, f"Too many items match the given schema (expected at most {max_c})");
+                p.errs[e].validator = "maxContains".to_string();
+                p.errs[e].validator_set = true;
+                return vec![e];
+            }
+        }
+    }
+    if matches >= min_c {
+        return none;
+    }
+    if matches == 0 {
+        return one(p, f"{py_value(a, inst)} does not contain items matching the given schema");
+    }
+    let e = new_err(p, f"Too few items match the given schema (expected at least {min_c} but only {matches} matched)");
+    p.errs[e].validator = "minContains".to_string();
+    p.errs[e].validator_set = true;
+    vec![e]
+}
+
+fn one_of(v: ref V, p: mut ref ErrPool, val: i64, inst: i64) -> Vec[i64] {
+    let a = ref v.a;
+    let subs = ref a.nodes[val].kids;
+    let mut all: Vec[i64] = Vec.new();
+    let mut first: i64 = -1;
+    for j in 0..subs.len() {
+        let errs = descend(v, p, inst, subs[j], None, Some(idx_step(j)));
+        if errs.len() == 0 {
+            first = j;
+            break;
+        }
+        all.extend(errs);
+    }
+    if first < 0 {
+        let e = new_err(p, f"{py_value(a, inst)} is not valid under any of the given schemas");
+        p.errs[e].context = all;
+        return vec![e];
+    }
+    let mut more: Vec[String] = Vec.new();
+    for j in (first + 1)..subs.len() {
+        if valid(v, p, inst, subs[j]) {
+            more.push(py_value(a, subs[j]));
+        }
+    }
+    if more.len() == 0 {
+        return Vec.new();
+    }
+    more.push(py_value(a, subs[first]));
+    one(p, f"{py_value(a, inst)} is valid under each of {comma(more)}")
+}
+// ------------------------------------------------------------ reporting
+
+fn comma(v: ref Vec[String]) -> String {
+    join(v, ", ")
+}
+
+fn is_ascii_letter(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+// jsonschema's json_path: `.key` for a plain key, `['key']` otherwise.
+fn simple_key(k: Str) -> bool {
+    let b = to_bytes(k);
+    if b.len() == 0 or not is_ascii_letter(b[0]) {
+        return false;
+    }
+    for c in b {
+        if not (is_ascii_letter(c) or is_digit(c) or c == b'_') {
+            return false;
+        }
+    }
+    true
+}
+
+fn path_text(path: ref Vec[Step]) -> String {
+    let mut o = "$".to_string();
+    for s in path {
+        if s.idx >= 0 {
+            o.push_str(f"[{s.idx}]");
+        } else if simple_key(s.key) {
+            o.push_str(".");
+            o.push_str(s.key);
+        } else {
+            let esc = replace_all(replace_all(s.key, "\\", "\\\\"), "'", "\\'");
+            o.push_str(f"['{esc}']");
+        }
+    }
+    o
+}
+
+fn step_text(s: ref Step) -> String {
+    if s.idx >= 0 { f"{s.idx}" } else { s.key.clone() }
+}
+
+fn schema_path_text(e: ref VErr) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in e.schema_path {
+        parts.push(step_text(s));
+    }
+    join(parts, "/")
+}
+
+fn joined_path(base: ref Vec[Step], rel: ref Vec[Step]) -> Vec[Step] {
+    let mut o: Vec[Step] = base.clone();
+    for s in rel {
+        o.push(s.clone());
+    }
+    o
+}
+
+// Python's comparison of two paths (deques of keys or indexes).
+fn cmp_steps(x: ref Vec[Step], y: ref Vec[Step]) -> i64 {
+    let n = if x.len() < y.len() { x.len() } else { y.len() };
+    for j in 0..n {
+        let a = ref x[j];
+        let b = ref y[j];
+        if a.idx >= 0 {
+            if a.idx != b.idx {
+                return if a.idx < b.idx { -1 } else { 1 };
+            }
+        } else if a.key != b.key {
+            return if a.key < b.key { -1 } else { 1 };
+        }
+    }
+    if x.len() < y.len() {
+        -1
+    } else if x.len() > y.len() {
+        1
+    } else {
+        0
+    }
+}
+
+fn matches_type(v: ref V, e: ref VErr) -> bool {
+    let a = ref v.a;
+    if e.schema < 0 or a.nodes[e.schema].kind != K_OBJ {
+        return false;
+    }
+    let t = get(a, e.schema, "type");
+    if t < 0 {
+        return false;
+    }
+    if a.nodes[t].kind == K_STR {
+        return is_type(a, e.inst, a.nodes[t].s);
+    }
+    for x in a.nodes[t].kids {
+        if is_type(a, e.inst, a.nodes[x].s) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_weak(e: ref VErr) -> bool {
+    e.validator_set and (e.validator == "anyOf" or e.validator == "oneOf")
+}
+
+// jsonschema's relevance key, compared: > 0 when `x` is the more relevant
+// error. Deeper first, then the later path, then a strong keyword, then an
+// error whose instance does not match the schema's type.
+fn cmp_relevance(v: ref V, p: ref ErrPool, x: i64, y: i64) -> i64 {
+    let a = ref p.errs[x];
+    let b = ref p.errs[y];
+    if a.path.len() != b.path.len() {
+        return b.path.len() - a.path.len();
+    }
+    let c = cmp_steps(a.path, b.path);
+    if c != 0 {
+        return c;
+    }
+    let wa = not is_weak(a);
+    let wb = not is_weak(b);
+    if wa != wb {
+        return if wa { 1 } else { -1 };
+    }
+    let ma = not matches_type(v, a);
+    let mb = not matches_type(v, b);
+    if ma != mb {
+        return if ma { 1 } else { -1 };
+    }
+    0
+}
+
+// best_match: the most relevant error, then down through its context while
+// one sub-error is strictly the least relevant.
+fn best_match(v: ref V, p: ref ErrPool, errs: ref Vec[i64]) -> (i64, Vec[Step]) {
+    let mut best = errs[0];
+    for j in 1..errs.len() {
+        if cmp_relevance(v, p, errs[j], best) > 0 {
+            best = errs[j];
+        }
+    }
+    let mut path: Vec[Step] = p.errs[best].path.clone();
+    while p.errs[best].context.len() > 0 {
+        let ctx = p.errs[best].context.clone();
+        let mut s0 = ctx[0];
+        for j in 1..ctx.len() {
+            if cmp_relevance(v, p, ctx[j], s0) < 0 {
+                s0 = ctx[j];
+            }
+        }
+        let mut s1: i64 = -1;
+        for c in ctx {
+            if c == s0 {
+                continue;
+            }
+            if s1 < 0 or cmp_relevance(v, p, c, s1) < 0 {
+                s1 = c;
+            }
+        }
+        if s1 >= 0 and cmp_relevance(v, p, s0, s1) == 0 {
+            return (best, path);
+        }
+        best = s0;
+        path = joined_path(path, p.errs[best].path);
+    }
+    (best, path)
+}
+
+// The order the report prints errors in: by path, schema path and message.
+struct SortKey {
+    path: String,
+    spath: String,
+    msg: String,
+    err: i64,
+}
+
+fn key_before(x: ref SortKey, y: ref SortKey) -> bool {
+    if x.path != y.path {
+        return x.path < y.path;
+    }
+    if x.spath != y.spath {
+        return x.spath < y.spath;
+    }
+    x.msg < y.msg
+}
+
+fn sorted_errors(p: ref ErrPool, base: ref Vec[Step], errs: ref Vec[i64]) -> Vec[i64] {
+    let mut keys: Vec[SortKey] = Vec.new();
+    for e in errs {
+        let ap = joined_path(base, p.errs[e].path);
+        keys.push(SortKey { path: path_text(ap), spath: schema_path_text(p.errs[e]), msg: p.errs[e].message.clone(), err: e });
+    }
+    // insertion sort, stable like Python's sorted
+    for i in 1..keys.len() {
+        let mut j = i;
+        while j > 0 and key_before(keys[j], keys[j - 1]) {
+            keys.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+    let mut o: Vec[i64] = Vec.new();
+    for k in keys {
+        o.push(k.err);
+    }
+    o
+}
+
+fn show(out: mut ref String, p: ref ErrPool, e: i64, base: ref Vec[Step], indent: i64) {
+    let ap = joined_path(base, p.errs[e].path);
+    let lead = if indent > 2 { " ".repeat(indent) + "- " } else { " ".repeat(indent) };
+    out.push_str(f"{lead}{path_text(ap)}: {p.errs[e].message} ({schema_path_text(p.errs[e])})\n");
+    for c in sorted_errors(p, ap, p.errs[e].context) {
+        show(out, p, c, ap, indent + 2);
+    }
+}
+
+// ------------------------------------------------------------ the command
+
+fn load(a: mut ref Store, rel: Str) -> Result[i64, String] {
+    let path = f"data/{rel}";
+    let is_file = match fs.metadata(path.clone()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    };
+    if not is_file {
+        return Err(f"{rel}: No such file or directory");
+    }
+    let text = match fs.read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => return Err(f"{rel}: {e}"),
+    };
+    match decode(a, text) {
+        Ok(v) => Ok(v),
+        Err(m) => Err(f"{rel}: {m}"),
+    }
+}
+
+fn validate(out: mut ref String, args: ref Vec[String]) -> i64 {
+    let mut best = false;
+    let mut first: i64 = 0;
+    if args.len() > 0 and args[0] == "--best" {
+        best = true;
+        first = 1;
+    }
+    if args.len() - first < 2 {
+        out.push_str("usage: validate [--best] SCHEMA DOC...\n");
+        return 2;
+    }
+    let mut v = V { a: Store { nodes: Vec.new() }, root: -1 };
+    v.root = match load(mut v.a, args[first]) {
+        Ok(r) => r,
+        Err(m) => {
+            out.push_str(f"{m}\n");
+            return 2;
+        }
+    };
+    let mut rc: i64 = 0;
+    for j in (first + 1)..args.len() {
+        let rel = ref args[j];
+        let inst = match load(mut v.a, rel) {
+            Ok(i) => i,
+            Err(m) => {
+                out.push_str(f"{m}\n");
+                rc = 2;
+                continue;
+            }
+        };
+        let mut pool = ErrPool { errs: Vec.new() };
+        let errs = errors(v, mut pool, inst, v.root);
+        if errs.len() == 0 {
+            out.push_str(f"{rel}: valid\n");
+            continue;
+        }
+        if rc < 1 {
+            rc = 1;
+        }
+        if best {
+            let (e, path) = best_match(v, pool, errs);
+            out.push_str(f"{rel}: {path_text(path)}: {pool.errs[e].message}\n");
+            continue;
+        }
+        let n = errs.len();
+        let s = if n != 1 { "s" } else { "" };
+        out.push_str(f"{rel}: {n} error{s}\n");
+        let none: Vec[Step] = Vec.new();
+        for e in sorted_errors(pool, none, errs) {
+            show(out, pool, e, none, 2);
+        }
+    }
+    rc
+}
+
+// ------------------------------------------------------------ the files
+
+// data/docs/broken-colon.json
+fn file_0() -> String {
+    """
+{\"workers\" 4}
+
+"""
+}
+
+// data/docs/broken-comma.json
+fn file_1() -> String {
+    """
+{
+  \"id\": \"ord_0a1b2c3d\",
+  \"currency\": \"EUR\"
+  \"items\": []
+}
+
+"""
+}
+
+// data/docs/broken-empty.json
+fn file_2() -> String {
+    """
+
+"""
+}
+
+// data/docs/broken-escape.json
+fn file_3() -> String {
+    """
+{\"path\": \"C:\\Users\\ana\"}
+
+"""
+}
+
+// data/docs/broken-extra.json
+fn file_4() -> String {
+    """
+{\"a\": 1} {\"b\": 2}
+
+"""
+}
+
+// data/docs/broken-literal.json
+fn file_5() -> String {
+    """
+{\"debug\": True}
+
+"""
+}
+
+// data/docs/broken-number.json
+fn file_6() -> String {
+    """
+{\"workers\": 012}
+
+"""
+}
+
+// data/docs/broken-quote.json
+fn file_7() -> String {
+    """
+{'name': 'x'}
+
+"""
+}
+
+// data/docs/broken-string.json
+fn file_8() -> String {
+    """
+{\"name\": \"unterminated
+}
+
+"""
+}
+
+// data/docs/broken-trailing.json
+fn file_9() -> String {
+    """
+{\"name\": \"x\", \"version\": \"1.0.0\",}
+
+"""
+}
+
+// data/docs/config-bad.json
+fn file_10() -> String {
+    """
+{
+  \"listen\": [\"localhost\", 0, \"tcp\"],
+  \"workers\": 7,
+  \"ratio\": 0.3,
+  \"level\": \"trace\",
+  \"tags\": [\"a\", 1, 1.0, true, false],
+  \"limits\": {\"maxConnections\": 10, \"burst\": 0, \"RPS\": 2.5},
+  \"mode\": {\"tls\": true, \"versions\": [1.2]},
+  \"legacyAuth\": {\"user\": \"admin\"},
+  \"admins\": [\"root@example.com\", \"ana@ops.example\"],
+  \"token\": \"changeme\",
+  \"backoff\": [1, 2.5],
+  \"debug\": true,
+  \"verbose\": 1
+}
+
+"""
+}
+
+// data/docs/config-edge.json
+fn file_11() -> String {
+    """
+{
+  \"listen\": [\"10.0.0.1\"],
+  \"workers\": 4.0,
+  \"ratio\": 1.0000001,
+  \"level\": 0.0,
+  \"tags\": [{\"a\": 1, \"b\": 2}, {\"b\": 2, \"a\": 1}],
+  \"limits\": {},
+  \"mode\": {\"versions\": [1.2, 1.3], \"tls\": true},
+  \"admins\": [\"a@b.c\"],
+  \"token\": \"Changeme\",
+  \"x-\": 1
+}
+
+"""
+}
+
+// data/docs/config-empty.json
+fn file_12() -> String {
+    """
+{}
+
+"""
+}
+
+// data/docs/config-ok.json
+fn file_13() -> String {
+    """
+{
+  \"listen\": [\"0.0.0.0\", 8443],
+  \"workers\": 8,
+  \"ratio\": 0.5,
+  \"level\": null,
+  \"tags\": [\"edge\", \"eu\", 3, [1, 2]],
+  \"limits\": {\"max_conn\": 1000, \"burst\": 50},
+  \"mode\": {\"tls\": true, \"versions\": [1.2, 1.3]},
+  \"admins\": [\"ana@ops.example\", \"bo@dev.example\", \"cy@ops.example\"],
+  \"token\": \"s3cr3t-9f8a\",
+  \"backoff\": [],
+  \"x-owner\": \"platform\"
+}
+
+"""
+}
+
+// data/docs/config-strings.json
+fn file_14() -> String {
+    """
+{
+  \"level\": \"it's \\\"quoted\\\"\",
+  \"token\": \"tab\\there\\nnewline\",
+  \"tags\": [\"caf\\u00e9\", \"café\", \"\\u65e5\\u672c\", \"\\\\back\"],
+  \"unknown key\": \"x\",
+  \"it's\": 1
+}
+
+"""
+}
+
+// data/docs/deploy-bad.json
+fn file_15() -> String {
+    """
+{
+  \"apiVersion\": \"apps/v1beta2\",
+  \"kind\": \"Deployment\",
+  \"metadata\": {\"name\": \"Checkout_API\", \"labels\": {\"-bad\": \"x\", \"team\": 7}},
+  \"spec\": {
+    \"replicas\": -1,
+    \"selector\": {},
+    \"strategy\": {\"type\": \"Recreate\", \"rollingUpdate\": {\"maxSurge\": \"25 percent\"}},
+    \"template\": {
+      \"spec\": {
+        \"restartPolicy\": \"Sometimes\",
+        \"containers\": [
+          {\"name\": \"web\", \"image\": \"\",
+           \"ports\": [{\"containerPort\": 70000}, {\"protocol\": \"HTTP\"}],
+           \"env\": [{\"name\": \"A\"}, {\"name\": \"B\", \"value\": \"1\", \"valueFrom\": {}}, {\"value\": \"x\"}],
+           \"resources\": {\"limits\": {\"cpu\": \"1.5 cores\", \"memory\": \"1Gb\", \"gpu\": 1}}}
+        ]
+      }
+    }
+  }
+}
+
+"""
+}
+
+// data/docs/deploy-no-app.json
+fn file_16() -> String {
+    """
+{
+  \"apiVersion\": \"apps/v1\",
+  \"kind\": \"StatefulSet\",
+  \"metadata\": {\"name\": \"worker\", \"labels\": {\"a-label-name-that-is-far-too-long-for-kubernetes-to-accept-at-all\": \"v\"}},
+  \"spec\": {\"selector\": {\"x\": 1}, \"template\": {\"spec\": {\"containers\": [{\"name\": \"sidecar\", \"image\": \"s:1\"}]}}}
+}
+
+"""
+}
+
+// data/docs/deploy-ok.json
+fn file_17() -> String {
+    """
+{
+  \"apiVersion\": \"apps/v1\",
+  \"kind\": \"Deployment\",
+  \"metadata\": {\"name\": \"checkout\", \"namespace\": \"shop\", \"labels\": {\"app.kubernetes.io/name\": \"checkout\", \"tier\": \"web\"}},
+  \"spec\": {
+    \"replicas\": 3,
+    \"selector\": {\"matchLabels\": {\"app\": \"checkout\"}},
+    \"strategy\": {\"type\": \"RollingUpdate\", \"rollingUpdate\": {\"maxSurge\": \"25%\", \"maxUnavailable\": 0}},
+    \"template\": {
+      \"spec\": {
+        \"containers\": [
+          {\"name\": \"app\", \"image\": \"registry.example/checkout:1.8.2\",
+           \"ports\": [{\"containerPort\": 8080, \"protocol\": \"TCP\"}],
+           \"env\": [{\"name\": \"MODE\", \"value\": \"prod\"}, {\"name\": \"DB_URL\", \"valueFrom\": {\"secretKeyRef\": {\"name\": \"db\", \"key\": \"url\"}}}],
+           \"resources\": {\"limits\": {\"cpu\": \"500m\", \"memory\": \"256Mi\"}, \"requests\": {\"cpu\": 0.25, \"memory\": \"128Mi\"}}},
+          {\"name\": \"envoy\", \"image\": \"envoyproxy/envoy:v1.31.0\", \"args\": [\"-c\", \"/etc/envoy.yaml\"]}
+        ]
+      }
+    }
+  }
+}
+
+"""
+}
+
+// data/docs/deploy-two-apps.json
+fn file_18() -> String {
+    """
+{
+  \"apiVersion\": \"apps/v1\",
+  \"kind\": \"Deployment\",
+  \"metadata\": {\"name\": \"batch\"},
+  \"spec\": {
+    \"selector\": {\"matchLabels\": {\"app\": \"batch\"}},
+    \"strategy\": {\"rollingUpdate\": {\"maxSurge\": 1.5}},
+    \"template\": {\"spec\": {\"containers\": [
+      {\"name\": \"app\", \"image\": \"batch:1\"},
+      {\"name\": \"app\", \"image\": \"batch:2\"}
+    ]}}
+  }
+}
+
+"""
+}
+
+// data/docs/order-array.json
+fn file_19() -> String {
+    """
+[{\"id\": \"ord_00000001\"}]
+
+"""
+}
+
+// data/docs/order-bad.json
+fn file_20() -> String {
+    """
+{
+  \"id\": \"ORD-12\",
+  \"customer\": {\"email\": \"kim@example.com\", \"name\": \"\"},
+  \"items\": [
+    {\"sku\": \"TEA-42\", \"qty\": 0, \"price\": 19.99},
+    {\"sku\": \"TEA-0042\", \"qty\": 2.5, \"price\": -3, \"discount\": 1},
+    {\"sku\": \"CUP-0007\", \"qty\": 101, \"price\": 0.3, \"colour\": \"red\"},
+    {\"qty\": 1}
+  ],
+  \"currency\": \"usd\",
+  \"coupon\": \"save10\",
+  \"giftWrap\": true,
+  \"shipping\": {\"country\": \"US\", \"line1\": \"9 Elm St\", \"postcode\": \"9021\"},
+  \"notes\": 5,
+  \"trackingId\": \"1Z999\",
+  \"source\": \"app\"
+}
+
+"""
+}
+
+// data/docs/order-empty.json
+fn file_21() -> String {
+    """
+{
+  \"id\": \"ord_00000000\",
+  \"customer\": \"ana@example.com\",
+  \"items\": [],
+  \"currency\": \"EUR\",
+  \"shipping\": {\"country\": \"DE\", \"postcode\": \"10115 Berlin-Mitte\"}
+}
+
+"""
+}
+
+// data/docs/order-ok.json
+fn file_22() -> String {
+    """
+{
+  \"id\": \"ord_0a1b2c3d\",
+  \"customer\": {\"email\": \"ana@example.com\", \"name\": \"Ana Lima\", \"vip\": true},
+  \"items\": [
+    {\"sku\": \"TEA-0042\", \"qty\": 2, \"price\": 4.5},
+    {\"sku\": \"MUG-1001\", \"qty\": 1, \"price\": 12.25, \"discount\": 0.1}
+  ],
+  \"currency\": \"EUR\",
+  \"shipping\": {\"country\": \"PT\", \"line1\": \"Rua Augusta 10\", \"postcode\": \"1100-053\"},
+  \"notes\": null
+}
+
+"""
+}
+
+// data/docs/order-us.json
+fn file_23() -> String {
+    """
+{
+  \"id\": \"ord_ffff0000\",
+  \"customer\": {\"email\": \"not-an-email\", \"name\": \"Bo\"},
+  \"items\": [{\"sku\": \"PEN-0001\", \"qty\": 10, \"price\": 1.0}],
+  \"currency\": \"USD\",
+  \"shipping\": {\"country\": \"US\", \"line1\": \"1 Main St\", \"postcode\": \"02139-4307\"},
+  \"giftWrap\": true,
+  \"giftMessage\": \"Happy birthday!\"
+}
+
+"""
+}
+
+// data/docs/package-bad.json
+fn file_24() -> String {
+    """
+{
+  \"name\": \"My_Package\",
+  \"version\": \"1.02.3\",
+  \"keywords\": [\"http\", \"client\", \"http\"],
+  \"license\": \"GPL\",
+  \"bin\": {},
+  \"scripts\": {\"test\": [\"jest\"], \"lint\": \"eslint .\"},
+  \"dependencies\": {\"left-pad\": \"1.3.0\", \"Express\": \"^4\", \"lodash\": 4},
+  \"engines\": {\"node\": \">=18\", \"npm\": \">=9\", \"yarn\": \"1\", \"pnpm\": \"8\"},
+  \"files\": []
+}
+
+"""
+}
+
+// data/docs/package-license.json
+fn file_25() -> String {
+    """
+{
+  \"name\": \"tiny\",
+  \"version\": \"0.0.1\",
+  \"license\": \"SEE LICENSE IN LICENSE.txt\",
+  \"bin\": \"cli.js\",
+  \"devDependencies\": {\"typescript\": \"5.6.2\"}
+}
+
+"""
+}
+
+// data/docs/package-license2.json
+fn file_26() -> String {
+    """
+{
+  \"name\": \"tiny-two\",
+  \"version\": \"1.0.0\",
+  \"license\": {\"url\": \"https://example.com/license\"},
+  \"keywords\": [1, true, 1.0, \"x\"]
+}
+
+"""
+}
+
+// data/docs/package-ok.json
+fn file_27() -> String {
+    """
+{
+  \"name\": \"@acme/log-shipper\",
+  \"version\": \"2.10.0-rc.1+build.7\",
+  \"private\": true,
+  \"keywords\": [\"logs\", \"shipper\", \"vector\"],
+  \"license\": \"Apache-2.0\",
+  \"bin\": {\"shipper\": \"bin/shipper.js\"},
+  \"scripts\": {\"test\": \"node --test\", \"build\": \"tsc -p .\"},
+  \"dependencies\": {\"undici\": \"^6.19.2\", \"@acme/core\": \"workspace:*\"},
+  \"engines\": {\"node\": \">=20\"},
+  \"files\": [\"dist\", \"bin\"]
+}
+
+"""
+}
+
+// data/docs/workflow-bad.json
+fn file_28() -> String {
+    """
+{
+  \"on\": [\"push\", \"merge\"],
+  \"jobs\": {
+    \"build\": {
+      \"runs-on\": 22.04,
+      \"timeout-minutes\": 0,
+      \"steps\": [
+        {\"name\": \"both\", \"uses\": \"actions/checkout@v4\", \"run\": \"make\"},
+        {\"name\": \"neither\"},
+        {\"run\": \"make\", \"with\": {\"x\": 1}},
+        {\"uses\": \"checkout\"}
+      ]
+    },
+    \"2nd-job\": {\"runs-on\": \"ubuntu-latest\", \"steps\": []},
+    \"lint\": {\"steps\": [{\"run\": \"ruff .\"}], \"needs\": [1]}
+  }
+}
+
+"""
+}
+
+// data/docs/workflow-ok.json
+fn file_29() -> String {
+    """
+{
+  \"name\": \"ci\",
+  \"on\": {\"push\": {\"branches\": [\"main\"]}, \"pull_request\": null},
+  \"jobs\": {
+    \"test\": {
+      \"runs-on\": \"ubuntu-24.04\",
+      \"timeout-minutes\": 30,
+      \"steps\": [
+        {\"uses\": \"actions/checkout@v4\"},
+        {\"uses\": \"actions/setup-node@v4\", \"with\": {\"node-version\": 20}},
+        {\"name\": \"test\", \"run\": \"npm test\"}
+      ]
+    },
+    \"deploy\": {\"runs-on\": [\"self-hosted\", \"linux\"], \"needs\": [\"test\"], \"steps\": [{\"uses\": \"docker://alpine:3.20\"}]}
+  }
+}
+
+"""
+}
+
+// data/docs/workflow-on.json
+fn file_30() -> String {
+    """
+{\"on\": \"nightly\", \"jobs\": {}}
+
+"""
+}
+
+// data/docs/workflow-on2.json
+fn file_31() -> String {
+    """
+{\"on\": {\"push\": {}, \"cron\": \"0 0 * * *\"}, \"jobs\": {\"a\": {\"runs-on\": \"x\", \"steps\": [{\"run\": \"true\"}], \"timeout-minutes\": 361}}}
+
+"""
+}
+
+// data/jobs.txt
+fn file_32() -> String {
+    """
+# mini_jsonschema jobs: each line runs from data/
+validate schemas/order.schema.json docs/order-ok.json docs/order-us.json docs/order-bad.json docs/order-empty.json docs/order-array.json
+validate --best schemas/order.schema.json docs/order-bad.json docs/order-empty.json docs/order-array.json
+validate schemas/package.schema.json docs/package-ok.json docs/package-bad.json docs/package-license.json docs/package-license2.json
+validate --best schemas/package.schema.json docs/package-bad.json docs/package-license2.json
+validate schemas/deployment.schema.json docs/deploy-ok.json docs/deploy-bad.json docs/deploy-two-apps.json docs/deploy-no-app.json
+validate --best schemas/deployment.schema.json docs/deploy-bad.json docs/deploy-two-apps.json docs/deploy-no-app.json
+validate schemas/config.schema.json docs/config-ok.json docs/config-bad.json docs/config-edge.json docs/config-empty.json docs/config-strings.json
+validate --best schemas/config.schema.json docs/config-bad.json docs/config-edge.json docs/config-strings.json
+validate schemas/workflow.schema.json docs/workflow-ok.json docs/workflow-bad.json docs/workflow-on.json docs/workflow-on2.json
+validate --best schemas/workflow.schema.json docs/workflow-bad.json docs/workflow-on.json docs/workflow-on2.json
+validate schemas/config.schema.json docs/broken-comma.json docs/broken-trailing.json docs/broken-quote.json docs/broken-string.json docs/broken-extra.json docs/broken-empty.json docs/broken-escape.json docs/broken-number.json docs/broken-colon.json docs/broken-literal.json
+validate schemas/order.schema.json docs/missing.json docs/order-ok.json
+validate schemas/missing.schema.json docs/order-ok.json
+validate schemas/order.schema.json
+
+"""
+}
+
+// data/schemas/config.schema.json
+fn file_33() -> String {
+    """
+{
+  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",
+  \"title\": \"service config\",
+  \"type\": \"object\",
+  \"properties\": {
+    \"listen\": {
+      \"type\": \"array\",
+      \"prefixItems\": [
+        {
+          \"type\": \"string\",
+          \"pattern\": \"^(\\\\d{1,3}\\\\.){3}\\\\d{1,3}$\"
+        },
+        {
+          \"type\": \"integer\",
+          \"minimum\": 1,
+          \"maximum\": 65535
+        }
+      ],
+      \"items\": false
+    },
+    \"workers\": {
+      \"type\": \"integer\",
+      \"multipleOf\": 2,
+      \"minimum\": 2
+    },
+    \"ratio\": {
+      \"type\": \"number\",
+      \"multipleOf\": 0.1,
+      \"maximum\": 1
+    },
+    \"level\": {
+      \"enum\": [
+        \"debug\",
+        \"info\",
+        \"warn\",
+        \"error\",
+        0,
+        null
+      ]
+    },
+    \"tags\": {
+      \"type\": \"array\",
+      \"uniqueItems\": true,
+      \"maxItems\": 4
+    },
+    \"limits\": {
+      \"type\": \"object\",
+      \"propertyNames\": {
+        \"pattern\": \"^[a-z_]+$\",
+        \"maxLength\": 12
+      },
+      \"additionalProperties\": {
+        \"type\": \"integer\",
+        \"exclusiveMinimum\": 0
+      },
+      \"minProperties\": 1
+    },
+    \"mode\": {
+      \"const\": {
+        \"tls\": true,
+        \"versions\": [
+          1.2,
+          1.3
+        ]
+      }
+    },
+    \"legacyAuth\": false,
+    \"admins\": {
+      \"type\": \"array\",
+      \"items\": {
+        \"type\": \"string\"
+      },
+      \"contains\": {
+        \"pattern\": \"@ops\\\\.example$\"
+      },
+      \"minContains\": 2
+    },
+    \"token\": {
+      \"type\": \"string\",
+      \"not\": {
+        \"pattern\": \"^(changeme|secret|password)$\"
+      }
+    },
+    \"backoff\": {
+      \"type\": \"array\",
+      \"items\": {
+        \"type\": \"number\"
+      },
+      \"maxItems\": 0
+    }
+  },
+  \"patternProperties\": {
+    \"^x-\": {}
+  },
+  \"additionalProperties\": false,
+  \"minProperties\": 1
+}
+
+"""
+}
+
+// data/schemas/deployment.schema.json
+fn file_34() -> String {
+    """
+{
+  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",
+  \"title\": \"Deployment (apps/v1, subset)\",
+  \"type\": \"object\",
+  \"required\": [
+    \"apiVersion\",
+    \"kind\",
+    \"metadata\",
+    \"spec\"
+  ],
+  \"properties\": {
+    \"apiVersion\": {
+      \"const\": \"apps/v1\"
+    },
+    \"kind\": {
+      \"const\": \"Deployment\"
+    },
+    \"metadata\": {
+      \"type\": \"object\",
+      \"required\": [
+        \"name\"
+      ],
+      \"properties\": {
+        \"name\": {
+          \"$ref\": \"#/$defs/dnsName\"
+        },
+        \"namespace\": {
+          \"$ref\": \"#/$defs/dnsName\"
+        },
+        \"labels\": {
+          \"type\": \"object\",
+          \"propertyNames\": {
+            \"maxLength\": 63,
+            \"pattern\": \"^[a-z0-9A-Z]([-a-z0-9A-Z_./]*[a-z0-9A-Z])?$\"
+          },
+          \"additionalProperties\": {
+            \"type\": \"string\",
+            \"maxLength\": 63
+          }
+        }
+      }
+    },
+    \"spec\": {
+      \"type\": \"object\",
+      \"required\": [
+        \"selector\",
+        \"template\"
+      ],
+      \"properties\": {
+        \"replicas\": {
+          \"type\": \"integer\",
+          \"minimum\": 0
+        },
+        \"selector\": {
+          \"type\": \"object\",
+          \"minProperties\": 1
+        },
+        \"template\": {
+          \"type\": \"object\",
+          \"properties\": {
+            \"spec\": {
+              \"type\": \"object\",
+              \"required\": [
+                \"containers\"
+              ],
+              \"properties\": {
+                \"containers\": {
+                  \"type\": \"array\",
+                  \"minItems\": 1,
+                  \"items\": {
+                    \"$ref\": \"#/$defs/container\"
+                  },
+                  \"contains\": {
+                    \"properties\": {
+                      \"name\": {
+                        \"const\": \"app\"
+                      }
+                    },
+                    \"required\": [
+                      \"name\"
+                    ]
+                  },
+                  \"maxContains\": 1
+                },
+                \"restartPolicy\": {
+                  \"enum\": [
+                    \"Always\",
+                    \"OnFailure\",
+                    \"Never\"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        \"strategy\": {
+          \"type\": \"object\",
+          \"properties\": {
+            \"type\": {
+              \"enum\": [
+                \"RollingUpdate\",
+                \"Recreate\"
+              ]
+            },
+            \"rollingUpdate\": {
+              \"type\": \"object\",
+              \"properties\": {
+                \"maxSurge\": {
+                  \"$ref\": \"#/$defs/intOrPercent\"
+                },
+                \"maxUnavailable\": {
+                  \"$ref\": \"#/$defs/intOrPercent\"
+                }
+              }
+            }
+          },
+          \"if\": {
+            \"properties\": {
+              \"type\": {
+                \"const\": \"Recreate\"
+              }
+            },
+            \"required\": [
+              \"type\"
+            ]
+          },
+          \"then\": {
+            \"not\": {
+              \"required\": [
+                \"rollingUpdate\"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  \"$defs\": {
+    \"dnsName\": {
+      \"type\": \"string\",
+      \"maxLength\": 63,
+      \"pattern\": \"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$\"
+    },
+    \"intOrPercent\": {
+      \"oneOf\": [
+        {
+          \"type\": \"integer\",
+          \"minimum\": 0
+        },
+        {
+          \"type\": \"string\",
+          \"pattern\": \"^\\\\d+%$\"
+        }
+      ]
+    },
+    \"container\": {
+      \"type\": \"object\",
+      \"required\": [
+        \"name\",
+        \"image\"
+      ],
+      \"properties\": {
+        \"name\": {
+          \"$ref\": \"#/$defs/dnsName\"
+        },
+        \"image\": {
+          \"type\": \"string\",
+          \"minLength\": 1
+        },
+        \"args\": {
+          \"type\": \"array\",
+          \"items\": {
+            \"type\": \"string\"
+          }
+        },
+        \"ports\": {
+          \"type\": \"array\",
+          \"items\": {
+            \"type\": \"object\",
+            \"required\": [
+              \"containerPort\"
+            ],
+            \"properties\": {
+              \"containerPort\": {
+                \"type\": \"integer\",
+                \"minimum\": 1,
+                \"maximum\": 65535
+              },
+              \"protocol\": {
+                \"enum\": [
+                  \"TCP\",
+                  \"UDP\",
+                  \"SCTP\"
+                ]
+              }
+            }
+          }
+        },
+        \"env\": {
+          \"type\": \"array\",
+          \"items\": {
+            \"type\": \"object\",
+            \"required\": [
+              \"name\"
+            ],
+            \"properties\": {
+              \"name\": {
+                \"type\": \"string\"
+              }
+            },
+            \"oneOf\": [
+              {
+                \"required\": [
+                  \"value\"
+                ]
+              },
+              {
+                \"required\": [
+                  \"valueFrom\"
+                ]
+              }
+            ]
+          }
+        },
+        \"resources\": {
+          \"type\": \"object\",
+          \"properties\": {
+            \"limits\": {
+              \"$ref\": \"#/$defs/quantities\"
+            },
+            \"requests\": {
+              \"$ref\": \"#/$defs/quantities\"
+            }
+          }
+        }
+      }
+    },
+    \"quantities\": {
+      \"type\": \"object\",
+      \"properties\": {
+        \"cpu\": {
+          \"type\": [
+            \"string\",
+            \"number\"
+          ],
+          \"pattern\": \"^\\\\d+(\\\\.\\\\d+)?m?$\"
+        },
+        \"memory\": {
+          \"type\": \"string\",
+          \"pattern\": \"^\\\\d+(Ki|Mi|Gi|K|M|G)?$\"
+        }
+      },
+      \"additionalProperties\": false
+    }
+  }
+}
+
+"""
+}
+
+// data/schemas/order.schema.json
+fn file_35() -> String {
+    """
+{
+  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",
+  \"$id\": \"https://shop.example/schemas/order.json\",
+  \"title\": \"Order\",
+  \"type\": \"object\",
+  \"required\": [
+    \"id\",
+    \"customer\",
+    \"items\",
+    \"currency\"
+  ],
+  \"properties\": {
+    \"id\": {
+      \"type\": \"string\",
+      \"pattern\": \"^ord_[0-9a-f]{8}$\"
+    },
+    \"customer\": {
+      \"$ref\": \"#/$defs/customer\"
+    },
+    \"items\": {
+      \"type\": \"array\",
+      \"minItems\": 1,
+      \"maxItems\": 50,
+      \"items\": {
+        \"$ref\": \"#/$defs/line\"
+      }
+    },
+    \"currency\": {
+      \"enum\": [
+        \"USD\",
+        \"EUR\",
+        \"GBP\",
+        \"JPY\"
+      ]
+    },
+    \"coupon\": {
+      \"type\": \"string\",
+      \"minLength\": 4,
+      \"maxLength\": 12,
+      \"pattern\": \"^[A-Z0-9]+$\"
+    },
+    \"giftWrap\": {
+      \"type\": \"boolean\"
+    },
+    \"giftMessage\": {
+      \"type\": \"string\",
+      \"maxLength\": 40
+    },
+    \"shipping\": {
+      \"$ref\": \"#/$defs/address\"
+    },
+    \"notes\": {
+      \"type\": [
+        \"string\",
+        \"null\"
+      ]
+    }
+  },
+  \"dependentRequired\": {
+    \"giftWrap\": [
+      \"giftMessage\"
+    ]
+  },
+  \"additionalProperties\": false,
+  \"$defs\": {
+    \"customer\": {
+      \"type\": \"object\",
+      \"required\": [
+        \"email\",
+        \"name\"
+      ],
+      \"properties\": {
+        \"email\": {
+          \"type\": \"string\",
+          \"format\": \"email\"
+        },
+        \"name\": {
+          \"type\": \"string\",
+          \"minLength\": 1
+        },
+        \"vip\": {
+          \"type\": \"boolean\"
+        }
+      }
+    },
+    \"line\": {
+      \"type\": \"object\",
+      \"required\": [
+        \"sku\",
+        \"qty\",
+        \"price\"
+      ],
+      \"properties\": {
+        \"sku\": {
+          \"type\": \"string\",
+          \"pattern\": \"^[A-Z]{3}-\\\\d{4}$\"
+        },
+        \"qty\": {
+          \"type\": \"integer\",
+          \"minimum\": 1,
+          \"maximum\": 100
+        },
+        \"price\": {
+          \"type\": \"number\",
+          \"exclusiveMinimum\": 0,
+          \"multipleOf\": 0.01
+        },
+        \"discount\": {
+          \"type\": \"number\",
+          \"minimum\": 0,
+          \"exclusiveMaximum\": 1
+        }
+      },
+      \"additionalProperties\": false
+    },
+    \"address\": {
+      \"type\": \"object\",
+      \"required\": [
+        \"country\",
+        \"line1\"
+      ],
+      \"properties\": {
+        \"country\": {
+          \"type\": \"string\",
+          \"pattern\": \"^[A-Z]{2}$\"
+        },
+        \"line1\": {
+          \"type\": \"string\"
+        },
+        \"postcode\": {
+          \"type\": \"string\"
+        }
+      },
+      \"if\": {
+        \"properties\": {
+          \"country\": {
+            \"const\": \"US\"
+          }
+        }
+      },
+      \"then\": {
+        \"required\": [
+          \"postcode\"
+        ],
+        \"properties\": {
+          \"postcode\": {
+            \"pattern\": \"^\\\\d{5}(-\\\\d{4})?$\"
+          }
+        }
+      },
+      \"else\": {
+        \"properties\": {
+          \"postcode\": {
+            \"maxLength\": 10
+          }
+        }
+      }
+    }
+  }
+}
+
+"""
+}
+
+// data/schemas/package.schema.json
+fn file_36() -> String {
+    """
+{
+  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",
+  \"title\": \"package.json (subset)\",
+  \"type\": \"object\",
+  \"required\": [
+    \"name\",
+    \"version\"
+  ],
+  \"properties\": {
+    \"name\": {
+      \"type\": \"string\",
+      \"maxLength\": 214,
+      \"pattern\": \"^(?:@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$\"
+    },
+    \"version\": {
+      \"type\": \"string\",
+      \"pattern\": \"^(0|[1-9]\\\\d*)\\\\.(0|[1-9]\\\\d*)\\\\.(0|[1-9]\\\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\\\+[0-9A-Za-z.-]+)?$\"
+    },
+    \"private\": {
+      \"type\": \"boolean\"
+    },
+    \"keywords\": {
+      \"type\": \"array\",
+      \"items\": {
+        \"type\": \"string\"
+      },
+      \"uniqueItems\": true
+    },
+    \"license\": {
+      \"anyOf\": [
+        {
+          \"type\": \"string\",
+          \"enum\": [
+            \"MIT\",
+            \"ISC\",
+            \"Apache-2.0\",
+            \"BSD-3-Clause\",
+            \"UNLICENSED\"
+          ]
+        },
+        {
+          \"type\": \"string\",
+          \"pattern\": \"^SEE LICEN[CS]E IN \"
+        },
+        {
+          \"type\": \"object\",
+          \"required\": [
+            \"type\"
+          ],
+          \"properties\": {
+            \"type\": {
+              \"type\": \"string\"
+            }
+          }
+        }
+      ]
+    },
+    \"bin\": {
+      \"oneOf\": [
+        {
+          \"type\": \"string\"
+        },
+        {
+          \"type\": \"object\",
+          \"additionalProperties\": {
+            \"type\": \"string\"
+          },
+          \"minProperties\": 1
+        }
+      ]
+    },
+    \"scripts\": {
+      \"type\": \"object\",
+      \"additionalProperties\": {
+        \"type\": \"string\"
+      }
+    },
+    \"dependencies\": {
+      \"$ref\": \"#/$defs/deps\"
+    },
+    \"devDependencies\": {
+      \"$ref\": \"#/$defs/deps\"
+    },
+    \"engines\": {
+      \"type\": \"object\",
+      \"properties\": {
+        \"node\": {
+          \"type\": \"string\"
+        }
+      },
+      \"maxProperties\": 3
+    },
+    \"files\": {
+      \"type\": \"array\",
+      \"items\": {
+        \"type\": \"string\"
+      },
+      \"minItems\": 1
+    }
+  },
+  \"$defs\": {
+    \"deps\": {
+      \"type\": \"object\",
+      \"patternProperties\": {
+        \"^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$\": {
+          \"type\": \"string\"
+        }
+      },
+      \"additionalProperties\": false
+    }
+  }
+}
+
+"""
+}
+
+// data/schemas/workflow.schema.json
+fn file_37() -> String {
+    """
+{
+  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",
+  \"title\": \"GitHub Actions workflow (subset)\",
+  \"type\": \"object\",
+  \"required\": [
+    \"on\",
+    \"jobs\"
+  ],
+  \"properties\": {
+    \"name\": {
+      \"type\": \"string\"
+    },
+    \"on\": {
+      \"oneOf\": [
+        {
+          \"$ref\": \"#/$defs/event\"
+        },
+        {
+          \"type\": \"array\",
+          \"items\": {
+            \"$ref\": \"#/$defs/event\"
+          },
+          \"minItems\": 1
+        },
+        {
+          \"type\": \"object\",
+          \"propertyNames\": {
+            \"$ref\": \"#/$defs/event\"
+          },
+          \"minProperties\": 1
+        }
+      ]
+    },
+    \"jobs\": {
+      \"type\": \"object\",
+      \"minProperties\": 1,
+      \"patternProperties\": {
+        \"^[_a-zA-Z][a-zA-Z0-9_-]*$\": {
+          \"$ref\": \"#/$defs/job\"
+        }
+      },
+      \"additionalProperties\": false
+    }
+  },
+  \"$defs\": {
+    \"event\": {
+      \"enum\": [
+        \"push\",
+        \"pull_request\",
+        \"schedule\",
+        \"workflow_dispatch\",
+        \"release\"
+      ]
+    },
+    \"job\": {
+      \"type\": \"object\",
+      \"required\": [
+        \"runs-on\",
+        \"steps\"
+      ],
+      \"properties\": {
+        \"runs-on\": {
+          \"type\": [
+            \"string\",
+            \"array\"
+          ]
+        },
+        \"timeout-minutes\": {
+          \"type\": \"number\",
+          \"exclusiveMinimum\": 0,
+          \"maximum\": 360
+        },
+        \"needs\": {
+          \"type\": [
+            \"string\",
+            \"array\"
+          ],
+          \"items\": {
+            \"type\": \"string\"
+          }
+        },
+        \"steps\": {
+          \"type\": \"array\",
+          \"minItems\": 1,
+          \"items\": {
+            \"$ref\": \"#/$defs/step\"
+          }
+        }
+      }
+    },
+    \"step\": {
+      \"type\": \"object\",
+      \"properties\": {
+        \"name\": {
+          \"type\": \"string\"
+        },
+        \"uses\": {
+          \"type\": \"string\",
+          \"pattern\": \"^[\\\\w.-]+/[\\\\w.-]+(/[\\\\w./-]+)?@[\\\\w.-]+$|^docker://\"
+        },
+        \"run\": {
+          \"type\": \"string\"
+        },
+        \"with\": {
+          \"type\": \"object\"
+        }
+      },
+      \"anyOf\": [
+        {
+          \"required\": [
+            \"uses\"
+          ]
+        },
+        {
+          \"required\": [
+            \"run\"
+          ]
+        }
+      ],
+      \"not\": {
+        \"required\": [
+          \"uses\",
+          \"run\"
+        ]
+      },
+      \"dependentSchemas\": {
+        \"with\": {
+          \"required\": [
+            \"uses\"
+          ]
+        }
+      }
+    }
+  }
+}
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// The bytes a block of hex digits spells; line breaks are skipped.
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut digits: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if is_hex(b[i]) {
+            digits.push(hex_val(b[i]));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data/docs")?;
+    put("data/docs/broken-colon.json", file_0())?;
+    put("data/docs/broken-comma.json", file_1())?;
+    put("data/docs/broken-empty.json", file_2())?;
+    put("data/docs/broken-escape.json", file_3())?;
+    put("data/docs/broken-extra.json", file_4())?;
+    put("data/docs/broken-literal.json", file_5())?;
+    put("data/docs/broken-number.json", file_6())?;
+    put("data/docs/broken-quote.json", file_7())?;
+    put("data/docs/broken-string.json", file_8())?;
+    put("data/docs/broken-trailing.json", file_9())?;
+    put("data/docs/config-bad.json", file_10())?;
+    put("data/docs/config-edge.json", file_11())?;
+    put("data/docs/config-empty.json", file_12())?;
+    put("data/docs/config-ok.json", file_13())?;
+    put("data/docs/config-strings.json", file_14())?;
+    put("data/docs/deploy-bad.json", file_15())?;
+    put("data/docs/deploy-no-app.json", file_16())?;
+    put("data/docs/deploy-ok.json", file_17())?;
+    put("data/docs/deploy-two-apps.json", file_18())?;
+    put("data/docs/order-array.json", file_19())?;
+    put("data/docs/order-bad.json", file_20())?;
+    put("data/docs/order-empty.json", file_21())?;
+    put("data/docs/order-ok.json", file_22())?;
+    put("data/docs/order-us.json", file_23())?;
+    put("data/docs/package-bad.json", file_24())?;
+    put("data/docs/package-license.json", file_25())?;
+    put("data/docs/package-license2.json", file_26())?;
+    put("data/docs/package-ok.json", file_27())?;
+    put("data/docs/workflow-bad.json", file_28())?;
+    put("data/docs/workflow-ok.json", file_29())?;
+    put("data/docs/workflow-on.json", file_30())?;
+    put("data/docs/workflow-on2.json", file_31())?;
+    make_dir("data")?;
+    put("data/jobs.txt", file_32())?;
+    make_dir("data/schemas")?;
+    put("data/schemas/config.schema.json", file_33())?;
+    put("data/schemas/deployment.schema.json", file_34())?;
+    put("data/schemas/order.schema.json", file_35())?;
+    put("data/schemas/package.schema.json", file_36())?;
+    put("data/schemas/workflow.schema.json", file_37())?;
+    Ok(())
+}
+
+// The names of the input files.
+fn data_names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("docs/broken-colon.json".to_string());
+    v.push("docs/broken-comma.json".to_string());
+    v.push("docs/broken-empty.json".to_string());
+    v.push("docs/broken-escape.json".to_string());
+    v.push("docs/broken-extra.json".to_string());
+    v.push("docs/broken-literal.json".to_string());
+    v.push("docs/broken-number.json".to_string());
+    v.push("docs/broken-quote.json".to_string());
+    v.push("docs/broken-string.json".to_string());
+    v.push("docs/broken-trailing.json".to_string());
+    v.push("docs/config-bad.json".to_string());
+    v.push("docs/config-edge.json".to_string());
+    v.push("docs/config-empty.json".to_string());
+    v.push("docs/config-ok.json".to_string());
+    v.push("docs/config-strings.json".to_string());
+    v.push("docs/deploy-bad.json".to_string());
+    v.push("docs/deploy-no-app.json".to_string());
+    v.push("docs/deploy-ok.json".to_string());
+    v.push("docs/deploy-two-apps.json".to_string());
+    v.push("docs/order-array.json".to_string());
+    v.push("docs/order-bad.json".to_string());
+    v.push("docs/order-empty.json".to_string());
+    v.push("docs/order-ok.json".to_string());
+    v.push("docs/order-us.json".to_string());
+    v.push("docs/package-bad.json".to_string());
+    v.push("docs/package-license.json".to_string());
+    v.push("docs/package-license2.json".to_string());
+    v.push("docs/package-ok.json".to_string());
+    v.push("docs/workflow-bad.json".to_string());
+    v.push("docs/workflow-ok.json".to_string());
+    v.push("docs/workflow-on.json".to_string());
+    v.push("docs/workflow-on2.json".to_string());
+    v.push("jobs.txt".to_string());
+    v.push("schemas/config.schema.json".to_string());
+    v.push("schemas/deployment.schema.json".to_string());
+    v.push("schemas/order.schema.json".to_string());
+    v.push("schemas/package.schema.json".to_string());
+    v.push("schemas/workflow.schema.json".to_string());
+    v
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.txt: {e}"),
+    };
+    for line in lines_of(text) {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let w = split_on(line, b' ');
+        let mut out = f"$ {line}\n";
+        let mut body = String.new();
+        let rest: Vec[String] = w[1..].to_vec();
+        let rc = if w[0] == "validate" { validate(mut body, rest) } else { 127 };
+        out.push_str(body);
+        if rc != 0 {
+            out.push_str(f"[exit status {rc}]\n");
+        }
+        println(out);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
