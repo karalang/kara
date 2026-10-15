@@ -185,6 +185,7 @@ cli/mini_cookies        SimpleCookie load, quoting, morsels and output as Python
 cli/mini_ipaddress      IPv4 and IPv6 addresses and networks as Python's ipaddress module; an IPAM and a firewall
 cli/mini_pathlib        POSIX and Windows pure paths as Python's pathlib; packaging rules over a real tree
 cli/mini_zoneinfo       time zones from real TZif files as Python's zoneinfo; transitions and a meeting planner
+cli/mini_gettext            .po compiler, .mo catalogs, fallback chains and plural forms (gettext)
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

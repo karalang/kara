@@ -1,0 +1,2223 @@
+// mini_gettext: a shop's UI in nine languages, translated the way
+// Python 3.13's gettext does it:
+// - a .po compiler, modelled on CPython's Tools/i18n/msgfmt.py, that
+//   reads comments, fuzzy flags, msgctxt, plural entries and escapes,
+//   and writes .mo files byte for byte as msgfmt.py lays them out;
+// - the GNUTranslations loader for little- and big-endian .mo files,
+//   with its metadata rules, charsets (UTF-8 and ISO-8859-1) and every
+//   OSError it raises;
+// - gettext's plural-form compiler (c2py): its tokenizer, its C
+//   precedence parser, the Python expression it generates, its errors
+//   and limits, and the expression's value under Python's arithmetic;
+// - gettext, ngettext, pgettext and npgettext through fallback chains.
+//
+// The inputs are the files in data/. expected.out is the output of
+// oracle.py, the same program written with gettext.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+// ------------------------------------------------------------ the .po compiler
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for i in from..to {
+        out.push(b[i]);
+    }
+    out
+}
+
+fn has_prefix(b: ref Vec[u8], p: Str) -> bool {
+    starts_at(b, 0, p)
+}
+
+fn append(a: mut ref Vec[u8], b: ref Vec[u8]) {
+    for i in 0..b.len() {
+        a.push(b[i]);
+    }
+}
+
+fn contains_seq(b: ref Vec[u8], p: Str) -> bool {
+    for i in 0..b.len() {
+        if starts_at(b, i, p) {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains_u8(b: ref Vec[u8], c: u8) -> bool {
+    for i in 0..b.len() {
+        if b[i] == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn strip_bytes(b: ref Vec[u8]) -> Vec[u8] {
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    sub(b, i, j)
+}
+
+// bytes.decode("latin-1"): one code point per byte.
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        push_code_point(mut out, b[i] as i64);
+    }
+    from_bytes(out)
+}
+
+fn unescape(s: ref Vec[u8], lno: i64) -> Result[Vec[u8], String] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < s.len() {
+        let c = s[i];
+        if c == b'\\' {
+            i += 1;
+            let e: u8 = if i < s.len() { s[i] } else { 0 };
+            if e == b'n' {
+                out.push(b'\n');
+            } else if e == b't' {
+                out.push(b'\t');
+            } else if e == b'r' {
+                out.push(b'\r');
+            } else if e == b'"' or e == b'\\' {
+                out.push(e);
+            } else {
+                let shown = if i < s.len() { latin1(sub(s, i, i + 1)) } else { String.new() };
+                return Err(f"line {lno}: unknown escape \\{shown}");
+            }
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+// One compiled message: the key (msgctxt EOT msgid, msgid NUL plural)
+// and the value (the msgstrs joined by NUL).
+#[derive(Clone)]
+struct Msg {
+    key: Vec[u8],
+    value: Vec[u8],
+}
+
+struct Compiled {
+    msgs: Vec[Msg],
+    fuzzy: i64,
+    empty: i64,
+}
+
+const ID: i64 = 1;
+const STR: i64 = 2;
+const CTXT: i64 = 3;
+
+// The parser's state between lines.
+struct Po {
+    section: i64,
+    has_ctxt: bool,
+    msgctxt: Vec[u8],
+    msgid: Vec[u8],
+    msgstr: Vec[u8],
+    fuzzy: bool,
+    is_plural: bool,
+    out: Compiled,
+}
+
+impl Po {
+    // Ends the entry being read: keeps it unless it is fuzzy or has no
+    // translation.
+    fn add(mut ref self) {
+        if self.fuzzy {
+            self.out.fuzzy += 1;
+            return;
+        }
+        let mut any = false;
+        for i in 0..self.msgstr.len() {
+            if self.msgstr[i] != 0 {
+                any = true;
+            }
+        }
+        if not any {
+            self.out.empty += 1;
+            return;
+        }
+        let mut key: Vec[u8] = Vec.new();
+        if self.has_ctxt {
+            append(mut key, self.msgctxt);
+            key.push(4);
+        }
+        append(mut key, self.msgid);
+        add_msg(mut self.out, key, self.msgstr.clone());
+    }
+}
+
+// A later entry with the same key replaces the earlier one.
+fn add_msg(c: mut ref Compiled, key: own Vec[u8], value: own Vec[u8]) {
+    for i in 0..c.msgs.len() {
+        if c.msgs[i].key == key {
+            c.msgs[i].value = value;
+            return;
+        }
+    }
+    c.msgs.push(Msg { key: key, value: value });
+}
+
+fn msgfmt(text: ref Vec[u8]) -> Result[Compiled, String] {
+    let mut p = Po {
+        section: 0,
+        has_ctxt: false,
+        msgctxt: Vec.new(),
+        msgid: Vec.new(),
+        msgstr: Vec.new(),
+        fuzzy: false,
+        is_plural: false,
+        out: Compiled { msgs: Vec.new(), fuzzy: 0, empty: 0 },
+    };
+    let mut lines: Vec[Vec[u8]] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..text.len() {
+        if text[i] == b'\n' {
+            lines.push(sub(text, st, i));
+            st = i + 1;
+        }
+    }
+    lines.push(sub(text, st, text.len()));
+    for k in 0..lines.len() {
+        let lno = k + 1;
+        let mut l = lines[k].clone();
+        let hash = l.len() > 0 and l[0] == b'#';
+        if hash and p.section == STR {
+            p.add();
+            p.section = 0;
+            p.has_ctxt = false;
+            p.fuzzy = false;
+        }
+        if has_prefix(l, "#,") and contains_seq(l, "fuzzy") {
+            p.fuzzy = true;
+        }
+        if hash {
+            continue;
+        }
+        if has_prefix(l, "msgctxt") {
+            if p.section == STR {
+                p.add();
+                p.fuzzy = false;
+            }
+            p.section = CTXT;
+            p.has_ctxt = true;
+            p.msgctxt = Vec.new();
+            l = sub(l, 7, l.len());
+        } else if has_prefix(l, "msgid_plural") {
+            if p.section != ID {
+                return Err(f"line {lno}: msgid_plural not preceded by msgid");
+            }
+            l = sub(l, 12, l.len());
+            p.msgid.push(0);
+            p.is_plural = true;
+        } else if has_prefix(l, "msgid") {
+            if p.section == STR {
+                p.add();
+                p.has_ctxt = false;
+                p.fuzzy = false;
+            }
+            p.section = ID;
+            l = sub(l, 5, l.len());
+            p.msgid = Vec.new();
+            p.msgstr = Vec.new();
+            p.is_plural = false;
+        } else if has_prefix(l, "msgstr") {
+            p.section = STR;
+            if has_prefix(l, "msgstr[") {
+                if not p.is_plural {
+                    return Err(f"line {lno}: plural without msgid_plural");
+                }
+                let mut j: i64 = 0;
+                while j < l.len() and l[j] != b']' {
+                    j += 1;
+                }
+                l = sub(l, j + 1, l.len());
+                if p.msgstr.len() > 0 {
+                    p.msgstr.push(0);
+                }
+            } else {
+                if p.is_plural {
+                    return Err(f"line {lno}: indexed msgstr required for plural");
+                }
+                l = sub(l, 6, l.len());
+            }
+        }
+        l = strip_bytes(l);
+        if l.len() == 0 {
+            continue;
+        }
+        if l.len() < 2 or l[0] != b'"' or l[l.len() - 1] != b'"' {
+            return Err(f"line {lno}: syntax error before: {latin1(l)}");
+        }
+        let s = unescape(sub(l, 1, l.len() - 1), lno)?;
+        if p.section == CTXT {
+            append(mut p.msgctxt, s);
+        } else if p.section == ID {
+            append(mut p.msgid, s);
+        } else if p.section == STR {
+            append(mut p.msgstr, s);
+        } else {
+            return Err(f"line {lno}: syntax error before: {latin1(l)}");
+        }
+    }
+    if p.section == STR {
+        p.add();
+    }
+    Ok(p.out)
+}
+
+fn bytes_lt(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    let mut i: i64 = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+        i += 1;
+    }
+    a.len() < b.len()
+}
+
+fn push_u32(out: mut ref Vec[u8], v: i64, big: bool) {
+    for k in 0..4 {
+        let shift = if big { 8 * (3 - k) } else { 8 * k };
+        out.push(((v >> shift) & 0xFF) as u8);
+    }
+}
+
+// msgfmt.py's generate(): the header, the key and value tables, then
+// the keys and the values, each NUL-terminated.
+fn generate(msgs: ref Vec[Msg]) -> Vec[u8] {
+    let mut keys = msgs.clone();
+    for i in 1..keys.len() {
+        let mut j = i;
+        while j > 0 and bytes_lt(keys[j].key, keys[j - 1].key) {
+            keys.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let n = keys.len();
+    let mut ids: Vec[u8] = Vec.new();
+    let mut strs: Vec[u8] = Vec.new();
+    let mut table: Vec[i64] = Vec.new();
+    let keystart = 7 * 4 + 16 * n;
+    let mut idlen: i64 = 0;
+    for i in 0..n {
+        idlen += keys[i].key.len() + 1;
+    }
+    let valuestart = keystart + idlen;
+    let mut vtable: Vec[i64] = Vec.new();
+    for i in 0..n {
+        table.push(keys[i].key.len());
+        table.push(ids.len() + keystart);
+        vtable.push(keys[i].value.len());
+        vtable.push(strs.len() + valuestart);
+        append(mut ids, keys[i].key);
+        ids.push(0);
+        append(mut strs, keys[i].value);
+        strs.push(0);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    push_u32(mut out, 0x950412de, false);
+    push_u32(mut out, 0, false);
+    push_u32(mut out, n, false);
+    push_u32(mut out, 28, false);
+    push_u32(mut out, 28 + n * 8, false);
+    push_u32(mut out, 0, false);
+    push_u32(mut out, 0, false);
+    for i in 0..table.len() {
+        push_u32(mut out, table[i], false);
+    }
+    for i in 0..vtable.len() {
+        push_u32(mut out, vtable[i], false);
+    }
+    append(mut out, ids);
+    append(mut out, strs);
+    out
+}
+
+fn hex_of(b: ref Vec[u8], n: i64) -> String {
+    let digits = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..n {
+        out.push(digits[(b[i] / 16) as i64]);
+        out.push(digits[(b[i] % 16) as i64]);
+    }
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ plural forms
+
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 0x80
+}
+
+// gettext._tokenize: the tokens, with each invalid one kept so that the
+// error is raised only when the parser reaches it, as the generator
+// does. The last token is "".
+#[derive(Clone)]
+struct PTok {
+    invalid: bool,
+    text: String,
+}
+
+fn tokenize(s: Str) -> Vec[PTok] {
+    let b = to_bytes(s);
+    let mut out: Vec[PTok] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b' ' or c == b'\t' {
+            i += 1;
+            continue;
+        }
+        if is_digit(c) {
+            let mut j = i;
+            while j < b.len() and is_digit(b[j]) {
+                j += 1;
+            }
+            if j == b.len() or not is_word(b[j]) {
+                out.push(PTok { invalid: false, text: byte_str(b, i, j) });
+                i = j;
+                continue;
+            }
+        }
+        if c == b'n' and (i + 1 == b.len() or not is_word(b[i + 1])) {
+            out.push(PTok { invalid: false, text: "n".to_string() });
+            i += 1;
+            continue;
+        }
+        if c == b'(' or c == b')' or c == b'-' or c == b'*' or c == b'/' or c == b'%' or c == b'+' or c == b'?' or c == b':' {
+            out.push(PTok { invalid: false, text: byte_str(b, i, i + 1) });
+            i += 1;
+            continue;
+        }
+        if c == b'>' or c == b'<' or c == b'!' {
+            let n = if i + 1 < b.len() and b[i + 1] == b'=' { 2 } else { 1 };
+            out.push(PTok { invalid: false, text: byte_str(b, i, i + n) });
+            i += n;
+            continue;
+        }
+        if i + 1 < b.len() and ((c == b'=' and b[i + 1] == b'=') or (c == b'&' and b[i + 1] == b'&') or (c == b'|' and b[i + 1] == b'|')) {
+            out.push(PTok { invalid: false, text: byte_str(b, i, i + 2) });
+            i += 2;
+            continue;
+        }
+        // \w+ or any one character
+        let mut j = i + 1;
+        if is_word(c) {
+            while j < b.len() and is_word(b[j]) {
+                j += 1;
+            }
+        } else if c >= 0x80 {
+            while j < b.len() and b[j] >= 0x80 and b[j] < 0xC0 {
+                j += 1;
+            }
+        }
+        out.push(PTok { invalid: true, text: byte_str(b, i, j) });
+        i = j;
+    }
+    out.push(PTok { invalid: false, text: String.new() });
+    out
+}
+
+const NUM: i64 = 0;
+const VAR: i64 = 1;
+const NOT: i64 = 2;
+const BIN: i64 = 3;
+const COND: i64 = 4;
+
+// An expression node; a, b and c index other nodes.
+#[derive(Clone)]
+struct PNode {
+    kind: i64,
+    op: String,
+    v: i64,
+    a: i64,
+    b: i64,
+    c: i64,
+}
+
+struct Plural {
+    toks: Vec[PTok],
+    at: i64,
+    nodes: Vec[PNode],
+}
+
+fn binary_priority(t: Str) -> i64 {
+    if t == "||" {
+        1
+    } else if t == "&&" {
+        2
+    } else if t == "==" or t == "!=" {
+        3
+    } else if t == "<" or t == ">" or t == "<=" or t == ">=" {
+        4
+    } else if t == "+" or t == "-" {
+        5
+    } else if t == "*" or t == "/" or t == "%" {
+        6
+    } else {
+        0
+    }
+}
+
+fn py_op(t: Str) -> String {
+    if t == "||" {
+        "or".to_string()
+    } else if t == "&&" {
+        "and".to_string()
+    } else if t == "/" {
+        "//".to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn unexpected(t: Str) -> String {
+    if t.len() > 0 { f"unexpected token in plural form: {t}" } else { "unexpected end of plural form".to_string() }
+}
+
+impl Plural {
+    fn next(mut ref self) -> Result[String, String] {
+        let t = self.toks[self.at].clone();
+        self.at += 1;
+        if t.invalid {
+            return Err(f"invalid token in plural form: {t.text}");
+        }
+        Ok(t.text)
+    }
+
+    fn node(mut ref self, kind: i64, op: Str, v: i64, a: i64, b: i64, c: i64) -> i64 {
+        self.nodes.push(PNode { kind: kind, op: op.to_string(), v: v, a: a, b: b, c: c });
+        self.nodes.len() - 1
+    }
+
+    // gettext._parse: the Python text, the node, and the next token.
+    fn parse(mut ref self, priority: i64) -> Result[(String, i64, String), String] {
+        let mut result = String.new();
+        let mut nots: i64 = 0;
+        let mut tok = self.next()?;
+        while tok == "!" {
+            result.push_str("not ");
+            nots += 1;
+            tok = self.next()?;
+        }
+        let mut node: i64 = -1;
+        if tok == "(" {
+            let (sub, sn, close) = self.parse(-1)?;
+            result = f"{result}({sub})";
+            node = sn;
+            if close != ")" {
+                return Err("unbalanced parenthesis in plural form".to_string());
+            }
+        } else if tok == "n" {
+            result.push_str("n");
+            node = self.node(VAR, "", 0, -1, -1, -1);
+        } else {
+            let b = to_bytes(tok);
+            if b.len() == 0 or not all_digits(b) {
+                return Err(unexpected(tok));
+            }
+            let mut v: i64 = 0;
+            for i in 0..b.len() {
+                v = v * 10 + (b[i] - b'0') as i64;
+            }
+            result.push_str(f"{v}");
+            node = self.node(NUM, "", v, -1, -1, -1);
+        }
+        for _ in 0..nots {
+            node = self.node(NOT, "", 0, node, -1, -1);
+        }
+        if starts_with(result, "not ") {
+            result = f"({result})";
+        }
+        tok = self.next()?;
+        let mut j: i64 = 100;
+        while binary_priority(tok) > 0 {
+            let i = binary_priority(tok);
+            if i < priority {
+                break;
+            }
+            if (i == 3 or i == 4) and (j == 3 or j == 4) {
+                result = f"({result})";
+            }
+            let (right, rn, after) = self.parse(i + 1)?;
+            result = f"{result} {py_op(tok)} {right}";
+            node = self.node(BIN, tok, 0, node, rn, -1);
+            tok = after;
+            j = i;
+        }
+        if j == priority and priority == 4 {
+            result = f"({result})";
+        }
+        if tok == "?" and priority <= 0 {
+            let (yes, yn, colon) = self.parse(0)?;
+            if colon != ":" {
+                return Err(unexpected(colon));
+            }
+            let (no, nn, after) = self.parse(-1)?;
+            result = f"{yes} if {result} else {no}";
+            node = self.node(COND, "", 0, node, yn, nn);
+            tok = after;
+            if priority == 0 {
+                result = f"({result})";
+            }
+        }
+        Ok((result, node, tok))
+    }
+}
+
+fn all_digits(b: ref Vec[u8]) -> bool {
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// A compiled Plural-Forms expression: the Python source c2py builds and
+// the tree that computes it.
+#[derive(Clone)]
+struct PluralFn {
+    source: String,
+    nodes: Vec[PNode],
+    root: i64,
+}
+
+// gettext.c2py
+fn c2py(s: Str) -> Result[PluralFn, String] {
+    if code_points(s).len() > 1000 {
+        return Err("plural form expression is too long".to_string());
+    }
+    let mut p = Plural { toks: tokenize(s), at: 0, nodes: Vec.new() };
+    let (result, root, tok) = p.parse(-1)?;
+    if tok.len() > 0 {
+        return Err(unexpected(tok));
+    }
+    let rb = to_bytes(result);
+    let mut depth: i64 = 0;
+    for i in 0..rb.len() {
+        if rb[i] == b'(' {
+            depth += 1;
+            if depth > 20 {
+                return Err("plural form expression is too complex".to_string());
+            }
+        } else if rb[i] == b')' {
+            depth -= 1;
+        }
+    }
+    Ok(PluralFn { source: result, nodes: p.nodes, root: root })
+}
+
+fn germanic() -> PluralFn {
+    c2py("n != 1").unwrap_or(PluralFn { source: String.new(), nodes: Vec.new(), root: -1 })
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// The value under Python's rules: // and % round down, `and` and `or`
+// give one of their operands, and only the branch taken is evaluated.
+fn eval_node(f: ref PluralFn, i: i64, n: i64) -> Result[i64, String] {
+    let k = f.nodes[i].clone();
+    if k.kind == NUM {
+        return Ok(k.v);
+    }
+    if k.kind == VAR {
+        return Ok(n);
+    }
+    if k.kind == NOT {
+        let x = eval_node(f, k.a, n)?;
+        return Ok(if x == 0 { 1 } else { 0 });
+    }
+    if k.kind == COND {
+        let c = eval_node(f, k.a, n)?;
+        return if c != 0 { eval_node(f, k.b, n) } else { eval_node(f, k.c, n) };
+    }
+    let x = eval_node(f, k.a, n)?;
+    if k.op == "&&" {
+        return if x == 0 { Ok(x) } else { eval_node(f, k.b, n) };
+    }
+    if k.op == "||" {
+        return if x != 0 { Ok(x) } else { eval_node(f, k.b, n) };
+    }
+    let y = eval_node(f, k.b, n)?;
+    let r = if k.op == "==" {
+        if x == y { 1 } else { 0 }
+    } else if k.op == "!=" {
+        if x != y { 1 } else { 0 }
+    } else if k.op == "<" {
+        if x < y { 1 } else { 0 }
+    } else if k.op == ">" {
+        if x > y { 1 } else { 0 }
+    } else if k.op == "<=" {
+        if x <= y { 1 } else { 0 }
+    } else if k.op == ">=" {
+        if x >= y { 1 } else { 0 }
+    } else if k.op == "+" {
+        x + y
+    } else if k.op == "-" {
+        x - y
+    } else if k.op == "*" {
+        x * y
+    } else if k.op == "/" {
+        if y == 0 {
+            return Err("integer division or modulo by zero".to_string());
+        }
+        floor_div(x, y)
+    } else {
+        if y == 0 {
+            return Err("integer modulo by zero".to_string());
+        }
+        x - floor_div(x, y) * y
+    };
+    Ok(r)
+}
+
+fn plural_of(f: ref PluralFn, n: i64) -> Result[i64, String] {
+    eval_node(f, f.root, n)
+}
+
+// ------------------------------------------------------------ GNUTranslations
+
+struct Catalog {
+    info_keys: Vec[String],
+    info_vals: Vec[String],
+    charset: Option[String],
+    plural: PluralFn,
+    // msgid (with any context) -> msgstr
+    single: Map[String, String],
+    // "index|msgid" -> msgstr
+    plurals: Map[String, String],
+    count: i64,
+}
+
+fn u32_at(b: ref Vec[u8], at: i64, big: bool) -> Result[i64, String] {
+    if at < 0 or at + 4 > b.len() {
+        return Err("struct.error: unpack requires a buffer of 4 bytes".to_string());
+    }
+    let mut x: i64 = 0;
+    for k in 0..4 {
+        let byte = if big { b[at + k] } else { b[at + 3 - k] };
+        x = (x << 8) | (byte as i64);
+    }
+    Ok(x)
+}
+
+// str(bytes, charset)
+fn decode(b: ref Vec[u8], charset: Str) -> String {
+    let c = lower(charset);
+    if c == "iso-8859-1" or c == "latin-1" or c == "latin1" or c == "iso8859-1" {
+        return latin1(b);
+    }
+    from_bytes(b.clone())
+}
+
+fn os_error(msg: Str, path: Str) -> String {
+    f"OSError: [Errno 0] {msg}: {py_repr(path)}"
+}
+
+fn set_info(c: mut ref Catalog, k: Str, v: Str) {
+    for i in 0..c.info_keys.len() {
+        if c.info_keys[i] == k {
+            c.info_vals[i] = v.to_string();
+            return;
+        }
+    }
+    c.info_keys.push(k.to_string());
+    c.info_vals.push(v.to_string());
+}
+
+fn add_info(c: mut ref Catalog, k: Str, more: Str) {
+    for i in 0..c.info_keys.len() {
+        if c.info_keys[i] == k {
+            c.info_vals[i] = f"{c.info_vals[i]}\n{more}";
+        }
+    }
+}
+
+// The metadata entry: "Key: value" lines, continuation lines, and the
+// charset and plural rule it sets.
+fn parse_header(c: mut ref Catalog, tmsg: ref Vec[u8]) -> Result[(), String] {
+    let mut lastk = String.new();
+    for line in split_on(from_bytes(tmsg.clone()), b'\n') {
+        let item = strip(line);
+        if item.len() == 0 {
+            continue;
+        }
+        if starts_with(item, "#-#-#-#-#") and ends_with(item, "#-#-#-#-#") {
+            continue;
+        }
+        if has_byte(item, b':') {
+            let (k0, _, v0) = partition(item, b':');
+            let k = lower(strip(k0));
+            let v = strip(v0);
+            set_info(c, k, v);
+            lastk = k.clone();
+            if k == "content-type" {
+                let at = find_str(v, "charset=");
+                c.charset = Some(slice_from(v, at + 8));
+            } else if k == "plural-forms" {
+                let parts = split_on(v, b';');
+                let at = find_str(parts[1], "plural=");
+                c.plural = match c2py(slice_from(parts[1], at + 7)) {
+                    Ok(f) => f,
+                    Err(e) => return Err(f"ValueError: {e}"),
+                };
+            }
+        } else if lastk.len() > 0 {
+            add_info(c, lastk, item);
+        }
+    }
+    Ok(())
+}
+
+fn ends_with(s: Str, p: Str) -> bool {
+    let b = to_bytes(s);
+    starts_at(b, b.len() - p.len(), p)
+}
+
+fn load_mo(buf: ref Vec[u8], path: Str) -> Result[Catalog, String] {
+    let mut c = Catalog {
+        info_keys: Vec.new(),
+        info_vals: Vec.new(),
+        charset: None,
+        plural: germanic(),
+        single: Map.new(),
+        plurals: Map.new(),
+        count: 0,
+    };
+    let buflen = buf.len();
+    let magic = u32_at(buf, 0, false)?;
+    let big = if magic == 0x950412de {
+        false
+    } else if magic == 0xde120495 {
+        true
+    } else {
+        return Err(os_error("Bad magic number", path));
+    };
+    let version = u32_at(buf, 4, big)?;
+    let msgcount = u32_at(buf, 8, big)?;
+    let mut masteridx = u32_at(buf, 12, big)?;
+    let mut transidx = u32_at(buf, 16, big)?;
+    let major = version >> 16;
+    if major != 0 and major != 1 {
+        return Err(os_error(f"Bad version number {major}", path));
+    }
+    for _ in 0..msgcount {
+        let mlen = u32_at(buf, masteridx, big)?;
+        let moff = u32_at(buf, masteridx + 4, big)?;
+        let tlen = u32_at(buf, transidx, big)?;
+        let toff = u32_at(buf, transidx + 4, big)?;
+        let mend = moff + mlen;
+        let tend = toff + tlen;
+        if not (mend < buflen and tend < buflen) {
+            return Err(os_error("File is corrupt", path));
+        }
+        let msg = sub(buf, moff, mend);
+        let tmsg = sub(buf, toff, tend);
+        if mlen == 0 {
+            parse_header(mut c, tmsg)?;
+        }
+        let charset = c.charset.clone().unwrap_or("ascii".to_string());
+        if contains_u8(msg, 0) {
+            let mut z: i64 = 0;
+            while msg[z] != 0 {
+                z += 1;
+            }
+            let msgid1 = decode(sub(msg, 0, z), charset);
+            let mut st: i64 = 0;
+            let mut form: i64 = 0;
+            for i in 0..tmsg.len() + 1 {
+                if i == tmsg.len() or tmsg[i] == 0 {
+                    let key = f"{form}|{msgid1}";
+                    if not c.plurals.contains_key(key) {
+                        c.count += 1;
+                    }
+                    c.plurals.insert(key, decode(sub(tmsg, st, i), charset));
+                    form += 1;
+                    st = i + 1;
+                }
+            }
+        } else {
+            let key = decode(msg, charset);
+            if not c.single.contains_key(key) {
+                c.count += 1;
+            }
+            c.single.insert(key, decode(tmsg, charset));
+        }
+        masteridx += 8;
+        transidx += 8;
+    }
+    Ok(c)
+}
+
+fn get_single(c: ref Catalog, k: Str) -> Option[String] {
+    match c.single.get(k) {
+        Some(v) => Some(v.clone()),
+        None => None,
+    }
+}
+
+fn get_plural(c: ref Catalog, k: Str, n: i64) -> Option[String] {
+    let i = match plural_of(c.plural, n) {
+        Ok(i) => i,
+        Err(_) => return None,
+    };
+    match c.plurals.get(f"{i}|{k}") {
+        Some(v) => Some(v.clone()),
+        None => None,
+    }
+}
+
+// gettext and pgettext down a chain of catalogs and their fallbacks.
+fn lookup(chain: ref Vec[Catalog], at: i64, key: Str, message: Str) -> String {
+    if at == chain.len() {
+        return message.to_string();
+    }
+    if let Some(v) = get_single(chain[at], key) {
+        return v;
+    }
+    if let Some(v) = get_plural(chain[at], key, 1) {
+        return v;
+    }
+    lookup(chain, at + 1, key, message)
+}
+
+// ngettext and npgettext
+fn nlookup(chain: ref Vec[Catalog], at: i64, key: Str, one: Str, many: Str, n: i64) -> String {
+    if at == chain.len() {
+        return if n == 1 { one.to_string() } else { many.to_string() };
+    }
+    if let Some(v) = get_plural(chain[at], key, n) {
+        return v;
+    }
+    nlookup(chain, at + 1, key, one, many, n)
+}
+
+fn gettext(chain: ref Vec[Catalog], msg: Str) -> String {
+    lookup(chain, 0, msg, msg)
+}
+
+fn pgettext(chain: ref Vec[Catalog], ctx: Str, msg: Str) -> String {
+    lookup(chain, 0, f"{ctx}\u{4}{msg}", msg)
+}
+
+fn ngettext(chain: ref Vec[Catalog], one: Str, many: Str, n: i64) -> String {
+    nlookup(chain, 0, one, one, many, n)
+}
+
+fn npgettext(chain: ref Vec[Catalog], ctx: Str, one: Str, many: Str, n: i64) -> String {
+    nlookup(chain, 0, f"{ctx}\u{4}{one}", one, many, n)
+}
+
+// ------------------------------------------------------------ the files
+
+// data/broken/badplural.mo
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("de12049500000000010000001c000000240000000000000000000000000000002c000000510000002d00000000436f6e");
+    s.push_str("74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a506c7572616c2d466f726d");
+    s.push_str("733a206e706c7572616c733d323b20706c7572616c3d6e203e3e20313b0a00");
+    s
+}
+
+// data/broken/be.mo
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("950412de00000000000000030000001c000000340000000000000000000000000000004c000000090000004d0000001a");
+    s.push_str("000000570000004e000000720000000c000000c100000018000000ce00596f75722063617274007b6e7d20646179206c");
+    s.push_str("656674007b6e7d2064617973206c65667400436f6e74656e742d547970653a20746578742f706c61696e3b2063686172");
+    s.push_str("7365743d5554462d380a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d6e3e313b0a");
+    s.push_str("00546120636861727265747465007b6e7d206a6f7572204245007b6e7d206a6f75727320424500");
+    s
+}
+
+// data/broken/corrupt.mo
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("de12049500000000030000001c000000340000000000000000000000000000004c000000090000004d0000001a000000");
+    s.push_str("570000004e000000822700000c000000d127000018000000de27000000596f75722063617274007b6e7d20646179206c");
+    s.push_str("656674007b6e7d2064617973206c65667400436f6e74656e742d547970653a20746578742f706c61696e3b2063686172");
+    s.push_str("7365743d5554462d380a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d6e3e313b0a");
+    s.push_str("00546120636861727265747465007b6e7d206a6f7572204245007b6e7d206a6f75727320424500");
+    s
+}
+
+// data/broken/magic.mo
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("0001020300000000030000001c000000340000000000000000000000000000004c000000090000004d0000001a000000");
+    s.push_str("570000004e000000720000000c000000c100000018000000ce00000000596f75722063617274007b6e7d20646179206c");
+    s.push_str("656674007b6e7d2064617973206c65667400436f6e74656e742d547970653a20746578742f706c61696e3b2063686172");
+    s.push_str("7365743d5554462d380a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d6e3e313b0a");
+    s.push_str("00546120636861727265747465007b6e7d206a6f7572204245007b6e7d206a6f75727320424500");
+    s
+}
+
+// data/broken/multiline.mo
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("de12049500000000030000001c000000340000000000000000000000000000004c000000010000004d00000004000000");
+    s.push_str("4f000000b200000054000000010000000701000008000000090100000061006200627300436f6e74656e742d54797065");
+    s.push_str("3a20746578742f706c61696e3b20636861727365743d5554462d380a582d4e6f74653a20666972737420706172740a20");
+    s.push_str("20636f6e74696e75656420686572650a232d232d232d232d232020612e706f2020232d232d232d232d230a4c6173742d");
+    s.push_str("5472616e736c61746f723a20416e61203c616e6140782e6578616d706c653e0a706c7572616c2d666f726d733a206e70");
+    s.push_str("6c7572616c733d333b20706c7572616c3d6e25333b0a004100423000423100423200");
+    s
+}
+
+// data/broken/version1.mo
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("de12049503000100030000001c000000340000000000000000000000000000004c000000090000004d0000001a000000");
+    s.push_str("570000004e000000720000000c000000c100000018000000ce00000000596f75722063617274007b6e7d20646179206c");
+    s.push_str("656674007b6e7d2064617973206c65667400436f6e74656e742d547970653a20746578742f706c61696e3b2063686172");
+    s.push_str("7365743d5554462d380a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d6e3e313b0a");
+    s.push_str("00546120636861727265747465007b6e7d206a6f7572204245007b6e7d206a6f75727320424500");
+    s
+}
+
+// data/broken/version2.mo
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("de12049500000200030000001c000000340000000000000000000000000000004c000000090000004d0000001a000000");
+    s.push_str("570000004e000000720000000c000000c100000018000000ce00000000596f75722063617274007b6e7d20646179206c");
+    s.push_str("656674007b6e7d2064617973206c65667400436f6e74656e742d547970653a20746578742f706c61696e3b2063686172");
+    s.push_str("7365743d5554462d380a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d6e3e313b0a");
+    s.push_str("00546120636861727265747465007b6e7d206a6f7572204245007b6e7d206a6f75727320424500");
+    s
+}
+
+// data/langs.txt
+fn file_7() -> String {
+    """
+fr
+de
+pl
+ru
+ar
+ja
+ga
+pt_BR pt
+xx de
+ja fr
+
+"""
+}
+
+// data/plurals.txt
+fn file_8() -> String {
+    """
+n != 1
+(n > 1)
+0
+n%10==1 && n%100!=11 ? 0 : n != 0 ? 1 : 2
+!n
+!!n
+!(n == 1)
+n == 1 || n == 2 ? 0 : 1
+n < 2 < 3
+n == 1 == 0
+2 * n - 3 * (n / 2)
+n % 7 - 3
+(n - 5) / 2
+(n - 5) % 3
+n / 0
+n ? n / (n - 3) : 9
+n && 2
+n || 7
+n > 1 ? n > 2 ? 2 : 1 : 0
+n ? 1 : 2 + 3
+n = 1
+n == 1 &
+n +
+(n
+n)
+2n
+m
+n == 1 ? 0
+~n
+n == 1 ; 2
+
+((((((((((((((((((((((n))))))))))))))))))))))
+(((((((((((((((((((n)))))))))))))))))))
+n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n + n
+
+"""
+}
+
+// data/po/ar.po
+fn file_9() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: ar <ar@li.example>\\n\"
+\"Language: ar\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=6; plural=n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=11 ? 4 : 5;\\n\"
+
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"لا منتجات\"
+msgstr[1] \"منتج واحد\"
+msgstr[2] \"منتجان\"
+msgstr[3] \"{n} منتجات\"
+msgstr[4] \"{n} منتجًا\"
+msgstr[5] \"{n} منتج\"
+
+msgid \"Your cart\"
+msgstr \"سلة التسوق\"
+
+
+"""
+}
+
+// data/po/de.po
+fn file_10() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: de <de@li.example>\\n\"
+\"Language: de\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=2; plural=(n != 1);\\n\"
+
+
+msgid \"Welcome to {shop}!\"
+msgstr \"Willkommen bei {shop}!\"
+
+msgid \"Your cart\"
+msgstr \"Ihr Warenkorb\"
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"{n} Artikel im Warenkorb\"
+msgstr[1] \"{n} Artikel im Warenkorb\"
+
+msgid \"{n} day left\"
+msgid_plural \"{n} days left\"
+msgstr[0] \"Noch {n} Tag\"
+msgstr[1] \"Noch {n} Tage\"
+
+msgctxt \"verb\"
+msgid \"Open\"
+msgstr \"Öffnen\"
+
+msgctxt \"store hours\"
+msgid \"Open\"
+msgstr \"Geöffnet\"
+
+msgid \"Order #{id} shipped\"
+msgstr \"Bestellung Nr. {id} versandt\"
+
+msgid \"Checkout\"
+msgstr \"Zur Kasse\"
+
+msgid \"Sign out\"
+msgstr \"\"
+
+
+"""
+}
+
+// data/po/fr.po
+fn file_11() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: fr <fr@li.example>\\n\"
+\"Language: fr\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=2; plural=(n > 1);\\n\"
+
+
+#: shop/views.py:12
+msgid \"Welcome to {shop}!\"
+msgstr \"Bienvenue chez {shop} !\"
+
+msgid \"Your cart\"
+msgstr \"Votre panier\"
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"{n} article dans votre panier\"
+msgstr[1] \"{n} articles dans votre panier\"
+
+msgid \"{n} day left\"
+msgid_plural \"{n} days left\"
+msgstr[0] \"Il reste {n} jour\"
+msgstr[1] \"Il reste {n} jours\"
+
+msgctxt \"verb\"
+msgid \"Open\"
+msgstr \"Ouvrir\"
+
+msgctxt \"store hours\"
+msgid \"Open\"
+msgstr \"Ouvert\"
+
+msgctxt \"inbox\"
+msgid \"{n} new message\"
+msgid_plural \"{n} new messages\"
+msgstr[0] \"{n} nouveau message\"
+msgstr[1] \"{n} nouveaux messages\"
+
+msgid \"Order #{id} shipped\"
+msgstr \"Commande n°{id} expédiée\"
+
+#. The page title
+#, fuzzy
+msgid \"Checkout\"
+msgstr \"Paiement\"
+
+msgid \"Sign out\"
+msgstr \"Se déconnecter\"
+
+msgid \"Say \"hello\"\"
+msgstr \"Dites « bonjour »\"
+
+msgid \"Line one\\nLine two\"
+msgstr \"Ligne un\\nLigne deux\"
+
+
+"""
+}
+
+// data/po/ga.po
+fn file_12() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: ga <ga@li.example>\\n\"
+\"Language: ga\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=5; plural=n==1 ? 0 : n==2 ? 1 : (n>2 && n<7) ? 2 :(n>6 && n<11) ? 3 : 4;\\n\"
+
+
+msgid \"{n} day left\"
+msgid_plural \"{n} days left\"
+msgstr[0] \"{n} lá fágtha\"
+msgstr[1] \"{n} lá fágtha\"
+msgstr[2] \"{n} lá fágtha\"
+msgstr[3] \"{n} lá fágtha\"
+msgstr[4] \"{n} lá fágtha\"
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"{n} earra amháin\"
+msgstr[1] \"{n} earra\"
+msgstr[2] \"{n} earra\"
+msgstr[3] \"{n} n-earra\"
+msgstr[4] \"{n} earra\"
+
+
+"""
+}
+
+// data/po/ja.po
+fn file_13() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: ja <ja@li.example>\\n\"
+\"Language: ja\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=1; plural=0;\\n\"
+
+
+msgid \"Welcome to {shop}!\"
+msgstr \"{shop}へようこそ！\"
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"カートに{n}点\"
+
+msgid \"{n} day left\"
+msgid_plural \"{n} days left\"
+msgstr[0] \"残り{n}日\"
+
+msgid \"Sign out\"
+msgstr \"ログアウト\"
+
+
+"""
+}
+
+// data/po/pl.po
+fn file_14() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: pl <pl@li.example>\\n\"
+\"Language: pl\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\\n\"
+
+
+msgid \"Welcome to {shop}!\"
+msgstr \"Witamy w {shop}!\"
+
+msgid \"Your cart\"
+msgstr \"Twój koszyk\"
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"{n} produkt w koszyku\"
+msgstr[1] \"{n} produkty w koszyku\"
+msgstr[2] \"{n} produktów w koszyku\"
+
+msgid \"{n} day left\"
+msgid_plural \"{n} days left\"
+msgstr[0] \"Został {n} dzień\"
+msgstr[1] \"Zostały {n} dni\"
+msgstr[2] \"Zostało {n} dni\"
+
+msgctxt \"inbox\"
+msgid \"{n} new message\"
+msgid_plural \"{n} new messages\"
+msgstr[0] \"{n} nowa wiadomość\"
+msgstr[1] \"{n} nowe wiadomości\"
+msgstr[2] \"{n} nowych wiadomości\"
+
+msgid \"Sign out\"
+msgstr \"Wyloguj się\"
+
+
+"""
+}
+
+// data/po/pt.po
+fn file_15() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: pt <pt@li.example>\\n\"
+\"Language: pt\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=2; plural=(n != 1);\\n\"
+
+
+msgid \"Your cart\"
+msgstr \"O seu carrinho\"
+
+msgid \"Sign out\"
+msgstr \"Terminar sessão\"
+
+msgid \"{n} day left\"
+msgid_plural \"{n} days left\"
+msgstr[0] \"Falta {n} dia\"
+msgstr[1] \"Faltam {n} dias\"
+
+
+"""
+}
+
+// data/po/pt_BR.po
+fn file_16() -> String {
+    let mut s = String.new();
+    s.push_str("23205472616e736c6174696f6e73206f66207468652073686f702055492e0a2320436f70797269676874202843292032");
+    s.push_str("303236205468652053686f7020417574686f72730a230a6d736769642022220a6d73677374722022220a2250726f6a65");
+    s.push_str("63742d49642d56657273696f6e3a2073686f7020322e345c6e220a225265706f72742d4d736769642d427567732d546f");
+    s.push_str("3a206931386e4073686f702e6578616d706c655c6e220a22504f542d4372656174696f6e2d446174653a20323032362d");
+    s.push_str("30392d30312031323a30302b303030305c6e220a22504f2d5265766973696f6e2d446174653a20323032362d31302d30");
+    s.push_str("312030393a33302b303230305c6e220a224c616e67756167652d5465616d3a2070745f4252203c70745f4252406c692e");
+    s.push_str("6578616d706c653e5c6e220a224c616e67756167653a2070745f42525c6e220a224d494d452d56657273696f6e3a2031");
+    s.push_str("2e305c6e220a22436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d49534f2d383835");
+    s.push_str("392d315c6e220a22436f6e74656e742d5472616e736665722d456e636f64696e673a20386269745c6e220a22506c7572");
+    s.push_str("616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e203e2031293b5c6e220a22582d47656e65");
+    s.push_str("7261746f723a20506f6564697420332e345c6e220a22582d506f656469742d42617365706174683a202e2e5c6e220a0a");
+    s.push_str("6d73676964202257656c636f6d6520746f207b73686f707d21220a6d7367737472202242656d2d76696e646f20e0207b");
+    s.push_str("73686f707d21220a0a6d736769642022596f75722063617274220a6d736773747220225365752063617272696e686f22");
+    s.push_str("0a0a6d7367696420227b6e7d206974656d20696e20796f75722063617274220a6d736769645f706c7572616c20227b6e");
+    s.push_str("7d206974656d7320696e20796f75722063617274220a6d73677374725b305d20227b6e7d206974656d206e6f20636172");
+    s.push_str("72696e686f220a6d73677374725b315d20227b6e7d206974656e73206e6f2063617272696e686f220a0a6d7367696420");
+    s.push_str("224f7264657220237b69647d2073686970706564220a6d7367737472202250656469646f206eba207b69647d20656e76");
+    s.push_str("6961646f220a0a");
+    s
+}
+
+// data/po/ru.po
+fn file_17() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: ru <ru@li.example>\\n\"
+\"Language: ru\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\\n\"
+
+
+msgid \"Welcome to {shop}!\"
+msgstr \"Добро пожаловать в {shop}!\"
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"{n} товар в корзине\"
+msgstr[1] \"{n} товара в корзине\"
+msgstr[2] \"{n} товаров в корзине\"
+
+msgid \"{n} day left\"
+msgid_plural \"{n} days left\"
+msgstr[0] \"Остался {n} день\"
+msgstr[1] \"Осталось {n} дня\"
+msgstr[2] \"Осталось {n} дней\"
+
+msgctxt \"verb\"
+msgid \"Open\"
+msgstr \"Открыть\"
+
+
+"""
+}
+
+// data/po/xx.po
+fn file_18() -> String {
+    """
+# Translations of the shop UI.
+# Copyright (C) 2026 The Shop Authors
+#
+msgid \"\"
+msgstr \"\"
+\"Project-Id-Version: shop 2.4\\n\"
+\"Report-Msgid-Bugs-To: i18n@shop.example\\n\"
+\"POT-Creation-Date: 2026-09-01 12:00+0000\\n\"
+\"PO-Revision-Date: 2026-10-01 09:30+0200\\n\"
+\"Language-Team: xx <xx@li.example>\\n\"
+\"Language: xx\\n\"
+\"MIME-Version: 1.0\\n\"
+\"Content-Type: text/plain; charset=UTF-8\\n\"
+\"Content-Transfer-Encoding: 8bit\\n\"
+\"Plural-Forms: nplurals=2; plural=n%3;\\n\"
+
+
+msgid \"{n} item in your cart\"
+msgid_plural \"{n} items in your cart\"
+msgstr[0] \"{n} xitem\"
+msgstr[1] \"{n} xitems\"
+
+
+"""
+}
+
+// data/ui.txt
+fn file_19() -> String {
+    """
+# the calls the shop makes, in the order it makes them
+_ Welcome to {shop}!
+_ Your cart
+n {n} item in your cart|{n} items in your cart|0 1 2 3 5 11 12 21 22 25 102 111
+n {n} day left|{n} days left|0 1 2 4 7 11 21
+p verb|Open
+p store hours|Open
+p menu|Open
+np inbox|{n} new message|{n} new messages|1 2 5 22
+_ Order #{id} shipped
+_ Checkout
+_ Sign out
+_ Say \"hello\"
+_ Line one\\nLine two
+_ Not in any catalog
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data/broken")?;
+    put_bytes("data/broken/badplural.mo", unhex(file_0()))?;
+    put_bytes("data/broken/be.mo", unhex(file_1()))?;
+    put_bytes("data/broken/corrupt.mo", unhex(file_2()))?;
+    put_bytes("data/broken/magic.mo", unhex(file_3()))?;
+    put_bytes("data/broken/multiline.mo", unhex(file_4()))?;
+    put_bytes("data/broken/version1.mo", unhex(file_5()))?;
+    put_bytes("data/broken/version2.mo", unhex(file_6()))?;
+    make_dir("data")?;
+    put("data/langs.txt", file_7())?;
+    put("data/plurals.txt", file_8())?;
+    make_dir("data/po")?;
+    put("data/po/ar.po", file_9())?;
+    put("data/po/de.po", file_10())?;
+    put("data/po/fr.po", file_11())?;
+    put("data/po/ga.po", file_12())?;
+    put("data/po/ja.po", file_13())?;
+    put("data/po/pl.po", file_14())?;
+    put("data/po/pt.po", file_15())?;
+    put_bytes("data/po/pt_BR.po", unhex(file_16()))?;
+    put("data/po/ru.po", file_17())?;
+    put("data/po/xx.po", file_18())?;
+    put("data/ui.txt", file_19())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the reports
+
+const SAMPLES: Array[i64, 16] = [0, 1, 2, 3, 4, 5, 7, 11, 12, 21, 22, 25, 100, 101, 111, 1000];
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn read_bytes(path: Str) -> Result[Vec[u8], String] {
+    match fs.read_bytes(path.to_string()) {
+        Ok(b) => Ok(b),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn sorted_names(dir: Str) -> Result[Vec[String], String] {
+    let mut names = match fs.read_dir(dir.to_string()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list {dir}: {e}"),
+    };
+    for i in 1..names.len() {
+        let mut j = i;
+        while j > 0 and names[j] < names[j - 1] {
+            names.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    Ok(names)
+}
+
+fn compile_all() -> Result[(), String] {
+    println("== compile");
+    for name in sorted_names("data/po")? {
+        let lang = slice(name, 0, name.len() - 3);
+        let text = read_bytes(f"data/po/{name}")?;
+        let c = match msgfmt(text) {
+            Ok(c) => c,
+            Err(e) => {
+                println(f"{name}: {e}");
+                continue;
+            }
+        };
+        let data = generate(c.msgs);
+        let dir = f"data/locale/{lang}/LC_MESSAGES";
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write_bytes(f"{dir}/shop.mo", data.clone()) {
+            return Err(f"cannot write {dir}/shop.mo: {e}");
+        }
+        let mut plural: i64 = 0;
+        let mut ctx: i64 = 0;
+        for i in 0..c.msgs.len() {
+            if contains_u8(c.msgs[i].key, 0) {
+                plural += 1;
+            }
+            if contains_u8(c.msgs[i].key, 4) {
+                ctx += 1;
+            }
+        }
+        println(f"{name}: {c.msgs.len()} messages ({plural} plural, {ctx} with context), {c.fuzzy} fuzzy and {c.empty} untranslated left out, {data.len()} bytes, head {hex_of(data, 28)}");
+    }
+    Ok(())
+}
+
+fn load(path: Str) -> Result[Catalog, String] {
+    let buf = read_bytes(path)?;
+    load_mo(buf, path)
+}
+
+fn int_list(v: ref Vec[i64]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{v[i]}");
+    }
+    out.push_str("]");
+    out
+}
+
+fn show_catalog(path: Str) -> Option[Catalog] {
+    let c = match load(path) {
+        Ok(c) => c,
+        Err(e) => {
+            println(f"{path}: {e}");
+            return None;
+        }
+    };
+    let cs = c.charset.clone().unwrap_or("None".to_string());
+    println(f"{path}: charset {cs}, {c.count} entries");
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..c.info_keys.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 and c.info_keys[order[j]] < c.info_keys[order[j - 1]] {
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    for k in 0..order.len() {
+        let i = order[k];
+        println(f"  {c.info_keys[i]}: {py_repr(c.info_vals[i])}");
+    }
+    let mut forms: Vec[i64] = Vec.new();
+    for n in SAMPLES {
+        forms.push(plural_of(c.plural, n).unwrap_or(-1));
+    }
+    println(f"  plural: {int_list(forms)}");
+    Some(c)
+}
+
+fn replace_all(s: Str, from: Str, to: Str) -> String {
+    let b = to_bytes(s);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    let mut st: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, from) {
+            out.push_str(byte_str(b, st, i));
+            out.push_str(to);
+            i += from.len();
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(byte_str(b, st, b.len()));
+    out
+}
+
+fn render(chain: ref Vec[Catalog], line: Str) -> Vec[String] {
+    let (kind, _, rest) = partition(line, b' ');
+    let mut out: Vec[String] = Vec.new();
+    if kind == "_" {
+        let msg = replace_all(rest, "\\n", "\n");
+        let t = replace_all(replace_all(gettext(chain, msg), "{shop}", "Kāra Books"), "{id}", "1042");
+        out.push(py_repr(t));
+        return out;
+    }
+    let parts = split_on(rest, b'|');
+    if kind == "p" {
+        out.push(f"{parts[0]}: {py_repr(pgettext(chain, parts[0], parts[1]))}");
+        return out;
+    }
+    if kind == "n" {
+        for n in split_on(parts[2], b' ') {
+            let k = py_int(n).unwrap_or(0);
+            out.push(f"{n}: {py_repr(replace_all(ngettext(chain, parts[0], parts[1], k), "{n}", n))}");
+        }
+        return out;
+    }
+    for n in split_on(parts[3], b' ') {
+        let k = py_int(n).unwrap_or(0);
+        out.push(f"{parts[0]} {n}: {py_repr(replace_all(npgettext(chain, parts[0], parts[1], parts[2], k), "{n}", n))}");
+    }
+    out
+}
+
+fn show_ui() -> Result[(), String] {
+    println("== ui");
+    let mut ui: Vec[String] = Vec.new();
+    for l in lines_of(read("data/ui.txt")?) {
+        if l.len() > 0 and first_byte(l) != b'#' {
+            ui.push(l.clone());
+        }
+    }
+    for line in lines_of(read("data/langs.txt")?) {
+        let langs = split_on(line, b' ');
+        println(f"-- {join(langs, " -> ")} -> source");
+        let mut chain: Vec[Catalog] = Vec.new();
+        for lang in langs {
+            chain.push(load(f"data/locale/{lang}/LC_MESSAGES/shop.mo")?);
+        }
+        for u in ui {
+            let (kind, _, _) = partition(u, b' ');
+            for out in render(chain, u) {
+                println(f"  {kind} {out}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn show_plurals() -> Result[(), String] {
+    println("== plural forms");
+    let text = read("data/plurals.txt")?;
+    let mut all = split_on(text, b'\n');
+    all.pop();
+    for p in all {
+        let cps = code_points(p);
+        let shown = if cps.len() < 60 { p.clone() } else { f"{slice(p, 0, 57)}..." };
+        let f = match c2py(p) {
+            Ok(f) => f,
+            Err(e) => {
+                println(f"{py_repr(shown)}: ValueError: {e}");
+                continue;
+            }
+        };
+        let mut vals: Vec[String] = Vec.new();
+        for n in SAMPLES {
+            vals.push(match plural_of(f, n) {
+                Ok(v) => f"{v}",
+                Err(_) => "ZeroDivisionError".to_string(),
+            });
+        }
+        let src = if f.source.len() < 90 { f.source.clone() } else { f"{slice(f.source, 0, 87)}..." };
+        println(f"{py_repr(shown)}: {src}");
+        println(f"  {join(vals, " ")}");
+    }
+    Ok(())
+}
+
+fn show_broken() -> Result[(), String] {
+    println("== broken");
+    for name in sorted_names("data/broken")? {
+        if let Some(c) = show_catalog(f"data/broken/{name}") {
+            let mut chain: Vec[Catalog] = Vec.new();
+            chain.push(c);
+            println(f"  {py_repr(gettext(chain, "Your cart"))} {py_repr(ngettext(chain, "{n} day left", "{n} days left", 2))} {py_repr(ngettext(chain, "b", "bs", 5))} {py_repr(gettext(chain, "b"))}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    compile_all()?;
+    println("== catalogs");
+    for name in sorted_names("data/locale")? {
+        let _ = show_catalog(f"data/locale/{name}/LC_MESSAGES/shop.mo");
+    }
+    show_ui()?;
+    show_plurals()?;
+    show_broken()
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_gettext: {e}");
+    }
+}
