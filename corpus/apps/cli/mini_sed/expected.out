@@ -1,0 +1,454 @@
+$ sed -n '/ 404 /p' access.log
+172.16.0.9 - - [14/Oct/2026:09:14:10 +0000] "GET /api/products/991 HTTP/1.1" 404 47 "-" "python-requests/2.32"
+172.16.0.9 - - [14/Oct/2026:09:14:11 +0000] "GET /api/products/992 HTTP/1.1" 404 47 "-" "python-requests/2.32"
+$ sed -n '$=' access.log
+9
+$ sed -n 2,4p hosts
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+
+$ sed -n '/^# app/,/^$/p' hosts
+# app tier
+10.0.12.7	app-1.staging app-1
+10.0.12.8	app-2.staging app-2
+#10.0.12.9	app-3.staging app-3
+
+$ sed '/^#/d;/^$/d' hosts
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+10.0.12.7	app-1.staging app-1
+10.0.12.8	app-2.staging app-2
+10.0.20.4	db-primary.staging db
+10.0.20.5	db-replica.staging
+$ sed -n '/^\[database\]/,/^\[/{/^\[/!p}' app.ini
+url = postgres://shop@db-primary.staging:5432/shop
+pool_size = 10
+timeout = 5
+
+$ sed -n /POST/= access.log
+2
+6
+8
+$ sed 3q CHANGELOG.md
+# Changelog
+
+## [Unreleased]
+$ sed -n '/^## \[1/,+3p' CHANGELOG.md
+## [1.9.0] - 2026-10-01
+
+### Fixed
+- Checkout timeout under load (#398)
+$ sed '0,/^##/d' CHANGELOG.md
+
+### Added
+- Saved carts (#412)
+
+## [1.9.0] - 2026-10-01
+
+### Fixed
+- Checkout timeout under load (#398)
+- Duplicate order emails (#401)
+
+### Changed
+- Upgrade to Postgres 16 (#377)
+$ sed '1~2d' sales.csv
+north,widget,1200,1534000
+north,gadget,40,2299960
+west,widget,15000,19200000
+$ sed -n '/widget/!p' sales.csv
+region,product,units,revenue
+north,gadget,40,2299960
+east,gizmo,7,630
+$ sed -n /STRIPE/Ip app.env
+STRIPE_KEY=sk_live_51Hc9xQ
+$ sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.x.x.\2/' access.log
+10.x.x.7 - - [14/Oct/2026:09:12:01 +0000] "GET /api/orders?page=2 HTTP/1.1" 200 1532 "-" "curl/8.5.0"
+10.x.x.7 - - [14/Oct/2026:09:12:03 +0000] "POST /api/orders HTTP/1.1" 201 88 "-" "curl/8.5.0"
+192.x.x.21 - alice [14/Oct/2026:09:13:44 +0000] "GET /static/app.js HTTP/2.0" 304 0 "https://shop.example.com/" "Mozilla/5.0"
+172.x.x.9 - - [14/Oct/2026:09:14:10 +0000] "GET /api/products/991 HTTP/1.1" 404 47 "-" "python-requests/2.32"
+172.x.x.9 - - [14/Oct/2026:09:14:11 +0000] "GET /api/products/992 HTTP/1.1" 404 47 "-" "python-requests/2.32"
+10.x.x.8 - - [14/Oct/2026:09:15:00 +0000] "POST /api/checkout HTTP/1.1" 502 166 "-" "okhttp/4.12"
+192.x.x.21 - alice [14/Oct/2026:09:15:02 +0000] "DELETE /api/cart/7 HTTP/2.0" 204 0 "https://shop.example.com/cart" "Mozilla/5.0"
+10.x.x.8 - - [14/Oct/2026:09:15:31 +0000] "POST /api/checkout HTTP/1.1" 503 166 "-" "okhttp/4.12"
+10.x.x.7 - - [14/Oct/2026:09:16:45 +0000] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.31"
+$ sed -E 's/^([^ ]+) [^[]*\[([^]]+)\] "([A-Z]+) ([^ ?]+)[^"]*" ([0-9]{3}) .*/\5 \3 \4 (\1 at \2)/' access.log
+200 GET /api/orders (10.0.12.7 at 14/Oct/2026:09:12:01 +0000)
+201 POST /api/orders (10.0.12.7 at 14/Oct/2026:09:12:03 +0000)
+304 GET /static/app.js (192.168.4.21 at 14/Oct/2026:09:13:44 +0000)
+404 GET /api/products/991 (172.16.0.9 at 14/Oct/2026:09:14:10 +0000)
+404 GET /api/products/992 (172.16.0.9 at 14/Oct/2026:09:14:11 +0000)
+502 POST /api/checkout (10.0.12.8 at 14/Oct/2026:09:15:00 +0000)
+204 DELETE /api/cart/7 (192.168.4.21 at 14/Oct/2026:09:15:02 +0000)
+503 POST /api/checkout (10.0.12.8 at 14/Oct/2026:09:15:31 +0000)
+200 GET /healthz (10.0.12.7 at 14/Oct/2026:09:16:45 +0000)
+$ sed -n -E '/" 5[0-9]{2} /s/.*\[([^:]+):([^ ]+) .*"[A-Z]+ ([^ ]+).*/\2 \3/p' access.log
+09:15:00 /api/checkout
+09:15:31 /api/checkout
+$ sed 's/^\(port\s*=\s*\).*/\18080/' app.ini
+; shop service
+[server]
+host = 0.0.0.0
+port = 8080
+workers = 4
+
+[database]
+url = postgres://shop@db-primary.staging:5432/shop
+pool_size = 10
+timeout = 5
+
+[cache]
+url = redis://cache.staging:6379/0
+ttl = 300
+$ sed 's|postgres://\([^:@]*\):[^@]*@|postgres://\1:****@|' app.env
+# written by the deploy job
+APP_NAME=shop
+DEBUG=true
+LOG_LEVEL=debug
+DATABASE_URL="postgres://shop:****@db-primary.staging:5432/shop"
+STRIPE_KEY=sk_live_51Hc9xQ
+FEATURE_FLAGS=new_checkout,dark_mode
+PORT=8000[no newline at end]
+$ sed -E 's/^([A-Z_]+)=(.*)$/export \1='\''\2'\''/;s/'\''"(.*)"'\''$/'\''\1'\''/' app.env
+# written by the deploy job
+export APP_NAME='shop'
+export DEBUG='true'
+export LOG_LEVEL='debug'
+export DATABASE_URL='postgres://shop:s3cret@db-primary.staging:5432/shop'
+export STRIPE_KEY='sk_live_51Hc9xQ'
+export FEATURE_FLAGS='new_checkout,dark_mode'
+export PORT='8000'[no newline at end]
+$ sed 's/,/\t/g' sales.csv
+region	product	units	revenue
+north	widget	1200	1534000
+south	widget	85	108800
+north	gadget	40	2299960
+east	gizmo	7	630
+west	widget	15000	19200000
+$ sed 's/widget/WIDGET/2;s/,/ | /3' sales.csv
+region,product,units | revenue
+north,widget,1200 | 1534000
+south,widget,85 | 108800
+north,gadget,40 | 2299960
+east,gizmo,7 | 630
+west,widget,15000 | 19200000
+$ sed s/a/A/2g words.txt
+apple
+apple
+banAnA
+cherry
+cherry
+cherry
+date
+apple
+$ sed -E 's/(^|,)([a-z])/\1\u\2/g' sales.csv
+Region,Product,Units,Revenue
+North,Widget,1200,1534000
+South,Widget,85,108800
+North,Gadget,40,2299960
+East,Gizmo,7,630
+West,Widget,15000,19200000
+$ sed 's/.*/\U&/;s/_\(.\)/-\L\1/g' app.env
+# WRITTEN BY THE DEPLOY JOB
+APP-nAME=SHOP
+DEBUG=TRUE
+LOG-lEVEL=DEBUG
+DATABASE-uRL="POSTGRES://SHOP:S3CRET@DB-PRIMARY.STAGING:5432/SHOP"
+STRIPE-kEY=SK-lIVE-51HC9XQ
+FEATURE-fLAGS=NEW-cHECKOUT,DARK-mODE
+PORT=8000[no newline at end]
+$ sed -E ':a;s/([0-9])([0-9]{3})($|[^0-9])/\1,\2\3/;ta' sales.csv
+region,product,units,revenue
+north,widget,1,200,1,534,000
+south,widget,85,108,800
+north,gadget,40,2,299,960
+east,gizmo,7,630
+west,widget,15,000,19,200,000
+$ sed 's/x*/-/g' words.txt
+-a-p-p-l-e-
+-a-p-p-l-e-
+-b-a-n-a-n-a-
+-c-h-e-r-r-y-
+-c-h-e-r-r-y-
+-c-h-e-r-r-y-
+-d-a-t-e-
+-a-p-p-l-e-
+$ sed 's/an/[&]/g;s/\[an\]/\&/2' words.txt
+apple
+apple
+b[an]&a
+cherry
+cherry
+cherry
+date
+apple
+$ sed -E 's/#([0-9]+)/[#\1](https:\/\/github.com\/shop\/issues\/\1)/' CHANGELOG.md
+# Changelog
+
+## [Unreleased]
+
+### Added
+- Saved carts ([#412](https://github.com/shop/issues/412))
+
+## [1.9.0] - 2026-10-01
+
+### Fixed
+- Checkout timeout under load ([#398](https://github.com/shop/issues/398))
+- Duplicate order emails ([#401](https://github.com/shop/issues/401))
+
+### Changed
+- Upgrade to Postgres 16 ([#377](https://github.com/shop/issues/377))
+$ sed -n '/http/{s//HTTPS/gp}' access.log
+192.168.4.21 - alice [14/Oct/2026:09:13:44 +0000] "GET /static/app.js HTTP/2.0" 304 0 "HTTPSs://shop.example.com/" "Mozilla/5.0"
+10.0.12.8 - - [14/Oct/2026:09:15:00 +0000] "POST /api/checkout HTTP/1.1" 502 166 "-" "okHTTPS/4.12"
+192.168.4.21 - alice [14/Oct/2026:09:15:02 +0000] "DELETE /api/cart/7 HTTP/2.0" 204 0 "HTTPSs://shop.example.com/cart" "Mozilla/5.0"
+10.0.12.8 - - [14/Oct/2026:09:15:31 +0000] "POST /api/checkout HTTP/1.1" 503 166 "-" "okHTTPS/4.12"
+$ sed 's/a/\n/2' words.txt
+apple
+apple
+ban
+na
+cherry
+cherry
+cherry
+date
+apple
+$ sed y/abcdefghij/ABCDEFGHIJ/ words.txt
+ApplE
+ApplE
+BAnAnA
+CHErry
+CHErry
+CHErry
+DAtE
+ApplE
+$ sed G words.txt
+apple
+
+apple
+
+banana
+
+cherry
+
+cherry
+
+cherry
+
+date
+
+apple
+
+$ sed -n '1!G;h;$p' words.txt
+apple
+date
+cherry
+cherry
+cherry
+banana
+apple
+apple
+$ sed '$!N;s/\n/ /' words.txt
+apple apple
+banana cherry
+cherry cherry
+date apple
+$ sed ':a;N;$!ba;s/\n/,/g' words.txt
+apple,apple,banana,cherry,cherry,cherry,date,apple
+$ sed '$!N;/^\(.*\)\n\1$/!P;D' words.txt
+apple
+banana
+cherry
+date
+apple
+$ sed -n '/^###/{h;d};/^- /{G;s/\n### / [/;s/$/]/;p}' CHANGELOG.md
+- Saved carts (#412) [Added]
+- Checkout timeout under load (#398) [Fixed]
+- Duplicate order emails (#401) [Fixed]
+- Upgrade to Postgres 16 (#377) [Changed]
+$ sed -n 'h;n;G;p' words.txt
+apple
+apple
+cherry
+banana
+cherry
+cherry
+apple
+date
+$ sed -n 'x;$p' words.txt
+date
+$ sed '/^\[server\]/a timeout = 30' app.ini
+; shop service
+[server]
+timeout = 30
+host = 0.0.0.0
+port = 8000
+workers = 4
+
+[database]
+url = postgres://shop@db-primary.staging:5432/shop
+pool_size = 10
+timeout = 5
+
+[cache]
+url = redis://cache.staging:6379/0
+ttl = 300
+$ sed -e '/^\[cache\]/i\' -e '; cache settings below' app.ini
+; shop service
+[server]
+host = 0.0.0.0
+port = 8000
+workers = 4
+
+[database]
+url = postgres://shop@db-primary.staging:5432/shop
+pool_size = 10
+timeout = 5
+
+; cache settings below
+[cache]
+url = redis://cache.staging:6379/0
+ttl = 300
+$ sed '/^DEBUG=/c DEBUG=false' app.env
+# written by the deploy job
+APP_NAME=shop
+DEBUG=false
+LOG_LEVEL=debug
+DATABASE_URL="postgres://shop:s3cret@db-primary.staging:5432/shop"
+STRIPE_KEY=sk_live_51Hc9xQ
+FEATURE_FLAGS=new_checkout,dark_mode
+PORT=8000[no newline at end]
+$ sed -e '$a\' -e PORT_ADMIN=8001 app.env
+# written by the deploy job
+APP_NAME=shop
+DEBUG=true
+LOG_LEVEL=debug
+DATABASE_URL="postgres://shop:s3cret@db-primary.staging:5432/shop"
+STRIPE_KEY=sk_live_51Hc9xQ
+FEATURE_FLAGS=new_checkout,dark_mode
+PORT=8000
+PORT_ADMIN=8001
+$ sed -e '/^## \[Unreleased\]/,/^## \[1/c\' -e '## [Unreleased]\' -e '' CHANGELOG.md
+# Changelog
+
+## [Unreleased]
+
+
+### Fixed
+- Checkout timeout under load (#398)
+- Duplicate order emails (#401)
+
+### Changed
+- Upgrade to Postgres 16 (#377)
+$ sed '$r footer.txt' sales.csv
+region,product,units,revenue
+north,widget,1200,1534000
+south,widget,85,108800
+north,gadget,40,2299960
+east,gizmo,7,630
+west,widget,15000,19200000
+-- generated by mini_sed; do not edit
+$ sed -n '/ 50[0-9] /w errors.log' access.log
+$ cat errors.log
+10.0.12.8 - - [14/Oct/2026:09:15:00 +0000] "POST /api/checkout HTTP/1.1" 502 166 "-" "okhttp/4.12"
+10.0.12.8 - - [14/Oct/2026:09:15:31 +0000] "POST /api/checkout HTTP/1.1" 503 166 "-" "okhttp/4.12"
+$ sed -i 's/^DEBUG=true/DEBUG=false/;s/^LOG_LEVEL=.*/LOG_LEVEL=info/' app.env
+$ cat app.env
+# written by the deploy job
+APP_NAME=shop
+DEBUG=false
+LOG_LEVEL=info
+DATABASE_URL="postgres://shop:s3cret@db-primary.staging:5432/shop"
+STRIPE_KEY=sk_live_51Hc9xQ
+FEATURE_FLAGS=new_checkout,dark_mode
+PORT=8000[no newline at end]
+$ sed -s -n '$p' hosts app.ini
+10.0.20.5	db-replica.staging
+ttl = 300
+$ sed -n '$p' hosts app.ini
+ttl = 300
+$ sed = footer.txt sales.csv
+1
+-- generated by mini_sed; do not edit
+2
+region,product,units,revenue
+3
+north,widget,1200,1534000
+4
+south,widget,85,108800
+5
+north,gadget,40,2299960
+6
+east,gizmo,7,630
+7
+west,widget,15000,19200000
+$ sed -E '/^(north|east)/!d' sales.csv
+north,widget,1200,1534000
+north,gadget,40,2299960
+east,gizmo,7,630
+$ sed -E 's/(an|ana)+/<&>/;s/(ch|che)(err|rr)/{&}/' words.txt
+apple
+apple
+b<anana>
+{cherr}y
+{cherr}y
+{cherr}y
+date
+apple
+$ sed '/^$/Q' hosts
+# /etc/hosts for the staging box
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+$ sed '/db/q 3' hosts
+# /etc/hosts for the staging box
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+
+# app tier
+10.0.12.7	app-1.staging app-1
+10.0.12.8	app-2.staging app-2
+#10.0.12.9	app-3.staging app-3
+
+# data tier
+10.0.20.4	db-primary.staging db
+[exit 3]
+$ sed -n '/^10\.0\.12\./{s/\t.*//;H};${x;s/\n/ /g;s/^ //;p}' hosts
+10.0.12.7 10.0.12.8
+$ sed -n -E '/^[^#].*\<app-[0-9]\>/p' hosts
+10.0.12.7	app-1.staging app-1
+10.0.12.8	app-2.staging app-2
+$ sed -E 's/\b([a-z])/\u\1/g' footer.txt
+-- Generated By Mini_sed; Do Not Edit
+$ sed s/a/b words.txt
+sed: -e expression #1, char 5: unterminated `s' command
+[exit 1]
+$ sed k words.txt
+sed: -e expression #1, char 1: unknown command: `k'
+[exit 1]
+$ sed s/a/b/z words.txt
+sed: -e expression #1, char 7: unknown option to `s'
+[exit 1]
+$ sed 's/\(a\)/\2/' words.txt
+sed: -e expression #1, char 11: invalid reference \2 on `s' command's RHS
+[exit 1]
+$ sed 'b nowhere' words.txt
+sed: can't find label for jump to `nowhere'
+[exit 4]
+$ sed '/a/{p' words.txt
+sed: -e expression #1, char 0: unmatched `{'
+[exit 1]
+$ sed 'p}' words.txt
+sed: -e expression #1, char 2: unexpected `}'
+[exit 1]
+$ sed -n p missing.txt footer.txt
+-- generated by mini_sed; do not edit
+sed: can't read missing.txt: No such file or directory
+[exit 2]
+$ sed 3, words.txt
+sed: -e expression #1, char 2: unexpected `,'
+[exit 1]
+$ sed pq words.txt
+sed: -e expression #1, char 2: extra characters after command
+[exit 1]
+$ sed -E 's/(a/b/' words.txt
+sed: -e expression #1, char 7: Unmatched ( or \(
+[exit 1]

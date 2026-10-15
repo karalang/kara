@@ -166,6 +166,7 @@ cli/mini_lua         a Lua 5.4 subset interpreter: closures over shared cells, m
 cli/mini_jinja       a Jinja2 subset rendering a blog: extends/super, include, import, macros with defaults, namespace, raw, trim/lstrip whitespace rules, autoescape, Jinja's error messages; output identical to Jinja2 3.1.6
 cli/mini_jq           a jq 1.7 subset running 47 invocations over pod, release, log and config JSON: paths and updates, reduce/foreach, defs, formats, dates, jq's number printing and error messages; output identical to jq 1.7
 cli/mini_patch        difflib's unified diff of two service trees, then GNU patch -p1 applying it: clean, -R, a drifted copy with offsets and a reject file, a malformed patch and garbage; output identical to difflib and GNU patch 2.7.6
+cli/mini_sed          a GNU sed 4.9 subset running 68 invocations over an access log, hosts, INI, .env, CSV and CHANGELOG: POSIX leftmost-longest BRE/ERE, ranges, hold space, a/i/c/r/w, -i/-s, GNU error messages; output identical to GNU sed 4.9
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

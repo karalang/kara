@@ -1,0 +1,2557 @@
+// mini_sed: a stream editor for a subset of GNU sed 4.9, run the way
+// deploy scripts and log pipelines run sed over config files, env files
+// and access logs. The run writes the input files into `data/` and a
+// `jobs.tsv` of sed invocations (one per line, tab-separated arguments),
+// then runs each job and prints what sed prints: a `$ sed ...` line,
+// stdout, then stderr, and `[exit N]` when the status is not 0. A job
+// `@cat FILE` shows a file a previous job wrote (`w`, `-i`).
+//
+// The regular expressions are POSIX basic (default) and extended (-E)
+// with GNU's extensions (`\+ \? \|` in basic, `\w \W \s \S \b \B \< \>`,
+// back-references in both). A match is POSIX's leftmost-longest: an
+// NFA simulation finds the leftmost start and the longest end there,
+// then a backtracking pass fills the groups for that extent. A pattern
+// with a back-reference is matched by backtracking alone (leftmost, then
+// the first extent in the pattern's order).
+//
+// The editor follows GNU sed: addresses (`N`, `$`, `/re/I`, `first~step`,
+// `0,/re/`, `addr,+N`, `addr,~N`, ranges, `!`), blocks, the commands
+// `= a b c d D g G h H i n N p P q Q r s t T w x y z :` and `#`, the `s`
+// flags `g p N I w`, `& \1..\9 \n \t \L \U \l \u \E` in the replacement,
+// the empty regex meaning the last one used, one-liner `a text`, and the
+// options -n -E -r -s -i -e. Output keeps a missing final newline as sed
+// does, and adds it back before anything written after it.
+//
+// expected.out is GNU sed 4.9's output on the same files, made by
+// oracle.py.
+
+// ------------------------------------------------------------ bytes and strings
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn push_str_bytes(v: mut ref Vec[u8], s: Str) {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        v.push(b[i]);
+    }
+}
+
+fn ends_with_nl(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() > 0 and b[b.len() - 1] == b'\n'
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_upper(c: u8) -> bool {
+    c >= b'A' and c <= b'Z'
+}
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_alpha(c: u8) -> bool {
+    is_upper(c) or is_lower(c)
+}
+
+fn is_word(c: u8) -> bool {
+    is_alpha(c) or is_digit(c) or c == b'_'
+}
+
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == 11 or c == 12 or c == b'\r'
+}
+
+fn to_upper(c: u8) -> u8 {
+    if is_lower(c) { c - 32 } else { c }
+}
+
+fn to_lower(c: u8) -> u8 {
+    if is_upper(c) { c + 32 } else { c }
+}
+
+// ------------------------------------------------------------ regex syntax
+
+const N_CHAR: i64 = 0;
+const N_ANY: i64 = 1;
+const N_SET: i64 = 2;
+const N_CAT: i64 = 3;
+const N_ALT: i64 = 4;
+const N_REP: i64 = 5;
+const N_GROUP: i64 = 6;
+const N_ASSERT: i64 = 7;
+const N_BACKREF: i64 = 8;
+const N_EMPTY: i64 = 9;
+
+// assertions
+const AS_BOL: i64 = 0;
+const AS_EOL: i64 = 1;
+const AS_WORDB: i64 = 2;
+const AS_NWORDB: i64 = 3;
+const AS_WSTART: i64 = 4;
+const AS_WEND: i64 = 5;
+
+// One node of a parsed pattern. `c` is the byte of a CHAR, the assertion
+// of an ASSERT and the group of a GROUP or BACKREF; `set` holds the 256
+// bytes a SET matches; `kids` are a CAT's or ALT's parts and a REP's or
+// GROUP's body; `min`/`max` bound a REP (`max` -1 for no bound).
+struct Node {
+    kind: i64,
+    c: i64,
+    set: Vec[bool],
+    kids: Vec[i64],
+    min: i64,
+    max: i64,
+}
+
+fn node(kind: i64, c: i64) -> Node {
+    Node { kind: kind, c: c, set: Vec.new(), kids: Vec.new(), min: 0, max: 0 }
+}
+
+fn empty_set() -> Vec[bool] {
+    let mut s: Vec[bool] = Vec.new();
+    for _ in 0..256 {
+        s.push(false);
+    }
+    s
+}
+
+struct RegexParser {
+    p: Vec[u8],
+    i: i64,
+    ere: bool,
+    nodes: Vec[Node],
+    groups: i64,
+    open: i64,
+    has_backref: bool,
+}
+
+impl RegexParser {
+    fn add(mut ref self, n: own Node) -> i64 {
+        self.nodes.push(n);
+        self.nodes.len() - 1
+    }
+
+    fn at_end(ref self) -> bool {
+        self.i >= self.p.len()
+    }
+
+    fn peek(ref self) -> u8 {
+        self.p[self.i]
+    }
+
+    fn peek2(ref self) -> u8 {
+        if self.i + 1 < self.p.len() { self.p[self.i + 1] } else { 0 }
+    }
+
+    // At `\|` (basic) or `|` (extended)?
+    fn at_bar(ref self) -> bool {
+        if self.at_end() {
+            return false;
+        }
+        if self.ere {
+            return self.peek() == b'|';
+        }
+        self.peek() == b'\\' and self.peek2() == b'|'
+    }
+
+    // At `\)` (basic) or `)` (extended)?
+    fn at_close(ref self) -> bool {
+        if self.at_end() {
+            return false;
+        }
+        if self.ere {
+            return self.peek() == b')' and self.open > 0;
+        }
+        self.peek() == b'\\' and self.peek2() == b')'
+    }
+
+    fn alt(mut ref self) -> Result[i64, String] {
+        let mut kids: Vec[i64] = Vec.new();
+        kids.push(self.cat()?);
+        while self.at_bar() {
+            self.i += if self.ere { 1 } else { 2 };
+            kids.push(self.cat()?);
+        }
+        if kids.len() == 1 {
+            return Ok(kids[0]);
+        }
+        let mut n = node(N_ALT, 0);
+        n.kids = kids;
+        Ok(self.add(n))
+    }
+
+    fn cat(mut ref self) -> Result[i64, String] {
+        let mut kids: Vec[i64] = Vec.new();
+        let mut first = true;
+        while not self.at_end() and not self.at_bar() and not self.at_close() {
+            let c = self.peek();
+            if not self.ere and c == b'\\' and self.peek2() == b')' {
+                return Err("Unmatched ) or \\)".to_string());
+            }
+            // `^` anchors at the start of a branch (always, in -E)
+            if c == b'^' and (first or self.ere) {
+                self.i += 1;
+                kids.push(self.add(node(N_ASSERT, AS_BOL)));
+                // a `*` right after a leading `^` is literal in basic
+                if not self.ere and not self.at_end() and self.peek() == b'*' {
+                    self.i += 1;
+                    kids.push(self.add(node(N_CHAR, 42)));
+                }
+                first = false;
+                continue;
+            }
+            if c == b'$' {
+                self.i += 1;
+                if self.ere or self.at_end() or self.at_bar() or self.at_close() {
+                    kids.push(self.add(node(N_ASSERT, AS_EOL)));
+                } else {
+                    let a = self.add(node(N_CHAR, 36));
+                    kids.push(self.repeats(a)?);
+                }
+                first = false;
+                continue;
+            }
+            if c == b'*' and first {
+                if self.ere {
+                    return Err("Invalid preceding regular expression".to_string());
+                }
+                self.i += 1;
+                let a = self.add(node(N_CHAR, 42));
+                kids.push(self.repeats(a)?);
+                first = false;
+                continue;
+            }
+            let a = self.atom()?;
+            kids.push(self.repeats(a)?);
+            first = false;
+        }
+        if kids.len() == 0 {
+            return Ok(self.add(node(N_EMPTY, 0)));
+        }
+        if kids.len() == 1 {
+            return Ok(kids[0]);
+        }
+        let mut n = node(N_CAT, 0);
+        n.kids = kids;
+        Ok(self.add(n))
+    }
+
+    fn number(mut ref self) -> i64 {
+        let mut n: i64 = -1;
+        while not self.at_end() and is_digit(self.peek()) {
+            if n < 0 {
+                n = 0;
+            }
+            n = n * 10 + (self.peek() - b'0') as i64;
+            self.i += 1;
+        }
+        n
+    }
+
+    // `{m}`, `{m,}`, `{m,n}`, after the opening brace; consumes the close.
+    fn bounds(mut ref self) -> Result[(i64, i64), String] {
+        let lo = self.number();
+        if lo < 0 {
+            return Err("Invalid content of \\{\\}".to_string());
+        }
+        let mut hi = lo;
+        if not self.at_end() and self.peek() == b',' {
+            self.i += 1;
+            hi = self.number();
+        }
+        if self.ere {
+            if self.at_end() or self.peek() != b'}' {
+                return Err("Unmatched \\{".to_string());
+            }
+            self.i += 1;
+        } else {
+            if self.at_end() or self.peek() != b'\\' or self.peek2() != b'}' {
+                return Err("Unmatched \\{".to_string());
+            }
+            self.i += 2;
+        }
+        if hi >= 0 and hi < lo {
+            return Err("Invalid content of \\{\\}".to_string());
+        }
+        Ok((lo, hi))
+    }
+
+    fn repeats(mut ref self, atom: i64) -> Result[i64, String] {
+        let mut a = atom;
+        loop {
+            if self.at_end() {
+                return Ok(a);
+            }
+            let c = self.peek();
+            let mut lo: i64 = 0;
+            let mut hi: i64 = 0;
+            if c == b'*' {
+                self.i += 1;
+                hi = -1;
+            } else if self.ere and c == b'+' {
+                self.i += 1;
+                lo = 1;
+                hi = -1;
+            } else if self.ere and c == b'?' {
+                self.i += 1;
+                hi = 1;
+            } else if self.ere and c == b'{' {
+                self.i += 1;
+                let (l, h) = self.bounds()?;
+                lo = l;
+                hi = h;
+            } else if not self.ere and c == b'\\' and self.peek2() == b'+' {
+                self.i += 2;
+                lo = 1;
+                hi = -1;
+            } else if not self.ere and c == b'\\' and self.peek2() == b'?' {
+                self.i += 2;
+                hi = 1;
+            } else if not self.ere and c == b'\\' and self.peek2() == b'{' {
+                self.i += 2;
+                let (l, h) = self.bounds()?;
+                lo = l;
+                hi = h;
+            } else {
+                return Ok(a);
+            }
+            let mut n = node(N_REP, 0);
+            n.kids.push(a);
+            n.min = lo;
+            n.max = hi;
+            a = self.add(n);
+        }
+    }
+
+    fn group(mut ref self) -> Result[i64, String] {
+        self.groups += 1;
+        let g = self.groups;
+        self.open += 1;
+        let body = self.alt()?;
+        if not self.at_close() {
+            return Err("Unmatched ( or \\(".to_string());
+        }
+        self.i += if self.ere { 1 } else { 2 };
+        self.open -= 1;
+        let mut n = node(N_GROUP, g);
+        n.kids.push(body);
+        Ok(self.add(n))
+    }
+
+    fn class_set(mut ref self, name: Str) -> Result[Vec[bool], String] {
+        let mut s = empty_set();
+        for i in 0..256 {
+            let c = i as u8;
+            let yes = if name == "alpha" {
+                is_alpha(c)
+            } else if name == "digit" {
+                is_digit(c)
+            } else if name == "alnum" {
+                is_alpha(c) or is_digit(c)
+            } else if name == "upper" {
+                is_upper(c)
+            } else if name == "lower" {
+                is_lower(c)
+            } else if name == "space" {
+                is_space(c)
+            } else if name == "blank" {
+                c == b' ' or c == b'\t'
+            } else if name == "punct" {
+                c > 32 and c < 127 and not is_alpha(c) and not is_digit(c)
+            } else if name == "print" {
+                c >= 32 and c < 127
+            } else if name == "graph" {
+                c > 32 and c < 127
+            } else if name == "cntrl" {
+                c < 32 or c == 127
+            } else if name == "xdigit" {
+                is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+            } else {
+                return Err("Invalid character class name".to_string());
+            };
+            s[i] = yes;
+        }
+        Ok(s)
+    }
+
+    // A bracket expression, after the `[`.
+    fn bracket(mut ref self) -> Result[i64, String] {
+        let unmatched = "Unmatched [, [^, [:, [., or [=";
+        let mut set = empty_set();
+        let mut negate = false;
+        if not self.at_end() and self.peek() == b'^' {
+            negate = true;
+            self.i += 1;
+        }
+        let mut first = true;
+        loop {
+            if self.at_end() {
+                return Err(unmatched.to_string());
+            }
+            let mut c = self.peek();
+            if c == b']' and not first {
+                self.i += 1;
+                break;
+            }
+            first = false;
+            if c == b'[' and self.peek2() == b':' {
+                let start = self.i + 2;
+                let mut j = start;
+                while j + 1 < self.p.len() and not (self.p[j] == b':' and self.p[j + 1] == b']') {
+                    j += 1;
+                }
+                if j + 1 >= self.p.len() {
+                    return Err(unmatched.to_string());
+                }
+                let name = byte_str(self.p, start, j);
+                let cs = self.class_set(name)?;
+                for k in 0..256 {
+                    if cs[k] {
+                        set[k] = true;
+                    }
+                }
+                self.i = j + 2;
+                continue;
+            }
+            self.i += 1;
+            // GNU sed reads \n and \t in a bracket; other backslashes are literal
+            if c == b'\\' and not self.at_end() and (self.peek() == b'n' or self.peek() == b't') {
+                c = if self.peek() == b'n' { b'\n' } else { b'\t' };
+                self.i += 1;
+            }
+            let mut hi = c;
+            if not self.at_end() and self.peek() == b'-' and self.peek2() != b']' and self.i + 1 < self.p.len() {
+                self.i += 1;
+                hi = self.peek();
+                self.i += 1;
+                if hi < c {
+                    return Err("Invalid range end".to_string());
+                }
+            }
+            for k in (c as i64)..(hi as i64 + 1) {
+                set[k] = true;
+            }
+        }
+        if negate {
+            for k in 0..256 {
+                set[k] = not set[k];
+            }
+        }
+        let mut n = node(N_SET, 0);
+        n.set = set;
+        Ok(self.add(n))
+    }
+
+    fn named_set(mut ref self, word: bool, yes: bool) -> i64 {
+        let mut set = empty_set();
+        for k in 0..256 {
+            let c = k as u8;
+            let m = if word { is_word(c) } else { is_space(c) };
+            set[k] = if yes { m } else { not m };
+        }
+        let mut n = node(N_SET, 0);
+        n.set = set;
+        self.add(n)
+    }
+
+    fn atom(mut ref self) -> Result[i64, String] {
+        let c = self.peek();
+        self.i += 1;
+        if c == b'.' {
+            return Ok(self.add(node(N_ANY, 0)));
+        }
+        if c == b'[' {
+            return self.bracket();
+        }
+        if self.ere and c == b'(' {
+            return self.group();
+        }
+        if self.ere and (c == b'*' or c == b'+' or c == b'?') {
+            return Err("Invalid preceding regular expression".to_string());
+        }
+        if c != b'\\' {
+            return Ok(self.add(node(N_CHAR, c as i64)));
+        }
+        if self.at_end() {
+            return Err("Trailing backslash".to_string());
+        }
+        let e = self.peek();
+        self.i += 1;
+        if not self.ere and e == b'(' {
+            return self.group();
+        }
+        if e >= b'1' and e <= b'9' {
+            let g = (e - b'0') as i64;
+            if g > self.groups {
+                return Err("Invalid back reference".to_string());
+            }
+            self.has_backref = true;
+            return Ok(self.add(node(N_BACKREF, g)));
+        }
+        if e == b'n' {
+            return Ok(self.add(node(N_CHAR, 10)));
+        }
+        if e == b't' {
+            return Ok(self.add(node(N_CHAR, 9)));
+        }
+        if e == b'w' {
+            return Ok(self.named_set(true, true));
+        }
+        if e == b'W' {
+            return Ok(self.named_set(true, false));
+        }
+        if e == b's' {
+            return Ok(self.named_set(false, true));
+        }
+        if e == b'S' {
+            return Ok(self.named_set(false, false));
+        }
+        if e == b'b' {
+            return Ok(self.add(node(N_ASSERT, AS_WORDB)));
+        }
+        if e == b'B' {
+            return Ok(self.add(node(N_ASSERT, AS_NWORDB)));
+        }
+        if e == b'<' {
+            return Ok(self.add(node(N_ASSERT, AS_WSTART)));
+        }
+        if e == b'>' {
+            return Ok(self.add(node(N_ASSERT, AS_WEND)));
+        }
+        if e == b'`' {
+            return Ok(self.add(node(N_ASSERT, AS_BOL)));
+        }
+        if e == b'\'' {
+            return Ok(self.add(node(N_ASSERT, AS_EOL)));
+        }
+        Ok(self.add(node(N_CHAR, e as i64)))
+    }
+}
+
+// ------------------------------------------------------------ regex program
+
+const I_CHAR: i64 = 0;
+const I_ANY: i64 = 1;
+const I_SET: i64 = 2;
+const I_SPLIT: i64 = 3;
+const I_JMP: i64 = 4;
+const I_SAVE: i64 = 5;
+const I_PROGRESS: i64 = 6;
+const I_ASSERT: i64 = 7;
+const I_BACKREF: i64 = 8;
+const I_MATCH: i64 = 9;
+
+// One instruction. CHAR matches byte `x`; SET matches the bytes in `set`;
+// SPLIT tries `x` first, then `y`; JMP goes to `x`; SAVE stores the
+// position in slot `x`; PROGRESS fails when the position equals slot `x`
+// (a loop body that matched nothing); ASSERT checks assertion `x`;
+// BACKREF matches group `x` again.
+struct Inst {
+    op: i64,
+    x: i64,
+    y: i64,
+    set: Vec[bool],
+}
+
+fn inst(op: i64, x: i64, y: i64) -> Inst {
+    Inst { op: op, x: x, y: y, set: Vec.new() }
+}
+
+struct Pattern {
+    prog: Vec[Inst],
+    groups: i64,
+    slots: i64,
+    icase: bool,
+    has_backref: bool,
+}
+
+struct Emitter {
+    prog: Vec[Inst],
+    slots: i64,
+    icase: bool,
+}
+
+impl Emitter {
+    fn here(ref self) -> i64 {
+        self.prog.len()
+    }
+
+    fn push(mut ref self, i: own Inst) -> i64 {
+        self.prog.push(i);
+        self.prog.len() - 1
+    }
+
+    fn emit(mut ref self, nodes: ref Vec[Node], k: i64) {
+        let kind = nodes[k].kind;
+        if kind == N_CHAR {
+            let c = nodes[k].c as u8;
+            if self.icase and is_alpha(c) {
+                let mut i = inst(I_SET, 0, 0);
+                i.set = empty_set();
+                i.set[to_lower(c) as i64] = true;
+                i.set[to_upper(c) as i64] = true;
+                self.push(i);
+            } else {
+                self.push(inst(I_CHAR, c as i64, 0));
+            }
+        } else if kind == N_ANY {
+            self.push(inst(I_ANY, 0, 0));
+        } else if kind == N_SET {
+            let mut i = inst(I_SET, 0, 0);
+            i.set = nodes[k].set.clone();
+            if self.icase {
+                for b in 0..256 {
+                    if nodes[k].set[b] {
+                        let c = b as u8;
+                        i.set[to_lower(c) as i64] = true;
+                        i.set[to_upper(c) as i64] = true;
+                    }
+                }
+            }
+            self.push(i);
+        } else if kind == N_CAT {
+            for j in 0..nodes[k].kids.len() {
+                self.emit(nodes, nodes[k].kids[j]);
+            }
+        } else if kind == N_ALT {
+            let n = nodes[k].kids.len();
+            let mut jumps: Vec[i64] = Vec.new();
+            for j in 0..n {
+                if j < n - 1 {
+                    let split = self.push(inst(I_SPLIT, 0, 0));
+                    self.prog[split].x = self.here();
+                    self.emit(nodes, nodes[k].kids[j]);
+                    jumps.push(self.push(inst(I_JMP, 0, 0)));
+                    self.prog[split].y = self.here();
+                } else {
+                    self.emit(nodes, nodes[k].kids[j]);
+                }
+            }
+            let end = self.here();
+            for j in 0..jumps.len() {
+                self.prog[jumps[j]].x = end;
+            }
+        } else if kind == N_REP {
+            let body = nodes[k].kids[0];
+            let lo = nodes[k].min;
+            let hi = nodes[k].max;
+            for _ in 0..lo {
+                self.emit(nodes, body);
+            }
+            if hi < 0 {
+                let slot = self.slots;
+                self.slots += 1;
+                let top = self.push(inst(I_SPLIT, 0, 0));
+                self.prog[top].x = self.here();
+                self.push(inst(I_SAVE, slot, 0));
+                self.emit(nodes, body);
+                self.push(inst(I_PROGRESS, slot, 0));
+                self.push(inst(I_JMP, top, 0));
+                self.prog[top].y = self.here();
+            } else {
+                let mut splits: Vec[i64] = Vec.new();
+                for _ in lo..hi {
+                    let s = self.push(inst(I_SPLIT, 0, 0));
+                    self.prog[s].x = self.here();
+                    splits.push(s);
+                    self.emit(nodes, body);
+                }
+                let end = self.here();
+                for j in 0..splits.len() {
+                    self.prog[splits[j]].y = end;
+                }
+            }
+        } else if kind == N_GROUP {
+            let g = nodes[k].c;
+            self.push(inst(I_SAVE, 2 * g, 0));
+            self.emit(nodes, nodes[k].kids[0]);
+            self.push(inst(I_SAVE, 2 * g + 1, 0));
+        } else if kind == N_ASSERT {
+            self.push(inst(I_ASSERT, nodes[k].c, 0));
+        } else if kind == N_BACKREF {
+            self.push(inst(I_BACKREF, nodes[k].c, 0));
+        }
+    }
+}
+
+// Compiles a pattern; the error is regcomp's message.
+fn compile_regex(pattern: ref Vec[u8], ere: bool, icase: bool) -> Result[Pattern, String] {
+    let mut rp = RegexParser { p: pattern.clone(), i: 0, ere: ere, nodes: Vec.new(), groups: 0, open: 0, has_backref: false };
+    let root = rp.alt()?;
+    if not rp.at_end() {
+        // a `)` with no group open in -E is literal in GNU; `\)` in basic is an error
+        return Err("Unmatched ) or \\)".to_string());
+    }
+    let groups = rp.groups;
+    let mut em = Emitter { prog: Vec.new(), slots: 2 * (groups + 1), icase: icase };
+    em.push(inst(I_SAVE, 0, 0));
+    em.emit(rp.nodes, root);
+    em.push(inst(I_SAVE, 1, 0));
+    em.push(inst(I_MATCH, 0, 0));
+    Ok(Pattern { prog: em.prog, groups: groups, slots: em.slots, icase: icase, has_backref: rp.has_backref })
+}
+
+// ------------------------------------------------------------ matching
+
+fn word_at(t: ref Vec[u8], i: i64) -> bool {
+    i >= 0 and i < t.len() and is_word(t[i])
+}
+
+fn assert_holds(a: i64, t: ref Vec[u8], sp: i64) -> bool {
+    if a == AS_BOL {
+        return sp == 0;
+    }
+    if a == AS_EOL {
+        return sp == t.len();
+    }
+    let before = word_at(t, sp - 1);
+    let after = word_at(t, sp);
+    if a == AS_WORDB {
+        return before != after;
+    }
+    if a == AS_NWORDB {
+        return before == after;
+    }
+    if a == AS_WSTART {
+        return not before and after;
+    }
+    before and not after
+}
+
+fn same_byte(a: u8, b: u8, icase: bool) -> bool {
+    if icase { to_lower(a) == to_lower(b) } else { a == b }
+}
+
+// Backtracking: does the program match at `sp`, ending at `want` (any
+// end when `want` is -1)? Fills `caps` on success.
+fn backtrack(re: ref Pattern, t: ref Vec[u8], pc0: i64, sp0: i64, caps: mut ref Vec[i64], want: i64) -> bool {
+    let mut pc = pc0;
+    let mut sp = sp0;
+    let n = t.len();
+    loop {
+        let op = re.prog[pc].op;
+        if op == I_CHAR {
+            if sp < n and t[sp] as i64 == re.prog[pc].x {
+                pc += 1;
+                sp += 1;
+            } else {
+                return false;
+            }
+        } else if op == I_ANY {
+            if sp < n {
+                pc += 1;
+                sp += 1;
+            } else {
+                return false;
+            }
+        } else if op == I_SET {
+            if sp < n and re.prog[pc].set[t[sp] as i64] {
+                pc += 1;
+                sp += 1;
+            } else {
+                return false;
+            }
+        } else if op == I_SPLIT {
+            if backtrack(re, t, re.prog[pc].x, sp, caps, want) {
+                return true;
+            }
+            pc = re.prog[pc].y;
+        } else if op == I_JMP {
+            pc = re.prog[pc].x;
+        } else if op == I_SAVE {
+            let slot = re.prog[pc].x;
+            let old = caps[slot];
+            caps[slot] = sp;
+            if backtrack(re, t, pc + 1, sp, caps, want) {
+                return true;
+            }
+            caps[slot] = old;
+            return false;
+        } else if op == I_PROGRESS {
+            if caps[re.prog[pc].x] == sp {
+                return false;
+            }
+            pc += 1;
+        } else if op == I_ASSERT {
+            if not assert_holds(re.prog[pc].x, t, sp) {
+                return false;
+            }
+            pc += 1;
+        } else if op == I_BACKREF {
+            let g = re.prog[pc].x;
+            let s = caps[2 * g];
+            let e = caps[2 * g + 1];
+            if s < 0 or e < 0 {
+                return false;
+            }
+            if sp + (e - s) > n {
+                return false;
+            }
+            for k in 0..(e - s) {
+                if not same_byte(t[s + k], t[sp + k], re.icase) {
+                    return false;
+                }
+            }
+            sp += e - s;
+            pc += 1;
+        } else {
+            return want < 0 or sp == want;
+        }
+    }
+}
+
+// The NFA's threads at one position: program counters and each thread's
+// start. `mark[pc]` is the last position whose list holds `pc`.
+struct Threads {
+    pcs: Vec[i64],
+    starts: Vec[i64],
+}
+
+fn add_thread(re: ref Pattern, t: ref Vec[u8], l: mut ref Threads, mark: mut ref Vec[i64], pc: i64, start: i64, sp: i64) {
+    if mark[pc] == sp {
+        return;
+    }
+    mark[pc] = sp;
+    let op = re.prog[pc].op;
+    if op == I_JMP {
+        add_thread(re, t, l, mark, re.prog[pc].x, start, sp);
+    } else if op == I_SPLIT {
+        add_thread(re, t, l, mark, re.prog[pc].x, start, sp);
+        add_thread(re, t, l, mark, re.prog[pc].y, start, sp);
+    } else if op == I_SAVE or op == I_PROGRESS {
+        add_thread(re, t, l, mark, pc + 1, start, sp);
+    } else if op == I_ASSERT {
+        if assert_holds(re.prog[pc].x, t, sp) {
+            add_thread(re, t, l, mark, pc + 1, start, sp);
+        }
+    } else {
+        l.pcs.push(pc);
+        l.starts.push(start);
+    }
+}
+
+// The leftmost start and the longest end there, at or after `from`;
+// (-1, -1) when nothing matches. Threads are kept in priority order and
+// an older thread (an earlier start) wins a pc, so the first start to
+// reach MATCH is the leftmost, and the run goes on while threads from
+// that start are alive, to find its longest end.
+fn leftmost_longest(re: ref Pattern, t: ref Vec[u8], from: i64) -> (i64, i64) {
+    let mut mark: Vec[i64] = Vec.new();
+    for _ in 0..re.prog.len() {
+        mark.push(-1);
+    }
+    let mut cur = Threads { pcs: Vec.new(), starts: Vec.new() };
+    let mut next = Threads { pcs: Vec.new(), starts: Vec.new() };
+    let mut best_s: i64 = -1;
+    let mut best_e: i64 = -1;
+    let n = t.len();
+    let mut sp = from;
+    while sp <= n {
+        if best_s < 0 {
+            add_thread(re, t, mut cur, mut mark, 0, sp, sp);
+        }
+        if cur.pcs.len() == 0 and best_s >= 0 {
+            break;
+        }
+        next.pcs.clear();
+        next.starts.clear();
+        for k in 0..cur.pcs.len() {
+            let pc = cur.pcs[k];
+            let start = cur.starts[k];
+            if best_s >= 0 and start > best_s {
+                continue;
+            }
+            let op = re.prog[pc].op;
+            if op == I_MATCH {
+                if best_s < 0 or start < best_s or (start == best_s and sp > best_e) {
+                    best_s = start;
+                    best_e = sp;
+                }
+                continue;
+            }
+            if sp >= n {
+                continue;
+            }
+            let c = t[sp];
+            let ok = if op == I_CHAR {
+                c as i64 == re.prog[pc].x
+            } else if op == I_ANY {
+                true
+            } else if op == I_SET {
+                re.prog[pc].set[c as i64]
+            } else {
+                false
+            };
+            if ok {
+                add_thread(re, t, mut next, mut mark, pc + 1, start, sp + 1);
+            }
+        }
+        let done = cur;
+        cur = next;
+        next = done;
+        sp += 1;
+    }
+    (best_s, best_e)
+}
+
+fn fresh_caps(re: ref Pattern) -> Vec[i64] {
+    let mut caps: Vec[i64] = Vec.new();
+    for _ in 0..re.slots {
+        caps.push(-1);
+    }
+    caps
+}
+
+// The first match at or after `from`: the group slots (start and end of
+// group g at 2g and 2g+1), or an empty Vec.
+fn search(re: ref Pattern, t: ref Vec[u8], from: i64) -> Vec[i64] {
+    if re.has_backref {
+        for s in from..(t.len() + 1) {
+            let mut caps = fresh_caps(re);
+            if backtrack(re, t, 0, s, mut caps, -1) {
+                return caps;
+            }
+        }
+        return Vec.new();
+    }
+    let (s, e) = leftmost_longest(re, t, from);
+    if s < 0 {
+        return Vec.new();
+    }
+    let mut caps = fresh_caps(re);
+    if backtrack(re, t, 0, s, mut caps, e) {
+        return caps;
+    }
+    Vec.new()
+}
+
+// ------------------------------------------------------------ the script
+
+const A_NONE: i64 = 0;
+const A_LINE: i64 = 1;
+const A_LAST: i64 = 2;
+const A_RE: i64 = 3;
+const A_STEP: i64 = 4;
+const A_ZERO: i64 = 5;
+const A_PLUS: i64 = 6;
+const A_TILDE: i64 = 7;
+
+// An address: a line `n`, `$`, a regex (index `re` into the script's
+// regexes, -1 for the last regex used), `n~step`, `0`, `+n` or `~n`.
+struct Addr {
+    kind: i64,
+    n: i64,
+    step: i64,
+    re: i64,
+}
+
+fn no_addr() -> Addr {
+    Addr { kind: A_NONE, n: 0, step: 0, re: -1 }
+}
+
+// Replacement pieces
+const P_LIT: i64 = 0;
+const P_GROUP: i64 = 1;
+const P_CASE: i64 = 2;
+
+// case pieces
+const C_UPPER: i64 = 1;
+const C_LOWER: i64 = 2;
+const C_END: i64 = 3;
+const C_UPPER1: i64 = 4;
+const C_LOWER1: i64 = 5;
+
+struct Piece {
+    kind: i64,
+    text: Vec[u8],
+    n: i64,
+}
+
+// One command. `text` is the text of `a i c`, the label of `: b t T` and
+// the file of `r w`; `re`, `repl` and the flags belong to `s`; `map` to
+// `y`; `target` is where `{` goes when its address does not match (its
+// `}`) and where `b t T` jump; `wout` is the output file of `w` and `s///w`.
+struct Cmd {
+    a1: Addr,
+    a2: Addr,
+    neg: bool,
+    name: u8,
+    text: String,
+    re: i64,
+    repl: Vec[Piece],
+    global: bool,
+    occurrence: i64,
+    print: bool,
+    wout: i64,
+    map: Vec[u8],
+    target: i64,
+    exit: i64,
+}
+
+fn new_cmd() -> Cmd {
+    Cmd { a1: no_addr(), a2: no_addr(), neg: false, name: 0, text: String.new(), re: -1, repl: Vec.new(), global: false, occurrence: 1, print: false, wout: -1, map: Vec.new(), target: -1, exit: 0 }
+}
+
+struct Script {
+    cmds: Vec[Cmd],
+    regexes: Vec[Pattern],
+    wnames: Vec[String],
+}
+
+// sed's message for a script it cannot use, and its exit status.
+struct SedError {
+    msg: String,
+    status: i64,
+}
+
+struct ScriptParser {
+    s: Vec[u8],
+    i: i64,
+    ere: bool,
+    cmds: Vec[Cmd],
+    regexes: Vec[Pattern],
+    wnames: Vec[String],
+}
+
+fn sed_error(at: i64, what: Str) -> SedError {
+    SedError { msg: f"sed: -e expression #1, char {at}: {what}", status: 1 }
+}
+
+impl ScriptParser {
+    fn eof(ref self) -> bool {
+        self.i >= self.s.len()
+    }
+
+    fn peek(ref self) -> u8 {
+        self.s[self.i]
+    }
+
+    fn fail(ref self, what: Str) -> SedError {
+        sed_error(self.i, what)
+    }
+
+    fn skip_blanks(mut ref self) {
+        while not self.eof() and (self.peek() == b' ' or self.peek() == b'\t') {
+            self.i += 1;
+        }
+    }
+
+    fn number(mut ref self) -> i64 {
+        let mut n: i64 = 0;
+        while not self.eof() and is_digit(self.peek()) {
+            n = n * 10 + (self.peek() - b'0') as i64;
+            self.i += 1;
+        }
+        n
+    }
+
+    // The text up to an unescaped `delim`, after the opening one: `\delim`
+    // becomes `delim`, a backslash-newline a newline, and other escapes
+    // stay. None at the end, or at a bare newline in a regex.
+    fn delimited(mut ref self, delim: u8, regex: bool) -> Option[Vec[u8]] {
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.eof() {
+                return None;
+            }
+            let c = self.peek();
+            self.i += 1;
+            if c == b'\n' and regex {
+                return None;
+            }
+            if c == delim {
+                return Some(out);
+            }
+            if c == b'\\' {
+                if self.eof() {
+                    return None;
+                }
+                let e = self.peek();
+                self.i += 1;
+                if e == delim {
+                    out.push(e);
+                } else if e == b'\n' {
+                    // a backslash-newline is a newline
+                    out.push(b'\n');
+                } else {
+                    out.push(b'\\');
+                    out.push(e);
+                }
+                continue;
+            }
+            out.push(c);
+        }
+    }
+
+    // A regex address or `s` pattern: compiled, or -1 for the empty one.
+    fn add_regex(mut ref self, pattern: ref Vec[u8], icase: bool) -> Result[i64, SedError] {
+        if pattern.len() == 0 {
+            return Ok(-1);
+        }
+        match compile_regex(pattern, self.ere, icase) {
+            Ok(re) => {
+                self.regexes.push(re);
+                Ok(self.regexes.len() - 1)
+            }
+            Err(m) => Err(self.fail(m)),
+        }
+    }
+
+    fn regex_addr(mut ref self, delim: u8) -> Result[Addr, SedError] {
+        let pattern = match self.delimited(delim, true) {
+            Some(p) => p,
+            None => return Err(self.fail("unterminated address regex")),
+        };
+        let mut icase = false;
+        while not self.eof() and (self.peek() == b'I' or self.peek() == b'M') {
+            if self.peek() == b'I' {
+                icase = true;
+            }
+            self.i += 1;
+        }
+        let re = self.add_regex(pattern, icase)?;
+        Ok(Addr { kind: A_RE, n: 0, step: 0, re: re })
+    }
+
+    // An address, or one of kind A_NONE when there is none here.
+    fn address(mut ref self, second: bool) -> Result[Addr, SedError] {
+        if self.eof() {
+            return Ok(no_addr());
+        }
+        let c = self.peek();
+        if is_digit(c) {
+            let n = self.number();
+            if not second and not self.eof() and self.peek() == b'~' {
+                self.i += 1;
+                let step = self.number();
+                return Ok(Addr { kind: A_STEP, n: n, step: step, re: -1 });
+            }
+            if n == 0 and not second {
+                return Ok(Addr { kind: A_ZERO, n: 0, step: 0, re: -1 });
+            }
+            return Ok(Addr { kind: A_LINE, n: n, step: 0, re: -1 });
+        }
+        if c == b'$' {
+            self.i += 1;
+            return Ok(Addr { kind: A_LAST, n: 0, step: 0, re: -1 });
+        }
+        if c == b'/' {
+            self.i += 1;
+            return self.regex_addr(b'/');
+        }
+        if c == b'\\' {
+            self.i += 1;
+            if self.eof() {
+                return Err(self.fail("unexpected `,'"));
+            }
+            let d = self.peek();
+            self.i += 1;
+            return self.regex_addr(d);
+        }
+        if second and (c == b'+' or c == b'~') {
+            self.i += 1;
+            let n = self.number();
+            let kind = if c == b'+' { A_PLUS } else { A_TILDE };
+            return Ok(Addr { kind: kind, n: n, step: 0, re: -1 });
+        }
+        Ok(no_addr())
+    }
+
+    // After a command: blanks, then the end, a newline, `;`, `}` or `#`.
+    fn end_of_cmd(mut ref self) -> Result[(), SedError] {
+        self.skip_blanks();
+        if self.eof() {
+            return Ok(());
+        }
+        let c = self.peek();
+        if c == b'\n' or c == b';' {
+            self.i += 1;
+            return Ok(());
+        }
+        if c == b'}' or c == b'#' {
+            return Ok(());
+        }
+        self.i += 1;
+        Err(self.fail("extra characters after command"))
+    }
+
+    // A label: to a newline or `;`, trailing blanks dropped.
+    fn label(mut ref self) -> String {
+        self.skip_blanks();
+        let mut out: Vec[u8] = Vec.new();
+        while not self.eof() and self.peek() != b'\n' and self.peek() != b';' {
+            out.push(self.peek());
+            self.i += 1;
+        }
+        while out.len() > 0 and (out[out.len() - 1] == b' ' or out[out.len() - 1] == b'\t') {
+            out.pop();
+        }
+        if not self.eof() {
+            self.i += 1;
+        }
+        from_bytes(out)
+    }
+
+    // A file name: to the end of the line.
+    fn file_name(mut ref self) -> String {
+        self.skip_blanks();
+        let mut out: Vec[u8] = Vec.new();
+        while not self.eof() and self.peek() != b'\n' {
+            out.push(self.peek());
+            self.i += 1;
+        }
+        if not self.eof() {
+            self.i += 1;
+        }
+        from_bytes(out)
+    }
+
+    fn wfile(mut ref self, name: own String) -> i64 {
+        for k in 0..self.wnames.len() {
+            if self.wnames[k] == name {
+                return k;
+            }
+        }
+        self.wnames.push(name);
+        self.wnames.len() - 1
+    }
+
+    // The text of `a`, `i` or `c`: GNU's one-liner `a text` (leading
+    // blanks dropped), `a\text`, or `a\` with the text on the next lines;
+    // a backslash-newline continues it and other backslashes are removed.
+    fn text_arg(mut ref self) -> Result[String, SedError] {
+        self.skip_blanks();
+        if not self.eof() and self.peek() == b'\\' {
+            self.i += 1;
+            if not self.eof() and self.peek() == b'\n' {
+                self.i += 1;
+            }
+        }
+        if self.eof() {
+            return Err(self.fail("expected \\ after `a', `c' or `i'"));
+        }
+        let mut out: Vec[u8] = Vec.new();
+        while not self.eof() {
+            let c = self.peek();
+            self.i += 1;
+            if c == b'\n' {
+                break;
+            }
+            if c == b'\\' {
+                if self.eof() {
+                    break;
+                }
+                out.push(self.peek());
+                self.i += 1;
+                continue;
+            }
+            out.push(c);
+        }
+        out.push(b'\n');
+        Ok(from_bytes(out))
+    }
+
+    // The replacement of `s`: literal runs, `&`, `\1`..`\9`, case
+    // conversions, `\n` and `\t`.
+    fn replacement(ref self, raw: ref Vec[u8]) -> Vec[Piece] {
+        let mut pieces: Vec[Piece] = Vec.new();
+        let mut lit: Vec[u8] = Vec.new();
+        let mut i: i64 = 0;
+        while i < raw.len() {
+            let c = raw[i];
+            i += 1;
+            if c == b'&' {
+                if lit.len() > 0 {
+                    pieces.push(Piece { kind: P_LIT, text: lit.clone(), n: 0 });
+                    lit.clear();
+                }
+                pieces.push(Piece { kind: P_GROUP, text: Vec.new(), n: 0 });
+                continue;
+            }
+            if c != b'\\' or i >= raw.len() {
+                lit.push(c);
+                continue;
+            }
+            let e = raw[i];
+            i += 1;
+            let mut piece: Option[Piece] = None;
+            if e >= b'0' and e <= b'9' {
+                piece = Some(Piece { kind: P_GROUP, text: Vec.new(), n: (e - b'0') as i64 });
+            } else if e == b'U' {
+                piece = Some(Piece { kind: P_CASE, text: Vec.new(), n: C_UPPER });
+            } else if e == b'L' {
+                piece = Some(Piece { kind: P_CASE, text: Vec.new(), n: C_LOWER });
+            } else if e == b'E' {
+                piece = Some(Piece { kind: P_CASE, text: Vec.new(), n: C_END });
+            } else if e == b'u' {
+                piece = Some(Piece { kind: P_CASE, text: Vec.new(), n: C_UPPER1 });
+            } else if e == b'l' {
+                piece = Some(Piece { kind: P_CASE, text: Vec.new(), n: C_LOWER1 });
+            } else if e == b'n' {
+                lit.push(b'\n');
+            } else if e == b't' {
+                lit.push(b'\t');
+            } else {
+                lit.push(e);
+            }
+            if let Some(p) = piece {
+                if lit.len() > 0 {
+                    pieces.push(Piece { kind: P_LIT, text: lit.clone(), n: 0 });
+                    lit.clear();
+                }
+                pieces.push(p);
+            }
+        }
+        if lit.len() > 0 {
+            pieces.push(Piece { kind: P_LIT, text: lit, n: 0 });
+        }
+        pieces
+    }
+
+    fn subst(mut ref self, cmd: mut ref Cmd) -> Result[(), SedError] {
+        if self.eof() {
+            return Err(self.fail("unterminated `s' command"));
+        }
+        let delim = self.peek();
+        self.i += 1;
+        let pattern = match self.delimited(delim, true) {
+            Some(p) => p,
+            None => return Err(self.fail("unterminated `s' command")),
+        };
+        let raw = match self.delimited(delim, false) {
+            Some(r) => r,
+            None => return Err(self.fail("unterminated `s' command")),
+        };
+        let mut icase = false;
+        loop {
+            if self.eof() {
+                break;
+            }
+            let c = self.peek();
+            if c == b'g' {
+                cmd.global = true;
+                self.i += 1;
+            } else if c == b'p' {
+                if cmd.print {
+                    self.i += 1;
+                    return Err(self.fail("multiple `p' options to `s' command"));
+                }
+                cmd.print = true;
+                self.i += 1;
+            } else if c == b'i' or c == b'I' {
+                icase = true;
+                self.i += 1;
+            } else if c == b'm' or c == b'M' {
+                self.i += 1;
+            } else if is_digit(c) {
+                let n = self.number();
+                if n == 0 {
+                    return Err(self.fail("number option to `s' command may not be zero"));
+                }
+                cmd.occurrence = n;
+            } else if c == b'w' {
+                self.i += 1;
+                let name = self.file_name();
+                cmd.wout = self.wfile(name);
+                break;
+            } else if c == b' ' or c == b'\t' or c == b'\n' or c == b';' or c == b'}' or c == b'#' {
+                break;
+            } else {
+                self.i += 1;
+                return Err(self.fail("unknown option to `s'"));
+            }
+        }
+        cmd.re = self.add_regex(pattern, icase)?;
+        cmd.repl = self.replacement(raw);
+        let groups = if cmd.re >= 0 { self.regexes[cmd.re].groups } else { 9 };
+        for k in 0..cmd.repl.len() {
+            if cmd.repl[k].kind == P_GROUP and cmd.repl[k].n > groups {
+                let n = cmd.repl[k].n;
+                return Err(self.fail(f"invalid reference \\{n} on `s' command's RHS"));
+            }
+        }
+        Ok(())
+    }
+
+    fn translit(mut ref self, cmd: mut ref Cmd) -> Result[(), SedError] {
+        if self.eof() {
+            return Err(self.fail("unterminated `y' command"));
+        }
+        let delim = self.peek();
+        self.i += 1;
+        let src = match self.delimited(delim, true) {
+            Some(p) => unescape_y(p),
+            None => return Err(self.fail("unterminated `y' command")),
+        };
+        let dst = match self.delimited(delim, true) {
+            Some(p) => unescape_y(p),
+            None => return Err(self.fail("unterminated `y' command")),
+        };
+        if src.len() != dst.len() {
+            return Err(self.fail("strings for `y' command are different lengths"));
+        }
+        let mut map: Vec[u8] = Vec.new();
+        for k in 0..256 {
+            map.push(k as u8);
+        }
+        for k in 0..src.len() {
+            map[src[k] as i64] = dst[k];
+        }
+        cmd.map = map;
+        Ok(())
+    }
+
+    fn parse(mut ref self) -> Result[(), SedError] {
+        let mut blocks: Vec[i64] = Vec.new();
+        loop {
+            while not self.eof() and (self.peek() == b' ' or self.peek() == b'\t' or self.peek() == b'\n' or self.peek() == b';') {
+                self.i += 1;
+            }
+            if self.eof() {
+                break;
+            }
+            let mut cmd = new_cmd();
+            cmd.a1 = self.address(false)?;
+            if cmd.a1.kind != A_NONE {
+                self.skip_blanks();
+                if not self.eof() and self.peek() == b',' {
+                    self.i += 1;
+                    self.skip_blanks();
+                    cmd.a2 = self.address(true)?;
+                    if cmd.a2.kind == A_NONE {
+                        return Err(self.fail("unexpected `,'"));
+                    }
+                }
+                if cmd.a1.kind == A_ZERO and cmd.a2.kind != A_RE {
+                    return Err(self.fail("invalid usage of line address 0"));
+                }
+            }
+            self.skip_blanks();
+            if not self.eof() and self.peek() == b'!' {
+                cmd.neg = true;
+                self.i += 1;
+                self.skip_blanks();
+                if not self.eof() and self.peek() == b'!' {
+                    self.i += 1;
+                    return Err(self.fail("multiple `!'s"));
+                }
+            }
+            if self.eof() or self.peek() == b'\n' or self.peek() == b';' {
+                return Err(self.fail("missing command"));
+            }
+            let c = self.peek();
+            self.i += 1;
+            cmd.name = c;
+            if c == b'{' {
+                blocks.push(self.cmds.len());
+                self.cmds.push(cmd);
+                continue;
+            }
+            if c == b'}' {
+                if blocks.len() == 0 {
+                    return Err(self.fail("unexpected `}'"));
+                }
+                if cmd.a1.kind != A_NONE {
+                    return Err(self.fail("} doesn't want any addresses"));
+                }
+                let open = blocks.pop().unwrap_or(0);
+                self.cmds[open].target = self.cmds.len();
+                self.end_of_cmd()?;
+                self.cmds.push(cmd);
+                continue;
+            }
+            if c == b'#' {
+                while not self.eof() and self.peek() != b'\n' {
+                    self.i += 1;
+                }
+                continue;
+            }
+            if c == b'=' or c == b'd' or c == b'D' or c == b'g' or c == b'G' or c == b'h' or c == b'H' or c == b'n' or c == b'N' or c == b'p' or c == b'P' or c == b'x' or c == b'z' {
+                self.end_of_cmd()?;
+            } else if c == b'q' or c == b'Q' {
+                self.skip_blanks();
+                cmd.exit = self.number();
+                self.end_of_cmd()?;
+            } else if c == b':' {
+                if cmd.a1.kind != A_NONE {
+                    return Err(self.fail(": doesn't want any addresses"));
+                }
+                cmd.text = self.label();
+                if cmd.text.len() == 0 {
+                    return Err(self.fail("\":\" lacks a label"));
+                }
+            } else if c == b'b' or c == b't' or c == b'T' {
+                cmd.text = self.label();
+            } else if c == b'a' or c == b'i' or c == b'c' {
+                cmd.text = self.text_arg()?;
+            } else if c == b'r' {
+                cmd.text = self.file_name();
+            } else if c == b'w' {
+                let name = self.file_name();
+                cmd.wout = self.wfile(name);
+            } else if c == b's' {
+                self.subst(mut cmd)?;
+                self.end_of_cmd()?;
+            } else if c == b'y' {
+                self.translit(mut cmd)?;
+                self.end_of_cmd()?;
+            } else {
+                let shown = from_bytes(vec![c]);
+                return Err(self.fail(f"unknown command: `{shown}'"));
+            }
+            self.cmds.push(cmd);
+        }
+        if blocks.len() > 0 {
+            return Err(sed_error(0, "unmatched `{'"));
+        }
+        // jump targets
+        for k in 0..self.cmds.len() {
+            let name = self.cmds[k].name;
+            if name == b'b' or name == b't' or name == b'T' {
+                let label = self.cmds[k].text.clone();
+                if label.len() == 0 {
+                    self.cmds[k].target = self.cmds.len();
+                    continue;
+                }
+                let mut found: i64 = -1;
+                for j in 0..self.cmds.len() {
+                    if self.cmds[j].name == b':' and self.cmds[j].text == label {
+                        found = j;
+                    }
+                }
+                if found < 0 {
+                    return Err(SedError { msg: f"sed: can't find label for jump to `{label}'", status: 4 });
+                }
+                self.cmds[k].target = found;
+            }
+        }
+        Ok(())
+    }
+}
+
+// The strings of `y`: `\\` is a backslash and `\n` a newline.
+fn unescape_y(p: Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < p.len() {
+        if p[i] == b'\\' and i + 1 < p.len() {
+            let e = p[i + 1];
+            out.push(if e == b'n' { b'\n' } else { e });
+            i += 2;
+            continue;
+        }
+        out.push(p[i]);
+        i += 1;
+    }
+    out
+}
+
+fn parse_script(text: Str, ere: bool) -> Result[Script, SedError] {
+    let mut sp = ScriptParser { s: to_bytes(text), i: 0, ere: ere, cmds: Vec.new(), regexes: Vec.new(), wnames: Vec.new() };
+    sp.parse()?;
+    Ok(Script { cmds: sp.cmds, regexes: sp.regexes, wnames: sp.wnames })
+}
+
+// ------------------------------------------------------------ running a script
+
+// An output stream. `missing` is set when the last thing written did not
+// end in a newline; sed adds that newline before writing anything else.
+struct Out {
+    text: String,
+    missing: bool,
+}
+
+fn new_out() -> Out {
+    Out { text: String.new(), missing: false }
+}
+
+impl Out {
+    fn raw(mut ref self, s: Str) {
+        if s.len() == 0 {
+            return;
+        }
+        if self.missing {
+            self.text.push_str("\n");
+        }
+        self.text.push_str(s);
+        self.missing = not ends_with_nl(s);
+    }
+
+    fn copy(ref self) -> Out {
+        Out { text: self.text.clone(), missing: self.missing }
+    }
+
+    fn line(mut ref self, s: Str, nl: bool) {
+        if self.missing {
+            self.text.push_str("\n");
+            self.missing = false;
+        }
+        self.text.push_str(s);
+        if nl {
+            self.text.push_str("\n");
+        } else {
+            self.missing = true;
+        }
+    }
+}
+
+// What `a` and `r` queue for the end of the cycle.
+struct Pending {
+    file: bool,
+    text: String,
+}
+
+// How a cycle ends.
+const E_AUTO: i64 = 0;
+const E_NOPRINT: i64 = 1;
+const E_RESTART: i64 = 2;
+const E_QUIT: i64 = 3;
+
+// The state of one sed run. Input is read a unit at a time: every file
+// together, or one file at a time with -s and -i. `lines` is the file
+// being read (without newlines), `bp` the next line in it and `last_nl`
+// whether its last line had a newline; `nl` is that for the line in the
+// pattern space.
+struct Run {
+    dir: String,
+    quiet: bool,
+    ps: String,
+    hs: String,
+    nl: bool,
+    line: i64,
+    files: Vec[String],
+    fi: i64,
+    unit_end: i64,
+    lines: Vec[String],
+    last_nl: bool,
+    bp: i64,
+    out: Out,
+    err: String,
+    status: i64,
+    appends: Vec[Pending],
+    wouts: Vec[Out],
+    replaced: bool,
+    quit: bool,
+    exit: i64,
+    active: Vec[bool],
+    ends: Vec[i64],
+    last_re: i64,
+}
+
+// The lines of a file, without their newlines.
+fn file_lines(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+impl Run {
+    // Opens the unit's next file that has a line; false at the unit's end.
+    fn open_next(mut ref self) -> bool {
+        while self.fi < self.unit_end {
+            let name = self.files[self.fi].clone();
+            self.fi += 1;
+            match fs.read_to_string(f"{self.dir}/{name}") {
+                Ok(t) => {
+                    self.lines = file_lines(t);
+                    self.last_nl = ends_with_nl(t);
+                    self.bp = 0;
+                    if self.lines.len() > 0 {
+                        return true;
+                    }
+                }
+                Err(_) => {
+                    self.err.push_str(f"sed: can't read {name}: No such file or directory\n");
+                    self.status = 2;
+                }
+            }
+        }
+        false
+    }
+
+    fn has_next(mut ref self) -> bool {
+        if self.bp < self.lines.len() {
+            return true;
+        }
+        self.open_next()
+    }
+
+    fn flush_appends(mut ref self) {
+        for k in 0..self.appends.len() {
+            let text = self.appends[k].text.clone();
+            if self.appends[k].file {
+                if let Ok(t) = fs.read_to_string(f"{self.dir}/{text}") {
+                    self.out.raw(t);
+                }
+            } else {
+                self.out.raw(text);
+            }
+        }
+        self.appends.clear();
+    }
+
+    // Reads the next line into the pattern space; false at the unit's end.
+    fn read_line(mut ref self) -> bool {
+        self.flush_appends();
+        if not self.has_next() {
+            return false;
+        }
+        self.ps = self.lines[self.bp].clone();
+        self.nl = self.bp + 1 < self.lines.len() or self.last_nl;
+        self.bp += 1;
+        self.line += 1;
+        true
+    }
+
+    fn is_last(mut ref self) -> bool {
+        not self.has_next()
+    }
+
+    fn write_to(mut ref self, k: i64, name: Str, s: Str, nl: bool) {
+        if name == "/dev/stdout" {
+            self.out.line(s, nl);
+        } else {
+            self.wouts[k].line(s, nl);
+        }
+    }
+}
+
+fn regex_of(r: mut ref Run, re: i64) -> i64 {
+    if re >= 0 {
+        r.last_re = re;
+    }
+    r.last_re
+}
+
+fn ps_matches(sc: ref Script, r: mut ref Run, re: i64) -> bool {
+    let k = regex_of(r, re);
+    if k < 0 {
+        return false;
+    }
+    let t = to_bytes(r.ps);
+    search(sc.regexes[k], t, 0).len() > 0
+}
+
+fn addr_matches(sc: ref Script, r: mut ref Run, a: ref Addr) -> bool {
+    if a.kind == A_LINE {
+        return r.line == a.n;
+    }
+    if a.kind == A_LAST {
+        return r.is_last();
+    }
+    if a.kind == A_RE {
+        return ps_matches(sc, r, a.re);
+    }
+    if a.kind == A_STEP {
+        if a.step <= 0 {
+            return r.line == a.n;
+        }
+        return r.line >= a.n and (r.line - a.n) % a.step == 0;
+    }
+    false
+}
+
+// Inside a range: does this line close it?
+fn range_closes(sc: ref Script, r: mut ref Run, k: i64, a2: ref Addr) -> bool {
+    if a2.kind == A_LAST {
+        return r.is_last();
+    }
+    if a2.kind == A_RE {
+        return ps_matches(sc, r, a2.re);
+    }
+    r.line >= r.ends[k]
+}
+
+// Does command k's address select this line? Updates its range state.
+fn selects(sc: ref Script, r: mut ref Run, k: i64) -> bool {
+    let a1 = ref sc.cmds[k].a1;
+    let a2 = ref sc.cmds[k].a2;
+    let mut yes = false;
+    if a1.kind == A_NONE {
+        yes = true;
+    } else if a2.kind == A_NONE {
+        yes = addr_matches(sc, r, a1);
+    } else if r.active[k] or (a1.kind == A_ZERO and r.line == 1) {
+        // `0,/re/` is a range already open at the first line
+        r.active[k] = true;
+        if range_closes(sc, r, k, a2) {
+            r.active[k] = false;
+        }
+        yes = true;
+    } else if addr_matches(sc, r, a1) {
+        yes = true;
+        let n = a2.n;
+        if a2.kind == A_LINE {
+            if n > r.line {
+                r.active[k] = true;
+                r.ends[k] = n;
+            }
+        } else if a2.kind == A_PLUS {
+            if n > 0 {
+                r.active[k] = true;
+                r.ends[k] = r.line + n;
+            }
+        } else if a2.kind == A_TILDE {
+            if n > 0 and r.line % n != 0 {
+                r.active[k] = true;
+                r.ends[k] = (r.line / n + 1) * n;
+            }
+        } else if a2.kind == A_LAST {
+            if not r.is_last() {
+                r.active[k] = true;
+            }
+        } else {
+            r.active[k] = true;
+        }
+    }
+    if sc.cmds[k].neg { not yes } else { yes }
+}
+
+// The case conversion in force while a replacement is built.
+struct CaseState {
+    mode: i64,
+    once: i64,
+}
+
+fn put_case(res: mut ref Vec[u8], c: u8, cs: mut ref CaseState) {
+    let how = if cs.once != 0 { cs.once } else { cs.mode };
+    cs.once = 0;
+    if how == C_UPPER or how == C_UPPER1 {
+        res.push(to_upper(c));
+    } else if how == C_LOWER or how == C_LOWER1 {
+        res.push(to_lower(c));
+    } else {
+        res.push(c);
+    }
+}
+
+fn replace_into(res: mut ref Vec[u8], pieces: ref Vec[Piece], t: ref Vec[u8], caps: ref Vec[i64]) {
+    let mut cs = CaseState { mode: 0, once: 0 };
+    for k in 0..pieces.len() {
+        let kind = pieces[k].kind;
+        if kind == P_LIT {
+            for j in 0..pieces[k].text.len() {
+                put_case(res, pieces[k].text[j], mut cs);
+            }
+        } else if kind == P_GROUP {
+            let g = pieces[k].n;
+            let s = caps[2 * g];
+            let e = caps[2 * g + 1];
+            if s >= 0 and e >= 0 {
+                for j in s..e {
+                    put_case(res, t[j], mut cs);
+                }
+            }
+        } else {
+            let n = pieces[k].n;
+            if n == C_UPPER or n == C_LOWER {
+                cs.mode = n;
+            } else if n == C_END {
+                cs.mode = 0;
+                cs.once = 0;
+            } else {
+                cs.once = n;
+            }
+        }
+    }
+}
+
+// `s`: true when a replacement was made.
+fn substitute(sc: ref Script, r: mut ref Run, k: i64) -> bool {
+    let ri = regex_of(r, sc.cmds[k].re);
+    if ri < 0 {
+        return false;
+    }
+    let re = ref sc.regexes[ri];
+    let t = to_bytes(r.ps);
+    let n = t.len();
+    let mut res: Vec[u8] = Vec.new();
+    let mut start: i64 = 0;
+    let mut count: i64 = 0;
+    let mut prev_end: i64 = -1;
+    let mut did = false;
+    while start <= n {
+        let caps = search(re, t, start);
+        if caps.len() == 0 {
+            break;
+        }
+        let ms = caps[0];
+        let me = caps[1];
+        // an empty match right after the previous match does not count
+        if ms == me and ms == prev_end {
+            if ms >= n {
+                break;
+            }
+            res.push(t[ms]);
+            start = ms + 1;
+            continue;
+        }
+        for j in start..ms {
+            res.push(t[j]);
+        }
+        count += 1;
+        if count < sc.cmds[k].occurrence {
+            for j in ms..me {
+                res.push(t[j]);
+            }
+        } else {
+            did = true;
+            replace_into(mut res, sc.cmds[k].repl, t, caps);
+            if not sc.cmds[k].global {
+                start = me;
+                break;
+            }
+        }
+        start = me;
+        if ms == me {
+            if ms < n {
+                res.push(t[ms]);
+            }
+            start = me + 1;
+        }
+        prev_end = me;
+    }
+    if not did {
+        return false;
+    }
+    for j in start..n {
+        res.push(t[j]);
+    }
+    r.ps = from_bytes(res);
+    true
+}
+
+fn first_newline(s: Str) -> i64 {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            return i;
+        }
+    }
+    -1
+}
+
+// One cycle of the script over the pattern space.
+fn execute(sc: ref Script, r: mut ref Run) -> i64 {
+    let n = sc.cmds.len();
+    let mut pc: i64 = 0;
+    while pc < n {
+        let name = sc.cmds[pc].name;
+        if name == b'}' or name == b':' {
+            pc += 1;
+            continue;
+        }
+        if not selects(sc, r, pc) {
+            pc = if name == b'{' { sc.cmds[pc].target } else { pc + 1 };
+            continue;
+        }
+        if name == b'=' {
+            let l = r.line;
+            r.out.line(f"{l}", true);
+        } else if name == b'a' {
+            r.appends.push(Pending { file: false, text: sc.cmds[pc].text.clone() });
+        } else if name == b'i' {
+            r.out.raw(sc.cmds[pc].text);
+        } else if name == b'c' {
+            // inside a range the text is written once, at its end
+            if not r.active[pc] or sc.cmds[pc].neg {
+                r.out.raw(sc.cmds[pc].text);
+            }
+            return E_NOPRINT;
+        } else if name == b'd' {
+            return E_NOPRINT;
+        } else if name == b'D' {
+            let at = first_newline(r.ps);
+            if at < 0 {
+                return E_NOPRINT;
+            }
+            let b = to_bytes(r.ps);
+            r.ps = byte_str(b, at + 1, b.len());
+            return E_RESTART;
+        } else if name == b'g' {
+            r.ps = r.hs.clone();
+        } else if name == b'G' {
+            let h = r.hs.clone();
+            r.ps.push_str("\n");
+            r.ps.push_str(h);
+        } else if name == b'h' {
+            r.hs = r.ps.clone();
+        } else if name == b'H' {
+            let p = r.ps.clone();
+            r.hs.push_str("\n");
+            r.hs.push_str(p);
+        } else if name == b'x' {
+            let p = r.ps.clone();
+            r.ps = r.hs.clone();
+            r.hs = p;
+        } else if name == b'n' {
+            if not r.has_next() {
+                r.quit = true;
+                return E_AUTO;
+            }
+            if not r.quiet {
+                let p = r.ps.clone();
+                let nl = r.nl;
+                r.out.line(p, nl);
+            }
+            r.read_line();
+        } else if name == b'N' {
+            if not r.has_next() {
+                r.quit = true;
+                return E_AUTO;
+            }
+            let old = r.ps.clone();
+            r.read_line();
+            let joined = f"{old}\n{r.ps}";
+            r.ps = joined;
+        } else if name == b'p' {
+            let p = r.ps.clone();
+            let nl = r.nl;
+            r.out.line(p, nl);
+        } else if name == b'P' {
+            let at = first_newline(r.ps);
+            let b = to_bytes(r.ps);
+            let first = if at < 0 { r.ps.clone() } else { byte_str(b, 0, at) };
+            r.out.line(first, true);
+        } else if name == b'q' {
+            r.quit = true;
+            r.exit = sc.cmds[pc].exit;
+            return E_AUTO;
+        } else if name == b'Q' {
+            r.quit = true;
+            r.exit = sc.cmds[pc].exit;
+            return E_QUIT;
+        } else if name == b'r' {
+            r.appends.push(Pending { file: true, text: sc.cmds[pc].text.clone() });
+        } else if name == b's' {
+            if substitute(sc, r, pc) {
+                r.replaced = true;
+                let k = sc.cmds[pc].wout;
+                if sc.cmds[pc].print {
+                    let p = r.ps.clone();
+                    let nl = r.nl;
+                    r.out.line(p, nl);
+                }
+                if k >= 0 {
+                    let p = r.ps.clone();
+                    let nl = r.nl;
+                    r.write_to(k, sc.wnames[k], p, nl);
+                }
+            }
+        } else if name == b't' {
+            if r.replaced {
+                r.replaced = false;
+                pc = sc.cmds[pc].target;
+                continue;
+            }
+        } else if name == b'T' {
+            if not r.replaced {
+                pc = sc.cmds[pc].target;
+                continue;
+            }
+            r.replaced = false;
+        } else if name == b'b' {
+            pc = sc.cmds[pc].target;
+            continue;
+        } else if name == b'w' {
+            let k = sc.cmds[pc].wout;
+            let p = r.ps.clone();
+            let nl = r.nl;
+            r.write_to(k, sc.wnames[k], p, nl);
+        } else if name == b'y' {
+            let mut b = to_bytes(r.ps);
+            for j in 0..b.len() {
+                b[j] = sc.cmds[pc].map[b[j] as i64];
+            }
+            r.ps = from_bytes(b);
+        } else if name == b'z' {
+            r.ps = String.new();
+        }
+        pc += 1;
+    }
+    E_AUTO
+}
+
+// Runs the script over the files of one unit.
+fn run_unit(sc: ref Script, r: mut ref Run) {
+    let mut reread = true;
+    loop {
+        if r.quit {
+            break;
+        }
+        if reread {
+            if not r.read_line() {
+                break;
+            }
+            r.replaced = false;
+        }
+        reread = true;
+        let end = execute(sc, r);
+        if end == E_QUIT {
+            break;
+        }
+        if end == E_AUTO and not r.quiet {
+            let p = r.ps.clone();
+            let nl = r.nl;
+            r.out.line(p, nl);
+        }
+        if end == E_RESTART {
+            reread = false;
+        }
+        r.flush_appends();
+    }
+}
+
+// What one sed run prints, and its exit status.
+struct Result3 {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+fn run_sed(args: ref Vec[String], dir: Str) -> Result3 {
+    let mut quiet = false;
+    let mut ere = false;
+    let mut separate = false;
+    let mut inplace = false;
+    let mut scripts: Vec[String] = Vec.new();
+    let mut have_e = false;
+    let mut rest: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let a = args[i].clone();
+        i += 1;
+        if a == "-n" {
+            quiet = true;
+        } else if a == "-E" or a == "-r" {
+            ere = true;
+        } else if a == "-s" {
+            separate = true;
+        } else if a == "-i" {
+            inplace = true;
+            separate = true;
+        } else if a == "-e" {
+            have_e = true;
+            if i < args.len() {
+                scripts.push(args[i].clone());
+                i += 1;
+            }
+        } else {
+            rest.push(a);
+        }
+    }
+    let mut text = String.new();
+    let mut files: Vec[String] = Vec.new();
+    if have_e {
+        for k in 0..scripts.len() {
+            text.push_str(scripts[k]);
+            text.push_str("\n");
+        }
+        files = rest;
+    } else {
+        for k in 0..rest.len() {
+            if k == 0 {
+                text = rest[k].clone();
+            } else {
+                files.push(rest[k].clone());
+            }
+        }
+    }
+    let sc = match parse_script(text, ere) {
+        Ok(s) => s,
+        Err(e) => return Result3 { out: String.new(), err: f"{e.msg}\n", status: e.status },
+    };
+    let mut active: Vec[bool] = Vec.new();
+    let mut ends: Vec[i64] = Vec.new();
+    for _ in 0..sc.cmds.len() {
+        active.push(false);
+        ends.push(0);
+    }
+    let mut wouts: Vec[Out] = Vec.new();
+    for _ in 0..sc.wnames.len() {
+        wouts.push(new_out());
+    }
+    let nfiles = files.len();
+    let mut r = Run { dir: dir.to_string(), quiet: quiet, ps: String.new(), hs: String.new(), nl: true, line: 0, files: files, fi: 0, unit_end: 0, lines: Vec.new(), last_nl: true, bp: 0, out: new_out(), err: String.new(), status: 0, appends: Vec.new(), wouts: wouts, replaced: false, quit: false, exit: 0, active: active, ends: ends, last_re: -1 };
+    if not separate {
+        r.unit_end = nfiles;
+        run_unit(sc, mut r);
+    } else {
+        while r.fi < nfiles and not r.quit {
+            r.unit_end = r.fi + 1;
+            r.line = 0;
+            r.lines = Vec.new();
+            r.bp = 0;
+            if inplace {
+                let name = r.files[r.fi].clone();
+                let keep = r.out.copy();
+                r.out = new_out();
+                run_unit(sc, mut r);
+                if fs.exists(f"{dir}/{name}") {
+                    let o = r.out.copy();
+                    if let Err(e) = fs.write(f"{dir}/{name}", o.text) {
+                        r.err.push_str(f"sed: couldn't write {name}: {e}\n");
+                        r.status = 4;
+                    }
+                }
+                r.out = keep;
+            } else {
+                run_unit(sc, mut r);
+            }
+        }
+    }
+    for k in 0..sc.wnames.len() {
+        let name = sc.wnames[k].clone();
+        if name != "/dev/stdout" {
+            let o = r.wouts[k].copy();
+            if let Err(e) = fs.write(f"{dir}/{name}", o.text) {
+                r.err.push_str(f"sed: couldn't open file {name}: {e}\n");
+                r.status = 4;
+            }
+        }
+    }
+    let status = if r.exit != 0 { r.exit } else { r.status };
+    let o = r.out.copy();
+    Result3 { out: o.text, err: r.err.clone(), status: status }
+}
+
+// ------------------------------------------------------------ the files
+
+fn file_changelog_md() -> String {
+    """
+# Changelog
+
+## [Unreleased]
+
+### Added
+- Saved carts (#412)
+
+## [1.9.0] - 2026-10-01
+
+### Fixed
+- Checkout timeout under load (#398)
+- Duplicate order emails (#401)
+
+### Changed
+- Upgrade to Postgres 16 (#377)
+
+"""
+}
+
+fn file_access_log() -> String {
+    """
+10.0.12.7 - - [14/Oct/2026:09:12:01 +0000] "GET /api/orders?page=2 HTTP/1.1" 200 1532 "-" "curl/8.5.0"
+10.0.12.7 - - [14/Oct/2026:09:12:03 +0000] "POST /api/orders HTTP/1.1" 201 88 "-" "curl/8.5.0"
+192.168.4.21 - alice [14/Oct/2026:09:13:44 +0000] "GET /static/app.js HTTP/2.0" 304 0 "https://shop.example.com/" "Mozilla/5.0"
+172.16.0.9 - - [14/Oct/2026:09:14:10 +0000] "GET /api/products/991 HTTP/1.1" 404 47 "-" "python-requests/2.32"
+172.16.0.9 - - [14/Oct/2026:09:14:11 +0000] "GET /api/products/992 HTTP/1.1" 404 47 "-" "python-requests/2.32"
+10.0.12.8 - - [14/Oct/2026:09:15:00 +0000] "POST /api/checkout HTTP/1.1" 502 166 "-" "okhttp/4.12"
+192.168.4.21 - alice [14/Oct/2026:09:15:02 +0000] "DELETE /api/cart/7 HTTP/2.0" 204 0 "https://shop.example.com/cart" "Mozilla/5.0"
+10.0.12.8 - - [14/Oct/2026:09:15:31 +0000] "POST /api/checkout HTTP/1.1" 503 166 "-" "okhttp/4.12"
+10.0.12.7 - - [14/Oct/2026:09:16:45 +0000] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.31"
+
+"""
+}
+
+fn file_app_env() -> String {
+    """
+# written by the deploy job
+APP_NAME=shop
+DEBUG=true
+LOG_LEVEL=debug
+DATABASE_URL="postgres://shop:s3cret@db-primary.staging:5432/shop"
+STRIPE_KEY=sk_live_51Hc9xQ
+FEATURE_FLAGS=new_checkout,dark_mode
+PORT=8000
+"""
+}
+
+fn file_app_ini() -> String {
+    """
+; shop service
+[server]
+host = 0.0.0.0
+port = 8000
+workers = 4
+
+[database]
+url = postgres://shop@db-primary.staging:5432/shop
+pool_size = 10
+timeout = 5
+
+[cache]
+url = redis://cache.staging:6379/0
+ttl = 300
+
+"""
+}
+
+fn file_footer_txt() -> String {
+    """
+-- generated by mini_sed; do not edit
+
+"""
+}
+
+fn file_hosts() -> String {
+    """
+# /etc/hosts for the staging box
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+
+# app tier
+10.0.12.7	app-1.staging app-1
+10.0.12.8	app-2.staging app-2
+#10.0.12.9	app-3.staging app-3
+
+# data tier
+10.0.20.4	db-primary.staging db
+10.0.20.5	db-replica.staging
+
+"""
+}
+
+fn file_sales_csv() -> String {
+    """
+region,product,units,revenue
+north,widget,1200,1534000
+south,widget,85,108800
+north,gadget,40,2299960
+east,gizmo,7,630
+west,widget,15000,19200000
+
+"""
+}
+
+fn file_words_txt() -> String {
+    """
+apple
+apple
+banana
+cherry
+cherry
+cherry
+date
+apple
+
+"""
+}
+
+fn jobs_tsv() -> String {
+    """
+-n	/ 404 /p	access.log
+-n	$=	access.log
+-n	2,4p	hosts
+-n	/^# app/,/^$/p	hosts
+/^#/d;/^$/d	hosts
+-n	/^\\[database\\]/,/^\\[/{/^\\[/!p}	app.ini
+-n	/POST/=	access.log
+3q	CHANGELOG.md
+-n	/^## \\[1/,+3p	CHANGELOG.md
+0,/^##/d	CHANGELOG.md
+1~2d	sales.csv
+-n	/widget/!p	sales.csv
+-n	/STRIPE/Ip	app.env
+s/\\([0-9]*\\)\\.[0-9]*\\.[0-9]*\\.\\([0-9]*\\)/\\1.x.x.\\2/	access.log
+-E	s/^([^ ]+) [^[]*\\[([^]]+)\\] "([A-Z]+) ([^ ?]+)[^"]*" ([0-9]{3}) .*/\\5 \\3 \\4 (\\1 at \\2)/	access.log
+-n	-E	/" 5[0-9]{2} /s/.*\\[([^:]+):([^ ]+) .*"[A-Z]+ ([^ ]+).*/\\2 \\3/p	access.log
+s/^\\(port\\s*=\\s*\\).*/\\18080/	app.ini
+s|postgres://\\([^:@]*\\):[^@]*@|postgres://\\1:****@|	app.env
+-E	s/^([A-Z_]+)=(.*)$/export \\1='\\2'/;s/'"(.*)"'$/'\\1'/	app.env
+s/,/\\t/g	sales.csv
+s/widget/WIDGET/2;s/,/ | /3	sales.csv
+s/a/A/2g	words.txt
+-E	s/(^|,)([a-z])/\\1\\u\\2/g	sales.csv
+s/.*/\\U&/;s/_\\(.\\)/-\\L\\1/g	app.env
+-E	:a;s/([0-9])([0-9]{3})($|[^0-9])/\\1,\\2\\3/;ta	sales.csv
+s/x*/-/g	words.txt
+s/an/[&]/g;s/\\[an\\]/\\&/2	words.txt
+-E	s/#([0-9]+)/[#\\1](https:\\/\\/github.com\\/shop\\/issues\\/\\1)/	CHANGELOG.md
+-n	/http/{s//HTTPS/gp}	access.log
+s/a/\\n/2	words.txt
+y/abcdefghij/ABCDEFGHIJ/	words.txt
+G	words.txt
+-n	1!G;h;$p	words.txt
+$!N;s/\\n/ /	words.txt
+:a;N;$!ba;s/\\n/,/g	words.txt
+$!N;/^\\(.*\\)\\n\\1$/!P;D	words.txt
+-n	/^###/{h;d};/^- /{G;s/\\n### / [/;s/$/]/;p}	CHANGELOG.md
+-n	h;n;G;p	words.txt
+-n	x;$p	words.txt
+/^\\[server\\]/a timeout = 30	app.ini
+-e	/^\\[cache\\]/i\\	-e	; cache settings below	app.ini
+/^DEBUG=/c DEBUG=false	app.env
+-e	$a\\	-e	PORT_ADMIN=8001	app.env
+-e	/^## \\[Unreleased\\]/,/^## \\[1/c\\	-e	## [Unreleased]\\	-e		CHANGELOG.md
+$r footer.txt	sales.csv
+-n	/ 50[0-9] /w errors.log	access.log
+@cat	errors.log
+-i	s/^DEBUG=true/DEBUG=false/;s/^LOG_LEVEL=.*/LOG_LEVEL=info/	app.env
+@cat	app.env
+-s	-n	$p	hosts	app.ini
+-n	$p	hosts	app.ini
+=	footer.txt	sales.csv
+-E	/^(north|east)/!d	sales.csv
+-E	s/(an|ana)+/<&>/;s/(ch|che)(err|rr)/{&}/	words.txt
+/^$/Q	hosts
+/db/q 3	hosts
+-n	/^10\\.0\\.12\\./{s/\\t.*//;H};${x;s/\\n/ /g;s/^ //;p}	hosts
+-n	-E	/^[^#].*\\<app-[0-9]\\>/p	hosts
+-E	s/\\b([a-z])/\\u\\1/g	footer.txt
+s/a/b	words.txt
+k	words.txt
+s/a/b/z	words.txt
+s/\\(a\\)/\\2/	words.txt
+b nowhere	words.txt
+/a/{p	words.txt
+p}	words.txt
+-n	p	missing.txt	footer.txt
+3,	words.txt
+pq	words.txt
+-E	s/(a/b/	words.txt
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    put("data/CHANGELOG.md", file_changelog_md())?;
+    put("data/access.log", file_access_log())?;
+    put("data/app.env", file_app_env())?;
+    put("data/app.ini", file_app_ini())?;
+    put("data/footer.txt", file_footer_txt())?;
+    put("data/hosts", file_hosts())?;
+    put("data/sales.csv", file_sales_csv())?;
+    put("data/words.txt", file_words_txt())?;
+    put("jobs.tsv", jobs_tsv())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+// An argument as a shell would need it written.
+fn quote(a: Str) -> String {
+    let b = a.bytes();
+    let mut plain = b.len() > 0;
+    for i in 0..b.len() {
+        let c = b[i];
+        let ok = is_alpha(c) or is_digit(c) or c == b'_' or c == b'.' or c == b'/' or c == b'=' or c == b'+' or c == b':' or c == b',' or c == b'%' or c == b'@' or c == b'-';
+        if not ok {
+            plain = false;
+        }
+    }
+    if plain {
+        return a.to_string();
+    }
+    let mut out = String.new();
+    out.push_str("'");
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push_str(from_bytes(vec![b[i]]));
+        }
+    }
+    out.push_str("'");
+    out
+}
+
+// Prints text, marking a missing final newline.
+fn show(text: Str) {
+    print(text);
+    if text.len() > 0 and not ends_with_nl(text) {
+        println("[no newline at end]");
+    }
+}
+
+fn split_tabs(line: Str) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\t' {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let jobs = match fs.read_to_string("jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read jobs.tsv: {e}"),
+    };
+    let lines = file_lines(jobs);
+    for j in 0..lines.len() {
+        let args = split_tabs(lines[j]);
+        if args[0] == "@cat" {
+            let name = args[1].clone();
+            println(f"$ cat {name}");
+            match fs.read_to_string(f"data/{name}") {
+                Ok(t) => show(t),
+                Err(e) => println(f"cat: {name}: {e}"),
+            }
+            continue;
+        }
+        let mut shown = String.new();
+        for k in 0..args.len() {
+            shown.push_str(" ");
+            shown.push_str(quote(args[k]));
+        }
+        println(f"$ sed{shown}");
+        let res = run_sed(args, "data");
+        show(res.out);
+        show(res.err);
+        if res.status != 0 {
+            let st = res.status;
+            println(f"[exit {st}]");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_sed: {e}");
+    }
+}
