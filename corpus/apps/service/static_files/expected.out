@@ -1,0 +1,410 @@
+== site
+  wrote index.html (61 bytes)
+  wrote css/site.css (56 bytes)
+  wrote js/app.js (22 bytes)
+  wrote data/report.json (24 bytes)
+  wrote docs/guide.txt (16 bytes)
+  wrote docs/notes v2.txt (14 bytes)
+  wrote docs/café.txt (28 bytes)
+  wrote docs/a&b <c>.txt (10 bytes)
+  wrote docs/img/logo.svg (42 bytes)
+  wrote docs/.draft.txt (8 bytes)
+  wrote .env (15 bytes)
+  wrote empty.txt (0 bytes)
+  wrote logs/app.log (7802 bytes)
+== basics
+  server: 13 requests read
+  GET / -> HTTP/1.1 200 OK
+    Content-Type: text/html; charset=utf-8
+    Content-Length: 61
+    ETag: "3d-a84a94cf"
+    Cache-Control: no-cache
+    Accept-Ranges: bytes
+    body 61 bytes crc a84a94cf "<!doctype html>\n<title>Kara static</title>\n<h1>I"
+    | <!doctype html>
+    | <title>Kara static</title>
+    | <h1>It works</h1>
+  GET /css/site.css -> HTTP/1.1 200 OK
+    Content-Type: text/css; charset=utf-8
+    Content-Length: 56
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+    Accept-Ranges: bytes
+    body 56 bytes crc 42ebf768 "body { font: 16px/1.4 sans-serif; }\nh1 { color: "
+  HEAD /js/app.js -> HTTP/1.1 200 OK
+    Content-Type: text/javascript; charset=utf-8
+    Content-Length: 22
+    ETag: "16-58a63069"
+    Cache-Control: public, max-age=3600
+    Accept-Ranges: bytes
+  GET /data/report.json?cache=no#top -> HTTP/1.1 200 OK
+    Content-Type: application/json
+    Content-Length: 24
+    ETag: "18-cdeecbf2"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 24 bytes crc cdeecbf2 "{"ok": true, "rows": 3}\n"
+  GET /missing.txt -> HTTP/1.1 404 Not Found
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 14
+    body 14 bytes crc 2c8afaaf "404 Not Found\n"
+  GET /docs?view=list -> HTTP/1.1 301 Moved Permanently
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 26
+    Location: /docs/?view=list
+    body 26 bytes crc 3c683a5f "Moved to /docs/?view=list\n"
+  GET /docs/ -> HTTP/1.1 200 OK
+    Content-Type: text/html; charset=utf-8
+    Content-Length: 353
+    Cache-Control: no-cache
+    body 353 bytes crc f682c8f3 "<!doctype html>\n<title>Index of /docs/</title>\n<"
+    | <!doctype html>
+    | <title>Index of /docs/</title>
+    | <h1>Index of /docs/</h1>
+    | <ul>
+    | <li><a href="../">../</a></li>
+    | <li><a href="a%26b%20%3Cc%3E.txt">a&amp;b &lt;c&gt;.txt</a></li>
+    | <li><a href="caf%C3%A9.txt">café.txt</a></li>
+    | <li><a href="guide.txt">guide.txt</a></li>
+    | <li><a href="img/">img/</a></li>
+    | <li><a href="notes%20v2.txt">notes v2.txt</a></li>
+    | </ul>
+  GET /docs/caf%C3%A9.txt -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 28
+    ETag: "1c-143618f9"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 28 bytes crc 143618f9 "Un café, s'il vous plaît.\n"
+  GET /docs/notes%20v2.txt -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 14
+    ETag: "e-adde59c5"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 14 bytes crc adde59c5 "Second notes.\n"
+  GET /docs/a%26b%20%3Cc%3E.txt -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 10
+    ETag: "a-ec8685de"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 10 bytes crc ec8685de "Odd name.\n"
+  GET /docs/img -> HTTP/1.1 301 Moved Permanently
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 20
+    Location: /docs/img/
+    body 20 bytes crc 9a67c88f "Moved to /docs/img/\n"
+  GET /logs/ -> HTTP/1.1 200 OK
+    Content-Type: text/html; charset=utf-8
+    Content-Length: 153
+    Cache-Control: no-cache
+    body 153 bytes crc 203e1a37 "<!doctype html>\n<title>Index of /logs/</title>\n<"
+    | <!doctype html>
+    | <title>Index of /logs/</title>
+    | <h1>Index of /logs/</h1>
+    | <ul>
+    | <li><a href="../">../</a></li>
+    | <li><a href="app.log">app.log</a></li>
+    | </ul>
+  GET /./css//site.css -> HTTP/1.1 200 OK
+    Content-Type: text/css; charset=utf-8
+    Content-Length: 56
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+    Accept-Ranges: bytes
+    body 56 bytes crc 42ebf768 "body { font: 16px/1.4 sans-serif; }\nh1 { color: "
+== conditional
+  server: 6 requests read
+  GET /css/site.css [If-None-Match: "38-42ebf768"] -> HTTP/1.1 304 Not Modified
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+  GET /css/site.css [If-None-Match: W/"38-42ebf768"] -> HTTP/1.1 304 Not Modified
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+  GET /css/site.css [If-None-Match: "nope", "38-42ebf768"] -> HTTP/1.1 304 Not Modified
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+  GET /css/site.css [If-None-Match: *] -> HTTP/1.1 304 Not Modified
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+  GET /css/site.css [If-None-Match: "nope"] -> HTTP/1.1 200 OK
+    Content-Type: text/css; charset=utf-8
+    Content-Length: 56
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+    Accept-Ranges: bytes
+    body 56 bytes crc 42ebf768 "body { font: 16px/1.4 sans-serif; }\nh1 { color: "
+  HEAD /css/site.css [If-None-Match: "38-42ebf768"] -> HTTP/1.1 304 Not Modified
+    ETag: "38-42ebf768"
+    Cache-Control: public, max-age=3600
+== log etag
+  server: 1 requests read
+  HEAD /logs/app.log -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 7802
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+== ranges
+  server: 15 requests read
+  GET /logs/app.log [Range: bytes=0-99] -> HTTP/1.1 206 Partial Content
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 100
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    Content-Range: bytes 0-99/7802
+    body 100 bytes crc 4344f48f "2026-10-15T04:00:00Z level=info req=1000 took=43"
+  GET /logs/app.log [Range: bytes=-120] -> HTTP/1.1 206 Partial Content
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 120
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    Content-Range: bytes 7682-7801/7802
+    body 120 bytes crc 4e6d33e9 "1147 took=465ms\n2026-10-15T04:02:28Z level=info "
+  GET /logs/app.log [Range: bytes=7000-] -> HTTP/1.1 206 Partial Content
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 802
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    Content-Range: bytes 7000-7801/7802
+    body 802 bytes crc 5533b5ec "q=1134 took=651ms\n2026-10-15T04:02:15Z level=inf"
+  GET /logs/app.log [Range: bytes=0-9, 50-59, -10] -> HTTP/1.1 206 Partial Content
+    Content-Type: multipart/byteranges; boundary=KARA_BYTERANGES
+    Content-Length: 344
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 344 bytes crc e5ef6456 "--KARA_BYTERANGES\r\nContent-Type: text/plain; cha"
+    | --KARA_BYTERANGES\r
+    | Content-Type: text/plain; charset=utf-8\r
+    | Content-Range: bytes 0-9/7802\r
+    | \r
+    | 2026-10-15\r
+    | --KARA_BYTERANGES\r
+    | Content-Type: text/plain; charset=utf-8\r
+    | Content-Range: bytes 50-59/7802\r
+    | \r
+    | s
+    | 2026-10-\r
+    | --KARA_BYTERANGES\r
+    | Content-Type: text/plain; charset=utf-8\r
+    | Content-Range: bytes 7792-7801/7802\r
+    | \r
+    | ook=611ms
+    | \r
+    | --KARA_BYTERANGES--\r
+  GET /logs/app.log [Range: bytes=99999-100000] -> HTTP/1.1 416 Range Not Satisfiable
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 26
+    Content-Range: bytes */7802
+    body 26 bytes crc b1692989 "416 Range Not Satisfiable\n"
+  GET /logs/app.log [Range: bytes=abc] -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 7802
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 7802 bytes crc b36d726a "2026-10-15T04:00:00Z level=info req=1000 took=43"
+  GET /logs/app.log [Range: bytes=5-2] -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 7802
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 7802 bytes crc b36d726a "2026-10-15T04:00:00Z level=info req=1000 took=43"
+  GET /logs/app.log [Range: items=0-5] -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 7802
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 7802 bytes crc b36d726a "2026-10-15T04:00:00Z level=info req=1000 took=43"
+  GET /logs/app.log [Range: bytes=0-4; If-Range: "1e7a-b36d726a"] -> HTTP/1.1 206 Partial Content
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 5
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    Content-Range: bytes 0-4/7802
+    body 5 bytes crc 06c418a4 "2026-"
+  GET /logs/app.log [Range: bytes=0-4; If-Range: "stale"] -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 7802
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 7802 bytes crc b36d726a "2026-10-15T04:00:00Z level=info req=1000 took=43"
+  HEAD /logs/app.log [Range: bytes=0-4] -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 7802
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+  GET /logs/app.log [Range: bytes=99999-, 0-0] -> HTTP/1.1 206 Partial Content
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 1
+    ETag: "1e7a-b36d726a"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    Content-Range: bytes 0-0/7802
+    body 1 bytes crc 1ad5be0d "2"
+  GET /empty.txt [Range: bytes=0-0] -> HTTP/1.1 416 Range Not Satisfiable
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 26
+    Content-Range: bytes */0
+    body 26 bytes crc b1692989 "416 Range Not Satisfiable\n"
+  GET /empty.txt [Range: bytes=-5] -> HTTP/1.1 416 Range Not Satisfiable
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 26
+    Content-Range: bytes */0
+    body 26 bytes crc b1692989 "416 Range Not Satisfiable\n"
+  GET /empty.txt -> HTTP/1.1 200 OK
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 0
+    ETag: "0-00000000"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    body 0 bytes crc 00000000 ""
+== hostile
+  server: 15 requests read
+  GET /../.env -> HTTP/1.1 403 Forbidden
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 14
+    body 14 bytes crc c10b8f60 "403 Forbidden\n"
+  GET /docs/../../.env -> HTTP/1.1 403 Forbidden
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 14
+    body 14 bytes crc c10b8f60 "403 Forbidden\n"
+  GET /%2e%2e/.env -> HTTP/1.1 403 Forbidden
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 14
+    body 14 bytes crc c10b8f60 "403 Forbidden\n"
+  GET /.env -> HTTP/1.1 404 Not Found
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 14
+    body 14 bytes crc 2c8afaaf "404 Not Found\n"
+  GET /docs/.draft.txt -> HTTP/1.1 404 Not Found
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 14
+    body 14 bytes crc 2c8afaaf "404 Not Found\n"
+  GET /docs/%2Fetc -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+  GET /bad%zz -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+  GET /trunc%4 -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+  GET /nul%00.txt -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+  GET /docs/img/../../index.html -> HTTP/1.1 200 OK
+    Content-Type: text/html; charset=utf-8
+    Content-Length: 61
+    ETag: "3d-a84a94cf"
+    Cache-Control: no-cache
+    Accept-Ranges: bytes
+    body 61 bytes crc a84a94cf "<!doctype html>\n<title>Kara static</title>\n<h1>I"
+    | <!doctype html>
+    | <title>Kara static</title>
+    | <h1>It works</h1>
+  POST /index.html -> HTTP/1.1 405 Method Not Allowed
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 23
+    Allow: GET, HEAD, OPTIONS
+    body 23 bytes crc fc5d68ab "405 Method Not Allowed\n"
+  DELETE /index.html -> HTTP/1.1 405 Method Not Allowed
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 23
+    Allow: GET, HEAD, OPTIONS
+    body 23 bytes crc fc5d68ab "405 Method Not Allowed\n"
+  OPTIONS * -> HTTP/1.1 204 No Content
+    Allow: GET, HEAD, OPTIONS
+  GET index.html -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+  GET / [Connection: close] -> HTTP/1.1 200 OK
+    Content-Type: text/html; charset=utf-8
+    Content-Length: 61
+    ETag: "3d-a84a94cf"
+    Cache-Control: no-cache
+    Accept-Ranges: bytes
+    Connection: close
+    body 61 bytes crc a84a94cf "<!doctype html>\n<title>Kara static</title>\n<h1>I"
+    | <!doctype html>
+    | <title>Kara static</title>
+    | <h1>It works</h1>
+  GET /js/app.js -> (no response)
+== http/1.0
+  server: 1 requests read
+  GET /js/app.js -> HTTP/1.1 200 OK
+    Content-Type: text/javascript; charset=utf-8
+    Content-Length: 22
+    ETag: "16-58a63069"
+    Cache-Control: public, max-age=3600
+    Accept-Ranges: bytes
+    Connection: close
+    body 22 bytes crc 58a63069 "console.log('ready');\n"
+  GET / -> (no response)
+== http/1.0 keep-alive
+  server: 2 requests read
+  GET /js/app.js [Connection: keep-alive] -> HTTP/1.1 200 OK
+    Content-Type: text/javascript; charset=utf-8
+    Content-Length: 22
+    ETag: "16-58a63069"
+    Cache-Control: public, max-age=3600
+    Accept-Ranges: bytes
+    body 22 bytes crc 58a63069 "console.log('ready');\n"
+  GET /data/report.json -> HTTP/1.1 200 OK
+    Content-Type: application/json
+    Content-Length: 24
+    ETag: "18-cdeecbf2"
+    Cache-Control: public, max-age=60
+    Accept-Ranges: bytes
+    Connection: close
+    body 24 bytes crc cdeecbf2 "{"ok": true, "rows": 3}\n"
+== malformed
+  server: 1 requests read
+  GARBAGE -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    Connection: close
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+  GET / -> (no response)
+== no host
+  server: 1 requests read
+  GET / -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    Connection: close
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+== bad header
+  server: 1 requests read
+  GET / [broken header] -> HTTP/1.1 400 Bad Request
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 16
+    Connection: close
+    body 16 bytes crc c46a0869 "400 Bad Request\n"
+== version
+  server: 1 requests read
+  GET / -> HTTP/1.1 505 HTTP Version Not Supported
+    Content-Type: text/plain; charset=utf-8
+    Content-Length: 31
+    Connection: close
+    body 31 bytes crc 9035216b "505 HTTP Version Not Supported\n"
+== access.log
+  57 requests, 33994 body bytes
+  200x23, 204x1, 206x6, 301x2, 304x5, 400x8, 403x3, 404x3, 405x2, 416x3, 505x1
+  GET / 200 61
+  GET /css/site.css 200 56
+  HEAD /js/app.js 200 0

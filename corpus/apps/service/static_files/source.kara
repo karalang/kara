@@ -1,0 +1,1011 @@
+// A static file server in the shape of nginx's or Caddy's file handler,
+// over real files and a real loopback socket.
+//
+// It writes a small site to `www/`, then serves it over keep-alive
+// connections with pipelined requests. Strong ETags are the body's length
+// and CRC-32. It answers If-None-Match (weak comparison, lists and `*`)
+// with 304, and Range requests as RFC 9110 describes them: single ranges,
+// suffix and open-ended ranges, multipart/byteranges for several, 416 when
+// none is satisfiable, If-Range, and an invalid Range header ignored.
+// Paths are percent-decoded per segment and normalised. Climbing above the
+// root is 403, dotfiles are 404, an encoded slash or NUL is 400. A
+// directory without a trailing slash redirects, and one without an
+// index.html gets a generated listing with escaped names. HEAD, OPTIONS,
+// 405 with Allow, Connection: close, HTTP/1.0 defaults, a missing Host and
+// an unknown version are all handled. Each request goes to an access log,
+// which is written to disk at the end and read back.
+
+const PORT_ADDR: Str = "127.0.0.1:47745";
+const ROOT: Str = "www";
+const BOUNDARY: Str = "KARA_BYTERANGES";
+
+// ---------------------------------------------------------------- bytes
+
+fn crc_table() -> Vec[u32] {
+    let mut table: Vec[u32] = Vec.new();
+    for n in 0..256 {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            if c & 1u32 == 1u32 {
+                c = 0xEDB88320u32 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        table.push(c);
+    }
+    table
+}
+
+fn crc32(table: ref Vec[u32], data: ref Vec[u8]) -> u32 {
+    let mut c = 0xFFFFFFFFu32;
+    for b in data.iter() {
+        let idx = ((c ^ (*b as u32)) & 0xFFu32) as i64;
+        c = table[idx] ^ (c >> 8);
+    }
+    c ^ 0xFFFFFFFFu32
+}
+
+const DIGITS: Str = "0123456789abcdef";
+
+fn hex_of(v0: i64) -> String {
+    if v0 == 0 {
+        return "0".to_string();
+    }
+    let mut v = v0;
+    let mut s = String.new();
+    while v > 0 {
+        s = f"{DIGITS.substring(v % 16, v % 16 + 1)}{s}";
+        v = v / 16;
+    }
+    s
+}
+
+fn hex8(v: u32) -> String {
+    let mut s = hex_of(v as i64);
+    while s.len() < 8 {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(*b);
+    }
+    v
+}
+
+fn append(out: mut ref Vec[u8], s: Str) {
+    for b in s.bytes() {
+        out.push(*b);
+    }
+}
+
+fn find_crlf2(b: ref Vec[u8], from: i64) -> i64 {
+    let mut i = from;
+    while i + 3 < b.len() {
+        if b[i] == 13u8 and b[i + 1] == 10u8 and b[i + 2] == 13u8 and b[i + 3] == 10u8 {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn text_of(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("".to_string())
+}
+
+fn last_index(s: Str, c: u8) -> i64 {
+    let b = s.bytes();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn is_digits(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for b in s.bytes() {
+        if *b < 48u8 or *b > 57u8 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---------------------------------------------------------------- HTTP
+
+fn reason(status: i64) -> String {
+    match status {
+        200 => "OK".to_string(),
+        204 => "No Content".to_string(),
+        206 => "Partial Content".to_string(),
+        301 => "Moved Permanently".to_string(),
+        304 => "Not Modified".to_string(),
+        400 => "Bad Request".to_string(),
+        403 => "Forbidden".to_string(),
+        404 => "Not Found".to_string(),
+        405 => "Method Not Allowed".to_string(),
+        416 => "Range Not Satisfiable".to_string(),
+        505 => "HTTP Version Not Supported".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+fn mime(path: Str) -> String {
+    let dot = last_index(path, 46u8);
+    let ext = if dot >= 0 and dot > last_index(path, 47u8) { path.substring(dot + 1, path.len()) } else { "".to_string() };
+    if ext == "html" {
+        return "text/html; charset=utf-8".to_string();
+    }
+    if ext == "css" {
+        return "text/css; charset=utf-8".to_string();
+    }
+    if ext == "js" {
+        return "text/javascript; charset=utf-8".to_string();
+    }
+    if ext == "json" {
+        return "application/json".to_string();
+    }
+    if ext == "txt" or ext == "log" {
+        return "text/plain; charset=utf-8".to_string();
+    }
+    if ext == "svg" {
+        return "image/svg+xml".to_string();
+    }
+    "application/octet-stream".to_string()
+}
+
+fn cache_control(path: Str) -> String {
+    let t = mime(path);
+    if t.starts_with("text/html") {
+        return "no-cache".to_string();
+    }
+    if t.starts_with("text/css") or t.starts_with("text/javascript") or t == "image/svg+xml" {
+        return "public, max-age=3600".to_string();
+    }
+    "public, max-age=60".to_string()
+}
+
+fn etag_of(t: ref Vec[u32], body: ref Vec[u8]) -> String {
+    f"\"{hex_of(body.len())}-{hex8(crc32(t, body))}\""
+}
+
+fn unhex(c: u8) -> i64 {
+    let v = c as i64;
+    if v >= 48 and v <= 57 {
+        return v - 48;
+    }
+    if v >= 97 and v <= 102 {
+        return v - 87;
+    }
+    if v >= 65 and v <= 70 {
+        return v - 55;
+    }
+    -1
+}
+
+fn pct_decode(seg: Str) -> Option[String] {
+    let b = seg.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == 37u8 {
+            if i + 2 >= b.len() {
+                return None;
+            }
+            let hi = unhex(b[i + 1]);
+            let lo = unhex(b[i + 2]);
+            if hi < 0 or lo < 0 {
+                return None;
+            }
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    for x in out.iter() {
+        if *x == 0u8 or *x == 47u8 {
+            return None;
+        }
+    }
+    match String.from_utf8(out) {
+        Ok(s) => Some(s),
+        Err(_) => None,
+    }
+}
+
+fn pct_encode(name: Str) -> String {
+    let mut out = String.new();
+    for x in name.bytes() {
+        let v = *x as i64;
+        let keep = (v >= 48 and v <= 57) or (v >= 65 and v <= 90) or (v >= 97 and v <= 122) or v == 45 or v == 46 or v == 95 or v == 126;
+        if keep {
+            out.push(*x as char);
+        } else {
+            out.push_str(f"%{DIGITS.substring(v / 16, v / 16 + 1).to_uppercase()}{DIGITS.substring(v % 16, v % 16 + 1).to_uppercase()}");
+        }
+    }
+    out
+}
+
+fn html_escape(s: Str) -> String {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+struct Req { method: String, target: String, version: String, hk: Vec[String], hv: Vec[String] }
+
+impl Req {
+    // The last of several same-named headers wins.
+    fn header(ref self, name: Str) -> Option[String] {
+        let mut i = self.hk.len() - 1;
+        while i >= 0 {
+            if self.hk[i] == name {
+                return Some(self.hv[i].clone());
+            }
+            i -= 1;
+        }
+        None
+    }
+}
+
+struct Resp { status: i64, hk: Vec[String], hv: Vec[String], body: Vec[u8], length: i64 }
+
+impl Resp {
+    fn add(mut ref self, k: Str, v: Str) {
+        self.hk.push(k.to_string());
+        self.hv.push(v.to_string());
+    }
+
+    fn set_body(mut ref self, body: own Vec[u8]) {
+        self.length = body.len();
+        self.body = body;
+    }
+}
+
+fn new_resp(status: i64) -> Resp {
+    Resp { status: status, hk: Vec.new(), hv: Vec.new(), body: Vec.new(), length: -1 }
+}
+
+fn error(status: i64) -> Resp {
+    let mut r = new_resp(status);
+    r.add("Content-Type", "text/plain; charset=utf-8");
+    r.set_body(bytes_of(f"{status} {reason(status)}\n"));
+    r
+}
+
+// If-None-Match uses the weak comparison.
+fn etag_list_matches(header: Str, tag: Str) -> bool {
+    let h = header.trim();
+    if h == "*" {
+        return true;
+    }
+    let want = if tag.starts_with("W/") { tag.substring(2, tag.len()) } else { tag.to_string() };
+    for part in h.split(",").iter() {
+        let mut p = part.trim().to_string();
+        if p.starts_with("W/") {
+            p = p.substring(2, p.len());
+        }
+        if p == want {
+            return true;
+        }
+    }
+    false
+}
+
+struct Ranges { first: Vec[i64], last: Vec[i64] }
+
+// None: ignore the header and send the whole body. No ranges: 416.
+fn parse_ranges(header: Str, size: i64) -> Option[Ranges] {
+    if not header.starts_with("bytes=") {
+        return None;
+    }
+    let mut out = Ranges { first: Vec.new(), last: Vec.new() };
+    for raw in header.substring(6, header.len()).split(",").iter() {
+        let s = raw.trim().to_string();
+        let dash = match s.find("-") {
+            Some(d) => d,
+            None => return None,
+        };
+        let a = s.substring(0, dash);
+        let b = s.substring(dash + 1, s.len());
+        if a == "" {
+            if not is_digits(b) {
+                return None;
+            }
+            let n = i64.parse(b).unwrap_or(0);
+            if n == 0 or size == 0 {
+                continue;
+            }
+            out.first.push(if size - n > 0 { size - n } else { 0 });
+            out.last.push(size - 1);
+        } else {
+            if not is_digits(a) or (b != "" and not is_digits(b)) {
+                return None;
+            }
+            let first = i64.parse(a).unwrap_or(0);
+            let mut last = size - 1;
+            if b != "" {
+                last = i64.parse(b).unwrap_or(0);
+                if last < first {
+                    return None;
+                }
+            }
+            if first >= size {
+                continue;
+            }
+            out.first.push(first);
+            out.last.push(if last < size - 1 { last } else { size - 1 });
+        }
+    }
+    Some(out)
+}
+
+fn slice_of(body: ref Vec[u8], a: i64, b: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for i in a..b + 1 {
+        v.push(body[i]);
+    }
+    v
+}
+
+fn serve_file(t: ref Vec[u32], path: Str, req: ref Req) -> Resp {
+    let body = bytes_of(fs.read_to_string(path.to_string()).unwrap_or("".to_string()));
+    let tag = etag_of(t, body);
+    let ty = mime(path);
+    let cc = cache_control(path);
+    match req.header("if-none-match") {
+        Some(inm) => {
+            if etag_list_matches(inm, tag) {
+                let mut r = new_resp(304);
+                r.add("ETag", tag);
+                r.add("Cache-Control", cc);
+                return r;
+            }
+        }
+        None => {}
+    }
+    let mut rng = if req.method == "GET" { req.header("range") } else { None };
+    match req.header("if-range") {
+        Some(ir) => {
+            if ir.trim() != tag {
+                rng = None;
+            }
+        }
+        None => {}
+    }
+    let ranges = match rng {
+        Some(h) => parse_ranges(h, body.len()),
+        None => None,
+    };
+    match ranges {
+        Some(rs) => {
+            let size = body.len();
+            if rs.first.len() == 0 {
+                let mut r = new_resp(416);
+                r.add("Content-Type", "text/plain; charset=utf-8");
+                r.add("Content-Range", f"bytes */{size}");
+                r.set_body(bytes_of("416 Range Not Satisfiable\n"));
+                return r;
+            }
+            let mut r = new_resp(206);
+            if rs.first.len() == 1 {
+                let a = rs.first[0];
+                let b = rs.last[0];
+                r.add("Content-Type", ty);
+                r.set_body(slice_of(body, a, b));
+                r.add("ETag", tag);
+                r.add("Cache-Control", cc);
+                r.add("Accept-Ranges", "bytes");
+                r.add("Content-Range", f"bytes {a}-{b}/{size}");
+                return r;
+            }
+            let mut parts: Vec[u8] = Vec.new();
+            for k in 0..rs.first.len() {
+                let a = rs.first[k];
+                let b = rs.last[k];
+                append(mut parts, f"--{BOUNDARY}\r\nContent-Type: {ty}\r\nContent-Range: bytes {a}-{b}/{size}\r\n\r\n");
+                for i in a..b + 1 {
+                    parts.push(body[i]);
+                }
+                append(mut parts, "\r\n");
+            }
+            append(mut parts, f"--{BOUNDARY}--\r\n");
+            r.add("Content-Type", f"multipart/byteranges; boundary={BOUNDARY}");
+            r.set_body(parts);
+            r.add("ETag", tag);
+            r.add("Cache-Control", cc);
+            r.add("Accept-Ranges", "bytes");
+            return r;
+        }
+        None => {}
+    }
+    let mut r = new_resp(200);
+    r.add("Content-Type", ty);
+    r.set_body(body);
+    r.add("ETag", tag);
+    r.add("Cache-Control", cc);
+    r.add("Accept-Ranges", "bytes");
+    r
+}
+
+fn is_dir(path: Str) -> bool {
+    match fs.metadata(path.to_string()) {
+        Ok(m) => m.is_dir,
+        Err(_) => false,
+    }
+}
+
+fn is_file(path: Str) -> bool {
+    match fs.metadata(path.to_string()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    }
+}
+
+fn listing(dirpath: Str, url: Str) -> Resp {
+    let names = match fs.read_dir(dirpath.to_string()) {
+        Ok(v) => v,
+        Err(_) => Vec.new(),
+    };
+    let mut text = f"<!doctype html>\n<title>Index of {html_escape(url)}</title>\n<h1>Index of {html_escape(url)}</h1>\n<ul>\n";
+    if url != "/" {
+        text.push_str("<li><a href=\"../\">../</a></li>\n");
+    }
+    for n in names.iter() {
+        if n.starts_with(".") {
+            continue;
+        }
+        let slash = if is_dir(f"{dirpath}/{n}") { "/" } else { "" };
+        text.push_str(f"<li><a href=\"{pct_encode(n)}{slash}\">{html_escape(n)}{slash}</a></li>\n");
+    }
+    text.push_str("</ul>\n");
+    let mut r = new_resp(200);
+    r.add("Content-Type", "text/html; charset=utf-8");
+    r.set_body(bytes_of(text));
+    r.add("Cache-Control", "no-cache");
+    r
+}
+
+fn route(t: ref Vec[u32], req: ref Req) -> Resp {
+    let m = req.method.clone();
+    if m == "OPTIONS" {
+        let mut r = new_resp(204);
+        r.add("Allow", "GET, HEAD, OPTIONS");
+        return r;
+    }
+    if m != "GET" and m != "HEAD" {
+        let mut r = error(405);
+        r.add("Allow", "GET, HEAD, OPTIONS");
+        return r;
+    }
+    if not req.target.starts_with("/") {
+        return error(400);
+    }
+    let mut path = req.target.clone();
+    let mut query = "".to_string();
+    match path.find("#") {
+        Some(k) => path = path.substring(0, k),
+        None => {}
+    }
+    match path.find("?") {
+        Some(k) => {
+            query = path.substring(k, path.len());
+            path = path.substring(0, k);
+        }
+        None => {}
+    }
+    let mut segs: Vec[String] = Vec.new();
+    let raws = path.split("/");
+    for j in 1..raws.len() {
+        if raws[j] == "" {
+            continue;
+        }
+        let s = match pct_decode(raws[j]) {
+            Some(s) => s,
+            None => return error(400),
+        };
+        if s == "." {
+            continue;
+        }
+        if s == ".." {
+            if segs.len() == 0 {
+                return error(403);
+            }
+            segs.pop();
+            continue;
+        }
+        segs.push(s);
+    }
+    let mut fs_path = ROOT.to_string();
+    let mut url = "/".to_string();
+    for s in segs.iter() {
+        if s.starts_with(".") {
+            return error(404);
+        }
+        fs_path.push_str(f"/{s}");
+        url.push_str(f"{s}/");
+    }
+    if not fs.exists(fs_path.clone()) {
+        return error(404);
+    }
+    if is_dir(fs_path) {
+        if not path.ends_with("/") {
+            let loc = f"{path}/{query}";
+            let mut r = new_resp(301);
+            r.add("Content-Type", "text/plain; charset=utf-8");
+            r.set_body(bytes_of(f"Moved to {loc}\n"));
+            r.add("Location", loc);
+            return r;
+        }
+        let index = f"{fs_path}/index.html";
+        if is_file(index) {
+            return serve_file(t, index, req);
+        }
+        return listing(fs_path, url);
+    }
+    serve_file(t, fs_path, req)
+}
+
+const ORDER: Array[Str, 10] = ["Server", "Content-Type", "Content-Length", "ETag", "Cache-Control", "Accept-Ranges", "Content-Range", "Location", "Allow", "Connection"];
+
+fn encode(r: ref Resp, head_only: bool, close: bool, out: mut ref Vec[u8]) -> i64 {
+    let mut hk: Vec[String] = Vec.new();
+    let mut hv: Vec[String] = Vec.new();
+    hk.push("Server".to_string());
+    hv.push("kara-static".to_string());
+    for i in 0..r.hk.len() {
+        hk.push(r.hk[i].clone());
+        hv.push(r.hv[i].clone());
+    }
+    if r.length >= 0 {
+        hk.push("Content-Length".to_string());
+        hv.push(f"{r.length}");
+    }
+    if close {
+        hk.push("Connection".to_string());
+        hv.push("close".to_string());
+    }
+    let mut head = f"HTTP/1.1 {r.status} {reason(r.status)}\r\n";
+    for name in ORDER.iter() {
+        for i in 0..hk.len() {
+            if hk[i] == name {
+                head.push_str(f"{hk[i]}: {hv[i]}\r\n");
+            }
+        }
+    }
+    head.push_str("\r\n");
+    append(mut out, head);
+    if head_only {
+        return 0;
+    }
+    for b in r.body.iter() {
+        out.push(*b);
+    }
+    r.body.len()
+}
+
+fn parse_request(head: Str) -> Option[Req] {
+    let lines = head.split("\r\n");
+    let parts = lines[0].split(" ");
+    if parts.len() != 3 or not parts[2].starts_with("HTTP/") {
+        return None;
+    }
+    let mut req = Req { method: parts[0].clone(), target: parts[1].clone(), version: parts[2].clone(), hk: Vec.new(), hv: Vec.new() };
+    for k in 1..lines.len() {
+        let ln = lines[k].clone();
+        let c = match ln.find(":") {
+            Some(c) => c,
+            None => return None,
+        };
+        if c == 0 {
+            return None;
+        }
+        req.hk.push(ln.substring(0, c).trim().to_lowercase());
+        req.hv.push(ln.substring(c + 1, ln.len()).trim().to_string());
+    }
+    Some(req)
+}
+
+fn serve(t: ref Vec[u32], data: ref Vec[u8], log: mut ref Vec[String], out: mut ref Vec[u8]) -> i64 {
+    let mut at = 0;
+    let mut n = 0;
+    loop {
+        let end = find_crlf2(data, at);
+        if end < 0 {
+            break;
+        }
+        let head = text_of(data, at, end);
+        at = end + 4;
+        n += 1;
+        let mut close = true;
+        let mut head_only = false;
+        let mut label = "- -".to_string();
+        let r = match parse_request(head) {
+            None => error(400),
+            Some(req) => {
+                label = f"{req.method} {req.target}";
+                if req.version != "HTTP/1.1" and req.version != "HTTP/1.0" {
+                    error(505)
+                } else if req.version == "HTTP/1.1" and req.header("host").is_none() {
+                    error(400)
+                } else {
+                    let conn = req.header("connection").unwrap_or("".to_string()).to_lowercase();
+                    close = conn == "close" or (req.version == "HTTP/1.0" and conn != "keep-alive");
+                    head_only = req.method == "HEAD";
+                    route(t, req)
+                }
+            }
+        };
+        let sent = encode(r, head_only, close, mut out);
+        log.push(f"{label} {r.status} {sent}");
+        if close {
+            break;
+        }
+    }
+    n
+}
+
+// ---------------------------------------------------------------- client
+
+fn read_all(conn: ref TcpStream) -> Vec[u8] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    bytes
+}
+
+fn shown(body: ref Vec[u8]) -> String {
+    let end = if body.len() < 48 { body.len() } else { 48 };
+    text_of(body, 0, end).replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+}
+
+struct Rq { label: String, wire: String, no_body: bool }
+
+struct Tags { k: Vec[String], v: Vec[String] }
+
+impl Tags {
+    fn get(ref self, label: Str) -> String {
+        for i in 0..self.k.len() {
+            if self.k[i] == label {
+                return self.v[i].clone();
+            }
+        }
+        "".to_string()
+    }
+}
+
+fn session(t: ref Vec[u32], listener: ref TcpListener, title: Str, reqs: ref Vec[Rq], log: mut ref Vec[String]) -> Tags {
+    println(f"== {title}");
+    let mut tags = Tags { k: Vec.new(), v: Vec.new() };
+    let client = match TcpStream.connect(PORT_ADDR.to_string()) {
+        Ok(c) => c,
+        Err(_) => {
+            println("connect failed");
+            return tags;
+        }
+    };
+    let mut wire = String.new();
+    for r in reqs.iter() {
+        wire.push_str(r.wire);
+    }
+    let sent = client.write_all(wire.bytes()).is_ok() and client.shutdown_write().is_ok();
+    if not sent {
+        println("client write failed");
+    }
+    match listener.accept() {
+        Ok(conn) => {
+            let mut out: Vec[u8] = Vec.new();
+            let n = serve(t, read_all(conn), mut log, mut out);
+            match conn.write_all(out) {
+                Ok(_) => {}
+                Err(_) => println("server write failed"),
+            }
+            println(f"  server: {n} requests read");
+        }
+        Err(_) => println("accept failed"),
+    }
+    let got = read_all(client);
+    let mut at = 0;
+    for rq in reqs.iter() {
+        if at >= got.len() {
+            println(f"  {rq.label} -> (no response)");
+            continue;
+        }
+        let end = find_crlf2(got, at);
+        let lines = text_of(got, at, end).split("\r\n");
+        println(f"  {rq.label} -> {lines[0]}");
+        let mut length = 0;
+        let mut ctype = "".to_string();
+        for k in 1..lines.len() {
+            let c = lines[k].find(": ").unwrap_or(0);
+            let name = lines[k].substring(0, c);
+            let value = lines[k].substring(c + 2, lines[k].len());
+            if name == "Server" {
+                continue;
+            }
+            if name == "Content-Length" {
+                length = i64.parse(value).unwrap_or(0);
+            }
+            if name == "ETag" {
+                tags.k.push(rq.label.clone());
+                tags.v.push(value.clone());
+            }
+            if name == "Content-Type" {
+                ctype = value.clone();
+            }
+            println(f"    {name}: {value}");
+        }
+        at = end + 4;
+        let status = i64.parse(lines[0].split(" ")[1]).unwrap_or(0);
+        if rq.no_body or status == 204 or status == 304 {
+            continue;
+        }
+        let body = slice_of(got, at, at + length - 1);
+        at += length;
+        println(f"    body {body.len()} bytes crc {hex8(crc32(t, body))} \"{shown(body)}\"");
+        if ctype.starts_with("text/html") or ctype.starts_with("multipart/") {
+            let ls = text_of(body, 0, body.len()).split("\n");
+            for j in 0..ls.len() - 1 {
+                println(f"    | {ls[j].replace("\r", "\\r")}");
+            }
+        }
+    }
+    tags
+}
+
+fn req(method: Str, target: Str, extra: ref Vec[String], version: Str, host: bool) -> Rq {
+    let mut w = f"{method} {target} {version}\r\n";
+    if host {
+        w.push_str("Host: localhost\r\n");
+    }
+    for h in extra.iter() {
+        w.push_str(f"{h}\r\n");
+    }
+    w.push_str("\r\n");
+    let mut label = f"{method} {target}";
+    if extra.len() > 0 {
+        label.push_str(f" [{extra.join("; ")}]");
+    }
+    Rq { label: label, wire: w, no_body: method == "HEAD" }
+}
+
+fn get(target: Str) -> Rq {
+    req("GET", target, Vec.new(), "HTTP/1.1", true)
+}
+
+fn get_with(target: Str, h: Str) -> Rq {
+    let mut extra: Vec[String] = Vec.new();
+    extra.push(h.to_string());
+    req("GET", target, extra, "HTTP/1.1", true)
+}
+
+fn get_with2(target: Str, h1: Str, h2: Str) -> Rq {
+    let mut extra: Vec[String] = Vec.new();
+    extra.push(h1.to_string());
+    extra.push(h2.to_string());
+    req("GET", target, extra, "HTTP/1.1", true)
+}
+
+// ---------------------------------------------------------------- site
+
+fn write_site() {
+    let mut names: Vec[String] = Vec.new();
+    let mut texts: Vec[String] = Vec.new();
+    names.push("index.html".to_string());
+    texts.push("<!doctype html>\n<title>Kara static</title>\n<h1>It works</h1>\n".to_string());
+    names.push("css/site.css".to_string());
+    texts.push("body { font: 16px/1.4 sans-serif; }\nh1 { color: #c33; }\n".to_string());
+    names.push("js/app.js".to_string());
+    texts.push("console.log('ready');\n".to_string());
+    names.push("data/report.json".to_string());
+    texts.push("{\"ok\": true, \"rows\": 3}\n".to_string());
+    names.push("docs/guide.txt".to_string());
+    texts.push("Read the guide.\n".to_string());
+    names.push("docs/notes v2.txt".to_string());
+    texts.push("Second notes.\n".to_string());
+    names.push("docs/café.txt".to_string());
+    texts.push("Un café, s'il vous plaît.\n".to_string());
+    names.push("docs/a&b <c>.txt".to_string());
+    texts.push("Odd name.\n".to_string());
+    names.push("docs/img/logo.svg".to_string());
+    texts.push("<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n".to_string());
+    names.push("docs/.draft.txt".to_string());
+    texts.push("not yet\n".to_string());
+    names.push(".env".to_string());
+    texts.push("SECRET=hunter2\n".to_string());
+    names.push("empty.txt".to_string());
+    texts.push("".to_string());
+    let levels: Array[Str, 5] = ["info", "info", "info", "warn", "error"];
+    let mut seed = 12345;
+    let mut log = String.new();
+    for i in 0..150 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let lvl = levels[seed % 5];
+        let ms = (seed >> 8) % 900 + 3;
+        log.push_str(f"2026-10-15T04:{i / 60:02}:{i % 60:02}Z level={lvl} req={1000 + i} took={ms}ms\n");
+    }
+    names.push("logs/app.log".to_string());
+    texts.push(log);
+    for k in 0..names.len() {
+        let p = f"{ROOT}/{names[k]}";
+        let dir = p.substring(0, last_index(p, 47u8));
+        match fs.create_dir_all(dir) {
+            Ok(_) => {}
+            Err(_) => println(f"  cannot create {names[k]}"),
+        }
+        match fs.write(p, texts[k].clone()) {
+            Ok(_) => println(f"  wrote {names[k]} ({texts[k].len()} bytes)"),
+            Err(_) => println(f"  cannot write {names[k]}"),
+        }
+    }
+}
+
+fn main() {
+    println("== site");
+    write_site();
+    let t = crc_table();
+    let listener = match TcpListener.bind(PORT_ADDR.to_string()) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+    let none: Vec[String] = Vec.new();
+    let mut log: Vec[String] = Vec.new();
+
+    let mut basics: Vec[Rq] = Vec.new();
+    basics.push(get("/"));
+    basics.push(get("/css/site.css"));
+    basics.push(req("HEAD", "/js/app.js", none, "HTTP/1.1", true));
+    basics.push(get("/data/report.json?cache=no#top"));
+    basics.push(get("/missing.txt"));
+    basics.push(get("/docs?view=list"));
+    basics.push(get("/docs/"));
+    basics.push(get("/docs/caf%C3%A9.txt"));
+    basics.push(get("/docs/notes%20v2.txt"));
+    basics.push(get("/docs/a%26b%20%3Cc%3E.txt"));
+    basics.push(get("/docs/img"));
+    basics.push(get("/logs/"));
+    basics.push(get("/./css//site.css"));
+    let tags = session(t, listener, "basics", basics, mut log);
+    let css = tags.get("GET /css/site.css");
+
+    let mut cond: Vec[Rq] = Vec.new();
+    cond.push(get_with("/css/site.css", f"If-None-Match: {css}"));
+    cond.push(get_with("/css/site.css", f"If-None-Match: W/{css}"));
+    cond.push(get_with("/css/site.css", f"If-None-Match: \"nope\", {css}"));
+    cond.push(get_with("/css/site.css", "If-None-Match: *"));
+    cond.push(get_with("/css/site.css", "If-None-Match: \"nope\""));
+    let mut inm: Vec[String] = Vec.new();
+    inm.push(f"If-None-Match: {css}");
+    cond.push(req("HEAD", "/css/site.css", inm, "HTTP/1.1", true));
+    session(t, listener, "conditional", cond, mut log);
+
+    let mut head: Vec[Rq] = Vec.new();
+    head.push(req("HEAD", "/logs/app.log", none, "HTTP/1.1", true));
+    let tag_log = session(t, listener, "log etag", head, mut log).get("HEAD /logs/app.log");
+
+    let mut ranges: Vec[Rq] = Vec.new();
+    ranges.push(get_with("/logs/app.log", "Range: bytes=0-99"));
+    ranges.push(get_with("/logs/app.log", "Range: bytes=-120"));
+    ranges.push(get_with("/logs/app.log", "Range: bytes=7000-"));
+    ranges.push(get_with("/logs/app.log", "Range: bytes=0-9, 50-59, -10"));
+    ranges.push(get_with("/logs/app.log", "Range: bytes=99999-100000"));
+    ranges.push(get_with("/logs/app.log", "Range: bytes=abc"));
+    ranges.push(get_with("/logs/app.log", "Range: bytes=5-2"));
+    ranges.push(get_with("/logs/app.log", "Range: items=0-5"));
+    ranges.push(get_with2("/logs/app.log", "Range: bytes=0-4", f"If-Range: {tag_log}"));
+    ranges.push(get_with2("/logs/app.log", "Range: bytes=0-4", "If-Range: \"stale\""));
+    let mut hr: Vec[String] = Vec.new();
+    hr.push("Range: bytes=0-4".to_string());
+    ranges.push(req("HEAD", "/logs/app.log", hr, "HTTP/1.1", true));
+    ranges.push(get_with("/logs/app.log", "Range: bytes=99999-, 0-0"));
+    ranges.push(get_with("/empty.txt", "Range: bytes=0-0"));
+    ranges.push(get_with("/empty.txt", "Range: bytes=-5"));
+    ranges.push(get("/empty.txt"));
+    session(t, listener, "ranges", ranges, mut log);
+
+    let mut hostile: Vec[Rq] = Vec.new();
+    hostile.push(get("/../.env"));
+    hostile.push(get("/docs/../../.env"));
+    hostile.push(get("/%2e%2e/.env"));
+    hostile.push(get("/.env"));
+    hostile.push(get("/docs/.draft.txt"));
+    hostile.push(get("/docs/%2Fetc"));
+    hostile.push(get("/bad%zz"));
+    hostile.push(get("/trunc%4"));
+    hostile.push(get("/nul%00.txt"));
+    hostile.push(get("/docs/img/../../index.html"));
+    hostile.push(req("POST", "/index.html", none, "HTTP/1.1", true));
+    hostile.push(req("DELETE", "/index.html", none, "HTTP/1.1", true));
+    hostile.push(req("OPTIONS", "*", none, "HTTP/1.1", true));
+    hostile.push(get("index.html"));
+    hostile.push(get_with("/", "Connection: close"));
+    hostile.push(get("/js/app.js"));
+    session(t, listener, "hostile", hostile, mut log);
+
+    let mut old: Vec[Rq] = Vec.new();
+    old.push(req("GET", "/js/app.js", none, "HTTP/1.0", false));
+    old.push(req("GET", "/", none, "HTTP/1.0", false));
+    session(t, listener, "http/1.0", old, mut log);
+
+    let mut ka: Vec[Rq] = Vec.new();
+    let mut keep: Vec[String] = Vec.new();
+    keep.push("Connection: keep-alive".to_string());
+    ka.push(req("GET", "/js/app.js", keep, "HTTP/1.0", false));
+    ka.push(req("GET", "/data/report.json", none, "HTTP/1.0", false));
+    session(t, listener, "http/1.0 keep-alive", ka, mut log);
+
+    let mut bad: Vec[Rq] = Vec.new();
+    bad.push(Rq { label: "GARBAGE".to_string(), wire: "GARBAGE\r\n\r\n".to_string(), no_body: false });
+    bad.push(get("/"));
+    session(t, listener, "malformed", bad, mut log);
+
+    let mut nohost: Vec[Rq] = Vec.new();
+    nohost.push(req("GET", "/", none, "HTTP/1.1", false));
+    session(t, listener, "no host", nohost, mut log);
+
+    let mut broken: Vec[Rq] = Vec.new();
+    broken.push(Rq { label: "GET / [broken header]".to_string(), wire: "GET / HTTP/1.1\r\nHost: x\r\nbroken\r\n\r\n".to_string(), no_body: false });
+    session(t, listener, "bad header", broken, mut log);
+
+    let mut v2: Vec[Rq] = Vec.new();
+    v2.push(req("GET", "/", none, "HTTP/2.0", true));
+    session(t, listener, "version", v2, mut log);
+
+    let mut text = String.new();
+    for l in log.iter() {
+        text.push_str(f"{l}\n");
+    }
+    match fs.write("access.log", text) {
+        Ok(_) => {}
+        Err(_) => println("cannot write access.log"),
+    }
+    let back = fs.read_to_string("access.log").unwrap_or("".to_string()).lines();
+    println("== access.log");
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    let mut total = 0;
+    for ln in back.iter() {
+        let f = ln.split(" ");
+        let code = f[f.len() - 2].clone();
+        let c = counts.get(code).unwrap_or(0);
+        counts.insert(code, c + 1);
+        total += i64.parse(f[f.len() - 1]).unwrap_or(0);
+    }
+    println(f"  {back.len()} requests, {total} body bytes");
+    let mut shown_counts: Vec[String] = Vec.new();
+    for (k, v) in counts.iter() {
+        shown_counts.push(f"{k}x{v}");
+    }
+    println(f"  {shown_counts.join(", ")}");
+    for i in 0..3 {
+        println(f"  {back[i]}");
+    }
+}
