@@ -150,7 +150,7 @@ pub fn check_borrows(
                     if conflicts(loan, &place, access) {
                         errs.push(format!(
                             "{}: {} of {} while it is borrowed{} (borrow at {}) [E0516]",
-                            loc(at, n),
+                            site(body, at, Some(loan.at)),
                             access_name(access),
                             show_place(body, tys, &place),
                             if loan.kind == BorrowKind::Mut {
@@ -158,7 +158,7 @@ pub fn check_borrows(
                             } else {
                                 ""
                             },
-                            loc(loan.at, body.blocks[loan.at.0].statements.len()),
+                            borrow_site(body, loan.at),
                         ));
                     }
                 }
@@ -190,10 +190,10 @@ pub fn check_borrows(
                     };
                     errs.push(format!(
                         "{}: the result borrows {}, which {} (borrow at {}) [E0509]",
-                        loc(at, n),
+                        site(body, at, Some(loan.at)),
                         show_place(body, tys, &loan.place),
                         owned,
-                        loc(loan.at, body.blocks[loan.at.0].statements.len()),
+                        borrow_site(body, loan.at),
                     ));
                 }
             }
@@ -287,7 +287,7 @@ fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
                     if p.projection.contains(&ProjElem::Deref) {
                         errs.push(format!(
                             "{}: {} is borrowed, so it cannot be stored as a function value; declare the parameter `escaping` (core semantics §9.3)",
-                            loc((bi, si), n),
+                            site(body, (bi, si), None),
                             show_place(body, tys, p),
                         ));
                     }
@@ -307,7 +307,7 @@ fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
                 if through_shared_ref(body, tys, &place) {
                     errs.push(format!(
                         "{}: {} of {} through a shared reference [E0517]",
-                        loc((bi, si), n),
+                        site(body, (bi, si), None),
                         what,
                         show_place(body, tys, &place),
                     ));
@@ -337,6 +337,42 @@ fn through_shared_ref(body: &Body, tys: &TyInterner, place: &Place) -> bool {
         }
     }
     read_only
+}
+
+/// The source `line:column` of statement `si` of block `bi` (its
+/// terminator past the last statement), when the builder recorded one.
+fn source_at(body: &Body, (bi, si): (usize, usize)) -> Option<(usize, usize)> {
+    let block = &body.blocks[bi];
+    let span = match block.statements.get(si) {
+        Some(s) => s.source_info.span,
+        None => block.terminator.source_info.span,
+    };
+    (span.line > 0).then_some((span.line, span.column))
+}
+
+/// Where an error is: `line:column: bbN[i]`, or the block position alone
+/// in a body with no source (MIR text), as every error names its source
+/// line (B-2026-10-15-16). A drop the builder put at a scope's end has no
+/// span of its own; the line is then the last one before it in its block,
+/// else that of `near` (the borrow it conflicts with).
+fn site(body: &Body, at: (usize, usize), near: Option<(usize, usize)>) -> String {
+    let l = loc(at, body.blocks[at.0].statements.len());
+    let line = source_at(body, at)
+        .or_else(|| (0..at.1).rev().find_map(|si| source_at(body, (at.0, si))))
+        .or_else(|| near.and_then(|n| source_at(body, n)));
+    match line {
+        Some((line, col)) => format!("{line}:{col}: {l}"),
+        None => l,
+    }
+}
+
+/// Where a borrow was taken: `bbN[i]`, then ` at line:column` when known.
+fn borrow_site(body: &Body, at: (usize, usize)) -> String {
+    let l = loc(at, body.blocks[at.0].statements.len());
+    match source_at(body, at) {
+        Some((line, col)) => format!("{l} at {line}:{col}"),
+        None => l,
+    }
 }
 
 fn loc((bi, si): (usize, usize), n_stmts: usize) -> String {

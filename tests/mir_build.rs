@@ -2108,3 +2108,21 @@ fn main() {
         }
     }
 }
+
+/// A borrow check error says where it is, as a type error does
+/// (B-2026-10-15-16).
+#[test]
+fn mir_borrow_error_carries_its_line_and_column() {
+    const SRC: &str = r#"
+fn main() {
+    let mut m: SortedMap[String, String] = SortedMap.new();
+    m.insert("a".to_string(), "1".to_string());
+    let v = m.get("a").unwrap_or(String.new());
+    println(f"{v}");
+}
+"#;
+    let err = karac::mir::lower::build_source(SRC).err().expect("refused");
+    assert!(err.starts_with("borrow check main: 5:"), "{err}");
+    assert!(err.contains("(borrow at bb"), "{err}");
+    assert!(err.contains(" at 5:"), "{err}");
+}
