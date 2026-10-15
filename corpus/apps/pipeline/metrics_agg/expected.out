@@ -1,0 +1,59 @@
+== parse
+  api-1.0.prom: 4 families, 13 samples, 0 errors
+  api-1.1.prom: 4 families, 13 samples, 0 errors
+  api-2.0.prom: 4 families, 13 samples, 0 errors
+  api-2.1.prom: 4 families, 13 samples, 0 errors
+  worker-1.0.prom: 4 families, 4 samples, 7 errors
+    line 3: duplicate series queue_depth{instance="10.0.1.7:9100",job="worker",queue="emails"}
+    line 4: expected , or } after label queue
+    line 5: no value for queue_depth
+    line 6: bad value 'lots'
+    line 8: TYPE for jobs_done_total after its samples
+    line 9: summary rpc_latency kept as untyped
+    line 12: bad label name at column 45
+  worker-1.1.prom: 4 families, 4 samples, 7 errors
+  label escapes: note=[say "hi"
+\o/] -> build_info{note="say \"hi\"\n\\o/",version="1.4.2"}
+  temperature_celsius = -35 (with a timestamp)
+== rate(http_requests_total[60s])
+  counter reset: http_requests_total{instance="10.0.0.2:9100",job="api",method="GET",status="200"}
+  counter reset: http_requests_total{instance="10.0.0.2:9100",job="api",method="GET",status="404"}
+  counter reset: http_requests_total{instance="10.0.0.2:9100",job="api",method="POST",status="500"}
+  {instance="10.0.0.1:9100",method="GET",status="200"} 10.0000/s
+  {instance="10.0.0.1:9100",method="GET",status="404"} 0.2000/s
+  {instance="10.0.0.1:9100",method="POST",status="500"} 0.1000/s
+  {instance="10.0.0.2:9100",method="GET",status="200"} 5.0000/s
+  {instance="10.0.0.2:9100",method="GET",status="404"} 0.0333/s
+  {instance="10.0.0.2:9100",method="POST",status="500"} 0.0167/s
+  sum by (class): 2xx=15.000, 4xx=0.233, 5xx=0.117
+  error ratio: 0.760%
+== latency
+  counter reset: http_request_duration_seconds_bucket{instance="10.0.0.2:9100",job="api",le="0.05"}
+  counter reset: http_request_duration_seconds_bucket{instance="10.0.0.2:9100",job="api",le="0.1"}
+  counter reset: http_request_duration_seconds_bucket{instance="10.0.0.2:9100",job="api",le="0.25"}
+  counter reset: http_request_duration_seconds_bucket{instance="10.0.0.2:9100",job="api",le="0.5"}
+  counter reset: http_request_duration_seconds_bucket{instance="10.0.0.2:9100",job="api",le="1"}
+  counter reset: http_request_duration_seconds_bucket{instance="10.0.0.2:9100",job="api",le="+Inf"}
+  buckets/s: le=0.05:9.667 le=0.1:13.000 le=0.25:15.250 le=0.5:15.833 le=1:15.867 le=+Inf:16.000
+  histogram_quantile(0.5) = 0.0414s
+  histogram_quantile(0.9) = 0.1933s
+  histogram_quantile(0.99) = 0.6000s
+  histogram_quantile(1.0) = 1.0000s
+  edge cases: q=-1 -Inf, q=2 +Inf, no +Inf NaN
+  mean latency: 97.14 ms
+== memory (latest scrape)
+  10.0.0.1:9100 52.0 MiB
+  10.0.0.2:9100 25.0 MiB
+  max 52.0 MiB, min 25.0 MiB, avg 38.50 MiB
+  versions: 1.4.2x2
+== aggregated.prom
+  # HELP job:http_requests:rate60s Request rate by job and status class.
+  # TYPE job:http_requests:rate60s gauge
+  job:http_requests:rate60s{class="2xx",job="api"} 15
+  job:http_requests:rate60s{class="4xx",job="api"} 0.233333
+  job:http_requests:rate60s{class="5xx",job="api"} 0.116667
+  # TYPE job:latency_seconds:p90 gauge
+  job:latency_seconds:p90{job="api"} 0.193333
+  # TYPE build_info gauge
+  build_info{note="say \"hi\"\n\\o/",version="1.4.2"} 1
+  re-parsed: 5 samples, 0 errors, note survives: true

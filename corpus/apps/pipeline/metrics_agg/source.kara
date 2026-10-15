@@ -1,0 +1,718 @@
+// A metrics aggregator over Prometheus text-format scrapes: what a small
+// recording-rule engine does between two scrapes of each target.
+//
+// The parser reads `# HELP` and `# TYPE`, metric names, label sets with the
+// format's escapes (\\ \" \n), the values +Inf / -Inf / NaN and exponents,
+// and an optional millisecond timestamp. Bad lines are reported with their
+// line number and skipped: an unterminated label set, a missing or
+// non-numeric value, a duplicate series, a label name starting with a digit,
+// a TYPE after the family's samples.
+//
+// From two scrapes 60 s apart it computes per-series counter rates with
+// reset detection, sums them by status class, the error ratio, quantiles
+// from summed histogram bucket rates exactly as PromQL's histogram_quantile
+// does (including its edge cases), mean latency from _sum and _count, and
+// gauge statistics. It writes the results back out as a .prom file in
+// canonical form and parses that again.
+
+const INTERVAL: f64 = 60.0;
+
+const BROKEN: Str = "# TYPE queue_depth gauge
+queue_depth{job=\"worker\",instance=\"10.0.1.7:9100\",queue=\"emails\"} 42
+queue_depth{job=\"worker\",instance=\"10.0.1.7:9100\",queue=\"emails\"} 43
+queue_depth{job=\"worker\",instance=\"10.0.1.7:9100\",queue=\"sms\" 7
+queue_depth{job=\"worker\",instance=\"10.0.1.7:9100\",queue=\"push\"}
+queue_depth{job=\"worker\",instance=\"10.0.1.7:9100\",queue=\"fax\"} lots
+jobs_done_total{job=\"worker\",instance=\"10.0.1.7:9100\"} 5
+# TYPE jobs_done_total counter
+# TYPE rpc_latency summary
+rpc_latency{job=\"worker\",instance=\"10.0.1.7:9100\",quantile=\"0.5\"} 0.2
+temperature_celsius{job=\"worker\",instance=\"10.0.1.7:9100\",room=\"lab\"} -3.5e1 1760000000000
+weird{job=\"worker\",instance=\"10.0.1.7:9100\",9lives=\"x\"} 1
+";
+
+fn scrape(job: Str, inst: Str, req: ref Vec[i64], b: ref Vec[i64], sum: Str, mem: Str, version: Str) -> String {
+    let id = f"job=\"{job}\",instance=\"{inst}\"";
+    let mut s = String.new();
+    s.push_str("# HELP http_requests_total Requests handled.\n# TYPE http_requests_total counter\n");
+    s.push_str(f"http_requests_total{{{id},method=\"GET\",status=\"200\"}} {req[0]}\n");
+    s.push_str(f"http_requests_total{{{id},method=\"GET\",status=\"404\"}} {req[1]}\n");
+    s.push_str(f"http_requests_total{{{id},method=\"POST\",status=\"500\"}} {req[2]}\n");
+    s.push_str("# HELP http_request_duration_seconds Request latency.\n# TYPE http_request_duration_seconds histogram\n");
+    let les = ["0.05", "0.1", "0.25", "0.5", "1", "+Inf"];
+    for k in 0..6 {
+        s.push_str(f"http_request_duration_seconds_bucket{{{id},le=\"{les[k]}\"}} {b[k]}\n");
+    }
+    s.push_str(f"http_request_duration_seconds_sum{{{id}}} {sum}\n");
+    s.push_str(f"http_request_duration_seconds_count{{{id}}} {b[5]}\n");
+    s.push_str("# HELP process_resident_memory_bytes Resident memory.\n# TYPE process_resident_memory_bytes gauge\n");
+    s.push_str(f"process_resident_memory_bytes{{{id}}} {mem}\n");
+    s.push_str("# TYPE build_info gauge\n");
+    s.push_str(f"build_info{{{id},version=\"{version}\",note=\"say \\\"hi\\\"\\n\\\\o/\"}} 1\n");
+    s
+}
+
+fn ints(v: ref Vec[i64]) -> Vec[i64] {
+    v.clone()
+}
+
+// ---------------------------------------------------------------- model
+
+struct Sample { name: String, lk: Vec[String], lv: Vec[String], value: f64, key: String }
+
+struct Scrape {
+    types: Map[String, String],
+    samples: Vec[Sample],
+    index: Map[String, i64],
+    errors: Vec[String],
+}
+
+fn esc(v: Str) -> String {
+    v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+}
+
+fn show_series(name: Str, lk: ref Vec[String], lv: ref Vec[String]) -> String {
+    if lk.len() == 0 {
+        return name.to_string();
+    }
+    let mut s = f"{name}{{";
+    for i in 0..lk.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{lk[i]}=\"{esc(lv[i])}\"");
+    }
+    s.push_str("}");
+    s
+}
+
+fn label(s: ref Sample, k: Str) -> String {
+    for i in 0..s.lk.len() {
+        if s.lk[i] == k {
+            return s.lv[i].clone();
+        }
+    }
+    String.new()
+}
+
+// The labels without `drop`, as a series string with no name.
+fn labels_without(s: ref Sample, drop1: Str, drop2: Str) -> String {
+    let mut lk: Vec[String] = Vec.new();
+    let mut lv: Vec[String] = Vec.new();
+    for i in 0..s.lk.len() {
+        if s.lk[i] != drop1 and s.lk[i] != drop2 {
+            lk.push(s.lk[i].clone());
+            lv.push(s.lv[i].clone());
+        }
+    }
+    show_series("", lk, lv)
+}
+
+fn sort_labels(lk: mut ref Vec[String], lv: mut ref Vec[String]) {
+    for i in 1..lk.len() {
+        let mut j = i;
+        while j > 0 and lk[j - 1] > lk[j] {
+            let tk = lk[j - 1].clone();
+            lk[j - 1] = lk[j].clone();
+            lk[j] = tk;
+            let tv = lv[j - 1].clone();
+            lv[j - 1] = lv[j].clone();
+            lv[j] = tv;
+            j -= 1;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- parsing
+
+fn is_word(c: u8) -> bool {
+    (c >= 48u8 and c <= 57u8) or (c >= 65u8 and c <= 90u8) or (c >= 97u8 and c <= 122u8) or c == 95u8
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= 48u8 and c <= 57u8
+}
+
+struct Labels { lk: Vec[String], lv: Vec[String], end: i64 }
+
+fn utf8(v: own Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+// s[i] is the `{`; returns the labels and the index after the `}`.
+fn parse_labels(s: Str, i0: i64) -> Result[Labels, String] {
+    let b = s.bytes();
+    let mut out = Labels { lk: Vec.new(), lv: Vec.new(), end: 0 };
+    let mut i = i0 + 1;
+    loop {
+        while i < b.len() and b[i] == 32u8 {
+            i += 1;
+        }
+        if i < b.len() and b[i] == 125u8 {
+            out.end = i + 1;
+            return Ok(out);
+        }
+        let mut j = i;
+        while j < b.len() and is_word(b[j]) {
+            j += 1;
+        }
+        let name = s.substring(i, j);
+        if j == i or is_digit(b[i]) {
+            return Err(f"bad label name at column {i + 1}");
+        }
+        if j >= b.len() or b[j] != 61u8 or j + 1 >= b.len() or b[j + 1] != 34u8 {
+            return Err(f"expected =\" after label {name}");
+        }
+        j += 2;
+        let mut val: Vec[u8] = Vec.new();
+        loop {
+            if j >= b.len() {
+                return Err(f"unterminated value for label {name}");
+            }
+            let c = b[j];
+            if c == 92u8 {
+                if j + 1 >= b.len() {
+                    return Err(f"unterminated value for label {name}");
+                }
+                let n = b[j + 1];
+                val.push(if n == 110u8 { 10u8 } else { n });
+                j += 2;
+            } else if c == 34u8 {
+                j += 1;
+                break;
+            } else {
+                val.push(c);
+                j += 1;
+            }
+        }
+        out.lk.push(name.clone());
+        out.lv.push(utf8(val));
+        while j < b.len() and b[j] == 32u8 {
+            j += 1;
+        }
+        if j < b.len() and b[j] == 44u8 {
+            j += 1;
+        } else if j < b.len() and b[j] == 125u8 {
+        } else {
+            return Err(f"expected , or }} after label {name}");
+        }
+        i = j;
+    }
+}
+
+fn parse_value(t: Str) -> Result[f64, String] {
+    if t == "+Inf" or t == "Inf" {
+        return Ok(1.0 / 0.0);
+    }
+    if t == "-Inf" {
+        return Ok(-1.0 / 0.0);
+    }
+    if t == "NaN" {
+        return Ok(0.0 / 0.0);
+    }
+    match f64.parse(t) {
+        Some(v) => Ok(v),
+        None => Err(f"bad value '{t}'"),
+    }
+}
+
+fn family_of(name: Str, types: ref Map[String, String]) -> String {
+    for suf in ["_bucket", "_sum", "_count"] {
+        if name.ends_with(suf) {
+            let base = name.substring(0, name.len() - suf.len());
+            match types.get(base) {
+                Some(t) => {
+                    if t == "histogram" {
+                        return base;
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    name.to_string()
+}
+
+fn parse_sample(line: Str) -> Result[Sample, String] {
+    let b = line.bytes();
+    let mut i = 0;
+    while i < b.len() and (is_word(b[i]) or b[i] == 58u8) {
+        i += 1;
+    }
+    let name = line.substring(0, i);
+    if name.len() == 0 {
+        return Err("missing metric name".to_string());
+    }
+    let mut lk: Vec[String] = Vec.new();
+    let mut lv: Vec[String] = Vec.new();
+    if i < b.len() and b[i] == 123u8 {
+        let l = parse_labels(line, i)?;
+        lk = l.lk;
+        lv = l.lv;
+        i = l.end;
+    }
+    let mut rest: Vec[String] = Vec.new();
+    for w in line.substring(i, line.len()).split(" ").iter() {
+        if w.len() > 0 {
+            rest.push(w.clone());
+        }
+    }
+    if rest.len() == 0 {
+        return Err(f"no value for {name}");
+    }
+    if rest.len() > 2 {
+        return Err(f"trailing text after value of {name}");
+    }
+    let value = parse_value(rest[0])?;
+    if rest.len() == 2 {
+        match i64.parse(rest[1]) {
+            Some(_) => {}
+            None => return Err(f"bad timestamp '{rest[1]}'"),
+        }
+    }
+    sort_labels(mut lk, mut lv);
+    let key = show_series(name, lk, lv);
+    Ok(Sample { name: name, lk: lk, lv: lv, value: value, key: key })
+}
+
+fn parse(text: Str) -> Scrape {
+    let mut sc = Scrape { types: Map.new(), samples: Vec.new(), index: Map.new(), errors: Vec.new() };
+    let mut seen: Vec[String] = Vec.new();
+    let mut n = 0;
+    for line in text.lines().iter() {
+        n += 1;
+        if line.trim().len() == 0 {
+            continue;
+        }
+        if line.starts_with("#") {
+            let w = line.split(" ");
+            if w.len() >= 4 and w[1] == "TYPE" {
+                let name = w[2].clone();
+                let mut ty = w[3].trim().to_string();
+                if contains(seen, name) {
+                    sc.errors.push(f"line {n}: TYPE for {name} after its samples");
+                    continue;
+                }
+                if ty != "counter" and ty != "gauge" and ty != "histogram" and ty != "summary" and ty != "untyped" {
+                    sc.errors.push(f"line {n}: unknown type {ty}");
+                    continue;
+                }
+                if ty == "summary" {
+                    sc.errors.push(f"line {n}: summary {name} kept as untyped");
+                    ty = "untyped".to_string();
+                }
+                sc.types.insert(name, ty);
+            }
+            continue;
+        }
+        match parse_sample(line) {
+            Ok(s) => {
+                let dup = match sc.index.get(s.key) {
+                    Some(_) => true,
+                    None => false,
+                };
+                if dup {
+                    sc.errors.push(f"line {n}: duplicate series {s.key}");
+                    continue;
+                }
+                let fam = family_of(s.name, sc.types);
+                if not contains(seen, fam) {
+                    seen.push(fam);
+                }
+                sc.index.insert(s.key.clone(), sc.samples.len());
+                sc.samples.push(s);
+            }
+            Err(e) => sc.errors.push(f"line {n}: {e}"),
+        }
+    }
+    sc
+}
+
+fn contains(v: ref Vec[String], x: Str) -> bool {
+    for s in v.iter() {
+        if s == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn family_count(sc: ref Scrape) -> i64 {
+    let mut fams: Vec[String] = Vec.new();
+    for s in sc.samples.iter() {
+        let f = family_of(s.name, sc.types);
+        if not contains(fams, f) {
+            fams.push(f);
+        }
+    }
+    fams.len()
+}
+
+// ---------------------------------------------------------------- numbers
+
+fn is_nan(v: f64) -> bool {
+    v != v
+}
+
+fn is_inf(v: f64) -> bool {
+    v > 1.7976931348623157e308 or v < -1.7976931348623157e308
+}
+
+fn num(v: f64) -> String {
+    if is_nan(v) {
+        return "NaN".to_string();
+    }
+    if is_inf(v) {
+        return if v > 0.0 { "+Inf".to_string() } else { "-Inf".to_string() };
+    }
+    let a = if v < 0.0 { -v } else { v };
+    if a < 1e15 and v == ((v as i64) as f64) {
+        return f"{v as i64}";
+    }
+    f"{v}"
+}
+
+fn round6(v: f64) -> f64 {
+    f64.parse(f"{v:.6}").unwrap_or(v)
+}
+
+// ---------------------------------------------------------------- PromQL
+
+struct Rates { series: Vec[Sample], resets: Vec[String] }
+
+fn rates(s0: ref Scrape, s1: ref Scrape, name: Str) -> Rates {
+    let mut out = Rates { series: Vec.new(), resets: Vec.new() };
+    for s in s1.samples.iter() {
+        if s.name != name {
+            continue;
+        }
+        let at = match s0.index.get(s.key) {
+            Some(k) => *k,
+            None => continue,
+        };
+        let v0 = s0.samples[at].value;
+        let delta = if s.value < v0 {
+            out.resets.push(s.key.clone());
+            s.value
+        } else {
+            s.value - v0
+        };
+        out.series.push(Sample { name: s.name.clone(), lk: s.lk.clone(), lv: s.lv.clone(), value: delta / INTERVAL, key: s.key.clone() });
+    }
+    out
+}
+
+fn sum_values(v: ref Vec[Sample]) -> f64 {
+    let mut t = 0.0;
+    for s in v.iter() {
+        t += s.value;
+    }
+    t
+}
+
+struct Buckets { up: Vec[f64], count: Vec[f64] }
+
+// PromQL's histogram_quantile over cumulative bucket counts sorted by `le`.
+fn histogram_quantile(q: f64, b: ref Buckets) -> f64 {
+    if q < 0.0 {
+        return -1.0 / 0.0;
+    }
+    if q > 1.0 {
+        return 1.0 / 0.0;
+    }
+    let n = b.up.len();
+    if n == 0 or not is_inf(b.up[n - 1]) {
+        return 0.0 / 0.0;
+    }
+    let mut fixed: Vec[f64] = Vec.new();
+    let mut run = 0.0;
+    for c in b.count.iter() {
+        if *c > run {
+            run = *c;
+        }
+        fixed.push(run);
+    }
+    let total = fixed[n - 1];
+    if total == 0.0 {
+        return 0.0 / 0.0;
+    }
+    let mut rank = q * total;
+    let mut k = 0;
+    while k < n and fixed[k] < rank {
+        k += 1;
+    }
+    if k == n - 1 {
+        return b.up[n - 2];
+    }
+    if k == 0 and b.up[0] <= 0.0 {
+        return b.up[0];
+    }
+    let start = if k == 0 { 0.0 } else { b.up[k - 1] };
+    let end = b.up[k];
+    let mut count = fixed[k];
+    if k > 0 {
+        count -= fixed[k - 1];
+        rank -= fixed[k - 1];
+    }
+    start + (end - start) * (rank / count)
+}
+
+fn sorted_strings(v: ref Vec[String]) -> Vec[String] {
+    let mut out = v.clone();
+    for i in 1..out.len() {
+        let mut j = i;
+        while j > 0 and out[j - 1] > out[j] {
+            let t = out[j - 1].clone();
+            out[j - 1] = out[j].clone();
+            out[j] = t;
+            j -= 1;
+        }
+    }
+    out
+}
+
+fn add_to(keys: mut ref Vec[String], vals: mut ref Vec[f64], k: Str, v: f64) {
+    for i in 0..keys.len() {
+        if keys[i] == k {
+            vals[i] += v;
+            return;
+        }
+    }
+    keys.push(k.to_string());
+    vals.push(v);
+}
+
+fn value_of(keys: ref Vec[String], vals: ref Vec[f64], k: Str) -> f64 {
+    for i in 0..keys.len() {
+        if keys[i] == k {
+            return vals[i];
+        }
+    }
+    0.0
+}
+
+// ---------------------------------------------------------------- main
+
+fn put(path: Str, text: Str) {
+    match fs.write(path, text) {
+        Ok(_) => {}
+        Err(_) => println(f"cannot write {path}"),
+    }
+}
+
+fn mib(v: f64) -> f64 {
+    v / 1048576.0
+}
+
+fn main() {
+    put("api-1.0.prom", scrape("api", "10.0.0.1:9100", ints([1027, 13, 3]), ints([600, 800, 950, 1000, 1030, 1043]), "98.5", "5.24288e7", "1.4.2"));
+    put("api-1.1.prom", scrape("api", "10.0.0.1:9100", ints([1627, 25, 9]), ints([1000, 1340, 1580, 1650, 1680, 1700]), "160.25", "5.4525952e7", "1.4.2"));
+    put("api-2.0.prom", scrape("api", "10.0.0.2:9100", ints([5000, 40, 10]), ints([3000, 4000, 4700, 4950, 5030, 5050]), "520.0", "8.388608e7", "1.4.1"));
+    put("api-2.1.prom", scrape("api", "10.0.0.2:9100", ints([300, 2, 1]), ints([180, 240, 285, 300, 302, 303]), "31.5", "2.62144e7", "1.4.2"));
+    put("worker-1.0.prom", BROKEN);
+    let later = BROKEN.replace("} 42\n", "} 40\n").replace("total{job=\"worker\",instance=\"10.0.1.7:9100\"} 5", "total{job=\"worker\",instance=\"10.0.1.7:9100\"} 65");
+    put("worker-1.1.prom", later);
+
+    let targets = ["api-1", "api-2", "worker-1"];
+    let mut scrapes: Vec[Scrape] = Vec.new();
+    println("== parse");
+    for t in targets {
+        for k in 0..2 {
+            let path = f"{t}.{k}.prom";
+            let text = fs.read_to_string(path.clone()).unwrap_or("".to_string());
+            let sc = parse(text);
+            println(f"  {path}: {family_count(sc)} families, {sc.samples.len()} samples, {sc.errors.len()} errors");
+            if k == 0 {
+                for e in sc.errors.iter() {
+                    println(f"    {e}");
+                }
+            }
+            scrapes.push(sc);
+        }
+    }
+    let mut bi_index = 0;
+    for i in 0..scrapes[0].samples.len() {
+        if scrapes[0].samples[i].name == "build_info" {
+            bi_index = i;
+            break;
+        }
+    }
+    let bi = ref scrapes[0].samples[bi_index];
+    println(f"  label escapes: note=[{label(bi, "note")}] -> build_info{labels_without(bi, "job", "instance")}");
+    for s in scrapes[4].samples.iter() {
+        if s.name == "temperature_celsius" {
+            println(f"  temperature_celsius = {num(s.value)} (with a timestamp)");
+        }
+    }
+
+    println("== rate(http_requests_total[60s])");
+    let mut all: Vec[Sample] = Vec.new();
+    for t in 0..3 {
+        let r = rates(scrapes[2 * t], scrapes[2 * t + 1], "http_requests_total");
+        for s in r.resets.iter() {
+            println(f"  counter reset: {s}");
+        }
+        for s in r.series.into_iter() {
+            all.push(s);
+        }
+    }
+    let mut shown_keys: Vec[String] = Vec.new();
+    for s in all.iter() {
+        shown_keys.push(labels_without(s, "job", ""));
+    }
+    for key in sorted_strings(shown_keys).iter() {
+        for s in all.iter() {
+            if labels_without(s, "job", "") == key {
+                println(f"  {key} {s.value:.4}/s");
+            }
+        }
+    }
+    let mut ck: Vec[String] = Vec.new();
+    let mut cv: Vec[f64] = Vec.new();
+    for s in all.iter() {
+        let cls = f"{label(s, "status").substring(0, 1)}xx";
+        add_to(mut ck, mut cv, cls, s.value);
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for c in sorted_strings(ck).iter() {
+        parts.push(f"{c}={value_of(ck, cv, c):.3}");
+    }
+    println(f"  sum by (class): {parts.join(", ")}");
+    let total = sum_values(all);
+    let mut errors = 0.0;
+    for s in all.iter() {
+        if label(s, "status").starts_with("5") {
+            errors += s.value;
+        }
+    }
+    println(f"  error ratio: {errors / total * 100.0:.3}%");
+
+    println("== latency");
+    let mut agg = Buckets { up: Vec.new(), count: Vec.new() };
+    let mut sums = 0.0;
+    let mut counts = 0.0;
+    for t in 0..2 {
+        let r = rates(scrapes[2 * t], scrapes[2 * t + 1], "http_request_duration_seconds_bucket");
+        for s in r.resets.iter() {
+            println(f"  counter reset: {s}");
+        }
+        for s in r.series.iter() {
+            let le = parse_value(label(s, "le")).unwrap_or(0.0);
+            let mut found = false;
+            for k in 0..agg.up.len() {
+                if agg.up[k] == le {
+                    agg.count[k] += s.value;
+                    found = true;
+                }
+            }
+            if not found {
+                agg.up.push(le);
+                agg.count.push(s.value);
+            }
+        }
+        sums += sum_values(rates(scrapes[2 * t], scrapes[2 * t + 1], "http_request_duration_seconds_sum").series);
+        counts += sum_values(rates(scrapes[2 * t], scrapes[2 * t + 1], "http_request_duration_seconds_count").series);
+    }
+    for i in 1..agg.up.len() {
+        let mut j = i;
+        while j > 0 and agg.up[j - 1] > agg.up[j] {
+            let tu = agg.up[j - 1];
+            agg.up[j - 1] = agg.up[j];
+            agg.up[j] = tu;
+            let tc = agg.count[j - 1];
+            agg.count[j - 1] = agg.count[j];
+            agg.count[j] = tc;
+            j -= 1;
+        }
+    }
+    let mut shown: Vec[String] = Vec.new();
+    for k in 0..agg.up.len() {
+        shown.push(f"le={num(agg.up[k])}:{agg.count[k]:.3}");
+    }
+    println(f"  buckets/s: {shown.join(" ")}");
+    for q in [0.5, 0.9, 0.99, 1.0] {
+        println(f"  histogram_quantile({q}) = {histogram_quantile(q, agg):.4}s");
+    }
+    let mut no_inf = Buckets { up: Vec.new(), count: Vec.new() };
+    for k in 0..agg.up.len() - 1 {
+        no_inf.up.push(agg.up[k]);
+        no_inf.count.push(agg.count[k]);
+    }
+    println(f"  edge cases: q=-1 {num(histogram_quantile(-1.0, agg))}, q=2 {num(histogram_quantile(2.0, agg))}, no +Inf {num(histogram_quantile(0.5, no_inf))}");
+    println(f"  mean latency: {sums / counts * 1000.0:.2} ms");
+
+    println("== memory (latest scrape)");
+    let mut insts: Vec[String] = Vec.new();
+    let mut mems: Vec[f64] = Vec.new();
+    for t in 0..3 {
+        for s in scrapes[2 * t + 1].samples.iter() {
+            if s.name == "process_resident_memory_bytes" {
+                insts.push(label(s, "instance"));
+                mems.push(s.value);
+            }
+        }
+    }
+    for inst in sorted_strings(insts).iter() {
+        println(f"  {inst} {mib(value_of(insts, mems, inst)):.1} MiB");
+    }
+    let mut hi = mems[0];
+    let mut lo = mems[0];
+    let mut tot = 0.0;
+    for v in mems.iter() {
+        if *v > hi {
+            hi = *v;
+        }
+        if *v < lo {
+            lo = *v;
+        }
+        tot += *v;
+    }
+    println(f"  max {mib(hi):.1} MiB, min {mib(lo):.1} MiB, avg {tot / (mems.len() as f64) / 1048576.0:.2} MiB");
+    let mut vk: Vec[String] = Vec.new();
+    let mut vc: Vec[f64] = Vec.new();
+    for t in 0..3 {
+        for s in scrapes[2 * t + 1].samples.iter() {
+            if s.name == "build_info" {
+                add_to(mut vk, mut vc, label(s, "version"), 1.0);
+            }
+        }
+    }
+    let mut vparts: Vec[String] = Vec.new();
+    for v in sorted_strings(vk).iter() {
+        vparts.push(f"{v}x{value_of(vk, vc, v) as i64}");
+    }
+    println(f"  versions: {vparts.join(", ")}");
+
+    println("== aggregated.prom");
+    let mut out: Vec[String] = Vec.new();
+    out.push("# HELP job:http_requests:rate60s Request rate by job and status class.".to_string());
+    out.push("# TYPE job:http_requests:rate60s gauge".to_string());
+    let mut jk: Vec[String] = Vec.new();
+    let mut jv: Vec[f64] = Vec.new();
+    for s in all.iter() {
+        let k = f"class=\"{label(s, "status").substring(0, 1)}xx\",job=\"{label(s, "job")}\"";
+        add_to(mut jk, mut jv, k, s.value);
+    }
+    for k in sorted_strings(jk).iter() {
+        out.push(f"job:http_requests:rate60s{{{k}}} {num(round6(value_of(jk, jv, k)))}");
+    }
+    out.push("# TYPE job:latency_seconds:p90 gauge".to_string());
+    out.push(f"job:latency_seconds:p90{{job=\"api\"}} {num(round6(histogram_quantile(0.9, agg)))}");
+    out.push("# TYPE build_info gauge".to_string());
+    out.push(f"build_info{labels_without(bi, "job", "instance")} 1");
+    let mut text = out.join("\n");
+    text.push_str("\n");
+    put("aggregated.prom", text);
+    for l in text.lines().iter() {
+        println(f"  {l}");
+    }
+    let back = parse(fs.read_to_string("aggregated.prom").unwrap_or("".to_string()));
+    let mut note = String.new();
+    for s in back.samples.iter() {
+        if s.name == "build_info" {
+            note = label(s, "note");
+        }
+    }
+    let survives = note == label(bi, "note");
+    println(f"  re-parsed: {back.samples.len()} samples, {back.errors.len()} errors, note survives: {survives}");
+}

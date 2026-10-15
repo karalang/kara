@@ -155,6 +155,7 @@ cli/tar_gz          ustar archiver + gzip/DEFLATE codec from the RFCs: LZ77 hash
 cli/mini_make       a small make: pattern rules, order-only prereqs, $@ $< $^ $*, wildcard/patsubst/notdir/words, -n/-f, mtimes via fs.metadata; output matches GNU Make 4.3
 service/supervisor  supervisord-style process supervisor: restart policies with backoff, exitcodes, runtime kills via try_wait/kill, Command.env, log rotation via fs.rename
 service/jwt_auth    HS256 JWT login service: SHA-256, HMAC, PBKDF2, base64url from the RFCs; alg-none, tamper, expiry/nbf leeway and issuer checks over TCP
+pipeline/metrics_agg Prometheus text-format aggregator: label escapes and error recovery, counter rates with reset detection, PromQL histogram_quantile over summed bucket rates, re-parsed .prom output
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
