@@ -1,0 +1,56 @@
+// Benchmark for #673: the length and count ending at each place, the ★
+// arm.
+//
+// For each place, note the length of the longest increasing subsequence
+// that ends there and how many such subsequences there are. A place
+// extends every earlier, smaller one: a longer length replaces its
+// count, an equal length adds to it. The answer sums the counts of the
+// places that reach the longest length. O(n^2).
+
+fn find_number_of_lis(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut length = vec![1; n];
+    let mut count = vec![1; n];
+    for i in 0..n {
+        for j in 0..i {
+            if nums[j] < nums[i] {
+                if length[j] + 1 > length[i] {
+                    length[i] = length[j] + 1;
+                    count[i] = count[j];
+                } else if length[j] + 1 == length[i] {
+                    count[i] += count[j];
+                }
+            }
+        }
+    }
+    let mut best = 0;
+    for v in length.iter() {
+        best = best.max(v);
+    }
+    let mut total = 0;
+    for i in 0..n {
+        if length[i] == best {
+            total += count[i];
+        }
+    }
+    total
+}
+
+fn main() {
+    // 150 arrays of 2,000 numbers, the problem's longest, each number
+    // below 32,768 from the same generator as the other languages. Each
+    // answer goes into a checksum.
+    let rounds = 150;
+    let size = 2000;
+    let mut seed: i64 = 673;
+    let mut sum = 0;
+    for _ in 0..rounds {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            nums.push(seed / 65536);
+        }
+        sum = (sum * 31 + find_number_of_lis(nums)) % 1000000007;
+    }
+    println(f"{rounds} arrays of {size}: checksum {sum}");
+}

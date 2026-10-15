@@ -1,0 +1,91 @@
+// LeetCode #674: Longest Continuous Increasing Subsequence -- jumping
+// from run to run.
+//
+// From the start of a run, scan forward while each number is larger than
+// the one before; that is the whole run. The next run starts where the
+// scan stopped, so every place is looked at once. O(n).
+
+fn find_length_of_lcis(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    let mut start = 0;
+    while start < n {
+        let mut end = start + 1;
+        while end < n and nums[end - 1] < nums[end] {
+            end += 1;
+        }
+        best = best.max(end - start);
+        start = end;
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) -> String {
+    if nums.len() <= 10 {
+        let mut parts: Vec[String] = Vec.new();
+        for v in nums.iter() {
+            parts.push(f"{v}");
+        }
+        return f"[{parts.join(", ")}]";
+    }
+    f"{nums.len()} numbers"
+}
+
+fn main() {
+    // The two LeetCode examples; one and two numbers; rising and falling
+    // runs; repeats; negatives; a run in the middle; a run at the end;
+    // the problem's extreme values; and 10,000 numbers, the problem's
+    // longest, rising, falling, and climbing 0 to 99 over and over.
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push(vec![1, 3, 5, 4, 7]);
+    cases.push(vec![2, 2, 2, 2, 2]);
+    cases.push(vec![7]);
+    cases.push(vec![1, 2]);
+    cases.push(vec![2, 1]);
+    cases.push(vec![1, 2, 3, 4, 5, 6]);
+    cases.push(vec![6, 5, 4, 3, 2, 1]);
+    cases.push(vec![1, 1, 2, 2, 3, 3]);
+    cases.push(vec![-3, -1, -2, 0, 5]);
+    cases.push(vec![5, 1, 2, 3, 0, 1]);
+    cases.push(vec![1, 3, 5, 7, 2, 4, 6, 8, 10]);
+    cases.push(vec![-1000000000, 1000000000, -1000000000, 1000000000]);
+    let mut rising: Vec[i64] = Vec.new();
+    let mut falling: Vec[i64] = Vec.new();
+    let mut saw: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        rising.push(i * 200000 - 1000000000);
+        falling.push(1000000000 - i * 200000);
+        saw.push(i % 100);
+    }
+    cases.push(rising);
+    cases.push(falling);
+    cases.push(saw);
+    for nums in cases.iter() {
+        println(f"{show(nums)}: {find_length_of_lcis(nums)}");
+    }
+    // 1,000 random arrays of up to 1,000 numbers, spread over 3, 30 or
+    // the problem's whole range, into a checksum.
+    let mut seed: i64 = 674;
+    let mut sum = 0;
+    let mut most = 0;
+    let spreads = [3, 30, 2000000001];
+    for c in 0..1000 {
+        let size = 1 + next_random(mut seed) % 1000;
+        let spread = spreads[c % 3];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % spread - spread / 2);
+        }
+        let got = find_length_of_lcis(nums);
+        most = most.max(got);
+        sum = (sum * 31 + got) % 1000000007;
+    }
+    println(f"1000 random: longest {most}, checksum {sum}");
+}

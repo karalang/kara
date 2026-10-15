@@ -1,0 +1,48 @@
+// Benchmark for #674: one pass with a running length, the ★ arm.
+//
+// Walk the array once, keeping the length of the strictly increasing run
+// that ends at the current place: a number larger than the one before
+// extends it, any other starts a new run of 1. The longest run seen is
+// the answer. O(n).
+
+fn find_length_of_lcis(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut run = 0;
+    for i in 0..nums.len() {
+        if i > 0 and nums[i - 1] < nums[i] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    best
+}
+
+fn main() {
+    // 100 arrays of 10,000 numbers, the problem's longest, each number
+    // below 1,000 from the same generator as the other languages, built
+    // once. Each round sets one number of one array, so no round repeats
+    // an earlier one, and then measures that array. Each answer goes
+    // into a checksum.
+    let arrays = 100;
+    let size = 10000;
+    let rounds = 20000;
+    let mut seed: i64 = 674;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..arrays {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            nums.push(seed / 65536 % 1000);
+        }
+        all.push(nums);
+    }
+    let mut sum = 0;
+    for r in 0..rounds {
+        let a = r % arrays;
+        all[a][r * 7919 % size] = r % 1000;
+        sum = (sum * 31 + find_length_of_lcis(all[a])) % 1000000007;
+    }
+    println(f"{rounds} rounds over {arrays} arrays of {size}: checksum {sum}");
+}

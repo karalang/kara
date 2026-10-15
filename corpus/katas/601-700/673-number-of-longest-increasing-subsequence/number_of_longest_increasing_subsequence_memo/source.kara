@@ -1,0 +1,129 @@
+// LeetCode #673: Number of Longest Increasing Subsequence -- starting
+// places, by memoized recursion.
+//
+// Ask the question the other way round: for each place, the longest
+// increasing subsequence that starts there and how many there are. A
+// place is followed by any later, larger one, so its answer comes from
+// theirs; recursion asks each place once and remembers the answer. The
+// answer sums the counts of the places that start a longest one.
+// O(n^2).
+
+fn starting_at(nums: Vec[i64], i: i64, memo: mut ref Vec[(i64, i64)], known: mut ref Vec[bool]) -> (i64, i64) {
+    if known[i] {
+        return memo[i];
+    }
+    let mut len = 1;
+    let mut count = 1;
+    for j in i + 1..nums.len() {
+        if nums[j] > nums[i] {
+            let (l, c) = starting_at(nums, j, memo, known);
+            if l + 1 > len {
+                len = l + 1;
+                count = c;
+            } else if l + 1 == len {
+                count += c;
+            }
+        }
+    }
+    memo[i] = (len, count);
+    known[i] = true;
+    (len, count)
+}
+
+fn find_number_of_lis(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut memo = vec![(0, 0); n];
+    let mut known = vec![false; n];
+    let mut best = 0;
+    let mut total = 0;
+    for i in 0..n {
+        let (len, count) = starting_at(nums, i, mut memo, mut known);
+        if len > best {
+            best = len;
+            total = count;
+        } else if len == best {
+            total += count;
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) -> String {
+    if nums.len() <= 10 {
+        let mut parts: Vec[String] = Vec.new();
+        for v in nums.iter() {
+            parts.push(f"{v}");
+        }
+        return f"[{parts.join(", ")}]";
+    }
+    f"{nums.len()} numbers"
+}
+
+fn main() {
+    // The two LeetCode examples; one number; rising and falling runs;
+    // pairs of repeats; negatives; a run of three repeated three times;
+    // pairs swapped, ten and sixty of them; 2,000 numbers rising, the
+    // problem's longest, and 2,000 falling.
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push(vec![1, 3, 5, 4, 7]);
+    cases.push(vec![2, 2, 2, 2, 2]);
+    cases.push(vec![7]);
+    cases.push(vec![1, 2, 3, 4, 5, 6]);
+    cases.push(vec![6, 5, 4, 3, 2, 1]);
+    cases.push(vec![1, 1, 2, 2, 3, 3]);
+    cases.push(vec![-3, -1, -2, 0]);
+    cases.push(vec![3, 1, 2]);
+    cases.push(vec![1, 2, 4, 3, 5, 4, 7, 2]);
+    cases.push(vec![1, 2, 3, 1, 2, 3, 1, 2, 3]);
+    cases.push(vec![2, 1, 4, 3, 6, 5, 8, 7, 10, 9]);
+    let mut pairs: Vec[i64] = Vec.new();
+    for i in 0..30 {
+        pairs.push(2 * i + 2);
+        pairs.push(2 * i + 1);
+    }
+    cases.push(pairs);
+    let mut rising: Vec[i64] = Vec.new();
+    let mut falling: Vec[i64] = Vec.new();
+    for i in 0..2000 {
+        rising.push(i - 1000000);
+        falling.push(1000000 - i);
+    }
+    cases.push(rising);
+    cases.push(falling);
+    for nums in cases.iter() {
+        println(f"{show(nums)}: {find_number_of_lis(nums)}");
+    }
+    // 300 random arrays of up to 200 numbers, spread over 5, 50 or the
+    // problem's whole range, into a checksum.
+    let mut seed: i64 = 673;
+    let mut sum = 0;
+    let mut most = 0;
+    let spreads = [5, 50, 2000001];
+    for c in 0..300 {
+        let size = 1 + next_random(mut seed) % 200;
+        let spread = spreads[c % 3];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push(next_random(mut seed) % spread - spread / 2);
+        }
+        let got = find_number_of_lis(nums);
+        most = most.max(got);
+        sum = (sum * 31 + got) % 1000000007;
+    }
+    println(f"300 random: largest {most}, checksum {sum}");
+    // Three arrays of 1,000 numbers over the whole range.
+    for _ in 0..3 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1000 {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 2000001 - 1000000);
+        }
+        println(f"1000 random: {find_number_of_lis(nums)}");
+    }
+}

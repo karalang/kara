@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/673-number-of-longest-increasing-subsequence/number_of_longest_increasing_subsequence_piles.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "5c299f966"
+extracted_src = "f916c528"
+model_rev = "1aa23105"
+model_src = "f916c528"

@@ -1,0 +1,186 @@
+// LeetCode #674: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_length_of_lcis_star(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut run = 0;
+    for i in 0..nums.len() {
+        if i > 0 and nums[i - 1] < nums[i] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    best
+}
+
+// ---- starts arm --------------------------------------------------------
+
+fn find_length_of_lcis_starts(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    let mut start = 0;
+    while start < n {
+        let mut end = start + 1;
+        while end < n and nums[end - 1] < nums[end] {
+            end += 1;
+        }
+        best = best.max(end - start);
+        start = end;
+    }
+    best
+}
+
+// ---- lengths arm -------------------------------------------------------
+
+fn find_length_of_lcis_lengths(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut ending = vec![1; n];
+    for i in 1..n {
+        if nums[i - 1] < nums[i] {
+            ending[i] = ending[i - 1] + 1;
+        }
+    }
+    ending.iter().fold(0, |best, len| best.max(len))
+}
+
+// ---- breaks arm --------------------------------------------------------
+
+fn breaks_of_breaks(nums: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(0);
+    for i in 1..nums.len() {
+        if nums[i] <= nums[i - 1] {
+            out.push(i);
+        }
+    }
+    out.push(nums.len());
+    out
+}
+
+fn find_length_of_lcis_breaks(nums: Vec[i64]) -> i64 {
+    let at = breaks_of_breaks(nums);
+    let mut best = 0;
+    for k in 1..at.len() {
+        best = best.max(at[k] - at[k - 1]);
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        find_length_of_lcis_star(nums)
+    } else if which == 1 {
+        find_length_of_lcis_starts(nums)
+    } else if which == 2 {
+        find_length_of_lcis_lengths(nums)
+    } else {
+        find_length_of_lcis_breaks(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: every stretch from `i` to `j`, checked pair by pair
+// for rising; the longest that does.
+fn definition(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut rising = true;
+            for k in i + 1..j + 1 {
+                if nums[k - 1] >= nums[k] {
+                    rising = false;
+                }
+            }
+            if rising {
+                best = best.max(j - i + 1);
+            }
+        }
+    }
+    best
+}
+
+// Reversed and negated: rising stretches map to rising ones.
+fn mirrored(nums: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = nums.len();
+    while i > 0 {
+        i -= 1;
+        out.push(0 - nums[i]);
+    }
+    out
+}
+
+fn part(nums: Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in from..to {
+        out.push(nums[i]);
+    }
+    out
+}
+
+fn main() {
+    // 3000 arrays of up to 30 numbers, spread over 3, 10 or 1000 values
+    // so that repeats range from common to rare, all held to the
+    // definition.
+    let cases = 3000;
+    let mut seed: i64 = 674;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    let spreads = [3, 10, 1000];
+    for c in 0..cases {
+        let size = 1 + next_random(mut seed) % 30;
+        let spread = spreads[c % 3];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push(next_random(mut seed) % spread - spread / 2);
+        }
+        let want = definition(nums);
+        let cut = next_random(mut seed) % (size + 1);
+        let left = part(nums, 0, cut);
+        let right = part(nums, cut, size);
+        let mut lower = nums.clone();
+        lower.push(nums[size - 1] - next_random(mut seed) % 3);
+        for which in 0..4 {
+            let got = answer(which, nums);
+            let a = answer(which, left);
+            let b = answer(which, right);
+            // P1: the definition's answer. P2: between 1 and the length.
+            // P3: the same reversed and negated. P4: cut in two, at least
+            // the larger half's answer and at most the two added. P5: the
+            // same with a number no larger than the last appended.
+            let ok = [
+                got == want,
+                got >= 1 and got <= size,
+                answer(which, mirrored(nums)) == got,
+                got >= a.max(b) and got <= a + b,
+                answer(which, lower) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} arrays, 4 arms, {checks} checks, {total} failures");
+}

@@ -1,0 +1,165 @@
+// LeetCode #673: Number of Longest Increasing Subsequence -- a Fenwick
+// tree over the values.
+//
+// Rank the distinct values. A Fenwick tree over the ranks holds, for
+// each prefix of ranks, the longest length of a subsequence ending on a
+// value in it and how many reach that length. Taking the numbers in
+// order, the prefix below a number's rank gives what the number
+// extends; the number then joins the tree at its own rank. Pairs
+// combine by keeping the longer length, adding counts on a tie.
+// O(n log n).
+
+// The distinct values of `nums`, rising.
+fn distinct_sorted(nums: Vec[i64]) -> Vec[i64] {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut out: Vec[i64] = Vec.new();
+    for v in sorted.iter() {
+        if out.is_empty() or out[out.len() - 1] != v {
+            out.push(v);
+        }
+    }
+    out
+}
+
+// The rank of `x` in `values`, from 1.
+fn rank_of(values: Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = values.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if values[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo + 1
+}
+
+// Fold a pair into the best pair so far.
+fn combine(best_len: mut ref i64, best_count: mut ref i64, len: i64, count: i64) {
+    if len > *best_len {
+        *best_len = len;
+        *best_count = count;
+    } else if len == *best_len {
+        *best_count += count;
+    }
+}
+
+fn find_number_of_lis(nums: Vec[i64]) -> i64 {
+    let values = distinct_sorted(nums);
+    let size = values.len();
+    let mut lens = vec![0; size + 1];
+    let mut counts = vec![0; size + 1];
+    for x in nums.iter() {
+        let r = rank_of(values, x);
+        // The best pair over the ranks below `r`.
+        let mut below_len = 0;
+        let mut below_count = 0;
+        let mut i = r - 1;
+        while i > 0 {
+            combine(mut below_len, mut below_count, lens[i], counts[i]);
+            i -= i & (0 - i);
+        }
+        let mut len = 1;
+        let mut count = 1;
+        if below_len > 0 {
+            len = below_len + 1;
+            count = below_count;
+        }
+        let mut j = r;
+        while j <= size {
+            combine(mut lens[j], mut counts[j], len, count);
+            j += j & (0 - j);
+        }
+    }
+    let mut best_len = 0;
+    let mut best_count = 0;
+    let mut i = size;
+    while i > 0 {
+        combine(mut best_len, mut best_count, lens[i], counts[i]);
+        i -= i & (0 - i);
+    }
+    best_count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) -> String {
+    if nums.len() <= 10 {
+        let mut parts: Vec[String] = Vec.new();
+        for v in nums.iter() {
+            parts.push(f"{v}");
+        }
+        return f"[{parts.join(", ")}]";
+    }
+    f"{nums.len()} numbers"
+}
+
+fn main() {
+    // The two LeetCode examples; one number; rising and falling runs;
+    // pairs of repeats; negatives; a run of three repeated three times;
+    // pairs swapped, ten and sixty of them; 2,000 numbers rising, the
+    // problem's longest, and 2,000 falling.
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push(vec![1, 3, 5, 4, 7]);
+    cases.push(vec![2, 2, 2, 2, 2]);
+    cases.push(vec![7]);
+    cases.push(vec![1, 2, 3, 4, 5, 6]);
+    cases.push(vec![6, 5, 4, 3, 2, 1]);
+    cases.push(vec![1, 1, 2, 2, 3, 3]);
+    cases.push(vec![-3, -1, -2, 0]);
+    cases.push(vec![3, 1, 2]);
+    cases.push(vec![1, 2, 4, 3, 5, 4, 7, 2]);
+    cases.push(vec![1, 2, 3, 1, 2, 3, 1, 2, 3]);
+    cases.push(vec![2, 1, 4, 3, 6, 5, 8, 7, 10, 9]);
+    let mut pairs: Vec[i64] = Vec.new();
+    for i in 0..30 {
+        pairs.push(2 * i + 2);
+        pairs.push(2 * i + 1);
+    }
+    cases.push(pairs);
+    let mut rising: Vec[i64] = Vec.new();
+    let mut falling: Vec[i64] = Vec.new();
+    for i in 0..2000 {
+        rising.push(i - 1000000);
+        falling.push(1000000 - i);
+    }
+    cases.push(rising);
+    cases.push(falling);
+    for nums in cases.iter() {
+        println(f"{show(nums)}: {find_number_of_lis(nums)}");
+    }
+    // 300 random arrays of up to 200 numbers, spread over 5, 50 or the
+    // problem's whole range, into a checksum.
+    let mut seed: i64 = 673;
+    let mut sum = 0;
+    let mut most = 0;
+    let spreads = [5, 50, 2000001];
+    for c in 0..300 {
+        let size = 1 + next_random(mut seed) % 200;
+        let spread = spreads[c % 3];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push(next_random(mut seed) % spread - spread / 2);
+        }
+        let got = find_number_of_lis(nums);
+        most = most.max(got);
+        sum = (sum * 31 + got) % 1000000007;
+    }
+    println(f"300 random: largest {most}, checksum {sum}");
+    // Three arrays of 1,000 numbers over the whole range.
+    for _ in 0..3 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1000 {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 2000001 - 1000000);
+        }
+        println(f"1000 random: {find_number_of_lis(nums)}");
+    }
+}
