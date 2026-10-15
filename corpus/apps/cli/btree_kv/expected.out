@@ -1,0 +1,39 @@
+== phase 1: 600 operations, a commit every 100
+  created a new store
+  get user:0041 -> (missing)
+  get user:0351 -> (missing)
+  get user:0103 -> (missing)
+  get user:0312 -> (missing)
+  commit 1: 12 pages, 66 keys, 9 splits this session, crc 2d86b9de
+  commit 2: 24 pages, 118 keys, 20 splits this session, crc 906aa0bc
+  commit 3: 34 pages, 163 keys, 30 splits this session, crc bbf0432b
+  commit 4: 39 pages, 194 keys, 35 splits this session, crc 78c2063c
+  commit 5: 43 pages, 214 keys, 39 splits this session, crc 24b0ec7c
+  commit 6: 47 pages, 230 keys, 43 splits this session, crc b186baa3
+  72 gets, 28 hits
+== phase 2: 12 more operations logged, then a crash before the commit
+  wal holds 11 records, 321 bytes; tearing the last 3 bytes
+  lost on purpose: put user:0340
+== phase 3: reopen and recover
+  opened kv.db: 47 pages, 230 keys, commit 6
+  wal: replayed 10 records, discarded 23 trailing bytes
+  commit 7: 47 pages, 231 keys, 0 splits this session, crc 6188f809
+== phase 4: verify
+  400 of 400 keys match the model (231 present)
+  invariants ok: height 3, 42 leaves, 4 inner, 0 empty leaves
+== phase 5: scan [user:0040, user:0052)
+  user:0040 = v478-abcdefghijklmnop
+  user:0041 = v519-abcde
+  user:0042 = v14-abcdefghijk
+  user:0043 = v506-
+  user:0045 = v460-ab
+  user:0046 = v283-abcde
+  user:0047 = v298-abcdefghijklmn
+  user:0048 = v442-abcdefghijklmnopq
+  user:0049 = v531-abcdef
+  user:0050 = v191-abcdefghijklmnop
+  user:0051 = v331-ab
+== phase 6: damaged files
+  bad-magic.db: bad magic
+  short.db: truncated: 11932 bytes for 47 pages
+  reloaded kv.db: 231 keys, re-serialized identically: True

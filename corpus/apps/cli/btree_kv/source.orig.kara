@@ -1,0 +1,755 @@
+// A page-based B+tree key-value store with a write-ahead log, over real
+// binary files: the storage engine under an embedded database.
+//
+// The file is an array of 256-byte pages. Page 0 is a header (magic, page
+// count, root, key count, commit number). A leaf packs its entries as
+// [klen][vlen][key][value] after a 7-byte header that links it to the next
+// leaf, so a range scan walks the leaf chain. An inner node packs
+// [klen][key][child] after its first child. Inserts split a node when its
+// encoding outgrows the page and promote a separator; a root split grows
+// the tree a level.
+//
+// Every change is appended to the WAL first as [op][klen][vlen][key][value]
+// with a CRC-32, and synced. A commit serialises every page to a temporary
+// file, syncs it, renames it over the database and empties the WAL.
+// Opening a store loads the database and replays the WAL up to the first
+// record that is incomplete or fails its checksum, which is how a write
+// torn by a crash is discarded. The library has no read-write open mode,
+// so a commit rewrites the whole file rather than the dirty pages.
+//
+// The run drives 600 random operations against the store and a Map model,
+// tears the WAL in a simulated crash, recovers, and checks every key
+// against the model and every structural invariant: sorted keys, keys
+// within their separators, uniform leaf depth, a leaf chain in tree order,
+// and the key count. The database file's CRC at each commit matches the
+// Python mirror's byte for byte.
+
+const PAGE: i64 = 256;
+const DB: Str = "kv.db";
+const WAL: Str = "kv.wal";
+const LEAF: i64 = 1;
+const INNER: i64 = 2;
+const ALPHA: Str = "abcdefghijklmnopqrstuvwxyz";
+
+// ---------------------------------------------------------------- bytes
+
+fn crc_table() -> Vec[u32] {
+    let mut table: Vec[u32] = Vec.new();
+    for n in 0..256 {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            if c & 1u32 == 1u32 {
+                c = 0xEDB88320u32 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        table.push(c);
+    }
+    table
+}
+
+fn crc32(table: ref Vec[u32], data: ref Vec[u8], from: i64, to: i64) -> i64 {
+    let mut c = 0xFFFFFFFFu32;
+    for i in from..to {
+        let idx = ((c ^ (data[i] as u32)) & 0xFFu32) as i64;
+        c = table[idx] ^ (c >> 8);
+    }
+    (c ^ 0xFFFFFFFFu32) as i64
+}
+
+const DIGITS: Str = "0123456789abcdef";
+
+fn hex8(v0: i64) -> String {
+    let mut v = v0;
+    let mut s = String.new();
+    for _ in 0..8 {
+        s = f"{DIGITS.substring(v % 16, v % 16 + 1)}{s}";
+        v = v / 16;
+    }
+    s
+}
+
+fn u16_at(b: ref Vec[u8], at: i64) -> i64 {
+    (b[at] as i64) | ((b[at + 1] as i64) << 8)
+}
+
+fn u32_at(b: ref Vec[u8], at: i64) -> i64 {
+    (b[at] as i64) | ((b[at + 1] as i64) << 8) | ((b[at + 2] as i64) << 16) | ((b[at + 3] as i64) << 24)
+}
+
+fn put16(out: mut ref Vec[u8], v: i64) {
+    out.push((v & 0xFF) as u8);
+    out.push(((v >> 8) & 0xFF) as u8);
+}
+
+fn put32(out: mut ref Vec[u8], v: i64) {
+    out.push((v & 0xFF) as u8);
+    out.push(((v >> 8) & 0xFF) as u8);
+    out.push(((v >> 16) & 0xFF) as u8);
+    out.push(((v >> 24) & 0xFF) as u8);
+}
+
+fn put_str(out: mut ref Vec[u8], s: Str) {
+    for b in s.bytes() {
+        out.push(*b);
+    }
+}
+
+fn pad_to(out: mut ref Vec[u8], len: i64) {
+    while out.len() < len {
+        out.push(0u8);
+    }
+}
+
+fn text_of(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("".to_string())
+}
+
+fn same_bytes(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---------------------------------------------------------------- tree
+
+struct Node { kind: i64, keys: Vec[String], vals: Vec[String], children: Vec[i64], next: i64 }
+
+fn new_node(kind: i64) -> Node {
+    Node { kind: kind, keys: Vec.new(), vals: Vec.new(), children: Vec.new(), next: 0 }
+}
+
+impl Node {
+    fn size(ref self) -> i64 {
+        let mut n = 7;
+        for i in 0..self.keys.len() {
+            if self.kind == LEAF {
+                n += 2 + self.keys[i].len() + self.vals[i].len();
+            } else {
+                n += 1 + self.keys[i].len() + 4;
+            }
+        }
+        n
+    }
+}
+
+fn bisect_right(keys: ref Vec[String], k: Str) -> i64 {
+    let mut i = 0;
+    while i < keys.len() and keys[i] <= k {
+        i += 1;
+    }
+    i
+}
+
+fn bisect_left(keys: ref Vec[String], k: Str) -> i64 {
+    let mut i = 0;
+    while i < keys.len() and keys[i] < k {
+        i += 1;
+    }
+    i
+}
+
+fn tail_strings(v: mut ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in from..v.len() {
+        out.push(v[i].clone());
+    }
+    v.truncate(from);
+    out
+}
+
+fn tail_ids(v: mut ref Vec[i64], from: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in from..v.len() {
+        out.push(v[i]);
+    }
+    v.truncate(from);
+    out
+}
+
+struct Split { sep: String, page: i64 }
+
+struct Tree { pages: Vec[Node], root: i64, count: i64, commits: i64, splits: i64 }
+
+fn new_tree() -> Tree {
+    let mut pages: Vec[Node] = Vec.new();
+    pages.push(new_node(0));
+    pages.push(new_node(LEAF));
+    Tree { pages: pages, root: 1, count: 0, commits: 0, splits: 0 }
+}
+
+impl Tree {
+    fn alloc(mut ref self, node: own Node) -> i64 {
+        self.pages.push(node);
+        self.pages.len() - 1
+    }
+
+    fn leaf_for(ref self, key: Str) -> i64 {
+        let mut pid = self.root;
+        while self.pages[pid].kind == INNER {
+            pid = self.pages[pid].children[bisect_right(self.pages[pid].keys, key)];
+        }
+        pid
+    }
+
+    fn get(ref self, key: Str) -> Option[String] {
+        let pid = self.leaf_for(key);
+        let i = bisect_left(self.pages[pid].keys, key);
+        if i < self.pages[pid].keys.len() and self.pages[pid].keys[i] == key {
+            return Some(self.pages[pid].vals[i].clone());
+        }
+        None
+    }
+
+    fn insert(mut ref self, pid: i64, key: Str, val: Str) -> Option[Split] {
+        if self.pages[pid].kind == LEAF {
+            let i = bisect_left(self.pages[pid].keys, key);
+            if i < self.pages[pid].keys.len() and self.pages[pid].keys[i] == key {
+                self.pages[pid].vals[i] = val.to_string();
+            } else {
+                self.pages[pid].keys.insert(i, key.to_string());
+                self.pages[pid].vals.insert(i, val.to_string());
+                self.count += 1;
+            }
+            if self.pages[pid].size() <= PAGE {
+                return None;
+            }
+            let mid = self.pages[pid].keys.len() / 2;
+            let mut right = new_node(LEAF);
+            right.keys = tail_strings(mut self.pages[pid].keys, mid);
+            right.vals = tail_strings(mut self.pages[pid].vals, mid);
+            right.next = self.pages[pid].next;
+            let sep = right.keys[0].clone();
+            let rid = self.alloc(right);
+            self.pages[pid].next = rid;
+            self.splits += 1;
+            return Some(Split { sep: sep, page: rid });
+        }
+        let i = bisect_right(self.pages[pid].keys, key);
+        let child = self.pages[pid].children[i];
+        let up = match self.insert(child, key, val) {
+            Some(s) => s,
+            None => return None,
+        };
+        self.pages[pid].keys.insert(i, up.sep);
+        self.pages[pid].children.insert(i + 1, up.page);
+        if self.pages[pid].size() <= PAGE {
+            return None;
+        }
+        let mid = self.pages[pid].keys.len() / 2;
+        let mut right = new_node(INNER);
+        let mut moved = tail_strings(mut self.pages[pid].keys, mid);
+        let promote = moved.remove(0);
+        right.keys = moved;
+        right.children = tail_ids(mut self.pages[pid].children, mid + 1);
+        self.splits += 1;
+        let rid = self.alloc(right);
+        Some(Split { sep: promote, page: rid })
+    }
+
+    fn put(mut ref self, key: Str, val: Str) {
+        match self.insert(self.root, key, val) {
+            Some(up) => {
+                let mut r = new_node(INNER);
+                r.keys.push(up.sep);
+                r.children.push(self.root);
+                r.children.push(up.page);
+                self.root = self.alloc(r);
+            }
+            None => {}
+        }
+    }
+
+    fn delete(mut ref self, key: Str) -> bool {
+        let pid = self.leaf_for(key);
+        let i = bisect_left(self.pages[pid].keys, key);
+        if i < self.pages[pid].keys.len() and self.pages[pid].keys[i] == key {
+            self.pages[pid].keys.remove(i);
+            self.pages[pid].vals.remove(i);
+            self.count -= 1;
+            return true;
+        }
+        false
+    }
+
+    fn scan(ref self, lo: Str, hi: Str) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut pid = self.leaf_for(lo);
+        loop {
+            for i in 0..self.pages[pid].keys.len() {
+                let k = self.pages[pid].keys[i].clone();
+                if k >= hi {
+                    return out;
+                }
+                if k >= lo {
+                    out.push(f"{k} = {self.pages[pid].vals[i]}");
+                }
+            }
+            if self.pages[pid].next == 0 {
+                return out;
+            }
+            pid = self.pages[pid].next;
+        }
+    }
+
+    fn serialize(ref self) -> Vec[u8] {
+        let mut out: Vec[u8] = Vec.new();
+        put_str(mut out, "KBT1");
+        put32(mut out, self.pages.len());
+        put32(mut out, self.root);
+        put32(mut out, self.count);
+        put32(mut out, self.commits);
+        pad_to(mut out, PAGE);
+        for pid in 1..self.pages.len() {
+            let n = ref self.pages[pid];
+            let base = out.len();
+            out.push(n.kind as u8);
+            put16(mut out, n.keys.len());
+            if n.kind == LEAF {
+                put32(mut out, n.next);
+                for i in 0..n.keys.len() {
+                    out.push(n.keys[i].len() as u8);
+                    out.push(n.vals[i].len() as u8);
+                    put_str(mut out, n.keys[i]);
+                    put_str(mut out, n.vals[i]);
+                }
+            } else {
+                put32(mut out, n.children[0]);
+                for i in 0..n.keys.len() {
+                    out.push(n.keys[i].len() as u8);
+                    put_str(mut out, n.keys[i]);
+                    put32(mut out, n.children[i + 1]);
+                }
+            }
+            pad_to(mut out, base + PAGE);
+        }
+        out
+    }
+}
+
+fn load(data: ref Vec[u8]) -> Result[Tree, String] {
+    if data.len() < PAGE or text_of(data, 0, 4) != "KBT1" {
+        return Err("bad magic".to_string());
+    }
+    let npages = u32_at(data, 4);
+    if data.len() != npages * PAGE {
+        return Err(f"truncated: {data.len()} bytes for {npages} pages");
+    }
+    let mut t = new_tree();
+    t.pages = Vec.new();
+    t.pages.push(new_node(0));
+    t.root = u32_at(data, 8);
+    t.count = u32_at(data, 12);
+    t.commits = u32_at(data, 16);
+    for pid in 1..npages {
+        let base = pid * PAGE;
+        let kind = data[base] as i64;
+        let mut n = new_node(kind);
+        let cnt = u16_at(data, base + 1);
+        let mut at = base + 7;
+        if kind == LEAF {
+            n.next = u32_at(data, base + 3);
+            for _ in 0..cnt {
+                let kl = data[at] as i64;
+                let vl = data[at + 1] as i64;
+                n.keys.push(text_of(data, at + 2, at + 2 + kl));
+                n.vals.push(text_of(data, at + 2 + kl, at + 2 + kl + vl));
+                at += 2 + kl + vl;
+            }
+        } else if kind == INNER {
+            n.children.push(u32_at(data, base + 3));
+            for _ in 0..cnt {
+                let kl = data[at] as i64;
+                n.keys.push(text_of(data, at + 1, at + 1 + kl));
+                n.children.push(u32_at(data, at + 1 + kl));
+                at += 1 + kl + 4;
+            }
+        } else {
+            return Err(f"page {pid}: bad type {kind}");
+        }
+        t.pages.push(n);
+    }
+    Ok(t)
+}
+
+// ---------------------------------------------------------------- files
+
+fn read_file(path: Str) -> Result[Vec[u8], IoError] {
+    let f = File.open(path)?;
+    let end = f.seek(SeekFrom.End, 0)?;
+    f.seek(SeekFrom.Start, 0)?;
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in 0..end {
+        buf.push(0u8);
+    }
+    let mut got = 0;
+    while got < buf.len() {
+        let n = f.read(mut buf[got..buf.len()])?;
+        if n == 0 {
+            break;
+        }
+        got += n;
+    }
+    Ok(buf)
+}
+
+fn write_all(f: ref File, data: ref Vec[u8]) -> Result[(), IoError] {
+    let mut at = 0;
+    while at < data.len() {
+        at += f.write(data[at..data.len()])?;
+    }
+    Ok(())
+}
+
+fn write_file(path: Str, data: ref Vec[u8]) -> Result[(), IoError] {
+    let f = File.create(path)?;
+    write_all(f, data)?;
+    f.sync_all()?;
+    Ok(())
+}
+
+fn wal_record(t: ref Vec[u32], op: i64, key: Str, val: Str) -> Vec[u8] {
+    let mut rec: Vec[u8] = Vec.new();
+    rec.push(op as u8);
+    rec.push(key.len() as u8);
+    rec.push(val.len() as u8);
+    put_str(mut rec, key);
+    put_str(mut rec, val);
+    let c = crc32(t, rec, 0, rec.len());
+    put32(mut rec, c);
+    rec
+}
+
+struct Store { crc: Vec[u32], tree: Tree }
+
+fn open_store(crc: own Vec[u32]) -> Result[Store, String] {
+    let mut s = Store { crc: crc, tree: new_tree() };
+    if fs.exists(DB) {
+        let data = match read_file(DB) {
+            Ok(d) => d,
+            Err(_) => return Err("cannot read the database".to_string()),
+        };
+        s.tree = load(data)?;
+        println(f"  opened {DB}: {s.tree.pages.len()} pages, {s.tree.count} keys, commit {s.tree.commits}");
+    } else {
+        println("  created a new store");
+    }
+    if fs.exists(WAL) {
+        let data = match read_file(WAL) {
+            Ok(d) => d,
+            Err(_) => return Err("cannot read the wal".to_string()),
+        };
+        let mut at = 0;
+        let mut n = 0;
+        while at < data.len() {
+            if at + 3 > data.len() {
+                break;
+            }
+            let kl = data[at + 1] as i64;
+            let vl = data[at + 2] as i64;
+            let end = at + 3 + kl + vl;
+            if end + 4 > data.len() {
+                break;
+            }
+            if crc32(s.crc, data, at, end) != u32_at(data, end) {
+                println(f"  wal: bad checksum at {at}");
+                break;
+            }
+            let key = text_of(data, at + 3, at + 3 + kl);
+            let val = text_of(data, at + 3 + kl, end);
+            s.apply(data[at] as i64, key, val);
+            n += 1;
+            at = end + 4;
+        }
+        println(f"  wal: replayed {n} records, discarded {data.len() - at} trailing bytes");
+    }
+    Ok(s)
+}
+
+impl Store {
+    fn apply(mut ref self, op: i64, key: Str, val: Str) {
+        if op == 1 {
+            self.tree.put(key, val);
+        } else {
+            self.tree.delete(key);
+        }
+    }
+
+    fn log(mut ref self, op: i64, key: Str, val: Str) -> Result[(), IoError] {
+        let f = File.append(WAL)?;
+        write_all(f, wal_record(self.crc, op, key, val))?;
+        f.sync_data()?;
+        self.apply(op, key, val);
+        Ok(())
+    }
+
+    fn commit(mut ref self) -> Result[(), IoError] {
+        self.tree.commits += 1;
+        let data = self.tree.serialize();
+        write_file(f"{DB}.tmp", data)?;
+        fs.rename(f"{DB}.tmp", DB)?;
+        write_file(WAL, Vec.new())?;
+        println(f"  commit {self.tree.commits}: {self.tree.pages.len()} pages, {self.tree.count} keys, {self.tree.splits} splits this session, crc {hex8(crc32(self.crc, data, 0, data.len()))}");
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------- checks
+
+struct Walk { errors: Vec[String], leaves: Vec[i64], inner: i64, min_depth: i64, max_depth: i64 }
+
+fn walk(t: ref Tree, w: mut ref Walk, pid: i64, lo: Option[String], hi: Option[String], depth: i64) {
+    let n = ref t.pages[pid];
+    for i in 1..n.keys.len() {
+        if n.keys[i - 1] >= n.keys[i] {
+            w.errors.push(f"page {pid}: keys out of order");
+        }
+    }
+    for k in n.keys.iter() {
+        let below = match lo {
+            Some(l) => k < l,
+            None => false,
+        };
+        let above = match hi {
+            Some(h) => k >= h,
+            None => false,
+        };
+        if below or above {
+            w.errors.push(f"page {pid}: key {k} outside its bounds");
+        }
+    }
+    if n.kind == LEAF {
+        if w.min_depth == 0 or depth < w.min_depth {
+            w.min_depth = depth;
+        }
+        if depth > w.max_depth {
+            w.max_depth = depth;
+        }
+        w.leaves.push(pid);
+        return;
+    }
+    w.inner += 1;
+    for i in 0..n.children.len() {
+        let clo = if i == 0 { lo.clone() } else { Some(n.keys[i - 1].clone()) };
+        let chi = if i == n.keys.len() { hi.clone() } else { Some(n.keys[i].clone()) };
+        walk(t, mut w, n.children[i], clo, chi, depth + 1);
+    }
+}
+
+fn check(t: ref Tree) -> Walk {
+    let mut w = Walk { errors: Vec.new(), leaves: Vec.new(), inner: 0, min_depth: 0, max_depth: 0 };
+    walk(t, mut w, t.root, None, None, 1);
+    let mut chain: Vec[i64] = Vec.new();
+    let mut pid = w.leaves[0];
+    while pid != 0 {
+        chain.push(pid);
+        pid = t.pages[pid].next;
+    }
+    let mut same = chain.len() == w.leaves.len();
+    if same {
+        for i in 0..chain.len() {
+            if chain[i] != w.leaves[i] {
+                same = false;
+            }
+        }
+    }
+    if not same {
+        w.errors.push("leaf chain does not match the tree order".to_string());
+    }
+    if w.min_depth != w.max_depth {
+        w.errors.push(f"leaves at depths [{w.min_depth}, {w.max_depth}]");
+    }
+    let mut total = 0;
+    for p in w.leaves.iter() {
+        total += t.pages[*p].keys.len();
+    }
+    if total != t.count {
+        w.errors.push(f"count {t.count} but {total} keys in leaves");
+    }
+    w
+}
+
+// ---------------------------------------------------------------- workload
+
+struct Rng { s: i64 }
+
+impl Rng {
+    fn next(mut ref self) -> i64 {
+        self.s = (self.s * 1103515245 + 12345) % 2147483648;
+        self.s >> 4
+    }
+}
+
+struct Op { op: i64, key: String, val: String }
+
+fn op_of(rng: mut ref Rng, i: i64) -> Op {
+    let r = rng.next() % 100;
+    let key = f"user:{rng.next() % 400:04}";
+    if r < 70 {
+        let n = rng.next() % 24;
+        return Op { op: 1, key: key, val: f"v{i}-{ALPHA.substring(0, n)}" };
+    }
+    if r < 90 {
+        return Op { op: 2, key: key, val: "".to_string() };
+    }
+    Op { op: 3, key: key, val: "".to_string() }
+}
+
+fn model_get(model: ref Map[String, String], key: Str) -> Option[String] {
+    match model.get(key) {
+        Some(v) => Some(v.clone()),
+        None => None,
+    }
+}
+
+fn show(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => s.clone(),
+        None => "(missing)".to_string(),
+    }
+}
+
+fn apply_model(model: mut ref Map[String, String], o: ref Op) {
+    if o.op == 1 {
+        model.insert(o.key.clone(), o.val.clone());
+    } else {
+        model.remove(o.key);
+    }
+}
+
+fn run_ops(s: mut ref Store, model: mut ref Map[String, String], rng: mut ref Rng, start: i64, count: i64, commit_every: i64, show_gets: i64) -> Result[(), IoError] {
+    let mut gets = 0;
+    let mut hits = 0;
+    for i in start..start + count {
+        let o = op_of(mut rng, i);
+        if o.op == 3 {
+            let got = s.tree.get(o.key);
+            let want = model_get(model, o.key);
+            gets += 1;
+            if got.is_some() {
+                hits += 1;
+            }
+            if got != want {
+                println(f"  get {o.key}: got {show(got)}, model has {show(want)}");
+            }
+            if gets <= show_gets {
+                println(f"  get {o.key} -> {show(got)}");
+            }
+        } else {
+            s.log(o.op, o.key, o.val)?;
+            apply_model(mut model, o);
+        }
+        if commit_every > 0 and (i - start + 1) % commit_every == 0 {
+            s.commit()?;
+        }
+    }
+    println(f"  {gets} gets, {hits} hits");
+    Ok(())
+}
+
+fn scenario() -> Result[(), String] {
+    for p in [DB, WAL, "kv.db.tmp"].iter() {
+        if fs.exists(*p) {
+            fs.remove_file(*p).map_err(|_| "cannot clean up".to_string())?;
+        }
+    }
+    let crc = crc_table();
+    let mut rng = Rng { s: 2026 };
+    let mut model: Map[String, String] = Map.new();
+    println("== phase 1: 600 operations, a commit every 100");
+    let mut s = open_store(crc.clone())?;
+    run_ops(mut s, mut model, mut rng, 0, 600, 100, 4).map_err(|_| "i/o error".to_string())?;
+
+    println("== phase 2: 12 more operations logged, then a crash before the commit");
+    let mut lost: Vec[Op] = Vec.new();
+    for i in 600..612 {
+        let o = op_of(mut rng, i);
+        if o.op == 3 {
+            continue;
+        }
+        s.log(o.op, o.key, o.val).map_err(|_| "i/o error".to_string())?;
+        lost.push(o);
+    }
+    let mut wal = read_file(WAL).map_err(|_| "cannot read the wal".to_string())?;
+    println(f"  wal holds {lost.len()} records, {wal.len()} bytes; tearing the last 3 bytes");
+    let keep = wal.len() - 3;
+    wal.truncate(keep);
+    write_file(WAL, wal).map_err(|_| "cannot tear the wal".to_string())?;
+    for k in 0..lost.len() - 1 {
+        apply_model(mut model, lost[k]);
+    }
+    let last = ref lost[lost.len() - 1];
+    println(f"  lost on purpose: {if last.op == 1 { "put" } else { "del" }} {last.key}");
+
+    println("== phase 3: reopen and recover");
+    let mut s2 = open_store(crc.clone())?;
+    s2.commit().map_err(|_| "commit failed".to_string())?;
+
+    println("== phase 4: verify");
+    let mut bad = 0;
+    for k in 0..400 {
+        let key = f"user:{k:04}";
+        let got = s2.tree.get(key);
+        let want = model_get(model, key);
+        if got != want {
+            bad += 1;
+            println(f"  mismatch {key}: {show(got)} vs {show(want)}");
+        }
+    }
+    println(f"  {400 - bad} of 400 keys match the model ({model.len()} present)");
+    let w = check(s2.tree);
+    for e in w.errors.iter() {
+        println(f"  invariant: {e}");
+    }
+    let mut empty = 0;
+    for p in w.leaves.iter() {
+        if s2.tree.pages[*p].keys.len() == 0 {
+            empty += 1;
+        }
+    }
+    let verdict = if w.errors.len() == 0 { "ok" } else { "BROKEN" };
+    println(f"  invariants {verdict}: height {w.max_depth}, {w.leaves.len()} leaves, {w.inner} inner, {empty} empty leaves");
+
+    println("== phase 5: scan [user:0040, user:0052)");
+    for line in s2.tree.scan("user:0040", "user:0052").iter() {
+        println(f"  {line}");
+    }
+
+    println("== phase 6: damaged files");
+    let good = read_file(DB).map_err(|_| "cannot read the database".to_string())?;
+    let mut bad_magic = good.clone();
+    bad_magic[0] = 88u8;
+    let mut short = good.clone();
+    short.truncate(good.len() - 100);
+    write_file("bad-magic.db", bad_magic).map_err(|_| "write failed".to_string())?;
+    write_file("short.db", short).map_err(|_| "write failed".to_string())?;
+    for p in ["bad-magic.db", "short.db"].iter() {
+        let data = read_file(*p).map_err(|_| "read failed".to_string())?;
+        match load(data) {
+            Ok(_) => println(f"  {p}: loaded?"),
+            Err(e) => println(f"  {p}: {e}"),
+        }
+    }
+    let t2 = load(good)?;
+    let same = if same_bytes(t2.serialize(), good) { "True" } else { "False" };
+    println(f"  reloaded {DB}: {t2.count} keys, re-serialized identically: {same}");
+    Ok(())
+}
+
+fn main() {
+    match scenario() {
+        Ok(_) => {}
+        Err(e) => println(f"error: {e}"),
+    }
+}

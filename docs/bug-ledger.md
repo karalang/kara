@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 606 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 267 |
+| missing-feature | 268 |
 | codegen-gap | 259 |
 | false-positive | 192 |
 | other | 172 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2900 |
 | interp | 928 |
-| typecheck | 432 |
+| typecheck | 433 |
 | other | 115 |
 | ownership | 100 |
 | cli | 76 |
@@ -217,6 +217,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-25 | 2026-10-15 | parser | medium | A closure parameter annotated with a mode does not parse: `|v: own Vec[i64]| v.len()` is "Expected Pipe, found Identifier" at the type, though design.md § Function values gives `|x: own T| body` as the way to set one parameter's mode and shows `|v: own Vec[i64]| sort(v)` twice | — |
 | B-2026-10-15-26 | 2026-10-15 | codegen | high | Calling an element of a `Vec[Fn(..)]` filled by `push` fails on every v2 surface though `karac check` passes: `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(w); v[0](7)` is "call through Fn(..w..), which is not a function value" on `__mir-run`, a silent exit 101 on `__mir-llvm-run` and an ASan stack-buffer-overflow; the same Vec built with `vec![w]` works, as does a closure in a struct field | — |
 | B-2026-10-15-27 | 2026-10-15 | codegen | high | A closure that escapes inside a value (stored in a struct in a returned `Vec`) captures BY REFERENCE on v2, though core-semantics.md §9.3 says an escaping closure captures every place by move: the captured owned `String` dangles after the function returns (`__mir-run` "dangling reference to a local of a function that returned", ASan heap-use-after-free); `karac check` refuses the program with the legacy backend's `escaping_closure` deferral | — |
+| B-2026-10-15-28 | 2026-10-15 | typecheck | low | The library has no read-write or positional file access: io.md's `File` opens for reading, for writing with truncation, or for appending, and has no `set_len`, so a page-based store (SQLite, LMDB, bbolt, a B+tree index) cannot rewrite one page in place or trim a torn log tail; it must rewrite the whole file. There is also no byte-level `fs.read`/`fs.write` beside the String ones | — |
 
 ### Relocated
 
