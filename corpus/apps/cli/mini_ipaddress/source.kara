@@ -459,7 +459,7 @@ fn is_addr_or_mask(e: ref IpError) -> bool {
 }
 
 fn u128_max() -> u128 {
-    (0xFFFF_FFFF_FFFF_FFFFu128 << 64) | 0xFFFF_FFFF_FFFF_FFFFu128
+    (0xFFFF_FFFF_FFFF_FFFF << 64) | 0xFFFF_FFFF_FFFF_FFFF
 }
 
 fn all_ones(v: i64) -> u128 {

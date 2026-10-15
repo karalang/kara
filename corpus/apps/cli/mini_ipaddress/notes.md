@@ -85,3 +85,9 @@ After that, the output matched `expected.out` on `__mir-run`,
 `__mir-llvm-run` and `__mir-llvm-asan`.
 
 Written 2026-10-15 by the real-world apps thread; karac at eb605b2e5b.
+
+Updated 2026-10-15, karac at 3d496c6072: B-2026-10-15-54 is fixed, so
+`u128_max` writes its two 64-bit masks without the `u128` suffix,
+`(0xFFFF_FFFF_FFFF_FFFF << 64) | 0xFFFF_FFFF_FFFF_FFFF`, and the app
+still matches on all four MIR surfaces. The original keeps the suffix it
+was written with.
