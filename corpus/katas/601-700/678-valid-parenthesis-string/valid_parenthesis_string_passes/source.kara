@@ -1,0 +1,194 @@
+// LeetCode #678: Valid Parenthesis String -- a pass each way.
+//
+// Left to right, read every `*` as `(`: if the balance ever drops below
+// 0, some prefix has more `)` than it could possibly open. Right to
+// left, read every `*` as `)`: if the balance of `)` over `(` ever drops
+// below 0, some suffix has more `(` than it could possibly close. When
+// neither happens the string is valid. O(n) time, O(1) space.
+
+fn check_valid_string(s: String) -> bool {
+    let b = s.bytes();
+    let n = b.len();
+    let mut balance = 0;
+    for i in 0..n {
+        if b[i] == b')' {
+            balance -= 1;
+        } else {
+            balance += 1;
+        }
+        if balance < 0 {
+            return false;
+        }
+    }
+    balance = 0;
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        if b[i] == b'(' {
+            balance -= 1;
+        } else {
+            balance += 1;
+        }
+        if balance < 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    let ok = check_valid_string(s.clone());
+    println(f"\"{s}\" -> {ok}");
+}
+
+fn repeat(piece: String, times: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..times {
+        s.push_str(piece);
+    }
+    s
+}
+
+// The `i`-th of the 3^n strings of length n, the last character
+// varying fastest.
+fn nth_string(i: i64, n: i64) -> String {
+    let mut s = String.new();
+    let mut p = 1;
+    for _ in 1..n {
+        p *= 3;
+    }
+    for _ in 0..n {
+        let d = i / p % 3;
+        if d == 0 {
+            s.push('(');
+        } else if d == 1 {
+            s.push(')');
+        } else {
+            s.push('*');
+        }
+        p /= 3;
+    }
+    s
+}
+
+// A random string of length 1 to 100. A third are uniform over the three
+// characters; the rest start from a balanced string of random walks,
+// turn some characters into `*` and change a few others, so that valid
+// and invalid strings are both common.
+fn random_string(seed: mut ref i64, c: i64) -> String {
+    let mut s = String.new();
+    if c % 3 == 0 {
+        let n = 1 + next_random(seed) % 100;
+        for _ in 0..n {
+            let d = next_random(seed) % 3;
+            if d == 0 {
+                s.push('(');
+            } else if d == 1 {
+                s.push(')');
+            } else {
+                s.push('*');
+            }
+        }
+        return s;
+    }
+    let half = 1 + next_random(seed) % 50;
+    let mut open = 0;
+    let mut left = half;
+    while left > 0 or open > 0 {
+        if left > 0 and (open == 0 or next_random(seed) % 2 == 0) {
+            s.push('(');
+            open += 1;
+            left -= 1;
+        } else {
+            s.push(')');
+            open -= 1;
+        }
+    }
+    let stars = next_random(seed) % 4;
+    let changes = next_random(seed) % 3;
+    let mut out = String.new();
+    for c in s.bytes() {
+        let r = next_random(seed) % 10;
+        if r < stars {
+            out.push('*');
+        } else if r == 9 and next_random(seed) % 3 < changes {
+            if c == b'(' {
+                out.push(')');
+            } else {
+                out.push('(');
+            }
+        } else {
+            out.push(c as char);
+        }
+    }
+    out
+}
+
+fn main() {
+    // The LeetCode examples, then corners: one character of each kind;
+    // stars that must open, close or vanish; a `)` before any `(`; and
+    // strings of 100 characters, the problem's longest.
+    show("()".to_string());
+    show("(*)".to_string());
+    show("(*))".to_string());
+    show("(".to_string());
+    show(")".to_string());
+    show("*".to_string());
+    show("*)".to_string());
+    show("(*".to_string());
+    show(")*".to_string());
+    show("*(".to_string());
+    show("(*)(".to_string());
+    show("**((".to_string());
+    show("((**".to_string());
+    show("(*()".to_string());
+    show("())*(".to_string());
+    show("(((*)".to_string());
+    show("((*)(*))((*".to_string());
+    let a = repeat("(".to_string(), 50);
+    let b = repeat("*".to_string(), 50);
+    println(f"50 ( then 50 * -> {check_valid_string(f"{a}{b}")}");
+    let c = repeat("(".to_string(), 51);
+    let d = repeat("*".to_string(), 49);
+    println(f"51 ( then 49 * -> {check_valid_string(f"{c}{d}")}");
+    println(f"(*)( 25 times -> {check_valid_string(repeat("(*)(".to_string(), 25))}");
+    println(f"*) 50 times -> {check_valid_string(repeat("*)".to_string(), 50))}");
+    println(f")* 50 times -> {check_valid_string(repeat(")*".to_string(), 50))}");
+    // How many of the 3^n strings of each length up to 8 are valid.
+    let mut counts: Vec[String] = Vec.new();
+    let mut total = 1;
+    for n in 1..9 {
+        total *= 3;
+        let mut valid = 0;
+        for i in 0..total {
+            if check_valid_string(nth_string(i, n)) {
+                valid += 1;
+            }
+        }
+        counts.push(f"{valid}");
+    }
+    println(f"valid of 3^n, n = 1..8: {counts.join(" ")}");
+    // A checksum of 1000 random strings.
+    let mut seed: i64 = 678;
+    let mut sum = 0;
+    let mut valid = 0;
+    for c in 0..1000 {
+        let s = random_string(mut seed, c);
+        let n = s.len() as i64;
+        let ok = check_valid_string(s);
+        if ok {
+            valid += 1;
+            sum = (sum * 31 + n) % 1000000007;
+        } else {
+            sum = (sum * 31 + 1000 + n) % 1000000007;
+        }
+    }
+    println(f"1000 random strings: {valid} valid, checksum {sum}");
+}

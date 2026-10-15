@@ -1,0 +1,390 @@
+// LeetCode #677: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each with a driver that plays a script of
+// calls into it, held to five properties on random scripts.
+
+// ---- star arm ----------------------------------------------------------
+
+struct MapSum_star {
+    values: Map[String, i64],
+}
+
+impl MapSum_star {
+    fn new() -> MapSum_star {
+        MapSum_star { values: Map.new() }
+    }
+
+    fn insert(mut ref self, key: own String, val: i64) {
+        self.values.insert(key, val);
+    }
+
+    fn sum(ref self, prefix: String) -> i64 {
+        let mut total = 0;
+        for (k, v) in self.values.iter() {
+            if k.starts_with(prefix) {
+                total += v;
+            }
+        }
+        total
+    }
+}
+
+fn drive_star(script: Vec[(bool, String, i64)]) -> Vec[i64] {
+    let mut m = MapSum_star.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_insert, word, val) in script.iter() {
+        if is_insert {
+            m.insert(word.clone(), val);
+        } else {
+            out.push(m.sum(word));
+        }
+    }
+    out
+}
+
+// ---- trie arm ----------------------------------------------------------
+
+struct Node_trie {
+    children: Vec[i64],
+    score: i64,
+}
+
+struct MapSum_trie {
+    nodes: Vec[Node_trie],
+    values: Map[String, i64],
+}
+
+fn new_node_trie() -> Node_trie {
+    Node_trie { children: vec![-1; 26], score: 0 }
+}
+
+impl MapSum_trie {
+    fn new() -> MapSum_trie {
+        MapSum_trie { nodes: vec![new_node_trie()], values: Map.new() }
+    }
+
+    fn insert(mut ref self, key: own String, val: i64) {
+        let old = match self.values.get(key) {
+            Some(v) => v,
+            None => 0,
+        };
+        let delta = val - old;
+        let mut node = 0;
+        self.nodes[0].score += delta;
+        for c in key.bytes().iter() {
+            let b = c as i64 - 97;
+            if self.nodes[node].children[b] == -1 {
+                self.nodes.push(new_node_trie());
+                self.nodes[node].children[b] = self.nodes.len() - 1;
+            }
+            node = self.nodes[node].children[b];
+            self.nodes[node].score += delta;
+        }
+        self.values.insert(key, val);
+    }
+
+    fn sum(ref self, prefix: String) -> i64 {
+        let mut node = 0;
+        for c in prefix.bytes().iter() {
+            node = self.nodes[node].children[c as i64 - 97];
+            if node == -1 {
+                return 0;
+            }
+        }
+        self.nodes[node].score
+    }
+}
+
+fn drive_trie(script: Vec[(bool, String, i64)]) -> Vec[i64] {
+    let mut m = MapSum_trie.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_insert, word, val) in script.iter() {
+        if is_insert {
+            m.insert(word.clone(), val);
+        } else {
+            out.push(m.sum(word));
+        }
+    }
+    out
+}
+
+// ---- prefixes arm ------------------------------------------------------
+
+struct MapSum_prefixes {
+    values: Map[String, i64],
+    sums: Map[String, i64],
+}
+
+impl MapSum_prefixes {
+    fn new() -> MapSum_prefixes {
+        MapSum_prefixes { values: Map.new(), sums: Map.new() }
+    }
+
+    fn insert(mut ref self, key: own String, val: i64) {
+        let old = match self.values.get(key) {
+            Some(v) => v,
+            None => 0,
+        };
+        for i in 1..key.len() + 1 {
+            let p = key[0..i].to_string();
+            let s = match self.sums.get(p) {
+                Some(v) => v,
+                None => 0,
+            };
+            self.sums.insert(p, s + val - old);
+        }
+        self.values.insert(key, val);
+    }
+
+    fn sum(ref self, prefix: String) -> i64 {
+        match self.sums.get(prefix) {
+            Some(v) => v,
+            None => 0,
+        }
+    }
+}
+
+fn drive_prefixes(script: Vec[(bool, String, i64)]) -> Vec[i64] {
+    let mut m = MapSum_prefixes.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_insert, word, val) in script.iter() {
+        if is_insert {
+            m.insert(word.clone(), val);
+        } else {
+            out.push(m.sum(word));
+        }
+    }
+    out
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+struct MapSum_sorted {
+    keys: Vec[String],
+    vals: Vec[i64],
+}
+
+// The first place in `keys` whose key is not below `word`.
+fn lower_bound_sorted(keys: Vec[String], word: String) -> i64 {
+    let mut lo = 0;
+    let mut hi = keys.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if keys[mid] < word {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+impl MapSum_sorted {
+    fn new() -> MapSum_sorted {
+        MapSum_sorted { keys: Vec.new(), vals: Vec.new() }
+    }
+
+    fn insert(mut ref self, key: own String, val: i64) {
+        let at = lower_bound_sorted(self.keys, key);
+        if at < self.keys.len() and self.keys[at] == key {
+            self.vals[at] = val;
+        } else {
+            self.keys.insert(at, key);
+            self.vals.insert(at, val);
+        }
+    }
+
+    fn sum(ref self, prefix: String) -> i64 {
+        let mut total = 0;
+        let mut i = lower_bound_sorted(self.keys, prefix);
+        while i < self.keys.len() and self.keys[i].starts_with(prefix) {
+            total += self.vals[i];
+            i += 1;
+        }
+        total
+    }
+}
+
+fn drive_sorted(script: Vec[(bool, String, i64)]) -> Vec[i64] {
+    let mut m = MapSum_sorted.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_insert, word, val) in script.iter() {
+        if is_insert {
+            m.insert(word.clone(), val);
+        } else {
+            out.push(m.sum(word));
+        }
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, script: Vec[(bool, String, i64)]) -> Vec[i64] {
+    if which == 0 {
+        drive_star(script)
+    } else if which == 1 {
+        drive_trie(script)
+    } else if which == 2 {
+        drive_prefixes(script)
+    } else {
+        drive_sorted(script)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, most: i64, letters: i64) -> String {
+    let n = 1 + next_random(seed) % most;
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(seed) % letters) as u8) as char);
+    }
+    s
+}
+
+// The keys inserted before call `upto`, each with its last value, found
+// by reading the calls backwards and skipping keys already seen.
+fn current(script: Vec[(bool, String, i64)], upto: i64) -> Vec[(String, i64)] {
+    let mut out: Vec[(String, i64)] = Vec.new();
+    let mut i = upto;
+    while i > 0 {
+        i -= 1;
+        let (is_insert, word, val) = script[i].clone();
+        if is_insert {
+            let mut seen = false;
+            for (k, _) in out.iter() {
+                if k == word {
+                    seen = true;
+                }
+            }
+            if not seen {
+                out.push((word, val));
+            }
+        }
+    }
+    out
+}
+
+// The definition: each sum adds up the current values of the keys whose
+// first letters are the prefix.
+fn definition(script: Vec[(bool, String, i64)]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..script.len() {
+        let (is_insert, prefix, _) = script[i].clone();
+        if not is_insert {
+            let mut total = 0;
+            for (k, v) in current(script, i).iter() {
+                if k.len() >= prefix.len() and k[0..prefix.len()] == prefix {
+                    total += v;
+                }
+            }
+            out.push(total);
+        }
+    }
+    out
+}
+
+fn sum_call(prefix: own String) -> (bool, String, i64) {
+    (false, prefix, 0)
+}
+
+fn main() {
+    // 400 random scripts of 50 calls, the problem's most, half inserts
+    // with values of 1 to 1000, half sums, with words of up to 6 letters
+    // over 2 to 4 letters; then probes on the final state.
+    let cases = 400;
+    let mut seed: i64 = 677;
+    let mut checks = 0;
+    let mut sums = 0;
+    let mut failures = vec![0; 5];
+    for c in 0..cases {
+        let letters = 2 + c % 3;
+        let most = 1 + c % 6;
+        let mut script: Vec[(bool, String, i64)] = Vec.new();
+        for _ in 0..50 {
+            if next_random(mut seed) % 2 == 0 {
+                let key = random_word(mut seed, most, letters);
+                script.push((true, key, 1 + next_random(mut seed) % 1000));
+            } else {
+                script.push(sum_call(random_word(mut seed, most, letters)));
+            }
+        }
+        let want = definition(script);
+        sums += want.len();
+        let last = current(script, script.len());
+        // Probes: a random prefix, and the prefix with each letter after
+        // it.
+        let probe = random_word(mut seed, most, letters);
+        let mut probes: Vec[(bool, String, i64)] = Vec.new();
+        probes.push(sum_call(probe.clone()));
+        for x in 0..letters {
+            probes.push(sum_call(f"{probe}{((97 + x) as u8) as char}"));
+        }
+        let mut probed = script.clone();
+        probed.extend(probes.clone());
+        // The final keys inserted afresh, in the reverse of the order
+        // they were found in.
+        let mut fresh: Vec[(bool, String, i64)] = Vec.new();
+        let mut k = last.len();
+        while k > 0 {
+            k -= 1;
+            fresh.push((true, last[k].0.clone(), last[k].1));
+        }
+        fresh.extend(probes.clone());
+        // A key inserted again with its current value.
+        let mut again = script.clone();
+        if last.len() > 0 {
+            let (key, val) = last[next_random(mut seed) % last.len()].clone();
+            again.push((true, key, val));
+        }
+        again.extend(probes.clone());
+        for which in 0..4 {
+            let got = answer(which, script);
+            let tail = answer(which, probed);
+            let n = want.len();
+            let total = tail[n];
+            let mut split = 0;
+            for x in 0..letters {
+                split += tail[n + 1 + x];
+            }
+            let distinct = last.len();
+            // P1: the definition's answer, every sum. P2: no sum below 0
+            // or above 1000 for each key. P3: a prefix's sum is its own
+            // key's value, if any, plus the sums of the prefixes one
+            // letter longer. P4: the final keys inserted afresh in another
+            // order give the same sums. P5: a key inserted again with its
+            // value changes no sum.
+            let mut in_range = true;
+            for v in got.iter() {
+                if v < 0 or v > 1000 * distinct {
+                    in_range = false;
+                }
+            }
+            let ok = [
+                got == want,
+                in_range,
+                total - split >= 0 and total - split <= 1000,
+                answer(which, fresh) == tail[n..tail.len()].to_vec(),
+                answer(which, again) == tail,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} scripts ({sums} sums), 4 arms, {checks} checks, {total} failures");
+}

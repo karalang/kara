@@ -1,0 +1,7 @@
+[null,null,3,null,5]
+[null,null,3,0,null,2]
+[null,null,null,null,4,2,0,3]
+[null,null,null,12,null,8,1,0]
+[null,0,null,1000,0]
+[null,null,null,1999,1000,1999]
+15000 random calls: checksum 127107357

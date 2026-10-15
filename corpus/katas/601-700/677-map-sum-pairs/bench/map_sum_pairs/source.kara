@@ -1,0 +1,91 @@
+// Benchmark for #677: the keys kept sorted, the sorted arm.
+//
+// Keep the keys in sorted order with their values. The keys starting
+// with a prefix sort together, from the first key not below the prefix,
+// so a sum finds that place by binary search and adds values while the
+// keys still start with the prefix. An insert finds its place the same
+// way and replaces the value there or inserts the key. Each call costs
+// O(log n) plus the keys it touches, and an insert also the shift.
+
+struct MapSum {
+    keys: Vec[String],
+    vals: Vec[i64],
+}
+
+// The first place in `keys` whose key is not below `word`.
+fn lower_bound(keys: Vec[String], word: String) -> i64 {
+    let mut lo = 0;
+    let mut hi = keys.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if keys[mid] < word {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+impl MapSum {
+    fn new() -> MapSum {
+        MapSum { keys: Vec.new(), vals: Vec.new() }
+    }
+
+    fn insert(mut ref self, key: own String, val: i64) {
+        let at = lower_bound(self.keys, key);
+        if at < self.keys.len() and self.keys[at] == key {
+            self.vals[at] = val;
+        } else {
+            self.keys.insert(at, key);
+            self.vals.insert(at, val);
+        }
+    }
+
+    fn sum(ref self, prefix: String) -> i64 {
+        let mut total = 0;
+        let mut i = lower_bound(self.keys, prefix);
+        while i < self.keys.len() and self.keys[i].starts_with(prefix) {
+            total += self.vals[i];
+            i += 1;
+        }
+        total
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, most: i64) -> String {
+    let n = 1 + next_random(seed) % most;
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(seed) % 3) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // 100 rounds, each a new map: 2,000 inserts of keys of up to 12
+    // letters over `a` to `c`, then 2,000 sums of prefixes of up to 3,
+    // all from the same generator as the other languages. That is far
+    // past the problem's 50 calls, so the sums have keys to add. Each
+    // sum goes into a checksum.
+    let rounds = 100;
+    let calls = 2000;
+    let mut seed: i64 = 677;
+    let mut s = 0;
+    for _ in 0..rounds {
+        let mut m = MapSum.new();
+        for _ in 0..calls {
+            let key = random_word(mut seed, 12);
+            m.insert(key, 1 + next_random(mut seed) % 1000);
+        }
+        for _ in 0..calls {
+            s = (s * 31 + m.sum(random_word(mut seed, 3))) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of {calls} inserts and {calls} sums: checksum {s}");
+}

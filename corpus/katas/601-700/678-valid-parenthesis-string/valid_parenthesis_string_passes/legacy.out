@@ -1,0 +1,24 @@
+"()" -> true
+"(*)" -> true
+"(*))" -> true
+"(" -> false
+")" -> false
+"*" -> true
+"*)" -> true
+"(*" -> true
+")*" -> false
+"*(" -> false
+"(*)(" -> false
+"**((" -> false
+"((**" -> true
+"(*()" -> true
+"())*(" -> false
+"(((*)" -> false
+"((*)(*))((*" -> false
+50 ( then 50 * -> true
+51 ( then 49 * -> false
+(*)( 25 times -> false
+*) 50 times -> true
+)* 50 times -> false
+valid of 3^n, n = 1..8: 1 4 8 28 68 224 592 1888
+1000 random strings: 593 valid, checksum 588282785

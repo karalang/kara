@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/678-valid-parenthesis-string/valid_parenthesis_string_passes.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "96a865aac"
+extracted_src = "3e5c1edc"
+model_rev = "583cfb0d"
+model_src = "3e5c1edc"

@@ -1,0 +1,135 @@
+// LeetCode #677: Map Sum Pairs -- a trie holding the sum below each
+// node.
+//
+// Every node of a trie of the keys holds the sum of the values of the
+// keys that pass through it. An insert finds how much the key's value
+// changes, its new value less any old one, which a map of the values
+// remembers, and adds that change to every node on the key's path. A
+// sum follows the prefix down and reads the node it ends at. Each call
+// costs O(length).
+
+struct Node {
+    children: Vec[i64],
+    score: i64,
+}
+
+struct MapSum {
+    nodes: Vec[Node],
+    values: Map[String, i64],
+}
+
+fn new_node() -> Node {
+    Node { children: vec![-1; 26], score: 0 }
+}
+
+impl MapSum {
+    fn new() -> MapSum {
+        MapSum { nodes: vec![new_node()], values: Map.new() }
+    }
+
+    fn insert(mut ref self, key: own String, val: i64) {
+        let old = match self.values.get(key) {
+            Some(v) => v,
+            None => 0,
+        };
+        let delta = val - old;
+        let mut node = 0;
+        self.nodes[0].score += delta;
+        for c in key.bytes().iter() {
+            let b = c as i64 - 97;
+            if self.nodes[node].children[b] == -1 {
+                self.nodes.push(new_node());
+                self.nodes[node].children[b] = self.nodes.len() - 1;
+            }
+            node = self.nodes[node].children[b];
+            self.nodes[node].score += delta;
+        }
+        self.values.insert(key, val);
+    }
+
+    fn sum(ref self, prefix: String) -> i64 {
+        let mut node = 0;
+        for c in prefix.bytes().iter() {
+            node = self.nodes[node].children[c as i64 - 97];
+            if node == -1 {
+                return 0;
+            }
+        }
+        self.nodes[node].score
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The calls in `script`, separated by `;`: `insert <key> <val>` or
+// `sum <prefix>`. The results as LeetCode prints them, `null` first for
+// the constructor and then for each insert.
+fn run_all(script: String) -> String {
+    let mut m = MapSum.new();
+    let mut out: Vec[String] = Vec.new();
+    out.push("null".to_string());
+    for call in script.split(";") {
+        let parts: Vec[String] = call.split(" ").iter().map(|p| p.to_string()).collect();
+        if parts[0] == "insert" {
+            m.insert(parts[1].clone(), i64.parse(parts[2]).unwrap());
+            out.push("null".to_string());
+        } else {
+            out.push(f"{m.sum(parts[1])}");
+        }
+    }
+    f"[{out.join(",")}]"
+}
+
+fn random_word(seed: mut ref i64, most: i64, letters: i64) -> String {
+    let n = 1 + next_random(seed) % most;
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // The LeetCode example; a key replaced, and a prefix longer than
+    // every key; keys that are prefixes of each other; a sum before any
+    // insert, and the largest value; and keys of 50 letters, the
+    // problem's longest.
+    println(run_all("insert apple 3;sum ap;insert app 2;sum ap"));
+    println(run_all("insert apple 3;sum apple;sum apples;insert apple 2;sum ap"));
+    println(run_all("insert a 1;insert b 2;insert ab 3;sum a;sum b;sum c;sum ab"));
+    println(run_all("insert aa 5;insert a 7;sum a;insert aa 1;sum a;sum aa;sum aaa"));
+    println(run_all("sum a;insert z 1000;sum z;sum zz"));
+    let mut long = String.new();
+    for _ in 0..50 {
+        long.push('y');
+    }
+    let short = long[0..49].to_string();
+    let half = long[0..25].to_string();
+    println(run_all(f"insert {long} 1000;insert {short} 999;sum y;sum {long};sum {half}"));
+    // 300 random runs of 50 calls, the problem's most, half inserts and
+    // half sums, with keys of up to 6 letters over 2 to 4 letters; the
+    // sums go into a checksum.
+    let mut seed: i64 = 677;
+    let mut sum = 0;
+    let mut calls = 0;
+    for c in 0..300 {
+        let letters = 2 + c % 3;
+        let most = 1 + c % 6;
+        let mut m = MapSum.new();
+        for _ in 0..50 {
+            calls += 1;
+            if next_random(mut seed) % 2 == 0 {
+                let key = random_word(mut seed, most, letters);
+                m.insert(key, 1 + next_random(mut seed) % 1000);
+            } else {
+                sum = (sum * 31 + m.sum(random_word(mut seed, most, letters))) % 1000000007;
+            }
+        }
+    }
+    println(f"{calls} random calls: checksum {sum}");
+}

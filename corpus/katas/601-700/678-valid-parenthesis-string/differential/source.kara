@@ -1,0 +1,341 @@
+// LeetCode #678: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random strings.
+
+// ---- star arm ----------------------------------------------------------
+
+fn check_valid_string_star(s: String) -> bool {
+    let mut low = 0;
+    let mut high = 0;
+    for c in s.bytes() {
+        if c == b'(' {
+            low += 1;
+            high += 1;
+        } else if c == b')' {
+            low -= 1;
+            high -= 1;
+        } else {
+            low -= 1;
+            high += 1;
+        }
+        if high < 0 {
+            return false;
+        }
+        if low < 0 {
+            low = 0;
+        }
+    }
+    low == 0
+}
+
+// ---- interval arm ------------------------------------------------------
+
+fn check_valid_string_interval(s: String) -> bool {
+    let b = s.bytes();
+    let n = b.len();
+    let mut ok: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..n + 1 {
+        let mut row: Vec[bool] = Vec.new();
+        for _ in 0..n + 1 {
+            row.push(false);
+        }
+        ok.push(row);
+    }
+    for i in 0..n + 1 {
+        ok[i][i] = true;
+    }
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let j = i + len;
+            let first = b[i];
+            let mut good = first == b'*' and ok[i + 1][j];
+            if not good and first != b')' {
+                for k in i + 1..j {
+                    if b[k] != b'(' and ok[i + 1][k] and ok[k + 1][j] {
+                        good = true;
+                        break;
+                    }
+                }
+            }
+            ok[i][j] = good;
+        }
+    }
+    ok[0][n]
+}
+
+// ---- stacks arm --------------------------------------------------------
+
+fn check_valid_string_stacks(s: String) -> bool {
+    let mut opens: Vec[i64] = Vec.new();
+    let mut stars: Vec[i64] = Vec.new();
+    let mut i = 0;
+    for c in s.bytes() {
+        if c == b'(' {
+            opens.push(i);
+        } else if c == b'*' {
+            stars.push(i);
+        } else if opens.len() > 0 {
+            opens.pop();
+        } else if stars.len() > 0 {
+            stars.pop();
+        } else {
+            return false;
+        }
+        i += 1;
+    }
+    while opens.len() > 0 {
+        if stars.len() == 0 {
+            return false;
+        }
+        let o = opens.pop().unwrap();
+        let t = stars.pop().unwrap();
+        if o > t {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- passes arm --------------------------------------------------------
+
+fn check_valid_string_passes(s: String) -> bool {
+    let b = s.bytes();
+    let n = b.len();
+    let mut balance = 0;
+    for i in 0..n {
+        if b[i] == b')' {
+            balance -= 1;
+        } else {
+            balance += 1;
+        }
+        if balance < 0 {
+            return false;
+        }
+    }
+    balance = 0;
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        if b[i] == b'(' {
+            balance -= 1;
+        } else {
+            balance += 1;
+        }
+        if balance < 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, s: String) -> bool {
+    if which == 0 {
+        check_valid_string_star(s)
+    } else if which == 1 {
+        check_valid_string_interval(s)
+    } else if which == 2 {
+        check_valid_string_stacks(s)
+    } else {
+        check_valid_string_passes(s)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: every way of reading the stars, each as `(`, `)` or
+// nothing, the `k`-th star's reading the `k`-th base-3 digit of the
+// choice; valid when some reading never closes more than is open and
+// ends with nothing open.
+fn definition(s: String) -> bool {
+    let b = s.bytes();
+    let mut stars = 0;
+    for c in b {
+        if c == b'*' {
+            stars += 1;
+        }
+    }
+    let mut ways = 1;
+    for _ in 0..stars {
+        ways *= 3;
+    }
+    for choice in 0..ways {
+        let mut rest = choice;
+        let mut open = 0;
+        let mut fine = true;
+        for c in b {
+            let mut d = 2;
+            if c == b'(' {
+                d = 0;
+            } else if c == b')' {
+                d = 1;
+            } else {
+                d = rest % 3;
+                rest /= 3;
+            }
+            if d == 0 {
+                open += 1;
+            } else if d == 1 {
+                open -= 1;
+            }
+            if open < 0 {
+                fine = false;
+                break;
+            }
+        }
+        if fine and open == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// The string reversed with `(` and `)` swapped.
+fn mirrored(s: String) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut i = b.len();
+    while i > 0 {
+        i -= 1;
+        if b[i] == b'(' {
+            out.push(')');
+        } else if b[i] == b')' {
+            out.push('(');
+        } else {
+            out.push('*');
+        }
+    }
+    out
+}
+
+// The string with `piece` put in before its `at`-th character.
+fn put_in(s: String, at: i64, piece: String) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    for i in 0..b.len() {
+        if i == at {
+            out.push_str(piece);
+        }
+        out.push(b[i] as char);
+    }
+    if at == b.len() {
+        out.push_str(piece);
+    }
+    out
+}
+
+// The string with its `at`-th character made a `*`.
+fn starred(s: String, at: i64) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    for i in 0..b.len() {
+        if i == at {
+            out.push('*');
+        } else {
+            out.push(b[i] as char);
+        }
+    }
+    out
+}
+
+fn random_string(seed: mut ref i64, most: i64, weights: i64) -> String {
+    let n = 1 + next_random(seed) % most;
+    let mut s = String.new();
+    for _ in 0..n {
+        // weights picks how often each character comes: 0 even, 1 more
+        // `(` and `)`, 2 more `*`.
+        let r = next_random(seed) % 10;
+        let star = if weights == 0 { 3 } else if weights == 1 { 1 } else { 6 };
+        if r < star {
+            s.push('*');
+        } else if r % 2 == 0 {
+            s.push('(');
+        } else {
+            s.push(')');
+        }
+    }
+    s
+}
+
+fn main() {
+    // Every string of up to 7 characters is held to the definition, and
+    // 2000 random strings of up to 60 to the other four properties, a
+    // third with the characters even, a third with fewer stars and a
+    // third with more.
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    let mut small = 0;
+    let mut total = 1;
+    for n in 1..8 {
+        total *= 3;
+        for i in 0..total {
+            let mut s = String.new();
+            let mut rest = i;
+            for _ in 0..n {
+                let d = rest % 3;
+                rest /= 3;
+                if d == 0 {
+                    s.push('(');
+                } else if d == 1 {
+                    s.push(')');
+                } else {
+                    s.push('*');
+                }
+            }
+            small += 1;
+            let want = definition(s.clone());
+            for which in 0..4 {
+                checks += 1;
+                if answer(which, s.clone()) != want {
+                    failures[0] += 1;
+                }
+            }
+        }
+    }
+    let mut seed: i64 = 678;
+    let cases = 2000;
+    let mut last = "()".to_string();
+    for c in 0..cases {
+        let s = random_string(mut seed, 60, c % 3);
+        let n = s.len() as i64;
+        let at = next_random(mut seed) % (n + 1);
+        let with_pair = put_in(s.clone(), at, "()".to_string());
+        let star_at = next_random(mut seed) % n;
+        let with_star = starred(s.clone(), star_at);
+        let mut joined = last.clone();
+        joined.push_str(s);
+        for which in 0..4 {
+            let got = answer(which, s.clone());
+            // P2: the same mirrored. P3: the same with `()` put in
+            // anywhere. P4: a character made a `*` keeps a valid string
+            // valid. P5: two valid strings joined are valid.
+            let ok = [
+                answer(which, mirrored(s.clone())) == got,
+                answer(which, with_pair.clone()) == got,
+                not got or answer(which, with_star.clone()),
+                not got or answer(which, joined.clone()),
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p + 1] += 1;
+                }
+            }
+        }
+        if answer(0, s.clone()) {
+            last = s;
+        }
+    }
+    let mut bad = 0;
+    for p in 0..5 {
+        bad += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{small + cases} strings ({small} against the definition), 4 arms, {checks} checks, {bad} failures");
+}
