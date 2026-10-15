@@ -1,0 +1,37 @@
+1970-01-01 = day 0, weekday 4, round trip ok
+2000-02-29 = day 11016, weekday 2, round trip ok
+2024-12-31 = day 20088, weekday 2, round trip ok
+1969-12-31 = day -1, weekday 3, round trip ok
+1900-03-01 = day -25508, weekday 4, round trip ok
+days in Feb 1900/2000/2024: 28 29 29
+crontab: 8 jobs, 2 errors
+  line 10 (broken): 61 is outside 0-59
+  line 11 (badday): 9 is outside 0-7
+== start at 2026-02-02 09:20 Mon
+  ran tick for 2026-02-02 09:15 Mon (326 slot(s) due): exit 0 [tick]
+  ran standup for 2026-02-02 09:00 Mon (2 slot(s) due): exit 0 [standup]
+  ran billing for 2026-02-01 02:30 Sun (1 slot(s) due): exit 0 [billing run]
+  ran friday13 for 2026-01-30 12:00 Fri (1 slot(s) due): exit 0 [spooky]
+  ran backup for 2026-02-01 00:00 Sun (1 slot(s) due): exit 3 [backup]
+  ran odd for 2026-01-31 10:35 Sat (8 slot(s) due): exit 0 [odd hours]
+  ran monthend for 2026-01-31 00:00 Sat (1 slot(s) due): exit 0 [thirty-first]
+  next:
+    tick      */15 * * * *         2026-02-02 09:30 Mon
+    standup   0 9 * * mon-fri      2026-02-03 09:00 Tue
+    billing   30 2 1 * *           2026-03-01 02:30 Sun
+    leapday   0 0 29 2 *           2028-02-29 00:00 Tue
+    friday13  0 12 13 * fri        2026-02-06 12:00 Fri
+    backup    0 0 * * 0            2026-02-08 00:00 Sun
+    odd       5,35 8-10/2 * jan,jul * 2026-07-01 08:05 Wed
+    monthend  0 0 31 * *           2026-03-31 00:00 Tue
+== start at 2026-02-02 10:30 Mon
+  ran tick for 2026-02-02 10:30 Mon (5 slot(s) due): exit 0 [tick]
+  next:
+    tick      */15 * * * *         2026-02-02 10:45 Mon
+    standup   0 9 * * mon-fri      2026-02-03 09:00 Tue
+    billing   30 2 1 * *           2026-03-01 02:30 Sun
+    leapday   0 0 29 2 *           2028-02-29 00:00 Tue
+    friday13  0 12 13 * fri        2026-02-06 12:00 Fri
+    backup    0 0 * * 0            2026-02-08 00:00 Sun
+    odd       5,35 8-10/2 * jan,jul * 2026-07-01 08:05 Wed
+    monthend  0 0 31 * *           2026-03-31 00:00 Tue

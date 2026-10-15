@@ -1,0 +1,420 @@
+// A cron scheduler: crontab parsing, next-fire computation, and a catch-up
+// run over real child processes.
+//
+// The crontab is a file with the classic five fields (minute, hour, day of
+// month, month, day of week), lists, ranges, steps, month and weekday
+// names, the @hourly / @daily / @weekly / @monthly / @yearly macros, and
+// Vixie cron's rule that when both day fields are restricted a day matches
+// if EITHER does. Times are UTC seconds since the epoch, converted to and
+// from civil dates by hand (Howard Hinnant's days-from-civil algorithm).
+//
+// The scheduler keeps a state file with each job's last run. On start it
+// works out which runs were missed while it was down, runs each due job
+// once (not once per missed slot), records the result, and prints the next
+// fire times. A second start an hour later shows the state carried over.
+//
+// Workarounds: B-2026-10-15-22 (see `since` in start), B-2026-10-12-6
+// (parse returns Option), B-2026-10-12-7 (split is an eager Vec).
+
+const CRONTAB: Str = "# m h dom mon dow  name  command
+*/15 * * * *        tick     echo tick
+0 9 * * mon-fri     standup  echo standup
+30 2 1 * *          billing  echo billing run
+0 0 29 2 *          leapday  echo leap day
+0 12 13 * fri       friday13 echo spooky
+@weekly             backup   sh -c 'echo backup; exit 3'
+5,35 8-10/2 * jan,jul *  odd  echo odd hours
+0 0 31 * *          monthend echo thirty-first
+61 * * * *          broken   echo never
+0 0 * * 9           badday   echo never
+";
+
+// ---- calendar -----------------------------------------------------------
+
+struct Civil { y: i64, m: i64, d: i64, hh: i64, mm: i64, ss: i64 }
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn to_civil(t: i64) -> Civil {
+    let days = floor_div(t, 86400);
+    let secs = t - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    Civil { y: y, m: m, d: d, hh: secs / 3600, mm: secs % 3600 / 60, ss: secs % 60 }
+}
+
+fn to_epoch(c: ref Civil) -> i64 {
+    days_from_civil(c.y, c.m, c.d) * 86400 + c.hh * 3600 + c.mm * 60 + c.ss
+}
+
+// 0 = Sunday.
+fn weekday(t: i64) -> i64 {
+    let days = floor_div(t, 86400);
+    let w = (days + 4) % 7;
+    if w < 0 { w + 7 } else { w }
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        if is_leap(y) { 29 } else { 28 }
+    } else if m == 4 or m == 6 or m == 9 or m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+fn two(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn stamp(t: i64) -> String {
+    let c = to_civil(t);
+    let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    f"{c.y}-{two(c.m)}-{two(c.d)} {two(c.hh)}:{two(c.mm)} {names[weekday(t)]}"
+}
+
+// ---- cron expressions ---------------------------------------------------
+
+// A field is the set of values it allows, as a bitmask.
+struct Spec { minutes: u64, hours: u64, doms: u64, months: u64, dows: u64, dom_star: bool, dow_star: bool }
+
+fn name_value(s: Str, names: ref Vec[String], base: i64) -> Option[i64] {
+    let low = s.to_lowercase();
+    for i in 0..names.len() {
+        if names[i] == low {
+            return Some(i + base);
+        }
+    }
+    i64.parse(s)
+}
+
+fn parse_field(f: Str, lo: i64, hi: i64, names: ref Vec[String], base: i64) -> Result[u64, String] {
+    let mut mask: u64 = 0u64;
+    for part in f.split(",") {
+        let (range, step) = match part.find("/") {
+            Some(i) => {
+                let st = match i64.parse(part[i + 1..part.len()]) {
+                    Some(n) => n,
+                    None => return Err(f"bad step in {part}"),
+                };
+                if st <= 0 {
+                    return Err(f"step must be positive in {part}");
+                }
+                (part[0..i].to_string(), st)
+            }
+            None => (part.to_string(), 1),
+        };
+        let (a, b) = if range == "*" {
+            (lo, hi)
+        } else {
+            match range.find("-") {
+                Some(i) => {
+                    let a = name_value(range[0..i], names, base);
+                    let b = name_value(range[i + 1..range.len()], names, base);
+                    match (a, b) {
+                        (Some(x), Some(y)) => (x, y),
+                        _ => return Err(f"bad range {range}"),
+                    }
+                }
+                None => match name_value(range, names, base) {
+                    Some(x) => (x, if step > 1 { hi } else { x }),
+                    None => return Err(f"bad value {range}"),
+                },
+            }
+        };
+        if a < lo or b > hi or a > b {
+            return Err(f"{part} is outside {lo}-{hi}");
+        }
+        let mut v = a;
+        while v <= b {
+            mask = mask | (1u64 << (v as u64));
+            v = v + step;
+        }
+    }
+    Ok(mask)
+}
+
+fn parse_spec(fields: ref Vec[String]) -> Result[Spec, String] {
+    let none: Vec[String] = Vec.new();
+    let months: Vec[String] = vec!["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].iter().map(|s| s.to_string()).collect();
+    let days: Vec[String] = vec!["sun", "mon", "tue", "wed", "thu", "fri", "sat"].iter().map(|s| s.to_string()).collect();
+    let minutes = parse_field(fields[0], 0, 59, none, 0)?;
+    let hours = parse_field(fields[1], 0, 23, none, 0)?;
+    let doms = parse_field(fields[2], 1, 31, none, 0)?;
+    let mons = parse_field(fields[3], 1, 12, months, 1)?;
+    // 7 is also Sunday.
+    let mut dows = parse_field(fields[4], 0, 7, days, 0)?;
+    if has(dows, 7) {
+        dows = (dows | 1u64) & 0x7fu64;
+    }
+    Ok(Spec { minutes: minutes, hours: hours, doms: doms, months: mons, dows: dows, dom_star: fields[2] == "*", dow_star: fields[4] == "*" })
+}
+
+fn has(mask: u64, v: i64) -> bool {
+    (mask >> (v as u64)) & 1u64 == 1u64
+}
+
+fn day_matches(s: ref Spec, c: ref Civil, t: i64) -> bool {
+    let dom = has(s.doms, c.d);
+    let dow = has(s.dows, weekday(t));
+    if s.dom_star or s.dow_star {
+        dom and dow
+    } else {
+        dom or dow
+    }
+}
+
+// The first minute strictly after `after` that the spec allows, searching
+// up to `limit` years ahead (a spec like Feb 30 never fires).
+fn next_fire(s: ref Spec, after: i64, limit: i64) -> Option[i64] {
+    let mut t = floor_div(after, 60) * 60 + 60;
+    let stop = after + limit * 366 * 86400;
+    while t <= stop {
+        let c = to_civil(t);
+        if not has(s.months, c.m) {
+            // Jump to the first day of the next month.
+            let (ny, nm) = if c.m == 12 { (c.y + 1, 1) } else { (c.y, c.m + 1) };
+            t = days_from_civil(ny, nm, 1) * 86400;
+            continue;
+        }
+        if not day_matches(s, c, t) {
+            t = (floor_div(t, 86400) + 1) * 86400;
+            continue;
+        }
+        if not has(s.hours, c.hh) {
+            t = floor_div(t, 3600) * 3600 + 3600;
+            continue;
+        }
+        if not has(s.minutes, c.mm) {
+            t = t + 60;
+            continue;
+        }
+        return Some(t);
+    }
+    None
+}
+
+// ---- crontab ------------------------------------------------------------
+
+struct Job { name: String, command: String, spec: Spec, expr: String }
+
+fn macro_fields(m: Str) -> Option[String] {
+    if m == "@hourly" {
+        Some("0 * * * *".to_string())
+    } else if m == "@daily" or m == "@midnight" {
+        Some("0 0 * * *".to_string())
+    } else if m == "@weekly" {
+        Some("0 0 * * 0".to_string())
+    } else if m == "@monthly" {
+        Some("0 0 1 * *".to_string())
+    } else if m == "@yearly" or m == "@annually" {
+        Some("0 0 1 1 *".to_string())
+    } else {
+        None
+    }
+}
+
+fn parse_crontab(text: Str) -> (Vec[Job], Vec[String]) {
+    let mut jobs: Vec[Job] = Vec.new();
+    let mut errors: Vec[String] = Vec.new();
+    let mut n = 0;
+    for line in text.lines() {
+        n += 1;
+        let t = line.trim();
+        if t.len() == 0 or t.starts_with("#") {
+            continue;
+        }
+        let words: Vec[String] = t.split_whitespace().iter().map(|w| w.to_string()).collect();
+        let (time, rest) = if words[0].starts_with("@") {
+            match macro_fields(words[0]) {
+                Some(f) => (f, 1),
+                None => {
+                    errors.push(f"line {n}: unknown macro {words[0]}");
+                    continue;
+                }
+            }
+        } else {
+            if words.len() < 7 {
+                errors.push(f"line {n}: too few fields");
+                continue;
+            }
+            (f"{words[0]} {words[1]} {words[2]} {words[3]} {words[4]}", 5)
+        };
+        if words.len() < rest + 2 {
+            errors.push(f"line {n}: no command");
+            continue;
+        }
+        let fields: Vec[String] = time.split(" ").iter().map(|w| w.to_string()).collect();
+        let mut command = String.new();
+        for k in rest + 1..words.len() {
+            if command.len() > 0 {
+                command.push(' ');
+            }
+            command.push_str(words[k]);
+        }
+        match parse_spec(fields) {
+            Ok(spec) => jobs.push(Job { name: words[rest].clone(), command: command, spec: spec, expr: time }),
+            Err(e) => errors.push(f"line {n} ({words[rest]}): {e}"),
+        }
+    }
+    (jobs, errors)
+}
+
+// ---- running ------------------------------------------------------------
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.Other(m) => m.clone(),
+        _ => "io error".to_string(),
+    }
+}
+
+fn run_command(cmd: Str) -> (i64, String) {
+    let child = match Command.new("sh").arg("-c").arg(cmd.to_string())
+        .stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        Ok(c) => c,
+        Err(e) => return (-1, f"spawn: {show(e)}"),
+    };
+    let out = match child.stdout() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    match child.wait() {
+        Ok(st) => (st.code, out.trim().to_string()),
+        Err(e) => (-1, f"wait: {show(e)}"),
+    }
+}
+
+fn load_state() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    match fs.read_to_string("cron.state".to_string()) {
+        Ok(text) => {
+            for line in text.lines() {
+                let p: Vec[String] = line.split(" ");
+                if p.len() == 2 {
+                    match i64.parse(p[1]) {
+                        Some(t) => {
+                            m.insert(p[0].clone(), t);
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    m
+}
+
+fn save_state(m: ref SortedMap[String, i64]) {
+    let mut s = String.new();
+    for (k, v) in m.iter() {
+        s.push_str(f"{k} {v}\n");
+    }
+    match fs.write("cron.state".to_string(), s) {
+        Ok(_) => {}
+        Err(_) => println("cannot save state"),
+    }
+}
+
+// One scheduler start at `now`, after being down since the state's times.
+fn start(jobs: ref Vec[Job], now: i64, first_start: i64) {
+    println(f"== start at {stamp(now)}");
+    let mut state = load_state();
+    for j in jobs.iter() {
+        // Annotated: unannotated, `since` is a `ref i64` and the MIR built
+        // for `t = f` below is invalid (B-2026-10-15-22).
+        let since: i64 = state.get(j.name).unwrap_or(first_start);
+        let mut missed = 0;
+        let mut last_slot = -1;
+        let mut t = since;
+        loop {
+            match next_fire(j.spec, t, 1) {
+                Some(f) => {
+                    if f > now {
+                        break;
+                    }
+                    missed += 1;
+                    last_slot = f;
+                    t = f;
+                }
+                None => break,
+            }
+        }
+        if missed > 0 {
+            let (code, out) = run_command(j.command);
+            println(f"  ran {j.name} for {stamp(last_slot)} ({missed} slot(s) due): exit {code} [{out}]");
+            state.insert(j.name.clone(), now);
+        }
+    }
+    save_state(state);
+    println("  next:");
+    for j in jobs.iter() {
+        match next_fire(j.spec, now, 8) {
+            Some(f) => println(f"    {j.name:<9} {j.expr:<20} {stamp(f)}"),
+            None => println(f"    {j.name:<9} {j.expr:<20} never"),
+        }
+    }
+}
+
+fn main() {
+    // A few fixed points first: the epoch, a leap day, and dates before 1970.
+    for (y, m, d) in [(1970, 1, 1), (2000, 2, 29), (2024, 12, 31), (1969, 12, 31), (1900, 3, 1)] {
+        let days = days_from_civil(y, m, d);
+        let (y2, m2, d2) = civil_from_days(days);
+        let back = if (y2, m2, d2) == (y, m, d) { "ok" } else { "MISMATCH" };
+        println(f"{y}-{two(m)}-{two(d)} = day {days}, weekday {weekday(days * 86400)}, round trip {back}");
+    }
+    println(f"days in Feb 1900/2000/2024: {days_in_month(1900, 2)} {days_in_month(2000, 2)} {days_in_month(2024, 2)}");
+
+    match fs.write("crontab".to_string(), CRONTAB.to_string()) {
+        Ok(_) => {}
+        Err(_) => {
+            println("cannot write crontab");
+            return;
+        }
+    }
+    let text = fs.read_to_string("crontab".to_string()).unwrap_or(String.new());
+    let (jobs, errors) = parse_crontab(text);
+    println(f"crontab: {jobs.len()} jobs, {errors.len()} errors");
+    for e in errors.iter() {
+        println(f"  {e}");
+    }
+
+    // Down from Thu 2026-01-29 23:50 to Mon 2026-02-02 09:20.
+    let first = to_epoch(Civil { y: 2026, m: 1, d: 29, hh: 23, mm: 50, ss: 0 });
+    let now = to_epoch(Civil { y: 2026, m: 2, d: 2, hh: 9, mm: 20, ss: 17 });
+    start(jobs, now, first);
+    start(jobs, now + 3600 + 600, first);
+}

@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 172 |
 | perf | 166 |
 | diagnostics | 162 |
-| crash | 118 |
+| crash | 119 |
 | soundness | 105 |
 | use-after-free | 90 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2896 |
-| interp | 926 |
-| typecheck | 430 |
+| codegen | 2897 |
+| interp | 927 |
+| typecheck | 431 |
 | other | 115 |
 | ownership | 99 |
 | cli | 76 |
@@ -217,6 +217,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-19 | 2026-10-15 | typecheck | medium | A `String` argument is not accepted for a `Str` parameter when the method is called through a generic bound: `fn look[S: Store](s: ref S, k: ref String) -> i64 { s.get(k).unwrap_or(0) }` with `fn get(self, key: Str)` is refused with "expected 'StringSlice', found 'ref String'" by check and by the MIR front end, though the same call on the concrete type (`m.get(k)`) is accepted | — |
 | B-2026-10-15-20 | 2026-10-15 | ownership | medium | `karac check` reports "value 'i' is moved inside a loop and not assigned again before the next iteration" for a binding declared INSIDE the loop body, when it is mutated inside an `if` before the move: `for k in ks.iter() { let mut i = It { n: k }; if k > 1 { i.n -= 1; } s.take(i); }` is refused, while the same body without the `if` (or with `i.n -= if k > 1 { 1 } else { 0 };`) passes, and every MIR surface runs the refused form | — |
 | B-2026-10-15-21 | 2026-10-15 | effect | medium | A call through a generic bound is charged the effects of EVERY impl of the trait method instead of the instance's (design.md §12 Trait methods and generic calls): `pub fn mem_only(m: mut ref Mem) with allocates(Heap) { store_twice(mut m); }` is refused as performing writes(FileSystem), which only the other impl (`Disk`) does; `karac check` also prints a bogus "mutual recursion group" note pairing `MemStore.get` with `FileStore.get` | — |
+| B-2026-10-15-22 | 2026-10-15 | typecheck+interp+codegen | medium | `let since = m.get(k).unwrap_or(9); let mut t = since; t = t + 1;` passes `karac check` but every MIR surface stops with an internal error, "invalid MIR: main: bb7[1]: assigning i64 to _8 of type ref i64": `since` and `t` are typed `ref i64` (the `Option[ref i64]` of `get`), so the assignment of an `i64` to `t` builds ill-typed MIR | — |
 
 ### Relocated
 
