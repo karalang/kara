@@ -1697,7 +1697,10 @@ impl super::Parser {
             Token::Identifier {
                 ref name,
                 raw: false,
-            } if name == "seq" && matches!(self.peek_token_ref_at(1), Token::LeftBrace) => {
+            } if name == "seq"
+                && !self.keyword_block_is_name
+                && matches!(self.peek_token_ref_at(1), Token::LeftBrace) =>
+            {
                 self.advance();
                 let block = self.expect_keyword_block("seq")?;
                 Some(Expr {
@@ -1712,7 +1715,9 @@ impl super::Parser {
                 ref name,
                 raw: false,
             } if name == "par"
-                && (matches!(self.peek_token_ref_at(1), Token::LeftBrace | Token::For)
+                && ((matches!(self.peek_token_ref_at(1), Token::LeftBrace)
+                    && !self.keyword_block_is_name)
+                    || matches!(self.peek_token_ref_at(1), Token::For)
                     || self.par_limit_then_for()) =>
             {
                 self.advance();
@@ -1950,7 +1955,11 @@ impl super::Parser {
     fn parse_match_expr(&mut self) -> Option<Expr> {
         let start = self.current_span();
         self.expect(&Token::Match)?;
-        let scrutinee = self.parse_expression()?;
+        let saved = self.keyword_block_is_name;
+        self.keyword_block_is_name = true;
+        let scrutinee = self.parse_expression();
+        self.keyword_block_is_name = saved;
+        let scrutinee = scrutinee?;
         self.expect(&Token::LeftBrace)?;
 
         let mut arms = Vec::new();
@@ -3135,10 +3144,11 @@ impl super::Parser {
     /// literal. Used for `if`/`while`/`for` conditions. Saves and restores the
     /// prior flag so nested/sequential parses are unaffected.
     fn parse_condition_expr(&mut self) -> Option<Expr> {
-        let saved = self.no_struct_literal;
+        let saved = (self.no_struct_literal, self.keyword_block_is_name);
         self.no_struct_literal = true;
+        self.keyword_block_is_name = true;
         let r = self.parse_expression();
-        self.no_struct_literal = saved;
+        (self.no_struct_literal, self.keyword_block_is_name) = saved;
         r
     }
 
@@ -3148,10 +3158,11 @@ impl super::Parser {
     /// values) so a struct literal nested inside a restricted condition still
     /// parses. A no-op when the flag was already clear (the common case).
     fn with_struct_literals<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let saved = self.no_struct_literal;
+        let saved = (self.no_struct_literal, self.keyword_block_is_name);
         self.no_struct_literal = false;
+        self.keyword_block_is_name = false;
         let r = f(self);
-        self.no_struct_literal = saved;
+        (self.no_struct_literal, self.keyword_block_is_name) = saved;
         r
     }
 

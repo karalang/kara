@@ -16356,3 +16356,46 @@ fn mut_inside_a_pattern_names_the_kara_spelling() {
         r.errors[0].message
     );
 }
+
+/// B-2026-10-15-43: `seq` and `par` are contextual, so a local of that name
+/// in an `if` / `while` condition or a `match` scrutinee is the name, and
+/// the `{` opens the body; a `seq {}` / `par {}` block elsewhere (a `let`
+/// value, a call argument inside a condition) still parses as one.
+#[test]
+fn seq_and_par_locals_read_as_names_in_conditions() {
+    let prog = parse_ok(
+        "fn main() {
+            let a = if seq { 3 } else { 4 };
+            let b = if par { 5 } else { 6 };
+            while seq { seq = false; }
+            let c = match par { true => 1, false => 2 };
+            let d = if f(seq { 1 }) { 7 } else { 8 };
+            let e = seq { 9 };
+        }",
+    );
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected a function");
+    };
+    let value = |i: usize| match &f.body.stmts[i].kind {
+        StmtKind::Let { value, .. } => value.clone(),
+        other => panic!("statement {i}: expected a let, got {other:?}"),
+    };
+    let name = |e: &Expr, want: &str| matches!(&e.kind, ExprKind::Identifier(n) if n == want);
+    assert!(matches!(&value(0).kind, ExprKind::If { condition, .. } if name(condition, "seq")));
+    assert!(matches!(&value(1).kind, ExprKind::If { condition, .. } if name(condition, "par")));
+    match &f.body.stmts[2].kind {
+        StmtKind::Expr(e) => {
+            assert!(matches!(&e.kind, ExprKind::While { condition, .. } if name(condition, "seq")))
+        }
+        other => panic!("expected a while, got {other:?}"),
+    }
+    assert!(matches!(&value(3).kind, ExprKind::Match { scrutinee, .. } if name(scrutinee, "par")));
+    match &value(4).kind {
+        ExprKind::If { condition, .. } => match &condition.kind {
+            ExprKind::Call { args, .. } => assert!(matches!(&args[0].value.kind, ExprKind::Seq(_))),
+            other => panic!("expected a call, got {other:?}"),
+        },
+        other => panic!("expected an if, got {other:?}"),
+    }
+    assert!(matches!(&value(5).kind, ExprKind::Seq(_)));
+}

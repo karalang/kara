@@ -350,6 +350,14 @@ pub struct Parser {
     /// scrutinee (`match P { x: 1 } { … }`), which the restriction would break.
     /// See `looks_like_struct_literal`.
     pub(crate) no_struct_literal: bool,
+    /// When set, `seq {` and `par {` at the current position read as the
+    /// NAME `seq` / `par` followed by the body block, not as a `seq {}` /
+    /// `par {}` block: the words are contextual, so `let seq = true; if seq {
+    /// … }` is a branch on a local (B-2026-10-15-43). Set for an `if` /
+    /// `while` / `for` condition, as `no_struct_literal` is, and also for a
+    /// `match` scrutinee, where a block is never what `match seq {` means.
+    /// Cleared with `no_struct_literal` inside delimited sub-expressions.
+    pub(crate) keyword_block_is_name: bool,
     /// Machine-applicable fix edits synthesized during parsing, keyed by the
     /// span of the diagnostic they resolve. Mirrors ownership.rs's
     /// `error_fix_diffs` side-channel: rather than widen `ParseError` (built
@@ -426,6 +434,7 @@ impl Parser {
             impl_trait_block_stack: Vec::new(),
             allow_type_class_param_name: false,
             no_struct_literal: false,
+            keyword_block_is_name: false,
             fix_edits: FxHashMap::default(),
             fix_diffs: FxHashMap::default(),
             let_pattern: None,
