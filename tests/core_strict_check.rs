@@ -4755,3 +4755,45 @@ fn main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn check_a_serde_program_reads_the_library() {
+    // B-2026-10-12-23: `#[derive(Serialize)]` and `Json` live only in the Kāra
+    // library, so `karac check` reads it for a serde program, as the build
+    // does, and a derive's own error is reported at the user's type.
+    accepted(
+        "serde-accepted",
+        r#"
+#[derive(Serialize, Deserialize)]
+struct Config {
+    #[serde(rename: "server_name")]
+    name: String,
+    #[serde(default: 8080)]
+    port: i64,
+    shapes: Vec[Shape],
+}
+#[derive(Serialize, Deserialize)]
+enum Shape { Dot, Circle(i64), Named { label: String } }
+fn main() {
+    let c = Config { name: "a".to_string(), port: 1, shapes: vec![Shape.Dot, Shape.Circle(2)] };
+    let s = Json.serialize(c);
+    println(s);
+    let back: Result[Config, DeserializeError] = Json.deserialize(s);
+    match back {
+        Ok(c) => println(c.port),
+        Err(e) => println(e.message),
+    }
+}
+"#,
+    );
+    rejected(
+        "serde-tagged-tuple",
+        r#"
+#[derive(Serialize)]
+#[serde(tag: "type")]
+enum Bad { A(i64) }
+fn main() { println(Json.serialize(Bad.A(1))); }
+"#,
+        "`Bad.A` is a tuple variant",
+    );
+}

@@ -129,6 +129,7 @@ pub fn expand_proto_schemas(program: &mut Program) -> Vec<ComptimeError> {
         interp,
         typed: &typed,
         errors: Vec::new(),
+        library_start: program.library_start,
     };
 
     // Evaluate each schema, then splice last-to-first so earlier indices stay
@@ -202,6 +203,7 @@ pub fn evaluate(program: &mut Program, typed: &TypeCheckResult) -> Vec<ComptimeE
         interp,
         typed,
         errors: Vec::new(),
+        library_start: program.library_start,
     };
     // Pass 1: fold `comptime { ... }` blocks in existing item bodies.
     if needs_fold {
@@ -527,6 +529,10 @@ struct Folder<'a> {
     interp: Interpreter<'a>,
     typed: &'a TypeCheckResult,
     errors: Vec<ComptimeError>,
+    /// Where appended library text starts, if any: a `compiler.error` raised
+    /// in a library derive's body is reported at the user's derive site,
+    /// which `karac check` keeps, rather than in the library (B-2026-10-12-23).
+    library_start: Option<usize>,
 }
 
 impl Folder<'_> {
@@ -998,9 +1004,15 @@ impl Folder<'_> {
             .comptime_user_errors
             .split_off(user_errors_before)
         {
+            let in_library = |s: &Span| self.library_start.is_some_and(|n| s.offset >= n);
+            let span = if in_library(&diag.span) && !in_library(site) {
+                *site
+            } else {
+                diag.span
+            };
             self.errors.push(ComptimeError {
                 message: format!("error[E_COMPTIME_ERROR]: {}", diag.message),
-                span: diag.span,
+                span,
             });
         }
 

@@ -1136,9 +1136,11 @@ impl Pipeline {
         };
         // A program using `std.process` or `std.net` is always checked this
         // way: its v2 surface is in the library, not the baked legacy module
-        // (B-2026-10-15-6, B-2026-10-15-18).
+        // (B-2026-10-15-6, B-2026-10-15-18). So is one using serde, which
+        // only the library defines (B-2026-10-12-23).
         if std::env::var("KARAC_CHECK_LIBRARY").as_deref() != Ok("1")
             && !crate::mir::lower::uses_v2_library_module(&src)
+            && !uses_serde(&src)
         {
             return self;
         }
@@ -2726,4 +2728,14 @@ fn library_fn_names(
         }
     }
     out
+}
+
+/// Whether `src` names the serde surface, which only the Kāra library
+/// defines (`#[derive(Serialize)]`, `Json`, `DeserializeError`;
+/// B-2026-10-12-23).
+fn uses_serde(src: &str) -> bool {
+    crate::tokenize(src).iter().any(|t| {
+        matches!(&t.token, crate::token::Token::Identifier { name, .. }
+            if matches!(name.as_str(), "Serialize" | "Deserialize" | "Json" | "DeserializeError" | "Serializer" | "Deserializer"))
+    })
 }
