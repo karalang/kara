@@ -1,0 +1,337 @@
+$ xz -l notes.txt.xz notes-crc32.xz notes-sha256.xz none.xz multi.xz concat.xz audio.raw.xz hello.xz rand.bin.xz empty.xz
+Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename
+    1       1       2216 B     14.1 KiB  0.154  CRC64   notes.txt.xz
+    1       1       2744 B     14.1 KiB  0.190  CRC32   notes-crc32.xz
+    1       1       2924 B     14.1 KiB  0.203  SHA-256 notes-sha256.xz
+    1       1        192 B        160 B  1.200  None    none.xz
+    1       4       2848 B     14.1 KiB  0.197  CRC64   multi.xz
+    2       2        288 B        182 B  1.582  CRC32,CRC64 concat.xz
+    1       1        196 B     11.7 KiB  0.016  CRC64   audio.raw.xz
+    1       1       1628 B     14.1 KiB  0.112  CRC64   hello.xz
+    1       1       3060 B       3000 B  1.020  CRC64   rand.bin.xz
+    1       0         32 B          0 B    ---  CRC64   empty.xz
+-------------------------------------------------------------------------------
+   11      13     15.8 KiB     85.5 KiB  0.184  None,CRC32,CRC64,SHA-256 10 files
+
+$ xz -lv concat.xz
+concat.xz (1/1)
+  Streams:           2
+  Blocks:            2
+  Compressed size:   288 B
+  Uncompressed size: 182 B
+  Ratio:             1.582
+  Check:             CRC32, CRC64
+  Stream Padding:    12 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0             196             160  1.225  CRC32            8
+         2         1             204             160              80              22  3.636  CRC64            4
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check
+         1         1              12               0             160             160  1.000  CRC32
+         2         1             216             160              48              22  2.182  CRC64
+
+$ xz -lv none.xz rand.bin.xz
+none.xz (1/2)
+  Streams:           1
+  Blocks:            1
+  Compressed size:   192 B
+  Uncompressed size: 160 B
+  Ratio:             1.200
+  Check:             None
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0             192             160  1.200  None             0
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check
+         1         1              12               0             156             160  0.975  None
+
+rand.bin.xz (2/2)
+  Streams:           1
+  Blocks:            1
+  Compressed size:   3060 B
+  Uncompressed size: 3000 B
+  Ratio:             1.020
+  Check:             CRC64
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0            3060            3000  1.020  CRC64            0
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check
+         1         1              12               0            3024            3000  1.008  CRC64
+
+Totals:
+  Number of files:   2
+  Streams:           2
+  Blocks:            2
+  Compressed size:   3252 B
+  Uncompressed size: 3160 B
+  Ratio:             1.029
+  Check:             None, CRC64
+  Stream Padding:    0 B
+
+$ xz -lvv multi.xz audio.raw.xz hello.xz
+multi.xz (1/3)
+  Streams:           1
+  Blocks:            4
+  Compressed size:   2848 B
+  Uncompressed size: 14.1 KiB (14428 B)
+  Ratio:             0.197
+  Check:             CRC64
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         4               0               0            2848           14428  0.197  CRC64            0
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check      CheckVal          Header  Flags        CompSize    MemUsage  Filters
+         1         1              12               0             768            4096  0.188  CRC64      895e8399110bea73      16  cu                744       9 MiB  --lzma2=dict=8MiB
+         1         2             780            4096             776            4096  0.189  CRC64      2be9f6b65a4cdd1b      16  cu                749       9 MiB  --lzma2=dict=8MiB
+         1         3            1556            8192             776            4096  0.189  CRC64      0f561be5591df24e      16  cu                752       9 MiB  --lzma2=dict=8MiB
+         1         4            2332           12288             480            2140  0.224  CRC64      92c5a32f7e423c57      16  cu                456       9 MiB  --lzma2=dict=8MiB
+  Memory needed:     9 MiB
+  Sizes in headers:  Yes
+  Minimum XZ Utils version: 5.0.0
+
+audio.raw.xz (2/3)
+  Streams:           1
+  Blocks:            1
+  Compressed size:   196 B
+  Uncompressed size: 11.7 KiB (12000 B)
+  Ratio:             0.016
+  Check:             CRC64
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0             196           12000  0.016  CRC64            0
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check      CheckVal          Header  Flags        CompSize    MemUsage  Filters
+         1         1              12               0             160           12000  0.013  CRC64      00e180dd1d52d4fa      12  --                139       9 MiB  --delta=dist=4 --lzma2=dict=8MiB
+  Memory needed:     9 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+hello.xz (3/3)
+  Streams:           1
+  Blocks:            1
+  Compressed size:   1628 B
+  Uncompressed size: 14.1 KiB (14472 B)
+  Ratio:             0.112
+  Check:             CRC64
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0            1628           14472  0.112  CRC64            0
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check      CheckVal          Header  Flags        CompSize    MemUsage  Filters
+         1         1              12               0            1592           14472  0.110  CRC64      dc5a810d60ab8564      12  --               1570       9 MiB  --x86 --lzma2=dict=8MiB
+  Memory needed:     9 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+Totals:
+  Number of files:   3
+  Streams:           3
+  Blocks:            6
+  Compressed size:   4672 B
+  Uncompressed size: 39.9 KiB (40900 B)
+  Ratio:             0.114
+  Check:             CRC64
+  Stream Padding:    0 B
+  Memory needed:     9 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+$ xz -lvv notes-sha256.xz empty.xz
+notes-sha256.xz (1/2)
+  Streams:           1
+  Blocks:            1
+  Compressed size:   2924 B
+  Uncompressed size: 14.1 KiB (14428 B)
+  Ratio:             0.203
+  Check:             SHA-256
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0            2924           14428  0.203  SHA-256          0
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check      CheckVal                                                          Header  Flags        CompSize    MemUsage  Filters
+         1         1              12               0            2888           14428  0.200  SHA-256    9124bf02290d3120eeef97e19a08c589e4e49238150a382c4fc2ded97afb9885      12  --               2844       1 MiB  --lzma2=dict=256KiB
+  Memory needed:     1 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+empty.xz (2/2)
+  Streams:           1
+  Blocks:            0
+  Compressed size:   32 B
+  Uncompressed size: 0 B
+  Ratio:             ---
+  Check:             CRC64
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         0               0               0              32               0    ---  CRC64            0
+  Memory needed:     0 MiB
+  Sizes in headers:  Yes
+  Minimum XZ Utils version: 5.0.0
+
+Totals:
+  Number of files:   2
+  Streams:           2
+  Blocks:            1
+  Compressed size:   2956 B
+  Uncompressed size: 14.1 KiB (14428 B)
+  Ratio:             0.205
+  Check:             CRC64, SHA-256
+  Stream Padding:    0 B
+  Memory needed:     1 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+$ xz -lvv concat.xz none.xz
+concat.xz (1/2)
+  Streams:           2
+  Blocks:            2
+  Compressed size:   288 B
+  Uncompressed size: 182 B
+  Ratio:             1.582
+  Check:             CRC32, CRC64
+  Stream Padding:    12 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0             196             160  1.225  CRC32            8
+         2         1             204             160              80              22  3.636  CRC64            4
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check      CheckVal          Header  Flags        CompSize    MemUsage  Filters
+         1         1              12               0             160             160  1.000  CRC32      37b5d2a9              12  --                141       9 MiB  --lzma2=dict=8MiB
+         2         1             216             160              48              22  2.182  CRC64      963b37352d06f2b1      12  --                 26       9 MiB  --lzma2=dict=8MiB
+  Memory needed:     9 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+none.xz (2/2)
+  Streams:           1
+  Blocks:            1
+  Compressed size:   192 B
+  Uncompressed size: 160 B
+  Ratio:             1.200
+  Check:             None
+  Stream Padding:    0 B
+  Streams:
+    Stream    Blocks      CompOffset    UncompOffset        CompSize      UncompSize  Ratio  Check      Padding
+         1         1               0               0             192             160  1.200  None             0
+  Blocks:
+    Stream     Block      CompOffset    UncompOffset       TotalSize      UncompSize  Ratio  Check      CheckVal  Header  Flags        CompSize    MemUsage  Filters
+         1         1              12               0             156             160  0.975  None       ---           12  --                141       9 MiB  --lzma2=dict=8MiB
+  Memory needed:     9 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+Totals:
+  Number of files:   2
+  Streams:           3
+  Blocks:            3
+  Compressed size:   480 B
+  Uncompressed size: 342 B
+  Ratio:             1.404
+  Check:             None, CRC32, CRC64
+  Stream Padding:    12 B
+  Memory needed:     9 MiB
+  Sizes in headers:  No
+  Minimum XZ Utils version: 5.0.0
+
+$ xz -l none.xz tiny.xz rand.bin.xz plain.xz
+Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename
+    1       1        192 B        160 B  1.200  None    none.xz
+    1       1       3060 B       3000 B  1.020  CRC64   rand.bin.xz
+-------------------------------------------------------------------------------
+    2       2       3252 B       3160 B  1.029  None,CRC64 2 files
+xz: tiny.xz: Too small to be a valid .xz file
+xz: plain.xz: File format not recognized
+[exit status 1]
+
+$ xz -l legacy.lzma
+xz: legacy.lzma: File format not recognized
+[exit status 1]
+
+$ xz -l badfooter.xz
+xz: badfooter.xz: Compressed data is corrupt
+[exit status 1]
+
+$ xz -l trunc.xz
+xz: trunc.xz: Compressed data is corrupt
+[exit status 1]
+
+$ xz -l missing.xz
+xz: missing.xz: No such file or directory
+[exit status 1]
+
+$ xz -t notes.txt.xz notes-crc32.xz notes-sha256.xz none.xz multi.xz concat.xz audio.raw.xz hello.xz rand.bin.xz empty.xz legacy.lzma
+
+$ xz -tv multi.xz concat.xz empty.xz legacy.lzma
+multi.xz: 2848 B / 14.1 KiB = 0.197
+concat.xz: 288 B / 182 B = 1.582
+empty.xz: 32 B / 0 B > 9.999
+legacy.lzma: 152 B / 160 B = 0.950
+
+$ xz -t trunc.xz
+xz: trunc.xz: Unexpected end of input
+[exit status 1]
+
+$ xz -t flip.xz
+xz: flip.xz: Compressed data is corrupt
+[exit status 1]
+
+$ xz -t badcheck.xz
+xz: badcheck.xz: Compressed data is corrupt
+[exit status 1]
+
+$ xz -t plain.xz tiny.xz
+xz: plain.xz: File format not recognized
+xz: tiny.xz: File format not recognized
+[exit status 1]
+
+$ xz -t missing.xz
+xz: missing.xz: No such file or directory
+[exit status 1]
+
+$ xz -dc concat.xz
+#include <stdio.h>
+
+int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++)
+        printf("hello, %s\n", argv[i]);
+    return argc > 1 ? 0 : 1;
+}
+two streams, one file
+
+$ xz -dc legacy.lzma
+#include <stdio.h>
+
+int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++)
+        printf("hello, %s\n", argv[i]);
+    return argc > 1 ? 0 : 1;
+}
+
+$ xz -dk hello.xz
+
+$ sha256sum hello
+6f5a6d8b042e911fdd6cc903d14cb3ebdd28f9b6a3486e62c085353e7aabd52f  hello
+
+$ xz -dk audio.raw.xz
+
+$ sha256sum audio.raw
+499bfa35ac82a91c318fd98cbaa9a95690feee5631ffef84704e27bde54cbc20  audio.raw
+
+$ xz -dk rand.bin.xz
+
+$ sha256sum rand.bin
+8e6f28b5bac07603e5916d96e84c7054864ad296af236acd2b4974af418191ab  rand.bin
+
+$ xz -dk notes.txt.xz
+xz: notes.txt: File exists
+[exit status 1]
+

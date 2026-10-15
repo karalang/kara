@@ -193,6 +193,7 @@ cli/mini_readelf        GNU readelf for x86-64 ELF, checksec, loader version and
 cli/mini_unzip          Info-ZIP unzip and zipinfo: inflate, ZipCrypto, zip64, data descriptors, zip-slip defences, sfx offsets
 cli/mini_x509           OpenSSL x509, asn1parse and verify: DER, names, extensions, SHA-1/256, Montgomery RSA, chain checks
 cli/mini_bzip2          bzip2 1.0.8 -t/-d/-k/-v: streams, CRCs, BWT, MTF, bzip2's Huffman tables, byte-exact output
+cli/mini_xz             XZ Utils xz -l/-lvv/-t/-d: streams, index, LZMA2/LZMA, delta and x86 filters, CRC-64, SHA-256
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
