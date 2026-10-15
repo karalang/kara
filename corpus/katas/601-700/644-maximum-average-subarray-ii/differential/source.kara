@@ -1,0 +1,254 @@
+// LeetCode #644: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+// The start and end of a subarray of `k` or more values averaging at
+// least `m`, or (-1, -1) if there is none.
+fn reaches_star(prefix: Vec[i64], k: i64, m: f64) -> (i64, i64) {
+    let mut lowest = 0;
+    for end in k..prefix.len() {
+        let c = end - k;
+        // `prefix[c] - m * c` below `prefix[lowest] - m * lowest`.
+        if ((prefix[c] - prefix[lowest]) as f64) < m * (c - lowest) as f64 {
+            lowest = c;
+        }
+        if ((prefix[end] - prefix[lowest]) as f64) >= m * (end - lowest) as f64 {
+            return (lowest, end);
+        }
+    }
+    (-1, -1)
+}
+
+fn find_max_average_star(nums: Vec[i64], k: i64) -> f64 {
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut lo = nums[0] as f64;
+    let mut hi = nums[0] as f64;
+    for x in nums.iter() {
+        lo = lo.min(*x as f64);
+        hi = hi.max(*x as f64);
+    }
+    // The whole array averages at least the smallest value.
+    let mut best = (0, nums.len());
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let (start, end) = reaches_star(prefix, k, mid);
+        if start == -1 {
+            hi = mid;
+        } else {
+            lo = mid;
+            best = (start, end);
+        }
+    }
+    let (start, end) = best;
+    (prefix[end] - prefix[start]) as f64 / (end - start) as f64
+}
+
+// ---- pairs arm ---------------------------------------------------------
+
+fn find_max_average_pairs(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut best_sum = prefix[k];
+    let mut best_len = k;
+    for start in 0..n - k + 1 {
+        for end in start + k..n + 1 {
+            let sum = prefix[end] - prefix[start];
+            let len = end - start;
+            if sum * best_len > best_sum * len {
+                best_sum = sum;
+                best_len = len;
+            }
+        }
+    }
+    best_sum as f64 / best_len as f64
+}
+
+// ---- hull arm ----------------------------------------------------------
+
+fn find_max_average_hull(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut hull: VecDeque[i64] = VecDeque.new();
+    let mut best_sum = prefix[k];
+    let mut best_len = k;
+    for end in k..n + 1 {
+        // The start `end - k` becomes allowed; keep the hull convex.
+        let c = end - k;
+        while hull.len() >= 2 {
+            let a = hull[hull.len() - 2];
+            let b = hull[hull.len() - 1];
+            // Drop `b` if it is not below the line from `a` to `c`.
+            if (prefix[b] - prefix[a]) * (c - a) >= (prefix[c] - prefix[a]) * (b - a) {
+                hull.pop_back();
+            } else {
+                break;
+            }
+        }
+        hull.push_back(c);
+        // Move the front on while the next start gives a steeper line.
+        while hull.len() >= 2 {
+            let a = hull[0];
+            let b = hull[1];
+            if (prefix[end] - prefix[b]) * (end - a) >= (prefix[end] - prefix[a]) * (end - b) {
+                hull.pop_front();
+            } else {
+                break;
+            }
+        }
+        let start = hull[0];
+        let sum = prefix[end] - prefix[start];
+        let len = end - start;
+        if sum * best_len > best_sum * len {
+            best_sum = sum;
+            best_len = len;
+        }
+    }
+    best_sum as f64 / best_len as f64
+}
+
+// ---- short arm ---------------------------------------------------------
+
+fn find_max_average_short(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut best_sum = prefix[k];
+    let mut best_len = k;
+    for len in k..2 * k {
+        for start in 0..n - len + 1 {
+            let sum = prefix[start + len] - prefix[start];
+            if sum * best_len > best_sum * len {
+                best_sum = sum;
+                best_len = len;
+            }
+        }
+        if len == n {
+            break;
+        }
+    }
+    best_sum as f64 / best_len as f64
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, nums: Vec[i64], k: i64) -> f64 {
+    if which == 0 {
+        find_max_average_star(nums, k)
+    } else if which == 1 {
+        find_max_average_pairs(nums, k)
+    } else if which == 2 {
+        find_max_average_hull(nums, k)
+    } else {
+        find_max_average_short(nums, k)
+    }
+}
+
+// The sum of the `len` values starting at `start`, added up from scratch.
+fn range_sum(nums: Vec[i64], start: i64, len: i64) -> i64 {
+    let mut s = 0;
+    for j in start..start + len {
+        s += nums[j];
+    }
+    s
+}
+
+// The definition: every subarray of `k` or more values summed from
+// scratch, the largest average found by comparing fractions exactly, and
+// that one divided out.
+fn definition(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut best_sum = range_sum(nums, 0, k);
+    let mut best_len = k;
+    for start in 0..n {
+        for len in k..n - start + 1 {
+            let s = range_sum(nums, start, len);
+            if s * best_len > best_sum * len {
+                best_sum = s;
+                best_len = len;
+            }
+        }
+    }
+    best_sum as f64 / best_len as f64
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6440;
+    let mut checks = 0;
+    let mut values = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 25 values from -15 to 15, and `k` from 1 to n.
+        let n = 1 + next_random(mut seed) % 25;
+        let k = 1 + next_random(mut seed) % n;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 31 - 15);
+        }
+        values += n;
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut doubled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+            doubled.push(2 * nums[i]);
+        }
+        let want = definition(nums, k);
+        for which in 0..4 {
+            let got = answer(which, nums, k);
+            // P2: some subarray of `k` or more values averages exactly the
+            // answer. P3: none averages more.
+            let mut reached = false;
+            let mut above = false;
+            for start in 0..n {
+                for len in k..n - start + 1 {
+                    let a = range_sum(nums, start, len) as f64 / len as f64;
+                    if a == got {
+                        reached = true;
+                    }
+                    if a > got {
+                        above = true;
+                    }
+                }
+            }
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                reached,
+                not above,
+                // P4: the values in reverse give the same answer.
+                answer(which, reversed, k) == got,
+                // P5: every value doubled doubles it, exactly.
+                answer(which, doubled, k) == 2.0 * got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({values} values), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,45 @@
+// Benchmark for #643: the ★ arm (a sliding sum) on a fixed workload. See
+// ../README.md § Benchmarks.
+
+fn find_max_average(nums: Vec[i64], k: i64) -> f64 {
+    let mut sum = 0;
+    for i in 0..k {
+        sum += nums[i];
+    }
+    let mut best = sum;
+    for i in k..nums.len() {
+        sum += nums[i] - nums[i - k];
+        if sum > best {
+            best = sum;
+        }
+    }
+    best as f64 / k as f64
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 arrays of 100,000 values from -10,000 to 10,000, made once; then
+    // 4,000 rounds each find the best average of one array, picked by the
+    // round, at a width of 1 to 100,000 also picked by the round, adding
+    // up the answers.
+    let mut seed: i64 = 643;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..100000 {
+            nums.push(next_random(mut seed) % 20001 - 10000);
+        }
+        arrays.push(nums);
+    }
+    let rounds = 4000;
+    let mut total = 0.0;
+    for r in 0..rounds {
+        let k = 1 + (r * 7919) % 100000;
+        total += find_max_average(arrays[r % 20], k);
+    }
+    println(f"{rounds} rounds over 20 arrays of 100000 values: answers adding to {total:.5}");
+}

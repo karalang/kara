@@ -1,0 +1,93 @@
+// LeetCode #643: Maximum Average Subarray I -- the window held in a
+// queue.
+//
+// The window's values themselves sit in a `VecDeque` with their sum
+// beside them: each value read joins at the back, and once the window
+// holds more than `k` the one at the front leaves, its value taken off
+// the sum. Whenever the window holds exactly `k`, its sum is a
+// candidate. The largest is divided by `k`. O(n) time, O(k) space.
+
+fn find_max_average(nums: Vec[i64], k: i64) -> f64 {
+    let mut window: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    let mut best: Option[i64] = None;
+    for x in nums.iter() {
+        window.push_back(*x);
+        sum += *x;
+        if window.len() > k {
+            sum -= window.pop_front().unwrap();
+        }
+        if window.len() == k {
+            best = match best {
+                Some(b) => Some(b.max(sum)),
+                None => Some(sum),
+            };
+        }
+    }
+    best.unwrap() as f64 / k as f64
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    let mut text = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            text.push_str(",");
+        }
+        text.push_str(f"{nums[i]}");
+    }
+    println(f"[{text}], k = {k} -> {find_max_average(nums, k):.5}");
+}
+
+// `n` values from `-most` to `most`.
+fn random_values(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * most + 1) - most);
+    }
+    nums
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 12, -5, -6, 50, 3], 4);
+    show(vec![5], 1);
+    // Every value negative; the whole array; the largest single value;
+    // the best window at the start and at the end; an average that is
+    // not a whole number; and the extremes of the values.
+    show(vec![-3, -1, -4, -1, -5], 2);
+    show(vec![4, -2, 7, 1], 4);
+    show(vec![3, -8, 9, 2, 9, -1], 1);
+    show(vec![10, 9, 1, 2, 3], 2);
+    show(vec![1, 2, 3, 9, 10], 2);
+    show(vec![1, 2, 1, 1, 3], 3);
+    show(vec![-10000, 10000, -10000, 10000], 3);
+    // 300 random arrays of 1 to 30 values from -20 to 20, `k` picked
+    // from 1 to n.
+    let mut seed: i64 = 643;
+    let mut total = 0.0;
+    let mut whole = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % n;
+        let nums = random_values(n, 20, mut seed);
+        let a = find_max_average(nums, k);
+        total += a;
+        if a == a.floor() {
+            whole += 1;
+        }
+    }
+    println(f"300 random arrays: sum of answers {total:.5}, {whole} whole");
+    // The problem's largest: 100,000 values from -10,000 to 10,000, at
+    // four widths.
+    let nums = random_values(100000, 10000, mut seed);
+    for k in vec![1, 1000, 50000, 100000] {
+        println(f"100000 values, k = {k}: {find_max_average(nums, k):.5}");
+    }
+}

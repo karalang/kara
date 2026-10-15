@@ -1,0 +1,75 @@
+// Benchmark for #644: the ★ arm (binary search on the average) on a
+// large workload.
+
+// The start and end of a subarray of `k` or more values averaging at
+// least `m`, or (-1, -1) if there is none.
+fn reaches(prefix: Vec[i64], k: i64, m: f64) -> (i64, i64) {
+    let mut lowest = 0;
+    for end in k..prefix.len() {
+        let c = end - k;
+        // `prefix[c] - m * c` below `prefix[lowest] - m * lowest`.
+        if ((prefix[c] - prefix[lowest]) as f64) < m * (c - lowest) as f64 {
+            lowest = c;
+        }
+        if ((prefix[end] - prefix[lowest]) as f64) >= m * (end - lowest) as f64 {
+            return (lowest, end);
+        }
+    }
+    (-1, -1)
+}
+
+fn find_max_average(nums: Vec[i64], k: i64) -> f64 {
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut lo = nums[0] as f64;
+    let mut hi = nums[0] as f64;
+    for x in nums.iter() {
+        lo = lo.min(*x as f64);
+        hi = hi.max(*x as f64);
+    }
+    // The whole array averages at least the smallest value.
+    let mut best = (0, nums.len());
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let (start, end) = reaches(prefix, k, mid);
+        if start == -1 {
+            hi = mid;
+        } else {
+            lo = mid;
+            best = (start, end);
+        }
+    }
+    let (start, end) = best;
+    (prefix[end] - prefix[start]) as f64 / (end - start) as f64
+}
+
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 arrays of 100,000 values from -10,000 to 10,000, made once; then
+    // 40 rounds each find the best average of one array, picked by the
+    // round, at a width of 1 to 100,000 also picked by the round, adding
+    // up the answers.
+    let mut seed: i64 = 644;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..100000 {
+            nums.push(next_random(mut seed) % 20001 - 10000);
+        }
+        arrays.push(nums);
+    }
+    let rounds = 40;
+    let mut total = 0.0;
+    for r in 0..rounds {
+        let k = 1 + (r * 7919) % 100000;
+        total += find_max_average(arrays[r % 20], k);
+    }
+    println(f"{rounds} rounds over 20 arrays of 100000 values: answers adding to {total:.5}");
+}

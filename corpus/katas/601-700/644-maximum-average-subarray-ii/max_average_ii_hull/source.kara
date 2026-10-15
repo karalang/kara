@@ -1,0 +1,121 @@
+// LeetCode #644: Maximum Average Subarray II -- the steepest line over a
+// convex hull.
+//
+// Plot each prefix sum as a point (i, prefix[i]). The subarray from `j`
+// to `i` averages the slope of the line between their points, so the
+// answer is the steepest line from an earlier point to a later one at
+// least `k` to its right. For a given end, the steepest start lies on the
+// lower convex hull of the allowed starts, so one queue holds that hull:
+// each new start goes on the back after the points it makes non-convex
+// come off. The front comes off while the next point gives a line at
+// least as steep; the start it passes over cannot beat the best answer
+// already found for any later end, since a line from it to a later end
+// averages two slopes, neither steeper than that best. Slopes are
+// compared by cross products in integers.
+// O(n).
+
+fn find_max_average(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut hull: VecDeque[i64] = VecDeque.new();
+    let mut best_sum = prefix[k];
+    let mut best_len = k;
+    for end in k..n + 1 {
+        // The start `end - k` becomes allowed; keep the hull convex.
+        let c = end - k;
+        while hull.len() >= 2 {
+            let a = hull[hull.len() - 2];
+            let b = hull[hull.len() - 1];
+            // Drop `b` if it is not below the line from `a` to `c`.
+            if (prefix[b] - prefix[a]) * (c - a) >= (prefix[c] - prefix[a]) * (b - a) {
+                hull.pop_back();
+            } else {
+                break;
+            }
+        }
+        hull.push_back(c);
+        // Move the front on while the next start gives a steeper line.
+        while hull.len() >= 2 {
+            let a = hull[0];
+            let b = hull[1];
+            if (prefix[end] - prefix[b]) * (end - a) >= (prefix[end] - prefix[a]) * (end - b) {
+                hull.pop_front();
+            } else {
+                break;
+            }
+        }
+        let start = hull[0];
+        let sum = prefix[end] - prefix[start];
+        let len = end - start;
+        if sum * best_len > best_sum * len {
+            best_sum = sum;
+            best_len = len;
+        }
+    }
+    best_sum as f64 / best_len as f64
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    let mut text = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            text.push_str(",");
+        }
+        text.push_str(f"{nums[i]}");
+    }
+    println(f"[{text}], k = {k} -> {find_max_average(nums, k):.5}");
+}
+
+// `n` values from `-most` to `most`.
+fn random_values(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * most + 1) - most);
+    }
+    nums
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 12, -5, -6, 50, 3], 4);
+    show(vec![5], 1);
+    // The best `k` values found in two places; the whole array as the
+    // only choice; every value equal; every value negative; one best
+    // average reached by 4 values and by 8; a best subarray of 8 values
+    // when every one of exactly 7 is worse; and the extremes of the
+    // values.
+    show(vec![1, 9, 9, 1, 9, 9, 1], 2);
+    show(vec![3, -1, 4, -1, 5], 5);
+    show(vec![7, 7, 7, 7], 3);
+    show(vec![-5, -2, -9, -1, -4], 2);
+    show(vec![0, 5, 5, 5, 0, 0, 5, 5, 5, 0], 4);
+    show(vec![1, 2, 2, 1, 2, 2, 1, 2, 2, 1, 2, 2, 1], 7);
+    show(vec![-10000, 10000, 10000, -10000, 10000], 2);
+    // 300 random arrays of 1 to 30 values from -20 to 20, `k` picked from
+    // 1 to n.
+    let mut seed: i64 = 644;
+    let mut total = 0.0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % n;
+        let nums = random_values(n, 20, mut seed);
+        total += find_max_average(nums, k);
+    }
+    println(f"300 random arrays: sum of answers {total:.5}");
+    // The problem's largest: 10,000 values from -10,000 to 10,000, at four
+    // widths.
+    let nums = random_values(10000, 10000, mut seed);
+    for k in vec![1, 100, 2500, 10000] {
+        println(f"10000 values, k = {k}: {find_max_average(nums, k):.5}");
+    }
+}

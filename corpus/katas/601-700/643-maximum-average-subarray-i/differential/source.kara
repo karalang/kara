@@ -1,0 +1,173 @@
+// LeetCode #643: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_max_average_star(nums: Vec[i64], k: i64) -> f64 {
+    let mut sum = 0;
+    for i in 0..k {
+        sum += nums[i];
+    }
+    let mut best = sum;
+    for i in k..nums.len() {
+        sum += nums[i] - nums[i - k];
+        if sum > best {
+            best = sum;
+        }
+    }
+    best as f64 / k as f64
+}
+
+// ---- prefix arm --------------------------------------------------------
+
+fn find_max_average_prefix(nums: Vec[i64], k: i64) -> f64 {
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut best = prefix[k];
+    for i in 1..nums.len() - k + 1 {
+        best = best.max(prefix[i + k] - prefix[i]);
+    }
+    best as f64 / k as f64
+}
+
+// ---- queue arm ---------------------------------------------------------
+
+fn find_max_average_queue(nums: Vec[i64], k: i64) -> f64 {
+    let mut window: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    let mut best: Option[i64] = None;
+    for x in nums.iter() {
+        window.push_back(*x);
+        sum += *x;
+        if window.len() > k {
+            sum -= window.pop_front().unwrap();
+        }
+        if window.len() == k {
+            best = match best {
+                Some(b) => Some(b.max(sum)),
+                None => Some(sum),
+            };
+        }
+    }
+    best.unwrap() as f64 / k as f64
+}
+
+// ---- zipped arm --------------------------------------------------------
+
+fn find_max_average_zipped(nums: Vec[i64], k: i64) -> f64 {
+    let first: i64 = nums[0..k].iter().sum();
+    let mut sum = first;
+    let mut best = first;
+    for (out, arriving) in nums.iter().zip(nums[k..].iter()) {
+        sum += *arriving - *out;
+        best = best.max(sum);
+    }
+    best as f64 / k as f64
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, nums: Vec[i64], k: i64) -> f64 {
+    if which == 0 {
+        find_max_average_star(nums, k)
+    } else if which == 1 {
+        find_max_average_prefix(nums, k)
+    } else if which == 2 {
+        find_max_average_queue(nums, k)
+    } else {
+        find_max_average_zipped(nums, k)
+    }
+}
+
+// The sum of the window of `k` starting at `start`, added up from
+// scratch.
+fn window_sum(nums: Vec[i64], start: i64, k: i64) -> i64 {
+    let mut s = 0;
+    for j in start..start + k {
+        s += nums[j];
+    }
+    s
+}
+
+// The definition: every window of `k` summed from scratch, and the
+// largest sum divided by `k`.
+fn definition(nums: Vec[i64], k: i64) -> f64 {
+    let mut best = window_sum(nums, 0, k);
+    for start in 1..nums.len() - k + 1 {
+        let s = window_sum(nums, start, k);
+        if s > best {
+            best = s;
+        }
+    }
+    best as f64 / k as f64
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6430;
+    let mut checks = 0;
+    let mut values = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 25 values from -15 to 15, and `k` from 1 to n.
+        let n = 1 + next_random(mut seed) % 25;
+        let k = 1 + next_random(mut seed) % n;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 31 - 15);
+        }
+        values += n;
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut doubled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+            doubled.push(2 * nums[i]);
+        }
+        let want = definition(nums, k);
+        for which in 0..4 {
+            let got = answer(which, nums, k);
+            // P2: some window averages exactly the answer. P3: no window
+            // averages more.
+            let mut reached = false;
+            let mut above = false;
+            for start in 0..n - k + 1 {
+                let a = window_sum(nums, start, k) as f64 / k as f64;
+                if a == got {
+                    reached = true;
+                }
+                if a > got {
+                    above = true;
+                }
+            }
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                reached,
+                not above,
+                // P4: the values in reverse give the same answer.
+                answer(which, reversed, k) == got,
+                // P5: every value doubled doubles it, exactly.
+                answer(which, doubled, k) == 2.0 * got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({values} values), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,90 @@
+// LeetCode #644: Maximum Average Subarray II -- every subarray, compared
+// as fractions.
+//
+// Prefix sums give every subarray's sum in O(1), so every pair of ends at
+// least `k` apart is tried. Averages are compared without dividing: `a /
+// p` is above `b / q` exactly when `a * q` is above `b * p`, all in
+// integers, and the best one is divided once at the end. O(n^2).
+
+fn find_max_average(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *x);
+    }
+    let mut best_sum = prefix[k];
+    let mut best_len = k;
+    for start in 0..n - k + 1 {
+        for end in start + k..n + 1 {
+            let sum = prefix[end] - prefix[start];
+            let len = end - start;
+            if sum * best_len > best_sum * len {
+                best_sum = sum;
+                best_len = len;
+            }
+        }
+    }
+    best_sum as f64 / best_len as f64
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    let mut text = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            text.push_str(",");
+        }
+        text.push_str(f"{nums[i]}");
+    }
+    println(f"[{text}], k = {k} -> {find_max_average(nums, k):.5}");
+}
+
+// `n` values from `-most` to `most`.
+fn random_values(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * most + 1) - most);
+    }
+    nums
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 12, -5, -6, 50, 3], 4);
+    show(vec![5], 1);
+    // The best `k` values found in two places; the whole array as the
+    // only choice; every value equal; every value negative; one best
+    // average reached by 4 values and by 8; a best subarray of 8 values
+    // when every one of exactly 7 is worse; and the extremes of the
+    // values.
+    show(vec![1, 9, 9, 1, 9, 9, 1], 2);
+    show(vec![3, -1, 4, -1, 5], 5);
+    show(vec![7, 7, 7, 7], 3);
+    show(vec![-5, -2, -9, -1, -4], 2);
+    show(vec![0, 5, 5, 5, 0, 0, 5, 5, 5, 0], 4);
+    show(vec![1, 2, 2, 1, 2, 2, 1, 2, 2, 1, 2, 2, 1], 7);
+    show(vec![-10000, 10000, 10000, -10000, 10000], 2);
+    // 300 random arrays of 1 to 30 values from -20 to 20, `k` picked from
+    // 1 to n.
+    let mut seed: i64 = 644;
+    let mut total = 0.0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % n;
+        let nums = random_values(n, 20, mut seed);
+        total += find_max_average(nums, k);
+    }
+    println(f"300 random arrays: sum of answers {total:.5}");
+    // The problem's largest: 10,000 values from -10,000 to 10,000, at four
+    // widths.
+    let nums = random_values(10000, 10000, mut seed);
+    for k in vec![1, 100, 2500, 10000] {
+        println(f"10000 values, k = {k}: {find_max_average(nums, k):.5}");
+    }
+}
