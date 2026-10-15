@@ -1,0 +1,150 @@
+== startup
+  defaults    {"server":{"host":"0.0.0.0","port":8080,"tls":false},"log":{"level":"info","targets":["stdout"]},"limits":{"max_conn":100,"timeout_ms":30000},"features":{"beta":false,"regions":["eu"]}}
+  config.json {"server":{"host":"127.0.0.1"},"log":{"targets":["stdout","file"]},"features":{"regions":["eu","us"]}}
+  env CFG_SERVER__PORT=9090 -> /server/port
+  env CFG_LOG__LEVEL=debug -> /log/level
+  env CFG_LIMITS__MAX_CONN=lots ignored: expected an int
+  env CFG_FEATURES__BETA=true -> /features/beta
+  environment {"server":{"port":9090},"log":{"level":"debug"},"features":{"beta":true}}
+  effective   {"server":{"host":"127.0.0.1","port":9090,"tls":false},"log":{"level":"debug","targets":["stdout","file"]},"limits":{"max_conn":100,"timeout_ms":30000},"features":{"beta":true,"regions":["eu","us"]}}
+  etag "d74ab599"
+== read
+  HTTP/1.1 200 OK  etag "d74ab599"
+    {"server":{"host":"127.0.0.1","port":9090,"tls":false},"log":{"level":"debug","targets":["stdout","file"]},"limits":{"max_conn":100,"timeout_ms":30000},"features":{"beta":true,"regions":["eu","us"]}}
+  HTTP/1.1 200 OK  etag "d74ab599"
+    9090
+  HTTP/1.1 200 OK  etag "d74ab599"
+    "file"
+  HTTP/1.1 200 OK  etag "d74ab599"
+    {"beta":true,"regions":["eu","us"]}
+  HTTP/1.1 404 Not Found
+    {"error":"no value at /nope"}
+  HTTP/1.1 404 Not Found
+    {"error":"no value at /log/targets/7"}
+  HTTP/1.1 404 Not Found
+    {"error":"no value at /log/targets/01"}
+  HTTP/1.1 400 Bad Request
+    {"error":"bad '~' escape in pointer '/a~2b'"}
+  HTTP/1.1 404 Not Found
+    {"error":"no route for /status"}
+  HTTP/1.1 405 Method Not Allowed
+    {"error":"use GET, PATCH, PUT or DELETE"}
+== conditional writes
+  HTTP/1.1 304 Not Modified  etag "d74ab599"
+  HTTP/1.1 200 OK  etag "d74ab599"
+    {"max_conn":100,"timeout_ms":30000}
+  HTTP/1.1 428 Precondition Required
+    {"error":"writes need If-Match"}
+  HTTP/1.1 412 Precondition Failed
+    {"error":"config is at \"d74ab599\", not \"deadbeef\""}
+  HTTP/1.1 415 Unsupported Media Type
+    {"error":"send application/merge-patch+json"}
+  HTTP/1.1 200 OK  etag "3369ce39"
+    warning: 299 - "overridden by environment: /log/level"
+    {"server":{"host":"127.0.0.1","port":9090,"tls":false},"log":{"level":"debug","targets":["stdout","file"]},"limits":{"max_conn":100,"timeout_ms":30000},"features":{"beta":true,"regions":["eu"]}}
+  HTTP/1.1 412 Precondition Failed
+    {"error":"config is at \"3369ce39\", not \"d74ab599\""}
+  HTTP/1.1 200 OK  etag "3369ce39"
+    ["eu"]
+== validation
+  HTTP/1.1 422 Unprocessable Content
+    {"errors":["/server/port: 70000 is above the maximum 65535"]}
+  HTTP/1.1 422 Unprocessable Content
+    {"errors":["/server/tls: expected a bool, found a string","/log/level: \"loud\" is not one of \"debug\", \"info\", \"warn\", \"error\"","/log/targets: 4 items, at most 3 allowed","/extra: unknown key"]}
+  HTTP/1.1 422 Unprocessable Content
+    {"errors":["/limits: expected an object, found an int","/features/regions/1: \"mars\" is not one of \"eu\", \"us\", \"ap\""]}
+  HTTP/1.1 400 Bad Request
+    {"error":"invalid JSON: expected '\"', found '}' at offset 25"}
+  HTTP/1.1 400 Bad Request
+    {"error":"invalid JSON: only integers are supported at offset 27"}
+  HTTP/1.1 200 OK  etag "e8b331ea"
+    warning: 299 - "overridden by environment: /server/port"
+    {"server":{"host":"127.0.0.1","port":9090,"tls":true},"log":{"level":"debug","targets":["stdout","file"]},"limits":{"max_conn":100,"timeout_ms":30000},"features":{"beta":true,"regions":["eu"]}}
+== pointer writes
+  HTTP/1.1 200 OK  etag "72ddffdc"
+    {"server":{"host":"127.0.0.1","port":9090,"tls":true},"log":{"level":"debug","targets":["stdout","file"]},"limits":{"max_conn":100,"timeout_ms":5000},"features":{"beta":true,"regions":["eu"]}}
+  HTTP/1.1 200 OK  etag "4add8975"
+    {"server":{"host":"127.0.0.1","port":9090,"tls":true},"log":{"level":"debug","targets":["stderr","file"]},"limits":{"max_conn":100,"timeout_ms":5000},"features":{"beta":true,"regions":["eu"]}}
+  HTTP/1.1 200 OK  etag "e260af7a"
+    {"server":{"host":"127.0.0.1","port":9090,"tls":true},"log":{"level":"debug","targets":["stderr","file","syslog"]},"limits":{"max_conn":100,"timeout_ms":5000},"features":{"beta":true,"regions":["eu"]}}
+  HTTP/1.1 422 Unprocessable Content
+    {"errors":["/log/targets: 4 items, at most 3 allowed"]}
+  HTTP/1.1 409 Conflict
+    {"error":"index '5' is outside an array of 3"}
+  HTTP/1.1 200 OK  etag "e260af7a"
+    warning: 299 - "overridden by environment: /server/port"
+    {"server":{"host":"127.0.0.1","port":9090,"tls":true},"log":{"level":"debug","targets":["stderr","file","syslog"]},"limits":{"max_conn":100,"timeout_ms":5000},"features":{"beta":true,"regions":["eu"]}}
+  HTTP/1.1 200 OK  etag "7ed3efef"
+    {"server":{"host":"0.0.0.0","port":9090,"tls":true},"log":{"level":"debug","targets":["stderr","file","syslog"]},"limits":{"max_conn":100,"timeout_ms":5000},"features":{"beta":true,"regions":["eu"]}}
+  HTTP/1.1 404 Not Found
+    {"error":"/server/host is not set in config.json"}
+  HTTP/1.1 400 Bad Request
+    {"error":"invalid JSON: unexpected 'm' at offset 0"}
+  HTTP/1.1 428 Precondition Required
+    {"error":"writes need If-Match"}
+  HTTP/1.1 405 Method Not Allowed
+    {"error":"use PATCH on /config"}
+  HTTP/1.1 200 OK  etag "7ed3efef"
+    {"host":"0.0.0.0","port":9090,"tls":true}
+== operator writes config.json: {"server": {"port": 7000, "tls": false}, "log": {"level": "error"}}
+== reload
+  HTTP/1.1 200 OK  etag "c4406340"
+    {"server":{"host":"0.0.0.0","port":9090,"tls":false},"log":{"level":"debug","targets":["stdout"]},"limits":{"max_conn":100,"timeout_ms":30000},"features":{"beta":true,"regions":["eu"]}}
+  HTTP/1.1 200 OK  etag "c4406340"
+    {"level":"debug","targets":["stdout"]}
+== operator writes config.json: {"server": {
+== reload broken file
+  HTTP/1.1 400 Bad Request
+    {"error":"config.json: expected '\"', found end of input at offset 12"}
+  HTTP/1.1 405 Method Not Allowed
+    {"error":"use POST"}
+== operator writes config.json: {"log": {"level": "verbose"}}
+== reload invalid file
+  HTTP/1.1 422 Unprocessable Content
+    {"errors":["/log/level: \"verbose\" is not one of \"debug\", \"info\", \"warn\", \"error\""]}
+  HTTP/1.1 304 Not Modified  etag "c4406340"
+== on disk
+  {"log": {"level": "verbose"}}
+== access log (version 9)
+  GET /config -> 200 (v1)
+  GET /config/server/port -> 200 (v1)
+  GET /config/log/targets/1 -> 200 (v1)
+  GET /config/features -> 200 (v1)
+  GET /config/nope -> 404 (v1)
+  GET /config/log/targets/7 -> 404 (v1)
+  GET /config/log/targets/01 -> 404 (v1)
+  GET /config/a~2b -> 400 (v1)
+  GET /status -> 404 (v1)
+  POST /config -> 405 (v1)
+  GET /config -> 304 (v1)
+  GET /config/limits -> 200 (v1)
+  PATCH /config -> 428 (v1)
+  PATCH /config -> 412 (v1)
+  PATCH /config -> 415 (v1)
+  PATCH /config -> 200 (v2)
+  PATCH /config -> 412 (v2)
+  GET /config/features/regions -> 200 (v2)
+  PATCH /config -> 422 (v2)
+  PATCH /config -> 422 (v2)
+  PATCH /config -> 422 (v2)
+  PATCH /config -> 400 (v2)
+  PATCH /config -> 400 (v2)
+  PATCH /config -> 200 (v3)
+  PUT /config/limits/timeout_ms -> 200 (v4)
+  PUT /config/log/targets/0 -> 200 (v5)
+  PUT /config/log/targets/- -> 200 (v6)
+  PUT /config/log/targets/- -> 422 (v6)
+  PUT /config/log/targets/5 -> 409 (v6)
+  PUT /config/server/port -> 200 (v7)
+  DELETE /config/server/host -> 200 (v8)
+  DELETE /config/server/host -> 404 (v8)
+  PUT /config/features/beta -> 400 (v8)
+  PUT /config/features/beta -> 428 (v8)
+  PUT /config -> 405 (v8)
+  GET /config/server -> 200 (v8)
+  POST /config/reload -> 200 (v9)
+  GET /config/log -> 200 (v9)
+  POST /config/reload -> 400 (v9)
+  GET /config/reload -> 405 (v9)
+  POST /config/reload -> 422 (v9)
+  GET /config -> 304 (v9)

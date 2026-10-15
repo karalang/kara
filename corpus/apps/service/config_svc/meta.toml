@@ -1,0 +1,10 @@
+source = "kara-katas/apps/service/config_svc/config_svc.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:service", "apps:real-io"]
+expected_from = "mirror"
+rules = []
+backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
+env = { CFG_SERVER__PORT = "9090", CFG_FEATURES__BETA = "true", CFG_LIMITS__MAX_CONN = "lots", CFG_LOG__LEVEL = "debug" }
+extracted_src = "75736453"

@@ -1,0 +1,1154 @@
+// A configuration service, the kind that sits behind a fleet of workers
+// and hands them their settings. Configuration comes in three layers:
+// built-in defaults, an operator's config.json on disk, and environment
+// overrides (CFG_SERVER__PORT=9090 sets /server/port). The layers are
+// combined with JSON Merge Patch (RFC 7386) and the result is checked
+// against a schema (types, int ranges, string choices, array sizes,
+// unknown keys).
+//
+// Over HTTP it serves the effective document and any value inside it by
+// JSON Pointer (RFC 6901), with an ETag so readers can poll with
+// If-None-Match and get 304. Writes are merge patches on /config and
+// PUT / DELETE on a pointer; every write needs If-Match (428 without, 412
+// on a stale tag), is validated (422 with every violation), is written
+// back to config.json, and warns when the environment shadows the value
+// that was just changed. POST /config/reload re-reads the file after an
+// operator edits it, and keeps the old config if the file is broken.
+//
+// The server and its client run in one thread: the client connects, writes
+// a batch of requests and shuts down its write side; the server reads to
+// end of input and answers each request in order.
+//
+// Workaround for a v2 gap, to revert once its row is fixed:
+//   B-2026-10-14-53  check reports a String passed to env.var as moved:
+//                    env.var(var.clone())
+
+const ADDR: Str = "127.0.0.1:47736";
+const FILE: Str = "config.json";
+
+const DEFAULTS: Str = "{\"server\": {\"host\": \"0.0.0.0\", \"port\": 8080, \"tls\": false}, \"log\": {\"level\": \"info\", \"targets\": [\"stdout\"]}, \"limits\": {\"max_conn\": 100, \"timeout_ms\": 30000}, \"features\": {\"beta\": false, \"regions\": [\"eu\"]}}";
+
+const SCHEMA: Str = "{\"type\": \"object\", \"props\": {
+  \"server\": {\"type\": \"object\", \"props\": {
+    \"host\": {\"type\": \"string\"},
+    \"port\": {\"type\": \"int\", \"min\": 1, \"max\": 65535},
+    \"tls\": {\"type\": \"bool\"}}},
+  \"log\": {\"type\": \"object\", \"props\": {
+    \"level\": {\"type\": \"string\", \"enum\": [\"debug\", \"info\", \"warn\", \"error\"]},
+    \"targets\": {\"type\": \"array\", \"max_items\": 3, \"items\": {\"type\": \"string\"}}}},
+  \"limits\": {\"type\": \"object\", \"props\": {
+    \"max_conn\": {\"type\": \"int\", \"min\": 1, \"max\": 10000},
+    \"timeout_ms\": {\"type\": \"int\", \"min\": 100}}},
+  \"features\": {\"type\": \"object\", \"props\": {
+    \"beta\": {\"type\": \"bool\"},
+    \"regions\": {\"type\": \"array\", \"items\": {\"type\": \"string\", \"enum\": [\"eu\", \"us\", \"ap\"]}}}}}}";
+
+const FIRST_FILE: Str = "{\"server\": {\"host\": \"127.0.0.1\"}, \"log\": {\"targets\": [\"stdout\", \"file\"]}, \"features\": {\"regions\": [\"eu\", \"us\"]}}";
+
+// ---- JSON -------------------------------------------------------------
+
+#[derive(Clone, PartialEq)]
+enum Jv { Null, Bool(bool), Int(i64), Text(String), Arr(Vec[Jv]), Obj(Vec[(String, Jv)]) }
+
+struct Reader { chars: Vec[char], at: i64 }
+
+impl Reader {
+    fn fail(self, what: Str) -> String {
+        f"{what} at offset {self.at}"
+    }
+
+    fn skip_ws(mut ref self) {
+        while self.at < self.chars.len() {
+            let c = self.chars[self.at];
+            if c == ' ' or c == '\n' or c == '\t' or c == '\r' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn peek(self) -> Option[char] {
+        if self.at < self.chars.len() { Some(self.chars[self.at]) } else { None }
+    }
+
+    fn expect(mut ref self, c: char) -> Result[(), String] {
+        self.skip_ws();
+        match self.peek() {
+            Some(d) => {
+                if d == c {
+                    self.at += 1;
+                    Ok(())
+                } else {
+                    Err(self.fail(f"expected '{c}', found '{d}'"))
+                }
+            }
+            None => Err(self.fail(f"expected '{c}', found end of input")),
+        }
+    }
+
+    fn word(mut ref self, w: Str, v: own Jv) -> Result[Jv, String] {
+        for c in w.chars() {
+            if self.peek() != Some(c) {
+                return Err(self.fail(f"invalid literal, expected {w}"));
+            }
+            self.at += 1;
+        }
+        Ok(v)
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        self.expect('"')?;
+        let mut out = String.new();
+        loop {
+            let c = match self.peek() {
+                Some(c) => c,
+                None => return Err(self.fail("unterminated string")),
+            };
+            self.at += 1;
+            if c == '"' {
+                return Ok(out);
+            }
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            let e = match self.peek() {
+                Some(e) => e,
+                None => return Err(self.fail("unterminated escape")),
+            };
+            self.at += 1;
+            match e {
+                '"' => out.push('"'),
+                '\\' => out.push('\\'),
+                '/' => out.push('/'),
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                _ => return Err(self.fail(f"bad escape '\\{e}'")),
+            }
+        }
+    }
+
+    // Integers only: a configuration value with a fraction or an exponent
+    // is refused rather than silently rounded.
+    fn number(mut ref self) -> Result[Jv, String] {
+        let start = self.at;
+        if self.peek() == Some('-') {
+            self.at += 1;
+        }
+        while self.at < self.chars.len() and self.chars[self.at].is_ascii_digit() {
+            self.at += 1;
+        }
+        match self.peek() {
+            Some('.') => return Err(self.fail("only integers are supported")),
+            Some('e') => return Err(self.fail("only integers are supported")),
+            Some('E') => return Err(self.fail("only integers are supported")),
+            _ => {}
+        }
+        let text: String = self.chars[start..self.at].iter().collect();
+        match i64.parse(text) {
+            Some(n) => Ok(Jv.Int(n)),
+            None => {
+                self.at = start;
+                Err(self.fail(f"bad number '{text}'"))
+            }
+        }
+    }
+
+    fn value(mut ref self, depth: i64) -> Result[Jv, String] {
+        if depth > 16 {
+            return Err(self.fail("nesting too deep"));
+        }
+        self.skip_ws();
+        match self.peek() {
+            None => Err(self.fail("expected a value, found end of input")),
+            Some('n') => self.word("null", Jv.Null),
+            Some('t') => self.word("true", Jv.Bool(true)),
+            Some('f') => self.word("false", Jv.Bool(false)),
+            Some('"') => Ok(Jv.Text(self.string()?)),
+            Some('[') => {
+                self.at += 1;
+                let mut items: Vec[Jv] = Vec.new();
+                self.skip_ws();
+                if self.peek() == Some(']') {
+                    self.at += 1;
+                    return Ok(Jv.Arr(items));
+                }
+                loop {
+                    items.push(self.value(depth + 1)?);
+                    self.skip_ws();
+                    match self.peek() {
+                        Some(',') => self.at += 1,
+                        Some(']') => {
+                            self.at += 1;
+                            return Ok(Jv.Arr(items));
+                        }
+                        _ => return Err(self.fail("expected ',' or ']'")),
+                    }
+                }
+            }
+            Some('{') => {
+                self.at += 1;
+                let mut fields: Vec[(String, Jv)] = Vec.new();
+                self.skip_ws();
+                if self.peek() == Some('}') {
+                    self.at += 1;
+                    return Ok(Jv.Obj(fields));
+                }
+                loop {
+                    self.skip_ws();
+                    let k = self.string()?;
+                    self.expect(':')?;
+                    let v = self.value(depth + 1)?;
+                    fields.push((k, v));
+                    self.skip_ws();
+                    match self.peek() {
+                        Some(',') => self.at += 1,
+                        Some('}') => {
+                            self.at += 1;
+                            return Ok(Jv.Obj(fields));
+                        }
+                        _ => return Err(self.fail("expected ',' or '}'")),
+                    }
+                }
+            }
+            Some(c) => {
+                if c == '-' or c.is_ascii_digit() {
+                    self.number()
+                } else {
+                    Err(self.fail(f"unexpected '{c}'"))
+                }
+            }
+        }
+    }
+}
+
+fn parse_json(text: Str) -> Result[Jv, String] {
+    let mut r = Reader { chars: text.chars().collect(), at: 0 };
+    let v = r.value(0)?;
+    r.skip_ws();
+    if r.at < r.chars.len() {
+        return Err(r.fail("trailing characters"));
+    }
+    Ok(v)
+}
+
+fn quote(s: Str, out: mut ref String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+fn write_json(v: ref Jv, out: mut ref String) {
+    match v {
+        Jv.Null => out.push_str("null"),
+        Jv.Bool(b) => out.push_str(if b { "true" } else { "false" }),
+        Jv.Int(n) => out.push_str(f"{n}"),
+        Jv.Text(s) => quote(s, out),
+        Jv.Arr(items) => {
+            out.push('[');
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_json(items[i], out);
+            }
+            out.push(']');
+        }
+        Jv.Obj(fields) => {
+            out.push('{');
+            for i in 0..fields.len() {
+                if i > 0 {
+                    out.push(',');
+                }
+                quote(fields[i].0, out);
+                out.push(':');
+                write_json(fields[i].1, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn to_json(v: ref Jv) -> String {
+    let mut s = String.new();
+    write_json(v, mut s);
+    s
+}
+
+fn kind(v: ref Jv) -> Str {
+    match v {
+        Jv.Null => "null",
+        Jv.Bool(_) => "a bool",
+        Jv.Int(_) => "an int",
+        Jv.Text(_) => "a string",
+        Jv.Arr(_) => "an array",
+        Jv.Obj(_) => "an object",
+    }
+}
+
+fn index_of(fields: ref Vec[(String, Jv)], name: Str) -> Option[i64] {
+    for i in 0..fields.len() {
+        if fields[i].0 == name {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn field(v: ref Jv, name: Str) -> Option[Jv] {
+    match v {
+        Jv.Obj(fields) => match index_of(fields, name) {
+            Some(i) => Some(fields[i].1.clone()),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+// ---- JSON Pointer (RFC 6901) ------------------------------------------
+
+fn parse_pointer(p: Str) -> Result[Vec[String], String] {
+    let mut out: Vec[String] = Vec.new();
+    if p.is_empty() {
+        return Ok(out);
+    }
+    if not p.starts_with("/") {
+        return Err(f"pointer '{p}' must start with '/'");
+    }
+    for s in p[1..p.len()].split("/") {
+        let cs: Vec[char] = s.chars().collect();
+        let mut seg = String.new();
+        let mut i = 0;
+        while i < cs.len() {
+            if cs[i] != '~' {
+                seg.push(cs[i]);
+                i += 1;
+                continue;
+            }
+            if i + 1 < cs.len() and cs[i + 1] == '0' {
+                seg.push('~');
+            } else if i + 1 < cs.len() and cs[i + 1] == '1' {
+                seg.push('/');
+            } else {
+                return Err(f"bad '~' escape in pointer '{p}'");
+            }
+            i += 2;
+        }
+        out.push(seg);
+    }
+    Ok(out)
+}
+
+fn escape_seg(k: Str) -> String {
+    k.replace("~", "~0").replace("/", "~1")
+}
+
+// An array index segment: digits without a leading zero, inside the array.
+fn array_index(seg: Str, len: i64) -> Option[i64] {
+    if seg.is_empty() or (seg.len() > 1 and seg.starts_with("0")) {
+        return None;
+    }
+    for c in seg.chars() {
+        if not c.is_ascii_digit() {
+            return None;
+        }
+    }
+    match i64.parse(seg) {
+        Some(n) => if n < len { Some(n) } else { None },
+        None => None,
+    }
+}
+
+fn get_at(v: ref Jv, path: ref Vec[String], i: i64) -> Option[Jv] {
+    if i == path.len() {
+        return Some(v.clone());
+    }
+    match v {
+        Jv.Obj(fields) => match index_of(fields, path[i]) {
+            Some(j) => get_at(fields[j].1, path, i + 1),
+            None => None,
+        },
+        Jv.Arr(items) => match array_index(path[i], items.len()) {
+            Some(j) => get_at(items[j], path, i + 1),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+// Sets the value at a pointer, creating missing objects on the way (the
+// file layer is sparse: it only holds what the operator changed). "-" as
+// the last segment appends to an array.
+fn set_at(v: mut ref Jv, path: ref Vec[String], i: i64, val: own Jv) -> Result[(), String] {
+    let last = i + 1 == path.len();
+    match v {
+        Jv.Obj(fields) => {
+            match index_of(fields, path[i]) {
+                Some(j) => {
+                    if last {
+                        fields[j].1 = val;
+                        Ok(())
+                    } else {
+                        set_at(mut fields[j].1, path, i + 1, val)
+                    }
+                }
+                None => {
+                    if last {
+                        fields.push((path[i].clone(), val));
+                        return Ok(());
+                    }
+                    fields.push((path[i].clone(), Jv.Obj(Vec.new())));
+                    let n = fields.len() - 1;
+                    set_at(mut fields[n].1, path, i + 1, val)
+                }
+            }
+        }
+        Jv.Arr(items) => {
+            if path[i] == "-" {
+                if not last {
+                    return Err("'-' must be the last segment".to_string());
+                }
+                items.push(val);
+                return Ok(());
+            }
+            match array_index(path[i], items.len()) {
+                Some(j) => {
+                    if last {
+                        items[j] = val;
+                        Ok(())
+                    } else {
+                        set_at(mut items[j], path, i + 1, val)
+                    }
+                }
+                None => Err(f"index '{path[i]}' is outside an array of {items.len()}"),
+            }
+        }
+        _ => Err(f"cannot step into {kind(v)} at '{path[i]}'"),
+    }
+}
+
+fn remove_at(v: mut ref Jv, path: ref Vec[String], i: i64) -> Result[(), String] {
+    let last = i + 1 == path.len();
+    match v {
+        Jv.Obj(fields) => match index_of(fields, path[i]) {
+            Some(j) => {
+                if last {
+                    fields.remove(j);
+                    Ok(())
+                } else {
+                    remove_at(mut fields[j].1, path, i + 1)
+                }
+            }
+            None => Err("not set".to_string()),
+        },
+        Jv.Arr(items) => match array_index(path[i], items.len()) {
+            Some(j) => {
+                if last {
+                    items.remove(j);
+                    Ok(())
+                } else {
+                    remove_at(mut items[j], path, i + 1)
+                }
+            }
+            None => Err("not set".to_string()),
+        },
+        _ => Err("not set".to_string()),
+    }
+}
+
+// ---- JSON Merge Patch (RFC 7386) --------------------------------------
+
+fn merge_patch(target: own Jv, patch: ref Jv) -> Jv {
+    match patch {
+        Jv.Obj(changes) => {
+            let mut fields: Vec[(String, Jv)] = match target {
+                Jv.Obj(f) => f,
+                _ => Vec.new(),
+            };
+            for (k, pv) in changes.iter() {
+                let at = index_of(fields, k);
+                if pv == Jv.Null {
+                    match at {
+                        Some(j) => {
+                            fields.remove(j);
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
+                match at {
+                    Some(j) => {
+                        let old = fields[j].1.clone();
+                        fields[j].1 = merge_patch(old, pv);
+                    }
+                    None => fields.push((k.clone(), merge_patch(Jv.Null, pv))),
+                }
+            }
+            Jv.Obj(fields)
+        }
+        _ => patch.clone(),
+    }
+}
+
+// The pointers of the values a patch sets or deletes.
+fn leaves(patch: ref Jv, at: Str, out: mut ref Vec[String]) {
+    match patch {
+        Jv.Obj(fields) => {
+            for (k, v) in fields.iter() {
+                leaves(v, f"{at}/{escape_seg(k)}", out);
+            }
+        }
+        _ => out.push(at.to_string()),
+    }
+}
+
+// ---- schema -----------------------------------------------------------
+
+fn type_of(schema: ref Jv) -> String {
+    match field(schema, "type") {
+        Some(Jv.Text(t)) => t,
+        _ => "any".to_string(),
+    }
+}
+
+fn validate(v: ref Jv, s: ref Jv, at: Str, errs: mut ref Vec[String]) {
+    let here = if at.is_empty() { "(root)".to_string() } else { at.to_string() };
+    let ty = type_of(s);
+    if ty == "object" {
+        let fields = match v {
+            Jv.Obj(f) => f,
+            _ => {
+                errs.push(f"{here}: expected an object, found {kind(v)}");
+                return;
+            }
+        };
+        let props = field(s, "props").unwrap_or(Jv.Obj(Vec.new()));
+        for (k, fv) in fields.iter() {
+            let child = f"{at}/{escape_seg(k)}";
+            match field(props, k) {
+                Some(ps) => validate(fv, ps, child, errs),
+                None => errs.push(f"{child}: unknown key"),
+            }
+        }
+    } else if ty == "int" {
+        match v {
+            Jv.Int(n) => {
+                match field(s, "min") {
+                    Some(Jv.Int(m)) => if n < m { errs.push(f"{here}: {n} is below the minimum {m}") },
+                    _ => {}
+                }
+                match field(s, "max") {
+                    Some(Jv.Int(m)) => if n > m { errs.push(f"{here}: {n} is above the maximum {m}") },
+                    _ => {}
+                }
+            }
+            _ => errs.push(f"{here}: expected an int, found {kind(v)}"),
+        }
+    } else if ty == "string" {
+        match v {
+            Jv.Text(t) => {
+                match field(s, "enum") {
+                    Some(Jv.Arr(choices)) => {
+                        if not choices.contains(v) {
+                            let names: Vec[String] = choices.iter().map(|c| to_json(c)).collect();
+                            errs.push(f"{here}: \"{t}\" is not one of {names.join(", ")}");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => errs.push(f"{here}: expected a string, found {kind(v)}"),
+        }
+    } else if ty == "bool" {
+        match v {
+            Jv.Bool(_) => {}
+            _ => errs.push(f"{here}: expected a bool, found {kind(v)}"),
+        }
+    } else if ty == "array" {
+        match v {
+            Jv.Arr(items) => {
+                match field(s, "max_items") {
+                    Some(Jv.Int(m)) => if items.len() > m { errs.push(f"{here}: {items.len()} items, at most {m} allowed") },
+                    _ => {}
+                }
+                let item_schema = field(s, "items").unwrap_or(Jv.Obj(Vec.new()));
+                for i in 0..items.len() {
+                    validate(items[i], item_schema, f"{at}/{i}", errs);
+                }
+            }
+            _ => errs.push(f"{here}: expected an array, found {kind(v)}"),
+        }
+    }
+}
+
+// ---- layers -----------------------------------------------------------
+
+fn env_value(ty: Str, raw: Str) -> Result[Jv, String] {
+    if ty == "int" {
+        match i64.parse(raw) {
+            Some(n) => Ok(Jv.Int(n)),
+            None => Err("expected an int".to_string()),
+        }
+    } else if ty == "bool" {
+        if raw == "true" or raw == "1" {
+            Ok(Jv.Bool(true))
+        } else if raw == "false" or raw == "0" {
+            Ok(Jv.Bool(false))
+        } else {
+            Err("expected true/false/1/0".to_string())
+        }
+    } else {
+        Ok(Jv.Text(raw.to_string()))
+    }
+}
+
+// Every scalar the schema describes can be overridden from the environment:
+// /limits/max_conn is CFG_LIMITS__MAX_CONN.
+fn env_layer(schema: ref Jv, at: Str, prefix: Str, layer: mut ref Jv, ptrs: mut ref Vec[String], notes: mut ref Vec[String]) {
+    let ty = type_of(schema);
+    if ty == "object" {
+        match field(schema, "props") {
+            Some(Jv.Obj(props)) => {
+                for (k, ps) in props.iter() {
+                    let name = k.to_uppercase();
+                    env_layer(ps, f"{at}/{escape_seg(k)}", f"{prefix}__{name}", layer, ptrs, notes);
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+    if ty == "array" {
+        return;
+    }
+    let var = prefix.replacen("__", "_", 1);
+    match env.var(var.clone()) {
+        Ok(raw) => match env_value(ty, raw) {
+            Ok(v) => {
+                let path = parse_pointer(at).unwrap_or(Vec.new());
+                match set_at(layer, path, 0, v) {
+                    Ok(_) => {}
+                    Err(e) => notes.push(f"env {var}: {e}"),
+                }
+                ptrs.push(at.to_string());
+                notes.push(f"env {var}={raw} -> {at}");
+            }
+            Err(e) => notes.push(f"env {var}={raw} ignored: {e}"),
+        },
+        Err(_) => {}
+    }
+}
+
+fn etag_of(v: ref Jv) -> String {
+    let mut h = 2166136261;
+    for b in to_json(v).bytes() {
+        h = h ^ (b as i64);
+        h = (h * 16777619) % 4294967296;
+    }
+    f"\"{h:08x}\""
+}
+
+struct Store { defaults: Jv, file: Jv, env: Jv, env_ptrs: Vec[String], schema: Jv, effective: Jv, etag: String, version: i64, log: Vec[String] }
+
+impl Store {
+    // Validates the config a new file layer gives and, if it passes, makes
+    // it current and writes the file layer back to disk. The file is
+    // checked on its own as well as with the environment on top, so a bad
+    // value is refused even while an override hides it.
+    fn commit(mut ref self, file: own Jv, touched: ref Vec[String]) -> Resp {
+        let base = merge_patch(self.defaults.clone(), file);
+        let mut errs: Vec[String] = Vec.new();
+        validate(base, self.schema, "", mut errs);
+        let candidate = merge_patch(base, self.env);
+        if errs.is_empty() {
+            validate(candidate, self.schema, "", mut errs);
+        }
+        if not errs.is_empty() {
+            let items: Vec[Jv] = errs.iter().map(|e| Jv.Text(e.clone())).collect();
+            return Resp { status: 422, headers: Vec.new(), body: to_json(Jv.Obj(vec![("errors".to_string(), Jv.Arr(items))])) };
+        }
+        self.file = file;
+        self.effective = candidate;
+        self.etag = etag_of(self.effective);
+        self.version += 1;
+        let mut headers = vec![("ETag".to_string(), self.etag.clone())];
+        match fs.write(FILE, to_json(self.file)) {
+            Ok(_) => {}
+            Err(_) => return error(500, "could not write config.json"),
+        }
+        let mut shadowed: Vec[String] = Vec.new();
+        for p in self.env_ptrs.iter() {
+            for t in touched.iter() {
+                if p == t or p.starts_with(f"{t}/") {
+                    shadowed.push(p.clone());
+                }
+            }
+        }
+        if not shadowed.is_empty() {
+            headers.push(("Warning".to_string(), f"299 - \"overridden by environment: {shadowed.join(", ")}\""));
+        }
+        Resp { status: 200, headers: headers, body: to_json(self.effective) }
+    }
+}
+
+// ---- HTTP -------------------------------------------------------------
+
+struct Req { method: String, path: String, headers: Vec[(String, String)], body: String }
+
+struct Resp { status: i64, headers: Vec[(String, String)], body: String }
+
+fn reason(status: i64) -> Str {
+    match status {
+        200 => "OK",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        412 => "Precondition Failed",
+        415 => "Unsupported Media Type",
+        422 => "Unprocessable Content",
+        428 => "Precondition Required",
+        _ => "Internal Server Error",
+    }
+}
+
+fn error(status: i64, msg: Str) -> Resp {
+    let body = Jv.Obj(vec![("error".to_string(), Jv.Text(msg.to_string()))]);
+    Resp { status: status, headers: Vec.new(), body: to_json(body) }
+}
+
+fn header(r: ref Req, name: Str) -> Option[String] {
+    for (k, v) in r.headers.iter() {
+        if k.to_lowercase() == name {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn with_etag(st: ref Store, body: own String) -> Resp {
+    Resp { status: 200, headers: vec![("ETag".to_string(), st.etag.clone())], body: body }
+}
+
+// Writes are conditional: the client must say which version it edited.
+fn precondition(st: ref Store, r: ref Req) -> Option[Resp] {
+    match header(r, "if-match") {
+        None => Some(error(428, "writes need If-Match")),
+        Some(t) => {
+            if t == "*" or t == st.etag {
+                None
+            } else {
+                Some(error(412, f"config is at {st.etag}, not {t}"))
+            }
+        }
+    }
+}
+
+fn reload(st: mut ref Store) -> Resp {
+    let text = match fs.read_to_string(FILE) {
+        Ok(t) => t,
+        Err(_) => return error(500, "could not read config.json"),
+    };
+    let file = match parse_json(text) {
+        Ok(v) => v,
+        Err(e) => return error(400, f"config.json: {e}"),
+    };
+    st.commit(file, Vec.new())
+}
+
+fn handle(st: mut ref Store, r: ref Req) -> Resp {
+    if r.path == "/config/reload" {
+        if r.method != "POST" {
+            return error(405, "use POST");
+        }
+        return reload(st);
+    }
+    if r.path != "/config" and not r.path.starts_with("/config/") {
+        return error(404, f"no route for {r.path}");
+    }
+    let ptr_text = r.path[7..r.path.len()].to_string();
+    let ptr = match parse_pointer(ptr_text) {
+        Ok(p) => p,
+        Err(e) => return error(400, e),
+    };
+    if r.method == "GET" {
+        if ptr.is_empty() {
+            match header(r, "if-none-match") {
+                Some(t) => {
+                    if t == st.etag {
+                        return Resp { status: 304, headers: vec![("ETag".to_string(), st.etag.clone())], body: String.new() };
+                    }
+                }
+                None => {}
+            }
+            return with_etag(st, to_json(st.effective));
+        }
+        return match get_at(st.effective, ptr, 0) {
+            Some(v) => with_etag(st, to_json(v)),
+            None => error(404, f"no value at {ptr_text}"),
+        };
+    }
+    if r.method == "PATCH" {
+        if not ptr.is_empty() {
+            return error(405, "PATCH applies to /config; use PUT on a pointer");
+        }
+        match precondition(st, r) {
+            Some(resp) => return resp,
+            None => {}
+        }
+        if header(r, "content-type") != Some("application/merge-patch+json".to_string()) {
+            return error(415, "send application/merge-patch+json");
+        }
+        let patch = match parse_json(r.body) {
+            Ok(v) => v,
+            Err(e) => return error(400, f"invalid JSON: {e}"),
+        };
+        let mut touched: Vec[String] = Vec.new();
+        leaves(patch, "", mut touched);
+        let file = merge_patch(st.file.clone(), patch);
+        return st.commit(file, touched);
+    }
+    if r.method == "PUT" or r.method == "DELETE" {
+        if ptr.is_empty() {
+            return error(405, "use PATCH on /config");
+        }
+        match precondition(st, r) {
+            Some(resp) => return resp,
+            None => {}
+        }
+        let mut file = st.file.clone();
+        if r.method == "PUT" {
+            let v = match parse_json(r.body) {
+                Ok(v) => v,
+                Err(e) => return error(400, f"invalid JSON: {e}"),
+            };
+            match set_at(mut file, ptr, 0, v) {
+                Ok(_) => {}
+                Err(e) => return error(409, e),
+            }
+        } else {
+            match remove_at(mut file, ptr, 0) {
+                Ok(_) => {}
+                Err(_) => return error(404, f"{ptr_text} is not set in config.json"),
+            }
+        }
+        return st.commit(file, vec![ptr_text]);
+    }
+    error(405, "use GET, PATCH, PUT or DELETE")
+}
+
+fn parse_requests(raw: Str) -> Result[Vec[Req], String] {
+    let mut out: Vec[Req] = Vec.new();
+    let mut at = 0;
+    while at < raw.len() {
+        let rest = raw[at..raw.len()];
+        let head_end = match rest.find("\r\n\r\n") {
+            Some(i) => i,
+            None => return Err("incomplete request head".to_string()),
+        };
+        let lines = rest[0..head_end].split("\r\n");
+        let parts = lines[0].split(" ");
+        if parts.len() != 3 {
+            return Err(f"bad request line '{lines[0]}'");
+        }
+        let mut headers: Vec[(String, String)] = Vec.new();
+        let mut length = 0;
+        for l in lines[1..lines.len()].iter() {
+            match l.find(":") {
+                Some(i) => {
+                    let k = l[0..i].trim().to_string();
+                    let v = l[i + 1..l.len()].trim().to_string();
+                    if k.to_lowercase() == "content-length" {
+                        length = match i64.parse(v) {
+                            Some(n) => n,
+                            None => return Err(f"bad Content-Length '{v}'"),
+                        };
+                    }
+                    headers.push((k, v));
+                }
+                None => return Err(f"bad header '{l}'"),
+            }
+        }
+        let body_start = at + head_end + 4;
+        if body_start + length > raw.len() {
+            return Err("body shorter than Content-Length".to_string());
+        }
+        let body = raw[body_start..body_start + length].to_string();
+        out.push(Req { method: parts[0].clone(), path: parts[1].clone(), headers: headers, body: body });
+        at = body_start + length;
+    }
+    Ok(out)
+}
+
+fn render(resp: ref Resp) -> String {
+    let mut s = f"HTTP/1.1 {resp.status} {reason(resp.status)}\r\n";
+    for (k, v) in resp.headers.iter() {
+        s.push_str(f"{k}: {v}\r\n");
+    }
+    s.push_str(f"Content-Length: {resp.body.len()}\r\n\r\n");
+    s.push_str(resp.body);
+    s
+}
+
+fn read_all(conn: ref TcpStream) -> Result[String, String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => return Err("read failed".to_string()),
+        }
+    }
+    match String.from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(_) => Err("not utf-8".to_string()),
+    }
+}
+
+fn serve(st: mut ref Store, raw: Str) -> String {
+    let reqs = match parse_requests(raw) {
+        Ok(r) => r,
+        Err(e) => return render(error(400, e)),
+    };
+    let mut out = String.new();
+    for r in reqs.iter() {
+        let resp = handle(st, r);
+        st.log.push(f"{r.method} {r.path} -> {resp.status} (v{st.version})");
+        out.push_str(render(resp));
+    }
+    out
+}
+
+// ---- client -----------------------------------------------------------
+
+fn request(method: Str, target: Str, extra: Str, body: Str) -> String {
+    let mut s = f"{method} {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}";
+    if not body.is_empty() {
+        s.push_str(f"Content-Length: {body.len()}\r\n");
+    }
+    s.push_str("\r\n");
+    s.push_str(body);
+    s
+}
+
+fn if_match(tag: Str) -> String {
+    f"If-Match: {tag}\r\n"
+}
+
+fn patch_headers(tag: Str) -> String {
+    f"If-Match: {tag}\r\nContent-Type: application/merge-patch+json\r\n"
+}
+
+// Prints each response and returns the last ETag the server sent.
+fn print_responses(resp: Str, tag: own String) -> String {
+    let mut tag = tag;
+    let mut at = 0;
+    while at < resp.len() {
+        let rest = resp[at..resp.len()];
+        let head_end = match rest.find("\r\n\r\n") {
+            Some(i) => i,
+            None => {
+                println("  (truncated response)");
+                return tag;
+            }
+        };
+        let lines = rest[0..head_end].split("\r\n");
+        let mut length = 0;
+        let mut line = lines[0].clone();
+        let mut warning = String.new();
+        for l in lines[1..lines.len()].iter() {
+            if l.starts_with("Content-Length: ") {
+                length = i64.parse(l[16..l.len()]).unwrap_or(0);
+            } else if l.starts_with("ETag: ") {
+                tag = l[6..l.len()].to_string();
+                line.push_str(f"  etag {tag}");
+            } else if l.starts_with("Warning: ") {
+                warning = l[9..l.len()].to_string();
+            }
+        }
+        println(f"  {line}");
+        if not warning.is_empty() {
+            println(f"    warning: {warning}");
+        }
+        let body = rest[head_end + 4..head_end + 4 + length];
+        if not body.is_empty() {
+            println(f"    {body}");
+        }
+        at += head_end + 4 + length;
+    }
+    tag
+}
+
+fn session(listener: ref TcpListener, st: mut ref Store, label: Str, batch: Str, tag: own String) -> String {
+    println(f"== {label}");
+    let client = match TcpStream.connect(ADDR) {
+        Ok(c) => c,
+        Err(_) => {
+            println("connect failed");
+            return tag;
+        }
+    };
+    match client.write_all(batch.bytes()) {
+        Ok(_) => {}
+        Err(_) => println("client write failed"),
+    }
+    match client.shutdown_write() {
+        Ok(_) => {}
+        Err(_) => println("shutdown failed"),
+    }
+    match listener.accept() {
+        Ok(conn) => {
+            let out = match read_all(conn) {
+                Ok(raw) => serve(st, raw),
+                Err(e) => render(error(400, e)),
+            };
+            match conn.write_all(out.bytes()) {
+                Ok(_) => {}
+                Err(_) => println("server write failed"),
+            }
+        }
+        Err(_) => println("accept failed"),
+    }
+    match read_all(client) {
+        Ok(resp) => print_responses(resp, tag),
+        Err(e) => {
+            println(f"client read: {e}");
+            tag
+        }
+    }
+}
+
+fn operator_edit(text: Str) {
+    println(f"== operator writes config.json: {text}");
+    match fs.write(FILE, text.to_string()) {
+        Ok(_) => {}
+        Err(_) => println("  write failed"),
+    }
+}
+
+fn start() -> Result[Store, String] {
+    println("== startup");
+    let defaults = parse_json(DEFAULTS).map_err(|e| f"defaults: {e}")?;
+    let schema = parse_json(SCHEMA).map_err(|e| f"schema: {e}")?;
+    fs.write(FILE, FIRST_FILE.to_string()).map_err(|_| "could not write config.json".to_string())?;
+    let text = fs.read_to_string(FILE).map_err(|_| "could not read config.json".to_string())?;
+    let file = parse_json(text).map_err(|e| f"config.json: {e}")?;
+    println(f"  defaults    {to_json(defaults)}");
+    println(f"  config.json {to_json(file)}");
+    let mut env_doc = Jv.Obj(Vec.new());
+    let mut ptrs: Vec[String] = Vec.new();
+    let mut notes: Vec[String] = Vec.new();
+    env_layer(schema, "", "CFG", mut env_doc, mut ptrs, mut notes);
+    for n in notes.iter() {
+        println(f"  {n}");
+    }
+    println(f"  environment {to_json(env_doc)}");
+    let mut st = Store { defaults: defaults, file: Jv.Obj(Vec.new()), env: env_doc, env_ptrs: ptrs, schema: schema, effective: Jv.Null, etag: String.new(), version: 0, log: Vec.new() };
+    let resp = st.commit(file, Vec.new());
+    if resp.status != 200 {
+        return Err(f"startup config is invalid: {resp.body}");
+    }
+    println(f"  effective   {to_json(st.effective)}");
+    println(f"  etag {st.etag}");
+    Ok(st)
+}
+
+fn main() {
+    let mut st = match start() {
+        Ok(s) => s,
+        Err(e) => {
+            println(f"  {e}");
+            return;
+        }
+    };
+    let listener = match TcpListener.bind(ADDR) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+
+    let mut b = request("GET", "/config", "", "");
+    b.push_str(request("GET", "/config/server/port", "", ""));
+    b.push_str(request("GET", "/config/log/targets/1", "", ""));
+    b.push_str(request("GET", "/config/features", "", ""));
+    b.push_str(request("GET", "/config/nope", "", ""));
+    b.push_str(request("GET", "/config/log/targets/7", "", ""));
+    b.push_str(request("GET", "/config/log/targets/01", "", ""));
+    b.push_str(request("GET", "/config/a~2b", "", ""));
+    b.push_str(request("GET", "/status", "", ""));
+    b.push_str(request("POST", "/config", "", "{}"));
+    let e1 = session(listener, mut st, "read", b, String.new());
+
+    let mut b = request("GET", "/config", f"If-None-Match: {e1}\r\n", "");
+    b.push_str(request("GET", "/config/limits", "If-None-Match: \"00000000\"\r\n", ""));
+    b.push_str(request("PATCH", "/config", "Content-Type: application/merge-patch+json\r\n", "{\"log\": {\"level\": \"warn\"}}"));
+    b.push_str(request("PATCH", "/config", patch_headers("\"deadbeef\""), "{\"log\": {\"level\": \"warn\"}}"));
+    b.push_str(request("PATCH", "/config", f"If-Match: {e1}\r\nContent-Type: application/json\r\n", "{\"log\": {\"level\": \"warn\"}}"));
+    b.push_str(request("PATCH", "/config", patch_headers(e1), "{\"log\": {\"level\": \"warn\"}, \"features\": {\"regions\": null}}"));
+    b.push_str(request("PATCH", "/config", patch_headers(e1), "{\"log\": {\"level\": \"debug\"}}"));
+    b.push_str(request("GET", "/config/features/regions", "", ""));
+    let e2 = session(listener, mut st, "conditional writes", b, e1);
+
+    let mut b = request("PATCH", "/config", patch_headers(e2), "{\"server\": {\"port\": 70000}}");
+    b.push_str(request("PATCH", "/config", patch_headers(e2), "{\"log\": {\"level\": \"loud\", \"targets\": [\"a\", \"b\", \"c\", \"d\"]}, \"extra\": 1, \"server\": {\"tls\": \"yes\"}}"));
+    b.push_str(request("PATCH", "/config", patch_headers(e2), "{\"limits\": 5, \"features\": {\"regions\": [\"eu\", \"mars\"]}}"));
+    b.push_str(request("PATCH", "/config", patch_headers(e2), "{\"log\": {\"level\": \"warn\",}}"));
+    b.push_str(request("PATCH", "/config", patch_headers(e2), "{\"limits\": {\"timeout_ms\": 2.5}}"));
+    b.push_str(request("PATCH", "/config", patch_headers(e2), "{\"server\": {\"port\": 8443, \"tls\": true}}"));
+    let e3 = session(listener, mut st, "validation", b, e2);
+
+    let any = if_match("*");
+    let mut b = request("PUT", "/config/limits/timeout_ms", any, "5000");
+    b.push_str(request("PUT", "/config/log/targets/0", any, "\"stderr\""));
+    b.push_str(request("PUT", "/config/log/targets/-", any, "\"syslog\""));
+    b.push_str(request("PUT", "/config/log/targets/-", any, "\"extra\""));
+    b.push_str(request("PUT", "/config/log/targets/5", any, "\"x\""));
+    b.push_str(request("PUT", "/config/server/port", any, "1234"));
+    b.push_str(request("DELETE", "/config/server/host", any, ""));
+    b.push_str(request("DELETE", "/config/server/host", any, ""));
+    b.push_str(request("PUT", "/config/features/beta", any, "maybe"));
+    b.push_str(request("PUT", "/config/features/beta", "", "true"));
+    b.push_str(request("PUT", "/config", any, "{}"));
+    b.push_str(request("GET", "/config/server", "", ""));
+    let e4 = session(listener, mut st, "pointer writes", b, e3);
+
+    operator_edit("{\"server\": {\"port\": 7000, \"tls\": false}, \"log\": {\"level\": \"error\"}}");
+    let mut b = request("POST", "/config/reload", "", "");
+    b.push_str(request("GET", "/config/log", "", ""));
+    let e5 = session(listener, mut st, "reload", b, e4);
+    operator_edit("{\"server\": {");
+    let mut b = request("POST", "/config/reload", "", "");
+    b.push_str(request("GET", "/config/reload", "", ""));
+    let e6 = session(listener, mut st, "reload broken file", b, e5);
+    operator_edit("{\"log\": {\"level\": \"verbose\"}}");
+    let mut b = request("POST", "/config/reload", "", "");
+    b.push_str(request("GET", "/config", f"If-None-Match: {e6}\r\n", ""));
+    session(listener, mut st, "reload invalid file", b, e6);
+
+    println("== on disk");
+    match fs.read_to_string(FILE) {
+        Ok(t) => println(f"  {t}"),
+        Err(_) => println("  (unreadable)"),
+    }
+    println(f"== access log (version {st.version})");
+    for l in st.log.iter() {
+        println(f"  {l}");
+    }
+}
