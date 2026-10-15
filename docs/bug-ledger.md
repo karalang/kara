@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 730 |
+| miscompile | 731 |
 | run-vs-build | 606 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 266 |
+| missing-feature | 267 |
 | codegen-gap | 259 |
 | false-positive | 192 |
 | other | 172 |
@@ -104,20 +104,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 162 |
 | crash | 119 |
 | soundness | 105 |
-| use-after-free | 90 |
+| use-after-free | 91 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2898 |
+| codegen | 2900 |
 | interp | 928 |
 | typecheck | 432 |
 | other | 115 |
 | ownership | 100 |
 | cli | 76 |
 | runtime | 72 |
-| parser | 63 |
+| parser | 64 |
 | autopar | 59 |
 | resolver | 40 |
 | effect | 32 |
@@ -214,6 +214,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-22 | 2026-10-15 | typecheck+interp+codegen | medium | `let since = m.get(k).unwrap_or(9); let mut t = since; t = t + 1;` passes `karac check` but every MIR surface stops with an internal error, "invalid MIR: main: bb7[1]: assigning i64 to _8 of type ref i64": `since` and `t` are typed `ref i64` (the `Option[ref i64]` of `get`), so the assignment of an `i64` to `t` builds ill-typed MIR | — |
 | B-2026-10-15-23 | 2026-10-15 | ownership | medium | `karac check` calls the argument of two built-in String methods MOVED, though every MIR surface runs the program: `line.find(op)` moves `op` when `line` is a `Str` (a parameter; a `String` receiver is fine), and `t.replacen("%", s, 1)` moves a `String` `s` on any receiver, so a later `op.len()` or a second `replacen` with the same stem is refused | — |
 | B-2026-10-15-24 | 2026-10-15 | typecheck+interp+codegen | medium | `match v[i] { J.I(n) => Some(*n), .. }` on an index place passes `karac check` (which binds `n` as a `ref i64`) but every MIR surface stops with "unary '*' requires 'ref T', 'mut ref T', or a raw pointer, found 'i64'": the MIR builder binds a Copy payload of an index-place scrutinee BY VALUE, though `let x = ref v[i]; match x { J.I(n) => *n }` binds it as a ref on MIR too | — |
+| B-2026-10-15-25 | 2026-10-15 | parser | medium | A closure parameter annotated with a mode does not parse: `|v: own Vec[i64]| v.len()` is "Expected Pipe, found Identifier" at the type, though design.md § Function values gives `|x: own T| body` as the way to set one parameter's mode and shows `|v: own Vec[i64]| sort(v)` twice | — |
+| B-2026-10-15-26 | 2026-10-15 | codegen | high | Calling an element of a `Vec[Fn(..)]` filled by `push` fails on every v2 surface though `karac check` passes: `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(w); v[0](7)` is "call through Fn(..w..), which is not a function value" on `__mir-run`, a silent exit 101 on `__mir-llvm-run` and an ASan stack-buffer-overflow; the same Vec built with `vec![w]` works, as does a closure in a struct field | — |
+| B-2026-10-15-27 | 2026-10-15 | codegen | high | A closure that escapes inside a value (stored in a struct in a returned `Vec`) captures BY REFERENCE on v2, though core-semantics.md §9.3 says an escaping closure captures every place by move: the captured owned `String` dangles after the function returns (`__mir-run` "dangling reference to a local of a function that returned", ASan heap-use-after-free); `karac check` refuses the program with the legacy backend's `escaping_closure` deferral | — |
 
 ### Relocated
 

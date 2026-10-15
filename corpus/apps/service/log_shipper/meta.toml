@@ -1,0 +1,10 @@
+source = "kara-katas/apps/service/log_shipper/log_shipper.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:service", "apps:real-io"]
+expected_from = "mirror"
+rules = []
+backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
+env = {}
+extracted_src = "b1bd9a3a"

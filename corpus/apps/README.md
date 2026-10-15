@@ -157,6 +157,7 @@ service/supervisor  supervisord-style process supervisor: restart policies with 
 service/jwt_auth    HS256 JWT login service: SHA-256, HMAC, PBKDF2, base64url from the RFCs; alg-none, tamper, expiry/nbf leeway and issuer checks over TCP
 pipeline/metrics_agg Prometheus text-format aggregator: label escapes and error recovery, counter rates with reset detection, PromQL histogram_quantile over summed bucket rates, re-parsed .prom output
 service/static_files static file server: CRC-32 ETags and If-None-Match, RFC 9110 ranges with multipart/byteranges and If-Range, percent-decoded path guards, escaped listings, pipelined keep-alive; curl-checked
+service/log_shipper  Vector-style log shipper: checksum-fingerprinted checkpoints, rename/copytruncate rotation, JSON-lines + combined parsers via a generic bound, closure transforms, idempotent NDJSON batches, 503 backoff, 413 splitting, dead letters
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

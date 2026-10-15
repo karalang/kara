@@ -1,0 +1,1100 @@
+// A log shipper in the shape of Vector or Fluent Bit: it tails real log
+// files and posts batches to an HTTP collector over a real socket.
+//
+// Each input is identified the way Vector's checksum strategy does it: by
+// the CRC-32 of its first line, not by its name. A checkpoint is
+// (fingerprint, byte offset) and is written atomically (a temp file, then a
+// rename) after every acknowledged batch. On start, a file whose
+// fingerprint changed is looked for under `<path>.1`. If the old file is
+// there, it was renamed by a rotation and is drained from the saved offset
+// first, so nothing is lost. If the fingerprint matches but the size
+// shrank, the file was truncated. A trailing line without a newline is
+// held back until it is complete.
+//
+// Lines go through a parser (JSON lines, or nginx's combined format)
+// chosen per input through a generic `LineParser` bound, then through a
+// list of closures that drop health checks, normalise levels, redact
+// e-mail addresses and client IPs, and add the host name. Each record
+// carries `_fp` and `_off`, which the collector uses as an idempotency
+// key, so a batch re-sent after a crash is not stored twice. The collector
+// answers 503 (with and without Retry-After) and 413 when a record is too
+// large. The shipper retries with exponential backoff on a virtual clock,
+// splits a 413 batch in half until the bad record is alone, and sends
+// anything it gives up on to a dead-letter file.
+
+const PORT_ADDR: Str = "127.0.0.1:47746";
+const BATCH: i64 = 4;
+const MAX_ATTEMPTS: i64 = 4;
+const MAX_MSG: i64 = 80;
+
+// ---------------------------------------------------------------- bytes
+
+fn crc_table() -> Vec[u32] {
+    let mut table: Vec[u32] = Vec.new();
+    for n in 0..256 {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            if c & 1u32 == 1u32 {
+                c = 0xEDB88320u32 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        table.push(c);
+    }
+    table
+}
+
+fn crc32(table: ref Vec[u32], data: ref Vec[u8], n: i64) -> u32 {
+    let mut c = 0xFFFFFFFFu32;
+    for i in 0..n {
+        let idx = ((c ^ (data[i] as u32)) & 0xFFu32) as i64;
+        c = table[idx] ^ (c >> 8);
+    }
+    c ^ 0xFFFFFFFFu32
+}
+
+const DIGITS: Str = "0123456789abcdef";
+
+fn hex_pad(v0: i64, width: i64) -> String {
+    let mut v = v0;
+    let mut s = String.new();
+    while v > 0 {
+        s = f"{DIGITS.substring(v % 16, v % 16 + 1)}{s}";
+        v = v / 16;
+    }
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(*b);
+    }
+    v
+}
+
+fn text_of(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("".to_string())
+}
+
+fn find_byte(b: ref Vec[u8], c: u8, from: i64) -> i64 {
+    let mut i = from;
+    while i < b.len() {
+        if b[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find_crlf2(b: ref Vec[u8]) -> i64 {
+    let mut i = 0;
+    while i + 3 < b.len() {
+        if b[i] == 13u8 and b[i + 1] == 10u8 and b[i + 2] == 13u8 and b[i + 3] == 10u8 {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn is_digits(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for b in s.bytes() {
+        if *b < 48u8 or *b > 57u8 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---------------------------------------------------------------- values
+
+enum Val {
+    S(String),
+    N(String),
+    B(String),
+    Null,
+}
+
+type Rec = SortedMap[String, Val];
+
+fn val_text(v: ref Val) -> String {
+    match v {
+        Val.S(t) => t.clone(),
+        Val.N(t) => t.clone(),
+        Val.B(t) => t.clone(),
+        Val.Null => "null".to_string(),
+    }
+}
+
+fn json_str(s: Str) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        let o = c as u32;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if o < 32u32 {
+            out.push_str(f"\\u{hex_pad(o as i64, 4)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push_str("\"");
+    out
+}
+
+fn render(rec: ref Rec) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for (k, v) in rec.iter() {
+        let t = match v {
+            Val.S(s) => json_str(s),
+            _ => val_text(v),
+        };
+        parts.push(f"{json_str(k)}:{t}");
+    }
+    f"{{{parts.join(",")}}}"
+}
+
+// ---------------------------------------------------------------- parsers
+
+trait LineParser {
+    fn name(ref self) -> String;
+    fn parse(ref self, line: Str) -> Result[Rec, String];
+}
+
+struct JsonLines {}
+
+struct Cursor { b: Vec[u8], p: i64 }
+
+impl Cursor {
+    fn at(ref self, c: u8) -> bool {
+        self.p < self.b.len() and self.b[self.p] == c
+    }
+
+    fn ws(mut ref self) {
+        while self.at(32u8) or self.at(9u8) {
+            self.p += 1;
+        }
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.at(34u8) {
+            return Err(f"expected string at col {self.p + 1}");
+        }
+        self.p += 1;
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.p >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.p];
+            if c == 34u8 {
+                self.p += 1;
+                return Ok(String.from_utf8(out).unwrap_or("".to_string()));
+            }
+            if c == 92u8 {
+                if self.p + 1 >= self.b.len() {
+                    return Err("unterminated string".to_string());
+                }
+                let e = self.b[self.p + 1];
+                if e == 117u8 {
+                    let mut cp = 0;
+                    for k in 0..4 {
+                        let i = self.p + 2 + k;
+                        let d = if i < self.b.len() { unhex(self.b[i]) } else { -1 };
+                        if d < 0 {
+                            return Err(f"bad \\u escape at col {self.p + 1}");
+                        }
+                        cp = cp * 16 + d;
+                    }
+                    push_utf8(mut out, cp);
+                    self.p += 6;
+                    continue;
+                }
+                let m = if e == 34u8 or e == 92u8 or e == 47u8 {
+                    e
+                } else if e == 110u8 {
+                    10u8
+                } else if e == 116u8 {
+                    9u8
+                } else if e == 114u8 {
+                    13u8
+                } else {
+                    return Err(f"bad escape at col {self.p + 1}");
+                };
+                out.push(m);
+                self.p += 2;
+                continue;
+            }
+            out.push(c);
+            self.p += 1;
+        }
+    }
+}
+
+fn unhex(c: u8) -> i64 {
+    let v = c as i64;
+    if v >= 48 and v <= 57 {
+        return v - 48;
+    }
+    if v >= 97 and v <= 102 {
+        return v - 87;
+    }
+    if v >= 65 and v <= 70 {
+        return v - 55;
+    }
+    -1
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_number(w: Str) -> bool {
+    let b = w.bytes();
+    let mut i = 0;
+    if i < b.len() and b[i] == 45u8 {
+        i += 1;
+    }
+    let mut st = i;
+    while i < b.len() and b[i] >= 48u8 and b[i] <= 57u8 {
+        i += 1;
+    }
+    if i == st {
+        return false;
+    }
+    if i < b.len() and b[i] == 46u8 {
+        i += 1;
+        st = i;
+        while i < b.len() and b[i] >= 48u8 and b[i] <= 57u8 {
+            i += 1;
+        }
+        if i == st {
+            return false;
+        }
+    }
+    i == b.len()
+}
+
+impl LineParser for JsonLines {
+    fn name(ref self) -> String {
+        "json".to_string()
+    }
+
+    fn parse(ref self, line: Str) -> Result[Rec, String] {
+        let mut c = Cursor { b: bytes_of(line), p: 0 };
+        let mut rec: Rec = SortedMap.new();
+        c.ws();
+        if not c.at(123u8) {
+            return Err("expected '{' at col 1".to_string());
+        }
+        c.p += 1;
+        c.ws();
+        if c.at(125u8) {
+            c.p += 1;
+        } else {
+            loop {
+                c.ws();
+                let k = c.string()?;
+                c.ws();
+                if not c.at(58u8) {
+                    return Err(f"expected ':' at col {c.p + 1}");
+                }
+                c.p += 1;
+                c.ws();
+                if c.at(34u8) {
+                    let s = c.string()?;
+                    rec.insert(k, Val.S(s));
+                } else {
+                    let st = c.p;
+                    while c.p < c.b.len() and not (c.at(44u8) or c.at(125u8) or c.at(32u8) or c.at(9u8)) {
+                        c.p += 1;
+                    }
+                    let word = text_of(c.b, st, c.p);
+                    if word == "true" or word == "false" {
+                        rec.insert(k, Val.B(word));
+                    } else if word == "null" {
+                        rec.insert(k, Val.Null);
+                    } else if is_number(word) {
+                        rec.insert(k, Val.N(word));
+                    } else {
+                        return Err(f"bad value at col {st + 1}");
+                    }
+                }
+                c.ws();
+                if c.at(44u8) {
+                    c.p += 1;
+                    continue;
+                }
+                if c.at(125u8) {
+                    c.p += 1;
+                    break;
+                }
+                return Err(f"expected ',' or '}}' at col {c.p + 1}");
+            }
+        }
+        c.ws();
+        if c.p != c.b.len() {
+            return Err(f"trailing data at col {c.p + 1}");
+        }
+        Ok(rec)
+    }
+}
+
+const MONTHS: Array[Str, 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+struct Combined {}
+
+impl LineParser for Combined {
+    fn name(ref self) -> String {
+        "combined".to_string()
+    }
+
+    // 10.0.0.5 - - [15/Oct/2026:05:00:01 +0000] "GET /x HTTP/1.1" 200 512 "-" "curl/8.4"
+    fn parse(ref self, line: Str) -> Result[Rec, String] {
+        let b = bytes_of(line);
+        let sp = find_byte(b, 32u8, 0);
+        if sp <= 0 {
+            return Err("no client address".to_string());
+        }
+        let client = text_of(b, 0, sp);
+        let lb = find_byte(b, 91u8, 0);
+        let rb = find_byte(b, 93u8, 0);
+        if lb < 0 or rb < lb {
+            return Err("no [time]".to_string());
+        }
+        let t = text_of(b, lb + 1, rb);
+        let tb = bytes_of(t);
+        if t.len() != 26 or tb[2] != 47u8 or tb[6] != 47u8 or tb[11] != 58u8 {
+            return Err(f"bad time '{t}'");
+        }
+        let mon = t.substring(3, 6);
+        let mut month = 0;
+        for i in 0..12 {
+            if MONTHS[i] == mon {
+                month = i + 1;
+            }
+        }
+        if month == 0 {
+            return Err(f"bad month '{mon}'");
+        }
+        let ts = f"{t.substring(7, 11)}-{month:02}-{t.substring(0, 2)}T{t.substring(12, 20)}Z";
+        let rest = text_of(b, rb + 1, b.len());
+        let rbytes = bytes_of(rest);
+        let q1 = find_byte(rbytes, 34u8, 0);
+        let q2 = find_byte(rbytes, 34u8, q1 + 1);
+        if q1 < 0 or q2 < 0 {
+            return Err("no request".to_string());
+        }
+        let req = text_of(rbytes, q1 + 1, q2).split(" ");
+        if req.len() != 3 {
+            return Err("bad request line".to_string());
+        }
+        let tail = text_of(rbytes, q2 + 1, rbytes.len());
+        let nums = tail.trim().split(" ");
+        if nums.len() < 2 or not is_digits(nums[0]) or not (is_digits(nums[1]) or nums[1] == "-") {
+            return Err("bad status or size".to_string());
+        }
+        let tbytes = bytes_of(tail);
+        let mut quoted: Vec[String] = Vec.new();
+        let mut i = 0;
+        loop {
+            let a = find_byte(tbytes, 34u8, i);
+            if a < 0 {
+                break;
+            }
+            let e = find_byte(tbytes, 34u8, a + 1);
+            if e < 0 {
+                return Err("unterminated quote".to_string());
+            }
+            quoted.push(text_of(tbytes, a + 1, e));
+            i = e + 1;
+        }
+        let mut rec: Rec = SortedMap.new();
+        rec.insert("client".to_string(), Val.S(client));
+        rec.insert("ts".to_string(), Val.S(ts));
+        rec.insert("method".to_string(), Val.S(req[0].clone()));
+        rec.insert("path".to_string(), Val.S(req[1].clone()));
+        rec.insert("status".to_string(), Val.N(nums[0].clone()));
+        rec.insert("bytes".to_string(), Val.N(if nums[1] != "-" { nums[1].clone() } else { "0".to_string() }));
+        if quoted.len() >= 2 {
+            if quoted[0] != "-" {
+                rec.insert("referer".to_string(), Val.S(quoted[0].clone()));
+            }
+            rec.insert("agent".to_string(), Val.S(quoted[1].clone()));
+        }
+        Ok(rec)
+    }
+}
+
+// ---------------------------------------------------------------- transforms
+
+struct Transform { name: String, f: Fn(Rec) -> Option[Rec] with allocates(Heap) }
+
+fn field(r: ref Rec, k: Str) -> Option[String] {
+    match r.get(k) {
+        Some(v) => Some(val_text(v)),
+        None => None,
+    }
+}
+
+fn make_transforms(host: own String) -> Vec[Transform] {
+    let mut ts: Vec[Transform] = Vec.new();
+    let drop_health: Fn(Rec) -> Option[Rec] with allocates(Heap) = |r: own Rec| {
+        match field(r, "path") {
+            Some(p) => {
+                if p == "/healthz" or p.starts_with("/healthz?") {
+                    return None;
+                }
+            }
+            None => {}
+        }
+        Some(r)
+    };
+    ts.push(Transform { name: "drop_health".to_string(), f: drop_health });
+    let norm_level: Fn(Rec) -> Option[Rec] with allocates(Heap) = |r: own Rec| {
+        let mut r = r;
+        match field(r, "level") {
+            Some(lv) => {
+                let mut t = lv.to_lowercase();
+                if t == "warning" {
+                    t = "warn".to_string();
+                }
+                r.insert("level".to_string(), Val.S(t));
+            }
+            None => {}
+        }
+        Some(r)
+    };
+    ts.push(Transform { name: "norm_level".to_string(), f: norm_level });
+    let redact: Fn(Rec) -> Option[Rec] with allocates(Heap) = |r: own Rec| {
+        let mut r = r;
+        match field(r, "user") {
+            Some(u) => match u.find("@") {
+                Some(at) => {
+                    r.insert("user".to_string(), Val.S(f"{u.substring(0, 1)}***{u.substring(at, u.len())}"));
+                }
+                None => {}
+            },
+            None => {}
+        }
+        match field(r, "client") {
+            Some(c) => {
+                let parts = c.split(".");
+                if parts.len() == 4 {
+                    r.insert("client".to_string(), Val.S(f"{parts[0]}.{parts[1]}.{parts[2]}.0"));
+                }
+            }
+            None => {}
+        }
+        Some(r)
+    };
+    ts.push(Transform { name: "redact".to_string(), f: redact });
+    let add_host: Fn(Rec) -> Option[Rec] with allocates(Heap) = |r: own Rec| {
+        let mut r = r;
+        r.insert("host".to_string(), Val.S(host.clone()));
+        Some(r)
+    };
+    ts.push(Transform { name: "add_host".to_string(), f: add_host });
+    ts
+}
+
+// ---------------------------------------------------------------- files
+
+fn read_from(path: Str, offset: i64) -> Result[Vec[u8], IoError] {
+    let f = File.open(path.to_string())?;
+    let end = f.seek(SeekFrom.End, 0)?;
+    f.seek(SeekFrom.Start, offset)?;
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in offset..end {
+        buf.push(0u8);
+    }
+    let mut got = 0;
+    while got < buf.len() {
+        let n = f.read(mut buf[got..buf.len()])?;
+        if n == 0 {
+            break;
+        }
+        got += n as i64;
+    }
+    Ok(buf)
+}
+
+fn size_of(path: Str) -> i64 {
+    match fs.metadata(path.to_string()) {
+        Ok(m) => m.len,
+        Err(_) => -1,
+    }
+}
+
+fn fingerprint(t: ref Vec[u32], path: Str) -> String {
+    let data = bytes_of(fs.read_to_string(path.to_string()).unwrap_or("".to_string()));
+    let nl = find_byte(data, 10u8, 0);
+    if nl < 0 {
+        return "".to_string();
+    }
+    hex_pad(crc32(t, data, nl + 1) as i64, 8)
+}
+
+struct Cp { fp: String, off: i64 }
+
+fn load_checkpoints() -> SortedMap[String, Cp] {
+    let mut cps: SortedMap[String, Cp] = SortedMap.new();
+    if not fs.exists("state/checkpoints".to_string()) {
+        return cps;
+    }
+    for ln in fs.read_to_string("state/checkpoints".to_string()).unwrap_or("".to_string()).lines().iter() {
+        let f = ln.split("\t");
+        cps.insert(f[0].clone(), Cp { fp: f[1].clone(), off: i64.parse(f[2]).unwrap_or(0) });
+    }
+    cps
+}
+
+fn save_checkpoints(cps: ref SortedMap[String, Cp]) {
+    let mut text = String.new();
+    for (k, c) in cps.iter() {
+        text.push_str(f"{k}\t{c.fp}\t{c.off}\n");
+    }
+    let ok = fs.create_dir_all("state".to_string()).is_ok() and fs.write("state/checkpoints.tmp".to_string(), text).is_ok() and fs.rename("state/checkpoints.tmp".to_string(), "state/checkpoints".to_string()).is_ok();
+    if not ok {
+        println("  cannot save checkpoints");
+    }
+}
+
+fn append_file(path: Str, text: Str) {
+    let ok = match File.append(path.to_string()) {
+        Ok(f) => f.write(text.bytes()).is_ok(),
+        Err(_) => false,
+    };
+    if not ok {
+        println(f"  cannot append to {path}");
+    }
+}
+
+fn show_checkpoints() {
+    let text = fs.read_to_string("state/checkpoints".to_string()).unwrap_or("".to_string());
+    println(f"  checkpoints: {text.trim().replace("\n", " | ")}");
+}
+
+// ---------------------------------------------------------------- collector
+
+struct Collector { listener: TcpListener, requests: i64, stored: Vec[String], keys: Set[String], dups: i64, script: Map[i64, String] }
+
+struct Answer { status: i64, retry: String, msg: String }
+
+// Encoded bytes of the "msg" string, escapes counted as written.
+fn msg_len(b: ref Vec[u8]) -> i64 {
+    let pat = bytes_of("\"msg\":\"");
+    let mut m = -1;
+    let mut i = 0;
+    while i + pat.len() <= b.len() and m < 0 {
+        let mut ok = true;
+        for k in 0..pat.len() {
+            if b[i + k] != pat[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            m = i;
+        }
+        i += 1;
+    }
+    if m < 0 {
+        return 0;
+    }
+    let mut j = m + 7;
+    while j < b.len() and b[j] != 34u8 {
+        j += if b[j] == 92u8 { 2 } else { 1 };
+    }
+    j - (m + 7)
+}
+
+fn field_of(ln: Str, k: Str) -> String {
+    let key = f"\"{k}\":";
+    let m = ln.find(key).unwrap_or(0);
+    let b = ln.bytes();
+    let st = m + key.len();
+    let mut e = st;
+    while e < b.len() and b[e] != 44u8 and b[e] != 125u8 {
+        e += 1;
+    }
+    let mut v = ln.substring(st, e);
+    if v.starts_with("\"") and v.ends_with("\"") and v.len() >= 2 {
+        v = v.substring(1, v.len() - 1);
+    }
+    v
+}
+
+impl Collector {
+    fn handle(mut ref self, data: ref Vec[u8]) -> Answer {
+        let end = find_crlf2(data);
+        let head = text_of(data, 0, end).split("\r\n");
+        let body = text_of(data, end + 4, data.len());
+        self.requests += 1;
+        let n = self.requests;
+        if not head[0].starts_with("POST /ingest ") {
+            return Answer { status: 404, retry: "".to_string(), msg: "not found".to_string() };
+        }
+        match self.script.get(n) {
+            Some(ra) => return Answer { status: 503, retry: ra.clone(), msg: "overloaded".to_string() },
+            None => {}
+        }
+        let all = body.split("\n");
+        let mut lines: Vec[String] = Vec.new();
+        for k in 0..all.len() - 1 {
+            lines.push(all[k].clone());
+        }
+        for ln in lines.iter() {
+            if msg_len(bytes_of(ln)) > MAX_MSG {
+                return Answer { status: 413, retry: "".to_string(), msg: "record too large".to_string() };
+            }
+        }
+        let mut new = 0;
+        for ln in lines.iter() {
+            let key = f"{field_of(ln, "_fp")}:{field_of(ln, "_off")}";
+            if self.keys.contains(key) {
+                self.dups += 1;
+                continue;
+            }
+            self.keys.insert(key);
+            self.stored.push(ln.clone());
+            new += 1;
+        }
+        Answer { status: 200, retry: "".to_string(), msg: f"stored {new} of {lines.len()}" }
+    }
+}
+
+fn reason(status: i64) -> String {
+    match status {
+        200 => "OK".to_string(),
+        404 => "Not Found".to_string(),
+        413 => "Content Too Large".to_string(),
+        _ => "Service Unavailable".to_string(),
+    }
+}
+
+fn read_all(conn: ref TcpStream) -> Vec[u8] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    bytes
+}
+
+fn post(col: mut ref Collector, ndjson: Str) -> Answer {
+    let failed = Answer { status: 0, retry: "".to_string(), msg: "transport error".to_string() };
+    let client = match TcpStream.connect(PORT_ADDR.to_string()) {
+        Ok(c) => c,
+        Err(_) => return failed,
+    };
+    let req = f"POST /ingest HTTP/1.1\r\nHost: collector\r\nContent-Type: application/x-ndjson\r\nContent-Length: {ndjson.len()}\r\n\r\n{ndjson}";
+    if not (client.write_all(req.bytes()).is_ok() and client.shutdown_write().is_ok()) {
+        return failed;
+    }
+    match col.listener.accept() {
+        Ok(conn) => {
+            let a = col.handle(read_all(conn));
+            let mut resp = f"HTTP/1.1 {a.status} {reason(a.status)}\r\n";
+            if a.retry != "" {
+                resp.push_str(f"Retry-After: {a.retry}\r\n");
+            }
+            resp.push_str(f"Content-Length: {a.msg.len()}\r\n\r\n{a.msg}");
+            if conn.write_all(resp.bytes()).is_err() {
+                return failed;
+            }
+        }
+        Err(_) => return failed,
+    }
+    let got = read_all(client);
+    let end = find_crlf2(got);
+    let lines = text_of(got, 0, end).split("\r\n");
+    let status = i64.parse(lines[0].split(" ")[1]).unwrap_or(0);
+    let mut retry = "".to_string();
+    for k in 1..lines.len() {
+        if lines[k].starts_with("Retry-After: ") {
+            retry = lines[k].substring(13, lines[k].len());
+        }
+    }
+    Answer { status: status, retry: retry, msg: text_of(got, end + 4, got.len()) }
+}
+
+// ---------------------------------------------------------------- shipper
+
+struct Item { line: String, off: i64 }
+
+enum Format {
+    Json,
+    Comb,
+}
+
+struct Input { name: String, path: String, format: Format }
+
+struct Shipper { t: Vec[u32], transforms: Vec[Transform], cps: SortedMap[String, Cp], clock: i64, batches: i64, dead: i64, crash_after: i64, crashed: bool }
+
+fn new_shipper(host: Str) -> Shipper {
+    Shipper { t: crc_table(), transforms: make_transforms(host.to_string()), cps: load_checkpoints(), clock: 0, batches: 0, dead: 0, crash_after: -1, crashed: false }
+}
+
+fn sub(items: ref Vec[Item], from: i64, to: i64) -> Vec[Item] {
+    let mut v: Vec[Item] = Vec.new();
+    for i in from..to {
+        v.push(Item { line: items[i].line.clone(), off: items[i].off });
+    }
+    v
+}
+
+impl Shipper {
+    fn deliver(mut ref self, col: mut ref Collector, items: ref Vec[Item], label: Str) {
+        let mut attempt = 1;
+        loop {
+            let mut body = String.new();
+            for it in items.iter() {
+                body.push_str(f"{it.line}\n");
+            }
+            let a = post(col, body);
+            if a.status == 200 {
+                println(f"    {label}: {items.len()} records -> 200 {a.msg}");
+                return;
+            }
+            if a.status == 413 {
+                if items.len() == 1 {
+                    append_file("dead/letters.ndjson", f"{items[0].line}\n");
+                    self.dead += 1;
+                    println(f"    {label}: 413 on a single record, dead-lettered @{items[0].off}");
+                    return;
+                }
+                let half = (items.len() + 1) / 2;
+                println(f"    {label}: 413, splitting {items.len()} -> {half}+{items.len() - half}");
+                self.deliver(col, sub(items, 0, half), f"{label}a");
+                self.deliver(col, sub(items, half, items.len()), f"{label}b");
+                return;
+            }
+            if attempt >= MAX_ATTEMPTS {
+                let mut text = String.new();
+                for it in items.iter() {
+                    text.push_str(f"{it.line}\n");
+                }
+                append_file("dead/letters.ndjson", text);
+                self.dead += items.len();
+                println(f"    {label}: {a.status} after {attempt} attempts, dead-lettered {items.len()} records");
+                return;
+            }
+            let wait = if a.retry != "" { i64.parse(a.retry).unwrap_or(1) } else { 1 << (attempt - 1) };
+            self.clock += wait;
+            println(f"    {label}: {a.status}, attempt {attempt}, retry in {wait}s (t={self.clock}s)");
+            attempt += 1;
+        }
+    }
+
+    fn flush(mut ref self, col: mut ref Collector, name: Str, fp: Str, items: ref Vec[Item], upto: i64) {
+        self.batches += 1;
+        let label = f"batch {self.batches}";
+        self.deliver(col, items, label);
+        if self.batches == self.crash_after {
+            println(f"    crash after the ack of batch {self.batches}, before its checkpoint");
+            self.crashed = true;
+            return;
+        }
+        self.cps.insert(name.to_string(), Cp { fp: fp.to_string(), off: upto });
+        save_checkpoints(self.cps);
+    }
+
+    fn drain[P: LineParser](mut ref self, col: mut ref Collector, name: Str, path: Str, parser: ref P, fp: Str, offset: i64) {
+        let data = match read_from(path, offset) {
+            Ok(d) => d,
+            Err(_) => {
+                println(f"    {name}: cannot read {path}");
+                return;
+            }
+        };
+        let mut pos = 0;
+        let mut items: Vec[Item] = Vec.new();
+        let mut consumed = offset;
+        loop {
+            let nl = find_byte(data, 10u8, pos);
+            if nl < 0 {
+                break;
+            }
+            let line_off = offset + pos;
+            let line = text_of(data, pos, nl);
+            pos = nl + 1;
+            consumed = offset + pos;
+            if line.trim() == "" {
+                continue;
+            }
+            let mut rec = match parser.parse(line) {
+                Ok(r) => r,
+                Err(e) => {
+                    println(f"    {name}@{line_off}: {parser.name()} parse error: {e}");
+                    continue;
+                }
+            };
+            rec.insert("_fp".to_string(), Val.S(fp.to_string()));
+            rec.insert("_off".to_string(), Val.N(f"{line_off}"));
+            rec.insert("_src".to_string(), Val.S(name.to_string()));
+            let mut dropped = "".to_string();
+            let mut cur: Option[Rec] = Some(rec);
+            for tr in self.transforms.iter() {
+                cur = match cur {
+                    Some(r) => (tr.f)(r),
+                    None => None,
+                };
+                if cur.is_none() {
+                    dropped = tr.name.clone();
+                    break;
+                }
+            }
+            match cur {
+                Some(r) => items.push(Item { line: render(r), off: line_off }),
+                None => {
+                    println(f"    {name}@{line_off}: dropped by {dropped}");
+                    continue;
+                }
+            }
+            if items.len() == BATCH {
+                self.flush(col, name, fp, items, consumed);
+                if self.crashed {
+                    return;
+                }
+                items = Vec.new();
+            }
+        }
+        if items.len() > 0 {
+            self.flush(col, name, fp, items, consumed);
+            if self.crashed {
+                return;
+            }
+        } else {
+            let same = match self.cps.get(name) {
+                Some(c) => c.fp == fp and c.off == consumed,
+                None => false,
+            };
+            if not same {
+                self.cps.insert(name.to_string(), Cp { fp: fp.to_string(), off: consumed });
+                save_checkpoints(self.cps);
+            }
+        }
+        if pos < data.len() {
+            println(f"    {name}: holding {data.len() - pos} bytes of a partial line");
+        }
+    }
+
+    fn drain_input(mut ref self, col: mut ref Collector, inp: ref Input, path: Str, fp: Str, offset: i64) {
+        match inp.format {
+            Format.Json => self.drain(col, inp.name, path, JsonLines {}, fp, offset),
+            Format.Comb => self.drain(col, inp.name, path, Combined {}, fp, offset),
+        }
+    }
+
+    fn run(mut ref self, col: mut ref Collector, inputs: ref Vec[Input]) {
+        for inp in inputs.iter() {
+            if self.crashed {
+                return;
+            }
+            let name = inp.name.clone();
+            if not fs.exists(inp.path.clone()) {
+                println(f"  {name}: missing");
+                continue;
+            }
+            let fp = fingerprint(self.t, inp.path);
+            if fp == "" {
+                println(f"  {name}: no complete first line yet, skipped");
+                continue;
+            }
+            let size = size_of(inp.path);
+            let (ofp, off) = match self.cps.get(name) {
+                Some(c) => (c.fp.clone(), c.off),
+                None => {
+                    println(f"  {name}: new file {fp}, reading from 0");
+                    self.drain_input(col, inp, inp.path, fp, 0);
+                    continue;
+                }
+            };
+            if ofp == fp and size >= off {
+                if size == off {
+                    println(f"  {name}: up to date at {off}");
+                    continue;
+                }
+                println(f"  {name}: resuming {fp} at {off} of {size}");
+                self.drain_input(col, inp, inp.path, fp, off);
+                continue;
+            }
+            let rotated = f"{inp.path}.1";
+            if ofp != fp and fs.exists(rotated.clone()) and fingerprint(self.t, rotated) == ofp {
+                println(f"  {name}: rotated; draining {rotated} ({ofp}) from {off} of {size_of(rotated)}");
+                self.drain_input(col, inp, rotated, ofp, off);
+                if self.crashed {
+                    return;
+                }
+            } else if ofp == fp {
+                println(f"  {name}: truncated ({size} < {off}), reading from 0");
+            } else {
+                println(f"  {name}: replaced ({ofp} -> {fp}), reading from 0");
+            }
+            println(f"  {name}: new file {fp}, reading from 0");
+            self.drain_input(col, inp, inp.path, fp, 0);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- scenario
+
+fn lines_text(v: ref Vec[String]) -> String {
+    let mut s = String.new();
+    for l in v.iter() {
+        s.push_str(f"{l}\n");
+    }
+    s
+}
+
+fn main() {
+    let mut app: Vec[String] = Vec.new();
+    app.push("{\"ts\":\"2026-10-15T05:00:01Z\",\"level\":\"info\",\"msg\":\"service started\",\"port\":8080}".to_string());
+    app.push("{\"ts\":\"2026-10-15T05:00:02Z\",\"level\":\"INFO\",\"msg\":\"user login\",\"user\":\"alice@example.com\",\"ok\":true}".to_string());
+    app.push("{\"ts\":\"2026-10-15T05:00:03Z\",\"level\":\"WARNING\",\"msg\":\"slow query\",\"ms\":812.5}".to_string());
+    app.push("this is not json".to_string());
+    app.push("{\"ts\":\"2026-10-15T05:00:04Z\",\"level\":\"error\",\"msg\":\"payment failed: \\\"card declined\\\"\",\"user\":\"bob@example.com\",\"code\":null}".to_string());
+    app.push("{\"ts\":\"2026-10-15T05:00:05Z\",\"level\":\"debug\",\"msg\":\"caf\\u00e9 menu loaded\",\"items\":12}".to_string());
+    let mut long = String.new();
+    for _ in 0..100 {
+        long.push_str("x");
+    }
+    app.push(f"{{\"ts\":\"2026-10-15T05:00:06Z\",\"level\":\"info\",\"msg\":\"{long}\"}}");
+    app.push("{\"ts\":\"2026-10-15T05:00:07Z\",\"level\":\"info\",\"msg\":\"cache warm\",\"hit_rate\":0.93}".to_string());
+    app.push("{\"ts\":\"2026-10-15T05:00:08Z\",\"level\":\"info\" \"msg\":\"missing comma\"}".to_string());
+    app.push("{\"ts\":\"2026-10-15T05:00:09Z\",\"level\":\"info\",\"msg\":\"tab\\there\",\"n\":-4}".to_string());
+    app.push("{\"ts\":\"2026-10-15T05:00:10Z\",\"level\":\"warn\",\"msg\":\"retrying upstream\",\"attempt\":2}".to_string());
+
+    let mut acc: Vec[String] = Vec.new();
+    acc.push("10.0.0.5 - - [15/Oct/2026:05:00:01 +0000] \"GET /api/items?page=2 HTTP/1.1\" 200 512 \"-\" \"curl/8.4\"".to_string());
+    acc.push("10.0.0.6 - - [15/Oct/2026:05:00:02 +0000] \"GET /healthz HTTP/1.1\" 200 2 \"-\" \"kube-probe/1.30\"".to_string());
+    acc.push("192.168.1.20 - - [15/Oct/2026:05:00:03 +0000] \"POST /api/orders HTTP/1.1\" 201 87 \"https://shop.example/cart\" \"Mozilla/5.0\"".to_string());
+    acc.push("10.0.0.5 - - [15/Oct/2026:05:00:04 +0000] \"GET /static/app.js HTTP/1.1\" 304 - \"-\" \"Mozilla/5.0\"".to_string());
+    acc.push("garbage line without brackets".to_string());
+    acc.push("10.0.0.7 - - [15/Foo/2026:05:00:05 +0000] \"GET / HTTP/1.1\" 200 10 \"-\" \"x\"".to_string());
+    acc.push("10.0.0.6 - - [15/Oct/2026:05:00:06 +0000] \"GET /healthz?full=1 HTTP/1.1\" 200 2 \"-\" \"kube-probe/1.30\"".to_string());
+    let partial = "10.0.0.8 - - [15/Oct/2026:05:00:07 +0000] \"DELETE /api/orders/9 HTTP/1.1\" 204 0 \"-\" \"c";
+
+    let ok = fs.create_dir_all("logs".to_string()).is_ok() and fs.create_dir_all("dead".to_string()).is_ok() and fs.write("logs/app.log".to_string(), lines_text(app)).is_ok() and fs.write("logs/access.log".to_string(), f"{lines_text(acc)}{partial}").is_ok();
+    if not ok {
+        println("cannot write the logs");
+        return;
+    }
+    println(f"== logs: app.log {size_of("logs/app.log")} bytes, access.log {size_of("logs/access.log")} bytes");
+
+    let listener = match TcpListener.bind(PORT_ADDR.to_string()) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+    let mut script: Map[i64, String] = Map.new();
+    script.insert(2, "3".to_string());
+    script.insert(7, "".to_string());
+    script.insert(8, "".to_string());
+    script.insert(17, "".to_string());
+    script.insert(18, "".to_string());
+    script.insert(19, "".to_string());
+    script.insert(20, "".to_string());
+    let mut col = Collector { listener: listener, requests: 0, stored: Vec.new(), keys: Set.new(), dups: 0, script: script };
+    let mut inputs: Vec[Input] = Vec.new();
+    inputs.push(Input { name: "app.log".to_string(), path: "logs/app.log".to_string(), format: Format.Json });
+    inputs.push(Input { name: "access.log".to_string(), path: "logs/access.log".to_string(), format: Format.Comb });
+
+    println("== run 1 (crashes after batch 4)");
+    let mut s1 = new_shipper("web-1");
+    s1.crash_after = 4;
+    s1.run(mut col, inputs);
+    show_checkpoints();
+
+    append_file("logs/app.log", "{\"ts\":\"2026-10-15T05:01:00Z\",\"level\":\"info\",\"msg\":\"before rotation\"}\n");
+    if fs.rename("logs/app.log".to_string(), "logs/app.log.1".to_string()).is_err() {
+        println("cannot rotate");
+    }
+    let mut fresh = "{\"ts\":\"2026-10-15T05:01:01Z\",\"level\":\"info\",\"msg\":\"after rotation\",\"gen\":2}\n".to_string();
+    fresh.push_str("{\"ts\":\"2026-10-15T05:01:02Z\",\"level\":\"Warning\",\"msg\":\"disk 91% full\",\"user\":\"ops@example.com\"}\n");
+    if fs.write("logs/app.log".to_string(), fresh).is_err() {
+        println("cannot write the new app.log");
+    }
+    append_file("logs/access.log", "url/8.4\"\n10.0.0.9 - - [15/Oct/2026:05:01:03 +0000] \"GET /api/items HTTP/1.1\" 200 2048 \"-\" \"curl/8.4\"\n");
+
+    println("== run 2 (after rotation and appends)");
+    let mut s2 = new_shipper("web-1");
+    s2.run(mut col, inputs);
+    show_checkpoints();
+
+    println("== run 3 (nothing new)");
+    let mut s3 = new_shipper("web-1");
+    s3.run(mut col, inputs);
+
+    if fs.write("logs/access.log".to_string(), "10.0.0.5 - - [15/Oct/2026:05:02:00 +0000] \"GET /after/truncate HTTP/1.1\" 200 1 \"-\" \"curl/8.4\"\n".to_string()).is_err() {
+        println("cannot truncate access.log");
+    }
+    append_file("logs/app.log", "{\"ts\":\"2026-10-15T05:02:01Z\",\"level\":\"info\",\"msg\":\"steady\"}\n");
+    println("== run 4 (access.log copytruncated, app.log appended)");
+    let mut s4 = new_shipper("web-2");
+    s4.run(mut col, inputs);
+    show_checkpoints();
+
+    println("== collector");
+    println(f"  {col.requests} requests, {col.stored.len()} records stored, {col.dups} duplicates ignored");
+    let mut by: SortedMap[String, i64] = SortedMap.new();
+    for ln in col.stored.iter() {
+        let k = field_of(ln, "_src");
+        let n = by.get(k).unwrap_or(0);
+        by.insert(k, n + 1);
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for (k, n) in by.iter() {
+        parts.push(f"{k}={n}");
+    }
+    println(f"  by source: {parts.join(", ")}");
+    for ln in col.stored.iter() {
+        if ln.contains("\"error\"") or ln.contains("caf") or ln.contains("/api/orders") or ln.contains("rotation") or ln.contains("steady") {
+            println(f"  {ln}");
+        }
+    }
+    let dead = fs.read_to_string("dead/letters.ndjson".to_string()).unwrap_or("".to_string()).lines();
+    println(f"== dead letters: {dead.len()}");
+    for ln in dead.iter() {
+        println(f"  {if ln.len() > 90 { ln.substring(0, 90) } else { ln.clone() }}");
+    }
+}

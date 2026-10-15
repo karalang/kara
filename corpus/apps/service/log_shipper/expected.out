@@ -1,0 +1,62 @@
+== logs: app.log 943 bytes, access.log 702 bytes
+== run 1 (crashes after batch 4)
+  app.log: new file 72995c10, reading from 0
+    app.log@260: json parse error: expected '{' at col 1
+    batch 1: 4 records -> 200 stored 4 of 4
+    app.log@723: json parse error: expected ',' or '}' at col 45
+    batch 2: 503, attempt 1, retry in 3s (t=3s)
+    batch 2: 413, splitting 4 -> 2+2
+    batch 2a: 413, splitting 2 -> 1+1
+    batch 2aa: 1 records -> 200 stored 1 of 1
+    batch 2ab: 413 on a single record, dead-lettered @489
+    batch 2b: 503, attempt 1, retry in 1s (t=4s)
+    batch 2b: 503, attempt 2, retry in 2s (t=6s)
+    batch 2b: 2 records -> 200 stored 2 of 2
+    batch 3: 1 records -> 200 stored 1 of 1
+  access.log: new file 4306289c, reading from 0
+    access.log@98: dropped by drop_health
+    access.log@411: combined parse error: no [time]
+    access.log@441: combined parse error: bad month 'Foo'
+    access.log@515: dropped by drop_health
+    batch 4: 3 records -> 200 stored 3 of 3
+    crash after the ack of batch 4, before its checkpoint
+  checkpoints: app.log	72995c10	943
+== run 2 (after rotation and appends)
+  app.log: rotated; draining logs/app.log.1 (72995c10) from 943 of 1012
+    batch 1: 1 records -> 200 stored 1 of 1
+  app.log: new file 7f1421f9, reading from 0
+    batch 2: 2 records -> 200 stored 2 of 2
+  access.log: new file 4306289c, reading from 0
+    access.log@98: dropped by drop_health
+    access.log@411: combined parse error: no [time]
+    access.log@441: combined parse error: bad month 'Foo'
+    access.log@515: dropped by drop_health
+    batch 3: 4 records -> 200 stored 1 of 4
+    batch 4: 1 records -> 200 stored 1 of 1
+  checkpoints: access.log	4306289c	803 | app.log	7f1421f9	171
+== run 3 (nothing new)
+  app.log: up to date at 171
+  access.log: up to date at 803
+== run 4 (access.log copytruncated, app.log appended)
+  app.log: resuming 7f1421f9 at 171 of 231
+    batch 1: 1 records -> 200 stored 1 of 1
+  access.log: replaced (4306289c -> ac28b2bc), reading from 0
+  access.log: new file ac28b2bc, reading from 0
+    batch 2: 503, attempt 1, retry in 1s (t=1s)
+    batch 2: 503, attempt 2, retry in 2s (t=3s)
+    batch 2: 503, attempt 3, retry in 4s (t=7s)
+    batch 2: 503 after 4 attempts, dead-lettered 1 records
+  checkpoints: access.log	ac28b2bc	94 | app.log	7f1421f9	231
+== collector
+  20 requests, 17 records stored, 3 duplicates ignored
+  by source: access.log=5, app.log=12
+  {"_fp":"72995c10","_off":277,"_src":"app.log","code":null,"host":"web-1","level":"error","msg":"payment failed: \"card declined\"","ts":"2026-10-15T05:00:04Z","user":"b***@example.com"}
+  {"_fp":"72995c10","_off":402,"_src":"app.log","host":"web-1","items":12,"level":"debug","msg":"café menu loaded","ts":"2026-10-15T05:00:05Z"}
+  {"_fp":"4306289c","_off":192,"_src":"access.log","agent":"Mozilla/5.0","bytes":87,"client":"192.168.1.0","host":"web-1","method":"POST","path":"/api/orders","referer":"https://shop.example/cart","status":201,"ts":"2026-10-15T05:00:03Z"}
+  {"_fp":"72995c10","_off":943,"_src":"app.log","host":"web-1","level":"info","msg":"before rotation","ts":"2026-10-15T05:01:00Z"}
+  {"_fp":"7f1421f9","_off":0,"_src":"app.log","gen":2,"host":"web-1","level":"info","msg":"after rotation","ts":"2026-10-15T05:01:01Z"}
+  {"_fp":"4306289c","_off":616,"_src":"access.log","agent":"curl/8.4","bytes":0,"client":"10.0.0.0","host":"web-1","method":"DELETE","path":"/api/orders/9","status":204,"ts":"2026-10-15T05:00:07Z"}
+  {"_fp":"7f1421f9","_off":171,"_src":"app.log","host":"web-2","level":"info","msg":"steady","ts":"2026-10-15T05:02:01Z"}
+== dead letters: 2
+  {"_fp":"72995c10","_off":489,"_src":"app.log","host":"web-1","level":"info","msg":"xxxxxxx
+  {"_fp":"ac28b2bc","_off":0,"_src":"access.log","agent":"curl/8.4","bytes":1,"client":"10.0
