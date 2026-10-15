@@ -28,7 +28,7 @@ fn cheapest_star(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64], memo:
             rest.push(needs[i] - offer[i]);
         }
         if fits and any {
-            let cost = offer[n] + cheapest_star(price, special, rest, memo);
+            let cost = offer[n] + cheapest_star(price, special, rest, mut memo);
             if cost < best {
                 best = cost;
             }
@@ -67,7 +67,7 @@ fn priced_coded(code: i64, place: Vec[i64], price: Vec[i64], offers: Vec[Vec[i64
             off += offer[i] * place[i];
         }
         if fits {
-            let cost = offer[n] + priced_coded(code - off, place, price, offers, memo);
+            let cost = offer[n] + priced_coded(code - off, place, price, offers, mut memo);
             if cost < best {
                 best = cost;
             }
@@ -212,9 +212,9 @@ fn random_offers(n: i64, count: i64, most: i64, dearest: i64, seed: mut ref i64)
     for _ in 0..count {
         let mut offer: Vec[i64] = Vec.new();
         for _ in 0..n {
-            offer.push(next_random(seed) % (most + 1));
+            offer.push(next_random(mut seed) % (most + 1));
         }
-        offer.push(next_random(seed) % (dearest + 1));
+        offer.push(next_random(mut seed) % (dearest + 1));
         special.push(offer);
     }
     special

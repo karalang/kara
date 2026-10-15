@@ -65,9 +65,9 @@ fn random_offers(n: i64, count: i64, most: i64, seed: mut ref i64) -> Vec[Vec[i6
     for _ in 0..count {
         let mut offer: Vec[i64] = Vec.new();
         for _ in 0..n {
-            offer.push(next_random(seed) % (most + 1));
+            offer.push(next_random(mut seed) % (most + 1));
         }
-        offer.push(next_random(seed) % 51);
+        offer.push(next_random(mut seed) % 51);
         special.push(offer);
     }
     special

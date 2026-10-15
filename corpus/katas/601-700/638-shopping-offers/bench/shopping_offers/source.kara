@@ -25,7 +25,7 @@ fn cheapest(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64], memo: mut 
             rest.push(needs[i] - offer[i]);
         }
         if fits and any {
-            let cost = offer[n] + cheapest(price, special, rest, memo);
+            let cost = offer[n] + cheapest(price, special, rest, mut memo);
             if cost < best {
                 best = cost;
             }

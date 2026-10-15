@@ -1,0 +1,141 @@
+// Benchmark for #641: the ★ arm (a ring with a start and a count) on a
+// fixed workload. See ../README.md § Benchmarks.
+
+struct MyCircularDeque {
+    data: Vec[i64],
+    head: i64,
+    count: i64,
+}
+
+impl MyCircularDeque {
+    fn new(k: i64) -> MyCircularDeque {
+        MyCircularDeque { data: vec![0; k], head: 0, count: 0 }
+    }
+
+    fn insert_front(mut ref self, value: i64) -> bool {
+        if self.count == self.data.len() {
+            return false;
+        }
+        self.head = (self.head + self.data.len() - 1) % self.data.len();
+        self.data[self.head] = value;
+        self.count += 1;
+        true
+    }
+
+    fn insert_last(mut ref self, value: i64) -> bool {
+        if self.count == self.data.len() {
+            return false;
+        }
+        let at = (self.head + self.count) % self.data.len();
+        self.data[at] = value;
+        self.count += 1;
+        true
+    }
+
+    fn delete_front(mut ref self) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        self.head = (self.head + 1) % self.data.len();
+        self.count -= 1;
+        true
+    }
+
+    fn delete_last(mut ref self) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        self.count -= 1;
+        true
+    }
+
+    fn get_front(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[self.head] }
+    }
+
+    fn get_rear(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[(self.head + self.count - 1) % self.data.len()] }
+    }
+
+    fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
+    fn is_full(self) -> bool {
+        self.count == self.data.len()
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` random operations, each one number: 0 to 1,000 is an
+// `insertFront` of that value and 1,001 to 2,001 an `insertLast` of the
+// value less 1,001, each about one in five; -1 a `deleteFront` and -2 a
+// `deleteLast`, each about one in eight; -3 `getFront`, -4 `getRear`,
+// -5 `isEmpty` and -6 `isFull`.
+fn script(count: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut ops: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        let roll = next_random(mut seed) % 40;
+        if roll < 8 {
+            ops.push(next_random(mut seed) % 1001);
+        } else if roll < 16 {
+            ops.push(1001 + next_random(mut seed) % 1001);
+        } else if roll < 21 {
+            ops.push(-1);
+        } else if roll < 26 {
+            ops.push(-2);
+        } else if roll < 30 {
+            ops.push(-3);
+        } else if roll < 34 {
+            ops.push(-4);
+        } else if roll < 37 {
+            ops.push(-5);
+        } else {
+            ops.push(-6);
+        }
+    }
+    ops
+}
+
+fn flag(b: bool) -> i64 {
+    if b { 1 } else { 0 }
+}
+
+fn main() {
+    // A script of 100,000 operations, made once; then 300 times runs it
+    // on a new deque of 1 to 1,000 slots, picked by the round, putting
+    // every result into a checksum.
+    let rounds = 300;
+    let mut seed: i64 = 641;
+    let ops = script(100000, mut seed);
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let mut q = MyCircularDeque.new(1 + (r * 37) % 1000);
+        for op in ops.iter() {
+            let op = *op;
+            let v = if op >= 1001 {
+                flag(q.insert_last(op - 1001))
+            } else if op >= 0 {
+                flag(q.insert_front(op))
+            } else if op == -1 {
+                flag(q.delete_front())
+            } else if op == -2 {
+                flag(q.delete_last())
+            } else if op == -3 {
+                q.get_front()
+            } else if op == -4 {
+                q.get_rear()
+            } else if op == -5 {
+                flag(q.is_empty())
+            } else {
+                flag(q.is_full())
+            };
+            checksum = (checksum * 31 + v + 2) % 1000000007;
+        }
+    }
+    println(f"{rounds} deques, {ops.len()} operations each: checksum {checksum}");
+}

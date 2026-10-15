@@ -1,0 +1,9 @@
+k = 3: [null,true,true,true,false,2,true,true,true,4]
+k = 2: [null,false,false,-1,-1,true,false]
+k = 1: [null,true,true,false,5,5,true,true,true,7,true,false]
+k = 2: [null,true,true,true,true,3,2,true,true,4,3,true,true,5,3]
+k = 4: [null,true,true,true,true,2,true,2,true,true,9,8]
+k = 4: [null,true,true,true,true,true,false,true,true,true,0,0,true,true,-1]
+300 random scripts: 47827 characters, checksum 108070924
+2000 operations, k = 1000: 9891 characters, checksum 79458948
+2000 operations, k = 1: 10346 characters, checksum 779743050

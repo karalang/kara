@@ -200,11 +200,11 @@ fn next_random(seed: mut ref i64) -> i64 {
 // stars, so that 1s, 2s, 0s and stars come often.
 fn random_text(seed: mut ref i64) -> String {
     let pool = "**1122203456789".bytes();
-    let n = 1 + next_random(seed) % 8;
+    let n = 1 + next_random(mut seed) % 8;
     let mut s = String.new();
     let mut stars = 0;
     for _ in 0..n {
-        let mut c = pool[next_random(seed) % pool.len()];
+        let mut c = pool[next_random(mut seed) % pool.len()];
         if c == b'*' {
             stars += 1;
             if stars > 2 {

@@ -68,12 +68,12 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_text(n: i64, stars: i64, zeros: i64, seed: mut ref i64) -> String {
     let mut s = String.new();
     for _ in 0..n {
-        if next_random(seed) % 100 < stars {
+        if next_random(mut seed) % 100 < stars {
             s.push('*');
-        } else if next_random(seed) % 100 < zeros {
+        } else if next_random(mut seed) % 100 < zeros {
             s.push('0');
         } else {
-            let d = 1 + next_random(seed) % 9;
+            let d = 1 + next_random(mut seed) % 9;
             s.push_str(f"{d}");
         }
     }

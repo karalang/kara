@@ -1,0 +1,662 @@
+// LeetCode #641: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each with a driver that runs a script on it,
+// held to five properties on random scripts.
+
+// ---- star arm ----------------------------------------------------------
+
+struct MyCircularDeque_star {
+    data: Vec[i64],
+    head: i64,
+    count: i64,
+}
+
+impl MyCircularDeque_star {
+    fn new(k: i64) -> MyCircularDeque_star {
+        MyCircularDeque_star { data: vec![0; k], head: 0, count: 0 }
+    }
+
+    fn insert_front(mut ref self, value: i64) -> bool {
+        if self.count == self.data.len() {
+            return false;
+        }
+        self.head = (self.head + self.data.len() - 1) % self.data.len();
+        self.data[self.head] = value;
+        self.count += 1;
+        true
+    }
+
+    fn insert_last(mut ref self, value: i64) -> bool {
+        if self.count == self.data.len() {
+            return false;
+        }
+        let at = (self.head + self.count) % self.data.len();
+        self.data[at] = value;
+        self.count += 1;
+        true
+    }
+
+    fn delete_front(mut ref self) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        self.head = (self.head + 1) % self.data.len();
+        self.count -= 1;
+        true
+    }
+
+    fn delete_last(mut ref self) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        self.count -= 1;
+        true
+    }
+
+    fn get_front(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[self.head] }
+    }
+
+    fn get_rear(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[(self.head + self.count - 1) % self.data.len()] }
+    }
+
+    fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
+    fn is_full(self) -> bool {
+        self.count == self.data.len()
+    }
+}
+
+fn drive_star(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularDeque_star.new(k);
+    // Moves the deque's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.insert_front(i % 1001);
+        let _out = q.delete_last();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.InsertFront(value) => f"{q.insert_front(*value)}",
+            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.DeleteFront => f"{q.delete_front()}",
+            Op.DeleteLast => f"{q.delete_last()}",
+            Op.GetFront => f"{q.get_front()}",
+            Op.GetRear => f"{q.get_rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.get_front());
+        t.rears.push(q.get_rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- slots arm ---------------------------------------------------------
+
+struct MyCircularDeque_slots {
+    data: Vec[i64],
+    front: i64,
+    back: i64,
+}
+
+impl MyCircularDeque_slots {
+    fn new(k: i64) -> MyCircularDeque_slots {
+        MyCircularDeque_slots { data: vec![0; k + 1], front: 0, back: 0 }
+    }
+
+    fn step(self, i: i64, by: i64) -> i64 {
+        (i + by + self.data.len()) % self.data.len()
+    }
+
+    fn insert_front(mut ref self, value: i64) -> bool {
+        if self.is_full() {
+            return false;
+        }
+        self.front = self.step(self.front, -1);
+        self.data[self.front] = value;
+        true
+    }
+
+    fn insert_last(mut ref self, value: i64) -> bool {
+        if self.is_full() {
+            return false;
+        }
+        self.data[self.back] = value;
+        self.back = self.step(self.back, 1);
+        true
+    }
+
+    fn delete_front(mut ref self) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        self.front = self.step(self.front, 1);
+        true
+    }
+
+    fn delete_last(mut ref self) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        self.back = self.step(self.back, -1);
+        true
+    }
+
+    fn get_front(self) -> i64 {
+        if self.is_empty() { -1 } else { self.data[self.front] }
+    }
+
+    fn get_rear(self) -> i64 {
+        if self.is_empty() { -1 } else { self.data[self.step(self.back, -1)] }
+    }
+
+    fn is_empty(self) -> bool {
+        self.front == self.back
+    }
+
+    fn is_full(self) -> bool {
+        self.step(self.back, 1) == self.front
+    }
+}
+
+fn drive_slots(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularDeque_slots.new(k);
+    // Moves the deque's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.insert_front(i % 1001);
+        let _out = q.delete_last();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.InsertFront(value) => f"{q.insert_front(*value)}",
+            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.DeleteFront => f"{q.delete_front()}",
+            Op.DeleteLast => f"{q.delete_last()}",
+            Op.GetFront => f"{q.get_front()}",
+            Op.GetRear => f"{q.get_rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.get_front());
+        t.rears.push(q.get_rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- deque arm ---------------------------------------------------------
+
+struct MyCircularDeque_deque {
+    items: VecDeque[i64],
+    capacity: i64,
+}
+
+impl MyCircularDeque_deque {
+    fn new(k: i64) -> MyCircularDeque_deque {
+        MyCircularDeque_deque { items: VecDeque.new(), capacity: k }
+    }
+
+    fn insert_front(mut ref self, value: i64) -> bool {
+        if self.items.len() == self.capacity {
+            return false;
+        }
+        self.items.push_front(value);
+        true
+    }
+
+    fn insert_last(mut ref self, value: i64) -> bool {
+        if self.items.len() == self.capacity {
+            return false;
+        }
+        self.items.push_back(value);
+        true
+    }
+
+    fn delete_front(mut ref self) -> bool {
+        self.items.pop_front().is_some()
+    }
+
+    fn delete_last(mut ref self) -> bool {
+        self.items.pop_back().is_some()
+    }
+
+    fn get_front(self) -> i64 {
+        match self.items.front() {
+            Some(v) => v,
+            None => -1,
+        }
+    }
+
+    fn get_rear(self) -> i64 {
+        match self.items.back() {
+            Some(v) => v,
+            None => -1,
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn is_full(self) -> bool {
+        self.items.len() == self.capacity
+    }
+}
+
+fn drive_deque(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularDeque_deque.new(k);
+    // Moves the deque's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.insert_front(i % 1001);
+        let _out = q.delete_last();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.InsertFront(value) => f"{q.insert_front(*value)}",
+            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.DeleteFront => f"{q.delete_front()}",
+            Op.DeleteLast => f"{q.delete_last()}",
+            Op.GetFront => f"{q.get_front()}",
+            Op.GetRear => f"{q.get_rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.get_front());
+        t.rears.push(q.get_rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- stacks arm --------------------------------------------------------
+
+struct MyCircularDeque_stacks {
+    front: Vec[i64],
+    back: Vec[i64],
+    capacity: i64,
+}
+
+// Moves the bottom half (rounded up) of `from` onto `to`, so that the
+// bottom of `from` ends on top of `to`.
+fn split_half_stacks(from: mut ref Vec[i64], to: mut ref Vec[i64]) {
+    let moved = (from.len() + 1) / 2;
+    let mut i = moved;
+    while i > 0 {
+        i -= 1;
+        to.push(from[i]);
+    }
+    let mut kept: Vec[i64] = Vec.new();
+    for j in moved..from.len() {
+        kept.push(from[j]);
+    }
+    *from = kept;
+}
+
+impl MyCircularDeque_stacks {
+    fn new(k: i64) -> MyCircularDeque_stacks {
+        MyCircularDeque_stacks { front: Vec.new(), back: Vec.new(), capacity: k }
+    }
+
+    fn size(self) -> i64 {
+        self.front.len() + self.back.len()
+    }
+
+    fn insert_front(mut ref self, value: i64) -> bool {
+        if self.size() == self.capacity {
+            return false;
+        }
+        self.front.push(value);
+        true
+    }
+
+    fn insert_last(mut ref self, value: i64) -> bool {
+        if self.size() == self.capacity {
+            return false;
+        }
+        self.back.push(value);
+        true
+    }
+
+    fn delete_front(mut ref self) -> bool {
+        if self.size() == 0 {
+            return false;
+        }
+        if self.front.is_empty() {
+            split_half_stacks(mut self.back, mut self.front);
+        }
+        self.front.pop();
+        true
+    }
+
+    fn delete_last(mut ref self) -> bool {
+        if self.size() == 0 {
+            return false;
+        }
+        if self.back.is_empty() {
+            split_half_stacks(mut self.front, mut self.back);
+        }
+        self.back.pop();
+        true
+    }
+
+    fn get_front(self) -> i64 {
+        if self.front.len() > 0 {
+            self.front[self.front.len() - 1]
+        } else if self.back.len() > 0 {
+            self.back[0]
+        } else {
+            -1
+        }
+    }
+
+    fn get_rear(self) -> i64 {
+        if self.back.len() > 0 {
+            self.back[self.back.len() - 1]
+        } else if self.front.len() > 0 {
+            self.front[0]
+        } else {
+            -1
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.size() == 0
+    }
+
+    fn is_full(self) -> bool {
+        self.size() == self.capacity
+    }
+}
+
+fn drive_stacks(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularDeque_stacks.new(k);
+    // Moves the deque's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.insert_front(i % 1001);
+        let _out = q.delete_last();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.InsertFront(value) => f"{q.insert_front(*value)}",
+            Op.InsertLast(value) => f"{q.insert_last(*value)}",
+            Op.DeleteFront => f"{q.delete_front()}",
+            Op.DeleteLast => f"{q.delete_last()}",
+            Op.GetFront => f"{q.get_front()}",
+            Op.GetRear => f"{q.get_rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.get_front());
+        t.rears.push(q.get_rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- the definition and the properties ------------------------------------
+
+enum Op {
+    InsertFront(i64),
+    InsertLast(i64),
+    DeleteFront,
+    DeleteLast,
+    GetFront,
+    GetRear,
+    IsEmpty,
+    IsFull,
+}
+
+struct Trace {
+    results: Vec[String],
+    fronts: Vec[i64],
+    rears: Vec[i64],
+    empties: Vec[bool],
+    fulls: Vec[bool],
+}
+
+fn new_trace() -> Trace {
+    Trace { results: Vec.new(), fronts: Vec.new(), rears: Vec.new(), empties: Vec.new(), fulls: Vec.new() }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    if which == 0 {
+        drive_star(k, ops, shift)
+    } else if which == 1 {
+        drive_slots(k, ops, shift)
+    } else if which == 2 {
+        drive_deque(k, ops, shift)
+    } else {
+        drive_stacks(k, ops, shift)
+    }
+}
+
+// The definition: the deque is the list of values in it, front first.
+// An insert puts its value at the start or the end when the list is
+// shorter than `k`; a delete removes the first or last value when there
+// is one; `getFront` and `getRear` are the first and last values, or -1.
+fn definition(k: i64, ops: Vec[Op]) -> Vec[String] {
+    let mut items: Vec[i64] = Vec.new();
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.iter() {
+        match op {
+            Op.InsertFront(value) => {
+                let ok = items.len() < k;
+                if ok {
+                    items.insert(0, *value);
+                }
+                out.push(f"{ok}");
+            }
+            Op.InsertLast(value) => {
+                let ok = items.len() < k;
+                if ok {
+                    items.push(*value);
+                }
+                out.push(f"{ok}");
+            }
+            Op.DeleteFront => {
+                let ok = items.len() > 0;
+                if ok {
+                    items.remove(0);
+                }
+                out.push(f"{ok}");
+            }
+            Op.DeleteLast => {
+                let ok = items.len() > 0;
+                if ok {
+                    items.pop();
+                }
+                out.push(f"{ok}");
+            }
+            Op.GetFront => out.push(f"{if items.is_empty() { -1 } else { items[0] }}"),
+            Op.GetRear => out.push(f"{if items.is_empty() { -1 } else { items[items.len() - 1] }}"),
+            Op.IsEmpty => out.push(f"{items.is_empty()}"),
+            Op.IsFull => out.push(f"{items.len() == k}"),
+        }
+    }
+    out
+}
+
+// `count` random operations, about two in five an insert of a value from
+// 0 to 9 at either end and one in four a delete at either end.
+fn script(count: i64, seed: mut ref i64) -> Vec[Op] {
+    let mut ops: Vec[Op] = Vec.new();
+    for _ in 0..count {
+        let roll = next_random(mut seed) % 40;
+        if roll < 8 {
+            ops.push(Op.InsertFront(next_random(mut seed) % 10));
+        } else if roll < 16 {
+            ops.push(Op.InsertLast(next_random(mut seed) % 10));
+        } else if roll < 21 {
+            ops.push(Op.DeleteFront);
+        } else if roll < 26 {
+            ops.push(Op.DeleteLast);
+        } else if roll < 30 {
+            ops.push(Op.GetFront);
+        } else if roll < 34 {
+            ops.push(Op.GetRear);
+        } else if roll < 37 {
+            ops.push(Op.IsEmpty);
+        } else {
+            ops.push(Op.IsFull);
+        }
+    }
+    ops
+}
+
+// The script with the two ends swapped.
+fn mirrored(ops: Vec[Op]) -> Vec[Op] {
+    let mut out: Vec[Op] = Vec.new();
+    for op in ops.iter() {
+        out.push(match op {
+            Op.InsertFront(value) => Op.InsertLast(*value),
+            Op.InsertLast(value) => Op.InsertFront(*value),
+            Op.DeleteFront => Op.DeleteLast,
+            Op.DeleteLast => Op.DeleteFront,
+            Op.GetFront => Op.GetRear,
+            Op.GetRear => Op.GetFront,
+            Op.IsEmpty => Op.IsEmpty,
+            Op.IsFull => Op.IsFull,
+        });
+    }
+    out
+}
+
+// P2: after every operation the ends are -1 exactly when the deque is
+// empty, it is never both empty and full, and a value just inserted is
+// at the end it went in at.
+fn consistent(ops: Vec[Op], t: Trace) -> bool {
+    for i in 0..t.results.len() {
+        if (t.fronts[i] == -1) != t.empties[i] or (t.rears[i] == -1) != t.empties[i] {
+            return false;
+        }
+        if t.empties[i] and t.fulls[i] {
+            return false;
+        }
+        if t.results[i] == "true" {
+            match ops[i] {
+                Op.InsertFront(value) => {
+                    if t.fronts[i] != value {
+                        return false;
+                    }
+                }
+                Op.InsertLast(value) => {
+                    if t.rears[i] != value {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    true
+}
+
+// P3: an insert succeeds exactly when the deque was not full and a
+// delete exactly when it was not empty, and the number of values in it,
+// counted from those successes, is 0 exactly when it is empty and `k`
+// exactly when it is full.
+fn counted(k: i64, ops: Vec[Op], t: Trace) -> bool {
+    let mut size = 0;
+    let mut was_empty = true;
+    let mut was_full = false;
+    for i in 0..ops.len() {
+        match ops[i] {
+            Op.InsertFront(_) | Op.InsertLast(_) => {
+                if t.results[i] != f"{not was_full}" {
+                    return false;
+                }
+                if not was_full {
+                    size += 1;
+                }
+            }
+            Op.DeleteFront | Op.DeleteLast => {
+                if t.results[i] != f"{not was_empty}" {
+                    return false;
+                }
+                if not was_empty {
+                    size -= 1;
+                }
+            }
+            _ => {}
+        }
+        if t.empties[i] != (size == 0) or t.fulls[i] != (size == k) {
+            return false;
+        }
+        was_empty = t.empties[i];
+        was_full = t.fulls[i];
+    }
+    true
+}
+
+fn same(a: Trace, b: Trace) -> bool {
+    a.results == b.results and a.fronts == b.fronts and a.rears == b.rears and a.empties == b.empties and a.fulls == b.fulls
+}
+
+// The trace of the mirrored script is this one with the ends swapped.
+fn mirror_of(a: Trace, b: Trace) -> bool {
+    a.results == b.results and a.fronts == b.rears and a.rears == b.fronts and a.empties == b.empties and a.fulls == b.fulls
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6410;
+    let mut checks = 0;
+    let mut operations = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // A deque of 1 to 5 and 1 to 40 operations on it; the start
+        // moved 1 to 12 places for P5.
+        let k = 1 + next_random(mut seed) % 5;
+        let ops = script(1 + next_random(mut seed) % 40, mut seed);
+        let shift = 1 + next_random(mut seed) % 12;
+        operations += ops.len();
+        let want = definition(k, ops);
+        for which in 0..4 {
+            let got = answer(which, k, ops, 0);
+            let ok = vec![
+                // P1: the definition's results.
+                got.results == want,
+                consistent(ops, got),
+                counted(k, ops, got),
+                // P4: the script with the ends swapped gives the same
+                // results with the ends swapped.
+                mirror_of(answer(which, k, mirrored(ops), 0), got),
+                // P5: with the start moved first, the same results and
+                // states.
+                same(answer(which, k, ops, shift), got),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({operations} operations), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

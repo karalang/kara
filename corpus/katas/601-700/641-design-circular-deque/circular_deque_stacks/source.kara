@@ -1,0 +1,218 @@
+// LeetCode #641: Design Circular Deque -- two stacks back to back.
+//
+// `front` holds the front half with the front value on top, and `back`
+// the rear half with the rear value on top. A push goes on the top of
+// its own stack. A pop from an empty stack first moves the bottom half
+// of the other stack across, reversed, so that each stack keeps about
+// half and the pops stay O(1) amortized; the front of an empty `front`
+// stack is the bottom of `back`, and the other way round.
+
+struct MyCircularDeque {
+    front: Vec[i64],
+    back: Vec[i64],
+    capacity: i64,
+}
+
+// Moves the bottom half (rounded up) of `from` onto `to`, so that the
+// bottom of `from` ends on top of `to`.
+fn split_half(from: mut ref Vec[i64], to: mut ref Vec[i64]) {
+    let moved = (from.len() + 1) / 2;
+    let mut i = moved;
+    while i > 0 {
+        i -= 1;
+        to.push(from[i]);
+    }
+    let mut kept: Vec[i64] = Vec.new();
+    for j in moved..from.len() {
+        kept.push(from[j]);
+    }
+    *from = kept;
+}
+
+impl MyCircularDeque {
+    fn new(k: i64) -> MyCircularDeque {
+        MyCircularDeque { front: Vec.new(), back: Vec.new(), capacity: k }
+    }
+
+    fn size(self) -> i64 {
+        self.front.len() + self.back.len()
+    }
+
+    fn insert_front(mut ref self, value: i64) -> bool {
+        if self.size() == self.capacity {
+            return false;
+        }
+        self.front.push(value);
+        true
+    }
+
+    fn insert_last(mut ref self, value: i64) -> bool {
+        if self.size() == self.capacity {
+            return false;
+        }
+        self.back.push(value);
+        true
+    }
+
+    fn delete_front(mut ref self) -> bool {
+        if self.size() == 0 {
+            return false;
+        }
+        if self.front.is_empty() {
+            split_half(mut self.back, mut self.front);
+        }
+        self.front.pop();
+        true
+    }
+
+    fn delete_last(mut ref self) -> bool {
+        if self.size() == 0 {
+            return false;
+        }
+        if self.back.is_empty() {
+            split_half(mut self.front, mut self.back);
+        }
+        self.back.pop();
+        true
+    }
+
+    fn get_front(self) -> i64 {
+        if self.front.len() > 0 {
+            self.front[self.front.len() - 1]
+        } else if self.back.len() > 0 {
+            self.back[0]
+        } else {
+            -1
+        }
+    }
+
+    fn get_rear(self) -> i64 {
+        if self.back.len() > 0 {
+            self.back[self.back.len() - 1]
+        } else if self.front.len() > 0 {
+            self.front[0]
+        } else {
+            -1
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.size() == 0
+    }
+
+    fn is_full(self) -> bool {
+        self.size() == self.capacity
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+enum Op {
+    InsertFront(i64),
+    InsertLast(i64),
+    DeleteFront,
+    DeleteLast,
+    GetFront,
+    GetRear,
+    IsEmpty,
+    IsFull,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Runs one operation and returns what it returns, as LeetCode prints it.
+fn run(q: mut ref MyCircularDeque, op: Op) -> String {
+    match op {
+        Op.InsertFront(value) => f"{q.insert_front(value)}",
+        Op.InsertLast(value) => f"{q.insert_last(value)}",
+        Op.DeleteFront => f"{q.delete_front()}",
+        Op.DeleteLast => f"{q.delete_last()}",
+        Op.GetFront => f"{q.get_front()}",
+        Op.GetRear => f"{q.get_rear()}",
+        Op.IsEmpty => f"{q.is_empty()}",
+        Op.IsFull => f"{q.is_full()}",
+    }
+}
+
+// A deque of capacity `k` with the operations run on it in order, the
+// results in LeetCode's form, `null` first for the constructor.
+fn run_all(k: i64, ops: Vec[Op]) -> String {
+    let mut q = MyCircularDeque.new(k);
+    let mut out = "[null".to_string();
+    for op in ops.iter() {
+        out.push_str(",");
+        out.push_str(run(mut q, op));
+    }
+    out.push_str("]");
+    out
+}
+
+fn show(k: i64, ops: Vec[Op]) {
+    println(f"k = {k}: {run_all(k, ops)}");
+}
+
+// `count` random operations, about two in five an insert of a value from
+// 0 to 1,000 at either end and one in four a delete at either end.
+fn script(count: i64, seed: mut ref i64) -> Vec[Op] {
+    let mut ops: Vec[Op] = Vec.new();
+    for _ in 0..count {
+        let roll = next_random(mut seed) % 40;
+        if roll < 8 {
+            ops.push(Op.InsertFront(next_random(mut seed) % 1001));
+        } else if roll < 16 {
+            ops.push(Op.InsertLast(next_random(mut seed) % 1001));
+        } else if roll < 21 {
+            ops.push(Op.DeleteFront);
+        } else if roll < 26 {
+            ops.push(Op.DeleteLast);
+        } else if roll < 30 {
+            ops.push(Op.GetFront);
+        } else if roll < 34 {
+            ops.push(Op.GetRear);
+        } else if roll < 37 {
+            ops.push(Op.IsEmpty);
+        } else {
+            ops.push(Op.IsFull);
+        }
+    }
+    ops
+}
+
+fn summary(s: String) -> String {
+    let mut h: i64 = 0;
+    for c in s.chars() {
+        h = (h * 31 + c as i64) % 1000000007;
+    }
+    f"{s.len()} characters, checksum {h}"
+}
+
+fn main() {
+    // The LeetCode example.
+    show(3, vec![Op.InsertLast(1), Op.InsertLast(2), Op.InsertFront(3), Op.InsertFront(4), Op.GetRear, Op.IsFull, Op.DeleteLast, Op.InsertFront(4), Op.GetFront]);
+    // Everything on an empty deque; a deque of one, filled from each end
+    // and emptied from the other; values pushed at the front wrapping
+    // round a deque of two; a deque used as a stack from the rear and as
+    // a queue from the front; a full deque emptied from both ends.
+    show(2, vec![Op.DeleteFront, Op.DeleteLast, Op.GetFront, Op.GetRear, Op.IsEmpty, Op.IsFull]);
+    show(1, vec![Op.InsertFront(5), Op.IsFull, Op.InsertLast(6), Op.GetFront, Op.GetRear, Op.DeleteLast, Op.IsEmpty, Op.InsertLast(7), Op.GetFront, Op.DeleteFront, Op.DeleteFront]);
+    show(2, vec![Op.InsertFront(1), Op.InsertFront(2), Op.DeleteLast, Op.InsertFront(3), Op.GetFront, Op.GetRear, Op.DeleteLast, Op.InsertFront(4), Op.GetFront, Op.GetRear, Op.DeleteFront, Op.InsertFront(5), Op.GetFront, Op.GetRear]);
+    show(4, vec![Op.InsertLast(1), Op.InsertLast(2), Op.InsertLast(3), Op.DeleteLast, Op.GetRear, Op.DeleteFront, Op.GetFront, Op.InsertFront(9), Op.InsertLast(8), Op.GetFront, Op.GetRear]);
+    show(4, vec![Op.InsertLast(0), Op.InsertFront(1000), Op.InsertLast(0), Op.InsertFront(1000), Op.IsFull, Op.InsertLast(1), Op.DeleteFront, Op.DeleteLast, Op.DeleteFront, Op.GetFront, Op.GetRear, Op.DeleteLast, Op.IsEmpty, Op.GetRear]);
+    // 300 random scripts of 1 to 60 operations on deques of 1 to 8.
+    let mut seed: i64 = 641;
+    let mut total = String.new();
+    for _ in 0..300 {
+        let k = 1 + next_random(mut seed) % 8;
+        let ops = script(1 + next_random(mut seed) % 60, mut seed);
+        total.push_str(run_all(k, ops));
+    }
+    println(f"300 random scripts: {summary(total)}");
+    // The problem's largest: 2,000 operations on a deque of 1,000, and on
+    // a deque of one.
+    let long = script(2000, mut seed);
+    println(f"2000 operations, k = 1000: {summary(run_all(1000, long))}");
+    println(f"2000 operations, k = 1: {summary(run_all(1, long))}");
+}

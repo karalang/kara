@@ -30,7 +30,7 @@ fn cheapest(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64], memo: mut 
             rest.push(needs[i] - offer[i]);
         }
         if fits and any {
-            let cost = offer[n] + cheapest(price, special, rest, memo);
+            let cost = offer[n] + cheapest(price, special, rest, mut memo);
             if cost < best {
                 best = cost;
             }
@@ -60,9 +60,9 @@ fn random_offers(n: i64, count: i64, most: i64, seed: mut ref i64) -> Vec[Vec[i6
     for _ in 0..count {
         let mut offer: Vec[i64] = Vec.new();
         for _ in 0..n {
-            offer.push(next_random(seed) % (most + 1));
+            offer.push(next_random(mut seed) % (most + 1));
         }
-        offer.push(next_random(seed) % 51);
+        offer.push(next_random(mut seed) % 51);
         special.push(offer);
     }
     special
