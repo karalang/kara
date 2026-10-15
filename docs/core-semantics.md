@@ -236,8 +236,10 @@ Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`, `ok_p
 **5.1 Where `ref T` and `mut ref T` may appear:**
 - as a parameter type;
 - as a return type, or inside one (`Option[ref T]`, a tuple);
-- as the type of a local bound to a call that returns a reference, to a projection of a named place, or to another reference;
+- as the type of a local bound to a call that returns a reference, to `ref place` or `mut ref place` (a borrow of a projection of a named place), or to another reference;
 - inside a view (§5.2).
+
+**A borrow of a place is written with an operator.** `ref place` borrows a place for reading and `mut ref place` borrows it for writing (`let up = mut ref pool.members[i]; up.hits += 1;`). A `let` annotation states the type and never creates the borrow: `let p: mut ref P = w.p;` is an error, whose fix inserts `mut ref`, and the same holds for `ref`. `mut ref place` needs a writable place (§5.9) and moves nothing. The binding needs no `let mut` to write through it; `let mut` would only let it be rebound. While it is live, §5.6 applies. At a call argument the marker `mut` is the only spelling (`f(mut x)`, not `f(mut ref x)`). (Decided by Gowtham, 2026-10-15.)
 
 **5.2 Views.** A *view* is any type that contains a `ref` or `mut ref` after generic substitution. Examples:
 - `Slice[T]` and `Str`;
@@ -304,12 +306,12 @@ A view **may** enter a branch of `par {}` or `par for`, or a `TaskGroup` task th
 
 **5.9 Nothing is written through a `ref`.** A place whose path dereferences a `ref` is read-only. That covers a borrowed parameter or receiver (bare `T`, `self`), a `ref` pattern binding, the item of `for x in c` (§4.6), a `ref` returned by a call, and a local bound to any of these. Such a place may not be:
 - assigned or compound-assigned;
-- mutably borrowed: a `mut ref self` receiver, an argument marked `mut`, or a `mut ref name` binding;
+- mutably borrowed: a `mut ref self` receiver, an argument marked `mut`, a `mut ref name` binding or a `mut ref place` expression;
 - moved out of (§3.7).
 
 **The exception** is a `mut` field of a `shared` value. It is writable through any handle, however the handle was reached, under §6.2's flags; that is why a shared type's methods can take a borrowed `self` (§4.3).
 
-**The fixes:** declare the parameter `mut ref T` and mark its call sites `mut`; iterate with `c.iter_mut()`; or bind with `mut ref name` from a mutable owned scrutinee.
+**The fixes:** declare the parameter `mut ref T` and mark its call sites `mut`; iterate with `c.iter_mut()`; bind with `mut ref name` from a mutable owned scrutinee; or borrow with `mut ref place` from a writable place.
 
 Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
 
