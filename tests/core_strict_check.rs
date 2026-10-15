@@ -4666,3 +4666,60 @@ fn main() {
 "#,
     );
 }
+
+/// B-2026-10-15-41: a program's own `Range` (or `IoError`) is its own type,
+/// and range literals keep the library's; an error names it as written.
+#[test]
+fn check_a_user_type_named_range_is_its_own() {
+    accepted(
+        "user-range",
+        r#"
+struct Range { lo: i64, hi: i64 }
+impl Range {
+    fn width(self) -> i64 { self.hi - self.lo }
+}
+struct IoError { n: Vec[i64] }
+fn mid(r: ref Range) -> i64 { (r.lo + r.hi) / 2 }
+fn main() {
+    let r = Range { lo: 1, hi: 3 };
+    let v: Vec[i64] = vec![10, 20, 30];
+    let mut s = 0;
+    for i in 0..v.len() {
+        s += v[i];
+    }
+    for i in 0..=1 {
+        s += i;
+    }
+    println(f"{s} {r.lo} {r.width()} {mid(r)} {v[1..3].len()}");
+    match fs.read_to_string("nonexistent_zz.txt") {
+        Ok(_) => println("read"),
+        Err(_) => println("failed"),
+    }
+    let u = IoError { n: vec![1, 2] };
+    println(f"{u.n.len()}");
+}
+"#,
+    );
+    let (dir, path) = fixture(
+        "user-range-err",
+        r#"
+struct Range { lo: i64, hi: i64 }
+fn main() {
+    let r = Range { lo: 1, hi: 3 };
+    let bad: i64 = r;
+    for i in 0..2 { println(f"{i}"); }
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "user-range-err: check must reject: {err}"
+    );
+    assert!(
+        err.contains("expected 'i64', found 'Range'") && err.contains("1 error(s)"),
+        "user-range-err: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

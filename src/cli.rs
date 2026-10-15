@@ -1084,6 +1084,9 @@ struct Pipeline {
     /// old-behaviour oracle while the v2 middle end is built (the redesign's
     /// M0 default, 2026-10-06).
     strict_core: bool,
+    /// The program's types renamed apart from ones the compiler spells, as
+    /// `(new, old)` ([`Self::strict_core`]).
+    renames: Vec<(String, String)>,
     /// B-2026-10-12-23 — when `Some(n)`, the parsed text is the user's `n`
     /// bytes followed by the Kāra library (`mir::lower::library_source`), the
     /// program the MIR pipeline checks; diagnostics past `n` are the
@@ -1118,6 +1121,7 @@ impl Pipeline {
             strict_core: false,
             library_len: None,
             library_fns: std::collections::HashSet::new(),
+            renames: Vec::new(),
         }
     }
 
@@ -1156,6 +1160,40 @@ impl Pipeline {
         self.source = Some(text);
         self.library_len = Some(user_len);
         self
+    }
+
+    /// Name a renamed type ([`Self::strict_core`]) in diagnostics as the
+    /// program wrote it.
+    fn unrename_messages(&mut self) {
+        if self.renames.is_empty() {
+            return;
+        }
+        let renames = std::mem::take(&mut self.renames);
+        let fix = |m: &mut String| {
+            for (new, old) in &renames {
+                if m.contains(new.as_str()) {
+                    *m = m.replace(new.as_str(), old);
+                }
+            }
+        };
+        self.parsed
+            .errors
+            .iter_mut()
+            .for_each(|e| fix(&mut e.message));
+        if let Some(r) = self.resolved.as_mut() {
+            r.errors.iter_mut().for_each(|e| fix(&mut e.message));
+        }
+        if let Some(t) = self.typed.as_mut() {
+            t.errors.iter_mut().for_each(|e| fix(&mut e.message));
+            t.warnings.iter_mut().for_each(|e| fix(&mut e.message));
+        }
+        if let Some(e) = self.effects.as_mut() {
+            e.errors.iter_mut().for_each(|e| fix(&mut e.message));
+        }
+        if let Some(o) = self.ownership.as_mut() {
+            o.errors.iter_mut().for_each(|e| fix(&mut e.message));
+        }
+        self.renames = renames;
     }
 
     /// Drop every diagnostic that lies in the appended library text.
@@ -1199,6 +1237,16 @@ impl Pipeline {
         if self.lint_overrides.legacy_core {
             return self;
         }
+        // A program's own type named like one the compiler spells (`Range`
+        // for a range literal) is checked under a name of its own, as the
+        // build does (B-2026-10-15-41).
+        if let Some(src) = &self.source {
+            let (text, renames) = crate::mir::lower::rename_compiler_name_shadows(src);
+            if !renames.is_empty() {
+                self.parsed = crate::parse(&text);
+                self.renames = renames;
+            }
+        }
         self.strict_core = true;
         self.lint_overrides.strict_core = true;
         self.lint_overrides
@@ -1225,6 +1273,11 @@ impl Pipeline {
     }
 
     fn resolve(&mut self) {
+        self.resolve_phase();
+        self.unrename_messages();
+    }
+
+    fn resolve_phase(&mut self) {
         if self.has_parse_errors() {
             return;
         }
@@ -1319,6 +1372,11 @@ impl Pipeline {
     }
 
     fn typecheck(&mut self) {
+        self.typecheck_phase();
+        self.unrename_messages();
+    }
+
+    fn typecheck_phase(&mut self) {
         if self.resolved.is_none() || self.has_resolve_errors() {
             return;
         }
@@ -1517,6 +1575,11 @@ impl Pipeline {
     }
 
     fn effectcheck(&mut self) {
+        self.effectcheck_phase();
+        self.unrename_messages();
+    }
+
+    fn effectcheck_phase(&mut self) {
         if self.has_parse_errors() {
             return;
         }
@@ -1629,6 +1692,11 @@ impl Pipeline {
     }
 
     fn ownershipcheck(&mut self) {
+        self.ownershipcheck_phase();
+        self.unrename_messages();
+    }
+
+    fn ownershipcheck_phase(&mut self) {
         if self.typed.is_none() {
             return;
         }

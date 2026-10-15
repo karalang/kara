@@ -1922,6 +1922,7 @@ pub(super) fn run_multi_file_late_phases(
         strict_core: false,
         library_len: None,
         library_fns: std::collections::HashSet::new(),
+        renames: Vec::new(),
     };
     pipeline.resolve();
     if pipeline.has_resolve_errors() {
