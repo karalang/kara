@@ -1,0 +1,191 @@
+// LeetCode #642: Design Search Autocomplete System -- a map of counts and
+// a narrowing list of candidates.
+//
+// No trie: a `Map` from each sentence to its count. The first character
+// of a sentence picks from the whole map every sentence starting with
+// it; each later character keeps those candidates that still match,
+// since a sentence that missed a shorter prefix misses a longer one too.
+// Each call sorts what is left, hottest first and in ASCII order among
+// equals, and keeps three. A `#` adds one to the typed sentence's count
+// and drops the candidates. A call costs O(candidates x length).
+
+struct AutocompleteSystem {
+    counts: Map[String, i64],
+    typed: String,
+    candidates: Vec[String],
+}
+
+impl AutocompleteSystem {
+    fn new(sentences: Vec[String], times: Vec[i64]) -> AutocompleteSystem {
+        let mut system = AutocompleteSystem { counts: Map.new(), typed: String.new(), candidates: Vec.new() };
+        for i in 0..sentences.len() {
+            system.add(sentences[i], times[i]);
+        }
+        system
+    }
+
+    fn add(mut ref self, sentence: String, times: i64) {
+        if self.counts.contains_key(sentence) {
+            self.counts[sentence] += times;
+        } else {
+            self.counts[sentence.clone()] = times;
+        }
+    }
+
+    fn input(mut ref self, c: char) -> Vec[String] {
+        if c == '#' {
+            let sentence = self.typed.clone();
+            self.add(sentence, 1);
+            self.typed = String.new();
+            self.candidates = Vec.new();
+            return Vec.new();
+        }
+        let first = self.typed.is_empty();
+        self.typed.push(c);
+        let mut kept: Vec[String] = Vec.new();
+        if first {
+            for (sentence, _) in self.counts {
+                if sentence.starts_with(self.typed) {
+                    kept.push(sentence.clone());
+                }
+            }
+        } else {
+            for sentence in self.candidates.iter() {
+                if sentence.starts_with(self.typed) {
+                    kept.push(sentence.clone());
+                }
+            }
+        }
+        self.candidates = kept;
+        let mut ranked: Vec[(i64, String)] = Vec.new();
+        for sentence in self.candidates.iter() {
+            ranked.push((self.counts[sentence], sentence.clone()));
+        }
+        ranked.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+        let mut top: Vec[String] = Vec.new();
+        for entry in ranked.iter() {
+            if top.len() == 3 {
+                break;
+            }
+            top.push(entry.1.clone());
+        }
+        top
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A system made from `sentences` and `times`, with `typing` typed into
+// it one character a call; the results as LeetCode prints them, `null`
+// first for the constructor.
+fn run_all(sentences: Vec[String], times: Vec[i64], typing: String) -> String {
+    let mut system = AutocompleteSystem.new(sentences, times);
+    let mut out = "[null".to_string();
+    for c in typing.chars() {
+        let got = system.input(c);
+        out.push_str(",[");
+        for i in 0..got.len() {
+            if i > 0 {
+                out.push_str(",");
+            }
+            out.push_str("\"");
+            out.push_str(got[i]);
+            out.push_str("\"");
+        }
+        out.push_str("]");
+    }
+    out.push_str("]");
+    out
+}
+
+fn show(sentences: Vec[String], times: Vec[i64], typing: String) {
+    println(run_all(sentences, times, typing));
+}
+
+fn words(text: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for part in text.split(",") {
+        out.push(part.to_string());
+    }
+    out
+}
+
+// A sentence of 1 to `most` characters, each one of the first `letters`
+// of `alphabet`.
+fn random_sentence(most: i64, alphabet: String, seed: mut ref i64) -> String {
+    let length = 1 + next_random(mut seed) % most;
+    let mut s = String.new();
+    for _ in 0..length {
+        let i = next_random(mut seed) % alphabet.len();
+        s.push_str(alphabet[i..i + 1]);
+    }
+    s
+}
+
+// `n` different sentences with times of 1 to `hottest`, and `calls`
+// characters typed: sentences ended by `#`, each half the time one of
+// those and otherwise a new one, the last perhaps cut short.
+fn random_case(n: i64, most: i64, alphabet: String, hottest: i64, calls: i64, seed: mut ref i64) -> (Vec[String], Vec[i64], String) {
+    let mut sentences: Vec[String] = Vec.new();
+    let mut times: Vec[i64] = Vec.new();
+    while sentences.len() < n {
+        let s = random_sentence(most, alphabet, mut seed);
+        if not sentences.contains(s) {
+            sentences.push(s);
+            times.push(1 + next_random(mut seed) % hottest);
+        }
+    }
+    let mut typing = String.new();
+    while typing.len() < calls {
+        if n > 0 and next_random(mut seed) % 2 == 0 {
+            typing.push_str(sentences[next_random(mut seed) % n]);
+        } else {
+            typing.push_str(random_sentence(most, alphabet, mut seed));
+        }
+        typing.push_str("#");
+    }
+    (sentences, times, typing[0..calls].to_string())
+}
+
+fn summary(s: String) -> String {
+    let mut h: i64 = 0;
+    for c in s.chars() {
+        h = (h * 31 + c as i64) % 1000000007;
+    }
+    f"{s.len()} characters, checksum {h}"
+}
+
+fn main() {
+    // The LeetCode example.
+    show(words("i love you,island,iroman,i love leetcode"), vec![5, 3, 2, 2], "i a#");
+    // Equal counts in ASCII order, a space before a letter; a typed
+    // sentence overtaking the others; no history at all; a prefix that
+    // leaves the trie and is then typed again; more than three matches,
+    // the fourth hottest dropped; a sentence that is a prefix of another.
+    show(words("ab,a b,a,abc"), vec![1, 1, 1, 1], "a#");
+    show(words("hello,help"), vec![2, 2], "hel#hel#hel#he");
+    show(Vec.new(), Vec.new(), "ab#a#ab#a");
+    show(words("cat,car"), vec![1, 1], "cx#cx#c");
+    show(words("go,gone,goal,good,got"), vec![4, 3, 5, 1, 3], "go#go");
+    show(words("a,aa,aaa"), vec![3, 2, 1], "aa#aaa#aaa#a");
+    // 300 random systems of 0 to 7 sentences of up to 6 letters from
+    // `ab `, with 1 to 40 characters typed.
+    let mut seed: i64 = 642;
+    let mut total = String.new();
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 8;
+        let calls = 1 + next_random(mut seed) % 40;
+        let (sentences, times, typing) = random_case(n, 6, "ab ", 5, calls, mut seed);
+        total.push_str(run_all(sentences, times, typing));
+    }
+    println(f"300 random systems: {summary(total)}");
+    // The problem's largest: 100 sentences of up to 100 characters from
+    // `abc `, typed up to 100 times each, and 5,000 calls.
+    let (sentences, times, typing) = random_case(100, 100, "abc ", 100, 5000, mut seed);
+    println(f"100 sentences, 5000 calls: {summary(run_all(sentences, times, typing))}");
+}

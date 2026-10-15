@@ -1,0 +1,616 @@
+// LeetCode #642: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each with a driver that types a script into
+// it, held to five properties on random histories and scripts.
+
+// ---- star arm ----------------------------------------------------------
+
+struct Node_star {
+    children: Vec[i64],
+    count: i64,
+}
+
+struct AutocompleteSystem_star {
+    nodes: Vec[Node_star],
+    typed: String,
+    // The node of what has been typed, or -1 once it leaves the trie.
+    at: i64,
+}
+
+fn branch_star(c: char) -> i64 {
+    if c == ' ' { 26 } else { c as i64 - 'a' as i64 }
+}
+
+fn letter_star(b: i64) -> char {
+    if b == 26 { ' ' } else { ('a' as i64 + b) as u8 as char }
+}
+
+fn new_node_star() -> Node_star {
+    Node_star { children: vec![-1; 27], count: 0 }
+}
+
+// Every sentence at or below `node`, whose path from the root spells
+// `path`, with its count.
+fn gather_star(nodes: Vec[Node_star], node: i64, path: String, found: mut ref Vec[(i64, String)]) {
+    if nodes[node].count > 0 {
+        found.push((nodes[node].count, path.clone()));
+    }
+    for b in 0..27 {
+        let child = nodes[node].children[b];
+        if child != -1 {
+            gather_star(nodes, child, f"{path}{letter_star(b)}", mut found);
+        }
+    }
+}
+
+impl AutocompleteSystem_star {
+    fn new(sentences: Vec[String], times: Vec[i64]) -> AutocompleteSystem_star {
+        let mut system = AutocompleteSystem_star { nodes: vec![new_node_star()], typed: String.new(), at: 0 };
+        for i in 0..sentences.len() {
+            system.add(sentences[i], times[i]);
+        }
+        system
+    }
+
+    fn add(mut ref self, sentence: String, times: i64) {
+        let mut node = 0;
+        for c in sentence.chars() {
+            let b = branch_star(c);
+            if self.nodes[node].children[b] == -1 {
+                self.nodes.push(new_node_star());
+                self.nodes[node].children[b] = self.nodes.len() - 1;
+            }
+            node = self.nodes[node].children[b];
+        }
+        self.nodes[node].count += times;
+    }
+
+    fn input(mut ref self, c: char) -> Vec[String] {
+        if c == '#' {
+            let sentence = self.typed.clone();
+            self.add(sentence, 1);
+            self.typed = String.new();
+            self.at = 0;
+            return Vec.new();
+        }
+        self.typed.push(c);
+        if self.at != -1 {
+            self.at = self.nodes[self.at].children[branch_star(c)];
+        }
+        let mut top: Vec[String] = Vec.new();
+        if self.at == -1 {
+            return top;
+        }
+        let mut found: Vec[(i64, String)] = Vec.new();
+        gather_star(self.nodes, self.at, self.typed, mut found);
+        found.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+        for i in 0..found.len() {
+            if i == 3 {
+                break;
+            }
+            top.push(found[i].1.clone());
+        }
+        top
+    }
+}
+
+fn drive_star(sentences: Vec[String], times: Vec[i64], typing: String) -> Vec[Vec[String]] {
+    let mut system = AutocompleteSystem_star.new(sentences, times);
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for c in typing.chars() {
+        out.push(system.input(c));
+    }
+    out
+}
+
+// ---- cached arm --------------------------------------------------------
+
+struct Node_cached {
+    children: Vec[i64],
+    count: i64,
+    top: Vec[(i64, String)],
+}
+
+struct AutocompleteSystem_cached {
+    nodes: Vec[Node_cached],
+    typed: String,
+    // The node of what has been typed, or -1 once it leaves the trie.
+    at: i64,
+}
+
+fn branch_cached(c: char) -> i64 {
+    if c == ' ' { 26 } else { c as i64 - 'a' as i64 }
+}
+
+fn new_node_cached() -> Node_cached {
+    Node_cached { children: vec![-1; 27], count: 0, top: Vec.new() }
+}
+
+// `top` with `sentence` at `count` in place of any older entry for it,
+// hottest first and in ASCII order among equals, three at most.
+fn ranked_cached(top: Vec[(i64, String)], count: i64, sentence: String) -> Vec[(i64, String)] {
+    let mut all: Vec[(i64, String)] = Vec.new();
+    for entry in top.iter() {
+        if entry.1 != sentence {
+            all.push((entry.0, entry.1.clone()));
+        }
+    }
+    all.push((count, sentence.clone()));
+    all.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+    let mut kept: Vec[(i64, String)] = Vec.new();
+    for entry in all.iter() {
+        if kept.len() == 3 {
+            break;
+        }
+        kept.push((entry.0, entry.1.clone()));
+    }
+    kept
+}
+
+impl AutocompleteSystem_cached {
+    fn new(sentences: Vec[String], times: Vec[i64]) -> AutocompleteSystem_cached {
+        let mut system = AutocompleteSystem_cached { nodes: vec![new_node_cached()], typed: String.new(), at: 0 };
+        for i in 0..sentences.len() {
+            system.add(sentences[i], times[i]);
+        }
+        system
+    }
+
+    fn add(mut ref self, sentence: String, times: i64) {
+        let mut path: Vec[i64] = vec![0];
+        let mut node = 0;
+        for c in sentence.chars() {
+            let b = branch_cached(c);
+            if self.nodes[node].children[b] == -1 {
+                self.nodes.push(new_node_cached());
+                self.nodes[node].children[b] = self.nodes.len() - 1;
+            }
+            node = self.nodes[node].children[b];
+            path.push(node);
+        }
+        self.nodes[node].count += times;
+        let count = self.nodes[node].count;
+        for at in path.iter() {
+            let at = *at;
+            self.nodes[at].top = ranked_cached(self.nodes[at].top, count, sentence);
+        }
+    }
+
+    fn input(mut ref self, c: char) -> Vec[String] {
+        if c == '#' {
+            let sentence = self.typed.clone();
+            self.add(sentence, 1);
+            self.typed = String.new();
+            self.at = 0;
+            return Vec.new();
+        }
+        self.typed.push(c);
+        if self.at != -1 {
+            self.at = self.nodes[self.at].children[branch_cached(c)];
+        }
+        let mut names: Vec[String] = Vec.new();
+        if self.at != -1 {
+            for entry in self.nodes[self.at].top.iter() {
+                names.push(entry.1.clone());
+            }
+        }
+        names
+    }
+}
+
+fn drive_cached(sentences: Vec[String], times: Vec[i64], typing: String) -> Vec[Vec[String]] {
+    let mut system = AutocompleteSystem_cached.new(sentences, times);
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for c in typing.chars() {
+        out.push(system.input(c));
+    }
+    out
+}
+
+// ---- narrowing arm -----------------------------------------------------
+
+struct AutocompleteSystem_narrowing {
+    counts: Map[String, i64],
+    typed: String,
+    candidates: Vec[String],
+}
+
+impl AutocompleteSystem_narrowing {
+    fn new(sentences: Vec[String], times: Vec[i64]) -> AutocompleteSystem_narrowing {
+        let mut system = AutocompleteSystem_narrowing { counts: Map.new(), typed: String.new(), candidates: Vec.new() };
+        for i in 0..sentences.len() {
+            system.add(sentences[i], times[i]);
+        }
+        system
+    }
+
+    fn add(mut ref self, sentence: String, times: i64) {
+        if self.counts.contains_key(sentence) {
+            self.counts[sentence] += times;
+        } else {
+            self.counts[sentence.clone()] = times;
+        }
+    }
+
+    fn input(mut ref self, c: char) -> Vec[String] {
+        if c == '#' {
+            let sentence = self.typed.clone();
+            self.add(sentence, 1);
+            self.typed = String.new();
+            self.candidates = Vec.new();
+            return Vec.new();
+        }
+        let first = self.typed.is_empty();
+        self.typed.push(c);
+        let mut kept: Vec[String] = Vec.new();
+        if first {
+            for (sentence, _) in self.counts {
+                if sentence.starts_with(self.typed) {
+                    kept.push(sentence.clone());
+                }
+            }
+        } else {
+            for sentence in self.candidates.iter() {
+                if sentence.starts_with(self.typed) {
+                    kept.push(sentence.clone());
+                }
+            }
+        }
+        self.candidates = kept;
+        let mut ranked: Vec[(i64, String)] = Vec.new();
+        for sentence in self.candidates.iter() {
+            ranked.push((self.counts[sentence], sentence.clone()));
+        }
+        ranked.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+        let mut top: Vec[String] = Vec.new();
+        for entry in ranked.iter() {
+            if top.len() == 3 {
+                break;
+            }
+            top.push(entry.1.clone());
+        }
+        top
+    }
+}
+
+fn drive_narrowing(sentences: Vec[String], times: Vec[i64], typing: String) -> Vec[Vec[String]] {
+    let mut system = AutocompleteSystem_narrowing.new(sentences, times);
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for c in typing.chars() {
+        out.push(system.input(c));
+    }
+    out
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+struct AutocompleteSystem_sorted {
+    sorted: Vec[String],
+    counts: Map[String, i64],
+    typed: String,
+}
+
+// The first index in `sorted` whose sentence is not before `key`.
+fn lower_bound_sorted(sorted: Vec[String], key: String) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+impl AutocompleteSystem_sorted {
+    fn new(sentences: Vec[String], times: Vec[i64]) -> AutocompleteSystem_sorted {
+        let mut system = AutocompleteSystem_sorted { sorted: Vec.new(), counts: Map.new(), typed: String.new() };
+        for i in 0..sentences.len() {
+            system.add(sentences[i], times[i]);
+        }
+        system
+    }
+
+    fn add(mut ref self, sentence: String, times: i64) {
+        if self.counts.contains_key(sentence) {
+            self.counts[sentence] += times;
+        } else {
+            let at = lower_bound_sorted(self.sorted, sentence);
+            self.sorted.insert(at, sentence.clone());
+            self.counts[sentence.clone()] = times;
+        }
+    }
+
+    fn input(mut ref self, c: char) -> Vec[String] {
+        if c == '#' {
+            let sentence = self.typed.clone();
+            self.add(sentence, 1);
+            self.typed = String.new();
+            return Vec.new();
+        }
+        self.typed.push(c);
+        let mut ranked: Vec[(i64, String)] = Vec.new();
+        let mut i = lower_bound_sorted(self.sorted, self.typed);
+        while i < self.sorted.len() and self.sorted[i].starts_with(self.typed) {
+            ranked.push((self.counts[self.sorted[i]], self.sorted[i].clone()));
+            i += 1;
+        }
+        ranked.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+        let mut top: Vec[String] = Vec.new();
+        for entry in ranked.iter() {
+            if top.len() == 3 {
+                break;
+            }
+            top.push(entry.1.clone());
+        }
+        top
+    }
+}
+
+fn drive_sorted(sentences: Vec[String], times: Vec[i64], typing: String) -> Vec[Vec[String]] {
+    let mut system = AutocompleteSystem_sorted.new(sentences, times);
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for c in typing.chars() {
+        out.push(system.input(c));
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, sentences: Vec[String], times: Vec[i64], typing: String) -> Vec[Vec[String]] {
+    if which == 0 {
+        drive_star(sentences, times, typing)
+    } else if which == 1 {
+        drive_cached(sentences, times, typing)
+    } else if which == 2 {
+        drive_narrowing(sentences, times, typing)
+    } else {
+        drive_sorted(sentences, times, typing)
+    }
+}
+
+// Whether sentence `a` at count `x` ranks before `b` at count `y`:
+// hotter, or as hot and first in ASCII order.
+fn before(x: i64, a: String, y: i64, b: String) -> bool {
+    x > y or (x == y and a < b)
+}
+
+// The definition: the history is every sentence with its count, and a
+// call's answer is, among the sentences starting with what has been
+// typed, the first in rank, then the first of the rest, three times
+// over. A `#` adds one to the typed sentence and answers nothing.
+fn definition(sentences: Vec[String], times: Vec[i64], typing: String) -> Vec[Vec[String]] {
+    let mut names: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..sentences.len() {
+        names.push(sentences[i].clone());
+        counts.push(times[i]);
+    }
+    let mut typed = String.new();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for c in typing.chars() {
+        if c == '#' {
+            let mut found = false;
+            for i in 0..names.len() {
+                if names[i] == typed {
+                    counts[i] += 1;
+                    found = true;
+                }
+            }
+            if not found {
+                names.push(typed.clone());
+                counts.push(1);
+            }
+            typed = String.new();
+            out.push(Vec.new());
+        } else {
+            typed.push(c);
+            let mut taken = vec![false; names.len()];
+            let mut top: Vec[String] = Vec.new();
+            for _ in 0..3 {
+                let mut best = -1;
+                for i in 0..names.len() {
+                    if not taken[i] and names[i].starts_with(typed) {
+                        if best == -1 or before(counts[i], names[i], counts[best], names[best]) {
+                            best = i;
+                        }
+                    }
+                }
+                if best != -1 {
+                    taken[best] = true;
+                    top.push(names[best].clone());
+                }
+            }
+            out.push(top);
+        }
+    }
+    out
+}
+
+// The history's count for `sentence`, 0 if it has none.
+fn count_of(names: Vec[String], counts: Vec[i64], sentence: String) -> i64 {
+    for i in 0..names.len() {
+        if names[i] == sentence {
+            return counts[i];
+        }
+    }
+    0
+}
+
+// P2: an answer after `#` is empty, and every other holds at most three
+// different sentences of the history, each starting with what has been
+// typed. P3: each answer is in rank order, and a sentence of the
+// history that starts with what has been typed but is left out ranks
+// after all three named. Returns [P2 holds, P3 holds].
+fn well_formed(sentences: Vec[String], times: Vec[i64], typing: String, got: Vec[Vec[String]]) -> Vec[bool] {
+    let mut names: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..sentences.len() {
+        names.push(sentences[i].clone());
+        counts.push(times[i]);
+    }
+    let mut p2 = got.len() == typing.len();
+    let mut p3 = true;
+    let mut typed = String.new();
+    let mut call = 0;
+    for c in typing.chars() {
+        if not p2 {
+            break;
+        }
+        let top = ref got[call];
+        call += 1;
+        if c == '#' {
+            if not top.is_empty() {
+                p2 = false;
+            }
+            let mut found = false;
+            for i in 0..names.len() {
+                if names[i] == typed {
+                    counts[i] += 1;
+                    found = true;
+                }
+            }
+            if not found {
+                names.push(typed.clone());
+                counts.push(1);
+            }
+            typed = String.new();
+            continue;
+        }
+        typed.push(c);
+        if top.len() > 3 {
+            p2 = false;
+        }
+        for i in 0..top.len() {
+            if not top[i].starts_with(typed) or count_of(names, counts, top[i]) == 0 {
+                p2 = false;
+            }
+            for j in 0..i {
+                if top[j] == top[i] {
+                    p2 = false;
+                }
+            }
+            if i > 0 and not before(count_of(names, counts, top[i - 1]), top[i - 1], count_of(names, counts, top[i]), top[i]) {
+                p3 = false;
+            }
+        }
+        for i in 0..names.len() {
+            if names[i].starts_with(typed) and not top.contains(names[i]) {
+                if top.len() < 3 {
+                    p3 = false;
+                } else if before(counts[i], names[i], count_of(names, counts, top[2]), top[2]) {
+                    p3 = false;
+                }
+            }
+        }
+    }
+    vec![p2, p3]
+}
+
+fn reversed[T: Clone](v: Vec[T]) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    for i in 0..v.len() {
+        out.push(v[v.len() - 1 - i].clone());
+    }
+    out
+}
+
+// The answers to the script when the history is typed in first, each
+// sentence followed by `#` as many times as its count, on a system made
+// with none.
+fn typed_history(which: i64, sentences: Vec[String], times: Vec[i64], typing: String) -> Vec[Vec[String]] {
+    let mut before_script = String.new();
+    for i in 0..sentences.len() {
+        for _ in 0..times[i] {
+            before_script.push_str(sentences[i]);
+            before_script.push_str("#");
+        }
+    }
+    let all = answer(which, Vec.new(), Vec.new(), f"{before_script}{typing}");
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for i in before_script.len()..all.len() {
+        out.push(all[i].clone());
+    }
+    out
+}
+
+// A sentence of 1 to `most` characters from `ab `.
+fn random_sentence(most: i64, seed: mut ref i64) -> String {
+    let length = 1 + next_random(mut seed) % most;
+    let mut s = String.new();
+    for _ in 0..length {
+        let r = next_random(mut seed) % 3;
+        s.push(if r == 0 { 'a' } else if r == 1 { 'b' } else { ' ' });
+    }
+    s
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6420;
+    let mut checks = 0;
+    let mut calls = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 0 to 6 different sentences of up to 5 characters, typed up to
+        // 4 times each, and 1 to 30 characters typed: sentences ended by
+        // `#`, half the time one of those, the last perhaps cut short.
+        let n = next_random(mut seed) % 7;
+        let mut sentences: Vec[String] = Vec.new();
+        let mut times: Vec[i64] = Vec.new();
+        while sentences.len() < n {
+            let s = random_sentence(5, mut seed);
+            if not sentences.contains(s) {
+                sentences.push(s);
+                times.push(1 + next_random(mut seed) % 4);
+            }
+        }
+        let length = 1 + next_random(mut seed) % 30;
+        let mut typing = String.new();
+        while typing.len() < length {
+            if n > 0 and next_random(mut seed) % 2 == 0 {
+                typing.push_str(sentences[next_random(mut seed) % n]);
+            } else {
+                typing.push_str(random_sentence(5, mut seed));
+            }
+            typing.push_str("#");
+        }
+        let typing = typing[0..length].to_string();
+        calls += length;
+        let want = definition(sentences, times, typing);
+        for which in 0..4 {
+            let got = answer(which, sentences, times, typing);
+            let shape = well_formed(sentences, times, typing, got);
+            let ok = vec![
+                // P1: the definition's answers.
+                got == want,
+                shape[0],
+                shape[1],
+                // P4: the history given in the other order.
+                answer(which, reversed(sentences), reversed(times), typing) == got,
+                // P5: the history typed in first.
+                typed_history(which, sentences, times, typing) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({calls} calls), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

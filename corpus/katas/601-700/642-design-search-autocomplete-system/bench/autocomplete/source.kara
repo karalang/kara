@@ -1,0 +1,157 @@
+// Benchmark for #642: the ★ arm (a trie searched below the prefix) on a
+// fixed workload. See ../README.md § Benchmarks.
+
+struct Node {
+    children: Vec[i64],
+    count: i64,
+}
+
+struct AutocompleteSystem {
+    nodes: Vec[Node],
+    typed: String,
+    // The node of what has been typed, or -1 once it leaves the trie.
+    at: i64,
+}
+
+fn branch(c: char) -> i64 {
+    if c == ' ' { 26 } else { c as i64 - 'a' as i64 }
+}
+
+fn letter(b: i64) -> char {
+    if b == 26 { ' ' } else { ('a' as i64 + b) as u8 as char }
+}
+
+fn new_node() -> Node {
+    Node { children: vec![-1; 27], count: 0 }
+}
+
+// Every sentence at or below `node`, whose path from the root spells
+// `path`, with its count.
+fn gather(nodes: Vec[Node], node: i64, path: String, found: mut ref Vec[(i64, String)]) {
+    if nodes[node].count > 0 {
+        found.push((nodes[node].count, path.clone()));
+    }
+    for b in 0..27 {
+        let child = nodes[node].children[b];
+        if child != -1 {
+            gather(nodes, child, f"{path}{letter(b)}", mut found);
+        }
+    }
+}
+
+impl AutocompleteSystem {
+    fn new(sentences: Vec[String], times: Vec[i64]) -> AutocompleteSystem {
+        let mut system = AutocompleteSystem { nodes: vec![new_node()], typed: String.new(), at: 0 };
+        for i in 0..sentences.len() {
+            system.add(sentences[i], times[i]);
+        }
+        system
+    }
+
+    fn add(mut ref self, sentence: String, times: i64) {
+        let mut node = 0;
+        for c in sentence.chars() {
+            let b = branch(c);
+            if self.nodes[node].children[b] == -1 {
+                self.nodes.push(new_node());
+                self.nodes[node].children[b] = self.nodes.len() - 1;
+            }
+            node = self.nodes[node].children[b];
+        }
+        self.nodes[node].count += times;
+    }
+
+    fn input(mut ref self, c: char) -> Vec[String] {
+        if c == '#' {
+            let sentence = self.typed.clone();
+            self.add(sentence, 1);
+            self.typed = String.new();
+            self.at = 0;
+            return Vec.new();
+        }
+        self.typed.push(c);
+        if self.at != -1 {
+            self.at = self.nodes[self.at].children[branch(c)];
+        }
+        let mut top: Vec[String] = Vec.new();
+        if self.at == -1 {
+            return top;
+        }
+        let mut found: Vec[(i64, String)] = Vec.new();
+        gather(self.nodes, self.at, self.typed, mut found);
+        found.sort_by(|a, b| if a.0 != b.0 { b.0.cmp(a.0) } else { a.1.cmp(b.1) });
+        for i in 0..found.len() {
+            if i == 3 {
+                break;
+            }
+            top.push(found[i].1.clone());
+        }
+        top
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A sentence of 1 to `most` characters from `abc `.
+fn random_sentence(most: i64, seed: mut ref i64) -> String {
+    let length = 1 + next_random(mut seed) % most;
+    let mut s = String.new();
+    for _ in 0..length {
+        let r = next_random(mut seed) % 4;
+        s.push(if r == 0 { 'a' } else if r == 1 { 'b' } else if r == 2 { 'c' } else { ' ' });
+    }
+    s
+}
+
+fn main() {
+    // 10 histories made once, each of 100 different sentences of up to
+    // 100 characters from `abc ` with times of 1 to 100, and a script of
+    // 5,000 calls: sentences ended by `#`, half the time one of those and
+    // otherwise a new one. Then 40 rounds each type one script, picked by
+    // the round, into a new system made from its history, putting the
+    // length and the first and last characters of every name answered
+    // into a checksum.
+    let mut seed: i64 = 642;
+    let mut histories: Vec[(Vec[String], Vec[i64], String)] = Vec.new();
+    for _ in 0..10 {
+        let mut sentences: Vec[String] = Vec.new();
+        let mut times: Vec[i64] = Vec.new();
+        while sentences.len() < 100 {
+            let s = random_sentence(100, mut seed);
+            if not sentences.contains(s) {
+                sentences.push(s);
+                times.push(1 + next_random(mut seed) % 100);
+            }
+        }
+        let mut typing = String.new();
+        while typing.len() < 5000 {
+            if next_random(mut seed) % 2 == 0 {
+                typing.push_str(sentences[next_random(mut seed) % 100]);
+            } else {
+                typing.push_str(random_sentence(100, mut seed));
+            }
+            typing.push_str("#");
+        }
+        histories.push((sentences, times, typing[0..5000].to_string()));
+    }
+    let rounds = 40;
+    let mut names = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let h = ref histories[r % 10];
+        let mut system = AutocompleteSystem.new(h.0, h.1);
+        for c in h.2.chars() {
+            let got = system.input(c);
+            for name in got.iter() {
+                let bytes = name.bytes();
+                checksum = (checksum * 31 + name.len() * 65536 + bytes[0] as i64 * 256 + bytes[name.len() - 1] as i64) % 1000000007;
+                names += 1;
+            }
+            checksum = (checksum * 31 + 1) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 5000 calls: {names} names, checksum {checksum}");
+}

@@ -1,0 +1,9 @@
+[null,["i love you","island","i love leetcode"],["i love you","i love leetcode"],[],[]]
+[null,["a","a b","ab"],[]]
+[null,["hello","help"],["hello","help"],["hello","help"],[],["hello","help","hel"],["hello","help","hel"],["hello","help","hel"],[],["hel","hello","help"],["hel","hello","help"],["hel","hello","help"],[],["hel","hello","help"],["hel","hello","help"]]
+[null,[],[],[],["ab"],[],["a","ab"],["ab"],[],["ab","a"]]
+[null,["car","cat"],[],[],["car","cat","cx"],["cx"],[],["cx","car","cat"]]
+[null,["goal","go","gone"],["goal","go","gone"],[],["go","goal","gone"],["go","goal","gone"]]
+[null,["a","aa","aaa"],["aa","aaa"],[],["a","aa","aaa"],["aa","aaa"],["aaa"],[],["a","aa","aaa"],["aa","aaa"],["aaa"],[],["a","aa","aaa"]]
+300 random systems: 50232 characters, checksum 249969747
+100 sentences, 5000 calls: 251614 characters, checksum 638859610
