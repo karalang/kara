@@ -2055,8 +2055,10 @@ impl<'a> super::TypeChecker<'a> {
                 // Here the expected return type is already known, so the
                 // collected returns are CHECKED against it rather than unified
                 // with the tail the way the infer arm has to do.
-                self.closure_return_types
-                    .push(super::ClosureReturnFrame::default());
+                self.closure_return_types.push(super::ClosureReturnFrame {
+                    expected: Some(expected_ret.clone()),
+                    ..Default::default()
+                });
                 let mut body_ty = self.check_expr(body, expected_ret);
                 // An expression body is the closure's tail: `|p: S| p.t` moves
                 // out of `p` as a fn's tail does. A block body's tail is
@@ -3641,6 +3643,89 @@ impl<'a> super::TypeChecker<'a> {
         self.discharge_gat_decl_constraints_in(&pre_resolve_ret, discharge_span);
 
         ret
+    }
+
+    /// Record `ty` for node `id` when what it holds still names a parameter
+    /// from some signature.
+    fn retype_partial_node(&mut self, id: crate::ids::NodeId, ty: &Type) {
+        let partial = self.node_types.get(&id).is_some_and(|(t, _)| {
+            self.mentions_foreign_param(t) && self.merge_closure_returns(t, ty).is_some()
+        });
+        if partial {
+            self.record_node_type(id, ty);
+        }
+    }
+
+    /// `retype_partial_node` for every value `e` can end with: a block's
+    /// tail, each branch of an `if` or `match`.
+    fn retype_partial_tails(&mut self, e: &Expr, ty: &Type) {
+        match &e.kind {
+            ExprKind::Block(b) => {
+                if let Some(t) = &b.final_expr {
+                    self.retype_partial_tails(t, ty);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = &then_block.final_expr {
+                    self.retype_partial_tails(t, ty);
+                }
+                if let Some(els) = else_branch {
+                    self.retype_partial_tails(els, ty);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.retype_partial_tails(&arm.body, ty);
+                }
+            }
+            _ => {}
+        }
+        self.retype_partial_node(e.id, ty);
+    }
+
+    /// Two closure return types that agree once each fills in what the other
+    /// leaves open: `Option[T]` of a bare `None` with `Option[String]`,
+    /// `Result[i64, E]` with `Result[T, String]`. `None` when they differ,
+    /// or when neither names an unsolved parameter.
+    fn merge_closure_returns(&self, a: &Type, b: &Type) -> Option<Type> {
+        if a == b || (!self.mentions_foreign_param(a) && !self.mentions_foreign_param(b)) {
+            return None;
+        }
+        fn merge(a: &Type, b: &Type, foreign: &dyn Fn(&Type) -> bool) -> Option<Type> {
+            match (a, b) {
+                (Type::TypeParam(_), _) if foreign(a) => Some(b.clone()),
+                (_, Type::TypeParam(_)) if foreign(b) => Some(a.clone()),
+                (Type::Named { name: n, args: x }, Type::Named { name: m, args: y })
+                    if n == m && x.len() == y.len() =>
+                {
+                    let args = x
+                        .iter()
+                        .zip(y)
+                        .map(|(p, q)| merge(p, q, foreign))
+                        .collect::<Option<Vec<_>>>()?;
+                    Some(Type::Named {
+                        name: n.clone(),
+                        args,
+                    })
+                }
+                (Type::Tuple(x), Type::Tuple(y)) if x.len() == y.len() => Some(Type::Tuple(
+                    x.iter()
+                        .zip(y)
+                        .map(|(p, q)| merge(p, q, foreign))
+                        .collect::<Option<Vec<_>>>()?,
+                )),
+                (Type::Ref(p), Type::Ref(q)) => Some(Type::Ref(Box::new(merge(p, q, foreign)?))),
+                (Type::MutRef(p), Type::MutRef(q)) => {
+                    Some(Type::MutRef(Box::new(merge(p, q, foreign)?)))
+                }
+                _ => (a == b).then(|| a.clone()),
+            }
+        }
+        merge(a, b, &|t| self.mentions_foreign_param(t))
     }
 
     /// Check the bounds `check_call_args_with_substitution_full` deferred
@@ -7790,13 +7875,20 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Never => None,
                         ref t => Some(t.clone()),
                     };
-                    for (t, _span) in collected.returns {
-                        let t = resolve_type_var_top(&t, &self.env.substitutions);
+                    for (t, _span) in collected.returns.iter() {
+                        let t = resolve_type_var_top(t, &self.env.substitutions);
                         if matches!(t, Type::Never | Type::Error) {
                             continue;
                         }
                         match &ret_ty {
                             None => ret_ty = Some(t),
+                            // A `return None` beside a tail `Some(x)` (or the
+                            // reverse) agrees with it: the side that still names
+                            // an unsolved parameter takes the other's type
+                            // (B-2026-10-14-59).
+                            Some(cur) if self.merge_closure_returns(cur, &t).is_some() => {
+                                ret_ty = self.merge_closure_returns(cur, &t);
+                            }
                             Some(cur) if *cur != t && *cur != Type::Error => {
                                 self.type_error(
                                     format!(
@@ -7811,7 +7903,16 @@ impl<'a> super::TypeChecker<'a> {
                             _ => {}
                         }
                     }
-                    ret_ty.unwrap_or(Type::Never)
+                    let ret = ret_ty.unwrap_or(Type::Never);
+                    // A return or tail typed only partly (`return None`,
+                    // `Ok(x)`) takes the closure's merged type (B-2026-10-14-59).
+                    if !self.mentions_foreign_param(&ret) && !matches!(ret, Type::Never) {
+                        for id in collected.return_exprs.iter().copied() {
+                            self.retype_partial_node(id, &ret);
+                        }
+                        self.retype_partial_tails(body, &ret);
+                    }
+                    ret
                 };
                 // B-2026-07-31-19 — solve the closure's Result/Option shape
                 // from the `?` demands its body raised. A `?` on Err returns
@@ -7853,9 +7954,16 @@ impl<'a> super::TypeChecker<'a> {
                 // (`?` deliberately stays on the fn-level path below —
                 // its closure-scoped typing is B-2026-07-31-19's scope.)
                 if !self.closure_return_types.is_empty() {
+                    let expected = self
+                        .closure_return_types
+                        .last()
+                        .and_then(|f| f.expected.clone());
                     let t = match inner {
                         Some(ref expr) => {
-                            let t = self.infer_expr(expr);
+                            let t = match &expected {
+                                Some(e) => self.check_expr(expr, e),
+                                None => self.infer_expr(expr),
+                            };
                             // A closure's `return p.t` moves out of `p` as a
                             // fn's does (the fn-level twin is below).
                             self.warn_borrow_projection_copy(expr, &t);
@@ -7864,11 +7972,14 @@ impl<'a> super::TypeChecker<'a> {
                         None => Type::Unit,
                     };
                     let span = inner.as_ref().map(|e| e.span).unwrap_or_else(|| expr.span);
-                    self.closure_return_types
+                    let frame = self
+                        .closure_return_types
                         .last_mut()
-                        .expect("checked non-empty above")
-                        .returns
-                        .push((t, span));
+                        .expect("checked non-empty above");
+                    frame.returns.push((t, span));
+                    if let Some(e) = inner {
+                        frame.return_exprs.push(e.id);
+                    }
                     return Type::Never;
                 }
                 if let Some(ref expr) = inner {

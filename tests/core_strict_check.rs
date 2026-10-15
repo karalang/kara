@@ -4380,3 +4380,18 @@ fn a_function_value_is_called_through_a_ref() {
          }\n",
     );
 }
+
+/// B-2026-10-14-59: a closure's early `return None` agrees with a tail
+/// `Some(..)`, and an early `return Err(..)` with a tail `Ok(..)`.
+#[test]
+fn a_closure_early_return_agrees_with_its_tail() {
+    accepted(
+        "closure-early-return",
+        "fn main() {\n\
+             let lim = 3;\n\
+             let f = |n: i64| { if n < 0 { return None; } if n > lim { Some(f\"big {n}\") } else { None } };\n\
+             let g = |n: i64| { if n == 0 { return Err(\"zero\".to_string()); } Ok(10 / n) };\n\
+             println(f\"{f(5).unwrap()} {g(2).unwrap()}\");\n\
+         }\n",
+    );
+}

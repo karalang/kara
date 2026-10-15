@@ -1789,3 +1789,54 @@ fn main() {
         }
     }
 }
+
+/// A closure's early `return None` / `return Err(..)` agrees with its tail
+/// once each fills in what the other leaves open (B-2026-10-14-59), and with
+/// the binding's annotated return type (B-2026-10-14-65).
+#[test]
+fn mir_closure_early_return_takes_the_closure_return_type() {
+    for (src, want) in [
+        (
+            r#"
+fn main() {
+    let lim = 3;
+    let f = |n: i64| { if n < 0 { return None; } if n > lim { Some(f"big {n}") } else { None } };
+    let h = |n: i64| { if n < 0 { return Some("neg".to_string()); } None };
+    println(f"{f(5).unwrap()} {f(-1).is_none()} {h(-2).unwrap()} {h(1).is_none()}");
+    let g = |n: i64| { if n == 0 { return Err("zero".to_string()); } Ok(10 / n) };
+    println(f"{g(2).unwrap()} {g(0).is_err()}");
+}
+"#,
+            "big 5 true neg true
+5 true
+",
+        ),
+        (
+            r#"
+fn main() {
+    let w = "a 3 b".split_whitespace();
+    let amount: Fn(i64) -> Result[i64, String] = |i: i64| {
+        if w.len() <= i {
+            return Err("missing".to_string());
+        }
+        Ok(w[i].len() as i64)
+    };
+    let r = match w[0].clone() { "a" => amount(1), "b" => amount(2), _ => Ok(0) };
+    println(f"{r.unwrap()}");
+    println(f"{amount(9).is_err()}");
+}
+"#,
+            "1
+true
+",
+        ),
+    ] {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want);
+        for opt in [0, 2] {
+            if let Some(out) = build_and_run(src, opt) {
+                assert_eq!(out, want, "at -O{opt}");
+            }
+        }
+    }
+}

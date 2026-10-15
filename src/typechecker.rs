@@ -2287,6 +2287,13 @@ pub(super) struct ClosureReturnFrame {
     /// True when an Option-form `?` fired in this body (demands the
     /// closure return `Option[_]`).
     pub(super) question_option: bool,
+    /// The closure's return type when its context gives one: a `return E`
+    /// is checked against it, so `E` is typed as it (B-2026-10-14-65).
+    pub(super) expected: Option<Type>,
+    /// The returned expressions, beside `returns`: once the closure's return
+    /// type is known, one typed only partly (`return None`) records it
+    /// (B-2026-10-14-59).
+    pub(super) return_exprs: Vec<crate::ids::NodeId>,
 }
 
 /// One element of a tuple-literal scrutinee, for
