@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 205 |
 | other | 173 |
 | perf | 170 |
-| diagnostics | 163 |
+| diagnostics | 164 |
 | crash | 120 |
 | soundness | 111 |
 | use-after-free | 91 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 106 |
 | cli | 76 |
 | runtime | 75 |
-| parser | 67 |
+| parser | 68 |
 | autopar | 59 |
 | resolver | 42 |
 | effect | 32 |
@@ -207,7 +207,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-51 | 2026-10-15 | typecheck | low | An unsuffixed integer literal on the LEFT of `&`, `|` or `^` is typed `i64` even when the other operand is `u8`: `0xC0 | c` and `let x: u8 = 0x80 | (c & 0x3F)` are refused with "implicit coercion from 'i64' to 'u8' would narrow", while `c | 0xC0`, `1 + c` and `200 - c` pass | — |
 | B-2026-10-15-52 | 2026-10-15 | typecheck | low | An `if` expression takes its type from an unsuffixed integer literal in its FIRST branch: `let x = if c { 0 } else { y }` with `y: u128` (or `u8`) types `x` as `i64` and is refused where `x` is used as the other type ("implicit coercion from 'i64' to 'u128' would narrow"), while `if c { y } else { 0 }` passes | — |
 | B-2026-10-15-53 | 2026-10-15 | typecheck | medium | `karac check` accepts `&`, `|` and `^` between two DIFFERENT integer types, such as `a & b` with `a: u128` and `b: i64`, which it refuses for `+`; every v2 surface then stops with "invalid MIR: binary operands of different types u128 and i64" | — |
-| B-2026-10-15-54 | 2026-10-15 | parser | low | An unsuffixed integer literal above `i64::MAX` is refused at PARSE even where the expected type is `u64` or `u128`: `let a: u64 = 0xFFFF_FFFF_FFFF_FFFF;` and `let b: u128 = 18446744073709551616;` fail with "integer literal ... is out of range for i64", although design.md says the type comes from inference and the range is checked against that type | — |
 | B-2026-10-15-55 | 2026-10-15 | codegen+runtime | medium | On the MIR compiled backend, `starts_with`, `contains`, `ends_with` and String `<` each call out to the runtime (`karac_mir_str_test`) where legacy inlines a length test and memcmp. Kata 677's bench makes 48.2M such calls, 45% of its instructions are their own cost (3.73G against legacy's 2.16G), and it runs at about 1.5 times legacy, the M2 bar | — |
 | B-2026-10-15-56 | 2026-10-15 | codegen+runtime | low | On the MIR compiled backend, the first allocation of a pushed `Vec` (`karac_mir_vec_reserve`) and every `Vec` clone (`karac_mir_vec_alloc`) are out-of-line runtime calls costing some 40 to 70 instructions each beyond the allocator, so kata 679's bench, which builds millions of two- to four-element `Vec[f64]`, runs 17.1G instructions against legacy's 12.9G: 1.5x legacy, at the M2 bar | — |
 | B-2026-10-15-57 | 2026-10-15 | ownership | medium | The MIR borrow checker's `origins_dataflow` grows faster than quadratically with the number of statements in one function: a function of N `s.push_str("<96 hex chars>");` statements takes 155 MB / 2.0 s at N=250, 386 MB / 3.4 s at N=500 and 2.15 GB / 12.8 s at N=1000 under `karac __mir-run` (debug karac), and an app embedding two SQLite files as hex (functions of about 2,800 and 900 such lines) reached 12 GB and was killed; `karac check` alone is 0.35 s, 1.06 s and 4.42 s at the same sizes, while `karac run --interp` takes 0.22 s / 94 MB at N=1000 | — |
@@ -221,6 +220,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock; the interpreter does not yet run `TaskGroup.spawn_frame` under the coroutine transform; E0500 for a task spawned on a parameter group asks to declare the captured value before the group | — |
+| B-2026-10-15-73 | 2026-10-15 | parser | low | An unsuffixed `i128::MIN`, `-170141183460469231731687303715884105728`, is refused at parse with advice to add a `u128` suffix, although `let w: i128 = -170141183460469231731687303715884105728;` is in range; the `i128`-suffixed spelling works | — |
 
 ### Relocated
 
@@ -4109,6 +4109,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-46 | parser | medium | AN EMPTY BODY AFTER AN UPPERCASE NAME IN A CONDITION PARSES AS AN EMPTY STRUCT LITERAL, so `if c == EOL { } else { . | 5361e20a4d |
 | B-2026-10-15-48 | interp+codegen | medium | A user struct named like a library type with a special drop (`Mutex`, `Atomic`, `OnceLock`, `Arena`, `Pool`, `File`) gets that type's drop on both MI… | cba3787150 |
 | B-2026-10-15-49 | interp+codegen | high | A VARIANT PATTERN SPELLED THROUGH A TYPE ALIAS MATCHES EVERY VALUE ON v2: with `enum NetE { A, B(i32) } type OldE = NetE;`, `match v { OldE.A => ..,… | 44cca1211f |
+| B-2026-10-15-54 | parser | low | An unsuffixed integer literal above `i64::MAX` is refused at PARSE even where the expected type is `u64` or `u128`: `let a: u64 = 0xFFFF_FFFF_FFFF_FF… | ce68ce663a |
 
 </details>
 
