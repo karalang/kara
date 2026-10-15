@@ -205,21 +205,21 @@ fn guard_bound(body: &Body, writes: &Writes, gb: &BasicBlockData) -> Option<u128
     }
 }
 
-struct Loop {
-    header: usize,
-    blocks: Vec<bool>,
-    latches: Vec<usize>,
+pub(super) struct Loop {
+    pub(super) header: usize,
+    pub(super) blocks: Vec<bool>,
+    pub(super) latches: Vec<usize>,
 }
 
 /// Where each local is written: plain assignments to the whole local, and
 /// whether anything else (a projection, a call result, a `mut` borrow, a
 /// discriminant) may write it.
-struct Writes {
-    assigns: Vec<Vec<(usize, usize)>>,
-    other: Vec<bool>,
+pub(super) struct Writes {
+    pub(super) assigns: Vec<Vec<(usize, usize)>>,
+    pub(super) other: Vec<bool>,
 }
 
-fn local_writes(body: &Body) -> Writes {
+pub(super) fn local_writes(body: &Body) -> Writes {
     let mut w = Writes {
         assigns: vec![Vec::new(); body.locals.len()],
         other: vec![false; body.locals.len()],
@@ -378,7 +378,11 @@ fn guard(
 
 /// `l = l + c`, checked, as its one write inside a loop: the block holding
 /// the checked add, that block's no-overflow successor, and `c`.
-fn increment(body: &Body, writes: &Writes, l: Local) -> Option<(usize, BasicBlock, u128)> {
+pub(super) fn increment(
+    body: &Body,
+    writes: &Writes,
+    l: Local,
+) -> Option<(usize, BasicBlock, u128)> {
     // `l = copy t` (or `copy pair.0`) for the write that is not the init.
     for &(bi, si) in &writes.assigns[l.index()] {
         let StatementKind::Assign(_, Rvalue::Use(Operand::Copy(src))) =
@@ -445,7 +449,7 @@ fn increment(body: &Body, writes: &Writes, l: Local) -> Option<(usize, BasicBloc
     None
 }
 
-fn mask(v: u128, bits: u32) -> u128 {
+pub(super) fn mask(v: u128, bits: u32) -> u128 {
     if bits >= 128 {
         v
     } else {
@@ -456,7 +460,11 @@ fn mask(v: u128, bits: u32) -> u128 {
 /// The statements on the chain of single-predecessor blocks that ends at
 /// `lp`'s one entry edge, as `(block, statement)`; `None` when the loop
 /// has more than one entry edge or the chain enters a loop block.
-fn entry_chain(body: &Body, preds: &[Vec<usize>], lp: &Loop) -> Option<Vec<(usize, usize)>> {
+pub(super) fn entry_chain(
+    body: &Body,
+    preds: &[Vec<usize>],
+    lp: &Loop,
+) -> Option<Vec<(usize, usize)>> {
     let outside: Vec<usize> = preds[lp.header]
         .iter()
         .copied()
@@ -479,7 +487,7 @@ fn entry_chain(body: &Body, preds: &[Vec<usize>], lp: &Loop) -> Option<Vec<(usiz
     Some(out)
 }
 
-fn predecessors(body: &Body) -> Vec<Vec<usize>> {
+pub(super) fn predecessors(body: &Body) -> Vec<Vec<usize>> {
     let mut preds = vec![Vec::new(); body.blocks.len()];
     for (i, b) in body.blocks.iter().enumerate() {
         for s in b.terminator.kind.successors() {
@@ -491,7 +499,7 @@ fn predecessors(body: &Body) -> Vec<Vec<usize>> {
 
 /// Immediate dominators (Cooper, Harvey and Kennedy); `usize::MAX` for a
 /// block the entry does not reach, and the entry is its own.
-fn dominators(body: &Body, preds: &[Vec<usize>]) -> Vec<usize> {
+pub(super) fn dominators(body: &Body, preds: &[Vec<usize>]) -> Vec<usize> {
     let n = body.blocks.len();
     // Reverse postorder from the entry.
     let mut order = Vec::with_capacity(n);
@@ -553,7 +561,7 @@ fn dominators(body: &Body, preds: &[Vec<usize>]) -> Vec<usize> {
 }
 
 /// Does `a` dominate `b`?
-fn dominates(idom: &[usize], a: usize, mut b: usize) -> bool {
+pub(super) fn dominates(idom: &[usize], a: usize, mut b: usize) -> bool {
     if idom[b] == usize::MAX {
         return false;
     }
@@ -569,7 +577,7 @@ fn dominates(idom: &[usize], a: usize, mut b: usize) -> bool {
 }
 
 /// One loop per header, over all its back edges.
-fn natural_loops(body: &Body, preds: &[Vec<usize>], idom: &[usize]) -> Vec<Loop> {
+pub(super) fn natural_loops(body: &Body, preds: &[Vec<usize>], idom: &[usize]) -> Vec<Loop> {
     let n = body.blocks.len();
     let mut loops: Vec<Loop> = Vec::new();
     for t in 0..n {

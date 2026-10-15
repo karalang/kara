@@ -1640,7 +1640,7 @@ impl<'a> Interp<'a> {
                 let vname = self.tys.display(ret);
                 Ok(self.alloc_box(&vname, Value::Agg(out)))
             }
-            ("Vec", "reserve" | "reserve_exact" | "shrink_to_fit" | "capacity") => {
+            ("Vec", "reserve" | "reserve_exact" | "shrink_to_fit" | "capacity" | "presize") => {
                 // The capacity a `reserve` asked for, so `capacity()` keeps
                 // its promise; a non-positive request changes nothing.
                 let Some(v) = args.first() else {
@@ -1653,6 +1653,15 @@ impl<'a> Interp<'a> {
                     ("capacity", []) => return Ok(Value::Int(cap as i128)),
                     ("shrink_to_fit", []) => {
                         self.caps.remove(&id);
+                    }
+                    // A counting loop's pushes, reserved before it
+                    // (`mir::presize`): `bound + delta`, clamped as
+                    // compiled code clamps it.
+                    ("presize", [Value::Int(b), Value::Int(d)]) => {
+                        let n = crate::mir::presize::room(*b, *d, 1);
+                        if n > 0 {
+                            self.caps.insert(id, cap.max(len + n as usize));
+                        }
                     }
                     (_, [Value::Int(n)]) if *n > 0 => {
                         self.caps.insert(id, cap.max(len + *n as usize));

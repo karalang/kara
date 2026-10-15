@@ -779,6 +779,38 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, z.into())
             }
+            // A counting loop's pushes, reserved before it
+            // (`mir::presize`): `bound + delta` elements, clamped.
+            ("Vec", "presize") => {
+                let v = self.ref_arg(&args[0])?;
+                let et = self.vec_elem(name, &args[0])?;
+                let size = self.layout(et)?.size;
+                if size == 0 {
+                    return Ok(());
+                }
+                let b = self.int_arg(&args[1])?;
+                let d = self.int_arg(&args[2])?;
+                let most = self.i64(crate::mir::presize::room(i128::MAX, 0, size) as u64);
+                // `bound` is clamped first, so adding `delta` (small) cannot
+                // overflow.
+                let b = self.smin(b, most)?;
+                let b = self.smax(b, self.i64((-(1i64 << 40)) as u64))?;
+                let n = self.builder.build_int_add(b, d, "").map_err(e)?;
+                let n = self.smin(n, most)?;
+                let pos = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, n, self.i64(0), "")
+                    .map_err(e)?;
+                // The reserve leaves the length as it was; storing it back
+                // says so to LLVM, which otherwise loses what it knew of
+                // the length (a fill to a constant count) at the call.
+                let lenp = self.offset(v, 8)?;
+                let len = self.load_i64(lenp)?;
+                self.if_then(pos, |cx| {
+                    cx.rt("vec_reserve", &[v.into(), n.into(), cx.i64(size).into()])
+                })?;
+                self.store(lenp, len.into())
+            }
             ("Vec", "push") => {
                 let v = self.ref_arg(&args[0])?;
                 let et = self.vec_elem(name, &args[0])?;
@@ -1115,6 +1147,30 @@ impl<'ctx> Cx<'ctx, '_> {
             std::cmp::Ordering::Greater => self.builder.build_int_truncate(v, t, "").map_err(e)?,
             std::cmp::Ordering::Equal => v,
         })
+    }
+
+    fn smin(&self, a: IntValue<'ctx>, b: IntValue<'ctx>) -> R<IntValue<'ctx>> {
+        let lt = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, a, b, "")
+            .map_err(e)?;
+        Ok(self
+            .builder
+            .build_select(lt, a, b, "")
+            .map_err(e)?
+            .into_int_value())
+    }
+
+    fn smax(&self, a: IntValue<'ctx>, b: IntValue<'ctx>) -> R<IntValue<'ctx>> {
+        let gt = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, a, b, "")
+            .map_err(e)?;
+        Ok(self
+            .builder
+            .build_select(gt, a, b, "")
+            .map_err(e)?
+            .into_int_value())
     }
 
     pub(super) fn non_negative(&self, n: IntValue<'ctx>) -> R<IntValue<'ctx>> {

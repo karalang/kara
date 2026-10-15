@@ -14622,6 +14622,8 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     let counters = std::env::var("KARAC_MIR_COUNTERS").as_deref() != Ok("0");
     // `KARAC_MIR_POPCOUNT=0` keeps Kernighan's bit-count loop (`popcount`).
     let popcount = std::env::var("KARAC_MIR_POPCOUNT").as_deref() != Ok("0");
+    // `KARAC_MIR_PRESIZE=0` leaves counting loops' pushes unreserved.
+    let presize = std::env::var("KARAC_MIR_PRESIZE").as_deref() != Ok("0");
     let coroutines = crate::mir::coroutine::coroutines(lowered.program.bodies.values());
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
@@ -14685,6 +14687,9 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         }
         if popcount {
             crate::mir::popcount::count_bit_loops(body, &lowered.tys);
+        }
+        if presize {
+            crate::mir::presize::presize_pushes(body, &lowered.tys);
         }
         if dump.as_deref() == Some("elaborated") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
