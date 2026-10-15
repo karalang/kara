@@ -1,0 +1,602 @@
+// A full-text search tool over a folder of documents, the core of a docs
+// site search or a desktop indexer. Each document is indexed in its own
+// task (a TaskGroup of at most three at a time) and the per-document
+// indexes come back over a channel; the merge sorts them by name, so the
+// result does not depend on which task finished first.
+//
+// Indexing lowercases, splits on anything that is not a letter or digit,
+// drops stopwords and strips a plural or "-ing" ending, and records each
+// term's positions. Queries have AND by default, OR between terms,
+// -term to exclude, "quoted phrases" matched by position, and prefix*.
+// Results are ranked by tf * idf in integers and shown with a snippet
+// around the first hit.
+//
+// The index is saved to search.idx with each document's content hash.
+// After the documents change, a restart reloads the index, re-indexes only
+// the documents whose hash changed (again in parallel), drops the ones that
+// are gone, and keeps the rest. A damaged index file is reported with its
+// line and rebuilt from scratch.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-14-48  no `channel(cap)`: the channel is `Channel.new()`
+//   B-2026-10-15-11  TaskGroup.new takes no limit; send returns (); the
+//                    receiver has no into_iter and recv no Option, so the
+//                    results are drained with try_recv (right only while
+//                    spawn is sequential, B-2026-10-14-49)
+//   B-2026-10-15-12  check holds an `any` closure's borrow of `d.name`
+//                    past the call: refresh tests with a loop
+//   B-2026-10-12-3   SortedMap has no get_mut: entry().or_insert()
+//   B-2026-10-15-5   fs.write's Result[Unit] is not Result[()]: save
+//                    matches on it
+//   B-2026-10-14-68  a Vec of string literals is Vec[String]: the query
+//                    lists are annotated Vec[Str]
+//   B-2026-10-14-52  iterating the const DOCS misreads it compiled: main
+//                    walks a local copy
+
+const INDEX: Str = "search.idx";
+
+const STOPWORDS: Str = "a an and are as at be by for from has in is it its of on or that the this to was were will with";
+
+const DOCS: Array[(Str, Str), 6] = [
+    ("install.txt", "Installing Kestrel. Download the installer for your platform, then run it. The installer checks your disk space and asks for an install folder. Installing on Linux needs the tar archive and a shell."),
+    ("config.txt", "Configuring Kestrel. Settings live in kestrel.toml. Each setting has a default; the config file overrides it, and environment variables override the file. Reloading the config does not restart running jobs."),
+    ("jobs.txt", "Running jobs. A job is a command with inputs and outputs. Kestrel runs jobs in parallel when their inputs are ready, and caches outputs by content hash, so an unchanged job is skipped."),
+    ("cache.txt", "The build cache. Outputs are stored by content hash in the cache folder. Cache entries expire after thirty days. Clearing the cache forces every job to run again; the disk space is reclaimed at once."),
+    ("errors.txt", "Troubleshooting errors. A failing job prints its command and exit status. Missing inputs are reported before any job runs. If the cache folder is not writable, Kestrel warns and runs without caching."),
+    ("faq.txt", "Frequently asked questions. Can jobs run on several machines? Not yet: remote execution is planned. Does Kestrel need a network? Only to download the installer. Where is the config file? Next to the project."),
+];
+
+// ---- tokenizing -------------------------------------------------------
+
+fn stem(w: Str) -> String {
+    if w.len() > 5 and w.ends_with("ing") {
+        return w[0..w.len() - 3].to_string();
+    }
+    if w.len() > 3 and w.ends_with("s") and not w.ends_with("ss") {
+        return w[0..w.len() - 1].to_string();
+    }
+    w.to_string()
+}
+
+// The words of a text in order, with their original spelling.
+fn raw_words(text: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            cur.push(c);
+        } else if not cur.is_empty() {
+            out.push(cur);
+            cur = String.new();
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn term_of(word: Str, stop: ref SortedSet[String]) -> Option[String] {
+    let w = word.to_lowercase();
+    if stop.contains(w) {
+        return None;
+    }
+    Some(stem(w))
+}
+
+// ---- per-document index ------------------------------------------------
+
+struct DocIndex { name: String, hash: String, words: i64, terms: SortedMap[String, Vec[i64]] }
+
+fn fnv(text: Str) -> String {
+    let mut h = 2166136261;
+    for b in text.bytes() {
+        h = h ^ (b as i64);
+        h = (h * 16777619) % 4294967296;
+    }
+    f"{h:08x}"
+}
+
+// Positions count indexed terms only, so a phrase can skip stopwords.
+fn index_doc(name: own String, text: own String, stop: ref SortedSet[String]) -> DocIndex {
+    let mut terms: SortedMap[String, Vec[i64]] = SortedMap.new();
+    let mut pos = 0;
+    for w in raw_words(text).iter() {
+        match term_of(w, stop) {
+            Some(t) => {
+                terms.entry(t).or_insert(Vec.new()).push(pos);
+                pos += 1;
+            }
+            None => {}
+        }
+    }
+    DocIndex { name: name, hash: fnv(text), words: pos, terms: terms }
+}
+
+// Indexes every (name, text) pair in its own task and returns the indexes
+// sorted by name, with how many terms the tasks indexed in total.
+fn index_all(jobs: own Vec[(String, String)], stop: ref SortedSet[String]) -> (Vec[DocIndex], i64) {
+    let (tx, rx): (Sender[DocIndex], Receiver[DocIndex]) = Channel.new();
+    let group = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    {
+        // The last sender drops at the end of this block, which closes
+        // the channel once every task's clone has gone too.
+        let tx = tx;
+        for (name, text) in jobs.into_iter() {
+            let t = tx.clone();
+            handles.push(group.spawn(|| {
+                let d = index_doc(name, text, stop);
+                let n = d.words;
+                t.send(d);
+                n
+            }));
+        }
+    }
+    let mut total = 0;
+    for h in handles.into_iter() {
+        total += h.join();
+    }
+    let mut docs: Vec[DocIndex] = Vec.new();
+    loop {
+        match rx.try_recv() {
+            Some(d) => docs.push(d),
+            None => break,
+        }
+    }
+    docs.sort_by(|a, b| a.name.cmp(b.name));
+    (docs, total)
+}
+
+// ---- the index file ---------------------------------------------------
+
+fn save(docs: ref Vec[DocIndex]) -> Result[(), String] {
+    let mut out = f"kestrel-index 1 {docs.len()}\n";
+    for d in docs.iter() {
+        out.push_str(f"doc {d.name} {d.hash} {d.words} {d.terms.len()}\n");
+        for (t, ps) in d.terms.iter() {
+            let nums: Vec[String] = ps.iter().map(|p| f"{p}").collect();
+            out.push_str(f"{t} {nums.join(",")}\n");
+        }
+    }
+    match fs.write(INDEX, out) {
+        Ok(_) => Ok(()),
+        Err(_) => Err("cannot write search.idx".to_string()),
+    }
+}
+
+fn load() -> Result[Vec[DocIndex], String] {
+    let text = fs.read_to_string(INDEX).map_err(|_| "cannot read search.idx".to_string())?;
+    let lines = text.lines();
+    let head: Vec[String] = lines[0].split(" ");
+    if head.len() != 3 or head[0] != "kestrel-index" or head[1] != "1" {
+        return Err("line 1: not a kestrel index".to_string());
+    }
+    let count = i64.parse(head[2]).ok_or("line 1: bad document count".to_string())?;
+    let mut docs: Vec[DocIndex] = Vec.new();
+    let mut at = 1;
+    for _ in 0..count {
+        let f: Vec[String] = lines[at].split(" ");
+        if f.len() != 5 or f[0] != "doc" {
+            return Err(f"line {at + 1}: expected a doc line");
+        }
+        let words = i64.parse(f[3]).ok_or(f"line {at + 1}: bad word count")?;
+        let n = i64.parse(f[4]).ok_or(f"line {at + 1}: bad term count")?;
+        at += 1;
+        let mut terms: SortedMap[String, Vec[i64]] = SortedMap.new();
+        for _ in 0..n {
+            if at >= lines.len() {
+                return Err(f"line {at + 1}: index ends early");
+            }
+            let parts: Vec[String] = lines[at].split(" ");
+            if parts.len() != 2 {
+                return Err(f"line {at + 1}: expected a term and its positions");
+            }
+            let mut ps: Vec[i64] = Vec.new();
+            for p in parts[1].split(",") {
+                ps.push(i64.parse(p).ok_or(f"line {at + 1}: bad position '{p}'")?);
+            }
+            terms.insert(parts[0].clone(), ps);
+            at += 1;
+        }
+        docs.push(DocIndex { name: f[1].clone(), hash: f[2].clone(), words: words, terms: terms });
+    }
+    Ok(docs)
+}
+
+// ---- queries ----------------------------------------------------------
+
+enum Want { Term(String), Prefix(String), Phrase(Vec[String]) }
+
+struct Item { what: Want, negated: bool, shown: String }
+
+// A query is an AND of groups; each group is an OR of items.
+fn parse_query(q: Str, stop: ref SortedSet[String]) -> Result[Vec[Vec[Item]], String] {
+    let cs: Vec[char] = q.chars().collect();
+    let mut groups: Vec[Vec[Item]] = Vec.new();
+    let mut join_next = false;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == ' ' {
+            i += 1;
+            continue;
+        }
+        let negated = cs[i] == '-';
+        if negated {
+            i += 1;
+        }
+        let mut item: Option[Item] = None;
+        if i < cs.len() and cs[i] == '"' {
+            let start = i;
+            i += 1;
+            let mut text = String.new();
+            while i < cs.len() and cs[i] != '"' {
+                text.push(cs[i]);
+                i += 1;
+            }
+            if i == cs.len() {
+                return Err(f"unterminated quote at {start}");
+            }
+            i += 1;
+            let words: Vec[String] = raw_words(text).iter().filter_map(|w| term_of(w, stop)).collect();
+            if words.is_empty() {
+                return Err(f"phrase \"{text}\" has only stopwords");
+            }
+            item = Some(Item { what: Want.Phrase(words), negated: negated, shown: f"\"{text}\"" });
+        } else {
+            let mut word = String.new();
+            while i < cs.len() and cs[i] != ' ' {
+                word.push(cs[i]);
+                i += 1;
+            }
+            if word == "OR" and not negated {
+                if groups.is_empty() or join_next {
+                    return Err("OR needs a term on each side".to_string());
+                }
+                join_next = true;
+                continue;
+            }
+            if word.ends_with("*") {
+                let p = word[0..word.len() - 1].to_lowercase();
+                if p.len() < 2 {
+                    return Err(f"prefix '{word}' is too short");
+                }
+                item = Some(Item { what: Want.Prefix(p), negated: negated, shown: word.clone() });
+            } else {
+                match term_of(word, stop) {
+                    Some(t) => item = Some(Item { what: Want.Term(t), negated: negated, shown: word.clone() }),
+                    None => {}
+                }
+            }
+        }
+        match item {
+            Some(it) => {
+                if join_next {
+                    if it.negated {
+                        return Err("cannot OR a negated term".to_string());
+                    }
+                    let n = groups.len() - 1;
+                    groups[n].push(it);
+                    join_next = false;
+                } else {
+                    groups.push(vec![it]);
+                }
+            }
+            None => {}
+        }
+    }
+    if join_next {
+        return Err("OR needs a term on each side".to_string());
+    }
+    if groups.is_empty() {
+        return Err("nothing to search for".to_string());
+    }
+    Ok(groups)
+}
+
+// How often an item occurs in a document, and the first position.
+fn hits(d: ref DocIndex, m: ref Want) -> (i64, i64) {
+    match m {
+        Want.Term(t) => match d.terms.get(t) {
+            Some(ps) => (ps.len(), ps[0]),
+            None => (0, -1),
+        },
+        Want.Prefix(p) => {
+            let mut n = 0;
+            let mut first = -1;
+            for (t, ps) in d.terms.iter() {
+                if t.starts_with(p) {
+                    n += ps.len();
+                    if first < 0 or ps[0] < first {
+                        first = ps[0];
+                    }
+                }
+            }
+            (n, first)
+        }
+        Want.Phrase(words) => {
+            let starts = match d.terms.get(words[0]) {
+                Some(ps) => ps.clone(),
+                None => return (0, -1),
+            };
+            let mut n = 0;
+            let mut first = -1;
+            for s in starts.iter() {
+                let mut ok = true;
+                for k in 1..words.len() {
+                    let want = s + k;
+                    match d.terms.get(words[k]) {
+                        Some(ps) => if not ps.contains(want) { ok = false; },
+                        None => ok = false,
+                    }
+                }
+                if ok {
+                    n += 1;
+                    if first < 0 {
+                        first = s;
+                    }
+                }
+            }
+            (n, first)
+        }
+    }
+}
+
+struct Hit { doc: i64, score: i64, first: i64 }
+
+fn search(docs: ref Vec[DocIndex], groups: ref Vec[Vec[Item]]) -> Vec[Hit] {
+    let n = docs.len();
+    let mut out: Vec[Hit] = Vec.new();
+    for di in 0..n {
+        let mut keep = true;
+        let mut score = 0;
+        let mut first = -1;
+        for g in groups.iter() {
+            let mut any = false;
+            for it in g.iter() {
+                let (tf, at) = hits(docs[di], it.what);
+                if it.negated {
+                    if tf > 0 {
+                        keep = false;
+                    }
+                    any = true;
+                    continue;
+                }
+                if tf > 0 {
+                    any = true;
+                    let df = docs.iter().filter(|d| hits(d, it.what).0 > 0).count();
+                    score += tf * (100 * n / df);
+                    if first < 0 or at < first {
+                        first = at;
+                    }
+                }
+            }
+            if not any {
+                keep = false;
+            }
+        }
+        if keep {
+            out.push(Hit { doc: di, score: score, first: first });
+        }
+    }
+    out.sort_by(|a, b| {
+        if a.score != b.score { b.score.cmp(a.score) } else { docs[a.doc].name.cmp(docs[b.doc].name) }
+    });
+    out
+}
+
+// Words around the hit, which is the `first`-th indexed term.
+fn snippet(text: Str, first: i64, stop: ref SortedSet[String]) -> String {
+    let words = raw_words(text);
+    let mut ordinal = 0;
+    let mut at = 0;
+    for i in 0..words.len() {
+        if term_of(words[i], stop).is_some() {
+            if ordinal == first {
+                at = i;
+                break;
+            }
+            ordinal += 1;
+        }
+    }
+    let lo = if at > 3 { at - 3 } else { 0 };
+    let hi = if at + 4 < words.len() { at + 4 } else { words.len() };
+    let mut parts: Vec[String] = Vec.new();
+    if lo > 0 {
+        parts.push("...".to_string());
+    }
+    for i in lo..hi {
+        if i == at {
+            parts.push(f"[{words[i]}]");
+        } else {
+            parts.push(words[i].clone());
+        }
+    }
+    if hi < words.len() {
+        parts.push("...".to_string());
+    }
+    parts.join(" ")
+}
+
+fn text_of(name: Str) -> String {
+    fs.read_to_string(name).unwrap_or(String.new())
+}
+
+fn run_queries(docs: ref Vec[DocIndex], queries: ref Vec[Str], stop: ref SortedSet[String]) {
+    for q in queries.iter() {
+        println(f"> {q}");
+        let groups = match parse_query(q, stop) {
+            Ok(g) => g,
+            Err(e) => {
+                println(f"  error: {e}");
+                continue;
+            }
+        };
+        let found = search(docs, groups);
+        if found.is_empty() {
+            println("  no matches");
+        }
+        for h in found.iter() {
+            let d = ref docs[h.doc];
+            if h.first < 0 {
+                println(f"  {d.name} ({h.score})");
+            } else {
+                println(f"  {d.name} ({h.score}): {snippet(text_of(d.name), h.first, stop)}");
+            }
+        }
+    }
+}
+
+fn stats(docs: ref Vec[DocIndex]) {
+    let mut df: SortedMap[String, i64] = SortedMap.new();
+    let mut postings = 0;
+    for d in docs.iter() {
+        for (t, ps) in d.terms.iter() {
+            postings += ps.len();
+            let n = df.get(t).unwrap_or(0);
+            df.insert(t.clone(), n + 1);
+        }
+    }
+    let mut common: Vec[(i64, String)] = Vec.new();
+    for (t, n) in df.iter() {
+        common.push((-n, t.clone()));
+    }
+    common.sort();
+    let top: Vec[String] = common[0..5].iter().map(|p| f"{p.1}:{-p.0}").collect();
+    println(f"  {docs.len()} documents, {df.len()} terms, {postings} postings; most common {top.join(" ")}");
+}
+
+// Restart: keep the indexed documents whose content is unchanged and
+// re-index the rest.
+fn refresh(names: ref Vec[String], stop: ref SortedSet[String]) -> Vec[DocIndex] {
+    let old = match load() {
+        Ok(d) => d,
+        Err(e) => {
+            println(f"  index unusable ({e}); rebuilding");
+            Vec.new()
+        }
+    };
+    let mut kept: Vec[DocIndex] = Vec.new();
+    let mut jobs: Vec[(String, String)] = Vec.new();
+    for name in names.iter() {
+        let text = text_of(name);
+        let h = fnv(text);
+        let mut reuse: Option[i64] = None;
+        for i in 0..old.len() {
+            if old[i].name == name and old[i].hash == h {
+                reuse = Some(i);
+            }
+        }
+        match reuse {
+            Some(_) => {}
+            None => jobs.push((name.clone(), text)),
+        }
+    }
+    for d in old.into_iter() {
+        if not names.contains(d.name) {
+            println(f"  dropped {d.name}");
+            continue;
+        }
+        let mut redo = false;
+        for j in jobs.iter() {
+            if j.0 == d.name {
+                redo = true;
+            }
+        }
+        if redo {
+            continue;
+        }
+        kept.push(d);
+    }
+    let changed: Vec[String] = jobs.iter().map(|j| j.0.clone()).collect();
+    let which = if changed.is_empty() { "none".to_string() } else { changed.join(", ") };
+    println(f"  kept {kept.len()}, re-indexing {changed.len()}: {which}");
+    let (fresh, total) = index_all(jobs, stop);
+    println(f"  indexed {total} terms");
+    for d in fresh.into_iter() {
+        kept.push(d);
+    }
+    kept.sort_by(|a, b| a.name.cmp(b.name));
+    kept
+}
+
+fn main() {
+    let mut stop: SortedSet[String] = SortedSet.new();
+    for w in STOPWORDS.split(" ") {
+        stop.insert(w.to_string());
+    }
+    let mut names: Vec[String] = Vec.new();
+    let mut jobs: Vec[(String, String)] = Vec.new();
+    let sources = DOCS;
+    for (name, text) in sources.iter() {
+        match fs.write(name, text.to_string()) {
+            Ok(_) => {}
+            Err(_) => println(f"cannot write {name}"),
+        }
+        names.push(name.to_string());
+        jobs.push((name.to_string(), text_of(name)));
+    }
+
+    println("== index");
+    let (docs, total) = index_all(jobs, stop);
+    println(f"  indexed {total} terms");
+    stats(docs);
+    match save(docs) {
+        Ok(_) => println("  saved search.idx"),
+        Err(e) => println(f"  {e}"),
+    }
+
+    println("== search");
+    let queries: Vec[Str] = vec![
+        "cache",
+        "jobs parallel",
+        "config OR settings",
+        "installer -linux",
+        "\"content hash\"",
+        "\"disk space\" cache",
+        "instal*",
+        "run*",
+        "kestrel -jobs -cache",
+        "the and of",
+        "\"is not\"",
+        "remote OR network OR offline",
+        "\"unterminated",
+        "OR cache",
+        "cache OR",
+        "x*",
+        "nothing-here",
+    ];
+    run_queries(docs, queries, stop);
+
+    println("== documents change");
+    match fs.write("cache.txt", "The build cache. Outputs are stored by content hash. Entries expire after seven days; a cleanup job removes them.".to_string()) {
+        Ok(_) => println("  rewrote cache.txt"),
+        Err(_) => println("  cannot write cache.txt"),
+    }
+    match fs.write("plugins.txt", "Writing plugins. A plugin adds a job type. Plugins are loaded from the plugin folder at start and can be reloaded without a restart.".to_string()) {
+        Ok(_) => println("  added plugins.txt"),
+        Err(_) => println("  cannot write plugins.txt"),
+    }
+    let names2: Vec[String] = names.iter().filter(|n| n != "faq.txt").map(|n| n.clone()).chain(vec!["plugins.txt".to_string()].into_iter()).collect();
+    println("  faq.txt is no longer part of the set");
+
+    println("== restart");
+    let docs2 = refresh(names2, stop);
+    stats(docs2);
+    match save(docs2) {
+        Ok(_) => println("  saved search.idx"),
+        Err(e) => println(f"  {e}"),
+    }
+    let queries2: Vec[Str] = vec!["cache expire*", "plugin* OR network", "\"content hash\"", "reload*"];
+    run_queries(docs2, queries2, stop);
+
+    println("== damaged index");
+    let saved = fs.read_to_string(INDEX).unwrap_or(String.new());
+    let broken = saved.replacen("\nexpire ", "\nexpire x", 1);
+    match fs.write(INDEX, broken) {
+        Ok(_) => {}
+        Err(_) => println("  cannot write search.idx"),
+    }
+    let docs3 = refresh(names2, stop);
+    stats(docs3);
+}

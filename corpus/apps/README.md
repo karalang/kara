@@ -144,6 +144,7 @@ service/smtp_sink   SMTP receiver over TCP: RFC 5321 replies and limits, dot uns
 cli/mini_shell      POSIX-flavoured shell: quoting, run-time $VAR/$? expansion, pipes, redirects, && ||, real child processes
 service/config_svc  layered JSON config service over HTTP: Merge Patch layers (defaults, file, CFG_* env), JSON Pointer reads, ETag/If-None-Match, If-Match writes, schema 422s, reload
 cli/csv_query       SQL over CSV files: quoted-field loader with type inference, SELECT/JOIN/WHERE/GROUP BY/HAVING/ORDER BY/LIMIT, NULL logic, LIKE/IN, aggregates
+pipeline/doc_search full-text search: per-document index tasks on a TaskGroup feeding a channel, AND/OR/NOT/phrase/prefix queries ranked by tf-idf, an index file with content hashes, incremental re-index
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
