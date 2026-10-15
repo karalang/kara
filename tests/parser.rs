@@ -16311,3 +16311,48 @@ fn a_mode_before_a_parameter_name_is_moved_into_its_type() {
     // A parameter NAMED `own` is a name, not a misplaced mode.
     assert!(parse("fn f(own: i64) -> i64 { own }").errors.is_empty());
 }
+
+/// Rust's `let (mut a, b)` names the Kāra spelling, `let mut (a, b)`, and
+/// carries the fix that moves the `mut` before the pattern, once however
+/// many inner `mut`s there are; outside a `let` the hint is a rebind
+/// (syntax.md "`mut` and patterns"; B-2026-10-14-57).
+#[test]
+fn mut_inside_a_pattern_names_the_kara_spelling() {
+    let src = "fn main() {\n    let (mut a, b) = (1, 2);\n    let (mut c, mut d) = (3, 4);\n    let mut (e, mut f) = (5, 6);\n}";
+    let r = parse(src);
+    assert_eq!(r.errors.len(), 4, "{:?}", r.errors);
+    assert!(
+        r.errors[0]
+            .message
+            .contains("`mut a` inside a pattern is Rust syntax -- in Kāra `mut` goes before the whole pattern, `let mut <pattern> = ..`"),
+        "{}",
+        r.errors[0].message
+    );
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for e in &r.errors {
+        let key = karac::resolver::SpanKey::from_span(&e.span);
+        for ed in r.fix_diffs.get(&key).expect("every inner `mut` has a fix") {
+            edits.push((ed.offset, ed.length, ed.replacement.clone()));
+        }
+    }
+    edits.sort();
+    let mut out = src.to_string();
+    for (off, len, rep) in edits.into_iter().rev() {
+        out.replace_range(off..off + len, &rep);
+    }
+    assert_eq!(
+        out,
+        "fn main() {\n    let mut (a, b) = (1, 2);\n    let mut (c, d) = (3, 4);\n    let mut (e, f) = (5, 6);\n}"
+    );
+    assert!(parse(&out).errors.is_empty());
+
+    let r = parse("fn main() { match Some(5) { Some(mut x) => println(x), None => {} } }");
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+    assert!(
+        r.errors[0]
+            .message
+            .contains("rebind it where it is used: `let mut x = x;`"),
+        "{}",
+        r.errors[0].message
+    );
+}

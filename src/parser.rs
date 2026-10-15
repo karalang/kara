@@ -362,6 +362,11 @@ pub struct Parser {
     /// see [`ParseResult::fix_diffs`] for why a repair sometimes needs both
     /// halves or neither.
     pub(crate) fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// While a `let` pattern is parsed: where the pattern starts, and
+    /// whether `mut` already stands before it. A `mut` inside the pattern
+    /// (Rust's `let (mut a, b)`) is then answered with the Kāra spelling
+    /// and a fix that moves it there (B-2026-10-14-57).
+    pub(crate) let_pattern: Option<(usize, bool)>,
 }
 
 /// Reason an `impl Trait` type expression is rejected at the current
@@ -423,6 +428,7 @@ impl Parser {
             no_struct_literal: false,
             fix_edits: FxHashMap::default(),
             fix_diffs: FxHashMap::default(),
+            let_pattern: None,
         }
     }
 

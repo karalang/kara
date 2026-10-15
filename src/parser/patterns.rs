@@ -110,6 +110,55 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
+            // `mut` inside a pattern is Rust's spelling: syntax.md puts it
+            // before the whole pattern of a `let`, and nowhere else
+            // (B-2026-10-14-57). Say so, offer the move as a fix, and parse
+            // on past the `mut`.
+            Token::Mut => {
+                let mut_span = self.current_span();
+                let next = self.tokens.get(self.pos + 1).map(|t| t.span.offset);
+                let name = match self.peek_token_ref_at(1) {
+                    Token::Identifier { name, .. } => name.clone(),
+                    _ => "x".to_string(),
+                };
+                let drop_mut = crate::resolver::TextEdit {
+                    offset: mut_span.offset,
+                    length: next.map_or(mut_span.length, |n| n - mut_span.offset),
+                    replacement: String::new(),
+                };
+                match self.let_pattern {
+                    Some((pattern_start, already_mut)) => {
+                        self.error(&format!(
+                            "`mut {name}` inside a pattern is Rust syntax -- in Kāra `mut` \
+                             goes before the whole pattern, `let mut <pattern> = ..`, and \
+                             makes every binding mutable"
+                        ));
+                        let mut edits = vec![drop_mut];
+                        if !already_mut {
+                            edits.insert(
+                                0,
+                                crate::resolver::TextEdit {
+                                    offset: pattern_start,
+                                    length: 0,
+                                    replacement: "mut ".to_string(),
+                                },
+                            );
+                            // One `mut` before the pattern covers every
+                            // binding: the next inner `mut` only goes.
+                            self.let_pattern = Some((pattern_start, true));
+                        }
+                        self.fix_diffs
+                            .insert(crate::resolver::SpanKey::from_span(&mut_span), edits);
+                    }
+                    None => self.error(&format!(
+                        "`mut {name}` inside a pattern is Rust syntax -- Kāra has no `mut` \
+                         in a pattern here; rebind it where it is used: \
+                         `let mut {name} = {name};`"
+                    )),
+                }
+                self.advance();
+                self.parse_single_pattern()
+            }
             // Half-open range patterns with a missing start: `..lit` and `..=lit`.
             // Bare `..` is not a valid pattern (use `_` for wildcard).
             Token::DotDot => {

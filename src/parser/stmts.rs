@@ -754,7 +754,12 @@ impl super::Parser {
         self.expect(&Token::Let)?;
 
         let is_mut = self.eat(&Token::Mut);
-        let pattern = self.parse_pattern()?;
+        let outer = self
+            .let_pattern
+            .replace((self.current_span().offset, is_mut));
+        let pattern = self.parse_pattern();
+        self.let_pattern = outer;
+        let pattern = pattern?;
 
         let ty = if self.eat(&Token::Colon) {
             Some(self.parse_type()?)
