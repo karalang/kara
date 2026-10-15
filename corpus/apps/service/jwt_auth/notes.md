@@ -45,4 +45,10 @@ Compiler gaps, worked around and listed in the source header:
 - **B-2026-10-15-10:** there is no `Clock.now()`, so the service's clock
   is a constant.
 
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-24 is fixed and a
+user `Request` no longer breaks anything (B-2026-10-15-48), so
+`jwt_auth.kara` is `jwt_auth.orig.kara` again and still matches on all
+four MIR surfaces. The constant clock stays: it is what makes the output
+reproducible.
+
 Written 2026-10-15 by the real-world apps thread; karac at fee58fc7e2.

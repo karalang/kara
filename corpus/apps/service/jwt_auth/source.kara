@@ -12,13 +12,6 @@
 // `alg` is HS256 (so an `alg: none` token is refused), the signature in
 // constant time, the issuer, `exp` and `nbf` with 30 s of leeway. The
 // clock is a fixed instant, because the library has no clock yet.
-//
-// Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-15-10  there is no `Clock.now()`, so NOW is a constant
-//   B-2026-10-15-24  `match self.vals[i] { JVal.JInt(n) => Some(*n) }`
-//                    passes check but the MIR builder binds `n` as an i64
-//                    and refuses the `*`, so JObj.get_int binds the element
-//                    with `let v = ref self.vals[i]` first
 
 const PORT_ADDR: Str = "127.0.0.1:47744";
 const NOW: i64 = 1760000000;
@@ -292,8 +285,7 @@ impl JObj {
     fn get_int(ref self, key: Str) -> Option[i64] {
         for i in 0..self.keys.len() {
             if self.keys[i] == key {
-                let v = ref self.vals[i];
-                match v {
+                match self.vals[i] {
                     JVal.JInt(n) => return Some(*n),
                     _ => return None,
                 }
@@ -572,7 +564,7 @@ fn reason(status: i64) -> Str {
     } else if status == 405 {
         "Method Not Allowed"
     } else {
-        "Bad HttpRequest"
+        "Bad Request"
     }
 }
 
@@ -588,7 +580,7 @@ fn error(status: i64, msg: Str, extra: Str) -> String {
     response(status, f"{{\"error\":{jq(msg)}}}", extra)
 }
 
-struct HttpRequest { method: String, path: String, auth: String, body: String }
+struct Request { method: String, path: String, auth: String, body: String }
 
 fn form_value(body: Str, key: Str) -> String {
     for pair in body.split("&").iter() {
@@ -604,7 +596,7 @@ fn form_value(body: Str, key: Str) -> String {
     String.new()
 }
 
-fn handle(a: ref Auth, r: ref HttpRequest) -> String {
+fn handle(a: ref Auth, r: ref Request) -> String {
     if r.path == "/login" {
         if r.method != "POST" {
             return error(405, "use POST", "Allow: POST");
@@ -685,7 +677,7 @@ fn serve(a: ref Auth, data: ref Vec[u8]) -> (String, i64) {
         let head = text_of(data, at, end);
         let lines = head.split("\r\n");
         let first = lines[0].split(" ");
-        let mut r = HttpRequest { method: first[0].clone(), path: first[1].clone(), auth: String.new(), body: String.new() };
+        let mut r = Request { method: first[0].clone(), path: first[1].clone(), auth: String.new(), body: String.new() };
         let mut length = 0;
         for k in 1..lines.len() {
             match lines[k].find(":") {

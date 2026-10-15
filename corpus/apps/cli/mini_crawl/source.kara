@@ -774,7 +774,7 @@ struct Rule {
     allow: bool,
 }
 
-struct Group {
+struct Entry {
     agents: Vec[String],
     rules: Vec[Rule],
     delay: i64,
@@ -786,23 +786,23 @@ fn rule_copy(r: ref Rule) -> Rule {
     Rule { path: r.path.clone(), parts: r.parts.clone(), full: r.full, allow: r.allow }
 }
 
-fn entry_new() -> Group {
-    Group { agents: Vec.new(), rules: Vec.new(), delay: -1, rate_n: -1, rate_s: -1 }
+fn entry_new() -> Entry {
+    Entry { agents: Vec.new(), rules: Vec.new(), delay: -1, rate_n: -1, rate_s: -1 }
 }
 
-fn entry_copy(e: ref Group) -> Group {
+fn entry_copy(e: ref Entry) -> Entry {
     let mut rules: Vec[Rule] = Vec.new();
     for i in 0..e.rules.len() {
         rules.push(rule_copy(e.rules[i]));
     }
-    Group { agents: e.agents.clone(), rules: rules, delay: e.delay, rate_n: e.rate_n, rate_s: e.rate_s }
+    Entry { agents: e.agents.clone(), rules: rules, delay: e.delay, rate_n: e.rate_n, rate_s: e.rate_s }
 }
 
 // The robots.txt groups, keyed by lowercased user agent in first-seen
 // order (several keys can hold copies of one entry).
 struct Robots {
     keys: Vec[String],
-    groups: Vec[Group],
+    groups: Vec[Entry],
     sitemaps: Vec[String],
 }
 
@@ -952,7 +952,7 @@ fn rule_applies(r: ref Rule, path: Str) -> i64 {
     at + last.len() + 1
 }
 
-fn allowance(e: ref Group, path: Str) -> bool {
+fn allowance(e: ref Entry, path: Str) -> bool {
     let mut best: i64 = -1;
     let mut allowed = true;
     for i in 0..e.rules.len() {
@@ -982,7 +982,7 @@ fn is_decimal(s: Str) -> bool {
     true
 }
 
-fn add_entry(r: mut ref Robots, e: Group) {
+fn add_entry(r: mut ref Robots, e: Entry) {
     for a in 0..e.agents.len() {
         let key = lower_str(e.agents[a]);
         let mut found: i64 = -1;
@@ -1110,7 +1110,7 @@ fn parse_robots(text: Str) -> Robots {
     r
 }
 
-fn entry_applies(e: ref Group, agent: Str) -> bool {
+fn entry_applies(e: ref Entry, agent: Str) -> bool {
     let ab = to_bytes(agent);
     let slash = find_byte(ab, b'/', 0);
     let name = lower_str(if slash >= 0 { byte_str(ab, 0, slash) } else { agent.to_string() });

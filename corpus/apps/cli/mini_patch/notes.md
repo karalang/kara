@@ -60,4 +60,8 @@ Compiler gaps, worked around:
   "'Range' is already defined" against the library. The struct is
   `Todo`.
 
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-41 is fixed, so
+the struct is `Range` again, `mini_patch.kara` is `mini_patch.orig.kara`,
+and it still matches on all four MIR surfaces.
+
 Written 2026-10-15 by the real-world apps thread; karac at 72cc0d4a00.

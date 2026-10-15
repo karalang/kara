@@ -95,4 +95,10 @@ into `data/out/` are byte-identical to the ones the oracle writes.
 There were no author errors and no compiler gaps. The program matched
 expected.out on the first run on all three MIR surfaces.
 
+Reverted 2026-10-15, karac at aec4d15cc0: with B-2026-10-15-8 and
+B-2026-10-15-41 fixed, the struct is `Entry` again. Check still warns
+that it shadows the prelude type, which is all a warning should do;
+`mini_crawl.kara` is `mini_crawl.orig.kara`, and it still matches on all
+four MIR surfaces.
+
 Written 2026-10-15 by the real-world apps thread; karac at 72cc0d4a00.

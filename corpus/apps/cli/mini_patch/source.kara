@@ -25,9 +25,6 @@
 //
 // expected.out is real difflib's and real GNU patch 2.7.6's output on the
 // same trees, made by oracle.py.
-//
-// Works around B-2026-10-15-41: the matcher's work-queue struct is `Todo`,
-// because a user `struct Range` captures every `a..b` in the program.
 
 // ------------------------------------------------------------ bytes and strings
 
@@ -199,7 +196,7 @@ fn longest_match(a: ref Vec[String], b: ref Vec[String], pop: ref Vec[bool], alo
 }
 
 // a[alo..ahi] against b[blo..bhi], still to match
-struct Todo { alo: i64, ahi: i64, blo: i64, bhi: i64 }
+struct Range { alo: i64, ahi: i64, blo: i64, bhi: i64 }
 
 fn block_before(x: ref Block, y: ref Block) -> bool {
     if x.a != y.a {
@@ -217,8 +214,8 @@ fn block_before(x: ref Block, y: ref Block) -> bool {
 fn matching_blocks(a: ref Vec[String], b: ref Vec[String]) -> Vec[Block] {
     let pop = popular_lines(b);
     let mut found: Vec[Block] = Vec.new();
-    let mut queue: Vec[Todo] = Vec.new();
-    queue.push(Todo { alo: 0, ahi: a.len(), blo: 0, bhi: b.len() });
+    let mut queue: Vec[Range] = Vec.new();
+    queue.push(Range { alo: 0, ahi: a.len(), blo: 0, bhi: b.len() });
     while queue.len() > 0 {
         let q = queue.pop().unwrap();
         let m = longest_match(a, b, pop, q.alo, q.ahi, q.blo, q.bhi);
@@ -226,10 +223,10 @@ fn matching_blocks(a: ref Vec[String], b: ref Vec[String]) -> Vec[Block] {
             continue;
         }
         if q.alo < m.a and q.blo < m.b {
-            queue.push(Todo { alo: q.alo, ahi: m.a, blo: q.blo, bhi: m.b });
+            queue.push(Range { alo: q.alo, ahi: m.a, blo: q.blo, bhi: m.b });
         }
         if m.a + m.size < q.ahi and m.b + m.size < q.bhi {
-            queue.push(Todo { alo: m.a + m.size, ahi: q.ahi, blo: m.b + m.size, bhi: q.bhi });
+            queue.push(Range { alo: m.a + m.size, ahi: q.ahi, blo: m.b + m.size, bhi: q.bhi });
         }
         found.push(m);
     }
