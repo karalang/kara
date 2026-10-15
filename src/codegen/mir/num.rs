@@ -1091,6 +1091,38 @@ impl<'ctx> Cx<'ctx, '_> {
         })
     }
 
+    /// `x.partial_cmp(y)`: `Some` of the `Ordering`, or `None` when either
+    /// side is NaN (B-2026-10-15-68).
+    fn float_partial_cmp(
+        &mut self,
+        x: FloatValue<'ctx>,
+        y: FloatValue<'ctx>,
+        dest: &Place,
+    ) -> R<()> {
+        use inkwell::FloatPredicate as P;
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let (some, none) = self.option_variants(dty)?;
+        let ot = self
+            .tys
+            .field_ty(dty, Some(some), 0)
+            .ok_or("an option without a payload")?;
+        let b = &self.builder;
+        let i32t = self.llcx.i32_type();
+        let lt = b.build_float_compare(P::OLT, x, y, "").map_err(e)?;
+        let gt = b.build_float_compare(P::OGT, x, y, "").map_err(e)?;
+        let lt = b.build_int_z_extend(lt, i32t, "").map_err(e)?;
+        let gt = b.build_int_z_extend(gt, i32t, "").map_err(e)?;
+        let o = b.build_int_sub(gt, lt, "").map_err(e)?;
+        let ordered = b.build_float_compare(P::ORD, x, y, "").map_err(e)?;
+        self.store_tag(d, dty, none)?;
+        self.if_then(ordered, |cx| {
+            cx.store_tag(d, dty, some)?;
+            let q = cx.offset(d, cx.field_offset(dty, Some(some), 0)?)?;
+            cx.store_ordering(q, ot, o)
+        })
+    }
+
     fn float_op(
         &mut self,
         ft: FloatTy,
@@ -1106,6 +1138,12 @@ impl<'ctx> Cx<'ctx, '_> {
             if let Some(()) = self.float_to_int(method, x, dest)? {
                 return Ok(Some(()));
             }
+        }
+        if let ("partial_cmp", [y]) = (method, &args[1..]) {
+            let Some(y) = self.float_peer(x, xt, y)? else {
+                return Ok(None);
+            };
+            return self.float_partial_cmp(x, y, dest).map(Some);
         }
         let f64t = self.llcx.f64_type();
         let f32t = self.llcx.f32_type();

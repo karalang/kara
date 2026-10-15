@@ -291,6 +291,12 @@ impl<'ctx> Cx<'ctx, '_> {
         let mut t = self.operand_type(v)?;
         let mut p = self.operand_ptr(v)?;
         while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            // A reference to a `str` or a slice is that view itself, not a
+            // pointer to one (`view_of`; B-2026-10-14-66).
+            if matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) {
+                t = i;
+                break;
+            }
             p = self.load_ptr(p)?;
             t = i;
         }

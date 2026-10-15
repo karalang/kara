@@ -212,7 +212,12 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// Writes the `Ordering` for -1 / 0 / 1 at `p`, of type `ty`.
-    fn store_ordering(&mut self, p: PointerValue<'ctx>, ty: Ty, o: IntValue<'ctx>) -> R<()> {
+    pub(super) fn store_ordering(
+        &mut self,
+        p: PointerValue<'ctx>,
+        ty: Ty,
+        o: IntValue<'ctx>,
+    ) -> R<()> {
         let f = self.cur_fn()?;
         let done = self.llcx.append_basic_block(f, "ordered");
         let mut arms = Vec::new();

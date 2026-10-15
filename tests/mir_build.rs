@@ -2701,3 +2701,71 @@ fn main() {
         }
     }
 }
+
+/// `f64.partial_cmp` / `f32.partial_cmp`: `Some` of the `Ordering`, `None`
+/// when either side is NaN, and the comparator a float sort is written
+/// with (B-2026-10-15-68).
+#[test]
+fn mir_build_float_partial_cmp() {
+    let src = r#"
+fn main() {
+    let a = 2.5;
+    let b = 1.0;
+    match a.partial_cmp(b) {
+        Some(Ordering.Greater) => println("greater"),
+        Some(_) => println("other"),
+        None => println("unordered"),
+    }
+    let nan = 0.0 / 0.0;
+    match nan.partial_cmp(1.0) {
+        Some(_) => println("ordered"),
+        None => println("unordered"),
+    }
+    match b.partial_cmp(b) {
+        Some(Ordering.Equal) => println("equal"),
+        _ => println("other"),
+    }
+    let mut v = [2.5, 1.0, 3.0, -4.0];
+    v.sort_by(|p, q| p.partial_cmp(q).unwrap());
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
+    let x: f32 = 1.5f32;
+    println(f"{x.partial_cmp(2.0f32) == Some(Ordering.Less)}");
+}
+"#;
+    for opt in [0, 2] {
+        let Some(out) = build_and_run(src, opt) else {
+            return;
+        };
+        assert_eq!(
+            out, "greater\nunordered\nequal\n-4.0 1.0 2.5 3.0\ntrue\n",
+            "at -O{opt}"
+        );
+    }
+}
+
+/// A width on a `ref Str` from iterating a `Vec[Str]` pads the view the
+/// reference is, rather than reading the view's bytes as a pointer
+/// (B-2026-10-14-66).
+#[test]
+fn mir_build_width_on_a_borrowed_str() {
+    let src = r#"
+fn main() {
+    let v: Vec[Str] = vec!["ab", "cde"];
+    for c in v.iter() {
+        println(f"[{c:<6}][{c:>6}][{c:^7}]");
+    }
+    let owned: Vec[String] = vec!["xy".to_string()];
+    for o in owned.iter() {
+        println(f"[{o:<4}]");
+    }
+}
+"#;
+    let want = "[ab    ][    ab][  ab   ]\n[cde   ][   cde][  cde  ]\n[xy  ]\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
