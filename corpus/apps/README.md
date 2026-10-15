@@ -189,6 +189,7 @@ cli/mini_gettext        .po compiler, .mo catalogs, fallback chains and plural f
 cli/mini_logging        a service's logs through Python's logging: handlers, rotation, dictConfig reloads
 cli/mini_datetime       strptime, strftime, fromisoformat, timedelta and a log normalizer
 cli/mini_sqlite         SQLite file reader: pages, overflow, records, freelist, pointer map, b-tree seeks
+cli/mini_readelf        GNU readelf for x86-64 ELF, checksec, loader version and symbol checks, gnu-hash lookups
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
