@@ -1,0 +1,2147 @@
+// mini_xml: the XML parsing behind feeds, Maven builds, SVG and sitemaps,
+// as Python's xml.etree.ElementTree does it over expat:
+// - a well-formedness parser with namespaces, character and entity
+//   references, internal DTD entities, CDATA, comments and processing
+//   instructions dropped, attribute value normalization, and expat's
+//   error messages with their line and column;
+// - the tree ElementTree builds, with `text` and `tail`;
+// - ElementPath, ElementTree's XPath subset, as `find`, `findall`,
+//   `findtext` and `itertext`: child, `*`, `.`, `..`, `//`, `{ns}` and
+//   `{*}` wildcards, and the predicates `[@a]`, `[@a='v']`, `[tag]`,
+//   `[tag='v']`, `[.='v']`, `[n]` and `[last()]`;
+// - `tostring`, with its generated namespace prefixes and its escaping.
+//
+// The run writes the documents into `data/`, prints each tree and its
+// serialization, runs the queries of `data/queries.txt`, and prints the
+// error for each document in `data/bad/`.
+//
+// expected.out is the output of oracle.py, the same report made with
+// Python 3.13's ElementTree.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+// ------------------------------------------------------------ the tree
+
+// An element. `text` is the character data before its first child and
+// `tail` the data after its end tag; `has_text`/`has_tail` say whether
+// there was any, as ElementTree tells None from "".
+#[derive(Clone)]
+struct El {
+    tag: String,
+    keys: Vec[String],
+    vals: Vec[String],
+    text: String,
+    has_text: bool,
+    tail: String,
+    has_tail: bool,
+    kids: Vec[i64],
+    parent: i64,
+}
+
+// The elements of a document; the root is element 0.
+struct Tree {
+    els: Vec[El],
+}
+
+impl Tree {
+    fn get(ref self, e: i64, key: Str) -> Option[String] {
+        for i in 0..self.els[e].keys.len() {
+            if self.els[e].keys[i] == key {
+                return Some(self.els[e].vals[i].clone());
+            }
+        }
+        None
+    }
+
+    // The element and its descendants, in document order.
+    fn iter(ref self, e: i64, out: mut ref Vec[i64]) {
+        out.push(e);
+        for k in 0..self.els[e].kids.len() {
+            self.iter(self.els[e].kids[k], out);
+        }
+    }
+
+    fn itertext(ref self, e: i64, out: mut ref String) {
+        if self.els[e].has_text {
+            out.push_str(self.els[e].text);
+        }
+        for k in 0..self.els[e].kids.len() {
+            let c = self.els[e].kids[k];
+            self.itertext(c, out);
+            if self.els[c].has_tail {
+                out.push_str(self.els[c].tail);
+            }
+        }
+    }
+
+    fn all_text(ref self, e: i64) -> String {
+        let mut s = String.new();
+        self.itertext(e, mut s);
+        s
+    }
+}
+
+// ------------------------------------------------------------ the parser
+
+const XML_NS: Str = "http://www.w3.org/XML/1998/namespace";
+
+// An error as expat reports it: the message and the byte offset.
+struct XErr {
+    msg: String,
+    pos: i64,
+}
+
+fn xerr(msg: Str, pos: i64) -> XErr {
+    XErr { msg: msg.to_string(), pos: pos }
+}
+
+fn is_xml_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r'
+}
+
+fn is_name_start(c: u8) -> bool {
+    is_alpha(c) or c == b'_' or c == b':' or c >= 128
+}
+
+fn is_name_char(c: u8) -> bool {
+    is_name_start(c) or is_digit(c) or c == b'-' or c == b'.'
+}
+
+fn utf8_of(cp: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 + cp / 64) as u8);
+        out.push((0x80 + cp % 64) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 + cp / 4096) as u8);
+        out.push((0x80 + (cp / 64) % 64) as u8);
+        out.push((0x80 + cp % 64) as u8);
+    } else {
+        out.push((0xF0 + cp / 262144) as u8);
+        out.push((0x80 + (cp / 4096) % 64) as u8);
+        out.push((0x80 + (cp / 64) % 64) as u8);
+        out.push((0x80 + cp % 64) as u8);
+    }
+    from_bytes(out)
+}
+
+fn valid_char(cp: i64) -> bool {
+    if cp == 9 or cp == 10 or cp == 13 {
+        return true;
+    }
+    if cp < 32 {
+        return false;
+    }
+    if cp >= 0xD800 and cp <= 0xDFFF {
+        return false;
+    }
+    cp != 0xFFFE and cp != 0xFFFF and cp <= 0x10FFFF
+}
+
+struct XmlParser {
+    b: Vec[u8],
+    i: i64,
+    els: Vec[El],
+    // the open elements, their names as written, and where each one's
+    // namespace declarations start
+    stack: Vec[i64],
+    raw: Vec[String],
+    marks: Vec[i64],
+    ns_prefix: Vec[String],
+    ns_uri: Vec[String],
+    ent_names: Vec[String],
+    ent_values: Vec[String],
+}
+
+impl XmlParser {
+    fn at(ref self, s: Str) -> bool {
+        let t = to_bytes(s);
+        if self.i + t.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..t.len() {
+            if self.b[self.i + k] != t[k] {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn eof(ref self) -> bool {
+        self.i >= self.b.len()
+    }
+
+    fn skip_ws(mut ref self) -> bool {
+        let st = self.i;
+        while not self.eof() and is_xml_ws(self.b[self.i]) {
+            self.i += 1;
+        }
+        self.i > st
+    }
+
+    // A name at the current position; an invalid token if there is none.
+    fn name(mut ref self) -> Result[String, XErr] {
+        if self.eof() {
+            return Err(xerr("unclosed token", self.i));
+        }
+        if not is_name_start(self.b[self.i]) {
+            return Err(xerr("not well-formed (invalid token)", self.i));
+        }
+        let st = self.i;
+        while not self.eof() and is_name_char(self.b[self.i]) {
+            self.i += 1;
+        }
+        Ok(byte_str(self.b, st, self.i))
+    }
+
+    // Skips to just after `end`; an unclosed token at `start` if it never
+    // comes.
+    fn skip_past(mut ref self, end: Str, start: i64) -> Result[(), XErr] {
+        while not self.eof() {
+            if self.at(end) {
+                self.i += end.len();
+                return Ok(());
+            }
+            self.i += 1;
+        }
+        Err(xerr("unclosed token", start))
+    }
+
+    fn comment(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 4;
+        self.skip_past("-->", st)
+    }
+
+    fn pi(mut ref self, first: bool) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 2;
+        let target = self.name()?;
+        if target == "xml" and not first {
+            return Err(xerr("XML or text declaration not at start of entity", st));
+        }
+        self.skip_past("?>", st)
+    }
+
+    // A reference after `&`, as the text it stands for.
+    fn reference(mut ref self) -> Result[String, XErr] {
+        let amp = self.i;
+        self.i += 1;
+        if self.eof() {
+            return Err(xerr("unclosed token", amp));
+        }
+        if self.b[self.i] == b'#' {
+            self.i += 1;
+            let hex = not self.eof() and self.b[self.i] == b'x';
+            if hex {
+                self.i += 1;
+            }
+            let st = self.i;
+            let mut v: i64 = 0;
+            while not self.eof() {
+                let c = self.b[self.i];
+                let d = if is_digit(c) {
+                    (c - b'0') as i64
+                } else if hex and lower_byte(c) >= b'a' and lower_byte(c) <= b'f' {
+                    (lower_byte(c) - b'a') as i64 + 10
+                } else {
+                    break;
+                };
+                if v < 0x110000 {
+                    v = v * (if hex { 16 } else { 10 }) + d;
+                }
+                self.i += 1;
+            }
+            if self.eof() {
+                return Err(xerr("unclosed token", amp));
+            }
+            if self.i == st or self.b[self.i] != b';' {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            self.i += 1;
+            if not valid_char(v) {
+                return Err(xerr("reference to invalid character number", amp));
+            }
+            return Ok(utf8_of(v));
+        }
+        let name = self.name()?;
+        if self.eof() {
+            return Err(xerr("unclosed token", amp));
+        }
+        if self.b[self.i] != b';' {
+            return Err(xerr("not well-formed (invalid token)", self.i));
+        }
+        self.i += 1;
+        match self.entity(name, 0) {
+            Some(t) => Ok(t),
+            None => Err(xerr("undefined entity", amp)),
+        }
+    }
+
+    // A named entity's text, with the references in it expanded.
+    fn entity(ref self, name: Str, depth: i64) -> Option[String] {
+        if name == "lt" {
+            return Some("<".to_string());
+        }
+        if name == "gt" {
+            return Some(">".to_string());
+        }
+        if name == "amp" {
+            return Some("&".to_string());
+        }
+        if name == "quot" {
+            return Some("\"".to_string());
+        }
+        if name == "apos" {
+            return Some("'".to_string());
+        }
+        if depth > 20 {
+            return None;
+        }
+        for k in 0..self.ent_names.len() {
+            if self.ent_names[k] == name {
+                let v = to_bytes(self.ent_values[k]);
+                let mut out = String.new();
+                let mut j: i64 = 0;
+                while j < v.len() {
+                    if v[j] == b'&' {
+                        let mut e = j + 1;
+                        while e < v.len() and v[e] != b';' {
+                            e += 1;
+                        }
+                        let inner = byte_str(v, j + 1, e);
+                        out.push_str(self.entity(inner, depth + 1).unwrap_or(String.new()));
+                        j = e + 1;
+                        continue;
+                    }
+                    let mut e = j;
+                    while e < v.len() and v[e] != b'&' {
+                        e += 1;
+                    }
+                    out.push_str(byte_str(v, j, e));
+                    j = e;
+                }
+                return Some(out);
+            }
+        }
+        None
+    }
+
+    // A quoted value in a DTD declaration, with character references
+    // expanded and other references kept for when the entity is used.
+    fn entity_value(mut ref self, start: i64) -> Result[String, XErr] {
+        let q = self.b[self.i];
+        self.i += 1;
+        let mut out = String.new();
+        loop {
+            if self.eof() {
+                return Err(xerr("unclosed token", start));
+            }
+            let c = self.b[self.i];
+            if c == q {
+                self.i += 1;
+                return Ok(out);
+            }
+            if c == b'&' and self.i + 1 < self.b.len() and self.b[self.i + 1] == b'#' {
+                out.push_str(self.reference()?);
+                continue;
+            }
+            let st = self.i;
+            self.i += 1;
+            while not self.eof() and self.b[self.i] != q and self.b[self.i] != b'&' {
+                self.i += 1;
+            }
+            out.push_str(byte_str(self.b, st, self.i));
+        }
+    }
+
+    // Skips a declaration to its `>`, stepping over quoted strings.
+    fn skip_decl(mut ref self, start: i64) -> Result[(), XErr] {
+        loop {
+            if self.eof() {
+                return Err(xerr("unclosed token", start));
+            }
+            let c = self.b[self.i];
+            self.i += 1;
+            if c == b'>' {
+                return Ok(());
+            }
+            if c == b'"' or c == b'\'' {
+                while not self.eof() and self.b[self.i] != c {
+                    self.i += 1;
+                }
+                self.i += 1;
+            }
+        }
+    }
+
+    fn doctype(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 9;
+        self.skip_ws();
+        self.name()?;
+        loop {
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            let c = self.b[self.i];
+            if c == b'>' {
+                self.i += 1;
+                return Ok(());
+            }
+            if c == b'"' or c == b'\'' {
+                self.i += 1;
+                while not self.eof() and self.b[self.i] != c {
+                    self.i += 1;
+                }
+                self.i += 1;
+                continue;
+            }
+            if c != b'[' {
+                self.i += 1;
+                continue;
+            }
+            self.i += 1;
+            loop {
+                self.skip_ws();
+                if self.eof() {
+                    return Err(xerr("unclosed token", st));
+                }
+                if self.b[self.i] == b']' {
+                    self.i += 1;
+                    break;
+                }
+                if self.at("<!--") {
+                    self.comment()?;
+                } else if self.at("<?") {
+                    self.pi(false)?;
+                } else if self.at("<!ENTITY") {
+                    let ds = self.i;
+                    self.i += 8;
+                    self.skip_ws();
+                    if not self.eof() and self.b[self.i] == b'%' {
+                        self.skip_decl(ds)?;
+                        continue;
+                    }
+                    let name = self.name()?;
+                    self.skip_ws();
+                    if not self.eof() and (self.b[self.i] == b'"' or self.b[self.i] == b'\'') {
+                        let v = self.entity_value(ds)?;
+                        if not contains_str(self.ent_names, name) {
+                            self.ent_names.push(name);
+                            self.ent_values.push(v);
+                        }
+                    }
+                    self.skip_decl(ds)?;
+                } else if self.at("<!") {
+                    let ds = self.i;
+                    self.skip_decl(ds)?;
+                } else {
+                    self.i += 1;
+                }
+            }
+        }
+    }
+
+    fn lookup_ns(ref self, prefix: Str) -> Option[String] {
+        if prefix == "xml" {
+            return Some(XML_NS.to_string());
+        }
+        let mut k = self.ns_prefix.len();
+        while k > 0 {
+            k -= 1;
+            if self.ns_prefix[k] == prefix {
+                return Some(self.ns_uri[k].clone());
+            }
+        }
+        None
+    }
+
+    // A qualified name in Clark notation, `{uri}local`.
+    fn expand(ref self, raw: Str, is_attr: bool) -> Option[String] {
+        let b = to_bytes(raw);
+        let mut colon: i64 = -1;
+        for k in 0..b.len() {
+            if b[k] == b':' {
+                colon = k;
+                break;
+            }
+        }
+        if colon < 0 {
+            if is_attr {
+                return Some(raw.to_string());
+            }
+            let uri = self.lookup_ns("").unwrap_or(String.new());
+            return Some(if uri.len() > 0 { f"{{{uri}}}{raw}" } else { raw.to_string() });
+        }
+        let prefix = byte_str(b, 0, colon);
+        let local = byte_str(b, colon + 1, b.len());
+        match self.lookup_ns(prefix) {
+            Some(uri) => Some(f"{{{uri}}}{local}"),
+            None => None,
+        }
+    }
+
+    fn add_text(mut ref self, s: Str) {
+        if s.len() == 0 {
+            return;
+        }
+        let top = self.stack[self.stack.len() - 1];
+        let n = self.els[top].kids.len();
+        if n == 0 {
+            self.els[top].text.push_str(s);
+            self.els[top].has_text = true;
+        } else {
+            let last = self.els[top].kids[n - 1];
+            self.els[last].tail.push_str(s);
+            self.els[last].has_tail = true;
+        }
+    }
+
+    // A start tag, after which the element is open (or already closed,
+    // for `<a/>`).
+    fn start_tag(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 1;
+        let raw = self.name()?;
+        let mut names: Vec[String] = Vec.new();
+        let mut name_pos: Vec[i64] = Vec.new();
+        let mut values: Vec[String] = Vec.new();
+        let mut empty = false;
+        loop {
+            let had_ws = self.skip_ws();
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            let c = self.b[self.i];
+            if c == b'>' {
+                self.i += 1;
+                break;
+            }
+            if c == b'/' {
+                if self.i + 1 >= self.b.len() {
+                    return Err(xerr("unclosed token", st));
+                }
+                if self.b[self.i + 1] != b'>' {
+                    return Err(xerr("not well-formed (invalid token)", self.i + 1));
+                }
+                self.i += 2;
+                empty = true;
+                break;
+            }
+            if not had_ws or not is_name_start(c) {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            let np = self.i;
+            let an = self.name()?;
+            self.skip_ws();
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            if self.b[self.i] != b'=' {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            self.i += 1;
+            self.skip_ws();
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            let q = self.b[self.i];
+            if q != b'"' and q != b'\'' {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            self.i += 1;
+            let mut v = String.new();
+            loop {
+                if self.eof() {
+                    return Err(xerr("unclosed token", st));
+                }
+                let ch = self.b[self.i];
+                if ch == q {
+                    self.i += 1;
+                    break;
+                }
+                if ch == b'<' {
+                    return Err(xerr("not well-formed (invalid token)", self.i));
+                }
+                if ch == b'&' {
+                    let t = self.reference()?;
+                    v.push_str(t);
+                    continue;
+                }
+                if is_xml_ws(ch) {
+                    v.push_str(" ");
+                    self.i += 1;
+                    continue;
+                }
+                let s0 = self.i;
+                while not self.eof() and self.b[self.i] != q and self.b[self.i] != b'<' and self.b[self.i] != b'&' and not is_xml_ws(self.b[self.i]) {
+                    self.i += 1;
+                }
+                v.push_str(byte_str(self.b, s0, self.i));
+            }
+            if contains_str(names, an) {
+                return Err(xerr("duplicate attribute", np));
+            }
+            names.push(an);
+            name_pos.push(np);
+            values.push(v);
+        }
+        // namespace declarations first, then the names
+        self.marks.push(self.ns_prefix.len());
+        for k in 0..names.len() {
+            if names[k] == "xmlns" {
+                self.ns_prefix.push(String.new());
+                self.ns_uri.push(values[k].clone());
+            } else if names[k].starts_with("xmlns:") {
+                self.ns_prefix.push(byte_str(to_bytes(names[k]), 6, names[k].len()));
+                self.ns_uri.push(values[k].clone());
+            }
+        }
+        let tag = match self.expand(raw, false) {
+            Some(t) => t,
+            None => return Err(xerr("unbound prefix", st)),
+        };
+        let mut keys: Vec[String] = Vec.new();
+        let mut vals: Vec[String] = Vec.new();
+        for k in 0..names.len() {
+            if names[k] == "xmlns" or names[k].starts_with("xmlns:") {
+                continue;
+            }
+            match self.expand(names[k], true) {
+                Some(key) => keys.push(key),
+                None => return Err(xerr("unbound prefix", st)),
+            }
+            vals.push(values[k].clone());
+        }
+        let parent = if self.stack.len() > 0 { self.stack[self.stack.len() - 1] } else { -1 };
+        let id = self.els.len();
+        self.els.push(El { tag: tag, keys: keys, vals: vals, text: String.new(), has_text: false, tail: String.new(), has_tail: false, kids: Vec.new(), parent: parent });
+        if parent >= 0 {
+            self.els[parent].kids.push(id);
+        }
+        if empty {
+            let m = self.marks.pop().unwrap();
+            self.ns_prefix.truncate(m);
+            self.ns_uri.truncate(m);
+        } else {
+            self.stack.push(id);
+            self.raw.push(raw);
+        }
+        Ok(())
+    }
+
+    fn end_tag(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 2;
+        let np = self.i;
+        let name = self.name()?;
+        self.skip_ws();
+        if self.eof() {
+            return Err(xerr("unclosed token", st));
+        }
+        if self.b[self.i] != b'>' {
+            return Err(xerr("not well-formed (invalid token)", self.i));
+        }
+        self.i += 1;
+        if name != self.raw[self.raw.len() - 1] {
+            return Err(xerr("mismatched tag", np));
+        }
+        self.stack.pop();
+        self.raw.pop();
+        let m = self.marks.pop().unwrap();
+        self.ns_prefix.truncate(m);
+        self.ns_uri.truncate(m);
+        Ok(())
+    }
+
+    // The root element and everything in it.
+    fn content(mut ref self) -> Result[(), XErr] {
+        self.start_tag()?;
+        while self.stack.len() > 0 {
+            if self.eof() {
+                return Err(xerr("no element found", self.i));
+            }
+            let c = self.b[self.i];
+            if c == b'<' {
+                if self.at("</") {
+                    self.end_tag()?;
+                } else if self.at("<!--") {
+                    self.comment()?;
+                } else if self.at("<![CDATA[") {
+                    let st = self.i;
+                    self.i += 9;
+                    let from = self.i;
+                    self.skip_past("]]>", st)?;
+                    let t = byte_str(self.b, from, self.i - 3);
+                    self.add_text(t);
+                } else if self.at("<?") {
+                    self.pi(false)?;
+                } else if self.i + 1 < self.b.len() and is_name_start(self.b[self.i + 1]) {
+                    self.start_tag()?;
+                } else if self.i + 1 >= self.b.len() {
+                    return Err(xerr("unclosed token", self.i));
+                } else {
+                    return Err(xerr("not well-formed (invalid token)", self.i + 1));
+                }
+                continue;
+            }
+            if c == b'&' {
+                let t = self.reference()?;
+                self.add_text(t);
+                continue;
+            }
+            if self.at("]]>") {
+                return Err(xerr("not well-formed (invalid token)", self.i + 2));
+            }
+            if c < 32 and not is_xml_ws(c) {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            let st = self.i;
+            self.i += 1;
+            while not self.eof() and self.b[self.i] != b'<' and self.b[self.i] != b'&' and self.b[self.i] != b']' and (self.b[self.i] >= 32 or is_xml_ws(self.b[self.i])) {
+                self.i += 1;
+            }
+            let t = byte_str(self.b, st, self.i);
+            self.add_text(t);
+        }
+        Ok(())
+    }
+
+    fn document(mut ref self) -> Result[(), XErr] {
+        if self.at("\u{feff}") {
+            self.i += 3;
+        }
+        if self.at("<?xml") and self.i + 5 < self.b.len() and is_xml_ws(self.b[self.i + 5]) {
+            self.pi(true)?;
+        }
+        loop {
+            self.skip_ws();
+            if self.eof() {
+                return Err(xerr("no element found", self.i));
+            }
+            if self.at("<!--") {
+                self.comment()?;
+            } else if self.at("<?") {
+                self.pi(false)?;
+            } else if self.at("<!DOCTYPE") {
+                self.doctype()?;
+            } else if self.b[self.i] == b'<' {
+                if self.i + 1 < self.b.len() and is_name_start(self.b[self.i + 1]) {
+                    break;
+                }
+                return Err(xerr("not well-formed (invalid token)", self.i + 1));
+            } else {
+                return Err(xerr("syntax error", self.i));
+            }
+        }
+        self.content()?;
+        loop {
+            self.skip_ws();
+            if self.eof() {
+                return Ok(());
+            }
+            if self.at("<!--") {
+                self.comment()?;
+            } else if self.at("<?") {
+                self.pi(false)?;
+            } else {
+                return Err(xerr("junk after document element", self.i));
+            }
+        }
+    }
+}
+
+// Parses a document, or says what is wrong with it as ElementTree's
+// ParseError does: the message, the line and the column.
+fn parse_xml(text: Str) -> Result[Tree, String] {
+    // expat reads \r\n and a lone \r as \n
+    let raw = to_bytes(text);
+    let mut b: Vec[u8] = Vec.new();
+    for k in 0..raw.len() {
+        if raw[k] == b'\r' {
+            if k + 1 < raw.len() and raw[k + 1] == b'\n' {
+                continue;
+            }
+            b.push(b'\n');
+        } else {
+            b.push(raw[k]);
+        }
+    }
+    let mut p = XmlParser { b: b, i: 0, els: Vec.new(), stack: Vec.new(), raw: Vec.new(), marks: Vec.new(), ns_prefix: Vec.new(), ns_uri: Vec.new(), ent_names: Vec.new(), ent_values: Vec.new() };
+    match p.document() {
+        Ok(_) => Ok(Tree { els: p.els }),
+        Err(e) => {
+            let mut line: i64 = 1;
+            let mut col: i64 = 0;
+            for k in 0..e.pos {
+                if p.b[k] == b'\n' {
+                    line += 1;
+                    col = 0;
+                } else if p.b[k] < 128 or p.b[k] >= 192 {
+                    col += 1;
+                }
+            }
+            Err(f"{e.msg}: line {line}, column {col}")
+        }
+    }
+}
+
+// ------------------------------------------------------------ ElementPath
+
+// A token of a path: an operator, or a tag; whitespace is neither.
+#[derive(Clone)]
+struct Tok {
+    op: String,
+    tag: String,
+}
+
+fn tok(op: Str, tag: Str) -> Tok {
+    Tok { op: op.to_string(), tag: tag.to_string() }
+}
+
+fn is_tag_char(c: u8) -> bool {
+    not (c == b'/' or c == b'[' or c == b']' or c == b'(' or c == b')' or c == b'@' or c == b'!' or c == b'=' or is_ws(c))
+}
+
+fn tag_run(b: ref Vec[u8], from: i64) -> i64 {
+    let mut j = from;
+    while j < b.len() and is_tag_char(b[j]) {
+        j += 1;
+    }
+    j
+}
+
+// ElementPath's tokenizer: at each position the first alternative that
+// matches wins, and a character no alternative matches is skipped.
+fn tokenize_path(path: Str) -> Result[Vec[Tok], String] {
+    let b = to_bytes(path);
+    let mut out: Vec[Tok] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == b'\'' or c == b'"' {
+            let mut j = i + 1;
+            while j < b.len() and b[j] != c {
+                j += 1;
+            }
+            if j < b.len() {
+                out.push(tok(byte_str(b, i, j + 1), ""));
+                i = j + 1;
+                continue;
+            }
+        }
+        if c == b':' and next == b':' {
+            out.push(tok("::", ""));
+            i += 2;
+            continue;
+        }
+        if c == b'/' {
+            if next == b'/' {
+                out.push(tok("//", ""));
+                i += 2;
+            } else {
+                out.push(tok("/", ""));
+                i += 1;
+            }
+            continue;
+        }
+        if (c == b'.' and next == b'.') or (c == b'(' and next == b')') or (c == b'!' and next == b'=') {
+            out.push(tok(byte_str(b, i, i + 2), ""));
+            i += 2;
+            continue;
+        }
+        if c == b'.' or c == b'*' or c == b':' or c == b'[' or c == b']' or c == b'(' or c == b')' or c == b'@' or c == b'=' {
+            out.push(tok(byte_str(b, i, i + 1), ""));
+            i += 1;
+            continue;
+        }
+        if is_ws(c) {
+            while i < b.len() and is_ws(b[i]) {
+                i += 1;
+            }
+            out.push(tok("", ""));
+            continue;
+        }
+        // a tag, maybe with a {namespace} in front
+        let mut end = i;
+        if c == b'{' {
+            let mut j = i + 1;
+            while j < b.len() and b[j] != b'}' {
+                j += 1;
+            }
+            if j < b.len() and j > i + 1 {
+                let e = tag_run(b, j + 1);
+                if e > j + 1 {
+                    end = e;
+                }
+            }
+        }
+        if end == i {
+            end = tag_run(b, i);
+        }
+        if end == i {
+            i += 1;
+            continue;
+        }
+        let t = byte_str(b, i, end);
+        if c != b'{' {
+            let tb = to_bytes(t);
+            for k in 0..tb.len() {
+                if tb[k] == b':' {
+                    return Err(f"prefix {py_repr(byte_str(tb, 0, k))} not found in prefix map");
+                }
+            }
+        }
+        out.push(tok("", t));
+        i = end;
+    }
+    Ok(out)
+}
+
+// One step of a compiled path; each turns a list of elements into the next.
+enum Sel {
+    Child(String),
+    AnyChild(String),
+    Star,
+    Here,
+    Up,
+    Desc(String),
+    AnyDesc(String),
+    HasAttr(String),
+    AttrIs(String, String, bool),
+    HasChild(String),
+    TextIs(String, String, bool),
+    Position(i64),
+}
+
+fn is_wildcard_tag(tag: Str) -> bool {
+    let b = to_bytes(tag);
+    let n = b.len();
+    (n >= 3 and b[0] == b'{' and b[1] == b'*' and b[2] == b'}') or (n >= 2 and b[n - 2] == b'}' and b[n - 1] == b'*')
+}
+
+fn starts_with(s: Str, p: Str) -> bool {
+    let a = to_bytes(s);
+    let b = to_bytes(p);
+    if b.len() > a.len() {
+        return false;
+    }
+    for k in 0..b.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_with(s: Str, p: Str) -> bool {
+    let a = to_bytes(s);
+    let b = to_bytes(p);
+    if b.len() > a.len() {
+        return false;
+    }
+    let off = a.len() - b.len();
+    for k in 0..b.len() {
+        if a[off + k] != b[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn drop_empty_ns(tag: Str) -> String {
+    if starts_with(tag, "{}") {
+        let b = to_bytes(tag);
+        return byte_str(b, 2, b.len());
+    }
+    tag.to_string()
+}
+
+// Does a tag match a wildcard tag: `{*}*`, `{}*`, `{*}name` or `{ns}*`?
+fn wild_match(pat: Str, tag: Str) -> bool {
+    if pat == "{*}*" {
+        return true;
+    }
+    if pat == "{}*" {
+        return not starts_with(tag, "{");
+    }
+    let pb = to_bytes(pat);
+    if starts_with(pat, "{*}") {
+        let name = byte_str(pb, 3, pb.len());
+        return tag == name or ends_with(tag, f"}}{name}");
+    }
+    let ns = byte_str(pb, 0, pb.len() - 1);
+    starts_with(tag, ns)
+}
+
+fn is_int(s: Str) -> bool {
+    let b = to_bytes(s);
+    let mut k: i64 = 0;
+    if k < b.len() and b[k] == b'-' {
+        k += 1;
+    }
+    if k >= b.len() {
+        return false;
+    }
+    while k < b.len() {
+        if not is_digit(b[k]) {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn int_of(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut k: i64 = 0;
+    let neg = b.len() > 0 and b[0] == b'-';
+    if neg {
+        k = 1;
+    }
+    let mut n: i64 = 0;
+    while k < b.len() {
+        n = n * 10 + (b[k] - b'0') as i64;
+        k += 1;
+    }
+    if neg { -n } else { n }
+}
+
+// The predicate after a `[`; `at` is the index of its first token.
+fn compile_predicate(toks: ref Vec[Tok], at: mut ref i64) -> Result[Sel, String] {
+    let mut sig = String.new();
+    let mut pred: Vec[String] = Vec.new();
+    loop {
+        if at >= toks.len() {
+            return Err("invalid path".to_string());
+        }
+        let t = toks[at].clone();
+        at += 1;
+        if t.op == "]" {
+            break;
+        }
+        if t.op == "" and t.tag == "" {
+            continue;
+        }
+        let ob = to_bytes(t.op);
+        if ob.len() > 0 and (ob[0] == b'\'' or ob[0] == b'"') {
+            sig.push_str("'");
+            pred.push(byte_str(ob, 1, ob.len() - 1));
+            continue;
+        }
+        if t.op == "" {
+            sig.push_str("-");
+        } else {
+            sig.push_str(t.op);
+        }
+        pred.push(t.tag);
+    }
+    if sig == "@-" {
+        return Ok(Sel.HasAttr(pred[1].clone()));
+    }
+    if sig == "@-='" or sig == "@-!='" {
+        return Ok(Sel.AttrIs(pred[1].clone(), pred[pred.len() - 1].clone(), sig == "@-!='"));
+    }
+    if sig == "-" and not is_int(pred[0]) {
+        return Ok(Sel.HasChild(pred[0].clone()));
+    }
+    if sig == ".='" or sig == ".!='" or ((sig == "-='" or sig == "-!='") and not is_int(pred[0])) {
+        let neg = sig == ".!='" or sig == "-!='";
+        return Ok(Sel.TextIs(pred[0].clone(), pred[pred.len() - 1].clone(), neg));
+    }
+    if sig == "-" or sig == "-()" or sig == "-()-" {
+        if sig == "-" {
+            let index = int_of(pred[0]) - 1;
+            if index < 0 {
+                return Err("XPath position >= 1 expected".to_string());
+            }
+            return Ok(Sel.Position(index));
+        }
+        if pred[0] != "last" {
+            return Err("unsupported function".to_string());
+        }
+        if sig == "-()-" {
+            if not is_int(pred[2]) {
+                return Err("unsupported expression".to_string());
+            }
+            let index = int_of(pred[2]) - 1;
+            if index > -2 {
+                return Err("XPath offset from last() must be negative".to_string());
+            }
+            return Ok(Sel.Position(index));
+        }
+        return Ok(Sel.Position(-1));
+    }
+    Err("invalid predicate".to_string())
+}
+
+fn compile_path(path: Str) -> Result[Vec[Sel], String] {
+    let mut p = path.to_string();
+    if ends_with(p, "/") {
+        p.push_str("*");
+    }
+    if starts_with(p, "/") {
+        return Err("cannot use absolute path on element".to_string());
+    }
+    let toks = tokenize_path(p)?;
+    let mut sels: Vec[Sel] = Vec.new();
+    let mut at: i64 = 0;
+    if toks.len() == 0 {
+        return Ok(sels);
+    }
+    loop {
+        let t = toks[at].clone();
+        at += 1;
+        if t.op == "" {
+            if is_wildcard_tag(t.tag) {
+                sels.push(Sel.AnyChild(t.tag));
+            } else {
+                sels.push(Sel.Child(drop_empty_ns(t.tag)));
+            }
+        } else if t.op == "*" {
+            sels.push(Sel.Star);
+        } else if t.op == "." {
+            sels.push(Sel.Here);
+        } else if t.op == ".." {
+            sels.push(Sel.Up);
+        } else if t.op == "//" {
+            if at >= toks.len() {
+                return Err("invalid path".to_string());
+            }
+            let n = toks[at].clone();
+            at += 1;
+            let tag = if n.op == "*" {
+                "*".to_string()
+            } else if n.op == "" {
+                n.tag
+            } else {
+                return Err("invalid descendant".to_string());
+            };
+            if is_wildcard_tag(tag) {
+                sels.push(Sel.AnyDesc(tag));
+            } else {
+                sels.push(Sel.Desc(drop_empty_ns(tag)));
+            }
+        } else if t.op == "[" {
+            sels.push(compile_predicate(toks, mut at)?);
+        } else {
+            return Err(f"invalid path: {py_repr(t.op)}");
+        }
+        if at >= toks.len() {
+            break;
+        }
+        if toks[at].op == "/" {
+            at += 1;
+            if at >= toks.len() {
+                return Err("invalid path".to_string());
+            }
+        }
+    }
+    Ok(sels)
+}
+
+impl Tree {
+    fn select(ref self, ctx: i64, sel: ref Sel, result: ref Vec[i64]) -> Result[Vec[i64], String] {
+        let mut out: Vec[i64] = Vec.new();
+        for r in 0..result.len() {
+            let e = result[r];
+            match ref sel {
+                Sel.Child(tag) => {
+                    for k in 0..self.els[e].kids.len() {
+                        let c = self.els[e].kids[k];
+                        if self.els[c].tag == tag {
+                            out.push(c);
+                        }
+                    }
+                }
+                Sel.AnyChild(pat) => {
+                    for k in 0..self.els[e].kids.len() {
+                        let c = self.els[e].kids[k];
+                        if wild_match(pat, self.els[c].tag) {
+                            out.push(c);
+                        }
+                    }
+                }
+                Sel.Star => {
+                    for k in 0..self.els[e].kids.len() {
+                        out.push(self.els[e].kids[k]);
+                    }
+                }
+                Sel.Here => out.push(e),
+                Sel.Up => {
+                    // the parent map covers the context's subtree only
+                    let p = if e == ctx { -1 } else { self.els[e].parent };
+                    if p >= 0 and not out.contains(p) {
+                        out.push(p);
+                    }
+                }
+                Sel.Desc(tag) => {
+                    let mut all: Vec[i64] = Vec.new();
+                    self.iter(e, mut all);
+                    for k in 1..all.len() {
+                        if tag == "*" or self.els[all[k]].tag == tag {
+                            out.push(all[k]);
+                        }
+                    }
+                }
+                Sel.AnyDesc(pat) => {
+                    let mut all: Vec[i64] = Vec.new();
+                    self.iter(e, mut all);
+                    for k in 1..all.len() {
+                        if wild_match(pat, self.els[all[k]].tag) {
+                            out.push(all[k]);
+                        }
+                    }
+                }
+                Sel.HasAttr(key) => {
+                    if self.get(e, key).is_some() {
+                        out.push(e);
+                    }
+                }
+                Sel.AttrIs(key, value, neg) => {
+                    let ok = match self.get(e, key) {
+                        Some(v) => (v == value) != neg,
+                        None => neg,
+                    };
+                    if ok {
+                        out.push(e);
+                    }
+                }
+                Sel.HasChild(tag) => {
+                    if self.find(e, tag)?.is_some() {
+                        out.push(e);
+                    }
+                }
+                Sel.TextIs(tag, value, neg) => {
+                    if tag.len() == 0 {
+                        if (self.all_text(e) == value) != neg {
+                            out.push(e);
+                        }
+                    } else {
+                        let found = self.findall(e, tag)?;
+                        for k in 0..found.len() {
+                            if (self.all_text(found[k]) == value) != neg {
+                                out.push(e);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Sel.Position(index) => {
+                    let p = if e == ctx { -1 } else { self.els[e].parent };
+                    if p < 0 {
+                        continue;
+                    }
+                    let mut same: Vec[i64] = Vec.new();
+                    for k in 0..self.els[p].kids.len() {
+                        let c = self.els[p].kids[k];
+                        if self.els[c].tag == self.els[e].tag {
+                            same.push(c);
+                        }
+                    }
+                    let at = if index < 0 { same.len() + index } else { index };
+                    if at >= 0 and at < same.len() and same[at] == e {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn findall(ref self, e: i64, path: Str) -> Result[Vec[i64], String] {
+        let sels = compile_path(path)?;
+        let mut result: Vec[i64] = Vec.new();
+        result.push(e);
+        for s in 0..sels.len() {
+            result = self.select(e, sels[s], result)?;
+        }
+        Ok(result)
+    }
+
+    fn find(ref self, e: i64, path: Str) -> Result[Option[i64], String] {
+        let all = self.findall(e, path)?;
+        if all.len() == 0 { Ok(None) } else { Ok(Some(all[0])) }
+    }
+
+    // None when nothing matches; "" for a match with no text.
+    fn findtext(ref self, e: i64, path: Str) -> Result[Option[String], String] {
+        match self.find(e, path)? {
+            Some(f) => Ok(Some(self.els[f].text.clone())),
+            None => Ok(None),
+        }
+    }
+}
+
+// ------------------------------------------------------------ tostring
+
+// The prefixes ElementTree knows by name; any other namespace is ns0, ns1, ...
+fn known_prefix(uri: Str) -> Option[String] {
+    let uris = ["http://www.w3.org/XML/1998/namespace", "http://www.w3.org/1999/xhtml", "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "http://schemas.xmlsoap.org/wsdl/", "http://www.w3.org/2001/XMLSchema", "http://www.w3.org/2001/XMLSchema-instance", "http://purl.org/dc/elements/1.1/"];
+    let names = ["xml", "html", "rdf", "wsdl", "xs", "xsi", "dc"];
+    for i in 0..uris.len() {
+        if uris[i] == uri {
+            return Some(names[i].to_string());
+        }
+    }
+    None
+}
+
+// The qualified names of a tree, as `prefix:local`, and the namespaces to
+// declare on its root.
+struct Names {
+    qnames: Vec[String],
+    shown: Vec[String],
+    ns_uri: Vec[String],
+    ns_prefix: Vec[String],
+}
+
+impl Names {
+    fn lookup(ref self, q: Str) -> String {
+        for i in 0..self.qnames.len() {
+            if self.qnames[i] == q {
+                return self.shown[i].clone();
+            }
+        }
+        q.to_string()
+    }
+
+    fn add(mut ref self, q: Str) {
+        if contains_str(self.qnames, q) {
+            return;
+        }
+        let b = to_bytes(q);
+        if b.len() == 0 or b[0] != b'{' {
+            self.qnames.push(q.to_string());
+            self.shown.push(q.to_string());
+            return;
+        }
+        let mut close = b.len() - 1;
+        while b[close] != b'}' {
+            close -= 1;
+        }
+        let uri = byte_str(b, 1, close);
+        let local = byte_str(b, close + 1, b.len());
+        let mut prefix = String.new();
+        let mut found = false;
+        for i in 0..self.ns_uri.len() {
+            if self.ns_uri[i] == uri {
+                prefix = self.ns_prefix[i].clone();
+                found = true;
+            }
+        }
+        if not found {
+            prefix = match known_prefix(uri) {
+                Some(p) => p,
+                None => f"ns{self.ns_uri.len()}",
+            };
+            if prefix != "xml" {
+                self.ns_uri.push(uri);
+                self.ns_prefix.push(prefix.clone());
+            }
+        }
+        self.qnames.push(q.to_string());
+        if prefix.len() > 0 {
+            self.shown.push(f"{prefix}:{local}");
+        } else {
+            self.shown.push(local);
+        }
+    }
+}
+
+fn escape_text(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out = String.new();
+    let mut from: i64 = 0;
+    for i in 0..b.len() {
+        let rep = if b[i] == b'&' {
+            "&amp;"
+        } else if b[i] == b'<' {
+            "&lt;"
+        } else if b[i] == b'>' {
+            "&gt;"
+        } else {
+            continue;
+        };
+        out.push_str(byte_str(b, from, i));
+        out.push_str(rep);
+        from = i + 1;
+    }
+    out.push_str(byte_str(b, from, b.len()));
+    out
+}
+
+fn escape_attr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out = String.new();
+    let mut from: i64 = 0;
+    for i in 0..b.len() {
+        let rep = if b[i] == b'&' {
+            "&amp;"
+        } else if b[i] == b'<' {
+            "&lt;"
+        } else if b[i] == b'>' {
+            "&gt;"
+        } else if b[i] == b'"' {
+            "&quot;"
+        } else if b[i] == b'\r' {
+            "&#13;"
+        } else if b[i] == b'\n' {
+            "&#10;"
+        } else if b[i] == b'\t' {
+            "&#09;"
+        } else {
+            continue;
+        };
+        out.push_str(byte_str(b, from, i));
+        out.push_str(rep);
+        from = i + 1;
+    }
+    out.push_str(byte_str(b, from, b.len()));
+    out
+}
+
+impl Tree {
+    fn write_el(ref self, e: i64, names: ref Names, root: bool, out: mut ref String) {
+        let el = self.els[e].clone();
+        let tag = names.lookup(el.tag);
+        out.push_str(f"<{tag}");
+        if root {
+            // the declarations, sorted on the prefix
+            let mut order: Vec[i64] = Vec.new();
+            for i in 0..names.ns_uri.len() {
+                order.push(i);
+            }
+            for i in 1..order.len() {
+                let mut j = i;
+                while j > 0 and names.ns_prefix[order[j - 1]] > names.ns_prefix[order[j]] {
+                    order.swap(j - 1, j);
+                    j -= 1;
+                }
+            }
+            for i in 0..order.len() {
+                let k = order[i];
+                let p = if names.ns_prefix[k].len() > 0 { f":{names.ns_prefix[k]}" } else { String.new() };
+                out.push_str(f" xmlns{p}=\"{escape_attr(names.ns_uri[k])}\"");
+            }
+        }
+        for i in 0..el.keys.len() {
+            out.push_str(f" {names.lookup(el.keys[i])}=\"{escape_attr(el.vals[i])}\"");
+        }
+        if el.text.len() > 0 or el.kids.len() > 0 {
+            out.push_str(">");
+            out.push_str(escape_text(el.text));
+            for k in 0..el.kids.len() {
+                self.write_el(el.kids[k], names, false, out);
+            }
+            out.push_str(f"</{tag}>");
+        } else {
+            out.push_str(" />");
+        }
+        if el.tail.len() > 0 {
+            out.push_str(escape_text(el.tail));
+        }
+    }
+
+    // ElementTree's tostring(root, encoding="unicode").
+    fn tostring(ref self, e: i64) -> String {
+        let mut names = Names { qnames: Vec.new(), shown: Vec.new(), ns_uri: Vec.new(), ns_prefix: Vec.new() };
+        let mut all: Vec[i64] = Vec.new();
+        self.iter(e, mut all);
+        for i in 0..all.len() {
+            let el = self.els[all[i]].clone();
+            names.add(el.tag);
+            for k in 0..el.keys.len() {
+                names.add(el.keys[k]);
+            }
+        }
+        let mut out = String.new();
+        self.write_el(e, names, true, mut out);
+        out
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/bad/amp.xml
+fn file_0() -> String {
+    """
+<a>fish & chips</a>
+
+"""
+}
+
+// data/bad/attrlt.xml
+fn file_1() -> String {
+    """
+<a x="<"/>
+
+"""
+}
+
+// data/bad/badname.xml
+fn file_2() -> String {
+    """
+<1a/>
+
+"""
+}
+
+// data/bad/badtoken.xml
+fn file_3() -> String {
+    """
+<a>1 < 2</a>
+
+"""
+}
+
+// data/bad/cdata.xml
+fn file_4() -> String {
+    """
+<a>]]></a>
+
+"""
+}
+
+// data/bad/charref.xml
+fn file_5() -> String {
+    """
+<a>&#0;</a>
+
+"""
+}
+
+// data/bad/close.xml
+fn file_6() -> String {
+    """
+<a></a >
+<b></b
+
+"""
+}
+
+// data/bad/decl.xml
+fn file_7() -> String {
+    """
+
+<?xml version="1.0"?><a/>
+
+"""
+}
+
+// data/bad/dupattr.xml
+fn file_8() -> String {
+    """
+<a x="1" x="2"/>
+
+"""
+}
+
+// data/bad/empty.xml
+fn file_9() -> String {
+    """
+
+"""
+}
+
+// data/bad/entity.xml
+fn file_10() -> String {
+    """
+<a>&nosuch;</a>
+
+"""
+}
+
+// data/bad/junk.xml
+fn file_11() -> String {
+    """
+<a/>
+<b/>
+
+"""
+}
+
+// data/bad/mismatch.xml
+fn file_12() -> String {
+    """
+<a><b></a></b>
+
+"""
+}
+
+// data/bad/noquote.xml
+fn file_13() -> String {
+    """
+<a x=1/>
+
+"""
+}
+
+// data/bad/prefix.xml
+fn file_14() -> String {
+    """
+<x:a/>
+
+"""
+}
+
+// data/bad/text.xml
+fn file_15() -> String {
+    """
+just text
+
+"""
+}
+
+// data/bad/unclosed.xml
+fn file_16() -> String {
+    """
+<root>
+  <child>text</child>
+
+"""
+}
+
+// data/bad/unterminated.xml
+fn file_17() -> String {
+    """
+<a><!-- comment</a>
+
+"""
+}
+
+// data/config.xml
+fn file_18() -> String {
+    """
+<?xml version="1.0"?>
+<!DOCTYPE config [
+  <!ENTITY company "Acme &amp; Sons">
+  <!ENTITY env "production">
+]>
+<config env="&env;" owner='&company;'>
+  <server host="0.0.0.0" port="8443" tls="on">
+    <timeout unit="s">30</timeout>
+    <limits connections="1024"
+            requests-per-second="250"/>
+  </server>
+  <database url="postgres://db:5432/orders" pool="20">primary</database>
+  <database url="postgres://replica:5432/orders" pool="5" readonly="true">replica</database>
+  <feature name="beta-ui" enabled="false"/>
+  <feature name="new-pricing" enabled="true">rollout 25%</feature>
+  <banner>Welcome to &company;.	Tabs and
+new lines are kept.</banner>
+  <note attr="line one
+line two&#10;three	tab"/>
+</config>
+
+"""
+}
+
+// data/feed.xml
+fn file_19() -> String {
+    """
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- the release feed -->
+<?xml-stylesheet type="text/xsl" href="feed.xsl"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Kara Releases</title>
+    <link>https://example.org/releases</link>
+    <atom:link href="https://example.org/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>News &amp; releases from the Kara project &#8212; weekly</description>
+    <item>
+      <title>Version 0.9 &#x2014; &quot;MIR everywhere&quot;</title>
+      <link>https://example.org/releases/0.9</link>
+      <dc:creator>Gowtham</dc:creator>
+      <category>compiler</category>
+      <category>release</category>
+      <pubDate>Wed, 14 Oct 2026 09:00:00 GMT</pubDate>
+      <description><![CDATA[<p>The <b>MIR</b> backend is now the default & legacy is frozen.</p>]]></description>
+    </item>
+    <item>
+      <title>Version 0.8</title>
+      <link>https://example.org/releases/0.8</link>
+      <dc:creator>Release bot</dc:creator>
+      <category>release</category>
+      <pubDate>Mon, 05 Oct 2026 09:00:00 GMT</pubDate>
+      <description>Bugs fixed: 41. It&apos;s <!-- not shown -->faster.</description>
+      <enclosure url="https://example.org/kara-0.8.tar.gz" length="1048576" type="application/gzip"/>
+    </item>
+    <item>
+      <title>Security notice</title>
+      <link>https://example.org/notices/1</link>
+      <category>security</category>
+      <description>Upgrade to 0.8.1 if you use &lt;TaskGroup&gt;.</description>
+    </item>
+  </channel>
+</rss>
+
+"""
+}
+
+// data/icon.svg
+fn file_20() -> String {
+    """
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff6a00"/><stop offset="1" stop-color="#ee0979"/></linearGradient>
+  </defs>
+  <g id="layer1" transform="translate(4 4)">
+    <circle cx="28" cy="28" r="26" fill="url(#g1)"/>
+    <path d="M16 40 L28 14 L40 40 Z" fill="none" stroke="white" stroke-width="3"/>
+    <use xlink:href="#g1" x="2"/>
+    <text x="32" y="60" font-size="8" text-anchor="middle">k&#257;ra</text>
+  </g>
+</svg>
+
+"""
+}
+
+// data/pom.xml
+fn file_21() -> String {
+    """
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>orders-service</artifactId>
+  <version>2.3.1-SNAPSHOT</version>
+  <properties>
+    <java.version>21</java.version>
+    <jackson.version>2.17.2</jackson.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>42.7.4</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.11.0</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
+
+"""
+}
+
+// data/queries.txt
+fn file_22() -> String {
+    """
+feed.xml|findtext|channel/title
+feed.xml|findall|channel/item/title
+feed.xml|findall|.//category
+feed.xml|findall|.//item[category='release']/link
+feed.xml|findall|channel/item[2]/title
+feed.xml|findall|channel/item[last()]/title
+feed.xml|findall|.//{http://purl.org/dc/elements/1.1/}creator
+feed.xml|findall|.//item[{http://purl.org/dc/elements/1.1/}creator]/title
+feed.xml|find|.//enclosure
+feed.xml|findall|.//*[@href]
+feed.xml|findall|.//*[@rel='self']
+feed.xml|findtext|.//item/description
+feed.xml|findtext|.//nothing
+feed.xml|findtext|channel/item[2]/description
+feed.xml|itertext|channel/item[3]
+feed.xml|findall|channel/*
+feed.xml|findall|channel/item/..
+pom.xml|findtext|{http://maven.apache.org/POM/4.0.0}artifactId
+pom.xml|findall|.//{http://maven.apache.org/POM/4.0.0}dependency/{http://maven.apache.org/POM/4.0.0}artifactId
+pom.xml|findall|.//{http://maven.apache.org/POM/4.0.0}dependency[{http://maven.apache.org/POM/4.0.0}scope='test']/{http://maven.apache.org/POM/4.0.0}artifactId
+pom.xml|findall|artifactId
+pom.xml|findall|{*}properties/*
+pom.xml|findall|.//{*}version
+icon.svg|findall|.//{http://www.w3.org/2000/svg}stop
+icon.svg|findall|.//*[@fill]
+icon.svg|findall|{http://www.w3.org/2000/svg}g/*[3]
+icon.svg|findtext|.//{http://www.w3.org/2000/svg}text
+config.xml|findall|database
+config.xml|findall|database[@readonly]
+config.xml|findall|feature[@enabled='true']
+config.xml|findtext|server/timeout
+config.xml|findall|.//limits
+config.xml|findtext|banner
+config.xml|findall|*[.='replica']
+sitemap.xml|findall|{http://www.sitemaps.org/schemas/sitemap/0.9}url/{http://www.sitemaps.org/schemas/sitemap/0.9}loc
+sitemap.xml|findall|{*}url[{*}priority]/{*}loc
+sitemap.xml|findall|{*}url[1]/*
+
+"""
+}
+
+// data/sitemap.xml
+fn file_23() -> String {
+    """
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.org/</loc><lastmod>2026-10-01</lastmod><priority>1.0</priority></url>
+  <url><loc>https://example.org/docs/</loc><lastmod>2026-10-12</lastmod><priority>0.8</priority></url>
+  <url><loc>https://example.org/docs/ownership</loc><lastmod>2026-09-30</lastmod></url>
+  <url><loc>https://example.org/blog/?page=2&amp;sort=new</loc><priority>0.3</priority></url>
+</urlset>
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data/bad")?;
+    put("data/bad/amp.xml", file_0())?;
+    put("data/bad/attrlt.xml", file_1())?;
+    put("data/bad/badname.xml", file_2())?;
+    put("data/bad/badtoken.xml", file_3())?;
+    put("data/bad/cdata.xml", file_4())?;
+    put("data/bad/charref.xml", file_5())?;
+    put("data/bad/close.xml", file_6())?;
+    put("data/bad/decl.xml", file_7())?;
+    put("data/bad/dupattr.xml", file_8())?;
+    put("data/bad/empty.xml", file_9())?;
+    put("data/bad/entity.xml", file_10())?;
+    put("data/bad/junk.xml", file_11())?;
+    put("data/bad/mismatch.xml", file_12())?;
+    put("data/bad/noquote.xml", file_13())?;
+    put("data/bad/prefix.xml", file_14())?;
+    put("data/bad/text.xml", file_15())?;
+    put("data/bad/unclosed.xml", file_16())?;
+    put("data/bad/unterminated.xml", file_17())?;
+    make_dir("data")?;
+    put("data/config.xml", file_18())?;
+    put("data/feed.xml", file_19())?;
+    put("data/icon.svg", file_20())?;
+    put("data/pom.xml", file_21())?;
+    put("data/queries.txt", file_22())?;
+    put("data/sitemap.xml", file_23())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the report
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+impl Tree {
+    fn dump(ref self, e: i64, depth: i64) {
+        let mut line = String.new();
+        for _ in 0..depth {
+            line.push_str("  ");
+        }
+        line.push_str(self.els[e].tag);
+        for k in 0..self.els[e].keys.len() {
+            line.push_str(f" {self.els[e].keys[k]}={py_repr(self.els[e].vals[k])}");
+        }
+        if strip(self.els[e].text).len() > 0 {
+            line.push_str(f" text={py_repr(self.els[e].text)}");
+        }
+        if strip(self.els[e].tail).len() > 0 {
+            line.push_str(f" tail={py_repr(self.els[e].tail)}");
+        }
+        println(line);
+        for k in 0..self.els[e].kids.len() {
+            self.dump(self.els[e].kids[k], depth + 1);
+        }
+    }
+
+    fn show(ref self, e: Option[i64]) -> String {
+        match e {
+            Some(e) => {
+                let t = strip(self.els[e].text);
+                if t.len() > 0 { f"{self.els[e].tag} {py_repr(t)}" } else { self.els[e].tag.clone() }
+            }
+            None => "None".to_string(),
+        }
+    }
+}
+
+fn query(t: ref Tree, method: Str, path: Str) -> Result[(), String] {
+    if method == "findall" {
+        let found = t.findall(0, path)?;
+        for i in 0..found.len() {
+            println(f"  {t.show(Some(found[i]))}");
+        }
+    } else if method == "find" {
+        println(f"  {t.show(t.find(0, path)?)}");
+    } else if method == "findtext" {
+        match t.findtext(0, path)? {
+            Some(s) => println(f"  {py_repr(s)}"),
+            None => println("  None"),
+        }
+    } else if method == "itertext" {
+        match t.find(0, path)? {
+            Some(e) => println(f"  {py_repr(t.all_text(e))}"),
+            None => return Err(f"{path}: nothing to iterate"),
+        }
+    } else {
+        return Err(f"unknown method {method}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let docs = ["feed.xml", "pom.xml", "icon.svg", "config.xml", "sitemap.xml"];
+    let mut names: Vec[String] = Vec.new();
+    let mut trees: Vec[Tree] = Vec.new();
+    for d in 0..docs.len() {
+        let name = docs[d].clone();
+        let t = parse_xml(read(f"data/{name}")?).map_err(|e| f"{name}: {e}")?;
+        println(f"== {name}");
+        t.dump(0, 0);
+        println("-- serialized");
+        println(t.tostring(0));
+        names.push(name.to_string());
+        trees.push(t);
+    }
+    println("== queries");
+    let qs = lines_of(read("data/queries.txt")?);
+    for i in 0..qs.len() {
+        let parts = split_on(qs[i], b'|');
+        println(f"{parts[0]} {parts[1]} {parts[2]}");
+        let mut at: i64 = -1;
+        for k in 0..names.len() {
+            if names[k] == parts[0] {
+                at = k;
+            }
+        }
+        if at < 0 {
+            return Err(f"no document {parts[0]}");
+        }
+        if let Err(e) = query(trees[at], parts[1], parts[2]) {
+            println(f"  SyntaxError: {e}");
+        }
+    }
+    println("== errors");
+    let mut bad = match fs.read_dir("data/bad".to_string()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list data/bad: {e}"),
+    };
+    bad.sort();
+    for i in 0..bad.len() {
+        match parse_xml(read(f"data/bad/{bad[i]}")?) {
+            Ok(_) => println(f"{bad[i]}: parsed"),
+            Err(e) => println(f"{bad[i]}: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_xml: {e}");
+    }
+}

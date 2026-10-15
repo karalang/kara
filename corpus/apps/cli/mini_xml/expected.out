@@ -1,0 +1,308 @@
+== feed.xml
+rss version='2.0'
+  channel
+    title text='Kara Releases'
+    link text='https://example.org/releases'
+    {http://www.w3.org/2005/Atom}link href='https://example.org/feed.xml' rel='self' type='application/rss+xml'
+    description text='News & releases from the Kara project — weekly'
+    item
+      title text='Version 0.9 — "MIR everywhere"'
+      link text='https://example.org/releases/0.9'
+      {http://purl.org/dc/elements/1.1/}creator text='Gowtham'
+      category text='compiler'
+      category text='release'
+      pubDate text='Wed, 14 Oct 2026 09:00:00 GMT'
+      description text='<p>The <b>MIR</b> backend is now the default & legacy is frozen.</p>'
+    item
+      title text='Version 0.8'
+      link text='https://example.org/releases/0.8'
+      {http://purl.org/dc/elements/1.1/}creator text='Release bot'
+      category text='release'
+      pubDate text='Mon, 05 Oct 2026 09:00:00 GMT'
+      description text="Bugs fixed: 41. It's faster."
+      enclosure url='https://example.org/kara-0.8.tar.gz' length='1048576' type='application/gzip'
+    item
+      title text='Security notice'
+      link text='https://example.org/notices/1'
+      category text='security'
+      description text='Upgrade to 0.8.1 if you use <TaskGroup>.'
+-- serialized
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:ns0="http://www.w3.org/2005/Atom" version="2.0">
+  <channel>
+    <title>Kara Releases</title>
+    <link>https://example.org/releases</link>
+    <ns0:link href="https://example.org/feed.xml" rel="self" type="application/rss+xml" />
+    <description>News &amp; releases from the Kara project — weekly</description>
+    <item>
+      <title>Version 0.9 — "MIR everywhere"</title>
+      <link>https://example.org/releases/0.9</link>
+      <dc:creator>Gowtham</dc:creator>
+      <category>compiler</category>
+      <category>release</category>
+      <pubDate>Wed, 14 Oct 2026 09:00:00 GMT</pubDate>
+      <description>&lt;p&gt;The &lt;b&gt;MIR&lt;/b&gt; backend is now the default &amp; legacy is frozen.&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>Version 0.8</title>
+      <link>https://example.org/releases/0.8</link>
+      <dc:creator>Release bot</dc:creator>
+      <category>release</category>
+      <pubDate>Mon, 05 Oct 2026 09:00:00 GMT</pubDate>
+      <description>Bugs fixed: 41. It's faster.</description>
+      <enclosure url="https://example.org/kara-0.8.tar.gz" length="1048576" type="application/gzip" />
+    </item>
+    <item>
+      <title>Security notice</title>
+      <link>https://example.org/notices/1</link>
+      <category>security</category>
+      <description>Upgrade to 0.8.1 if you use &lt;TaskGroup&gt;.</description>
+    </item>
+  </channel>
+</rss>
+== pom.xml
+{http://maven.apache.org/POM/4.0.0}project {http://www.w3.org/2001/XMLSchema-instance}schemaLocation='http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd'
+  {http://maven.apache.org/POM/4.0.0}modelVersion text='4.0.0'
+  {http://maven.apache.org/POM/4.0.0}groupId text='org.example'
+  {http://maven.apache.org/POM/4.0.0}artifactId text='orders-service'
+  {http://maven.apache.org/POM/4.0.0}version text='2.3.1-SNAPSHOT'
+  {http://maven.apache.org/POM/4.0.0}properties
+    {http://maven.apache.org/POM/4.0.0}java.version text='21'
+    {http://maven.apache.org/POM/4.0.0}jackson.version text='2.17.2'
+  {http://maven.apache.org/POM/4.0.0}dependencies
+    {http://maven.apache.org/POM/4.0.0}dependency
+      {http://maven.apache.org/POM/4.0.0}groupId text='com.fasterxml.jackson.core'
+      {http://maven.apache.org/POM/4.0.0}artifactId text='jackson-databind'
+      {http://maven.apache.org/POM/4.0.0}version text='${jackson.version}'
+    {http://maven.apache.org/POM/4.0.0}dependency
+      {http://maven.apache.org/POM/4.0.0}groupId text='org.postgresql'
+      {http://maven.apache.org/POM/4.0.0}artifactId text='postgresql'
+      {http://maven.apache.org/POM/4.0.0}version text='42.7.4'
+      {http://maven.apache.org/POM/4.0.0}scope text='runtime'
+    {http://maven.apache.org/POM/4.0.0}dependency
+      {http://maven.apache.org/POM/4.0.0}groupId text='org.junit.jupiter'
+      {http://maven.apache.org/POM/4.0.0}artifactId text='junit-jupiter'
+      {http://maven.apache.org/POM/4.0.0}version text='5.11.0'
+      {http://maven.apache.org/POM/4.0.0}scope text='test'
+-- serialized
+<ns0:project xmlns:ns0="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <ns0:modelVersion>4.0.0</ns0:modelVersion>
+  <ns0:groupId>org.example</ns0:groupId>
+  <ns0:artifactId>orders-service</ns0:artifactId>
+  <ns0:version>2.3.1-SNAPSHOT</ns0:version>
+  <ns0:properties>
+    <ns0:java.version>21</ns0:java.version>
+    <ns0:jackson.version>2.17.2</ns0:jackson.version>
+  </ns0:properties>
+  <ns0:dependencies>
+    <ns0:dependency>
+      <ns0:groupId>com.fasterxml.jackson.core</ns0:groupId>
+      <ns0:artifactId>jackson-databind</ns0:artifactId>
+      <ns0:version>${jackson.version}</ns0:version>
+    </ns0:dependency>
+    <ns0:dependency>
+      <ns0:groupId>org.postgresql</ns0:groupId>
+      <ns0:artifactId>postgresql</ns0:artifactId>
+      <ns0:version>42.7.4</ns0:version>
+      <ns0:scope>runtime</ns0:scope>
+    </ns0:dependency>
+    <ns0:dependency>
+      <ns0:groupId>org.junit.jupiter</ns0:groupId>
+      <ns0:artifactId>junit-jupiter</ns0:artifactId>
+      <ns0:version>5.11.0</ns0:version>
+      <ns0:scope>test</ns0:scope>
+    </ns0:dependency>
+  </ns0:dependencies>
+</ns0:project>
+== icon.svg
+{http://www.w3.org/2000/svg}svg width='64' height='64' viewBox='0 0 64 64'
+  {http://www.w3.org/2000/svg}defs
+    {http://www.w3.org/2000/svg}linearGradient id='g1' x1='0' y1='0' x2='1' y2='1'
+      {http://www.w3.org/2000/svg}stop offset='0' stop-color='#ff6a00'
+      {http://www.w3.org/2000/svg}stop offset='1' stop-color='#ee0979'
+  {http://www.w3.org/2000/svg}g id='layer1' transform='translate(4 4)'
+    {http://www.w3.org/2000/svg}circle cx='28' cy='28' r='26' fill='url(#g1)'
+    {http://www.w3.org/2000/svg}path d='M16 40 L28 14 L40 40 Z' fill='none' stroke='white' stroke-width='3'
+    {http://www.w3.org/2000/svg}use {http://www.w3.org/1999/xlink}href='#g1' x='2'
+    {http://www.w3.org/2000/svg}text x='32' y='60' font-size='8' text-anchor='middle' text='kāra'
+-- serialized
+<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" xmlns:ns1="http://www.w3.org/1999/xlink" width="64" height="64" viewBox="0 0 64 64">
+  <ns0:defs>
+    <ns0:linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><ns0:stop offset="0" stop-color="#ff6a00" /><ns0:stop offset="1" stop-color="#ee0979" /></ns0:linearGradient>
+  </ns0:defs>
+  <ns0:g id="layer1" transform="translate(4 4)">
+    <ns0:circle cx="28" cy="28" r="26" fill="url(#g1)" />
+    <ns0:path d="M16 40 L28 14 L40 40 Z" fill="none" stroke="white" stroke-width="3" />
+    <ns0:use ns1:href="#g1" x="2" />
+    <ns0:text x="32" y="60" font-size="8" text-anchor="middle">kāra</ns0:text>
+  </ns0:g>
+</ns0:svg>
+== config.xml
+config env='production' owner='Acme & Sons'
+  server host='0.0.0.0' port='8443' tls='on'
+    timeout unit='s' text='30'
+    limits connections='1024' requests-per-second='250'
+  database url='postgres://db:5432/orders' pool='20' text='primary'
+  database url='postgres://replica:5432/orders' pool='5' readonly='true' text='replica'
+  feature name='beta-ui' enabled='false'
+  feature name='new-pricing' enabled='true' text='rollout 25%'
+  banner text='Welcome to Acme & Sons.\tTabs and\nnew lines are kept.'
+  note attr='line one line two\nthree tab'
+-- serialized
+<config env="production" owner="Acme &amp; Sons">
+  <server host="0.0.0.0" port="8443" tls="on">
+    <timeout unit="s">30</timeout>
+    <limits connections="1024" requests-per-second="250" />
+  </server>
+  <database url="postgres://db:5432/orders" pool="20">primary</database>
+  <database url="postgres://replica:5432/orders" pool="5" readonly="true">replica</database>
+  <feature name="beta-ui" enabled="false" />
+  <feature name="new-pricing" enabled="true">rollout 25%</feature>
+  <banner>Welcome to Acme &amp; Sons.	Tabs and
+new lines are kept.</banner>
+  <note attr="line one line two&#10;three tab" />
+</config>
+== sitemap.xml
+{http://www.sitemaps.org/schemas/sitemap/0.9}urlset
+  {http://www.sitemaps.org/schemas/sitemap/0.9}url
+    {http://www.sitemaps.org/schemas/sitemap/0.9}loc text='https://example.org/'
+    {http://www.sitemaps.org/schemas/sitemap/0.9}lastmod text='2026-10-01'
+    {http://www.sitemaps.org/schemas/sitemap/0.9}priority text='1.0'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}url
+    {http://www.sitemaps.org/schemas/sitemap/0.9}loc text='https://example.org/docs/'
+    {http://www.sitemaps.org/schemas/sitemap/0.9}lastmod text='2026-10-12'
+    {http://www.sitemaps.org/schemas/sitemap/0.9}priority text='0.8'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}url
+    {http://www.sitemaps.org/schemas/sitemap/0.9}loc text='https://example.org/docs/ownership'
+    {http://www.sitemaps.org/schemas/sitemap/0.9}lastmod text='2026-09-30'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}url
+    {http://www.sitemaps.org/schemas/sitemap/0.9}loc text='https://example.org/blog/?page=2&sort=new'
+    {http://www.sitemaps.org/schemas/sitemap/0.9}priority text='0.3'
+-- serialized
+<ns0:urlset xmlns:ns0="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <ns0:url><ns0:loc>https://example.org/</ns0:loc><ns0:lastmod>2026-10-01</ns0:lastmod><ns0:priority>1.0</ns0:priority></ns0:url>
+  <ns0:url><ns0:loc>https://example.org/docs/</ns0:loc><ns0:lastmod>2026-10-12</ns0:lastmod><ns0:priority>0.8</ns0:priority></ns0:url>
+  <ns0:url><ns0:loc>https://example.org/docs/ownership</ns0:loc><ns0:lastmod>2026-09-30</ns0:lastmod></ns0:url>
+  <ns0:url><ns0:loc>https://example.org/blog/?page=2&amp;sort=new</ns0:loc><ns0:priority>0.3</ns0:priority></ns0:url>
+</ns0:urlset>
+== queries
+feed.xml findtext channel/title
+  'Kara Releases'
+feed.xml findall channel/item/title
+  title 'Version 0.9 — "MIR everywhere"'
+  title 'Version 0.8'
+  title 'Security notice'
+feed.xml findall .//category
+  category 'compiler'
+  category 'release'
+  category 'release'
+  category 'security'
+feed.xml findall .//item[category='release']/link
+  link 'https://example.org/releases/0.9'
+  link 'https://example.org/releases/0.8'
+feed.xml findall channel/item[2]/title
+  title 'Version 0.8'
+feed.xml findall channel/item[last()]/title
+  title 'Security notice'
+feed.xml findall .//{http://purl.org/dc/elements/1.1/}creator
+  {http://purl.org/dc/elements/1.1/}creator 'Gowtham'
+  {http://purl.org/dc/elements/1.1/}creator 'Release bot'
+feed.xml findall .//item[{http://purl.org/dc/elements/1.1/}creator]/title
+  title 'Version 0.9 — "MIR everywhere"'
+  title 'Version 0.8'
+feed.xml find .//enclosure
+  enclosure
+feed.xml findall .//*[@href]
+  {http://www.w3.org/2005/Atom}link
+feed.xml findall .//*[@rel='self']
+  {http://www.w3.org/2005/Atom}link
+feed.xml findtext .//item/description
+  '<p>The <b>MIR</b> backend is now the default & legacy is frozen.</p>'
+feed.xml findtext .//nothing
+  None
+feed.xml findtext channel/item[2]/description
+  "Bugs fixed: 41. It's faster."
+feed.xml itertext channel/item[3]
+  '\n      Security notice\n      https://example.org/notices/1\n      security\n      Upgrade to 0.8.1 if you use <TaskGroup>.\n    '
+feed.xml findall channel/*
+  title 'Kara Releases'
+  link 'https://example.org/releases'
+  {http://www.w3.org/2005/Atom}link
+  description 'News & releases from the Kara project — weekly'
+  item
+  item
+  item
+feed.xml findall channel/item/..
+  channel
+pom.xml findtext {http://maven.apache.org/POM/4.0.0}artifactId
+  'orders-service'
+pom.xml findall .//{http://maven.apache.org/POM/4.0.0}dependency/{http://maven.apache.org/POM/4.0.0}artifactId
+  {http://maven.apache.org/POM/4.0.0}artifactId 'jackson-databind'
+  {http://maven.apache.org/POM/4.0.0}artifactId 'postgresql'
+  {http://maven.apache.org/POM/4.0.0}artifactId 'junit-jupiter'
+pom.xml findall .//{http://maven.apache.org/POM/4.0.0}dependency[{http://maven.apache.org/POM/4.0.0}scope='test']/{http://maven.apache.org/POM/4.0.0}artifactId
+  {http://maven.apache.org/POM/4.0.0}artifactId 'junit-jupiter'
+pom.xml findall artifactId
+pom.xml findall {*}properties/*
+  {http://maven.apache.org/POM/4.0.0}java.version '21'
+  {http://maven.apache.org/POM/4.0.0}jackson.version '2.17.2'
+pom.xml findall .//{*}version
+  {http://maven.apache.org/POM/4.0.0}version '2.3.1-SNAPSHOT'
+  {http://maven.apache.org/POM/4.0.0}version '${jackson.version}'
+  {http://maven.apache.org/POM/4.0.0}version '42.7.4'
+  {http://maven.apache.org/POM/4.0.0}version '5.11.0'
+icon.svg findall .//{http://www.w3.org/2000/svg}stop
+  {http://www.w3.org/2000/svg}stop
+  {http://www.w3.org/2000/svg}stop
+icon.svg findall .//*[@fill]
+  {http://www.w3.org/2000/svg}circle
+  {http://www.w3.org/2000/svg}path
+icon.svg findall {http://www.w3.org/2000/svg}g/*[3]
+icon.svg findtext .//{http://www.w3.org/2000/svg}text
+  'kāra'
+config.xml findall database
+  database 'primary'
+  database 'replica'
+config.xml findall database[@readonly]
+  database 'replica'
+config.xml findall feature[@enabled='true']
+  feature 'rollout 25%'
+config.xml findtext server/timeout
+  '30'
+config.xml findall .//limits
+  limits
+config.xml findtext banner
+  'Welcome to Acme & Sons.\tTabs and\nnew lines are kept.'
+config.xml findall *[.='replica']
+  database 'replica'
+sitemap.xml findall {http://www.sitemaps.org/schemas/sitemap/0.9}url/{http://www.sitemaps.org/schemas/sitemap/0.9}loc
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/docs/'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/docs/ownership'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/blog/?page=2&sort=new'
+sitemap.xml findall {*}url[{*}priority]/{*}loc
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/docs/'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/blog/?page=2&sort=new'
+sitemap.xml findall {*}url[1]/*
+  {http://www.sitemaps.org/schemas/sitemap/0.9}loc 'https://example.org/'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}lastmod '2026-10-01'
+  {http://www.sitemaps.org/schemas/sitemap/0.9}priority '1.0'
+== errors
+amp.xml: not well-formed (invalid token): line 1, column 9
+attrlt.xml: not well-formed (invalid token): line 1, column 6
+badname.xml: not well-formed (invalid token): line 1, column 1
+badtoken.xml: not well-formed (invalid token): line 1, column 6
+cdata.xml: not well-formed (invalid token): line 1, column 5
+charref.xml: reference to invalid character number: line 1, column 3
+close.xml: junk after document element: line 2, column 0
+decl.xml: XML or text declaration not at start of entity: line 2, column 0
+dupattr.xml: duplicate attribute: line 1, column 9
+empty.xml: no element found: line 1, column 0
+entity.xml: undefined entity: line 1, column 3
+junk.xml: junk after document element: line 2, column 0
+mismatch.xml: mismatched tag: line 1, column 8
+noquote.xml: not well-formed (invalid token): line 1, column 5
+prefix.xml: unbound prefix: line 1, column 0
+text.xml: syntax error: line 1, column 0
+unclosed.xml: no element found: line 3, column 0
+unterminated.xml: unclosed token: line 1, column 3
