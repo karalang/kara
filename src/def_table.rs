@@ -65,6 +65,10 @@ pub struct ProgramDefs {
     /// order. A method's impl parameters are on the impl; see
     /// [`ProgramDefs::generic_params`].
     pub generics: HashMap<DefId, Vec<String>>,
+    /// A non-generic type alias whose target names a definition (`type
+    /// TcpError = NetError;`) → that definition, so a path through the alias
+    /// (`TcpError.Other`) reaches the target's variants and methods.
+    pub aliases: HashMap<DefId, DefId>,
 }
 
 /// One impl block.
@@ -196,6 +200,7 @@ impl ProgramDefs {
         defs.module_impls = vec![Vec::new(); n];
         for (id, m) in tree.modules.iter().enumerate() {
             defs.module_impls[id] = defs.add_impls(&m.items, |defs, name| defs.lookup(id, name));
+            defs.add_aliases(&m.items, |defs, name| defs.lookup(id, name));
         }
         defs
     }
@@ -209,6 +214,7 @@ impl ProgramDefs {
         defs.module_items = vec![items];
         defs.module_imports = vec![HashMap::new()];
         defs.module_impls = vec![defs.add_impls(&program.items, |defs, name| defs.lookup(0, name))];
+        defs.add_aliases(&program.items, |defs, name| defs.lookup(0, name));
         defs
     }
 
@@ -287,7 +293,45 @@ impl ProgramDefs {
             self.add_impls(&program.items, |defs, name| {
                 defs.stdlib_items.get(name).copied()
             });
+            self.add_aliases(&program.items, |defs, name| {
+                defs.stdlib_items.get(name).copied()
+            });
         }
+    }
+
+    /// Record each non-generic alias in `items` whose target is a bare name
+    /// `resolve` finds (`type TcpError = NetError;`).
+    fn add_aliases(&mut self, items: &[Item], resolve: impl Fn(&Self, &str) -> Option<DefId>) {
+        for item in items {
+            let Item::TypeAlias(t) = item else { continue };
+            if t.generic_params.is_some() {
+                continue;
+            }
+            let TypeKind::Path(p) = &t.ty.kind else {
+                continue;
+            };
+            if p.generic_args.is_some() {
+                continue;
+            }
+            let ([target], Some(alias)) = (p.segments.as_slice(), resolve(self, &t.name)) else {
+                continue;
+            };
+            if let Some(to) = resolve(self, target).filter(|&to| to != alias) {
+                self.aliases.insert(alias, to);
+            }
+        }
+    }
+
+    /// `def`, or the definition the alias `def` names, followed through
+    /// aliases of aliases.
+    pub fn unalias(&self, mut def: DefId) -> DefId {
+        for _ in 0..8 {
+            match self.aliases.get(&def) {
+                Some(&to) => def = to,
+                None => break,
+            }
+        }
+        def
     }
 
     /// Intern the declarations in `items` under `prefix`; returns them by name.

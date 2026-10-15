@@ -160,6 +160,8 @@ fn res_of(
 /// `seg` as a member of definition `d`: a variant of an enum, else an
 /// associated function or method, preferring the inherent one.
 fn member(defs: &ProgramDefs, d: DefId, seg: &str) -> Option<DefId> {
+    // Through an alias, the members are its target's (B-2026-10-15-49).
+    let d = defs.unalias(d);
     if defs.table.get(d).kind == DefKind::Enum {
         if let Some(v) = defs.variant(d, seg) {
             return Some(v);

@@ -373,3 +373,29 @@ fn main() {
         "2 3\n4\n",
     );
 }
+
+/// B-2026-10-15-49: a variant pattern spelled through a type alias names
+/// the target's variant. `OldE.A` matched every value (a bare name binding)
+/// and `OldE.B(n)` was refused.
+#[test]
+fn a_variant_pattern_through_a_type_alias_tests_the_variant() {
+    assert_runs(
+        r#"
+enum NetE { A, B(i32) }
+type OldE = NetE;
+fn main() {
+    let v: NetE = NetE.B(7);
+    match v {
+        OldE.A => println("a"),
+        OldE.B(n) => println(f"b {n}"),
+    }
+    let w: OldE = NetE.A;
+    match w {
+        OldE.B(n) => println(f"b {n}"),
+        OldE.A => println("a"),
+    }
+}
+"#,
+        "b 7\na\n",
+    );
+}
