@@ -1,0 +1,1631 @@
+// mini_ini: the INI configuration files every service, build tool and
+// desktop program reads, as Python 3.13's configparser reads them:
+// - the reader: section headers, `=` and `:` delimiters, comment and
+//   inline-comment prefixes, multiline values continued by indentation,
+//   blank lines inside values, valueless keys, strict mode's duplicate
+//   checks, and the errors it raises and collects;
+// - basic `%(name)s` and extended `${section:name}` interpolation, with
+//   their escapes, the recursion limit and their errors;
+// - get, getint, getboolean, items, set, add and remove, and write;
+// - a job file that runs all of them over a dozen real-world files: an
+//   app config, setup.cfg, my.cnf, php.ini, buildout.cfg, .git/config, a
+//   systemd unit, a layered conf.d, and broken ones.
+//
+// expected.out is the output of oracle.py, the same jobs run with
+// Python 3.13's configparser.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn rstrip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut j = b.len();
+    while j > 0 and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, 0, j)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_byte(b: ref Vec[u8], c: u8, from: i64) -> i64 {
+    for i in from..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+// The lines of a file as Python iterates them, each with its newline.
+fn raw_lines(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i + 1));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+// `%2d`
+fn pad2(n: i64) -> String {
+    if n < 10 { f" {n}" } else { f"{n}" }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match ref v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+fn list_repr(v: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        parts.push(py_repr(v[i]));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// ------------------------------------------------------------ sections
+
+// A section's options in the order they were added; a value is None for
+// a key written without one.
+#[derive(Clone)]
+struct Section {
+    name: String,
+    keys: Vec[String],
+    vals: Vec[Option[String]],
+}
+
+fn new_section(name: Str) -> Section {
+    Section { name: name.to_string(), keys: Vec.new(), vals: Vec.new() }
+}
+
+impl Section {
+    fn find(ref self, k: Str) -> i64 {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == k {
+                return i;
+            }
+        }
+        -1
+    }
+
+    // A dict assignment: an existing key keeps its place.
+    fn put(mut ref self, k: Str, v: own Option[String]) {
+        let i = self.find(k);
+        if i >= 0 {
+            self.vals[i] = v;
+        } else {
+            self.keys.push(k.to_string());
+            self.vals.push(v);
+        }
+    }
+
+    fn remove(mut ref self, k: Str) -> bool {
+        let i = self.find(k);
+        if i < 0 {
+            return false;
+        }
+        self.keys.remove(i);
+        self.vals.remove(i);
+        true
+    }
+}
+
+// ------------------------------------------------------------ the parser
+
+const INTERP_NONE: i64 = 0;
+const INTERP_BASIC: i64 = 1;
+const INTERP_EXTENDED: i64 = 2;
+
+// Where the reader is writing: no section yet, the defaults, or a section.
+const NO_SECTION: i64 = -1;
+const IN_DEFAULTS: i64 = -2;
+
+struct Config {
+    interp: i64,
+    strict: bool,
+    empty_lines: bool,
+    no_value: bool,
+    full: Vec[String],
+    inline: Vec[String],
+    delimiters: Vec[String],
+    default_section: String,
+    defaults: Section,
+    sections: Vec[Section],
+}
+
+fn new_config() -> Config {
+    Config {
+        interp: INTERP_BASIC,
+        strict: true,
+        empty_lines: true,
+        no_value: false,
+        full: ["#".to_string(), ";".to_string()],
+        inline: Vec.new(),
+        delimiters: ["=".to_string(), ":".to_string()],
+        default_section: "DEFAULT".to_string(),
+        defaults: new_section("DEFAULT"),
+        sections: Vec.new(),
+    }
+}
+
+// The reader's state over one file, _ReadState.
+struct ReadState {
+    cursect: i64,
+    sectname: String,
+    // "" when there is no current option, as Python tests it
+    optname: String,
+    lineno: i64,
+    indent_level: i64,
+    cur_indent: i64,
+    // "S<section>" and "O<section>\n<option>"
+    added: Vec[String],
+    // the lines of the ParsingError raised at the end
+    errors: Vec[String],
+    // the current option's value lines, and whether it has none
+    lines: Vec[String],
+    cur_none: bool,
+}
+
+const MAXSIZE: i64 = 9223372036854775807;
+
+fn parsing_error_line(lineno: i64, line: Str) -> String {
+    f"\n\t[line {pad2(lineno)}]: {py_repr(line)}"
+}
+
+impl Config {
+    fn find_section(ref self, name: Str) -> i64 {
+        for i in 0..self.sections.len() {
+            if self.sections[i].name == name {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn section_names(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..self.sections.len() {
+            out.push(self.sections[i].name.clone());
+        }
+        out
+    }
+
+    fn put_at(mut ref self, at: i64, k: Str, v: own Option[String]) {
+        if at == IN_DEFAULTS {
+            self.defaults.put(k, v);
+        } else {
+            self.sections[at].put(k, v);
+        }
+    }
+
+    // _Line.clean: "" for a comment line, else the line without its
+    // inline comment, stripped.
+    fn clean(ref self, line: Str) -> String {
+        let s = strip(line);
+        let sb = to_bytes(s);
+        for i in 0..self.full.len() {
+            if starts_at(sb, 0, self.full[i]) {
+                return String.new();
+            }
+        }
+        let b = to_bytes(line);
+        let mut cut = b.len();
+        for k in 0..self.inline.len() {
+            if starts_at(b, 0, self.inline[k]) {
+                cut = 0;
+            }
+            for i in 0..b.len() {
+                if i < cut and is_ws(b[i]) and starts_at(b, i + 1, self.inline[k]) {
+                    cut = i;
+                }
+            }
+        }
+        strip(byte_str(b, 0, cut))
+    }
+
+    // The first delimiter in the line and its length, or (-1, 0).
+    fn find_delimiter(ref self, b: ref Vec[u8]) -> (i64, i64) {
+        for i in 0..b.len() {
+            for k in 0..self.delimiters.len() {
+                if starts_at(b, i, self.delimiters[k]) {
+                    return (i, self.delimiters[k].len());
+                }
+            }
+        }
+        (-1, 0)
+    }
+
+    fn store(mut ref self, st: ref ReadState) {
+        let v = if st.cur_none { None } else { Some(rstrip(join(st.lines, "\n"))) };
+        self.put_at(st.cursect, st.optname, v);
+    }
+
+    fn header(mut ref self, st: mut ref ReadState, name: Str, src: Str) -> Result[(), String] {
+        st.sectname = name.to_string();
+        let at = self.find_section(name);
+        let key = f"S{name}";
+        if at >= 0 {
+            if self.strict and contains_str(st.added, key) {
+                return Err(f"DuplicateSectionError: While reading from {py_repr(src)} [line {pad2(st.lineno)}]: section {py_repr(name)} already exists");
+            }
+            st.cursect = at;
+            st.added.push(key);
+        } else if name == self.default_section {
+            st.cursect = IN_DEFAULTS;
+        } else {
+            self.sections.push(new_section(name));
+            st.cursect = self.sections.len() - 1;
+            st.added.push(key);
+        }
+        st.optname = String.new();
+        Ok(())
+    }
+
+    fn option(mut ref self, st: mut ref ReadState, line: Str, clean: Str, src: Str) -> Result[(), String] {
+        st.indent_level = st.cur_indent;
+        let b = to_bytes(clean);
+        let (pos, dlen) = self.find_delimiter(b);
+        if pos < 0 and not self.no_value {
+            st.errors.push(parsing_error_line(st.lineno, line));
+            return Ok(());
+        }
+        let name = if pos >= 0 { rstrip(byte_str(b, 0, pos)) } else { clean.to_string() };
+        if name.len() == 0 {
+            st.errors.push(parsing_error_line(st.lineno, line));
+        }
+        st.optname = lower(name);
+        let key = f"O{st.sectname}\n{st.optname}";
+        if self.strict and contains_str(st.added, key) {
+            return Err(f"DuplicateOptionError: While reading from {py_repr(src)} [line {pad2(st.lineno)}]: option {py_repr(st.optname)} in section {py_repr(st.sectname)} already exists");
+        }
+        st.added.push(key);
+        if pos >= 0 {
+            st.lines = [strip(byte_str(b, pos + dlen, b.len()))];
+            st.cur_none = false;
+        } else {
+            st.lines = Vec.new();
+            st.cur_none = true;
+        }
+        self.store(st);
+        Ok(())
+    }
+
+    // _read: one file's lines into the sections; a fatal error stops it,
+    // the others are raised together at the end.
+    fn read_text(mut ref self, text: Str, src: Str) -> Result[(), String] {
+        let mut st = ReadState { cursect: NO_SECTION, sectname: String.new(), optname: String.new(), lineno: 0, indent_level: 0, cur_indent: 0, added: Vec.new(), errors: Vec.new(), lines: Vec.new(), cur_none: false };
+        let lines = raw_lines(text);
+        for n in 0..lines.len() {
+            let line = lines[n].clone();
+            st.lineno = n + 1;
+            let clean = self.clean(line);
+            if clean.len() == 0 {
+                if self.empty_lines {
+                    let has_comments = strip(line) != clean;
+                    if not has_comments and st.cursect != NO_SECTION and st.optname.len() > 0 and not st.cur_none {
+                        st.lines.push(String.new());
+                        self.store(st);
+                    }
+                } else {
+                    st.indent_level = MAXSIZE;
+                }
+                continue;
+            }
+            let b = to_bytes(line);
+            let mut indent: i64 = 0;
+            while indent < b.len() and is_ws(b[indent]) {
+                indent += 1;
+            }
+            st.cur_indent = indent;
+            // a continuation line
+            if st.cursect != NO_SECTION and st.optname.len() > 0 and st.cur_indent > st.indent_level {
+                if st.cur_none {
+                    return Err(f"MultilineContinuationError: Key without value continued with an indented line.\nfile: {py_repr(src)}, line: {st.lineno}\n{py_repr(line)}");
+                }
+                st.lines.push(clean);
+                self.store(st);
+                continue;
+            }
+            st.indent_level = st.cur_indent;
+            // SECTCRE: `[`, anything, and the last `]`
+            let cb = to_bytes(clean);
+            let mut close: i64 = -1;
+            if cb.len() >= 3 and cb[0] == b'[' {
+                for i in 2..cb.len() {
+                    if cb[i] == b']' {
+                        close = i;
+                    }
+                }
+            }
+            if close < 0 and st.cursect == NO_SECTION {
+                return Err(f"MissingSectionHeaderError: File contains no section headers.\nfile: {py_repr(src)}, line: {st.lineno}\n{py_repr(line)}");
+            }
+            if close >= 0 {
+                self.header(mut st, byte_str(cb, 1, close), src)?;
+            } else {
+                self.option(mut st, line, clean, src)?;
+            }
+        }
+        if st.errors.len() > 0 {
+            let mut msg = f"ParsingError: Source contains parsing errors: {py_repr(src)}";
+            for i in 0..st.errors.len() {
+                msg.push_str(st.errors[i]);
+            }
+            return Err(msg);
+        }
+        Ok(())
+    }
+
+    // read(): the files that exist, in order; the names of those read.
+    fn read(mut ref self, names: ref Vec[String]) -> Result[Vec[String], String] {
+        let mut ok: Vec[String] = Vec.new();
+        for i in 0..names.len() {
+            let text = match fs.read_to_string(names[i].clone()) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            self.read_text(text, names[i])?;
+            ok.push(names[i].clone());
+        }
+        Ok(ok)
+    }
+}
+
+// ------------------------------------------------------------ getting values
+
+const MAX_INTERPOLATION_DEPTH: i64 = 10;
+
+fn missing_option(option: Str, section: Str, rawval: Str, key: Str) -> String {
+    f"InterpolationMissingOptionError: Bad value substitution: option {py_repr(option)} in section {py_repr(section)} contains an interpolation key {py_repr(key)} which is not a valid option name. Raw value: {rawval}"
+}
+
+fn depth_error(option: Str, section: Str, rawval: Str) -> String {
+    f"InterpolationDepthError: Recursion limit exceeded in value substitution: option {py_repr(option)} in section {py_repr(section)} contains an interpolation key which cannot be substituted in {MAX_INTERPOLATION_DEPTH} steps. Raw value: {rawval}"
+}
+
+// The end of a `<open>name<close>` reference at the start of `b` from
+// `i` (`%(name)s` or `${name}`), just past it, or -1.
+fn key_end(b: ref Vec[u8], i: i64, close: u8, tail: i64) -> i64 {
+    let c = find_byte(b, close, i + 2);
+    if c <= i + 2 {
+        return -1;
+    }
+    if tail != 0 {
+        if c + 1 < b.len() and b[c + 1] as i64 == tail {
+            return c + 2;
+        }
+        return -1;
+    }
+    c + 1
+}
+
+impl Config {
+    // A section's raw value, with the defaults under it: _unify_values.
+    fn lookup(ref self, section: Str, option: Str) -> Result[Option[String], String] {
+        let mut at: i64 = -1;
+        if section != self.default_section {
+            at = self.find_section(section);
+            if at < 0 {
+                return Err(f"NoSectionError: No section: {py_repr(section)}");
+            }
+            let i = self.sections[at].find(option);
+            if i >= 0 {
+                return Ok(self.sections[at].vals[i].clone());
+            }
+        }
+        let i = self.defaults.find(option);
+        if i >= 0 {
+            return Ok(self.defaults.vals[i].clone());
+        }
+        Err(f"NoOptionError: No option {py_repr(option)} in section: {py_repr(section)}")
+    }
+
+    // The raw value as an error message shows it, or `rest` if there is none.
+    fn rawval(ref self, section: Str, option: Str, rest: Str) -> String {
+        match self.lookup(section, option) {
+            Ok(v) => opt_repr(v),
+            Err(_) => py_repr(rest),
+        }
+    }
+
+    fn basic(ref self, option: Str, section: Str, rest0: Str, depth: i64, accum: mut ref String) -> Result[(), String] {
+        let rawval = self.rawval(section, option, rest0);
+        if depth > MAX_INTERPOLATION_DEPTH {
+            return Err(depth_error(option, section, rawval));
+        }
+        let b = to_bytes(rest0);
+        let mut i: i64 = 0;
+        while i < b.len() {
+            let p = find_byte(b, b'%', i);
+            if p < 0 {
+                accum.push_str(byte_str(b, i, b.len()));
+                return Ok(());
+            }
+            accum.push_str(byte_str(b, i, p));
+            i = p;
+            let c: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+            if c == b'%' {
+                accum.push_str("%");
+                i += 2;
+            } else if c == b'(' {
+                let end = key_end(b, i, b')', b's' as i64);
+                if end < 0 {
+                    return Err(f"InterpolationSyntaxError: bad interpolation variable reference {py_repr(byte_str(b, i, b.len()))}");
+                }
+                let var = lower(byte_str(b, i + 2, end - 2));
+                i = end;
+                let v = match self.lookup(section, var) {
+                    Ok(v) => v,
+                    Err(_) => return Err(missing_option(option, section, rawval, var)),
+                };
+                let s = match v {
+                    Some(s) => s,
+                    None => return Err("TypeError: argument of type 'NoneType' is not iterable".to_string()),
+                };
+                if find_byte(to_bytes(s), b'%', 0) >= 0 {
+                    self.basic(option, section, s, depth + 1, accum)?;
+                } else {
+                    accum.push_str(s);
+                }
+            } else {
+                return Err(f"InterpolationSyntaxError: '%' must be followed by '%' or '(', found: {py_repr(byte_str(b, i, b.len()))}");
+            }
+        }
+        Ok(())
+    }
+
+    fn extended(ref self, option: Str, section: Str, rest0: Str, depth: i64, accum: mut ref String) -> Result[(), String] {
+        let rawval = self.rawval(section, option, rest0);
+        if depth > MAX_INTERPOLATION_DEPTH {
+            return Err(depth_error(option, section, rawval));
+        }
+        let b = to_bytes(rest0);
+        let mut i: i64 = 0;
+        while i < b.len() {
+            let p = find_byte(b, b'$', i);
+            if p < 0 {
+                accum.push_str(byte_str(b, i, b.len()));
+                return Ok(());
+            }
+            accum.push_str(byte_str(b, i, p));
+            i = p;
+            let c: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+            if c == b'$' {
+                accum.push_str("$");
+                i += 2;
+            } else if c == b'{' {
+                let end = key_end(b, i, b'}', 0);
+                if end < 0 {
+                    return Err(f"InterpolationSyntaxError: bad interpolation variable reference {py_repr(byte_str(b, i, b.len()))}");
+                }
+                let path = split_on(byte_str(b, i + 2, end - 1), b':');
+                i = end;
+                let mut sect = section.to_string();
+                let mut opt = option.to_string();
+                let got = if path.len() == 1 {
+                    opt = lower(path[0]);
+                    self.lookup(section, opt)
+                } else if path.len() == 2 {
+                    sect = path[0].clone();
+                    opt = lower(path[1]);
+                    self.lookup(sect, opt)
+                } else {
+                    return Err(f"InterpolationSyntaxError: More than one ':' found: {py_repr(byte_str(b, i, b.len()))}");
+                };
+                let v = match got {
+                    Ok(v) => v,
+                    Err(_) => return Err(missing_option(option, section, rawval, join(path, ":"))),
+                };
+                if let Some(s) = v {
+                    if find_byte(to_bytes(s), b'$', 0) >= 0 {
+                        self.extended(opt, sect, s, depth + 1, accum)?;
+                    } else {
+                        accum.push_str(s);
+                    }
+                }
+            } else {
+                return Err(f"InterpolationSyntaxError: '$' must be followed by '$' or '{{', found: {py_repr(byte_str(b, i, b.len()))}");
+            }
+        }
+        Ok(())
+    }
+
+    // before_get
+    fn interpolate(ref self, section: Str, option: Str, value: Str) -> Result[String, String] {
+        let mut accum = String.new();
+        if self.interp == INTERP_BASIC {
+            self.basic(option, section, value, 1, mut accum)?;
+        } else if self.interp == INTERP_EXTENDED {
+            self.extended(option, section, value, 1, mut accum)?;
+        } else {
+            return Ok(value.to_string());
+        }
+        Ok(accum)
+    }
+
+    fn get(ref self, section: Str, option: Str, raw: bool) -> Result[Option[String], String] {
+        let opt = lower(option);
+        match self.lookup(section, opt)? {
+            Some(v) => {
+                if raw {
+                    Ok(Some(v))
+                } else {
+                    Ok(Some(self.interpolate(section, opt, v)?))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn getint(ref self, section: Str, option: Str) -> Result[i64, String] {
+        let v = self.get(section, option, false)?;
+        let s = match v {
+            Some(s) => s,
+            None => return Err("TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'".to_string()),
+        };
+        match py_int(s) {
+            Some(n) => Ok(n),
+            None => Err(f"ValueError: invalid literal for int() with base 10: {py_repr(s)}"),
+        }
+    }
+
+    fn getboolean(ref self, section: Str, option: Str) -> Result[bool, String] {
+        let v = self.get(section, option, false)?;
+        let s = match v {
+            Some(s) => s,
+            None => return Err("AttributeError: 'NoneType' object has no attribute 'lower'".to_string()),
+        };
+        let l = lower(s);
+        if l == "1" or l == "yes" or l == "true" or l == "on" {
+            return Ok(true);
+        }
+        if l == "0" or l == "no" or l == "false" or l == "off" {
+            return Ok(false);
+        }
+        Err(f"ValueError: Not a boolean: {s}")
+    }
+
+    // items(): the defaults, then the section over them.
+    fn items(ref self, section: Str, raw: bool) -> Result[Section, String] {
+        let mut d = self.defaults.clone();
+        if section != self.default_section {
+            let at = self.find_section(section);
+            if at < 0 {
+                return Err(f"NoSectionError: No section: {py_repr(section)}");
+            }
+            let s = self.sections[at].clone();
+            for i in 0..s.keys.len() {
+                d.put(s.keys[i], s.vals[i].clone());
+            }
+        }
+        if raw or self.interp == INTERP_NONE {
+            return Ok(d);
+        }
+        let mut out = new_section(section);
+        for i in 0..d.keys.len() {
+            let raw_v = match ref d.vals[i] {
+                Some(s) => s.clone(),
+                None => String.new(),
+            };
+            let v = self.interpolate(section, d.keys[i], raw_v)?;
+            out.put(d.keys[i], Some(v));
+        }
+        Ok(out)
+    }
+}
+
+// int(): white space around, a sign, and digits with single underscores
+// between them.
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// ------------------------------------------------------------ changing it
+
+// The value with its escapes and valid references taken out (before_set).
+fn without_refs(value: Str, open: u8) -> String {
+    let b = to_bytes(value);
+    let mut tmp: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == open and i + 1 < b.len() and b[i + 1] == open {
+            i += 2;
+        } else {
+            tmp.push(b[i]);
+            i += 1;
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < tmp.len() {
+        let end = if open == b'%' {
+            if i + 1 < tmp.len() and tmp[i] == b'%' and tmp[i + 1] == b'(' { key_end(tmp, i, b')', b's' as i64) } else { -1 }
+        } else {
+            if i + 1 < tmp.len() and tmp[i] == b'$' and tmp[i + 1] == b'{' { key_end(tmp, i, b'}', 0) } else { -1 }
+        };
+        if end >= 0 {
+            i = end;
+        } else {
+            out.push(tmp[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+impl Config {
+    fn set(mut ref self, section: Str, option: Str, value: Str) -> Result[(), String] {
+        if value.len() > 0 and self.interp != INTERP_NONE {
+            let open: u8 = if self.interp == INTERP_BASIC { b'%' } else { b'$' };
+            let tb = to_bytes(without_refs(value, open));
+            let at = find_byte(tb, open, 0);
+            if at >= 0 {
+                return Err(f"ValueError: invalid interpolation syntax in {py_repr(value)} at position {at}");
+            }
+        }
+        if section.len() == 0 or section == self.default_section {
+            self.defaults.put(lower(option), Some(value.to_string()));
+            return Ok(());
+        }
+        let at = self.find_section(section);
+        if at < 0 {
+            return Err(f"NoSectionError: No section: {py_repr(section)}");
+        }
+        self.sections[at].put(lower(option), Some(value.to_string()));
+        Ok(())
+    }
+
+    fn add_section(mut ref self, section: Str) -> Result[(), String] {
+        if section == self.default_section {
+            return Err(f"ValueError: Invalid section name: {py_repr(section)}");
+        }
+        if self.find_section(section) >= 0 {
+            return Err(f"DuplicateSectionError: Section {py_repr(section)} already exists");
+        }
+        self.sections.push(new_section(section));
+        Ok(())
+    }
+
+    fn has_option(ref self, section: Str, option: Str) -> bool {
+        let opt = lower(option);
+        if section.len() == 0 or section == self.default_section {
+            return self.defaults.find(opt) >= 0;
+        }
+        let at = self.find_section(section);
+        if at < 0 {
+            return false;
+        }
+        self.sections[at].find(opt) >= 0 or self.defaults.find(opt) >= 0
+    }
+
+    fn remove_option(mut ref self, section: Str, option: Str) -> Result[bool, String] {
+        let opt = lower(option);
+        if section.len() == 0 or section == self.default_section {
+            return Ok(self.defaults.remove(opt));
+        }
+        let at = self.find_section(section);
+        if at < 0 {
+            return Err(f"NoSectionError: No section: {py_repr(section)}");
+        }
+        Ok(self.sections[at].remove(opt))
+    }
+
+    fn remove_section(mut ref self, section: Str) -> bool {
+        let at = self.find_section(section);
+        if at < 0 {
+            return false;
+        }
+        self.sections.remove(at);
+        true
+    }
+
+    fn write_section(ref self, out: mut ref String, s: ref Section, delim: Str) {
+        out.push_str(f"[{s.name}]\n");
+        for i in 0..s.keys.len() {
+            out.push_str(s.keys[i]);
+            match ref s.vals[i] {
+                Some(v) => {
+                    out.push_str(delim);
+                    let b = to_bytes(v);
+                    let mut w: Vec[u8] = Vec.new();
+                    let mut k: i64 = 0;
+                    while k < b.len() {
+                        if b[k] == b'\r' and k + 1 < b.len() and b[k + 1] == b'\n' {
+                            k += 1;
+                        }
+                        if b[k] == b'\r' or b[k] == b'\n' {
+                            w.push(b'\n');
+                            w.push(b'\t');
+                        } else {
+                            w.push(b[k]);
+                        }
+                        k += 1;
+                    }
+                    out.push_str(from_bytes(w));
+                }
+                None => {
+                    if not self.no_value {
+                        out.push_str(f"{delim}None");
+                    }
+                }
+            }
+            out.push_str("\n");
+        }
+        out.push_str("\n");
+    }
+
+    fn write(ref self) -> String {
+        let delim = f" {self.delimiters[0]} ";
+        let mut out = String.new();
+        if self.defaults.keys.len() > 0 {
+            let mut d = self.defaults.clone();
+            d.name = self.default_section.clone();
+            self.write_section(mut out, d, delim);
+        }
+        for i in 0..self.sections.len() {
+            self.write_section(mut out, self.sections[i], delim);
+        }
+        out
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/app.ini
+fn file_0() -> String {
+    """
+# Settings for the orders service.
+[DEFAULT]
+home = /srv/orders
+log_dir = %(home)s/logs
+debug = no
+
+[server]
+host = 0.0.0.0
+port = 8080
+workers: 4
+Debug = Yes
+url = http://%(host)s:%(port)s/
+pid_file = %(home)s/run/orders.pid
+
+[database]
+; the replica is read-only
+url = postgresql://orders@db.internal:5432/orders
+pool size = 10
+timeout = 30s
+log_file = %(log_dir)s/db.log
+
+[paths]
+static = %(home)s/static
+media = %(static)s/../media
+progress = 100%%
+broken = %(nowhere)s/x
+loop = %(loop)s
+bad = 50% done
+
+"""
+}
+
+// data/buildout.cfg
+fn file_1() -> String {
+    """
+[buildout]
+directory = /home/dev/project
+parts = app test
+eggs-directory = ${directory}/eggs
+bin-directory = ${buildout:directory}/bin
+
+[app]
+recipe = zc.recipe.egg
+eggs = ${buildout:parts} requests
+interpreter = ${buildout:bin-directory}/py
+price = $$5
+
+[test]
+recipe = zc.recipe.testrunner
+defaults = ['--auto-color']
+missing = ${app:nope}
+nosection = ${other:thing}
+colons = ${a:b:c}
+syntax = ${unclosed
+
+"""
+}
+
+// data/conf.d/broken.ini
+fn file_2() -> String {
+    """
+[server]
+port = 9100
+this line has no delimiter
+=no name
+[features]
+    indented = fine
+another bad line
+
+"""
+}
+
+// data/conf.d/local.ini
+fn file_3() -> String {
+    """
+[server]
+port = 9000
+
+[features]
+beta = true
+export = 1
+
+"""
+}
+
+// data/defaults.ini
+fn file_4() -> String {
+    """
+[server]
+host = 127.0.0.1
+port = 8000
+timeout = 30
+
+[features]
+search = on
+beta = off
+
+"""
+}
+
+// data/dupoption.ini
+fn file_5() -> String {
+    """
+[a]
+x = 1
+y = 2
+X = 3
+
+"""
+}
+
+// data/dupsection.ini
+fn file_6() -> String {
+    """
+[a]
+x = 1
+
+[b]
+y = 2
+
+[a]
+z = 3
+
+"""
+}
+
+// data/git.ini
+fn file_7() -> String {
+    """
+[core]
+	repositoryformatversion = 0
+	bare = false
+[remote \"origin\"]
+	url = git@example.org:orders.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch \"main\"]
+	remote = origin
+	merge = refs/heads/main
+
+"""
+}
+
+// data/jobs.txt
+fn file_8() -> String {
+    """
+# Each job starts with `parser`, followed by its options.
+parser interpolation=basic
+read data/app.ini data/missing.ini
+sections
+dump
+get server url
+getint server port
+getint database timeout
+getboolean server debug
+getboolean DEFAULT debug
+get server nothing
+get cache dir
+items database
+set paths static /var/www/static
+get paths media
+set paths fine 10%%
+set paths wrong 10% off
+set nowhere a b
+write
+
+parser interpolation=none
+read data/setup.cfg
+dump
+get options install_requires
+get metadata classifiers
+write
+
+parser interpolation=none empty_lines=0
+read data/setup.cfg
+get options install_requires
+
+parser interpolation=none no_value=1 inline=#
+read data/my.cnf
+dump
+has mysqld skip-name-resolve
+has mysqld skip-networking
+get mysqld skip-external-locking
+write
+
+parser interpolation=none no_value=0
+read data/my.cnf
+
+parser interpolation=none inline=;
+read data/php.ini
+dump
+
+parser interpolation=extended
+read data/buildout.cfg
+dump
+get app interpreter
+
+parser interpolation=none
+read data/git.ini
+sections
+get remote \"origin\" fetch
+write
+
+parser interpolation=none
+read data/unit.service
+
+parser interpolation=none strict=0 delimiters==
+read data/unit.service
+dump
+
+parser interpolation=basic
+read data/defaults.ini data/conf.d/local.ini
+dump
+getboolean features search
+getboolean features beta
+getboolean features export
+add features
+add DEFAULT
+add logging
+set logging level INFO
+remove-option server timeout
+remove-option server timeout
+remove-section features
+remove-section features
+write
+
+parser interpolation=basic
+read data/defaults.ini data/conf.d/broken.ini data/conf.d/local.ini
+dump
+
+parser interpolation=basic
+read data/noheader.ini
+
+parser interpolation=basic
+read data/dupsection.ini
+dump
+
+parser interpolation=basic strict=0
+read data/dupsection.ini data/dupoption.ini
+dump
+
+parser interpolation=basic
+read data/dupoption.ini
+dump
+
+parser interpolation=basic no_value=1
+read data/valueless.ini
+dump
+
+parser interpolation=none
+read data/tabs.ini
+dump
+write
+
+parser interpolation=none default=general comments=#
+read data/app.ini
+sections
+dump
+
+"""
+}
+
+// data/my.cnf
+fn file_9() -> String {
+    """
+# MySQL server configuration
+[client]
+port = 3306
+socket = /var/run/mysqld/mysqld.sock
+
+[mysqld]
+user = mysql
+skip-external-locking
+skip-name-resolve
+bind-address = 127.0.0.1
+key_buffer_size = 16M
+max_allowed_packet = 64M   # raised for imports
+sql_mode = STRICT_TRANS_TABLES;NO_ENGINE_SUBSTITUTION
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet = 16M
+
+"""
+}
+
+// data/noheader.ini
+fn file_10() -> String {
+    """
+key = value
+[later]
+x = 1
+
+"""
+}
+
+// data/php.ini
+fn file_11() -> String {
+    """
+[PHP]
+engine = On
+short_open_tag = Off ; deprecated
+precision = 14
+memory_limit = 128M ;per script
+error_reporting = E_ALL & ~E_DEPRECATED
+display_errors = Off
+date.timezone = \"UTC\"
+include_path = \".:/usr/share/php\"
+
+[Session]
+session.save_path = \"/var/lib/php/sessions\"
+session.name = PHPSESSID;not a comment here
+
+"""
+}
+
+// data/setup.cfg
+fn file_12() -> String {
+    """
+[metadata]
+name = orders
+version = 2.3.1
+description = Order service
+long_description = file: README.md
+classifiers =
+    Programming Language :: Python :: 3
+    License :: OSI Approved :: MIT License
+
+[options]
+packages = find:
+python_requires = >=3.10
+install_requires =
+    requests>=2.31
+    sqlalchemy>=2.0
+
+    # optional below
+    redis>=5.0
+zip_safe = False
+
+[options.entry_points]
+console_scripts =
+    orders = orders.cli:main
+
+[flake8]
+max-line-length = 100
+exclude = .git,__pycache__,build
+
+"""
+}
+
+// data/tabs.ini
+fn file_13() -> String {
+    """
+[weird]
+key with spaces = value with spaces  
+  leading = indented key
+	multi = first
+		second
+
+		third after blank
+empty =
+colon: yes : no
+[ spaced name ]
+[x] trailing text
+k=v
+
+"""
+}
+
+// data/unit.service
+fn file_14() -> String {
+    """
+[Unit]
+Description=Orders worker
+After=network.target
+After=postgresql.service
+
+[Service]
+ExecStart=/srv/orders/bin/worker --queue=orders
+Environment=QUEUE=orders
+Environment=CONCURRENCY=4
+Restart=on-failure
+
+"""
+}
+
+// data/valueless.ini
+fn file_15() -> String {
+    """
+[a]
+flag
+    continued
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/app.ini", file_0())?;
+    put("data/buildout.cfg", file_1())?;
+    make_dir("data/conf.d")?;
+    put("data/conf.d/broken.ini", file_2())?;
+    put("data/conf.d/local.ini", file_3())?;
+    put("data/defaults.ini", file_4())?;
+    put("data/dupoption.ini", file_5())?;
+    put("data/dupsection.ini", file_6())?;
+    put("data/git.ini", file_7())?;
+    put("data/jobs.txt", file_8())?;
+    put("data/my.cnf", file_9())?;
+    put("data/noheader.ini", file_10())?;
+    put("data/php.ini", file_11())?;
+    put("data/setup.cfg", file_12())?;
+    put("data/tabs.ini", file_13())?;
+    put("data/unit.service", file_14())?;
+    put("data/valueless.ini", file_15())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn read_file(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+// A `parser` line's options.
+fn new_parser(words: ref Vec[String]) -> Result[Config, String] {
+    let mut c = new_config();
+    for i in 1..words.len() {
+        let b = to_bytes(words[i]);
+        let eq = find_byte(b, b'=', 0);
+        if eq < 0 {
+            return Err(f"bad parser option {words[i]}");
+        }
+        let k = byte_str(b, 0, eq);
+        let v = byte_str(b, eq + 1, b.len());
+        let mut chars: Vec[String] = Vec.new();
+        let vb = to_bytes(v);
+        for j in 0..vb.len() {
+            chars.push(byte_str(vb, j, j + 1));
+        }
+        if k == "interpolation" {
+            c.interp = if v == "basic" {
+                INTERP_BASIC
+            } else if v == "extended" {
+                INTERP_EXTENDED
+            } else {
+                INTERP_NONE
+            };
+        } else if k == "strict" {
+            c.strict = v == "1";
+        } else if k == "empty_lines" {
+            c.empty_lines = v == "1";
+        } else if k == "no_value" {
+            c.no_value = v == "1";
+        } else if k == "inline" {
+            c.inline = chars;
+        } else if k == "comments" {
+            c.full = chars;
+        } else if k == "delimiters" {
+            c.delimiters = chars;
+        } else if k == "default" {
+            c.default_section = v.clone();
+            c.defaults.name = v;
+        } else {
+            return Err(f"bad parser option {k}");
+        }
+    }
+    Ok(c)
+}
+
+fn words_from(w: ref Vec[String], from: i64, to: i64) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in from..to {
+        parts.push(w[i].clone());
+    }
+    join(parts, " ")
+}
+
+fn dump(c: ref Config) {
+    let mut names: Vec[String] = [c.default_section.clone()];
+    let rest = c.section_names();
+    for i in 0..rest.len() {
+        names.push(rest[i].clone());
+    }
+    for n in 0..names.len() {
+        let s = names[n].clone();
+        println(f"  [{s}]");
+        let raw = if n == 0 {
+            c.defaults.clone()
+        } else {
+            match c.items(s, true) {
+                Ok(d) => d,
+                Err(e) => {
+                    println(f"    {e}");
+                    continue;
+                }
+            }
+        };
+        for i in 0..raw.keys.len() {
+            println(f"    {raw.keys[i]} = {opt_repr(raw.vals[i])}");
+            match c.get(s, raw.keys[i], false) {
+                Ok(got) => {
+                    if got != raw.vals[i] {
+                        println(f"      -> {opt_repr(got)}");
+                    }
+                }
+                Err(e) => println(f"      -> {e}"),
+            }
+        }
+    }
+}
+
+// One job line other than parser, dump and write: its result's repr.
+fn run_job(c: mut ref Config, w: ref Vec[String]) -> Result[String, String] {
+    let cmd = w[0].clone();
+    let n = w.len();
+    if cmd == "read" {
+        let mut names: Vec[String] = Vec.new();
+        for i in 1..n {
+            names.push(w[i].clone());
+        }
+        return Ok(list_repr(c.read(names)?));
+    }
+    if cmd == "sections" {
+        return Ok(list_repr(c.section_names()));
+    }
+    if cmd == "get" or cmd == "getint" or cmd == "getboolean" or cmd == "has" or cmd == "remove-option" {
+        let s = words_from(w, 1, n - 1);
+        let o = w[n - 1].clone();
+        if cmd == "get" {
+            return Ok(opt_repr(c.get(s, o, false)?));
+        }
+        if cmd == "getint" {
+            return Ok(f"{c.getint(s, o)?}");
+        }
+        if cmd == "getboolean" {
+            return Ok(py_bool(c.getboolean(s, o)?));
+        }
+        if cmd == "has" {
+            return Ok(py_bool(c.has_option(s, o)));
+        }
+        return Ok(py_bool(c.remove_option(s, o)?));
+    }
+    if cmd == "set" {
+        c.set(w[1], w[2], words_from(w, 3, n))?;
+        return Ok(opt_repr(c.get(w[1], w[2], true)?));
+    }
+    let s = words_from(w, 1, n);
+    if cmd == "items" {
+        let d = c.items(s, false)?;
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..d.keys.len() {
+            parts.push(f"({py_repr(d.keys[i])}, {opt_repr(d.vals[i])})");
+        }
+        return Ok(f"[{join(parts, ", ")}]");
+    }
+    if cmd == "add" {
+        c.add_section(s)?;
+        return Ok("None".to_string());
+    }
+    if cmd == "remove-section" {
+        return Ok(py_bool(c.remove_section(s)));
+    }
+    Err(f"unknown job {cmd}")
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let jobs = lines_of(read_file("data/jobs.txt")?);
+    let mut c = new_config();
+    for j in 0..jobs.len() {
+        let line = jobs[j].clone();
+        if strip(line).len() == 0 or to_bytes(line)[0] == b'#' {
+            continue;
+        }
+        let w = split_ws(line);
+        if w[0] == "parser" {
+            println(f"== {line}");
+            c = new_parser(w)?;
+        } else if w[0] == "dump" {
+            println("-- dump");
+            dump(c);
+        } else if w[0] == "write" {
+            println("-- write");
+            let text = c.write();
+            let ls = lines_of(text);
+            for i in 0..ls.len() {
+                println(f"  |{ls[i]}");
+            }
+        } else {
+            match run_job(mut c, w) {
+                Ok(r) => println(f"{line}: {r}"),
+                Err(e) => println(f"{line}: {e}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_ini: {e}");
+    }
+}

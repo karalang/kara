@@ -1,0 +1,407 @@
+== parser interpolation=basic
+read data/app.ini data/missing.ini: ['data/app.ini']
+sections: ['server', 'database', 'paths']
+-- dump
+  [DEFAULT]
+    home = '/srv/orders'
+    log_dir = '%(home)s/logs'
+      -> '/srv/orders/logs'
+    debug = 'no'
+  [server]
+    home = '/srv/orders'
+    log_dir = '%(home)s/logs'
+      -> '/srv/orders/logs'
+    debug = 'Yes'
+    host = '0.0.0.0'
+    port = '8080'
+    workers = '4'
+    url = 'http://%(host)s:%(port)s/'
+      -> 'http://0.0.0.0:8080/'
+    pid_file = '%(home)s/run/orders.pid'
+      -> '/srv/orders/run/orders.pid'
+  [database]
+    home = '/srv/orders'
+    log_dir = '%(home)s/logs'
+      -> '/srv/orders/logs'
+    debug = 'no'
+    url = 'postgresql://orders@db.internal:5432/orders'
+    pool size = '10'
+    timeout = '30s'
+    log_file = '%(log_dir)s/db.log'
+      -> '/srv/orders/logs/db.log'
+  [paths]
+    home = '/srv/orders'
+    log_dir = '%(home)s/logs'
+      -> '/srv/orders/logs'
+    debug = 'no'
+    static = '%(home)s/static'
+      -> '/srv/orders/static'
+    media = '%(static)s/../media'
+      -> '/srv/orders/static/../media'
+    progress = '100%%'
+      -> '100%'
+    broken = '%(nowhere)s/x'
+      -> InterpolationMissingOptionError: Bad value substitution: option 'broken' in section 'paths' contains an interpolation key 'nowhere' which is not a valid option name. Raw value: '%(nowhere)s/x'
+    loop = '%(loop)s'
+      -> InterpolationDepthError: Recursion limit exceeded in value substitution: option 'loop' in section 'paths' contains an interpolation key which cannot be substituted in 10 steps. Raw value: '%(loop)s'
+    bad = '50% done'
+      -> InterpolationSyntaxError: '%' must be followed by '%' or '(', found: '% done'
+get server url: 'http://0.0.0.0:8080/'
+getint server port: 8080
+getint database timeout: ValueError: invalid literal for int() with base 10: '30s'
+getboolean server debug: True
+getboolean DEFAULT debug: False
+get server nothing: NoOptionError: No option 'nothing' in section: 'server'
+get cache dir: NoSectionError: No section: 'cache'
+items database: [('home', '/srv/orders'), ('log_dir', '/srv/orders/logs'), ('debug', 'no'), ('url', 'postgresql://orders@db.internal:5432/orders'), ('pool size', '10'), ('timeout', '30s'), ('log_file', '/srv/orders/logs/db.log')]
+set paths static /var/www/static: '/var/www/static'
+get paths media: '/var/www/static/../media'
+set paths fine 10%%: '10%%'
+set paths wrong 10% off: ValueError: invalid interpolation syntax in '10% off' at position 2
+set nowhere a b: NoSectionError: No section: 'nowhere'
+-- write
+  |[DEFAULT]
+  |home = /srv/orders
+  |log_dir = %(home)s/logs
+  |debug = no
+  |
+  |[server]
+  |host = 0.0.0.0
+  |port = 8080
+  |workers = 4
+  |debug = Yes
+  |url = http://%(host)s:%(port)s/
+  |pid_file = %(home)s/run/orders.pid
+  |
+  |[database]
+  |url = postgresql://orders@db.internal:5432/orders
+  |pool size = 10
+  |timeout = 30s
+  |log_file = %(log_dir)s/db.log
+  |
+  |[paths]
+  |static = /var/www/static
+  |media = %(static)s/../media
+  |progress = 100%%
+  |broken = %(nowhere)s/x
+  |loop = %(loop)s
+  |bad = 50% done
+  |fine = 10%%
+  |
+== parser interpolation=none
+read data/setup.cfg: ['data/setup.cfg']
+-- dump
+  [DEFAULT]
+  [metadata]
+    name = 'orders'
+    version = '2.3.1'
+    description = 'Order service'
+    long_description = 'file: README.md'
+    classifiers = '\nProgramming Language :: Python :: 3\nLicense :: OSI Approved :: MIT License'
+  [options]
+    packages = 'find:'
+    python_requires = '>=3.10'
+    install_requires = '\nrequests>=2.31\nsqlalchemy>=2.0\n\nredis>=5.0'
+    zip_safe = 'False'
+  [options.entry_points]
+    console_scripts = '\norders = orders.cli:main'
+  [flake8]
+    max-line-length = '100'
+    exclude = '.git,__pycache__,build'
+get options install_requires: '\nrequests>=2.31\nsqlalchemy>=2.0\n\nredis>=5.0'
+get metadata classifiers: '\nProgramming Language :: Python :: 3\nLicense :: OSI Approved :: MIT License'
+-- write
+  |[metadata]
+  |name = orders
+  |version = 2.3.1
+  |description = Order service
+  |long_description = file: README.md
+  |classifiers = 
+  |	Programming Language :: Python :: 3
+  |	License :: OSI Approved :: MIT License
+  |
+  |[options]
+  |packages = find:
+  |python_requires = >=3.10
+  |install_requires = 
+  |	requests>=2.31
+  |	sqlalchemy>=2.0
+  |	
+  |	redis>=5.0
+  |zip_safe = False
+  |
+  |[options.entry_points]
+  |console_scripts = 
+  |	orders = orders.cli:main
+  |
+  |[flake8]
+  |max-line-length = 100
+  |exclude = .git,__pycache__,build
+  |
+== parser interpolation=none empty_lines=0
+read data/setup.cfg: ['data/setup.cfg']
+get options install_requires: '\nrequests>=2.31\nsqlalchemy>=2.0'
+== parser interpolation=none no_value=1 inline=#
+read data/my.cnf: ['data/my.cnf']
+-- dump
+  [DEFAULT]
+  [client]
+    port = '3306'
+    socket = '/var/run/mysqld/mysqld.sock'
+  [mysqld]
+    user = 'mysql'
+    skip-external-locking = None
+    skip-name-resolve = None
+    bind-address = '127.0.0.1'
+    key_buffer_size = '16M'
+    max_allowed_packet = '64M'
+    sql_mode = 'STRICT_TRANS_TABLES;NO_ENGINE_SUBSTITUTION'
+  [mysqldump]
+    quick = None
+    quote-names = None
+    max_allowed_packet = '16M'
+has mysqld skip-name-resolve: True
+has mysqld skip-networking: False
+get mysqld skip-external-locking: None
+-- write
+  |[client]
+  |port = 3306
+  |socket = /var/run/mysqld/mysqld.sock
+  |
+  |[mysqld]
+  |user = mysql
+  |skip-external-locking
+  |skip-name-resolve
+  |bind-address = 127.0.0.1
+  |key_buffer_size = 16M
+  |max_allowed_packet = 64M
+  |sql_mode = STRICT_TRANS_TABLES;NO_ENGINE_SUBSTITUTION
+  |
+  |[mysqldump]
+  |quick
+  |quote-names
+  |max_allowed_packet = 16M
+  |
+== parser interpolation=none no_value=0
+read data/my.cnf: ParsingError: Source contains parsing errors: 'data/my.cnf'
+	[line  8]: 'skip-external-locking\n'
+	[line  9]: 'skip-name-resolve\n'
+	[line 16]: 'quick\n'
+	[line 17]: 'quote-names\n'
+== parser interpolation=none inline=;
+read data/php.ini: ['data/php.ini']
+-- dump
+  [DEFAULT]
+  [PHP]
+    engine = 'On'
+    short_open_tag = 'Off'
+    precision = '14'
+    memory_limit = '128M'
+    error_reporting = 'E_ALL & ~E_DEPRECATED'
+    display_errors = 'Off'
+    date.timezone = '"UTC"'
+    include_path = '".:/usr/share/php"'
+  [Session]
+    session.save_path = '"/var/lib/php/sessions"'
+    session.name = 'PHPSESSID;not a comment here'
+== parser interpolation=extended
+read data/buildout.cfg: ['data/buildout.cfg']
+-- dump
+  [DEFAULT]
+  [buildout]
+    directory = '/home/dev/project'
+    parts = 'app test'
+    eggs-directory = '${directory}/eggs'
+      -> '/home/dev/project/eggs'
+    bin-directory = '${buildout:directory}/bin'
+      -> '/home/dev/project/bin'
+  [app]
+    recipe = 'zc.recipe.egg'
+    eggs = '${buildout:parts} requests'
+      -> 'app test requests'
+    interpreter = '${buildout:bin-directory}/py'
+      -> '/home/dev/project/bin/py'
+    price = '$$5'
+      -> '$5'
+  [test]
+    recipe = 'zc.recipe.testrunner'
+    defaults = "['--auto-color']"
+    missing = '${app:nope}'
+      -> InterpolationMissingOptionError: Bad value substitution: option 'missing' in section 'test' contains an interpolation key 'app:nope' which is not a valid option name. Raw value: '${app:nope}'
+    nosection = '${other:thing}'
+      -> InterpolationMissingOptionError: Bad value substitution: option 'nosection' in section 'test' contains an interpolation key 'other:thing' which is not a valid option name. Raw value: '${other:thing}'
+    colons = '${a:b:c}'
+      -> InterpolationSyntaxError: More than one ':' found: ''
+    syntax = '${unclosed'
+      -> InterpolationSyntaxError: bad interpolation variable reference '${unclosed'
+get app interpreter: '/home/dev/project/bin/py'
+== parser interpolation=none
+read data/git.ini: ['data/git.ini']
+sections: ['core', 'remote "origin"', 'branch "main"']
+get remote "origin" fetch: '+refs/heads/*:refs/remotes/origin/*'
+-- write
+  |[core]
+  |repositoryformatversion = 0
+  |bare = false
+  |
+  |[remote "origin"]
+  |url = git@example.org:orders.git
+  |fetch = +refs/heads/*:refs/remotes/origin/*
+  |
+  |[branch "main"]
+  |remote = origin
+  |merge = refs/heads/main
+  |
+== parser interpolation=none
+read data/unit.service: DuplicateOptionError: While reading from 'data/unit.service' [line  4]: option 'after' in section 'Unit' already exists
+== parser interpolation=none strict=0 delimiters==
+read data/unit.service: ['data/unit.service']
+-- dump
+  [DEFAULT]
+  [Unit]
+    description = 'Orders worker'
+    after = 'postgresql.service'
+  [Service]
+    execstart = '/srv/orders/bin/worker --queue=orders'
+    environment = 'CONCURRENCY=4'
+    restart = 'on-failure'
+== parser interpolation=basic
+read data/defaults.ini data/conf.d/local.ini: ['data/defaults.ini', 'data/conf.d/local.ini']
+-- dump
+  [DEFAULT]
+  [server]
+    host = '127.0.0.1'
+    port = '9000'
+    timeout = '30'
+  [features]
+    search = 'on'
+    beta = 'true'
+    export = '1'
+getboolean features search: True
+getboolean features beta: True
+getboolean features export: True
+add features: DuplicateSectionError: Section 'features' already exists
+add DEFAULT: ValueError: Invalid section name: 'DEFAULT'
+add logging: None
+set logging level INFO: 'INFO'
+remove-option server timeout: True
+remove-option server timeout: False
+remove-section features: True
+remove-section features: False
+-- write
+  |[server]
+  |host = 127.0.0.1
+  |port = 9000
+  |
+  |[logging]
+  |level = INFO
+  |
+== parser interpolation=basic
+read data/defaults.ini data/conf.d/broken.ini data/conf.d/local.ini: ParsingError: Source contains parsing errors: 'data/conf.d/broken.ini'
+	[line  3]: 'this line has no delimiter\n'
+	[line  4]: '=no name\n'
+	[line  7]: 'another bad line\n'
+-- dump
+  [DEFAULT]
+  [server]
+    host = '127.0.0.1'
+    port = '9100'
+    timeout = '30'
+     = 'no name'
+  [features]
+    search = 'on'
+    beta = 'off'
+    indented = 'fine'
+== parser interpolation=basic
+read data/noheader.ini: MissingSectionHeaderError: File contains no section headers.
+file: 'data/noheader.ini', line: 1
+'key = value\n'
+== parser interpolation=basic
+read data/dupsection.ini: DuplicateSectionError: While reading from 'data/dupsection.ini' [line  7]: section 'a' already exists
+-- dump
+  [DEFAULT]
+  [a]
+    x = '1'
+  [b]
+    y = '2'
+== parser interpolation=basic strict=0
+read data/dupsection.ini data/dupoption.ini: ['data/dupsection.ini', 'data/dupoption.ini']
+-- dump
+  [DEFAULT]
+  [a]
+    x = '3'
+    z = '3'
+    y = '2'
+  [b]
+    y = '2'
+== parser interpolation=basic
+read data/dupoption.ini: DuplicateOptionError: While reading from 'data/dupoption.ini' [line  4]: option 'x' in section 'a' already exists
+-- dump
+  [DEFAULT]
+  [a]
+    x = '1'
+    y = '2'
+== parser interpolation=basic no_value=1
+read data/valueless.ini: MultilineContinuationError: Key without value continued with an indented line.
+file: 'data/valueless.ini', line: 3
+'    continued\n'
+-- dump
+  [DEFAULT]
+  [a]
+    flag = None
+== parser interpolation=none
+read data/tabs.ini: ['data/tabs.ini']
+-- dump
+  [DEFAULT]
+  [weird]
+    key with spaces = 'value with spaces\nleading = indented key\nmulti = first\nsecond\n\nthird after blank'
+    empty = ''
+    colon = 'yes : no'
+  [ spaced name ]
+  [x]
+    k = 'v'
+-- write
+  |[weird]
+  |key with spaces = value with spaces
+  |	leading = indented key
+  |	multi = first
+  |	second
+  |	
+  |	third after blank
+  |empty = 
+  |colon = yes : no
+  |
+  |[ spaced name ]
+  |
+  |[x]
+  |k = v
+  |
+== parser interpolation=none default=general comments=#
+read data/app.ini: ParsingError: Source contains parsing errors: 'data/app.ini'
+	[line 16]: '; the replica is read-only\n'
+sections: ['DEFAULT', 'server', 'database', 'paths']
+-- dump
+  [general]
+  [DEFAULT]
+    home = '/srv/orders'
+    log_dir = '%(home)s/logs'
+    debug = 'no'
+  [server]
+    host = '0.0.0.0'
+    port = '8080'
+    workers = '4'
+    debug = 'Yes'
+    url = 'http://%(host)s:%(port)s/'
+    pid_file = '%(home)s/run/orders.pid'
+  [database]
+    url = 'postgresql://orders@db.internal:5432/orders'
+    pool size = '10'
+    timeout = '30s'
+    log_file = '%(log_dir)s/db.log'
+  [paths]
+    static = '%(home)s/static'
+    media = '%(static)s/../media'
+    progress = '100%%'
+    broken = '%(nowhere)s/x'
+    loop = '%(loop)s'
+    bad = '50% done'

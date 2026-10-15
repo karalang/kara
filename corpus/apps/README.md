@@ -177,6 +177,7 @@ cli/mini_m4             a GNU m4 1.4.19 clone: rescanned macro expansion, quotin
 cli/mini_xml            XML parser, ElementPath queries and tostring, as Python's ElementTree
 cli/mini_csv            Python's csv module: reader and writer from _csv.c, DictReader/DictWriter, the Sniffer, and an order report
 cli/mini_ignore         which files git ignores: wildmatch.c and dir.c's .gitignore rules; output identical to git ls-files and check-ignore -v
+cli/mini_ini            INI files as Python's configparser reads and writes them
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
