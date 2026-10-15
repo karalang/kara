@@ -9161,8 +9161,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         match found {
             Some((e, idx)) if def == e => return Some(idx),
             Some(_) => {}
-            // A struct (a struct pattern's path) has no variant.
-            None if self.lcx.defs.table.get(v).kind != DefKind::Variant => return None,
+            // A struct (a struct pattern's path) has no variant, unless the
+            // scrutinee is an enum with a variant by the struct's name: a
+            // bare `Heading(n)` on a `Block` names the variant
+            // (B-2026-10-15-35).
+            None if self.lcx.defs.table.get(v).kind != DefKind::Variant && def == v => {
+                return None;
+            }
             None => {}
         }
         // A user variant named like a prelude one (`Err`) resolves to the

@@ -2503,3 +2503,48 @@ fn main() {
         );
     }
 }
+
+/// A bare variant pattern whose name a struct also holds names the
+/// scrutinee's variant, not the struct (B-2026-10-15-35); the struct's own
+/// patterns still mean the struct.
+#[test]
+fn mir_bare_variant_pattern_named_like_a_struct() {
+    let src = r#"
+enum Block { Heading(i64), Rule, Para { text: String } }
+struct Heading { level: i64 }
+struct Para { text: String }
+fn show(b: Block) -> String {
+    match b {
+        Heading(n) => f"h{n}",
+        Para { text } => f"p:{text}",
+        Rule => "rule",
+    }
+}
+fn lvl(h: Heading) -> i64 {
+    match h {
+        Heading { level } => level,
+    }
+}
+fn txt(p: ref Para) -> String {
+    let Para { text } = p;
+    text.clone()
+}
+fn main() {
+    println(show(Block.Heading(2)));
+    println(show(Block.Para { text: "x".to_string() }));
+    println(show(Block.Rule));
+    println(f"{lvl(Heading { level: 3 })}");
+    println(txt(Para { text: "y".to_string() }));
+    let b = Block.Heading(4);
+    if let Heading(k) = b { println(f"k{k}"); }
+}
+"#;
+    let want = "h2\np:x\nrule\n3\ny\nk4\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
