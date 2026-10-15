@@ -1,0 +1,652 @@
+// A WebSocket chat server (RFC 6455) on a real loopback socket.
+//
+// The server does the opening handshake (Sec-WebSocket-Accept is the
+// base64 SHA-1 of the client key and the RFC's GUID, both written here),
+// reads masked client frames, joins fragmented messages, answers pings,
+// and broadcasts chat lines to every client in the room. It closes a
+// connection with the right status code when a client breaks the protocol:
+// 1002 for an unmasked frame or a bad opcode, 1007 for text that is not
+// UTF-8, 1009 for a message over the size limit.
+//
+// One thread drives every party. Each round, every client connects, writes
+// its handshake and frames, and shuts down its write side; the server
+// accepts them all, reads each to end of input, runs the room, writes the
+// replies, and closes; then each client reads its frames back.
+
+const GUID: Str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const MAX_MESSAGE: i64 = 200;
+
+// ---- SHA-1 and base64 -------------------------------------------------
+
+fn rotl(x: u32, n: u32) -> u32 {
+    (x << n) | (x >> (32u32 - n))
+}
+
+fn sha1(data: Slice[u8]) -> Vec[u8] {
+    let mut msg: Vec[u8] = Vec.new();
+    for b in data {
+        msg.push(b);
+    }
+    let bit_len: u64 = (data.len() as u64) * 8u64;
+    msg.push(0x80u8);
+    while msg.len() % 64 != 56 {
+        msg.push(0u8);
+    }
+    for k in 0..8 {
+        msg.push(((bit_len >> ((7 - k) as u64 * 8u64)) & 0xffu64) as u8);
+    }
+    let mut h: Vec[u32] = vec![0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32];
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut chunk = 0;
+    while chunk < msg.len() {
+        for i in 0..16 {
+            let at = chunk + i * 4;
+            w[i] = ((msg[at] as u32) << 24u32) | ((msg[at + 1] as u32) << 16u32)
+                | ((msg[at + 2] as u32) << 8u32) | (msg[at + 3] as u32);
+        }
+        for i in 16..80 {
+            w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1u32);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for i in 0..80 {
+            let (f, k) = if i < 20 {
+                ((b & c) | ((~b) & d), 0x5A827999u32)
+            } else if i < 40 {
+                (b ^ c ^ d, 0x6ED9EBA1u32)
+            } else if i < 60 {
+                ((b & c) | (b & d) | (c & d), 0x8F1BBCDCu32)
+            } else {
+                (b ^ c ^ d, 0xCA62C1D6u32)
+            };
+            let t = rotl(a, 5u32).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[i]);
+            e = d;
+            d = c;
+            c = rotl(b, 30u32);
+            b = a;
+            a = t;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        chunk = chunk + 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h.iter() {
+        out.push((x >> 24u32) as u8);
+        out.push(((x >> 16u32) & 0xffu32) as u8);
+        out.push(((x >> 8u32) & 0xffu32) as u8);
+        out.push((x & 0xffu32) as u8);
+    }
+    out
+}
+
+fn base64(data: Slice[u8]) -> String {
+    let table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < data.len() {
+        let b0 = data[i] as i64;
+        let b1 = if i + 1 < data.len() { data[i + 1] as i64 } else { 0 };
+        let b2 = if i + 2 < data.len() { data[i + 2] as i64 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(table[(n >> 18) & 63] as char);
+        out.push(table[(n >> 12) & 63] as char);
+        out.push(if i + 1 < data.len() { table[(n >> 6) & 63] as char } else { '=' });
+        out.push(if i + 2 < data.len() { table[n & 63] as char } else { '=' });
+        i = i + 3;
+    }
+    out
+}
+
+fn accept_key(key: Str) -> String {
+    base64(sha1(f"{key}{GUID}".bytes()))
+}
+
+// ---- frames -----------------------------------------------------------
+
+struct Frame { fin: bool, opcode: i64, masked: bool, payload: Vec[u8] }
+
+fn encode(fin: bool, opcode: i64, payload: Slice[u8], mask: Option[Array[u8, 4]]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    out.push(((if fin { 0x80 } else { 0 }) | opcode) as u8);
+    let mbit = match mask {
+        Some(_) => 0x80,
+        None => 0,
+    };
+    let n = payload.len();
+    if n < 126 {
+        out.push((mbit | n) as u8);
+    } else {
+        out.push((mbit | 126) as u8);
+        out.push((n >> 8) as u8);
+        out.push((n & 0xff) as u8);
+    }
+    match mask {
+        Some(m) => {
+            for k in 0..4 {
+                out.push(m[k]);
+            }
+            for i in 0..n {
+                out.push(payload[i] ^ m[i % 4]);
+            }
+        }
+        None => {
+            for b in payload {
+                out.push(b);
+            }
+        }
+    }
+    out
+}
+
+// Reads one frame at `at`; returns it and the offset after it, or None if
+// the bytes stop first.
+fn decode_frame(buf: Slice[u8], at: i64) -> Option[(Frame, i64)] {
+    if at + 2 > buf.len() {
+        return None;
+    }
+    let b0 = buf[at] as i64;
+    let b1 = buf[at + 1] as i64;
+    let masked = (b1 & 0x80) != 0;
+    let mut len = b1 & 0x7f;
+    let mut pos = at + 2;
+    if len == 126 {
+        if pos + 2 > buf.len() {
+            return None;
+        }
+        len = ((buf[pos] as i64) << 8) | (buf[pos + 1] as i64);
+        pos = pos + 2;
+    } else if len == 127 {
+        if pos + 8 > buf.len() {
+            return None;
+        }
+        len = 0;
+        for k in 0..8 {
+            len = (len << 8) | (buf[pos + k] as i64);
+        }
+        pos = pos + 8;
+    }
+    let mut key: Vec[u8] = Vec.new();
+    if masked {
+        if pos + 4 > buf.len() {
+            return None;
+        }
+        for k in 0..4 {
+            key.push(buf[pos + k]);
+        }
+        pos = pos + 4;
+    }
+    if pos + len > buf.len() {
+        return None;
+    }
+    let mut payload: Vec[u8] = Vec.new();
+    for i in 0..len {
+        let b = buf[pos + i];
+        payload.push(if masked { b ^ key[i % 4] } else { b });
+    }
+    Some((Frame { fin: (b0 & 0x80) != 0, opcode: b0 & 0x0f, masked: masked, payload: payload }, pos + len))
+}
+
+fn close_payload(code: i64, reason: Str) -> Vec[u8] {
+    let mut p: Vec[u8] = vec![(code >> 8) as u8, (code & 0xff) as u8];
+    for b in reason.bytes() {
+        p.push(b);
+    }
+    p
+}
+
+// ---- server -----------------------------------------------------------
+
+struct Conn {
+    stream: TcpStream,
+    nick: String,
+    out: Vec[u8],
+    open: bool,
+    // A message being assembled from fragments.
+    partial: Vec[u8],
+    partial_op: i64,
+}
+
+struct Room { conns: Vec[Conn], history: Vec[String] }
+
+fn read_all(conn: ref TcpStream) -> Vec[u8] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    bytes
+}
+
+fn find_crlf2(b: Slice[u8]) -> Option[i64] {
+    let mut i = 0;
+    while i + 3 < b.len() {
+        if b[i] == 13u8 and b[i + 1] == 10u8 and b[i + 2] == 13u8 and b[i + 3] == 10u8 {
+            return Some(i);
+        }
+        i = i + 1;
+    }
+    None
+}
+
+fn utf8(b: Slice[u8]) -> Option[String] {
+    match String.from_utf8(b) {
+        Ok(s) => Some(s),
+        Err(_) => None,
+    }
+}
+
+fn push_bytes(dst: mut ref Vec[u8], src: Slice[u8]) {
+    for b in src {
+        dst.push(b);
+    }
+}
+
+// Checks the upgrade request; returns the reply head, and whether to go on.
+fn handshake(head: Str) -> (String, bool) {
+    let lines: Vec[String] = head.split("\r\n");
+    let first: Vec[String] = lines[0].split(" ");
+    let mut key = String.new();
+    let mut upgrade = false;
+    let mut version = String.new();
+    for i in 1..lines.len() {
+        match lines[i].find(":") {
+            Some(c) => {
+                let name = lines[i][0..c].trim().to_lowercase();
+                let value = lines[i][c + 1..lines[i].len()].trim().to_string();
+                if name == "sec-websocket-key" {
+                    key = value;
+                } else if name == "upgrade" {
+                    upgrade = value.to_lowercase() == "websocket";
+                } else if name == "sec-websocket-version" {
+                    version = value;
+                }
+            }
+            None => {}
+        }
+    }
+    if first.len() != 3 or first[0] != "GET" or first[1] != "/chat" {
+        return ("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(), false);
+    }
+    if not upgrade or key.len() == 0 {
+        return ("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_string(), false);
+    }
+    if version != "13" {
+        return ("HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\n\r\n".to_string(), false);
+    }
+    (f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept_key(key)}\r\n\r\n", true)
+}
+
+fn send_text(room: mut ref Room, to: i64, text: Str) {
+    if room.conns[to].open {
+        let f = encode(true, 1, text.bytes(), None);
+        push_bytes(mut room.conns[to].out, f);
+    }
+}
+
+fn broadcast(room: mut ref Room, text: Str) {
+    room.history.push(text.to_string());
+    for i in 0..room.conns.len() {
+        send_text(room, i, text);
+    }
+}
+
+fn close_conn(room: mut ref Room, i: i64, code: i64, reason: Str) {
+    if not room.conns[i].open {
+        return;
+    }
+    let f = encode(true, 8, close_payload(code, reason), None);
+    push_bytes(mut room.conns[i].out, f);
+    room.conns[i].open = false;
+    println(f"  server: closed {room.conns[i].nick} with {code} ({reason})");
+}
+
+fn on_message(room: mut ref Room, i: i64, text: Str) {
+    if text.starts_with("/nick ") {
+        let new_nick = text[6..text.len()].trim().to_string();
+        let mut taken = false;
+        for c in room.conns.iter() {
+            if c.open and c.nick == new_nick {
+                taken = true;
+            }
+        }
+        if taken or new_nick.len() == 0 {
+            send_text(room, i, f"* nick {new_nick} is taken");
+        } else {
+            let old = room.conns[i].nick.clone();
+            room.conns[i].nick = new_nick.clone();
+            broadcast(room, f"* {old} is now {new_nick}");
+        }
+    } else if text == "/who" {
+        let mut names: Vec[String] = Vec.new();
+        for c in room.conns.iter() {
+            if c.open {
+                names.push(c.nick.clone());
+            }
+        }
+        names.sort();
+        send_text(room, i, f"* here: {names.join(", ")}");
+    } else if text == "/history" {
+        let n = room.history.len();
+        let from = if n > 3 { n - 3 } else { 0 };
+        for k in from..n {
+            let line = room.history[k].clone();
+            send_text(room, i, f"| {line}");
+        }
+    } else {
+        let nick = room.conns[i].nick.clone();
+        broadcast(room, f"<{nick}> {text}");
+    }
+}
+
+// Runs one client's frames through the room.
+fn on_frames(room: mut ref Room, i: i64, buf: Slice[u8], start: i64) {
+    let mut at = start;
+    while room.conns[i].open {
+        let (frame, next) = match decode_frame(buf, at) {
+            Some(x) => x,
+            None => {
+                if at < buf.len() {
+                    close_conn(room, i, 1002, "truncated frame");
+                }
+                return;
+            }
+        };
+        at = next;
+        if not frame.masked {
+            close_conn(room, i, 1002, "client frames must be masked");
+            return;
+        }
+        let op = frame.opcode;
+        if op == 9 {
+            let pong = encode(true, 10, frame.payload, None);
+            push_bytes(mut room.conns[i].out, pong);
+        } else if op == 10 {
+        } else if op == 8 {
+            let code = if frame.payload.len() >= 2 {
+                ((frame.payload[0] as i64) << 8) | (frame.payload[1] as i64)
+            } else {
+                1005
+            };
+            let nick = room.conns[i].nick.clone();
+            let echo = encode(true, 8, close_payload(1000, "bye"), None);
+            push_bytes(mut room.conns[i].out, echo);
+            room.conns[i].open = false;
+            println(f"  server: {nick} closed with {code}");
+            broadcast(room, f"* {nick} left");
+            return;
+        } else if op == 1 or op == 2 or op == 0 {
+            if op == 0 and room.conns[i].partial_op == 0 {
+                close_conn(room, i, 1002, "continuation with nothing to continue");
+                return;
+            }
+            if op != 0 and room.conns[i].partial_op != 0 {
+                close_conn(room, i, 1002, "new message inside a fragmented one");
+                return;
+            }
+            if op != 0 {
+                room.conns[i].partial_op = op;
+            }
+            push_bytes(mut room.conns[i].partial, frame.payload);
+            if room.conns[i].partial.len() > MAX_MESSAGE {
+                close_conn(room, i, 1009, "message too big");
+                return;
+            }
+            if frame.fin {
+                let whole = room.conns[i].partial.clone();
+                let kind = room.conns[i].partial_op;
+                room.conns[i].partial = Vec.new();
+                room.conns[i].partial_op = 0;
+                if kind == 2 {
+                    send_text(room, i, f"* binary message of {whole.len()} bytes ignored");
+                } else {
+                    match utf8(whole) {
+                        Some(text) => on_message(room, i, text),
+                        None => {
+                            close_conn(room, i, 1007, "text is not UTF-8");
+                            return;
+                        }
+                    }
+                }
+            }
+        } else {
+            close_conn(room, i, 1002, f"unknown opcode {op}");
+            return;
+        }
+    }
+}
+
+// ---- clients ----------------------------------------------------------
+
+struct Peer { name: String, wire: Vec[u8], stream: Option[TcpStream] }
+
+fn mask_for(name: Str, n: i64) -> Array[u8, 4] {
+    let b = name.bytes();
+    [b[0], (n * 37 % 256) as u8, 0x5au8, (b.len() * 11) as u8]
+}
+
+fn client(name: Str, key: Str) -> Peer {
+    let req = f"GET /chat HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    let mut wire: Vec[u8] = Vec.new();
+    push_bytes(mut wire, req.bytes());
+    Peer { name: name.to_string(), wire: wire, stream: None }
+}
+
+fn text(c: mut ref Peer, msg: Str) {
+    let n = c.wire.len();
+    let f = encode(true, 1, msg.bytes(), Some(mask_for(c.name, n)));
+    push_bytes(mut c.wire, f);
+}
+
+fn frame(c: mut ref Peer, fin: bool, op: i64, payload: Slice[u8]) {
+    let n = c.wire.len();
+    let f = encode(fin, op, payload, Some(mask_for(c.name, n)));
+    push_bytes(mut c.wire, f);
+}
+
+fn raw(c: mut ref Peer, bytes: Slice[u8]) {
+    push_bytes(mut c.wire, bytes);
+}
+
+fn describe(f: ref Frame) -> String {
+    if f.opcode == 1 {
+        utf8(f.payload).unwrap_or("?".to_string())
+    } else if f.opcode == 8 {
+        let code = if f.payload.len() >= 2 { ((f.payload[0] as i64) << 8) | (f.payload[1] as i64) } else { 0 };
+        let mut rest: Vec[u8] = Vec.new();
+        for k in 2..f.payload.len() {
+            rest.push(f.payload[k]);
+        }
+        f"[close {code} {utf8(rest).unwrap_or(String.new())}]"
+    } else if f.opcode == 10 {
+        f"[pong {utf8(f.payload).unwrap_or(String.new())}]"
+    } else {
+        f"[opcode {f.opcode}]"
+    }
+}
+
+// One round: every client connects and sends, the server handles them all
+// in connection order, then every client reads what came back.
+fn round(listener: ref TcpListener, room: mut ref Room, clients: mut ref Vec[Peer], label: Str) {
+    println(f"== {label}");
+    for c in clients.iter_mut() {
+        match TcpStream.connect("127.0.0.1:47742".to_string()) {
+            Ok(s) => {
+                let ok = s.write_all(c.wire).is_ok() and s.shutdown_write().is_ok();
+                if not ok {
+                    println(f"  {c.name}: write failed");
+                }
+                c.stream = Some(s);
+            }
+            Err(_) => println(f"  {c.name}: connect failed"),
+        }
+    }
+    let mut inputs: Vec[Vec[u8]] = Vec.new();
+    let mut starts: Vec[i64] = Vec.new();
+    room.conns = Vec.new();
+    for c in clients.iter() {
+        match listener.accept() {
+            Ok(s) => {
+                let bytes = read_all(s);
+                room.conns.push(Conn { stream: s, nick: c.name.clone(), out: Vec.new(), open: false, partial: Vec.new(), partial_op: 0 });
+                inputs.push(bytes);
+                starts.push(0);
+            }
+            Err(_) => println("  server: accept failed"),
+        }
+    }
+    // Handshakes first, so every client is in the room before anyone talks.
+    for i in 0..room.conns.len() {
+        let head_end = match find_crlf2(inputs[i]) {
+            Some(e) => e,
+            None => {
+                push_bytes(mut room.conns[i].out, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".bytes());
+                continue;
+            }
+        };
+        let mut head_bytes: Vec[u8] = Vec.new();
+        for k in 0..head_end {
+            head_bytes.push(inputs[i][k]);
+        }
+        let head = utf8(head_bytes).unwrap_or(String.new());
+        let (reply, ok) = handshake(head);
+        push_bytes(mut room.conns[i].out, reply.bytes());
+        starts[i] = head_end + 4;
+        if ok {
+            room.conns[i].open = true;
+            let nick = room.conns[i].nick.clone();
+            broadcast(room, f"* {nick} joined");
+        }
+    }
+    for i in 0..room.conns.len() {
+        if room.conns[i].open {
+            on_frames(room, i, inputs[i], starts[i]);
+        }
+    }
+    for i in 0..room.conns.len() {
+        if room.conns[i].open {
+            close_conn(room, i, 1001, "server going away");
+        }
+        let out = room.conns[i].out.clone();
+        match room.conns[i].stream.write_all(out) {
+            Ok(_) => {}
+            Err(_) => println("  server: write failed"),
+        }
+    }
+    room.conns = Vec.new();
+    for c in clients.iter_mut() {
+        let bytes = match c.stream {
+            Some(s) => read_all(s),
+            None => Vec.new(),
+        };
+        c.stream = None;
+        let head_end = match find_crlf2(bytes) {
+            Some(e) => e,
+            None => {
+                println(f"  {c.name}: no reply");
+                continue;
+            }
+        };
+        let mut head_bytes: Vec[u8] = Vec.new();
+        for k in 0..head_end {
+            head_bytes.push(bytes[k]);
+        }
+        let head = utf8(head_bytes).unwrap_or(String.new());
+        let status: Vec[String] = head.lines()[0].split(" ");
+        let mut accept = "-".to_string();
+        for l in head.lines() {
+            if l.to_lowercase().starts_with("sec-websocket-accept:") {
+                accept = l[21..l.len()].trim().to_string();
+            }
+        }
+        println(f"  {c.name}: {status[1]} accept={accept}");
+        let mut at = head_end + 4;
+        loop {
+            match decode_frame(bytes, at) {
+                Some((f, next)) => {
+                    println(f"    {describe(f)}");
+                    at = next;
+                }
+                None => break,
+            }
+        }
+        c.wire = Vec.new();
+    }
+}
+
+fn main() {
+    println(f"RFC 6455 sample key: {accept_key("dGhlIHNhbXBsZSBub25jZQ==")}");
+    let listener = match TcpListener.bind("127.0.0.1:47742".to_string()) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+    let mut room = Room { conns: Vec.new(), history: Vec.new() };
+
+    let mut a = client("ada", "x3JJHMbDL1EzLkh9GBhXDw==");
+    text(mut a, "hello room");
+    text(mut a, "/nick countess");
+    let mut b = client("bob", "AQIDBAUGBwgJCgsMDQ4PEA==");
+    frame(mut b, false, 1, "frag".bytes());
+    frame(mut b, true, 9, "ping-1".bytes());
+    frame(mut b, false, 0, "mented ".bytes());
+    frame(mut b, true, 0, "hello".bytes());
+    text(mut b, "/who");
+    let mut cy = client("cy", "dGhlIHNhbXBsZSBub25jZQ==");
+    text(mut cy, "/nick bob");
+    let long = "word ".repeat(30);
+    text(mut cy, long);
+    text(mut cy, "/history");
+    frame(mut cy, true, 8, close_payload(1000, "done"));
+    let mut clients = vec![a, b, cy];
+    round(listener, mut room, mut clients, "three clients chat");
+
+    let mut d = client("dee", "ZGVlZGVlZGVlZGVlZGVlZA==");
+    raw(mut d, encode(true, 1, "no mask".bytes(), None));
+    let mut e = client("eve", "ZXZlZXZlZXZlZXZlZXZlZQ==");
+    frame(mut e, true, 1, [0xffu8, 0xfeu8, 0x41u8]);
+    let mut f = client("fay", "ZmF5ZmF5ZmF5ZmF5ZmF5Zg==");
+    let big = "x".repeat(120);
+    frame(mut f, false, 1, big.bytes());
+    frame(mut f, true, 0, big.bytes());
+    let mut g = client("gus", "Z3VzZ3VzZ3VzZ3VzZ3VzZw==");
+    frame(mut g, true, 3, "?".bytes());
+    let mut h = client("hal", "aGFsaGFsaGFsaGFsaGFsaA==");
+    frame(mut h, true, 0, "orphan".bytes());
+    let mut clients2 = vec![d, e, f, g, h];
+    round(listener, mut room, mut clients2, "protocol errors");
+
+    let mut old = client("ivy", "aXZ5aXZ5aXZ5aXZ5aXZ5aQ==");
+    old.wire = Vec.new();
+    raw(mut old, "GET /chat HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: aXZ5aXZ5aXZ5aXZ5aXZ5aQ==\r\nSec-WebSocket-Version: 8\r\n\r\n".bytes());
+    let mut plain = client("joe", "-");
+    plain.wire = Vec.new();
+    raw(mut plain, "GET /chat HTTP/1.1\r\nHost: x\r\n\r\n".bytes());
+    let mut lost = client("kim", "-");
+    lost.wire = Vec.new();
+    raw(mut lost, "GET /other HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nSec-WebSocket-Key: a2ltCg==\r\nSec-WebSocket-Version: 13\r\n\r\n".bytes());
+    let mut ok = client("lee", "bGVlbGVlbGVlbGVlbGVlbA==");
+    text(mut ok, "/history");
+    let mut clients3 = vec![old, plain, lost, ok];
+    round(listener, mut room, mut clients3, "handshake failures");
+    println(f"history: {room.history.len()} lines");
+}

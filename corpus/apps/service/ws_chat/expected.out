@@ -1,0 +1,80 @@
+RFC 6455 sample key: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+== three clients chat
+  server: cy closed with 1000
+  server: closed countess with 1001 (server going away)
+  server: closed bob with 1001 (server going away)
+  ada: 101 accept=HSmrc0sMlYUkAGmm5OPpG2HaGWk=
+    * ada joined
+    * bob joined
+    * cy joined
+    <ada> hello room
+    * ada is now countess
+    <bob> fragmented hello
+    <cy> word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word 
+    * cy left
+    [close 1001 server going away]
+  bob: 101 accept=C/0nmHhBztSRGR1CwL6Tf4ZjwpY=
+    * bob joined
+    * cy joined
+    <ada> hello room
+    * ada is now countess
+    [pong ping-1]
+    <bob> fragmented hello
+    * here: bob, countess, cy
+    <cy> word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word 
+    * cy left
+    [close 1001 server going away]
+  cy: 101 accept=s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+    * cy joined
+    <ada> hello room
+    * ada is now countess
+    <bob> fragmented hello
+    * nick bob is taken
+    <cy> word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word 
+    | * ada is now countess
+    | <bob> fragmented hello
+    | <cy> word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word 
+    [close 1000 bye]
+== protocol errors
+  server: closed dee with 1002 (client frames must be masked)
+  server: closed eve with 1007 (text is not UTF-8)
+  server: closed fay with 1009 (message too big)
+  server: closed gus with 1002 (unknown opcode 3)
+  server: closed hal with 1002 (continuation with nothing to continue)
+  dee: 101 accept=hYB7wc9W/qr/ZPyyZd3DlILd3G4=
+    * dee joined
+    * eve joined
+    * fay joined
+    * gus joined
+    * hal joined
+    [close 1002 client frames must be masked]
+  eve: 101 accept=qXwNkinkcsrjyAp03xNpTGgGcw8=
+    * eve joined
+    * fay joined
+    * gus joined
+    * hal joined
+    [close 1007 text is not UTF-8]
+  fay: 101 accept=0lQQ8yWv+oOcD9s9EOfTB/bR9VM=
+    * fay joined
+    * gus joined
+    * hal joined
+    [close 1009 message too big]
+  gus: 101 accept=O1N6MXYdLnZyEGk/VX5ucoaUfG8=
+    * gus joined
+    * hal joined
+    [close 1002 unknown opcode 3]
+  hal: 101 accept=TW/Ifc9oRyh+ODzRU6bt7dZxAyE=
+    * hal joined
+    [close 1002 continuation with nothing to continue]
+== handshake failures
+  server: closed lee with 1001 (server going away)
+  ivy: 426 accept=-
+  joe: 400 accept=-
+  kim: 404 accept=-
+  lee: 101 accept=PUO1mX82Di0r6Kuf6RzVpkpQ61k=
+    * lee joined
+    | * gus joined
+    | * hal joined
+    | * lee joined
+    [close 1001 server going away]
+history: 14 lines

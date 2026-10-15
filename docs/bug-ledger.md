@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 264 |
+| missing-feature | 265 |
 | codegen-gap | 259 |
 | false-positive | 188 |
 | other | 172 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2895 |
 | interp | 925 |
-| typecheck | 427 |
+| typecheck | 428 |
 | other | 115 |
 | ownership | 98 |
 | cli | 76 |
@@ -214,6 +214,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-14 | 2026-10-15 | ownership | medium | `karac check` refuses a `mut ref` local bound to a projection of a named place, which core-semantics.md §5.1 allows: `let p: mut ref P = w.p; p.n += 5;` is refused twice ("cannot compound-assign through `p` — declared without `mut`", then "value 'w.p' moved here"), and `let p: mut ref P = w.ps[1];` with E_INDEX_MOVE_NON_COPY, while `__mir-run` runs the field form and prints the updated value; there is also no expression form `mut ref place` (only `ref place`), so a mutable borrow of an element has no `let` spelling at all | — |
 | B-2026-10-15-15 | 2026-10-15 | typecheck | low | The string library has no reverse search: docs/library/strings.md lists `find` but no `rfind`, `rsplit_once`, `split_once` or `strip_suffix`, and there is no path module, so taking a path's parent directory, a file's extension or the last field of a line means scanning the bytes by hand | — |
 | B-2026-10-15-16 | 2026-10-15 | typecheck+ownership | medium | `let v = m.get(k).unwrap_or(String.new());` binds a borrow of a temporary (core-semantics.md §5.1: `String.new()` in a `ref` slot is a temporary), but `karac check` passes it; every MIR surface then refuses the whole program with `borrow check main: bb10[term]: drop of _9 while it is borrowed (borrow at bb9[0]) [E0516]`, which names a basic block and no source line | — |
+| B-2026-10-15-17 | 2026-10-15 | typecheck | low | The library has no byte encodings or digests: docs/library/ defines no base64, no hex encode/decode, and no SHA-1 / SHA-256, so a WebSocket handshake, HTTP basic auth, a JWT, an ETag or a content-addressed store each needs its own hand-written SHA-1 and base64 | — |
 
 ### Relocated
 
