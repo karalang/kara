@@ -2376,3 +2376,50 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-15-41 and B-2026-10-15-42: a program's own `Range` or `IoError`
+/// is its own type, and range literals and file errors keep the library's.
+#[test]
+fn mir_a_user_type_named_range_or_io_error_is_its_own() {
+    let src = r#"
+struct Range { lo: i64, hi: i64 }
+impl Range {
+    fn width(self) -> i64 { self.hi - self.lo }
+}
+struct IoError { n: Vec[i64] }
+fn mid(r: ref Range) -> i64 { (r.lo + r.hi) / 2 }
+fn main() {
+    let r = Range { lo: 1, hi: 3 };
+    let v: Vec[i64] = vec![10, 20, 30];
+    let mut s = 0;
+    for i in 0..v.len() {
+        s += v[i];
+    }
+    for i in 0..=1 {
+        s += i;
+    }
+    println(f"{s} {r.lo} {r.width()} {mid(r)} {v[1..3].len()}");
+    match fs.read_to_string("nonexistent_zz.txt") {
+        Ok(_) => println("read"),
+        Err(_) => println("failed"),
+    }
+    let u = IoError { n: vec![1, 2] };
+    println(f"{u.n.len()}");
+}
+"#;
+    let want = "61 1 2 2 2\nfailed\n2\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    // An error names the program's type by its own name.
+    let err = karac::mir::lower::build_source(
+        &src.replace("    println(f\"{u.n.len()}\");", "    let bad: i64 = r;"),
+    )
+    .err()
+    .expect("refused");
+    assert!(err.contains("found 'Range'"), "{err}");
+}

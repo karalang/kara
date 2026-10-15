@@ -14604,6 +14604,8 @@ pub(crate) fn mark_library_builtins(program: &mut ast::Program, user_len: usize)
 /// check` checks this text, as the build does, so a program using a
 /// library-only feature (`#[derive(Serialize)]`) checks as it builds.
 pub fn library_source(src: &str) -> (String, usize) {
+    let (renamed, _) = rename_compiler_name_shadows(src);
+    let src = renamed.as_str();
     let user_len = src.len();
     // Baked modules whose bodies are Kāra, for a program that names them
     // (`#[derive(Message)]`'s `encode` / `decode` call `std.protobuf`), as
@@ -14632,6 +14634,71 @@ pub fn library_source(src: &str) -> (String, usize) {
     }
     let lib = rename_clashing_library_items(src, lib);
     (format!("{src}{lib}"), user_len)
+}
+
+/// Library types the compiler itself spells: a range literal is a `Range`,
+/// a failed file operation an `IoError`.
+const TYPES_THE_COMPILER_SPELLS: &[&str] = &["Range", "RangeInclusive", "IoError"];
+
+/// `src` with each of its own top-level types named like one the compiler
+/// spells ([`TYPES_THE_COMPILER_SPELLS`]) renamed apart, and the renames as
+/// `(new, old)` pairs. The program cannot mean the library's type by that
+/// name, having declared its own, so every identifier of the name in it is
+/// its own type's (B-2026-10-15-41). The new name is as long as the old,
+/// so every span stays where it was.
+pub fn rename_compiler_name_shadows(src: &str) -> (String, Vec<(String, String)>) {
+    let declared: Vec<&str> = TYPES_THE_COMPILER_SPELLS
+        .iter()
+        .copied()
+        .filter(|name| {
+            src.lines().any(|line| {
+                let line = line
+                    .trim_start_matches("pub ")
+                    .trim_start_matches("shared ");
+                ["struct ", "enum ", "type ", "trait "].iter().any(|kw| {
+                    line.strip_prefix(kw).is_some_and(|rest| {
+                        rest.strip_prefix(name).is_some_and(|after| {
+                            !after.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                        })
+                    })
+                })
+            })
+        })
+        .collect();
+    if declared.is_empty() {
+        return (src.to_string(), Vec::new());
+    }
+    let tokens = crate::tokenize(src);
+    let mut renames = Vec::new();
+    let mut out = src.as_bytes().to_vec();
+    for name in declared {
+        // The name with its last characters turned to `_`, one the program
+        // does not already use.
+        let Some(new) = (1..name.len()).find_map(|k| {
+            let cand = format!("{}{}", &name[..name.len() - k], "_".repeat(k));
+            (!tokens.iter().any(|t| {
+                matches!(&t.token, crate::token::Token::Identifier { name: n, .. } if *n == cand)
+            }))
+            .then_some(cand)
+        }) else {
+            continue;
+        };
+        for t in &tokens {
+            if let crate::token::Token::Identifier {
+                name: n,
+                raw: false,
+            } = &t.token
+            {
+                let at = t.span.offset;
+                if n == name && src.get(at..at + name.len()) == Some(name) {
+                    out[at..at + name.len()].copy_from_slice(new.as_bytes());
+                }
+            }
+        }
+        renames.push((new, name.to_string()));
+    }
+    let text = String::from_utf8(out).unwrap_or_else(|_| src.to_string());
+    (text, renames)
 }
 
 /// Library items the compiler names (`Iterator`, `Ordering`, the serde
@@ -14802,6 +14869,16 @@ fn user_operator_trait(bin: BinOp) -> Option<(&'static str, &'static str)> {
 /// Check one source file, build its MIR and elaborate drops; or the first
 /// stage that refused it.
 pub fn build_source(src: &str) -> Result<Lowered, String> {
+    let (_, renames) = rename_compiler_name_shadows(src);
+    build_renamed_source(src).map_err(|mut e| {
+        for (new, old) in &renames {
+            e = e.replace(new.as_str(), old);
+        }
+        e
+    })
+}
+
+fn build_renamed_source(src: &str) -> Result<Lowered, String> {
     let (src, user_len) = library_source(src);
     let parsed = crate::parse(&src);
     if !parsed.errors.is_empty() {
