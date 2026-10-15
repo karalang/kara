@@ -540,6 +540,57 @@ pub fn effectcheck_with_typecheck_data(
     checker.check()
 }
 
+/// [`effectcheck_with_typecheck_data`] plus the tables that charge a call
+/// through a generic bound to the instance it is made at (B-2026-10-15-21):
+/// the typechecker's `node_call_subs` and the expressions it typed by a type
+/// parameter ([`typeparam_value_nodes`]).
+/// Without them such a call is charged every impl of the method.
+#[allow(clippy::too_many_arguments)]
+pub fn effectcheck_with_typecheck_tables(
+    program: &Program,
+    policy: PublicEffectsPolicy,
+    profile_config: impl Into<ProfileConfig>,
+    method_callee_types: FxHashMap<crate::resolver::SpanKey, String>,
+    call_type_subs: rustc_hash::FxHashMap<
+        crate::resolver::SpanKey,
+        rustc_hash::FxHashMap<String, String>,
+    >,
+    node_call_subs: rustc_hash::FxHashMap<
+        crate::ids::NodeId,
+        rustc_hash::FxHashMap<String, crate::typechecker::Type>,
+    >,
+    typeparam_nodes: rustc_hash::FxHashMap<crate::ids::NodeId, String>,
+) -> EffectCheckResult {
+    let checker = EffectChecker::new_with_policy_and_config(program, policy, profile_config.into())
+        .with_method_callee_types(method_callee_types)
+        .with_call_type_subs(call_type_subs)
+        .with_bound_dispatch_tables(node_call_subs, typeparam_nodes);
+    checker.check()
+}
+
+/// The expressions the typechecker typed by a type parameter, or by a `ref` /
+/// `mut ref` to one, keyed by `NodeId` and naming the parameter: the
+/// receivers through which a call dispatches on a bound (B-2026-10-15-21).
+pub fn typeparam_value_nodes(
+    typed: &crate::typechecker::TypeCheckResult,
+) -> rustc_hash::FxHashMap<crate::ids::NodeId, String> {
+    use crate::typechecker::Type;
+    typed
+        .node_types
+        .iter()
+        .filter_map(|(&node, (ty, _))| {
+            let mut ty = ty;
+            while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+                ty = inner;
+            }
+            match ty {
+                Type::TypeParam(name) => Some((node, name.clone())),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 /// Analyze concurrency opportunities in a parsed program.
 ///
 /// Convenience wrapper over [`concurrency_analyze_typed`] with no type info —

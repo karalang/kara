@@ -626,12 +626,14 @@ pub fn effectcheck_as_build_does(
     program: &karac::ast::Program,
     typed: &karac::typechecker::TypeCheckResult,
 ) -> karac::effectchecker::EffectCheckResult {
-    karac::effectcheck_with_typecheck_data(
+    karac::effectcheck_with_typecheck_tables(
         program,
         karac::effectchecker::PublicEffectsPolicy::default(),
         karac::manifest::ProfileConfig::default(),
         typed.method_callee_types.clone(),
         typed.call_type_subs.clone(),
+        typed.node_call_subs.clone(),
+        karac::typeparam_value_nodes(typed),
     )
 }
 

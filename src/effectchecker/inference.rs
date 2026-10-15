@@ -20,7 +20,8 @@ use crate::intern::Symbol;
 use crate::token::Span;
 
 use super::{
-    tarjan_scc, DeclaredEffects, Effect, EffectError, EffectErrorKind, EffectOrigin, EffectSet,
+    tarjan_scc, BoundEvent, DeclaredEffects, Effect, EffectError, EffectErrorKind, EffectOrigin,
+    EffectSet,
 };
 
 /// Which edge kinds `build_call_graph_with` puts in the graph.
@@ -490,7 +491,7 @@ impl<'a> super::EffectChecker<'a> {
         // still empty. Declared-effect callees would have masked this.
         for (&name, func) in &self.function_bodies {
             let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
-            let relevant = self
+            let mut relevant = self
                 .collect_calls_in_block(&func.body, bounds)
                 .into_iter()
                 .chain(
@@ -501,13 +502,18 @@ impl<'a> super::EffectChecker<'a> {
                         .flatten()
                         .copied(),
                 )
-                .filter(|(callee, _)| all_fn_names.contains(callee))
-                .collect();
+                .collect::<Vec<_>>();
+            if kinds == EdgeKinds::CallsAndValueRefs {
+                for &(callee, span) in self.fn_value_ref_calls.get(&name).into_iter().flatten() {
+                    self.charge_bound_calls_unresolved(callee, span, &mut relevant);
+                }
+            }
+            relevant.retain(|(callee, _)| all_fn_names.contains(callee));
             graph.insert(name, relevant);
         }
         for (&name, func) in &self.method_bodies {
             let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
-            let relevant = self
+            let mut relevant = self
                 .collect_calls_in_block(&func.body, bounds)
                 .into_iter()
                 .chain(
@@ -518,8 +524,13 @@ impl<'a> super::EffectChecker<'a> {
                         .flatten()
                         .copied(),
                 )
-                .filter(|(callee, _)| all_fn_names.contains(callee))
-                .collect();
+                .collect::<Vec<_>>();
+            if kinds == EdgeKinds::CallsAndValueRefs {
+                for &(callee, span) in self.fn_value_ref_calls.get(&name).into_iter().flatten() {
+                    self.charge_bound_calls_unresolved(callee, span, &mut relevant);
+                }
+            }
+            relevant.retain(|(callee, _)| all_fn_names.contains(callee));
             graph.insert(name, relevant);
         }
         graph
@@ -589,6 +600,9 @@ impl<'a> super::EffectChecker<'a> {
                 .flatten()
                 .copied(),
         );
+        for &(callee, span) in self.fn_value_ref_calls.get(&fn_name).into_iter().flatten() {
+            self.charge_bound_calls_unresolved(callee, span, &mut calls);
+        }
 
         // Dedupe callees in place (first call site wins — matching
         // `EffectSet::add`'s first-origin-wins semantics).
@@ -836,6 +850,252 @@ impl<'a> super::EffectChecker<'a> {
         false
     }
 
+    /// Whether the bare-name fallback for a method call may push `key`, given
+    /// the typechecker's resolution `precise` of the same call. With no
+    /// resolution, or one naming a trait (a `dyn` receiver), any impl may be
+    /// the callee. A resolution to a concrete type's own method excludes
+    /// every other impl; one to a concrete type with no such body (a trait
+    /// default it inherits, or a built-in type's method) keeps only the trait
+    /// defaults (B-2026-10-15-21).
+    fn fallback_can_reach(&self, precise: Option<Symbol>, key: Symbol) -> bool {
+        let Some(precise) = precise else {
+            return true;
+        };
+        let owner = |sym: Symbol| -> Option<String> {
+            self.interner
+                .resolve(sym)
+                .rsplit_once('.')
+                .map(|(o, _)| o.to_string())
+        };
+        let is_trait = |name: &Option<String>| {
+            name.as_ref()
+                .is_some_and(|n| self.trait_names.contains(n.as_str()))
+        };
+        if is_trait(&owner(precise)) {
+            return true;
+        }
+        if self.method_bodies.contains_key(&precise) {
+            return false;
+        }
+        is_trait(&owner(key))
+    }
+
+    /// Whether `trait_name` declares a method `method_name`, with or without a
+    /// receiver.
+    fn trait_declares_method(&self, trait_name: &str, method_name: &str) -> bool {
+        self.program.items.iter().any(|item| match item {
+            Item::TraitDef(t) if t.name == trait_name => t
+                .items
+                .iter()
+                .any(|ti| matches!(ti, TraitItem::Method(m) if m.name == method_name)),
+            _ => false,
+        })
+    }
+
+    /// B-2026-10-15-21: a method call on a value of a type parameter, through
+    /// a bound whose trait method declares no effects, is charged "the
+    /// effects of the instance's method" (design.md § Generics), which only a
+    /// call site that instantiates the parameter knows. Returns true (and
+    /// records the fact for `compute_bound_calls`) when the call is deferred
+    /// that way. A trait method that declares effects, a `Self` receiver
+    /// (a trait default body, instantiated through no call site), and a
+    /// method no bound declares keep the old charge, every impl.
+    fn defer_bound_method_call(
+        &self,
+        receiver: &Expr,
+        method: Symbol,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
+    ) -> bool {
+        let Some(param) = self.typeparam_nodes.get(&receiver.id) else {
+            return false;
+        };
+        if param == "Self" {
+            return false;
+        }
+        let Some(bs) = bounds.get(param) else {
+            return false;
+        };
+        let method_str = self.interner.resolve(method).to_string();
+        let mut declared_by_a_bound = false;
+        for b in bs {
+            let Some(t) = b.path.last() else {
+                continue;
+            };
+            if !self.trait_declares_method(t, &method_str) {
+                continue;
+            }
+            declared_by_a_bound = true;
+            let key = self.interner.dotted_str(t, &method_str);
+            if !matches!(
+                self.declared_effects.get(&key),
+                Some(DeclaredEffects::None) | None
+            ) || self.fn_uses_with_underscore.contains(&key)
+            {
+                return false;
+            }
+        }
+        if !declared_by_a_bound {
+            return false;
+        }
+        self.note_bound_event(BoundEvent::TypeParam {
+            param: param.clone(),
+            method,
+        });
+        true
+    }
+
+    fn note_bound_event(&self, event: BoundEvent) {
+        if let Some(events) = self.bound_events.borrow_mut().as_mut() {
+            events.push(event);
+        }
+    }
+
+    /// At a call of `callee` (call node `node`), charge the calls `callee`
+    /// makes through bounds (`bound_calls`) to the instances this call binds
+    /// its parameters to. A parameter bound to one of the CALLER's own type
+    /// parameters is the caller's to pass on (it is in the caller's
+    /// `bound_calls`); one the typechecker did not solve, or a type with no
+    /// such method body, is charged every impl, as before.
+    fn charge_bound_calls_at(
+        &self,
+        callee: Symbol,
+        node: crate::ids::NodeId,
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        self.note_bound_event(BoundEvent::Generic { callee, node });
+        let Some(pairs) = self.bound_calls.get(&callee) else {
+            return;
+        };
+        let subs = self.node_call_subs.get(&node);
+        for (param, method) in pairs {
+            let resolved = subs.and_then(|s| s.get(param));
+            if let Some(ty) = resolved {
+                if let crate::typechecker::Type::TypeParam(q) = ty {
+                    if q != "Self" {
+                        continue;
+                    }
+                } else if let Some(name) = crate::typechecker::type_to_concrete_or_param_name(ty) {
+                    let key = self
+                        .interner
+                        .dotted_str(&name, &self.interner.resolve(*method));
+                    if self.method_bodies.contains_key(&key) {
+                        calls.push((key, span));
+                        continue;
+                    }
+                }
+            }
+            if let Some(keys) = self.method_name_index.get(method) {
+                for &key in keys {
+                    calls.push((key, span));
+                }
+            }
+        }
+    }
+
+    /// A function mentioned as a VALUE is instantiated where no call site
+    /// says at what, so its calls through bounds are charged every impl.
+    pub(crate) fn charge_bound_calls_unresolved(
+        &self,
+        callee: Symbol,
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        let Some(pairs) = self.bound_calls.get(&callee) else {
+            return;
+        };
+        for (_, method) in pairs {
+            if let Some(keys) = self.method_name_index.get(method) {
+                for &key in keys {
+                    calls.push((key, span));
+                }
+            }
+        }
+    }
+
+    /// B-2026-10-15-21: fill `bound_calls`. Each body is walked once with
+    /// `bound_events` set, collecting its deferred calls through bounds and
+    /// its calls to other user functions with their call nodes; then a
+    /// generic callee's pairs flow to a caller that instantiates them at the
+    /// caller's own type parameters, to a fixed point.
+    pub(crate) fn compute_bound_calls(&mut self) {
+        self.trait_names = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::TraitDef(t) => Some(t.name.clone()),
+                _ => None,
+            })
+            .collect();
+        if self.typeparam_nodes.is_empty() {
+            return;
+        }
+        let names: Vec<Symbol> = self
+            .function_bodies
+            .keys()
+            .chain(self.method_bodies.keys())
+            .copied()
+            .collect();
+        let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
+        let mut events: Vec<(Symbol, Vec<BoundEvent>)> = Vec::new();
+        for name in names {
+            let Some(func) = self
+                .function_bodies
+                .get(&name)
+                .or_else(|| self.method_bodies.get(&name))
+            else {
+                continue;
+            };
+            let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
+            *self.bound_events.borrow_mut() = Some(Vec::new());
+            let _ = self.collect_calls_in_block(&func.body, bounds);
+            let walked = self.bound_events.borrow_mut().take().unwrap_or_default();
+            if !walked.is_empty() {
+                events.push((name, walked));
+            }
+        }
+        let mut bound_calls: FxHashMap<Symbol, FxHashSet<(String, Symbol)>> = FxHashMap::default();
+        for (f, walked) in &events {
+            for e in walked {
+                if let BoundEvent::TypeParam { param, method } = e {
+                    bound_calls
+                        .entry(*f)
+                        .or_default()
+                        .insert((param.clone(), *method));
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (f, walked) in &events {
+                for e in walked {
+                    let BoundEvent::Generic { callee, node } = e else {
+                        continue;
+                    };
+                    let Some(pairs) = bound_calls.get(callee).cloned() else {
+                        continue;
+                    };
+                    for (p, m) in pairs {
+                        if let Some(crate::typechecker::Type::TypeParam(q)) =
+                            self.node_call_subs.get(node).and_then(|s| s.get(&p))
+                        {
+                            if q != "Self"
+                                && bound_calls.entry(*f).or_default().insert((q.clone(), m))
+                            {
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.bound_calls = bound_calls;
+    }
+
     pub(crate) fn collect_calls_in_expr(
         &self,
         expr: &Expr,
@@ -859,6 +1119,7 @@ impl<'a> super::EffectChecker<'a> {
                     let n = self.extract_callee_name(callee);
                     if let Some(name) = n {
                         calls.push((name, expr.span));
+                        self.charge_bound_calls_at(name, expr.id, expr.span, calls);
                     }
                     n
                 };
@@ -933,8 +1194,12 @@ impl<'a> super::EffectChecker<'a> {
                 // safely map `get`/`post`/`send`). Precise and additive: it can
                 // only contribute effects that genuinely belong to the resolved
                 // method, so it never taints `map.get()` / `sender.send()`.
-                if let Some(precise_key) = self.resolve_method_callee_key(&expr.span) {
+                let precise = self.resolve_method_callee_key(&expr.span);
+                if let Some(precise_key) = precise {
                     calls.push((precise_key, expr.span));
+                    if self.method_bodies.contains_key(&precise_key) {
+                        self.charge_bound_calls_at(precise_key, expr.id, expr.span, calls);
+                    }
                 }
                 // `CACHE.get()` on a module-level `LazyLock[T]` — attribute the
                 // stored initializer's effects to THIS function, which is what
@@ -1005,9 +1270,25 @@ impl<'a> super::EffectChecker<'a> {
                 // method with a matching bare name, via the index built in
                 // `collect_function_info` (scanning all `method_bodies` keys
                 // here, once per call site, was the front end's top hotspot).
-                if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {
-                    for &key in keys {
-                        calls.push((key, expr.span));
+                //
+                // Two narrowings (B-2026-10-15-21). A call through a bound
+                // whose trait method declares no effects is charged at the
+                // instance, by whoever instantiates this function, so it adds
+                // nothing here. And a call the typechecker resolved to a
+                // concrete type's own method cannot reach another type's impl
+                // of the same name: without that, `self.items.remove(i)` in
+                // one store's method was an edge to every `remove` in the
+                // program, which also made unrelated impls a "mutual
+                // recursion group".
+                let deferred =
+                    method_sym.is_some_and(|m| self.defer_bound_method_call(object, m, bounds));
+                if !deferred {
+                    if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {
+                        for &key in keys {
+                            if self.fallback_can_reach(precise, key) {
+                                calls.push((key, expr.span));
+                            }
+                        }
                     }
                 }
                 // unwrap() and expect() always panic on None/Err (F-057).

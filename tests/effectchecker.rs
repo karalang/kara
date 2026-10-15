@@ -174,13 +174,17 @@ fn effectcheck_full_pipeline(source: &str) -> EffectCheckResult {
     assert!(typed.errors.is_empty(), "Type errors: {:?}", typed.errors);
     let method_types = typed.method_callee_types.clone();
     let call_type_subs = typed.call_type_subs.clone();
+    let node_call_subs = typed.node_call_subs.clone();
+    let typeparam_receivers = karac::typeparam_value_nodes(&typed);
     lower(&mut parsed.program, &typed);
-    effectcheck_with_typecheck_data(
+    karac::effectcheck_with_typecheck_tables(
         &parsed.program,
         PublicEffectsPolicy::default(),
         CompileProfile::Default,
         method_types,
         call_type_subs,
+        node_call_subs,
+        typeparam_receivers,
     )
 }
 
@@ -10592,14 +10596,6 @@ fn effect_sets_agree_with_and_without_the_threaded_tables() {
          impl Sink { fn emit(ref self, v: i64) -> i64 with writes(Log) { v + self.n } }\n\
          fn caller(s: ref Sink) -> i64 { s.emit(1) }\n\
          fn main() { let s = Sink { n: 1 }; let _ = caller(s); }",
-        // SAME method name on two types — only one is effectful.
-        "effect resource Net;\n\
-         struct Pure { n: i64 }\n\
-         struct Impure { n: i64 }\n\
-         impl Pure { fn get(ref self) -> i64 { self.n } }\n\
-         impl Impure { fn get(ref self) -> i64 with sends(Net) { self.n } }\n\
-         fn only_pure(p: ref Pure) -> i64 { p.get() }\n\
-         fn main() { let p = Pure { n: 1 }; let _ = only_pure(p); }",
         // Polymorphic effect slot through a method.
         "effect resource Net;\n\
          struct Runner { n: i64 }\n\
@@ -10622,6 +10618,43 @@ fn effect_sets_agree_with_and_without_the_threaded_tables() {
         };
         assert_eq!(key(&bare), key(&rich), "effect sets diverged for:\n{src}");
     }
+}
+
+/// The one shape where the two entrypoints DO differ, in the sound direction:
+/// the same method name on two types, only one effectful. Without the
+/// typechecker's resolution of `p.get()` the call can be either impl, so the
+/// bare form charges both; with it, the call reaches `Pure.get` alone
+/// (B-2026-10-15-21, which made the threaded form stop also charging every
+/// other impl of the name). A harness on the bare form is therefore at worst
+/// over-cautious, never missing an effect.
+#[test]
+fn resolved_method_call_is_charged_its_own_impl_only() {
+    let (bare, rich) = bare_and_rich(
+        "effect resource Net;\n\
+         struct Pure { n: i64 }\n\
+         struct Impure { n: i64 }\n\
+         impl Pure { fn get(ref self) -> i64 { self.n } }\n\
+         impl Impure { fn get(ref self) -> i64 with sends(Net) { self.n } }\n\
+         fn only_pure(p: ref Pure) -> i64 { p.get() }\n\
+         fn main() { let p = Pure { n: 1 }; let _ = only_pure(p); }",
+    );
+    let sends = |r: &karac::effectchecker::EffectCheckResult| {
+        r.inferred_effects.get("only_pure").is_some_and(|set| {
+            set.effects
+                .iter()
+                .any(|te| format!("{:?}", te.effect).contains("Net"))
+        })
+    };
+    assert!(
+        sends(&bare),
+        "bare: {:?}",
+        bare.inferred_effects.get("only_pure")
+    );
+    assert!(
+        !sends(&rich),
+        "rich: {:?}",
+        rich.inferred_effects.get("only_pure")
+    );
 }
 
 /// B-2026-08-21-2 slice 4 — `pure_loop_in_par`.
@@ -12602,5 +12635,119 @@ fn test_allocates_heap_still_constrains_a_bare_fn_slot_under_embedded() {
                 && e.message.contains("allocates(Heap)")),
         "embedded must still check `allocates(Heap)` against a bare slot; got {:?}",
         errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ── B-2026-10-15-21: a call through a bound is charged at the instance ──
+
+/// Two stores behind one trait, one in memory and one on disk, and generic
+/// helpers that call through the bound directly, through another generic
+/// function, and through a method of a generic struct.
+const BOUND_STORES: &str = r#"
+trait Store {
+    fn save(mut ref self, v: i64);
+    fn remove(mut ref self, i: i64);
+}
+pub struct Mem { v: Vec[i64] }
+pub struct Disk { path: String }
+impl Store for Mem {
+    fn save(mut ref self, v: i64) { self.v.push(v); }
+    fn remove(mut ref self, i: i64) { let _gone = self.v.remove(i); }
+}
+impl Store for Disk {
+    fn save(mut ref self, v: i64) {
+        match fs.write(self.path.clone(), f"{v}\n") {
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+    fn remove(mut ref self, i: i64) {
+        match fs.write(self.path.clone(), f"-{i}\n") {
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+}
+fn store_twice[S: Store](s: mut ref S) { s.save(1); s.save(2); }
+fn store_four[T: Store](t: mut ref T) { store_twice(t); store_twice(t); }
+pub struct Svc[S: Store] { s: S }
+impl[S: Store] Svc[S] {
+    fn put(mut ref self, v: i64) { self.s.save(v); }
+}
+"#;
+
+fn bound_errors(body: &str) -> Vec<String> {
+    let src = format!("{BOUND_STORES}{body}");
+    effectcheck_full_pipeline(&src)
+        .errors
+        .into_iter()
+        .map(|e| e.message)
+        .collect()
+}
+
+#[test]
+fn test_bound_call_is_charged_the_instance_not_every_impl() {
+    for (label, body) in [
+        (
+            "direct",
+            "pub fn only() with allocates(Heap) { let mut m = Mem { v: Vec.new() }; store_twice(mut m); }",
+        ),
+        (
+            "through a generic caller",
+            "pub fn only() with allocates(Heap) { let mut m = Mem { v: Vec.new() }; store_four(mut m); }",
+        ),
+        (
+            "through a generic struct's method",
+            "pub fn only() with allocates(Heap) { let mut x = Svc { s: Mem { v: Vec.new() } }; x.put(1); }",
+        ),
+    ] {
+        let errs = bound_errors(&format!("{body}\nfn main() {{}}"));
+        assert!(errs.is_empty(), "{label}: {errs:?}");
+    }
+}
+
+#[test]
+fn test_bound_call_still_charges_the_instance_that_does_io() {
+    for (label, body) in [
+        (
+            "direct",
+            "pub fn only() with allocates(Heap) { let mut d = Disk { path: \"x\".to_string() }; store_twice(mut d); }",
+        ),
+        (
+            "through a generic caller",
+            "pub fn only() with allocates(Heap) { let mut d = Disk { path: \"x\".to_string() }; store_four(mut d); }",
+        ),
+        (
+            "through a generic struct's method",
+            "pub fn only() with allocates(Heap) { let mut x = Svc { s: Disk { path: \"x\".to_string() } }; x.put(1); }",
+        ),
+    ] {
+        let errs = bound_errors(&format!("{body}\nfn main() {{}}"));
+        assert!(
+            errs.iter().any(|m| m.contains("writes(FileSystem)")),
+            "{label}: {errs:?}"
+        );
+    }
+}
+
+/// `self.v.remove(i)` resolves to `Vec.remove`; it used to be an edge to
+/// every `remove` in the program, which put `Mem.remove` and `Disk.remove`
+/// in one "mutual recursion group" and charged the memory store the disk's
+/// I/O.
+#[test]
+fn test_resolved_method_call_reaches_no_other_impl() {
+    let src = format!(
+        "{BOUND_STORES}pub fn drop_one() with allocates(Heap) panics {{ let mut m = Mem {{ v: Vec.new() }}; m.remove(0); }}\nfn main() {{}}"
+    );
+    let result = effectcheck_full_pipeline(&src);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert!(
+        result.mutual_recursion_groups.is_empty(),
+        "{:?}",
+        result
+            .mutual_recursion_groups
+            .iter()
+            .map(|g| g.functions.clone())
+            .collect::<Vec<_>>()
     );
 }

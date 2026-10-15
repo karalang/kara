@@ -1538,12 +1538,27 @@ impl Pipeline {
         // reflected for the moot-flag scaffold and downstream knob consumers.
         let mut profile_config = self.profile_config.clone();
         profile_config.profile = self.profile;
-        self.effects = Some(crate::effectcheck_with_typecheck_data(
+        // B-2026-10-15-21: a call through a generic bound is charged at the
+        // instance it is made at, which needs the call nodes' solved type
+        // arguments and the expressions typed by a type parameter.
+        let node_call_subs = self
+            .typed
+            .as_ref()
+            .map(|t| t.node_call_subs.clone())
+            .unwrap_or_default();
+        let typeparam_nodes = self
+            .typed
+            .as_ref()
+            .map(crate::typeparam_value_nodes)
+            .unwrap_or_default();
+        self.effects = Some(crate::effectcheck_with_typecheck_tables(
             &self.parsed.program,
             crate::effectchecker::PublicEffectsPolicy::default(),
             profile_config,
             method_types,
             call_type_subs,
+            node_call_subs,
+            typeparam_nodes,
         ));
         // Populate `Program.callee_effectful` from the effect-check result so
         // codegen can narrow the par-branch cooperative cancel-check to calls

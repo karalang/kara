@@ -721,6 +721,20 @@ impl BuiltinSyms {
     }
 }
 
+/// One bound-dispatch fact met while `compute_bound_calls` walks a body
+/// (B-2026-10-15-21).
+#[derive(Debug, Clone)]
+pub(crate) enum BoundEvent {
+    /// `x.method(..)` on a value of type parameter `param`, through a bound
+    /// whose trait method declares no effects.
+    TypeParam { param: String, method: Symbol },
+    /// A call to the user function or method `callee`, at call node `node`.
+    Generic {
+        callee: Symbol,
+        node: crate::ids::NodeId,
+    },
+}
+
 /// Handle to a function body the checker walks: a direct borrow of the
 /// AST for real functions and impl methods (`program` outlives the
 /// checker, so this is the zero-clone common case) or a synthesized
@@ -862,6 +876,32 @@ pub struct EffectChecker<'a> {
     /// when a generic call's effect-subtyping check fails. Empty when
     /// constructed via the unparameterised `new` family.
     pub(crate) call_type_subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
+    /// Each generic call's solved type arguments, keyed by the call
+    /// expression's `NodeId` (`TypeCheckResult.node_call_subs`). Unlike
+    /// `call_type_subs` it covers a method call's IMPL parameters
+    /// (`svc.add(x)` on a `Service[Mem]` binds `S = Mem`) and keeps a type
+    /// parameter distinct from a type of the same spelling. B-2026-10-15-21
+    /// reads it to charge a call through a bound to the instance it is made
+    /// at.
+    pub(crate) node_call_subs:
+        FxHashMap<crate::ids::NodeId, FxHashMap<String, crate::typechecker::Type>>,
+    /// Expressions whose type is a type parameter, or a `ref` / `mut ref` to
+    /// one (`s` in `s.save(1)` with `s: mut ref S`), keyed by `NodeId` and
+    /// naming the parameter. Built from `TypeCheckResult.node_types` by
+    /// [`crate::typeparam_value_nodes`].
+    pub(crate) typeparam_nodes: FxHashMap<crate::ids::NodeId, String>,
+    /// B-2026-10-15-21: per function, the `(type parameter, method)` pairs its
+    /// body calls through a bound whose trait method declares no effects,
+    /// directly or through a generic callee instantiated at one of its own
+    /// parameters. design.md § Generics charges such a call "the effects of
+    /// the instance's method", so these are left out of the function's own
+    /// effects and resolved at each call site from `node_call_subs`.
+    pub(crate) bound_calls: FxHashMap<Symbol, FxHashSet<(String, Symbol)>>,
+    /// Set only while `compute_bound_calls` walks a body: the bound-dispatch
+    /// events that walk meets, in order.
+    pub(crate) bound_events: std::cell::RefCell<Option<Vec<BoundEvent>>>,
+    /// The program's trait names, for `fallback_can_reach`.
+    pub(crate) trait_names: FxHashSet<String>,
     /// Phase 6 line 26 slice 8aa: per-call-site effect-variable
     /// substitutions, populated by `check_call_args_subtyping` from
     /// the existing `compute_call_var_bindings` output. Exposed via
@@ -1033,6 +1073,11 @@ impl<'a> EffectChecker<'a> {
             fn_effect_var_positions: FxHashMap::default(),
             method_callee_types: FxHashMap::default(),
             call_type_subs: FxHashMap::default(),
+            node_call_subs: FxHashMap::default(),
+            typeparam_nodes: FxHashMap::default(),
+            bound_calls: FxHashMap::default(),
+            bound_events: std::cell::RefCell::new(None),
+            trait_names: FxHashSet::default(),
             call_effect_subs: FxHashMap::default(),
             modbind_let_mut: FxHashMap::default(),
             lazy_lock_inits: FxHashMap::default(),
@@ -1080,6 +1125,21 @@ impl<'a> EffectChecker<'a> {
         subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
     ) -> Self {
         self.call_type_subs = subs;
+        self
+    }
+
+    /// Attach the typechecker's `NodeId`-keyed call substitutions and the
+    /// expressions typed by a type parameter, so a call through a bound is charged
+    /// the effects of the instance it is made at (B-2026-10-15-21). Without
+    /// them every such call is charged every impl of the method, which is
+    /// sound but loose.
+    pub fn with_bound_dispatch_tables(
+        mut self,
+        node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, crate::typechecker::Type>>,
+        typeparam_nodes: FxHashMap<crate::ids::NodeId, String>,
+    ) -> Self {
+        self.node_call_subs = node_call_subs;
+        self.typeparam_nodes = typeparam_nodes;
         self
     }
 
@@ -1898,6 +1958,7 @@ impl<'a> EffectChecker<'a> {
         self.collect_function_info();
         self.fn_bounds_index = self.build_fn_bounds_index();
         self.fn_effect_var_positions = self.build_fn_effect_var_positions();
+        self.compute_bound_calls();
 
         // Phase B: Infer and verify
         self.infer_effects();
