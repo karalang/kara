@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 259 |
 | codegen-gap | 258 |
-| false-positive | 182 |
+| false-positive | 183 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 161 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2892 |
 | interp | 923 |
-| typecheck | 419 |
+| typecheck | 420 |
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -203,6 +203,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-69 | 2026-10-14 | runtime | medium | A short `Vec` grown by `push` allocates twice on the MIR compiled backend (first block 4 elements, then 8) where legacy allocates once (8): kata 638's `Map[Vec[i64], i64]` memo bench is 2.0x legacy, 1.2x with the first block raised to 8 | — |
 | B-2026-10-14-70 | 2026-10-14 | typecheck | medium | `karac check` still refuses chained field receivers (`self.env.to.len()`, `self.env.to.push(x)`) with the `chained_field_receiver` error, a legacy-codegen deferral ("deferred to v1.x in codegen ... fails `karac build`"), although every v2 surface runs them: the corpus mir-* backends run check first, so any v2 program with a nested-field method call fails | — |
 | B-2026-10-14-72 | 2026-10-14 | interp+codegen | low | `BufReader.fill_buf()` (docs/library/io.md § Buffered I/O) is missing on both v2 backends: `karac check` and legacy `run --interp` accept and run it, but `__mir-run` stops at `call of unknown function BufReader[File].fill_buf` and `__mir-llvm-run` at `native `BufReader[File].fill_buf` is not lowered yet` | — |
+| B-2026-10-15-1 | 2026-10-15 | typecheck | medium | `karac check` types the items of `a.iter().zip(b.iter())` by value, so a `*x` on either half is rejected ("unary '*' requires 'ref T' ... found 'i64'"), design.md's own `Vec` equality example included (§ Conditional impls: `.zip(other.iter()).all(|(a, b)| *a == *b)`), and `chain` loses the item type the same way; `karac __mir-run` and `__mir-llvm-run` accept and run the same programs | — |
 
 ### Relocated
 
