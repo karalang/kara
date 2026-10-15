@@ -180,6 +180,7 @@ cli/mini_ignore         which files git ignores: wildmatch.c and dir.c's .gitign
 cli/mini_ini            INI files as Python's configparser reads and writes them
 cli/mini_argparse       command-line parsing, help and errors as Python's argparse does them; output identical to argparse
 cli/mini_urlparse       URLs as Python 3.13's urllib.parse: split, join, quoting, queries, an access-log report
+cli/mini_mime           base64, base32, base16, Ascii85, base85, hex, CRCs and quoted-printable as Python does them; a MIME packer and reader
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

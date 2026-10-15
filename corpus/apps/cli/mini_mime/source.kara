@@ -1,0 +1,2132 @@
+// mini_mime: binary-to-text encodings as Python 3.13's base64, binascii
+// and quopri do them, and a mail packer and reader built on them:
+// - base64 (standard, URL-safe, alternative characters, encodebytes)
+//   with binascii's padding rules and every error of its strict mode;
+// - base32 and base32hex (casefold, map01), base16, Ascii85 (foldspaces,
+//   wrapcol, pad, Adobe framing), base85 and Z85, with their errors;
+// - hexlify with separators, unhexlify, crc32 and crc_hqx;
+// - quoted-printable (quotetabs, header mode, soft line breaks), as
+//   quopri's own encoder and decoder do it.
+//
+// The program runs the cases in data/cases.txt. It then packs
+// data/outbox into a multipart message (a quoted-printable body,
+// base64 attachments, RFC 2047 encoded words), writes it, reads it back
+// and checks every attachment round-trips. Then it reads three messages
+// from data/inbox written by other mail clients, decoding their headers
+// and parts and saving the attachments. expected.out is the output of
+// oracle.py, the same program written with those Python modules.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+// becomes one U+FFFD, as CPython's decoder does it.
+fn utf8_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let mut need: i64 = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            }
+            if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            }
+            if c == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_str_bytes(mut out, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut ok = true;
+        for k in 0..need {
+            if j >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[j];
+            let (l, h) = if k == 0 { (lo, hi) } else { (0x80 as u8, 0xBF as u8) };
+            if d < l or d > h {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            for k in i..j {
+                out.push(b[k]);
+            }
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+// A stable sort of (name, count) pairs: the highest count first, then
+// by name.
+
+// ------------------------------------------------------------ bytes
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    to_bytes(s)
+}
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let lo = if from < 0 { 0 } else { from };
+    let hi = if to > b.len() { b.len() } else { to };
+    for i in lo..hi {
+        out.push(b[i]);
+    }
+    out
+}
+
+fn append(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+fn starts_bytes(b: ref Vec[u8], pat: Str) -> bool {
+    starts_at(b, 0, pat)
+}
+
+fn ends_bytes(b: ref Vec[u8], pat: Str) -> bool {
+    let p = to_bytes(pat);
+    starts_at(b, b.len() - p.len(), pat)
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+// The cases spell bytes with \xNN, \t, \n, \r and \\.
+fn unescape_bytes(s: Str) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' and i + 1 < b.len() {
+            let n = b[i + 1];
+            if n == b't' or n == b'n' or n == b'r' or n == b'\\' {
+                out.push(if n == b't' { b'\t' } else if n == b'n' { b'\n' } else if n == b'r' { b'\r' } else { b'\\' });
+                i += 2;
+                continue;
+            }
+            if n == b'x' and i + 3 < b.len() {
+                out.push(hex_val(b[i + 2]) * 16 + hex_val(b[i + 3]));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn hex8(n: i64) -> String {
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 28;
+    while k >= 0 {
+        out.push(hex[(n >> k) & 15]);
+        k -= 4;
+    }
+    from_bytes(out)
+}
+
+// latin-1 bytes as text: each byte is the code point of that value.
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+        } else {
+            out.push((c >> 6) | 0xC0);
+            out.push((c & 0x3F) | 0x80);
+        }
+    }
+    from_bytes(out)
+}
+
+// ASCII with 'replace': each byte past 127 is U+FFFD.
+fn ascii_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] < 0x80 {
+            out.push(b[i]);
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+    }
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ base64
+
+const B64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_val(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+fn b2a_base64(b: ref Vec[u8], newline: bool) -> Vec[u8] {
+    let tab = to_bytes(B64_ALPHABET);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 2 < b.len() {
+        let n = ((b[i] as i64) << 16) | ((b[i + 1] as i64) << 8) | b[i + 2] as i64;
+        out.push(tab[(n >> 18) & 63]);
+        out.push(tab[(n >> 12) & 63]);
+        out.push(tab[(n >> 6) & 63]);
+        out.push(tab[n & 63]);
+        i += 3;
+    }
+    let left = b.len() - i;
+    if left == 1 {
+        let n = (b[i] as i64) << 16;
+        out.push(tab[(n >> 18) & 63]);
+        out.push(tab[(n >> 12) & 63]);
+        out.push(b'=');
+        out.push(b'=');
+    } else if left == 2 {
+        let n = ((b[i] as i64) << 16) | ((b[i + 1] as i64) << 8);
+        out.push(tab[(n >> 18) & 63]);
+        out.push(tab[(n >> 12) & 63]);
+        out.push(tab[(n >> 6) & 63]);
+        out.push(b'=');
+    }
+    if newline {
+        out.push(b'\n');
+    }
+    out
+}
+
+// binascii.a2b_base64. Outside strict mode anything off the alphabet is
+// skipped, and a complete pad only matters at the end; strict mode
+// refuses each irregularity with its own message.
+fn a2b_base64(b: ref Vec[u8], strict: bool) -> Result[Vec[u8], String] {
+    if strict and b.len() > 0 and b[0] == b'=' {
+        return Err("binascii.Error: Leading padding not allowed".to_string());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad: i64 = 0;
+    let mut left: i64 = 0;
+    let mut pads: i64 = 0;
+    let mut padding_started = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == b'=' {
+            padding_started = true;
+            if strict and (quad == 0 or quad + pads >= 4) {
+                return Err("binascii.Error: Excess padding not allowed".to_string());
+            }
+            if quad >= 2 {
+                pads += 1;
+            }
+            continue;
+        }
+        let v = b64_val(c);
+        if v < 0 {
+            if strict {
+                return Err("binascii.Error: Only base64 data is allowed".to_string());
+            }
+            continue;
+        }
+        if strict and padding_started {
+            if quad + pads >= 4 {
+                return Err("binascii.Error: Excess data after padding".to_string());
+            }
+            return Err("binascii.Error: Discontinuous padding not allowed".to_string());
+        }
+        pads = 0;
+        if quad == 0 {
+            quad = 1;
+            left = v;
+        } else if quad == 1 {
+            quad = 2;
+            out.push(((left << 2) | (v >> 4)) as u8);
+            left = v & 0x0f;
+        } else if quad == 2 {
+            quad = 3;
+            out.push((((left << 4) | (v >> 2)) & 255) as u8);
+            left = v & 0x03;
+        } else {
+            quad = 0;
+            out.push((((left << 6) | v) & 255) as u8);
+            left = 0;
+        }
+    }
+    if quad == 1 {
+        let n = out.len() / 3 * 4 + 1;
+        return Err(f"binascii.Error: Invalid base64-encoded string: number of data characters ({n}) cannot be 1 more than a multiple of 4");
+    }
+    if quad != 0 and quad + pads < 4 {
+        return Err("binascii.Error: Incorrect padding".to_string());
+    }
+    Ok(out)
+}
+
+// bytes.translate with a table made by bytes.maketrans(from, to).
+fn translate(b: ref Vec[u8], from: Str, to: Str) -> Vec[u8] {
+    let f = to_bytes(from);
+    let t = to_bytes(to);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let mut c = b[i];
+        // maketrans: the last mapping of a byte wins
+        let mut k = f.len() - 1;
+        while k >= 0 {
+            if f[k] == b[i] {
+                c = t[k];
+                break;
+            }
+            k -= 1;
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn b64encode(b: ref Vec[u8], alt: Str) -> Vec[u8] {
+    let e = b2a_base64(b, false);
+    if alt.len() > 0 { translate(e, "+/", alt) } else { e }
+}
+
+fn b64decode(b: ref Vec[u8], alt: Str, validate: bool) -> Result[Vec[u8], String] {
+    if alt.len() > 0 {
+        return a2b_base64(translate(b, alt, "+/"), validate);
+    }
+    a2b_base64(b, validate)
+}
+
+fn encodebytes(b: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        append(mut out, b2a_base64(sub(b, i, i + 57), true));
+        i += 57;
+    }
+    out
+}
+
+// ------------------------------------------------------------ base32
+
+const B32_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const B32HEX_ALPHABET: Str = "0123456789ABCDEFGHIJKLMNOPQRSTUV";
+
+fn b32encode(alphabet: Str, b: ref Vec[u8]) -> Vec[u8] {
+    let tab = to_bytes(alphabet);
+    let leftover = b.len() % 5;
+    let mut s = b.clone();
+    if leftover > 0 {
+        for _ in 0..5 - leftover {
+            s.push(0);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < s.len() {
+        let mut c: i64 = 0;
+        for k in 0..5 {
+            c = (c << 8) | s[i + k] as i64;
+        }
+        let mut sh: i64 = 35;
+        while sh >= 0 {
+            out.push(tab[(c >> sh) & 31]);
+            sh -= 5;
+        }
+        i += 5;
+    }
+    let pad = if leftover == 1 { 6 } else if leftover == 2 { 4 } else if leftover == 3 { 3 } else if leftover == 4 { 1 } else { 0 };
+    for k in 0..pad {
+        let at = out.len() - 1 - k;
+        out[at] = b'=';
+    }
+    out
+}
+
+fn b32decode(alphabet: Str, b: ref Vec[u8], casefold: bool, map01: Str) -> Result[Vec[u8], String] {
+    if b.len() % 8 != 0 {
+        return Err("binascii.Error: Incorrect padding".to_string());
+    }
+    let mut s = b.clone();
+    if map01.len() > 0 {
+        s = translate(s, "01", f"O{map01}");
+    }
+    if casefold {
+        s = to_bytes(upper(from_bytes(s)));
+    }
+    let l = s.len();
+    while s.len() > 0 and s[s.len() - 1] == b'=' {
+        s.pop();
+    }
+    let padchars = l - s.len();
+    let tab = to_bytes(alphabet);
+    let mut decoded: Vec[u8] = Vec.new();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() {
+        acc = 0;
+        let end = if i + 8 < s.len() { i + 8 } else { s.len() };
+        for k in i..end {
+            let mut v: i64 = -1;
+            for t in 0..tab.len() {
+                if tab[t] == s[k] {
+                    v = t;
+                }
+            }
+            if v < 0 {
+                return Err("binascii.Error: Non-base32 digit found".to_string());
+            }
+            acc = (acc << 5) + v;
+        }
+        let mut sh: i64 = 32;
+        while sh >= 0 {
+            decoded.push(((acc >> sh) & 255) as u8);
+            sh -= 8;
+        }
+        i += 8;
+    }
+    if l % 8 != 0 or not (padchars == 0 or padchars == 1 or padchars == 3 or padchars == 4 or padchars == 6) {
+        return Err("binascii.Error: Incorrect padding".to_string());
+    }
+    if padchars > 0 and decoded.len() > 0 {
+        acc = acc << (5 * padchars);
+        let leftover = (43 - 5 * padchars) / 8;
+        for _ in 0..5 {
+            decoded.pop();
+        }
+        let mut sh: i64 = 32;
+        for _ in 0..leftover {
+            decoded.push(((acc >> sh) & 255) as u8);
+            sh -= 8;
+        }
+    }
+    Ok(decoded)
+}
+
+// ------------------------------------------------------------ base16 and hex
+
+fn hexlify(b: ref Vec[u8], sep: Str, per: i64) -> Vec[u8] {
+    let hex = to_bytes("0123456789abcdef");
+    let sb = to_bytes(sep);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if sb.len() > 0 and i > 0 {
+            // positive counts groups from the right, negative from the left
+            let at = if per > 0 { (b.len() - i) % per == 0 } else { i % (-per) == 0 };
+            if at {
+                out.push(sb[0]);
+            }
+        }
+        out.push(hex[(b[i] / 16) as i64]);
+        out.push(hex[(b[i] % 16) as i64]);
+    }
+    out
+}
+
+fn unhexlify(b: ref Vec[u8]) -> Result[Vec[u8], String] {
+    if b.len() % 2 != 0 {
+        return Err("binascii.Error: Odd-length string".to_string());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if not is_hex(b[i]) or not is_hex(b[i + 1]) {
+            return Err("binascii.Error: Non-hexadecimal digit found".to_string());
+        }
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn b16encode(b: ref Vec[u8]) -> Vec[u8] {
+    to_bytes(upper(from_bytes(hexlify(b, "", 1))))
+}
+
+fn b16decode(b: ref Vec[u8], casefold: bool) -> Result[Vec[u8], String] {
+    let s = if casefold { to_bytes(upper(from_bytes(b.clone()))) } else { b.clone() };
+    for i in 0..s.len() {
+        let c = s[i];
+        if not (is_digit(c) or (c >= b'A' and c <= b'F')) {
+            return Err("binascii.Error: Non-base16 digit found".to_string());
+        }
+    }
+    unhexlify(s)
+}
+
+// ------------------------------------------------------------ checksums
+
+fn crc32(b: ref Vec[u8], value: i64) -> i64 {
+    let mut crc = value ^ 0xFFFFFFFF;
+    for i in 0..b.len() {
+        crc = crc ^ b[i] as i64;
+        for _ in 0..8 {
+            if crc & 1 == 1 {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc = crc >> 1;
+            }
+        }
+    }
+    crc ^ 0xFFFFFFFF
+}
+
+// CRC-CCITT, as binhex uses it.
+fn crc_hqx(b: ref Vec[u8], value: i64) -> i64 {
+    let mut crc = value & 0xFFFF;
+    for i in 0..b.len() {
+        crc = crc ^ ((b[i] as i64) << 8);
+        for _ in 0..8 {
+            if crc & 0x8000 != 0 {
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+            } else {
+                crc = (crc << 1) & 0xFFFF;
+            }
+        }
+    }
+    crc
+}
+
+// ------------------------------------------------------------ Ascii85 and base85
+
+const B85_ALPHABET: Str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+const Z85_ALPHABET: Str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#";
+
+// base64's _85encode: big-endian words of four bytes, five digits each.
+fn encode85(b: ref Vec[u8], chars: ref Vec[u8], pad: bool, foldnuls: bool, foldspaces: bool) -> Vec[u8] {
+    let padding = (4 - b.len() % 4) % 4;
+    let mut s = b.clone();
+    for _ in 0..padding {
+        s.push(0);
+    }
+    let mut chunks: Vec[Vec[u8]] = Vec.new();
+    let mut i: i64 = 0;
+    while i < s.len() {
+        let mut word: i64 = 0;
+        for k in 0..4 {
+            word = (word << 8) | s[i + k] as i64;
+        }
+        if foldnuls and word == 0 {
+            chunks.push([b'z']);
+        } else if foldspaces and word == 0x20202020 {
+            chunks.push([b'y']);
+        } else {
+            let mut d: Vec[u8] = [0, 0, 0, 0, 0];
+            let mut w = word;
+            let mut k: i64 = 4;
+            while k >= 0 {
+                d[k] = chars[w % 85];
+                w = w / 85;
+                k -= 1;
+            }
+            chunks.push(d);
+        }
+        i += 4;
+    }
+    if padding > 0 and not pad {
+        let n = chunks.len() - 1;
+        if chunks[n].len() == 1 and chunks[n][0] == b'z' {
+            chunks[n] = [chars[0], chars[0], chars[0], chars[0], chars[0]];
+        }
+        let keep = chunks[n].len() - padding;
+        let mut last = chunks[n].clone();
+        while last.len() > keep and last.len() > 0 {
+            last.pop();
+        }
+        chunks[n] = last;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for k in 0..chunks.len() {
+        append(mut out, chunks[k]);
+    }
+    out
+}
+
+fn a85chars() -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for c in 33..118 {
+        v.push(c as u8);
+    }
+    v
+}
+
+fn a85encode(b: ref Vec[u8], foldspaces: bool, wrapcol: i64, pad: bool, adobe: bool) -> Vec[u8] {
+    let mut result = encode85(b, a85chars(), pad, true, foldspaces);
+    if adobe {
+        let mut r = to_bytes("<~");
+        append(mut r, result);
+        result = r;
+    }
+    if wrapcol > 0 {
+        let min = if adobe { 2 } else { 1 };
+        let w = if wrapcol > min { wrapcol } else { min };
+        let mut chunks: Vec[Vec[u8]] = Vec.new();
+        let mut i: i64 = 0;
+        while i < result.len() {
+            chunks.push(sub(result, i, i + w));
+            i += w;
+        }
+        if adobe and chunks[chunks.len() - 1].len() + 2 > w {
+            chunks.push(Vec.new());
+        }
+        let mut joined: Vec[u8] = Vec.new();
+        for k in 0..chunks.len() {
+            if k > 0 {
+                joined.push(b'\n');
+            }
+            append(mut joined, chunks[k]);
+        }
+        result = joined;
+    }
+    if adobe {
+        result.push(b'~');
+        result.push(b'>');
+    }
+    result
+}
+
+fn a85decode(b0: ref Vec[u8], foldspaces: bool, adobe: bool) -> Result[Vec[u8], String] {
+    let mut b = b0.clone();
+    if adobe {
+        if not ends_bytes(b, "~>") {
+            return Err("ValueError: Ascii85 encoded byte sequences must end with b'~>'".to_string());
+        }
+        if starts_bytes(b, "<~") {
+            b = sub(b, 2, b.len() - 2);
+        } else {
+            b = sub(b, 0, b.len() - 2);
+        }
+    }
+    for _ in 0..4 {
+        b.push(b'u');
+    }
+    let mut decoded: Vec[u8] = Vec.new();
+    let mut curr: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let x = b[i];
+        if x >= b'!' and x <= b'u' {
+            curr.push(x);
+            if curr.len() == 5 {
+                let mut acc: i64 = 0;
+                for k in 0..5 {
+                    acc = 85 * acc + (curr[k] - 33) as i64;
+                }
+                if acc > 0xFFFFFFFF {
+                    return Err("ValueError: Ascii85 overflow".to_string());
+                }
+                let mut sh: i64 = 24;
+                while sh >= 0 {
+                    decoded.push(((acc >> sh) & 255) as u8);
+                    sh -= 8;
+                }
+                curr = Vec.new();
+            }
+        } else if x == b'z' {
+            if curr.len() > 0 {
+                return Err("ValueError: z inside Ascii85 5-tuple".to_string());
+            }
+            append(mut decoded, [0 as u8, 0, 0, 0]);
+        } else if foldspaces and x == b'y' {
+            if curr.len() > 0 {
+                return Err("ValueError: y inside Ascii85 5-tuple".to_string());
+            }
+            append(mut decoded, [32 as u8, 32, 32, 32]);
+        } else if x == b' ' or x == b'\t' or x == b'\n' or x == b'\r' or x == 11 {
+            continue;
+        } else {
+            return Err(f"ValueError: Non-Ascii85 digit found: {from_bytes([x])}");
+        }
+    }
+    let padding = 4 - curr.len();
+    if padding > 0 {
+        let keep = decoded.len() - padding;
+        decoded = sub(decoded, 0, keep);
+    }
+    Ok(decoded)
+}
+
+fn b85encode(b: ref Vec[u8], pad: bool) -> Vec[u8] {
+    encode85(b, to_bytes(B85_ALPHABET), pad, false, false)
+}
+
+fn b85decode(b0: ref Vec[u8]) -> Result[Vec[u8], String] {
+    let tab = to_bytes(B85_ALPHABET);
+    let padding = (5 - b0.len() % 5) % 5;
+    let mut b = b0.clone();
+    for _ in 0..padding {
+        b.push(b'~');
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let mut acc: i64 = 0;
+        for j in 0..5 {
+            let mut v: i64 = -1;
+            for t in 0..tab.len() {
+                if tab[t] == b[i + j] {
+                    v = t;
+                }
+            }
+            if v < 0 {
+                return Err(f"ValueError: bad base85 character at position {i + j}");
+            }
+            acc = acc * 85 + v;
+        }
+        if acc > 0xFFFFFFFF {
+            return Err(f"ValueError: base85 overflow in hunk starting at byte {i}");
+        }
+        let mut sh: i64 = 24;
+        while sh >= 0 {
+            out.push(((acc >> sh) & 255) as u8);
+            sh -= 8;
+        }
+        i += 5;
+    }
+    if padding > 0 {
+        let keep = out.len() - padding;
+        out = sub(out, 0, keep);
+    }
+    Ok(out)
+}
+
+fn z85encode(b: ref Vec[u8]) -> Vec[u8] {
+    translate(b85encode(b, false), B85_ALPHABET, Z85_ALPHABET)
+}
+
+fn z85decode(b: ref Vec[u8]) -> Result[Vec[u8], String] {
+    // the base85 characters that Z85 lacks become \x00, which neither has
+    let s = translate(b, f"{Z85_ALPHABET};_`|~", f"{B85_ALPHABET}\u{0}\u{0}\u{0}\u{0}\u{0}");
+    match b85decode(s) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(replace_str(e, "base85", "z85")),
+    }
+}
+
+fn replace_str(s: Str, pat: Str, with: Str) -> String {
+    let b = to_bytes(s);
+    let p = to_bytes(pat);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, pat) {
+            push_str_bytes(mut out, with);
+            i += p.len();
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ quoted-printable
+
+fn needs_quoting(c: u8, quotetabs: bool, header: bool) -> bool {
+    if c == b' ' or c == b'\t' {
+        return quotetabs;
+    }
+    if c == b'_' {
+        return header;
+    }
+    c == b'=' or c < 32 or c > 126
+}
+
+fn qp_quote(out: mut ref Vec[u8], c: u8) {
+    let hex = to_bytes("0123456789ABCDEF");
+    out.push(b'=');
+    out.push(hex[(c / 16) as i64]);
+    out.push(hex[(c % 16) as i64]);
+}
+
+// quopri's write(): a line ending in a space or tab has it quoted, and a
+// line that is just "." is quoted too.
+fn qp_write(out: mut ref Vec[u8], s: ref Vec[u8], line_end: Str) {
+    if s.len() > 0 and (s[s.len() - 1] == b' ' or s[s.len() - 1] == b'\t') {
+        append(out, sub(s, 0, s.len() - 1));
+        qp_quote(out, s[s.len() - 1]);
+    } else if s.len() == 1 and s[0] == b'.' {
+        qp_quote(out, b'.');
+    } else {
+        append(out, s);
+    }
+    push_str_bytes(out, line_end);
+}
+
+// Lines as readline returns them, each with its newline.
+fn read_lines(b: ref Vec[u8]) -> Vec[Vec[u8]] {
+    let mut lines: Vec[Vec[u8]] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            lines.push(sub(b, st, i + 1));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        lines.push(sub(b, st, b.len()));
+    }
+    lines
+}
+
+fn qp_encode(b: ref Vec[u8], quotetabs: bool, header: bool) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut prev: Option[Vec[u8]] = None;
+    let mut stripped = "";
+    let lines = read_lines(b);
+    for li in 0..lines.len() {
+        let mut line = lines[li].clone();
+        stripped = "";
+        if line.len() > 0 and line[line.len() - 1] == b'\n' {
+            line.pop();
+            stripped = "\n";
+        }
+        let mut outline: Vec[u8] = Vec.new();
+        for i in 0..line.len() {
+            let c = line[i];
+            if needs_quoting(c, quotetabs, header) {
+                qp_quote(mut outline, c);
+            } else if header and c == b' ' {
+                outline.push(b'_');
+            } else {
+                outline.push(c);
+            }
+        }
+        if let Some(p) = prev {
+            qp_write(mut out, p, "\n");
+        }
+        let mut this = outline;
+        while this.len() > 76 {
+            qp_write(mut out, sub(this, 0, 75), "=\n");
+            this = sub(this, 75, this.len());
+        }
+        prev = Some(this);
+    }
+    if let Some(p) = prev {
+        qp_write(mut out, p, stripped);
+    }
+    out
+}
+
+fn qp_decode(b: ref Vec[u8], header: bool) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut new: Vec[u8] = Vec.new();
+    let lines = read_lines(b);
+    for li in 0..lines.len() {
+        let line = lines[li].clone();
+        let mut i: i64 = 0;
+        let mut n = line.len();
+        let mut partial = true;
+        if n > 0 and line[n - 1] == b'\n' {
+            partial = false;
+            n -= 1;
+            while n > 0 and (line[n - 1] == b' ' or line[n - 1] == b'\t' or line[n - 1] == b'\r') {
+                n -= 1;
+            }
+        }
+        while i < n {
+            let c = line[i];
+            if c == b'_' and header {
+                new.push(b' ');
+                i += 1;
+            } else if c != b'=' {
+                new.push(c);
+                i += 1;
+            } else if i + 1 == n and not partial {
+                partial = true;
+                break;
+            } else if i + 1 < n and line[i + 1] == b'=' {
+                new.push(b'=');
+                i += 2;
+            } else if i + 2 < n and is_hex(line[i + 1]) and is_hex(line[i + 2]) {
+                new.push(hex_val(line[i + 1]) * 16 + hex_val(line[i + 2]));
+                i += 3;
+            } else {
+                new.push(c);
+                i += 1;
+            }
+        }
+        if not partial {
+            append(mut out, new);
+            out.push(b'\n');
+            new = Vec.new();
+        }
+    }
+    append(mut out, new);
+    out
+}
+
+// ------------------------------------------------------------ mail
+
+const BOUNDARY: Str = "==kara-0001==";
+
+fn content_type_for(name: Str) -> String {
+    let (_, _, ext) = rpartition(name, b'.');
+    if ext == "txt" {
+        "text/plain".to_string()
+    } else if ext == "csv" {
+        "text/csv".to_string()
+    } else if ext == "png" {
+        "image/png".to_string()
+    } else {
+        "application/octet-stream".to_string()
+    }
+}
+
+// An RFC 2047 encoded word for a name that is not plain ASCII.
+fn encoded_word_b(s: Str) -> String {
+    if is_ascii(s) {
+        return s.to_string();
+    }
+    f"=?utf-8?b?{from_bytes(b64encode(to_bytes(s), ""))}?="
+}
+
+// The attachment the run makes itself: 300 bytes off an LCG.
+fn make_icon() -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut x: i64 = 12345;
+    for _ in 0..300 {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(((x >> 16) & 255) as u8);
+    }
+    out
+}
+
+fn read_bytes(path: Str) -> Result[Vec[u8], String] {
+    match fs.read_bytes(path.to_string()) {
+        Ok(b) => Ok(b),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn write_bytes(path: Str, b: ref Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dirs(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn list_dir(path: Str) -> Result[Vec[String], String] {
+    match fs.read_dir(path.to_string()) {
+        Ok(v) => Ok(sort_strings(v)),
+        Err(e) => Err(f"cannot list {path}: {e}"),
+    }
+}
+
+fn build_message() -> Result[String, String] {
+    let names = list_dir("data/outbox")?;
+    let subject = "Nightly build \u{2014} caf\u{e9} branch, all green";
+    let mut out: Vec[String] = Vec.new();
+    out.push("From: build-bot <bot@example.com>".to_string());
+    out.push("To: team@example.com".to_string());
+    out.push(f"Subject: =?utf-8?q?{from_bytes(qp_encode(to_bytes(subject), false, true))}?=");
+    out.push("MIME-Version: 1.0".to_string());
+    out.push(f"Content-Type: multipart/mixed; boundary=\"{BOUNDARY}\"");
+    out.push(String.new());
+    out.push("This is a multi-part message in MIME format.".to_string());
+    for i in 0..names.len() {
+        let data = read_bytes(f"data/outbox/{names[i]}")?;
+        out.push(f"--{BOUNDARY}");
+        if names[i] == "note.txt" {
+            out.push("Content-Type: text/plain; charset=\"utf-8\"".to_string());
+            out.push("Content-Transfer-Encoding: quoted-printable".to_string());
+            out.push(String.new());
+            out.push(from_bytes(qp_encode(data, false, false)));
+        } else {
+            let fname = encoded_word_b(names[i]);
+            out.push(f"Content-Type: {content_type_for(names[i])}; name=\"{fname}\"");
+            out.push("Content-Transfer-Encoding: base64".to_string());
+            out.push(f"Content-Disposition: attachment; filename=\"{fname}\"");
+            out.push(String.new());
+            out.push(from_bytes(encodebytes(data)));
+        }
+    }
+    out.push(f"--{BOUNDARY}--");
+    Ok(f"{join(out, "\n")}\n")
+}
+
+fn decode_charset(b: ref Vec[u8], cs: Str) -> String {
+    let c = lower(cs);
+    if c == "utf-8" or c == "utf8" {
+        utf8_replace(b)
+    } else if c == "iso-8859-1" or c == "latin-1" or c == "latin1" {
+        latin1(b)
+    } else {
+        ascii_replace(b)
+    }
+}
+
+fn find_from(b: ref Vec[u8], pat: Str, from: i64) -> i64 {
+    if from < 0 {
+        return -1;
+    }
+    for i in from..b.len() {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+// RFC 2047 encoded words; the white space between two of them goes.
+fn decode_header(v: Str) -> String {
+    let b = to_bytes(v);
+    let mut out: Vec[u8] = Vec.new();
+    let mut pending: Vec[u8] = Vec.new();
+    let mut last_was_word = false;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, "=?") {
+            let q1 = find_from(b, "?", i + 2);
+            let q2 = if q1 >= 0 { find_from(b, "?", q1 + 1) } else { -1 };
+            let end = if q2 >= 0 { find_from(b, "?=", q2 + 1) } else { -1 };
+            if q1 >= 0 and q2 == q1 + 2 and end >= 0 {
+                let cs = byte_str(b, i + 2, q1);
+                let enc = lower_byte(b[q1 + 1]);
+                let text = sub(b, q2 + 1, end);
+                let raw: Option[Vec[u8]] = if enc == b'q' {
+                    Some(qp_decode(text, true))
+                } else if enc == b'b' {
+                    match a2b_base64(text, false) {
+                        Ok(r) => Some(r),
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(r) = raw {
+                    if not last_was_word {
+                        append(mut out, pending);
+                    }
+                    pending = Vec.new();
+                    push_str_bytes(mut out, decode_charset(r, cs));
+                    last_was_word = true;
+                    i = end + 2;
+                    continue;
+                }
+            }
+        }
+        let c = b[i];
+        if c == b' ' or c == b'\t' {
+            pending.push(c);
+        } else {
+            append(mut out, pending);
+            pending = Vec.new();
+            out.push(c);
+            last_was_word = false;
+        }
+        i += 1;
+    }
+    append(mut out, pending);
+    from_bytes(out)
+}
+
+#[derive(Clone)]
+struct Header {
+    name: String,
+    value: String,
+}
+
+struct Parsed {
+    headers: Vec[Header],
+    body: Vec[String],
+}
+
+fn parse_headers(lines: ref Vec[String]) -> Parsed {
+    let mut headers: Vec[Header] = Vec.new();
+    let mut i: i64 = 0;
+    while i < lines.len() and lines[i].len() > 0 {
+        let line = lines[i].clone();
+        let c = first_byte(line);
+        if (c == b' ' or c == b'\t') and headers.len() > 0 {
+            let n = headers.len() - 1;
+            let joined = f"{headers[n].value} {strip(line)}";
+            headers[n].value = joined;
+        } else {
+            let (k, _, v) = partition(line, b':');
+            headers.push(Header { name: strip(k), value: strip(v) });
+        }
+        i += 1;
+    }
+    let mut body: Vec[String] = Vec.new();
+    for k in i + 1..lines.len() {
+        body.push(lines[k].clone());
+    }
+    Parsed { headers: headers, body: body }
+}
+
+fn header(headers: ref Vec[Header], name: Str) -> String {
+    let want = lower(name);
+    for i in 0..headers.len() {
+        if lower(headers[i].name) == want {
+            return headers[i].value.clone();
+        }
+    }
+    String.new()
+}
+
+// A header value's main part and its parameters; a later parameter of
+// the same name wins, as a dict assignment does.
+struct Params {
+    main: String,
+    keys: Vec[String],
+    vals: Vec[String],
+}
+
+impl Params {
+    fn get(ref self, k: Str, default: Str) -> String {
+        let mut i = self.keys.len() - 1;
+        while i >= 0 {
+            if self.keys[i] == k {
+                return self.vals[i].clone();
+            }
+            i -= 1;
+        }
+        default.to_string()
+    }
+}
+
+fn params(value: Str) -> Params {
+    let parts = split_on(value, b';');
+    let mut p = Params { main: lower(strip(parts[0])), keys: Vec.new(), vals: Vec.new() };
+    for i in 1..parts.len() {
+        let (k, _, v0) = partition(strip(parts[i]), b'=');
+        let mut v = strip(v0);
+        let vb = to_bytes(v);
+        if vb.len() >= 2 and vb[0] == b'"' and vb[vb.len() - 1] == b'"' {
+            v = byte_str(vb, 1, vb.len() - 1);
+        }
+        p.keys.push(lower(strip(k)));
+        p.vals.push(v);
+    }
+    p
+}
+
+fn split_parts(body: ref Vec[String], boundary: Str) -> Vec[Vec[String]] {
+    let mut parts: Vec[Vec[String]] = Vec.new();
+    let mut cur: Vec[String] = Vec.new();
+    let mut in_part = false;
+    let delim = f"--{boundary}";
+    let close = f"--{boundary}--";
+    for i in 0..body.len() {
+        if body[i] == close {
+            if in_part {
+                parts.push(cur.clone());
+            }
+            return parts;
+        }
+        if body[i] == delim {
+            if in_part {
+                parts.push(cur.clone());
+            }
+            cur = Vec.new();
+            in_part = true;
+            continue;
+        }
+        if in_part {
+            cur.push(body[i].clone());
+        }
+    }
+    if in_part {
+        parts.push(cur);
+    }
+    parts
+}
+
+fn or_default(s: own String, d: Str) -> String {
+    if s.len() > 0 { s } else { d.to_string() }
+}
+
+// Reads one message: its From and Subject, then each part, decoded. The
+// parts with a file name are saved under `outdir`.
+fn receive(path: Str, outdir: Str) -> Result[Vec[Vec[u8]], String] {
+    let text = ascii_replace(read_bytes(path)?);
+    let mut lines: Vec[String] = Vec.new();
+    let raw = split_on(text, b'\n');
+    for i in 0..raw.len() {
+        let l = raw[i].clone();
+        if ends_bytes(to_bytes(l), "\r") {
+            lines.push(slice(l, 0, l.len() - 1));
+        } else {
+            lines.push(l);
+        }
+    }
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    let msg = parse_headers(lines);
+    println(f"From: {decode_header(header(msg.headers, "From"))}");
+    println(f"Subject: {decode_header(header(msg.headers, "Subject"))}");
+    let ct = params(or_default(header(msg.headers, "Content-Type"), "text/plain"));
+    let parts = if starts_with(ct.main, "multipart/") {
+        split_parts(msg.body, ct.get("boundary", ""))
+    } else {
+        [lines.clone()]
+    };
+    let mut files: Vec[Vec[u8]] = Vec.new();
+    for n in 0..parts.len() {
+        let part = parse_headers(parts[n]);
+        let pt = params(or_default(header(part.headers, "Content-Type"), "text/plain"));
+        let cte = or_default(lower(header(part.headers, "Content-Transfer-Encoding")), "7bit");
+        let disp = params(header(part.headers, "Content-Disposition"));
+        let fname = decode_header(disp.get("filename", pt.get("name", "")));
+        let body = to_bytes(join(part.body, "\n"));
+        let decoded = if cte == "base64" {
+            a2b_base64(body, false)
+        } else if cte == "quoted-printable" {
+            Ok(qp_decode(body, false))
+        } else {
+            Ok(body)
+        };
+        let data = match decoded {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"part {n + 1}: {pt.main} {cte} {py_repr(fname)}: Error: {e}");
+                continue;
+            }
+        };
+        let dump = from_bytes(hexlify(sub(data, 0, 16), " ", 1));
+        println(f"part {n + 1}: {pt.main} {cte} {py_repr(fname)}: {data.len()} bytes, crc32 {hex8(crc32(data, 0))}, {dump}");
+        if starts_with(pt.main, "text/") and fname.len() == 0 {
+            let shown = split_on(decode_charset(data, pt.get("charset", "us-ascii")), b'\n');
+            for k in 0..shown.len() {
+                println(f"  | {shown[k]}");
+            }
+        }
+        if fname.len() > 0 {
+            make_dirs(outdir)?;
+            write_bytes(f"{outdir}/{fname}", data)?;
+        }
+        files.push(data);
+    }
+    Ok(files)
+}
+
+fn show_mail() -> Result[(), String] {
+    println("== send");
+    write_bytes("data/outbox/caf\u{e9}-logo.png", make_icon())?;
+    let msg = build_message()?;
+    make_dirs("data/out")?;
+    write_file("data/out/message.eml", msg)?;
+    let back = lines_of(from_bytes(read_bytes("data/out/message.eml")?));
+    for i in 0..back.len() {
+        println(back[i]);
+    }
+    println("== receive");
+    println("-- data/out/message.eml");
+    let got = receive("data/out/message.eml", "data/out/received/message")?;
+    let names = list_dir("data/outbox")?;
+    for i in 0..names.len() {
+        if i >= got.len() {
+            break;
+        }
+        let mine = read_bytes(f"data/outbox/{names[i]}")?;
+        let same = if got[i] == mine { "same" } else { "DIFFERENT" };
+        println(f"round trip {names[i]}: {same}");
+    }
+    let inbox = list_dir("data/inbox")?;
+    for i in 0..inbox.len() {
+        println(f"-- data/inbox/{inbox[i]}");
+        let (stem, _, _) = rpartition(inbox[i], b'.');
+        receive(f"data/inbox/{inbox[i]}", f"data/out/received/{stem}")?;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the files
+
+// data/cases.txt
+fn file_0() -> String {
+    """
+b64encode | 
+b64encode | f
+b64encode | fo
+b64encode | foo
+b64encode | foobar
+b64encode | \\x00\\xff\\xfe\\xfd\\xfc?>
+b64encode alt=-_ | \\xfb\\xff\\xbf
+urlsafe_b64encode | \\xfb\\xff\\xbf\\x00
+b64decode | Zm9vYmFy
+b64decode | Zm9vYg==
+b64decode | Zm9vYg
+b64decode | Zm9vY
+b64decode | Zm9v YmFy\\n
+b64decode | Zm9v!!YmFy
+b64decode | YQ==YQ
+b64decode | YQ=x=
+b64decode | ==YQ==
+b64decode validate | Zm9vYmFy
+b64decode validate | Zm9v YmFy
+b64decode validate | =Zm9v
+b64decode validate | YQ===
+b64decode validate | YQ==x
+b64decode validate | YQ=x
+b64decode validate | YWJj=
+b64decode validate | Y=
+b64decode validate | YR==
+b64decode alt=-_ | -_-_
+b64decode alt=-_ | +/+/
+urlsafe_b64decode | -_-_
+urlsafe_b64decode | -_8A
+encodebytes | The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.
+encodebytes | 
+decodebytes | VGhlIHF1aWNr\\nIGJyb3du\\n
+b32encode | 
+b32encode | a
+b32encode | ab
+b32encode | abc
+b32encode | abcd
+b32encode | abcde
+b32encode | \\xff\\x00\\xff
+b32hexencode | abcde
+b32decode | MFRGG===
+b32decode | MFRGGZDF
+b32decode | mfrgg===
+b32decode casefold | mfrgg===
+b32decode | MFRGG==
+b32decode | MFRGGZ==
+b32decode | MF=GG===
+b32decode | ========
+b32decode | ME======
+b32decode | MFRA====
+b32decode | 0FRGG===
+b32decode map01=L | 01RGG===
+b32decode map01=I | 1EZQ====
+b32hexdecode | C5H66===
+b32hexdecode casefold | c5h66===
+b16encode | \\x00\\x01\\xab\\xff
+b16decode | 0001ABFF
+b16decode | 0001abff
+b16decode casefold | 0001abff
+b16decode | 0001A
+b16decode | 00G1
+a85encode | 
+a85encode | hello
+a85encode | \\x00\\x00\\x00\\x00\\x00
+a85encode | \\x00\\x00
+a85encode | \\x00\\x00\\x00\\x00
+a85encode foldspaces | four    spaces    
+a85encode pad | hello
+a85encode adobe | hello world
+a85encode wrapcol=10 | the quick brown fox jumps
+a85encode adobe wrapcol=10 | the quick brown fox
+a85encode adobe wrapcol=1 | ab
+a85decode | BOu!rDZ
+a85decode | BOu!r D Z\\n
+a85decode | z
+a85decode | !!z
+a85decode | !!
+a85decode | s8W-\"
+a85decode | s8W-#
+a85decode | BOu!rv
+a85decode foldspaces | y
+a85decode | y
+a85decode foldspaces | !y
+a85decode adobe | <~BOu!rDZ~>
+a85decode adobe | BOu!rDZ~>
+a85decode adobe | <~BOu!rDZ
+b85encode | 
+b85encode | hello
+b85encode pad | hello
+b85encode | \\x00\\x00\\x00\\x00\\xff\\xff\\xff\\xff
+b85decode | Xk~0{Zv
+b85decode | Xk~0{Zy<
+b85decode | Xk~0\"Zv
+b85decode | |NsC0
+b85decode | |NsC1
+z85encode | \\x86\\x4f\\xd2\\x6f\\xb5\\x59\\xf7\\x5b
+z85decode | HelloWorld
+z85decode | Hello~orld
+z85decode | %nSc0
+hexlify | \\x01\\x02\\xab
+hexlify sep=- n=2 | \\x01\\x02\\x03\\x04\\x05
+hexlify sep=- n=-2 | \\x01\\x02\\x03\\x04\\x05
+hexlify sep=: | \\xde\\xad\\xbe\\xef
+unhexlify | 01ab
+unhexlify | 01AB
+unhexlify | 01a
+unhexlify | 0x
+crc32 | 
+crc32 | The quick brown fox jumps over the lazy dog
+crc32 value=1 | hello
+crc_hqx | 123456789
+crc_hqx value=65535 | 123456789
+qp_encode | plain text
+qp_encode | a=b and caf\\xc3\\xa9
+qp_encode | trailing space \\n
+qp_encode | tab\\tinside
+qp_encode quotetabs | tab\\tinside and spaces
+qp_encode | line one\\nline two\\t\\n.\\nend.
+qp_encode | 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+qp_encode | 012345678901234567890123456789012345678901234567890123456789012345678901234\\xc3\\xa9xyz
+qp_encode | 01234567890123456789012345678901234567890123456789012345678901234567890123 x
+qp_encode header | Hello World_x=y caf\\xc3\\xa9
+qp_encode | \\r\\n
+qp_decode | a=3Db caf=C3=A9
+qp_decode | soft=\\nbreak
+qp_decode | trailing   \\nspace
+qp_decode | bad=ZZescape =4
+qp_decode | ==3D
+qp_decode | end=
+qp_decode | crlf=\\r\\nline
+qp_decode header | Hello_World=5F
+qp_decode | Hello_World
+
+"""
+}
+
+// data/inbox/01-phone.eml
+fn file_1() -> String {
+    """
+From: =?iso-8859-1?q?Andr=E9_M=FCller?= <andre@example.de>
+To: team@example.com
+Subject: =?utf-8?b?UGhvdG9zIGZyb20gdGhlIG9mZnNpdGUg8J+TuA==?=
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=\"b1_phone\"
+
+This is a multi-part message in MIME format.
+
+--b1_phone
+Content-Type: text/plain; charset=\"utf-8\"
+Content-Transfer-Encoding: base64
+
+SGVyZSBhcmUgdGhlIHBob3Rvcy4gU2Now7ZuZSBHcsO8w59lIQo=
+
+--b1_phone
+Content-Type: image/png; name=\"logo.png\"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename=\"logo.png\"
+
+CzBVep/E6Q4zWH2ix+wRNluApcrvFDleg6jN8hc8YYar0PUaP2SJrtP4HUJn
+jLHW+yBFao+02f4jSG2St9wBJktwlbrfBClOc5i94gcsUXabwOUKL1R5nsPo
+DTJXfKHG6xA1Wn+kye4TOF2Cp8zxFjtgharP9Bk+
+--b1_phone
+Content-Type: image/jpeg; name=\"broken.jpg\"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename=\"broken.jpg\"
+
+/9j/4AAQSkZJRgABAQ
+--b1_phone--
+
+"""
+}
+
+// data/inbox/02-invoice.eml
+fn file_2() -> String {
+    """
+From: Billing <billing@example.com>
+To: team@example.com
+Subject: =?utf-8?q?Invoice_=E2=84=96_2026-10_=E2=80=94_due_15_Nov?=
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary=\"alt-42\"
+
+--alt-42
+Content-Type: text/plain; charset=\"iso-8859-1\"
+Content-Transfer-Encoding: quoted-printable
+
+Your invoice for October is ready. The total is EUR 1.234,50 (that is =A31.05=
+6,12 in sterling).   
+A bad escape =ZZ stays, and so does a lone = at the end =
+--alt-42
+Content-Type: text/html; charset=\"utf-8\"
+Content-Transfer-Encoding: quoted-printable
+
+<html><body><p style=3D\"color: #333\">Your invoice for October is ready. The=
+ total is =E2=82=AC1.234,50 and is due on 15 November.</p></body></html>
+
+--alt-42--
+
+"""
+}
+
+// data/inbox/03-export.eml
+fn file_3() -> String {
+    """
+From: exporter@example.org\r
+To: team@example.com\r
+Subject: Export ready\r
+Content-Type: multipart/mixed; boundary=XYZ\r
+\r
+--XYZ\r
+Content-Type: text/plain\r
+\r
+The export is attached.\r
+--XYZ\r
+Content-Type: text/csv; name=export.csv\r
+Content-Transfer-Encoding: base64\r
+Content-Disposition: attachment; filename=export.csv\r
+\r
+aWQsYW1vdW *50DQoxLDEw\r
+LjAwDQoyLC0zLjUwDQo=\r
+--XYZ--\r
+
+"""
+}
+
+// data/outbox/note.txt
+fn file_4() -> String {
+    """
+Nightly build report — café branch
+
+All 1,284 tests passed. Coverage is 87.5% (up from 86.9%), and the binary size is 4.2 MiB.
+Line with trailing spaces   
+Line with a tab	here and an equals sign: a=b
+.
+From the release checklist: ✓ tagged, ✓ signed, ✗ announced.
+A very long line that keeps going past the seventy-six character limit of quoted-printable so it has to be broken with soft line breaks somewhere in the middle.
+日本語の行
+-- 
+build-bot
+
+"""
+}
+
+// data/outbox/report.csv
+fn file_5() -> String {
+    """
+suite,tests,failed,seconds
+lexer,212,0,1.9
+parser,388,0,4.1
+typecheck,431,0,9.7
+codegen,253,0,31.2
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/cases.txt", file_0())?;
+    make_dir("data/inbox")?;
+    put("data/inbox/01-phone.eml", file_1())?;
+    put("data/inbox/02-invoice.eml", file_2())?;
+    put("data/inbox/03-export.eml", file_3())?;
+    make_dir("data/outbox")?;
+    put("data/outbox/note.txt", file_4())?;
+    put("data/outbox/report.csv", file_5())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the cases
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn write_file(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// The options of a case: `name` or `name=value` words.
+struct Opts {
+    keys: Vec[String],
+    vals: Vec[String],
+}
+
+impl Opts {
+    fn has(ref self, k: Str) -> bool {
+        contains_str(self.keys, k)
+    }
+
+    fn get(ref self, k: Str, default: Str) -> String {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == k {
+                return self.vals[i].clone();
+            }
+        }
+        default.to_string()
+    }
+
+    fn int(ref self, k: Str) -> i64 {
+        let b = to_bytes(self.get(k, "0"));
+        let neg = b.len() > 0 and b[0] == b'-';
+        let mut n: i64 = 0;
+        for i in 0..b.len() {
+            if is_digit(b[i]) {
+                n = n * 10 + (b[i] - b'0') as i64;
+            }
+        }
+        if neg { -n } else { n }
+    }
+}
+
+fn shown(r: own Result[Vec[u8], String]) -> Result[String, String] {
+    match r {
+        Ok(b) => Ok(bytes_repr(b)),
+        Err(e) => Err(e),
+    }
+}
+
+fn run_case(name: Str, o: ref Opts, d: ref Vec[u8]) -> Result[String, String] {
+    if name == "b64encode" {
+        return Ok(bytes_repr(b64encode(d, o.get("alt", ""))));
+    }
+    if name == "urlsafe_b64encode" {
+        return Ok(bytes_repr(translate(b64encode(d, ""), "+/", "-_")));
+    }
+    if name == "b64decode" {
+        return shown(b64decode(d, o.get("alt", ""), o.has("validate")));
+    }
+    if name == "urlsafe_b64decode" {
+        return shown(b64decode(translate(d, "-_", "+/"), "", false));
+    }
+    if name == "encodebytes" {
+        return Ok(bytes_repr(encodebytes(d)));
+    }
+    if name == "decodebytes" {
+        return shown(a2b_base64(d, false));
+    }
+    if name == "b32encode" {
+        return Ok(bytes_repr(b32encode(B32_ALPHABET, d)));
+    }
+    if name == "b32hexencode" {
+        return Ok(bytes_repr(b32encode(B32HEX_ALPHABET, d)));
+    }
+    if name == "b32decode" {
+        return shown(b32decode(B32_ALPHABET, d, o.has("casefold"), o.get("map01", "")));
+    }
+    if name == "b32hexdecode" {
+        return shown(b32decode(B32HEX_ALPHABET, d, o.has("casefold"), ""));
+    }
+    if name == "b16encode" {
+        return Ok(bytes_repr(b16encode(d)));
+    }
+    if name == "b16decode" {
+        return shown(b16decode(d, o.has("casefold")));
+    }
+    if name == "a85encode" {
+        return Ok(bytes_repr(a85encode(d, o.has("foldspaces"), o.int("wrapcol"), o.has("pad"), o.has("adobe"))));
+    }
+    if name == "a85decode" {
+        return shown(a85decode(d, o.has("foldspaces"), o.has("adobe")));
+    }
+    if name == "b85encode" {
+        return Ok(bytes_repr(b85encode(d, o.has("pad"))));
+    }
+    if name == "b85decode" {
+        return shown(b85decode(d));
+    }
+    if name == "z85encode" {
+        return Ok(bytes_repr(z85encode(d)));
+    }
+    if name == "z85decode" {
+        return shown(z85decode(d));
+    }
+    if name == "hexlify" {
+        let per = if o.has("n") { o.int("n") } else { 1 };
+        return Ok(bytes_repr(hexlify(d, o.get("sep", ""), per)));
+    }
+    if name == "unhexlify" {
+        return shown(unhexlify(d));
+    }
+    if name == "crc32" {
+        return Ok(f"{crc32(d, o.int("value"))}");
+    }
+    if name == "crc_hqx" {
+        return Ok(f"{crc_hqx(d, o.int("value"))}");
+    }
+    if name == "qp_encode" {
+        return Ok(bytes_repr(qp_encode(d, o.has("quotetabs"), o.has("header"))));
+    }
+    if name == "qp_decode" {
+        return Ok(bytes_repr(qp_decode(d, o.has("header"))));
+    }
+    Err(f"unknown case {name}")
+}
+
+fn show_codecs() -> Result[(), String] {
+    println("== codecs");
+    let lines = lines_of(read("data/cases.txt")?);
+    for i in 0..lines.len() {
+        let line = lines[i].clone();
+        let at = find_str(line, " | ");
+        let spec = if at >= 0 { slice(line, 0, at) } else { line.clone() };
+        let raw = if at >= 0 { slice_from(line, at + 3) } else { String.new() };
+        let words = split_ws(spec);
+        let mut o = Opts { keys: Vec.new(), vals: Vec.new() };
+        for k in 1..words.len() {
+            let (key, _, val) = partition(words[k], b'=');
+            o.keys.push(key);
+            o.vals.push(val);
+        }
+        println(line);
+        match run_case(words[0], o, unescape_bytes(raw)) {
+            Ok(s) => println(f"  -> {s}"),
+            Err(e) => println(f"  Error: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    show_codecs()?;
+    show_mail()?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_mime: {e}");
+    }
+}

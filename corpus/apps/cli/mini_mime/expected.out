@@ -1,0 +1,361 @@
+== codecs
+b64encode | 
+  -> b''
+b64encode | f
+  -> b'Zg=='
+b64encode | fo
+  -> b'Zm8='
+b64encode | foo
+  -> b'Zm9v'
+b64encode | foobar
+  -> b'Zm9vYmFy'
+b64encode | \x00\xff\xfe\xfd\xfc?>
+  -> b'AP/+/fw/Pg=='
+b64encode alt=-_ | \xfb\xff\xbf
+  -> b'-_-_'
+urlsafe_b64encode | \xfb\xff\xbf\x00
+  -> b'-_-_AA=='
+b64decode | Zm9vYmFy
+  -> b'foobar'
+b64decode | Zm9vYg==
+  -> b'foob'
+b64decode | Zm9vYg
+  Error: binascii.Error: Incorrect padding
+b64decode | Zm9vY
+  Error: binascii.Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4
+b64decode | Zm9v YmFy\n
+  -> b'foobar'
+b64decode | Zm9v!!YmFy
+  -> b'foobar'
+b64decode | YQ==YQ
+  -> b'a\x06\x10'
+b64decode | YQ=x=
+  -> b'a\x0c'
+b64decode | ==YQ==
+  -> b'a'
+b64decode validate | Zm9vYmFy
+  -> b'foobar'
+b64decode validate | Zm9v YmFy
+  Error: binascii.Error: Only base64 data is allowed
+b64decode validate | =Zm9v
+  Error: binascii.Error: Leading padding not allowed
+b64decode validate | YQ===
+  Error: binascii.Error: Excess padding not allowed
+b64decode validate | YQ==x
+  Error: binascii.Error: Excess data after padding
+b64decode validate | YQ=x
+  Error: binascii.Error: Discontinuous padding not allowed
+b64decode validate | YWJj=
+  Error: binascii.Error: Excess padding not allowed
+b64decode validate | Y=
+  Error: binascii.Error: Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4
+b64decode validate | YR==
+  -> b'a'
+b64decode alt=-_ | -_-_
+  -> b'\xfb\xff\xbf'
+b64decode alt=-_ | +/+/
+  -> b'\xfb\xff\xbf'
+urlsafe_b64decode | -_-_
+  -> b'\xfb\xff\xbf'
+urlsafe_b64decode | -_8A
+  -> b'\xfb\xff\x00'
+encodebytes | The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.
+  -> b'VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4gVGhlIHF1aWNrIGJy\nb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4=\n'
+encodebytes | 
+  -> b''
+decodebytes | VGhlIHF1aWNr\nIGJyb3du\n
+  -> b'The quick brown'
+b32encode | 
+  -> b''
+b32encode | a
+  -> b'ME======'
+b32encode | ab
+  -> b'MFRA===='
+b32encode | abc
+  -> b'MFRGG==='
+b32encode | abcd
+  -> b'MFRGGZA='
+b32encode | abcde
+  -> b'MFRGGZDF'
+b32encode | \xff\x00\xff
+  -> b'74AP6==='
+b32hexencode | abcde
+  -> b'C5H66P35'
+b32decode | MFRGG===
+  -> b'abc'
+b32decode | MFRGGZDF
+  -> b'abcde'
+b32decode | mfrgg===
+  Error: binascii.Error: Non-base32 digit found
+b32decode casefold | mfrgg===
+  -> b'abc'
+b32decode | MFRGG==
+  Error: binascii.Error: Incorrect padding
+b32decode | MFRGGZ==
+  Error: binascii.Error: Incorrect padding
+b32decode | MF=GG===
+  Error: binascii.Error: Non-base32 digit found
+b32decode | ========
+  Error: binascii.Error: Incorrect padding
+b32decode | ME======
+  -> b'a'
+b32decode | MFRA====
+  -> b'ab'
+b32decode | 0FRGG===
+  Error: binascii.Error: Non-base32 digit found
+b32decode map01=L | 01RGG===
+  -> b'r\xe2c'
+b32decode map01=I | 1EZQ====
+  -> b'A3'
+b32hexdecode | C5H66===
+  -> b'abc'
+b32hexdecode casefold | c5h66===
+  -> b'abc'
+b16encode | \x00\x01\xab\xff
+  -> b'0001ABFF'
+b16decode | 0001ABFF
+  -> b'\x00\x01\xab\xff'
+b16decode | 0001abff
+  Error: binascii.Error: Non-base16 digit found
+b16decode casefold | 0001abff
+  -> b'\x00\x01\xab\xff'
+b16decode | 0001A
+  Error: binascii.Error: Odd-length string
+b16decode | 00G1
+  Error: binascii.Error: Non-base16 digit found
+a85encode | 
+  -> b''
+a85encode | hello
+  -> b'BOu!rDZ'
+a85encode | \x00\x00\x00\x00\x00
+  -> b'z!!'
+a85encode | \x00\x00
+  -> b'!!!'
+a85encode | \x00\x00\x00\x00
+  -> b'z'
+a85encode foldspaces | four    spaces    
+  -> b'AoDg4yF)YPtATJt:+<U'
+a85encode pad | hello
+  -> b'BOu!rDZBb;'
+a85encode adobe | hello world
+  -> b'<~BOu!rD]j7BEbo7~>'
+a85encode wrapcol=10 | the quick brown fox jumps
+  -> b'FD,5.EHPu*\nCER),Dg-(A\nAoDo:C3=B4\nEr'
+a85encode adobe wrapcol=10 | the quick brown fox
+  -> b'<~FD,5.EHP\nu*CER),Dg-\n(AAoDn~>'
+a85encode adobe wrapcol=1 | ab
+  -> b'<~\n@:\nB\n~>'
+a85decode | BOu!rDZ
+  -> b'hello'
+a85decode | BOu!r D Z\n
+  -> b'hello'
+a85decode | z
+  -> b'\x00\x00\x00\x00'
+a85decode | !!z
+  Error: ValueError: z inside Ascii85 5-tuple
+a85decode | !!
+  -> b'\x00'
+a85decode | s8W-"
+  Error: ValueError: Ascii85 overflow
+a85decode | s8W-#
+  Error: ValueError: Ascii85 overflow
+a85decode | BOu!rv
+  Error: ValueError: Non-Ascii85 digit found: v
+a85decode foldspaces | y
+  -> b'    '
+a85decode | y
+  Error: ValueError: Non-Ascii85 digit found: y
+a85decode foldspaces | !y
+  Error: ValueError: y inside Ascii85 5-tuple
+a85decode adobe | <~BOu!rDZ~>
+  -> b'hello'
+a85decode adobe | BOu!rDZ~>
+  -> b'hello'
+a85decode adobe | <~BOu!rDZ
+  Error: ValueError: Ascii85 encoded byte sequences must end with b'~>'
+b85encode | 
+  -> b''
+b85encode | hello
+  -> b'Xk~0{Zv'
+b85encode pad | hello
+  -> b'Xk~0{ZvX%Q'
+b85encode | \x00\x00\x00\x00\xff\xff\xff\xff
+  -> b'00000|NsC0'
+b85decode | Xk~0{Zv
+  -> b'hello'
+b85decode | Xk~0{Zy<
+  -> b'hello '
+b85decode | Xk~0"Zv
+  Error: ValueError: bad base85 character at position 4
+b85decode | |NsC0
+  -> b'\xff\xff\xff\xff'
+b85decode | |NsC1
+  Error: ValueError: base85 overflow in hunk starting at byte 0
+z85encode | \x86\x4f\xd2\x6f\xb5\x59\xf7\x5b
+  -> b'HelloWorld'
+z85decode | HelloWorld
+  -> b'\x86O\xd2o\xb5Y\xf7['
+z85decode | Hello~orld
+  Error: ValueError: bad z85 character at position 5
+z85decode | %nSc0
+  -> b'\xff\xff\xff\xff'
+hexlify | \x01\x02\xab
+  -> b'0102ab'
+hexlify sep=- n=2 | \x01\x02\x03\x04\x05
+  -> b'01-0203-0405'
+hexlify sep=- n=-2 | \x01\x02\x03\x04\x05
+  -> b'0102-0304-05'
+hexlify sep=: | \xde\xad\xbe\xef
+  -> b'de:ad:be:ef'
+unhexlify | 01ab
+  -> b'\x01\xab'
+unhexlify | 01AB
+  -> b'\x01\xab'
+unhexlify | 01a
+  Error: binascii.Error: Odd-length string
+unhexlify | 0x
+  Error: binascii.Error: Non-hexadecimal digit found
+crc32 | 
+  -> 0
+crc32 | The quick brown fox jumps over the lazy dog
+  -> 1095738169
+crc32 value=1 | hello
+  -> 191926070
+crc_hqx | 123456789
+  -> 12739
+crc_hqx value=65535 | 123456789
+  -> 10673
+qp_encode | plain text
+  -> b'plain text'
+qp_encode | a=b and caf\xc3\xa9
+  -> b'a=3Db and caf=C3=A9'
+qp_encode | trailing space \n
+  -> b'trailing space=20\n'
+qp_encode | tab\tinside
+  -> b'tab\tinside'
+qp_encode quotetabs | tab\tinside and spaces
+  -> b'tab=09inside=20and=20spaces'
+qp_encode | line one\nline two\t\n.\nend.
+  -> b'line one\nline two=09\n=2E\nend.'
+qp_encode | 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+  -> b'012345678901234567890123456789012345678901234567890123456789012345678901234=\n5678901234567890123456789'
+qp_encode | 012345678901234567890123456789012345678901234567890123456789012345678901234\xc3\xa9xyz
+  -> b'012345678901234567890123456789012345678901234567890123456789012345678901234=\n=C3=A9xyz'
+qp_encode | 01234567890123456789012345678901234567890123456789012345678901234567890123 x
+  -> b'01234567890123456789012345678901234567890123456789012345678901234567890123 x'
+qp_encode header | Hello World_x=y caf\xc3\xa9
+  -> b'Hello_World=5Fx=3Dy_caf=C3=A9'
+qp_encode | \r\n
+  -> b'=0D\n'
+qp_decode | a=3Db caf=C3=A9
+  -> b'a=b caf\xc3\xa9'
+qp_decode | soft=\nbreak
+  -> b'softbreak'
+qp_decode | trailing   \nspace
+  -> b'trailing\nspace'
+qp_decode | bad=ZZescape =4
+  -> b'bad=ZZescape =4'
+qp_decode | ==3D
+  -> b'=3D'
+qp_decode | end=
+  -> b'end='
+qp_decode | crlf=\r\nline
+  -> b'crlfline'
+qp_decode header | Hello_World=5F
+  -> b'Hello World_'
+qp_decode | Hello_World
+  -> b'Hello_World'
+== send
+From: build-bot <bot@example.com>
+To: team@example.com
+Subject: =?utf-8?q?Nightly_build_=E2=80=94_caf=C3=A9_branch,_all_green?=
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==kara-0001=="
+
+This is a multi-part message in MIME format.
+--==kara-0001==
+Content-Type: image/png; name="=?utf-8?b?Y2Fmw6ktbG9nby5wbmc=?="
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="=?utf-8?b?Y2Fmw6ktbG9nby5wbmc=?="
+
+3ARlqh+tHVra5awbHl8TcHls/RD/Ga9gHQSstB0CK0Z4czry31+utwhZ0e45EMtIlbXMiSkR/wa2
+Yi7fPPk1/UuUKMoJfESzAl6WX7PqbazULYFuaa/g5odMnATn0jZdLGDJ6vR59oag65Mm5GIS1Q3L
+s3cVamo6aLqO23QIRp7zzrMK+NDdaLv4X/ok8tL8GIf7XIe6tDgypZsbPRB893jWf+Jt+BGRKX6T
+lcsSxVfOWvHUFhjXGbwEW36ZZfGilHHEKqxqqTjEdcetMjgCHwU7LJka/OsV3s9ouuB8vNYelxua
+C52+l2PTkvyv36KMlyNFYuvdB2Vw/1iJas/3yu4/HOnkCmjl3pONOJx9vddbCdTn4jNEP0qMxKGQ
+1ri43GFf0Y4ovlkOqlAb
+
+--==kara-0001==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Nightly build report =E2=80=94 caf=C3=A9 branch
+
+All 1,284 tests passed. Coverage is 87.5% (up from 86.9%), and the binary s=
+ize is 4.2 MiB.
+Line with trailing spaces  =20
+Line with a tab	here and an equals sign: a=3Db
+=2E
+From the release checklist: =E2=9C=93 tagged, =E2=9C=93 signed, =E2=9C=97 a=
+nnounced.
+A very long line that keeps going past the seventy-six character limit of q=
+uoted-printable so it has to be broken with soft line breaks somewhere in t=
+he middle.
+=E6=97=A5=E6=9C=AC=E8=AA=9E=E3=81=AE=E8=A1=8C
+--=20
+build-bot
+
+--==kara-0001==
+Content-Type: text/csv; name="report.csv"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="report.csv"
+
+c3VpdGUsdGVzdHMsZmFpbGVkLHNlY29uZHMKbGV4ZXIsMjEyLDAsMS45CnBhcnNlciwzODgsMCw0
+LjEKdHlwZWNoZWNrLDQzMSwwLDkuNwpjb2RlZ2VuLDI1MywwLDMxLjIK
+
+--==kara-0001==--
+== receive
+-- data/out/message.eml
+From: build-bot <bot@example.com>
+Subject: Nightly build — café branch, all green
+part 1: image/png base64 'café-logo.png': 300 bytes, crc32 632f0e5f, dc 04 65 aa 1f ad 1d 5a da e5 ac 1b 1e 5f 13 70
+part 2: text/plain quoted-printable '': 464 bytes, crc32 b0f4425b, 4e 69 67 68 74 6c 79 20 62 75 69 6c 64 20 72 65
+  | Nightly build report — café branch
+  | 
+  | All 1,284 tests passed. Coverage is 87.5% (up from 86.9%), and the binary size is 4.2 MiB.
+  | Line with trailing spaces   
+  | Line with a tab	here and an equals sign: a=b
+  | .
+  | From the release checklist: ✓ tagged, ✓ signed, ✗ announced.
+  | A very long line that keeps going past the seventy-six character limit of quoted-printable so it has to be broken with soft line breaks somewhere in the middle.
+  | 日本語の行
+  | -- 
+  | build-bot
+  | 
+part 3: text/csv base64 'report.csv': 99 bytes, crc32 a5f5b9a9, 73 75 69 74 65 2c 74 65 73 74 73 2c 66 61 69 6c
+round trip café-logo.png: same
+round trip note.txt: same
+round trip report.csv: same
+-- data/inbox/01-phone.eml
+From: André Müller <andre@example.de>
+Subject: Photos from the offsite 📸
+part 1: text/plain base64 '': 38 bytes, crc32 208ff3d9, 48 65 72 65 20 61 72 65 20 74 68 65 20 70 68 6f
+  | Here are the photos. Schöne Grüße!
+  | 
+part 2: image/png base64 'logo.png': 120 bytes, crc32 20da8815, 0b 30 55 7a 9f c4 e9 0e 33 58 7d a2 c7 ec 11 36
+part 3: image/jpeg base64 'broken.jpg': Error: binascii.Error: Incorrect padding
+-- data/inbox/02-invoice.eml
+From: Billing <billing@example.com>
+Subject: Invoice № 2026-10 — due 15 Nov
+part 1: text/plain quoted-printable '': 151 bytes, crc32 32973f7b, 59 6f 75 72 20 69 6e 76 6f 69 63 65 20 66 6f 72
+  | Your invoice for October is ready. The total is EUR 1.234,50 (that is £1.056,12 in sterling).
+  | A bad escape =ZZ stays, and so does a lone = at the end =
+part 2: text/html quoted-printable '': 140 bytes, crc32 abce41af, 3c 68 74 6d 6c 3e 3c 62 6f 64 79 3e 3c 70 20 73
+  | <html><body><p style="color: #333">Your invoice for October is ready. The total is €1.234,50 and is due on 15 November.</p></body></html>
+  | 
+-- data/inbox/03-export.eml
+From: exporter@example.org
+Subject: Export ready
+part 1: text/plain 7bit '': 23 bytes, crc32 59d71c15, 54 68 65 20 65 78 70 6f 72 74 20 69 73 20 61 74
+  | The export is attached.
+part 2: text/csv base64 'export.csv': 29 bytes, crc32 18fd9b72, 69 64 2c 61 6d 6f 75 6e 74 0d 0a 31 2c 31 30 2e
