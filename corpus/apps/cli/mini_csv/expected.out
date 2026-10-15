@@ -1,0 +1,306 @@
+== read
+-- contacts.csv
+  1 ['name', 'email', 'phone', 'notes']
+  2 ['Smith, Jane', 'jane@example.org', '555-0100', 'Prefers "JD"']
+  4 ['Bob Ng', 'bob@example.org', '', 'Line one\r\nline two']
+  5 ['Ünal Çelik', 'unal@example.org', '+90 555 0101', '']
+  6 []
+  7 ['Lee', 'lee@example.org', '555-0102', 'trailing  ']
+-- inventory.tsv delimiter=tab
+  1 ['sku', 'name', 'qty', 'location']
+  2 ['A-100', 'Widget, large', '12', 'Aisle 3']
+  3 ['A-101', 'Gadget (blue)', '0', '']
+  4 ['B-200', 'Spanner', '7', 'Aisle 1', 'overshoot']
+-- prices_eu.csv delimiter=semicolon
+  1 ['sku', 'name', 'price', 'qty']
+  2 ['K-1', 'Kaffee; gemahlen', '12,50', '3']
+  3 ['K-2', 'Tee', '3,99', '10']
+  4 ['K-3', 'Zucker "fein"', '1,25', '']
+-- survey.csv
+  1 ['id', ' answer', ' score']
+  2 ['1', ' "yes', ' mostly"', ' 4']
+  3 ['2', ' no', ' 2']
+  4 ['3', '   "spaced"  ', ' 5']
+-- survey.csv skipinitialspace=1
+  1 ['id', 'answer', 'score']
+  2 ['1', 'yes, mostly', '4']
+  3 ['2', 'no', '2']
+  4 ['3', 'spaced  ', '5']
+-- escaped.txt delimiter=pipe quoting=none escapechar=backslash
+  1 ['path', 'desc']
+  2 ['C:\\temp', 'has | pipe']
+  4 ['line\ncontinued', 'x']
+  5 ['"quoted"', 'kept']
+-- escaped.txt delimiter=pipe escapechar=backslash
+  1 ['path', 'desc']
+  2 ['C:\\temp', 'has | pipe']
+  4 ['line\ncontinued', 'x']
+  5 ['quoted', 'kept']
+-- numbers.csv quoting=nonnumeric
+  1 ['label', 1.0, 2.5, -3.0]
+  2 ['pi', 3.14159, '', 1000.0]
+  3 ['empty', '', 0.0, '']
+-- nulls.csv quoting=notnull
+  1 ['a', None, '1', '']
+  2 [None, 'x', None, '2.50']
+-- nulls.csv quoting=strings
+  1 ['a', None, 1.0, '']
+  2 [None, 'x', None, 2.5]
+-- contacts.csv quotechar=none
+  1 ['name', 'email', 'phone', 'notes']
+  2 ['"Smith', ' Jane"', 'jane@example.org', '555-0100', '"Prefers ""JD"""']
+  3 ['Bob Ng', 'bob@example.org', '', '"Line one']
+  4 ['line two"']
+  5 ['"Ünal Çelik"', 'unal@example.org', '+90 555 0101', '']
+  6 []
+  7 ['Lee', 'lee@example.org', '555-0102', 'trailing  ']
+-- survey.csv quotechar=squote skipinitialspace=1
+  1 ['id', 'answer', 'score']
+  2 ['1', '"yes', 'mostly"', '4']
+  3 ['2', 'no', '2']
+  4 ['3', '"spaced"  ', '5']
+-- after_quote.csv
+  1 ['a', 'bc', 'd']
+  2 ['1', '2', '3']
+-- after_quote.csv strict=1
+  Error: ',' expected after '"' (line 1)
+-- after_quote.csv doublequote=0
+  1 ['a', 'bc', 'd']
+  2 ['1', '2', '3']
+-- eof_quote.csv
+  2 ['a', 'unterminated\nfield']
+-- eof_quote.csv strict=1
+  Error: unexpected end of data (line 2)
+-- cr_mid.csv source=text
+  Error: new-line character seen in unquoted field - do you need to open the file with newline=''? (line 1)
+-- cr_mid.csv
+  1 ['a', 'b']
+  2 ['c', 'd']
+  3 ['next', 'row']
+-- long.csv limit=16
+  Error: field larger than field limit (16) (line 1)
+-- numbers.csv quoting=nonnumeric delimiter=semicolon
+  1 ['label,1,2.5,-3']
+  2 ['pi,3.14159,,1e3']
+  3 ['empty,"",0,']
+-- nulls.csv quoting=nonnumeric
+  1 ['a', '', 1.0, '']
+  2 ['', 'x', '', 2.5]
+== write
+-- excel
+  'id,name,note,amount\r\n'
+  '1,plain,,2.5\r\n'
+  '2,"has,comma","say ""hi""",-3\r\n'
+  '3,"multi\nline","cr\rhere",\r\n'
+  '4, lead space,back\\slash,0.1\r\n'
+  '5,tab\there,semi;colon,10\r\n'
+  "6,it's,a b,'q'\r\n"
+  '""\r\n'
+  '""\r\n'
+  '\r\n'
+-- quoting=all
+  '"id","name","note","amount"\r\n'
+  '"1","plain","","2.5"\r\n'
+  '"2","has,comma","say ""hi""","-3"\r\n'
+  '"3","multi\nline","cr\rhere",""\r\n'
+  '"4"," lead space","back\\slash","0.1"\r\n'
+  '"5","tab\there","semi;colon","10"\r\n'
+  '"6","it\'s","a b","\'q\'"\r\n'
+  '""\r\n'
+  '""\r\n'
+  '\r\n'
+-- quoting=nonnumeric
+  '"id","name","note","amount"\r\n'
+  '1,"plain","",2.5\r\n'
+  '2,"has,comma","say ""hi""",-3\r\n'
+  '3,"multi\nline","cr\rhere",""\r\n'
+  '4," lead space","back\\slash",0.1\r\n'
+  '5,"tab\there","semi;colon",10\r\n'
+  '6,"it\'s","a b","\'q\'"\r\n'
+  '""\r\n'
+  '""\r\n'
+  '\r\n'
+-- quoting=strings
+  '"id","name","note","amount"\r\n'
+  '1,"plain","",2.5\r\n'
+  '2,"has,comma","say ""hi""",-3\r\n'
+  '3,"multi\nline","cr\rhere",\r\n'
+  '4," lead space","back\\slash",0.1\r\n'
+  '5,"tab\there","semi;colon",10\r\n'
+  '6,"it\'s","a b","\'q\'"\r\n'
+  '""\r\n'
+  Error: single empty field record must be quoted
+  '\r\n'
+-- quoting=notnull
+  '"id","name","note","amount"\r\n'
+  '"1","plain","","2.5"\r\n'
+  '"2","has,comma","say ""hi""","-3"\r\n'
+  '"3","multi\nline","cr\rhere",\r\n'
+  '"4"," lead space","back\\slash","0.1"\r\n'
+  '"5","tab\there","semi;colon","10"\r\n'
+  '"6","it\'s","a b","\'q\'"\r\n'
+  '""\r\n'
+  Error: single empty field record must be quoted
+  '\r\n'
+-- quoting=none escapechar=backslash
+  'id,name,note,amount\r\n'
+  '1,plain,,2.5\r\n'
+  '2,has\\,comma,say \\"hi\\",-3\r\n'
+  '3,multi\\\nline,cr\\\rhere,\r\n'
+  '4, lead space,back\\\\slash,0.1\r\n'
+  '5,tab\there,semi;colon,10\r\n'
+  "6,it's,a b,'q'\r\n"
+  Error: single empty field record must be quoted
+  Error: single empty field record must be quoted
+  '\r\n'
+-- quoting=none
+  'id,name,note,amount\r\n'
+  '1,plain,,2.5\r\n'
+  Error: need to escape, but no escapechar set
+  Error: need to escape, but no escapechar set
+  '4, lead space,back\\slash,0.1\r\n'
+  '5,tab\there,semi;colon,10\r\n'
+  "6,it's,a b,'q'\r\n"
+  Error: single empty field record must be quoted
+  Error: single empty field record must be quoted
+  '\r\n'
+-- doublequote=0 escapechar=backslash
+  'id,name,note,amount\r\n'
+  '1,plain,,2.5\r\n'
+  '2,"has,comma",say \\"hi\\",-3\r\n'
+  '3,"multi\nline","cr\rhere",\r\n'
+  '4, lead space,back\\\\slash,0.1\r\n'
+  '5,tab\there,semi;colon,10\r\n'
+  "6,it's,a b,'q'\r\n"
+  '""\r\n'
+  '""\r\n'
+  '\r\n'
+-- doublequote=0
+  'id,name,note,amount\r\n'
+  '1,plain,,2.5\r\n'
+  Error: need to escape, but no escapechar set
+  '3,"multi\nline","cr\rhere",\r\n'
+  '4, lead space,back\\slash,0.1\r\n'
+  '5,tab\there,semi;colon,10\r\n'
+  "6,it's,a b,'q'\r\n"
+  '""\r\n'
+  '""\r\n'
+  '\r\n'
+-- delimiter=semicolon lineterminator=lf
+  'id;name;note;amount\n'
+  '1;plain;;2.5\n'
+  '2;has,comma;"say ""hi""";-3\n'
+  '3;"multi\nline";"cr\rhere";\n'
+  '4; lead space;back\\slash;0.1\n'
+  '5;tab\there;"semi;colon";10\n'
+  "6;it's;a b;'q'\n"
+  '""\n'
+  '""\n'
+  '\n'
+-- delimiter=tab quotechar=squote
+  'id\tname\tnote\tamount\r\n'
+  '1\tplain\t\t2.5\r\n'
+  '2\thas,comma\tsay "hi"\t-3\r\n'
+  "3\t'multi\nline'\t'cr\rhere'\t\r\n"
+  '4\t lead space\tback\\slash\t0.1\r\n'
+  "5\t'tab\there'\tsemi;colon\t10\r\n"
+  "6\t'it''s'\ta b\t'''q'''\r\n"
+  "''\r\n"
+  "''\r\n"
+  '\r\n'
+-- delimiter=space skipinitialspace=1
+  'id name note amount\r\n'
+  '1 plain "" 2.5\r\n'
+  '2 has,comma "say ""hi""" -3\r\n'
+  '3 "multi\nline" "cr\rhere" ""\r\n'
+  '4 " lead space" back\\slash 0.1\r\n'
+  '5 tab\there semi;colon 10\r\n'
+  '6 it\'s "a b" \'q\'\r\n'
+  '""\r\n'
+  '""\r\n'
+  '\r\n'
+-- lineterminator=semicolon
+  'id,name,note,amount;'
+  '1,plain,,2.5;'
+  '2,"has,comma","say ""hi""",-3;'
+  '3,"multi\nline","cr\rhere",;'
+  '4, lead space,back\\slash,0.1;'
+  '5,tab\there,"semi;colon",10;'
+  "6,it's,a b,'q';"
+  '"";'
+  '"";'
+  ';'
+== dict
+  fieldnames ['id', 'name', 'city']
+  2 {'id': '1', 'name': 'Ada', 'city': 'London'}
+  3 {'id': '2', 'name': 'Grace', 'city': 'N/A'}
+  5 {'id': '3', 'name': 'Linus', 'city': 'Helsinki', '_extra': ['Finland', 'extra']}
+  6 {'id': '4', 'name': '', 'city': ''}
+  1 {'key': 'x1', 'value': '10'}
+  2 {'key': 'x2', 'value': '20', None: ['spare']}
+  3 {'key': 'x3', 'value': None}
+  2 {'k': '3', 'v': '2'}
+  raise: 'id,name,email\r\n1,Ann,-\r\n2,"Bo, Jr.",bo@example.org\r\n<dict contains fields not in fieldnames: \'phone\'>-,-,-\r\n'
+  ignore: 'id,name,email\r\n1,Ann,-\r\n2,"Bo, Jr.",bo@example.org\r\n3,-,-\r\n-,-,-\r\n'
+== sniff
+colons.txt: delimiter=':' quotechar='"' doublequote=False skipinitialspace=False header=False
+  ['root', 'x', '0', '0', 'root', '/root', '/bin/bash']
+  ['daemon', 'x', '1', '1', 'daemon', '/usr/sbin', '/usr/sbin/nologin']
+  ['bin', 'x', '2', '2', 'bin', '/bin', '/usr/sbin/nologin']
+complex.txt: delimiter=',' quotechar='"' doublequote=False skipinitialspace=False header=True
+  ['re', 'im']
+  ['1+2j', '3']
+  ['-4.5e1', 'inf']
+  ['nan', '7j']
+dq.txt: delimiter=',' quotechar='"' doublequote=True skipinitialspace=False header=False
+  ['name', 'quote']
+  ['Ann', 'She said "hi"']
+  ['Bo', 'none']
+lengths.txt: delimiter=',' quotechar='"' doublequote=False skipinitialspace=False header=True
+  ['code', 'label']
+  ['AB', 'first']
+  ['CD', 'second']
+  ['EF', 'third']
+mixed.txt: delimiter=',' quotechar='"' doublequote=False skipinitialspace=False header=False
+  ['x;y', 'z']
+  ['1;2', '3']
+  ['4;5', '6']
+noheader.txt: delimiter=',' quotechar='"' doublequote=False skipinitialspace=False header=False
+  ['10', '20', '30']
+  ['40', '50', '60']
+  ['70', '80', '90']
+onecol.txt: delimiter='"' quotechar='"' doublequote=False skipinitialspace=False header=Error: bad delimiter or quotechar value
+  Error: bad delimiter or quotechar value
+oneword.txt: Error: Could not determine delimiter
+pipes.txt: delimiter='|' quotechar='"' doublequote=False skipinitialspace=False header=True
+  ['a', 'b', 'c']
+  ['1', '2', '3']
+  ['4', '5', '6']
+  ['7', '8', '9']
+plain.txt: delimiter=',' quotechar='"' doublequote=False skipinitialspace=False header=True
+  ['city', 'population', 'area']
+  ['Oslo', '709037', '454.0']
+  ['Bergen', '291940', '465.3']
+  ['Tromso', '77544', '2521.0']
+quoted.txt: delimiter=';' quotechar="'" doublequote=True skipinitialspace=False header=True
+  ['id', 'title', 'year']
+  ['1', 'Dune', '1965']
+  ['2', "It's here", '2001']
+  ['3', 'Solaris', '1961']
+spaced.txt: delimiter=',' quotechar='"' doublequote=False skipinitialspace=True header=True
+  ['name', 'role', 'age']
+  ['Ann', 'dev, lead', '41']
+  ['Bo', 'ops', '29']
+tabs.txt: delimiter='\t' quotechar='"' doublequote=False skipinitialspace=False header=True
+  ['date', 'level', 'message']
+  ['2026-10-01', 'INFO', 'started']
+  ['2026-10-01', 'WARN', 'disk at 91%']
+  ['2026-10-02', 'INFO', 'stopped']
+== report
+sniffed delimiter=';' header=True
+-- data/out/orders_clean.csv
+'"order","date","country","customer","amount","status"\r\n1001,"2026-10-01","DE","Müller GmbH","1234.50","bezahlt"\r\n1002,"2026-10-01","AT","Gruber; Söhne","89.90","bezahlt"\r\n1003,"2026-10-02","DE","Schmidt ""Bau""","450.00","offen"\r\n1004,"2026-10-02","CH","Keller AG","2100.00","bezahlt"\r\n1005,"2026-10-03","DE","Weber","12.05","storniert"\r\n1006,"2026-10-03","AT","Hofer Filiale 2","310.40","bezahlt"\r\n1007,"2026-10-04","CH","Zürcher","-15.00","erstattet"\r\n'
+  read back: 8 rows, last [1007.0, '2026-10-04', 'CH', 'Zürcher', '-15.00', 'erstattet']
+-- data/out/summary.csv
+'country,orders,revenue\nAT,2,400.30\nCH,2,2085.00\nDE,1,1234.50\ntotal,5,3719.80\n'
+  read back: 5 rows, last ['total', '5', '3719.80']

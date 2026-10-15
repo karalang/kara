@@ -174,7 +174,8 @@ cli/mini_crawl         a site crawler and link checker with robots.txt, URL norm
 cli/mini_bc            an arbitrary-precision calculator: bc's whole language, its scale rules, obase and ibase, wrapped output and error recovery; output identical to GNU bc 1.07.1
 cli/mini_pip            a pip resolver on a port of packaging 26.3 (versions, specifiers, markers)
 cli/mini_m4             a GNU m4 1.4.19 clone: rescanned macro expansion, quoting and comments, regex, eval and diversion builtins; output identical to GNU m4
-cli/mini_xml               XML parser, ElementPath queries and tostring, as Python's ElementTree
+cli/mini_xml            XML parser, ElementPath queries and tostring, as Python's ElementTree
+cli/mini_csv            Python's csv module: reader and writer from _csv.c, DictReader/DictWriter, the Sniffer, and an order report
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

@@ -96,9 +96,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 606 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 270 |
+| missing-feature | 271 |
 | codegen-gap | 262 |
-| false-positive | 200 |
+| false-positive | 201 |
 | other | 172 |
 | perf | 167 |
 | diagnostics | 162 |
@@ -112,12 +112,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2908 |
 | interp | 933 |
-| typecheck | 437 |
+| typecheck | 438 |
 | other | 115 |
 | ownership | 103 |
 | cli | 76 |
 | runtime | 72 |
-| parser | 65 |
+| parser | 66 |
 | autopar | 59 |
 | resolver | 42 |
 | effect | 32 |
@@ -212,6 +212,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-42 | 2026-10-15 | codegen | low | A user type named like a library type the I/O library returns (`struct IoError { .. }`) replaces it inside the library on both MIR backends: `match fs.read_to_string("missing") { Ok(_) => .., Err(_) => .. }` stops `__mir-run` with "IoError has no variant NotFound" and `__mir-llvm-run` with "`IoError` has no variant NotFound"; `karac check` accepts it with only the prelude_shadow warning | — |
 | B-2026-10-15-44 | 2026-10-15 | interp+codegen | low | std.process on v2: a child's pipes cannot be wrapped in a BufReader / BufWriter (no read_line or lines over ChildStdout) | — |
 | B-2026-10-15-45 | 2026-10-15 | typecheck | medium | karac check in library mode accepts a call to a method that does not exist on a #[derive(Serialize)] struct; the build then fails | — |
+| B-2026-10-15-46 | 2026-10-15 | parser | medium | AN EMPTY BODY AFTER AN UPPERCASE NAME IN A CONDITION PARSES AS AN EMPTY STRUCT LITERAL, so `if c == EOL { } else { .. }` and `while c == MAX_LEN { }` fail `karac check` and every MIR surface with `Expected LeftBrace, found Else` (or at the next statement); design.md says a `{` after a name in a condition always starts the body | — |
+| B-2026-10-15-47 | 2026-10-15 | typecheck | low | A STRUCT UPDATE WHOSE BASE IS A CALL (`Dialect { quoting: Q, ..excel() }`) IS REFUSED BY `karac check` AND EVERY MIR SURFACE, and the error says the spread is "parsed but NOT applied -- no field is copied from the base", which reads as the whole feature being missing; design.md lets `..base` be any expression of the struct's type | — |
 
 ### Relocated
 

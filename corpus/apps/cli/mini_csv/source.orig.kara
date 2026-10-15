@@ -1,0 +1,2276 @@
+// mini_csv: the CSV handling every data pipeline, spreadsheet export and
+// import tool needs, as Python 3.13's csv module does it:
+// - the reader's state machine, ported from _csv.c: quoting, doubled
+//   quotes, escape characters, skipinitialspace, strict mode, the field
+//   size limit, the six quoting modes' conversions, and its errors;
+// - the writer, with the same six quoting modes, escaping, line
+//   terminators and its errors;
+// - DictReader and DictWriter, with restkey, restval and extrasaction;
+// - the Sniffer, which guesses a dialect from a sample and whether the
+//   sample starts with a header row;
+// - a report built with all of them: an order export from a European
+//   shop system, sniffed, cleaned and summarized into two new CSV files.
+//
+// expected.out is the output of oracle.py, the same report made with
+// Python 3.13's csv module.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+// ------------------------------------------------------------ dialects
+
+// A character that is not set, as a dialect's quotechar or escapechar can be.
+const UNSET: i64 = -2;
+// The end of a line, as the reader's state machine sees it.
+const EOL: i64 = -1;
+
+const QUOTE_MINIMAL: i64 = 0;
+const QUOTE_ALL: i64 = 1;
+const QUOTE_NONNUMERIC: i64 = 2;
+const QUOTE_NONE: i64 = 3;
+const QUOTE_STRINGS: i64 = 4;
+const QUOTE_NOTNULL: i64 = 5;
+
+#[derive(Clone)]
+struct Dialect {
+    delimiter: i64,
+    quotechar: i64,
+    escapechar: i64,
+    doublequote: bool,
+    skipinitialspace: bool,
+    lineterminator: String,
+    quoting: i64,
+    strict: bool,
+}
+
+fn excel() -> Dialect {
+    Dialect {
+        delimiter: b',' as i64,
+        quotechar: b'"' as i64,
+        escapechar: UNSET,
+        doublequote: true,
+        skipinitialspace: false,
+        lineterminator: "\r\n".to_string(),
+        quoting: QUOTE_MINIMAL,
+        strict: false,
+    }
+}
+
+impl Dialect {
+    // The checks _csv makes when a reader or writer is made.
+    fn check(ref self) -> Result[(), String] {
+        if self.delimiter == b'\r' as i64 or self.delimiter == b'\n' as i64 {
+            return Err("bad delimiter value".to_string());
+        }
+        if self.delimiter == self.escapechar {
+            return Err("bad delimiter or escapechar value".to_string());
+        }
+        if self.delimiter == self.quotechar {
+            return Err("bad delimiter or quotechar value".to_string());
+        }
+        if self.escapechar != UNSET and self.escapechar == self.quotechar {
+            return Err("bad escapechar or quotechar value".to_string());
+        }
+        let lt = to_bytes(self.lineterminator);
+        for k in 0..lt.len() {
+            if lt[k] as i64 == self.delimiter {
+                return Err("bad delimiter or lineterminator value".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+// The character a name in a job stands for.
+fn char_named(name: Str) -> Result[i64, String] {
+    let names = ["comma", "tab", "semicolon", "pipe", "space", "colon", "dquote", "squote", "backslash"];
+    let chars = ",\t;| :\"'\\";
+    let cb = to_bytes(chars);
+    for i in 0..names.len() {
+        if names[i] == name {
+            return Ok(cb[i] as i64);
+        }
+    }
+    if name == "none" {
+        return Ok(UNSET);
+    }
+    Err(f"unknown character {name}")
+}
+
+fn quoting_named(name: Str) -> Result[i64, String] {
+    let names = ["minimal", "all", "nonnumeric", "none", "strings", "notnull"];
+    for i in 0..names.len() {
+        if names[i] == name {
+            return Ok(i);
+        }
+    }
+    Err(f"unknown quoting {name}")
+}
+
+// The options of a job line, `key=value ...`: the dialect, and the
+// reader's source and field size limit.
+struct Job {
+    d: Dialect,
+    text_source: bool,
+    limit: i64,
+}
+
+fn parse_job(words: ref Vec[String], from: i64) -> Result[Job, String] {
+    let mut j = Job { d: excel(), text_source: false, limit: 131072 };
+    for i in from..words.len() {
+        let kv = split_on(words[i], b'=');
+        let k = kv[0].clone();
+        let v = kv[1].clone();
+        if k == "delimiter" {
+            j.d.delimiter = char_named(v)?;
+        } else if k == "quotechar" {
+            j.d.quotechar = char_named(v)?;
+        } else if k == "escapechar" {
+            j.d.escapechar = char_named(v)?;
+        } else if k == "lineterminator" {
+            j.d.lineterminator = if v == "crlf" {
+                "\r\n".to_string()
+            } else if v == "lf" {
+                "\n".to_string()
+            } else if v == "cr" {
+                "\r".to_string()
+            } else {
+                let c = char_named(v)?;
+                from_bytes([c as u8].to_vec())
+            };
+        } else if k == "doublequote" {
+            j.d.doublequote = v == "1";
+        } else if k == "skipinitialspace" {
+            j.d.skipinitialspace = v == "1";
+        } else if k == "strict" {
+            j.d.strict = v == "1";
+        } else if k == "quoting" {
+            j.d.quoting = quoting_named(v)?;
+        } else if k == "source" {
+            j.text_source = v == "text";
+        } else if k == "limit" {
+            j.limit = int_of(v);
+        } else {
+            return Err(f"unknown option {k}");
+        }
+    }
+    Ok(j)
+}
+
+fn int_of(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut n: i64 = 0;
+    let mut k: i64 = 0;
+    let neg = b.len() > 0 and b[0] == b'-';
+    if neg {
+        k = 1;
+    }
+    while k < b.len() {
+        n = n * 10 + (b[k] - b'0') as i64;
+        k += 1;
+    }
+    if neg { -n } else { n }
+}
+
+// ------------------------------------------------------------ the reader
+
+// A field as the reader returns it: a string, a float (the numeric quoting
+// modes) or None (QUOTE_NOTNULL and QUOTE_STRINGS).
+#[derive(Clone)]
+enum Value {
+    S(String),
+    F(f64),
+    Null,
+}
+
+fn value_repr(v: ref Value) -> String {
+    match ref v {
+        Value.S(s) => py_repr(s),
+        Value.F(x) => f"{x}",
+        Value.Null => "None".to_string(),
+    }
+}
+
+fn row_repr(row: ref Vec[Value]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..row.len() {
+        parts.push(value_repr(row[i]));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// The lines of a text as a file read with newline='' gives them, each with
+// its own line end; with `lf_only`, as a StringIO reading "\n" ends only.
+fn split_lines(text: Str, lf_only: bool) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i + 1));
+            i += 1;
+            st = i;
+        } else if b[i] == b'\r' and not lf_only {
+            let end = if i + 1 < b.len() and b[i + 1] == b'\n' { i + 2 } else { i + 1 };
+            out.push(byte_str(b, st, end));
+            i = end;
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+const START_RECORD: i64 = 0;
+const START_FIELD: i64 = 1;
+const ESCAPED_CHAR: i64 = 2;
+const IN_FIELD: i64 = 3;
+const IN_QUOTED_FIELD: i64 = 4;
+const ESCAPE_IN_QUOTED_FIELD: i64 = 5;
+const QUOTE_IN_QUOTED_FIELD: i64 = 6;
+const EAT_CRNL: i64 = 7;
+const AFTER_ESCAPED_CRNL: i64 = 8;
+
+struct Reader {
+    d: Dialect,
+    lines: Vec[String],
+    next_line: i64,
+    line_num: i64,
+    limit: i64,
+    state: i64,
+    fields: Vec[Value],
+    field: Vec[u8],
+    field_len: i64,
+    unquoted: bool,
+}
+
+fn new_reader(text: Str, d: ref Dialect, lf_only: bool, limit: i64) -> Result[Reader, String] {
+    d.check()?;
+    Ok(Reader {
+        d: d.clone(),
+        lines: split_lines(text, lf_only),
+        next_line: 0,
+        line_num: 0,
+        limit: limit,
+        state: START_RECORD,
+        fields: Vec.new(),
+        field: Vec.new(),
+        field_len: 0,
+        unquoted: true,
+    })
+}
+
+// Python's float() of a field.
+fn to_float(s: Str) -> Result[f64, String] {
+    match f64.parse(strip(s)) {
+        Ok(x) => Ok(x),
+        Err(_) => Err(f"could not convert string to float: {py_repr(s)}"),
+    }
+}
+
+impl Reader {
+    fn save_field(mut ref self) -> Result[(), String] {
+        let q = self.d.quoting;
+        let text = from_bytes(self.field.clone());
+        let v = if self.unquoted and self.field_len == 0 and (q == QUOTE_NOTNULL or q == QUOTE_STRINGS) {
+            Value.Null
+        } else if self.unquoted and self.field_len != 0 and (q == QUOTE_NONNUMERIC or q == QUOTE_STRINGS) {
+            Value.F(to_float(text)?)
+        } else {
+            Value.S(text)
+        };
+        self.fields.push(v);
+        self.field.clear();
+        self.field_len = 0;
+        self.unquoted = true;
+        Ok(())
+    }
+
+    fn add_char(mut ref self, c: i64) -> Result[(), String] {
+        // the limit counts characters; a UTF-8 continuation byte is part of one
+        let starts = c < 128 or c >= 192;
+        if starts {
+            if self.field_len >= self.limit {
+                return Err(f"field larger than field limit ({self.limit})");
+            }
+            self.field_len += 1;
+        }
+        self.field.push(c as u8);
+        Ok(())
+    }
+
+    fn end_line(mut ref self, c: i64) -> Result[(), String] {
+        self.save_field()?;
+        self.state = if c == EOL { START_RECORD } else { EAT_CRNL };
+        Ok(())
+    }
+
+    fn process(mut ref self, c0: i64) -> Result[(), String] {
+        let mut c = c0;
+        let d = self.d.clone();
+        let nl = c == b'\n' as i64 or c == b'\r' as i64;
+        let quote = c == d.quotechar and d.quoting != QUOTE_NONE;
+        if self.state == START_RECORD {
+            if c == EOL {
+                return Ok(());
+            }
+            if nl {
+                self.state = EAT_CRNL;
+                return Ok(());
+            }
+            self.state = START_FIELD;
+        }
+        if self.state == START_FIELD {
+            if nl or c == EOL {
+                self.end_line(c)?;
+            } else if quote {
+                self.unquoted = false;
+                self.state = IN_QUOTED_FIELD;
+            } else if c == d.escapechar {
+                self.state = ESCAPED_CHAR;
+            } else if c == b' ' as i64 and d.skipinitialspace {
+                // spaces at the start of a field are dropped
+            } else if c == d.delimiter {
+                self.save_field()?;
+            } else {
+                self.add_char(c)?;
+                self.state = IN_FIELD;
+            }
+            return Ok(());
+        }
+        if self.state == ESCAPED_CHAR {
+            if nl {
+                self.add_char(c)?;
+                self.state = AFTER_ESCAPED_CRNL;
+                return Ok(());
+            }
+            if c == EOL {
+                c = b'\n' as i64;
+            }
+            self.add_char(c)?;
+            self.state = IN_FIELD;
+            return Ok(());
+        }
+        if self.state == AFTER_ESCAPED_CRNL {
+            if c == EOL {
+                return Ok(());
+            }
+            self.state = IN_FIELD;
+        }
+        if self.state == IN_FIELD {
+            if nl or c == EOL {
+                self.end_line(c)?;
+            } else if c == d.escapechar {
+                self.state = ESCAPED_CHAR;
+            } else if c == d.delimiter {
+                self.save_field()?;
+                self.state = START_FIELD;
+            } else {
+                self.add_char(c)?;
+            }
+            return Ok(());
+        }
+        if self.state == IN_QUOTED_FIELD {
+            if c == EOL {
+                // the line end is in the field already
+            } else if c == d.escapechar {
+                self.state = ESCAPE_IN_QUOTED_FIELD;
+            } else if quote {
+                self.state = if d.doublequote { QUOTE_IN_QUOTED_FIELD } else { IN_FIELD };
+            } else {
+                self.add_char(c)?;
+            }
+            return Ok(());
+        }
+        if self.state == ESCAPE_IN_QUOTED_FIELD {
+            if c == EOL {
+                c = b'\n' as i64;
+            }
+            self.add_char(c)?;
+            self.state = IN_QUOTED_FIELD;
+            return Ok(());
+        }
+        if self.state == QUOTE_IN_QUOTED_FIELD {
+            if quote {
+                self.add_char(c)?;
+                self.state = IN_QUOTED_FIELD;
+            } else if c == d.delimiter {
+                self.save_field()?;
+                self.state = START_FIELD;
+            } else if nl or c == EOL {
+                self.end_line(c)?;
+            } else if not d.strict {
+                self.add_char(c)?;
+                self.state = IN_FIELD;
+            } else {
+                let dl = from_bytes([d.delimiter as u8].to_vec());
+                let ql = from_bytes([d.quotechar as u8].to_vec());
+                return Err(f"'{dl}' expected after '{ql}'");
+            }
+            return Ok(());
+        }
+        // EAT_CRNL
+        if nl {
+            return Ok(());
+        }
+        if c == EOL {
+            self.state = START_RECORD;
+            return Ok(());
+        }
+        Err("new-line character seen in unquoted field - do you need to open the file with newline=''?".to_string())
+    }
+
+    // The next record; None at the end of the input.
+    fn next(mut ref self) -> Result[Option[Vec[Value]], String] {
+        self.fields = Vec.new();
+        self.field.clear();
+        self.field_len = 0;
+        self.unquoted = true;
+        self.state = START_RECORD;
+        loop {
+            if self.next_line >= self.lines.len() {
+                if self.field_len != 0 or self.state == IN_QUOTED_FIELD {
+                    if self.d.strict {
+                        return Err("unexpected end of data".to_string());
+                    }
+                    self.save_field()?;
+                    break;
+                }
+                return Ok(None);
+            }
+            let line = to_bytes(self.lines[self.next_line]);
+            self.next_line += 1;
+            self.line_num += 1;
+            for k in 0..line.len() {
+                self.process(line[k] as i64)?;
+            }
+            self.process(EOL)?;
+            if self.state == START_RECORD {
+                break;
+            }
+        }
+        let row = self.fields.clone();
+        self.fields = Vec.new();
+        Ok(Some(row))
+    }
+
+    // The records as strings, for the reader of a sniffed dialect.
+    fn next_strings(mut ref self) -> Result[Option[Vec[String]], String] {
+        match self.next()? {
+            Some(row) => {
+                let mut out: Vec[String] = Vec.new();
+                for i in 0..row.len() {
+                    match ref row[i] {
+                        Value.S(s) => out.push(s.clone()),
+                        Value.F(x) => out.push(f"{x}"),
+                        Value.Null => out.push(String.new()),
+                    }
+                }
+                Ok(Some(out))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+// ------------------------------------------------------------ the writer
+
+// A value handed to the writer: a string, a number (written as Python's
+// str() writes it) or None.
+#[derive(Clone)]
+enum Cell {
+    Text(String),
+    Num(String),
+    Null,
+}
+
+fn t(s: Str) -> Cell {
+    Cell.Text(s.to_string())
+}
+
+fn n(s: Str) -> Cell {
+    Cell.Num(s.to_string())
+}
+
+struct Writer {
+    d: Dialect,
+    rec: Vec[u8],
+    num_fields: i64,
+}
+
+fn new_writer(d: ref Dialect) -> Result[Writer, String] {
+    d.check()?;
+    Ok(Writer { d: d.clone(), rec: Vec.new(), num_fields: 0 })
+}
+
+impl Writer {
+    // One field, with its delimiter, quotes and escapes; `null` is None.
+    fn append(mut ref self, text: Str, null: bool, quoted0: bool) -> Result[(), String] {
+        let d = self.d.clone();
+        let b = to_bytes(text);
+        let lt = to_bytes(d.lineterminator);
+        let mut quoted = quoted0;
+        if not quoted and b.len() == 0 and d.delimiter == b' ' as i64 and d.skipinitialspace {
+            if d.quoting == QUOTE_NONE or (null and (d.quoting == QUOTE_STRINGS or d.quoting == QUOTE_NOTNULL)) {
+                return Err("empty field must be quoted if delimiter is a space and skipinitialspace is true".to_string());
+            }
+            quoted = true;
+        }
+        let mut body: Vec[u8] = Vec.new();
+        for i in 0..b.len() {
+            let c = b[i] as i64;
+            let mut special = c == d.delimiter or c == d.escapechar or c == d.quotechar or c == b'\n' as i64 or c == b'\r' as i64;
+            for k in 0..lt.len() {
+                if lt[k] as i64 == c {
+                    special = true;
+                }
+            }
+            if special {
+                let mut want_escape = false;
+                if d.quoting == QUOTE_NONE {
+                    want_escape = true;
+                } else {
+                    if c == d.quotechar {
+                        if d.doublequote {
+                            body.push(d.quotechar as u8);
+                        } else {
+                            want_escape = true;
+                        }
+                    } else if c == d.escapechar {
+                        want_escape = true;
+                    }
+                    if not want_escape {
+                        quoted = true;
+                    }
+                }
+                if want_escape {
+                    if d.escapechar == UNSET {
+                        return Err("need to escape, but no escapechar set".to_string());
+                    }
+                    body.push(d.escapechar as u8);
+                }
+            }
+            body.push(b[i]);
+        }
+        if self.num_fields > 0 {
+            self.rec.push(d.delimiter as u8);
+        }
+        if quoted {
+            self.rec.push(d.quotechar as u8);
+        }
+        for i in 0..body.len() {
+            self.rec.push(body[i]);
+        }
+        if quoted {
+            self.rec.push(d.quotechar as u8);
+        }
+        self.num_fields += 1;
+        Ok(())
+    }
+
+    // writerow: the record and its line terminator.
+    fn row(mut ref self, cells: ref Vec[Cell]) -> Result[String, String] {
+        self.rec.clear();
+        self.num_fields = 0;
+        let q = self.d.quoting;
+        let mut last_null = false;
+        for i in 0..cells.len() {
+            let (text, is_num, null) = match ref cells[i] {
+                Cell.Text(s) => (s.clone(), false, false),
+                Cell.Num(s) => (s.clone(), true, false),
+                Cell.Null => (String.new(), false, true),
+            };
+            let quoted = if q == QUOTE_NONNUMERIC {
+                not is_num
+            } else if q == QUOTE_ALL {
+                true
+            } else if q == QUOTE_STRINGS {
+                not is_num and not null
+            } else if q == QUOTE_NOTNULL {
+                not null
+            } else {
+                false
+            };
+            last_null = null;
+            self.append(text, null, quoted)?;
+        }
+        if self.num_fields > 0 and self.rec.len() == 0 {
+            if q == QUOTE_NONE or (last_null and (q == QUOTE_STRINGS or q == QUOTE_NOTNULL)) {
+                return Err("single empty field record must be quoted".to_string());
+            }
+            self.num_fields -= 1;
+            self.append("", true, true)?;
+        }
+        let mut out = from_bytes(self.rec.clone());
+        out.push_str(self.d.lineterminator);
+        Ok(out)
+    }
+}
+
+// ------------------------------------------------------------ DictReader
+
+// A DictReader value: a field, the list under restkey, or restval's None.
+#[derive(Clone)]
+enum DVal {
+    S(String),
+    L(Vec[String]),
+    Null,
+}
+
+// A dict as DictReader builds it: keys in insertion order, None allowed.
+#[derive(Clone)]
+struct Dict {
+    keys: Vec[Option[String]],
+    vals: Vec[DVal],
+}
+
+impl Dict {
+    fn set(mut ref self, k: Option[String], v: DVal) {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == k {
+                self.vals[i] = v;
+                return;
+            }
+        }
+        self.keys.push(k);
+        self.vals.push(v);
+    }
+
+    fn get(ref self, k: Str) -> String {
+        for i in 0..self.keys.len() {
+            if let Some(key) = ref self.keys[i] {
+                if key == k {
+                    if let DVal.S(s) = ref self.vals[i] {
+                        return s.clone();
+                    }
+                }
+            }
+        }
+        String.new()
+    }
+
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..self.keys.len() {
+            let k = match ref self.keys[i] {
+                Some(s) => py_repr(s),
+                None => "None".to_string(),
+            };
+            let v = match ref self.vals[i] {
+                DVal.S(s) => py_repr(s),
+                DVal.L(l) => {
+                    let mut items: Vec[String] = Vec.new();
+                    for j in 0..l.len() {
+                        items.push(py_repr(l[j]));
+                    }
+                    f"[{join(items, ", ")}]"
+                }
+                DVal.Null => "None".to_string(),
+            };
+            parts.push(f"{k}: {v}");
+        }
+        f"{{{join(parts, ", ")}}}"
+    }
+}
+
+struct DictReader {
+    r: Reader,
+    fieldnames: Vec[String],
+    have_names: bool,
+    restkey: Option[String],
+    restval: Option[String],
+    line_num: i64,
+}
+
+fn dict_reader(r: own Reader, fieldnames: Option[Vec[String]], restkey: Option[String], restval: Option[String]) -> DictReader {
+    let have = fieldnames.is_some();
+    DictReader { r: r, fieldnames: fieldnames.unwrap_or(Vec.new()), have_names: have, restkey: restkey, restval: restval, line_num: 0 }
+}
+
+impl DictReader {
+    fn names(mut ref self) -> Result[Vec[String], String] {
+        if not self.have_names {
+            if let Some(row) = self.r.next_strings()? {
+                self.fieldnames = row;
+            }
+            self.have_names = true;
+        }
+        self.line_num = self.r.line_num;
+        Ok(self.fieldnames.clone())
+    }
+
+    fn next(mut ref self) -> Result[Option[Dict], String] {
+        if self.line_num == 0 {
+            self.names()?;
+        }
+        let mut row = match self.r.next_strings()? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        while row.len() == 0 {
+            row = match self.r.next_strings()? {
+                Some(r) => r,
+                None => return Ok(None),
+            };
+        }
+        self.line_num = self.r.line_num;
+        let names = self.fieldnames.clone();
+        let mut d = Dict { keys: Vec.new(), vals: Vec.new() };
+        let lf = names.len();
+        let lr = row.len();
+        let m = if lf < lr { lf } else { lr };
+        for i in 0..m {
+            d.set(Some(names[i].clone()), DVal.S(row[i].clone()));
+        }
+        if lf < lr {
+            let mut rest: Vec[String] = Vec.new();
+            for i in lf..lr {
+                rest.push(row[i].clone());
+            }
+            d.set(self.restkey.clone(), DVal.L(rest));
+        } else if lf > lr {
+            for i in lr..lf {
+                let v = match ref self.restval {
+                    Some(s) => DVal.S(s.clone()),
+                    None => DVal.Null,
+                };
+                d.set(Some(names[i].clone()), v);
+            }
+        }
+        Ok(Some(d))
+    }
+}
+
+// ------------------------------------------------------------ DictWriter
+
+// A row for DictWriter: the keys and values of a Python dict.
+struct WDict {
+    keys: Vec[String],
+    vals: Vec[Cell],
+}
+
+// DictWriter.writerow: the values in fieldnames order, restval for a
+// missing key, and an error for an extra key unless extras are ignored.
+fn dict_row(w: mut ref Writer, names: ref Vec[String], d: ref WDict, restval: Str, ignore: bool) -> Result[String, String] {
+    if not ignore {
+        let mut wrong: Vec[String] = Vec.new();
+        for i in 0..d.keys.len() {
+            if not contains_str(names, d.keys[i]) {
+                wrong.push(py_repr(d.keys[i]));
+            }
+        }
+        if wrong.len() > 0 {
+            return Err(f"dict contains fields not in fieldnames: {join(wrong, ", ")}");
+        }
+    }
+    let mut cells: Vec[Cell] = Vec.new();
+    for i in 0..names.len() {
+        let mut c = t(restval);
+        for k in 0..d.keys.len() {
+            if d.keys[k] == names[i] {
+                c = d.vals[k].clone();
+            }
+        }
+        cells.push(c);
+    }
+    w.row(cells)
+}
+
+fn header_row(w: mut ref Writer, names: ref Vec[String]) -> Result[String, String] {
+    let mut cells: Vec[Cell] = Vec.new();
+    for i in 0..names.len() {
+        cells.push(t(names[i]));
+    }
+    w.row(cells)
+}
+
+// ------------------------------------------------------------ the Sniffer
+
+// Sniffer._guess_quote_and_delimiter's regular expressions, matched by
+// hand. Each quoted body is `(?:QQ|(?!Q).)*+`: doubled quotes or other
+// characters, possessively, so it ends at the first single quote.
+fn is_delim_class(c: u8) -> bool {
+    not (is_word(c) or c == b'\n' or c == b'"' or c == b'\'')
+}
+
+fn quoted_body_end(d: ref Vec[u8], from: i64, q: u8) -> i64 {
+    let mut p = from;
+    loop {
+        if p + 1 < d.len() and d[p] == q and d[p + 1] == q {
+            p += 2;
+        } else if p < d.len() and d[p] != q {
+            p += 1;
+        } else {
+            return p;
+        }
+    }
+}
+
+// A match: its quote, its delimiter (0 for none), whether a space followed
+// the delimiter, and where it ends.
+struct QMatch {
+    quote: u8,
+    delim: u8,
+    space: bool,
+    end: i64,
+}
+
+// `(?P<delim>D)(?P<space> ?)(?P<quote>Q)BODY(?P=quote)` then, for form 1,
+// `(?P=delim)`, and for form 3, `(?:$|\n)`.
+fn match_delim_first(d: ref Vec[u8], s: i64, form: i64) -> Option[QMatch] {
+    if s >= d.len() or not is_delim_class(d[s]) {
+        return None;
+    }
+    let delim = d[s];
+    let mut p = s + 1;
+    let space = p < d.len() and d[p] == b' ';
+    if space {
+        p += 1;
+    }
+    if p >= d.len() or not (d[p] == b'"' or d[p] == b'\'') {
+        return None;
+    }
+    let q = d[p];
+    p = quoted_body_end(d, p + 1, q);
+    if p >= d.len() or d[p] != q {
+        return None;
+    }
+    p += 1;
+    if form == 1 {
+        if p >= d.len() or d[p] != delim {
+            return None;
+        }
+        p += 1;
+    } else if p < d.len() and d[p] != b'\n' {
+        return None;
+    }
+    Some(QMatch { quote: q, delim: delim, space: space, end: p })
+}
+
+// `(?:^|\n)(?P<quote>Q)BODY(?P=quote)` then, for form 2,
+// `(?P<delim>D)(?P<space> ?)`, and for form 4, `(?:$|\n)`.
+fn match_line_first(d: ref Vec[u8], s: i64, form: i64) -> Option[QMatch] {
+    let mut starts: Vec[i64] = Vec.new();
+    if s == 0 or d[s - 1] == b'\n' {
+        starts.push(s);
+    }
+    if s < d.len() and d[s] == b'\n' {
+        starts.push(s + 1);
+    }
+    for k in 0..starts.len() {
+        let mut p = starts[k];
+        if p >= d.len() or not (d[p] == b'"' or d[p] == b'\'') {
+            continue;
+        }
+        let q = d[p];
+        p = quoted_body_end(d, p + 1, q);
+        if p >= d.len() or d[p] != q {
+            continue;
+        }
+        p += 1;
+        if form == 2 {
+            if p >= d.len() or not is_delim_class(d[p]) {
+                continue;
+            }
+            let delim = d[p];
+            p += 1;
+            let space = p < d.len() and d[p] == b' ';
+            if space {
+                p += 1;
+            }
+            return Some(QMatch { quote: q, delim: delim, space: space, end: p });
+        }
+        if p < d.len() and d[p] != b'\n' {
+            continue;
+        }
+        return Some(QMatch { quote: q, delim: 0, space: false, end: p });
+    }
+    None
+}
+
+fn find_all_form(d: ref Vec[u8], form: i64) -> Vec[QMatch] {
+    let mut out: Vec[QMatch] = Vec.new();
+    let mut s: i64 = 0;
+    while s <= d.len() {
+        let m = if form == 1 or form == 3 { match_delim_first(d, s, form) } else { match_line_first(d, s, form) };
+        match m {
+            Some(m) => {
+                s = m.end;
+                out.push(m);
+            }
+            None => s += 1,
+        }
+    }
+    out
+}
+
+// A count per character, in the order the characters were first counted,
+// as a Python dict keeps them.
+struct Counts {
+    keys: Vec[u8],
+    counts: Vec[i64],
+}
+
+impl Counts {
+    fn add(mut ref self, c: u8) {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == c {
+                self.counts[i] += 1;
+                return;
+            }
+        }
+        self.keys.push(c);
+        self.counts.push(1);
+    }
+
+    // max(d, key=d.get): the first key with the largest count.
+    fn best(ref self) -> i64 {
+        let mut b: i64 = 0;
+        for i in 1..self.keys.len() {
+            if self.counts[i] > self.counts[b] {
+                b = i;
+            }
+        }
+        b
+    }
+}
+
+struct Guess {
+    quotechar: u8,
+    doublequote: bool,
+    delimiter: u8,
+    skipinitialspace: bool,
+}
+
+fn guess_quote_and_delimiter(d: ref Vec[u8]) -> Guess {
+    let mut matches: Vec[QMatch] = Vec.new();
+    let mut form: i64 = 1;
+    while form <= 4 {
+        matches = find_all_form(d, form);
+        if matches.len() > 0 {
+            break;
+        }
+        form += 1;
+    }
+    if matches.len() == 0 {
+        return Guess { quotechar: 0, doublequote: false, delimiter: 0, skipinitialspace: false };
+    }
+    let mut quotes = Counts { keys: Vec.new(), counts: Vec.new() };
+    let mut delims = Counts { keys: Vec.new(), counts: Vec.new() };
+    let mut spaces: i64 = 0;
+    for i in 0..matches.len() {
+        quotes.add(matches[i].quote);
+        if form == 4 {
+            continue;
+        }
+        delims.add(matches[i].delim);
+        if matches[i].space {
+            spaces += 1;
+        }
+    }
+    let quotechar = quotes.keys[quotes.best()];
+    let mut delim: u8 = 0;
+    let mut skip = false;
+    if delims.keys.len() > 0 {
+        let b = delims.best();
+        delim = delims.keys[b];
+        skip = delims.counts[b] == spaces;
+        if delim == b'\n' {
+            delim = 0;
+        }
+    }
+    // a doubled quote inside a whole quoted field means doublequote
+    let mut doublequote = false;
+    if delim != 0 {
+        let q = quotechar;
+        let mut s: i64 = 0;
+        while s < d.len() and not doublequote {
+            let at_start = (s > 0 and d[s - 1] == delim) or s == 0 or d[s - 1] == b'\n';
+            let mut matched_end: i64 = -1;
+            if at_start {
+                let mut p = s;
+                if delim != b' ' {
+                    while p < d.len() and d[p] == b' ' {
+                        p += 1;
+                    }
+                }
+                if p < d.len() and d[p] == q {
+                    p += 1;
+                    let body = p;
+                    loop {
+                        if p + 1 < d.len() and d[p] == q and d[p + 1] == q {
+                            p += 2;
+                        } else if p < d.len() and d[p] != q {
+                            p += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let body_end = p;
+                    if p < d.len() and d[p] == q {
+                        p += 1;
+                        let ok = if p < d.len() and d[p] == delim {
+                            p += 1;
+                            true
+                        } else {
+                            p == d.len() or d[p] == b'\n'
+                        };
+                        if ok {
+                            matched_end = p;
+                            for k in body..body_end - 1 {
+                                if d[k] == q and d[k + 1] == q {
+                                    doublequote = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            s = if matched_end > s { matched_end } else { s + 1 };
+        }
+    }
+    Guess { quotechar: quotechar, doublequote: doublequote, delimiter: delim, skipinitialspace: skip }
+}
+
+fn count_byte(line: ref Vec[u8], c: u8) -> i64 {
+    let mut n: i64 = 0;
+    for i in 0..line.len() {
+        if line[i] == c {
+            n += 1;
+        }
+    }
+    n
+}
+
+// data[0].count(d) == data[0].count(d + " ")
+fn spaces_after(line: ref Vec[u8], c: u8) -> bool {
+    let mut pairs: i64 = 0;
+    let mut i: i64 = 0;
+    while i < line.len() {
+        if i + 1 < line.len() and line[i] == c and line[i + 1] == b' ' {
+            pairs += 1;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    count_byte(line, c) == pairs
+}
+
+// One character's mode: the frequency, and how many lines show it less
+// the lines that show any other frequency.
+#[derive(Clone)]
+struct Mode {
+    c: u8,
+    freq: i64,
+    count: i64,
+}
+
+fn guess_delimiter(text: ref Vec[u8]) -> (u8, bool) {
+    let all = split_on(from_bytes(text.clone()), b'\n');
+    let mut data: Vec[Vec[u8]] = Vec.new();
+    for i in 0..all.len() {
+        if all[i].len() > 0 {
+            data.push(to_bytes(all[i]));
+        }
+    }
+    let chunk = if data.len() < 10 { data.len() } else { 10 };
+    let mut iteration: i64 = 0;
+    // per character: the frequencies seen and on how many lines, in order
+    let mut freqs: Vec[Vec[i64]] = Vec.new();
+    let mut lines: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..127 {
+        freqs.push(Vec.new());
+        lines.push(Vec.new());
+    }
+    let mut modes: Vec[Mode] = Vec.new();
+    let mut delims: Vec[Mode] = Vec.new();
+    let mut start: i64 = 0;
+    let mut end = chunk;
+    while start < data.len() {
+        iteration += 1;
+        let stop = if end < data.len() { end } else { data.len() };
+        for li in start..stop {
+            for c in 0..127 {
+                let f = count_byte(data[li], c as u8);
+                let mut found = false;
+                for k in 0..freqs[c].len() {
+                    if freqs[c][k] == f {
+                        lines[c][k] += 1;
+                        found = true;
+                    }
+                }
+                if not found {
+                    freqs[c].push(f);
+                    lines[c].push(1);
+                }
+            }
+        }
+        for c in 0..127 {
+            if freqs[c].len() == 0 or (freqs[c].len() == 1 and freqs[c][0] == 0) {
+                continue;
+            }
+            let mut m = Mode { c: c as u8, freq: freqs[c][0], count: lines[c][0] };
+            if freqs[c].len() > 1 {
+                let mut b: i64 = 0;
+                for k in 1..freqs[c].len() {
+                    if lines[c][k] > lines[c][b] {
+                        b = k;
+                    }
+                }
+                let mut others: i64 = 0;
+                for k in 0..freqs[c].len() {
+                    if k != b {
+                        others += lines[c][k];
+                    }
+                }
+                m = Mode { c: c as u8, freq: freqs[c][b], count: lines[c][b] - others };
+            }
+            let mut placed = false;
+            for k in 0..modes.len() {
+                if modes[k].c == c as u8 {
+                    modes[k] = m.clone();
+                    placed = true;
+                }
+            }
+            if not placed {
+                modes.push(m);
+            }
+        }
+        let seen = chunk * iteration;
+        let total = (if seen < data.len() { seen } else { data.len() }) as f64;
+        let mut consistency: f64 = 1.0;
+        let threshold: f64 = 0.9;
+        while delims.len() == 0 and consistency >= threshold {
+            for k in 0..modes.len() {
+                let v = modes[k].clone();
+                if v.freq > 0 and v.count > 0 and (v.count as f64) / total >= consistency {
+                    delims.push(v);
+                }
+            }
+            consistency -= 0.01;
+        }
+        if delims.len() == 1 {
+            let dl = delims[0].c;
+            return (dl, spaces_after(data[0], dl));
+        }
+        start = end;
+        end += chunk;
+    }
+    if delims.len() == 0 {
+        return (0, false);
+    }
+    let preferred = to_bytes(",\t; :");
+    for i in 0..preferred.len() {
+        for k in 0..delims.len() {
+            if delims[k].c == preferred[i] {
+                return (preferred[i], spaces_after(data[0], preferred[i]));
+            }
+        }
+    }
+    // the largest (mode, character) pair
+    let mut b: i64 = 0;
+    for k in 1..delims.len() {
+        let x = delims[k].clone();
+        let y = delims[b].clone();
+        if x.freq > y.freq or (x.freq == y.freq and (x.count > y.count or (x.count == y.count and x.c > y.c))) {
+            b = k;
+        }
+    }
+    let dl = delims[b].c;
+    (dl, spaces_after(data[0], dl))
+}
+
+// Sniffer().sniff(sample)
+fn sniff(sample: Str) -> Result[Dialect, String] {
+    let raw = to_bytes(sample);
+    let mut d: Vec[u8] = Vec.new();
+    for i in 0..raw.len() {
+        if raw[i] == b'\r' {
+            if i + 1 < raw.len() and raw[i + 1] == b'\n' {
+                continue;
+            }
+            d.push(b'\n');
+        } else {
+            d.push(raw[i]);
+        }
+    }
+    let g = guess_quote_and_delimiter(d);
+    let mut delim = g.delimiter;
+    let mut skip = g.skipinitialspace;
+    if delim == 0 {
+        let (dl, sk) = guess_delimiter(d);
+        delim = dl;
+        skip = sk;
+    }
+    if delim == 0 {
+        return Err("Could not determine delimiter".to_string());
+    }
+    let mut dialect = excel();
+    dialect.doublequote = g.doublequote;
+    dialect.delimiter = delim as i64;
+    dialect.quotechar = if g.quotechar == 0 { b'"' as i64 } else { g.quotechar as i64 };
+    dialect.skipinitialspace = skip;
+    Ok(dialect)
+}
+
+// The end of a run of digits, with single underscores between them.
+fn digits_from(b: ref Vec[u8], at: i64) -> i64 {
+    let mut q = at;
+    while q < b.len() and is_digit(b[q]) {
+        q += 1;
+        if q + 1 < b.len() and b[q] == b'_' and is_digit(b[q + 1]) {
+            q += 1;
+        }
+    }
+    q
+}
+
+fn is_j(c: u8) -> bool {
+    c == b'j' or c == b'J'
+}
+
+// The number of characters in a string.
+fn char_len(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] < 128 or b[i] >= 192 {
+            n += 1;
+        }
+    }
+    n
+}
+
+// Python's float() syntax, from `from`; the end, or -1 if there is none.
+fn float_end(b: ref Vec[u8], from: i64, signed: bool) -> i64 {
+    let mut p = from;
+    if signed and p < b.len() and (b[p] == b'+' or b[p] == b'-') {
+        p += 1;
+    }
+    let words = ["infinity", "inf", "nan"];
+    for w in 0..words.len() {
+        let wb = to_bytes(words[w]);
+        if p + wb.len() <= b.len() {
+            let mut same = true;
+            for k in 0..wb.len() {
+                if lower_byte(b[p + k]) != wb[k] {
+                    same = false;
+                }
+            }
+            if same {
+                return p + wb.len();
+            }
+        }
+    }
+    let int_end = digits_from(b, p);
+    let mut q = int_end;
+    let mut frac = false;
+    if q < b.len() and b[q] == b'.' {
+        let f = digits_from(b, q + 1);
+        frac = f > q + 1;
+        q = f;
+    }
+    if int_end == p and not frac {
+        return -1;
+    }
+    if q < b.len() and (b[q] == b'e' or b[q] == b'E') {
+        let mut e = q + 1;
+        if e < b.len() and (b[e] == b'+' or b[e] == b'-') {
+            e += 1;
+        }
+        let ee = digits_from(b, e);
+        if ee > e {
+            q = ee;
+        }
+    }
+    q
+}
+
+// Python's complex() of a string: a real, an imaginary or a sum of both.
+fn is_complex(s: Str) -> bool {
+    let mut t = strip(s);
+    let tb = to_bytes(t);
+    if tb.len() >= 2 and tb[0] == b'(' and tb[tb.len() - 1] == b')' {
+        t = strip(byte_str(tb, 1, tb.len() - 1));
+    }
+    let b = to_bytes(t);
+    let n = b.len();
+    let e1 = float_end(b, 0, true);
+    if e1 >= 0 {
+        if e1 == n {
+            return true;
+        }
+        if is_j(b[e1]) and e1 + 1 == n {
+            return true;
+        }
+        if b[e1] == b'+' or b[e1] == b'-' {
+            let e2 = float_end(b, e1 + 1, false);
+            let at = if e2 >= 0 { e2 } else { e1 + 1 };
+            return at < n and is_j(b[at]) and at + 1 == n;
+        }
+        return false;
+    }
+    let mut p: i64 = 0;
+    if p < n and (b[p] == b'+' or b[p] == b'-') {
+        p += 1;
+    }
+    p < n and is_j(b[p]) and p + 1 == n
+}
+
+// Sniffer().has_header(sample): a vote, column by column, on whether the
+// first row differs in type or length from the rows under it.
+fn has_header(sample: Str) -> Result[bool, String] {
+    let d = sniff(sample)?;
+    let mut r = new_reader(sample, d, true, 131072)?;
+    let header = match r.next_strings()? {
+        Some(h) => h,
+        None => return Err("StopIteration".to_string()),
+    };
+    let columns = header.len();
+    // per column: -1 not yet typed, -2 complex, else a length; and alive
+    let mut types: Vec[i64] = Vec.new();
+    let mut alive: Vec[bool] = Vec.new();
+    for _ in 0..columns {
+        types.push(-1);
+        alive.push(true);
+    }
+    let mut checked: i64 = 0;
+    loop {
+        let row = match r.next_strings()? {
+            Some(row) => row,
+            None => break,
+        };
+        if checked > 20 {
+            break;
+        }
+        checked += 1;
+        if row.len() != columns {
+            continue;
+        }
+        for col in 0..columns {
+            if not alive[col] {
+                continue;
+            }
+            let this = if is_complex(row[col]) { -2 } else { char_len(row[col]) };
+            if this != types[col] {
+                if types[col] == -1 {
+                    types[col] = this;
+                } else {
+                    alive[col] = false;
+                }
+            }
+        }
+    }
+    let mut vote: i64 = 0;
+    for col in 0..columns {
+        if not alive[col] {
+            continue;
+        }
+        if types[col] >= 0 {
+            if char_len(header[col]) != types[col] {
+                vote += 1;
+            } else {
+                vote -= 1;
+            }
+        } else if types[col] == -2 and is_complex(header[col]) {
+            vote -= 1;
+        } else {
+            // not a number, or a column that never got a type (None(...))
+            vote += 1;
+        }
+    }
+    Ok(vote > 0)
+}
+
+// ------------------------------------------------------------ the files
+
+// data/after_quote.csv
+fn file_0() -> String {
+    """
+a,\"b\"c,d
+1,2,3
+
+"""
+}
+
+// data/contacts.csv
+fn file_1() -> String {
+    """
+name,email,phone,notes\r
+\"Smith, Jane\",jane@example.org,555-0100,\"Prefers \"\"JD\"\"\"\r
+Bob Ng,bob@example.org,,\"Line one\r
+line two\"\r
+\"Ünal Çelik\",unal@example.org,+90 555 0101,\r
+\r
+Lee,lee@example.org,555-0102,trailing  \r
+
+"""
+}
+
+// data/cr_mid.csv
+fn file_2() -> String {
+    """
+a,b\rc,d
+next,row
+
+"""
+}
+
+// data/dupcols.csv
+fn file_3() -> String {
+    """
+k,v,k
+1,2,3
+
+"""
+}
+
+// data/eof_quote.csv
+fn file_4() -> String {
+    """
+a,\"unterminated
+field
+"""
+}
+
+// data/escaped.txt
+fn file_5() -> String {
+    """
+path|desc
+C:\\\\temp|has \\| pipe
+line\\
+continued|x
+\"quoted\"|kept
+
+"""
+}
+
+// data/headerless.csv
+fn file_6() -> String {
+    """
+x1,10
+x2,20,spare
+x3
+
+"""
+}
+
+// data/inventory.tsv
+fn file_7() -> String {
+    """
+sku	name	qty	location
+A-100	Widget, large	12	Aisle 3
+A-101	\"Gadget\" (blue)	0	
+B-200	Spanner	7	Aisle 1	overshoot
+
+"""
+}
+
+// data/long.csv
+fn file_8() -> String {
+    """
+short,this field is far too long for the limit
+
+"""
+}
+
+// data/nulls.csv
+fn file_9() -> String {
+    """
+\"a\",,1,\"\"
+,\"x\",,2.50
+
+"""
+}
+
+// data/numbers.csv
+fn file_10() -> String {
+    """
+\"label\",1,2.5,-3
+\"pi\",3.14159,,1e3
+\"empty\",\"\",0,
+
+"""
+}
+
+// data/orders.csv
+fn file_11() -> String {
+    """
+Bestellung;Datum;Land;Kunde;Betrag;Status\r
+1001;2026-10-01;DE;\"Müller GmbH\";1.234,50;bezahlt\r
+1002;2026-10-01;AT;\"Gruber; Söhne\";89,90;bezahlt\r
+1003;2026-10-02;DE;\"Schmidt \"\"Bau\"\"\";450,00;offen\r
+1004;2026-10-02;CH;Keller AG;2.100,00;bezahlt\r
+1005;2026-10-03;DE;Weber;12,05;storniert\r
+1006;2026-10-03;AT;\"Hofer\r
+Filiale 2\";310,40;bezahlt\r
+1007;2026-10-04;CH;Zürcher;-15,00;erstattet\r
+
+"""
+}
+
+// data/prices_eu.csv
+fn file_12() -> String {
+    """
+sku;name;price;qty
+K-1;\"Kaffee; gemahlen\";12,50;3
+K-2;Tee;3,99;10
+K-3;\"Zucker \"\"fein\"\"\";1,25;
+
+"""
+}
+
+// data/ragged.csv
+fn file_13() -> String {
+    """
+id,name,city
+1,Ada,London
+2,Grace
+
+3,Linus,Helsinki,Finland,extra
+4,,
+
+"""
+}
+
+// data/read-jobs.txt
+fn file_14() -> String {
+    """
+contacts.csv
+inventory.tsv delimiter=tab
+prices_eu.csv delimiter=semicolon
+survey.csv
+survey.csv skipinitialspace=1
+escaped.txt delimiter=pipe quoting=none escapechar=backslash
+escaped.txt delimiter=pipe escapechar=backslash
+numbers.csv quoting=nonnumeric
+nulls.csv quoting=notnull
+nulls.csv quoting=strings
+contacts.csv quotechar=none
+survey.csv quotechar=squote skipinitialspace=1
+after_quote.csv
+after_quote.csv strict=1
+after_quote.csv doublequote=0
+eof_quote.csv
+eof_quote.csv strict=1
+cr_mid.csv source=text
+cr_mid.csv
+long.csv limit=16
+numbers.csv quoting=nonnumeric delimiter=semicolon
+nulls.csv quoting=nonnumeric
+
+"""
+}
+
+// data/sniff/colons.txt
+fn file_15() -> String {
+    """
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+
+"""
+}
+
+// data/sniff/complex.txt
+fn file_16() -> String {
+    """
+re,im
+1+2j,3
+-4.5e1,inf
+nan,7j
+
+"""
+}
+
+// data/sniff/dq.txt
+fn file_17() -> String {
+    """
+\"name\",\"quote\"
+\"Ann\",\"She said \"\"hi\"\"\"
+\"Bo\",\"none\"
+
+"""
+}
+
+// data/sniff/lengths.txt
+fn file_18() -> String {
+    """
+code,label
+AB,first
+CD,second
+EF,third
+
+"""
+}
+
+// data/sniff/mixed.txt
+fn file_19() -> String {
+    """
+x;y,z
+1;2,3
+4;5,6
+
+"""
+}
+
+// data/sniff/noheader.txt
+fn file_20() -> String {
+    """
+10,20,30
+40,50,60
+70,80,90
+
+"""
+}
+
+// data/sniff/onecol.txt
+fn file_21() -> String {
+    """
+\"alpha\"
+\"beta\"
+\"gamma\"
+
+"""
+}
+
+// data/sniff/oneword.txt
+fn file_22() -> String {
+    """
+hello
+world
+again
+
+"""
+}
+
+// data/sniff/pipes.txt
+fn file_23() -> String {
+    """
+a|b|c
+1|2|3
+4|5|6
+7|8|9
+
+"""
+}
+
+// data/sniff/plain.txt
+fn file_24() -> String {
+    """
+city,population,area
+Oslo,709037,454.0
+Bergen,291940,465.3
+Tromso,77544,2521.0
+
+"""
+}
+
+// data/sniff/quoted.txt
+fn file_25() -> String {
+    """
+'id';'title';'year'
+1;'Dune';1965
+2;'It''s here';2001
+3;'Solaris';1961
+
+"""
+}
+
+// data/sniff/spaced.txt
+fn file_26() -> String {
+    """
+name, \"role\", age
+Ann, \"dev, lead\", 41
+Bo, \"ops\", 29
+
+"""
+}
+
+// data/sniff/tabs.txt
+fn file_27() -> String {
+    """
+date	level	message
+2026-10-01	INFO	started
+2026-10-01	WARN	disk at 91%
+2026-10-02	INFO	stopped
+
+"""
+}
+
+// data/survey.csv
+fn file_28() -> String {
+    """
+id, answer, score
+1, \"yes, mostly\", 4
+2, no, 2
+3,   \"spaced\"  , 5
+
+"""
+}
+
+// data/write-jobs.txt
+fn file_29() -> String {
+    """
+
+quoting=all
+quoting=nonnumeric
+quoting=strings
+quoting=notnull
+quoting=none escapechar=backslash
+quoting=none
+doublequote=0 escapechar=backslash
+doublequote=0
+delimiter=semicolon lineterminator=lf
+delimiter=tab quotechar=squote
+delimiter=space skipinitialspace=1
+lineterminator=semicolon
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/after_quote.csv", file_0())?;
+    put("data/contacts.csv", file_1())?;
+    put("data/cr_mid.csv", file_2())?;
+    put("data/dupcols.csv", file_3())?;
+    put("data/eof_quote.csv", file_4())?;
+    put("data/escaped.txt", file_5())?;
+    put("data/headerless.csv", file_6())?;
+    put("data/inventory.tsv", file_7())?;
+    put("data/long.csv", file_8())?;
+    put("data/nulls.csv", file_9())?;
+    put("data/numbers.csv", file_10())?;
+    put("data/orders.csv", file_11())?;
+    put("data/prices_eu.csv", file_12())?;
+    put("data/ragged.csv", file_13())?;
+    put("data/read-jobs.txt", file_14())?;
+    make_dir("data/sniff")?;
+    put("data/sniff/colons.txt", file_15())?;
+    put("data/sniff/complex.txt", file_16())?;
+    put("data/sniff/dq.txt", file_17())?;
+    put("data/sniff/lengths.txt", file_18())?;
+    put("data/sniff/mixed.txt", file_19())?;
+    put("data/sniff/noheader.txt", file_20())?;
+    put("data/sniff/onecol.txt", file_21())?;
+    put("data/sniff/oneword.txt", file_22())?;
+    put("data/sniff/pipes.txt", file_23())?;
+    put("data/sniff/plain.txt", file_24())?;
+    put("data/sniff/quoted.txt", file_25())?;
+    put("data/sniff/spaced.txt", file_26())?;
+    put("data/sniff/tabs.txt", file_27())?;
+    put("data/survey.csv", file_28())?;
+    put("data/write-jobs.txt", file_29())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the report
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn write_file(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn show_reads() -> Result[(), String] {
+    println("== read");
+    let jobs = lines_of(read("data/read-jobs.txt")?);
+    for i in 0..jobs.len() {
+        let words = split_ws(jobs[i]);
+        let job = parse_job(words, 1)?;
+        println(f"-- {jobs[i]}");
+        let text = read(f"data/{words[0]}")?;
+        let mut r = match new_reader(text, job.d, job.text_source, job.limit) {
+            Ok(r) => r,
+            Err(e) => {
+                println(f"  Error: {e}");
+                continue;
+            }
+        };
+        loop {
+            match r.next() {
+                Ok(Some(row)) => println(f"  {r.line_num} {row_repr(row)}"),
+                Ok(None) => break,
+                Err(e) => {
+                    println(f"  Error: {e} (line {r.line_num})");
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// The rows every writer job writes.
+fn write_rows() -> Vec[Vec[Cell]] {
+    let mut rows: Vec[Vec[Cell]] = Vec.new();
+    rows.push([t("id"), t("name"), t("note"), t("amount")].to_vec());
+    rows.push([n("1"), t("plain"), t(""), n("2.5")].to_vec());
+    rows.push([n("2"), t("has,comma"), t("say \"hi\""), n("-3")].to_vec());
+    rows.push([n("3"), t("multi\nline"), t("cr\rhere"), Cell.Null].to_vec());
+    rows.push([n("4"), t(" lead space"), t("back\\slash"), n("0.1")].to_vec());
+    rows.push([n("5"), t("tab\there"), t("semi;colon"), n("10")].to_vec());
+    rows.push([n("6"), t("it's"), t("a b"), t("'q'")].to_vec());
+    rows.push([t("")].to_vec());
+    rows.push([Cell.Null].to_vec());
+    rows.push(Vec.new());
+    rows
+}
+
+fn show_writes() -> Result[(), String] {
+    println("== write");
+    let jobs = lines_of(read("data/write-jobs.txt")?);
+    let rows = write_rows();
+    for i in 0..jobs.len() {
+        let words = split_ws(jobs[i]);
+        let job = parse_job(words, 0)?;
+        let label = if jobs[i].len() > 0 { jobs[i].clone() } else { "excel".to_string() };
+        println(f"-- {label}");
+        let mut w = new_writer(job.d)?;
+        for k in 0..rows.len() {
+            match w.row(rows[k]) {
+                Ok(s) => println(f"  {py_repr(s)}"),
+                Err(e) => println(f"  Error: {e}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn wdict(keys: ref Vec[String], vals: ref Vec[Cell]) -> WDict {
+    WDict { keys: keys.clone(), vals: vals.clone() }
+}
+
+fn show_dicts() -> Result[(), String] {
+    println("== dict");
+    let r = new_reader(read("data/ragged.csv")?, excel(), false, 131072)?;
+    let mut dr = dict_reader(r, None, Some("_extra".to_string()), Some("N/A".to_string()));
+    let names = dr.names()?;
+    let mut shown: Vec[String] = Vec.new();
+    for i in 0..names.len() {
+        shown.push(py_repr(names[i]));
+    }
+    println(f"  fieldnames [{join(shown, ", ")}]");
+    while let Some(d) = dr.next()? {
+        println(f"  {dr.line_num} {d.repr()}");
+    }
+    let r = new_reader(read("data/headerless.csv")?, excel(), false, 131072)?;
+    let mut dr = dict_reader(r, Some(["key".to_string(), "value".to_string()].to_vec()), None, None);
+    while let Some(d) = dr.next()? {
+        println(f"  {dr.line_num} {d.repr()}");
+    }
+    let r = new_reader(read("data/dupcols.csv")?, excel(), false, 131072)?;
+    let mut dr = dict_reader(r, None, None, None);
+    while let Some(d) = dr.next()? {
+        println(f"  {dr.line_num} {d.repr()}");
+    }
+    let mut dicts: Vec[WDict] = Vec.new();
+    dicts.push(wdict(["id".to_string(), "name".to_string()].to_vec(), [n("1"), t("Ann")].to_vec()));
+    dicts.push(wdict(["email".to_string(), "id".to_string(), "name".to_string()].to_vec(), [t("bo@example.org"), n("2"), t("Bo, Jr.")].to_vec()));
+    dicts.push(wdict(["id".to_string(), "phone".to_string()].to_vec(), [n("3"), t("555")].to_vec()));
+    dicts.push(wdict(Vec.new(), Vec.new()));
+    let fields = ["id".to_string(), "name".to_string(), "email".to_string()].to_vec();
+    let actions = ["raise", "ignore"];
+    for a in 0..actions.len() {
+        let mut w = new_writer(excel())?;
+        let mut buf = header_row(mut w, fields)?;
+        for i in 0..dicts.len() {
+            match dict_row(mut w, fields, dicts[i], "-", actions[a] == "ignore") {
+                Ok(s) => buf.push_str(s),
+                Err(e) => buf.push_str(f"<{e}>"),
+            }
+        }
+        println(f"  {actions[a]}: {py_repr(buf)}");
+    }
+    Ok(())
+}
+
+fn yes(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn char_repr(c: i64) -> String {
+    py_repr(from_bytes([c as u8].to_vec().to_vec()))
+}
+
+fn show_sniffs() -> Result[(), String] {
+    println("== sniff");
+    let mut names = match fs.read_dir("data/sniff".to_string()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list data/sniff: {e}"),
+    };
+    names.sort();
+    for i in 0..names.len() {
+        let sample = read(f"data/sniff/{names[i]}")?;
+        let d = match sniff(sample) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"{names[i]}: Error: {e}");
+                continue;
+            }
+        };
+        let header = match has_header(sample) {
+            Ok(h) => yes(h),
+            Err(e) => f"Error: {e}",
+        };
+        println(f"{names[i]}: delimiter={char_repr(d.delimiter)} quotechar={char_repr(d.quotechar)} doublequote={yes(d.doublequote)} skipinitialspace={yes(d.skipinitialspace)} header={header}");
+        let mut r = match new_reader(sample, d, true, 131072) {
+            Ok(r) => r,
+            Err(e) => {
+                println(f"  Error: {e}");
+                continue;
+            }
+        };
+        loop {
+            match r.next() {
+                Ok(Some(row)) => println(f"  {row_repr(row)}"),
+                Ok(None) => break,
+                Err(e) => {
+                    println(f"  Error: {e}");
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// "1.234,50" in cents.
+fn cents(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let neg = b.len() > 0 and b[0] == b'-';
+    let mut euros: i64 = 0;
+    let mut frac: Vec[u8] = Vec.new();
+    let mut in_frac = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == b',' {
+            in_frac = true;
+        } else if is_digit(c) {
+            if in_frac {
+                frac.push(c);
+            } else {
+                euros = euros * 10 + (c - b'0') as i64;
+            }
+        }
+    }
+    frac.push(b'0');
+    frac.push(b'0');
+    let n = euros * 100 + ((frac[0] - b'0') as i64) * 10 + (frac[1] - b'0') as i64;
+    if neg { -n } else { n }
+}
+
+fn money(n: i64) -> String {
+    let sign = if n < 0 { "-" } else { "" };
+    let a = if n < 0 { -n } else { n };
+    let c = a % 100;
+    let pad = if c < 10 { "0" } else { "" };
+    f"{sign}{a / 100}.{pad}{c}"
+}
+
+fn show_report() -> Result[(), String] {
+    println("== report");
+    let text = read("data/orders.csv")?;
+    let dialect = sniff(text)?;
+    println(f"sniffed delimiter={char_repr(dialect.delimiter)} header={yes(has_header(text)?)}");
+    let r = new_reader(text, dialect, false, 131072)?;
+    let mut dr = dict_reader(r, None, None, None);
+    let mut orders: Vec[Dict] = Vec.new();
+    while let Some(d) = dr.next()? {
+        orders.push(d);
+    }
+    make_dir("data/out")?;
+    let mut clean = new_writer(Dialect { quoting: QUOTE_NONNUMERIC, ..excel() })?;
+    let mut out = clean.row([t("order"), t("date"), t("country"), t("customer"), t("amount"), t("status")].to_vec())?;
+    let mut countries: Vec[String] = Vec.new();
+    let mut totals: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..orders.len() {
+        let o = orders[i].clone();
+        let c = cents(o.get("Betrag"));
+        let customer = join(split_ws(o.get("Kunde")), " ");
+        out.push_str(clean.row([n(o.get("Bestellung")), t(o.get("Datum")), t(o.get("Land")), t(customer), t(money(c)), t(o.get("Status"))].to_vec())?);
+        let status = o.get("Status");
+        if status == "bezahlt" or status == "erstattet" {
+            let land = o.get("Land");
+            let mut at: i64 = -1;
+            for k in 0..countries.len() {
+                if countries[k] == land {
+                    at = k;
+                }
+            }
+            if at < 0 {
+                countries.push(land);
+                totals.push(0);
+                counts.push(0);
+                at = countries.len() - 1;
+            }
+            totals[at] += c;
+            counts[at] += 1;
+        }
+    }
+    write_file("data/out/orders_clean.csv", out)?;
+    let fields = ["country".to_string(), "orders".to_string(), "revenue".to_string()].to_vec();
+    let mut sw = new_writer(Dialect { lineterminator: "\n".to_string(), ..excel() })?;
+    let mut summary = header_row(mut sw, fields)?;
+    let sorted = sort_strings(countries.clone());
+    let mut all_orders: i64 = 0;
+    let mut all_cents: i64 = 0;
+    for i in 0..sorted.len() {
+        let mut at: i64 = 0;
+        for k in 0..countries.len() {
+            if countries[k] == sorted[i] {
+                at = k;
+            }
+        }
+        all_orders += counts[at];
+        all_cents += totals[at];
+        let row = wdict(fields, [t(sorted[i]), n(f"{counts[at]}"), t(money(totals[at]))]);
+        summary.push_str(dict_row(mut sw, fields, row, "", false)?);
+    }
+    let row = wdict(fields, [t("total"), n(f"{all_orders}"), t(money(all_cents))].to_vec());
+    summary.push_str(dict_row(mut sw, fields, row, "", false)?);
+    write_file("data/out/summary.csv", summary)?;
+    let files = ["orders_clean.csv", "summary.csv"];
+    for i in 0..files.len() {
+        println(f"-- data/out/{files[i]}");
+        let back_text = read(f"data/out/{files[i]}")?;
+        println(py_repr(back_text));
+        let quoting = if i == 0 { QUOTE_NONNUMERIC } else { QUOTE_MINIMAL };
+        let mut r = new_reader(back_text, Dialect { quoting: quoting, ..excel() }, false, 131072)?;
+        let mut back: Vec[Vec[Value]] = Vec.new();
+        while let Some(row) = r.next()? {
+            back.push(row);
+        }
+        println(f"  read back: {back.len()} rows, last {row_repr(back[back.len() - 1])}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    show_reads()?;
+    show_writes()?;
+    show_dicts()?;
+    show_sniffs()?;
+    show_report()?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_csv: {e}");
+    }
+}
