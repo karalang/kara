@@ -1,0 +1,73 @@
+// Benchmark for #657: the ★ arm (walk the moves) on a large workload.
+
+fn judge_circle(moves: String) -> bool {
+    let mut x = 0;
+    let mut y = 0;
+    for m in moves.chars() {
+        match m {
+            'U' => y += 1,
+            'D' => y -= 1,
+            'L' => x -= 1,
+            _ => x += 1,
+        }
+    }
+    x == 0 and y == 0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` moves: if `balanced`, opposite pairs in a random order; otherwise
+// each move at random.
+fn random_moves(n: i64, balanced: bool, seed: mut ref i64) -> String {
+    let letters = vec!['U', 'D', 'L', 'R'];
+    let mut steps: Vec[char] = Vec.new();
+    if balanced {
+        for _ in 0..n / 2 {
+            let pair = next_random(seed) % 2;
+            steps.push(letters[pair * 2]);
+            steps.push(letters[pair * 2 + 1]);
+        }
+        let mut i = steps.len() - 1;
+        while i > 0 {
+            let j = next_random(seed) % (i + 1);
+            steps.swap(i, j);
+            i -= 1;
+        }
+    } else {
+        for _ in 0..n {
+            steps.push(letters[next_random(seed) % 4]);
+        }
+    }
+    let mut s = String.new();
+    for c in steps.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn main() {
+    // Eight strings of 1,000,000 moves made once, the even ones balanced;
+    // then 100 rounds each ask whether one, picked by the round, brings
+    // the robot back, and put the answer into a checksum.
+    let inputs = 8;
+    let rounds = 100;
+    let mut seed: i64 = 657;
+    let mut strings: Vec[String] = Vec.new();
+    for k in 0..inputs {
+        strings.push(random_moves(1000000, k % 2 == 0, mut seed));
+    }
+    let mut back = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let pick = (r * 3) % inputs;
+        let at = judge_circle(strings[pick]);
+        if at {
+            back += 1;
+        }
+        checksum = (checksum * 31 + pick * 2 + if at { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"{inputs} strings of 1000000, {rounds} rounds: {back} back, checksum {checksum}");
+}

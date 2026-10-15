@@ -1,0 +1,110 @@
+// LeetCode #657: Robot Return to Origin -- displacement by halves.
+//
+// The displacement of a run of moves is the sum of the displacements of
+// its two halves, down to single moves. The robot is back when the whole
+// run's displacement is (0, 0). O(n) time, O(log n) stack.
+
+fn judge_circle(moves: String) -> bool {
+    let steps: Vec[char] = moves.chars().collect();
+    let (x, y) = displacement(steps, 0, steps.len());
+    x == 0 and y == 0
+}
+
+fn displacement(steps: Vec[char], low: i64, high: i64) -> (i64, i64) {
+    if high - low == 0 {
+        return (0, 0);
+    }
+    if high - low == 1 {
+        return match steps[low] {
+            'U' => (0, 1),
+            'D' => (0, -1),
+            'L' => (-1, 0),
+            _ => (1, 0),
+        };
+    }
+    let middle = (low + high) / 2;
+    let (ax, ay) = displacement(steps, low, middle);
+    let (bx, by) = displacement(steps, middle, high);
+    (ax + bx, ay + by)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(moves: String) {
+    println(f"\"{moves}\" -> {judge_circle(moves)}");
+}
+
+// `n` moves: if `balanced`, `n` rounded down to even, made of opposite
+// pairs in a random order; otherwise each move at random.
+fn random_moves(n: i64, balanced: bool, seed: mut ref i64) -> String {
+    let letters = vec!['U', 'D', 'L', 'R'];
+    let mut steps: Vec[char] = Vec.new();
+    if balanced {
+        for _ in 0..n / 2 {
+            let pair = next_random(seed) % 2;
+            steps.push(letters[pair * 2]);
+            steps.push(letters[pair * 2 + 1]);
+        }
+        let mut i = steps.len() - 1;
+        while i > 0 {
+            let j = next_random(seed) % (i + 1);
+            steps.swap(i, j);
+            i -= 1;
+        }
+    } else {
+        for _ in 0..n {
+            steps.push(letters[next_random(seed) % 4]);
+        }
+    }
+    let mut s = String.new();
+    for c in steps.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("UD".to_string());
+    show("LL".to_string());
+    // One move; each move once; a square; back along the x axis but not
+    // the y; a long way round.
+    show("U".to_string());
+    show("UDLR".to_string());
+    show("RRDDLLUU".to_string());
+    show("LRLRU".to_string());
+    show("LDRRLRUULR".to_string());
+    // 300 random strings of 1 to 60 moves, half of them balanced.
+    let mut seed: i64 = 657;
+    let mut back = 0;
+    let mut sum = 0;
+    for k in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let moves = random_moves(n, k % 2 == 0, mut seed);
+        let at = judge_circle(moves);
+        if at {
+            back += 1;
+        }
+        sum = (sum * 7 + moves.len() * 2 + if at { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"300 random strings: {back} back at the origin, checksum {sum}");
+    // The problem's longest, 20,000 moves: balanced; balanced but one
+    // move changed; at random.
+    let moves = random_moves(20000, true, mut seed);
+    println(f"20000 balanced: {judge_circle(moves)}");
+    let mut changed = String.new();
+    for (i, c) in moves.chars().enumerate() {
+        if i == 12345 {
+            changed.push(if c == 'U' { 'L' } else { 'U' });
+        } else {
+            changed.push(c);
+        }
+    }
+    println(f"20000 with one move changed: {judge_circle(changed)}");
+    println(f"20000 at random: {judge_circle(random_moves(20000, false, mut seed))}");
+}

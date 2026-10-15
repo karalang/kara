@@ -1,0 +1,11 @@
+"UD" -> true
+"LL" -> false
+"U" -> false
+"UDLR" -> true
+"RRDDLLUU" -> true
+"LRLRU" -> false
+"LDRRLRUULR" -> false
+300 random strings: 152 back at the origin, checksum 236219531
+20000 balanced: true
+20000 with one move changed: false
+20000 at random: false

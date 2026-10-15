@@ -1,0 +1,195 @@
+// LeetCode #657: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random strings.
+
+// ---- star arm ----------------------------------------------------------
+
+fn judge_circle_star(moves: String) -> bool {
+    let mut x = 0;
+    let mut y = 0;
+    for m in moves.chars() {
+        match m {
+            'U' => y += 1,
+            'D' => y -= 1,
+            'L' => x -= 1,
+            _ => x += 1,
+        }
+    }
+    x == 0 and y == 0
+}
+
+// ---- counts arm --------------------------------------------------------
+
+fn judge_circle_counts(moves: String) -> bool {
+    let up = moves.chars().filter(|c| c == 'U').count();
+    let down = moves.chars().filter(|c| c == 'D').count();
+    let left = moves.chars().filter(|c| c == 'L').count();
+    let right = moves.chars().filter(|c| c == 'R').count();
+    up == down and left == right
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn judge_circle_table(moves: String) -> bool {
+    let mut tally: Map[char, i64] = Map.new();
+    for m in moves.chars() {
+        *tally.entry(m).or_insert(0) += 1;
+    }
+    count_table(tally, 'U') == count_table(tally, 'D') and count_table(tally, 'L') == count_table(tally, 'R')
+}
+
+fn count_table(tally: Map[char, i64], m: char) -> i64 {
+    match tally.get(m) {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+// ---- split arm ---------------------------------------------------------
+
+fn judge_circle_split(moves: String) -> bool {
+    let steps: Vec[char] = moves.chars().collect();
+    let (x, y) = displacement_split(steps, 0, steps.len());
+    x == 0 and y == 0
+}
+
+fn displacement_split(steps: Vec[char], low: i64, high: i64) -> (i64, i64) {
+    if high - low == 0 {
+        return (0, 0);
+    }
+    if high - low == 1 {
+        return match steps[low] {
+            'U' => (0, 1),
+            'D' => (0, -1),
+            'L' => (-1, 0),
+            _ => (1, 0),
+        };
+    }
+    let middle = (low + high) / 2;
+    let (ax, ay) = displacement_split(steps, low, middle);
+    let (bx, by) = displacement_split(steps, middle, high);
+    (ax + bx, ay + by)
+}
+
+// ---- the definition and the properties -------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, moves: String) -> bool {
+    match which {
+        0 => judge_circle_star(moves),
+        1 => judge_circle_counts(moves),
+        2 => judge_circle_table(moves),
+        _ => judge_circle_split(moves),
+    }
+}
+
+fn opposite(m: char) -> char {
+    match m {
+        'U' => 'D',
+        'D' => 'U',
+        'L' => 'R',
+        _ => 'L',
+    }
+}
+
+// The definition, with no coordinates: strike out a move and one of its
+// opposites, again and again; the robot is back exactly when every move
+// is struck out.
+fn definition(moves: String) -> bool {
+    let mut left: Vec[char] = moves.chars().collect();
+    while not left.is_empty() {
+        let want = opposite(left[0]);
+        let mut found = -1;
+        for k in 1..left.len() {
+            if found == -1 and left[k] == want {
+                found = k;
+            }
+        }
+        if found == -1 {
+            return false;
+        }
+        left.remove(found);
+        left.remove(0);
+    }
+    true
+}
+
+fn main() {
+    // 1,000 random strings of 0 to 40 moves; half made of opposite pairs,
+    // a quarter of those with one move changed, the rest at random.
+    let cases = 1000;
+    let letters = vec!['U', 'D', 'L', 'R'];
+    let mut seed: i64 = 657;
+    let mut total = 0;
+    let mut back = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for k in 0..cases {
+        let n = next_random(mut seed) % 41;
+        let mut steps: Vec[char] = Vec.new();
+        if k % 2 == 0 {
+            for _ in 0..n / 2 {
+                let m = letters[next_random(mut seed) % 4];
+                steps.insert(next_random(mut seed) % (steps.len() + 1), m);
+                steps.insert(next_random(mut seed) % (steps.len() + 1), opposite(m));
+            }
+            if k % 8 == 0 and steps.len() > 0 {
+                let at = next_random(mut seed) % steps.len();
+                steps[at] = letters[next_random(mut seed) % 4];
+            }
+        } else {
+            for _ in 0..n {
+                steps.push(letters[next_random(mut seed) % 4]);
+            }
+        }
+        let moves: String = steps.iter().collect();
+        total += steps.len();
+        let want = definition(moves);
+        if want {
+            back += 1;
+        }
+        // A rotation, the reverse, the moves undone, and the moves twice.
+        let cut = if steps.len() == 0 { 0 } else { next_random(mut seed) % steps.len() };
+        let mut rotated = String.new();
+        for i in 0..steps.len() {
+            rotated.push(steps[(i + cut) % steps.len()]);
+        }
+        let mut reversed = String.new();
+        let mut undone = moves.clone();
+        for i in 0..steps.len() {
+            reversed.push(steps[steps.len() - 1 - i]);
+            undone.push(opposite(steps[steps.len() - 1 - i]));
+        }
+        let twice = moves.clone() + moves.clone();
+        for which in 0..4 {
+            let got = answer(which, moves);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: a rotation of the moves gives the same answer.
+                answer(which, rotated) == got,
+                // P3: the moves reversed give the same answer.
+                answer(which, reversed) == got,
+                // P4: the moves followed by their undoing come back.
+                answer(which, undone),
+                // P5: the moves made twice give the same answer.
+                answer(which, twice) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} strings ({total} moves, {back} back), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

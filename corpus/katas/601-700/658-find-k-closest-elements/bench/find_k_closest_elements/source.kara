@@ -1,0 +1,48 @@
+// Benchmark for #658: the ★ arm (binary search for the window) on a large
+// workload.
+
+fn find_closest_elements(arr: Vec[i64], k: i64, x: i64) -> Vec[i64] {
+    let mut low = 0;
+    let mut high = arr.len() - k;
+    while low < high {
+        let middle = (low + high) / 2;
+        if x - arr[middle] > arr[middle + k] - x {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in low..low + k {
+        out.push(arr[i]);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // One sorted array of 1,000,000 numbers from -1,000,000 to 1,000,000,
+    // made once; then 1,000,000 queries, each with `k` from 1 to 64 and a
+    // random `x`, putting the answer's two ends and its length into a
+    // checksum.
+    let n = 1000000;
+    let queries = 1000000;
+    let mut seed: i64 = 658;
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        arr.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 2000001 - 1000000);
+    }
+    arr.sort();
+    let mut checksum: i64 = 0;
+    for q in 0..queries {
+        let k = 1 + q % 64;
+        let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % 2200001 - 1100000;
+        let got = find_closest_elements(arr, k, x);
+        checksum = (checksum * 31 + got[0] * 3 + got[got.len() - 1] * 5 + got.len() + 10000000) % 1000000007;
+    }
+    println(f"{n} numbers, {queries} queries: checksum {checksum}");
+}
