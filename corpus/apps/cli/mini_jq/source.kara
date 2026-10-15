@@ -1,0 +1,4800 @@
+// mini_jq: a command-line JSON processor for a subset of jq 1.7, run the
+// way a shell script runs jq over API responses, logs and config files.
+// The run writes a Kubernetes pod list, a GitHub-style release list, an
+// NDJSON event log and a service config into data/, plus jobs.tsv: one
+// jq invocation per line (flags, file, program). It then runs every job
+// against the file it names and prints what jq prints, stdout first and
+// then stderr, with the exit status when it is not 0.
+//
+// What it implements, following jq 1.7:
+// - the grammar: pipes, `,`, `//`, assignment (`=`, `|=`, `+=` and the
+//   other arithmetic updates), `and`/`or`, comparisons, arithmetic, unary
+//   minus, `.foo`, `.[e]`, slices, `.[]`, `?`, `..`, string
+//   interpolation and `@format "..."`, array and object construction
+//   (with `{name}` and `{$x}` shorthand), `if`/`elif`/`else`, `try` and
+//   `catch`, `reduce`, `foreach`, `as` bindings with array and object
+//   destructuring, `def` with filter and `$value` parameters, recursion;
+// - jq's output order for every product (the right operand of a binary
+//   operator varies slowest, an object's first key slowest, a string's
+//   first interpolation fastest);
+// - path expressions, for path(), paths, del, assignment, getpath,
+//   setpath, delpaths;
+// - builtins (natives here, or jq definitions in the prelude, as jq has
+//   them): length, keys, has, map, select, add, any, all, range, floor,
+//   sqrt, tostring, tonumber, type, sort, sort_by, group_by, unique,
+//   unique_by, min, max, min_by, max_by, reverse, to_entries,
+//   from_entries, with_entries, join, split, ltrimstr, rtrimstr,
+//   startswith, endswith, ascii_downcase, ascii_upcase, index, limit,
+//   first, last, nth, until, while, recurse, walk, map_values, paths,
+//   leaf_paths, del, to_entries, error, empty, not, input, inputs,
+//   tojson, fromjson, the type filters, todate, fromdate,
+//   fromdateiso8601, todateiso8601 and the formats @text, @json, @csv,
+//   @tsv, @html, @uri, @sh, @base64, @base64d;
+// - numbers as jq 1.7 prints them: literals from the input or the
+//   program keep their text (1.50 stays 1.50), computed numbers print
+//   in 17 significant digits, shortest form (1e+17, 0.30000000000000004);
+// - jq's messages: runtime errors with the input's file and line,
+//   compile errors for undefined functions and variables and syntax
+//   errors, with the exit statuses 5 and 3;
+// - the flags -c, -r, -s, -n, -S, --arg and --argjson.
+//
+// expected.out is real jq 1.7's output on the same files, made by
+// make_expected.py.
+//
+// Workarounds for compiler gaps, each marked where it is applied:
+// B-2026-10-15-37 (the syntax tree parameter is `tree`, not `ast`),
+// B-2026-10-15-32 (an error value matched through a `ref` binding),
+// B-2026-10-15-24 (a codepoint matched through a `ref` binding).
+
+// ------------------------------------------------------------ bytes and strings
+
+fn byte_str(b: Slice[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn sub(s: Str, from: i64, to: i64) -> String {
+    byte_str(s.bytes(), from, to)
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or c == b'_'
+}
+
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r'
+}
+
+fn ascii_case(s: Str, up: bool) -> String {
+    let b = s.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if up and c >= b'a' and c <= b'z' {
+            v.push(c - 32u8);
+        } else if not up and c >= b'A' and c <= b'Z' {
+            v.push(c + 32u8);
+        } else {
+            v.push(c);
+        }
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn repeat_str(s: Str, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+fn spaces(n: i64) -> String {
+    repeat_str(" ", n)
+}
+
+fn starts_with(s: Str, head: Str) -> bool {
+    let b = s.bytes();
+    let h = head.bytes();
+    if h.len() > b.len() {
+        return false;
+    }
+    for i in 0..h.len() {
+        if b[i] != h[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_with(s: Str, tail: Str) -> bool {
+    let b = s.bytes();
+    let t = tail.bytes();
+    if t.len() > b.len() {
+        return false;
+    }
+    for i in 0..t.len() {
+        if b[b.len() - t.len() + i] != t[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// The byte offset of `needle` in `s` at or after `from`, or -1.
+fn find_from(s: Str, needle: Str, from: i64) -> i64 {
+    let b = s.bytes();
+    let n = needle.bytes();
+    let mut i = from;
+    while i + n.len() <= b.len() {
+        let mut same = true;
+        for j in 0..n.len() {
+            if b[i + j] != n[j] {
+                same = false;
+                break;
+            }
+        }
+        if same {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// The number of characters (code points) of UTF-8 text.
+fn char_count(s: Str) -> i64 {
+    let b = s.bytes();
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] < 128u8 or b[i] >= 192u8 {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn hex_digit(d: i64, upper: bool) -> String {
+    let digits = if upper { "0123456789ABCDEF" } else { "0123456789abcdef" };
+    sub(digits, d, d + 1)
+}
+
+// ------------------------------------------------------------ values
+
+// A JSON value. A number keeps the text it was written with, when it
+// came from the input or the program ("" for a computed number): jq 1.7
+// prints such a number as written. Arrays and objects are never changed
+// after they are built, so sharing them is safe.
+#[derive(Clone)]
+enum J {
+    Null,
+    False,
+    True,
+    Num(f64, String),
+    Str(String),
+    Arr(JArr),
+    Obj(JObj),
+}
+
+shared struct JArr { items: Vec[J] }
+
+// Keys in insertion order, as jq keeps them.
+shared struct JObj { keys: Vec[String], vals: Vec[J] }
+
+fn num(x: f64) -> J {
+    J.Num(x, String.new())
+}
+
+fn jstr(s: Str) -> J {
+    J.Str(s.to_string())
+}
+
+fn jbool(b: bool) -> J {
+    if b { J.True } else { J.False }
+}
+
+fn arr(items: own Vec[J]) -> J {
+    J.Arr(JArr { items: items })
+}
+
+fn obj(keys: own Vec[String], vals: own Vec[J]) -> J {
+    J.Obj(JObj { keys: keys, vals: vals })
+}
+
+fn empty_obj() -> J {
+    obj(Vec.new(), Vec.new())
+}
+
+fn obj_find(o: ref JObj, k: Str) -> i64 {
+    for i in 0..o.keys.len() {
+        if o.keys[i] == k {
+            return i;
+        }
+    }
+    -1
+}
+
+// A copy of the object with key k set to v: replaced in place when
+// present, appended when not.
+fn obj_with(o: ref JObj, k: Str, v: own J) -> J {
+    let mut keys = o.keys.clone();
+    let mut vals = o.vals.clone();
+    let i = obj_find(o, k);
+    if i >= 0 {
+        vals[i] = v;
+    } else {
+        keys.push(k.to_string());
+        vals.push(v);
+    }
+    obj(keys, vals)
+}
+
+fn type_name(v: ref J) -> String {
+    let s = match v {
+        J.Null => "null",
+        J.False => "boolean",
+        J.True => "boolean",
+        J.Num(_, _) => "number",
+        J.Str(_) => "string",
+        J.Arr(_) => "array",
+        J.Obj(_) => "object",
+    };
+    s.to_string()
+}
+
+fn truthy(v: ref J) -> bool {
+    match v {
+        J.Null => false,
+        J.False => false,
+        _ => true,
+    }
+}
+
+fn is_num(v: ref J) -> bool {
+    match v {
+        J.Num(_, _) => true,
+        _ => false,
+    }
+}
+
+fn num_of(v: ref J) -> f64 {
+    match v {
+        J.Num(x, _) => *x,
+        _ => 0.0,
+    }
+}
+
+fn str_of(v: ref J) -> String {
+    match v {
+        J.Str(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn items_of(v: ref J) -> Vec[J] {
+    match v {
+        J.Arr(a) => a.items.clone(),
+        _ => Vec.new(),
+    }
+}
+
+// ------------------------------------------------------------ numbers
+
+fn is_finite(x: f64) -> bool {
+    x == x and x - x == 0.0
+}
+
+// The shortest digits of a finite double and dtoa's decimal point
+// position (the value is 0.DIGITS times ten to the power decpt), read
+// off its shortest round-trip text.
+fn shortest_digits(x: f64) -> (String, i64) {
+    let text = f"{x}";
+    let b = text.bytes();
+    let mut i: i64 = 0;
+    if i < b.len() and b[i] == b'-' {
+        i += 1;
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    let mut point: i64 = -1;
+    while i < b.len() and b[i] != b'e' and b[i] != b'E' {
+        if b[i] == b'.' {
+            point = digits.len();
+        } else {
+            digits.push(b[i]);
+        }
+        i += 1;
+    }
+    if point < 0 {
+        point = digits.len();
+    }
+    let mut exp: i64 = 0;
+    if i < b.len() {
+        i += 1;
+        let mut neg = false;
+        if b[i] == b'+' {
+            i += 1;
+        } else if b[i] == b'-' {
+            neg = true;
+            i += 1;
+        }
+        while i < b.len() {
+            exp = exp * 10 + (b[i] - b'0') as i64;
+            i += 1;
+        }
+        if neg {
+            exp = 0 - exp;
+        }
+    }
+    // drop leading zeros (each moves the point left) and trailing ones
+    let mut st: i64 = 0;
+    while st < digits.len() and digits[st] == b'0' {
+        st += 1;
+    }
+    let mut e = digits.len();
+    while e > st and digits[e - 1] == b'0' {
+        e -= 1;
+    }
+    (byte_str(digits, st, e), point - st + exp)
+}
+
+// jq 1.7's text for a computed number: 17 significant digits, shortest
+// form; exponential when the point is far from the digits.
+fn num_text(x: f64) -> String {
+    if x != x {
+        return "null".to_string();
+    }
+    if not is_finite(x) {
+        return if x > 0.0 { "1.7976931348623157e+308".to_string() } else { "-1.7976931348623157e+308".to_string() };
+    }
+    let sign = if x < 0.0 or (x == 0.0 and 1.0 / x < 0.0) { "-" } else { "" };
+    let (digits, decpt) = shortest_digits(x);
+    let n = digits.len();
+    if n == 0 {
+        return f"{sign}0";
+    }
+    let mut out = sign.to_string();
+    if decpt <= -4 or decpt > n + 15 {
+        out.push_str(sub(digits, 0, 1));
+        if n > 1 {
+            out.push_str(".");
+            out.push_str(sub(digits, 1, n));
+        }
+        let e = decpt - 1;
+        out.push_str(if e < 0 { "e-" } else { "e+" });
+        let a = if e < 0 { 0 - e } else { e };
+        if a < 10 {
+            out.push_str("0");
+        }
+        out.push_str(f"{a}");
+        return out;
+    }
+    if decpt <= 0 {
+        out.push_str("0.");
+        out.push_str(repeat_str("0", 0 - decpt));
+        out.push_str(digits);
+    } else if decpt >= n {
+        out.push_str(digits);
+        out.push_str(repeat_str("0", decpt - n));
+    } else {
+        out.push_str(sub(digits, 0, decpt));
+        out.push_str(".");
+        out.push_str(sub(digits, decpt, n));
+    }
+    out
+}
+
+fn num_dump(x: f64, lit: Str) -> String {
+    if lit.len() > 0 {
+        return lit.to_string();
+    }
+    num_text(x)
+}
+
+// A JSON number's text as a double.
+fn parse_num(text: Str) -> Option[f64] {
+    f64.parse(text.to_string())
+}
+
+// An integer for indexing, ranges and the like: jq truncates toward
+// negative infinity for indices.
+fn floor_int(x: f64) -> i64 {
+    let t = x as i64;
+    if (t as f64) > x {
+        return t - 1;
+    }
+    t
+}
+
+// ------------------------------------------------------------ JSON text
+
+struct JsonParser { b: Vec[u8], p: i64 }
+
+fn json_err(msg: Str) -> String {
+    msg.to_string()
+}
+
+fn push_utf8(v: mut ref Vec[u8], code: i64) {
+    if code < 128 {
+        v.push(code as u8);
+    } else if code < 2048 {
+        v.push((192 + code / 64) as u8);
+        v.push((128 + code % 64) as u8);
+    } else if code < 65536 {
+        v.push((224 + code / 4096) as u8);
+        v.push((128 + code / 64 % 64) as u8);
+        v.push((128 + code % 64) as u8);
+    } else {
+        v.push((240 + code / 262144) as u8);
+        v.push((128 + code / 4096 % 64) as u8);
+        v.push((128 + code / 64 % 64) as u8);
+        v.push((128 + code % 64) as u8);
+    }
+}
+
+fn hex_val(h: u8) -> i64 {
+    if is_digit(h) {
+        return (h - b'0') as i64;
+    }
+    if h >= b'a' and h <= b'f' {
+        return (h - b'a') as i64 + 10;
+    }
+    if h >= b'A' and h <= b'F' {
+        return (h - b'A') as i64 + 10;
+    }
+    -1
+}
+
+impl JsonParser {
+    fn ws(mut ref self) {
+        while self.p < self.b.len() and is_space(self.b[self.p]) {
+            self.p += 1;
+        }
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let wb = w.bytes();
+        if self.p + wb.len() > self.b.len() {
+            return false;
+        }
+        for i in 0..wb.len() {
+            if self.b[self.p + i] != wb[i] {
+                return false;
+            }
+        }
+        self.p += wb.len();
+        true
+    }
+
+    fn hex4(mut ref self) -> Result[i64, String] {
+        let mut code: i64 = 0;
+        for _ in 0..4 {
+            if self.p >= self.b.len() {
+                return Err(json_err("Invalid escape"));
+            }
+            let d = hex_val(self.b[self.p]);
+            if d < 0 {
+                return Err(json_err("Invalid escape"));
+            }
+            code = code * 16 + d;
+            self.p += 1;
+        }
+        Ok(code)
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        self.p += 1;
+        let mut v: Vec[u8] = Vec.new();
+        loop {
+            if self.p >= self.b.len() {
+                return Err(json_err("Unfinished string"));
+            }
+            let c = self.b[self.p];
+            self.p += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                v.push(c);
+                continue;
+            }
+            if self.p >= self.b.len() {
+                return Err(json_err("Unfinished string"));
+            }
+            let e = self.b[self.p];
+            self.p += 1;
+            if e == b'n' {
+                v.push(b'\n');
+            } else if e == b't' {
+                v.push(b'\t');
+            } else if e == b'r' {
+                v.push(b'\r');
+            } else if e == b'b' {
+                v.push(8u8);
+            } else if e == b'f' {
+                v.push(12u8);
+            } else if e == b'u' {
+                let mut code = self.hex4()?;
+                // a surrogate pair
+                if code >= 55296 and code < 56320 and self.word("\\u") {
+                    let low = self.hex4()?;
+                    code = 65536 + (code - 55296) * 1024 + (low - 56320);
+                }
+                push_utf8(mut v, code);
+            } else if e == b'"' or e == b'\\' or e == b'/' {
+                v.push(e);
+            } else {
+                return Err(json_err("Invalid escape"));
+            }
+        }
+        Ok(String.from_utf8(v).unwrap_or("?".to_string()))
+    }
+
+    fn value(mut ref self) -> Result[J, String] {
+        self.ws();
+        if self.p >= self.b.len() {
+            return Err(json_err("Unfinished JSON term"));
+        }
+        let c = self.b[self.p];
+        if c == b'{' {
+            self.p += 1;
+            let mut keys: Vec[String] = Vec.new();
+            let mut vals: Vec[J] = Vec.new();
+            self.ws();
+            if self.p < self.b.len() and self.b[self.p] == b'}' {
+                self.p += 1;
+                return Ok(obj(keys, vals));
+            }
+            loop {
+                self.ws();
+                if self.p >= self.b.len() or self.b[self.p] != b'"' {
+                    return Err(json_err("Object keys must be strings"));
+                }
+                let k = self.string()?;
+                self.ws();
+                if self.p >= self.b.len() or self.b[self.p] != b':' {
+                    return Err(json_err("Objects must consist of key:value pairs"));
+                }
+                self.p += 1;
+                let v = self.value()?;
+                let mut found = -1;
+                for i in 0..keys.len() {
+                    if keys[i] == k {
+                        found = i;
+                    }
+                }
+                if found >= 0 {
+                    vals[found] = v;
+                } else {
+                    keys.push(k);
+                    vals.push(v);
+                }
+                self.ws();
+                if self.p >= self.b.len() {
+                    return Err(json_err("Unfinished JSON term"));
+                }
+                let s = self.b[self.p];
+                self.p += 1;
+                if s == b'}' {
+                    return Ok(obj(keys, vals));
+                }
+                if s != b',' {
+                    return Err(json_err("Expected separator between values"));
+                }
+            }
+        }
+        if c == b'[' {
+            self.p += 1;
+            let mut items: Vec[J] = Vec.new();
+            self.ws();
+            if self.p < self.b.len() and self.b[self.p] == b']' {
+                self.p += 1;
+                return Ok(arr(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.p >= self.b.len() {
+                    return Err(json_err("Unfinished JSON term"));
+                }
+                let s = self.b[self.p];
+                self.p += 1;
+                if s == b']' {
+                    return Ok(arr(items));
+                }
+                if s != b',' {
+                    return Err(json_err("Expected separator between values"));
+                }
+            }
+        }
+        if c == b'"' {
+            let s = self.string()?;
+            return Ok(J.Str(s));
+        }
+        if self.word("true") {
+            return Ok(J.True);
+        }
+        if self.word("false") {
+            return Ok(J.False);
+        }
+        if self.word("null") {
+            return Ok(J.Null);
+        }
+        let st = self.p;
+        while self.p < self.b.len() {
+            let d = self.b[self.p];
+            if not (is_digit(d) or d == b'.' or d == b'e' or d == b'E' or d == b'-' or d == b'+') {
+                break;
+            }
+            self.p += 1;
+        }
+        let text = byte_str(self.b, st, self.p);
+        if text.len() == 0 {
+            return Err(json_err("Invalid literal"));
+        }
+        match parse_num(text) {
+            Some(x) => Ok(J.Num(x, text)),
+            None => Err(json_err("Invalid numeric literal")),
+        }
+    }
+}
+
+// Every JSON value of a file, each with the line jq reports for errors
+// while it is the input: the newlines read up to the first newline at or
+// after the value's last byte (all of them when there is none).
+fn parse_values(src: Str) -> Result[(Vec[J], Vec[i64]), String] {
+    let mut jp = JsonParser { b: src.bytes().to_vec(), p: 0 };
+    let mut vals: Vec[J] = Vec.new();
+    let mut lines: Vec[i64] = Vec.new();
+    loop {
+        jp.ws();
+        if jp.p >= jp.b.len() {
+            break;
+        }
+        let v = jp.value()?;
+        vals.push(v);
+        let mut q = jp.p - 1;
+        while q < jp.b.len() and jp.b[q] != b'\n' {
+            q += 1;
+        }
+        let mut n: i64 = 0;
+        let stop = if q < jp.b.len() { q + 1 } else { jp.b.len() };
+        for i in 0..stop {
+            if jp.b[i] == b'\n' {
+                n += 1;
+            }
+        }
+        lines.push(n);
+    }
+    Ok((vals, lines))
+}
+
+fn parse_json(src: Str) -> Result[J, String] {
+    let mut jp = JsonParser { b: src.bytes().to_vec(), p: 0 };
+    let v = jp.value()?;
+    jp.ws();
+    if jp.p != jp.b.len() {
+        return Err(json_err("Unexpected extra JSON values"));
+    }
+    Ok(v)
+}
+
+fn quote(s: Str, out: mut ref String) {
+    let b = s.bytes();
+    out.push_str("\"");
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        let c = b[i];
+        let rep = if c == b'"' {
+            "\\\"".to_string()
+        } else if c == b'\\' {
+            "\\\\".to_string()
+        } else if c == b'\n' {
+            "\\n".to_string()
+        } else if c == b'\t' {
+            "\\t".to_string()
+        } else if c == b'\r' {
+            "\\r".to_string()
+        } else if c == 8u8 {
+            "\\b".to_string()
+        } else if c == 12u8 {
+            "\\f".to_string()
+        } else if c < 32u8 or c == 127u8 {
+            let d = c as i64;
+            f"\\u00{hex_digit(d / 16, false)}{hex_digit(d % 16, false)}"
+        } else {
+            String.new()
+        };
+        if rep.len() > 0 {
+            out.push_str(byte_str(b, st, i));
+            out.push_str(rep);
+            st = i + 1;
+        }
+    }
+    out.push_str(byte_str(b, st, b.len()));
+    out.push_str("\"");
+}
+
+fn sorted_order(keys: ref Vec[String]) -> Vec[i64] {
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..keys.len() {
+        // insertion sort: stable, and objects are small
+        let mut j = idx.len();
+        while j > 0 and keys[idx[j - 1]] > keys[i] {
+            j -= 1;
+        }
+        idx.insert(j, i);
+    }
+    idx
+}
+
+// jq's output: pretty with a two-space indent, or compact; keys sorted
+// with -S.
+fn dump_to(v: ref J, pretty: bool, sort: bool, depth: i64, out: mut ref String) {
+    match v {
+        J.Null => out.push_str("null"),
+        J.False => out.push_str("false"),
+        J.True => out.push_str("true"),
+        J.Num(x, lit) => out.push_str(num_dump(*x, lit)),
+        J.Str(s) => quote(s, out),
+        J.Arr(a) => {
+            if a.items.len() == 0 {
+                out.push_str("[]");
+                return;
+            }
+            out.push_str("[");
+            for i in 0..a.items.len() {
+                if i > 0 {
+                    out.push_str(",");
+                }
+                if pretty {
+                    out.push_str("\n");
+                    out.push_str(spaces(2 * depth + 2));
+                }
+                dump_to(a.items[i], pretty, sort, depth + 1, out);
+            }
+            if pretty {
+                out.push_str("\n");
+                out.push_str(spaces(2 * depth));
+            }
+            out.push_str("]");
+        }
+        J.Obj(o) => {
+            if o.keys.len() == 0 {
+                out.push_str("{}");
+                return;
+            }
+            let order = if sort {
+                sorted_order(o.keys)
+            } else {
+                let mut idx: Vec[i64] = Vec.new();
+                for i in 0..o.keys.len() {
+                    idx.push(i);
+                }
+                idx
+            };
+            out.push_str("{");
+            for n in 0..order.len() {
+                let i = order[n];
+                if n > 0 {
+                    out.push_str(",");
+                }
+                if pretty {
+                    out.push_str("\n");
+                    out.push_str(spaces(2 * depth + 2));
+                }
+                quote(o.keys[i], out);
+                out.push_str(if pretty { ": " } else { ":" });
+                dump_to(o.vals[i], pretty, sort, depth + 1, out);
+            }
+            if pretty {
+                out.push_str("\n");
+                out.push_str(spaces(2 * depth));
+            }
+            out.push_str("}");
+        }
+    }
+}
+
+fn dump(v: ref J) -> String {
+    let mut out = String.new();
+    dump_to(v, false, false, 0, mut out);
+    out
+}
+
+// What tostring and string interpolation make of a value.
+fn to_text(v: ref J) -> String {
+    match v {
+        J.Str(s) => s.clone(),
+        _ => dump(v),
+    }
+}
+
+// A value in an error message: its compact text, cut to 11 bytes and
+// "..." when it is longer than 14.
+fn dump_trunc(v: ref J) -> String {
+    let s = dump(v);
+    if s.len() > 14 {
+        let b = s.bytes();
+        let mut e: i64 = 11;
+        // never cut a character in two
+        while e > 0 and b[e] >= 128u8 and b[e] < 192u8 {
+            e -= 1;
+        }
+        return f"{byte_str(b, 0, e)}...";
+    }
+    s
+}
+
+fn describe(v: ref J) -> String {
+    f"{type_name(v)} ({dump_trunc(v)})"
+}
+
+// ------------------------------------------------------------ ordering
+
+fn type_rank(v: ref J) -> i64 {
+    match v {
+        J.Null => 0,
+        J.False => 1,
+        J.True => 2,
+        J.Num(_, _) => 3,
+        J.Str(_) => 4,
+        J.Arr(_) => 5,
+        J.Obj(_) => 6,
+    }
+}
+
+fn str_cmp(a: Str, b: Str) -> i64 {
+    if a < b {
+        return -1;
+    }
+    if a > b {
+        return 1;
+    }
+    0
+}
+
+// jq's total order: null < false < true < numbers < strings < arrays <
+// objects; objects compare their sorted key lists, then their values in
+// key order.
+fn cmp(a: ref J, b: ref J) -> i64 {
+    let ra = type_rank(a);
+    let rb = type_rank(b);
+    if ra != rb {
+        return if ra < rb { -1 } else { 1 };
+    }
+    match a {
+        J.Num(x, _) => {
+            let y = num_of(b);
+            if *x < y {
+                return -1;
+            }
+            if *x > y {
+                return 1;
+            }
+            0
+        }
+        J.Str(s) => str_cmp(s, str_of(b)),
+        J.Arr(x) => {
+            let ys = items_of(b);
+            let mut i: i64 = 0;
+            while i < x.items.len() and i < ys.len() {
+                let c = cmp(x.items[i], ys[i]);
+                if c != 0 {
+                    return c;
+                }
+                i += 1;
+            }
+            if x.items.len() < ys.len() {
+                return -1;
+            }
+            if x.items.len() > ys.len() {
+                return 1;
+            }
+            0
+        }
+        J.Obj(x) => {
+            let y = match b {
+                J.Obj(o) => o.clone(),
+                _ => JObj { keys: Vec.new(), vals: Vec.new() },
+            };
+            let xo = sorted_order(x.keys);
+            let yo = sorted_order(y.keys);
+            let mut i: i64 = 0;
+            while i < xo.len() and i < yo.len() {
+                let c = str_cmp(x.keys[xo[i]], y.keys[yo[i]]);
+                if c != 0 {
+                    return c;
+                }
+                i += 1;
+            }
+            if xo.len() != yo.len() {
+                return if xo.len() < yo.len() { -1 } else { 1 };
+            }
+            for k in 0..xo.len() {
+                let c = cmp(x.vals[xo[k]], y.vals[yo[k]]);
+                if c != 0 {
+                    return c;
+                }
+            }
+            0
+        }
+        _ => 0,
+    }
+}
+
+fn jeq(a: ref J, b: ref J) -> bool {
+    cmp(a, b) == 0
+}
+
+// A stable merge sort of values by keys.
+fn sort_by_keys(vals: ref Vec[J], keys: ref Vec[J]) -> Vec[i64] {
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..vals.len() {
+        idx.push(i);
+    }
+    let mut width: i64 = 1;
+    let n = idx.len();
+    while width < n {
+        let mut next: Vec[i64] = Vec.new();
+        let mut lo: i64 = 0;
+        while lo < n {
+            let mid = if lo + width < n { lo + width } else { n };
+            let hi = if lo + 2 * width < n { lo + 2 * width } else { n };
+            let mut i = lo;
+            let mut j = mid;
+            while i < mid or j < hi {
+                if j >= hi or (i < mid and cmp(keys[idx[i]], keys[idx[j]]) <= 0) {
+                    next.push(idx[i]);
+                    i += 1;
+                } else {
+                    next.push(idx[j]);
+                    j += 1;
+                }
+            }
+            lo = hi;
+        }
+        idx = next;
+        width *= 2;
+    }
+    idx
+}
+
+// ------------------------------------------------------------ lexer
+
+const T_IDENT: i64 = 0;
+const T_FIELD: i64 = 1;
+const T_VAR: i64 = 2;
+const T_NUM: i64 = 3;
+const T_STR: i64 = 4;
+const T_FORMAT: i64 = 5;
+const T_OP: i64 = 6;
+const T_EOF: i64 = 7;
+const T_BAD: i64 = 8;
+
+// `col` is the byte offset of the token in the program (jq programs on a
+// command line are one line). A string token's text is its raw content,
+// between the quotes.
+struct Token { kind: i64, text: String, col: i64 }
+
+fn token(kind: i64, text: own String, col: i64) -> Token {
+    Token { kind: kind, text: text, col: col }
+}
+
+const KEYWORDS: Str = " def if then elif else end as reduce foreach try catch label import include and or __loc__ ";
+
+fn is_keyword(s: Str) -> bool {
+    KEYWORDS.contains(f" {s} ")
+}
+
+// The index just past the string whose opening quote is at i (or the
+// end of the text when it is not closed): `\(...)` interpolations may
+// hold strings and parentheses of their own.
+fn string_end(b: Slice[u8], i: i64) -> i64 {
+    let mut j = i + 1;
+    while j < b.len() {
+        let c = b[j];
+        if c == b'"' {
+            return j + 1;
+        }
+        if c == b'\\' and j + 1 < b.len() and b[j + 1] == b'(' {
+            j = interp_end(b, j + 2);
+            continue;
+        }
+        if c == b'\\' {
+            j += 2;
+            continue;
+        }
+        j += 1;
+    }
+    b.len()
+}
+
+// The index just past the `)` that closes an interpolation whose text
+// starts at i.
+fn interp_end(b: Slice[u8], i: i64) -> i64 {
+    let mut depth: i64 = 1;
+    let mut k = i;
+    while k < b.len() {
+        let c = b[k];
+        if c == b'"' {
+            k = string_end(b, k);
+            continue;
+        }
+        if c == b'(' {
+            depth += 1;
+        } else if c == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return k + 1;
+            }
+        }
+        k += 1;
+    }
+    b.len()
+}
+
+const OPS3: Str = " ?// //= ";
+const OPS2: Str = " .. != == // |= += -= *= /= %= <= >= ";
+const OPS1: Str = "|,.[](){}:;=<>+-*/%?";
+
+fn lex(src: Str, base: i64) -> Vec[Token] {
+    let b = src.bytes();
+    let n = b.len();
+    let mut out: Vec[Token] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        let c = b[i];
+        if is_space(c) {
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < n and b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        let st = i;
+        if is_alpha(c) {
+            while i < n and (is_alpha(b[i]) or is_digit(b[i]) or (b[i] == b':' and i + 1 < n and b[i + 1] == b':')) {
+                if b[i] == b':' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            out.push(token(T_IDENT, byte_str(b, st, i), base + st));
+            continue;
+        }
+        if c == b'.' and i + 1 < n and is_alpha(b[i + 1]) {
+            i += 1;
+            while i < n and (is_alpha(b[i]) or is_digit(b[i])) {
+                i += 1;
+            }
+            out.push(token(T_FIELD, byte_str(b, st + 1, i), base + st));
+            continue;
+        }
+        if (c == b'$' or c == b'@') and i + 1 < n and is_alpha(b[i + 1]) {
+            i += 1;
+            while i < n and (is_alpha(b[i]) or is_digit(b[i])) {
+                i += 1;
+            }
+            out.push(token(if c == b'$' { T_VAR } else { T_FORMAT }, byte_str(b, st, i), base + st));
+            continue;
+        }
+        if is_digit(c) or (c == b'.' and i + 1 < n and is_digit(b[i + 1])) {
+            while i < n and (is_digit(b[i]) or b[i] == b'.') {
+                i += 1;
+            }
+            if i < n and (b[i] == b'e' or b[i] == b'E') {
+                i += 1;
+                if i < n and (b[i] == b'+' or b[i] == b'-') {
+                    i += 1;
+                }
+                while i < n and is_digit(b[i]) {
+                    i += 1;
+                }
+            }
+            out.push(token(T_NUM, byte_str(b, st, i), base + st));
+            continue;
+        }
+        if c == b'"' {
+            let e = string_end(b, i);
+            if e > n or b[e - 1] != b'"' or e == i + 1 {
+                out.push(token(T_BAD, byte_str(b, st, n), base + st));
+                return out;
+            }
+            out.push(token(T_STR, byte_str(b, i + 1, e - 1), base + st));
+            i = e;
+            continue;
+        }
+        if i + 3 <= n and OPS3.contains(f" {sub(src, i, i + 3)} ") {
+            out.push(token(T_OP, byte_str(b, i, i + 3), base + st));
+            i += 3;
+            continue;
+        }
+        if i + 2 <= n and OPS2.contains(f" {sub(src, i, i + 2)} ") {
+            out.push(token(T_OP, byte_str(b, i, i + 2), base + st));
+            i += 2;
+            continue;
+        }
+        let one = byte_str(b, i, i + 1);
+        if OPS1.contains(one) {
+            out.push(token(T_OP, one, base + st));
+            i += 1;
+            continue;
+        }
+        out.push(token(T_BAD, one, base + st));
+        return out;
+    }
+    out.push(token(T_EOF, String.new(), base + n));
+    out
+}
+
+// ------------------------------------------------------------ syntax tree
+
+// Expressions, patterns and definitions live in arenas and refer to each
+// other by index; -1 is an absent child.
+enum Expr {
+    Identity,
+    LNull,
+    LTrue,
+    LFalse,
+    LNum(f64, String),
+    LStr(String),
+    // literal pieces around the interpolated expressions, and the format
+    // that applies to each interpolated value ("" for none)
+    Interp(Vec[String], Vec[i64], String),
+    Format(String),
+    // target, index
+    Index(i64, i64),
+    // target, from, to
+    Slice(i64, i64, i64),
+    Iter(i64),
+    // body, handler
+    Try(i64, i64),
+    ArrLit(i64),
+    // key expressions, value expressions
+    ObjLit(Vec[i64], Vec[i64]),
+    Neg(i64),
+    Pipe(i64, i64),
+    Comma(i64, i64),
+    Bin(String, i64, i64),
+    And(i64, i64),
+    Or(i64, i64),
+    Alt(i64, i64),
+    Assign(String, i64, i64),
+    // conditions, branches, else branch
+    If(Vec[i64], Vec[i64], i64),
+    // source, pattern, init, update
+    Reduce(i64, i64, i64, i64),
+    // source, pattern, init, update, extract
+    Foreach(i64, i64, i64, i64, i64),
+    // source, pattern, body
+    Bind(i64, i64, i64),
+    Var(String),
+    Call(String, Vec[i64]),
+    // definition, body
+    Def(i64, i64),
+}
+
+enum Pat {
+    PVar(String),
+    PArr(Vec[i64]),
+    // key expressions, sub-patterns
+    PObj(Vec[i64], Vec[i64]),
+}
+
+// A `def`; a parameter is `name` (a filter) or `$name` (a value).
+struct FnDef { name: String, params: Vec[String], body: i64 }
+
+// Functions take it as `tree`: `karac check` reads a method call on a
+// local named `ast` as a call into the comptime `ast` module
+// (B-2026-10-15-37).
+struct Prog {
+    exprs: Vec[Expr],
+    cols: Vec[i64],
+    pats: Vec[Pat],
+    defs: Vec[FnDef],
+}
+
+impl Prog {
+    fn add(mut ref self, e: own Expr, col: i64) -> i64 {
+        self.exprs.push(e);
+        self.cols.push(col);
+        self.exprs.len() - 1
+    }
+
+    fn add_pat(mut ref self, p: own Pat) -> i64 {
+        self.pats.push(p);
+        self.pats.len() - 1
+    }
+
+    fn add_def(mut ref self, d: own FnDef) -> i64 {
+        self.defs.push(d);
+        self.defs.len() - 1
+    }
+}
+
+fn new_prog() -> Prog {
+    Prog { exprs: Vec.new(), cols: Vec.new(), pats: Vec.new(), defs: Vec.new() }
+}
+
+// ------------------------------------------------------------ parser
+
+// A compile error: its message and the column it points at.
+struct CErr { msg: String, col: i64 }
+
+fn cerr(msg: own String, col: i64) -> CErr {
+    CErr { msg: msg, col: col }
+}
+
+struct Parser { toks: Vec[Token], pos: i64 }
+
+// bison's name for an unexpected token
+fn tok_desc(t: ref Token) -> String {
+    if t.kind == T_EOF {
+        return "end of file".to_string();
+    }
+    if t.kind == T_IDENT {
+        if is_keyword(t.text) {
+            return t.text.clone();
+        }
+        return "IDENT".to_string();
+    }
+    if t.kind == T_FIELD {
+        return "FIELD".to_string();
+    }
+    if t.kind == T_NUM {
+        return "LITERAL".to_string();
+    }
+    if t.kind == T_STR {
+        return "QQSTRING_START".to_string();
+    }
+    if t.kind == T_FORMAT {
+        return "FORMAT".to_string();
+    }
+    if t.kind == T_VAR {
+        return "'$'".to_string();
+    }
+    if t.kind == T_BAD {
+        return "INVALID_CHARACTER".to_string();
+    }
+    if t.text.len() == 1 {
+        return f"'{t.text}'";
+    }
+    f"\"{t.text}\""
+}
+
+// jq's string escapes, for the literal pieces of a string
+fn unescape(raw: Str) -> String {
+    let b = raw.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c != b'\\' or i + 1 >= b.len() {
+            v.push(c);
+            i += 1;
+            continue;
+        }
+        let e = b[i + 1];
+        i += 2;
+        if e == b'n' {
+            v.push(b'\n');
+        } else if e == b't' {
+            v.push(b'\t');
+        } else if e == b'r' {
+            v.push(b'\r');
+        } else if e == b'b' {
+            v.push(8u8);
+        } else if e == b'f' {
+            v.push(12u8);
+        } else if e == b'u' and i + 4 <= b.len() {
+            let mut code: i64 = 0;
+            for k in 0..4 {
+                code = code * 16 + hex_val(b[i + k]);
+            }
+            i += 4;
+            push_utf8(mut v, code);
+        } else {
+            v.push(e);
+        }
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+impl Parser {
+    fn peek(ref self) -> Token {
+        let t = ref self.toks[self.pos];
+        Token { kind: t.kind, text: t.text.clone(), col: t.col }
+    }
+
+    fn col(ref self) -> i64 {
+        self.toks[self.pos].col
+    }
+
+    fn is_op(ref self, text: Str) -> bool {
+        self.toks[self.pos].kind == T_OP and self.toks[self.pos].text == text
+    }
+
+    fn is_kw(ref self, text: Str) -> bool {
+        self.toks[self.pos].kind == T_IDENT and self.toks[self.pos].text == text
+    }
+
+    fn unexpected(ref self) -> CErr {
+        // at the end of the program jq points at the last token
+        let mut at = self.pos;
+        if self.toks[at].kind == T_EOF and at > 0 {
+            at -= 1;
+        }
+        let d = tok_desc(self.toks[self.pos]);
+        cerr(f"syntax error, unexpected {d} (Unix shell quoting issues?)", self.toks[at].col)
+    }
+
+    fn expect_op(mut ref self, text: Str) -> Result[(), CErr] {
+        if not self.is_op(text) {
+            return Err(self.unexpected());
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    fn expect_kw(mut ref self, text: Str) -> Result[(), CErr] {
+        if not self.is_kw(text) {
+            return Err(self.unexpected());
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    fn pipe(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        if self.is_kw("def") {
+            let col = self.col();
+            let d = self.def(tree)?;
+            let body = self.pipe(tree)?;
+            return Ok(tree.add(Expr.Def(d, body), col));
+        }
+        let col = self.col();
+        let l = self.comma(tree)?;
+        if self.is_op("|") {
+            self.pos += 1;
+            let r = self.pipe(tree)?;
+            return Ok(tree.add(Expr.Pipe(l, r), col));
+        }
+        Ok(l)
+    }
+
+    fn def(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        self.pos += 1;
+        let t = self.peek();
+        if t.kind != T_IDENT or is_keyword(t.text) {
+            return Err(self.unexpected());
+        }
+        self.pos += 1;
+        let mut params: Vec[String] = Vec.new();
+        if self.is_op("(") {
+            self.pos += 1;
+            loop {
+                let p = self.peek();
+                if p.kind != T_IDENT and p.kind != T_VAR {
+                    return Err(self.unexpected());
+                }
+                params.push(p.text.clone());
+                self.pos += 1;
+                if self.is_op(";") {
+                    self.pos += 1;
+                    continue;
+                }
+                self.expect_op(")")?;
+                break;
+            }
+        }
+        self.expect_op(":")?;
+        let body = self.pipe(tree)?;
+        self.expect_op(";")?;
+        Ok(tree.add_def(FnDef { name: t.text.clone(), params: params, body: body }))
+    }
+
+    fn comma(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let mut l = self.alt(tree)?;
+        while self.is_op(",") {
+            self.pos += 1;
+            let r = self.alt(tree)?;
+            l = tree.add(Expr.Comma(l, r), col);
+        }
+        Ok(l)
+    }
+
+    fn alt(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let l = self.assign(tree)?;
+        if self.is_op("//") {
+            self.pos += 1;
+            let r = self.alt(tree)?;
+            return Ok(tree.add(Expr.Alt(l, r), col));
+        }
+        Ok(l)
+    }
+
+    fn assign(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let l = self.or_expr(tree)?;
+        let t = self.peek();
+        if t.kind == T_OP and " = |= += -= *= /= %= //= ".contains(f" {t.text} ") {
+            self.pos += 1;
+            let r = self.alt(tree)?;
+            return Ok(tree.add(Expr.Assign(t.text.clone(), l, r), col));
+        }
+        Ok(l)
+    }
+
+    fn or_expr(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let mut l = self.and_expr(tree)?;
+        while self.is_kw("or") {
+            self.pos += 1;
+            let r = self.and_expr(tree)?;
+            l = tree.add(Expr.Or(l, r), col);
+        }
+        Ok(l)
+    }
+
+    fn and_expr(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let mut l = self.compare(tree)?;
+        while self.is_kw("and") {
+            self.pos += 1;
+            let r = self.compare(tree)?;
+            l = tree.add(Expr.And(l, r), col);
+        }
+        Ok(l)
+    }
+
+    fn compare(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let l = self.additive(tree)?;
+        let t = self.peek();
+        if t.kind == T_OP and " == != < <= > >= ".contains(f" {t.text} ") {
+            self.pos += 1;
+            let r = self.additive(tree)?;
+            return Ok(tree.add(Expr.Bin(t.text.clone(), l, r), col));
+        }
+        Ok(l)
+    }
+
+    fn additive(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let mut l = self.multiplicative(tree)?;
+        loop {
+            let t = self.peek();
+            if t.kind != T_OP or (t.text != "+" and t.text != "-") {
+                break;
+            }
+            self.pos += 1;
+            let r = self.multiplicative(tree)?;
+            l = tree.add(Expr.Bin(t.text.clone(), l, r), col);
+        }
+        Ok(l)
+    }
+
+    fn multiplicative(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let mut l = self.unary(tree)?;
+        loop {
+            let t = self.peek();
+            if t.kind != T_OP or (t.text != "*" and t.text != "/" and t.text != "%") {
+                break;
+            }
+            self.pos += 1;
+            let r = self.unary(tree)?;
+            l = tree.add(Expr.Bin(t.text.clone(), l, r), col);
+        }
+        Ok(l)
+    }
+
+    fn unary(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        if self.is_op("-") {
+            let col = self.col();
+            self.pos += 1;
+            let e = self.unary(tree)?;
+            return Ok(tree.add(Expr.Neg(e), col));
+        }
+        self.postfix(tree, true)
+    }
+
+    fn postfix(mut ref self, tree: mut ref Prog, allow_as: bool) -> Result[i64, CErr] {
+        let col = self.col();
+        let mut e = self.term(tree)?;
+        loop {
+            let t = self.peek();
+            if t.kind == T_FIELD {
+                self.pos += 1;
+                let k = tree.add(Expr.LStr(t.text.clone()), t.col);
+                e = tree.add(Expr.Index(e, k), col);
+                continue;
+            }
+            if t.kind == T_OP and t.text == "." and self.toks[self.pos + 1].kind == T_STR {
+                self.pos += 1;
+                let k = self.string(tree, "")?;
+                e = tree.add(Expr.Index(e, k), col);
+                continue;
+            }
+            if t.kind == T_OP and t.text == "." and self.toks[self.pos + 1].kind == T_OP and self.toks[self.pos + 1].text == "[" {
+                self.pos += 1;
+                continue;
+            }
+            if t.kind == T_OP and t.text == "[" {
+                self.pos += 1;
+                e = self.bracket(tree, e, col)?;
+                continue;
+            }
+            if t.kind == T_OP and t.text == "?" {
+                self.pos += 1;
+                e = tree.add(Expr.Try(e, -1), col);
+                continue;
+            }
+            if allow_as and t.kind == T_IDENT and t.text == "as" {
+                self.pos += 1;
+                let p = self.pattern(tree)?;
+                self.expect_op("|")?;
+                let body = self.pipe(tree)?;
+                return Ok(tree.add(Expr.Bind(e, p, body), col));
+            }
+            break;
+        }
+        Ok(e)
+    }
+
+    // after `[`: `]`, `e]`, `e:e]`, `:e]` or `e:]`
+    fn bracket(mut ref self, tree: mut ref Prog, target: i64, col: i64) -> Result[i64, CErr] {
+        if self.is_op("]") {
+            self.pos += 1;
+            return Ok(tree.add(Expr.Iter(target), col));
+        }
+        let mut from: i64 = -1;
+        if not self.is_op(":") {
+            from = self.pipe(tree)?;
+            if self.is_op("]") {
+                self.pos += 1;
+                return Ok(tree.add(Expr.Index(target, from), col));
+            }
+        }
+        self.expect_op(":")?;
+        let mut to: i64 = -1;
+        if not self.is_op("]") {
+            to = self.pipe(tree)?;
+        }
+        self.expect_op("]")?;
+        Ok(tree.add(Expr.Slice(target, from, to), col))
+    }
+
+    // A string token: its literal pieces and interpolations, each
+    // interpolation parsed from its own text.
+    fn string(mut ref self, tree: mut ref Prog, fmt: Str) -> Result[i64, CErr] {
+        let t = self.peek();
+        self.pos += 1;
+        let b = t.text.bytes();
+        let mut lits: Vec[String] = Vec.new();
+        let mut parts: Vec[i64] = Vec.new();
+        let mut st: i64 = 0;
+        let mut i: i64 = 0;
+        while i < b.len() {
+            if b[i] == b'\\' and i + 1 < b.len() and b[i + 1] == b'(' {
+                lits.push(unescape(byte_str(b, st, i)));
+                let e = interp_end(b, i + 2);
+                let inner = byte_str(b, i + 2, e - 1);
+                let mut p = Parser { toks: lex(inner, t.col + 1 + i + 2), pos: 0 };
+                let x = p.pipe(tree)?;
+                if p.toks[p.pos].kind != T_EOF {
+                    return Err(p.unexpected());
+                }
+                parts.push(x);
+                i = e;
+                st = e;
+                continue;
+            }
+            if b[i] == b'\\' {
+                i += 2;
+                continue;
+            }
+            i += 1;
+        }
+        lits.push(unescape(byte_str(b, st, b.len())));
+        if parts.len() == 0 and fmt.len() == 0 {
+            return Ok(tree.add(Expr.LStr(lits[0].clone()), t.col));
+        }
+        Ok(tree.add(Expr.Interp(lits, parts, fmt.to_string()), t.col))
+    }
+
+    fn term(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let t = self.peek();
+        let col = t.col;
+        if t.kind == T_FIELD {
+            self.pos += 1;
+            let dot = tree.add(Expr.Identity, col);
+            let k = tree.add(Expr.LStr(t.text.clone()), col);
+            return Ok(tree.add(Expr.Index(dot, k), col));
+        }
+        if t.kind == T_NUM {
+            self.pos += 1;
+            let text = t.text.clone();
+            let x = parse_num(text).unwrap_or(0.0);
+            return Ok(tree.add(Expr.LNum(x, t.text.clone()), col));
+        }
+        if t.kind == T_STR {
+            return self.string(tree, "");
+        }
+        if t.kind == T_FORMAT {
+            self.pos += 1;
+            if self.toks[self.pos].kind == T_STR {
+                return self.string(tree, t.text);
+            }
+            return Ok(tree.add(Expr.Format(t.text.clone()), col));
+        }
+        if t.kind == T_VAR {
+            self.pos += 1;
+            return Ok(tree.add(Expr.Var(t.text.clone()), col));
+        }
+        if t.kind == T_OP {
+            if t.text == "." {
+                self.pos += 1;
+                if self.toks[self.pos].kind == T_STR {
+                    let dot = tree.add(Expr.Identity, col);
+                    let k = self.string(tree, "")?;
+                    return Ok(tree.add(Expr.Index(dot, k), col));
+                }
+                return Ok(tree.add(Expr.Identity, col));
+            }
+            if t.text == ".." {
+                self.pos += 1;
+                return Ok(tree.add(Expr.Call("recurse".to_string(), Vec.new()), col));
+            }
+            if t.text == "(" {
+                self.pos += 1;
+                let e = self.pipe(tree)?;
+                self.expect_op(")")?;
+                return Ok(e);
+            }
+            if t.text == "[" {
+                self.pos += 1;
+                if self.is_op("]") {
+                    self.pos += 1;
+                    return Ok(tree.add(Expr.ArrLit(-1), col));
+                }
+                let e = self.pipe(tree)?;
+                self.expect_op("]")?;
+                return Ok(tree.add(Expr.ArrLit(e), col));
+            }
+            if t.text == "{" {
+                self.pos += 1;
+                return self.object(tree, col);
+            }
+            return Err(self.unexpected());
+        }
+        if t.kind != T_IDENT {
+            return Err(self.unexpected());
+        }
+        let name = t.text.clone();
+        if name == "null" or name == "true" or name == "false" {
+            self.pos += 1;
+            let e = if name == "null" { Expr.LNull } else if name == "true" { Expr.LTrue } else { Expr.LFalse };
+            return Ok(tree.add(e, col));
+        }
+        if name == "if" {
+            self.pos += 1;
+            return self.if_expr(tree, col);
+        }
+        if name == "try" {
+            self.pos += 1;
+            let body = self.postfix(tree, false)?;
+            let mut handler: i64 = -1;
+            if self.is_kw("catch") {
+                self.pos += 1;
+                handler = self.postfix(tree, false)?;
+            }
+            return Ok(tree.add(Expr.Try(body, handler), col));
+        }
+        if name == "reduce" or name == "foreach" {
+            self.pos += 1;
+            let src = self.postfix(tree, false)?;
+            self.expect_kw("as")?;
+            let p = self.pattern(tree)?;
+            self.expect_op("(")?;
+            let init = self.pipe(tree)?;
+            self.expect_op(";")?;
+            let update = self.pipe(tree)?;
+            if name == "reduce" {
+                self.expect_op(")")?;
+                return Ok(tree.add(Expr.Reduce(src, p, init, update), col));
+            }
+            let mut extract: i64 = -1;
+            if self.is_op(";") {
+                self.pos += 1;
+                extract = self.pipe(tree)?;
+            }
+            self.expect_op(")")?;
+            return Ok(tree.add(Expr.Foreach(src, p, init, update, extract), col));
+        }
+        if name == "def" {
+            let d = self.def(tree)?;
+            let body = self.pipe(tree)?;
+            return Ok(tree.add(Expr.Def(d, body), col));
+        }
+        if is_keyword(name) {
+            return Err(self.unexpected());
+        }
+        self.pos += 1;
+        let mut args: Vec[i64] = Vec.new();
+        if self.is_op("(") {
+            self.pos += 1;
+            loop {
+                args.push(self.pipe(tree)?);
+                if self.is_op(";") {
+                    self.pos += 1;
+                    continue;
+                }
+                self.expect_op(")")?;
+                break;
+            }
+        }
+        Ok(tree.add(Expr.Call(name, args), col))
+    }
+
+    fn if_expr(mut ref self, tree: mut ref Prog, col: i64) -> Result[i64, CErr] {
+        let mut conds: Vec[i64] = Vec.new();
+        let mut thens: Vec[i64] = Vec.new();
+        loop {
+            conds.push(self.pipe(tree)?);
+            self.expect_kw("then")?;
+            thens.push(self.pipe(tree)?);
+            if self.is_kw("elif") {
+                self.pos += 1;
+                continue;
+            }
+            break;
+        }
+        let mut els: i64 = -1;
+        if self.is_kw("else") {
+            self.pos += 1;
+            els = self.pipe(tree)?;
+        }
+        self.expect_kw("end")?;
+        Ok(tree.add(Expr.If(conds, thens, els), col))
+    }
+
+    // An object value: a term, a negated one, or such terms piped.
+    fn obj_value(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let col = self.col();
+        let mut v = if self.is_op("-") {
+            self.pos += 1;
+            let e = self.postfix(tree, false)?;
+            tree.add(Expr.Neg(e), col)
+        } else {
+            self.postfix(tree, false)?
+        };
+        while self.is_op("|") {
+            self.pos += 1;
+            let r = self.postfix(tree, false)?;
+            v = tree.add(Expr.Pipe(v, r), col);
+        }
+        Ok(v)
+    }
+
+    fn object(mut ref self, tree: mut ref Prog, col: i64) -> Result[i64, CErr] {
+        let mut keys: Vec[i64] = Vec.new();
+        let mut vals: Vec[i64] = Vec.new();
+        if self.is_op("}") {
+            self.pos += 1;
+            return Ok(tree.add(Expr.ObjLit(keys, vals), col));
+        }
+        loop {
+            let t = self.peek();
+            let kcol = t.col;
+            if t.kind == T_VAR {
+                self.pos += 1;
+                let name = sub(t.text, 1, t.text.len());
+                keys.push(tree.add(Expr.LStr(name), kcol));
+                vals.push(tree.add(Expr.Var(t.text.clone()), kcol));
+            } else {
+                let mut shorthand = false;
+                let k = if t.kind == T_IDENT {
+                    self.pos += 1;
+                    shorthand = true;
+                    tree.add(Expr.LStr(t.text.clone()), kcol)
+                } else if t.kind == T_STR {
+                    shorthand = true;
+                    self.string(tree, "")?
+                } else if t.kind == T_OP and t.text == "(" {
+                    self.pos += 1;
+                    let e = self.pipe(tree)?;
+                    self.expect_op(")")?;
+                    e
+                } else {
+                    return Err(self.unexpected());
+                };
+                keys.push(k);
+                if self.is_op(":") {
+                    self.pos += 1;
+                    vals.push(self.obj_value(tree)?);
+                } else if shorthand {
+                    let dot = tree.add(Expr.Identity, kcol);
+                    vals.push(tree.add(Expr.Index(dot, k), kcol));
+                } else {
+                    return Err(self.unexpected());
+                }
+            }
+            if self.is_op(",") {
+                self.pos += 1;
+                continue;
+            }
+            self.expect_op("}")?;
+            break;
+        }
+        Ok(tree.add(Expr.ObjLit(keys, vals), col))
+    }
+
+    fn pattern(mut ref self, tree: mut ref Prog) -> Result[i64, CErr] {
+        let t = self.peek();
+        if t.kind == T_VAR {
+            self.pos += 1;
+            return Ok(tree.add_pat(Pat.PVar(t.text.clone())));
+        }
+        if self.is_op("[") {
+            self.pos += 1;
+            let mut subs: Vec[i64] = Vec.new();
+            loop {
+                subs.push(self.pattern(tree)?);
+                if self.is_op(",") {
+                    self.pos += 1;
+                    continue;
+                }
+                self.expect_op("]")?;
+                break;
+            }
+            return Ok(tree.add_pat(Pat.PArr(subs)));
+        }
+        if self.is_op("{") {
+            self.pos += 1;
+            let mut keys: Vec[i64] = Vec.new();
+            let mut subs: Vec[i64] = Vec.new();
+            loop {
+                let k = self.peek();
+                if k.kind == T_VAR {
+                    self.pos += 1;
+                    let name = sub(k.text, 1, k.text.len());
+                    keys.push(tree.add(Expr.LStr(name), k.col));
+                    subs.push(tree.add_pat(Pat.PVar(k.text.clone())));
+                } else {
+                    let key = if k.kind == T_IDENT {
+                        self.pos += 1;
+                        tree.add(Expr.LStr(k.text.clone()), k.col)
+                    } else if k.kind == T_STR {
+                        self.string(tree, "")?
+                    } else if self.is_op("(") {
+                        self.pos += 1;
+                        let e = self.pipe(tree)?;
+                        self.expect_op(")")?;
+                        e
+                    } else {
+                        return Err(self.unexpected());
+                    };
+                    self.expect_op(":")?;
+                    keys.push(key);
+                    subs.push(self.pattern(tree)?);
+                }
+                if self.is_op(",") {
+                    self.pos += 1;
+                    continue;
+                }
+                self.expect_op("}")?;
+                break;
+            }
+            return Ok(tree.add_pat(Pat.PObj(keys, subs)));
+        }
+        Err(self.unexpected())
+    }
+}
+
+fn parse_program(tree: mut ref Prog, src: Str) -> Result[i64, CErr] {
+    let mut p = Parser { toks: lex(src, 0), pos: 0 };
+    let e = p.pipe(tree)?;
+    if p.toks[p.pos].kind != T_EOF {
+        return Err(p.unexpected());
+    }
+    Ok(e)
+}
+
+// ------------------------------------------------------------ evaluation state
+
+const F_VAR: i64 = 0;
+const F_DEF: i64 = 1;
+const F_CLOSURE: i64 = 2;
+
+// Scopes are a chain of frames in an arena: a variable, a definition (a
+// call's body runs in the frame of its definition, which sees itself
+// and every outer name) or a filter argument (an expression and the
+// frame of the call that passed it).
+struct Frame { kind: i64, name: String, arity: i64, val: J, def: i64, cenv: i64, up: i64 }
+
+// The inputs still to read (for `input` and `inputs`) and the line jq
+// reports errors at: the line of the input being processed, or -1 for
+// <unknown>.
+struct R {
+    frames: Vec[Frame],
+    inputs: Vec[J],
+    lines: Vec[i64],
+    next: i64,
+    line: i64,
+    file: String,
+}
+
+// A stream's outputs, with their paths when it runs as a path
+// expression (null otherwise), and the error that ended it.
+struct Out { vals: Vec[J], paths: Vec[J], err: Option[J] }
+
+fn new_out() -> Out {
+    Out { vals: Vec.new(), paths: Vec.new(), err: None }
+}
+
+fn emit(out: mut ref Out, v: own J, p: own J) {
+    out.vals.push(v);
+    out.paths.push(p);
+}
+
+fn has_err(o: ref Out) -> bool {
+    match o.err {
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn get_err(o: ref Out) -> Option[J] {
+    o.err.clone()
+}
+
+fn fail(msg: own String) -> Option[J] {
+    Some(J.Str(msg))
+}
+
+fn push_frame(r: mut ref R, kind: i64, name: Str, arity: i64, val: own J, def: i64, cenv: i64, up: i64) -> i64 {
+    r.frames.push(Frame { kind: kind, name: name.to_string(), arity: arity, val: val, def: def, cenv: cenv, up: up });
+    r.frames.len() - 1
+}
+
+fn push_var(r: mut ref R, name: Str, val: own J, up: i64) -> i64 {
+    push_frame(r, F_VAR, name, 0, val, -1, -1, up)
+}
+
+fn find_var(r: ref R, env: i64, name: Str) -> Option[J] {
+    let mut f = env;
+    while f >= 0 {
+        if r.frames[f].kind == F_VAR and r.frames[f].name == name {
+            return Some(r.frames[f].val.clone());
+        }
+        f = r.frames[f].up;
+    }
+    None
+}
+
+// The innermost definition or filter argument called `name` that takes
+// `arity` arguments, or -1.
+fn find_fn(r: ref R, env: i64, name: Str, arity: i64) -> i64 {
+    let mut f = env;
+    while f >= 0 {
+        let k = r.frames[f].kind;
+        if k != F_VAR and r.frames[f].name == name and r.frames[f].arity == arity {
+            return f;
+        }
+        f = r.frames[f].up;
+    }
+    -1
+}
+
+fn path_push(p: ref J, k: own J) -> J {
+    let mut items = items_of(p);
+    items.push(k);
+    arr(items)
+}
+
+fn root_path() -> J {
+    arr(Vec.new())
+}
+
+// A value in a longer message: 26 bytes and "..." past 29.
+fn dump_trunc30(v: ref J) -> String {
+    let s = dump(v);
+    if s.len() > 29 {
+        let b = s.bytes();
+        let mut e: i64 = 26;
+        while e > 0 and b[e] >= 128u8 and b[e] < 192u8 {
+            e -= 1;
+        }
+        return f"{byte_str(b, 0, e)}...";
+    }
+    s
+}
+
+fn bad_path(v: ref J) -> Option[J] {
+    fail(f"Invalid path expression with result {dump_trunc30(v)}")
+}
+
+// ------------------------------------------------------------ value operations
+
+fn index_val(v: ref J, k: ref J) -> Result[J, String] {
+    match v {
+        J.Null => match k {
+            J.Str(_) => Ok(J.Null),
+            J.Num(_, _) => Ok(J.Null),
+            J.Null => Ok(J.Null),
+            J.Obj(_) => Ok(J.Null),
+            _ => Err(f"Cannot index null with {type_name(k)}"),
+        },
+        J.Obj(o) => match k {
+            J.Str(s) => {
+                let i = obj_find(o, s);
+                if i < 0 {
+                    return Ok(J.Null);
+                }
+                Ok(o.vals[i].clone())
+            }
+            _ => Err(f"Cannot index object with {type_name(k)}"),
+        },
+        J.Arr(a) => match k {
+            J.Num(x, _) => {
+                let mut i = floor_int(*x);
+                if i < 0 {
+                    i += a.items.len();
+                }
+                if i < 0 or i >= a.items.len() {
+                    return Ok(J.Null);
+                }
+                Ok(a.items[i].clone())
+            }
+            J.Str(s) => Err(f"Cannot index array with string \"{s}\""),
+            _ => Err(f"Cannot index array with {type_name(k)}"),
+        },
+        _ => match k {
+            J.Str(s) => Err(f"Cannot index {type_name(v)} with string \"{s}\""),
+            _ => Err(f"Cannot index {type_name(v)} with {type_name(k)}"),
+        },
+    }
+}
+
+fn slice_bound(b: ref J, n: i64, dflt: i64, up: bool) -> Result[i64, String] {
+    match b {
+        J.Null => Ok(dflt),
+        J.Num(x, _) => {
+            let mut i = if up { 0 - floor_int(0.0 - *x) } else { floor_int(*x) };
+            if i < 0 {
+                i += n;
+            }
+            if i < 0 {
+                i = 0;
+            }
+            if i > n {
+                i = n;
+            }
+            Ok(i)
+        }
+        _ => Err("Start and end indices of an array slice must be numbers".to_string()),
+    }
+}
+
+fn slice_val(v: ref J, from: ref J, to: ref J) -> Result[J, String] {
+    match v {
+        J.Null => Ok(J.Null),
+        J.Arr(a) => {
+            let n = a.items.len();
+            let f = slice_bound(from, n, 0, false)?;
+            let mut t = slice_bound(to, n, n, true)?;
+            if t < f {
+                t = f;
+            }
+            let mut items: Vec[J] = Vec.new();
+            for i in f..t {
+                items.push(a.items[i].clone());
+            }
+            Ok(arr(items))
+        }
+        J.Str(s) => {
+            let cs = chars_of(s);
+            let n = cs.len();
+            let f = slice_bound(from, n, 0, false)?;
+            let mut t = slice_bound(to, n, n, true)?;
+            if t < f {
+                t = f;
+            }
+            let mut out = String.new();
+            for i in f..t {
+                out.push_str(cs[i]);
+            }
+            Ok(J.Str(out))
+        }
+        _ => Err(f"Cannot index {type_name(v)} with object"),
+    }
+}
+
+// The characters of UTF-8 text, each as its own string.
+fn chars_of(s: Str) -> Vec[String] {
+    let b = s.bytes();
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let mut e = i + 1;
+        while e < b.len() and b[e] >= 128u8 and b[e] < 192u8 {
+            e += 1;
+        }
+        out.push(byte_str(b, i, e));
+        i = e;
+    }
+    out
+}
+
+fn deep_merge(a: ref JObj, b: ref JObj) -> J {
+    let mut keys = a.keys.clone();
+    let mut vals = a.vals.clone();
+    for i in 0..b.keys.len() {
+        let k = b.keys[i].clone();
+        let mut at: i64 = -1;
+        for j in 0..keys.len() {
+            if keys[j] == k {
+                at = j;
+            }
+        }
+        if at < 0 {
+            keys.push(k);
+            vals.push(b.vals[i].clone());
+            continue;
+        }
+        let merged = match vals[at] {
+            J.Obj(x) => match b.vals[i] {
+                J.Obj(y) => deep_merge(x, y),
+                _ => b.vals[i].clone(),
+            },
+            _ => b.vals[i].clone(),
+        };
+        vals[at] = merged;
+    }
+    obj(keys, vals)
+}
+
+fn split_str(s: Str, sep: Str) -> Vec[J] {
+    let mut out: Vec[J] = Vec.new();
+    if s.len() == 0 {
+        return out;
+    }
+    if sep.len() == 0 {
+        let cs = chars_of(s);
+        for i in 0..cs.len() {
+            out.push(J.Str(cs[i].clone()));
+        }
+        return out;
+    }
+    let mut st: i64 = 0;
+    loop {
+        let i = find_from(s, sep, st);
+        if i < 0 {
+            out.push(J.Str(sub(s, st, s.len())));
+            return out;
+        }
+        out.push(J.Str(sub(s, st, i)));
+        st = i + sep.len();
+    }
+}
+
+fn type_error2(a: ref J, b: ref J, what: Str) -> String {
+    f"{describe(a)} and {describe(b)} {what}"
+}
+
+fn binop(op: Str, a: ref J, b: ref J) -> Result[J, String] {
+    if op == "==" {
+        return Ok(jbool(cmp(a, b) == 0));
+    }
+    if op == "!=" {
+        return Ok(jbool(cmp(a, b) != 0));
+    }
+    if op == "<" {
+        return Ok(jbool(cmp(a, b) < 0));
+    }
+    if op == "<=" {
+        return Ok(jbool(cmp(a, b) <= 0));
+    }
+    if op == ">" {
+        return Ok(jbool(cmp(a, b) > 0));
+    }
+    if op == ">=" {
+        return Ok(jbool(cmp(a, b) >= 0));
+    }
+    if op == "+" {
+        match a {
+            J.Null => return Ok(b.clone()),
+            _ => {}
+        }
+        match b {
+            J.Null => return Ok(a.clone()),
+            _ => {}
+        }
+        match a {
+            J.Num(x, _) => match b {
+                J.Num(y, _) => return Ok(num(*x + *y)),
+                _ => {}
+            },
+            J.Str(x) => match b {
+                J.Str(y) => return Ok(J.Str(f"{x}{y}")),
+                _ => {}
+            },
+            J.Arr(x) => match b {
+                J.Arr(y) => {
+                    let mut items = x.items.clone();
+                    for i in 0..y.items.len() {
+                        items.push(y.items[i].clone());
+                    }
+                    return Ok(arr(items));
+                }
+                _ => {}
+            },
+            J.Obj(x) => match b {
+                J.Obj(y) => {
+                    let mut keys = x.keys.clone();
+                    let mut vals = x.vals.clone();
+                    for i in 0..y.keys.len() {
+                        let mut at: i64 = -1;
+                        for j in 0..keys.len() {
+                            if keys[j] == y.keys[i] {
+                                at = j;
+                            }
+                        }
+                        if at >= 0 {
+                            vals[at] = y.vals[i].clone();
+                        } else {
+                            keys.push(y.keys[i].clone());
+                            vals.push(y.vals[i].clone());
+                        }
+                    }
+                    return Ok(obj(keys, vals));
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        return Err(type_error2(a, b, "cannot be added"));
+    }
+    if op == "-" {
+        match a {
+            J.Num(x, _) => match b {
+                J.Num(y, _) => return Ok(num(*x - *y)),
+                _ => {}
+            },
+            J.Arr(x) => match b {
+                J.Arr(y) => {
+                    let mut items: Vec[J] = Vec.new();
+                    for i in 0..x.items.len() {
+                        let mut keep = true;
+                        for j in 0..y.items.len() {
+                            if jeq(x.items[i], y.items[j]) {
+                                keep = false;
+                            }
+                        }
+                        if keep {
+                            items.push(x.items[i].clone());
+                        }
+                    }
+                    return Ok(arr(items));
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        return Err(type_error2(a, b, "cannot be subtracted"));
+    }
+    if op == "*" {
+        match a {
+            J.Num(x, _) => match b {
+                J.Num(y, _) => return Ok(num(*x * *y)),
+                J.Str(s) => return Ok(repeat_text(s, *x)),
+                _ => {}
+            },
+            J.Str(s) => match b {
+                J.Num(y, _) => return Ok(repeat_text(s, *y)),
+                _ => {}
+            },
+            J.Obj(x) => match b {
+                J.Obj(y) => return Ok(deep_merge(x, y)),
+                _ => {}
+            },
+            _ => {}
+        }
+        return Err(type_error2(a, b, "cannot be multiplied"));
+    }
+    if op == "/" {
+        match a {
+            J.Num(x, _) => match b {
+                J.Num(y, _) => {
+                    if *y == 0.0 {
+                        return Err(type_error2(a, b, "cannot be divided because the divisor is zero"));
+                    }
+                    return Ok(num(*x / *y));
+                }
+                _ => {}
+            },
+            J.Str(x) => match b {
+                J.Str(y) => return Ok(arr(split_str(x, y))),
+                _ => {}
+            },
+            _ => {}
+        }
+        return Err(type_error2(a, b, "cannot be divided"));
+    }
+    // %
+    match a {
+        J.Num(x, _) => match b {
+            J.Num(y, _) => {
+                let bi = *y as i64;
+                if bi == 0 {
+                    return Err(type_error2(a, b, "cannot be divided (remainder) because the divisor is zero"));
+                }
+                let ai = *x as i64;
+                let bm = if bi < 0 { 0 - bi } else { bi };
+                return Ok(num((ai % bm) as f64));
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    Err(type_error2(a, b, "cannot be divided"))
+}
+
+// jq 1.7's string repetition: null for a count at or below zero, the
+// text repeated the count's integer part times otherwise.
+fn repeat_text(s: Str, x: f64) -> J {
+    if x <= 0.0 {
+        return J.Null;
+    }
+    J.Str(repeat_str(s, x as i64))
+}
+
+// ------------------------------------------------------------ paths
+
+fn get_in(v: ref J, path: ref Vec[J]) -> Result[J, String] {
+    let mut cur = v.clone();
+    for i in 0..path.len() {
+        match cur {
+            J.Null => return Ok(J.Null),
+            _ => {}
+        }
+        cur = index_val(cur, path[i])?;
+    }
+    Ok(cur)
+}
+
+fn set_in(v: ref J, path: ref Vec[J], i: i64, x: ref J) -> Result[J, String] {
+    if i == path.len() {
+        return Ok(x.clone());
+    }
+    let k = ref path[i];
+    match k {
+        J.Str(key) => match v {
+            J.Null => {
+                let child = set_in(J.Null, path, i + 1, x)?;
+                let mut keys: Vec[String] = Vec.new();
+                keys.push(key.clone());
+                let mut vals: Vec[J] = Vec.new();
+                vals.push(child);
+                Ok(obj(keys, vals))
+            }
+            J.Obj(o) => {
+                let at = obj_find(o, key);
+                let old = if at >= 0 { o.vals[at].clone() } else { J.Null };
+                let child = set_in(old, path, i + 1, x)?;
+                Ok(obj_with(o, key, child))
+            }
+            _ => Err(f"Cannot index {type_name(v)} with \"{key}\""),
+        },
+        J.Num(n, _) => {
+            let items = match v {
+                J.Null => Vec.new(),
+                J.Arr(a) => a.items.clone(),
+                _ => return Err(f"Cannot index {type_name(v)} with number"),
+            };
+            let mut idx = floor_int(*n);
+            if idx < 0 {
+                idx += items.len();
+                if idx < 0 {
+                    return Err("Out of bounds negative array index".to_string());
+                }
+            }
+            let mut out = items;
+            while out.len() <= idx {
+                out.push(J.Null);
+            }
+            let child = set_in(out[idx], path, i + 1, x)?;
+            out[idx] = child;
+            Ok(arr(out))
+        }
+        _ => Err(f"Invalid path component {dump(k)}"),
+    }
+}
+
+// Deletes one path; a path through a missing value deletes nothing.
+fn del_in(v: ref J, path: ref Vec[J], i: i64) -> Result[J, String] {
+    if path.len() == 0 {
+        return Ok(J.Null);
+    }
+    match v {
+        J.Null => return Ok(J.Null),
+        _ => {}
+    }
+    let k = ref path[i];
+    let last = i == path.len() - 1;
+    match v {
+        J.Obj(o) => {
+            let key = match k {
+                J.Str(s) => s.clone(),
+                _ => return Err(f"Cannot delete field at index of object"),
+            };
+            let at = obj_find(o, key);
+            if at < 0 {
+                return Ok(v.clone());
+            }
+            if last {
+                let mut keys = o.keys.clone();
+                let mut vals = o.vals.clone();
+                keys.remove(at);
+                vals.remove(at);
+                return Ok(obj(keys, vals));
+            }
+            let child = del_in(o.vals[at], path, i + 1)?;
+            Ok(obj_with(o, key, child))
+        }
+        J.Arr(a) => {
+            let n = match k {
+                J.Num(x, _) => *x,
+                _ => return Err("Cannot delete field at object index of array".to_string()),
+            };
+            let mut idx = floor_int(n);
+            if idx < 0 {
+                idx += a.items.len();
+            }
+            if idx < 0 or idx >= a.items.len() {
+                return Ok(v.clone());
+            }
+            let mut items = a.items.clone();
+            if last {
+                items.remove(idx);
+                return Ok(arr(items));
+            }
+            let child = del_in(items[idx], path, i + 1)?;
+            items[idx] = child;
+            Ok(arr(items))
+        }
+        _ => Err(f"Cannot delete field at index of {type_name(v)}"),
+    }
+}
+
+// Deletes every path, the last in jq's order first, so earlier array
+// indices still mean what they meant.
+fn del_paths(v: ref J, paths: ref Vec[J]) -> Result[J, String] {
+    let order = sort_by_keys(paths, paths);
+    let mut cur = v.clone();
+    let mut i = order.len() - 1;
+    while i >= 0 {
+        let p = items_of(paths[order[i]]);
+        cur = del_in(cur, p, 0)?;
+        i -= 1;
+    }
+    Ok(cur)
+}
+
+// ------------------------------------------------------------ the evaluator
+
+fn run(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64) -> Out {
+    let mut o = new_out();
+    let err = ev(tree, r, e, v, J.Null, false, env, mut o);
+    o.err = err;
+    o
+}
+
+fn run_p(tree: ref Prog, r: mut ref R, e: i64, v: ref J, p: ref J, pm: bool, env: i64) -> Out {
+    let mut o = new_out();
+    let err = ev(tree, r, e, v, p, pm, env, mut o);
+    o.err = err;
+    o
+}
+
+// The paths of a path expression, from `.`.
+fn paths_of(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64) -> Out {
+    run_p(tree, r, e, v, root_path(), true, env)
+}
+
+// Runs expression e on input v (whose path is p when pm is set, for a
+// path expression), appending its outputs; returns the error that ends
+// the stream, if one does.
+fn ev(tree: ref Prog, r: mut ref R, e: i64, v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    let x = ref tree.exprs[e];
+    match x {
+        Expr.Identity => {
+            emit(out, v.clone(), p.clone());
+            None
+        }
+        Expr.Index(t, k) => ev_index(tree, r, *t, *k, v, p, pm, env, out),
+        Expr.Slice(t, f, to) => ev_slice(tree, r, *t, *f, *to, v, p, pm, env, out),
+        Expr.Iter(t) => {
+            let tr = run_p(tree, r, *t, v, p, pm, env);
+            for i in 0..tr.vals.len() {
+                let tv = ref tr.vals[i];
+                match tv {
+                    J.Arr(a) => {
+                        for j in 0..a.items.len() {
+                            let np = if pm { path_push(tr.paths[i], num(j as f64)) } else { J.Null };
+                            emit(out, a.items[j].clone(), np);
+                        }
+                    }
+                    J.Obj(o) => {
+                        for j in 0..o.keys.len() {
+                            let np = if pm { path_push(tr.paths[i], jstr(o.keys[j])) } else { J.Null };
+                            emit(out, o.vals[j].clone(), np);
+                        }
+                    }
+                    _ => return fail(f"Cannot iterate over {describe(tv)}"),
+                }
+            }
+            get_err(tr)
+        }
+        Expr.Try(body, h) => {
+            let br = run_p(tree, r, *body, v, p, pm, env);
+            for i in 0..br.vals.len() {
+                emit(out, br.vals[i].clone(), br.paths[i].clone());
+            }
+            match br.err {
+                Some(ev_err) => {
+                    if *h < 0 {
+                        return None;
+                    }
+                    ev(tree, r, *h, ev_err, J.Null, false, env, out)
+                }
+                None => None,
+            }
+        }
+        Expr.Pipe(a, b) => {
+            let ar = run_p(tree, r, *a, v, p, pm, env);
+            for i in 0..ar.vals.len() {
+                let err = ev(tree, r, *b, ar.vals[i], ar.paths[i], pm, env, out);
+                if err.is_some() {
+                    return err;
+                }
+            }
+            get_err(ar)
+        }
+        Expr.Comma(a, b) => {
+            let err = ev(tree, r, *a, v, p, pm, env, out);
+            if err.is_some() {
+                return err;
+            }
+            ev(tree, r, *b, v, p, pm, env, out)
+        }
+        Expr.Alt(a, b) => {
+            let ar = run_p(tree, r, *a, v, p, pm, env);
+            let mut any = false;
+            for i in 0..ar.vals.len() {
+                if truthy(ar.vals[i]) {
+                    emit(out, ar.vals[i].clone(), ar.paths[i].clone());
+                    any = true;
+                }
+            }
+            if any {
+                return None;
+            }
+            ev(tree, r, *b, v, p, pm, env, out)
+        }
+        Expr.If(conds, thens, els) => ev_if(tree, r, conds, thens, *els, 0, v, p, pm, env, out),
+        Expr.Bind(src, pat, body) => {
+            let sr = run(tree, r, *src, v, env);
+            for i in 0..sr.vals.len() {
+                let e2 = match bind_pat(tree, r, *pat, sr.vals[i], v, env) {
+                    Ok(f) => f,
+                    Err(m) => return Some(m),
+                };
+                let err = ev(tree, r, *body, v, p, pm, e2, out);
+                if err.is_some() {
+                    return err;
+                }
+            }
+            get_err(sr)
+        }
+        Expr.Call(name, args) => ev_call(tree, r, e, name, args, v, p, pm, env, out),
+        Expr.Def(d, body) => {
+            let fd = ref tree.defs[*d];
+            let f = push_frame(r, F_DEF, fd.name, fd.params.len(), J.Null, *d, -1, env);
+            ev(tree, r, *body, v, p, pm, f, out)
+        }
+        _ => {
+            if not pm {
+                return ev_value(tree, r, e, v, env, out);
+            }
+            // a value where a path expression needs a path
+            let tmp = run(tree, r, e, v, env);
+            if tmp.vals.len() > 0 {
+                return bad_path(tmp.vals[0]);
+            }
+            get_err(tmp)
+        }
+    }
+}
+
+fn ev_index(tree: ref Prog, r: mut ref R, t: i64, k: i64, v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    let tr = run_p(tree, r, t, v, p, pm, env);
+    let kr = run(tree, r, k, v, env);
+    for i in 0..tr.vals.len() {
+        for j in 0..kr.vals.len() {
+            match index_val(tr.vals[i], kr.vals[j]) {
+                Ok(x) => {
+                    let np = if pm { path_push(tr.paths[i], kr.vals[j].clone()) } else { J.Null };
+                    emit(out, x, np);
+                }
+                Err(m) => return fail(m),
+            }
+        }
+        if has_err(kr) {
+            return get_err(kr);
+        }
+    }
+    if has_err(kr) {
+        return get_err(kr);
+    }
+    get_err(tr)
+}
+
+fn ev_slice(tree: ref Prog, r: mut ref R, t: i64, f: i64, to: i64, v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    let tr = run_p(tree, r, t, v, p, pm, env);
+    let fr = if f >= 0 { run(tree, r, f, v, env) } else { Out { vals: vec![J.Null], paths: vec![J.Null], err: None } };
+    let tor = if to >= 0 { run(tree, r, to, v, env) } else { Out { vals: vec![J.Null], paths: vec![J.Null], err: None } };
+    if has_err(fr) {
+        return get_err(fr);
+    }
+    if has_err(tor) {
+        return get_err(tor);
+    }
+    for i in 0..tr.vals.len() {
+        for a in 0..tor.vals.len() {
+            for b in 0..fr.vals.len() {
+                match slice_val(tr.vals[i], fr.vals[b], tor.vals[a]) {
+                    Ok(x) => {
+                        let np = if pm {
+                            let mut keys: Vec[String] = Vec.new();
+                            keys.push("start".to_string());
+                            keys.push("end".to_string());
+                            let mut vals: Vec[J] = Vec.new();
+                            vals.push(fr.vals[b].clone());
+                            vals.push(tor.vals[a].clone());
+                            path_push(tr.paths[i], obj(keys, vals))
+                        } else {
+                            J.Null
+                        };
+                        emit(out, x, np);
+                    }
+                    Err(m) => return fail(m),
+                }
+            }
+        }
+    }
+    get_err(tr)
+}
+
+fn ev_if(tree: ref Prog, r: mut ref R, conds: ref Vec[i64], thens: ref Vec[i64], els: i64, i: i64, v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    let cr = run(tree, r, conds[i], v, env);
+    for j in 0..cr.vals.len() {
+        let err = if truthy(cr.vals[j]) {
+            ev(tree, r, thens[i], v, p, pm, env, out)
+        } else if i + 1 < conds.len() {
+            ev_if(tree, r, conds, thens, els, i + 1, v, p, pm, env, out)
+        } else if els >= 0 {
+            ev(tree, r, els, v, p, pm, env, out)
+        } else {
+            emit(out, v.clone(), p.clone());
+            None
+        };
+        if err.is_some() {
+            return err;
+        }
+    }
+    get_err(cr)
+}
+
+// Binds a pattern to a value: the new innermost frame, or the error.
+// Keys computed by `(expr)` run on the input `dot`.
+fn bind_pat(tree: ref Prog, r: mut ref R, pat: i64, val: ref J, dot: ref J, env: i64) -> Result[i64, J] {
+    let pt = ref tree.pats[pat];
+    match pt {
+        Pat.PVar(name) => Ok(push_var(r, name, val.clone(), env)),
+        Pat.PArr(subs) => {
+            match val {
+                J.Null => {}
+                J.Arr(_) => {}
+                _ => return Err(J.Str(f"Cannot index {type_name(val)} with number")),
+            }
+            let mut f = env;
+            for i in 0..subs.len() {
+                let item = match index_val(val, num(i as f64)) {
+                    Ok(x) => x,
+                    Err(m) => return Err(J.Str(m)),
+                };
+                f = bind_pat(tree, r, subs[i], item, dot, f)?;
+            }
+            Ok(f)
+        }
+        Pat.PObj(keys, subs) => {
+            let mut f = env;
+            for i in 0..keys.len() {
+                let kr = run(tree, r, keys[i], dot, f);
+                if has_err(kr) {
+                    return Err(kr.err.clone().unwrap_or(J.Null));
+                }
+                if kr.vals.len() == 0 {
+                    continue;
+                }
+                let key = ref kr.vals[0];
+                match key {
+                    J.Str(_) => {}
+                    _ => return Err(J.Str(f"Cannot index {type_name(val)} with {type_name(key)}")),
+                }
+                let item = match index_val(val, key) {
+                    Ok(x) => x,
+                    Err(m) => return Err(J.Str(m)),
+                };
+                f = bind_pat(tree, r, subs[i], item, dot, f)?;
+            }
+            Ok(f)
+        }
+    }
+}
+
+// The values that only make sense as values (never as paths).
+fn ev_value(tree: ref Prog, r: mut ref R, e: i64, v: ref J, env: i64, out: mut ref Out) -> Option[J] {
+    let x = ref tree.exprs[e];
+    match x {
+        Expr.LNull => emit(out, J.Null, J.Null),
+        Expr.LTrue => emit(out, J.True, J.Null),
+        Expr.LFalse => emit(out, J.False, J.Null),
+        Expr.LNum(n, text) => emit(out, J.Num(*n, text.clone()), J.Null),
+        Expr.LStr(s) => emit(out, J.Str(s.clone()), J.Null),
+        Expr.Format(name) => match format_val(name, v) {
+            Ok(s) => emit(out, J.Str(s), J.Null),
+            Err(m) => return fail(m),
+        },
+        Expr.Interp(lits, parts, fmt) => {
+            let n = parts.len();
+            return interp_build(tree, r, lits, parts, fmt, n, lits[n].clone(), v, env, out);
+        }
+        Expr.ArrLit(body) => {
+            if *body < 0 {
+                emit(out, arr(Vec.new()), J.Null);
+                return None;
+            }
+            let br = run(tree, r, *body, v, env);
+            if has_err(br) {
+                return get_err(br);
+            }
+            emit(out, arr(br.vals.clone()), J.Null);
+        }
+        Expr.ObjLit(keys, vals) => {
+            return obj_build(tree, r, keys, vals, 0, Vec.new(), Vec.new(), v, env, out);
+        }
+        Expr.Neg(a) => {
+            let ar = run(tree, r, *a, v, env);
+            for i in 0..ar.vals.len() {
+                let av = ref ar.vals[i];
+                match av {
+                    J.Num(n, _) => emit(out, num(0.0 - *n), J.Null),
+                    _ => return fail(f"{describe(av)} cannot be negated"),
+                }
+            }
+            return get_err(ar);
+        }
+        Expr.Bin(op, a, b) => {
+            // the right operand varies slowest
+            let br = run(tree, r, *b, v, env);
+            if br.vals.len() == 0 {
+                return get_err(br);
+            }
+            let ar = run(tree, r, *a, v, env);
+            for j in 0..br.vals.len() {
+                for i in 0..ar.vals.len() {
+                    match binop(op, ar.vals[i], br.vals[j]) {
+                        Ok(res) => emit(out, res, J.Null),
+                        Err(m) => return fail(m),
+                    }
+                }
+                if has_err(ar) {
+                    return get_err(ar);
+                }
+            }
+            return get_err(br);
+        }
+        Expr.And(a, b) => return ev_logic(tree, r, *a, *b, true, v, env, out),
+        Expr.Or(a, b) => return ev_logic(tree, r, *a, *b, false, v, env, out),
+        Expr.Assign(op, lhs, rhs) => return ev_assign(tree, r, op, *lhs, *rhs, v, env, out),
+        Expr.Reduce(src, pat, init, update) => {
+            let ir = run(tree, r, *init, v, env);
+            for k in 0..ir.vals.len() {
+                let mut acc = ir.vals[k].clone();
+                let sr = run(tree, r, *src, v, env);
+                for i in 0..sr.vals.len() {
+                    let e2 = match bind_pat(tree, r, *pat, sr.vals[i], v, env) {
+                        Ok(f) => f,
+                        Err(m) => return Some(m),
+                    };
+                    let ur = run(tree, r, *update, acc, e2);
+                    if has_err(ur) {
+                        return get_err(ur);
+                    }
+                    acc = if ur.vals.len() > 0 { ur.vals[ur.vals.len() - 1].clone() } else { J.Null };
+                }
+                if has_err(sr) {
+                    return get_err(sr);
+                }
+                emit(out, acc, J.Null);
+            }
+            return get_err(ir);
+        }
+        Expr.Foreach(src, pat, init, update, extract) => {
+            let ir = run(tree, r, *init, v, env);
+            for k in 0..ir.vals.len() {
+                let mut acc = ir.vals[k].clone();
+                let sr = run(tree, r, *src, v, env);
+                for i in 0..sr.vals.len() {
+                    let e2 = match bind_pat(tree, r, *pat, sr.vals[i], v, env) {
+                        Ok(f) => f,
+                        Err(m) => return Some(m),
+                    };
+                    let ur = run(tree, r, *update, acc, e2);
+                    for j in 0..ur.vals.len() {
+                        acc = ur.vals[j].clone();
+                        if *extract >= 0 {
+                            let err = ev(tree, r, *extract, acc, J.Null, false, e2, out);
+                            if err.is_some() {
+                                return err;
+                            }
+                        } else {
+                            emit(out, acc.clone(), J.Null);
+                        }
+                    }
+                    if has_err(ur) {
+                        return get_err(ur);
+                    }
+                }
+                if has_err(sr) {
+                    return get_err(sr);
+                }
+            }
+            return get_err(ir);
+        }
+        Expr.Var(name) => {
+            if name == "$__loc__" {
+                let mut keys: Vec[String] = Vec.new();
+                keys.push("file".to_string());
+                keys.push("line".to_string());
+                let mut vals: Vec[J] = Vec.new();
+                vals.push(jstr("<top-level>"));
+                vals.push(num(1.0));
+                emit(out, obj(keys, vals), J.Null);
+                return None;
+            }
+            match find_var(r, env, name) {
+                Some(val) => emit(out, val, J.Null),
+                None => return fail(f"{name} is not defined"),
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+// String interpolation: the last interpolated expression varies slowest.
+// `tail` is the text from piece k on.
+fn interp_build(tree: ref Prog, r: mut ref R, lits: ref Vec[String], parts: ref Vec[i64], fmt: Str, k: i64, tail: own String, v: ref J, env: i64, out: mut ref Out) -> Option[J] {
+    if k == 0 {
+        emit(out, J.Str(tail), J.Null);
+        return None;
+    }
+    let pr = run(tree, r, parts[k - 1], v, env);
+    for i in 0..pr.vals.len() {
+        let text = if fmt.len() == 0 {
+            to_text(pr.vals[i])
+        } else {
+            match format_val(fmt, pr.vals[i]) {
+                Ok(s) => s,
+                Err(m) => return fail(m),
+            }
+        };
+        let err = interp_build(tree, r, lits, parts, fmt, k - 1, f"{lits[k - 1]}{text}{tail}", v, env, out);
+        if err.is_some() {
+            return err;
+        }
+    }
+    get_err(pr)
+}
+
+// Object construction: the first key varies slowest.
+fn obj_build(tree: ref Prog, r: mut ref R, keys: ref Vec[i64], vals: ref Vec[i64], i: i64, ks: own Vec[String], vs: own Vec[J], v: ref J, env: i64, out: mut ref Out) -> Option[J] {
+    if i == keys.len() {
+        // a key given twice keeps its first place and its last value
+        let mut fk: Vec[String] = Vec.new();
+        let mut fv: Vec[J] = Vec.new();
+        for n in 0..ks.len() {
+            let mut at: i64 = -1;
+            for m in 0..fk.len() {
+                if fk[m] == ks[n] {
+                    at = m;
+                }
+            }
+            if at >= 0 {
+                fv[at] = vs[n].clone();
+            } else {
+                fk.push(ks[n].clone());
+                fv.push(vs[n].clone());
+            }
+        }
+        emit(out, obj(fk, fv), J.Null);
+        return None;
+    }
+    let kr = run(tree, r, keys[i], v, env);
+    for a in 0..kr.vals.len() {
+        let kv = ref kr.vals[a];
+        let key = match kv {
+            J.Str(s) => s.clone(),
+            _ => return fail(f"Object keys must be strings"),
+        };
+        let vr = run(tree, r, vals[i], v, env);
+        for b in 0..vr.vals.len() {
+            let mut ks2 = ks.clone();
+            ks2.push(key.clone());
+            let mut vs2 = vs.clone();
+            vs2.push(vr.vals[b].clone());
+            let err = obj_build(tree, r, keys, vals, i + 1, ks2, vs2, v, env, out);
+            if err.is_some() {
+                return err;
+            }
+        }
+        if has_err(vr) {
+            return get_err(vr);
+        }
+    }
+    get_err(kr)
+}
+
+fn ev_logic(tree: ref Prog, r: mut ref R, a: i64, b: i64, is_and: bool, v: ref J, env: i64, out: mut ref Out) -> Option[J] {
+    let ar = run(tree, r, a, v, env);
+    for i in 0..ar.vals.len() {
+        let t = truthy(ar.vals[i]);
+        if is_and and not t {
+            emit(out, J.False, J.Null);
+            continue;
+        }
+        if not is_and and t {
+            emit(out, J.True, J.Null);
+            continue;
+        }
+        let br = run(tree, r, b, v, env);
+        for j in 0..br.vals.len() {
+            emit(out, jbool(truthy(br.vals[j])), J.Null);
+        }
+        if has_err(br) {
+            return get_err(br);
+        }
+    }
+    get_err(ar)
+}
+
+// `lhs |= f` updates each path with f's first output and deletes the
+// paths f yields nothing for; `lhs = rhs` and `lhs op= rhs` run once per
+// output of rhs (computed on `.`).
+fn ev_assign(tree: ref Prog, r: mut ref R, op: Str, lhs: i64, rhs: i64, v: ref J, env: i64, out: mut ref Out) -> Option[J] {
+    let pr = paths_of(tree, r, lhs, v, env);
+    if has_err(pr) {
+        return get_err(pr);
+    }
+    if op == "|=" {
+        let mut acc = v.clone();
+        let mut gone: Vec[J] = Vec.new();
+        for i in 0..pr.paths.len() {
+            let path = items_of(pr.paths[i]);
+            let old = match get_in(acc, path) {
+                Ok(x) => x,
+                Err(m) => return fail(m),
+            };
+            let ur = run(tree, r, rhs, old, env);
+            if has_err(ur) {
+                return get_err(ur);
+            }
+            if ur.vals.len() == 0 {
+                gone.push(pr.paths[i].clone());
+                continue;
+            }
+            acc = match set_in(acc, path, 0, ur.vals[0]) {
+                Ok(x) => x,
+                Err(m) => return fail(m),
+            };
+        }
+        if gone.len() > 0 {
+            acc = match del_paths(acc, gone) {
+                Ok(x) => x,
+                Err(m) => return fail(m),
+            };
+        }
+        emit(out, acc, J.Null);
+        return None;
+    }
+    let rr = run(tree, r, rhs, v, env);
+    for k in 0..rr.vals.len() {
+        let mut acc = v.clone();
+        for i in 0..pr.paths.len() {
+            let path = items_of(pr.paths[i]);
+            let new = if op == "=" {
+                rr.vals[k].clone()
+            } else {
+                let old = match get_in(acc, path) {
+                    Ok(x) => x,
+                    Err(m) => return fail(m),
+                };
+                if op == "//=" {
+                    if truthy(old) { old } else { rr.vals[k].clone() }
+                } else {
+                    match binop(sub(op, 0, 1), old, rr.vals[k]) {
+                        Ok(x) => x,
+                        Err(m) => return fail(m),
+                    }
+                }
+            };
+            acc = match set_in(acc, path, 0, new) {
+                Ok(x) => x,
+                Err(m) => return fail(m),
+            };
+        }
+        emit(out, acc, J.Null);
+    }
+    get_err(rr)
+}
+
+fn ev_call(tree: ref Prog, r: mut ref R, e: i64, name: ref String, args: ref Vec[i64], v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    let f = find_fn(r, env, name, args.len());
+    if f < 0 {
+        return native(tree, r, name, args, v, p, pm, env, out);
+    }
+    let def = r.frames[f].def;
+    if r.frames[f].kind == F_CLOSURE {
+        let cenv = r.frames[f].cenv;
+        return ev(tree, r, def, v, p, pm, cenv, out);
+    }
+    call_def(tree, r, def, 0, args, env, v, p, pm, f, out)
+}
+
+// Binds a definition's parameters one by one, then runs its body: a
+// filter parameter is a closure over the caller's scope, a `$name`
+// parameter also binds each of its argument's values in turn.
+fn call_def(tree: ref Prog, r: mut ref R, d: i64, j: i64, args: ref Vec[i64], caller: i64, v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    let fd = ref tree.defs[d];
+    if j == fd.params.len() {
+        return ev(tree, r, fd.body, v, p, pm, env, out);
+    }
+    let pname = fd.params[j].clone();
+    if not starts_with(pname, "$") {
+        let e1 = push_frame(r, F_CLOSURE, pname, 0, J.Null, args[j], caller, env);
+        return call_def(tree, r, d, j + 1, args, caller, v, p, pm, e1, out);
+    }
+    let ar = run(tree, r, args[j], v, caller);
+    let bare = sub(pname, 1, pname.len());
+    for i in 0..ar.vals.len() {
+        let e1 = push_frame(r, F_CLOSURE, bare, 0, J.Null, args[j], caller, env);
+        let e2 = push_var(r, pname, ar.vals[i].clone(), e1);
+        let err = call_def(tree, r, d, j + 1, args, caller, v, p, pm, e2, out);
+        if err.is_some() {
+            return err;
+        }
+    }
+    get_err(ar)
+}
+
+// ------------------------------------------------------------ formats
+
+const BASE64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(s: Str) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let n = b.len() - i;
+        let b0 = b[i] as i64;
+        let b1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let b2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let w = b0 * 65536 + b1 * 256 + b2;
+        out.push_str(sub(BASE64_ALPHABET, w / 262144, w / 262144 + 1));
+        out.push_str(sub(BASE64_ALPHABET, w / 4096 % 64, w / 4096 % 64 + 1));
+        if n > 1 {
+            out.push_str(sub(BASE64_ALPHABET, w / 64 % 64, w / 64 % 64 + 1));
+        } else {
+            out.push_str("=");
+        }
+        if n > 2 {
+            out.push_str(sub(BASE64_ALPHABET, w % 64, w % 64 + 1));
+        } else {
+            out.push_str("=");
+        }
+        i += 3;
+    }
+    out
+}
+
+fn base64_decode(s: Str) -> Result[String, String] {
+    let b = s.bytes();
+    let alphabet = BASE64_ALPHABET.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    let mut acc: i64 = 0;
+    let mut bits: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'=' {
+            break;
+        }
+        let mut d: i64 = -1;
+        for j in 0..64 {
+            if alphabet[j] == b[i] {
+                d = j;
+            }
+        }
+        if d < 0 {
+            return Err(f"{describe(J.Str(s.to_string()))} is not valid base64 data");
+        }
+        acc = acc * 64 + d;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            v.push((acc >> bits) as u8);
+            acc = acc & ((1 << bits) - 1);
+        }
+    }
+    Ok(String.from_utf8(v).unwrap_or("?".to_string()))
+}
+
+fn escape_with(s: Str, html: bool) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        let c = b[i];
+        let rep = if html {
+            if c == b'<' {
+                "&lt;"
+            } else if c == b'>' {
+                "&gt;"
+            } else if c == b'&' {
+                "&amp;"
+            } else if c == b'\'' {
+                "&apos;"
+            } else if c == b'"' {
+                "&quot;"
+            } else {
+                ""
+            }
+        } else {
+            if c == b'\\' {
+                "\\\\"
+            } else if c == b'\t' {
+                "\\t"
+            } else if c == b'\n' {
+                "\\n"
+            } else if c == b'\r' {
+                "\\r"
+            } else {
+                ""
+            }
+        };
+        if rep.len() > 0 {
+            out.push_str(byte_str(b, st, i));
+            out.push_str(rep);
+            st = i + 1;
+        }
+    }
+    out.push_str(byte_str(b, st, b.len()));
+    out
+}
+
+fn uri_escape(s: Str) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if is_alpha(c) and c != b'_' or is_digit(c) or c == b'-' or c == b'_' or c == b'.' or c == b'~' {
+            out.push_str(byte_str(b, i, i + 1));
+        } else {
+            let d = c as i64;
+            out.push_str(f"%{hex_digit(d / 16, true)}{hex_digit(d % 16, true)}");
+        }
+    }
+    out
+}
+
+fn sh_quote(s: Str) -> String {
+    let b = s.bytes();
+    let mut out = "'".to_string();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            out.push_str(byte_str(b, st, i));
+            out.push_str("'\\''");
+            st = i + 1;
+        }
+    }
+    out.push_str(byte_str(b, st, b.len()));
+    out.push_str("'");
+    out
+}
+
+// One row element of @csv or @tsv.
+fn row_cell(v: ref J, csv: bool) -> Result[String, String] {
+    match v {
+        J.Null => Ok(String.new()),
+        J.True => Ok("true".to_string()),
+        J.False => Ok("false".to_string()),
+        J.Num(_, _) => Ok(dump(v)),
+        J.Str(s) => {
+            if csv {
+                let b = s.bytes();
+                let mut out = "\"".to_string();
+                let mut st: i64 = 0;
+                for i in 0..b.len() {
+                    if b[i] == b'"' {
+                        out.push_str(byte_str(b, st, i + 1));
+                        out.push_str("\"");
+                        st = i + 1;
+                    }
+                }
+                out.push_str(byte_str(b, st, b.len()));
+                out.push_str("\"");
+                return Ok(out);
+            }
+            Ok(escape_with(s, false))
+        }
+        _ => Err(f"{describe(v)} is not valid in a csv row"),
+    }
+}
+
+fn format_val(name: Str, v: ref J) -> Result[String, String] {
+    if name == "@text" {
+        return Ok(to_text(v));
+    }
+    if name == "@json" {
+        return Ok(dump(v));
+    }
+    if name == "@html" {
+        return Ok(escape_with(to_text(v), true));
+    }
+    if name == "@uri" {
+        return Ok(uri_escape(to_text(v)));
+    }
+    if name == "@base64" {
+        return Ok(base64_encode(to_text(v)));
+    }
+    if name == "@base64d" {
+        return base64_decode(to_text(v));
+    }
+    if name == "@csv" or name == "@tsv" {
+        let csv = name == "@csv";
+        let items = match v {
+            J.Arr(a) => a.items.clone(),
+            _ => {
+                let what = if csv { "csv" } else { "tsv" };
+                return Err(f"{describe(v)} cannot be {what}-formatted, only an array can be");
+            }
+        };
+        let mut out = String.new();
+        for i in 0..items.len() {
+            if i > 0 {
+                out.push_str(if csv { "," } else { "\t" });
+            }
+            out.push_str(row_cell(items[i], csv)?);
+        }
+        return Ok(out);
+    }
+    // @sh
+    match v {
+        J.Arr(a) => {
+            let mut out = String.new();
+            for i in 0..a.items.len() {
+                if i > 0 {
+                    out.push_str(" ");
+                }
+                let item = ref a.items[i];
+                match item {
+                    J.Str(s) => out.push_str(sh_quote(s)),
+                    J.Arr(_) => return Err(f"{describe(item)} can not be escaped for shell"),
+                    J.Obj(_) => return Err(f"{describe(item)} can not be escaped for shell"),
+                    _ => out.push_str(dump(item)),
+                }
+            }
+            Ok(out)
+        }
+        J.Str(s) => Ok(sh_quote(s)),
+        J.Obj(_) => Err(f"{describe(v)} can not be escaped for shell"),
+        _ => Ok(dump(v)),
+    }
+}
+
+const FORMATS: Str = " @text @json @html @uri @csv @tsv @sh @base64 @base64d ";
+
+// ------------------------------------------------------------ dates
+
+// Days since 1970-01-01 of a proleptic Gregorian date.
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 {
+        return f"0{n}";
+    }
+    f"{n}"
+}
+
+fn iso_date(t: f64) -> String {
+    let secs = floor_int(t);
+    let mut days = secs / 86400;
+    let mut rem = secs % 86400;
+    if rem < 0 {
+        rem += 86400;
+        days -= 1;
+    }
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (if m <= 2 { 1 } else { 0 });
+    f"{y}-{pad2(m)}-{pad2(d)}T{pad2(rem / 3600)}:{pad2(rem / 60 % 60)}:{pad2(rem % 60)}Z"
+}
+
+fn digits_at(b: Slice[u8], from: i64, n: i64) -> i64 {
+    let mut v: i64 = 0;
+    for i in from..from + n {
+        if not is_digit(b[i]) {
+            return -1;
+        }
+        v = v * 10 + (b[i] - b'0') as i64;
+    }
+    v
+}
+
+fn parse_iso(s: Str) -> Result[f64, String] {
+    let b = s.bytes();
+    let bad = f"date \"{s}\" does not match format \"%Y-%m-%dT%H:%M:%SZ\"";
+    if b.len() != 20 or b[4] != b'-' or b[7] != b'-' or b[10] != b'T' or b[13] != b':' or b[16] != b':' or b[19] != b'Z' {
+        return Err(bad);
+    }
+    let y = digits_at(b, 0, 4);
+    let mo = digits_at(b, 5, 2);
+    let d = digits_at(b, 8, 2);
+    let h = digits_at(b, 11, 2);
+    let mi = digits_at(b, 14, 2);
+    let se = digits_at(b, 17, 2);
+    if y < 0 or mo < 1 or mo > 12 or d < 1 or d > 31 or h < 0 or h > 23 or mi < 0 or mi > 59 or se < 0 or se > 60 {
+        return Err(bad);
+    }
+    Ok((days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + se) as f64)
+}
+
+// ------------------------------------------------------------ builtins
+
+const NATIVES: Str = " empty/0 not/0 length/0 utf8bytelength/0 keys/0 keys_unsorted/0 type/0 tostring/0 tonumber/0 floor/0 ceil/0 round/0 sqrt/0 fabs/0 log/0 exp/0 pow/2 sort/0 sort_by/1 group_by/1 unique/0 unique_by/1 min/0 max/0 min_by/1 max_by/1 reverse/0 ascii_downcase/0 ascii_upcase/0 tojson/0 fromjson/0 input/0 inputs/0 todateiso8601/0 fromdateiso8601/0 error/0 error/1 infinite/0 nan/0 isnan/0 isinfinite/0 ltrimstr/1 rtrimstr/1 startswith/1 endswith/1 split/1 has/1 contains/1 index/1 rindex/1 indices/1 explode/0 implode/0 path/1 getpath/1 setpath/2 delpaths/1 limit/2 first/1 range/2 input_filename/0 ";
+
+// The functions jq itself defines in jq, as jq 1.7 defines them (some
+// simplified where the result is the same).
+const PRELUDE: Str = "
+def map(f): [.[] | f];
+def select(f): if f then . else empty end;
+def recurse(f): def r: ., (f | r); r;
+def recurse: recurse(.[]?);
+def recurse(f; cond): def r: ., (f | select(cond) | r); r;
+def values: select(. != null);
+def nulls: select(. == null);
+def booleans: select(type == \"boolean\");
+def numbers: select(type == \"number\");
+def strings: select(type == \"string\");
+def arrays: select(type == \"array\");
+def objects: select(type == \"object\");
+def iterables: select(type|. == \"array\" or . == \"object\");
+def scalars: select(type|. != \"array\" and . != \"object\");
+def to_entries: [keys_unsorted[] as $k | {key: $k, value: .[$k]}];
+def from_entries: reduce .[] as $x ({}; . + { ($x | if .key == null then .k // .name // .Name // .K // .Key else .key end | if type == \"string\" then . else tojson end): ($x | if has(\"value\") then .value else .v end) });
+def with_entries(f): to_entries | map(f) | from_entries;
+def add: reduce .[] as $x (null; . + $x);
+def any: reduce .[] as $x (false; . or $x);
+def all: reduce .[] as $x (true; . and $x);
+def any(f): reduce (.[] | f) as $x (false; . or $x);
+def all(f): reduce (.[] | f) as $x (true; . and $x);
+def any(g; cond): isempty(first(g | cond | select(.))) | not;
+def all(g; cond): isempty(first(g | cond | select(. | not)));
+def isempty(g): first((g | false), true);
+def join($x): reduce .[] as $i (null; (if . == null then \"\" else . + $x end) + ($i | if . == null then \"\" elif type == \"string\" then . else tojson end)) // \"\";
+def map_values(f): .[] |= f;
+def del(f): delpaths([path(f)]);
+def paths: path(..) | select(length > 0);
+def paths(node_filter): . as $dot | paths | select(. as $p | $dot | getpath($p) | node_filter);
+def leaf_paths: paths(scalars);
+def walk(f): def w: if type == \"object\" then map_values(w) elif type == \"array\" then map(w) else . end | f; w;
+def first: .[0];
+def last: .[-1];
+def last(f): reduce f as $x (null; $x);
+def nth($n): .[$n];
+def nth($n; f): if $n < 0 then error(\"Out of bounds negative array index\") else last(limit($n + 1; f)) end;
+def until(cond; update): def _until: if cond then . else (update | _until) end; _until;
+def while(cond; update): def _while: if cond then ., (update | _while) else empty end; _while;
+def repeat(f): def _repeat: ., (f | _repeat); _repeat;
+def range($x): range(0; $x);
+def in(xs): . as $x | xs | has($x);
+def inside(xs): . as $x | xs | contains($x);
+def flatten: def _flatten: reduce .[] as $i ([]; if $i | type == \"array\" then . + ($i | _flatten) else . + [$i] end); _flatten;
+def flatten($x): if $x < 0 then error(\"flatten depth must not be negative\") else reduce .[] as $i ([]; if $i | type == \"array\" and $x != 0 then . + ($i | flatten($x - 1)) else . + [$i] end) end;
+def todate: todateiso8601;
+def fromdate: fromdateiso8601;
+def tostream: path(def r: (.[]? | r), .; r) as $p | getpath($p) | reduce path(.[]?) as $q ([$p, .]; [$p + $q]);
+def ascii: [.] | implode;
+def combinations: if length == 0 then [] else .[0][] as $x | (.[1:] | combinations) as $w | [$x] + $w end;
+def transpose: if . == [] then [] else . as $in | (map(length) | max) as $max | [range(0; $max) as $j | [range(0; $in | length) as $i | $in[$i][$j]]] end;
+def env: {};
+def to_array: if type == \"array\" then . else [.] end;
+.";
+
+fn sort_error(v: ref J) -> String {
+    f"{describe(v)} cannot be sorted, as it is not an array"
+}
+
+fn num_required(v: ref J, what: Str) -> String {
+    f"{describe(v)} number required"
+}
+
+fn math1(name: Str, v: ref J) -> Result[J, String] {
+    let x = match v {
+        J.Num(n, _) => *n,
+        _ => return Err(num_required(v, name)),
+    };
+    let y = if name == "floor" {
+        x.floor()
+    } else if name == "ceil" {
+        x.ceil()
+    } else if name == "round" {
+        x.round()
+    } else if name == "sqrt" {
+        x.sqrt()
+    } else if name == "fabs" {
+        x.abs()
+    } else if name == "log" {
+        x.ln()
+    } else {
+        // exp
+        (2.718281828459045).pow(x)
+    };
+    Ok(num(y))
+}
+
+fn keys_of(v: ref J, sorted: bool) -> Result[J, String] {
+    match v {
+        J.Obj(o) => {
+            let mut out: Vec[J] = Vec.new();
+            if sorted {
+                let order = sorted_order(o.keys);
+                for i in 0..order.len() {
+                    out.push(jstr(o.keys[order[i]]));
+                }
+            } else {
+                for i in 0..o.keys.len() {
+                    out.push(jstr(o.keys[i]));
+                }
+            }
+            Ok(arr(out))
+        }
+        J.Arr(a) => {
+            let mut out: Vec[J] = Vec.new();
+            for i in 0..a.items.len() {
+                out.push(num(i as f64));
+            }
+            Ok(arr(out))
+        }
+        _ => Err(f"{describe(v)} has no keys"),
+    }
+}
+
+fn length_of(v: ref J) -> Result[J, String] {
+    match v {
+        J.Null => Ok(num(0.0)),
+        J.Num(x, _) => Ok(num(x.abs())),
+        J.Str(s) => Ok(num(char_count(s) as f64)),
+        J.Arr(a) => Ok(num(a.items.len() as f64)),
+        J.Obj(o) => Ok(num(o.keys.len() as f64)),
+        _ => Err(f"{describe(v)} has no length"),
+    }
+}
+
+fn unique_sorted(items: ref Vec[J]) -> Vec[J] {
+    let order = sort_by_keys(items, items);
+    let mut out: Vec[J] = Vec.new();
+    for i in 0..order.len() {
+        let x = ref items[order[i]];
+        if out.len() == 0 or not jeq(out[out.len() - 1], x) {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+fn contains_val(a: ref J, b: ref J) -> Result[bool, String] {
+    match a {
+        J.Obj(x) => match b {
+            J.Obj(y) => {
+                for i in 0..y.keys.len() {
+                    let at = obj_find(x, y.keys[i]);
+                    if at < 0 {
+                        return Ok(false);
+                    }
+                    if not contains_val(x.vals[at], y.vals[i])? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => Err(type_error2(a, b, "cannot have their containment checked")),
+        },
+        J.Arr(x) => match b {
+            J.Arr(y) => {
+                for i in 0..y.items.len() {
+                    let mut found = false;
+                    for j in 0..x.items.len() {
+                        if type_rank(x.items[j]) == type_rank(y.items[i]) and contains_val(x.items[j], y.items[i])? {
+                            found = true;
+                        }
+                    }
+                    if not found {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => Err(type_error2(a, b, "cannot have their containment checked")),
+        },
+        J.Str(x) => match b {
+            J.Str(y) => Ok(find_from(x, y, 0) >= 0),
+            _ => Err(type_error2(a, b, "cannot have their containment checked")),
+        },
+        _ => {
+            if type_rank(a) == type_rank(b) {
+                return Ok(jeq(a, b));
+            }
+            Err(type_error2(a, b, "cannot have their containment checked"))
+        }
+    }
+}
+
+// The positions of x in v: byte offsets in a string, element positions
+// (of a sub-array, when x is one) in an array.
+fn indices_of(v: ref J, x: ref J) -> Result[J, String] {
+    let mut out: Vec[J] = Vec.new();
+    match v {
+        J.Null => return Ok(J.Null),
+        J.Str(s) => match x {
+            J.Str(n) => {
+                if n.len() == 0 {
+                    return Ok(J.Null);
+                }
+                let mut i = find_from(s, n, 0);
+                while i >= 0 {
+                    out.push(num(i as f64));
+                    i = find_from(s, n, i + 1);
+                }
+            }
+            _ => return Err(type_error2(v, x, "cannot be searched from")),
+        },
+        J.Arr(a) => {
+            let needle = match x {
+                J.Arr(n) => n.items.clone(),
+                _ => vec![x.clone()],
+            };
+            if needle.len() == 0 {
+                return Ok(J.Null);
+            }
+            let mut i: i64 = 0;
+            while i + needle.len() <= a.items.len() {
+                let mut same = true;
+                for j in 0..needle.len() {
+                    if not jeq(a.items[i + j], needle[j]) {
+                        same = false;
+                        break;
+                    }
+                }
+                if same {
+                    out.push(num(i as f64));
+                }
+                i += 1;
+            }
+        }
+        _ => return Err(type_error2(v, x, "cannot be searched from")),
+    }
+    Ok(arr(out))
+}
+
+fn explode(v: ref J) -> Result[J, String] {
+    let s = match v {
+        J.Str(s) => s.clone(),
+        _ => return Err("explode input must be a string".to_string()),
+    };
+    let cs = chars_of(s);
+    let mut out: Vec[J] = Vec.new();
+    for i in 0..cs.len() {
+        let b = cs[i].bytes();
+        let mut code: i64 = 0;
+        if b.len() == 1 {
+            code = b[0] as i64;
+        } else {
+            code = (b[0] as i64) & (if b.len() == 2 { 31 } else if b.len() == 3 { 15 } else { 7 });
+            for k in 1..b.len() {
+                code = code * 64 + ((b[k] as i64) & 63);
+            }
+        }
+        out.push(num(code as f64));
+    }
+    Ok(arr(out))
+}
+
+fn implode(v: ref J) -> Result[J, String] {
+    let items = match v {
+        J.Arr(a) => a.items.clone(),
+        _ => return Err("implode input must be an array".to_string()),
+    };
+    let mut bytes: Vec[u8] = Vec.new();
+    for i in 0..items.len() {
+        // a `ref` binding: in `match items[i]`, `karac check` types `x` as
+        // a reference and the MIR front end as a value (B-2026-10-15-24)
+        let item = ref items[i];
+        match item {
+            J.Num(x, _) => push_utf8(mut bytes, *x as i64),
+            _ => return Err("Unicode codepoint must be numeric".to_string()),
+        }
+    }
+    Ok(J.Str(String.from_utf8(bytes).unwrap_or("?".to_string())))
+}
+
+fn trim_str(v: ref J, x: ref J, left: bool) -> J {
+    match v {
+        J.Str(s) => match x {
+            J.Str(t) => {
+                if left and starts_with(s, t) {
+                    return J.Str(sub(s, t.len(), s.len()));
+                }
+                if not left and ends_with(s, t) {
+                    return J.Str(sub(s, 0, s.len() - t.len()));
+                }
+                v.clone()
+            }
+            _ => v.clone(),
+        },
+        _ => v.clone(),
+    }
+}
+
+// The builtins that take no argument and cannot fail in a way that
+// needs the evaluator.
+fn native0(r: mut ref R, name: Str, v: ref J) -> Result[J, String] {
+    if name == "not" {
+        return Ok(jbool(not truthy(v)));
+    }
+    if name == "length" {
+        return length_of(v);
+    }
+    if name == "utf8bytelength" {
+        return match v {
+            J.Str(s) => Ok(num(s.len() as f64)),
+            _ => Err(f"{describe(v)} only strings have UTF-8 byte length"),
+        };
+    }
+    if name == "keys" or name == "keys_unsorted" {
+        return keys_of(v, name == "keys");
+    }
+    if name == "type" {
+        return Ok(J.Str(type_name(v)));
+    }
+    if name == "tostring" {
+        return Ok(J.Str(to_text(v)));
+    }
+    if name == "tojson" {
+        return Ok(J.Str(dump(v)));
+    }
+    if name == "tonumber" {
+        return match v {
+            J.Num(_, _) => Ok(v.clone()),
+            J.Str(s) => match parse_num(s) {
+                Some(x) => Ok(num(x)),
+                None => Err(f"Cannot parse '{s}' as JSON"),
+            },
+            _ => Err(f"{describe(v)} cannot be parsed as a number"),
+        };
+    }
+    if name == "fromjson" {
+        return match v {
+            J.Str(s) => match parse_json(s) {
+                Ok(x) => Ok(x),
+                Err(m) => Err(f"{m} (while parsing '{s}')"),
+            },
+            _ => Err(f"{describe(v)} cannot be parsed as JSON"),
+        };
+    }
+    if " floor ceil round sqrt fabs log exp ".contains(f" {name} ") {
+        return math1(name, v);
+    }
+    if name == "sort" {
+        return match v {
+            J.Arr(a) => {
+                let order = sort_by_keys(a.items, a.items);
+                let mut out: Vec[J] = Vec.new();
+                for i in 0..order.len() {
+                    out.push(a.items[order[i]].clone());
+                }
+                Ok(arr(out))
+            }
+            _ => Err(sort_error(v)),
+        };
+    }
+    if name == "unique" {
+        return match v {
+            J.Arr(a) => Ok(arr(unique_sorted(a.items))),
+            _ => Err(sort_error(v)),
+        };
+    }
+    if name == "min" or name == "max" {
+        let items = match v {
+            J.Arr(a) => a.items.clone(),
+            _ => return Err(type_error2(v, v, "cannot be iterated over")),
+        };
+        if items.len() == 0 {
+            return Ok(J.Null);
+        }
+        let mut best: i64 = 0;
+        for i in 1..items.len() {
+            let c = cmp(items[i], items[best]);
+            if (name == "min" and c < 0) or (name == "max" and c >= 0) {
+                best = i;
+            }
+        }
+        return Ok(items[best].clone());
+    }
+    if name == "reverse" {
+        return match v {
+            J.Null => Ok(arr(Vec.new())),
+            J.Arr(a) => {
+                let mut out: Vec[J] = Vec.new();
+                let mut i = a.items.len() - 1;
+                while i >= 0 {
+                    out.push(a.items[i].clone());
+                    i -= 1;
+                }
+                Ok(arr(out))
+            }
+            J.Str(s) => {
+                let cs = chars_of(s);
+                let mut out = String.new();
+                let mut i = cs.len() - 1;
+                while i >= 0 {
+                    out.push_str(cs[i]);
+                    i -= 1;
+                }
+                Ok(J.Str(out))
+            }
+            _ => Err(f"Cannot index {type_name(v)} with number"),
+        };
+    }
+    if name == "ascii_downcase" or name == "ascii_upcase" {
+        return match v {
+            J.Str(s) => Ok(J.Str(ascii_case(s, name == "ascii_upcase"))),
+            _ => Err("explode input must be a string".to_string()),
+        };
+    }
+    if name == "explode" {
+        return explode(v);
+    }
+    if name == "implode" {
+        return implode(v);
+    }
+    if name == "todateiso8601" {
+        return match v {
+            J.Num(x, _) => Ok(J.Str(iso_date(*x))),
+            _ => Err("strftime/1 requires parsed datetime inputs".to_string()),
+        };
+    }
+    if name == "fromdateiso8601" {
+        return match v {
+            J.Str(s) => match parse_iso(s) {
+                Ok(x) => Ok(num(x)),
+                Err(m) => Err(m),
+            },
+            _ => Err("strptime/1 requires string inputs and arguments".to_string()),
+        };
+    }
+    if name == "infinite" {
+        return Ok(num(1.0 / 0.0));
+    }
+    if name == "nan" {
+        return Ok(num(0.0 / 0.0));
+    }
+    if name == "isnan" {
+        return Ok(jbool(num_of(v) != num_of(v)));
+    }
+    if name == "isinfinite" {
+        let x = num_of(v);
+        return Ok(jbool(x == x and not is_finite(x)));
+    }
+    if name == "input_filename" {
+        return Ok(J.Str(r.file.clone()));
+    }
+    Err(f"{name}/0 is not defined")
+}
+
+// The builtins with one value argument.
+fn native1(name: Str, v: ref J, a: ref J) -> Result[J, String] {
+    if name == "ltrimstr" or name == "rtrimstr" {
+        return Ok(trim_str(v, a, name == "ltrimstr"));
+    }
+    if name == "startswith" or name == "endswith" {
+        let s = match v {
+            J.Str(x) => x.clone(),
+            _ => return Err(f"{name}() requires string inputs"),
+        };
+        let t = match a {
+            J.Str(x) => x.clone(),
+            _ => return Err(f"{name}() requires string inputs"),
+        };
+        return Ok(jbool(if name == "startswith" { starts_with(s, t) } else { ends_with(s, t) }));
+    }
+    if name == "split" {
+        let s = match v {
+            J.Str(x) => x.clone(),
+            _ => return Err("split input and separator must be strings".to_string()),
+        };
+        return match a {
+            J.Str(t) => Ok(arr(split_str(s, t))),
+            _ => Err("split input and separator must be strings".to_string()),
+        };
+    }
+    if name == "has" {
+        return match v {
+            J.Obj(o) => match a {
+                J.Str(k) => Ok(jbool(obj_find(o, k) >= 0)),
+                _ => Err(f"Cannot check whether object has a {type_name(a)} key"),
+            },
+            J.Arr(x) => match a {
+                J.Num(n, _) => Ok(jbool(*n >= 0.0 and *n < x.items.len() as f64)),
+                _ => Err(f"Cannot check whether array has a {type_name(a)} key"),
+            },
+            _ => Err(f"Cannot check whether {type_name(v)} has a {type_name(a)} key"),
+        };
+    }
+    if name == "contains" {
+        return Ok(jbool(contains_val(v, a)?));
+    }
+    if name == "index" or name == "rindex" or name == "indices" {
+        let all = indices_of(v, a)?;
+        if name == "indices" {
+            return Ok(all);
+        }
+        let items = items_of(all);
+        if items.len() == 0 {
+            return Ok(J.Null);
+        }
+        return Ok(if name == "index" { items[0].clone() } else { items[items.len() - 1].clone() });
+    }
+    if name == "getpath" {
+        let path = match a {
+            J.Arr(p) => p.items.clone(),
+            _ => return Err("Path must be specified as an array".to_string()),
+        };
+        return match get_in(v, path) {
+            Ok(x) => Ok(x),
+            Err(_) => Ok(J.Null),
+        };
+    }
+    if name == "delpaths" {
+        let paths = match a {
+            J.Arr(p) => p.items.clone(),
+            _ => return Err("Paths must be specified as an array".to_string()),
+        };
+        return del_paths(v, paths);
+    }
+    if name == "error" {
+        return Err(String.new());
+    }
+    Err(f"{name}/1 is not defined")
+}
+
+// A function argument's values on each element of the input array, as
+// the sort keys of sort_by and the others (an array of them each).
+fn keys_by(tree: ref Prog, r: mut ref R, f: i64, items: ref Vec[J], env: i64) -> Result[Vec[J], J] {
+    let mut keys: Vec[J] = Vec.new();
+    for i in 0..items.len() {
+        let kr = run(tree, r, f, items[i], env);
+        if has_err(kr) {
+            return Err(kr.err.clone().unwrap_or(J.Null));
+        }
+        keys.push(arr(kr.vals.clone()));
+    }
+    Ok(keys)
+}
+
+const PATH_NATIVES: Str = " empty/0 error/0 error/1 getpath/1 first/1 limit/2 ";
+
+fn native(tree: ref Prog, r: mut ref R, name: ref String, args: ref Vec[i64], v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    let key = f"{name}/{args.len()}";
+    if pm and not PATH_NATIVES.contains(f" {key} ") {
+        let tmp = run_native(tree, r, name, key, args, v, J.Null, false, env);
+        if tmp.vals.len() > 0 {
+            return bad_path(tmp.vals[0]);
+        }
+        return get_err(tmp);
+    }
+    let res = run_native(tree, r, name, key, args, v, p, pm, env);
+    for i in 0..res.vals.len() {
+        emit(out, res.vals[i].clone(), res.paths[i].clone());
+    }
+    get_err(res)
+}
+
+fn run_native(tree: ref Prog, r: mut ref R, name: Str, key: Str, args: ref Vec[i64], v: ref J, p: ref J, pm: bool, env: i64) -> Out {
+    let mut out = new_out();
+    let err = native_into(tree, r, name, key, args, v, p, pm, env, mut out);
+    out.err = err;
+    out
+}
+
+fn native_into(tree: ref Prog, r: mut ref R, name: Str, key: Str, args: ref Vec[i64], v: ref J, p: ref J, pm: bool, env: i64, out: mut ref Out) -> Option[J] {
+    if key == "empty/0" {
+        return None;
+    }
+    if key == "error/0" {
+        return Some(v.clone());
+    }
+    if key == "error/1" {
+        let ar = run(tree, r, args[0], v, env);
+        if ar.vals.len() > 0 {
+            return Some(ar.vals[0].clone());
+        }
+        return get_err(ar);
+    }
+    if key == "input/0" {
+        if r.next >= r.inputs.len() {
+            return fail("No more inputs".to_string());
+        }
+        let k = r.next;
+        r.next += 1;
+        r.line = r.lines[k];
+        emit(out, r.inputs[k].clone(), J.Null);
+        return None;
+    }
+    if key == "inputs/0" {
+        while r.next < r.inputs.len() {
+            let k = r.next;
+            r.next += 1;
+            emit(out, r.inputs[k].clone(), J.Null);
+        }
+        r.line = -1;
+        return None;
+    }
+    if key == "path/1" {
+        let pr = paths_of(tree, r, args[0], v, env);
+        for i in 0..pr.paths.len() {
+            emit(out, pr.paths[i].clone(), J.Null);
+        }
+        return get_err(pr);
+    }
+    if key == "first/1" {
+        let fr = run_p(tree, r, args[0], v, p, pm, env);
+        if fr.vals.len() > 0 {
+            emit(out, fr.vals[0].clone(), fr.paths[0].clone());
+            return None;
+        }
+        return get_err(fr);
+    }
+    if key == "limit/2" {
+        let nr = run(tree, r, args[0], v, env);
+        for k in 0..nr.vals.len() {
+            let n = floor_int(num_of(nr.vals[k]));
+            if n <= 0 {
+                continue;
+            }
+            let fr = run_p(tree, r, args[1], v, p, pm, env);
+            let mut i: i64 = 0;
+            while i < fr.vals.len() and i < n {
+                emit(out, fr.vals[i].clone(), fr.paths[i].clone());
+                i += 1;
+            }
+            if i < n and has_err(fr) {
+                return get_err(fr);
+            }
+        }
+        return get_err(nr);
+    }
+    if key == "getpath/1" {
+        let ar = run(tree, r, args[0], v, env);
+        for i in 0..ar.vals.len() {
+            match native1("getpath", v, ar.vals[i]) {
+                Ok(x) => {
+                    let np = if pm {
+                        let mut items = items_of(p);
+                        let extra = items_of(ar.vals[i]);
+                        for j in 0..extra.len() {
+                            items.push(extra[j].clone());
+                        }
+                        arr(items)
+                    } else {
+                        J.Null
+                    };
+                    emit(out, x, np);
+                }
+                Err(m) => return fail(m),
+            }
+        }
+        return get_err(ar);
+    }
+    if key == "range/2" {
+        let fr = run(tree, r, args[0], v, env);
+        let tr = run(tree, r, args[1], v, env);
+        for a in 0..fr.vals.len() {
+            for b in 0..tr.vals.len() {
+                let mut x = num_of(fr.vals[a]);
+                let upto = num_of(tr.vals[b]);
+                while x < upto {
+                    emit(out, num(x), J.Null);
+                    x += 1.0;
+                }
+            }
+        }
+        if has_err(fr) {
+            return get_err(fr);
+        }
+        return get_err(tr);
+    }
+    if key == "setpath/2" or key == "pow/2" {
+        let ar = run(tree, r, args[0], v, env);
+        let br = run(tree, r, args[1], v, env);
+        for b in 0..br.vals.len() {
+            for a in 0..ar.vals.len() {
+                let res = if key == "pow/2" {
+                    Ok(num(num_of(ar.vals[a]).pow(num_of(br.vals[b]))))
+                } else {
+                    match ar.vals[a] {
+                        J.Arr(pa) => set_in(v, pa.items, 0, br.vals[b]),
+                        _ => Err("Path must be specified as an array".to_string()),
+                    }
+                };
+                match res {
+                    Ok(x) => emit(out, x, J.Null),
+                    Err(m) => return fail(m),
+                }
+            }
+        }
+        if has_err(ar) {
+            return get_err(ar);
+        }
+        return get_err(br);
+    }
+    if " sort_by/1 group_by/1 unique_by/1 min_by/1 max_by/1 ".contains(f" {key} ") {
+        let items = match v {
+            J.Arr(a) => a.items.clone(),
+            _ => {
+                if name == "sort_by" or name == "group_by" or name == "unique_by" {
+                    return fail(sort_error(v));
+                }
+                return fail(f"Cannot index {type_name(v)} with number");
+            }
+        };
+        let keys = match keys_by(tree, r, args[0], items, env) {
+            Ok(k) => k,
+            Err(m) => return Some(m),
+        };
+        if name == "min_by" or name == "max_by" {
+            if items.len() == 0 {
+                emit(out, J.Null, J.Null);
+                return None;
+            }
+            let mut best: i64 = 0;
+            for i in 1..items.len() {
+                let c = cmp(keys[i], keys[best]);
+                if (name == "min_by" and c < 0) or (name == "max_by" and c >= 0) {
+                    best = i;
+                }
+            }
+            emit(out, items[best].clone(), J.Null);
+            return None;
+        }
+        let order = sort_by_keys(items, keys);
+        if name == "sort_by" {
+            let mut res: Vec[J] = Vec.new();
+            for i in 0..order.len() {
+                res.push(items[order[i]].clone());
+            }
+            emit(out, arr(res), J.Null);
+            return None;
+        }
+        let mut groups: Vec[J] = Vec.new();
+        let mut cur: Vec[J] = Vec.new();
+        for i in 0..order.len() {
+            if i > 0 and not jeq(keys[order[i]], keys[order[i - 1]]) {
+                groups.push(if name == "group_by" { arr(cur.clone()) } else { cur[0].clone() });
+                cur = Vec.new();
+            }
+            cur.push(items[order[i]].clone());
+        }
+        if cur.len() > 0 {
+            groups.push(if name == "group_by" { arr(cur.clone()) } else { cur[0].clone() });
+        }
+        emit(out, arr(groups), J.Null);
+        return None;
+    }
+    if args.len() == 0 {
+        return match native0(r, name, v) {
+            Ok(x) => {
+                emit(out, x, J.Null);
+                None
+            }
+            Err(m) => fail(m),
+        };
+    }
+    let ar = run(tree, r, args[0], v, env);
+    for i in 0..ar.vals.len() {
+        match native1(name, v, ar.vals[i]) {
+            Ok(x) => emit(out, x, J.Null),
+            Err(m) => return fail(m),
+        }
+    }
+    get_err(ar)
+}
+
+// ------------------------------------------------------------ compile-time checks
+
+// jq's "is not defined" errors: every call must name a definition in
+// scope, a filter parameter or a builtin, every variable a binding.
+struct Scope { fns: Vec[String], vars: Vec[String] }
+
+fn pat_vars(tree: ref Prog, pat: i64, sc: mut ref Scope, errs: mut ref Vec[CErr]) {
+    let pt = ref tree.pats[pat];
+    match pt {
+        Pat.PVar(name) => sc.vars.push(name.clone()),
+        Pat.PArr(subs) => {
+            for i in 0..subs.len() {
+                pat_vars(tree, subs[i], sc, errs);
+            }
+        }
+        Pat.PObj(keys, subs) => {
+            for i in 0..keys.len() {
+                check(tree, keys[i], sc, errs);
+                pat_vars(tree, subs[i], sc, errs);
+            }
+        }
+    }
+}
+
+fn has_name(list: ref Vec[String], name: Str) -> bool {
+    for i in 0..list.len() {
+        if list[i] == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn check_all(tree: ref Prog, list: ref Vec[i64], sc: mut ref Scope, errs: mut ref Vec[CErr]) {
+    for i in 0..list.len() {
+        check(tree, list[i], sc, errs);
+    }
+}
+
+fn check(tree: ref Prog, e: i64, sc: mut ref Scope, errs: mut ref Vec[CErr]) {
+    if e < 0 {
+        return;
+    }
+    let col = tree.cols[e];
+    let x = ref tree.exprs[e];
+    match x {
+        Expr.Interp(_, parts, fmt) => {
+            if fmt.len() > 0 and not FORMATS.contains(f" {fmt} ") {
+                errs.push(cerr(f"{sub(fmt, 1, fmt.len())} is not a valid format", col));
+            }
+            check_all(tree, parts, sc, errs);
+        }
+        Expr.Format(name) => {
+            if not FORMATS.contains(f" {name} ") {
+                errs.push(cerr(f"{sub(name, 1, name.len())} is not a valid format", col));
+            }
+        }
+        Expr.Index(t, k) => {
+            check(tree, *t, sc, errs);
+            check(tree, *k, sc, errs);
+        }
+        Expr.Slice(t, f, to) => {
+            check(tree, *t, sc, errs);
+            check(tree, *f, sc, errs);
+            check(tree, *to, sc, errs);
+        }
+        Expr.Iter(t) => check(tree, *t, sc, errs),
+        Expr.Try(a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.ArrLit(a) => check(tree, *a, sc, errs),
+        Expr.ObjLit(keys, vals) => {
+            for i in 0..keys.len() {
+                check(tree, keys[i], sc, errs);
+                check(tree, vals[i], sc, errs);
+            }
+        }
+        Expr.Neg(a) => check(tree, *a, sc, errs),
+        Expr.Pipe(a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.Comma(a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.Bin(_, a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.And(a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.Or(a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.Alt(a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.Assign(_, a, b) => {
+            check(tree, *a, sc, errs);
+            check(tree, *b, sc, errs);
+        }
+        Expr.If(conds, thens, els) => {
+            for i in 0..conds.len() {
+                check(tree, conds[i], sc, errs);
+                check(tree, thens[i], sc, errs);
+            }
+            check(tree, *els, sc, errs);
+        }
+        Expr.Reduce(src, pat, init, update) => {
+            check(tree, *src, sc, errs);
+            check(tree, *init, sc, errs);
+            let nv = sc.vars.len();
+            pat_vars(tree, *pat, sc, errs);
+            check(tree, *update, sc, errs);
+            sc.vars.truncate(nv);
+        }
+        Expr.Foreach(src, pat, init, update, extract) => {
+            check(tree, *src, sc, errs);
+            check(tree, *init, sc, errs);
+            let nv = sc.vars.len();
+            pat_vars(tree, *pat, sc, errs);
+            check(tree, *update, sc, errs);
+            check(tree, *extract, sc, errs);
+            sc.vars.truncate(nv);
+        }
+        Expr.Bind(src, pat, body) => {
+            check(tree, *src, sc, errs);
+            let nv = sc.vars.len();
+            pat_vars(tree, *pat, sc, errs);
+            check(tree, *body, sc, errs);
+            sc.vars.truncate(nv);
+        }
+        Expr.Var(name) => {
+            if not has_name(sc.vars, name) and name != "$__loc__" and name != "$ENV" {
+                errs.push(cerr(f"{name} is not defined", col));
+            }
+        }
+        Expr.Call(name, args) => {
+            let key = f"{name}/{args.len()}";
+            if not has_name(sc.fns, key) and not NATIVES.contains(f" {key} ") {
+                errs.push(cerr(f"{key} is not defined", col));
+            }
+            check_all(tree, args, sc, errs);
+        }
+        Expr.Def(d, body) => {
+            let fd = ref tree.defs[*d];
+            let nf = sc.fns.len();
+            let nv = sc.vars.len();
+            sc.fns.push(f"{fd.name}/{fd.params.len()}");
+            let nf2 = sc.fns.len();
+            for i in 0..fd.params.len() {
+                let pname = ref fd.params[i];
+                if starts_with(pname, "$") {
+                    sc.vars.push(pname.clone());
+                    sc.fns.push(f"{sub(pname, 1, pname.len())}/0");
+                } else {
+                    sc.fns.push(f"{pname}/0");
+                }
+            }
+            check(tree, fd.body, sc, errs);
+            sc.fns.truncate(nf2);
+            sc.vars.truncate(nv);
+            check(tree, *body, sc, errs);
+            sc.fns.truncate(nf);
+        }
+        _ => {}
+    }
+}
+// ------------------------------------------------------------ the files
+
+fn pods_json() -> String {
+    """
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "metadata": {"name": "api-7d9f-x2", "namespace": "prod", "labels": {"app": "api", "tier": "web"}},
+      "status": {
+        "phase": "Running",
+        "startTime": "2025-10-09T08:15:00Z",
+        "containerStatuses": [
+          {"name": "api", "image": "registry.local/api:1.8.2", "restartCount": 0, "ready": true},
+          {"name": "envoy", "image": "envoyproxy/envoy:v1.31", "restartCount": 2, "ready": true}
+        ]
+      }
+    },
+    {
+      "metadata": {"name": "api-7d9f-k4", "namespace": "prod", "labels": {"app": "api", "tier": "web"}},
+      "status": {
+        "phase": "Running",
+        "startTime": "2025-10-09T08:16:30Z",
+        "containerStatuses": [
+          {"name": "api", "image": "registry.local/api:1.8.2", "restartCount": 5, "ready": false},
+          {"name": "envoy", "image": "envoyproxy/envoy:v1.31", "restartCount": 0, "ready": true}
+        ]
+      }
+    },
+    {
+      "metadata": {"name": "worker-55c-q8", "namespace": "prod", "labels": {"app": "worker"}},
+      "status": {
+        "phase": "Pending",
+        "containerStatuses": []
+      }
+    },
+    {
+      "metadata": {"name": "redis-0", "namespace": "data", "labels": {"app": "redis", "tier": "cache"}},
+      "status": {
+        "phase": "Running",
+        "startTime": "2025-09-30T23:59:59Z",
+        "containerStatuses": [
+          {"name": "redis", "image": "redis:7.2", "restartCount": 1, "ready": true}
+        ]
+      }
+    },
+    {
+      "metadata": {"name": "migrate-29k", "namespace": "data", "labels": {"app": "migrate"}},
+      "status": {
+        "phase": "Failed",
+        "startTime": "2025-10-10T02:00:00Z",
+        "containerStatuses": [
+          {"name": "migrate", "image": "registry.local/migrate:0.4.0", "restartCount": 4, "ready": false}
+        ]
+      }
+    }
+  ]
+}
+
+"""
+}
+
+fn releases_json() -> String {
+    """
+[
+  {
+    "tag_name": "v2.0.0-rc.1",
+    "prerelease": true,
+    "published_at": "2025-10-08T17:42:10Z",
+    "assets": [
+      {"name": "kara-2.0.0-rc.1-linux-x86_64.tar.gz", "size": 18874368, "download_count": 41}
+    ]
+  },
+  {
+    "tag_name": "v1.10.2",
+    "prerelease": false,
+    "published_at": "2025-09-21T09:00:00Z",
+    "assets": [
+      {"name": "kara-1.10.2-linux-x86_64.tar.gz", "size": 17301504, "download_count": 1290},
+      {"name": "kara-1.10.2-macos-arm64.tar.gz", "size": 16252928, "download_count": 845},
+      {"name": "SHA256SUMS", "size": 214, "download_count": 77}
+    ]
+  },
+  {
+    "tag_name": "v1.9.0",
+    "prerelease": false,
+    "published_at": "2025-06-02T12:30:45Z",
+    "assets": [
+      {"name": "kara-1.9.0-linux-x86_64.tar.gz", "size": 16777216, "download_count": 3021}
+    ]
+  },
+  {
+    "tag_name": "v1.10.0",
+    "prerelease": false,
+    "published_at": "2025-08-14T00:00:00Z",
+    "assets": []
+  }
+]
+
+"""
+}
+
+fn events_ndjson() -> String {
+    """
+{"ts": "2025-10-10T09:00:01Z", "level": "info", "svc": "api", "msg": "GET /orders 200", "latency_ms": 41}
+{"ts": "2025-10-10T09:00:02Z", "level": "info", "svc": "api", "msg": "GET /orders/17 200", "latency_ms": 12.5}
+{"ts": "2025-10-10T09:00:02Z", "level": "warn", "svc": "worker", "msg": "retrying job 881", "latency_ms": 300}
+{"ts": "2025-10-10T09:00:03Z", "level": "error", "svc": "api", "msg": "POST /orders 500: db timeout", "latency_ms": 5000}
+{"ts": "2025-10-10T09:00:05Z", "level": "info", "svc": "worker", "msg": "job 881 done", "latency_ms": "n/a"}
+{"ts": "2025-10-10T09:00:07Z", "level": "error", "svc": "worker", "msg": "job 902 failed: \\"disk full\\"", "latency_ms": 75}
+{"ts": "2025-10-10T09:00:08Z", "level": "info", "svc": "api", "msg": "GET /health 200", "latency_ms": 1}
+
+"""
+}
+
+fn config_json() -> String {
+    """
+{
+  "name": "shop",
+  "version": 3,
+  "feature_search": true,
+  "feature_beta_ui": false,
+  "owner": "platform-team",
+  "limits": {"ratio": 0.10, "burst": 1.50, "max_conns": 512},
+  "environments": {
+    "staging": {"url": "https://staging.shop.test", "replicas": 1},
+    "prod": {"url": "https://shop.test", "replicas": 6}
+  },
+  "services": {
+    "api": {"image": "api:1.8.2", "port": 8080, "replicas": 3, "env": {"LOG_LEVEL": "info", "DB_POOL": "20"}},
+    "worker": {"image": "worker:1.8.2", "replicas": 2, "env": {"QUEUE": "jobs"}},
+    "legacy": {"image": "monolith:0.9", "port": 9000, "replicas": 0, "env": {}}
+  },
+  "tags": ["blue", "Green", "red", "green"]
+}
+
+"""
+}
+
+fn jobs_tsv() -> String {
+    """
+	pods.json	.items | length
+-r	pods.json	.items[] | "\\(.metadata.namespace)/\\(.metadata.name) \\(.status.phase)"
+-c	pods.json	[.items[] | select(.status.phase != "Running") | .metadata.name]
+	pods.json	.items | group_by(.metadata.namespace) | map({ns: .[0].metadata.namespace, pods: length, restarts: (map(.status.containerStatuses[].restartCount) | add)})
+-r	pods.json	.items[] | .metadata.name as $pod | .status.containerStatuses[]? | [$pod, .name, .image, .restartCount, .ready] | @tsv
+-c	pods.json	[.items[].metadata.labels.app] | unique, (map(select(startswith("a") or endswith("e"))) | sort)
+-c	pods.json	.items | map(select(.metadata.labels.tier? == "web")) | sort_by(.metadata.name) | map(.metadata.name)
+	pods.json	.items | max_by(.status.containerStatuses | map(.restartCount) | add // 0) | .metadata.name
+-r	pods.json	.items[] | select(.status.startTime) | "\\(.metadata.name)\\t\\(1760140800 - (.status.startTime | fromdateiso8601)) s\\t\\(.status.startTime | fromdateiso8601 | todate)"
+-c	pods.json	[.items[] | try (.status.containerStatuses[0].restartCount | if . > 3 then error("too many restarts: \\(.)") else . end) catch .]
+--argjson n 3 -c	pods.json	[limit($n; .items[].metadata.name)], [.items[] | .metadata.labels | to_entries | length], (.items | first(.[] | select(.status.phase == "Failed")) | .metadata.name)
+	releases.json	[.[] | select(.prerelease | not)] | first | .tag_name
+-r	releases.json	.[] | "\\(.tag_name): \\([.assets[].download_count] | add // 0) downloads"
+-c	releases.json	[.[] | .assets[] | select(.name | endswith(".tar.gz"))] | map({name, mb: (.size / 1048576 * 10 | floor / 10)})
+-c	releases.json	map(.tag_name | ltrimstr("v") | split("-")[0] | split(".") | map(tonumber)) | sort, (sort | last | map(tostring) | join("."))
+-r	releases.json	.[] | [.tag_name, (.published_at | fromdateiso8601 | . / 86400 | floor), .prerelease] | @csv
+-c	events.ndjson	select(.level == "error") | {ts, svc, msg}
+-s	events.ndjson	group_by(.svc) | map({svc: .[0].svc, n: length, levels: (map(.level) | unique), max: (map(.latency_ms | numbers) | max)})
+-s -r	events.ndjson	map(.level) | reduce .[] as $l ({}; .[$l] += 1) | to_entries[] | "\\(.key)=\\(.value)"
+	events.ndjson	.latency_ms / 1000
+-n	events.ndjson	[inputs | .latency_ms | numbers] | add / length
+-n -c	events.ndjson	foreach inputs as $e ({n: 0, slow: 0}; .n += 1 | .slow += (if ($e.latency_ms | type) == "number" and $e.latency_ms > 100 then 1 else 0 end); [.n, .slow])
+	config.json	.services.api.replicas += 2 | .services.api
+-c	config.json	del(.services.legacy, .tags[0]) | [(.services | keys), .tags]
+-c	config.json	[paths(type == "number")]
+-c	config.json	to_entries | map(select(.key | startswith("feature_"))) | from_entries
+	config.json	. * {"services": {"api": {"image": "api:2.0", "env": {"LOG_LEVEL": "debug"}}}} | .services.api
+-c	config.json	walk(if type == "string" then ascii_upcase else . end) | .services.worker, .limits
+-c	config.json	[.. | objects | select(has("port")) | .port], [.. | numbers] , (.limits | map_values(. * 2))
+-r	config.json	.services | to_entries[] | "\\(.key)\\t\\(.value.port // "-")\\t\\(.value.env | keys | join(","))"
+-c	config.json	getpath(["services","api","env"]), setpath(["limits","ratio"]; 0.25).limits, (delpaths([["services"],["environments"]]) | keys_unsorted)
+--arg env prod	config.json	.environments[$env].url, (.environments | to_entries | map(.value.replicas) | add)
+-c -S	config.json	.limits, {z: 1, a: {y: 2, b: 3}}
+-c	config.json	def fact: if . <= 1 then 1 else . * (. - 1 | fact) end; def twice(f): f | f; [range(1;8) | fact], (5 | twice(. * 3)), ([.tags[] | ascii_downcase] | unique)
+-c	config.json	.tags as [$first, $second] | {$first, $second, rest: .tags[2:], count: (.tags | length), idx: (.tags | index("red"))}
+	config.json	.limits.ratio + .limits.burst, .limits.ratio * 3, .version / 4, -.limits.max_conns, 10 % 3, (.tags | length) * 1e17
+-r	config.json	.owner | @base64, @uri, @html, ("a b <c>" | @sh), ([1, "x,y", null] | @csv), (. | @json), ("\\(.)" | ascii_upcase)
+	config.json	.services.api + 1
+	config.json	.tags[] | .name
+-c	config.json	([.services[] | .port] | sort), ([.services[].replicas] | add), ([.tags[] | length] | min, max), (.version | tostring | length)
+	config.json	.version as $v | $nope
+	config.json	.name | upcase
+	config.json	.services | keys | +
+	config.json	.a ++ 1
+-c	config.json	path(.services.api.env[]), [paths(type == "boolean")], ([path(..)] | length)
+-c	config.json	[1, null, true, "a", [2], {"k": 0}, false, -1.5] | sort, (map(type) | unique)
+
+"""
+}
+
+
+// ------------------------------------------------------------ the command line
+
+// jq's compile-error report: each error, the program with the column
+// marked, and the count.
+fn compile_report(prog: Str, errs: ref Vec[CErr], err: mut ref String) {
+    for i in 0..errs.len() {
+        let c = ref errs[i];
+        err.push_str(f"jq: error: {c.msg} at <top-level>, line 1:\n{prog}{spaces(c.col)}\n");
+    }
+    let n = errs.len();
+    let s = if n == 1 { "" } else { "s" };
+    err.push_str(f"jq: {n} compile error{s}\n");
+}
+
+// The prelude's definitions as frames, outermost first; returns the
+// innermost one, and records each name/arity for the checks.
+fn base_env(tree: ref Prog, r: mut ref R, root: i64, names: mut ref Vec[String]) -> i64 {
+    let mut e = root;
+    let mut env: i64 = -1;
+    loop {
+        let x = ref tree.exprs[e];
+        match x {
+            Expr.Def(d, body) => {
+                let fd = ref tree.defs[*d];
+                env = push_frame(r, F_DEF, fd.name, fd.params.len(), J.Null, *d, -1, env);
+                names.push(f"{fd.name}/{fd.params.len()}");
+                e = *body;
+            }
+            _ => break,
+        }
+    }
+    env
+}
+
+fn count_newlines(s: Str) -> i64 {
+    let b = s.bytes();
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            n += 1;
+        }
+    }
+    n
+}
+
+// Options of one job.
+struct Opts { compact: bool, raw: bool, slurp: bool, null_input: bool, sort: bool, names: Vec[String], vals: Vec[J] }
+
+fn parse_flags(words: ref Vec[String]) -> Result[Opts, String] {
+    let mut o = Opts { compact: false, raw: false, slurp: false, null_input: false, sort: false, names: Vec.new(), vals: Vec.new() };
+    let mut i: i64 = 0;
+    while i < words.len() {
+        let w = words[i].clone();
+        if w == "--arg" or w == "--argjson" {
+            if i + 2 >= words.len() {
+                return Err(f"{w} takes two parameters (e.g. {w} varname value)");
+            }
+            o.names.push(f"${words[i + 1]}");
+            if w == "--arg" {
+                o.vals.push(J.Str(words[i + 2].clone()));
+            } else {
+                match parse_json(words[i + 2]) {
+                    Ok(x) => o.vals.push(x),
+                    Err(_) => return Err(f"Invalid JSON text passed to --argjson"),
+                }
+            }
+            i += 3;
+            continue;
+        }
+        let b = w.bytes();
+        for k in 1..b.len() {
+            let c = b[k];
+            if c == b'c' {
+                o.compact = true;
+            } else if c == b'r' {
+                o.raw = true;
+            } else if c == b's' {
+                o.slurp = true;
+            } else if c == b'n' {
+                o.null_input = true;
+            } else if c == b'S' {
+                o.sort = true;
+            } else {
+                return Err(f"Unknown option: {w}");
+            }
+        }
+        i += 1;
+    }
+    Ok(o)
+}
+
+// Runs one input through the program: its outputs to `out`, its error
+// to `err`; returns the exit status it leaves (5 after an error).
+fn process(tree: ref Prog, r: mut ref R, root: i64, input: ref J, env: i64, o: ref Opts, file: Str, out: mut ref String, err: mut ref String) -> i64 {
+    let res = run(tree, r, root, input, env);
+    for i in 0..res.vals.len() {
+        let v = ref res.vals[i];
+        match v {
+            J.Str(s) => {
+                if o.raw {
+                    out.push_str(s);
+                } else {
+                    dump_to(v, not o.compact, o.sort, 0, out);
+                }
+            }
+            _ => dump_to(v, not o.compact, o.sort, 0, out),
+        }
+        out.push_str("\n");
+    }
+    let e = match res.err {
+        Some(x) => x,
+        None => return 0,
+    };
+    let loc = if r.line < 0 { "<unknown>".to_string() } else { f"{file}:{r.line}" };
+    // a `ref` binding: `karac check` takes the `J.Str(s)` arm as moving
+    // `e` on every path (B-2026-10-15-32)
+    let ev = ref e;
+    match ev {
+        J.Str(s) => err.push_str(f"jq: error (at {loc}): {s}\n"),
+        _ => err.push_str(f"jq: error (at {loc}) (not a string): {dump(e)}\n"),
+    }
+    5
+}
+
+// One jq invocation: what it prints on stdout and on stderr, and its
+// exit status.
+fn run_job(tree: mut ref Prog, prelude: i64, words: ref Vec[String], file: Str, prog: Str, out: mut ref String, err: mut ref String) -> i64 {
+    let o = match parse_flags(words) {
+        Ok(x) => x,
+        Err(m) => {
+            err.push_str(f"jq: {m}\n");
+            return 2;
+        }
+    };
+    let root = match parse_program(tree, prog) {
+        Ok(e) => e,
+        Err(c) => {
+            let errs: Vec[CErr] = vec![c];
+            compile_report(prog, errs, err);
+            return 3;
+        }
+    };
+    let mut r = R { frames: Vec.new(), inputs: Vec.new(), lines: Vec.new(), next: 0, line: -1, file: f"data/{file}" };
+    let mut fns: Vec[String] = Vec.new();
+    let mut env = base_env(tree, mut r, prelude, mut fns);
+    env = push_var(mut r, "$ENV", empty_obj(), env);
+    for i in 0..o.names.len() {
+        env = push_var(mut r, o.names[i], o.vals[i].clone(), env);
+    }
+    let mut sc = Scope { fns: fns, vars: o.names.clone() };
+    let mut errs: Vec[CErr] = Vec.new();
+    check(tree, root, mut sc, mut errs);
+    if errs.len() > 0 {
+        compile_report(prog, errs, err);
+        return 3;
+    }
+    let text = match fs.read_to_string(f"data/{file}") {
+        Ok(t) => t,
+        Err(e) => {
+            err.push_str(f"jq: error: Could not open {file}: {e}\n");
+            return 2;
+        }
+    };
+    let (vals, lines) = match parse_values(text) {
+        Ok(x) => x,
+        Err(m) => {
+            err.push_str(f"jq: error (at {file}:0): {m}\n");
+            return 2;
+        }
+    };
+    if o.slurp {
+        r.inputs.push(arr(vals));
+        r.lines.push(count_newlines(text));
+    } else {
+        r.inputs = vals;
+        r.lines = lines;
+    }
+    if o.null_input {
+        return process(tree, mut r, root, J.Null, env, o, file, out, err);
+    }
+    let mut status: i64 = 0;
+    while r.next < r.inputs.len() {
+        let k = r.next;
+        r.next += 1;
+        r.line = r.lines[k];
+        let input = r.inputs[k].clone();
+        status = process(tree, mut r, root, input, env, o, file, out, err);
+    }
+    status
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    let names: Array[Str, 4] = ["pods.json", "releases.json", "events.ndjson", "config.json"];
+    let texts: Array[String, 4] = [pods_json(), releases_json(), events_ndjson(), config_json()];
+    for i in 0..4 {
+        if let Err(e) = fs.write(f"data/{names[i]}", texts[i].clone()) {
+            return Err(f"cannot write data/{names[i]}: {e}");
+        }
+    }
+    if let Err(e) = fs.write("jobs.tsv".to_string(), jobs_tsv()) {
+        return Err(f"cannot write jobs.tsv: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        println(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            println(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut tree = new_prog();
+    let prelude = match parse_program(mut tree, PRELUDE) {
+        Ok(e) => e,
+        Err(c) => {
+            println(f"prelude: {c.msg} at {c.col}");
+            return;
+        }
+    };
+    let lines = split_str(jobs, "\n");
+    for i in 0..lines.len() {
+        let line = str_of(lines[i]);
+        if line.len() == 0 {
+            continue;
+        }
+        let fields = split_str(line, "\t");
+        if fields.len() != 3 {
+            println(f"jobs.tsv: bad line {line}");
+            return;
+        }
+        let flags = str_of(fields[0]);
+        let file = str_of(fields[1]);
+        let prog = str_of(fields[2]);
+        let mut words: Vec[String] = Vec.new();
+        let parts = split_str(flags, " ");
+        for k in 0..parts.len() {
+            let w = str_of(parts[k]);
+            if w.len() > 0 {
+                words.push(w);
+            }
+        }
+        let shown = if flags.len() > 0 { f"{flags} " } else { String.new() };
+        println(f"$ jq {shown}'{prog}' {file}");
+        let mut out = String.new();
+        let mut err = String.new();
+        let status = run_job(mut tree, prelude, words, file, prog, mut out, mut err);
+        print(out);
+        print(err);
+        if status != 0 {
+            println(f"[exit {status}]");
+        }
+    }
+}

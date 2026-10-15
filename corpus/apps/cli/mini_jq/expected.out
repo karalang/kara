@@ -1,0 +1,220 @@
+$ jq '.items | length' pods.json
+5
+$ jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name) \(.status.phase)"' pods.json
+prod/api-7d9f-x2 Running
+prod/api-7d9f-k4 Running
+prod/worker-55c-q8 Pending
+data/redis-0 Running
+data/migrate-29k Failed
+$ jq -c '[.items[] | select(.status.phase != "Running") | .metadata.name]' pods.json
+["worker-55c-q8","migrate-29k"]
+$ jq '.items | group_by(.metadata.namespace) | map({ns: .[0].metadata.namespace, pods: length, restarts: (map(.status.containerStatuses[].restartCount) | add)})' pods.json
+[
+  {
+    "ns": "data",
+    "pods": 2,
+    "restarts": 5
+  },
+  {
+    "ns": "prod",
+    "pods": 3,
+    "restarts": 7
+  }
+]
+$ jq -r '.items[] | .metadata.name as $pod | .status.containerStatuses[]? | [$pod, .name, .image, .restartCount, .ready] | @tsv' pods.json
+api-7d9f-x2	api	registry.local/api:1.8.2	0	true
+api-7d9f-x2	envoy	envoyproxy/envoy:v1.31	2	true
+api-7d9f-k4	api	registry.local/api:1.8.2	5	false
+api-7d9f-k4	envoy	envoyproxy/envoy:v1.31	0	true
+redis-0	redis	redis:7.2	1	true
+migrate-29k	migrate	registry.local/migrate:0.4.0	4	false
+$ jq -c '[.items[].metadata.labels.app] | unique, (map(select(startswith("a") or endswith("e"))) | sort)' pods.json
+["api","migrate","redis","worker"]
+["api","api","migrate"]
+$ jq -c '.items | map(select(.metadata.labels.tier? == "web")) | sort_by(.metadata.name) | map(.metadata.name)' pods.json
+["api-7d9f-k4","api-7d9f-x2"]
+$ jq '.items | max_by(.status.containerStatuses | map(.restartCount) | add // 0) | .metadata.name' pods.json
+"api-7d9f-k4"
+$ jq -r '.items[] | select(.status.startTime) | "\(.metadata.name)\t\(1760140800 - (.status.startTime | fromdateiso8601)) s\t\(.status.startTime | fromdateiso8601 | todate)"' pods.json
+api-7d9f-x2	143100 s	2025-10-09T08:15:00Z
+api-7d9f-k4	143010 s	2025-10-09T08:16:30Z
+redis-0	864001 s	2025-09-30T23:59:59Z
+migrate-29k	79200 s	2025-10-10T02:00:00Z
+$ jq -c '[.items[] | try (.status.containerStatuses[0].restartCount | if . > 3 then error("too many restarts: \(.)") else . end) catch .]' pods.json
+[0,"too many restarts: 5",null,1,"too many restarts: 4"]
+$ jq --argjson n 3 -c '[limit($n; .items[].metadata.name)], [.items[] | .metadata.labels | to_entries | length], (.items | first(.[] | select(.status.phase == "Failed")) | .metadata.name)' pods.json
+["api-7d9f-x2","api-7d9f-k4","worker-55c-q8"]
+[2,2,1,2,1]
+"migrate-29k"
+$ jq '[.[] | select(.prerelease | not)] | first | .tag_name' releases.json
+"v1.10.2"
+$ jq -r '.[] | "\(.tag_name): \([.assets[].download_count] | add // 0) downloads"' releases.json
+v2.0.0-rc.1: 41 downloads
+v1.10.2: 2212 downloads
+v1.9.0: 3021 downloads
+v1.10.0: 0 downloads
+$ jq -c '[.[] | .assets[] | select(.name | endswith(".tar.gz"))] | map({name, mb: (.size / 1048576 * 10 | floor / 10)})' releases.json
+[{"name":"kara-2.0.0-rc.1-linux-x86_64.tar.gz","mb":18},{"name":"kara-1.10.2-linux-x86_64.tar.gz","mb":16.5},{"name":"kara-1.10.2-macos-arm64.tar.gz","mb":15.5},{"name":"kara-1.9.0-linux-x86_64.tar.gz","mb":16}]
+$ jq -c 'map(.tag_name | ltrimstr("v") | split("-")[0] | split(".") | map(tonumber)) | sort, (sort | last | map(tostring) | join("."))' releases.json
+[[1,9,0],[1,10,0],[1,10,2],[2,0,0]]
+"2.0.0"
+$ jq -r '.[] | [.tag_name, (.published_at | fromdateiso8601 | . / 86400 | floor), .prerelease] | @csv' releases.json
+"v2.0.0-rc.1",20369,true
+"v1.10.2",20352,false
+"v1.9.0",20241,false
+"v1.10.0",20314,false
+$ jq -c 'select(.level == "error") | {ts, svc, msg}' events.ndjson
+{"ts":"2025-10-10T09:00:03Z","svc":"api","msg":"POST /orders 500: db timeout"}
+{"ts":"2025-10-10T09:00:07Z","svc":"worker","msg":"job 902 failed: \"disk full\""}
+$ jq -s 'group_by(.svc) | map({svc: .[0].svc, n: length, levels: (map(.level) | unique), max: (map(.latency_ms | numbers) | max)})' events.ndjson
+[
+  {
+    "svc": "api",
+    "n": 4,
+    "levels": [
+      "error",
+      "info"
+    ],
+    "max": 5000
+  },
+  {
+    "svc": "worker",
+    "n": 3,
+    "levels": [
+      "error",
+      "info",
+      "warn"
+    ],
+    "max": 300
+  }
+]
+$ jq -s -r 'map(.level) | reduce .[] as $l ({}; .[$l] += 1) | to_entries[] | "\(.key)=\(.value)"' events.ndjson
+info=4
+warn=1
+error=2
+$ jq '.latency_ms / 1000' events.ndjson
+0.041
+0.0125
+0.3
+5
+0.075
+0.001
+jq: error (at events.ndjson:5): string ("n/a") and number (1000) cannot be divided
+$ jq -n '[inputs | .latency_ms | numbers] | add / length' events.ndjson
+904.9166666666666
+$ jq -n -c 'foreach inputs as $e ({n: 0, slow: 0}; .n += 1 | .slow += (if ($e.latency_ms | type) == "number" and $e.latency_ms > 100 then 1 else 0 end); [.n, .slow])' events.ndjson
+[1,0]
+[2,0]
+[3,1]
+[4,2]
+[5,2]
+[6,2]
+[7,2]
+$ jq '.services.api.replicas += 2 | .services.api' config.json
+{
+  "image": "api:1.8.2",
+  "port": 8080,
+  "replicas": 5,
+  "env": {
+    "LOG_LEVEL": "info",
+    "DB_POOL": "20"
+  }
+}
+$ jq -c 'del(.services.legacy, .tags[0]) | [(.services | keys), .tags]' config.json
+[["api","worker"],["Green","red","green"]]
+$ jq -c '[paths(type == "number")]' config.json
+[["version"],["limits","ratio"],["limits","burst"],["limits","max_conns"],["environments","staging","replicas"],["environments","prod","replicas"],["services","api","port"],["services","api","replicas"],["services","worker","replicas"],["services","legacy","port"],["services","legacy","replicas"]]
+$ jq -c 'to_entries | map(select(.key | startswith("feature_"))) | from_entries' config.json
+{"feature_search":true,"feature_beta_ui":false}
+$ jq '. * {"services": {"api": {"image": "api:2.0", "env": {"LOG_LEVEL": "debug"}}}} | .services.api' config.json
+{
+  "image": "api:2.0",
+  "port": 8080,
+  "replicas": 3,
+  "env": {
+    "LOG_LEVEL": "debug",
+    "DB_POOL": "20"
+  }
+}
+$ jq -c 'walk(if type == "string" then ascii_upcase else . end) | .services.worker, .limits' config.json
+{"image":"WORKER:1.8.2","replicas":2,"env":{"QUEUE":"JOBS"}}
+{"ratio":0.10,"burst":1.50,"max_conns":512}
+$ jq -c '[.. | objects | select(has("port")) | .port], [.. | numbers] , (.limits | map_values(. * 2))' config.json
+[8080,9000]
+[3,0.10,1.50,512,1,6,8080,3,2,9000,0]
+{"ratio":0.2,"burst":3,"max_conns":1024}
+$ jq -r '.services | to_entries[] | "\(.key)\t\(.value.port // "-")\t\(.value.env | keys | join(","))"' config.json
+api	8080	DB_POOL,LOG_LEVEL
+worker	-	QUEUE
+legacy	9000	
+$ jq -c 'getpath(["services","api","env"]), setpath(["limits","ratio"]; 0.25).limits, (delpaths([["services"],["environments"]]) | keys_unsorted)' config.json
+{"LOG_LEVEL":"info","DB_POOL":"20"}
+{"ratio":0.25,"burst":1.50,"max_conns":512}
+["name","version","feature_search","feature_beta_ui","owner","limits","tags"]
+$ jq --arg env prod '.environments[$env].url, (.environments | to_entries | map(.value.replicas) | add)' config.json
+"https://shop.test"
+7
+$ jq -c -S '.limits, {z: 1, a: {y: 2, b: 3}}' config.json
+{"burst":1.50,"max_conns":512,"ratio":0.10}
+{"a":{"b":3,"y":2},"z":1}
+$ jq -c 'def fact: if . <= 1 then 1 else . * (. - 1 | fact) end; def twice(f): f | f; [range(1;8) | fact], (5 | twice(. * 3)), ([.tags[] | ascii_downcase] | unique)' config.json
+[1,2,6,24,120,720,5040]
+45
+["blue","green","red"]
+$ jq -c '.tags as [$first, $second] | {$first, $second, rest: .tags[2:], count: (.tags | length), idx: (.tags | index("red"))}' config.json
+{"first":"blue","second":"Green","rest":["red","green"],"count":4,"idx":2}
+$ jq '.limits.ratio + .limits.burst, .limits.ratio * 3, .version / 4, -.limits.max_conns, 10 % 3, (.tags | length) * 1e17' config.json
+1.6
+0.30000000000000004
+0.75
+-512
+1
+4e+17
+$ jq -r '.owner | @base64, @uri, @html, ("a b <c>" | @sh), ([1, "x,y", null] | @csv), (. | @json), ("\(.)" | ascii_upcase)' config.json
+cGxhdGZvcm0tdGVhbQ==
+platform-team
+platform-team
+'a b <c>'
+1,"x,y",
+"platform-team"
+PLATFORM-TEAM
+$ jq '.services.api + 1' config.json
+jq: error (at config.json:18): object ({"image":"a...) and number (1) cannot be added
+[exit 5]
+$ jq '.tags[] | .name' config.json
+jq: error (at config.json:18): Cannot index string with string "name"
+[exit 5]
+$ jq -c '([.services[] | .port] | sort), ([.services[].replicas] | add), ([.tags[] | length] | min, max), (.version | tostring | length)' config.json
+[null,8080,9000]
+5
+3
+5
+1
+$ jq '.version as $v | $nope' config.json
+jq: error: $nope is not defined at <top-level>, line 1:
+.version as $v | $nope                 
+jq: 1 compile error
+[exit 3]
+$ jq '.name | upcase' config.json
+jq: error: upcase/0 is not defined at <top-level>, line 1:
+.name | upcase        
+jq: 1 compile error
+[exit 3]
+$ jq '.services | keys | +' config.json
+jq: error: syntax error, unexpected '+' (Unix shell quoting issues?) at <top-level>, line 1:
+.services | keys | +                   
+jq: 1 compile error
+[exit 3]
+$ jq '.a ++ 1' config.json
+jq: error: syntax error, unexpected '+' (Unix shell quoting issues?) at <top-level>, line 1:
+.a ++ 1    
+jq: 1 compile error
+[exit 3]
+$ jq -c 'path(.services.api.env[]), [paths(type == "boolean")], ([path(..)] | length)' config.json
+["services","api","env","LOG_LEVEL"]
+["services","api","env","DB_POOL"]
+[["feature_search"],["feature_beta_ui"]]
+40
+$ jq -c '[1, null, true, "a", [2], {"k": 0}, false, -1.5] | sort, (map(type) | unique)' config.json
+[null,false,true,-1.5,1,"a",[2],{"k":0}]
+["array","boolean","null","number","object","string"]
