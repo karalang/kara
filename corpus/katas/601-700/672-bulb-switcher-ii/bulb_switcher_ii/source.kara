@@ -1,0 +1,66 @@
+// LeetCode #672: Bulb Switcher II -- the cases worked out.
+//
+// The four buttons flip all bulbs, the even ones, the odd ones, and
+// those numbered 3k + 1. Pressing a button twice undoes it, and presses
+// commute, so only which buttons were pressed an odd number of times
+// matters. Every button's pattern repeats every 6 bulbs, and the first
+// 3 already decide the rest, so look at no more than 3. Counting the
+// patterns reachable with exactly m presses then gives a short table.
+// O(1).
+
+fn flip_lights(n: i64, m: i64) -> i64 {
+    if m == 0 {
+        return 1;
+    }
+    if n == 1 {
+        return 2;
+    }
+    if n == 2 {
+        return if m == 1 { 3 } else { 4 };
+    }
+    if m == 1 {
+        4
+    } else if m == 2 {
+        7
+    } else {
+        8
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The three LeetCode examples.
+    println(f"n=1 m=1: {flip_lights(1, 1)}");
+    println(f"n=2 m=1: {flip_lights(2, 1)}");
+    println(f"n=3 m=1: {flip_lights(3, 1)}");
+    // A table for n from 1 to 8 and m from 0 to 6, a row for each n.
+    for n in 1..9 {
+        let mut parts: Vec[String] = Vec.new();
+        for m in 0..7 {
+            parts.push(f"{flip_lights(n, m)}");
+        }
+        println(f"n={n}: {parts.join(" ")}");
+    }
+    // The problem's largest, 1,000 bulbs and 1,000 presses, and its
+    // corners.
+    println(f"n=1000 m=1000: {flip_lights(1000, 1000)}");
+    println(f"n=1000 m=0: {flip_lights(1000, 0)}");
+    println(f"n=1 m=1000: {flip_lights(1, 1000)}");
+    println(f"n=2 m=999: {flip_lights(2, 999)}");
+    // 1,000 random cases, n up to 1,000 and m up to 1,000, into a
+    // checksum.
+    let mut seed: i64 = 672;
+    let mut sum = 0;
+    for _ in 0..1000 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let m = next_random(mut seed) % 1001;
+        sum = (sum * 31 + flip_lights(n, m)) % 1000000007;
+    }
+    println(f"1000 random cases: checksum {sum}");
+}

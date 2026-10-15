@@ -1,0 +1,78 @@
+// LeetCode #672: Bulb Switcher II -- every bulb, no shortcut.
+//
+// The same 16 sets of buttons pressed an odd number of times, but each
+// applied to all n bulbs, with no use of the pattern repeating, and the
+// results compared whole. O(16 * 16 * n).
+
+fn flip_lights(n: i64, m: i64) -> i64 {
+    let mut states: Vec[Vec[bool]] = Vec.new();
+    for set in 0..16 {
+        let k = (set & 1) + (set >> 1 & 1) + (set >> 2 & 1) + (set >> 3 & 1);
+        if k > m or (m - k) % 2 != 0 {
+            continue;
+        }
+        let mut bulbs = vec![true; n];
+        for i in 1..n + 1 {
+            if set & 1 != 0 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+            if set & 2 != 0 and i % 2 == 0 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+            if set & 4 != 0 and i % 2 == 1 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+            if set & 8 != 0 and i % 3 == 1 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+        }
+        let mut fresh = true;
+        for s in states.iter() {
+            if s == bulbs {
+                fresh = false;
+            }
+        }
+        if fresh {
+            states.push(bulbs);
+        }
+    }
+    states.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The three LeetCode examples.
+    println(f"n=1 m=1: {flip_lights(1, 1)}");
+    println(f"n=2 m=1: {flip_lights(2, 1)}");
+    println(f"n=3 m=1: {flip_lights(3, 1)}");
+    // A table for n from 1 to 8 and m from 0 to 6, a row for each n.
+    for n in 1..9 {
+        let mut parts: Vec[String] = Vec.new();
+        for m in 0..7 {
+            parts.push(f"{flip_lights(n, m)}");
+        }
+        println(f"n={n}: {parts.join(" ")}");
+    }
+    // The problem's largest, 1,000 bulbs and 1,000 presses, and its
+    // corners.
+    println(f"n=1000 m=1000: {flip_lights(1000, 1000)}");
+    println(f"n=1000 m=0: {flip_lights(1000, 0)}");
+    println(f"n=1 m=1000: {flip_lights(1, 1000)}");
+    println(f"n=2 m=999: {flip_lights(2, 999)}");
+    // 1,000 random cases, n up to 1,000 and m up to 1,000, into a
+    // checksum.
+    let mut seed: i64 = 672;
+    let mut sum = 0;
+    for _ in 0..1000 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let m = next_random(mut seed) % 1001;
+        sum = (sum * 31 + flip_lights(n, m)) % 1000000007;
+    }
+    println(f"1000 random cases: checksum {sum}");
+}

@@ -1,0 +1,280 @@
+// LeetCode #671: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_second_minimum_value_star(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => -1,
+        Some(r) => smallest_above_star(Some(r), r.val),
+    }
+}
+
+// The smallest value in the subtree larger than `low`, or -1.
+fn smallest_above_star(node: Option[TreeNode], low: i64) -> i64 {
+    match node {
+        None => -1,
+        Some(n) => {
+            if n.val > low {
+                return n.val;
+            }
+            let a = smallest_above_star(n.left, low);
+            let b = smallest_above_star(n.right, low);
+            if a == -1 {
+                b
+            } else if b == -1 {
+                a
+            } else {
+                a.min(b)
+            }
+        }
+    }
+}
+
+// ---- values arm --------------------------------------------------------
+
+fn find_second_minimum_value_values(root: Option[TreeNode]) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        values.push(n.val);
+        if let Some(l) = n.left {
+            stack.push(l);
+        }
+        if let Some(r) = n.right {
+            stack.push(r);
+        }
+    }
+    values.sort();
+    for v in values.iter() {
+        if v > values[0] {
+            return v;
+        }
+    }
+    -1
+}
+
+// ---- levels arm --------------------------------------------------------
+
+fn find_second_minimum_value_levels(root: Option[TreeNode]) -> i64 {
+    let r = match root {
+        None => return -1,
+        Some(r) => r,
+    };
+    let low = r.val;
+    let mut best = -1;
+    let mut queue: Vec[TreeNode] = vec![r];
+    let mut head = 0;
+    while head < queue.len() {
+        let n = queue[head];
+        head += 1;
+        if n.val > low {
+            if best == -1 or n.val < best {
+                best = n.val;
+            }
+        } else {
+            if let Some(l) = n.left {
+                queue.push(l);
+            }
+            if let Some(rt) = n.right {
+                queue.push(rt);
+            }
+        }
+    }
+    best
+}
+
+// ---- children arm ------------------------------------------------------
+
+fn find_second_minimum_value_children(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => -1,
+        Some(r) => second_children(r),
+    }
+}
+
+fn better_children(a: i64, b: i64) -> i64 {
+    if a == -1 {
+        b
+    } else if b == -1 {
+        a
+    } else {
+        a.min(b)
+    }
+}
+
+// The second smallest value in the subtree under `n`, or -1.
+fn second_children(n: TreeNode) -> i64 {
+    match (n.left, n.right) {
+        (Some(l), Some(r)) => {
+            if l.val == r.val {
+                better_children(second_children(l), second_children(r))
+            } else if l.val < r.val {
+                better_children(r.val, second_children(l))
+            } else {
+                better_children(l.val, second_children(r))
+            }
+        }
+        _ => -1,
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode]) -> i64 {
+    if which == 0 {
+        find_second_minimum_value_star(root)
+    } else if which == 1 {
+        find_second_minimum_value_values(root)
+    } else if which == 2 {
+        find_second_minimum_value_levels(root)
+    } else {
+        find_second_minimum_value_children(root)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn special(levels: i64, val: i64, chance: i64, spread: i64, seed: mut ref i64) -> TreeNode {
+    let n = leaf(val);
+    if levels > 1 and next_random(mut seed) % 100 < chance {
+        let other = val + next_random(mut seed) % (spread + 1);
+        let a = special(levels - 1, val, chance, spread, mut seed);
+        let b = special(levels - 1, other, chance, spread, mut seed);
+        if next_random(mut seed) % 2 == 0 {
+            n.left = Some(a);
+            n.right = Some(b);
+        } else {
+            n.left = Some(b);
+            n.right = Some(a);
+        }
+    }
+    n
+}
+
+fn all_values(root: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = root {
+        out.push(n.val);
+        all_values(n.left, out);
+        all_values(n.right, out);
+    }
+}
+
+// The definition, from the wording alone: the smallest value in the
+// tree, then the smallest value larger than it, or -1.
+fn definition(root: Option[TreeNode]) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    all_values(root, mut values);
+    let mut least = values[0];
+    for v in values.iter() {
+        least = least.min(v);
+    }
+    let mut second = -1;
+    for v in values.iter() {
+        if v > least and (second == -1 or v < second) {
+            second = v;
+        }
+    }
+    second
+}
+
+// The tree turned left to right, as new nodes.
+fn mirrored(root: Option[TreeNode]) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+// Every value raised by `by`, as new nodes.
+fn shifted(root: Option[TreeNode], by: i64) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val + by, left: shifted(n.left, by), right: shifted(n.right, by) }),
+    }
+}
+
+fn main() {
+    // 2000 random trees of the problem's shape, 1 to 7 levels, values
+    // from 1 to 5, children larger than their parent by 0 to 3.
+    let cases = 2000;
+    let mut seed: i64 = 671;
+    let mut nodes = 0;
+    let mut nones = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let levels = 1 + next_random(mut seed) % 7;
+        let val = 1 + next_random(mut seed) % 5;
+        let spread = next_random(mut seed) % 4;
+        let t = Some(special(levels, val, 70, spread, mut seed));
+        let mut values: Vec[i64] = Vec.new();
+        all_values(t, mut values);
+        nodes += values.len();
+        let want = definition(t);
+        if want == -1 {
+            nones += 1;
+        }
+        let mut one_value = true;
+        for v in values.iter() {
+            if v != values[0] {
+                one_value = false;
+            }
+        }
+        let flip = mirrored(t);
+        let up = shifted(t, 1000);
+        for which in 0..4 {
+            let got = answer(which, t);
+            let raised = answer(which, up);
+            // P1: the definition's answer. P2: the same for the tree
+            // turned left to right. P3: every value raised by 1000
+            // raises the answer by 1000. P4: -1 exactly when the tree
+            // holds one value. P5: otherwise a value in the tree, larger
+            // than the root's.
+            let mut in_tree = false;
+            for v in values.iter() {
+                if v == got {
+                    in_tree = true;
+                }
+            }
+            let ok = [
+                got == want,
+                answer(which, flip) == got,
+                if got == -1 { raised == -1 } else { raised == got + 1000 },
+                (got == -1) == one_value,
+                got == -1 or (in_tree and got > val),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} trees ({nodes} nodes, {nones} with no second value), 4 arms, {checks} checks, {total} failures");
+}

@@ -1,0 +1,264 @@
+// LeetCode #672: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on small and large cases.
+
+// ---- star arm ----------------------------------------------------------
+
+fn flip_lights_star(n: i64, m: i64) -> i64 {
+    if m == 0 {
+        return 1;
+    }
+    if n == 1 {
+        return 2;
+    }
+    if n == 2 {
+        return if m == 1 { 3 } else { 4 };
+    }
+    if m == 1 {
+        4
+    } else if m == 2 {
+        7
+    } else {
+        8
+    }
+}
+
+// ---- presses arm -------------------------------------------------------
+
+fn mask_of_presses(button: i64, width: i64) -> i64 {
+    let mut mask = 0;
+    for i in 1..width + 1 {
+        let on = if button == 0 {
+            true
+        } else if button == 1 {
+            i % 2 == 0
+        } else if button == 2 {
+            i % 2 == 1
+        } else {
+            i % 3 == 1
+        };
+        if on {
+            mask |= 1 << (i - 1);
+        }
+    }
+    mask
+}
+
+fn flip_lights_presses(n: i64, m: i64) -> i64 {
+    let width = n.min(6);
+    let mut masks: Vec[i64] = Vec.new();
+    for b in 0..4 {
+        masks.push(mask_of_presses(b, width));
+    }
+    let mut now = vec![false; 64];
+    now[(1 << width) - 1] = true;
+    let mut before = now.clone();
+    for step in 0..m {
+        let mut next = vec![false; 64];
+        for s in 0..64 {
+            if now[s] {
+                for mask in masks.iter() {
+                    next[s ^ mask] = true;
+                }
+            }
+        }
+        if step >= 1 and next == before {
+            // From here the sets alternate, so the answer is the set at
+            // the parity of the presses left.
+            if (m - step - 1) % 2 == 1 {
+                next = now.clone();
+            }
+            now = next;
+            break;
+        }
+        before = now;
+        now = next;
+    }
+    let mut count = 0;
+    for s in 0..64 {
+        if now[s] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- subsets arm -------------------------------------------------------
+
+fn flip_lights_subsets(n: i64, m: i64) -> i64 {
+    let width = n.min(6);
+    let mut seen = vec![false; 64];
+    let mut count = 0;
+    for set in 0..16 {
+        let k = (set & 1) + (set >> 1 & 1) + (set >> 2 & 1) + (set >> 3 & 1);
+        if k > m or (m - k) % 2 != 0 {
+            continue;
+        }
+        let mut state = 0;
+        for i in 1..width + 1 {
+            let mut on = true;
+            if set & 1 != 0 {
+                on = not on;
+            }
+            if set & 2 != 0 and i % 2 == 0 {
+                on = not on;
+            }
+            if set & 4 != 0 and i % 2 == 1 {
+                on = not on;
+            }
+            if set & 8 != 0 and i % 3 == 1 {
+                on = not on;
+            }
+            if on {
+                state |= 1 << (i - 1);
+            }
+        }
+        if not seen[state] {
+            seen[state] = true;
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- whole arm ---------------------------------------------------------
+
+fn flip_lights_whole(n: i64, m: i64) -> i64 {
+    let mut states: Vec[Vec[bool]] = Vec.new();
+    for set in 0..16 {
+        let k = (set & 1) + (set >> 1 & 1) + (set >> 2 & 1) + (set >> 3 & 1);
+        if k > m or (m - k) % 2 != 0 {
+            continue;
+        }
+        let mut bulbs = vec![true; n];
+        for i in 1..n + 1 {
+            if set & 1 != 0 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+            if set & 2 != 0 and i % 2 == 0 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+            if set & 4 != 0 and i % 2 == 1 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+            if set & 8 != 0 and i % 3 == 1 {
+                bulbs[i - 1] = not bulbs[i - 1];
+            }
+        }
+        let mut fresh = true;
+        for s in states.iter() {
+            if s == bulbs {
+                fresh = false;
+            }
+        }
+        if fresh {
+            states.push(bulbs);
+        }
+    }
+    states.len()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, n: i64, m: i64) -> i64 {
+    if which == 0 {
+        flip_lights_star(n, m)
+    } else if which == 1 {
+        flip_lights_presses(n, m)
+    } else if which == 2 {
+        flip_lights_subsets(n, m)
+    } else {
+        flip_lights_whole(n, m)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition, by brute force: every sequence of exactly m presses,
+// all 4^m of them, played out on all n bulbs, counting the distinct
+// results. Bulb i is bit i - 1 of the state.
+fn definition(n: i64, m: i64) -> i64 {
+    let mut seen = vec![false; 1 << n];
+    let mut total = 1;
+    for _ in 0..m {
+        total *= 4;
+    }
+    for code in 0..total {
+        let mut state = (1 << n) - 1;
+        let mut c = code;
+        for _ in 0..m {
+            let button = c % 4;
+            c /= 4;
+            for i in 1..n + 1 {
+                let hit = button == 0 or (button == 1 and i % 2 == 0)
+                    or (button == 2 and i % 2 == 1) or (button == 3 and i % 3 == 1);
+                if hit {
+                    state ^= 1 << (i - 1);
+                }
+            }
+        }
+        seen[state] = true;
+    }
+    let mut count = 0;
+    for s in seen.iter() {
+        if s {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn main() {
+    // Every n from 1 to 10 with every m from 0 to 6 against the
+    // definition; then 1,000 random cases, n up to 1,000 and m up to
+    // 1,000, for the other properties.
+    let mut cases: Vec[(i64, i64)] = Vec.new();
+    for n in 1..11 {
+        for m in 0..7 {
+            cases.push((n, m));
+        }
+    }
+    let small = cases.len();
+    let mut seed: i64 = 672;
+    for _ in 0..1000 {
+        cases.push((1 + next_random(mut seed) % 1000, next_random(mut seed) % 1001));
+    }
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for c in 0..cases.len() {
+        let (n, m) = cases[c];
+        let want = if c < small { definition(n, m) } else { -1 };
+        for which in 0..4 {
+            let got = answer(which, n, m);
+            // P1: the definition's count. P2: from 6 bulbs on, the same
+            // as with 6, since the first six decide the rest. P3: at most 8,
+            // and at most 2^n. P4: no fewer with one more bulb. P5: no
+            // fewer with two more presses, the extra pair undoing itself.
+            let ok = [
+                got == want,
+                n < 6 or answer(which, 6, m) == got,
+                got <= 8 and (n > 3 or got <= 1 << n),
+                answer(which, n + 1, m) >= got,
+                answer(which, n, m + 2) >= got,
+            ];
+            let first = if c < small { 0 } else { 1 };
+            for p in first..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases.len()} cases ({small} against the definition), 4 arms, {checks} checks, {total} failures");
+}

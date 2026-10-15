@@ -1,0 +1,75 @@
+// Benchmark for #671: the ★ arm (a pruned walk) on a large workload.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_second_minimum_value(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => -1,
+        Some(r) => smallest_above(Some(r), r.val),
+    }
+}
+
+// The smallest value in the subtree larger than `low`, or -1.
+fn smallest_above(node: Option[TreeNode], low: i64) -> i64 {
+    match node {
+        None => -1,
+        Some(n) => {
+            if n.val > low {
+                return n.val;
+            }
+            let a = smallest_above(n.left, low);
+            let b = smallest_above(n.right, low);
+            if a == -1 {
+                b
+            } else if b == -1 {
+                a
+            } else {
+                a.min(b)
+            }
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn special(levels: i64, val: i64, spread: i64, seed: mut ref i64) -> TreeNode {
+    let n = leaf(val);
+    if levels > 1 {
+        let other = val + next_random(mut seed) % (spread + 1);
+        n.left = Some(special(levels - 1, val, spread, mut seed));
+        n.right = Some(special(levels - 1, other, spread, mut seed));
+    }
+    n
+}
+
+fn main() {
+    // 16 full trees of 16 levels, 65,535 nodes each, made once: in a
+    // quarter, every value is the same, so the walk visits every node;
+    // in the rest a child differs from its parent half the time or
+    // more, so the walk stops early. Each round asks one, picked by the
+    // round, and puts the answer into a checksum.
+    let mut seed: i64 = 671;
+    let mut trees: Vec[TreeNode] = Vec.new();
+    for t in 0..16 {
+        let spread = if t % 4 == 0 { 0 } else { t };
+        trees.push(special(16, 7 + t, spread, mut seed));
+    }
+    let rounds = 2000;
+    let mut sum = 0;
+    for r in 0..rounds {
+        let s = find_second_minimum_value(Some(trees[r % 16]));
+        sum = (sum * 31 + s + 1) % 1000000007;
+    }
+    println(f"16 trees of 65535 nodes, {rounds} rounds: checksum {sum}");
+}

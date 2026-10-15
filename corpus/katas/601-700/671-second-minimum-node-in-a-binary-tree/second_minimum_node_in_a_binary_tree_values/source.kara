@@ -1,0 +1,142 @@
+// LeetCode #671: Second Minimum Node In a Binary Tree -- every value.
+//
+// Ignore the tree's special shape: collect every value, sort them, and
+// take the first one larger than the first. O(nodes log nodes).
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_second_minimum_value(root: Option[TreeNode]) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        values.push(n.val);
+        if let Some(l) = n.left {
+            stack.push(l);
+        }
+        if let Some(r) = n.right {
+            stack.push(r);
+        }
+    }
+    values.sort();
+    for v in values.iter() {
+        if v > values[0] {
+            return v;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A tree of the problem's shape at most `levels` deep: a node has two
+// children with chance `chance` in 100, one holding the node's value and
+// the other that plus 0 to `spread`.
+fn special(levels: i64, val: i64, chance: i64, spread: i64, seed: mut ref i64) -> TreeNode {
+    let n = leaf(val);
+    if levels > 1 and next_random(mut seed) % 100 < chance {
+        let other = val + next_random(mut seed) % (spread + 1);
+        let a = special(levels - 1, val, chance, spread, mut seed);
+        let b = special(levels - 1, other, chance, spread, mut seed);
+        if next_random(mut seed) % 2 == 0 {
+            n.left = Some(a);
+            n.right = Some(b);
+        } else {
+            n.left = Some(b);
+            n.right = Some(a);
+        }
+    }
+    n
+}
+
+fn size(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(n) => 1 + size(n.left) + size(n.right),
+    }
+}
+
+fn show(name: String, root: Option[TreeNode]) {
+    println(f"{name}: {find_second_minimum_value(root)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("[2,2,5,null,null,5,7]", from_level(vec![Some(2), Some(2), Some(5), None, None, Some(5), Some(7)]));
+    show("[2,2,2]", from_level(vec![Some(2), Some(2), Some(2)]));
+    // One node; the second smallest on the right, deep down, or at the
+    // largest value allowed; a tree of one value; and one where the
+    // second smallest, 2, lies deep below copies of the root's value
+    // while larger values sit nearer the top.
+    show("[1]", from_level(vec![Some(1)]));
+    show("[5,8,5]", from_level(vec![Some(5), Some(8), Some(5)]));
+    show("[2,2,2147483647]", from_level(vec![Some(2), Some(2), Some(2147483647)]));
+    show("[1,1,1,1,1,1,1,1,3]", from_level(vec![Some(1), Some(1), Some(1), Some(1), Some(1), Some(1), Some(1), Some(1), Some(3)]));
+    show("[3,3,3,3,3,3,3]", from_level(vec![Some(3), Some(3), Some(3), Some(3), Some(3), Some(3), Some(3)]));
+    show("[1,1,3,1,1,3,4,3,1,1,1,3,8,4,8,3,3,1,6,2,1]", from_level(vec![Some(1), Some(1), Some(3), Some(1), Some(1), Some(3), Some(4), Some(3), Some(1), Some(1), Some(1), Some(3), Some(8), Some(4), Some(8), Some(3), Some(3), Some(1), Some(6), Some(2), Some(1)]));
+    // Trees far larger than the problem allows: full to 16 levels, with
+    // children that differ from their parent rarely or often.
+    let mut seed: i64 = 671;
+    for spread in [0, 1, 3, 1000000].iter() {
+        let t = special(16, 7, 100, spread, mut seed);
+        println(f"full 16 levels, spread {spread}: {size(Some(t))} nodes, second {find_second_minimum_value(Some(t))}");
+    }
+    // 1,000 random trees up to 6 levels, values from 1 up, into a
+    // checksum; how many have no second value.
+    let mut sum = 0;
+    let mut none = 0;
+    for _ in 0..1000 {
+        let t = special(6, 1 + next_random(mut seed) % 5, 60, next_random(mut seed) % 4, mut seed);
+        let s = find_second_minimum_value(Some(t));
+        if s == -1 {
+            none += 1;
+        }
+        sum = (sum * 31 + s + 1) % 1000000007;
+    }
+    println(f"1000 random trees: {none} with no second value, checksum {sum}");
+}
