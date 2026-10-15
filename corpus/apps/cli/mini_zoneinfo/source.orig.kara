@@ -1,0 +1,2313 @@
+// mini_zoneinfo: time zones as Python 3.13's zoneinfo handles them,
+// read from real TZif files:
+// - the TZif loader for versions 1 to 3, with every error it reports;
+// - the inferred DST offsets, local transition times, the zone before
+//   the first transition, and the footer's POSIX TZ string with its M,
+//   J and plain day rules, negative DST and every parsing error;
+// - utcoffset, dst and tzname for a wall time with fold 0 and 1, and
+//   fromutc with its fold detection, before, inside and after the table;
+// - a year-by-year list of each zone's transitions, found by stepping
+//   fromutc, and a meeting planner that converts weekly meetings across
+//   zones and flags times that are skipped or happen twice.
+//
+// The inputs are the files in data/. expected.out is the output of
+// oracle.py, the same program written with zoneinfo and datetime.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+// ------------------------------------------------------------ calendar
+
+// Division and remainder rounding down, as Python's // and %.
+fn fdiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn fmod(a: i64, b: i64) -> i64 {
+    a - fdiv(a, b) * b
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if is_leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+// Days from 1970-01-01 to a date.
+fn days_from_civil(year: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+// The date of a day number: (year, month, day).
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+// Monday is 0, as datetime.weekday has it.
+fn weekday(days: i64) -> i64 {
+    fmod(days + 3, 7)
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn pad4(n: i64) -> String {
+    if n < 10 {
+        f"000{n}"
+    } else if n < 100 {
+        f"00{n}"
+    } else if n < 1000 {
+        f"0{n}"
+    } else {
+        f"{n}"
+    }
+}
+
+// A naive datetime, as seconds from 1970-01-01T00:00:00.
+fn iso(ts: i64) -> String {
+    let (y, m, d) = civil_from_days(fdiv(ts, 86400));
+    let s = fmod(ts, 86400);
+    f"{pad4(y)}-{pad2(m)}-{pad2(d)}T{pad2(s / 3600)}:{pad2(s / 60 % 60)}:{pad2(s % 60)}"
+}
+
+fn hh_mm(ts: i64) -> String {
+    let s = fmod(ts, 86400);
+    f"{pad2(s / 3600)}:{pad2(s / 60 % 60)}"
+}
+
+fn year_of(ts: i64) -> i64 {
+    let (y, _, _) = civil_from_days(fdiv(ts, 86400));
+    y
+}
+
+// "YYYY-MM-DDTHH:MM:SS" as seconds.
+fn parse_iso(s: Str) -> i64 {
+    let n = |a: i64, b: i64| -> i64 { py_int(slice(s, a, b)).unwrap_or(0) };
+    days_from_civil(n(0, 4), n(5, 7), n(8, 10)) * 86400 + n(11, 13) * 3600 + n(14, 16) * 60 + n(17, 19)
+}
+
+// A UTC offset the way isoformat writes it.
+fn off(secs: i64) -> String {
+    let sign = if secs < 0 { "-" } else { "+" };
+    let s = if secs < 0 { -secs } else { secs };
+    let sec = s % 60;
+    let tail = if sec != 0 { f":{pad2(sec)}" } else { String.new() };
+    f"{sign}{pad2(s / 3600)}:{pad2(s / 60 % 60)}{tail}"
+}
+
+// ------------------------------------------------------------ the TZif file
+
+struct Reader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl Reader {
+    fn take(mut ref self, n: i64) -> Result[Vec[u8], String] {
+        if self.at + n > self.b.len() {
+            return Err("Invalid TZif file: truncated".to_string());
+        }
+        let mut out: Vec[u8] = Vec.new();
+        for i in self.at..self.at + n {
+            out.push(self.b[i]);
+        }
+        self.at += n;
+        Ok(out)
+    }
+
+    fn skip(mut ref self, n: i64) {
+        self.at += n;
+    }
+
+    fn int(mut ref self, n: i64) -> Result[i64, String] {
+        let v = self.take(n)?;
+        let mut x: i64 = 0;
+        for i in 0..n {
+            x = (x << 8) | (v[i] as i64);
+        }
+        // sign-extend
+        if n < 8 and v[0] >= 0x80 {
+            x -= 1 << (8 * n);
+        }
+        Ok(x)
+    }
+
+    fn byte(mut ref self) -> Result[i64, String] {
+        let v = self.take(1)?;
+        Ok(v[0] as i64)
+    }
+
+    fn signed_byte(mut ref self) -> Result[i64, String] {
+        let v = self.byte()?;
+        Ok(if v >= 128 { v - 256 } else { v })
+    }
+}
+
+struct Header {
+    version: i64,
+    isutcnt: i64,
+    isstdcnt: i64,
+    leapcnt: i64,
+    timecnt: i64,
+    typecnt: i64,
+    charcnt: i64,
+}
+
+fn read_header(r: mut ref Reader) -> Result[Header, String] {
+    if from_bytes(r.take(4)?) != "TZif" {
+        return Err("Invalid TZif file: magic not found".to_string());
+    }
+    let v = r.byte()?;
+    let version = if v == 0 { 1 } else { v - 48 };
+    r.skip(15);
+    Ok(Header {
+        version: version,
+        isutcnt: r.int(4)?,
+        isstdcnt: r.int(4)?,
+        leapcnt: r.int(4)?,
+        timecnt: r.int(4)?,
+        typecnt: r.int(4)?,
+        charcnt: r.int(4)?,
+    })
+}
+
+// What _common.load_data reads from a file.
+struct Raw {
+    version: i64,
+    trans_idx: Vec[i64],
+    trans_utc: Vec[i64],
+    utcoff: Vec[i64],
+    isdst: Vec[i64],
+    abbr: Vec[String],
+    tz_str: Option[String],
+}
+
+fn load_data(bytes: Vec[u8]) -> Result[Raw, String] {
+    let mut r = Reader { b: bytes, at: 0 };
+    let mut h = read_header(mut r)?;
+    let version = h.version;
+    let mut time_size: i64 = 4;
+    if h.version > 1 {
+        // skip the version 1 data, then read the second header
+        time_size = 8;
+        r.skip(h.timecnt * 5 + h.typecnt * 6 + h.charcnt + h.leapcnt * 8 + h.isstdcnt + h.isutcnt);
+        h = read_header(mut r)?;
+    }
+    let mut trans_utc: Vec[i64] = Vec.new();
+    let mut trans_idx: Vec[i64] = Vec.new();
+    for _ in 0..h.timecnt {
+        trans_utc.push(r.int(time_size)?);
+    }
+    let mut most: i64 = -1;
+    for _ in 0..h.timecnt {
+        let i = r.byte()?;
+        if i > most {
+            most = i;
+        }
+        trans_idx.push(i);
+    }
+    if h.timecnt > 0 and most >= h.typecnt {
+        return Err(f"Invalid transition index found while reading TZif: {most}");
+    }
+    let mut utcoff: Vec[i64] = Vec.new();
+    let mut isdst: Vec[i64] = Vec.new();
+    let mut abbrind: Vec[i64] = Vec.new();
+    for _ in 0..h.typecnt {
+        utcoff.push(r.int(4)?);
+        isdst.push(r.signed_byte()?);
+        abbrind.push(r.signed_byte()?);
+    }
+    let chars = r.take(h.charcnt)?;
+    let mut abbr: Vec[String] = Vec.new();
+    for i in 0..abbrind.len() {
+        let st = abbrind[i];
+        let mut e = st;
+        while e < chars.len() and chars[e] != 0 {
+            e += 1;
+        }
+        abbr.push(byte_str(chars, st, e));
+    }
+    let mut tz_str: Option[String] = None;
+    if version >= 2 {
+        r.skip(h.isutcnt + h.isstdcnt + h.leapcnt * 12);
+        let nl = r.byte()?;
+        if nl != 10 {
+            return Err("Invalid TZif file: no newline before the footer".to_string());
+        }
+        let mut line: Vec[u8] = Vec.new();
+        let mut ended = false;
+        while r.at < r.b.len() {
+            let c = r.byte()?;
+            if c == 10 {
+                ended = true;
+                break;
+            }
+            line.push(c as u8);
+        }
+        if not ended {
+            return Err("Invalid TZif file: unexpected end of file".to_string());
+        }
+        tz_str = Some(from_bytes(line));
+    }
+    Ok(Raw { version: version, trans_idx: trans_idx, trans_utc: trans_utc, utcoff: utcoff, isdst: isdst, abbr: abbr, tz_str: tz_str })
+}
+
+// ------------------------------------------------------------ TZ strings
+
+// A _ttinfo: the offset, the DST part of it, and the name.
+#[derive(Clone)]
+struct Tti {
+    utcoff: i64,
+    dstoff: i64,
+    tzname: String,
+}
+
+fn tti_eq(a: ref Tti, b: ref Tti) -> bool {
+    a.utcoff == b.utcoff and a.dstoff == b.dstoff and a.tzname == b.tzname
+}
+
+// A transition day: Mm.w.d when `cal`, otherwise Jn or n.
+#[derive(Clone)]
+struct DayRule {
+    cal: bool,
+    m: i64,
+    w: i64,
+    d: i64,
+    julian: bool,
+    secs: i64,
+}
+
+// The rule after the last transition: either a fixed _ttinfo or a
+// _TZStr with its two _ttinfos and its start and end.
+#[derive(Clone)]
+struct After {
+    is_rule: bool,
+    std: Tti,
+    dst: Tti,
+    start: DayRule,
+    end: DayRule,
+    dst_diff: i64,
+}
+
+fn fixed_after(t: Tti) -> After {
+    let r = DayRule { cal: false, m: 0, w: 0, d: 0, julian: false, secs: 0 };
+    After { is_rule: false, std: t.clone(), dst: t, start: r.clone(), end: r, dst_diff: 0 }
+}
+
+fn days_before_year(year: i64) -> i64 {
+    let y = year - 1;
+    y * 365 + fdiv(y, 4) - fdiv(y, 100) + fdiv(y, 400) - 719162
+}
+
+const DAYS_BEFORE_MONTH: Array[i64, 13] = [-1, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+
+fn year_to_epoch(r: ref DayRule, year: i64) -> i64 {
+    if not r.cal {
+        let mut d = r.d;
+        if r.julian and d >= 59 and is_leap(year) {
+            d += 1;
+        }
+        return (days_before_year(year) + d) * 86400 + r.secs;
+    }
+    // calendar.monthrange counts Monday as 0; POSIX counts Sunday as 0
+    let first_day = weekday(days_from_civil(year, r.m, 1));
+    let mut month_day = fmod(r.d - (first_day + 1), 7) + 1;
+    month_day += (r.w - 1) * 7;
+    if month_day > days_in_month(year, r.m) {
+        month_day -= 7;
+    }
+    let leap: i64 = if r.m > 2 and is_leap(year) { 1 } else { 0 };
+    let ordinal = days_before_year(year) + DAYS_BEFORE_MONTH[r.m] + leap + month_day;
+    ordinal * 86400 + r.secs
+}
+
+fn all_digits(b: ref Vec[u8], from: i64, to: i64) -> bool {
+    if to <= from {
+        return false;
+    }
+    for i in from..to {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn digits_val(b: ref Vec[u8], from: i64, to: i64) -> i64 {
+    let mut n: i64 = 0;
+    for i in from..to {
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+// [+-]?\d{1,3}(:\d{2}(:\d{2})?)? at b[i..], as many bytes as it takes:
+// (end, sign, h, m, s), or end = -1 when nothing matches.
+fn scan_hms(b: ref Vec[u8], i0: i64) -> (i64, i64, i64, i64, i64) {
+    let mut i = i0;
+    let mut sign: i64 = 0;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        sign = if b[i] == b'-' { -1 } else { 1 };
+        i += 1;
+    }
+    let st = i;
+    while i < b.len() and is_digit(b[i]) and i - st < 3 {
+        i += 1;
+    }
+    if i == st {
+        return (-1, 0, 0, 0, 0);
+    }
+    let h = digits_val(b, st, i);
+    let mut m: i64 = 0;
+    let mut s: i64 = 0;
+    if i + 3 <= b.len() and b[i] == b':' and all_digits(b, i + 1, i + 3) {
+        m = digits_val(b, i + 1, i + 3);
+        i += 3;
+        if i + 3 <= b.len() and b[i] == b':' and all_digits(b, i + 1, i + 3) {
+            s = digits_val(b, i + 1, i + 3);
+            i += 3;
+        }
+    }
+    (i, sign, h, m, s)
+}
+
+fn min_i(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+// [a-zA-Z]+ or <[a-zA-Z0-9+-]+> at b[i..]: the end, or -1.
+fn scan_abbr(b: ref Vec[u8], i0: i64) -> i64 {
+    let mut i = i0;
+    if i < b.len() and b[i] == b'<' {
+        i += 1;
+        let st = i;
+        while i < b.len() and (is_alnum(b[i]) or b[i] == b'+' or b[i] == b'-') {
+            i += 1;
+        }
+        if i == st or i >= b.len() or b[i] != b'>' {
+            return -1;
+        }
+        return i + 1;
+    }
+    while i < b.len() and is_alpha(b[i]) {
+        i += 1;
+    }
+    if i == i0 { -1 } else { i }
+}
+
+fn strip_angles(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and (b[i] == b'<' or b[i] == b'>') {
+        i += 1;
+    }
+    while j > i and (b[j - 1] == b'<' or b[j - 1] == b'>') {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+// _parse_tz_delta: hours west become seconds east.
+fn tz_delta(sign: i64, h: i64, m: i64, s: i64) -> Result[i64, String] {
+    if h > 24 {
+        return Err("hours".to_string());
+    }
+    let total = h * 3600 + m * 60 + s;
+    Ok(if sign != -1 { -total } else { total })
+}
+
+fn parse_time(s: Str) -> Result[i64, String] {
+    let b = to_bytes(s);
+    let (e, sign, h, m, sec) = scan_hms(b, 0);
+    if e != b.len() {
+        return Err(f"Invalid time: {s}");
+    }
+    if h > 167 {
+        return Err(f"Hour must be in [0, 167]: {s}");
+    }
+    let t = h * 3600 + m * 60 + sec;
+    Ok(if sign == -1 { -t } else { t })
+}
+
+fn parse_day_rule(s: Str) -> Result[DayRule, String] {
+    let (date, has_time, time) = partition(s, b'/');
+    let b = to_bytes(date);
+    let mut r = DayRule { cal: false, m: 0, w: 0, d: 0, julian: false, secs: 7200 };
+    if first_byte(date) == b'M' {
+        // M(\d{1,2})\.(\d)\.(\d)
+        let mut i: i64 = 1;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+        }
+        if i == 1 or i > 3 or i + 4 != b.len() or b[i] != b'.' or not is_digit(b[i + 1]) or b[i + 2] != b'.' or not is_digit(b[i + 3]) {
+            return Err(f"Invalid dst start/end date: {s}");
+        }
+        r.cal = true;
+        r.m = digits_val(b, 1, i);
+        r.w = (b[i + 1] - b'0') as i64;
+        r.d = (b[i + 3] - b'0') as i64;
+        if r.m < 1 or r.m > 12 {
+            return Err("m must be in [1, 12]".to_string());
+        }
+        if r.w < 1 or r.w > 5 {
+            return Err("w must be in [1, 5]".to_string());
+        }
+        if r.d < 0 or r.d > 6 {
+            return Err("d must be in [0, 6]".to_string());
+        }
+    } else {
+        let mut st: i64 = 0;
+        if first_byte(date) == b'J' {
+            r.julian = true;
+            st = 1;
+        }
+        if b.len() - st > 3 or not all_digits(b, st, b.len()) {
+            return Err(f"Invalid dst start/end date: {s}");
+        }
+        r.d = digits_val(b, st, b.len());
+        let min_day: i64 = if r.julian { 1 } else { 0 };
+        if r.d < min_day or r.d > 365 {
+            return Err(f"d must be in [{min_day}, 365], not: {r.d}");
+        }
+    }
+    if has_time {
+        r.secs = parse_time(time)?;
+    }
+    Ok(r)
+}
+
+// _parse_tz_str
+fn parse_tz_str(s: Str) -> Result[After, String] {
+    let (offset_str, has_rules, rules) = partition(s, b',');
+    let b = to_bytes(offset_str);
+    let bad = f"{s} is not a valid TZ string";
+    let e1 = scan_abbr(b, 0);
+    if e1 < 0 {
+        return Err(bad);
+    }
+    let std_abbr = strip_angles(byte_str(b, 0, e1));
+    let mut std_off: i64 = 0;
+    let mut has_std_off = false;
+    let mut dst_abbr = String.new();
+    let mut has_dst = false;
+    let mut dst_off: i64 = 0;
+    let mut has_dst_off = false;
+    let mut i = e1;
+    if i < b.len() {
+        let (e2, sg, h, m, sec) = scan_hms(b, i);
+        if e2 < 0 {
+            return Err(bad);
+        }
+        has_std_off = true;
+        std_off = match tz_delta(sg, h, m, sec) {
+            Ok(v) => v,
+            Err(_) => return Err(f"Invalid STD offset in {s}"),
+        };
+        i = e2;
+        if i < b.len() {
+            let e3 = scan_abbr(b, i);
+            if e3 < 0 {
+                return Err(bad);
+            }
+            dst_abbr = strip_angles(byte_str(b, i, e3));
+            has_dst = true;
+            i = e3;
+            if i < b.len() {
+                let (e4, sg2, h2, m2, sec2) = scan_hms(b, i);
+                if e4 != b.len() {
+                    return Err(bad);
+                }
+                has_dst_off = true;
+                dst_off = match tz_delta(sg2, h2, m2, sec2) {
+                    Ok(v) => v,
+                    Err(_) => return Err(f"Invalid DST offset in {s}"),
+                };
+            }
+        }
+    }
+    if not has_std_off {
+        return Err(f"Invalid STD offset in {s}");
+    }
+    if has_dst {
+        if not has_dst_off {
+            dst_off = std_off + 3600;
+        }
+        if not has_rules {
+            return Err(f"Missing transition rules: {s}");
+        }
+        let (a, two, c) = partition(rules, b',');
+        if not two {
+            return Err(f"Invalid TZ string: {s}");
+        }
+        let start = match parse_day_rule(a) {
+            Ok(r) => r,
+            Err(_) => return Err(f"Invalid TZ string: {s}"),
+        };
+        let end = match parse_day_rule(c) {
+            Ok(r) => r,
+            Err(_) => return Err(f"Invalid TZ string: {s}"),
+        };
+        let diff = dst_off - std_off;
+        return Ok(After {
+            is_rule: true,
+            std: Tti { utcoff: std_off, dstoff: 0, tzname: std_abbr },
+            dst: Tti { utcoff: dst_off, dstoff: diff, tzname: dst_abbr },
+            start: start,
+            end: end,
+            dst_diff: diff,
+        });
+    }
+    if has_rules {
+        return Err(f"Transition rule present without DST: {s}");
+    }
+    Ok(fixed_after(Tti { utcoff: std_off, dstoff: 0, tzname: std_abbr }))
+}
+
+fn transitions(a: ref After, year: i64) -> (i64, i64) {
+    (year_to_epoch(a.start, year), year_to_epoch(a.end, year))
+}
+
+fn rule_info(a: ref After, ts: i64, year: i64, fold: i64) -> Tti {
+    let (s0, e0) = transitions(a, year);
+    let mut start = s0;
+    let mut end = e0;
+    if (fold == 1) == (a.dst_diff >= 0) {
+        end -= a.dst_diff;
+    } else {
+        start += a.dst_diff;
+    }
+    let isdst = if start < end { start <= ts and ts < end } else { not (end <= ts and ts < start) };
+    if isdst { a.dst.clone() } else { a.std.clone() }
+}
+
+fn rule_info_fromutc(a: ref After, ts: i64, year: i64) -> (Tti, bool) {
+    let (s0, e0) = transitions(a, year);
+    let start = s0 - a.std.utcoff;
+    let end = e0 - a.dst.utcoff;
+    let isdst = if start < end { start <= ts and ts < end } else { not (end <= ts and ts < start) };
+    let (lo, hi) = if a.dst_diff > 0 { (end, end + a.dst_diff) } else { (start, start - a.dst_diff) };
+    let fold = lo <= ts and ts < hi;
+    (if isdst { a.dst.clone() } else { a.std.clone() }, fold)
+}
+
+// ------------------------------------------------------------ the zone
+
+#[derive(Clone)]
+struct Zone {
+    key: String,
+    trans_utc: Vec[i64],
+    // the transitions in local time, for fold 0 and for fold 1
+    local0: Vec[i64],
+    local1: Vec[i64],
+    // the _ttinfo each transition starts
+    ttinfos: Vec[Tti],
+    before: Option[Tti],
+    after: After,
+}
+
+// ZoneInfo._utcoff_to_dstoff
+fn utcoff_to_dstoff(trans_idx: ref Vec[i64], utcoffsets: ref Vec[i64], isdsts: ref Vec[i64]) -> Vec[i64] {
+    let typecnt = isdsts.len();
+    let mut dstoffs: Vec[i64] = Vec.new();
+    let mut dst_cnt: i64 = 0;
+    for i in 0..typecnt {
+        dstoffs.push(0);
+        if isdsts[i] != 0 {
+            dst_cnt += 1;
+        }
+    }
+    let mut dst_found: i64 = 0;
+    let mut broke = false;
+    for i in 1..trans_idx.len() {
+        if dst_cnt == dst_found {
+            broke = true;
+            break;
+        }
+        let idx = trans_idx[i];
+        if isdsts[idx] == 0 {
+            continue;
+        }
+        if dstoffs[idx] != 0 {
+            continue;
+        }
+        let mut dstoff: i64 = 0;
+        let utcoff = utcoffsets[idx];
+        let mut comp_idx = trans_idx[i - 1];
+        if isdsts[comp_idx] == 0 {
+            dstoff = utcoff - utcoffsets[comp_idx];
+        }
+        if dstoff == 0 and idx < typecnt - 1 and i + 1 < trans_idx.len() {
+            comp_idx = trans_idx[i + 1];
+            if isdsts[comp_idx] != 0 {
+                continue;
+            }
+            dstoff = utcoff - utcoffsets[comp_idx];
+        }
+        if dstoff != 0 {
+            dst_found += 1;
+            dstoffs[idx] = dstoff;
+        }
+    }
+    if not broke {
+        // a DST type with no offset found gets one hour
+        for idx in 0..typecnt {
+            if dstoffs[idx] == 0 and isdsts[idx] != 0 {
+                dstoffs[idx] = 3600;
+            }
+        }
+    }
+    dstoffs
+}
+
+// ZoneInfo._ts_to_local: the larger offset for fold 0, the smaller for 1.
+fn ts_to_local(trans_idx: ref Vec[i64], trans_utc: ref Vec[i64], utcoffsets: ref Vec[i64], fold: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if trans_utc.len() == 0 {
+        return out;
+    }
+    for i in 0..trans_idx.len() {
+        let mut a: i64 = 0;
+        let mut b: i64 = 0;
+        if i == 0 {
+            if utcoffsets.len() > 1 {
+                a = utcoffsets[0];
+                b = utcoffsets[trans_idx[0]];
+            } else {
+                a = utcoffsets[0];
+                b = utcoffsets[0];
+            }
+        } else {
+            a = utcoffsets[trans_idx[i - 1]];
+            b = utcoffsets[trans_idx[i]];
+        }
+        let hi = if a > b { a } else { b };
+        let lo = if a > b { b } else { a };
+        out.push(trans_utc[i] + if fold == 0 { hi } else { lo });
+    }
+    out
+}
+
+fn load_zone(key: Str, raw: ref Raw) -> Result[Zone, String] {
+    let dstoff = utcoff_to_dstoff(raw.trans_idx, raw.utcoff, raw.isdst);
+    let mut list: Vec[Tti] = Vec.new();
+    for i in 0..raw.utcoff.len() {
+        list.push(Tti { utcoff: raw.utcoff[i], dstoff: dstoff[i], tzname: raw.abbr[i].clone() });
+    }
+    let mut ttinfos: Vec[Tti] = Vec.new();
+    for i in 0..raw.trans_idx.len() {
+        ttinfos.push(list[raw.trans_idx[i]].clone());
+    }
+    // the first standard-time type
+    let mut before: Option[Tti] = None;
+    for i in 0..raw.isdst.len() {
+        if raw.isdst[i] == 0 {
+            before = Some(list[i].clone());
+            break;
+        }
+    }
+    if before.is_none() and ttinfos.len() > 0 {
+        before = Some(ttinfos[0].clone());
+    }
+    let footer = raw.tz_str.clone().unwrap_or(String.new());
+    let after = if footer.len() > 0 {
+        parse_tz_str(footer)?
+    } else {
+        if ttinfos.len() == 0 and list.len() == 0 {
+            return Err("No time zone information found.".to_string());
+        }
+        if ttinfos.len() > 0 {
+            fixed_after(ttinfos[ttinfos.len() - 1].clone())
+        } else {
+            fixed_after(list[list.len() - 1].clone())
+        }
+    };
+    Ok(Zone {
+        key: key.to_string(),
+        trans_utc: raw.trans_utc.clone(),
+        local0: ts_to_local(raw.trans_idx, raw.trans_utc, raw.utcoff, 0),
+        local1: ts_to_local(raw.trans_idx, raw.trans_utc, raw.utcoff, 1),
+        ttinfos: ttinfos,
+        before: before,
+        after: after,
+    })
+}
+
+// bisect.bisect_right
+fn bisect_right(v: ref Vec[i64], x: i64) -> i64 {
+    let mut lo: i64 = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if x < v[mid] {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn before_tti(z: ref Zone) -> Tti {
+    match z.before.clone() {
+        Some(t) => t,
+        None => Tti { utcoff: 0, dstoff: 0, tzname: String.new() },
+    }
+}
+
+// ZoneInfo._find_trans: the _ttinfo in force at a local time.
+fn find_trans(z: ref Zone, ts: i64, fold: i64) -> Tti {
+    let lt = if fold == 0 { z.local0.clone() } else { z.local1.clone() };
+    let n = lt.len();
+    if n > 0 and ts < lt[0] {
+        return before_tti(z);
+    }
+    if n == 0 or ts > lt[n - 1] {
+        if z.after.is_rule {
+            return rule_info(z.after, ts, year_of(ts), fold);
+        }
+        return z.after.std.clone();
+    }
+    let idx = bisect_right(lt, ts) - 1;
+    z.ttinfos[idx].clone()
+}
+
+// ZoneInfo.fromutc: the _ttinfo in force at a UTC time, and the fold of
+// the local time it gives.
+fn from_utc(z: ref Zone, ts: i64) -> (Tti, bool) {
+    let n = z.trans_utc.len();
+    if n >= 1 and ts < z.trans_utc[0] {
+        return (before_tti(z), false);
+    }
+    if (n == 0 or ts > z.trans_utc[n - 1]) and z.after.is_rule {
+        return rule_info_fromutc(z.after, ts, year_of(ts));
+    }
+    if n == 0 {
+        return (z.after.std.clone(), false);
+    }
+    let idx = bisect_right(z.trans_utc, ts);
+    let mut prev = before_tti(z);
+    let mut tti = z.ttinfos[0].clone();
+    if n > 1 and ts >= z.trans_utc[1] {
+        prev = z.ttinfos[idx - 2].clone();
+        tti = z.ttinfos[idx - 1].clone();
+    } else if ts > z.trans_utc[n - 1] {
+        prev = z.ttinfos[n - 1].clone();
+        tti = z.after.std.clone();
+    }
+    let shift = prev.utcoff - tti.utcoff;
+    let fold = shift > ts - z.trans_utc[idx - 1];
+    (tti, fold)
+}
+
+// ------------------------------------------------------------ the files
+
+// data/convert.txt
+fn file_0() -> String {
+    """
+# utc ZONE TIME: the local time at a UTC instant
+# local ZONE TIME FOLD: the offset and UTC instant of a wall time
+utc America/New_York 2024-03-10T06:59:59
+utc America/New_York 2024-03-10T07:00:00
+utc America/New_York 2024-11-03T05:30:00
+utc America/New_York 2024-11-03T06:30:00
+utc America/New_York 1883-11-18T16:59:59
+utc America/New_York 2100-07-04T16:00:00
+utc America/New_York 1970-01-01T00:00:00
+utc Europe/London 1971-06-01T00:00:00
+utc Europe/London 2037-10-25T00:30:00
+utc Europe/London 2037-10-25T01:30:00
+utc Australia/Lord_Howe 2024-04-06T14:45:00
+utc Australia/Lord_Howe 2024-04-06T15:15:00
+utc Asia/Kolkata 1941-10-01T00:00:00
+utc Asia/Kolkata 2300-01-01T00:00:00
+utc Pacific/Apia 2011-12-30T09:59:59
+utc Pacific/Apia 2011-12-30T10:00:00
+utc Pacific/Chatham 2024-09-28T14:00:00
+utc Africa/Casablanca 2024-03-10T01:59:59
+utc Africa/Casablanca 2024-03-10T02:00:00
+utc Antarctica/Troll 2024-03-31T01:00:00
+utc America/Sao_Paulo 2018-11-04T03:00:00
+utc UTC 2024-02-29T12:00:00
+utc Test/Version1 1918-03-31T07:00:00
+utc Test/Version1 1950-01-01T00:00:00
+utc Test/FooterOnly 2024-03-10T02:59:59
+utc Test/FooterOnly 2024-03-10T03:00:00
+utc Test/FooterOnly 2024-11-03T02:00:00
+utc Test/Eire 2030-10-27T00:30:00
+utc Test/Eire 2030-10-27T01:30:00
+utc Test/Eire 2030-03-31T00:59:59
+utc Test/Julian 2024-03-01T23:59:59
+utc Test/Julian 2024-03-02T00:00:00
+utc Test/Guess 1970-01-01T00:20:00
+utc Test/Fixed 2024-01-01T00:00:00
+local America/New_York 2024-03-10T02:30:00 0
+local America/New_York 2024-03-10T02:30:00 1
+local America/New_York 2024-11-03T01:30:00 0
+local America/New_York 2024-11-03T01:30:00 1
+local America/New_York 2024-07-01T12:00:00 1
+local America/New_York 1800-01-01T00:00:00 0
+local Europe/London 2099-03-29T01:30:00 0
+local Europe/London 2099-03-29T01:30:00 1
+local Europe/London 2099-10-25T01:30:00 1
+local Australia/Lord_Howe 2024-04-07T01:45:00 0
+local Australia/Lord_Howe 2024-04-07T01:45:00 1
+local Australia/Lord_Howe 2024-10-06T02:15:00 0
+local Pacific/Apia 2011-12-30T12:00:00 0
+local Pacific/Chatham 2050-09-25T02:50:00 0
+local America/St_Johns 2024-11-03T01:15:00 1
+local Test/Eire 2030-10-27T01:30:00 0
+local Test/Eire 2030-10-27T01:30:00 1
+local Test/Eire 2030-03-31T01:30:00 0
+local Test/Eire 2030-03-31T01:30:00 1
+local Test/FooterOnly 2024-11-03T23:30:00 0
+local Test/FooterOnly 2024-11-03T23:30:00 1
+local Test/Julian 2025-10-28T22:30:00 1
+
+"""
+}
+
+// data/meetings.txt
+fn file_1() -> String {
+    """
+# name | organizer zone | first local start | weeks | attendee zones
+Release sync | America/New_York | 2024-02-26T09:00:00 | 8 | Europe/London Asia/Kolkata Australia/Lord_Howe Pacific/Chatham
+Ops handover | Europe/London | 2024-10-13T01:30:00 | 4 | America/St_Johns Africa/Casablanca UTC
+Night batch | America/New_York | 2024-03-03T02:30:00 | 3 | UTC Antarctica/Troll
+Pacific call | Pacific/Apia | 2011-12-16T10:00:00 | 4 | America/New_York Pacific/Chatham
+
+"""
+}
+
+// data/tzstrings.txt
+fn file_2() -> String {
+    """
+EST5EDT,M3.2.0,M11.1.0
+GMT0BST,M3.5.0/1,M10.5.0
+<+1030>-10:30<+11>-11,M10.1.0,M4.1.0
+NST3:30NDT,M3.2.0,M11.1.0
+<-03>3<-02>,M3.2.0/-1,M11.1.0/24
+IST-1GMT0,M10.5.0,M3.5.0/1
+AAA1BBB0,J60/25,300/-2
+AAA-12:45:30BBB-13:45:30,M9.5.0/2:45,M4.1.0/3:45
+UTC0
+IST-5:30
+CET-1CEST,M3.5.0,M10.5.0/3
+WART4WARST,J1/0,J365/25
+XXX-3YYY,0/0,J365/25
+EST
+EST5EDT
+EST5,M3.2.0,M11.1.0
+EST25EDT,M3.2.0,M11.1.0
+EST5EDT4:60,M3.2.0,M11.1.0
+EST5EDT,M13.2.0,M11.1.0
+EST5EDT,M3.2.7,M11.1.0
+EST5EDT,M3.2.0
+EST5EDT,J0,J365
+EST5EDT,366,J365
+EST5EDT,M3.2.0/168,M11.1.0
+EST5EDT,M3.2.0/1:2,M11.1.0
+E5EDT,M3.2.0,M11.1.0
+EST1234EDT
+<A1>1<B2>,M1.1.0,M12.5.6/167
+
+EST+5EDT-4:30:15,M3.2.0/-1:30,M11.1.0/26:30
+
+"""
+}
+
+// data/years.txt
+fn file_3() -> String {
+    """
+America/New_York 1883 1918 2024 2101
+Europe/London 1968 1971 2024
+Australia/Lord_Howe 2024
+Pacific/Apia 2011 2021
+Pacific/Chatham 2024
+Africa/Casablanca 2024 2087
+Antarctica/Troll 2024
+America/Sao_Paulo 2018 2019 2020
+Test/Eire 2030
+Test/FooterOnly 2024
+Test/Julian 2024 2025
+Test/Version1 1918 1919
+Test/Guess 1970
+
+"""
+}
+
+// data/zones/Africa/Casablanca
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("545a69663200000000000000000000000000000000000000000000000000000000000048000000050000000c9651f99c");
+    s.push_str("c6ff1480c758ac70c7d9ed80d2a132f0db35a400dbee27f0fb257240fbc2ef70086b848008c66df00be80c000c6147f0");
+    s.push_str("0dc93f800e8ef2700fd351801027a3701ab7a6001e186ff04841e68048bb22704a231a004a8dd5704bdcc0804c5de570");
+    s.push_str("4d97b8804e348cf04f9ca0a05008bba050319a205067a7a0517c82a051d8cba052059ea0526c73a053377aa053ae21a0");
+    s.push_str("53dc4620544c55a055175ca0557ce02055ab04a0562c37a056f73ea0575387a05781ac205815542058d720a05920f4a0");
+    s.push_str("595853a059f536205ab702a05af79c205b25c0a05cce43a05cfc68205e9bb0a05ed30fa06072582060a07ca0623fc520");
+    s.push_str("6277242064166ca06444912065ed1420661b38a067ba812067f1e020699128a069bf4d206aaf30107fffffff02010201");
+    s.push_str("020102010201020102010201020302010201020102010201020102010201020102010201020102010201020102010201");
+    s.push_str("0201020102010201020102010201020102010202fffff8e4000000000e10010400000000000800000e10000400000000");
+    s.push_str("00084c4d54002b3031002b303000545a6966320000000000000000000000000000000000000000000000000000000000");
+    s.push_str("0048000000050000000cffffffff9651f99cffffffffc6ff1480ffffffffc758ac70ffffffffc7d9ed80ffffffffd2a1");
+    s.push_str("32f0ffffffffdb35a400ffffffffdbee27f0fffffffffb257240fffffffffbc2ef7000000000086b84800000000008c6");
+    s.push_str("6df0000000000be80c00000000000c6147f0000000000dc93f80000000000e8ef270000000000fd35180000000001027");
+    s.push_str("a370000000001ab7a600000000001e186ff0000000004841e6800000000048bb2270000000004a231a00000000004a8d");
+    s.push_str("d570000000004bdcc080000000004c5de570000000004d97b880000000004e348cf0000000004f9ca0a0000000005008");
+    s.push_str("bba00000000050319a20000000005067a7a000000000517c82a00000000051d8cba00000000052059ea000000000526c");
+    s.push_str("73a00000000053377aa00000000053ae21a00000000053dc462000000000544c55a00000000055175ca000000000557c");
+    s.push_str("e0200000000055ab04a000000000562c37a00000000056f73ea000000000575387a0000000005781ac20000000005815");
+    s.push_str("54200000000058d720a0000000005920f4a000000000595853a00000000059f53620000000005ab702a0000000005af7");
+    s.push_str("9c20000000005b25c0a0000000005cce43a0000000005cfc6820000000005e9bb0a0000000005ed30fa0000000006072");
+    s.push_str("58200000000060a07ca000000000623fc52000000000627724200000000064166ca000000000644491200000000065ed");
+    s.push_str("142000000000661b38a00000000067ba81200000000067f1e02000000000699128a00000000069bf4d20000000006aaf");
+    s.push_str("3010000000007fffffff0201020102010201020102010201020102030201020102010201020102010201020102010201");
+    s.push_str("02010201020102010201020102010201020102010201020102010201020102010202fffff8e4000000000e1001040000");
+    s.push_str("0000000800000e1000040000000000084c4d54002b3031002b3030000a3c2b30303e300a");
+    s
+}
+
+// data/zones/America/New_York
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000060000000600000000000000ec000000060000001480000000");
+    s.push_str("9ea61e709fbaeb60a0860070a19acd60a265e270a383e9e0a46aae70a535a760a653caf0a7158960a833acf0a8fea5e0");
+    s.push_str("aa138ef0aade87e0abf370f0acbe69e0add352f0ae9e4be0afb334f0b07e2de0b19c5170b2674a60b37c3370b4472c60");
+    s.push_str("b55c1570b6270e60b73bf770b806f060b91bd970b9e6d260bb04f5f0bbc6b460bce4d7f0bdafd0e0bec4b9f0bf8fb2e0");
+    s.push_str("c0a49bf0c16f94e0c2847df0c34f76e0c4645ff0c52f58e0c64d7c70c70f3ae0c82d5e70c8f85760ca0d4070cad83960");
+    s.push_str("cb88f070d223f470d260fbe0d375e4f0d440dde0d555c6f0d620bfe0d735a8f0d800a1e0d9158af0d9e083e0dafea770");
+    s.push_str("dbc065e0dcde8970dda98260debe6b70df896460e09e4d70e1694660e27e2f70e3492860e45e1170e5572ee0e6472df0");
+    s.push_str("e73710e0e8270ff0e916f2e0ea06f1f0eaf6d4e0ebe6d3f0ecd6b6e0edc6b5f0eebfd360efafd270f09fb560f18fb470");
+    s.push_str("f27f9760f36f9670f45f7960f54f7870f63f5b60f72f5a70f82877e0f90f3c70fa0859e0faf858f0fbe83be0fcd83af0");
+    s.push_str("fdc81de0feb81cf0ffa7ffe00097fef00187e1e00277e0f00370fe600460fd700550e0600640df700730c260078d1970");
+    s.push_str("0910a46009ad94f00af086600be085700cd9a2e00dc067700eb984e00fa983f0109966e0118965f0127948e0136947f0");
+    s.push_str("14592ae0154929f016390ce017290bf0182229601908edf01a020b601af20a701be1ed601cd1ec701dc1cf601eb1ce70");
+    s.push_str("1fa1b160207600f0218193602255e2f0236aafe02435c4f0254a91e02615a6f0272a73e027fec370290a55e029dea570");
+    s.push_str("2aea37e02bbe87702cd354602d9e69702eb336602f7e4b7030931860316767f03272fa60334749f03452dc6035272bf0");
+    s.push_str("3632be6037070df0381bdae038e6eff039fbbce03ac6d1f03bdb9ee03cafee703dbb80e03e8fd0703f9b62e0406fb270");
+    s.push_str("41847f60424f947043646160442f76704544436045f3a8f0472d5fe047d38af0490d41e049b36cf04aed23e04b9c8970");
+    s.push_str("4cd640604d7c6b704eb622604f5c4d7050960460513c2f705275e660531c11705455c86054fbf3705635aa6056e50ff0");
+    s.push_str("581ec6e058c4f1f059fea8e05aa4d3f05bde8ae05c84b5f05dbe6ce05e6497f05f9e4ee0604db47061876b60622d9670");
+    s.push_str("63674d60640d787065472f6065ed5a706727116067cd3c706906f36069ad1e706ae6d5606b963af06ccff1e06d761cf0");
+    s.push_str("6eafd3e06f55fef0708fb5e07135e0f0726f97e07315c2f0744f79e074fedf707638966076dec1707818786078bea370");
+    s.push_str("79f85a607a9e85707bd83c607c7e67707db81e607e5e49707f9800600301020102010201020102010201020102010201");
+    s.push_str("020102010201020102010201020102010201020102010201020102010204050201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201020102010201020102ffffba9e0000ffffc7c00104ffffb9b00008ffffb9b00008");
+    s.push_str("ffffc7c0010cffffc7c001104c4d540045445400455354004557540045505400000000010001000000010001545a6966");
+    s.push_str("32000000000000000000000000000000000000060000000600000000000000ec0000000600000014ffffffff5e03f090");
+    s.push_str("ffffffff9ea61e70ffffffff9fbaeb60ffffffffa0860070ffffffffa19acd60ffffffffa265e270ffffffffa383e9e0");
+    s.push_str("ffffffffa46aae70ffffffffa535a760ffffffffa653caf0ffffffffa7158960ffffffffa833acf0ffffffffa8fea5e0");
+    s.push_str("ffffffffaa138ef0ffffffffaade87e0ffffffffabf370f0ffffffffacbe69e0ffffffffadd352f0ffffffffae9e4be0");
+    s.push_str("ffffffffafb334f0ffffffffb07e2de0ffffffffb19c5170ffffffffb2674a60ffffffffb37c3370ffffffffb4472c60");
+    s.push_str("ffffffffb55c1570ffffffffb6270e60ffffffffb73bf770ffffffffb806f060ffffffffb91bd970ffffffffb9e6d260");
+    s.push_str("ffffffffbb04f5f0ffffffffbbc6b460ffffffffbce4d7f0ffffffffbdafd0e0ffffffffbec4b9f0ffffffffbf8fb2e0");
+    s.push_str("ffffffffc0a49bf0ffffffffc16f94e0ffffffffc2847df0ffffffffc34f76e0ffffffffc4645ff0ffffffffc52f58e0");
+    s.push_str("ffffffffc64d7c70ffffffffc70f3ae0ffffffffc82d5e70ffffffffc8f85760ffffffffca0d4070ffffffffcad83960");
+    s.push_str("ffffffffcb88f070ffffffffd223f470ffffffffd260fbe0ffffffffd375e4f0ffffffffd440dde0ffffffffd555c6f0");
+    s.push_str("ffffffffd620bfe0ffffffffd735a8f0ffffffffd800a1e0ffffffffd9158af0ffffffffd9e083e0ffffffffdafea770");
+    s.push_str("ffffffffdbc065e0ffffffffdcde8970ffffffffdda98260ffffffffdebe6b70ffffffffdf896460ffffffffe09e4d70");
+    s.push_str("ffffffffe1694660ffffffffe27e2f70ffffffffe3492860ffffffffe45e1170ffffffffe5572ee0ffffffffe6472df0");
+    s.push_str("ffffffffe73710e0ffffffffe8270ff0ffffffffe916f2e0ffffffffea06f1f0ffffffffeaf6d4e0ffffffffebe6d3f0");
+    s.push_str("ffffffffecd6b6e0ffffffffedc6b5f0ffffffffeebfd360ffffffffefafd270fffffffff09fb560fffffffff18fb470");
+    s.push_str("fffffffff27f9760fffffffff36f9670fffffffff45f7960fffffffff54f7870fffffffff63f5b60fffffffff72f5a70");
+    s.push_str("fffffffff82877e0fffffffff90f3c70fffffffffa0859e0fffffffffaf858f0fffffffffbe83be0fffffffffcd83af0");
+    s.push_str("fffffffffdc81de0fffffffffeb81cf0ffffffffffa7ffe0000000000097fef0000000000187e1e0000000000277e0f0");
+    s.push_str("000000000370fe60000000000460fd70000000000550e060000000000640df70000000000730c26000000000078d1970");
+    s.push_str("000000000910a4600000000009ad94f0000000000af08660000000000be08570000000000cd9a2e0000000000dc06770");
+    s.push_str("000000000eb984e0000000000fa983f000000000109966e000000000118965f000000000127948e000000000136947f0");
+    s.push_str("0000000014592ae000000000154929f00000000016390ce00000000017290bf00000000018222960000000001908edf0");
+    s.push_str("000000001a020b60000000001af20a70000000001be1ed60000000001cd1ec70000000001dc1cf60000000001eb1ce70");
+    s.push_str("000000001fa1b16000000000207600f00000000021819360000000002255e2f000000000236aafe0000000002435c4f0");
+    s.push_str("00000000254a91e0000000002615a6f000000000272a73e00000000027fec37000000000290a55e00000000029dea570");
+    s.push_str("000000002aea37e0000000002bbe8770000000002cd35460000000002d9e6970000000002eb33660000000002f7e4b70");
+    s.push_str("000000003093186000000000316767f0000000003272fa6000000000334749f0000000003452dc600000000035272bf0");
+    s.push_str("000000003632be600000000037070df000000000381bdae00000000038e6eff00000000039fbbce0000000003ac6d1f0");
+    s.push_str("000000003bdb9ee0000000003cafee70000000003dbb80e0000000003e8fd070000000003f9b62e000000000406fb270");
+    s.push_str("0000000041847f6000000000424f9470000000004364616000000000442f767000000000454443600000000045f3a8f0");
+    s.push_str("00000000472d5fe00000000047d38af000000000490d41e00000000049b36cf0000000004aed23e0000000004b9c8970");
+    s.push_str("000000004cd64060000000004d7c6b70000000004eb62260000000004f5c4d70000000005096046000000000513c2f70");
+    s.push_str("000000005275e66000000000531c1170000000005455c8600000000054fbf370000000005635aa600000000056e50ff0");
+    s.push_str("00000000581ec6e00000000058c4f1f00000000059fea8e0000000005aa4d3f0000000005bde8ae0000000005c84b5f0");
+    s.push_str("000000005dbe6ce0000000005e6497f0000000005f9e4ee000000000604db4700000000061876b6000000000622d9670");
+    s.push_str("0000000063674d6000000000640d78700000000065472f600000000065ed5a7000000000672711600000000067cd3c70");
+    s.push_str("000000006906f3600000000069ad1e70000000006ae6d560000000006b963af0000000006ccff1e0000000006d761cf0");
+    s.push_str("000000006eafd3e0000000006f55fef000000000708fb5e0000000007135e0f000000000726f97e0000000007315c2f0");
+    s.push_str("00000000744f79e00000000074fedf7000000000763896600000000076dec17000000000781878600000000078bea370");
+    s.push_str("0000000079f85a60000000007a9e8570000000007bd83c60000000007c7e6770000000007db81e60000000007e5e4970");
+    s.push_str("000000007f98006003010201020102010201020102010201020102010201020102010201020102010201020102010201");
+    s.push_str("020102010201020102040502010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("01020102ffffba9e0000ffffc7c00104ffffb9b00008ffffb9b00008ffffc7c0010cffffc7c001104c4d540045445400");
+    s.push_str("4553540045575400455054000000000100010000000100010a455354354544542c4d332e322e302c4d31312e312e300a");
+    s
+}
+
+// data/zones/America/Sao_Paulo
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("545a6966320000000000000000000000000000000000000000000000000000000000005c000000030000000c96aa72b4");
+    s.push_str("b80f49e0b8fd40a0b9f13430bade7420da38ae30daebfa30dc19e1b0dcb95920ddfb1530de9bde20dfdd9a30e0543320");
+    s.push_str("f45a0930f5055e20f6c06430f70e1ea0f8512c30f8c7c520fa0ad2b0faa8f8a0fbec0630fc8b7da01dc98e301e78d7a0");
+    s.push_str("1fa035b02033cfa021816930220bc8a0235810b023e270202537f2b025d4c72027210f3027bde3a02900f13029948b20");
+    s.push_str("2aea0db02b6b32a02cc0b5302d66c4202ea097302f46a62030807930311d4da0325720b033066a203438543034f8c120");
+    s.push_str("36201f3036cf68a037f6c6b038b8852039dfe3303a8f2ca03bc8ffb03c6f0ea03dc491303e4ef0a03f91fe30402ed2a0");
+    s.push_str("4186f8304217ef204351c23043f7d120454d53b045e0eda04711863047b7952048faa2b0499777204ada84b04b8093a0");
+    s.push_str("4cba66b04d6075a04e9a48b04f49922050836530512039a05263473053001ba05443293054e9382056230b3056c91a20");
+    s.push_str("5802ed3058a8fc2059e2cf305a88de205bde60b05c68c0207fffffff0201020102010201020102010201020102010201");
+    s.push_str("020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201");
+    s.push_str("020102010201020102010201020102010201020102010202ffffd44c0000ffffe3e00104ffffd5d000084c4d54002d30");
+    s.push_str("32002d303300545a6966320000000000000000000000000000000000000000000000000000000000005c000000030000");
+    s.push_str("000cffffffff96aa72b4ffffffffb80f49e0ffffffffb8fd40a0ffffffffb9f13430ffffffffbade7420ffffffffda38");
+    s.push_str("ae30ffffffffdaebfa30ffffffffdc19e1b0ffffffffdcb95920ffffffffddfb1530ffffffffde9bde20ffffffffdfdd");
+    s.push_str("9a30ffffffffe0543320fffffffff45a0930fffffffff5055e20fffffffff6c06430fffffffff70e1ea0fffffffff851");
+    s.push_str("2c30fffffffff8c7c520fffffffffa0ad2b0fffffffffaa8f8a0fffffffffbec0630fffffffffc8b7da0000000001dc9");
+    s.push_str("8e30000000001e78d7a0000000001fa035b0000000002033cfa0000000002181693000000000220bc8a0000000002358");
+    s.push_str("10b00000000023e27020000000002537f2b00000000025d4c7200000000027210f300000000027bde3a0000000002900");
+    s.push_str("f1300000000029948b20000000002aea0db0000000002b6b32a0000000002cc0b530000000002d66c420000000002ea0");
+    s.push_str("9730000000002f46a620000000003080793000000000311d4da000000000325720b00000000033066a20000000003438");
+    s.push_str("54300000000034f8c1200000000036201f300000000036cf68a00000000037f6c6b00000000038b885200000000039df");
+    s.push_str("e330000000003a8f2ca0000000003bc8ffb0000000003c6f0ea0000000003dc49130000000003e4ef0a0000000003f91");
+    s.push_str("fe3000000000402ed2a0000000004186f830000000004217ef20000000004351c2300000000043f7d12000000000454d");
+    s.push_str("53b00000000045e0eda000000000471186300000000047b795200000000048faa2b00000000049977720000000004ada");
+    s.push_str("84b0000000004b8093a0000000004cba66b0000000004d6075a0000000004e9a48b0000000004f499220000000005083");
+    s.push_str("653000000000512039a000000000526347300000000053001ba000000000544329300000000054e93820000000005623");
+    s.push_str("0b300000000056c91a20000000005802ed300000000058a8fc200000000059e2cf30000000005a88de20000000005bde");
+    s.push_str("60b0000000005c68c020000000007fffffff020102010201020102010201020102010201020102010201020102010201");
+    s.push_str("020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102010201");
+    s.push_str("0201020102010201020102010202ffffd44c0000ffffe3e00104ffffd5d000084c4d54002d3032002d3033000a3c2d30");
+    s.push_str("333e330a");
+    s
+}
+
+// data/zones/America/St_Johns
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000090000000900000000000000ef000000090000001980000000");
+    s.push_str("9ccf620c9da4e6fc9eb87e8c9fbad67ca0b688dca138ff4ca295195ca384fc4ca474fb5ca564de4ca65e17dca744c04c");
+    s.push_str("a83df9dca924a24caa1ddbdcab04844cabfdbddcace4664caddd9fdcaecd82ccafbd81dcb0ad64ccb1a69e5cb28d46cc");
+    s.push_str("b386805cb46d28ccb566625cb64d0accb746445cb82cecccb926265cba16094cbb0f42dcbbf5eb4cbcef24dcbdd5cd4c");
+    s.push_str("be9e4d6cbecf06a8bfb5af18c0b83138c179efa8c2981338c359d1a8c477f538c539b3a8c66111b8c71995a8c840f3b8");
+    s.push_str("c902b228ca20d5b8cae29428cc00b7b8d223f470d260e6c8d38844d8d44a0348d56826d8d629e548d74808d8d809c748");
+    s.push_str("d927ead8d9e9a948db110758dbd2c5c8dcde7458dda96d48debe5658df894f48e09e3858e1693148e27e1a58e3491348");
+    s.push_str("e45dfc58e528f548e64718d8e71211c8e826fad8e8f1f3c8ea06dcd8ead1d5c8ebe6bed8ecb1b7c8edc6a0d8eebfbe48");
+    s.push_str("efafbd58f09fa048f18f9f58f27f8248f36f8158f45f6448f54f6358f63f4648f72f4558f82862c8f90f2758fa0844c8");
+    s.push_str("faf843d8fbe826c8fcd825d8fdc808c8feb807d8ffa7eac80097e9d80187ccc80277cbd80370e9480460e8580550cb48");
+    s.push_str("0640ca580730ad480820ac5809108f480a008e580af071480be070580cd98dc80dc052580eb96fc80fa96ed8109951c8");
+    s.push_str("118950d8127933c8136932d8145915c8154914d81638f7c81728f6d8182214481908d8d81a01f6481af1f5581be1d848");
+    s.push_str("1cd1d7581dc1ba481eb1b9581fa19c482075cff4218162642255b1f4236a70d4243593f4254a60e4261575f4272a42e4");
+    s.push_str("27fe9274290a24e429de74742aea06e42bbe56742cd323642d9e38742eb305642f7e1a743092e764316736f43272c964");
+    s.push_str("334718f43452ab643526faf436328d643706dcf4381ba9e438e6bef439fb8be43ac6a0f43bdb6de43cafbd743dbb4fe4");
+    s.push_str("3e8f9f743f9b31e4406f817441844e64424f637443643064442f45744544126445f377f4472d2ee447d359f4490d10e4");
+    s.push_str("49b33bf44aecf2e44b9c58744cd60f644d7c3a744eb60d484f5c38585095ef48513c1a585275d148531bfc585455b348");
+    s.push_str("54fbde585635954856e4fad8581eb1c858c4dcd859fe93c85aa4bed85bde75c85c84a0d85dbe57c85e6482d85f9e39c8");
+    s.push_str("604d9f5861875648622d815863673848640d635865471a4865ed45586726fc4867cd27586906de4869ad09586ae6c048");
+    s.push_str("6b9625d86ccfdcc86d7607d86eafbec86f55e9d8708fa0c87135cbd8726f82c87315add8744f64c874feca5876388148");
+    s.push_str("76deac587818634878be8e5879f845487a9e70587bd827487c7e52587db809487e5e34587f97eb480201020102010201");
+    s.push_str("020102010201020102010201020102010201020102010201020102010204030403040304030403040304030406050403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030407040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030403040304ffffce940000ffffdc");
+    s.push_str("a40104ffffce940008ffffdcd80104ffffcec80008ffffdcd8010cffffdcd80110ffffeae80114ffffdcd801044c4d54");
+    s.push_str("004e4454004e5354004e5054004e5754004e44445400000000000001000000000000000001000000545a696632000000");
+    s.push_str("000000000000000000000000000000090000000900000000000000ef0000000900000019ffffffff5e3d34ecffffffff");
+    s.push_str("9ccf620cffffffff9da4e6fcffffffff9eb87e8cffffffff9fbad67cffffffffa0b688dcffffffffa138ff4cffffffff");
+    s.push_str("a295195cffffffffa384fc4cffffffffa474fb5cffffffffa564de4cffffffffa65e17dcffffffffa744c04cffffffff");
+    s.push_str("a83df9dcffffffffa924a24cffffffffaa1ddbdcffffffffab04844cffffffffabfdbddcfffffffface4664cffffffff");
+    s.push_str("addd9fdcffffffffaecd82ccffffffffafbd81dcffffffffb0ad64ccffffffffb1a69e5cffffffffb28d46ccffffffff");
+    s.push_str("b386805cffffffffb46d28ccffffffffb566625cffffffffb64d0accffffffffb746445cffffffffb82cecccffffffff");
+    s.push_str("b926265cffffffffba16094cffffffffbb0f42dcffffffffbbf5eb4cffffffffbcef24dcffffffffbdd5cd4cffffffff");
+    s.push_str("be9e4d6cffffffffbecf06a8ffffffffbfb5af18ffffffffc0b83138ffffffffc179efa8ffffffffc2981338ffffffff");
+    s.push_str("c359d1a8ffffffffc477f538ffffffffc539b3a8ffffffffc66111b8ffffffffc71995a8ffffffffc840f3b8ffffffff");
+    s.push_str("c902b228ffffffffca20d5b8ffffffffcae29428ffffffffcc00b7b8ffffffffd223f470ffffffffd260e6c8ffffffff");
+    s.push_str("d38844d8ffffffffd44a0348ffffffffd56826d8ffffffffd629e548ffffffffd74808d8ffffffffd809c748ffffffff");
+    s.push_str("d927ead8ffffffffd9e9a948ffffffffdb110758ffffffffdbd2c5c8ffffffffdcde7458ffffffffdda96d48ffffffff");
+    s.push_str("debe5658ffffffffdf894f48ffffffffe09e3858ffffffffe1693148ffffffffe27e1a58ffffffffe3491348ffffffff");
+    s.push_str("e45dfc58ffffffffe528f548ffffffffe64718d8ffffffffe71211c8ffffffffe826fad8ffffffffe8f1f3c8ffffffff");
+    s.push_str("ea06dcd8ffffffffead1d5c8ffffffffebe6bed8ffffffffecb1b7c8ffffffffedc6a0d8ffffffffeebfbe48ffffffff");
+    s.push_str("efafbd58fffffffff09fa048fffffffff18f9f58fffffffff27f8248fffffffff36f8158fffffffff45f6448ffffffff");
+    s.push_str("f54f6358fffffffff63f4648fffffffff72f4558fffffffff82862c8fffffffff90f2758fffffffffa0844c8ffffffff");
+    s.push_str("faf843d8fffffffffbe826c8fffffffffcd825d8fffffffffdc808c8fffffffffeb807d8ffffffffffa7eac800000000");
+    s.push_str("0097e9d8000000000187ccc8000000000277cbd8000000000370e948000000000460e858000000000550cb4800000000");
+    s.push_str("0640ca58000000000730ad48000000000820ac580000000009108f48000000000a008e58000000000af0714800000000");
+    s.push_str("0be07058000000000cd98dc8000000000dc05258000000000eb96fc8000000000fa96ed800000000109951c800000000");
+    s.push_str("118950d800000000127933c800000000136932d800000000145915c800000000154914d8000000001638f7c800000000");
+    s.push_str("1728f6d80000000018221448000000001908d8d8000000001a01f648000000001af1f558000000001be1d84800000000");
+    s.push_str("1cd1d758000000001dc1ba48000000001eb1b958000000001fa19c48000000002075cff4000000002181626400000000");
+    s.push_str("2255b1f400000000236a70d400000000243593f400000000254a60e400000000261575f400000000272a42e400000000");
+    s.push_str("27fe927400000000290a24e40000000029de7474000000002aea06e4000000002bbe5674000000002cd3236400000000");
+    s.push_str("2d9e3874000000002eb30564000000002f7e1a74000000003092e76400000000316736f4000000003272c96400000000");
+    s.push_str("334718f4000000003452ab64000000003526faf40000000036328d64000000003706dcf400000000381ba9e400000000");
+    s.push_str("38e6bef40000000039fb8be4000000003ac6a0f4000000003bdb6de4000000003cafbd74000000003dbb4fe400000000");
+    s.push_str("3e8f9f74000000003f9b31e400000000406f81740000000041844e6400000000424f6374000000004364306400000000");
+    s.push_str("442f457400000000454412640000000045f377f400000000472d2ee40000000047d359f400000000490d10e400000000");
+    s.push_str("49b33bf4000000004aecf2e4000000004b9c5874000000004cd60f64000000004d7c3a74000000004eb60d4800000000");
+    s.push_str("4f5c3858000000005095ef4800000000513c1a58000000005275d14800000000531bfc58000000005455b34800000000");
+    s.push_str("54fbde5800000000563595480000000056e4fad800000000581eb1c80000000058c4dcd80000000059fe93c800000000");
+    s.push_str("5aa4bed8000000005bde75c8000000005c84a0d8000000005dbe57c8000000005e6482d8000000005f9e39c800000000");
+    s.push_str("604d9f58000000006187564800000000622d8158000000006367384800000000640d63580000000065471a4800000000");
+    s.push_str("65ed4558000000006726fc480000000067cd2758000000006906de480000000069ad0958000000006ae6c04800000000");
+    s.push_str("6b9625d8000000006ccfdcc8000000006d7607d8000000006eafbec8000000006f55e9d800000000708fa0c800000000");
+    s.push_str("7135cbd800000000726f82c8000000007315add800000000744f64c80000000074feca58000000007638814800000000");
+    s.push_str("76deac5800000000781863480000000078be8e580000000079f84548000000007a9e7058000000007bd8274800000000");
+    s.push_str("7c7e5258000000007db80948000000007e5e3458000000007f97eb480201020102010201020102010201020102010201");
+    s.push_str("020102010201020102010201020102010204030403040304030403040304030406050403040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030407040304030403040304030403040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304ffffce940000ffffdca40104ffffce940008ffffdc");
+    s.push_str("d80104ffffcec80008ffffdcd8010cffffdcd80110ffffeae80114ffffdcd801044c4d54004e4454004e5354004e5054");
+    s.push_str("004e5754004e444454000000000000010000000000000000010000000a4e5354333a33304e44542c4d332e322e302c4d");
+    s.push_str("31312e312e300a");
+    s
+}
+
+// data/zones/Antarctica/Troll
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("545a69663200000000000000000000000000000000000004000000040000000000000044000000040000000c420d4700");
+    s.push_str("4246059043641b104425e7904543fd104605c9904723df1047eee6104903c11049cec8104ae3a3104baeaa104cccbf90");
+    s.push_str("4d8e8c104eaca1904f6e6e10508c839051578a90526c659053376c90544c479055174e90562c299056f7309058154610");
+    s.push_str("58d7129059f528105ab6f4905bd50a105ca011105db4ec105e7ff3105f94ce10605fd510617dea90623fb710635dcc90");
+    s.push_str("641f9910653dae906608b590671d909067e8979068fd729069c879906add54906ba85b906cc671106d883d906ea65310");
+    s.push_str("6f681f907086351071513c107266171073311e107445f91075110010762f159076f0e210780ef79078d0c41079eed990");
+    s.push_str("7ab0a6107bcebb907c99c2907dae9d907e79a4907f8e7f907fffffff0301020102010201020102010201020102010201");
+    s.push_str("020102010201020102010201020102010201020102010201020102010201020102010201020102010201020102010202");
+    s.push_str("00000000000000001c2001040000000000080000000000082d3030002b3032002b3030000001010000010100545a6966");
+    s.push_str("3200000000000000000000000000000000000004000000040000000000000044000000040000000c00000000420d4700");
+    s.push_str("00000000424605900000000043641b10000000004425e790000000004543fd10000000004605c990000000004723df10");
+    s.push_str("0000000047eee610000000004903c1100000000049cec810000000004ae3a310000000004baeaa10000000004cccbf90");
+    s.push_str("000000004d8e8c10000000004eaca190000000004f6e6e1000000000508c83900000000051578a9000000000526c6590");
+    s.push_str("0000000053376c9000000000544c47900000000055174e9000000000562c29900000000056f730900000000058154610");
+    s.push_str("0000000058d712900000000059f52810000000005ab6f490000000005bd50a10000000005ca01110000000005db4ec10");
+    s.push_str("000000005e7ff310000000005f94ce1000000000605fd51000000000617dea9000000000623fb71000000000635dcc90");
+    s.push_str("00000000641f991000000000653dae90000000006608b59000000000671d90900000000067e897900000000068fd7290");
+    s.push_str("0000000069c87990000000006add5490000000006ba85b90000000006cc67110000000006d883d90000000006ea65310");
+    s.push_str("000000006f681f9000000000708635100000000071513c1000000000726617100000000073311e10000000007445f910");
+    s.push_str("000000007511001000000000762f15900000000076f0e21000000000780ef7900000000078d0c4100000000079eed990");
+    s.push_str("000000007ab0a610000000007bcebb90000000007c99c290000000007dae9d90000000007e79a490000000007f8e7f90");
+    s.push_str("000000007fffffff03010201020102010201020102010201020102010201020102010201020102010201020102010201");
+    s.push_str("0201020102010201020102010201020102010201020102010201020200000000000000001c2001040000000000080000");
+    s.push_str("000000082d3030002b3032002b30300000010100000101000a3c2b30303e303c2b30323e2d322c4d332e352e302f312c");
+    s.push_str("4d31302e352e302f330a");
+    s
+}
+
+// data/zones/Asia/Kolkata
+fn file_9() -> String {
+    let mut s = String.new();
+    s.push_str("545a69663200000000000000000000000000000000000000000000000000000000000006000000040000001280000000");
+    s.push_str("879dbcbacadb8c28cc057118cc9532a8d2741298010203020302000052d8000000004b46000400004d58000800005b68");
+    s.push_str("010c4c4d54004d4d5400495354002b3036333000545a6966320000000000000000000000000000000000000000000000");
+    s.push_str("00000000000000070000000500000016ffffffff26ba1828ffffffff43e7eb30ffffffff879dbcbaffffffffcadb8c28");
+    s.push_str("ffffffffcc057118ffffffffcc9532a8ffffffffd274129801020304030403000052d80000000052d0000400004b4600");
+    s.push_str("0800004d58000c00005b6801104c4d5400484d54004d4d5400495354002b30363330000a4953542d353a33300a");
+    s
+}
+
+// data/zones/Australia/Lord_Howe
+fn file_10() -> String {
+    let mut s = String.new();
+    s.push_str("545a69663200000000000000000000000000000000000000000000000000000000000074000000050000001980000000");
+    s.push_str("14fe66e0163840f816e78a6818215d7818c76c681a013f781aa74e681be121781c8730681dc103781e798e701f97aaf8");
+    s.push_str("205970702180c77822428cf02369e3f824226ef02549c5f825efdbf02729a7f827cfbdf0290989f829af9ff02ae96bf8");
+    s.push_str("2b98bc702cd288782d789e702eb26a782f58807030924c78315d4c7032722e78333d2e7034521078351d10703631f278");
+    s.push_str("36fcf270381b0ef838dcd47039a7e2783abcb6703bdad2f83ca5d2f03dbab4f83e85b4f03f9a96f8406596f04183b378");
+    s.push_str("424578f043639578442e95704543777846053cf04723597847f793f048e78bf849d775f04ac76df84bb757f04ca74ff8");
+    s.push_str("4d9739f04e8731f84f771bf050704e78516038705250307853401a7054301278551ffc70560ff47856ffde7057efd678");
+    s.push_str("58dfc07059cfb8785abfa2705bb8d4f85ca8bef05d98b6f85e88a0f05f7898f8606882f061587af8624864f063385cf8");
+    s.push_str("642846f065183ef86611637067015b7867f1457068e13d7869d127706ac11f786bb109706ca101786d90eb706e80e378");
+    s.push_str("6f70cd707069fff87159e9f07249e1f87339cbf07429c3f87519adf07609a5f876f98ff077e987f878d971f079c969f8");
+    s.push_str("7ab953f07bb286787ca270707d9268787e8252707f724a787fffffff0103020302030203020304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403");
+    s.push_str("040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030404");
+    s.push_str("00009524000000008ca000040000a1b80109000093a8000f00009ab001154c4d540041455354002b31313330002b3130");
+    s.push_str("3330002b313100545a696632000000000000000000000000000000000000000000000000000000000000740000000500");
+    s.push_str("000019ffffffff731677dc0000000014fe66e000000000163840f80000000016e78a680000000018215d780000000018");
+    s.push_str("c76c68000000001a013f78000000001aa74e68000000001be12178000000001c873068000000001dc10378000000001e");
+    s.push_str("798e70000000001f97aaf80000000020597070000000002180c7780000000022428cf0000000002369e3f80000000024");
+    s.push_str("226ef0000000002549c5f80000000025efdbf0000000002729a7f80000000027cfbdf000000000290989f80000000029");
+    s.push_str("af9ff0000000002ae96bf8000000002b98bc70000000002cd28878000000002d789e70000000002eb26a78000000002f");
+    s.push_str("5880700000000030924c7800000000315d4c700000000032722e7800000000333d2e7000000000345210780000000035");
+    s.push_str("1d1070000000003631f2780000000036fcf27000000000381b0ef80000000038dcd4700000000039a7e278000000003a");
+    s.push_str("bcb670000000003bdad2f8000000003ca5d2f0000000003dbab4f8000000003e85b4f0000000003f9a96f80000000040");
+    s.push_str("6596f0000000004183b37800000000424578f0000000004363957800000000442e957000000000454377780000000046");
+    s.push_str("053cf000000000472359780000000047f793f00000000048e78bf80000000049d775f0000000004ac76df8000000004b");
+    s.push_str("b757f0000000004ca74ff8000000004d9739f0000000004e8731f8000000004f771bf00000000050704e780000000051");
+    s.push_str("60387000000000525030780000000053401a70000000005430127800000000551ffc7000000000560ff4780000000056");
+    s.push_str("ffde700000000057efd6780000000058dfc0700000000059cfb878000000005abfa270000000005bb8d4f8000000005c");
+    s.push_str("a8bef0000000005d98b6f8000000005e88a0f0000000005f7898f800000000606882f00000000061587af80000000062");
+    s.push_str("4864f00000000063385cf800000000642846f00000000065183ef800000000661163700000000067015b780000000067");
+    s.push_str("f145700000000068e13d780000000069d12770000000006ac11f78000000006bb10970000000006ca10178000000006d");
+    s.push_str("90eb70000000006e80e378000000006f70cd70000000007069fff8000000007159e9f0000000007249e1f80000000073");
+    s.push_str("39cbf0000000007429c3f8000000007519adf0000000007609a5f80000000076f98ff00000000077e987f80000000078");
+    s.push_str("d971f00000000079c969f8000000007ab953f0000000007bb28678000000007ca27070000000007d926878000000007e");
+    s.push_str("825270000000007f724a78000000007fffffff0103020302030203020304030403040304030403040304030403040304");
+    s.push_str("030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304");
+    s.push_str("03040304030403040304030403040304030403040304030403040304030403040304030403040400009524000000008c");
+    s.push_str("a000040000a1b80109000093a8000f00009ab001154c4d540041455354002b31313330002b31303330002b3131000a3c");
+    s.push_str("2b313033303e2d31303a33303c2b31313e2d31312c4d31302e312e302c4d342e312e300a");
+    s
+}
+
+// data/zones/Bad/Empty
+fn file_11() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000000000000000000000000000000000000000a0a");
+    s
+}
+
+// data/zones/Bad/Index
+fn file_12() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000000000000000000000100000001000000040000000000000000");
+    s.push_str("05000000000000555443000a555443300a");
+    s
+}
+
+// data/zones/Bad/Magic
+fn file_13() -> String {
+    let mut s = String.new();
+    s.push_str("545a6a6600000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    s
+}
+
+// data/zones/Bad/NoNewline
+fn file_14() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000000000000000000000000000001000000040000000000005554");
+    s.push_str("43000a55544330");
+    s
+}
+
+// data/zones/Bad/NoRules
+fn file_15() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000000000000000000000000000001000000040000000000004141");
+    s.push_str("41000a414141334242420a");
+    s
+}
+
+// data/zones/Bad/RulesNoDST
+fn file_16() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000000000000000000000000000001000000040000000000004141");
+    s.push_str("41000a414141332c4d332e322e302c4d31312e312e300a");
+    s
+}
+
+// data/zones/Bad/Week
+fn file_17() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000000000000000000000000000001000000040000000000004141");
+    s.push_str("41000a414141334242422c4d332e362e302c4d31312e312e300a");
+    s
+}
+
+// data/zones/Europe/London
+fn file_18() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000080000000800000000000000f2000000080000001180000000");
+    s.push_str("9b26ada09bd605209ccf30a09da4c3a09e9c9da09f971aa0a085ba20a176fca0a2659c20a37bc8a0a44eb8a0a53ffb20");
+    s.push_str("a6256020a727c620a82a2c20a8ebf8a0aa00d3a0aad51520abe9f020acc76c20adc9d220aea74e20afa079a0b0873020");
+    s.push_str("b192d0a0b2704ca0b372b2a0b4502ea0b5495a20b63010a0b73276a0b80ff2a0b91258a0b9efd4a0bae90020bbd8f120");
+    s.push_str("bcdb5720bdb8d320beb1fea0bf98b520c09b1b20c1789720c27afd20c3587920c451a4a0c5385b20c63ac120c758d6a0");
+    s.push_str("c7da09a0ca162690ca975990cbd11e90cc773b90cdb10090ce605810cf90e290d06e5e90d1721610d1fb3210d269fe20");
+    s.push_str("d36329a0d449e020d51e21a0d542fd90d5dfe010d64eac20d6fe03a0d82e8e20d8f99520da0e7020daebec20dbe517a0");
+    s.push_str("dccbce20ddc4f9a0deb4eaa0dfae1620e094cca0e17248a0e26b7420e3522aa0e45490a0e5320ca0e63dad20e71b2920");
+    s.push_str("e81454a0e8fb0b20e9fd7120eadaed20ebdd5320ecbacf20edb3faa0ee9ab120ef8167a0f09f7d20f16149a0f27f5f20");
+    s.push_str("f34a6620f45f4120f5210da0f63f2320f700efa0f81f0520f8e0d1a0f9fee720fac0b3a0fbe803a0fc7baba0fdc7bb70");
+    s.push_str("0370c620042958200550a82006093a2007308a2007e91c2009106c2009c8fe200af04e200bb21aa00cd030200d91fca0");
+    s.push_str("0eb012200f71dea010992ea01151c0a0127910a01331a2a01458f2a01523eb901638c6901703cd901818a89018e3af90");
+    s.push_str("19f88a901ac391901be1a7101cacae101dc189101e8c90101fa16b10206c721021814d10224c541023612f10242c3610");
+    s.push_str("254a4b90260c1810272a2d9027f53490290a0f9029d516902ae9f1902bb4f8902cc9d3902d94da902ea9b5902f74bc90");
+    s.push_str("30899790315dd9103272b410333dbb1034529610351d9d103632781036fd7f10381b949038dd611039fb76903abd4310");
+    s.push_str("3bdb58903ca65f903dbb3a903e8641903f9b1c9040662390418439104246059043641b104425e7904543fd104605c990");
+    s.push_str("4723df1047eee6104903c11049cec8104ae3a3104baeaa104cccbf904d8e8c104eaca1904f6e6e10508c839051578a90");
+    s.push_str("526c659053376c90544c479055174e90562c299056f730905815461058d7129059f528105ab6f4905bd50a105ca01110");
+    s.push_str("5db4ec105e7ff3105f94ce10605fd510617dea90623fb710635dcc90641f9910653dae906608b590671d909067e89790");
+    s.push_str("68fd729069c879906add54906ba85b906cc671106d883d906ea653106f681f907086351071513c107266171073311e10");
+    s.push_str("7445f91075110010762f159076f0e210780ef79078d0c41079eed9907ab0a6107bcebb907c99c2907dae9d907e79a490");
+    s.push_str("7f8e7f900401020102010201020102010201020102010201020102010201020102010201020102010201020102010201");
+    s.push_str("020102010201030103010301030103010201020103010201020102010201020102010201020102010201020102010201");
+    s.push_str("020102010201020102010201020102010507010201020102010201020102010201020102060706070607060706070607");
+    s.push_str("060706070607060706070607060706070607060706070607060706070607060706070607060706070607060706070607");
+    s.push_str("060706070607060706070607060706070607060706070607060706070607060706070607060706070607060706070607");
+    s.push_str("060706070607ffffffb5000000000e10010400000000000800001c20010c00000000000800000e10000400000e100104");
+    s.push_str("0000000000084c4d540042535400474d5400424453540000010101000001010000000000000101545a69663200000000");
+    s.push_str("0000000000000000000000000000080000000800000000000000f20000000800000011ffffffff1a5d09cbffffffff9b");
+    s.push_str("26ada0ffffffff9bd60520ffffffff9ccf30a0ffffffff9da4c3a0ffffffff9e9c9da0ffffffff9f971aa0ffffffffa0");
+    s.push_str("85ba20ffffffffa176fca0ffffffffa2659c20ffffffffa37bc8a0ffffffffa44eb8a0ffffffffa53ffb20ffffffffa6");
+    s.push_str("256020ffffffffa727c620ffffffffa82a2c20ffffffffa8ebf8a0ffffffffaa00d3a0ffffffffaad51520ffffffffab");
+    s.push_str("e9f020ffffffffacc76c20ffffffffadc9d220ffffffffaea74e20ffffffffafa079a0ffffffffb0873020ffffffffb1");
+    s.push_str("92d0a0ffffffffb2704ca0ffffffffb372b2a0ffffffffb4502ea0ffffffffb5495a20ffffffffb63010a0ffffffffb7");
+    s.push_str("3276a0ffffffffb80ff2a0ffffffffb91258a0ffffffffb9efd4a0ffffffffbae90020ffffffffbbd8f120ffffffffbc");
+    s.push_str("db5720ffffffffbdb8d320ffffffffbeb1fea0ffffffffbf98b520ffffffffc09b1b20ffffffffc1789720ffffffffc2");
+    s.push_str("7afd20ffffffffc3587920ffffffffc451a4a0ffffffffc5385b20ffffffffc63ac120ffffffffc758d6a0ffffffffc7");
+    s.push_str("da09a0ffffffffca162690ffffffffca975990ffffffffcbd11e90ffffffffcc773b90ffffffffcdb10090ffffffffce");
+    s.push_str("605810ffffffffcf90e290ffffffffd06e5e90ffffffffd1721610ffffffffd1fb3210ffffffffd269fe20ffffffffd3");
+    s.push_str("6329a0ffffffffd449e020ffffffffd51e21a0ffffffffd542fd90ffffffffd5dfe010ffffffffd64eac20ffffffffd6");
+    s.push_str("fe03a0ffffffffd82e8e20ffffffffd8f99520ffffffffda0e7020ffffffffdaebec20ffffffffdbe517a0ffffffffdc");
+    s.push_str("cbce20ffffffffddc4f9a0ffffffffdeb4eaa0ffffffffdfae1620ffffffffe094cca0ffffffffe17248a0ffffffffe2");
+    s.push_str("6b7420ffffffffe3522aa0ffffffffe45490a0ffffffffe5320ca0ffffffffe63dad20ffffffffe71b2920ffffffffe8");
+    s.push_str("1454a0ffffffffe8fb0b20ffffffffe9fd7120ffffffffeadaed20ffffffffebdd5320ffffffffecbacf20ffffffffed");
+    s.push_str("b3faa0ffffffffee9ab120ffffffffef8167a0fffffffff09f7d20fffffffff16149a0fffffffff27f5f20fffffffff3");
+    s.push_str("4a6620fffffffff45f4120fffffffff5210da0fffffffff63f2320fffffffff700efa0fffffffff81f0520fffffffff8");
+    s.push_str("e0d1a0fffffffff9fee720fffffffffac0b3a0fffffffffbe803a0fffffffffc7baba0fffffffffdc7bb700000000003");
+    s.push_str("70c6200000000004295820000000000550a8200000000006093a200000000007308a200000000007e91c200000000009");
+    s.push_str("106c200000000009c8fe20000000000af04e20000000000bb21aa0000000000cd03020000000000d91fca0000000000e");
+    s.push_str("b01220000000000f71dea00000000010992ea0000000001151c0a000000000127910a0000000001331a2a00000000014");
+    s.push_str("58f2a0000000001523eb90000000001638c690000000001703cd90000000001818a8900000000018e3af900000000019");
+    s.push_str("f88a90000000001ac39190000000001be1a710000000001cacae10000000001dc18910000000001e8c9010000000001f");
+    s.push_str("a16b1000000000206c72100000000021814d1000000000224c54100000000023612f1000000000242c36100000000025");
+    s.push_str("4a4b9000000000260c181000000000272a2d900000000027f5349000000000290a0f900000000029d51690000000002a");
+    s.push_str("e9f190000000002bb4f890000000002cc9d390000000002d94da90000000002ea9b590000000002f74bc900000000030");
+    s.push_str("89979000000000315dd910000000003272b41000000000333dbb10000000003452961000000000351d9d100000000036");
+    s.push_str("3278100000000036fd7f1000000000381b94900000000038dd61100000000039fb7690000000003abd4310000000003b");
+    s.push_str("db5890000000003ca65f90000000003dbb3a90000000003e864190000000003f9b1c9000000000406623900000000041");
+    s.push_str("84391000000000424605900000000043641b10000000004425e790000000004543fd10000000004605c9900000000047");
+    s.push_str("23df100000000047eee610000000004903c1100000000049cec810000000004ae3a310000000004baeaa10000000004c");
+    s.push_str("ccbf90000000004d8e8c10000000004eaca190000000004f6e6e1000000000508c83900000000051578a900000000052");
+    s.push_str("6c65900000000053376c9000000000544c47900000000055174e9000000000562c29900000000056f730900000000058");
+    s.push_str("1546100000000058d712900000000059f52810000000005ab6f490000000005bd50a10000000005ca01110000000005d");
+    s.push_str("b4ec10000000005e7ff310000000005f94ce1000000000605fd51000000000617dea9000000000623fb7100000000063");
+    s.push_str("5dcc9000000000641f991000000000653dae90000000006608b59000000000671d90900000000067e897900000000068");
+    s.push_str("fd72900000000069c87990000000006add5490000000006ba85b90000000006cc67110000000006d883d90000000006e");
+    s.push_str("a65310000000006f681f9000000000708635100000000071513c1000000000726617100000000073311e100000000074");
+    s.push_str("45f910000000007511001000000000762f15900000000076f0e21000000000780ef7900000000078d0c4100000000079");
+    s.push_str("eed990000000007ab0a610000000007bcebb90000000007c99c290000000007dae9d90000000007e79a490000000007f");
+    s.push_str("8e7f90040102010201020102010201020102010201020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020103010301030103010301020102010301020102010201020102010201020102010201020102010201020102");
+    s.push_str("010201020102010201020102010201050701020102010201020102010201020102010206070607060706070607060706");
+    s.push_str("070607060706070607060706070607060706070607060706070607060706070607060706070607060706070607060706");
+    s.push_str("070607060706070607060706070607060706070607060706070607060706070607060706070607060706070607060706");
+    s.push_str("0706070607ffffffb5000000000e10010400000000000800001c20010c00000000000800000e10000400000e10010400");
+    s.push_str("00000000084c4d540042535400474d54004244535400000101010000010100000000000001010a474d54304253542c4d");
+    s.push_str("332e352e302f312c4d31302e352e300a");
+    s
+}
+
+// data/zones/Pacific/Apia
+fn file_19() -> String {
+    let mut s = String.new();
+    s.push_str("545a6966320000000000000000000000000000000000000000000000000000000000001b000000070000001a80000000");
+    s.push_str("9105fc00da6204384c9f27b04d972be04e7de2604efd8ba04f770de05066fee051602a605246e0e053400c605426c2e0");
+    s.push_str("551fee605606a4e056ffd06057e686e058dfb26059c668e05abf94605baf85605ca8b0e05d8f67605e8892e05f6f4960");
+    s.push_str("606874e07fffffff0102040304030605060506050605060506050605060506050605050000b0800000ffff5f000000ff");
+    s.push_str("ff5e480004ffff7360010affff6550000e0000b6d000120000c4e001164c4d54002d31313330002d3130002d3131002b");
+    s.push_str("3133002b313400545a6966320000000000000000000000000000000000000000000000000000000000001b0000000700");
+    s.push_str("00001affffffff6e3dc900ffffffff9105fc00ffffffffda620438000000004c9f27b0000000004d972be0000000004e");
+    s.push_str("7de260000000004efd8ba0000000004f770de0000000005066fee00000000051602a60000000005246e0e00000000053");
+    s.push_str("400c60000000005426c2e000000000551fee60000000005606a4e00000000056ffd0600000000057e686e00000000058");
+    s.push_str("dfb2600000000059c668e0000000005abf9460000000005baf8560000000005ca8b0e0000000005d8f6760000000005e");
+    s.push_str("8892e0000000005f6f496000000000606874e0000000007fffffff010204030403060506050605060506050605060506");
+    s.push_str("0506050605050000b0800000ffff5f000000ffff5e480004ffff7360010affff6550000e0000b6d000120000c4e00116");
+    s.push_str("4c4d54002d31313330002d3130002d3131002b3133002b3134000a3c2b31333e2d31330a");
+    s
+}
+
+// data/zones/Pacific/Chatham
+fn file_20() -> String {
+    let mut s = String.new();
+    s.push_str("545a69663200000000000000000000000000000000000000000000050000000000000082000000050000001680000000");
+    s.push_str("d2da96bc0918fde009aca5e00aefa5600b9efce00cd8c1e00d7edee00eb8a3e00f5ec0e0109885e0113ea2e0127867e0");
+    s.push_str("131e84e0145849e014fe66e016382be016e783601821486018c765601a012a601aa747601be10c601c8729601dc0ee60");
+    s.push_str("1e670b601fa0d0602046ed602180b260223009e02369cee0240febe0252e0160260242e0270de36027e224e028edc560");
+    s.push_str("29c206e02acda7602bab23602cad89602d8b05602e8d6b602f6ae760306d4d60314ac960325669e0332aab6034364be0");
+    s.push_str("350a8d6036162de036f3a9e037f60fe038d38be039d5f1e03ab36de03bbf0e603c934fe03d9ef0603e7331e03f7ed260");
+    s.push_str("405c4e60415eb460423c3060433e9660441c1260451e786045fbf46046fe5a6047f785e048de3c6049d767e04abe1e60");
+    s.push_str("4bb749e04c9e00604d972be04e7de2604f770de05066fee051602a605246e0e053400c605426c2e0551fee605606a4e0");
+    s.push_str("56ffd06057e686e058dfb26059c668e05abf94605baf85605ca8b0e05d8f67605e8892e05f6f4960606874e0614f2b60");
+    s.push_str("624856e0632f0d60642838e0650eef606611556066f80be067f1376068d7ede069d119606ab7cfe06bb0fb606c97b1e0");
+    s.push_str("6d90dd606e7793e06f70bf607060b0607159dbe0724092607339bde07420746075199fe07600566076f981e077e03860");
+    s.push_str("78d963e079c01a607ab945e07ba936e07ca262607d8918e07e8244607f68fae07fffffff010402030203020302030203");
+    s.push_str("020302030203020302030203020302030203020302030203020302030203020302030203020302030203020302030203");
+    s.push_str("020302030203020302030203020302030203020302030203020302030203020302030203020302030203020302030203");
+    s.push_str("020302030203020302030203020302030203020302020000abfc00000000ac4400040000c15c010a0000b34c00100000");
+    s.push_str("b34c00104c4d54002b31323135002b31333435002b31323435000000010100545a696632000000000000000000000000");
+    s.push_str("000000000000000000000500000000000000820000000500000016ffffffff41b74484ffffffffd2da96bc0000000009");
+    s.push_str("18fde00000000009aca5e0000000000aefa560000000000b9efce0000000000cd8c1e0000000000d7edee0000000000e");
+    s.push_str("b8a3e0000000000f5ec0e000000000109885e000000000113ea2e000000000127867e000000000131e84e00000000014");
+    s.push_str("5849e00000000014fe66e00000000016382be00000000016e7836000000000182148600000000018c76560000000001a");
+    s.push_str("012a60000000001aa74760000000001be10c60000000001c872960000000001dc0ee60000000001e670b60000000001f");
+    s.push_str("a0d060000000002046ed60000000002180b26000000000223009e0000000002369cee000000000240febe00000000025");
+    s.push_str("2e016000000000260242e000000000270de3600000000027e224e00000000028edc5600000000029c206e0000000002a");
+    s.push_str("cda760000000002bab2360000000002cad8960000000002d8b0560000000002e8d6b60000000002f6ae7600000000030");
+    s.push_str("6d4d6000000000314ac96000000000325669e000000000332aab600000000034364be000000000350a8d600000000036");
+    s.push_str("162de00000000036f3a9e00000000037f60fe00000000038d38be00000000039d5f1e0000000003ab36de0000000003b");
+    s.push_str("bf0e60000000003c934fe0000000003d9ef060000000003e7331e0000000003f7ed26000000000405c4e600000000041");
+    s.push_str("5eb46000000000423c306000000000433e966000000000441c126000000000451e78600000000045fbf4600000000046");
+    s.push_str("fe5a600000000047f785e00000000048de3c600000000049d767e0000000004abe1e60000000004bb749e0000000004c");
+    s.push_str("9e0060000000004d972be0000000004e7de260000000004f770de0000000005066fee00000000051602a600000000052");
+    s.push_str("46e0e00000000053400c60000000005426c2e000000000551fee60000000005606a4e00000000056ffd0600000000057");
+    s.push_str("e686e00000000058dfb2600000000059c668e0000000005abf9460000000005baf8560000000005ca8b0e0000000005d");
+    s.push_str("8f6760000000005e8892e0000000005f6f496000000000606874e000000000614f2b6000000000624856e00000000063");
+    s.push_str("2f0d6000000000642838e000000000650eef6000000000661155600000000066f80be00000000067f137600000000068");
+    s.push_str("d7ede00000000069d11960000000006ab7cfe0000000006bb0fb60000000006c97b1e0000000006d90dd60000000006e");
+    s.push_str("7793e0000000006f70bf60000000007060b060000000007159dbe00000000072409260000000007339bde00000000074");
+    s.push_str("2074600000000075199fe000000000760056600000000076f981e00000000077e038600000000078d963e00000000079");
+    s.push_str("c01a60000000007ab945e0000000007ba936e0000000007ca26260000000007d8918e0000000007e824460000000007f");
+    s.push_str("68fae0000000007fffffff01040203020302030203020302030203020302030203020302030203020302030203020302");
+    s.push_str("030203020302030203020302030203020302030203020302030203020302030203020302030203020302030203020302");
+    s.push_str("0302030203020302030203020302030203020302030203020302030203020302030203020302030203020302020000ab");
+    s.push_str("fc00000000ac4400040000c15c010a0000b34c00100000b34c00104c4d54002b31323135002b31333435002b31323435");
+    s.push_str("0000000101000a3c2b313234353e2d31323a34353c2b313334353e2c4d392e352e302f323a34352c4d342e312e302f33");
+    s.push_str("3a34350a");
+    s
+}
+
+// data/zones/Test/Eire
+fn file_21() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("3200000000000000000000000000000000000000000000000000000000000002000000020000000800000000641f9910");
+    s.push_str("00000000653dae90010000000000010000000e100004474d5400495354000a4953542d31474d54302c4d31302e352e30");
+    s.push_str("2c4d332e352e302f310a");
+    s
+}
+
+// data/zones/Test/Fixed
+fn file_22() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("3200000000000000000000000000000000000000000000000000000000000000000000010000000400004d5800004953");
+    s.push_str("54000a0a");
+    s
+}
+
+// data/zones/Test/FooterOnly
+fn file_23() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("32000000000000000000000000000000000000000000000000000000000000000000000100000006ffffd5d000003c2d");
+    s.push_str("30333e000a3c2d30333e333c2d30323e2c4d332e322e302f2d312c4d31312e312e302f32340a");
+    s
+}
+
+// data/zones/Test/Guess
+fn file_24() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000000000000000000000200000002000000080000000000000000");
+    s.push_str("00000000000003e8010100000000000000001518010453544400445354000a535444300a");
+    s
+}
+
+// data/zones/Test/Indicators
+fn file_25() -> String {
+    let mut s = String.new();
+    s.push_str("545a696632000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("320000000000000000000000000000000000000000000003000000000000000200000003000000090000000000000000");
+    s.push_str("0000000005f5e100010200000e10000000001c20010400000e1000004345540043455354000101010a4345542d314345");
+    s.push_str("53542c4d332e352e302c4d31302e352e302f330a");
+    s
+}
+
+// data/zones/Test/Julian
+fn file_26() -> String {
+    let mut s = String.new();
+    s.push_str("545a696633000000000000000000000000000000000000000000000000000000000000000000000000000000545a6966");
+    s.push_str("33000000000000000000000000000000000000000000000000000000000000000000000100000004fffff1f000004141");
+    s.push_str("41000a41414131424242302c4a36302f32352c3330302f2d320a");
+    s
+}
+
+// data/zones/Test/Version1
+fn file_27() -> String {
+    let mut s = String.new();
+    s.push_str("545a6966000000000000000000000000000000000000000000000000000000000000000400000002000000089ea61e70");
+    s.push_str("9fbaeb60a0860070a19acd6001000100ffffb9b00000ffffc7c001044553540045445400");
+    s
+}
+
+// data/zones/UTC
+fn file_28() -> String {
+    let mut s = String.new();
+    s.push_str("545a69663200000000000000000000000000000000000000000000000000000000000000000000010000000400000000");
+    s.push_str("000055544300545a69663200000000000000000000000000000000000000000000000000000000000000000000010000");
+    s.push_str("0004000000000000555443000a555443300a");
+    s
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/convert.txt", file_0())?;
+    put("data/meetings.txt", file_1())?;
+    put("data/tzstrings.txt", file_2())?;
+    put("data/years.txt", file_3())?;
+    make_dir("data/zones/Africa")?;
+    put_bytes("data/zones/Africa/Casablanca", unhex(file_4()))?;
+    make_dir("data/zones/America")?;
+    put_bytes("data/zones/America/New_York", unhex(file_5()))?;
+    put_bytes("data/zones/America/Sao_Paulo", unhex(file_6()))?;
+    put_bytes("data/zones/America/St_Johns", unhex(file_7()))?;
+    make_dir("data/zones/Antarctica")?;
+    put_bytes("data/zones/Antarctica/Troll", unhex(file_8()))?;
+    make_dir("data/zones/Asia")?;
+    put_bytes("data/zones/Asia/Kolkata", unhex(file_9()))?;
+    make_dir("data/zones/Australia")?;
+    put_bytes("data/zones/Australia/Lord_Howe", unhex(file_10()))?;
+    make_dir("data/zones/Bad")?;
+    put_bytes("data/zones/Bad/Empty", unhex(file_11()))?;
+    put_bytes("data/zones/Bad/Index", unhex(file_12()))?;
+    put_bytes("data/zones/Bad/Magic", unhex(file_13()))?;
+    put_bytes("data/zones/Bad/NoNewline", unhex(file_14()))?;
+    put_bytes("data/zones/Bad/NoRules", unhex(file_15()))?;
+    put_bytes("data/zones/Bad/RulesNoDST", unhex(file_16()))?;
+    put_bytes("data/zones/Bad/Week", unhex(file_17()))?;
+    make_dir("data/zones/Europe")?;
+    put_bytes("data/zones/Europe/London", unhex(file_18()))?;
+    make_dir("data/zones/Pacific")?;
+    put_bytes("data/zones/Pacific/Apia", unhex(file_19()))?;
+    put_bytes("data/zones/Pacific/Chatham", unhex(file_20()))?;
+    make_dir("data/zones/Test")?;
+    put_bytes("data/zones/Test/Eire", unhex(file_21()))?;
+    put_bytes("data/zones/Test/Fixed", unhex(file_22()))?;
+    put_bytes("data/zones/Test/FooterOnly", unhex(file_23()))?;
+    put_bytes("data/zones/Test/Guess", unhex(file_24()))?;
+    put_bytes("data/zones/Test/Indicators", unhex(file_25()))?;
+    put_bytes("data/zones/Test/Julian", unhex(file_26()))?;
+    put_bytes("data/zones/Test/Version1", unhex(file_27()))?;
+    make_dir("data/zones")?;
+    put_bytes("data/zones/UTC", unhex(file_28()))?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the reports
+
+const ROOT: Str = "data/zones";
+const DAYS: Array[Str, 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+// Every file under the zones directory, as a key.
+fn walk(dir: Str, out: mut ref Vec[String]) -> Result[(), String] {
+    let full = if dir.len() > 0 { f"{ROOT}/{dir}" } else { ROOT.to_string() };
+    let names = match fs.read_dir(full.clone()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list {full}: {e}"),
+    };
+    for i in 0..names.len() {
+        let rel = if dir.len() > 0 { f"{dir}/{names[i]}" } else { names[i].clone() };
+        let is_dir = match fs.metadata(f"{ROOT}/{rel}") {
+            Ok(m) => m.is_dir,
+            Err(e) => return Err(f"cannot stat {rel}: {e}"),
+        };
+        if is_dir {
+            walk(rel, out)?;
+        } else {
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
+fn tti_str(t: ref Tti) -> String {
+    f"{t.tzname} {off(t.utcoff)} dst {t.dstoff}"
+}
+
+fn rule_str(r: ref DayRule) -> String {
+    let d = if r.cal { f"M{r.m}.{r.w}.{r.d}" } else if r.julian { f"J{r.d}" } else { f"{r.d}" };
+    f"{d}/{r.secs}"
+}
+
+fn after_str(a: ref After) -> String {
+    if a.is_rule {
+        return f"rule {tti_str(a.std)} / {tti_str(a.dst)}, {rule_str(a.start)} to {rule_str(a.end)}";
+    }
+    f"fixed {tti_str(a.std)}"
+}
+
+fn show_zones() -> Result[Vec[Zone], String] {
+    println("== zones");
+    let mut keys: Vec[String] = Vec.new();
+    walk("", mut keys)?;
+    for i in 1..keys.len() {
+        let mut j = i;
+        while j > 0 and keys[j] < keys[j - 1] {
+            keys.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut zones: Vec[Zone] = Vec.new();
+    for key in keys {
+        let bytes = match fs.read_bytes(f"{ROOT}/{key}") {
+            Ok(b) => b,
+            Err(e) => return Err(f"cannot read {key}: {e}"),
+        };
+        let raw = match load_data(bytes) {
+            Ok(r) => r,
+            Err(e) => {
+                println(f"{key}: ValueError: {e}");
+                continue;
+            }
+        };
+        let z = match load_zone(key, raw) {
+            Ok(z) => z,
+            Err(e) => {
+                println(f"{key}: ValueError: {e}");
+                continue;
+            }
+        };
+        let footer = match raw.tz_str.clone() {
+            Some(s) => py_repr(s),
+            None => "None".to_string(),
+        };
+        println(f"{key}: version {raw.version}, {raw.trans_utc.len()} transitions, {raw.utcoff.len()} types, footer {footer}");
+        let dstoff = utcoff_to_dstoff(raw.trans_idx, raw.utcoff, raw.isdst);
+        for t in 0..raw.utcoff.len() {
+            println(f"  type {t}: {raw.abbr[t]} {off(raw.utcoff[t])} isdst {raw.isdst[t]} dst {dstoff[t]}");
+        }
+        if raw.trans_utc.len() > 0 {
+            println(f"  first {iso(raw.trans_utc[0])}Z, last {iso(raw.trans_utc[raw.trans_utc.len() - 1])}Z");
+        }
+        let before = match z.before.clone() {
+            Some(t) => tti_str(t),
+            None => "None".to_string(),
+        };
+        println(f"  before {before}");
+        println(f"  after {after_str(z.after)}");
+        zones.push(z);
+    }
+    Ok(zones)
+}
+
+fn show_tzstrings() -> Result[(), String] {
+    println("== tz strings");
+    for s in lines_of(read("data/tzstrings.txt")?) {
+        match parse_tz_str(s) {
+            Ok(a) => {
+                println(f"{py_repr(s)}: {after_str(a)}");
+                if a.is_rule {
+                    for y in [2024, 2025] {
+                        let (st, en) = transitions(a, y);
+                        println(f"  {y}: {iso(st)} to {iso(en)}");
+                    }
+                }
+            }
+            Err(e) => println(f"{py_repr(s)}: ValueError: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn zone_at(zones: ref Vec[Zone], key: Str) -> i64 {
+    for i in 0..zones.len() {
+        if zones[i].key == key {
+            return i;
+        }
+    }
+    -1
+}
+
+// The local time at a UTC time, as datetime.astimezone shows it.
+fn show_local(z: ref Zone, utc: i64) -> String {
+    let (t, fold) = from_utc(z, utc);
+    let f: i64 = if fold { 1 } else { 0 };
+    f"{iso(utc + t.utcoff)}{off(t.utcoff)} fold {f} {t.tzname} dst {t.dstoff}"
+}
+
+fn show_convert(zones: ref Vec[Zone]) -> Result[(), String] {
+    println("== conversions");
+    for line in lines_of(read("data/convert.txt")?) {
+        if line.len() == 0 or first_byte(line) == b'#' {
+            continue;
+        }
+        let w = split_on(line, b' ');
+        let z = zones[zone_at(zones, w[1])].clone();
+        let t = parse_iso(w[2]);
+        if w[0] == "utc" {
+            println(f"utc {w[1]} {iso(t)}Z -> {show_local(z, t)}");
+        } else {
+            let fold = py_int(w[3]).unwrap_or(0);
+            let tti = find_trans(z, t, fold);
+            let u = t - tti.utcoff;
+            let (back, _) = from_utc(z, u);
+            let note = if u + back.utcoff == t { String.new() } else { f" (round trip {iso(u + back.utcoff)})" };
+            println(f"local {w[1]} {iso(t)} fold {w[3]} -> {tti.tzname} {off(tti.utcoff)} dst {tti.dstoff} = {iso(u)}Z{note}");
+        }
+    }
+    Ok(())
+}
+
+fn same_state(a: ref Tti, b: ref Tti) -> bool {
+    a.utcoff == b.utcoff and a.dstoff == b.dstoff and a.tzname == b.tzname
+}
+
+fn state(z: ref Zone, ts: i64) -> Tti {
+    let (t, _) = from_utc(z, ts);
+    t
+}
+
+fn show_years(zones: ref Vec[Zone]) -> Result[(), String] {
+    println("== transitions");
+    let step: i64 = 3 * 3600;
+    for line in lines_of(read("data/years.txt")?) {
+        let w = split_on(line, b' ');
+        let z = zones[zone_at(zones, w[0])].clone();
+        for k in 1..w.len() {
+            let y = py_int(w[k]).unwrap_or(0);
+            println(f"{w[0]} {y}:");
+            let lo = days_from_civil(y, 1, 1) * 86400;
+            let hi = days_from_civil(y + 1, 1, 1) * 86400;
+            let mut prev = state(z, lo);
+            let mut t = lo;
+            let mut count: i64 = 0;
+            while t < hi {
+                let n = if t + step < hi { t + step } else { hi };
+                let cur = state(z, n);
+                if not same_state(cur, prev) {
+                    // prev holds at a, cur at b
+                    let mut a = t;
+                    let mut b = n;
+                    while b - a > 1 {
+                        let mid = fdiv(a + b, 2);
+                        if same_state(state(z, mid), prev) {
+                            a = mid;
+                        } else {
+                            b = mid;
+                        }
+                    }
+                    println(f"  {iso(b)}Z {prev.tzname} {off(prev.utcoff)} -> {cur.tzname} {off(cur.utcoff)} dst {cur.dstoff}, clocks go from {iso(b - 1 + prev.utcoff)} to {iso(b + cur.utcoff)}");
+                    prev = state(z, b);
+                    t = b;
+                    count += 1;
+                    continue;
+                }
+                t = n;
+            }
+            if count == 0 {
+                println(f"  none, {prev.tzname} {off(prev.utcoff)} all year");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn show_meetings(zones: ref Vec[Zone]) -> Result[(), String] {
+    println("== meetings");
+    for line in lines_of(read("data/meetings.txt")?) {
+        if line.len() == 0 or first_byte(line) == b'#' {
+            continue;
+        }
+        let f = split_on(line, b'|');
+        let name = strip(f[0]);
+        let org = strip(f[1]);
+        let z = zones[zone_at(zones, org)].clone();
+        println(f"{name} ({org}):");
+        let start = parse_iso(strip(f[2]));
+        let weeks = py_int(f[3]).unwrap_or(0);
+        let others = split_on(strip(f[4]), b' ');
+        for k in 0..weeks {
+            let t = start + 7 * 86400 * k;
+            let a = find_trans(z, t, 0);
+            let b = find_trans(z, t, 1);
+            let u = t - a.utcoff;
+            let (bt, _) = from_utc(z, u);
+            let back = u + bt.utcoff;
+            let head = f"  {DAYS[weekday(fdiv(t, 86400))]} {iso(t)} {a.tzname}";
+            if back != t {
+                println(f"{head}: does not exist, clocks skip it; moved to {iso(back)}");
+            } else if a.utcoff != b.utcoff {
+                println(f"{head}: happens twice, using the first");
+            } else {
+                println(head);
+            }
+            for o in others {
+                let oz = zones[zone_at(zones, o)].clone();
+                let (ot, _) = from_utc(oz, u);
+                let loc = u + ot.utcoff;
+                let day = fdiv(loc, 86400) - fdiv(t, 86400);
+                let shift = if day > 0 { f" (+{day} day)" } else if day < 0 { f" ({day} day)" } else { String.new() };
+                println(f"    {o}: {DAYS[weekday(fdiv(loc, 86400))]} {hh_mm(loc)} {ot.tzname}{shift}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let zones = show_zones()?;
+    show_tzstrings()?;
+    show_convert(zones)?;
+    show_years(zones)?;
+    show_meetings(zones)
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_zoneinfo: {e}");
+    }
+}

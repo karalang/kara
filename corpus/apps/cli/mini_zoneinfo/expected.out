@@ -1,0 +1,413 @@
+== zones
+Africa/Casablanca: version 2, 72 transitions, 5 types, footer '<+00>0'
+  type 0: LMT -00:30:20 isdst 0 dst 0
+  type 1: +01 +01:00 isdst 1 dst 3600
+  type 2: +00 +00:00 isdst 0 dst 0
+  type 3: +01 +01:00 isdst 0 dst 0
+  type 4: +00 +00:00 isdst 0 dst 0
+  first 1913-10-26T00:30:20Z, last 2038-01-19T03:14:07Z
+  before LMT -00:30:20 dst 0
+  after fixed +00 +00:00 dst 0
+America/New_York: version 2, 236 transitions, 6 types, footer 'EST5EDT,M3.2.0,M11.1.0'
+  type 0: LMT -04:56:02 isdst 0 dst 0
+  type 1: EDT -04:00 isdst 1 dst 3600
+  type 2: EST -05:00 isdst 0 dst 0
+  type 3: EST -05:00 isdst 0 dst 0
+  type 4: EWT -04:00 isdst 1 dst 3600
+  type 5: EPT -04:00 isdst 1 dst 3600
+  first 1883-11-18T17:00:00Z, last 2037-11-01T06:00:00Z
+  before LMT -04:56:02 dst 0
+  after rule EST -05:00 dst 0 / EDT -04:00 dst 3600, M3.2.0/7200 to M11.1.0/7200
+America/Sao_Paulo: version 2, 92 transitions, 3 types, footer '<-03>3'
+  type 0: LMT -03:06:28 isdst 0 dst 0
+  type 1: -02 -02:00 isdst 1 dst 3600
+  type 2: -03 -03:00 isdst 0 dst 0
+  first 1914-01-01T03:06:28Z, last 2038-01-19T03:14:07Z
+  before LMT -03:06:28 dst 0
+  after fixed -03 -03:00 dst 0
+America/St_Johns: version 2, 239 transitions, 9 types, footer 'NST3:30NDT,M3.2.0,M11.1.0'
+  type 0: LMT -03:30:52 isdst 0 dst 0
+  type 1: NDT -02:30:52 isdst 1 dst 3600
+  type 2: NST -03:30:52 isdst 0 dst 0
+  type 3: NDT -02:30 isdst 1 dst 3600
+  type 4: NST -03:30 isdst 0 dst 0
+  type 5: NPT -02:30 isdst 1 dst 3600
+  type 6: NWT -02:30 isdst 1 dst 3600
+  type 7: NDDT -01:30 isdst 1 dst 7200
+  type 8: NDT -02:30 isdst 1 dst 3600
+  first 1884-01-01T03:30:52Z, last 2037-11-01T04:30:00Z
+  before LMT -03:30:52 dst 0
+  after rule NST -03:30 dst 0 / NDT -02:30 dst 3600, M3.2.0/7200 to M11.1.0/7200
+Antarctica/Troll: version 2, 68 transitions, 4 types, footer '<+00>0<+02>-2,M3.5.0/1,M10.5.0/3'
+  type 0: -00 +00:00 isdst 0 dst 0
+  type 1: +02 +02:00 isdst 1 dst 7200
+  type 2: +00 +00:00 isdst 0 dst 0
+  type 3: +00 +00:00 isdst 0 dst 0
+  first 2005-02-12T00:00:00Z, last 2038-01-19T03:14:07Z
+  before -00 +00:00 dst 0
+  after rule +00 +00:00 dst 0 / +02 +02:00 dst 7200, M3.5.0/3600 to M10.5.0/10800
+Asia/Kolkata: version 2, 7 transitions, 5 types, footer 'IST-5:30'
+  type 0: LMT +05:53:28 isdst 0 dst 0
+  type 1: HMT +05:53:20 isdst 0 dst 0
+  type 2: MMT +05:21:10 isdst 0 dst 0
+  type 3: IST +05:30 isdst 0 dst 0
+  type 4: +0630 +06:30 isdst 1 dst 3600
+  first 1854-06-27T18:06:32Z, last 1945-10-14T17:30:00Z
+  before LMT +05:53:28 dst 0
+  after fixed IST +05:30 dst 0
+Australia/Lord_Howe: version 2, 116 transitions, 5 types, footer '<+1030>-10:30<+11>-11,M10.1.0,M4.1.0'
+  type 0: LMT +10:36:20 isdst 0 dst 0
+  type 1: AEST +10:00 isdst 0 dst 0
+  type 2: +1130 +11:30 isdst 1 dst 3600
+  type 3: +1030 +10:30 isdst 0 dst 0
+  type 4: +11 +11:00 isdst 1 dst 1800
+  first 1895-01-31T13:23:40Z, last 2038-01-19T03:14:07Z
+  before LMT +10:36:20 dst 0
+  after rule +1030 +10:30 dst 0 / +11 +11:00 dst 1800, M10.1.0/7200 to M4.1.0/7200
+Bad/Empty: ValueError: No time zone information found.
+Bad/Index: ValueError: Invalid transition index found while reading TZif: 5
+Bad/Magic: ValueError: Invalid TZif file: magic not found
+Bad/NoNewline: ValueError: Invalid TZif file: unexpected end of file
+Bad/NoRules: ValueError: Missing transition rules: AAA3BBB
+Bad/RulesNoDST: ValueError: Transition rule present without DST: AAA3,M3.2.0,M11.1.0
+Bad/Week: ValueError: Invalid TZ string: AAA3BBB,M3.6.0,M11.1.0
+Europe/London: version 2, 242 transitions, 8 types, footer 'GMT0BST,M3.5.0/1,M10.5.0'
+  type 0: LMT -00:01:15 isdst 0 dst 0
+  type 1: BST +01:00 isdst 1 dst 3600
+  type 2: GMT +00:00 isdst 0 dst 0
+  type 3: BDST +02:00 isdst 1 dst 3600
+  type 4: GMT +00:00 isdst 0 dst 0
+  type 5: BST +01:00 isdst 0 dst 0
+  type 6: BST +01:00 isdst 1 dst 3600
+  type 7: GMT +00:00 isdst 0 dst 0
+  first 1847-12-01T00:01:15Z, last 2037-10-25T01:00:00Z
+  before LMT -00:01:15 dst 0
+  after rule GMT +00:00 dst 0 / BST +01:00 dst 3600, M3.5.0/3600 to M10.5.0/7200
+Pacific/Apia: version 2, 27 transitions, 7 types, footer '<+13>-13'
+  type 0: LMT +12:33:04 isdst 0 dst 0
+  type 1: LMT -11:26:56 isdst 0 dst 0
+  type 2: -1130 -11:30 isdst 0 dst 0
+  type 3: -10 -10:00 isdst 1 dst 3600
+  type 4: -11 -11:00 isdst 0 dst 0
+  type 5: +13 +13:00 isdst 0 dst 0
+  type 6: +14 +14:00 isdst 1 dst 3600
+  first 1892-07-04T11:26:56Z, last 2038-01-19T03:14:07Z
+  before LMT +12:33:04 dst 0
+  after fixed +13 +13:00 dst 0
+Pacific/Chatham: version 2, 130 transitions, 5 types, footer '<+1245>-12:45<+1345>,M9.5.0/2:45,M4.1.0/3:45'
+  type 0: LMT +12:13:48 isdst 0 dst 0
+  type 1: +1215 +12:15 isdst 0 dst 0
+  type 2: +1345 +13:45 isdst 1 dst 3600
+  type 3: +1245 +12:45 isdst 0 dst 0
+  type 4: +1245 +12:45 isdst 0 dst 0
+  first 1868-11-01T11:46:12Z, last 2038-01-19T03:14:07Z
+  before LMT +12:13:48 dst 0
+  after rule +1245 +12:45 dst 0 / +1345 +13:45 dst 3600, M9.5.0/9900 to M4.1.0/13500
+Test/Eire: version 2, 2 transitions, 2 types, footer 'IST-1GMT0,M10.5.0,M3.5.0/1'
+  type 0: GMT +00:00 isdst 1 dst -3600
+  type 1: IST +01:00 isdst 0 dst 0
+  first 2023-03-26T01:00:00Z, last 2023-10-29T01:00:00Z
+  before IST +01:00 dst 0
+  after rule IST +01:00 dst 0 / GMT +00:00 dst -3600, M10.5.0/7200 to M3.5.0/3600
+Test/Fixed: version 2, 0 transitions, 1 types, footer ''
+  type 0: IST +05:30 isdst 0 dst 0
+  before IST +05:30 dst 0
+  after fixed IST +05:30 dst 0
+Test/FooterOnly: version 2, 0 transitions, 1 types, footer '<-03>3<-02>,M3.2.0/-1,M11.1.0/24'
+  type 0: <-03> -03:00 isdst 0 dst 0
+  before <-03> -03:00 dst 0
+  after rule -03 -03:00 dst 0 / -02 -02:00 dst 3600, M3.2.0/-3600 to M11.1.0/86400
+Test/Guess: version 2, 2 transitions, 2 types, footer 'STD0'
+  type 0: STD +00:00 isdst 0 dst 0
+  type 1: DST +01:30 isdst 1 dst 3600
+  first 1970-01-01T00:00:00Z, last 1970-01-01T00:16:40Z
+  before STD +00:00 dst 0
+  after fixed STD +00:00 dst 0
+Test/Indicators: version 2, 2 transitions, 3 types, footer 'CET-1CEST,M3.5.0,M10.5.0/3'
+  type 0: CET +01:00 isdst 0 dst 0
+  type 1: CEST +02:00 isdst 1 dst 3600
+  type 2: CET +01:00 isdst 0 dst 0
+  first 1970-01-01T00:00:00Z, last 1973-03-03T09:46:40Z
+  before CET +01:00 dst 0
+  after rule CET +01:00 dst 0 / CEST +02:00 dst 3600, M3.5.0/7200 to M10.5.0/10800
+Test/Julian: version 3, 0 transitions, 1 types, footer 'AAA1BBB0,J60/25,300/-2'
+  type 0: AAA -01:00 isdst 0 dst 0
+  before AAA -01:00 dst 0
+  after rule AAA -01:00 dst 0 / BBB +00:00 dst 3600, J60/90000 to 300/-7200
+Test/Version1: version 1, 4 transitions, 2 types, footer None
+  type 0: EST -05:00 isdst 0 dst 0
+  type 1: EDT -04:00 isdst 1 dst 3600
+  first 1918-03-31T07:00:00Z, last 1919-10-26T06:00:00Z
+  before EST -05:00 dst 0
+  after fixed EST -05:00 dst 0
+UTC: version 2, 0 transitions, 1 types, footer 'UTC0'
+  type 0: UTC +00:00 isdst 0 dst 0
+  before UTC +00:00 dst 0
+  after fixed UTC +00:00 dst 0
+== tz strings
+'EST5EDT,M3.2.0,M11.1.0': rule EST -05:00 dst 0 / EDT -04:00 dst 3600, M3.2.0/7200 to M11.1.0/7200
+  2024: 2024-03-10T02:00:00 to 2024-11-03T02:00:00
+  2025: 2025-03-09T02:00:00 to 2025-11-02T02:00:00
+'GMT0BST,M3.5.0/1,M10.5.0': rule GMT +00:00 dst 0 / BST +01:00 dst 3600, M3.5.0/3600 to M10.5.0/7200
+  2024: 2024-03-31T01:00:00 to 2024-10-27T02:00:00
+  2025: 2025-03-30T01:00:00 to 2025-10-26T02:00:00
+'<+1030>-10:30<+11>-11,M10.1.0,M4.1.0': rule +1030 +10:30 dst 0 / +11 +11:00 dst 1800, M10.1.0/7200 to M4.1.0/7200
+  2024: 2024-10-06T02:00:00 to 2024-04-07T02:00:00
+  2025: 2025-10-05T02:00:00 to 2025-04-06T02:00:00
+'NST3:30NDT,M3.2.0,M11.1.0': rule NST -03:30 dst 0 / NDT -02:30 dst 3600, M3.2.0/7200 to M11.1.0/7200
+  2024: 2024-03-10T02:00:00 to 2024-11-03T02:00:00
+  2025: 2025-03-09T02:00:00 to 2025-11-02T02:00:00
+'<-03>3<-02>,M3.2.0/-1,M11.1.0/24': rule -03 -03:00 dst 0 / -02 -02:00 dst 3600, M3.2.0/-3600 to M11.1.0/86400
+  2024: 2024-03-09T23:00:00 to 2024-11-04T00:00:00
+  2025: 2025-03-08T23:00:00 to 2025-11-03T00:00:00
+'IST-1GMT0,M10.5.0,M3.5.0/1': rule IST +01:00 dst 0 / GMT +00:00 dst -3600, M10.5.0/7200 to M3.5.0/3600
+  2024: 2024-10-27T02:00:00 to 2024-03-31T01:00:00
+  2025: 2025-10-26T02:00:00 to 2025-03-30T01:00:00
+'AAA1BBB0,J60/25,300/-2': rule AAA -01:00 dst 0 / BBB +00:00 dst 3600, J60/90000 to 300/-7200
+  2024: 2024-03-02T01:00:00 to 2024-10-25T22:00:00
+  2025: 2025-03-02T01:00:00 to 2025-10-26T22:00:00
+'AAA-12:45:30BBB-13:45:30,M9.5.0/2:45,M4.1.0/3:45': rule AAA +12:45:30 dst 0 / BBB +13:45:30 dst 3600, M9.5.0/9900 to M4.1.0/13500
+  2024: 2024-09-29T02:45:00 to 2024-04-07T03:45:00
+  2025: 2025-09-28T02:45:00 to 2025-04-06T03:45:00
+'UTC0': fixed UTC +00:00 dst 0
+'IST-5:30': fixed IST +05:30 dst 0
+'CET-1CEST,M3.5.0,M10.5.0/3': rule CET +01:00 dst 0 / CEST +02:00 dst 3600, M3.5.0/7200 to M10.5.0/10800
+  2024: 2024-03-31T02:00:00 to 2024-10-27T03:00:00
+  2025: 2025-03-30T02:00:00 to 2025-10-26T03:00:00
+'WART4WARST,J1/0,J365/25': rule WART -04:00 dst 0 / WARST -03:00 dst 3600, J1/0 to J365/90000
+  2024: 2024-01-01T00:00:00 to 2025-01-01T01:00:00
+  2025: 2025-01-01T00:00:00 to 2026-01-01T01:00:00
+'XXX-3YYY,0/0,J365/25': rule XXX +03:00 dst 0 / YYY +04:00 dst 3600, 0/0 to J365/90000
+  2024: 2023-12-31T00:00:00 to 2025-01-01T01:00:00
+  2025: 2024-12-31T00:00:00 to 2026-01-01T01:00:00
+'EST': ValueError: Invalid STD offset in EST
+'EST5EDT': ValueError: Missing transition rules: EST5EDT
+'EST5,M3.2.0,M11.1.0': ValueError: Transition rule present without DST: EST5,M3.2.0,M11.1.0
+'EST25EDT,M3.2.0,M11.1.0': ValueError: Invalid STD offset in EST25EDT,M3.2.0,M11.1.0
+'EST5EDT4:60,M3.2.0,M11.1.0': rule EST -05:00 dst 0 / EDT -05:00 dst 0, M3.2.0/7200 to M11.1.0/7200
+  2024: 2024-03-10T02:00:00 to 2024-11-03T02:00:00
+  2025: 2025-03-09T02:00:00 to 2025-11-02T02:00:00
+'EST5EDT,M13.2.0,M11.1.0': ValueError: Invalid TZ string: EST5EDT,M13.2.0,M11.1.0
+'EST5EDT,M3.2.7,M11.1.0': ValueError: Invalid TZ string: EST5EDT,M3.2.7,M11.1.0
+'EST5EDT,M3.2.0': ValueError: Invalid TZ string: EST5EDT,M3.2.0
+'EST5EDT,J0,J365': ValueError: Invalid TZ string: EST5EDT,J0,J365
+'EST5EDT,366,J365': ValueError: Invalid TZ string: EST5EDT,366,J365
+'EST5EDT,M3.2.0/168,M11.1.0': ValueError: Invalid TZ string: EST5EDT,M3.2.0/168,M11.1.0
+'EST5EDT,M3.2.0/1:2,M11.1.0': ValueError: Invalid TZ string: EST5EDT,M3.2.0/1:2,M11.1.0
+'E5EDT,M3.2.0,M11.1.0': rule E -05:00 dst 0 / EDT -04:00 dst 3600, M3.2.0/7200 to M11.1.0/7200
+  2024: 2024-03-10T02:00:00 to 2024-11-03T02:00:00
+  2025: 2025-03-09T02:00:00 to 2025-11-02T02:00:00
+'EST1234EDT': ValueError: EST1234EDT is not a valid TZ string
+'<A1>1<B2>,M1.1.0,M12.5.6/167': rule A1 -01:00 dst 0 / B2 +00:00 dst 3600, M1.1.0/7200 to M12.5.6/601200
+  2024: 2024-01-07T02:00:00 to 2025-01-03T23:00:00
+  2025: 2025-01-05T02:00:00 to 2026-01-02T23:00:00
+'': ValueError:  is not a valid TZ string
+'EST+5EDT-4:30:15,M3.2.0/-1:30,M11.1.0/26:30': rule EST -05:00 dst 0 / EDT +04:30:15 dst 34215, M3.2.0/-5400 to M11.1.0/95400
+  2024: 2024-03-09T22:30:00 to 2024-11-04T02:30:00
+  2025: 2025-03-08T22:30:00 to 2025-11-03T02:30:00
+== conversions
+utc America/New_York 2024-03-10T06:59:59Z -> 2024-03-10T01:59:59-05:00 fold 0 EST dst 0
+utc America/New_York 2024-03-10T07:00:00Z -> 2024-03-10T03:00:00-04:00 fold 0 EDT dst 3600
+utc America/New_York 2024-11-03T05:30:00Z -> 2024-11-03T01:30:00-04:00 fold 0 EDT dst 3600
+utc America/New_York 2024-11-03T06:30:00Z -> 2024-11-03T01:30:00-05:00 fold 1 EST dst 0
+utc America/New_York 1883-11-18T16:59:59Z -> 1883-11-18T12:03:57-04:56:02 fold 0 LMT dst 0
+utc America/New_York 2100-07-04T16:00:00Z -> 2100-07-04T12:00:00-04:00 fold 0 EDT dst 3600
+utc America/New_York 1970-01-01T00:00:00Z -> 1969-12-31T19:00:00-05:00 fold 0 EST dst 0
+utc Europe/London 1971-06-01T00:00:00Z -> 1971-06-01T01:00:00+01:00 fold 0 BST dst 0
+utc Europe/London 2037-10-25T00:30:00Z -> 2037-10-25T01:30:00+01:00 fold 0 BST dst 3600
+utc Europe/London 2037-10-25T01:30:00Z -> 2037-10-25T01:30:00+00:00 fold 1 GMT dst 0
+utc Australia/Lord_Howe 2024-04-06T14:45:00Z -> 2024-04-07T01:45:00+11:00 fold 0 +11 dst 1800
+utc Australia/Lord_Howe 2024-04-06T15:15:00Z -> 2024-04-07T01:45:00+10:30 fold 1 +1030 dst 0
+utc Asia/Kolkata 1941-10-01T00:00:00Z -> 1941-10-01T06:30:00+06:30 fold 0 +0630 dst 3600
+utc Asia/Kolkata 2300-01-01T00:00:00Z -> 2300-01-01T05:30:00+05:30 fold 0 IST dst 0
+utc Pacific/Apia 2011-12-30T09:59:59Z -> 2011-12-29T23:59:59-10:00 fold 0 -10 dst 3600
+utc Pacific/Apia 2011-12-30T10:00:00Z -> 2011-12-31T00:00:00+14:00 fold 0 +14 dst 3600
+utc Pacific/Chatham 2024-09-28T14:00:00Z -> 2024-09-29T03:45:00+13:45 fold 0 +1345 dst 3600
+utc Africa/Casablanca 2024-03-10T01:59:59Z -> 2024-03-10T02:59:59+01:00 fold 0 +01 dst 3600
+utc Africa/Casablanca 2024-03-10T02:00:00Z -> 2024-03-10T02:00:00+00:00 fold 1 +00 dst 0
+utc Antarctica/Troll 2024-03-31T01:00:00Z -> 2024-03-31T03:00:00+02:00 fold 0 +02 dst 7200
+utc America/Sao_Paulo 2018-11-04T03:00:00Z -> 2018-11-04T01:00:00-02:00 fold 0 -02 dst 3600
+utc UTC 2024-02-29T12:00:00Z -> 2024-02-29T12:00:00+00:00 fold 0 UTC dst 0
+utc Test/Version1 1918-03-31T07:00:00Z -> 1918-03-31T03:00:00-04:00 fold 0 EDT dst 3600
+utc Test/Version1 1950-01-01T00:00:00Z -> 1949-12-31T19:00:00-05:00 fold 0 EST dst 0
+utc Test/FooterOnly 2024-03-10T02:59:59Z -> 2024-03-10T00:59:59-02:00 fold 0 -02 dst 3600
+utc Test/FooterOnly 2024-03-10T03:00:00Z -> 2024-03-10T01:00:00-02:00 fold 0 -02 dst 3600
+utc Test/FooterOnly 2024-11-03T02:00:00Z -> 2024-11-03T00:00:00-02:00 fold 0 -02 dst 3600
+utc Test/Eire 2030-10-27T00:30:00Z -> 2030-10-27T01:30:00+01:00 fold 0 IST dst 0
+utc Test/Eire 2030-10-27T01:30:00Z -> 2030-10-27T01:30:00+00:00 fold 1 GMT dst -3600
+utc Test/Eire 2030-03-31T00:59:59Z -> 2030-03-31T00:59:59+00:00 fold 0 GMT dst -3600
+utc Test/Julian 2024-03-01T23:59:59Z -> 2024-03-01T22:59:59-01:00 fold 0 AAA dst 0
+utc Test/Julian 2024-03-02T00:00:00Z -> 2024-03-01T23:00:00-01:00 fold 0 AAA dst 0
+utc Test/Guess 1970-01-01T00:20:00Z -> 1970-01-01T01:50:00+00:00 fold 0 STD dst 0
+utc Test/Fixed 2024-01-01T00:00:00Z -> 2024-01-01T05:30:00+05:30 fold 0 IST dst 0
+local America/New_York 2024-03-10T02:30:00 fold 0 -> EST -05:00 dst 0 = 2024-03-10T07:30:00Z (round trip 2024-03-10T03:30:00)
+local America/New_York 2024-03-10T02:30:00 fold 1 -> EDT -04:00 dst 3600 = 2024-03-10T06:30:00Z (round trip 2024-03-10T01:30:00)
+local America/New_York 2024-11-03T01:30:00 fold 0 -> EDT -04:00 dst 3600 = 2024-11-03T05:30:00Z
+local America/New_York 2024-11-03T01:30:00 fold 1 -> EST -05:00 dst 0 = 2024-11-03T06:30:00Z
+local America/New_York 2024-07-01T12:00:00 fold 1 -> EDT -04:00 dst 3600 = 2024-07-01T16:00:00Z
+local America/New_York 1800-01-01T00:00:00 fold 0 -> LMT -04:56:02 dst 0 = 1800-01-01T04:56:02Z
+local Europe/London 2099-03-29T01:30:00 fold 0 -> GMT +00:00 dst 0 = 2099-03-29T01:30:00Z (round trip 2099-03-29T02:30:00)
+local Europe/London 2099-03-29T01:30:00 fold 1 -> BST +01:00 dst 3600 = 2099-03-29T00:30:00Z (round trip 2099-03-29T00:30:00)
+local Europe/London 2099-10-25T01:30:00 fold 1 -> GMT +00:00 dst 0 = 2099-10-25T01:30:00Z
+local Australia/Lord_Howe 2024-04-07T01:45:00 fold 0 -> +11 +11:00 dst 1800 = 2024-04-06T14:45:00Z
+local Australia/Lord_Howe 2024-04-07T01:45:00 fold 1 -> +1030 +10:30 dst 0 = 2024-04-06T15:15:00Z
+local Australia/Lord_Howe 2024-10-06T02:15:00 fold 0 -> +1030 +10:30 dst 0 = 2024-10-05T15:45:00Z (round trip 2024-10-06T02:45:00)
+local Pacific/Apia 2011-12-30T12:00:00 fold 0 -> -10 -10:00 dst 3600 = 2011-12-30T22:00:00Z (round trip 2011-12-31T12:00:00)
+local Pacific/Chatham 2050-09-25T02:50:00 fold 0 -> +1245 +12:45 dst 0 = 2050-09-24T14:05:00Z (round trip 2050-09-25T03:50:00)
+local America/St_Johns 2024-11-03T01:15:00 fold 1 -> NST -03:30 dst 0 = 2024-11-03T04:45:00Z
+local Test/Eire 2030-10-27T01:30:00 fold 0 -> IST +01:00 dst 0 = 2030-10-27T00:30:00Z
+local Test/Eire 2030-10-27T01:30:00 fold 1 -> GMT +00:00 dst -3600 = 2030-10-27T01:30:00Z
+local Test/Eire 2030-03-31T01:30:00 fold 0 -> GMT +00:00 dst -3600 = 2030-03-31T01:30:00Z (round trip 2030-03-31T02:30:00)
+local Test/Eire 2030-03-31T01:30:00 fold 1 -> IST +01:00 dst 0 = 2030-03-31T00:30:00Z (round trip 2030-03-31T00:30:00)
+local Test/FooterOnly 2024-11-03T23:30:00 fold 0 -> -02 -02:00 dst 3600 = 2024-11-04T01:30:00Z
+local Test/FooterOnly 2024-11-03T23:30:00 fold 1 -> -03 -03:00 dst 0 = 2024-11-04T02:30:00Z
+local Test/Julian 2025-10-28T22:30:00 fold 1 -> AAA -01:00 dst 0 = 2025-10-28T23:30:00Z
+== transitions
+America/New_York 1883:
+  1883-11-18T17:00:00Z LMT -04:56:02 -> EST -05:00 dst 0, clocks go from 1883-11-18T12:03:57 to 1883-11-18T12:00:00
+America/New_York 1918:
+  1918-03-31T07:00:00Z EST -05:00 -> EDT -04:00 dst 3600, clocks go from 1918-03-31T01:59:59 to 1918-03-31T03:00:00
+  1918-10-27T06:00:00Z EDT -04:00 -> EST -05:00 dst 0, clocks go from 1918-10-27T01:59:59 to 1918-10-27T01:00:00
+America/New_York 2024:
+  2024-03-10T07:00:00Z EST -05:00 -> EDT -04:00 dst 3600, clocks go from 2024-03-10T01:59:59 to 2024-03-10T03:00:00
+  2024-11-03T06:00:00Z EDT -04:00 -> EST -05:00 dst 0, clocks go from 2024-11-03T01:59:59 to 2024-11-03T01:00:00
+America/New_York 2101:
+  2101-03-13T07:00:00Z EST -05:00 -> EDT -04:00 dst 3600, clocks go from 2101-03-13T01:59:59 to 2101-03-13T03:00:00
+  2101-11-06T06:00:00Z EDT -04:00 -> EST -05:00 dst 0, clocks go from 2101-11-06T01:59:59 to 2101-11-06T01:00:00
+Europe/London 1968:
+  1968-02-18T02:00:00Z GMT +00:00 -> BST +01:00 dst 3600, clocks go from 1968-02-18T01:59:59 to 1968-02-18T03:00:00
+  1968-10-26T23:00:00Z BST +01:00 -> BST +01:00 dst 0, clocks go from 1968-10-26T23:59:59 to 1968-10-27T00:00:00
+Europe/London 1971:
+  1971-10-31T02:00:00Z BST +01:00 -> GMT +00:00 dst 0, clocks go from 1971-10-31T02:59:59 to 1971-10-31T02:00:00
+Europe/London 2024:
+  2024-03-31T01:00:00Z GMT +00:00 -> BST +01:00 dst 3600, clocks go from 2024-03-31T00:59:59 to 2024-03-31T02:00:00
+  2024-10-27T01:00:00Z BST +01:00 -> GMT +00:00 dst 0, clocks go from 2024-10-27T01:59:59 to 2024-10-27T01:00:00
+Australia/Lord_Howe 2024:
+  2024-04-06T15:00:00Z +11 +11:00 -> +1030 +10:30 dst 0, clocks go from 2024-04-07T01:59:59 to 2024-04-07T01:30:00
+  2024-10-05T15:30:00Z +1030 +10:30 -> +11 +11:00 dst 1800, clocks go from 2024-10-06T01:59:59 to 2024-10-06T02:30:00
+Pacific/Apia 2011:
+  2011-04-02T14:00:00Z -10 -10:00 -> -11 -11:00 dst 0, clocks go from 2011-04-02T03:59:59 to 2011-04-02T03:00:00
+  2011-09-24T14:00:00Z -11 -11:00 -> -10 -10:00 dst 3600, clocks go from 2011-09-24T02:59:59 to 2011-09-24T04:00:00
+  2011-12-30T10:00:00Z -10 -10:00 -> +14 +14:00 dst 3600, clocks go from 2011-12-29T23:59:59 to 2011-12-31T00:00:00
+Pacific/Apia 2021:
+  2021-04-03T14:00:00Z +14 +14:00 -> +13 +13:00 dst 0, clocks go from 2021-04-04T03:59:59 to 2021-04-04T03:00:00
+Pacific/Chatham 2024:
+  2024-04-06T14:00:00Z +1345 +13:45 -> +1245 +12:45 dst 0, clocks go from 2024-04-07T03:44:59 to 2024-04-07T02:45:00
+  2024-09-28T14:00:00Z +1245 +12:45 -> +1345 +13:45 dst 3600, clocks go from 2024-09-29T02:44:59 to 2024-09-29T03:45:00
+Africa/Casablanca 2024:
+  2024-03-10T02:00:00Z +01 +01:00 -> +00 +00:00 dst 0, clocks go from 2024-03-10T02:59:59 to 2024-03-10T02:00:00
+  2024-04-14T02:00:00Z +00 +00:00 -> +01 +01:00 dst 3600, clocks go from 2024-04-14T01:59:59 to 2024-04-14T03:00:00
+Africa/Casablanca 2087:
+  none, +00 +00:00 all year
+Antarctica/Troll 2024:
+  2024-03-31T01:00:00Z +00 +00:00 -> +02 +02:00 dst 7200, clocks go from 2024-03-31T00:59:59 to 2024-03-31T03:00:00
+  2024-10-27T01:00:00Z +02 +02:00 -> +00 +00:00 dst 0, clocks go from 2024-10-27T02:59:59 to 2024-10-27T01:00:00
+America/Sao_Paulo 2018:
+  2018-02-18T02:00:00Z -02 -02:00 -> -03 -03:00 dst 0, clocks go from 2018-02-17T23:59:59 to 2018-02-17T23:00:00
+  2018-11-04T03:00:00Z -03 -03:00 -> -02 -02:00 dst 3600, clocks go from 2018-11-03T23:59:59 to 2018-11-04T01:00:00
+America/Sao_Paulo 2019:
+  2019-02-17T02:00:00Z -02 -02:00 -> -03 -03:00 dst 0, clocks go from 2019-02-16T23:59:59 to 2019-02-16T23:00:00
+America/Sao_Paulo 2020:
+  none, -03 -03:00 all year
+Test/Eire 2030:
+  2030-03-31T01:00:00Z GMT +00:00 -> IST +01:00 dst 0, clocks go from 2030-03-31T00:59:59 to 2030-03-31T02:00:00
+  2030-10-27T01:00:00Z IST +01:00 -> GMT +00:00 dst -3600, clocks go from 2030-10-27T01:59:59 to 2030-10-27T01:00:00
+Test/FooterOnly 2024:
+  2024-03-10T02:00:00Z -03 -03:00 -> -02 -02:00 dst 3600, clocks go from 2024-03-09T22:59:59 to 2024-03-10T00:00:00
+  2024-11-04T02:00:00Z -02 -02:00 -> -03 -03:00 dst 0, clocks go from 2024-11-03T23:59:59 to 2024-11-03T23:00:00
+Test/Julian 2024:
+  2024-03-02T02:00:00Z AAA -01:00 -> BBB +00:00 dst 3600, clocks go from 2024-03-02T00:59:59 to 2024-03-02T02:00:00
+  2024-10-25T22:00:00Z BBB +00:00 -> AAA -01:00 dst 0, clocks go from 2024-10-25T21:59:59 to 2024-10-25T21:00:00
+Test/Julian 2025:
+  2025-03-02T02:00:00Z AAA -01:00 -> BBB +00:00 dst 3600, clocks go from 2025-03-02T00:59:59 to 2025-03-02T02:00:00
+  2025-10-26T22:00:00Z BBB +00:00 -> AAA -01:00 dst 0, clocks go from 2025-10-26T21:59:59 to 2025-10-26T21:00:00
+Test/Version1 1918:
+  1918-03-31T07:00:00Z EST -05:00 -> EDT -04:00 dst 3600, clocks go from 1918-03-31T01:59:59 to 1918-03-31T03:00:00
+  1918-10-27T06:00:00Z EDT -04:00 -> EST -05:00 dst 0, clocks go from 1918-10-27T01:59:59 to 1918-10-27T01:00:00
+Test/Version1 1919:
+  1919-03-30T07:00:00Z EST -05:00 -> EDT -04:00 dst 3600, clocks go from 1919-03-30T01:59:59 to 1919-03-30T03:00:00
+  1919-10-26T06:00:00Z EDT -04:00 -> EST -05:00 dst 0, clocks go from 1919-10-26T01:59:59 to 1919-10-26T01:00:00
+Test/Guess 1970:
+  1970-01-01T00:16:41Z DST +01:30 -> STD +00:00 dst 0, clocks go from 1970-01-01T01:46:40 to 1970-01-01T00:16:41
+== meetings
+Release sync (America/New_York):
+  Mon 2024-02-26T09:00:00 EST
+    Europe/London: Mon 14:00 GMT
+    Asia/Kolkata: Mon 19:30 IST
+    Australia/Lord_Howe: Tue 01:00 +11 (+1 day)
+    Pacific/Chatham: Tue 03:45 +1345 (+1 day)
+  Mon 2024-03-04T09:00:00 EST
+    Europe/London: Mon 14:00 GMT
+    Asia/Kolkata: Mon 19:30 IST
+    Australia/Lord_Howe: Tue 01:00 +11 (+1 day)
+    Pacific/Chatham: Tue 03:45 +1345 (+1 day)
+  Mon 2024-03-11T09:00:00 EDT
+    Europe/London: Mon 13:00 GMT
+    Asia/Kolkata: Mon 18:30 IST
+    Australia/Lord_Howe: Tue 00:00 +11 (+1 day)
+    Pacific/Chatham: Tue 02:45 +1345 (+1 day)
+  Mon 2024-03-18T09:00:00 EDT
+    Europe/London: Mon 13:00 GMT
+    Asia/Kolkata: Mon 18:30 IST
+    Australia/Lord_Howe: Tue 00:00 +11 (+1 day)
+    Pacific/Chatham: Tue 02:45 +1345 (+1 day)
+  Mon 2024-03-25T09:00:00 EDT
+    Europe/London: Mon 13:00 GMT
+    Asia/Kolkata: Mon 18:30 IST
+    Australia/Lord_Howe: Tue 00:00 +11 (+1 day)
+    Pacific/Chatham: Tue 02:45 +1345 (+1 day)
+  Mon 2024-04-01T09:00:00 EDT
+    Europe/London: Mon 14:00 BST
+    Asia/Kolkata: Mon 18:30 IST
+    Australia/Lord_Howe: Tue 00:00 +11 (+1 day)
+    Pacific/Chatham: Tue 02:45 +1345 (+1 day)
+  Mon 2024-04-08T09:00:00 EDT
+    Europe/London: Mon 14:00 BST
+    Asia/Kolkata: Mon 18:30 IST
+    Australia/Lord_Howe: Mon 23:30 +1030
+    Pacific/Chatham: Tue 01:45 +1245 (+1 day)
+  Mon 2024-04-15T09:00:00 EDT
+    Europe/London: Mon 14:00 BST
+    Asia/Kolkata: Mon 18:30 IST
+    Australia/Lord_Howe: Mon 23:30 +1030
+    Pacific/Chatham: Tue 01:45 +1245 (+1 day)
+Ops handover (Europe/London):
+  Sun 2024-10-13T01:30:00 BST
+    America/St_Johns: Sat 22:00 NDT (-1 day)
+    Africa/Casablanca: Sun 01:30 +01
+    UTC: Sun 00:30 UTC
+  Sun 2024-10-20T01:30:00 BST
+    America/St_Johns: Sat 22:00 NDT (-1 day)
+    Africa/Casablanca: Sun 01:30 +01
+    UTC: Sun 00:30 UTC
+  Sun 2024-10-27T01:30:00 BST: happens twice, using the first
+    America/St_Johns: Sat 22:00 NDT (-1 day)
+    Africa/Casablanca: Sun 01:30 +01
+    UTC: Sun 00:30 UTC
+  Sun 2024-11-03T01:30:00 GMT
+    America/St_Johns: Sat 23:00 NDT (-1 day)
+    Africa/Casablanca: Sun 02:30 +01
+    UTC: Sun 01:30 UTC
+Night batch (America/New_York):
+  Sun 2024-03-03T02:30:00 EST
+    UTC: Sun 07:30 UTC
+    Antarctica/Troll: Sun 07:30 +00
+  Sun 2024-03-10T02:30:00 EST: does not exist, clocks skip it; moved to 2024-03-10T03:30:00
+    UTC: Sun 07:30 UTC
+    Antarctica/Troll: Sun 07:30 +00
+  Sun 2024-03-17T02:30:00 EDT
+    UTC: Sun 06:30 UTC
+    Antarctica/Troll: Sun 06:30 +00
+Pacific call (Pacific/Apia):
+  Fri 2011-12-16T10:00:00 -10
+    America/New_York: Fri 15:00 EST
+    Pacific/Chatham: Sat 09:45 +1345 (+1 day)
+  Fri 2011-12-23T10:00:00 -10
+    America/New_York: Fri 15:00 EST
+    Pacific/Chatham: Sat 09:45 +1345 (+1 day)
+  Fri 2011-12-30T10:00:00 -10: does not exist, clocks skip it; moved to 2011-12-31T10:00:00
+    America/New_York: Fri 15:00 EST
+    Pacific/Chatham: Sat 09:45 +1345 (+1 day)
+  Fri 2012-01-06T10:00:00 +14
+    America/New_York: Thu 15:00 EST (-1 day)
+    Pacific/Chatham: Fri 09:45 +1345
