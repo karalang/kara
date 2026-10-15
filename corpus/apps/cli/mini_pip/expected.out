@@ -1,0 +1,597 @@
+== versions
+'1.0' -> 1.0  [epoch 0, release 1.0, pre -, post -, dev -, local -, public 1.0, base 1.0]
+'1.0.0' -> 1.0.0  [epoch 0, release 1.0.0, pre -, post -, dev -, local -, public 1.0.0, base 1.0.0]
+'v1.0' -> 1.0  [epoch 0, release 1.0, pre -, post -, dev -, local -, public 1.0, base 1.0]
+' 1.0 ' -> 1.0  [epoch 0, release 1.0, pre -, post -, dev -, local -, public 1.0, base 1.0]
+'V2' -> 2  [epoch 0, release 2, pre -, post -, dev -, local -, public 2, base 2]
+'1!2.0' -> 1!2.0  [epoch 1, release 2.0, pre -, post -, dev -, local -, public 1!2.0, base 1!2.0]
+'0001!1' -> 1!1  [epoch 1, release 1, pre -, post -, dev -, local -, public 1!1, base 1!1]
+'01.02.003' -> 1.2.3  [epoch 0, release 1.2.3, pre -, post -, dev -, local -, public 1.2.3, base 1.2.3]
+'1.0a-1' -> 1.0a1  [epoch 0, release 1.0, pre a1, post -, dev -, local -, public 1.0a1, base 1.0, pre-release]
+'1.0a1' -> 1.0a1  [epoch 0, release 1.0, pre a1, post -, dev -, local -, public 1.0a1, base 1.0, pre-release]
+'1.0alpha1' -> 1.0a1  [epoch 0, release 1.0, pre a1, post -, dev -, local -, public 1.0a1, base 1.0, pre-release]
+'1.0b2' -> 1.0b2  [epoch 0, release 1.0, pre b2, post -, dev -, local -, public 1.0b2, base 1.0, pre-release]
+'1.0Beta2' -> 1.0b2  [epoch 0, release 1.0, pre b2, post -, dev -, local -, public 1.0b2, base 1.0, pre-release]
+'1.0c1' -> 1.0rc1  [epoch 0, release 1.0, pre rc1, post -, dev -, local -, public 1.0rc1, base 1.0, pre-release]
+'1.0rc1' -> 1.0rc1  [epoch 0, release 1.0, pre rc1, post -, dev -, local -, public 1.0rc1, base 1.0, pre-release]
+'1.0preview2' -> 1.0rc2  [epoch 0, release 1.0, pre rc2, post -, dev -, local -, public 1.0rc2, base 1.0, pre-release]
+'1.0rc' -> 1.0rc0  [epoch 0, release 1.0, pre rc0, post -, dev -, local -, public 1.0rc0, base 1.0, pre-release]
+'1.0.dev' -> 1.0.dev0  [epoch 0, release 1.0, pre -, post -, dev 0, local -, public 1.0.dev0, base 1.0, pre-release, dev-release]
+'1.0.DEV2' -> 1.0.dev2  [epoch 0, release 1.0, pre -, post -, dev 2, local -, public 1.0.dev2, base 1.0, pre-release, dev-release]
+'1.0a1.dev3' -> 1.0a1.dev3  [epoch 0, release 1.0, pre a1, post -, dev 3, local -, public 1.0a1.dev3, base 1.0, pre-release, dev-release]
+'1.0-1' -> 1.0.post1  [epoch 0, release 1.0, pre -, post 1, dev -, local -, public 1.0.post1, base 1.0, post-release]
+'1.0-r1' -> 1.0.post1  [epoch 0, release 1.0, pre -, post 1, dev -, local -, public 1.0.post1, base 1.0, post-release]
+'1.0.post.' -> 1.0.post0  [epoch 0, release 1.0, pre -, post 0, dev -, local -, public 1.0.post0, base 1.0, post-release]
+'1.0a.' -> 1.0a0  [epoch 0, release 1.0, pre a0, post -, dev -, local -, public 1.0a0, base 1.0, pre-release]
+'1.0post' -> 1.0.post0  [epoch 0, release 1.0, pre -, post 0, dev -, local -, public 1.0.post0, base 1.0, post-release]
+'1.0.r' -> 1.0.post0  [epoch 0, release 1.0, pre -, post 0, dev -, local -, public 1.0.post0, base 1.0, post-release]
+'1.0_rev3' -> 1.0.post3  [epoch 0, release 1.0, pre -, post 3, dev -, local -, public 1.0.post3, base 1.0, post-release]
+'1.0a1-1' -> 1.0a1.post1  [epoch 0, release 1.0, pre a1, post 1, dev -, local -, public 1.0a1.post1, base 1.0, pre-release, post-release]
+'1.0+ABC.def-1' -> 1.0+abc.def.1  [epoch 0, release 1.0, pre -, post -, dev -, local abc.def.1, public 1.0, base 1.0]
+'1.0+local_1.2' -> 1.0+local.1.2  [epoch 0, release 1.0, pre -, post -, dev -, local local.1.2, public 1.0, base 1.0]
+'1.0+5' -> 1.0+5  [epoch 0, release 1.0, pre -, post -, dev -, local 5, public 1.0, base 1.0]
+'1.0+abc' -> 1.0+abc  [epoch 0, release 1.0, pre -, post -, dev -, local abc, public 1.0, base 1.0]
+'1.0+abc.5' -> 1.0+abc.5  [epoch 0, release 1.0, pre -, post -, dev -, local abc.5, public 1.0, base 1.0]
+'2.0.post0.dev1' -> 2.0.post0.dev1  [epoch 0, release 2.0, pre -, post 0, dev 1, local -, public 2.0.post0.dev1, base 2.0, pre-release, post-release, dev-release]
+'0.0' -> 0.0  [epoch 0, release 0.0, pre -, post -, dev -, local -, public 0.0, base 0.0]
+'0' -> 0  [epoch 0, release 0, pre -, post -, dev -, local -, public 0, base 0]
+'1.0.0.0.0' -> 1.0.0.0.0  [epoch 0, release 1.0.0.0.0, pre -, post -, dev -, local -, public 1.0.0.0.0, base 1.0.0.0.0]
+'2024.8.30' -> 2024.8.30  [epoch 0, release 2024.8.30, pre -, post -, dev -, local -, public 2024.8.30, base 2024.8.30]
+'1.0.' -> Invalid version: '1.0.'
+'1.0+' -> Invalid version: '1.0+'
+'1.0+abc..1' -> Invalid version: '1.0+abc..1'
+'1.0--1' -> Invalid version: '1.0--1'
+'1.0-' -> Invalid version: '1.0-'
+'1..0' -> Invalid version: '1..0'
+'.1' -> Invalid version: '.1'
+'1.0 a1' -> Invalid version: '1.0 a1'
+'1.0.a.b' -> Invalid version: '1.0.a.b'
+'abc' -> Invalid version: 'abc'
+"1.0'x" -> Invalid version: "1.0'x"
+'٣' -> Invalid version: '٣'
+sorted:
+  0.0 = 0
+  1.0.dev0
+  1.0.dev2
+  1.0a0
+  1.0a1.dev3
+  1.0a1 = 1.0a1 = 1.0a1
+  1.0a1.post1
+  1.0b2 = 1.0b2
+  1.0rc0
+  1.0rc1 = 1.0rc1
+  1.0rc2
+  1.0 = 1.0.0 = 1.0 = 1.0 = 1.0.0.0.0
+  1.0+abc
+  1.0+abc.def.1
+  1.0+abc.5
+  1.0+local.1.2
+  1.0+5
+  1.0.post0 = 1.0.post0 = 1.0.post0
+  1.0.post1 = 1.0.post1
+  1.0.post3
+  1.2.3
+  2
+  2.0.post0.dev1
+  2024.8.30
+  1!1
+  1!2.0
+
+== specifiers
+'>=1.0': '>=1.0' prereleases=None unsatisfiable=n
+  contains 0.9:nnn 1.0:yyy 1.0.post1:yyy 2.0a1:yyn 2.0:yyy 1.0+local:yyy foo:nnn
+  filter 1.0 1.0.post1 2.0 1.0+local
+  filter pre 1.0 1.0.post1 2.0a1 2.0 1.0+local
+  filter final 1.0 1.0.post1 2.0 1.0+local
+'>=1.0, <2': '<2,>=1.0' prereleases=None unsatisfiable=n
+  contains 1.0:yyy 1.5:yyy 2.0a1:nnn 2.0.dev0:nnn 1.9.post1:yyy 2.0:nnn
+  filter 1.0 1.5 1.9.post1
+  filter pre 1.0 1.5 1.9.post1
+  filter final 1.0 1.5 1.9.post1
+'<2.0': '<2.0' prereleases=None unsatisfiable=n
+  contains 1.9:yyy 2.0a1:nnn 2.0rc1:nnn 2.0.dev1:nnn 1.9.9+local:yyy
+  filter 1.9 1.9.9+local
+  filter pre 1.9 1.9.9+local
+  filter final 1.9 1.9.9+local
+'<2.0rc1': '<2.0rc1' prereleases=True unsatisfiable=n
+  contains 2.0b1:yyn 2.0rc1:nnn 1.9:yyy
+  filter 2.0b1 1.9
+  filter pre 2.0b1 1.9
+  filter final 1.9
+'>1.0': '>1.0' prereleases=None unsatisfiable=n
+  contains 1.0:nnn 1.0.post1:nnn 1.0+local:nnn 1.0.1:yyy 1.1a1:yyn
+  filter 1.0.1
+  filter pre 1.0.1 1.1a1
+  filter final 1.0.1
+'>1.0.post1': '>1.0.post1' prereleases=None unsatisfiable=n
+  contains 1.0.post1:nnn 1.0.post2:yyy 1.0.post2.dev0:yyn 1.1:yyy
+  filter 1.0.post2 1.1
+  filter pre 1.0.post2 1.0.post2.dev0 1.1
+  filter final 1.0.post2 1.1
+'>1.0.dev1': '>1.0.dev1' prereleases=True unsatisfiable=n
+  contains 1.0.dev1:nnn 1.0.dev2:yyn 1.0a1:yyn 1.0:yyy
+  filter 1.0.dev2 1.0a1 1.0
+  filter pre 1.0.dev2 1.0a1 1.0
+  filter final 1.0
+'>1.0rc1': '>1.0rc1' prereleases=True unsatisfiable=n
+  contains 1.0rc1:nnn 1.0rc1.post1:nnn 1.0rc2:yyn 1.0:yyy
+  filter 1.0rc2 1.0
+  filter pre 1.0rc2 1.0
+  filter final 1.0
+'<=1.0': '<=1.0' prereleases=None unsatisfiable=n
+  contains 1.0:yyy 1.0+local:yyy 1.0.post1:nnn 0.9:yyy 1.0.dev0:yyn
+  filter 1.0 1.0+local 0.9
+  filter pre 1.0 1.0+local 0.9 1.0.dev0
+  filter final 1.0 1.0+local 0.9
+'==1.0': '==1.0' prereleases=None unsatisfiable=n
+  contains 1.0:yyy 1.0.0:yyy 1.0+abc:yyy 1.0.post1:nnn 1.0a1:nnn
+  filter 1.0 1.0.0 1.0+abc
+  filter pre 1.0 1.0.0 1.0+abc
+  filter final 1.0 1.0.0 1.0+abc
+'==1.0+abc': '==1.0+abc' prereleases=None unsatisfiable=n
+  contains 1.0+abc:yyy 1.0:nnn 1.0+abd:nnn
+  filter 1.0+abc
+  filter pre 1.0+abc
+  filter final 1.0+abc
+'==1.*': '==1.*' prereleases=None unsatisfiable=n
+  contains 0.9:nnn 1.0:yyy 1.5a1:yyn 1.99:yyy 2.0:nnn 1.0.dev0:yyn
+  filter 1.0 1.99
+  filter pre 1.0 1.5a1 1.99 1.0.dev0
+  filter final 1.0 1.99
+'!=1.*': '!=1.*' prereleases=None unsatisfiable=n
+  contains 0.9:yyy 1.5:nnn 2.0:yyy 2.0rc1:yyn
+  filter 0.9 2.0
+  filter pre 0.9 2.0 2.0rc1
+  filter final 0.9 2.0
+'~=1.4.5': '~=1.4.5' prereleases=None unsatisfiable=n
+  contains 1.4.4:nnn 1.4.5:yyy 1.4.9:yyy 1.5:nnn 1.4.10a1:yyn
+  filter 1.4.5 1.4.9
+  filter pre 1.4.5 1.4.9 1.4.10a1
+  filter final 1.4.5 1.4.9
+'~=2.2': '~=2.2' prereleases=None unsatisfiable=n
+  contains 2.1:nnn 2.2:yyy 2.9:yyy 3.0:nnn 3.0a1:nnn
+  filter 2.2 2.9
+  filter pre 2.2 2.9
+  filter final 2.2 2.9
+'~=2.2.post3': '~=2.2.post3' prereleases=None unsatisfiable=n
+  contains 2.2:nnn 2.2.post3:yyy 2.3:yyy 3.0:nnn
+  filter 2.2.post3 2.3
+  filter pre 2.2.post3 2.3
+  filter final 2.2.post3 2.3
+'!=1.5, >=1.0': '!=1.5,>=1.0' prereleases=None unsatisfiable=n
+  contains 1.0:yyy 1.5:nnn 1.5.0:nnn 1.5+local:nnn 1.6:yyy
+  filter 1.0 1.6
+  filter pre 1.0 1.6
+  filter final 1.0 1.6
+'>=2.0a1': '>=2.0a1' prereleases=True unsatisfiable=n
+  contains 1.9:nnn 2.0a1:yyn 2.0b2:yyn 2.0:yyy 3.0.dev1:yyn
+  filter 2.0a1 2.0b2 2.0 3.0.dev1
+  filter pre 2.0a1 2.0b2 2.0 3.0.dev1
+  filter final 2.0
+'>=1,<1': '<1,>=1' prereleases=None unsatisfiable=y
+  contains 1:nnn 0.9:nnn 1.0:nnn
+  filter 
+  filter pre 
+  filter final 
+'==1.0, ==2.0': '==1.0,==2.0' prereleases=None unsatisfiable=y
+  contains 1.0:nnn 2.0:nnn
+  filter 
+  filter pre 
+  filter final 
+'<0.dev0': '<0.dev0' prereleases=True unsatisfiable=y
+  contains 0:nnn 0.dev0:nnn
+  filter 
+  filter pre 
+  filter final 
+'>1.0, <1.0.post0': '<1.0.post0,>1.0' prereleases=None unsatisfiable=y
+  contains 1.0.post0:nnn 1.0+local:nnn 1.0.0.post0:nnn
+  filter 
+  filter pre 
+  filter final 
+'>2.0b1, <2.0b2': '<2.0b2,>2.0b1' prereleases=True unsatisfiable=n
+  contains 2.0b1:nnn 2.0b1.post1:nnn 2.0b2.dev0:yyn 2.0b2:nnn
+  filter 2.0b2.dev0
+  filter pre 2.0b2.dev0
+  filter final 
+'': '' prereleases=None unsatisfiable=n
+  contains 1.0:yyy 2.0a1:yyn junk:yyy
+  filter 1.0 junk
+  filter pre 1.0 2.0a1 junk
+  filter final 1.0 junk
+'===1.0+foo': '===1.0+foo' prereleases=None unsatisfiable=n
+  contains 1.0+foo:yyy 1.0+FOO:yyy 1.0:nnn foo:nnn
+  filter 1.0+foo 1.0+FOO
+  filter pre 1.0+foo 1.0+FOO
+  filter final 1.0+foo 1.0+FOO
+'===foobar': '===foobar' prereleases=None unsatisfiable=n
+  contains foobar:yyy FooBar:yyy 1.0:nnn
+  filter foobar FooBar
+  filter pre foobar FooBar
+  filter final foobar FooBar
+'>=1.0, ===1.0.0': '===1.0.0,>=1.0' prereleases=None unsatisfiable=n
+  contains 1.0:nnn 1.0.0:yyy
+  filter 1.0.0
+  filter pre 1.0.0
+  filter final 1.0.0
+'===1.0, ===2.0': '===1.0,===2.0' prereleases=None unsatisfiable=y
+  contains 1.0:nnn
+  filter 
+  filter pre 
+  filter final 
+'>=1.0,<2.0a.0': '<2.0a.0,>=1.0' prereleases=True unsatisfiable=n
+  contains 1.9:yyy 2.0a0:nnn 2.0.dev0:yyn
+  filter 1.9 2.0.dev0
+  filter pre 1.9 2.0.dev0
+  filter final 1.9
+'>= 1.0 ,  != 1.2.*': '!=1.2.*,>=1.0' prereleases=None unsatisfiable=n
+  contains 1.1:yyy 1.2.3:nnn 1.3:yyy
+  filter 1.1 1.3
+  filter pre 1.1 1.3
+  filter final 1.1 1.3
+'<3, >=2, !=2.5, <2.5.0, >=2': '!=2.5,<2.5.0,<3,>=2' prereleases=None unsatisfiable=n
+  contains 2.0:yyy 2.4:yyy 2.5:nnn
+  filter 2.0 2.4
+  filter pre 2.0 2.4
+  filter final 2.0 2.4
+'=>1.0': Invalid specifier: '=>1.0'
+'~=1': Invalid specifier: '~=1'
+'>=1.0.*': Invalid specifier: '>=1.0.*'
+'==1.0.post1.*': Invalid specifier: '==1.0.post1.*'
+'<1.0+local': Invalid specifier: '<1.0+local'
+
+== markers
+'python_version >= "3.10"': python_version >= "3.10"
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: true
+'python_version<\'3.9\' or sys_platform=="win32"': python_version < "3.9" or sys_platform == "win32"
+  linux-py312: false
+  win-py39: true
+  mac-pypy310: false
+'(os_name == "nt" and platform_machine == "AMD64") or implementation_name == "pypy"': (os_name == "nt" and platform_machine == "AMD64") or implementation_name == "pypy"
+  linux-py312: false
+  win-py39: true
+  mac-pypy310: true
+"'linux' in sys_platform": "linux" in sys_platform
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: false
+'"arm" not in platform_machine': "arm" not in platform_machine
+  linux-py312: true
+  win-py39: true
+  mac-pypy310: false
+'platform_release >= "6"': platform_release >= "6"
+  linux-py312: false
+  win-py39: true
+  mac-pypy310: true
+'python_full_version ~= "3.12.0"': python_full_version ~= "3.12.0"
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: false
+'implementation_version >= "7.3"': implementation_version >= "7.3"
+  linux-py312: false
+  win-py39: false
+  mac-pypy310: true
+'extra == "Socks_Proxy"': extra == "socks-proxy"
+  linux-py312: false
+  win-py39: false
+  mac-pypy310: false
+'platform_system == "Linux" and python_version > "3.11" or platform_system == "Darwin"': platform_system == "Linux" and python_version > "3.11" or platform_system == "Darwin"
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: true
+'platform_system == "Linux" and (python_version > "3.11" or platform_system == "Darwin")': platform_system == "Linux" and (python_version > "3.11" or platform_system == "Darwin")
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: false
+'sys.platform == "darwin"': sys_platform == "darwin"
+  linux-py312: false
+  win-py39: false
+  mac-pypy310: true
+"os.name == 'posix'": os_name == "posix"
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: true
+'python_implementation == "PyPy"': platform_python_implementation == "PyPy"
+  linux-py312: false
+  win-py39: false
+  mac-pypy310: true
+'platform_version ~= "1.0"': platform_version ~= "1.0"
+  linux-py312: UndefinedComparison: Undefined <Op('~=')> on '#45-Ubuntu SMP PREEMPT_DYNAMIC' and '1.0'.
+  win-py39: UndefinedComparison: Undefined <Op('~=')> on '10.0.19045' and '1.0'.
+  mac-pypy310: UndefinedComparison: Undefined <Op('~=')> on 'Darwin Kernel Version 23.6.0' and '1.0'.
+'extras == "socks"': extras == "socks"
+  linux-py312: UndefinedEnvironmentName: 'extras'
+  win-py39: UndefinedEnvironmentName: 'extras'
+  mac-pypy310: UndefinedEnvironmentName: 'extras'
+'python_version === "3.12"': python_version === "3.12"
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: false
+'python_version in "3.11 3.12"': python_version in "3.11 3.12"
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: false
+'"3.9" < python_version': "3.9" < python_version
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: true
+'python_version > "3.12.0rc1"': python_version > "3.12.0rc1"
+  linux-py312: true
+  win-py39: false
+  mac-pypy310: false
+'platform_machine >= "x86"': platform_machine >= "x86"
+  linux-py312: false
+  win-py39: false
+  mac-pypy310: false
+'"a" == "b"': "a" == "b"
+  linux-py312: UndefinedEnvironmentName: 'b'
+  win-py39: UndefinedEnvironmentName: 'b'
+  mac-pypy310: UndefinedEnvironmentName: 'b'
+'python_version >=': InvalidMarker
+  | Expected a marker variable or quoted string
+  |     python_version >=
+  |                      ^
+'python_version = "3.8"': InvalidMarker
+  | Expected marker operator, one of <=, <, !=, ==, >=, >, ~=, ===, in, not in
+  |     python_version = "3.8"
+  |                    ^
+'os_name == "nt" and': InvalidMarker
+  | Expected a marker variable or quoted string
+  |     os_name == "nt" and
+  |                        ^
+'(python_version > "3.8"': InvalidMarker
+  | Expected matching RIGHT_PARENTHESIS for LEFT_PARENTHESIS, after marker expression
+  |     (python_version > "3.8"
+  |     ~~~~~~~~~~~~~~~~~~~~~~~^
+'platform_machine == x86_64': InvalidMarker
+  | Expected a marker variable or quoted string
+  |     platform_machine == x86_64
+  |                         ^
+'python_version >= "3.8" foo': InvalidMarker
+  | Expected end of marker expression
+  |     python_version >= "3.8" foo
+  |                             ^
+'not_a_var == "x"': InvalidMarker
+  | Expected a marker variable or quoted string
+  |     not_a_var == "x"
+  |     ^
+'os_name not "nt"': InvalidMarker
+  | Expected 'in' after 'not'
+  |     os_name not "nt"
+  |                 ^
+
+== requirements
+'requests': requests
+  name requests (requests), extras -, specifier -, url -, marker -
+'requests[security,socks] >= 2.8.1, == 2.8.*': requests[security,socks]==2.8.*,>=2.8.1
+  name requests (requests), extras security,socks, specifier ==2.8.*,>=2.8.1, url -, marker -
+'Django>=4.2,<5.0 ; python_version >= "3.8"': Django<5.0,>=4.2; python_version >= "3.8"
+  name Django (django), extras -, specifier <5.0,>=4.2, url -, marker python_version >= "3.8"
+'name @ https://example.com/pkgs/name-1.0-py3-none-any.whl': name @ https://example.com/pkgs/name-1.0-py3-none-any.whl
+  name name (name), extras -, specifier -, url https://example.com/pkgs/name-1.0-py3-none-any.whl, marker -
+'name @ file:///tmp/x.tar.gz ; os_name == "nt"': name @ file:///tmp/x.tar.gz ; os_name == "nt"
+  name name (name), extras -, specifier -, url file:///tmp/x.tar.gz, marker os_name == "nt"
+'pip (>=24.0)': pip>=24.0
+  name pip (pip), extras -, specifier >=24.0, url -, marker -
+'Foo.Bar_baz-qux==1.0+local.7': Foo.Bar_baz-qux==1.0+local.7
+  name Foo.Bar_baz-qux (foo-bar-baz-qux), extras -, specifier ==1.0+local.7, url -, marker -
+'numpy~=1.26.0': numpy~=1.26.0
+  name numpy (numpy), extras -, specifier ~=1.26.0, url -, marker -
+'pkg[ b , a ]': pkg[a,b]
+  name pkg (pkg), extras a,b, specifier -, url -, marker -
+'pkg===1.0-custom': pkg===1.0-custom
+  name pkg (pkg), extras -, specifier ===1.0-custom, url -, marker -
+'pkg!=1.0.*,!=1.1.*': pkg!=1.0.*,!=1.1.*
+  name pkg (pkg), extras -, specifier !=1.0.*,!=1.1.*, url -, marker -
+'typing_extensions>=4.6.1; python_version < "3.13"': typing_extensions>=4.6.1; python_version < "3.13"
+  name typing_extensions (typing-extensions), extras -, specifier >=4.6.1, url -, marker python_version < "3.13"
+'urllib3[brotli]>=1.21.1; extra == "Use_Chardet"': urllib3[brotli]>=1.21.1; extra == "use-chardet"
+  name urllib3 (urllib3), extras brotli, specifier >=1.21.1, url -, marker extra == "use-chardet"
+'>=1.0': InvalidRequirement
+  | Expected package name at the start of dependency specifier
+  |     >=1.0
+  |     ^
+'pkg[a b]': InvalidRequirement
+  | Expected comma between extra names
+  |     pkg[a b]
+  |           ^
+'pkg[a,]': InvalidRequirement
+  | Expected extra name after comma
+  |     pkg[a,]
+  |           ^
+'pkg >= 1.0 extra': InvalidRequirement
+  | Expected comma (within version specifier), semicolon (after version specifier) or end
+  |     pkg >= 1.0 extra
+  |         ~~~~~~~^
+'pkg (>=1.0': InvalidRequirement
+  | Expected matching RIGHT_PARENTHESIS for LEFT_PARENTHESIS, after version specifier
+  |     pkg (>=1.0
+  |         ~~~~~~^
+'pkg>=1.0.*': InvalidRequirement
+  | .* suffix can only be used with `==` or `!=` operators
+  |     pkg>=1.0.*
+  |        ~~~~~~^
+'pkg==1.0rc1.*': InvalidRequirement
+  | .* suffix cannot be used with pre-release, post-release, dev or local versions
+  |     pkg==1.0rc1.*
+  |        ~~~~~~~~~^
+'pkg<=1.0+local': InvalidRequirement
+  | Local version label can only be used with `==` or `!=` operators
+  |     pkg<=1.0+local
+  |        ~~~~~^
+'pkg @ ': InvalidRequirement
+  | Expected URL after @
+  |     pkg @ 
+  |           ^
+'pkg @ https://x.whl; python_version>"3"': InvalidRequirement
+  | Expected semicolon (after URL and whitespace) or end
+  |     pkg @ https://x.whl; python_version>"3"
+  |           ~~~~~~~~~~~~~~~^
+'pkg ; ': InvalidRequirement
+  | Expected a marker variable or quoted string
+  |     pkg ; 
+  |           ^
+'pkg ==1.0 ; python_version >= "3.8" and': InvalidRequirement
+  | Expected a marker variable or quoted string
+  |     pkg ==1.0 ; python_version >= "3.8" and
+  |                                            ^
+'pkg~=1': InvalidRequirement
+  | Expected semicolon (after name with no version specifier) or end
+  |     pkg~=1
+  |        ^
+'pkg[extra]extra2': InvalidRequirement
+  | Expected semicolon (after name with no version specifier) or end
+  |     pkg[extra]extra2
+  |               ^
+
+== resolve web.txt (linux-py312)
+skipped waitress; sys_platform == "win32" (marker is false)
+asgiref==3.8.1
+blinker==1.9.0
+certifi==2025.6.15
+charset-normalizer==3.4.2
+click==8.2.0
+flask[async,dotenv]==3.0.3
+gunicorn==23.0.0
+idna==3.10
+itsdangerous==2.2.0
+jinja2==3.1.6
+markupsafe==3.0.2
+packaging==25.0
+pysocks==1.7.1
+python-dotenv==1.1.0
+requests[socks]==2.32.4
+urllib3==2.2.3
+werkzeug==3.0.6
+backtracks: 107
+install order: asgiref blinker certifi charset-normalizer click idna itsdangerous markupsafe jinja2 packaging gunicorn pysocks python-dotenv urllib3 requests werkzeug flask
+== resolve web.txt (win-py39)
+skipped gunicorn>=22; sys_platform != "win32" (marker is false)
+asgiref==3.8.1
+blinker==1.9.0
+certifi==2025.6.15
+charset-normalizer==3.4.2
+click==8.1.8
+colorama==0.4.6
+flask[async,dotenv]==3.0.3
+idna==3.10
+importlib-metadata==8.5.0
+itsdangerous==2.2.0
+jinja2==3.1.6
+markupsafe==3.0.2
+pysocks==1.7.1
+python-dotenv==1.1.0
+requests[socks]==2.32.4
+typing-extensions==4.13.2
+urllib3==2.2.3
+waitress==3.0.2
+werkzeug==3.0.6
+zipp==3.21.0
+backtracks: 83
+install order: blinker certifi charset-normalizer colorama click idna itsdangerous markupsafe jinja2 pysocks python-dotenv typing-extensions asgiref urllib3 requests waitress werkzeug zipp importlib-metadata flask
+== resolve web.txt (mac-pypy310)
+skipped waitress; sys_platform == "win32" (marker is false)
+asgiref==3.8.1
+blinker==1.9.0
+certifi==2025.6.15
+charset-normalizer==3.4.2
+click==8.2.0
+flask[async,dotenv]==3.0.3
+gunicorn==23.0.0
+idna==3.10
+itsdangerous==2.2.0
+jinja2==3.1.6
+markupsafe==3.0.2
+packaging==25.0
+pysocks==1.7.1
+python-dotenv==1.1.0
+requests[socks]==2.32.4
+typing-extensions==4.13.2
+urllib3==2.2.3
+werkzeug==3.0.6
+backtracks: 107
+install order: blinker certifi charset-normalizer click idna itsdangerous markupsafe jinja2 packaging gunicorn pysocks python-dotenv typing-extensions asgiref urllib3 requests werkzeug flask
+== resolve data.txt (linux-py312)
+skipped numpy<2; python_version < "3.10" (marker is false)
+numpy==2.3.0
+pandas==2.2.3
+python-dateutil==2.9.0.post0
+pytz==2024.2
+six==1.17.0
+typing-extensions==4.13.2
+tzdata==2025.2
+backtracks: 0
+install order: numpy pytz six python-dateutil typing-extensions tzdata pandas
+== resolve data.txt (win-py39)
+numpy==1.26.4
+pandas==2.2.3
+python-dateutil==2.9.0.post0
+pytz==2024.2
+six==1.17.0
+typing-extensions==4.13.2
+tzdata==2025.2
+backtracks: 0
+install order: numpy pytz six python-dateutil typing-extensions tzdata pandas
+== resolve aws.txt (linux-py312)
+boto3==1.35.99
+botocore==1.35.99
+jmespath==1.0.1
+python-dateutil==2.9.0.post0
+s3transfer==0.10.4
+six==1.17.0
+urllib3==2.5.0
+backtracks: 2
+install order: jmespath six python-dateutil urllib3 botocore s3transfer boto3
+== resolve api.txt (linux-py312)
+annotated-types==0.7.0
+asgiref==3.8.1
+django==5.1.4
+idna==3.10
+pydantic==2.10.6
+pydantic-core==2.27.2
+sqlparse==0.5.3
+typing-extensions==4.13.2
+backtracks: 0
+install order: annotated-types asgiref idna sqlparse django typing-extensions pydantic-core pydantic
+== resolve api.txt (win-py39)
+annotated-types==0.7.0
+asgiref==3.8.1
+django==4.2.16
+idna==3.10
+pydantic==2.10.6
+pydantic-core==2.27.2
+sqlparse==0.5.3
+typing-extensions==4.13.2
+tzdata==2025.2
+backtracks: 0
+install order: annotated-types idna sqlparse typing-extensions asgiref pydantic-core pydantic tzdata django
+== resolve pre.txt (linux-py312)
+annotated-types==0.7.0
+asgiref==3.8.1
+django==5.2.1
+pydantic==2.11.0b1
+pydantic-core==2.30.0
+sqlparse==0.5.3
+typing-extensions==4.13.2
+backtracks: 0
+install order: annotated-types asgiref sqlparse django typing-extensions pydantic-core pydantic
+== resolve conflict.txt (linux-py312)
+error: no version of pydantic-core matches ==2.23.4,>=2.27 (required by the user, pydantic==2.9.2)
+backtracks: 1
+== resolve yanked.txt (linux-py312)
+idna==4.0rc1
+urllib3==2.0.0
+backtracks: 0
+install order: idna urllib3
+== resolve yanked2.txt (linux-py312)
+error: no version of urllib3 matches <2.1,>=2.0 (required by the user)
+backtracks: 0
+== resolve missing.txt (linux-py312)
+error: no project named left-pad in the index (required by the user)
+backtracks: 3
+== resolve bad.txt (linux-py312)
+error: bad.txt:2: invalid requirement 'flask >= 2.0 async'
+  | Expected comma (within version specifier), semicolon (after version specifier) or end
+  |     flask >= 2.0 async
+  |           ~~~~~~~^

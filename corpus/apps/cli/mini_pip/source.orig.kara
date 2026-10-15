@@ -1,0 +1,4324 @@
+// mini_pip: the part of pip that decides what to install. It is a port of
+// packaging 26.3, the library pip vendors, and a resolver built on it:
+// - PEP 440 versions: parsing every spelling the spec allows, the
+//   normalized form, and the ordering, with local labels;
+// - specifiers and specifier sets as packaging 26 evaluates them, by
+//   intervals with boundaries for post-releases and local labels, with its
+//   pre-release rules for `contains` and `filter`, and `is_unsatisfiable`;
+// - PEP 508 markers and requirement strings, with packaging's tokenizer,
+//   its error messages and their `~~~^` pointers, and marker evaluation
+//   over an environment;
+// - a backtracking resolver over a JSON package index (`requires_dist`,
+//   `requires_python`, yanked releases, extras), reading requirements files
+//   with comments, line continuations, `-r` and `-c` constraints, and
+//   printing the pins, how many times it backtracked, and an install order.
+//
+// The run writes the cases into `data/` and prints five sections:
+// versions, specifiers, markers, requirements, and one resolution per line
+// of `jobs.txt`.
+//
+// expected.out is the output of oracle.py, the same tool written with
+// packaging 26.3 itself.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+// A project name as the index files it: lower case, with every run of
+// `-`, `_` and `.` as one `-`.
+fn canonicalize_name(name: Str) -> String {
+    let b = to_bytes(name);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == b'-' or c == b'_' or c == b'.' {
+            if out.len() == 0 or out[out.len() - 1] != b'-' {
+                out.push(b'-');
+            }
+        } else {
+            out.push(lower_byte(c));
+        }
+    }
+    from_bytes(out)
+}
+
+// A decimal number; the digits are known to be there.
+fn parse_int(b: ref Vec[u8], from: i64, to: i64) -> i64 {
+    let mut n: i64 = 0;
+    for i in from..to {
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+// ------------------------------------------------------------ versions
+
+const PRE_A: i64 = 0;
+const PRE_B: i64 = 1;
+const PRE_RC: i64 = 2;
+const NONE: i64 = -1;
+
+// A PEP 440 version. `pre_kind`, `post` and `dev` are NONE when absent;
+// the local label is its segments, already lower-cased, numbers without
+// their leading zeros; no segments means no label.
+#[derive(Clone)]
+struct Ver {
+    epoch: i64,
+    release: Vec[i64],
+    pre_kind: i64,
+    pre_n: i64,
+    post: i64,
+    dev: i64,
+    local: Vec[String],
+}
+
+fn plain_ver(epoch: i64, release: own Vec[i64]) -> Ver {
+    Ver { epoch: epoch, release: release, pre_kind: NONE, pre_n: 0, post: NONE, dev: NONE, local: Vec.new() }
+}
+
+// One of the words at b[i..], case-insensitively; the first that matches
+// wins, as in a regex alternation. Returns its index, or -1.
+fn match_word(b: ref Vec[u8], i: i64, words: ref Vec[String]) -> i64 {
+    for w in 0..words.len() {
+        let wb = to_bytes(words[w]);
+        if i + wb.len() > b.len() {
+            continue;
+        }
+        let mut ok = true;
+        for k in 0..wb.len() {
+            if lower_byte(b[i + k]) != wb[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return w;
+        }
+    }
+    -1
+}
+
+fn words(list: Str) -> Vec[String] {
+    split_on(list, b' ')
+}
+
+fn is_sep(c: u8) -> bool {
+    c == b'.' or c == b'_' or c == b'-'
+}
+
+fn digits_end(b: ref Vec[u8], i: i64) -> i64 {
+    let mut j = i;
+    while j < b.len() and is_digit(b[j]) {
+        j += 1;
+    }
+    j
+}
+
+fn pre_kind_of(word: Str) -> i64 {
+    if word == "alpha" or word == "a" {
+        return PRE_A;
+    }
+    if word == "beta" or word == "b" {
+        return PRE_B;
+    }
+    PRE_RC
+}
+
+// A local label's segment: numbers lose their leading zeros, words are
+// lower-cased.
+fn local_segment(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut all_digits = true;
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            all_digits = false;
+        }
+    }
+    if all_digits {
+        let n = parse_int(b, 0, b.len());
+        return f"{n}";
+    }
+    lower(s)
+}
+
+// Parses a version as packaging's regex does (it is matched against the
+// whole string, with white space allowed around it).
+fn parse_version(s: Str) -> Option[Ver] {
+    let b = to_bytes(s);
+    let n = b.len();
+    let mut i: i64 = 0;
+    while i < n and is_ws(b[i]) {
+        i += 1;
+    }
+    if i < n and (b[i] == b'v' or b[i] == b'V') {
+        i += 1;
+    }
+    let mut epoch: i64 = 0;
+    let e = digits_end(b, i);
+    if e > i and e < n and b[e] == b'!' {
+        epoch = parse_int(b, i, e);
+        i = e + 1;
+    }
+    let mut release: Vec[i64] = Vec.new();
+    let r = digits_end(b, i);
+    if r == i {
+        return None;
+    }
+    release.push(parse_int(b, i, r));
+    i = r;
+    while i + 1 < n and b[i] == b'.' and is_digit(b[i + 1]) {
+        let r2 = digits_end(b, i + 1);
+        release.push(parse_int(b, i + 1, r2));
+        i = r2;
+    }
+    let mut v = plain_ver(epoch, release);
+    // pre-release
+    let pre_words = words("alpha a beta b preview pre c rc");
+    let mut j = i;
+    if j < n and is_sep(b[j]) {
+        j += 1;
+    }
+    let w = match_word(b, j, pre_words);
+    if w >= 0 {
+        j += pre_words[w].len();
+        v.pre_kind = pre_kind_of(pre_words[w]);
+        if j < n and is_sep(b[j]) {
+            j += 1;
+        }
+        let d = digits_end(b, j);
+        v.pre_n = if d > j { parse_int(b, j, d) } else { 0 };
+        i = d;
+    }
+    // post-release
+    if i + 1 < n and b[i] == b'-' and is_digit(b[i + 1]) {
+        let d = digits_end(b, i + 1);
+        v.post = parse_int(b, i + 1, d);
+        i = d;
+    } else {
+        let post_words = words("post rev r");
+        let mut j = i;
+        if j < n and is_sep(b[j]) {
+            j += 1;
+        }
+        let w = match_word(b, j, post_words);
+        if w >= 0 {
+            j += post_words[w].len();
+            if j < n and is_sep(b[j]) {
+                j += 1;
+            }
+            let d = digits_end(b, j);
+            v.post = if d > j { parse_int(b, j, d) } else { 0 };
+            i = d;
+        }
+    }
+    // dev release
+    let dev_words = words("dev");
+    let mut j = i;
+    if j < n and is_sep(b[j]) {
+        j += 1;
+    }
+    if match_word(b, j, dev_words) == 0 {
+        j += 3;
+        if j < n and is_sep(b[j]) {
+            j += 1;
+        }
+        let d = digits_end(b, j);
+        v.dev = if d > j { parse_int(b, j, d) } else { 0 };
+        i = d;
+    }
+    // local label
+    if i + 1 < n and b[i] == b'+' and is_alnum(b[i + 1]) {
+        let mut j = i + 1;
+        let mut st = j;
+        loop {
+            while j < n and is_alnum(b[j]) {
+                j += 1;
+            }
+            v.local.push(local_segment(byte_str(b, st, j)));
+            if j + 1 < n and is_sep(b[j]) and is_alnum(b[j + 1]) {
+                j += 1;
+                st = j;
+                continue;
+            }
+            break;
+        }
+        i = j;
+    }
+    while i < n and is_ws(b[i]) {
+        i += 1;
+    }
+    if i != n {
+        return None;
+    }
+    Some(v)
+}
+
+fn join_ints(v: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        parts.push(f"{v[i]}");
+    }
+    join(parts, ".")
+}
+
+fn pre_letters(kind: i64) -> String {
+    if kind == PRE_A {
+        return "a".to_string();
+    }
+    if kind == PRE_B {
+        return "b".to_string();
+    }
+    "rc".to_string()
+}
+
+impl Ver {
+    fn is_prerelease(ref self) -> bool {
+        self.dev != NONE or self.pre_kind != NONE
+    }
+
+    fn base_version(ref self) -> String {
+        let r = join_ints(self.release);
+        if self.epoch != 0 {
+            return f"{self.epoch}!{r}";
+        }
+        r
+    }
+
+    fn public(ref self) -> String {
+        let mut s = self.base_version();
+        if self.pre_kind != NONE {
+            s.push_str(f"{pre_letters(self.pre_kind)}{self.pre_n}");
+        }
+        if self.post != NONE {
+            s.push_str(f".post{self.post}");
+        }
+        if self.dev != NONE {
+            s.push_str(f".dev{self.dev}");
+        }
+        s
+    }
+
+    fn to_str(ref self) -> String {
+        let mut s = self.public();
+        if self.local.len() > 0 {
+            s.push_str("+");
+            s.push_str(join(self.local, "."));
+        }
+        s
+    }
+
+    fn has_local(ref self) -> bool {
+        self.local.len() > 0
+    }
+
+    // The ordering key's suffix: pre-release rank and number, post-release
+    // rank and number, dev rank and number.
+    fn suffix(ref self) -> Vec[i64] {
+        let mut s: Vec[i64] = Vec.new();
+        if self.pre_kind == NONE and self.post == NONE and self.dev != NONE {
+            s.push(-1);
+            s.push(0);
+        } else if self.pre_kind == NONE {
+            s.push(3);
+            s.push(0);
+        } else {
+            s.push(self.pre_kind);
+            s.push(self.pre_n);
+        }
+        s.push(if self.post == NONE { 0 } else { 1 });
+        s.push(if self.post == NONE { 0 } else { self.post });
+        s.push(if self.dev == NONE { 1 } else { 0 });
+        s.push(if self.dev == NONE { 0 } else { self.dev });
+        s
+    }
+
+    fn same_pre(ref self, other: ref Ver) -> bool {
+        self.pre_kind == other.pre_kind and (self.pre_kind == NONE or self.pre_n == other.pre_n)
+    }
+}
+
+// The release without trailing zeros, as the ordering key has it.
+fn key_release(r: ref Vec[i64]) -> Vec[i64] {
+    let mut end = r.len();
+    while end > 0 and r[end - 1] == 0 {
+        end -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..end {
+        out.push(r[i]);
+    }
+    out
+}
+
+// The release without trailing zeros, keeping at least one part, as the
+// specifier boundaries have it.
+fn trim_release(r: ref Vec[i64]) -> Vec[i64] {
+    let mut end = r.len();
+    while end > 1 and r[end - 1] == 0 {
+        end -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..end {
+        out.push(r[i]);
+    }
+    out
+}
+
+fn cmp_ints(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut i: i64 = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    if a.len() == b.len() {
+        return 0;
+    }
+    if a.len() < b.len() { -1 } else { 1 }
+}
+
+fn cmp_i(a: i64, b: i64) -> i64 {
+    if a < b {
+        return -1;
+    }
+    if a > b { 1 } else { 0 }
+}
+
+fn is_number(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// Local labels compare segment by segment; a number is above any word.
+fn cmp_local(a: ref Vec[String], b: ref Vec[String]) -> i64 {
+    let mut i: i64 = 0;
+    while i < a.len() and i < b.len() {
+        let an = is_number(a[i]);
+        let bn = is_number(b[i]);
+        let c = if an and bn {
+            cmp_i(parse_int(to_bytes(a[i]), 0, a[i].len()), parse_int(to_bytes(b[i]), 0, b[i].len()))
+        } else if an {
+            1
+        } else if bn {
+            -1
+        } else if a[i] < b[i] {
+            -1
+        } else if a[i] > b[i] {
+            1
+        } else {
+            0
+        };
+        if c != 0 {
+            return c;
+        }
+        i += 1;
+    }
+    cmp_i(a.len(), b.len())
+}
+
+// The PEP 440 order.
+fn ver_cmp(a: ref Ver, b: ref Ver) -> i64 {
+    let c = cmp_i(a.epoch, b.epoch);
+    if c != 0 {
+        return c;
+    }
+    let c = cmp_ints(key_release(a.release), key_release(b.release));
+    if c != 0 {
+        return c;
+    }
+    let c = cmp_ints(a.suffix(), b.suffix());
+    if c != 0 {
+        return c;
+    }
+    if a.has_local() != b.has_local() {
+        return if a.has_local() { 1 } else { -1 };
+    }
+    cmp_local(a.local, b.local)
+}
+
+impl PartialOrd for Ver {
+    fn partial_cmp(ref self, other: ref Ver) -> Option[Ordering] {
+        let c = ver_cmp(self, other);
+        if c < 0 {
+            return Some(Ordering.Less);
+        }
+        if c > 0 { Some(Ordering.Greater) } else { Some(Ordering.Equal) }
+    }
+}
+
+impl PartialEq for Ver {
+    fn eq(ref self, other: ref Ver) -> bool {
+        ver_cmp(self, other) == 0
+    }
+}
+
+// Stable sorts by version, ascending or descending.
+fn sort_versions(v: own Vec[Ver]) -> Vec[Ver] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+fn sort_version_strings_desc(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and parse_version(v[j - 1]).unwrap() < parse_version(v[j]).unwrap() {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// ------------------------------------------------------------ specifier syntax
+
+// The end of a version specifier that starts at b[i], as packaging's
+// specifier regex matches it, or -1.
+fn match_specifier(b: ref Vec[u8], i: i64) -> i64 {
+    let n = b.len();
+    if i + 3 <= n and b[i] == b'=' and b[i + 1] == b'=' and b[i + 2] == b'=' {
+        let mut j = skip_ws(b, i + 3);
+        while j < n and not is_ws(b[j]) and b[j] != b';' and b[j] != b')' {
+            j += 1;
+        }
+        return j;
+    }
+    let two = if i + 2 <= n { byte_str(b, i, i + 2) } else { String.new() };
+    if two == "==" or two == "!=" {
+        let j = match_release(b, skip_ws(b, i + 2), false);
+        if j < 0 {
+            return -1;
+        }
+        if j + 2 <= n and b[j] == b'.' and b[j + 1] == b'*' {
+            return j + 2;
+        }
+        let j = match_suffixes(b, j);
+        return match_local(b, j);
+    }
+    if two == "~=" {
+        let j = match_release(b, skip_ws(b, i + 2), true);
+        if j < 0 {
+            return -1;
+        }
+        return match_suffixes(b, j);
+    }
+    let op_len = if two == "<=" or two == ">=" {
+        2
+    } else if i < n and (b[i] == b'<' or b[i] == b'>') {
+        1
+    } else {
+        0
+    };
+    if op_len == 0 {
+        return -1;
+    }
+    let j = match_release(b, skip_ws(b, i + op_len), false);
+    if j < 0 {
+        return -1;
+    }
+    match_suffixes(b, j)
+}
+
+fn skip_ws(b: ref Vec[u8], i: i64) -> i64 {
+    let mut j = i;
+    while j < b.len() and is_ws(b[j]) {
+        j += 1;
+    }
+    j
+}
+
+// `v?`, an epoch, and the release; `~=` needs two release parts.
+fn match_release(b: ref Vec[u8], i: i64, two_parts: bool) -> i64 {
+    let n = b.len();
+    let mut j = i;
+    if j < n and (b[j] == b'v' or b[j] == b'V') {
+        j += 1;
+    }
+    let e = digits_end(b, j);
+    if e > j and e < n and b[e] == b'!' {
+        j = e + 1;
+    }
+    let r = digits_end(b, j);
+    if r == j {
+        return -1;
+    }
+    j = r;
+    let mut parts: i64 = 1;
+    while j + 1 < n and b[j] == b'.' and is_digit(b[j + 1]) {
+        j = digits_end(b, j + 1);
+        parts += 1;
+    }
+    if two_parts and parts < 2 {
+        return -1;
+    }
+    j
+}
+
+// Optional pre-, post- and dev-release parts.
+fn match_suffixes(b: ref Vec[u8], i: i64) -> i64 {
+    let n = b.len();
+    let mut j = i;
+    let pre_words = words("alpha beta preview pre a b c rc");
+    let mut k = j;
+    if k < n and is_sep(b[k]) {
+        k += 1;
+    }
+    let w = match_word(b, k, pre_words);
+    if w >= 0 {
+        k += pre_words[w].len();
+        if k < n and is_sep(b[k]) {
+            k += 1;
+        }
+        j = digits_end(b, k);
+    }
+    if j + 1 < n and b[j] == b'-' and is_digit(b[j + 1]) {
+        j = digits_end(b, j + 1);
+    } else {
+        let post_words = words("post rev r");
+        let mut k = j;
+        if k < n and is_sep(b[k]) {
+            k += 1;
+        }
+        let w = match_word(b, k, post_words);
+        if w >= 0 {
+            k += post_words[w].len();
+            if k < n and is_sep(b[k]) {
+                k += 1;
+            }
+            j = digits_end(b, k);
+        }
+    }
+    let mut k = j;
+    if k < n and is_sep(b[k]) {
+        k += 1;
+    }
+    if match_word(b, k, words("dev")) == 0 {
+        k += 3;
+        if k < n and is_sep(b[k]) {
+            k += 1;
+        }
+        j = digits_end(b, k);
+    }
+    j
+}
+
+fn match_local(b: ref Vec[u8], i: i64) -> i64 {
+    let n = b.len();
+    if not (i + 1 < n and b[i] == b'+' and is_alnum(b[i + 1])) {
+        return i;
+    }
+    let mut j = i + 1;
+    loop {
+        while j < n and is_alnum(b[j]) {
+            j += 1;
+        }
+        if j + 1 < n and is_sep(b[j]) and is_alnum(b[j + 1]) {
+            j += 1;
+            continue;
+        }
+        return j;
+    }
+}
+
+// ------------------------------------------------------------ specifiers
+
+#[derive(Clone)]
+struct Spec {
+    op: String,
+    ver: String,
+}
+
+fn parse_spec(s: Str) -> Result[Spec, String] {
+    let b = to_bytes(s);
+    let st = skip_ws(b, 0);
+    let e = match_specifier(b, st);
+    if e < 0 or skip_ws(b, e) != b.len() {
+        return Err(f"Invalid specifier: {py_repr(s)}");
+    }
+    let t = strip(s);
+    let tb = to_bytes(t);
+    let op_len = if t.starts_with("===") {
+        3
+    } else if t.starts_with("~=") or t.starts_with("==") or t.starts_with("!=") or t.starts_with("<=") or t.starts_with(">=") {
+        2
+    } else {
+        1
+    };
+    Ok(Spec { op: byte_str(tb, 0, op_len), ver: strip(byte_str(tb, op_len, tb.len())) })
+}
+
+impl Spec {
+    fn to_str(ref self) -> String {
+        f"{self.op}{self.ver}"
+    }
+
+    fn wildcard(ref self) -> bool {
+        self.ver.ends_with(".*")
+    }
+
+    // The version, without a wildcard's `.*`.
+    fn version(ref self) -> Ver {
+        let v = if self.wildcard() { byte_str(to_bytes(self.ver), 0, self.ver.len() - 2) } else { self.ver.clone() };
+        parse_version(v).unwrap()
+    }
+
+    // Whether the specifier asks for pre-releases: true, false or NONE.
+    fn prereleases(ref self) -> i64 {
+        if self.op == "!=" {
+            return 0;
+        }
+        if self.op == "==" and self.wildcard() {
+            return 0;
+        }
+        match parse_version(self.ver) {
+            Some(v) => if v.is_prerelease() { 1 } else { 0 },
+            None => NONE,
+        }
+    }
+}
+
+// ------------------------------------------------------------ intervals
+
+// A bound's version: none (unbounded), a version, or a version followed
+// by all its local labels (AFTER_LOCALS) or all its post-releases
+// (AFTER_POSTS).
+const B_NONE: i64 = 0;
+const B_VER: i64 = 1;
+const B_AFTER_LOCALS: i64 = 2;
+const B_AFTER_POSTS: i64 = 3;
+
+#[derive(Clone)]
+struct Bound {
+    kind: i64,
+    v: Ver,
+    inclusive: bool,
+}
+
+#[derive(Clone)]
+struct Interval {
+    lo: Bound,
+    hi: Bound,
+}
+
+fn unbounded() -> Bound {
+    Bound { kind: B_NONE, v: plain_ver(0, vec![0]), inclusive: false }
+}
+
+fn at(v: own Ver, inclusive: bool) -> Bound {
+    Bound { kind: B_VER, v: v, inclusive: inclusive }
+}
+
+fn after(v: own Ver, kind: i64, inclusive: bool) -> Bound {
+    Bound { kind: kind, v: v, inclusive: inclusive }
+}
+
+fn interval(lo: own Bound, hi: own Bound) -> Interval {
+    Interval { lo: lo, hi: hi }
+}
+
+fn full_range() -> Vec[Interval] {
+    vec![interval(unbounded(), unbounded())]
+}
+
+fn min_version() -> Ver {
+    let mut v = plain_ver(0, vec![0]);
+    v.dev = 0;
+    v
+}
+
+fn is_boundary(b: ref Bound) -> bool {
+    b.kind == B_AFTER_LOCALS or b.kind == B_AFTER_POSTS
+}
+
+// Whether `other` is in the family a boundary stands after: the same
+// release, and for AFTER_LOCALS the same post and dev parts; for
+// AFTER_POSTS the same dev part or any post-release.
+fn is_family(b: ref Bound, other: ref Ver) -> bool {
+    if other.epoch != b.v.epoch {
+        return false;
+    }
+    let t = trim_release(b.v.release);
+    if other.release.len() < t.len() {
+        return false;
+    }
+    for i in 0..t.len() {
+        if other.release[i] != t[i] {
+            return false;
+        }
+    }
+    for i in t.len()..other.release.len() {
+        if other.release[i] != 0 {
+            return false;
+        }
+    }
+    if not other.same_pre(b.v) {
+        return false;
+    }
+    if b.kind == B_AFTER_LOCALS {
+        return other.post == b.v.post and other.dev == b.v.dev;
+    }
+    other.dev == b.v.dev or other.post != NONE
+}
+
+const INF: i64 = 9223372036854775807;
+
+// A boundary's place in the order of boundaries.
+fn order_key_cmp(a: ref Bound, b: ref Bound) -> i64 {
+    let c = cmp_i(a.v.epoch, b.v.epoch);
+    if c != 0 {
+        return c;
+    }
+    let c = cmp_ints(key_release(a.v.release), key_release(b.v.release));
+    if c != 0 {
+        return c;
+    }
+    cmp_ints(boundary_suffix(a), boundary_suffix(b))
+}
+
+fn boundary_suffix(b: ref Bound) -> Vec[i64] {
+    let s = b.v.suffix();
+    if b.kind == B_AFTER_POSTS {
+        return vec![s[0], s[1], 1, INF, 1, 0];
+    }
+    s
+}
+
+// Equality and order of two bound versions, which may be versions or
+// boundaries.
+fn bv_eq(a: ref Bound, b: ref Bound) -> bool {
+    if a.kind == B_VER and b.kind == B_VER {
+        return ver_cmp(a.v, b.v) == 0;
+    }
+    if is_boundary(a) and is_boundary(b) {
+        return order_key_cmp(a, b) == 0;
+    }
+    false
+}
+
+fn bv_lt(a: ref Bound, b: ref Bound) -> bool {
+    if a.kind == B_VER and b.kind == B_VER {
+        return ver_cmp(a.v, b.v) < 0;
+    }
+    if is_boundary(a) and is_boundary(b) {
+        return order_key_cmp(a, b) < 0;
+    }
+    if is_boundary(a) {
+        return ver_cmp(a.v, b.v) < 0 and not is_family(a, b.v);
+    }
+    ver_cmp(b.v, a.v) >= 0 or is_family(b, a.v)
+}
+
+fn bv_gt(a: ref Bound, b: ref Bound) -> bool {
+    if a.kind == B_VER and b.kind == B_VER {
+        return ver_cmp(a.v, b.v) > 0;
+    }
+    if is_boundary(a) and is_boundary(b) {
+        return order_key_cmp(a, b) > 0;
+    }
+    if is_boundary(a) {
+        return ver_cmp(a.v, b.v) >= 0 or is_family(a, b.v);
+    }
+    ver_cmp(b.v, a.v) < 0 and not is_family(b, a.v)
+}
+
+fn bound_eq(a: ref Bound, b: ref Bound) -> bool {
+    if a.kind == B_NONE or b.kind == B_NONE {
+        return a.kind == b.kind and a.inclusive == b.inclusive;
+    }
+    bv_eq(a, b) and a.inclusive == b.inclusive
+}
+
+fn lower_lt(a: ref Bound, b: ref Bound) -> bool {
+    if a.kind == B_NONE {
+        return b.kind != B_NONE;
+    }
+    if b.kind == B_NONE {
+        return false;
+    }
+    if not bv_eq(a, b) {
+        return bv_lt(a, b);
+    }
+    a.inclusive and not b.inclusive
+}
+
+fn upper_lt(a: ref Bound, b: ref Bound) -> bool {
+    if a.kind == B_NONE {
+        return false;
+    }
+    if b.kind == B_NONE {
+        return true;
+    }
+    if not bv_eq(a, b) {
+        return bv_lt(a, b);
+    }
+    not a.inclusive and b.inclusive
+}
+
+fn same_release_family(v: ref Ver, p: ref Ver) -> bool {
+    if p.epoch != v.epoch {
+        return false;
+    }
+    let t = trim_release(v.release);
+    if p.release.len() < t.len() {
+        return false;
+    }
+    for i in 0..t.len() {
+        if p.release[i] != t[i] {
+            return false;
+        }
+    }
+    for i in t.len()..p.release.len() {
+        if p.release[i] != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// Whether a version is above a lower bound.
+fn above(lo: ref Bound, p: ref Ver) -> bool {
+    if lo.kind == B_NONE {
+        return true;
+    }
+    if lo.kind == B_VER {
+        let c = ver_cmp(lo.v, p);
+        return if lo.inclusive { c <= 0 } else { c < 0 };
+    }
+    if ver_cmp(lo.v, p) >= 0 {
+        return false;
+    }
+    if not same_release_family(lo.v, p) or not p.same_pre(lo.v) {
+        return true;
+    }
+    if lo.kind == B_AFTER_POSTS {
+        return false;
+    }
+    if p.post != lo.v.post {
+        return true;
+    }
+    p.dev != lo.v.dev
+}
+
+// Whether a version is below an upper bound.
+fn below(hi: ref Bound, p: ref Ver) -> bool {
+    if hi.kind == B_NONE {
+        return true;
+    }
+    if hi.kind == B_VER {
+        let c = ver_cmp(hi.v, p);
+        return if hi.inclusive { c >= 0 } else { c > 0 };
+    }
+    if hi.kind == B_AFTER_POSTS {
+        return not bv_lt(hi, at(p.clone(), true));
+    }
+    if ver_cmp(hi.v, p) >= 0 {
+        return true;
+    }
+    if not same_release_family(hi.v, p) or not p.same_pre(hi.v) {
+        return false;
+    }
+    if p.post != hi.v.post {
+        return false;
+    }
+    p.dev == hi.v.dev
+}
+
+// The least version after a boundary, when there is one.
+fn least_version_above(b: ref Bound) -> Option[Ver] {
+    let mut v = b.v.clone();
+    v.local = Vec.new();
+    if b.kind == B_AFTER_LOCALS {
+        if v.dev != NONE {
+            v.dev += 1;
+            return Some(v);
+        }
+        v.post = if v.post != NONE { v.post + 1 } else { 0 };
+        v.dev = 0;
+        return Some(v);
+    }
+    if v.pre_kind != NONE {
+        v.pre_n += 1;
+        v.post = NONE;
+        v.dev = 0;
+        return Some(v);
+    }
+    None
+}
+
+fn range_is_empty(lo: ref Bound, hi: ref Bound) -> bool {
+    if hi.kind == B_NONE {
+        return false;
+    }
+    if lo.kind == B_NONE {
+        return not hi.inclusive and hi.kind == B_VER and ver_cmp(hi.v, min_version()) <= 0;
+    }
+    if is_boundary(lo) {
+        if let Some(succ) = least_version_above(lo) {
+            let s = at(succ, true);
+            if bv_eq(hi, s) {
+                return not hi.inclusive;
+            }
+            return bv_lt(hi, s);
+        }
+    }
+    if bv_eq(lo, hi) {
+        return not (lo.inclusive and hi.inclusive);
+    }
+    bv_gt(lo, hi)
+}
+
+fn intersect(left: ref Vec[Interval], right: ref Vec[Interval]) -> Vec[Interval] {
+    let mut out: Vec[Interval] = Vec.new();
+    let mut li: i64 = 0;
+    let mut ri: i64 = 0;
+    while li < left.len() and ri < right.len() {
+        let l = ref left[li];
+        let r = ref right[ri];
+        // max of the lower bounds, min of the upper bounds, as Python's
+        // max and min pick them
+        let lo = if not lower_lt(r.lo, l.lo) and not bound_eq(r.lo, l.lo) { r.lo.clone() } else { l.lo.clone() };
+        let hi = if upper_lt(r.hi, l.hi) { r.hi.clone() } else { l.hi.clone() };
+        if not range_is_empty(lo, hi) {
+            out.push(interval(lo, hi));
+        }
+        if upper_lt(l.hi, r.hi) {
+            li += 1;
+        } else {
+            ri += 1;
+        }
+    }
+    out
+}
+
+fn with_dev0(v: ref Ver, release: own Vec[i64]) -> Ver {
+    let mut out = plain_ver(v.epoch, release);
+    out.dev = 0;
+    out
+}
+
+// The release with its last part one higher, as a dev0.
+fn next_prefix_dev0(v: ref Ver) -> Ver {
+    let mut r = v.release.clone();
+    let k = r.len() - 1;
+    r[k] = r[k] + 1;
+    with_dev0(v, r)
+}
+
+fn spec_ranges(s: ref Spec) -> Vec[Interval] {
+    if s.op == "===" {
+        return full_range();
+    }
+    let v = s.version();
+    if s.wildcard() {
+        let lo = with_dev0(v, v.release.clone());
+        let hi = next_prefix_dev0(v);
+        if s.op == "==" {
+            return vec![interval(at(lo, true), at(hi, false))];
+        }
+        return vec![interval(unbounded(), at(lo, false)), interval(at(hi, true), unbounded())];
+    }
+    let op = s.op.clone();
+    if op == ">=" {
+        return vec![interval(at(v, true), unbounded())];
+    }
+    if op == "<=" {
+        return vec![interval(unbounded(), after(v, B_AFTER_LOCALS, true))];
+    }
+    if op == ">" {
+        let mut w = v.clone();
+        w.local = Vec.new();
+        if v.dev != NONE {
+            w.dev = v.dev + 1;
+            return vec![interval(at(w, true), unbounded())];
+        }
+        if v.post != NONE {
+            w.post = v.post + 1;
+            w.dev = 0;
+            return vec![interval(at(w, true), unbounded())];
+        }
+        return vec![interval(after(v, B_AFTER_POSTS, false), unbounded())];
+    }
+    if op == "<" {
+        let mut bound = v.clone();
+        if not v.is_prerelease() {
+            bound.dev = 0;
+            bound.local = Vec.new();
+        }
+        if ver_cmp(bound, min_version()) <= 0 {
+            return Vec.new();
+        }
+        return vec![interval(unbounded(), at(bound, false))];
+    }
+    let upper = if s.ver.contains("+") { at(v.clone(), true) } else { after(v.clone(), B_AFTER_LOCALS, true) };
+    if op == "==" {
+        return vec![interval(at(v, true), upper)];
+    }
+    if op == "!=" {
+        let mut lo = upper.clone();
+        lo.inclusive = false;
+        return vec![interval(unbounded(), at(v, false)), interval(lo, unbounded())];
+    }
+    // ~=
+    let mut prefix = v.release.clone();
+    prefix.pop();
+    let p = plain_ver(v.epoch, prefix);
+    vec![interval(at(v, true), at(next_prefix_dev0(p), false))]
+}
+
+fn in_ranges(ranges: ref Vec[Interval], v: ref Ver) -> bool {
+    for i in 0..ranges.len() {
+        if not above(ranges[i].lo, v) {
+            return false;
+        }
+        if below(ranges[i].hi, v) {
+            return true;
+        }
+    }
+    false
+}
+
+// The quick answer packaging gives before it builds intervals, or NONE.
+fn fast_match(s: ref Spec, v: ref Ver) -> i64 {
+    if s.wildcard() or v.has_local() {
+        return NONE;
+    }
+    let op = s.op.clone();
+    if op == ">=" or op == "<=" or op == "==" or op == "!=" {
+        let c = ver_cmp(v, s.version());
+        let r = if op == ">=" {
+            c >= 0
+        } else if op == "<=" {
+            c <= 0
+        } else if op == "==" {
+            c == 0
+        } else {
+            c != 0
+        };
+        return if r { 1 } else { 0 };
+    }
+    if op == "<" or op == ">" {
+        let sv = s.version();
+        if v.epoch != sv.epoch or cmp_ints(trim_release(v.release), trim_release(sv.release)) != 0 {
+            let c = ver_cmp(v, sv);
+            let r = if op == "<" { c < 0 } else { c > 0 };
+            return if r { 1 } else { 0 };
+        }
+    }
+    NONE
+}
+
+// Specifier.contains with pre-releases allowed.
+fn spec_contains(s: ref Spec, item: Str) -> bool {
+    if s.op == "===" {
+        return lower(item) == lower(s.ver);
+    }
+    match parse_version(item) {
+        None => false,
+        Some(v) => {
+            let m = fast_match(s, v);
+            if m != NONE {
+                return m == 1;
+            }
+            in_ranges(spec_ranges(s), v)
+        }
+    }
+}
+
+// ------------------------------------------------------------ specifier sets
+
+#[derive(Clone)]
+struct SpecSet {
+    specs: Vec[Spec],
+    has_arbitrary: bool,
+}
+
+fn empty_set() -> SpecSet {
+    SpecSet { specs: Vec.new(), has_arbitrary: false }
+}
+
+fn parse_spec_set(s: Str) -> Result[SpecSet, String] {
+    let mut out = empty_set();
+    let parts = split_on(s, b',');
+    for i in 0..parts.len() {
+        let p = strip(parts[i]);
+        if p.len() == 0 {
+            continue;
+        }
+        out.specs.push(parse_spec(p)?);
+    }
+    out.has_arbitrary = s.contains("===");
+    Ok(out)
+}
+
+impl SpecSet {
+    // The specifiers sorted by their text, without repeats.
+    fn to_str(ref self) -> String {
+        let mut texts: Vec[String] = Vec.new();
+        for i in 0..self.specs.len() {
+            texts.push(self.specs[i].to_str());
+        }
+        let sorted = sort_strings(texts);
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..sorted.len() {
+            if not contains_str(out, sorted[i]) {
+                out.push(sorted[i].clone());
+            }
+        }
+        join(out, ",")
+    }
+
+    fn and(ref self, other: ref SpecSet) -> SpecSet {
+        let mut specs = self.specs.clone();
+        for i in 0..other.specs.len() {
+            specs.push(other.specs[i].clone());
+        }
+        SpecSet { specs: specs, has_arbitrary: self.has_arbitrary or other.has_arbitrary }
+    }
+
+    fn prereleases(ref self) -> i64 {
+        for i in 0..self.specs.len() {
+            if self.specs[i].prereleases() == 1 {
+                return 1;
+            }
+        }
+        NONE
+    }
+
+    fn ranges(ref self) -> Vec[Interval] {
+        let mut result = spec_ranges(self.specs[0]);
+        for i in 1..self.specs.len() {
+            result = intersect(result, spec_ranges(self.specs[i]));
+            if result.len() == 0 {
+                break;
+            }
+        }
+        result
+    }
+
+    fn is_unsatisfiable(ref self) -> bool {
+        if self.specs.len() == 0 {
+            return false;
+        }
+        if self.ranges().len() == 0 {
+            return true;
+        }
+        let mut arbitrary: Vec[String] = Vec.new();
+        for i in 0..self.specs.len() {
+            if self.specs[i].op == "===" {
+                arbitrary.push(self.specs[i].ver.clone());
+            }
+        }
+        if arbitrary.len() == 0 {
+            return false;
+        }
+        let first = lower(arbitrary[0]);
+        for i in 1..arbitrary.len() {
+            if lower(arbitrary[i]) != first {
+                return true;
+            }
+        }
+        let mut standard: Vec[Spec] = Vec.new();
+        for i in 0..self.specs.len() {
+            if self.specs[i].op != "===" {
+                standard.push(self.specs[i].clone());
+            }
+        }
+        if standard.len() == 0 {
+            return false;
+        }
+        if parse_version(arbitrary[0]).is_none() {
+            return true;
+        }
+        for i in 0..standard.len() {
+            if not spec_contains(standard[i], arbitrary[0]) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // `pre` is true, false or NONE, as `prereleases=` is.
+    fn contains(ref self, item: Str, pre: i64) -> bool {
+        if let Some(v) = parse_version(item) {
+            if not self.has_arbitrary and not v.has_local() and self.specs.len() > 0 {
+                if v.is_prerelease() and pre == 0 {
+                    return false;
+                }
+                let mut all_fast = true;
+                for i in 0..self.specs.len() {
+                    let m = fast_match(self.specs[i], v);
+                    if m == NONE {
+                        all_fast = false;
+                        break;
+                    }
+                    if m == 0 {
+                        return false;
+                    }
+                }
+                if all_fast {
+                    return true;
+                }
+                return in_ranges(self.ranges(), v);
+            }
+        }
+        let one = vec![item.to_string()];
+        self.filter(one, pre).len() > 0
+    }
+
+    fn filter(ref self, items: ref Vec[String], pre_in: i64) -> Vec[String] {
+        let mut pre = pre_in;
+        if pre == NONE and self.prereleases() != NONE {
+            pre = self.prereleases();
+        }
+        if self.specs.len() == 0 {
+            return pre_filter(items, pre);
+        }
+        if self.has_arbitrary {
+            let mut matches: Vec[String] = Vec.new();
+            for i in 0..items.len() {
+                let mut ok = true;
+                for k in 0..self.specs.len() {
+                    if not spec_contains(self.specs[k], items[i]) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    matches.push(items[i].clone());
+                }
+            }
+            return pre_filter(matches, pre);
+        }
+        let ranges = self.ranges();
+        let mut out: Vec[String] = Vec.new();
+        let mut held: Vec[String] = Vec.new();
+        let mut found_final = false;
+        for i in 0..items.len() {
+            let v = match parse_version(items[i]) {
+                Some(v) => v,
+                None => continue,
+            };
+            if pre == 0 and v.is_prerelease() {
+                continue;
+            }
+            if not in_ranges(ranges, v) {
+                continue;
+            }
+            if pre == 1 or not v.is_prerelease() {
+                found_final = found_final or not v.is_prerelease();
+                out.push(items[i].clone());
+            } else if not found_final {
+                held.push(items[i].clone());
+            }
+        }
+        if pre == NONE and not found_final {
+            return held;
+        }
+        out
+    }
+}
+
+// The pre-release rule applied to versions already matched: pre-releases
+// only when nothing else is there, unless told.
+fn pre_filter(items: ref Vec[String], pre: i64) -> Vec[String] {
+    if pre == 1 {
+        return items.clone();
+    }
+    let mut out: Vec[String] = Vec.new();
+    if pre == 0 {
+        for i in 0..items.len() {
+            match parse_version(items[i]) {
+                Some(v) => {
+                    if not v.is_prerelease() {
+                        out.push(items[i].clone());
+                    }
+                }
+                None => out.push(items[i].clone()),
+            }
+        }
+        return out;
+    }
+    let mut nonfinal: Vec[String] = Vec.new();
+    let mut arbitrary: Vec[String] = Vec.new();
+    let mut found_final = false;
+    for i in 0..items.len() {
+        match parse_version(items[i]) {
+            None => {
+                if found_final {
+                    out.push(items[i].clone());
+                } else {
+                    arbitrary.push(items[i].clone());
+                    nonfinal.push(items[i].clone());
+                }
+            }
+            Some(v) => {
+                if not v.is_prerelease() {
+                    if not found_final {
+                        for k in 0..arbitrary.len() {
+                            out.push(arbitrary[k].clone());
+                        }
+                        found_final = true;
+                    }
+                    out.push(items[i].clone());
+                } else if not found_final {
+                    nonfinal.push(items[i].clone());
+                }
+            }
+        }
+    }
+    if not found_final {
+        return nonfinal;
+    }
+    out
+}
+
+// ------------------------------------------------------------ the tokenizer
+
+// packaging's syntax error: a message and the span of the source it
+// points at.
+struct SyntaxErr {
+    message: String,
+    from: i64,
+    to: i64,
+}
+
+fn show_syntax_error(e: ref SyntaxErr, source: Str) -> String {
+    let mut pointer = String.new();
+    for _ in 0..e.from {
+        pointer.push_str(" ");
+    }
+    for _ in e.from..e.to {
+        pointer.push_str("~");
+    }
+    pointer.push_str("^");
+    f"{e.message}\n    {source}\n    {pointer}"
+}
+
+fn variable_names() -> Vec[String] {
+    words("python_version python_full_version os_name os.name sys_platform sys.platform platform_release platform_system platform_version platform.version platform_machine platform.machine platform_python_implementation platform.python_implementation python_implementation implementation_name implementation_version extras extra dependency_groups")
+}
+
+// A tokenizer over one requirement or marker. `check` looks for a token
+// at the current position and remembers it; `read` takes it.
+struct Tokenizer {
+    b: Vec[u8],
+    source: String,
+    pos: i64,
+    next_end: i64,
+    next_text: String,
+    vars: Vec[String],
+}
+
+fn tokenizer(source: Str) -> Tokenizer {
+    Tokenizer { b: to_bytes(source), source: source.to_string(), pos: 0, next_end: -1, next_text: String.new(), vars: variable_names() }
+}
+
+impl Tokenizer {
+    fn boundary(ref self, i: i64) -> bool {
+        let before = i > 0 and is_word(self.b[i - 1]);
+        let after = i < self.b.len() and is_word(self.b[i]);
+        before != after
+    }
+
+    fn lit(ref self, s: Str) -> i64 {
+        if self.source.len() >= self.pos + s.len() and byte_str(self.b, self.pos, self.pos + s.len()) == s {
+            return self.pos + s.len();
+        }
+        -1
+    }
+
+    // A keyword between word boundaries.
+    fn word(ref self, s: Str) -> i64 {
+        if not self.boundary(self.pos) {
+            return -1;
+        }
+        let e = self.lit(s);
+        if e >= 0 and self.boundary(e) {
+            return e;
+        }
+        -1
+    }
+
+    // Where the token named `name` would end, or -1.
+    fn scan(ref self, name: Str) -> i64 {
+        let b = ref self.b;
+        let n = b.len();
+        let p = self.pos;
+        if name == "LEFT_PARENTHESIS" {
+            return self.lit("(");
+        }
+        if name == "RIGHT_PARENTHESIS" {
+            return self.lit(")");
+        }
+        if name == "LEFT_BRACKET" {
+            return self.lit("[");
+        }
+        if name == "RIGHT_BRACKET" {
+            return self.lit("]");
+        }
+        if name == "SEMICOLON" {
+            return self.lit(";");
+        }
+        if name == "COMMA" {
+            return self.lit(",");
+        }
+        if name == "AT" {
+            return self.lit("@");
+        }
+        if name == "QUOTED_STRING" {
+            if p < n and (b[p] == b'\'' or b[p] == b'"') {
+                let q = b[p];
+                let mut j = p + 1;
+                while j < n and b[j] != q {
+                    j += 1;
+                }
+                if j < n {
+                    return j + 1;
+                }
+            }
+            return -1;
+        }
+        if name == "OP" {
+            let ops = words("=== == ~= != <= >= < >");
+            for i in 0..ops.len() {
+                let e = self.lit(ops[i]);
+                if e >= 0 {
+                    return e;
+                }
+            }
+            return -1;
+        }
+        if name == "BOOLOP" {
+            let e = self.word("or");
+            if e >= 0 {
+                return e;
+            }
+            return self.word("and");
+        }
+        if name == "IN" {
+            return self.word("in");
+        }
+        if name == "NOT" {
+            return self.word("not");
+        }
+        if name == "VARIABLE" {
+            for i in 0..self.vars.len() {
+                let e = self.word(self.vars[i]);
+                if e >= 0 {
+                    return e;
+                }
+            }
+            return -1;
+        }
+        if name == "SPECIFIER" {
+            return match_specifier(self.b, p);
+        }
+        if name == "URL" {
+            let mut j = p;
+            while j < n and b[j] != b' ' and b[j] != b'\t' {
+                j += 1;
+            }
+            return if j > p { j } else { -1 };
+        }
+        if name == "IDENTIFIER" {
+            if not (p < n and is_alnum(b[p]) and self.boundary(p)) {
+                return -1;
+            }
+            let mut j = p + 1;
+            while j < n and (is_alnum(b[j]) or b[j] == b'.' or b[j] == b'_' or b[j] == b'-') {
+                j += 1;
+            }
+            while j > p + 1 and not self.boundary(j) {
+                j -= 1;
+            }
+            return if self.boundary(j) { j } else { -1 };
+        }
+        if name == "VERSION_PREFIX_TRAIL" {
+            return self.lit(".*");
+        }
+        if name == "VERSION_LOCAL_LABEL_TRAIL" {
+            let lc = |c: u8| -> bool { is_digit(c) or (c >= b'a' and c <= b'z') };
+            if not (p + 1 < n and b[p] == b'+' and lc(b[p + 1])) {
+                return -1;
+            }
+            let mut j = p + 1;
+            loop {
+                while j < n and lc(b[j]) {
+                    j += 1;
+                }
+                if j + 1 < n and is_sep(b[j]) and lc(b[j + 1]) {
+                    j += 1;
+                    continue;
+                }
+                return j;
+            }
+        }
+        if name == "WS" {
+            let mut j = p;
+            while j < n and (b[j] == b' ' or b[j] == b'\t') {
+                j += 1;
+            }
+            return if j > p { j } else { -1 };
+        }
+        // END
+        if p == n { p } else { -1 }
+    }
+
+    fn check(mut ref self, name: Str) -> bool {
+        let e = self.scan(name);
+        if e < 0 {
+            return false;
+        }
+        self.next_end = e;
+        self.next_text = byte_str(self.b, self.pos, e);
+        true
+    }
+
+    fn peek(ref self, name: Str) -> bool {
+        self.scan(name) >= 0
+    }
+
+    fn read(mut ref self) -> String {
+        self.pos = self.next_end;
+        self.next_end = -1;
+        self.next_text.clone()
+    }
+
+    fn consume(mut ref self, name: Str) {
+        if self.check(name) {
+            self.read();
+        }
+    }
+
+    fn error(ref self, msg: Str) -> SyntaxErr {
+        SyntaxErr { message: msg.to_string(), from: self.pos, to: self.pos }
+    }
+
+    fn error_from(ref self, msg: Str, from: i64) -> SyntaxErr {
+        SyntaxErr { message: msg.to_string(), from: from, to: self.pos }
+    }
+
+    fn expect(mut ref self, name: Str, expected: Str) -> Result[String, SyntaxErr] {
+        if not self.check(name) {
+            return Err(self.error(f"Expected {expected}"));
+        }
+        Ok(self.read())
+    }
+
+    // The closing half of enclosing_tokens.
+    fn close(mut ref self, open_pos: i64, close: Str, open: Str, around: Str) -> Result[(), SyntaxErr] {
+        if open_pos < 0 {
+            return Ok(());
+        }
+        if not self.check(close) {
+            return Err(self.error_from(f"Expected matching {close} for {open}, after {around}", open_pos));
+        }
+        self.read();
+        Ok(())
+    }
+
+    fn open(mut ref self, open: Str) -> i64 {
+        if self.check(open) {
+            let p = self.pos;
+            self.read();
+            return p;
+        }
+        -1
+    }
+}
+
+// ------------------------------------------------------------ markers
+
+// A marker is a list of items, nested lists, and the words "and" and
+// "or". An item compares two operands, each a variable or a value.
+#[derive(Clone)]
+enum MNode {
+    Item(bool, String, String, bool, String),
+    List(Vec[MNode]),
+    Word(String),
+}
+
+fn parse_marker_var(t: mut ref Tokenizer) -> Result[(bool, String), SyntaxErr] {
+    if t.check("VARIABLE") {
+        let mut name = t.read();
+        let b = to_bytes(name);
+        let mut out: Vec[u8] = Vec.new();
+        for i in 0..b.len() {
+            out.push(if b[i] == b'.' { b'_' } else { b[i] });
+        }
+        name = from_bytes(out);
+        if name == "platform_python_implementation" or name == "python_implementation" {
+            name = "platform_python_implementation".to_string();
+        }
+        return Ok((true, name));
+    }
+    if t.check("QUOTED_STRING") {
+        let text = t.read();
+        let b = to_bytes(text);
+        return Ok((false, byte_str(b, 1, b.len() - 1)));
+    }
+    Err(t.error("Expected a marker variable or quoted string"))
+}
+
+fn parse_marker_op(t: mut ref Tokenizer) -> Result[String, SyntaxErr] {
+    if t.check("IN") {
+        t.read();
+        return Ok("in".to_string());
+    }
+    if t.check("NOT") {
+        t.read();
+        t.expect("WS", "whitespace after 'not'")?;
+        t.expect("IN", "'in' after 'not'")?;
+        return Ok("not in".to_string());
+    }
+    if t.check("OP") {
+        return Ok(t.read());
+    }
+    Err(t.error("Expected marker operator, one of <=, <, !=, ==, >=, >, ~=, ===, in, not in"))
+}
+
+fn parse_marker_item(t: mut ref Tokenizer) -> Result[MNode, SyntaxErr] {
+    t.consume("WS");
+    let (lv, l) = parse_marker_var(t)?;
+    t.consume("WS");
+    let op = parse_marker_op(t)?;
+    t.consume("WS");
+    let (rv, r) = parse_marker_var(t)?;
+    t.consume("WS");
+    Ok(MNode.Item(lv, l, op, rv, r))
+}
+
+fn parse_marker_atom(t: mut ref Tokenizer) -> Result[MNode, SyntaxErr] {
+    t.consume("WS");
+    let node = if t.peek("LEFT_PARENTHESIS") {
+        let open = t.open("LEFT_PARENTHESIS");
+        t.consume("WS");
+        let inner = parse_marker(t)?;
+        t.consume("WS");
+        t.close(open, "RIGHT_PARENTHESIS", "LEFT_PARENTHESIS", "marker expression")?;
+        inner
+    } else {
+        parse_marker_item(t)?
+    };
+    t.consume("WS");
+    Ok(node)
+}
+
+fn parse_marker(t: mut ref Tokenizer) -> Result[MNode, SyntaxErr] {
+    let mut list: Vec[MNode] = Vec.new();
+    list.push(parse_marker_atom(t)?);
+    while t.check("BOOLOP") {
+        let op = t.read();
+        list.push(MNode.Word(op));
+        list.push(parse_marker_atom(t)?);
+    }
+    Ok(MNode.List(list))
+}
+
+// Extra names in a marker are compared in their normalized form.
+fn normalize_extras(m: ref MNode) -> MNode {
+    match m {
+        MNode.List(items) => {
+            let mut out: Vec[MNode] = Vec.new();
+            for i in 0..items.len() {
+                out.push(normalize_extras(items[i]));
+            }
+            MNode.List(out)
+        }
+        MNode.Item(lv, l, op, rv, r) => {
+            if *lv and l == "extra" and not *rv {
+                return MNode.Item(true, l.clone(), op.clone(), false, canonicalize_name(r));
+            }
+            if *rv and r == "extra" and not *lv {
+                return MNode.Item(false, canonicalize_name(l), op.clone(), true, r.clone());
+            }
+            if *rv and (r == "extras" or r == "dependency_groups") and not *lv {
+                return MNode.Item(false, canonicalize_name(l), op.clone(), true, r.clone());
+            }
+            m.clone()
+        }
+        MNode.Word(_) => m.clone(),
+    }
+}
+
+fn parse_full_marker(source: Str) -> Result[MNode, String] {
+    let mut t = tokenizer(source);
+    let r = parse_marker(t);
+    let m = match r {
+        Ok(m) => m,
+        Err(e) => return Err(show_syntax_error(e, source)),
+    };
+    if let Err(e) = t.expect("END", "end of marker expression") {
+        return Err(show_syntax_error(e, source));
+    }
+    Ok(normalize_extras(m))
+}
+
+fn serialize_operand(is_var: bool, s: Str) -> String {
+    if is_var {
+        return s.to_string();
+    }
+    if not s.contains("\"") {
+        return f"\"{s}\"";
+    }
+    f"'{s}'"
+}
+
+fn format_marker(m: ref MNode, first: bool) -> String {
+    match m {
+        MNode.List(items) => {
+            if items.len() == 1 {
+                match items[0] {
+                    MNode.Word(_) => {}
+                    _ => return format_marker(items[0], first),
+                }
+            }
+            let mut parts: Vec[String] = Vec.new();
+            for i in 0..items.len() {
+                parts.push(format_marker(items[i], false));
+            }
+            let inner = join(parts, " ");
+            if first { inner } else { f"({inner})" }
+        }
+        MNode.Item(lv, l, op, rv, r) => f"{serialize_operand(*lv, l)} {op} {serialize_operand(*rv, r)}",
+        MNode.Word(w) => w.clone(),
+    }
+}
+
+const REQUIRE_VERSION: Str = "implementation_version platform_release python_full_version python_version";
+
+fn eval_op(lhs: Str, op: Str, rhs: Str, key: Str) -> Result[bool, String] {
+    if contains_str(words(REQUIRE_VERSION), key) {
+        if let Ok(spec) = parse_spec(f"{op}{rhs}") {
+            return Ok(spec_contains(spec, lhs));
+        }
+    }
+    if op == "in" {
+        return Ok(rhs.contains(lhs));
+    }
+    if op == "not in" {
+        return Ok(not rhs.contains(lhs));
+    }
+    if op == "<" or op == ">" {
+        return Ok(false);
+    }
+    if op == "<=" or op == "==" or op == ">=" {
+        return Ok(lhs == rhs);
+    }
+    if op == "!=" {
+        return Ok(lhs != rhs);
+    }
+    Err(f"UndefinedComparison: Undefined <Op({py_repr(op)})> on {py_repr(lhs)} and {py_repr(rhs)}.")
+}
+
+// An environment: the marker variables' values.
+#[derive(Clone)]
+struct Env {
+    keys: Vec[String],
+    values: Vec[String],
+}
+
+impl Env {
+    fn get(ref self, k: Str) -> Option[String] {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == k {
+                return Some(self.values[i].clone());
+            }
+        }
+        None
+    }
+
+    fn with(ref self, k: Str, v: Str) -> Env {
+        let mut e = self.clone();
+        for i in 0..e.keys.len() {
+            if e.keys[i] == k {
+                e.values[i] = v.to_string();
+                return e;
+            }
+        }
+        e.keys.push(k.to_string());
+        e.values.push(v.to_string());
+        e
+    }
+}
+
+fn eval_marker(m: ref MNode, env: ref Env) -> Result[bool, String] {
+    match m {
+        MNode.List(items) => {
+            // groups of "and"ed results, the groups "or"ed
+            let mut any = false;
+            let mut all = true;
+            for i in 0..items.len() {
+                match items[i] {
+                    MNode.Word(w) => {
+                        if w == "or" {
+                            any = any or all;
+                            all = true;
+                        }
+                    }
+                    _ => {
+                        let r = eval_marker(items[i], env)?;
+                        all = all and r;
+                    }
+                }
+            }
+            Ok(any or all)
+        }
+        MNode.Item(lv, l, op, _, r) => {
+            let key = if *lv { l.clone() } else { r.clone() };
+            let value = match env.get(key) {
+                Some(v) => v,
+                None => return Err(f"UndefinedEnvironmentName: {py_repr(key)}"),
+            };
+            if *lv { eval_op(value, op, r, key) } else { eval_op(l, op, value, key) }
+        }
+        MNode.Word(_) => Ok(false),
+    }
+}
+
+// Marker.evaluate: `extra` defaults to empty and is normalized.
+fn evaluate(m: ref MNode, env: ref Env, extra: Str) -> Result[bool, String] {
+    let mut e = env.with("extra", if extra.len() > 0 { canonicalize_name(extra) } else { String.new() });
+    if let Some(v) = e.get("python_full_version") {
+        if v.ends_with("+") {
+            e = e.with("python_full_version", f"{v}local");
+        }
+    }
+    eval_marker(m, e)
+}
+
+// ------------------------------------------------------------ requirements
+
+#[derive(Clone)]
+struct Requirement {
+    name: String,
+    url: String,
+    extras: Vec[String],
+    spec: SpecSet,
+    marker: Option[MNode],
+}
+
+fn parse_extras(t: mut ref Tokenizer) -> Result[Vec[String], SyntaxErr] {
+    let mut extras: Vec[String] = Vec.new();
+    if not t.peek("LEFT_BRACKET") {
+        return Ok(extras);
+    }
+    let open = t.open("LEFT_BRACKET");
+    t.consume("WS");
+    if t.check("IDENTIFIER") {
+        extras.push(t.read());
+        loop {
+            t.consume("WS");
+            if t.peek("IDENTIFIER") {
+                return Err(t.error("Expected comma between extra names"));
+            }
+            if not t.check("COMMA") {
+                break;
+            }
+            t.read();
+            t.consume("WS");
+            extras.push(t.expect("IDENTIFIER", "extra name after comma")?);
+        }
+    }
+    t.consume("WS");
+    t.close(open, "RIGHT_BRACKET", "LEFT_BRACKET", "extras")?;
+    Ok(extras)
+}
+
+fn parse_version_many(t: mut ref Tokenizer) -> Result[String, SyntaxErr] {
+    let mut out = String.new();
+    while t.check("SPECIFIER") {
+        let start = t.pos;
+        let s = t.read();
+        out.push_str(s);
+        if t.peek("VERSION_PREFIX_TRAIL") {
+            let msg = if s.starts_with("!=") or (s.starts_with("==") and not s.starts_with("===")) {
+                ".* suffix cannot be used with pre-release, post-release, dev or local versions"
+            } else {
+                ".* suffix can only be used with `==` or `!=` operators"
+            };
+            return Err(SyntaxErr { message: msg.to_string(), from: start, to: t.pos + 1 });
+        }
+        if t.peek("VERSION_LOCAL_LABEL_TRAIL") {
+            return Err(SyntaxErr { message: "Local version label can only be used with `==` or `!=` operators".to_string(), from: start, to: t.pos });
+        }
+        t.consume("WS");
+        if not t.check("COMMA") {
+            break;
+        }
+        out.push_str(t.read());
+        t.consume("WS");
+    }
+    Ok(out)
+}
+
+fn parse_specifier(t: mut ref Tokenizer) -> Result[String, SyntaxErr] {
+    let open = t.open("LEFT_PARENTHESIS");
+    t.consume("WS");
+    let s = parse_version_many(t)?;
+    t.consume("WS");
+    t.close(open, "RIGHT_PARENTHESIS", "LEFT_PARENTHESIS", "version specifier")?;
+    Ok(s)
+}
+
+fn parse_requirement_marker(t: mut ref Tokenizer, start: i64, expected: Str) -> Result[MNode, SyntaxErr] {
+    if not t.check("SEMICOLON") {
+        return Err(t.error_from(f"Expected {expected} or end", start));
+    }
+    t.read();
+    let m = parse_marker(t)?;
+    t.consume("WS");
+    Ok(m)
+}
+
+// The name, extras, URL, specifier and marker of a requirement string.
+fn parse_requirement_parts(t: mut ref Tokenizer) -> Result[(String, Vec[String], String, String, Option[MNode]), SyntaxErr] {
+    t.consume("WS");
+    let name = t.expect("IDENTIFIER", "package name at the start of dependency specifier")?;
+    t.consume("WS");
+    let extras = parse_extras(t)?;
+    t.consume("WS");
+    let mut url = String.new();
+    let mut spec = String.new();
+    let mut marker: Option[MNode] = None;
+    if t.check("AT") {
+        t.read();
+        t.consume("WS");
+        let url_start = t.pos;
+        url = t.expect("URL", "URL after @")?;
+        if not t.peek("END") {
+            t.expect("WS", "whitespace after URL")?;
+            if not t.peek("END") {
+                marker = Some(parse_requirement_marker(t, url_start, "semicolon (after URL and whitespace)")?);
+            }
+        }
+    } else {
+        let start = t.pos;
+        spec = parse_specifier(t)?;
+        t.consume("WS");
+        if not t.peek("END") {
+            let expected = if spec.len() > 0 { "comma (within version specifier), semicolon (after version specifier)" } else { "semicolon (after name with no version specifier)" };
+            marker = Some(parse_requirement_marker(t, start, expected)?);
+        }
+    }
+    t.expect("END", "end of dependency specifier")?;
+    Ok((name, extras, url, spec, marker))
+}
+
+fn parse_requirement(source: Str) -> Result[Requirement, String] {
+    let mut t = tokenizer(source);
+    let parts = match parse_requirement_parts(t) {
+        Ok(p) => p,
+        Err(e) => return Err(show_syntax_error(e, source)),
+    };
+    let (name, extras_list, url, spec_text, marker) = parts;
+    let mut extras: Vec[String] = Vec.new();
+    for i in 0..extras_list.len() {
+        if not contains_str(extras, extras_list[i]) {
+            extras.push(extras_list[i].clone());
+        }
+    }
+    let spec = parse_spec_set(spec_text)?;
+    let m = match marker {
+        Some(x) => Some(normalize_extras(x)),
+        None => None,
+    };
+    Ok(Requirement { name: name, url: url, extras: sort_strings(extras), spec: spec, marker: m })
+}
+
+impl Requirement {
+    fn to_str(ref self) -> String {
+        let mut s = self.name.clone();
+        if self.extras.len() > 0 {
+            s.push_str(f"[{join(self.extras, ",")}]");
+        }
+        s.push_str(self.spec.to_str());
+        if self.url.len() > 0 {
+            s.push_str(f" @ {self.url}");
+            if self.marker.is_some() {
+                s.push_str(" ");
+            }
+        }
+        if let Some(m) = ref self.marker {
+            s.push_str(f"; {format_marker(m, true)}");
+        }
+        s
+    }
+
+    fn key(ref self) -> String {
+        canonicalize_name(self.name)
+    }
+
+    // Whether the requirement applies in this environment, with no extra.
+    fn applies(ref self, env: ref Env) -> bool {
+        match ref self.marker {
+            None => true,
+            Some(m) => evaluate(m, env, "").unwrap_or(false),
+        }
+    }
+}
+
+// ------------------------------------------------------------ JSON
+
+#[derive(Clone)]
+enum Json {
+    Null,
+    Bool(bool),
+    Num(String),
+    Text(String),
+    Arr(Vec[Json]),
+    Obj(Vec[String], Vec[Json]),
+}
+
+struct JsonReader {
+    b: Vec[u8],
+    pos: i64,
+}
+
+impl JsonReader {
+    fn skip(mut ref self) {
+        while self.pos < self.b.len() and is_ws(self.b[self.pos]) {
+            self.pos += 1;
+        }
+    }
+
+    fn fail(ref self, what: Str) -> String {
+        f"index.json: {what} at byte {self.pos}"
+    }
+
+    fn eat(mut ref self, c: u8) -> Result[(), String] {
+        self.skip();
+        if self.pos >= self.b.len() or self.b[self.pos] != c {
+            return Err(self.fail(f"expected '{from_bytes(vec![c])}'"));
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    fn hex4(mut ref self) -> Result[i64, String] {
+        let mut n: i64 = 0;
+        for _ in 0..4 {
+            if self.pos >= self.b.len() {
+                return Err(self.fail("short \\u escape"));
+            }
+            let c = lower_byte(self.b[self.pos]);
+            let d = if is_digit(c) {
+                (c - b'0') as i64
+            } else if c >= b'a' and c <= b'f' {
+                (c - b'a') as i64 + 10
+            } else {
+                return Err(self.fail("bad \\u escape"));
+            };
+            n = n * 16 + d;
+            self.pos += 1;
+        }
+        Ok(n)
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        self.eat(b'"')?;
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.pos >= self.b.len() {
+                return Err(self.fail("unterminated string"));
+            }
+            let c = self.b[self.pos];
+            self.pos += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            if self.pos >= self.b.len() {
+                return Err(self.fail("unterminated string"));
+            }
+            let e = self.b[self.pos];
+            self.pos += 1;
+            if e == b'n' {
+                out.push(b'\n');
+            } else if e == b't' {
+                out.push(b'\t');
+            } else if e == b'r' {
+                out.push(b'\r');
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4()?;
+                if cp >= 0xD800 and cp < 0xDC00 and self.pos + 1 < self.b.len() and self.b[self.pos] == b'\\' {
+                    self.pos += 2;
+                    let lo = self.hex4()?;
+                    cp = 0x10000 + (cp - 0xD800) * 1024 + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(from_bytes(out))
+    }
+
+    fn value(mut ref self) -> Result[Json, String] {
+        self.skip();
+        if self.pos >= self.b.len() {
+            return Err(self.fail("unexpected end"));
+        }
+        let c = self.b[self.pos];
+        if c == b'"' {
+            return Ok(Json.Text(self.string()?));
+        }
+        if c == b'[' {
+            self.pos += 1;
+            let mut items: Vec[Json] = Vec.new();
+            self.skip();
+            if self.pos < self.b.len() and self.b[self.pos] == b']' {
+                self.pos += 1;
+                return Ok(Json.Arr(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.skip();
+                if self.pos < self.b.len() and self.b[self.pos] == b',' {
+                    self.pos += 1;
+                    continue;
+                }
+                self.eat(b']')?;
+                return Ok(Json.Arr(items));
+            }
+        }
+        if c == b'{' {
+            self.pos += 1;
+            let mut keys: Vec[String] = Vec.new();
+            let mut values: Vec[Json] = Vec.new();
+            self.skip();
+            if self.pos < self.b.len() and self.b[self.pos] == b'}' {
+                self.pos += 1;
+                return Ok(Json.Obj(keys, values));
+            }
+            loop {
+                self.skip();
+                keys.push(self.string()?);
+                self.eat(b':')?;
+                values.push(self.value()?);
+                self.skip();
+                if self.pos < self.b.len() and self.b[self.pos] == b',' {
+                    self.pos += 1;
+                    continue;
+                }
+                self.eat(b'}')?;
+                return Ok(Json.Obj(keys, values));
+            }
+        }
+        let st = self.pos;
+        while self.pos < self.b.len() and (is_alnum(self.b[self.pos]) or self.b[self.pos] == b'-' or self.b[self.pos] == b'+' or self.b[self.pos] == b'.') {
+            self.pos += 1;
+        }
+        let word = byte_str(self.b, st, self.pos);
+        if word == "true" {
+            return Ok(Json.Bool(true));
+        }
+        if word == "false" {
+            return Ok(Json.Bool(false));
+        }
+        if word == "null" {
+            return Ok(Json.Null);
+        }
+        if word.len() == 0 {
+            return Err(self.fail("unexpected character"));
+        }
+        Ok(Json.Num(word))
+    }
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 + cp / 64) as u8);
+        out.push((0x80 + cp % 64) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 + cp / 4096) as u8);
+        out.push((0x80 + (cp / 64) % 64) as u8);
+        out.push((0x80 + cp % 64) as u8);
+    } else {
+        out.push((0xF0 + cp / 262144) as u8);
+        out.push((0x80 + (cp / 4096) % 64) as u8);
+        out.push((0x80 + (cp / 64) % 64) as u8);
+        out.push((0x80 + cp % 64) as u8);
+    }
+}
+
+fn parse_json(text: Str) -> Result[Json, String] {
+    let mut r = JsonReader { b: to_bytes(text), pos: 0 };
+    let v = r.value()?;
+    r.skip();
+    if r.pos != r.b.len() {
+        return Err(r.fail("extra data"));
+    }
+    Ok(v)
+}
+
+fn field(j: ref Json, key: Str) -> Option[Json] {
+    match j {
+        Json.Obj(keys, values) => {
+            for i in 0..keys.len() {
+                if keys[i] == key {
+                    return Some(values[i].clone());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn text_of(j: ref Json) -> String {
+    match j {
+        Json.Text(s) => s.clone(),
+        Json.Num(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+// ------------------------------------------------------------ the index
+
+#[derive(Clone)]
+struct Release {
+    version: String,
+    deps: Vec[Requirement],
+    has_python: bool,
+    python: SpecSet,
+    yanked: bool,
+}
+
+#[derive(Clone)]
+struct Project {
+    name: String,
+    releases: Vec[Release],
+}
+
+fn read_index(text: Str) -> Result[Vec[Project], String] {
+    let root = parse_json(text)?;
+    let projects = match field(root, "projects") {
+        Some(p) => p,
+        None => return Err("index.json: no projects".to_string()),
+    };
+    let mut out: Vec[Project] = Vec.new();
+    match projects {
+        Json.Obj(names, rel_lists) => {
+            for p in 0..names.len() {
+                let mut releases: Vec[Release] = Vec.new();
+                match rel_lists[p] {
+                    Json.Arr(rels) => {
+                        for r in 0..rels.len() {
+                            releases.push(read_release(rels[r])?);
+                        }
+                    }
+                    _ => return Err(f"index.json: {names[p]} is not a list"),
+                }
+                out.push(Project { name: canonicalize_name(names[p]), releases: releases });
+            }
+        }
+        _ => return Err("index.json: projects is not an object".to_string()),
+    }
+    Ok(out)
+}
+
+fn read_release(j: ref Json) -> Result[Release, String] {
+    let version = match field(j, "version") {
+        Some(v) => text_of(v),
+        None => return Err("index.json: a release has no version".to_string()),
+    };
+    let mut deps: Vec[Requirement] = Vec.new();
+    if let Some(Json.Arr(list)) = field(j, "requires_dist") {
+        for i in 0..list.len() {
+            let text = text_of(list[i]);
+            match parse_requirement(text) {
+                Ok(r) => deps.push(r),
+                Err(e) => return Err(f"index.json: {version}: {e}"),
+            }
+        }
+    }
+    let mut has_python = false;
+    let mut python = empty_set();
+    if let Some(Json.Text(py)) = field(j, "requires_python") {
+        has_python = true;
+        python = parse_spec_set(py)?;
+    }
+    let yanked = match field(j, "yanked") {
+        Some(Json.Bool(b)) => b,
+        _ => false,
+    };
+    Ok(Release { version: version, deps: deps, has_python: has_python, python: python, yanked: yanked })
+}
+
+fn find_project(index: ref Vec[Project], name: Str) -> i64 {
+    for i in 0..index.len() {
+        if index[i].name == name {
+            return i;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ environments
+
+fn read_envs(text: Str) -> (Vec[String], Vec[Env]) {
+    let mut names: Vec[String] = Vec.new();
+    let mut envs: Vec[Env] = Vec.new();
+    let ls = lines_of(text);
+    for i in 0..ls.len() {
+        let line = strip(ls[i]);
+        if line.len() == 0 {
+            continue;
+        }
+        if line.starts_with("[") {
+            names.push(byte_str(to_bytes(line), 1, line.len() - 1));
+            envs.push(Env { keys: Vec.new(), values: Vec.new() });
+            continue;
+        }
+        let b = to_bytes(line);
+        let mut eq: i64 = b.len();
+        for k in 0..b.len() {
+            if b[k] == b'=' {
+                eq = k;
+                break;
+            }
+        }
+        let key = strip(byte_str(b, 0, eq));
+        let value = if eq < b.len() { strip(byte_str(b, eq + 1, b.len())) } else { String.new() };
+        let last = envs.len() - 1;
+        envs[last].keys.push(key);
+        envs[last].values.push(value);
+    }
+    (names, envs)
+}
+
+// ------------------------------------------------------------ requirements files
+
+fn dirname(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut cut: i64 = -1;
+    for i in 0..b.len() {
+        if b[i] == b'/' {
+            cut = i;
+        }
+    }
+    if cut < 0 { String.new() } else { byte_str(b, 0, cut) }
+}
+
+fn basename(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut cut: i64 = -1;
+    for i in 0..b.len() {
+        if b[i] == b'/' {
+            cut = i;
+        }
+    }
+    byte_str(b, cut + 1, b.len())
+}
+
+// Reads a requirements file as pip does, for the forms it uses: comments,
+// line continuations, `-r` and `-c`.
+fn read_reqs(path: Str, reqs: mut ref Vec[Requirement], cons: mut ref Vec[Requirement], as_constraint: bool) -> Result[(), String] {
+    let text = match fs.read_to_string(path.to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    let phys = lines_of(text);
+    let mut i: i64 = 0;
+    while i < phys.len() {
+        let start = i;
+        let mut line = phys[i].clone();
+        while line.ends_with("\\") and i + 1 < phys.len() {
+            i += 1;
+            line = f"{byte_str(to_bytes(line), 0, line.len() - 1)}{phys[i]}";
+        }
+        i += 1;
+        let b = to_bytes(line);
+        let mut cut = b.len();
+        for k in 0..b.len() {
+            if b[k] == b'#' and (k == 0 or b[k - 1] == b' ' or b[k - 1] == b'\t') {
+                cut = k;
+                break;
+            }
+        }
+        let text = strip(byte_str(b, 0, cut));
+        if text.len() == 0 {
+            continue;
+        }
+        if text.starts_with("-r ") or text.starts_with("-c ") {
+            let rest = strip(byte_str(to_bytes(text), 3, text.len()));
+            let dir = dirname(path);
+            let other = if dir.len() > 0 { f"{dir}/{rest}" } else { rest };
+            read_reqs(other, reqs, cons, as_constraint or text.starts_with("-c "))?;
+            continue;
+        }
+        match parse_requirement(text) {
+            Ok(r) => {
+                if as_constraint {
+                    cons.push(r);
+                } else {
+                    reqs.push(r);
+                }
+            }
+            Err(e) => {
+                let mut msg = f"{basename(path)}:{start + 1}: invalid requirement {py_repr(text)}";
+                let ls = split_on(e, b'\n');
+                for k in 0..ls.len() {
+                    msg.push_str(f"\n  | {ls[k]}");
+                }
+                return Err(msg);
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the resolver
+
+struct Resolver {
+    index: Vec[Project],
+    env: Env,
+    reqs: Vec[Requirement],
+    parents: Vec[String],
+    cons: Vec[Requirement],
+    pin_names: Vec[String],
+    pin_versions: Vec[String],
+    pin_extras: Vec[Vec[String]],
+    backtracks: i64,
+    conflict: String,
+}
+
+fn index_of(v: ref Vec[String], s: Str) -> i64 {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return i;
+        }
+    }
+    -1
+}
+
+fn remove_str(v: mut ref Vec[String], s: Str) {
+    let k = index_of(v, s);
+    if k >= 0 {
+        v.remove(k);
+    }
+}
+
+impl Resolver {
+    fn who(ref self, name: Str) -> String {
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..self.reqs.len() {
+            if self.reqs[i].key() == name and not contains_str(out, self.parents[i]) {
+                out.push(self.parents[i].clone());
+            }
+        }
+        join(out, ", ")
+    }
+
+    fn candidates(mut ref self, name: Str) -> Vec[String] {
+        let mut specs = empty_set();
+        for i in 0..self.reqs.len() {
+            if self.reqs[i].key() == name {
+                specs = specs.and(self.reqs[i].spec);
+            }
+        }
+        for i in 0..self.cons.len() {
+            if self.cons[i].key() == name {
+                specs = specs.and(self.cons[i].spec);
+            }
+        }
+        let p = find_project(self.index, name);
+        if p < 0 {
+            self.conflict = f"no project named {name} in the index (required by {self.who(name)})";
+            return Vec.new();
+        }
+        let mut exact = false;
+        for i in 0..specs.specs.len() {
+            let s = specs.specs[i].clone();
+            if (s.op == "==" or s.op == "===") and not s.ver.ends_with(".*") {
+                exact = true;
+            }
+        }
+        let python = self.env.get("python_full_version").unwrap_or(String.new());
+        let mut vs: Vec[String] = Vec.new();
+        for r in 0..self.index[p].releases.len() {
+            let rel = ref self.index[p].releases[r];
+            if rel.has_python and not rel.python.contains(python, NONE) {
+                continue;
+            }
+            if rel.yanked and not exact {
+                continue;
+            }
+            vs.push(rel.version.clone());
+        }
+        let ok = sort_version_strings_desc(specs.filter(vs, NONE));
+        if ok.len() == 0 {
+            let shown = specs.to_str();
+            let shown = if shown.len() == 0 { "(any)".to_string() } else { shown };
+            self.conflict = f"no version of {name} matches {shown} (required by {self.who(name)})";
+        }
+        ok
+    }
+
+    // The dependencies a release brings in: its unconditional ones when
+    // `base`, and those of each extra that only that extra turns on.
+    fn deps(ref self, name: Str, version: Str, new_extras: ref Vec[String], base: bool) -> Vec[Requirement] {
+        let p = find_project(self.index, name);
+        let mut out: Vec[Requirement] = Vec.new();
+        for r in 0..self.index[p].releases.len() {
+            let rel = ref self.index[p].releases[r];
+            if rel.version != version {
+                continue;
+            }
+            if base {
+                for d in 0..rel.deps.len() {
+                    if rel.deps[d].applies(self.env) {
+                        out.push(rel.deps[d].clone());
+                    }
+                }
+            }
+            for e in 0..new_extras.len() {
+                for d in 0..rel.deps.len() {
+                    match ref rel.deps[d].marker {
+                        None => {}
+                        Some(m) => {
+                            let on = evaluate(m, self.env, new_extras[e]).unwrap_or(false);
+                            if on and not rel.deps[d].applies(self.env) {
+                                out.push(rel.deps[d].clone());
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        out
+    }
+
+    fn truncate(mut ref self, mark: i64) {
+        while self.reqs.len() > mark {
+            self.reqs.pop();
+            self.parents.pop();
+        }
+    }
+
+    fn solve(mut ref self, k: i64) -> bool {
+        if k == self.reqs.len() {
+            return true;
+        }
+        let req = self.reqs[k].clone();
+        let parent = self.parents[k].clone();
+        let name = req.key();
+        let mut want: Vec[String] = Vec.new();
+        for i in 0..req.extras.len() {
+            let e = canonicalize_name(req.extras[i]);
+            if not contains_str(want, e) {
+                want.push(e);
+            }
+        }
+        let want = sort_strings(want);
+        let pinned = index_of(self.pin_names, name);
+        if pinned >= 0 {
+            let v = self.pin_versions[pinned].clone();
+            if not req.spec.contains(v, 1) {
+                self.conflict = f"{name}=={v} does not match {req.spec.to_str()} (required by {parent})";
+                return false;
+            }
+            let mut new: Vec[String] = Vec.new();
+            for i in 0..want.len() {
+                if not contains_str(self.pin_extras[pinned], want[i]) {
+                    new.push(want[i].clone());
+                }
+            }
+            let mark = self.reqs.len();
+            for i in 0..new.len() {
+                self.pin_extras[pinned].push(new[i].clone());
+            }
+            let label = f"{name}=={v}";
+            let ds = self.deps(name, v, new, false);
+            for i in 0..ds.len() {
+                self.reqs.push(ds[i].clone());
+                self.parents.push(label.clone());
+            }
+            if self.solve(k + 1) {
+                return true;
+            }
+            self.truncate(mark);
+            for i in 0..new.len() {
+                remove_str(mut self.pin_extras[pinned], new[i]);
+            }
+            return false;
+        }
+        let cands = self.candidates(name);
+        for c in 0..cands.len() {
+            let v = cands[c].clone();
+            self.pin_names.push(name.clone());
+            self.pin_versions.push(v.clone());
+            self.pin_extras.push(want.clone());
+            let mark = self.reqs.len();
+            let label = f"{name}=={v}";
+            let ds = self.deps(name, v, want, true);
+            for i in 0..ds.len() {
+                self.reqs.push(ds[i].clone());
+                self.parents.push(label.clone());
+            }
+            if self.solve(k + 1) {
+                return true;
+            }
+            self.backtracks += 1;
+            self.truncate(mark);
+            self.pin_names.pop();
+            self.pin_versions.pop();
+            self.pin_extras.pop();
+        }
+        false
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/envs.txt
+fn file_0() -> String {
+    """
+[linux-py312]
+implementation_name = cpython
+implementation_version = 3.12.7
+os_name = posix
+platform_machine = x86_64
+platform_release = 6.8.0-45-generic
+platform_system = Linux
+platform_version = #45-Ubuntu SMP PREEMPT_DYNAMIC
+python_full_version = 3.12.7
+platform_python_implementation = CPython
+python_version = 3.12
+sys_platform = linux
+
+[win-py39]
+implementation_name = cpython
+implementation_version = 3.9.13
+os_name = nt
+platform_machine = AMD64
+platform_release = 10
+platform_system = Windows
+platform_version = 10.0.19045
+python_full_version = 3.9.13
+platform_python_implementation = CPython
+python_version = 3.9
+sys_platform = win32
+
+[mac-pypy310]
+implementation_name = pypy
+implementation_version = 7.3.17
+os_name = posix
+platform_machine = arm64
+platform_release = 23.6.0
+platform_system = Darwin
+platform_version = Darwin Kernel Version 23.6.0
+python_full_version = 3.10.14
+platform_python_implementation = PyPy
+python_version = 3.10
+sys_platform = darwin
+
+"""
+}
+
+// data/index.json
+fn file_1() -> String {
+    """
+{
+  "meta": {
+    "api-version": "1.1"
+  },
+  "projects": {
+    "certifi": [
+      {
+        "version": "2024.8.30",
+        "requires_dist": [],
+        "requires_python": ">=3.6"
+      },
+      {
+        "version": "2025.1.31",
+        "requires_dist": [],
+        "requires_python": ">=3.6"
+      },
+      {
+        "version": "2025.6.15",
+        "requires_dist": [],
+        "requires_python": ">=3.7"
+      }
+    ],
+    "charset-normalizer": [
+      {
+        "version": "3.3.2",
+        "requires_dist": [],
+        "requires_python": ">=3.7.0"
+      },
+      {
+        "version": "3.4.0",
+        "requires_dist": [],
+        "requires_python": ">=3.7.0"
+      },
+      {
+        "version": "3.4.2",
+        "requires_dist": [],
+        "requires_python": ">=3.7"
+      }
+    ],
+    "idna": [
+      {
+        "version": "3.7",
+        "requires_dist": [],
+        "requires_python": ">=3.5"
+      },
+      {
+        "version": "3.8",
+        "requires_dist": [],
+        "requires_python": ">=3.6"
+      },
+      {
+        "version": "3.10",
+        "requires_dist": [],
+        "requires_python": ">=3.6"
+      },
+      {
+        "version": "4.0rc1",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "urllib3": [
+      {
+        "version": "1.26.20",
+        "requires_dist": [
+          "brotli==1.0.9; (os_name != \\"nt\\" or python_version >= \\"3\\") and platform_python_implementation == \\"CPython\\" and extra == \\"brotli\\"",
+          "PySocks!=1.5.7,<2.0,>=1.5.6; extra == \\"socks\\""
+        ],
+        "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*"
+      },
+      {
+        "version": "2.0.0",
+        "requires_dist": [],
+        "requires_python": ">=3.7",
+        "yanked": true
+      },
+      {
+        "version": "2.2.3",
+        "requires_dist": [
+          "brotli>=1.0.9; platform_python_implementation == \\"CPython\\" and extra == \\"brotli\\"",
+          "brotlicffi>=0.8.0; platform_python_implementation != \\"CPython\\" and extra == \\"brotli\\"",
+          "pysocks!=1.5.7,<2.0,>=1.5.6; extra == \\"socks\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "2.3.0",
+        "requires_dist": [
+          "brotli>=1.0.9; platform_python_implementation == \\"CPython\\" and extra == \\"brotli\\"",
+          "brotlicffi>=0.8.0; platform_python_implementation != \\"CPython\\" and extra == \\"brotli\\"",
+          "pysocks!=1.5.7,<2.0,>=1.5.6; extra == \\"socks\\""
+        ],
+        "requires_python": ">=3.9"
+      },
+      {
+        "version": "2.5.0",
+        "requires_dist": [
+          "brotli>=1.0.9; platform_python_implementation == \\"CPython\\" and extra == \\"brotli\\"",
+          "brotlicffi>=1.0.9; platform_python_implementation != \\"CPython\\" and extra == \\"brotli\\"",
+          "pysocks!=1.5.7,<2.0,>=1.5.6; extra == \\"socks\\""
+        ],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "requests": [
+      {
+        "version": "2.31.0",
+        "requires_dist": [
+          "charset-normalizer<4,>=2",
+          "idna<4,>=2.5",
+          "urllib3<3,>=1.21.1",
+          "certifi>=2017.4.17",
+          "PySocks!=1.5.7,>=1.5.6; extra == \\"socks\\"",
+          "chardet<6,>=3.0.2; extra == \\"use_chardet_on_py3\\""
+        ],
+        "requires_python": ">=3.7"
+      },
+      {
+        "version": "2.32.3",
+        "requires_dist": [
+          "charset-normalizer<4,>=2",
+          "idna<4,>=2.5",
+          "urllib3<3,>=1.21.1",
+          "certifi>=2017.4.17",
+          "PySocks!=1.5.7,>=1.5.6; extra == \\"socks\\"",
+          "chardet<6,>=3.0.2; extra == \\"use-chardet-on-py3\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "2.32.4",
+        "requires_dist": [
+          "charset_normalizer<4,>=2",
+          "idna<4,>=2.5",
+          "urllib3<3,>=1.21.1",
+          "certifi>=2017.4.17",
+          "PySocks!=1.5.7,>=1.5.6; extra == \\"socks\\"",
+          "chardet<6,>=3.0.2; extra == \\"use-chardet-on-py3\\""
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "pysocks": [
+      {
+        "version": "1.5.6",
+        "requires_dist": []
+      },
+      {
+        "version": "1.5.7",
+        "requires_dist": []
+      },
+      {
+        "version": "1.7.1",
+        "requires_dist": [],
+        "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
+      }
+    ],
+    "brotli": [
+      {
+        "version": "1.0.9",
+        "requires_dist": []
+      },
+      {
+        "version": "1.1.0",
+        "requires_dist": []
+      }
+    ],
+    "brotlicffi": [
+      {
+        "version": "1.1.0.0",
+        "requires_dist": [
+          "cffi>=1.0.0"
+        ],
+        "requires_python": ">=3.7"
+      }
+    ],
+    "cffi": [
+      {
+        "version": "1.17.1",
+        "requires_dist": [
+          "pycparser"
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "pycparser": [
+      {
+        "version": "2.22",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "flask": [
+      {
+        "version": "2.3.3",
+        "requires_dist": [
+          "Werkzeug>=2.3.7",
+          "Jinja2>=3.1.2",
+          "itsdangerous>=2.1.2",
+          "click>=8.1.3",
+          "blinker>=1.6.2",
+          "importlib-metadata>=3.6.0; python_version < \\"3.10\\"",
+          "asgiref>=3.2; extra == \\"async\\"",
+          "python-dotenv; extra == \\"dotenv\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "3.0.3",
+        "requires_dist": [
+          "Werkzeug>=3.0.0",
+          "Jinja2>=3.1.2",
+          "itsdangerous>=2.1.2",
+          "click>=8.1.3",
+          "blinker>=1.6.2",
+          "importlib-metadata>=3.6.0; python_version < \\"3.10\\"",
+          "asgiref>=3.2; extra == \\"async\\"",
+          "python-dotenv; extra == \\"dotenv\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "3.1.1",
+        "requires_dist": [
+          "blinker>=1.9.0",
+          "click>=8.1.3",
+          "importlib-metadata>=3.6.0; python_version < \\"3.10\\"",
+          "itsdangerous>=2.2.0",
+          "jinja2>=3.1.2",
+          "markupsafe>=2.1.1",
+          "werkzeug>=3.1.0",
+          "asgiref>=3.2; extra == \\"async\\"",
+          "python-dotenv; extra == \\"dotenv\\""
+        ],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "werkzeug": [
+      {
+        "version": "2.3.8",
+        "requires_dist": [
+          "MarkupSafe>=2.1.1"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "3.0.6",
+        "requires_dist": [
+          "MarkupSafe>=2.1.1"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "3.1.3",
+        "requires_dist": [
+          "MarkupSafe>=2.1.1",
+          "watchdog>=2.3; extra == \\"watchdog\\""
+        ],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "jinja2": [
+      {
+        "version": "3.1.4",
+        "requires_dist": [
+          "MarkupSafe>=2.0",
+          "Babel>=2.7; extra == \\"i18n\\""
+        ],
+        "requires_python": ">=3.7"
+      },
+      {
+        "version": "3.1.6",
+        "requires_dist": [
+          "MarkupSafe>=2.0",
+          "Babel>=2.7; extra == \\"i18n\\""
+        ],
+        "requires_python": ">=3.7"
+      }
+    ],
+    "markupsafe": [
+      {
+        "version": "2.1.5",
+        "requires_dist": [],
+        "requires_python": ">=3.7"
+      },
+      {
+        "version": "3.0.2",
+        "requires_dist": [],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "itsdangerous": [
+      {
+        "version": "2.1.2",
+        "requires_dist": [],
+        "requires_python": ">=3.7"
+      },
+      {
+        "version": "2.2.0",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "click": [
+      {
+        "version": "8.1.7",
+        "requires_dist": [
+          "colorama; platform_system == \\"Windows\\"",
+          "importlib-metadata; python_version < \\"3.8\\""
+        ],
+        "requires_python": ">=3.7"
+      },
+      {
+        "version": "8.1.8",
+        "requires_dist": [
+          "colorama; platform_system == \\"Windows\\"",
+          "importlib-metadata; python_version < \\"3.8\\""
+        ],
+        "requires_python": ">=3.7"
+      },
+      {
+        "version": "8.2.0",
+        "requires_dist": [
+          "colorama; platform_system == \\"Windows\\""
+        ],
+        "requires_python": ">=3.10"
+      }
+    ],
+    "colorama": [
+      {
+        "version": "0.4.6",
+        "requires_dist": [],
+        "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*, !=3.6.*"
+      }
+    ],
+    "blinker": [
+      {
+        "version": "1.8.2",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.9.0",
+        "requires_dist": [],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "importlib-metadata": [
+      {
+        "version": "8.5.0",
+        "requires_dist": [
+          "zipp>=3.20",
+          "typing-extensions>=3.6.4; python_version < \\"3.8\\""
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "zipp": [
+      {
+        "version": "3.20.2",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "3.21.0",
+        "requires_dist": [],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "asgiref": [
+      {
+        "version": "3.8.1",
+        "requires_dist": [
+          "typing_extensions>=4; python_version < \\"3.11\\""
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "typing-extensions": [
+      {
+        "version": "4.12.2",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "4.13.0rc1",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "4.13.2",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "python-dotenv": [
+      {
+        "version": "1.0.1",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.1.0",
+        "requires_dist": [],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "waitress": [
+      {
+        "version": "3.0.1",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "3.0.2",
+        "requires_dist": [],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "gunicorn": [
+      {
+        "version": "22.0.0",
+        "requires_dist": [
+          "packaging"
+        ],
+        "requires_python": ">=3.7"
+      },
+      {
+        "version": "23.0.0",
+        "requires_dist": [
+          "packaging"
+        ],
+        "requires_python": ">=3.7"
+      }
+    ],
+    "packaging": [
+      {
+        "version": "24.2",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "25.0",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "django": [
+      {
+        "version": "4.2.16",
+        "requires_dist": [
+          "asgiref<4,>=3.6.0",
+          "backports.zoneinfo; python_version < \\"3.9\\"",
+          "sqlparse>=0.3.1",
+          "tzdata; sys_platform == \\"win32\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "5.1.4",
+        "requires_dist": [
+          "asgiref<4,>=3.8.1",
+          "sqlparse>=0.3.1",
+          "tzdata; sys_platform == \\"win32\\""
+        ],
+        "requires_python": ">=3.10"
+      },
+      {
+        "version": "5.2rc1",
+        "requires_dist": [
+          "asgiref>=3.8.1",
+          "sqlparse>=0.3.1",
+          "tzdata; sys_platform == \\"win32\\""
+        ],
+        "requires_python": ">=3.10"
+      },
+      {
+        "version": "5.2.1",
+        "requires_dist": [
+          "asgiref>=3.8.1",
+          "sqlparse>=0.3.1",
+          "tzdata; sys_platform == \\"win32\\""
+        ],
+        "requires_python": ">=3.10"
+      }
+    ],
+    "sqlparse": [
+      {
+        "version": "0.5.1",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "0.5.3",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "tzdata": [
+      {
+        "version": "2024.2",
+        "requires_dist": [],
+        "requires_python": ">=2"
+      },
+      {
+        "version": "2025.2",
+        "requires_dist": [],
+        "requires_python": ">=2"
+      }
+    ],
+    "backports-zoneinfo": [
+      {
+        "version": "0.2.1",
+        "requires_dist": [],
+        "requires_python": ">=3.6"
+      }
+    ],
+    "numpy": [
+      {
+        "version": "1.24.4",
+        "requires_dist": [],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.26.4",
+        "requires_dist": [],
+        "requires_python": ">=3.9"
+      },
+      {
+        "version": "2.0.2",
+        "requires_dist": [],
+        "requires_python": ">=3.9"
+      },
+      {
+        "version": "2.2.6",
+        "requires_dist": [],
+        "requires_python": ">=3.10"
+      },
+      {
+        "version": "2.3.0",
+        "requires_dist": [],
+        "requires_python": ">=3.11"
+      }
+    ],
+    "pandas": [
+      {
+        "version": "2.0.3",
+        "requires_dist": [
+          "python-dateutil>=2.8.2",
+          "pytz>=2020.1",
+          "tzdata>=2022.1",
+          "numpy>=1.20.3; python_version < \\"3.10\\"",
+          "numpy>=1.21.0; python_version >= \\"3.10\\"",
+          "numpy>=1.23.2; python_version >= \\"3.11\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "2.2.3",
+        "requires_dist": [
+          "numpy>=1.22.4; python_version < \\"3.11\\"",
+          "numpy>=1.23.2; python_version == \\"3.11\\"",
+          "numpy>=1.26.0; python_version >= \\"3.12\\"",
+          "python-dateutil>=2.8.2",
+          "pytz>=2020.1",
+          "tzdata>=2022.7"
+        ],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "python-dateutil": [
+      {
+        "version": "2.8.2",
+        "requires_dist": [
+          "six>=1.5"
+        ],
+        "requires_python": "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
+      },
+      {
+        "version": "2.9.0.post0",
+        "requires_dist": [
+          "six>=1.5"
+        ],
+        "requires_python": "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
+      }
+    ],
+    "six": [
+      {
+        "version": "1.16.0",
+        "requires_dist": []
+      },
+      {
+        "version": "1.17.0",
+        "requires_dist": [],
+        "requires_python": "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
+      }
+    ],
+    "pytz": [
+      {
+        "version": "2024.2",
+        "requires_dist": []
+      },
+      {
+        "version": "2025.2",
+        "requires_dist": []
+      }
+    ],
+    "pydantic": [
+      {
+        "version": "2.9.2",
+        "requires_dist": [
+          "annotated-types>=0.6.0",
+          "pydantic-core==2.23.4",
+          "typing-extensions>=4.6.1; python_version < \\"3.13\\"",
+          "typing-extensions>=4.12.2; python_version >= \\"3.13\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "2.10.6",
+        "requires_dist": [
+          "annotated-types>=0.6.0",
+          "pydantic-core==2.27.2",
+          "typing-extensions>=4.12.2"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "2.11.0b1",
+        "requires_dist": [
+          "annotated-types>=0.6.0",
+          "pydantic-core==2.30.0",
+          "typing-extensions>=4.12.2"
+        ],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "pydantic-core": [
+      {
+        "version": "2.23.4",
+        "requires_dist": [
+          "typing-extensions!=4.7.0,>=4.6.0"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "2.27.2",
+        "requires_dist": [
+          "typing-extensions!=4.7.0,>=4.6.0"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "2.30.0",
+        "requires_dist": [
+          "typing-extensions>=4.6.0,!=4.7.0"
+        ],
+        "requires_python": ">=3.9"
+      }
+    ],
+    "annotated-types": [
+      {
+        "version": "0.7.0",
+        "requires_dist": [
+          "typing-extensions>=4.0.0; python_version < \\"3.9\\""
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "boto3": [
+      {
+        "version": "1.35.90",
+        "requires_dist": [
+          "botocore<1.36.0,>=1.35.90",
+          "jmespath<2.0.0,>=0.7.1",
+          "s3transfer<0.11.0,>=0.10.0"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.35.99",
+        "requires_dist": [
+          "botocore<1.36.0,>=1.35.99",
+          "jmespath<2.0.0,>=0.7.1",
+          "s3transfer<0.11.0,>=0.10.0"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.36.0",
+        "requires_dist": [
+          "botocore<1.37.0,>=1.36.0",
+          "jmespath<2.0.0,>=0.7.1",
+          "s3transfer<0.12.0,>=0.11.0"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.36.2",
+        "requires_dist": [
+          "botocore<1.37.0,>=1.36.2",
+          "jmespath<2.0.0,>=0.7.1",
+          "s3transfer<0.12.0,>=0.11.0"
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "botocore": [
+      {
+        "version": "1.35.90",
+        "requires_dist": [
+          "jmespath<2.0.0,>=0.7.1",
+          "python-dateutil<3.0.0,>=2.1",
+          "urllib3<1.27,>=1.25.4; python_version < \\"3.10\\"",
+          "urllib3!=2.2.0,<3,>=1.25.4; python_version >= \\"3.10\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.35.99",
+        "requires_dist": [
+          "jmespath<2.0.0,>=0.7.1",
+          "python-dateutil<3.0.0,>=2.1",
+          "urllib3<1.27,>=1.25.4; python_version < \\"3.10\\"",
+          "urllib3!=2.2.0,<3,>=1.25.4; python_version >= \\"3.10\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.36.0",
+        "requires_dist": [
+          "jmespath<2.0.0,>=0.7.1",
+          "python-dateutil<3.0.0,>=2.1",
+          "urllib3<1.27,>=1.25.4; python_version < \\"3.10\\"",
+          "urllib3!=2.2.0,<3,>=1.25.4; python_version >= \\"3.10\\""
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "1.36.2",
+        "requires_dist": [
+          "jmespath<2.0.0,>=0.7.1",
+          "python-dateutil<3.0.0,>=2.1",
+          "urllib3<1.27,>=1.25.4; python_version < \\"3.10\\"",
+          "urllib3!=2.2.0,<3,>=1.25.4; python_version >= \\"3.10\\""
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "s3transfer": [
+      {
+        "version": "0.10.4",
+        "requires_dist": [
+          "botocore<2.0a.0,>=1.33.2"
+        ],
+        "requires_python": ">=3.8"
+      },
+      {
+        "version": "0.11.0",
+        "requires_dist": [
+          "botocore<2.0a.0,>=1.36.0"
+        ],
+        "requires_python": ">=3.8"
+      }
+    ],
+    "jmespath": [
+      {
+        "version": "1.0.1",
+        "requires_dist": [],
+        "requires_python": ">=3.7"
+      }
+    ]
+  }
+}
+
+"""
+}
+
+// data/jobs.txt
+fn file_2() -> String {
+    """
+web.txt linux-py312
+web.txt win-py39
+web.txt mac-pypy310
+data.txt linux-py312
+data.txt win-py39
+aws.txt linux-py312
+api.txt linux-py312
+api.txt win-py39
+pre.txt linux-py312
+conflict.txt linux-py312
+yanked.txt linux-py312
+yanked2.txt linux-py312
+missing.txt linux-py312
+bad.txt linux-py312
+
+"""
+}
+
+// data/markers.txt
+fn file_3() -> String {
+    """
+python_version >= "3.10"
+python_version<'3.9' or sys_platform=="win32"
+(os_name == "nt" and platform_machine == "AMD64") or implementation_name == "pypy"
+'linux' in sys_platform
+"arm" not in platform_machine
+platform_release >= "6"
+python_full_version ~= "3.12.0"
+implementation_version >= "7.3"
+extra == "Socks_Proxy"
+platform_system == "Linux" and python_version > "3.11" or platform_system == "Darwin"
+platform_system == "Linux" and (python_version > "3.11" or platform_system == "Darwin")
+sys.platform == "darwin"
+os.name == 'posix'
+python_implementation == "PyPy"
+platform_version ~= "1.0"
+extras == "socks"
+python_version === "3.12"
+python_version in "3.11 3.12"
+"3.9" < python_version
+python_version > "3.12.0rc1"
+platform_machine >= "x86"
+"a" == "b"
+python_version >=
+python_version = "3.8"
+os_name == "nt" and
+(python_version > "3.8"
+platform_machine == x86_64
+python_version >= "3.8" foo
+not_a_var == "x"
+os_name not "nt"
+
+"""
+}
+
+// data/reqs/api.txt
+fn file_4() -> String {
+    """
+pydantic>=2.10
+django>=4.2,<5.2
+idna>=3.9
+
+"""
+}
+
+// data/reqs/aws.txt
+fn file_5() -> String {
+    """
+boto3
+botocore<1.36
+
+"""
+}
+
+// data/reqs/bad.txt
+fn file_6() -> String {
+    """
+requests
+flask >= 2.0 async
+
+"""
+}
+
+// data/reqs/base.txt
+fn file_7() -> String {
+    """
+six
+typing_extensions>=4.12
+
+"""
+}
+
+// data/reqs/conflict.txt
+fn file_8() -> String {
+    """
+pydantic==2.9.2
+pydantic-core>=2.27
+
+"""
+}
+
+// data/reqs/constraints.txt
+fn file_9() -> String {
+    """
+urllib3<2.3
+werkzeug != 3.1.3
+
+"""
+}
+
+// data/reqs/data.txt
+fn file_10() -> String {
+    """
+-r base.txt
+pandas
+numpy<2 ; python_version < "3.10"
+pytz==2024.2 \\
+    ; python_version >= "3.9"
+
+"""
+}
+
+// data/reqs/missing.txt
+fn file_11() -> String {
+    """
+requests
+left-pad>=1.0
+
+"""
+}
+
+// data/reqs/pre.txt
+fn file_12() -> String {
+    """
+django>=5.2rc1
+pydantic>=2.11.0b1
+
+"""
+}
+
+// data/reqs/web.txt
+fn file_13() -> String {
+    """
+# The web service.
+Flask[async,dotenv]>=2.3  # the app
+requests[socks] ~= 2.32
+gunicorn>=22 ; sys_platform != "win32"
+waitress ; sys_platform == "win32"   # Windows has no gunicorn
+-c constraints.txt
+
+"""
+}
+
+// data/reqs/yanked.txt
+fn file_14() -> String {
+    """
+urllib3==2.0.0
+idna>=4.0.dev0
+
+"""
+}
+
+// data/reqs/yanked2.txt
+fn file_15() -> String {
+    """
+urllib3>=2.0,<2.1
+
+"""
+}
+
+// data/requirement-tests.txt
+fn file_16() -> String {
+    """
+requests
+requests[security,socks] >= 2.8.1, == 2.8.*
+Django>=4.2,<5.0 ; python_version >= "3.8"
+name @ https://example.com/pkgs/name-1.0-py3-none-any.whl
+name @ file:///tmp/x.tar.gz ; os_name == "nt"
+pip (>=24.0)
+Foo.Bar_baz-qux==1.0+local.7
+numpy~=1.26.0
+pkg[ b , a ]
+pkg===1.0-custom
+pkg!=1.0.*,!=1.1.*
+typing_extensions>=4.6.1; python_version < "3.13"
+urllib3[brotli]>=1.21.1; extra == "Use_Chardet"
+>=1.0
+pkg[a b]
+pkg[a,]
+pkg >= 1.0 extra
+pkg (>=1.0
+pkg>=1.0.*
+pkg==1.0rc1.*
+pkg<=1.0+local
+pkg @ 
+pkg @ https://x.whl; python_version>"3"
+pkg ; 
+pkg ==1.0 ; python_version >= "3.8" and
+pkg~=1
+pkg[extra]extra2
+
+"""
+}
+
+// data/specifiers.txt
+fn file_17() -> String {
+    """
+>=1.0 | 0.9 1.0 1.0.post1 2.0a1 2.0 1.0+local foo
+>=1.0, <2 | 1.0 1.5 2.0a1 2.0.dev0 1.9.post1 2.0
+<2.0 | 1.9 2.0a1 2.0rc1 2.0.dev1 1.9.9+local
+<2.0rc1 | 2.0b1 2.0rc1 1.9
+>1.0 | 1.0 1.0.post1 1.0+local 1.0.1 1.1a1
+>1.0.post1 | 1.0.post1 1.0.post2 1.0.post2.dev0 1.1
+>1.0.dev1 | 1.0.dev1 1.0.dev2 1.0a1 1.0
+>1.0rc1 | 1.0rc1 1.0rc1.post1 1.0rc2 1.0
+<=1.0 | 1.0 1.0+local 1.0.post1 0.9 1.0.dev0
+==1.0 | 1.0 1.0.0 1.0+abc 1.0.post1 1.0a1
+==1.0+abc | 1.0+abc 1.0 1.0+abd
+==1.* | 0.9 1.0 1.5a1 1.99 2.0 1.0.dev0
+!=1.* | 0.9 1.5 2.0 2.0rc1
+~=1.4.5 | 1.4.4 1.4.5 1.4.9 1.5 1.4.10a1
+~=2.2 | 2.1 2.2 2.9 3.0 3.0a1
+~=2.2.post3 | 2.2 2.2.post3 2.3 3.0
+!=1.5, >=1.0 | 1.0 1.5 1.5.0 1.5+local 1.6
+>=2.0a1 | 1.9 2.0a1 2.0b2 2.0 3.0.dev1
+>=1,<1 | 1 0.9 1.0
+==1.0, ==2.0 | 1.0 2.0
+<0.dev0 | 0 0.dev0
+>1.0, <1.0.post0 | 1.0.post0 1.0+local 1.0.0.post0
+>2.0b1, <2.0b2 | 2.0b1 2.0b1.post1 2.0b2.dev0 2.0b2
+ | 1.0 2.0a1 junk
+===1.0+foo | 1.0+foo 1.0+FOO 1.0 foo
+===foobar | foobar FooBar 1.0
+>=1.0, ===1.0.0 | 1.0 1.0.0
+===1.0, ===2.0 | 1.0
+>=1.0,<2.0a.0 | 1.9 2.0a0 2.0.dev0
+>= 1.0 ,  != 1.2.* | 1.1 1.2.3 1.3
+<3, >=2, !=2.5, <2.5.0, >=2 | 2.0 2.4 2.5
+=>1.0 | 1.0
+~=1 | 1.0
+>=1.0.* | 1.0
+==1.0.post1.* | 1.0
+<1.0+local | 1.0
+
+"""
+}
+
+// data/versions.txt
+fn file_18() -> String {
+    """
+1.0
+1.0.0
+v1.0
+ 1.0 
+V2
+1!2.0
+0001!1
+01.02.003
+1.0a-1
+1.0a1
+1.0alpha1
+1.0b2
+1.0Beta2
+1.0c1
+1.0rc1
+1.0preview2
+1.0rc
+1.0.dev
+1.0.DEV2
+1.0a1.dev3
+1.0-1
+1.0-r1
+1.0.post.
+1.0a.
+1.0post
+1.0.r
+1.0_rev3
+1.0a1-1
+1.0+ABC.def-1
+1.0+local_1.2
+1.0+5
+1.0+abc
+1.0+abc.5
+2.0.post0.dev1
+0.0
+0
+1.0.0.0.0
+2024.8.30
+1.0.
+1.0+
+1.0+abc..1
+1.0--1
+1.0-
+1..0
+.1
+1.0 a1
+1.0.a.b
+abc
+1.0'x
+٣
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/envs.txt", file_0())?;
+    put("data/index.json", file_1())?;
+    put("data/jobs.txt", file_2())?;
+    put("data/markers.txt", file_3())?;
+    make_dir("data/reqs")?;
+    put("data/reqs/api.txt", file_4())?;
+    put("data/reqs/aws.txt", file_5())?;
+    put("data/reqs/bad.txt", file_6())?;
+    put("data/reqs/base.txt", file_7())?;
+    put("data/reqs/conflict.txt", file_8())?;
+    put("data/reqs/constraints.txt", file_9())?;
+    put("data/reqs/data.txt", file_10())?;
+    put("data/reqs/missing.txt", file_11())?;
+    put("data/reqs/pre.txt", file_12())?;
+    put("data/reqs/web.txt", file_13())?;
+    put("data/reqs/yanked.txt", file_14())?;
+    put("data/reqs/yanked2.txt", file_15())?;
+    put("data/requirement-tests.txt", file_16())?;
+    put("data/specifiers.txt", file_17())?;
+    put("data/versions.txt", file_18())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the report
+
+fn yn(b: bool) -> String {
+    if b { "y".to_string() } else { "n".to_string() }
+}
+
+fn opt_int(n: i64) -> String {
+    if n == NONE { "-".to_string() } else { f"{n}" }
+}
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn show_versions() -> Result[(), String] {
+    println("== versions");
+    let ls = lines_of(read("data/versions.txt")?);
+    let mut valid: Vec[Ver] = Vec.new();
+    for i in 0..ls.len() {
+        let raw = ls[i].clone();
+        let v = match parse_version(raw) {
+            Some(v) => v,
+            None => {
+                println(f"{py_repr(raw)} -> Invalid version: {py_repr(raw)}");
+                continue;
+            }
+        };
+        let pre = if v.pre_kind == NONE { "-".to_string() } else { f"{pre_letters(v.pre_kind)}{v.pre_n}" };
+        let local = if v.has_local() { join(v.local, ".") } else { "-".to_string() };
+        let mut flags: Vec[String] = Vec.new();
+        if v.is_prerelease() {
+            flags.push("pre-release".to_string());
+        }
+        if v.post != NONE {
+            flags.push("post-release".to_string());
+        }
+        if v.dev != NONE {
+            flags.push("dev-release".to_string());
+        }
+        let tail = if flags.len() == 0 { String.new() } else { f", {join(flags, ", ")}" };
+        println(f"{py_repr(raw)} -> {v.to_str()}  [epoch {v.epoch}, release {join_ints(v.release)}, pre {pre}, post {opt_int(v.post)}, dev {opt_int(v.dev)}, local {local}, public {v.public()}, base {v.base_version()}{tail}]");
+        valid.push(v);
+    }
+    println("sorted:");
+    let sorted = sort_versions(valid);
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..sorted.len() {
+        if i > 0 and sorted[i] == sorted[i - 1] {
+            let last = out.len() - 1;
+            out[last].push_str(f" = {sorted[i].to_str()}");
+        } else {
+            out.push(sorted[i].to_str());
+        }
+    }
+    for i in 0..out.len() {
+        println(f"  {out[i]}");
+    }
+    Ok(())
+}
+
+fn show_specifiers() -> Result[(), String] {
+    println("");
+    println("== specifiers");
+    let ls = lines_of(read("data/specifiers.txt")?);
+    for i in 0..ls.len() {
+        let b = to_bytes(ls[i]);
+        let mut bar = b.len();
+        for k in 0..b.len() {
+            if b[k] == b'|' {
+                bar = k;
+                break;
+            }
+        }
+        let spec = strip(byte_str(b, 0, bar));
+        let items = if bar < b.len() { split_ws(byte_str(b, bar + 1, b.len())) } else { Vec.new() };
+        let s = match parse_spec_set(spec) {
+            Ok(s) => s,
+            Err(e) => {
+                println(f"{py_repr(spec)}: {e}");
+                continue;
+            }
+        };
+        let pre = if s.prereleases() == 1 { "True" } else { "None" };
+        println(f"{py_repr(spec)}: {py_repr(s.to_str())} prereleases={pre} unsatisfiable={yn(s.is_unsatisfiable())}");
+        let mut cells: Vec[String] = Vec.new();
+        for k in 0..items.len() {
+            let it = items[k].clone();
+            cells.push(f"{it}:{yn(s.contains(it, NONE))}{yn(s.contains(it, 1))}{yn(s.contains(it, 0))}");
+        }
+        println(f"  contains {join(cells, " ")}");
+        println(f"  filter {join(s.filter(items, NONE), " ")}");
+        println(f"  filter pre {join(s.filter(items, 1), " ")}");
+        println(f"  filter final {join(s.filter(items, 0), " ")}");
+    }
+    Ok(())
+}
+
+fn show_lines(text: Str) {
+    let ls = split_on(text, b'\n');
+    for i in 0..ls.len() {
+        println(f"  | {ls[i]}");
+    }
+}
+
+fn show_markers(names: ref Vec[String], envs: ref Vec[Env]) -> Result[(), String] {
+    println("");
+    println("== markers");
+    let ls = lines_of(read("data/markers.txt")?);
+    for i in 0..ls.len() {
+        let raw = ls[i].clone();
+        let m = match parse_full_marker(raw) {
+            Ok(m) => m,
+            Err(e) => {
+                println(f"{py_repr(raw)}: InvalidMarker");
+                show_lines(e);
+                continue;
+            }
+        };
+        println(f"{py_repr(raw)}: {format_marker(m, true)}");
+        for k in 0..names.len() {
+            let r = match evaluate(m, envs[k], "") {
+                Ok(true) => "true".to_string(),
+                Ok(false) => "false".to_string(),
+                Err(e) => e,
+            };
+            println(f"  {names[k]}: {r}");
+        }
+    }
+    Ok(())
+}
+
+fn show_requirements() -> Result[(), String] {
+    println("");
+    println("== requirements");
+    let ls = lines_of(read("data/requirement-tests.txt")?);
+    for i in 0..ls.len() {
+        let raw = ls[i].clone();
+        let r = match parse_requirement(raw) {
+            Ok(r) => r,
+            Err(e) => {
+                println(f"{py_repr(raw)}: InvalidRequirement");
+                show_lines(e);
+                continue;
+            }
+        };
+        println(f"{py_repr(raw)}: {r.to_str()}");
+        let extras = if r.extras.len() > 0 { join(r.extras, ",") } else { "-".to_string() };
+        let spec = r.spec.to_str();
+        let spec = if spec.len() > 0 { spec } else { "-".to_string() };
+        let url = if r.url.len() > 0 { r.url.clone() } else { "-".to_string() };
+        let marker = match ref r.marker {
+            Some(m) => format_marker(m, true),
+            None => "-".to_string(),
+        };
+        println(f"  name {r.name} ({r.key()}), extras {extras}, specifier {spec}, url {url}, marker {marker}");
+    }
+    Ok(())
+}
+
+fn resolve(index: ref Vec[Project], file: Str, env_name: Str, env: ref Env) {
+    println(f"== resolve {file} ({env_name})");
+    let mut roots: Vec[Requirement] = Vec.new();
+    let mut cons: Vec[Requirement] = Vec.new();
+    if let Err(e) = read_reqs(f"data/reqs/{file}", mut roots, mut cons, false) {
+        println(f"error: {e}");
+        return;
+    }
+    let mut reqs: Vec[Requirement] = Vec.new();
+    let mut parents: Vec[String] = Vec.new();
+    for i in 0..roots.len() {
+        if not roots[i].applies(env) {
+            println(f"skipped {roots[i].to_str()} (marker is false)");
+            continue;
+        }
+        reqs.push(roots[i].clone());
+        parents.push("the user".to_string());
+    }
+    let mut kept: Vec[Requirement] = Vec.new();
+    for i in 0..cons.len() {
+        if cons[i].applies(env) {
+            kept.push(cons[i].clone());
+        }
+    }
+    let mut r = Resolver {
+        index: index.clone(),
+        env: env.clone(),
+        reqs: reqs,
+        parents: parents,
+        cons: kept,
+        pin_names: Vec.new(),
+        pin_versions: Vec.new(),
+        pin_extras: Vec.new(),
+        backtracks: 0,
+        conflict: String.new(),
+    };
+    if not r.solve(0) {
+        println(f"error: {r.conflict}");
+        println(f"backtracks: {r.backtracks}");
+        return;
+    }
+    let names = sort_strings(r.pin_names.clone());
+    for i in 0..names.len() {
+        let p = index_of(r.pin_names, names[i]);
+        let ex = sort_strings(r.pin_extras[p].clone());
+        let shown = if ex.len() > 0 { f"[{join(ex, ",")}]" } else { String.new() };
+        println(f"{names[i]}{shown}=={r.pin_versions[p]}");
+    }
+    println(f"backtracks: {r.backtracks}");
+    // what each pinned project needs, from the final edges
+    let mut needs: Vec[Vec[String]] = Vec.new();
+    for _ in 0..names.len() {
+        needs.push(Vec.new());
+    }
+    for i in 0..r.reqs.len() {
+        if r.parents[i] == "the user" {
+            continue;
+        }
+        let parent = split_on(r.parents[i], b'=')[0].clone();
+        let p = index_of(names, parent);
+        let d = r.reqs[i].key();
+        if not contains_str(needs[p], d) {
+            needs[p].push(d);
+        }
+    }
+    let mut order: Vec[String] = Vec.new();
+    let mut left = names.clone();
+    while left.len() > 0 {
+        let mut pick: i64 = 0;
+        for k in 0..left.len() {
+            let n = index_of(names, left[k]);
+            let mut ready = true;
+            for d in 0..needs[n].len() {
+                if needs[n][d] != left[k] and not contains_str(order, needs[n][d]) {
+                    ready = false;
+                    break;
+                }
+            }
+            if ready {
+                pick = k;
+                break;
+            }
+        }
+        order.push(left[pick].clone());
+        left.remove(pick);
+    }
+    println(f"install order: {join(order, " ")}");
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    show_versions()?;
+    show_specifiers()?;
+    let (names, envs) = read_envs(read("data/envs.txt")?);
+    show_markers(names, envs)?;
+    show_requirements()?;
+    let index = read_index(read("data/index.json")?)?;
+    println("");
+    let jobs = lines_of(read("data/jobs.txt")?);
+    for i in 0..jobs.len() {
+        let parts = split_ws(jobs[i]);
+        let e = index_of(names, parts[1]);
+        resolve(index, parts[0], parts[1], envs[e]);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_pip: {e}");
+    }
+}
