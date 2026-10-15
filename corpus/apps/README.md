@@ -162,6 +162,7 @@ cli/btree_kv         page-based B+tree KV store: 256-byte pages, leaf chain, nod
 cli/toml_check       TOML 1.0 parser and validator over real config files: all string/number/date forms, tomllib redefinition rules, 27 rejected documents; mirror cross-checked against tomllib
 cli/md_render        CommonMark Markdown-to-HTML renderer and docs-site build: nested tight/loose lists, delimiter-run emphasis, reference links, heading ids and TOC; matches markdown-it on all 45 inputs
 cli/delta_sync       rsync-style directory sync: rolling weak checksum + MD5 block signatures, binary COPY/LIT deltas with an end-to-end MD5, create/update/delete, damaged deltas refused
+cli/mini_lua         a Lua 5.4 subset interpreter: closures over shared cells, metatables, pcall/error positions, Lua patterns from lstrlib.c, exact %.14g floats; seven scripts and an access-log report, output identical to real Lua 5.4.6
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

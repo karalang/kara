@@ -1,0 +1,4819 @@
+// mini_lua: an interpreter for a subset of Lua 5.4, used the way an
+// application embeds a scripting language. It writes seven scripts and a
+// web-server access log to disk, then runs each script from its file.
+//
+// The subset: nil, booleans, 64-bit integers and floats with Lua 5.4's
+// arithmetic (floor division and modulo, wrapping integers, float
+// exponentiation), strings, tables with an array part, closures with
+// shared upvalues, multiple results and assignment, numeric and generic
+// for, while, repeat, break, metatables (__index, __tostring, __add,
+// __sub, __mul, __eq, __lt), pcall and error with Lua's position
+// prefixes, and a library: print, type, tostring, tonumber, ipairs,
+// pairs, next, select, rawget, setmetatable, getmetatable, assert,
+// error, pcall; math, table and string functions, including Lua patterns
+// (find, match, gmatch, gsub) ported from lstrlib.c; io.write, io.lines
+// and io.open for writing.
+//
+// Not supported: varargs, goto, coroutines, integer bit operators, long
+// strings and the utf8 and os libraries.
+//
+// expected.out is real Lua 5.4.6's output on the same scripts, made by
+// make_expected.sh. Floats print with "%.14g", formatted here from the
+// shortest representation of the value.
+
+// ------------------------------------------------------------ lexer
+
+const T_EOF: i64 = 0;
+const T_NAME: i64 = 1;
+const T_INT: i64 = 2;
+const T_FLOAT: i64 = 3;
+const T_STR: i64 = 4;
+const T_OP: i64 = 5;
+const T_KW: i64 = 6;
+
+struct Token { kind: i64, text: String, ival: i64, fval: f64, line: i64 }
+
+const KEYWORDS: Str = " and break do else elseif end false for function if in local nil not or repeat return then true until while ";
+
+fn is_kw(w: Str) -> bool {
+    KEYWORDS.contains(f" {w} ")
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or c == b'_'
+}
+
+fn hex_val(c: u8) -> i64 {
+    if is_digit(c) {
+        return (c - b'0') as i64;
+    }
+    if c >= b'a' and c <= b'f' {
+        return (c - b'a') as i64 + 10;
+    }
+    if c >= b'A' and c <= b'F' {
+        return (c - b'A') as i64 + 10;
+    }
+    -1
+}
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn lex(src: Str) -> Result[Vec[Token], String] {
+    let b = src.bytes();
+    let n = b.len();
+    let mut out: Vec[Token] = Vec.new();
+    let mut i: i64 = 0;
+    let mut line: i64 = 1;
+    while i < n {
+        let c = b[i];
+        if c == b'\n' {
+            line += 1;
+            i += 1;
+            continue;
+        }
+        if c == b' ' or c == b'\t' or c == b'\r' {
+            i += 1;
+            continue;
+        }
+        if c == b'-' and i + 1 < n and b[i + 1] == b'-' {
+            while i < n and b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if is_alpha(c) {
+            let st = i;
+            while i < n and (is_alpha(b[i]) or is_digit(b[i])) {
+                i += 1;
+            }
+            let w = byte_str(b, st, i);
+            let kind = if is_kw(w) { T_KW } else { T_NAME };
+            out.push(Token { kind: kind, text: w, ival: 0, fval: 0.0, line: line });
+            continue;
+        }
+        if is_digit(c) or (c == b'.' and i + 1 < n and is_digit(b[i + 1])) {
+            let st = i;
+            if c == b'0' and i + 1 < n and (b[i + 1] == b'x' or b[i + 1] == b'X') {
+                i += 2;
+                let mut v: i64 = 0;
+                while i < n and hex_val(b[i]) >= 0 {
+                    v = v.wrapping_mul(16).wrapping_add(hex_val(b[i]));
+                    i += 1;
+                }
+                out.push(Token { kind: T_INT, text: byte_str(b, st, i), ival: v, fval: 0.0, line: line });
+                continue;
+            }
+            let mut float = false;
+            while i < n and (is_digit(b[i]) or b[i] == b'.') {
+                if b[i] == b'.' {
+                    float = true;
+                }
+                i += 1;
+            }
+            if i < n and (b[i] == b'e' or b[i] == b'E') {
+                float = true;
+                i += 1;
+                if i < n and (b[i] == b'+' or b[i] == b'-') {
+                    i += 1;
+                }
+                while i < n and is_digit(b[i]) {
+                    i += 1;
+                }
+            }
+            let text = byte_str(b, st, i);
+            if float {
+                let v = match f64.parse(text) {
+                    Some(v) => v,
+                    None => return Err(f"{line}: malformed number near '{text}'"),
+                };
+                out.push(Token { kind: T_FLOAT, text: text, ival: 0, fval: v, line: line });
+            } else {
+                // a decimal integer that overflows becomes a float, as in Lua
+                let mut v: i64 = 0;
+                let mut over = false;
+                for j in st..i {
+                    let d = (b[j] - b'0') as i64;
+                    if v > (9223372036854775807 - d) / 10 {
+                        over = true;
+                    }
+                    v = v.wrapping_mul(10).wrapping_add(d);
+                }
+                if over {
+                    out.push(Token { kind: T_FLOAT, text: text.clone(), ival: 0, fval: f64.parse(text).unwrap_or(0.0), line: line });
+                } else {
+                    out.push(Token { kind: T_INT, text: text, ival: v, fval: 0.0, line: line });
+                }
+            }
+            continue;
+        }
+        if c == b'"' or c == b'\'' {
+            let q = c;
+            i += 1;
+            let mut v: Vec[u8] = Vec.new();
+            loop {
+                if i >= n or b[i] == b'\n' {
+                    return Err(f"{line}: unfinished string");
+                }
+                let d = b[i];
+                if d == q {
+                    i += 1;
+                    break;
+                }
+                if d == b'\\' {
+                    i += 1;
+                    let e = if i < n { b[i] } else { 0u8 };
+                    if e == b'n' {
+                        v.push(b'\n');
+                    } else if e == b't' {
+                        v.push(b'\t');
+                    } else if e == b'r' {
+                        v.push(b'\r');
+                    } else if is_digit(e) {
+                        let mut code: i64 = 0;
+                        let mut k = 0;
+                        while k < 3 and i < n and is_digit(b[i]) {
+                            code = code * 10 + (b[i] - b'0') as i64;
+                            i += 1;
+                            k += 1;
+                        }
+                        v.push(code as u8);
+                        continue;
+                    } else {
+                        v.push(e);
+                    }
+                    i += 1;
+                    continue;
+                }
+                v.push(d);
+                i += 1;
+            }
+            let s = String.from_utf8(v).unwrap_or("?".to_string());
+            out.push(Token { kind: T_STR, text: s, ival: 0, fval: 0.0, line: line });
+            continue;
+        }
+        // operators, longest first
+        let three = if i + 2 < n { byte_str(b, i, i + 3) } else { String.new() };
+        let two = if i + 1 < n { byte_str(b, i, i + 2) } else { String.new() };
+        if three == "..." {
+            return Err(f"{line}: varargs are not supported");
+        }
+        if two == "==" or two == "~=" or two == "<=" or two == ">=" or two == "//" or two == ".." or two == "::" {
+            out.push(Token { kind: T_OP, text: two, ival: 0, fval: 0.0, line: line });
+            i += 2;
+            continue;
+        }
+        let one = byte_str(b, i, i + 1);
+        if "+-*/%^#&~|<>=(){}[];:,.".contains(one) {
+            out.push(Token { kind: T_OP, text: one, ival: 0, fval: 0.0, line: line });
+            i += 1;
+            continue;
+        }
+        return Err(f"{line}: unexpected symbol near '{one}'");
+    }
+    out.push(Token { kind: T_EOF, text: "<eof>".to_string(), ival: 0, fval: 0.0, line: line });
+    Ok(out)
+}
+
+// ------------------------------------------------------------ syntax tree
+
+// Expressions and statements live in arenas and refer to each other by
+// index; a block is a list of statement indices.
+enum Expr {
+    Nil,
+    True,
+    False,
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Name(String),
+    Index(i64, i64),
+    Call(i64, Vec[i64], i64),
+    Method(i64, String, Vec[i64], i64),
+    Function(i64),
+    Binary(String, i64, i64, i64),
+    Unary(String, i64, i64),
+    And(i64, i64),
+    Or(i64, i64),
+    Paren(i64),
+    // positional items, then keyed items as (key, value) pairs
+    Table(Vec[i64], Vec[i64], Vec[i64]),
+}
+
+enum Stmt {
+    Local(Vec[String], Vec[i64]),
+    LocalFunction(String, i64),
+    Assign(Vec[i64], Vec[i64]),
+    Expression(i64),
+    If(Vec[i64], Vec[i64], i64),
+    While(i64, i64),
+    NumFor(String, i64, i64, i64, i64),
+    GenFor(Vec[String], Vec[i64], i64),
+    Repeat(i64, i64),
+    Return(Vec[i64]),
+    Break,
+    Do(i64),
+}
+
+struct Proto { name: String, params: Vec[String], body: i64 }
+
+struct Ast {
+    exprs: Vec[Expr],
+    stmts: Vec[Stmt],
+    lines: Vec[i64],
+    blocks: Vec[Vec[i64]],
+    protos: Vec[Proto],
+}
+
+// ------------------------------------------------------------ parser
+
+struct Parser { toks: Vec[Token], p: i64, ast: Ast }
+
+fn binary_priority(op: Str) -> (i64, i64) {
+    if op == "or" {
+        return (1, 1);
+    }
+    if op == "and" {
+        return (2, 2);
+    }
+    if op == "<" or op == ">" or op == "<=" or op == ">=" or op == "~=" or op == "==" {
+        return (3, 3);
+    }
+    if op == ".." {
+        return (9, 8);
+    }
+    if op == "+" or op == "-" {
+        return (10, 10);
+    }
+    if op == "*" or op == "/" or op == "//" or op == "%" {
+        return (11, 11);
+    }
+    if op == "^" {
+        return (14, 13);
+    }
+    (-1, -1)
+}
+
+const UNARY_PRIORITY: i64 = 12;
+
+impl Parser {
+    fn peek(ref self) -> ref Token {
+        ref self.toks[self.p]
+    }
+
+    fn line(ref self) -> i64 {
+        self.toks[self.p].line
+    }
+
+    fn is(ref self, text: Str) -> bool {
+        let t = ref self.toks[self.p];
+        (t.kind == T_OP or t.kind == T_KW) and t.text == text
+    }
+
+    fn accept(mut ref self, text: Str) -> bool {
+        if self.is(text) {
+            self.p += 1;
+            return true;
+        }
+        false
+    }
+
+    fn err(ref self, msg: Str) -> String {
+        let t = ref self.toks[self.p];
+        f"{t.line}: {msg} near '{t.text}'"
+    }
+
+    fn expect(mut ref self, text: Str) -> Result[(), String] {
+        if self.accept(text) {
+            return Ok(());
+        }
+        Err(self.err(f"'{text}' expected"))
+    }
+
+    fn name(mut ref self) -> Result[String, String] {
+        let t = ref self.toks[self.p];
+        if t.kind != T_NAME {
+            return Err(self.err("<name> expected"));
+        }
+        let s = t.text.clone();
+        self.p += 1;
+        Ok(s)
+    }
+
+    fn add_expr(mut ref self, e: own Expr) -> i64 {
+        self.ast.exprs.push(e);
+        self.ast.exprs.len() - 1
+    }
+
+    fn add_stmt(mut ref self, s: own Stmt, line: i64) -> i64 {
+        self.ast.stmts.push(s);
+        self.ast.lines.push(line);
+        self.ast.stmts.len() - 1
+    }
+
+    fn block_ends(ref self) -> bool {
+        let t = ref self.toks[self.p];
+        t.kind == T_EOF or (t.kind == T_KW and (t.text == "end" or t.text == "else" or t.text == "elseif" or t.text == "until"))
+    }
+
+    fn block(mut ref self) -> Result[i64, String] {
+        let mut list: Vec[i64] = Vec.new();
+        while not self.block_ends() {
+            if self.accept(";") {
+                continue;
+            }
+            if self.is("return") {
+                let line = self.line();
+                self.p += 1;
+                let mut values: Vec[i64] = Vec.new();
+                if not self.block_ends() and not self.is(";") {
+                    values = self.expr_list()?;
+                }
+                self.accept(";");
+                list.push(self.add_stmt(Stmt.Return(values), line));
+                break;
+            }
+            list.push(self.statement()?);
+        }
+        self.ast.blocks.push(list);
+        Ok(self.ast.blocks.len() - 1)
+    }
+
+    fn statement(mut ref self) -> Result[i64, String] {
+        let line = self.line();
+        if self.accept("local") {
+            if self.accept("function") {
+                let name = self.name()?;
+                let f = self.func_body(name.clone(), false)?;
+                return Ok(self.add_stmt(Stmt.LocalFunction(name, f), line));
+            }
+            let mut names: Vec[String] = Vec.new();
+            names.push(self.name()?);
+            while self.accept(",") {
+                names.push(self.name()?);
+            }
+            let mut values: Vec[i64] = Vec.new();
+            if self.accept("=") {
+                values = self.expr_list()?;
+            }
+            return Ok(self.add_stmt(Stmt.Local(names, values), line));
+        }
+        if self.accept("function") {
+            // function a.b.c:m() ... end is an assignment to a.b.c.m
+            let first = self.name()?;
+            let mut full = first.clone();
+            let mut target = self.add_expr(Expr.Name(first));
+            let mut method = false;
+            loop {
+                if self.accept(".") {
+                    let k = self.name()?;
+                    full = f"{full}.{k}";
+                    let key = self.add_expr(Expr.Text(k));
+                    target = self.add_expr(Expr.Index(target, key));
+                } else if self.accept(":") {
+                    let k = self.name()?;
+                    full = f"{full}:{k}";
+                    let key = self.add_expr(Expr.Text(k));
+                    target = self.add_expr(Expr.Index(target, key));
+                    method = true;
+                    break;
+                } else {
+                    break;
+                }
+            }
+            let f = self.func_body(full, method)?;
+            let fe = self.add_expr(Expr.Function(f));
+            let mut targets: Vec[i64] = Vec.new();
+            targets.push(target);
+            let mut values: Vec[i64] = Vec.new();
+            values.push(fe);
+            return Ok(self.add_stmt(Stmt.Assign(targets, values), line));
+        }
+        if self.accept("if") {
+            let mut conds: Vec[i64] = Vec.new();
+            let mut blocks: Vec[i64] = Vec.new();
+            conds.push(self.expr(0)?);
+            self.expect("then")?;
+            blocks.push(self.block()?);
+            let mut other: i64 = -1;
+            loop {
+                if self.accept("elseif") {
+                    conds.push(self.expr(0)?);
+                    self.expect("then")?;
+                    blocks.push(self.block()?);
+                } else if self.accept("else") {
+                    other = self.block()?;
+                    self.expect("end")?;
+                    break;
+                } else {
+                    self.expect("end")?;
+                    break;
+                }
+            }
+            return Ok(self.add_stmt(Stmt.If(conds, blocks, other), line));
+        }
+        if self.accept("while") {
+            let c = self.expr(0)?;
+            self.expect("do")?;
+            let body = self.block()?;
+            self.expect("end")?;
+            return Ok(self.add_stmt(Stmt.While(c, body), line));
+        }
+        if self.accept("repeat") {
+            let body = self.block()?;
+            self.expect("until")?;
+            let c = self.expr(0)?;
+            return Ok(self.add_stmt(Stmt.Repeat(body, c), line));
+        }
+        if self.accept("do") {
+            let body = self.block()?;
+            self.expect("end")?;
+            return Ok(self.add_stmt(Stmt.Do(body), line));
+        }
+        if self.accept("break") {
+            return Ok(self.add_stmt(Stmt.Break, line));
+        }
+        if self.accept("for") {
+            let first = self.name()?;
+            if self.accept("=") {
+                let start = self.expr(0)?;
+                self.expect(",")?;
+                let stop = self.expr(0)?;
+                let mut step: i64 = -1;
+                if self.accept(",") {
+                    step = self.expr(0)?;
+                }
+                self.expect("do")?;
+                let body = self.block()?;
+                self.expect("end")?;
+                return Ok(self.add_stmt(Stmt.NumFor(first, start, stop, step, body), line));
+            }
+            let mut names: Vec[String] = Vec.new();
+            names.push(first);
+            while self.accept(",") {
+                names.push(self.name()?);
+            }
+            self.expect("in")?;
+            let values = self.expr_list()?;
+            self.expect("do")?;
+            let body = self.block()?;
+            self.expect("end")?;
+            return Ok(self.add_stmt(Stmt.GenFor(names, values, body), line));
+        }
+        // an expression statement: a call, or the start of an assignment
+        let e = self.suffixed()?;
+        if self.is("=") or self.is(",") {
+            let mut targets: Vec[i64] = Vec.new();
+            targets.push(e);
+            while self.accept(",") {
+                targets.push(self.suffixed()?);
+            }
+            self.expect("=")?;
+            let values = self.expr_list()?;
+            return Ok(self.add_stmt(Stmt.Assign(targets, values), line));
+        }
+        if not self.is_call(e) {
+            return Err(self.err("syntax error"));
+        }
+        Ok(self.add_stmt(Stmt.Expression(e), line))
+    }
+
+    fn is_call(ref self, e: i64) -> bool {
+        let x = ref self.ast.exprs[e];
+        match x {
+            Expr.Call(_, _, _) => true,
+            Expr.Method(_, _, _, _) => true,
+            _ => false,
+        }
+    }
+
+    fn func_body(mut ref self, name: own String, method: bool) -> Result[i64, String] {
+        self.expect("(")?;
+        let mut params: Vec[String] = Vec.new();
+        if method {
+            params.push("self".to_string());
+        }
+        if not self.is(")") {
+            params.push(self.name()?);
+            while self.accept(",") {
+                params.push(self.name()?);
+            }
+        }
+        self.expect(")")?;
+        let body = self.block()?;
+        self.expect("end")?;
+        self.ast.protos.push(Proto { name: name, params: params, body: body });
+        Ok(self.ast.protos.len() - 1)
+    }
+
+    fn expr_list(mut ref self) -> Result[Vec[i64], String] {
+        let mut out: Vec[i64] = Vec.new();
+        out.push(self.expr(0)?);
+        while self.accept(",") {
+            out.push(self.expr(0)?);
+        }
+        Ok(out)
+    }
+
+    fn primary(mut ref self) -> Result[i64, String] {
+        if self.accept("(") {
+            let e = self.expr(0)?;
+            self.expect(")")?;
+            return Ok(self.add_expr(Expr.Paren(e)));
+        }
+        let n = self.name()?;
+        Ok(self.add_expr(Expr.Name(n)))
+    }
+
+    fn call_args(mut ref self) -> Result[Vec[i64], String] {
+        let mut args: Vec[i64] = Vec.new();
+        let t = ref self.toks[self.p];
+        if t.kind == T_STR {
+            let s = t.text.clone();
+            self.p += 1;
+            args.push(self.add_expr(Expr.Text(s)));
+            return Ok(args);
+        }
+        if self.is("{") {
+            args.push(self.table()?);
+            return Ok(args);
+        }
+        self.expect("(")?;
+        if not self.is(")") {
+            args = self.expr_list()?;
+        }
+        self.expect(")")?;
+        Ok(args)
+    }
+
+    fn suffixed(mut ref self) -> Result[i64, String] {
+        // a call is reported at the line where its expression starts
+        let line = self.line();
+        let mut e = self.primary()?;
+        loop {
+            if self.accept(".") {
+                let k = self.name()?;
+                let key = self.add_expr(Expr.Text(k));
+                e = self.add_expr(Expr.Index(e, key));
+            } else if self.accept("[") {
+                let key = self.expr(0)?;
+                self.expect("]")?;
+                e = self.add_expr(Expr.Index(e, key));
+            } else if self.accept(":") {
+                let m = self.name()?;
+                let args = self.call_args()?;
+                e = self.add_expr(Expr.Method(e, m, args, line));
+            } else if self.is("(") or self.is("{") or self.toks[self.p].kind == T_STR {
+                let args = self.call_args()?;
+                e = self.add_expr(Expr.Call(e, args, line));
+            } else {
+                return Ok(e);
+            }
+        }
+    }
+
+    fn table(mut ref self) -> Result[i64, String] {
+        self.expect("{")?;
+        let mut items: Vec[i64] = Vec.new();
+        let mut keys: Vec[i64] = Vec.new();
+        let mut vals: Vec[i64] = Vec.new();
+        while not self.is("}") {
+            if self.accept("[") {
+                keys.push(self.expr(0)?);
+                self.expect("]")?;
+                self.expect("=")?;
+                vals.push(self.expr(0)?);
+            } else if self.toks[self.p].kind == T_NAME and self.toks[self.p + 1].text == "=" and self.toks[self.p + 1].kind == T_OP {
+                let k = self.name()?;
+                self.p += 1;
+                keys.push(self.add_expr(Expr.Text(k)));
+                vals.push(self.expr(0)?);
+            } else {
+                items.push(self.expr(0)?);
+            }
+            if not self.accept(",") and not self.accept(";") {
+                break;
+            }
+        }
+        self.expect("}")?;
+        Ok(self.add_expr(Expr.Table(items, keys, vals)))
+    }
+
+    fn simple(mut ref self) -> Result[i64, String] {
+        let t = ref self.toks[self.p];
+        let kind = t.kind;
+        if kind == T_INT {
+            let v = t.ival;
+            self.p += 1;
+            return Ok(self.add_expr(Expr.Int(v)));
+        }
+        if kind == T_FLOAT {
+            let v = t.fval;
+            self.p += 1;
+            return Ok(self.add_expr(Expr.Float(v)));
+        }
+        if kind == T_STR {
+            let s = t.text.clone();
+            self.p += 1;
+            return Ok(self.add_expr(Expr.Text(s)));
+        }
+        if self.accept("nil") {
+            return Ok(self.add_expr(Expr.Nil));
+        }
+        if self.accept("true") {
+            return Ok(self.add_expr(Expr.True));
+        }
+        if self.accept("false") {
+            return Ok(self.add_expr(Expr.False));
+        }
+        if self.is("{") {
+            return self.table();
+        }
+        if self.accept("function") {
+            let f = self.func_body("anonymous".to_string(), false)?;
+            return Ok(self.add_expr(Expr.Function(f)));
+        }
+        self.suffixed()
+    }
+
+    // precedence climbing over Lua's priority table
+    fn expr(mut ref self, limit: i64) -> Result[i64, String] {
+        let line = self.line();
+        let mut left: i64 = -1;
+        if self.is("not") or self.is("-") or self.is("#") {
+            let op = self.toks[self.p].text.clone();
+            self.p += 1;
+            let operand = self.expr(UNARY_PRIORITY)?;
+            left = self.add_expr(Expr.Unary(op, operand, line));
+        } else {
+            left = self.simple()?;
+        }
+        loop {
+            let t = ref self.toks[self.p];
+            if t.kind != T_OP and t.kind != T_KW {
+                return Ok(left);
+            }
+            let op = t.text.clone();
+            let (lp, rp) = binary_priority(op);
+            if lp <= limit {
+                return Ok(left);
+            }
+            let oline = self.line();
+            self.p += 1;
+            let right = self.expr(rp)?;
+            if op == "and" {
+                left = self.add_expr(Expr.And(left, right));
+            } else if op == "or" {
+                left = self.add_expr(Expr.Or(left, right));
+            } else {
+                left = self.add_expr(Expr.Binary(op, left, right, oline));
+            }
+        }
+    }
+}
+
+fn parse(src: Str) -> Result[Ast, String] {
+    let toks = lex(src)?;
+    let ast = Ast { exprs: Vec.new(), stmts: Vec.new(), lines: Vec.new(), blocks: Vec.new(), protos: Vec.new() };
+    let mut p = Parser { toks: toks, p: 0, ast: ast };
+    let body = p.block()?;
+    if p.toks[p.p].kind != T_EOF {
+        return Err(p.err("'<eof>' expected"));
+    }
+    p.ast.protos.push(Proto { name: "main chunk".to_string(), params: Vec.new(), body: body });
+    Ok(p.ast)
+}
+// ------------------------------------------------------------ values
+
+// A Lua value. Tables and functions have reference semantics, so they
+// are shared structs; everything else is copied.
+#[derive(Clone)]
+enum Value {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    Num(f64),
+    Text(String),
+    Tab(LTable),
+    Fun(LFunc),
+}
+
+// A table: an array part for the keys 1..n and a hash part kept in
+// insertion order (pairs walks that order). A removed hash entry keeps
+// its slot with a nil value, so `next` can continue past it.
+shared struct LTable {
+    id: i64,
+    mut arr: Vec[Value],
+    mut hkeys: Vec[Value],
+    mut hvals: Vec[Value],
+    mut index: Map[String, i64],
+    mut meta: Option[LTable],
+    // a file handle's path, contents and mode; empty for a plain table
+    mut ud: Vec[String],
+}
+
+// A function: a Lua closure (proto >= 0, with the environment it closes
+// over and how many of that environment's names it can see) or a
+// builtin (builtin >= 0, with mutable state for iterators).
+shared struct LFunc {
+    id: i64,
+    proto: i64,
+    env: Option[Env],
+    elimit: i64,
+    builtin: i64,
+    name: String,
+    mut state: Vec[Value],
+}
+
+// One scope. Each local is a cell, so closures share it with the scope.
+shared struct Cell { mut v: Value }
+
+shared struct Env {
+    mut names: Vec[String],
+    mut cells: Vec[Cell],
+    parent: Option[Env],
+    plimit: i64,
+}
+
+fn new_env(parent: ref Env) -> Env {
+    Env { names: Vec.new(), cells: Vec.new(), parent: Some(parent.clone()), plimit: parent.names.len() }
+}
+
+fn declare(env: ref Env, name: Str, v: own Value) {
+    env.names.push(name.to_string());
+    env.cells.push(Cell { v: v });
+}
+
+fn lookup(env: ref Env, limit: i64, name: Str) -> Option[Cell] {
+    let mut i = limit - 1;
+    while i >= 0 {
+        if env.names[i] == name {
+            return Some(env.cells[i].clone());
+        }
+        i -= 1;
+    }
+    match env.parent {
+        Some(p) => lookup(p, env.plimit, name),
+        None => None,
+    }
+}
+
+fn type_name(v: ref Value) -> String {
+    let s = match v {
+        Value.Nil => "nil",
+        Value.Bool(_) => "boolean",
+        Value.Int(_) => "number",
+        Value.Num(_) => "number",
+        Value.Text(_) => "string",
+        Value.Tab(t) => if t.ud.len() > 0 { "userdata" } else { "table" },
+        Value.Fun(_) => "function",
+    };
+    s.to_string()
+}
+
+fn truthy(v: ref Value) -> bool {
+    match v {
+        Value.Nil => false,
+        Value.Bool(b) => *b,
+        _ => true,
+    }
+}
+
+fn is_nil(v: ref Value) -> bool {
+    match v {
+        Value.Nil => true,
+        _ => false,
+    }
+}
+
+// The float's value as an integer, when it has one.
+fn float_to_int(x: f64) -> Option[i64] {
+    if x != x or x < -9223372036854775808.0 or x >= 9223372036854775808.0 {
+        return None;
+    }
+    if x.floor() != x {
+        return None;
+    }
+    Some(x as i64)
+}
+
+// Tables index integral floats as integers: t[1.0] is t[1].
+fn norm_key(k: own Value) -> Value {
+    match k {
+        Value.Num(x) => match float_to_int(x) {
+            Some(i) => Value.Int(i),
+            None => Value.Num(x),
+        },
+        other => other,
+    }
+}
+
+fn key_code(k: ref Value) -> String {
+    match k {
+        Value.Nil => "z".to_string(),
+        Value.Bool(b) => if *b { "b1".to_string() } else { "b0".to_string() },
+        Value.Int(i) => f"i{i}",
+        Value.Num(x) => f"n{x}",
+        Value.Text(s) => f"s{s}",
+        Value.Tab(t) => f"t{t.id}",
+        Value.Fun(f) => f"f{f.id}",
+    }
+}
+
+impl LTable {
+    fn len(ref self) -> i64 {
+        self.arr.len()
+    }
+
+    fn get(ref self, key: ref Value) -> Value {
+        let k = norm_key(key.clone());
+        if let Value.Int(i) = k {
+            if i >= 1 and i <= self.arr.len() {
+                return self.arr[i - 1].clone();
+            }
+        }
+        let pos: i64 = self.index.get(key_code(k)).unwrap_or(-1);
+        if pos < 0 {
+            return Value.Nil;
+        }
+        self.hvals[pos].clone()
+    }
+
+    fn get_str(ref self, key: Str) -> Value {
+        self.get(Value.Text(key.to_string()))
+    }
+
+    // The caller has checked the key is neither nil nor NaN.
+    fn set(ref self, key: ref Value, v: own Value) {
+        let k = norm_key(key.clone());
+        if let Value.Int(i) = k {
+            let n = self.arr.len();
+            if i >= 1 and i <= n {
+                self.arr[i - 1] = v;
+                if i == n {
+                    self.trim();
+                }
+                return;
+            }
+            if i == n + 1 {
+                if is_nil(v) {
+                    self.hash_set(k, v);
+                    return;
+                }
+                self.arr.push(v);
+                // a value at n + 1 may already sit in the hash part
+                let code = key_code(k);
+                let pos: i64 = self.index.get(code).unwrap_or(-1);
+                if pos >= 0 {
+                    self.hvals[pos] = Value.Nil;
+                }
+                self.migrate();
+                return;
+            }
+        }
+        self.hash_set(k, v);
+    }
+
+    fn set_str(ref self, key: Str, v: own Value) {
+        self.set(Value.Text(key.to_string()), v);
+    }
+
+    fn hash_set(ref self, k: own Value, v: own Value) {
+        let code = key_code(k);
+        let pos: i64 = self.index.get(code).unwrap_or(-1);
+        if pos >= 0 {
+            self.hvals[pos] = v;
+            return;
+        }
+        if is_nil(v) {
+            return;
+        }
+        self.index.insert(code, self.hkeys.len());
+        self.hkeys.push(k);
+        self.hvals.push(v);
+    }
+
+    // Moves keys n+1, n+2, ... from the hash part into the array part.
+    fn migrate(ref self) {
+        loop {
+            let next = Value.Int(self.arr.len() + 1);
+            let pos: i64 = self.index.get(key_code(next)).unwrap_or(-1);
+            if pos < 0 {
+                return;
+            }
+            if is_nil(self.hvals[pos]) {
+                return;
+            }
+            let v = self.hvals[pos].clone();
+            self.hvals[pos] = Value.Nil;
+            self.arr.push(v);
+        }
+    }
+
+    fn trim(ref self) {
+        while self.arr.len() > 0 and is_nil(self.arr[self.arr.len() - 1]) {
+            self.arr.pop();
+        }
+    }
+
+    // The entry after `key` in traversal order: the array part, then the
+    // hash part. None when the key is not in the table.
+    fn next(ref self, key: ref Value) -> Option[(Value, Value)] {
+        let k = norm_key(key.clone());
+        let mut ai: i64 = 0;
+        let mut hi: i64 = 0;
+        if is_nil(k) {
+            ai = 0;
+        } else {
+            let mut found = false;
+            if let Value.Int(i) = k {
+                if i >= 1 and i <= self.arr.len() {
+                    ai = i;
+                    found = true;
+                }
+            }
+            if not found {
+                let pos: i64 = self.index.get(key_code(k)).unwrap_or(-1);
+                if pos < 0 {
+                    return None;
+                }
+                ai = self.arr.len();
+                hi = pos + 1;
+            }
+        }
+        while ai < self.arr.len() {
+            if not is_nil(self.arr[ai]) {
+                return Some((Value.Int(ai + 1), self.arr[ai].clone()));
+            }
+            ai += 1;
+        }
+        while hi < self.hkeys.len() {
+            if not is_nil(self.hvals[hi]) {
+                return Some((self.hkeys[hi].clone(), self.hvals[hi].clone()));
+            }
+            hi += 1;
+        }
+        Some((Value.Nil, Value.Nil))
+    }
+}
+
+// ------------------------------------------------------------ numbers
+
+// The exact decimal expansion of a finite, positive double: its
+// significant digits and the power of ten of the first one. A double is
+// m * 2^e, so the digits are those of m * 2^e, or of m * 5^-e shifted.
+fn exact_digits(x: f64) -> (Vec[u8], i64) {
+    let bits = x.to_bits();
+    let biased = ((bits >> 52) & 2047) as i64;
+    let frac = (bits & 4503599627370495) as i64;
+    let mut m = frac;
+    let mut e: i64 = -1074;
+    if biased > 0 {
+        m = frac + 4503599627370496;
+        e = biased - 1075;
+    }
+    // little-endian decimal digits of m
+    let mut d: Vec[i64] = Vec.new();
+    while m > 0 {
+        d.push(m % 10);
+        m = m / 10;
+    }
+    let mut point: i64 = 0;
+    if e >= 0 {
+        let mut left = e;
+        while left > 0 {
+            let k = if left > 30 { 30 } else { left };
+            mul_small(mut d, 1 << k);
+            left -= k;
+        }
+    } else {
+        let mut left = 0 - e;
+        point = e;
+        while left > 0 {
+            let k = if left > 13 { 13 } else { left };
+            let mut f: i64 = 1;
+            for _ in 0..k {
+                f *= 5;
+            }
+            mul_small(mut d, f);
+            left -= k;
+        }
+    }
+    let exp = d.len() - 1 + point;
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = d.len() - 1;
+    while i >= 0 {
+        out.push(d[i] as u8);
+        i -= 1;
+    }
+    while out.len() > 1 and out[out.len() - 1] == 0 {
+        out.pop();
+    }
+    (out, exp)
+}
+
+fn mul_small(d: mut ref Vec[i64], f: i64) {
+    let mut carry: i64 = 0;
+    for i in 0..d.len() {
+        let v = d[i] * f + carry;
+        d[i] = v % 10;
+        carry = v / 10;
+    }
+    while carry > 0 {
+        d.push(carry % 10);
+        carry = carry / 10;
+    }
+}
+
+// Rounds to `keep` significant digits, to nearest with ties to even (what
+// C's printf does with the exact value). An empty result is zero.
+fn round_digits(d: ref Vec[u8], x: i64, keep: i64) -> (Vec[u8], i64) {
+    let mut out: Vec[u8] = Vec.new();
+    if keep < 0 {
+        return (out, x);
+    }
+    if d.len() <= keep {
+        return (d.clone(), x);
+    }
+    for i in 0..keep {
+        out.push(d[i]);
+    }
+    let r = d[keep];
+    let mut up = r > 5;
+    if r == 5 {
+        let mut rest = false;
+        for i in keep + 1..d.len() {
+            if d[i] != 0 {
+                rest = true;
+            }
+        }
+        up = rest or (keep > 0 and d[keep - 1] % 2 == 1);
+    }
+    if not up {
+        return (out, x);
+    }
+    let mut i = keep - 1;
+    while i >= 0 and out[i] == 9 {
+        out[i] = 0;
+        i -= 1;
+    }
+    if i < 0 {
+        out.insert(0, 1);
+        return (out, x + 1);
+    }
+    out[i] = out[i] + 1;
+    (out, x)
+}
+
+fn digit_at(d: ref Vec[u8], x: i64, place: i64) -> u8 {
+    let idx = x - place;
+    if idx >= 0 and idx < d.len() {
+        return d[idx];
+    }
+    0
+}
+
+fn digit_char(v: u8) -> String {
+    let b: Vec[u8] = vec![v + b'0'];
+    String.from_utf8(b).unwrap_or("?".to_string())
+}
+
+// The digits of (d, x) in fixed notation with `prec` decimals.
+fn fixed_text(d: ref Vec[u8], x: i64, prec: i64) -> String {
+    let mut s = String.new();
+    if d.len() == 0 or x < 0 {
+        s.push_str("0");
+    } else {
+        let mut place = x;
+        while place >= 0 {
+            s.push_str(digit_char(digit_at(d, x, place)));
+            place -= 1;
+        }
+    }
+    if prec > 0 {
+        s.push_str(".");
+        for p in 1..prec + 1 {
+            s.push_str(digit_char(if d.len() == 0 { 0u8 } else { digit_at(d, x, 0 - p) }));
+        }
+    }
+    s
+}
+
+fn exp_text(x: i64, upper: bool) -> String {
+    let sign = if x < 0 { "-" } else { "+" };
+    let a = if x < 0 { 0 - x } else { x };
+    let e = if upper { "E" } else { "e" };
+    if a < 10 {
+        return f"{e}{sign}0{a}";
+    }
+    f"{e}{sign}{a}"
+}
+
+fn sci_text(d: ref Vec[u8], x: i64, decimals: i64, upper: bool) -> String {
+    let mut s = String.new();
+    s.push_str(digit_char(if d.len() == 0 { 0u8 } else { d[0] }));
+    if decimals > 0 {
+        s.push_str(".");
+        for i in 1..decimals + 1 {
+            s.push_str(digit_char(if i < d.len() { d[i] } else { 0u8 }));
+        }
+    }
+    let ex = if d.len() == 0 { 0 } else { x };
+    s.push_str(exp_text(ex, upper));
+    s
+}
+
+fn strip_zeros(s: own String) -> String {
+    if not s.contains(".") {
+        return s;
+    }
+    let b = s.bytes();
+    let mut end = b.len();
+    while end > 0 and b[end - 1] == b'0' {
+        end -= 1;
+    }
+    if end > 0 and b[end - 1] == b'.' {
+        end -= 1;
+    }
+    s.substring(0, end)
+}
+
+fn neg_zero(x: f64) -> bool {
+    x == 0.0 and 1.0 / x < 0.0
+}
+
+fn special_text(x: f64, upper: bool) -> Option[String] {
+    if x != x {
+        return Some(if upper { "NAN".to_string() } else { "nan".to_string() });
+    }
+    if x > 1.7976931348623157e308 {
+        return Some(if upper { "INF".to_string() } else { "inf".to_string() });
+    }
+    if x < -1.7976931348623157e308 {
+        return Some(if upper { "-INF".to_string() } else { "-inf".to_string() });
+    }
+    None
+}
+
+fn split_sign(x: f64) -> (String, f64) {
+    if x < 0.0 or neg_zero(x) {
+        return ("-".to_string(), 0.0 - x);
+    }
+    (String.new(), x)
+}
+
+fn digits_of(a: f64) -> (Vec[u8], i64) {
+    if a == 0.0 {
+        let z: Vec[u8] = vec![0u8];
+        return (z, 0);
+    }
+    exact_digits(a)
+}
+
+// C's %.<prec>g
+fn fmt_g(x: f64, prec_in: i64, upper: bool, alt: bool) -> String {
+    if let Some(s) = special_text(x, upper) {
+        return s;
+    }
+    let prec = if prec_in == 0 { 1 } else { prec_in };
+    let (sign, a) = split_sign(x);
+    let (d0, x0) = digits_of(a);
+    let (d, ex) = if a == 0.0 { (d0, 0) } else { round_digits(d0, x0, prec) };
+    let body = if ex < -4 or ex >= prec {
+        let t = sci_text(d, ex, prec - 1, upper);
+        if alt {
+            t
+        } else {
+            let cut = if upper { t.find("E") } else { t.find("e") };
+            match cut {
+                Some(p) => {
+                    let m = t.substring(0, p);
+                    let tail = t.substring(p);
+                    f"{strip_zeros(m)}{tail}"
+                }
+                None => t,
+            }
+        }
+    } else {
+        let t = fixed_text(d, ex, prec - 1 - ex);
+        if alt { t } else { strip_zeros(t) }
+    };
+    f"{sign}{body}"
+}
+
+// C's %.<prec>f
+fn fmt_f(x: f64, prec: i64, upper: bool) -> String {
+    if let Some(s) = special_text(x, upper) {
+        return s;
+    }
+    let (sign, a) = split_sign(x);
+    let (d0, x0) = digits_of(a);
+    let (d, ex) = if a == 0.0 { (d0, 0) } else { round_digits(d0, x0, x0 + 1 + prec) };
+    f"{sign}{fixed_text(d, ex, prec)}"
+}
+
+// C's %.<prec>e
+fn fmt_e(x: f64, prec: i64, upper: bool) -> String {
+    if let Some(s) = special_text(x, upper) {
+        return s;
+    }
+    let (sign, a) = split_sign(x);
+    let (d0, x0) = digits_of(a);
+    let (d, ex) = if a == 0.0 { (d0, 0) } else { round_digits(d0, x0, prec + 1) };
+    f"{sign}{sci_text(d, ex, prec, upper)}"
+}
+
+fn looks_like_int(s: Str) -> bool {
+    for c in s.bytes().iter() {
+        if not (is_digit(*c) or *c == b'-') {
+            return false;
+        }
+    }
+    true
+}
+
+// lua_Number2str: "%.14g", plus ".0" when that reads as an integer.
+fn float_text(x: f64) -> String {
+    let s = fmt_g(x, 14, false, false);
+    if looks_like_int(s) {
+        return f"{s}.0";
+    }
+    s
+}
+
+fn trim_bytes(b: ref Vec[u8]) -> (i64, i64) {
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and is_space(b[st]) {
+        st += 1;
+    }
+    while en > st and is_space(b[en - 1]) {
+        en -= 1;
+    }
+    (st, en)
+}
+
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11u8 or c == 12u8
+}
+
+// l_str2int: decimal or hex digits, an optional sign, surrounding spaces.
+// Decimal overflow gives None (the caller then reads a float); hex wraps.
+fn str_to_int(s: Str) -> Option[i64] {
+    let b = s.bytes();
+    let (st, en) = trim_bytes(b);
+    let mut i = st;
+    let mut neg = false;
+    if i < en and b[i] == b'-' {
+        neg = true;
+        i += 1;
+    } else if i < en and b[i] == b'+' {
+        i += 1;
+    }
+    if i >= en {
+        return None;
+    }
+    let mut v: i64 = 0;
+    if i + 1 < en and b[i] == b'0' and (b[i + 1] == b'x' or b[i + 1] == b'X') {
+        i += 2;
+        if i >= en {
+            return None;
+        }
+        while i < en {
+            let h = hex_val(b[i]);
+            if h < 0 {
+                return None;
+            }
+            v = v.wrapping_mul(16).wrapping_add(h);
+            i += 1;
+        }
+    } else {
+        while i < en {
+            if not is_digit(b[i]) {
+                return None;
+            }
+            let dg = (b[i] - b'0') as i64;
+            if v > (9223372036854775807 - dg) / 10 {
+                // -9223372036854775808 still fits
+                if neg and v == 922337203685477580 and dg == 8 and i + 1 == en {
+                    return Some(-9223372036854775807 - 1);
+                }
+                return None;
+            }
+            v = v * 10 + dg;
+            i += 1;
+        }
+    }
+    if neg {
+        return Some((0 as i64).wrapping_sub(v));
+    }
+    Some(v)
+}
+
+// lua_stringtonumber
+fn str_to_number(s: Str) -> Option[Value] {
+    if let Some(i) = str_to_int(s) {
+        return Some(Value.Int(i));
+    }
+    // Lua refuses "inf" and "nan"; this subset has no hex floats
+    if s.contains("n") or s.contains("N") or s.contains("x") or s.contains("X") {
+        return None;
+    }
+    let b = s.bytes();
+    let (st, en) = trim_bytes(b);
+    if st >= en {
+        return None;
+    }
+    let t = s.substring(st, en);
+    match f64.parse(t) {
+        Some(x) => Some(Value.Num(x)),
+        None => None,
+    }
+}
+
+// tonumber(s, base)
+fn str_to_int_base(s: Str, base: i64) -> Option[i64] {
+    let b = s.bytes();
+    let (st, en) = trim_bytes(b);
+    let mut i = st;
+    let mut neg = false;
+    if i < en and b[i] == b'-' {
+        neg = true;
+        i += 1;
+    }
+    if i >= en {
+        return None;
+    }
+    let mut v: i64 = 0;
+    while i < en {
+        let c = b[i];
+        let dg = if is_digit(c) {
+            (c - b'0') as i64
+        } else if c >= b'a' and c <= b'z' {
+            (c - b'a') as i64 + 10
+        } else if c >= b'A' and c <= b'Z' {
+            (c - b'A') as i64 + 10
+        } else {
+            99
+        };
+        if dg >= base {
+            return None;
+        }
+        v = v.wrapping_mul(base).wrapping_add(dg);
+        i += 1;
+    }
+    if neg {
+        return Some((0 as i64).wrapping_sub(v));
+    }
+    Some(v)
+}
+
+// Arithmetic operands: numbers, and strings that read as numbers.
+fn to_arith(v: ref Value) -> Option[Value] {
+    match v {
+        Value.Int(i) => Some(Value.Int(*i)),
+        Value.Num(x) => Some(Value.Num(*x)),
+        Value.Text(s) => str_to_number(s),
+        _ => None,
+    }
+}
+
+fn as_float(v: ref Value) -> f64 {
+    match v {
+        Value.Int(i) => *i as f64,
+        Value.Num(x) => *x,
+        _ => 0.0,
+    }
+}
+
+fn int_floor_div(a: i64, b: i64) -> i64 {
+    if b == -1 {
+        return (0 as i64).wrapping_sub(a);
+    }
+    let q = a / b;
+    if a % b != 0 and ((a < 0) != (b < 0)) {
+        return q - 1;
+    }
+    q
+}
+
+fn int_mod(a: i64, b: i64) -> i64 {
+    if b == -1 {
+        return 0;
+    }
+    let m = a % b;
+    if m != 0 and ((m < 0) != (b < 0)) {
+        return m + b;
+    }
+    m
+}
+
+fn float_mod(a: f64, b: f64) -> f64 {
+    let m = a % b;
+    if m != 0.0 and ((m < 0.0) != (b < 0.0)) {
+        return m + b;
+    }
+    m
+}
+
+// Number formatting for print/tostring/..: integers in decimal, floats
+// with "%.14g" and ".0" when they look integral.
+fn number_text(v: ref Value) -> String {
+    match v {
+        Value.Int(i) => f"{i}",
+        Value.Num(x) => float_text(*x),
+        _ => String.new(),
+    }
+}
+// ------------------------------------------------------------ Lua patterns
+
+// A port of lstrlib.c's matcher. Positions are byte offsets; a match
+// function returns the end of the match or -1.
+const CAP_UNFINISHED: i64 = -1;
+const CAP_POSITION: i64 = -2;
+const MAX_CAPTURES: i64 = 32;
+const MAX_MATCH_DEPTH: i64 = 200;
+
+struct MatchState {
+    src: Vec[u8],
+    pat: Vec[u8],
+    level: i64,
+    depth: i64,
+    cap_start: Vec[i64],
+    cap_len: Vec[i64],
+}
+
+fn new_match_state(src: Str, pat: Str) -> MatchState {
+    let mut cs: Vec[i64] = Vec.new();
+    let mut cl: Vec[i64] = Vec.new();
+    for _ in 0..MAX_CAPTURES {
+        cs.push(0);
+        cl.push(0);
+    }
+    MatchState { src: src.bytes(), pat: pat.bytes(), level: 0, depth: MAX_MATCH_DEPTH, cap_start: cs, cap_len: cl }
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' {
+        return c + 32;
+    }
+    c
+}
+
+fn upper_byte(c: u8) -> u8 {
+    if c >= b'a' and c <= b'z' {
+        return c - 32;
+    }
+    c
+}
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_upper(c: u8) -> bool {
+    c >= b'A' and c <= b'Z'
+}
+
+fn is_punct(c: u8) -> bool {
+    c > 32 and c < 127 and not is_alpha(c) and not is_digit(c) or c == b'_'
+}
+
+fn match_class(c: u8, cl: u8) -> bool {
+    let l = lower_byte(cl);
+    let res = if l == b'a' {
+        is_lower(c) or is_upper(c)
+    } else if l == b'c' {
+        c < 32 or c == 127
+    } else if l == b'd' {
+        is_digit(c)
+    } else if l == b'g' {
+        c > 32 and c < 127
+    } else if l == b'l' {
+        is_lower(c)
+    } else if l == b'p' {
+        is_punct(c)
+    } else if l == b's' {
+        is_space(c)
+    } else if l == b'u' {
+        is_upper(c)
+    } else if l == b'w' {
+        is_lower(c) or is_upper(c) or is_digit(c)
+    } else if l == b'x' {
+        hex_val(c) >= 0
+    } else {
+        return cl == c;
+    };
+    if is_upper(cl) {
+        return not res;
+    }
+    res
+}
+
+impl MatchState {
+    fn plen(ref self) -> i64 {
+        self.pat.len()
+    }
+
+    fn slen(ref self) -> i64 {
+        self.src.len()
+    }
+
+    fn class_end(ref self, p0: i64) -> Result[i64, String] {
+        let mut p = p0;
+        let c = self.pat[p];
+        p += 1;
+        if c == b'%' {
+            if p >= self.plen() {
+                return Err("malformed pattern (ends with '%')".to_string());
+            }
+            return Ok(p + 1);
+        }
+        if c == b'[' {
+            if p < self.plen() and self.pat[p] == b'^' {
+                p += 1;
+            }
+            // the first character of a set may be ']'
+            loop {
+                if p >= self.plen() {
+                    return Err("malformed pattern (missing ']')".to_string());
+                }
+                let cc = self.pat[p];
+                p += 1;
+                if cc == b'%' and p < self.plen() {
+                    p += 1;
+                }
+                if p >= self.plen() {
+                    return Err("malformed pattern (missing ']')".to_string());
+                }
+                if self.pat[p] == b']' {
+                    break;
+                }
+            }
+            return Ok(p + 1);
+        }
+        Ok(p)
+    }
+
+    // [set]: p is the '[', ec the closing ']'
+    fn match_bracket(ref self, c: u8, p0: i64, ec: i64) -> bool {
+        let mut p = p0;
+        let mut sig = true;
+        if self.pat[p + 1] == b'^' {
+            sig = false;
+            p += 1;
+        }
+        p += 1;
+        while p < ec {
+            if self.pat[p] == b'%' {
+                p += 1;
+                if match_class(c, self.pat[p]) {
+                    return sig;
+                }
+                p += 1;
+            } else if p + 2 < ec and self.pat[p + 1] == b'-' {
+                if self.pat[p] <= c and c <= self.pat[p + 2] {
+                    return sig;
+                }
+                p += 3;
+            } else {
+                if self.pat[p] == c {
+                    return sig;
+                }
+                p += 1;
+            }
+        }
+        not sig
+    }
+
+    fn single_match(ref self, s: i64, p: i64, ep: i64) -> bool {
+        if s >= self.slen() {
+            return false;
+        }
+        let c = self.src[s];
+        let pc = self.pat[p];
+        if pc == b'.' {
+            return true;
+        }
+        if pc == b'%' {
+            return match_class(c, self.pat[p + 1]);
+        }
+        if pc == b'[' {
+            return self.match_bracket(c, p, ep - 1);
+        }
+        pc == c
+    }
+
+    fn do_match(mut ref self, s0: i64, p0: i64) -> Result[i64, String] {
+        self.depth -= 1;
+        if self.depth == 0 {
+            return Err("pattern too complex".to_string());
+        }
+        let r = self.match_loop(s0, p0);
+        self.depth += 1;
+        r
+    }
+
+    fn match_loop(mut ref self, s0: i64, p0: i64) -> Result[i64, String] {
+        let mut s = s0;
+        let mut p = p0;
+        loop {
+            if p >= self.plen() {
+                return Ok(s);
+            }
+            let pc = self.pat[p];
+            if pc == b'(' {
+                if p + 1 < self.plen() and self.pat[p + 1] == b')' {
+                    return self.start_capture(s, p + 2, CAP_POSITION);
+                }
+                return self.start_capture(s, p + 1, CAP_UNFINISHED);
+            }
+            if pc == b')' {
+                return self.end_capture(s, p + 1);
+            }
+            if pc == b'$' and p + 1 == self.plen() {
+                return Ok(if s == self.slen() { s } else { -1 });
+            }
+            if pc == b'%' and p + 1 < self.plen() {
+                let nc = self.pat[p + 1];
+                if nc == b'b' {
+                    let e = self.match_balance(s, p + 2)?;
+                    if e == -1 {
+                        return Ok(-1);
+                    }
+                    s = e;
+                    p += 4;
+                    continue;
+                }
+                if nc == b'f' {
+                    p += 2;
+                    if p >= self.plen() or self.pat[p] != b'[' {
+                        return Err("missing '[' after '%f' in pattern".to_string());
+                    }
+                    let ep = self.class_end(p)?;
+                    let prev = if s == 0 { 0u8 } else { self.src[s - 1] };
+                    let cur = if s < self.slen() { self.src[s] } else { 0u8 };
+                    if not self.match_bracket(prev, p, ep - 1) and self.match_bracket(cur, p, ep - 1) {
+                        p = ep;
+                        continue;
+                    }
+                    return Ok(-1);
+                }
+                if is_digit(nc) {
+                    let e = self.match_capture(s, nc)?;
+                    if e == -1 {
+                        return Ok(-1);
+                    }
+                    s = e;
+                    p += 2;
+                    continue;
+                }
+            }
+            let ep = self.class_end(p)?;
+            let epc = if ep < self.plen() { self.pat[ep] } else { 0u8 };
+            if not self.single_match(s, p, ep) {
+                if epc == b'*' or epc == b'?' or epc == b'-' {
+                    p = ep + 1;
+                    continue;
+                }
+                return Ok(-1);
+            }
+            if epc == b'?' {
+                let r = self.do_match(s + 1, ep + 1)?;
+                if r != -1 {
+                    return Ok(r);
+                }
+                p = ep + 1;
+                continue;
+            }
+            if epc == b'+' {
+                return self.max_expand(s + 1, p, ep);
+            }
+            if epc == b'*' {
+                return self.max_expand(s, p, ep);
+            }
+            if epc == b'-' {
+                return self.min_expand(s, p, ep);
+            }
+            s += 1;
+            p = ep;
+        }
+    }
+
+    fn max_expand(mut ref self, s: i64, p: i64, ep: i64) -> Result[i64, String] {
+        let mut i: i64 = 0;
+        while self.single_match(s + i, p, ep) {
+            i += 1;
+        }
+        while i >= 0 {
+            let r = self.do_match(s + i, ep + 1)?;
+            if r != -1 {
+                return Ok(r);
+            }
+            i -= 1;
+        }
+        Ok(-1)
+    }
+
+    fn min_expand(mut ref self, s0: i64, p: i64, ep: i64) -> Result[i64, String] {
+        let mut s = s0;
+        loop {
+            let r = self.do_match(s, ep + 1)?;
+            if r != -1 {
+                return Ok(r);
+            }
+            if self.single_match(s, p, ep) {
+                s += 1;
+            } else {
+                return Ok(-1);
+            }
+        }
+    }
+
+    fn start_capture(mut ref self, s: i64, p: i64, what: i64) -> Result[i64, String] {
+        if self.level >= MAX_CAPTURES {
+            return Err("too many captures".to_string());
+        }
+        let l = self.level;
+        self.cap_start[l] = s;
+        self.cap_len[l] = what;
+        self.level += 1;
+        let r = self.do_match(s, p)?;
+        if r == -1 {
+            self.level -= 1;
+        }
+        Ok(r)
+    }
+
+    fn end_capture(mut ref self, s: i64, p: i64) -> Result[i64, String] {
+        let mut l = self.level - 1;
+        while l >= 0 and self.cap_len[l] != CAP_UNFINISHED {
+            l -= 1;
+        }
+        if l < 0 {
+            return Err("invalid pattern capture".to_string());
+        }
+        self.cap_len[l] = s - self.cap_start[l];
+        let r = self.do_match(s, p)?;
+        if r == -1 {
+            self.cap_len[l] = CAP_UNFINISHED;
+        }
+        Ok(r)
+    }
+
+    fn match_balance(ref self, s: i64, p: i64) -> Result[i64, String] {
+        if p + 1 >= self.plen() {
+            return Err("missing arguments to '%b'".to_string());
+        }
+        if s >= self.slen() or self.src[s] != self.pat[p] {
+            return Ok(-1);
+        }
+        let open = self.pat[p];
+        let close = self.pat[p + 1];
+        let mut cont = 1;
+        let mut i = s + 1;
+        while i < self.slen() {
+            let c = self.src[i];
+            if c == close {
+                cont -= 1;
+                if cont == 0 {
+                    return Ok(i + 1);
+                }
+            } else if c == open {
+                cont += 1;
+            }
+            i += 1;
+        }
+        Ok(-1)
+    }
+
+    fn match_capture(ref self, s: i64, d: u8) -> Result[i64, String] {
+        let l = (d as i64) - 49;
+        if l < 0 or l >= self.level or self.cap_len[l] == CAP_UNFINISHED {
+            return Err(f"invalid capture index %{l + 1}");
+        }
+        let len = self.cap_len[l];
+        let st = self.cap_start[l];
+        if self.slen() - s >= len {
+            for k in 0..len {
+                if self.src[st + k] != self.src[s + k] {
+                    return Ok(-1);
+                }
+            }
+            return Ok(s + len);
+        }
+        Ok(-1)
+    }
+
+    fn text(ref self, from: i64, to: i64) -> String {
+        byte_str(self.src, from, to)
+    }
+
+    // Capture i of the match s..e; capture 0 is the whole match when the
+    // pattern has none.
+    fn capture(ref self, i: i64, s: i64, e: i64) -> Result[Value, String] {
+        if i >= self.level {
+            if i == 0 {
+                return Ok(Value.Text(self.text(s, e)));
+            }
+            return Err(f"invalid capture index %{i + 1}");
+        }
+        let l = self.cap_len[i];
+        if l == CAP_UNFINISHED {
+            return Err("unfinished capture".to_string());
+        }
+        if l == CAP_POSITION {
+            return Ok(Value.Int(self.cap_start[i] + 1));
+        }
+        Ok(Value.Text(self.text(self.cap_start[i], self.cap_start[i] + l)))
+    }
+
+    fn captures(ref self, s: i64, e: i64, whole: bool) -> Result[Vec[Value], String] {
+        let n = if self.level == 0 and whole { 1 } else { self.level };
+        let mut out: Vec[Value] = Vec.new();
+        for i in 0..n {
+            out.push(self.capture(i, s, e)?);
+        }
+        Ok(out)
+    }
+
+    fn reset(mut ref self) {
+        self.level = 0;
+        self.depth = MAX_MATCH_DEPTH;
+    }
+}
+
+fn has_specials(p: Str) -> bool {
+    for c in p.bytes().iter() {
+        if *c == b'^' or *c == b'$' or *c == b'*' or *c == b'+' or *c == b'?' or *c == b'.' or *c == b'(' or *c == b')' or *c == b'[' or *c == b']' or *c == b'%' or *c == b'-' {
+            return true;
+        }
+    }
+    false
+}
+
+// Lua's posrelat for an initial position: negative counts from the end.
+fn start_pos(i: i64, len: i64) -> i64 {
+    if i > 0 {
+        return i;
+    }
+    if i == 0 {
+        return 1;
+    }
+    if i < 0 - len {
+        return 1;
+    }
+    len + i + 1
+}
+
+fn end_pos(j: i64, len: i64) -> i64 {
+    if j > len {
+        return len;
+    }
+    if j >= 0 {
+        return j;
+    }
+    if j < 0 - len {
+        return 0;
+    }
+    len + j + 1
+}
+
+fn plain_find(s: ref Vec[u8], p: ref Vec[u8], from: i64) -> i64 {
+    let n = s.len();
+    let m = p.len();
+    let mut i = from;
+    while i + m <= n {
+        let mut ok = true;
+        for k in 0..m {
+            if s[i + k] != p[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// string.find and string.match
+fn str_find(s: Str, p: Str, init_in: i64, plain: bool, find: bool) -> Result[Vec[Value], String] {
+    let ls = s.len();
+    let init = start_pos(init_in, ls) - 1;
+    let mut out: Vec[Value] = Vec.new();
+    if init > ls {
+        out.push(Value.Nil);
+        return Ok(out);
+    }
+    if find and (plain or not has_specials(p)) {
+        let at = plain_find(s.bytes(), p.bytes(), init);
+        if at >= 0 {
+            out.push(Value.Int(at + 1));
+            out.push(Value.Int(at + p.len()));
+        } else {
+            out.push(Value.Nil);
+        }
+        return Ok(out);
+    }
+    let mut ms = new_match_state(s, p);
+    let anchor = ms.pat.len() > 0 and ms.pat[0] == b'^';
+    let p0 = if anchor { 1 } else { 0 };
+    let mut s1 = init;
+    loop {
+        ms.reset();
+        let e = ms.do_match(s1, p0)?;
+        if e != -1 {
+            if find {
+                out.push(Value.Int(s1 + 1));
+                out.push(Value.Int(e));
+                let caps = ms.captures(-1, 0, false)?;
+                for c in caps.into_iter() {
+                    out.push(c);
+                }
+            } else {
+                out = ms.captures(s1, e, true)?;
+            }
+            return Ok(out);
+        }
+        s1 += 1;
+        if s1 > ls or anchor {
+            break;
+        }
+    }
+    out.push(Value.Nil);
+    Ok(out)
+}
+// ------------------------------------------------------------ the interpreter
+
+enum Flow {
+    Normal,
+    Break,
+    Return(Vec[Value]),
+}
+
+// Interpreter state. The call stack is two parallel vectors: whether each
+// frame is a Lua function, and the line it is executing (for error
+// positions).
+struct State {
+    next_id: i64,
+    globals: LTable,
+    strlib: LTable,
+    str_meta: LTable,
+    file_meta: LTable,
+    handles: Vec[LTable],
+    flua: Vec[bool],
+    fline: Vec[i64],
+    chunk: String,
+}
+
+const MAX_DEPTH: i64 = 180;
+
+impl State {
+    fn new_id(mut ref self) -> i64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    fn push_frame(mut ref self, lua: bool, line: i64) {
+        self.flua.push(lua);
+        self.fline.push(line);
+    }
+
+    fn pop_frame(mut ref self) {
+        self.flua.pop();
+        self.fline.pop();
+    }
+
+    fn unwind(mut ref self, depth: i64) {
+        while self.flua.len() > depth {
+            self.pop_frame();
+        }
+    }
+
+    fn set_line(mut ref self, line: i64) {
+        let n = self.fline.len();
+        self.fline[n - 1] = line;
+    }
+
+    // luaL_where: "chunk:line: " for the frame `level` below the top,
+    // when that frame is a Lua function.
+    fn place(ref self, level: i64) -> String {
+        let idx = self.flua.len() - 1 - level;
+        if idx >= 0 and self.flua[idx] {
+            return f"{self.chunk}:{self.fline[idx]}: ";
+        }
+        String.new()
+    }
+
+    // An error raised while running Lua code (the top frame).
+    fn rt_error(ref self, msg: Str) -> Value {
+        Value.Text(f"{self.place(0)}{msg}")
+    }
+
+    // An error raised by a builtin, reported at its caller.
+    fn lib_error(ref self, msg: Str) -> Value {
+        Value.Text(f"{self.place(1)}{msg}")
+    }
+
+    fn new_table(mut ref self) -> LTable {
+        LTable { id: self.new_id(), arr: Vec.new(), hkeys: Vec.new(), hvals: Vec.new(), index: Map.new(), meta: None, ud: Vec.new() }
+    }
+
+    fn builtin(mut ref self, name: Str, id: i64) -> Value {
+        Value.Fun(LFunc { id: self.new_id(), proto: -1, env: None, elimit: 0, builtin: id, name: name.to_string(), state: Vec.new() })
+    }
+
+    fn register(mut ref self, t: ref LTable, name: Str, id: i64) {
+        let f = self.builtin(name, id);
+        t.set_str(name, f);
+    }
+}
+
+fn make_closure(st: mut ref State, env: ref Env, ast: ref Ast, p: i64) -> Value {
+    Value.Fun(LFunc { id: st.new_id(), proto: p, env: Some(env.clone()), elimit: env.names.len(), builtin: -1, name: ast.protos[p].name.clone(), state: Vec.new() })
+}
+
+fn first(vs: own Vec[Value]) -> Value {
+    for v in vs.into_iter() {
+        return v;
+    }
+    Value.Nil
+}
+
+fn hex_id(id: i64) -> String {
+    f"0x{id:08x}"
+}
+
+fn tostring_raw(v: ref Value) -> String {
+    match v {
+        Value.Nil => "nil".to_string(),
+        Value.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value.Int(_) => number_text(v),
+        Value.Num(_) => number_text(v),
+        Value.Text(s) => s.clone(),
+        Value.Tab(t) => {
+            if t.ud.len() > 0 {
+                if t.ud[2] == "closed" {
+                    return "file (closed)".to_string();
+                }
+                return f"file ({hex_id(t.id)})";
+            }
+            f"table: {hex_id(t.id)}"
+        }
+        Value.Fun(f) => f"function: {hex_id(f.id)}",
+    }
+}
+
+fn metafield(v: ref Value, name: Str) -> Value {
+    match v {
+        Value.Tab(t) => match t.meta {
+            Some(m) => m.get_str(name),
+            None => Value.Nil,
+        },
+        _ => Value.Nil,
+    }
+}
+
+fn is_callable(v: ref Value) -> bool {
+    match v {
+        Value.Fun(_) => true,
+        _ => false,
+    }
+}
+
+// luaL_tolstring: __tostring first.
+fn tostring_meta(ast: ref Ast, st: mut ref State, v: ref Value) -> Result[String, Value] {
+    let h = metafield(v, "__tostring");
+    if is_callable(h) {
+        let mut args: Vec[Value] = Vec.new();
+        args.push(v.clone());
+        let r = first(call_value(ast, st, h, args)?);
+        return match r {
+            Value.Text(s) => Ok(s),
+            _ => Err(st.lib_error("'__tostring' must return a string")),
+        };
+    }
+    Ok(tostring_raw(v))
+}
+
+// A note on the variable an expression names, for error messages.
+fn describe(ast: ref Ast, env: ref Env, e: i64) -> String {
+    let x = ref ast.exprs[e];
+    match x {
+        Expr.Name(n) => match lookup(env, env.names.len(), n) {
+            Some(_) => f" (local '{n}')",
+            None => f" (global '{n}')",
+        },
+        Expr.Index(_, k) => {
+            let kx = ref ast.exprs[*k];
+            match kx {
+                Expr.Text(s) => f" (field '{s}')",
+                _ => String.new(),
+            }
+        }
+        Expr.Method(_, name, _, _) => f" (method '{name}')",
+        _ => String.new(),
+    }
+}
+
+// t[k], following __index.
+fn index_value(ast: ref Ast, st: mut ref State, obj: own Value, key: ref Value, what: Str) -> Result[Value, Value] {
+    let mut cur = obj;
+    for _ in 0..100 {
+        let c = ref cur;
+        let mut handler = Value.Nil;
+        match c {
+            Value.Tab(t) => {
+                let v = t.get(key);
+                if not is_nil(v) {
+                    return Ok(v);
+                }
+                handler = match t.meta {
+                    Some(m) => m.get_str("__index"),
+                    None => Value.Nil,
+                };
+                if is_nil(handler) {
+                    return Ok(Value.Nil);
+                }
+            }
+            Value.Text(_) => {
+                return Ok(st.strlib.get(key));
+            }
+            _ => {
+                return Err(st.rt_error(f"attempt to index a {type_name(c)} value{what}"));
+            }
+        }
+        if is_callable(handler) {
+            let mut args: Vec[Value] = Vec.new();
+            args.push(cur.clone());
+            args.push(key.clone());
+            return Ok(first(call_value(ast, st, handler, args)?));
+        }
+        cur = handler;
+    }
+    Err(st.rt_error("'__index' chain too long; possible loop"))
+}
+
+fn check_key(st: ref State, k: ref Value) -> Result[(), Value] {
+    match k {
+        Value.Nil => Err(st.rt_error("index is nil")),
+        Value.Num(x) => if *x != *x { Err(st.rt_error("index is NaN")) } else { Ok(()) },
+        _ => Ok(()),
+    }
+}
+
+fn call_value(ast: ref Ast, st: mut ref State, f: ref Value, args: own Vec[Value]) -> Result[Vec[Value], Value] {
+    let lf = match f {
+        Value.Fun(lf) => lf.clone(),
+        _ => return Err(st.rt_error(f"attempt to call a {type_name(f)} value")),
+    };
+    if st.flua.len() > MAX_DEPTH {
+        return Err(st.rt_error("stack overflow"));
+    }
+    if lf.builtin >= 0 {
+        st.push_frame(false, 0);
+        let r = call_builtin(ast, st, lf, args);
+        st.pop_frame();
+        return r;
+    }
+    let proto = ref ast.protos[lf.proto];
+    let parent = match lf.env {
+        Some(e) => Some(e.clone()),
+        None => None,
+    };
+    let env = Env { names: Vec.new(), cells: Vec.new(), parent: parent, plimit: lf.elimit };
+    let mut i: i64 = 0;
+    for a in args.into_iter() {
+        if i < proto.params.len() {
+            declare(env, proto.params[i], a);
+        }
+        i += 1;
+    }
+    while i < proto.params.len() {
+        declare(env, proto.params[i], Value.Nil);
+        i += 1;
+    }
+    st.push_frame(true, 0);
+    let r = exec_stmts(ast, st, env, proto.body);
+    st.pop_frame();
+    match r {
+        Ok(Flow.Return(vs)) => Ok(vs),
+        Ok(_) => Ok(Vec.new()),
+        Err(e) => Err(e),
+    }
+}
+
+fn is_multi(ast: ref Ast, e: i64) -> bool {
+    let x = ref ast.exprs[e];
+    match x {
+        Expr.Call(_, _, _) => true,
+        Expr.Method(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+// An expression list: every value but the last is truncated to one, and
+// a call in the last position contributes all of its results.
+fn eval_list(ast: ref Ast, st: mut ref State, env: ref Env, list: ref Vec[i64]) -> Result[Vec[Value], Value] {
+    let mut out: Vec[Value] = Vec.new();
+    let n = list.len();
+    for i in 0..n {
+        let e = list[i];
+        if i == n - 1 and is_multi(ast, e) {
+            let vs = eval_call(ast, st, env, e)?;
+            for v in vs.into_iter() {
+                out.push(v);
+            }
+        } else {
+            out.push(eval(ast, st, env, e)?);
+        }
+    }
+    Ok(out)
+}
+
+fn eval_call(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Vec[Value], Value] {
+    let x = ref ast.exprs[e];
+    match x {
+        Expr.Call(fe, args, line) => {
+            let fv = eval(ast, st, env, *fe)?;
+            let argv = eval_list(ast, st, env, args)?;
+            st.set_line(*line);
+            if not is_callable(fv) {
+                return Err(st.rt_error(f"attempt to call a {type_name(fv)} value{describe(ast, env, *fe)}"));
+            }
+            call_value(ast, st, fv, argv)
+        }
+        Expr.Method(oe, name, args, line) => {
+            let ov = eval(ast, st, env, *oe)?;
+            st.set_line(*line);
+            let key = Value.Text(name.clone());
+            let fv = index_value(ast, st, ov.clone(), key, describe(ast, env, *oe))?;
+            let mut argv: Vec[Value] = Vec.new();
+            argv.push(ov);
+            let rest = eval_list(ast, st, env, args)?;
+            for v in rest.into_iter() {
+                argv.push(v);
+            }
+            st.set_line(*line);
+            if not is_callable(fv) {
+                return Err(st.rt_error(f"attempt to call a {type_name(fv)} value (method '{name}')"));
+            }
+            call_value(ast, st, fv, argv)
+        }
+        _ => {
+            let mut out: Vec[Value] = Vec.new();
+            out.push(eval(ast, st, env, e)?);
+            Ok(out)
+        }
+    }
+}
+
+fn eval(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Value, Value] {
+    let x = ref ast.exprs[e];
+    match x {
+        Expr.Nil => Ok(Value.Nil),
+        Expr.True => Ok(Value.Bool(true)),
+        Expr.False => Ok(Value.Bool(false)),
+        Expr.Int(i) => Ok(Value.Int(*i)),
+        Expr.Float(f) => Ok(Value.Num(*f)),
+        Expr.Text(s) => Ok(Value.Text(s.clone())),
+        Expr.Name(n) => match lookup(env, env.names.len(), n) {
+            Some(c) => Ok(c.v.clone()),
+            None => Ok(st.globals.get_str(n)),
+        },
+        Expr.Index(oe, ke) => {
+            let ov = eval(ast, st, env, *oe)?;
+            let kv = eval(ast, st, env, *ke)?;
+            index_value(ast, st, ov, kv, describe(ast, env, *oe))
+        }
+        Expr.Call(_, _, _) => Ok(first(eval_call(ast, st, env, e)?)),
+        Expr.Method(_, _, _, _) => Ok(first(eval_call(ast, st, env, e)?)),
+        Expr.Function(p) => Ok(make_closure(st, env, ast, *p)),
+        Expr.Binary(op, l, r, line) => {
+            let a = eval(ast, st, env, *l)?;
+            let b = eval(ast, st, env, *r)?;
+            st.set_line(*line);
+            binary(ast, st, op, a, b)
+        }
+        Expr.Unary(op, o, line) => {
+            let a = eval(ast, st, env, *o)?;
+            st.set_line(*line);
+            unary(ast, st, op, a, describe(ast, env, *o))
+        }
+        Expr.And(l, r) => {
+            let a = eval(ast, st, env, *l)?;
+            if not truthy(a) {
+                return Ok(a);
+            }
+            eval(ast, st, env, *r)
+        }
+        Expr.Or(l, r) => {
+            let a = eval(ast, st, env, *l)?;
+            if truthy(a) {
+                return Ok(a);
+            }
+            eval(ast, st, env, *r)
+        }
+        Expr.Paren(i) => eval(ast, st, env, *i),
+        Expr.Table(items, keys, vals) => {
+            let t = st.new_table();
+            let positional = eval_list(ast, st, env, items)?;
+            for i in 0..keys.len() {
+                let k = eval(ast, st, env, keys[i])?;
+                check_key(st, k)?;
+                let v = eval(ast, st, env, vals[i])?;
+                t.set(k, v);
+            }
+            let mut i: i64 = 1;
+            for v in positional.into_iter() {
+                t.set(Value.Int(i), v);
+                i += 1;
+            }
+            Ok(Value.Tab(t))
+        }
+    }
+}
+
+// ------------------------------------------------------------ operators
+
+fn arith_event(op: Str) -> String {
+    let s = if op == "+" {
+        "__add"
+    } else if op == "-" {
+        "__sub"
+    } else if op == "*" {
+        "__mul"
+    } else if op == "/" {
+        "__div"
+    } else if op == "%" {
+        "__mod"
+    } else if op == "//" {
+        "__idiv"
+    } else if op == "^" {
+        "__pow"
+    } else {
+        "__concat"
+    };
+    s.to_string()
+}
+
+// The metamethod for a binary event, from either operand.
+fn try_meta(ast: ref Ast, st: mut ref State, event: Str, a: ref Value, b: ref Value) -> Result[Option[Value], Value] {
+    let mut h = metafield(a, event);
+    if is_nil(h) {
+        h = metafield(b, event);
+    }
+    if not is_callable(h) {
+        return Ok(None);
+    }
+    let mut args: Vec[Value] = Vec.new();
+    args.push(a.clone());
+    args.push(b.clone());
+    Ok(Some(first(call_value(ast, st, h, args)?)))
+}
+
+fn arith(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, b: ref Value) -> Result[Value, Value] {
+    let na = to_arith(a);
+    let nb = to_arith(b);
+    if let Some(x) = na {
+        if let Some(y) = nb {
+            if op == "/" {
+                return Ok(Value.Num(as_float(x) / as_float(y)));
+            }
+            if op == "^" {
+                return Ok(Value.Num(as_float(x).pow(as_float(y))));
+            }
+            if let Value.Int(i) = x {
+                if let Value.Int(j) = y {
+                    if op == "+" {
+                        return Ok(Value.Int(i.wrapping_add(j)));
+                    }
+                    if op == "-" {
+                        return Ok(Value.Int(i.wrapping_sub(j)));
+                    }
+                    if op == "*" {
+                        return Ok(Value.Int(i.wrapping_mul(j)));
+                    }
+                    if j == 0 {
+                        let what = if op == "//" { "'n//0'" } else { "'n%%0'" };
+                        return Err(st.rt_error(f"attempt to perform {what}"));
+                    }
+                    if op == "//" {
+                        return Ok(Value.Int(int_floor_div(i, j)));
+                    }
+                    return Ok(Value.Int(int_mod(i, j)));
+                }
+            }
+            let fx = as_float(x);
+            let fy = as_float(y);
+            if op == "+" {
+                return Ok(Value.Num(fx + fy));
+            }
+            if op == "-" {
+                return Ok(Value.Num(fx - fy));
+            }
+            if op == "*" {
+                return Ok(Value.Num(fx * fy));
+            }
+            if op == "//" {
+                return Ok(Value.Num((fx / fy).floor()));
+            }
+            return Ok(Value.Num(float_mod(fx, fy)));
+        }
+    }
+    if let Some(r) = try_meta(ast, st, arith_event(op), a, b)? {
+        return Ok(r);
+    }
+    // luaG_opinterror: blame the first operand that is not a number
+    let bad = match to_arith(a) {
+        Some(_) => b,
+        None => a,
+    };
+    let kind = match bad {
+        Value.Text(_) => "attempt to perform arithmetic on a string value".to_string(),
+        _ => f"attempt to perform arithmetic on a {type_name(bad)} value",
+    };
+    Err(st.rt_error(kind))
+}
+
+fn concat_piece(v: ref Value) -> Option[String] {
+    match v {
+        Value.Text(s) => Some(s.clone()),
+        Value.Int(_) => Some(number_text(v)),
+        Value.Num(_) => Some(number_text(v)),
+        _ => None,
+    }
+}
+
+fn concat(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value) -> Result[Value, Value] {
+    if let Some(x) = concat_piece(a) {
+        if let Some(y) = concat_piece(b) {
+            return Ok(Value.Text(f"{x}{y}"));
+        }
+    }
+    if let Some(r) = try_meta(ast, st, "__concat", a, b)? {
+        return Ok(r);
+    }
+    let bad = match concat_piece(a) {
+        Some(_) => b,
+        None => a,
+    };
+    Err(st.rt_error(f"attempt to concatenate a {type_name(bad)} value"))
+}
+
+fn is_number(v: ref Value) -> bool {
+    match v {
+        Value.Int(_) => true,
+        Value.Num(_) => true,
+        _ => false,
+    }
+}
+
+fn raw_equal(a: ref Value, b: ref Value) -> bool {
+    match a {
+        Value.Nil => is_nil(b),
+        Value.Bool(x) => match b {
+            Value.Bool(y) => *x == *y,
+            _ => false,
+        },
+        Value.Int(x) => match b {
+            Value.Int(y) => *x == *y,
+            Value.Num(y) => match float_to_int(*y) {
+                Some(j) => j == *x,
+                None => false,
+            },
+            _ => false,
+        },
+        Value.Num(x) => match b {
+            Value.Num(y) => *x == *y,
+            Value.Int(y) => match float_to_int(*x) {
+                Some(j) => j == *y,
+                None => false,
+            },
+            _ => false,
+        },
+        Value.Text(x) => match b {
+            Value.Text(y) => x == y,
+            _ => false,
+        },
+        Value.Tab(x) => match b {
+            Value.Tab(y) => x.id == y.id,
+            _ => false,
+        },
+        Value.Fun(x) => match b {
+            Value.Fun(y) => x.id == y.id,
+            _ => false,
+        },
+    }
+}
+
+fn both_tables(a: ref Value, b: ref Value) -> bool {
+    match a {
+        Value.Tab(_) => match b {
+            Value.Tab(_) => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn values_equal(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value) -> Result[bool, Value] {
+    if raw_equal(a, b) {
+        return Ok(true);
+    }
+    if not both_tables(a, b) {
+        return Ok(false);
+    }
+    match try_meta(ast, st, "__eq", a, b)? {
+        Some(r) => Ok(truthy(r)),
+        None => Ok(false),
+    }
+}
+
+fn compare_error(st: ref State, a: ref Value, b: ref Value) -> Value {
+    let ta = type_name(a);
+    let tb = type_name(b);
+    if ta == tb {
+        return st.rt_error(f"attempt to compare two {ta} values");
+    }
+    st.rt_error(f"attempt to compare {ta} with {tb}")
+}
+
+fn less_than(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value, or_equal: bool) -> Result[bool, Value] {
+    if is_number(a) and is_number(b) {
+        if let Value.Int(x) = a {
+            if let Value.Int(y) = b {
+                return Ok(if or_equal { *x <= *y } else { *x < *y });
+            }
+        }
+        let x = as_float(a);
+        let y = as_float(b);
+        return Ok(if or_equal { x <= y } else { x < y });
+    }
+    if let Value.Text(x) = a {
+        if let Value.Text(y) = b {
+            return Ok(if or_equal { x <= y } else { x < y });
+        }
+    }
+    let event = if or_equal { "__le" } else { "__lt" };
+    match try_meta(ast, st, event, a, b)? {
+        Some(r) => Ok(truthy(r)),
+        None => Err(compare_error(st, a, b)),
+    }
+}
+
+fn binary(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, b: ref Value) -> Result[Value, Value] {
+    if op == "==" {
+        return Ok(Value.Bool(values_equal(ast, st, a, b)?));
+    }
+    if op == "~=" {
+        return Ok(Value.Bool(not values_equal(ast, st, a, b)?));
+    }
+    if op == "<" {
+        return Ok(Value.Bool(less_than(ast, st, a, b, false)?));
+    }
+    if op == ">" {
+        return Ok(Value.Bool(less_than(ast, st, b, a, false)?));
+    }
+    if op == "<=" {
+        return Ok(Value.Bool(less_than(ast, st, a, b, true)?));
+    }
+    if op == ">=" {
+        return Ok(Value.Bool(less_than(ast, st, b, a, true)?));
+    }
+    if op == ".." {
+        return concat(ast, st, a, b);
+    }
+    arith(ast, st, op, a, b)
+}
+
+fn unary(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, what: Str) -> Result[Value, Value] {
+    if op == "not" {
+        return Ok(Value.Bool(not truthy(a)));
+    }
+    if op == "#" {
+        return match a {
+            Value.Text(s) => Ok(Value.Int(s.len())),
+            Value.Tab(t) => Ok(Value.Int(t.len())),
+            _ => Err(st.rt_error(f"attempt to get length of a {type_name(a)} value{what}")),
+        };
+    }
+    match to_arith(a) {
+        Some(Value.Int(i)) => Ok(Value.Int((0 as i64).wrapping_sub(i))),
+        Some(Value.Num(x)) => Ok(Value.Num(-x)),
+        _ => {
+            if let Some(r) = try_meta(ast, st, "__unm", a, a)? {
+                return Ok(r);
+            }
+            Err(st.rt_error(f"attempt to perform arithmetic on a {type_name(a)} value{what}"))
+        }
+    }
+}
+
+// ------------------------------------------------------------ statements
+
+fn exec_block(ast: ref Ast, st: mut ref State, env: ref Env, b: i64) -> Result[Flow, Value] {
+    let inner = new_env(env);
+    exec_stmts(ast, st, inner, b)
+}
+
+fn exec_stmts(ast: ref Ast, st: mut ref State, env: ref Env, b: i64) -> Result[Flow, Value] {
+    let list = ref ast.blocks[b];
+    for si in list.iter() {
+        let f = exec_stmt(ast, st, env, *si)?;
+        match f {
+            Flow.Normal => {}
+            other => return Ok(other),
+        }
+    }
+    Ok(Flow.Normal)
+}
+
+// An assignment target, evaluated before the values are.
+enum Place {
+    Local(Cell),
+    Global(String),
+    Field(Value, Value, String),
+}
+
+fn assign(st: mut ref State, place: own Place, v: own Value) -> Result[(), Value] {
+    match place {
+        Place.Local(c) => {
+            c.v = v;
+            Ok(())
+        }
+        Place.Global(n) => {
+            st.globals.set_str(n, v);
+            Ok(())
+        }
+        Place.Field(obj, k, what) => match obj {
+            Value.Tab(t) => {
+                check_key(st, k)?;
+                t.set(k, v);
+                Ok(())
+            }
+            other => Err(st.rt_error(f"attempt to index a {type_name(other)} value{what}")),
+        },
+    }
+}
+
+fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Flow, Value] {
+    st.set_line(ast.lines[s]);
+    let stmt = ref ast.stmts[s];
+    match stmt {
+        Stmt.Local(names, values) => {
+            let vs = eval_list(ast, st, env, values)?;
+            let mut i: i64 = 0;
+            for v in vs.into_iter() {
+                if i < names.len() {
+                    declare(env, names[i], v);
+                }
+                i += 1;
+            }
+            while i < names.len() {
+                declare(env, names[i], Value.Nil);
+                i += 1;
+            }
+            Ok(Flow.Normal)
+        }
+        Stmt.LocalFunction(name, p) => {
+            // declared first, so the function can call itself
+            declare(env, name, Value.Nil);
+            let f = make_closure(st, env, ast, *p);
+            let n = env.cells.len();
+            env.cells[n - 1].v = f;
+            Ok(Flow.Normal)
+        }
+        Stmt.Assign(targets, values) => {
+            let mut places: Vec[Place] = Vec.new();
+            for te in targets.iter() {
+                let tx = ref ast.exprs[*te];
+                match tx {
+                    Expr.Name(n) => match lookup(env, env.names.len(), n) {
+                        Some(c) => places.push(Place.Local(c)),
+                        None => places.push(Place.Global(n.clone())),
+                    },
+                    Expr.Index(oe, ke) => {
+                        let ov = eval(ast, st, env, *oe)?;
+                        let kv = eval(ast, st, env, *ke)?;
+                        places.push(Place.Field(ov, kv, describe(ast, env, *oe)));
+                    }
+                    _ => return Err(st.rt_error("cannot assign to this expression")),
+                }
+            }
+            let vs = eval_list(ast, st, env, values)?;
+            let mut vals: Vec[Value] = Vec.new();
+            for v in vs.into_iter() {
+                vals.push(v);
+            }
+            while vals.len() < places.len() {
+                vals.push(Value.Nil);
+            }
+            st.set_line(ast.lines[s]);
+            let mut i: i64 = 0;
+            for p in places.into_iter() {
+                assign(st, p, vals[i].clone())?;
+                i += 1;
+            }
+            Ok(Flow.Normal)
+        }
+        Stmt.Expression(e) => {
+            eval_call(ast, st, env, *e)?;
+            Ok(Flow.Normal)
+        }
+        Stmt.If(conds, blocks, other) => {
+            for i in 0..conds.len() {
+                let c = eval(ast, st, env, conds[i])?;
+                if truthy(c) {
+                    return exec_block(ast, st, env, blocks[i]);
+                }
+            }
+            if *other >= 0 {
+                return exec_block(ast, st, env, *other);
+            }
+            Ok(Flow.Normal)
+        }
+        Stmt.While(c, body) => {
+            loop {
+                let cv = eval(ast, st, env, *c)?;
+                if not truthy(cv) {
+                    break;
+                }
+                match exec_block(ast, st, env, *body)? {
+                    Flow.Break => break,
+                    Flow.Return(vs) => return Ok(Flow.Return(vs)),
+                    Flow.Normal => {}
+                }
+            }
+            Ok(Flow.Normal)
+        }
+        Stmt.Repeat(body, c) => {
+            loop {
+                // the condition can see the body's locals
+                let inner = new_env(env);
+                match exec_stmts(ast, st, inner, *body)? {
+                    Flow.Break => break,
+                    Flow.Return(vs) => return Ok(Flow.Return(vs)),
+                    Flow.Normal => {}
+                }
+                let cv = eval(ast, st, inner, *c)?;
+                if truthy(cv) {
+                    break;
+                }
+            }
+            Ok(Flow.Normal)
+        }
+        Stmt.NumFor(var, start, stop, step, body) => exec_numfor(ast, st, env, var, *start, *stop, *step, *body),
+        Stmt.GenFor(names, values, body) => exec_genfor(ast, st, env, names, values, *body),
+        Stmt.Return(values) => Ok(Flow.Return(eval_list(ast, st, env, values)?)),
+        Stmt.Break => Ok(Flow.Break),
+        Stmt.Do(b) => exec_block(ast, st, env, *b),
+    }
+}
+
+fn for_number(st: ref State, v: own Value, what: Str) -> Result[Value, Value] {
+    match v {
+        Value.Int(i) => Ok(Value.Int(i)),
+        Value.Num(x) => Ok(Value.Num(x)),
+        _ => Err(st.rt_error(f"'for' {what} must be a number")),
+    }
+}
+
+fn run_body(ast: ref Ast, st: mut ref State, env: ref Env, var: Str, v: own Value, body: i64) -> Result[Flow, Value] {
+    let ienv = new_env(env);
+    declare(ienv, var, v);
+    exec_block(ast, st, ienv, body)
+}
+
+fn exec_numfor(ast: ref Ast, st: mut ref State, env: ref Env, var: Str, start: i64, stop: i64, step: i64, body: i64) -> Result[Flow, Value] {
+    let a0 = eval(ast, st, env, start)?;
+    let a = for_number(st, a0, "initial value")?;
+    let b0 = eval(ast, st, env, stop)?;
+    let b = for_number(st, b0, "limit")?;
+    let c = if step >= 0 {
+        let c0 = eval(ast, st, env, step)?;
+        for_number(st, c0, "step")?
+    } else {
+        Value.Int(1)
+    };
+    if let Value.Int(i0) = a {
+        if let Value.Int(s) = c {
+            if s == 0 {
+                return Err(st.rt_error("'for' step is zero"));
+            }
+            // forlimit: a float limit is clipped to an integer
+            let lim: i64 = match b {
+                Value.Int(l) => l,
+                _ => {
+                    let f = as_float(b);
+                    if f != f {
+                        return Ok(Flow.Normal);
+                    }
+                    let g = if s > 0 { f.floor() } else { f.ceil() };
+                    if g >= 9223372036854775807.0 {
+                        9223372036854775807
+                    } else if g <= -9223372036854775808.0 {
+                        -9223372036854775807 - 1
+                    } else {
+                        g as i64
+                    }
+                }
+            };
+            if (s > 0 and i0 > lim) or (s < 0 and i0 < lim) {
+                return Ok(Flow.Normal);
+            }
+            let mut i = i0;
+            loop {
+                match run_body(ast, st, env, var, Value.Int(i), body)? {
+                    Flow.Break => break,
+                    Flow.Return(vs) => return Ok(Flow.Return(vs)),
+                    Flow.Normal => {}
+                }
+                let next: i64 = match i.checked_add(s) {
+                    Some(n) => n,
+                    None => break,
+                };
+                if (s > 0 and next > lim) or (s < 0 and next < lim) {
+                    break;
+                }
+                i = next;
+            }
+            return Ok(Flow.Normal);
+        }
+    }
+    let mut x = as_float(a);
+    let lim = as_float(b);
+    let s = as_float(c);
+    if s == 0.0 {
+        return Err(st.rt_error("'for' step is zero"));
+    }
+    while (s > 0.0 and x <= lim) or (s < 0.0 and x >= lim) {
+        match run_body(ast, st, env, var, Value.Num(x), body)? {
+            Flow.Break => break,
+            Flow.Return(vs) => return Ok(Flow.Return(vs)),
+            Flow.Normal => {}
+        }
+        x = x + s;
+    }
+    Ok(Flow.Normal)
+}
+
+fn exec_genfor(ast: ref Ast, st: mut ref State, env: ref Env, names: ref Vec[String], values: ref Vec[i64], body: i64) -> Result[Flow, Value] {
+    let vs = eval_list(ast, st, env, values)?;
+    let mut three: Vec[Value] = Vec.new();
+    for v in vs.into_iter() {
+        if three.len() < 3 {
+            three.push(v);
+        }
+    }
+    while three.len() < 3 {
+        three.push(Value.Nil);
+    }
+    let f = three[0].clone();
+    let s = three[1].clone();
+    let mut ctl = three[2].clone();
+    loop {
+        let mut args: Vec[Value] = Vec.new();
+        args.push(s.clone());
+        args.push(ctl.clone());
+        if not is_callable(f) {
+            return Err(st.rt_error(f"attempt to call a {type_name(f)} value"));
+        }
+        let rs = call_value(ast, st, f, args)?;
+        let mut got: Vec[Value] = Vec.new();
+        for v in rs.into_iter() {
+            got.push(v);
+        }
+        if got.len() == 0 or is_nil(got[0]) {
+            break;
+        }
+        ctl = got[0].clone();
+        let ienv = new_env(env);
+        for i in 0..names.len() {
+            let v = if i < got.len() { got[i].clone() } else { Value.Nil };
+            declare(ienv, names[i], v);
+        }
+        match exec_block(ast, st, ienv, body)? {
+            Flow.Break => break,
+            Flow.Return(r) => return Ok(Flow.Return(r)),
+            Flow.Normal => {}
+        }
+    }
+    Ok(Flow.Normal)
+}
+// ------------------------------------------------------------ the library
+
+const B_PRINT: i64 = 1;
+const B_TYPE: i64 = 2;
+const B_TOSTRING: i64 = 3;
+const B_TONUMBER: i64 = 4;
+const B_IPAIRS: i64 = 5;
+const B_IPAIRS_ITER: i64 = 6;
+const B_PAIRS: i64 = 7;
+const B_NEXT: i64 = 8;
+const B_SELECT: i64 = 9;
+const B_RAWGET: i64 = 10;
+const B_RAWSET: i64 = 11;
+const B_RAWEQUAL: i64 = 12;
+const B_RAWLEN: i64 = 13;
+const B_SETMETATABLE: i64 = 14;
+const B_GETMETATABLE: i64 = 15;
+const B_ASSERT: i64 = 16;
+const B_ERROR: i64 = 17;
+const B_PCALL: i64 = 18;
+const B_FLOOR: i64 = 20;
+const B_CEIL: i64 = 21;
+const B_MAX: i64 = 22;
+const B_MIN: i64 = 23;
+const B_ABS: i64 = 24;
+const B_MTYPE: i64 = 25;
+const B_SQRT: i64 = 26;
+const B_TOINTEGER: i64 = 27;
+const B_INSERT: i64 = 30;
+const B_REMOVE: i64 = 31;
+const B_CONCAT: i64 = 32;
+const B_SORT: i64 = 33;
+const B_UNPACK: i64 = 34;
+const B_REP: i64 = 40;
+const B_SUB: i64 = 41;
+const B_UPPER: i64 = 42;
+const B_LOWER: i64 = 43;
+const B_LEN: i64 = 44;
+const B_BYTE: i64 = 45;
+const B_CHAR: i64 = 46;
+const B_REVERSE: i64 = 47;
+const B_FORMAT: i64 = 48;
+const B_FIND: i64 = 49;
+const B_MATCH: i64 = 50;
+const B_GMATCH: i64 = 51;
+const B_GMATCH_ITER: i64 = 52;
+const B_GSUB: i64 = 53;
+const B_WRITE: i64 = 60;
+const B_LINES: i64 = 61;
+const B_LINES_ITER: i64 = 62;
+const B_OPEN: i64 = 63;
+const B_FWRITE: i64 = 64;
+const B_FCLOSE: i64 = 65;
+const B_FLINES: i64 = 66;
+const B_FREAD: i64 = 67;
+
+fn arg(args: ref Vec[Value], i: i64) -> Value {
+    if i < args.len() {
+        return args[i].clone();
+    }
+    Value.Nil
+}
+
+fn bad_arg(st: ref State, i: i64, fname: Str, msg: Str) -> Value {
+    st.lib_error(f"bad argument #{i + 1} to '{fname}' ({msg})")
+}
+
+fn got(args: ref Vec[Value], i: i64) -> String {
+    if i >= args.len() {
+        return "no value".to_string();
+    }
+    type_name(args[i])
+}
+
+fn check_any(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Result[Value, Value] {
+    if i >= args.len() {
+        return Err(bad_arg(st, i, fname, "value expected"));
+    }
+    Ok(args[i].clone())
+}
+
+fn check_int(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Result[i64, Value] {
+    let v = arg(args, i);
+    let n = match v {
+        Value.Text(s) => str_to_number(s),
+        Value.Int(n) => Some(Value.Int(n)),
+        Value.Num(x) => Some(Value.Num(x)),
+        _ => None,
+    };
+    match n {
+        Some(Value.Int(n)) => Ok(n),
+        Some(Value.Num(x)) => match float_to_int(x) {
+            Some(n) => Ok(n),
+            None => Err(bad_arg(st, i, fname, "number has no integer representation")),
+        },
+        _ => Err(bad_arg(st, i, fname, f"number expected, got {got(args, i)}")),
+    }
+}
+
+fn opt_int(st: ref State, args: ref Vec[Value], i: i64, fname: Str, dflt: i64) -> Result[i64, Value] {
+    if i >= args.len() or is_nil(args[i]) {
+        return Ok(dflt);
+    }
+    check_int(st, args, i, fname)
+}
+
+fn check_num(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Result[Value, Value] {
+    let v = arg(args, i);
+    match to_arith(v) {
+        Some(n) => Ok(n),
+        None => Err(bad_arg(st, i, fname, f"number expected, got {got(args, i)}")),
+    }
+}
+
+fn check_str(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Result[String, Value] {
+    let v = arg(args, i);
+    match concat_piece(v) {
+        Some(s) => Ok(s),
+        None => Err(bad_arg(st, i, fname, f"string expected, got {got(args, i)}")),
+    }
+}
+
+fn check_table(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Result[LTable, Value] {
+    let v = arg(args, i);
+    match v {
+        Value.Tab(t) => Ok(t),
+        _ => Err(bad_arg(st, i, fname, f"table expected, got {got(args, i)}")),
+    }
+}
+
+fn one(v: own Value) -> Vec[Value] {
+    let mut out: Vec[Value] = Vec.new();
+    out.push(v);
+    out
+}
+
+fn none() -> Vec[Value] {
+    Vec.new()
+}
+
+fn text_of_bytes(b: ref Vec[u8]) -> String {
+    byte_str(b, 0, b.len())
+}
+
+fn call_builtin(ast: ref Ast, st: mut ref State, f: ref LFunc, args: own Vec[Value]) -> Result[Vec[Value], Value] {
+    let id = f.builtin;
+    if id < 20 {
+        return base_lib(ast, st, f, id, args);
+    }
+    if id < 30 {
+        return math_lib(st, id, args);
+    }
+    if id < 40 {
+        return table_lib(ast, st, id, args);
+    }
+    if id < 60 {
+        return string_lib(ast, st, f, id, args);
+    }
+    io_lib(ast, st, f, id, args)
+}
+
+fn base_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[Value]) -> Result[Vec[Value], Value] {
+    if id == B_PRINT {
+        let mut line = String.new();
+        for i in 0..args.len() {
+            if i > 0 {
+                line.push_str("\t");
+            }
+            line.push_str(tostring_meta(ast, st, args[i])?);
+        }
+        println(line);
+        return Ok(none());
+    }
+    if id == B_TYPE {
+        let v = check_any(st, args, 0, "type")?;
+        return Ok(one(Value.Text(type_name(v))));
+    }
+    if id == B_TOSTRING {
+        let v = check_any(st, args, 0, "tostring")?;
+        return Ok(one(Value.Text(tostring_meta(ast, st, v)?)));
+    }
+    if id == B_TONUMBER {
+        if args.len() >= 2 and not is_nil(args[1]) {
+            let base = check_int(st, args, 1, "tonumber")?;
+            let s = match arg(args, 0) {
+                Value.Text(s) => s,
+                _ => return Err(bad_arg(st, 0, "tonumber", f"string expected, got {got(args, 0)}")),
+            };
+            if base < 2 or base > 36 {
+                return Err(bad_arg(st, 1, "tonumber", "base out of range"));
+            }
+            return Ok(one(match str_to_int_base(s, base) {
+                Some(n) => Value.Int(n),
+                None => Value.Nil,
+            }));
+        }
+        let v = check_any(st, args, 0, "tonumber")?;
+        return Ok(one(match v {
+            Value.Int(n) => Value.Int(n),
+            Value.Num(x) => Value.Num(x),
+            Value.Text(s) => match str_to_number(s) {
+                Some(n) => n,
+                None => Value.Nil,
+            },
+            _ => Value.Nil,
+        }));
+    }
+    if id == B_IPAIRS {
+        let v = check_any(st, args, 0, "ipairs")?;
+        let mut out: Vec[Value] = Vec.new();
+        out.push(st.builtin("ipairs_iter", B_IPAIRS_ITER));
+        out.push(v);
+        out.push(Value.Int(0));
+        return Ok(out);
+    }
+    if id == B_IPAIRS_ITER {
+        let i = check_int(st, args, 1, "ipairs")? + 1;
+        let v = index_value(ast, st, arg(args, 0), Value.Int(i), "")?;
+        if is_nil(v) {
+            return Ok(one(Value.Nil));
+        }
+        let mut out: Vec[Value] = Vec.new();
+        out.push(Value.Int(i));
+        out.push(v);
+        return Ok(out);
+    }
+    if id == B_PAIRS {
+        let t = check_table(st, args, 0, "pairs")?;
+        let mut out: Vec[Value] = Vec.new();
+        out.push(st.builtin("next", B_NEXT));
+        out.push(Value.Tab(t));
+        out.push(Value.Nil);
+        return Ok(out);
+    }
+    if id == B_NEXT {
+        let t = check_table(st, args, 0, "next")?;
+        return match t.next(arg(args, 1)) {
+            None => Err(st.lib_error("invalid key to 'next'")),
+            Some((k, v)) => {
+                if is_nil(k) {
+                    return Ok(one(Value.Nil));
+                }
+                let mut out: Vec[Value] = Vec.new();
+                out.push(k);
+                out.push(v);
+                Ok(out)
+            }
+        };
+    }
+    if id == B_SELECT {
+        let n = args.len() - 1;
+        if let Value.Text(s) = arg(args, 0) {
+            if s == "#" {
+                return Ok(one(Value.Int(n)));
+            }
+        }
+        let mut i = check_int(st, args, 0, "select")?;
+        if i < 0 {
+            i = n + i;
+        } else if i > n {
+            i = n;
+        } else {
+            i -= 1;
+        }
+        if i < 0 {
+            return Err(bad_arg(st, 0, "select", "index out of range"));
+        }
+        let mut out: Vec[Value] = Vec.new();
+        let mut k: i64 = 0;
+        for v in args.into_iter() {
+            if k > i {
+                out.push(v);
+            }
+            k += 1;
+        }
+        return Ok(out);
+    }
+    if id == B_RAWGET {
+        let t = check_table(st, args, 0, "rawget")?;
+        return Ok(one(t.get(arg(args, 1))));
+    }
+    if id == B_RAWSET {
+        let t = check_table(st, args, 0, "rawset")?;
+        let k = arg(args, 1);
+        check_key(st, k)?;
+        t.set(k, arg(args, 2));
+        return Ok(one(Value.Tab(t)));
+    }
+    if id == B_RAWEQUAL {
+        return Ok(one(Value.Bool(raw_equal(arg(args, 0), arg(args, 1)))));
+    }
+    if id == B_RAWLEN {
+        return match arg(args, 0) {
+            Value.Tab(t) => Ok(one(Value.Int(t.len()))),
+            Value.Text(s) => Ok(one(Value.Int(s.len()))),
+            _ => Err(bad_arg(st, 0, "rawlen", "table or string expected")),
+        };
+    }
+    if id == B_SETMETATABLE {
+        let t = check_table(st, args, 0, "setmetatable")?;
+        match arg(args, 1) {
+            Value.Nil => {
+                t.meta = None;
+            }
+            Value.Tab(m) => {
+                t.meta = Some(m);
+            }
+            _ => return Err(bad_arg(st, 1, "setmetatable", "nil or table expected")),
+        }
+        return Ok(one(Value.Tab(t)));
+    }
+    if id == B_GETMETATABLE {
+        return match arg(args, 0) {
+            Value.Tab(t) => match t.meta {
+                Some(m) => Ok(one(Value.Tab(m.clone()))),
+                None => Ok(one(Value.Nil)),
+            },
+            Value.Text(_) => Ok(one(Value.Tab(st.str_meta.clone()))),
+            _ => Ok(one(Value.Nil)),
+        };
+    }
+    if id == B_ASSERT {
+        let v = check_any(st, args, 0, "assert")?;
+        if truthy(v) {
+            return Ok(args);
+        }
+        if args.len() >= 2 {
+            return Err(args[1].clone());
+        }
+        return Err(Value.Text("assertion failed!".to_string()));
+    }
+    if id == B_ERROR {
+        let level = opt_int(st, args, 1, "error", 1)?;
+        let v = arg(args, 0);
+        if let Value.Text(s) = v {
+            if level > 0 {
+                return Err(Value.Text(f"{st.place(level)}{s}"));
+            }
+            return Err(Value.Text(s));
+        }
+        return Err(v);
+    }
+    // pcall
+    if args.len() == 0 {
+        return Err(bad_arg(st, 0, "pcall", "value expected"));
+    }
+    let depth = st.flua.len();
+    let mut rest: Vec[Value] = Vec.new();
+    let mut fv = Value.Nil;
+    let mut k: i64 = 0;
+    for v in args.into_iter() {
+        if k == 0 {
+            fv = v;
+        } else {
+            rest.push(v);
+        }
+        k += 1;
+    }
+    let _ = f;
+    match call_value(ast, st, fv, rest) {
+        Ok(vs) => {
+            let mut out: Vec[Value] = Vec.new();
+            out.push(Value.Bool(true));
+            for v in vs.into_iter() {
+                out.push(v);
+            }
+            Ok(out)
+        }
+        Err(e) => {
+            st.unwind(depth);
+            let mut out: Vec[Value] = Vec.new();
+            out.push(Value.Bool(false));
+            out.push(e);
+            Ok(out)
+        }
+    }
+}
+
+fn math_lib(st: mut ref State, id: i64, args: own Vec[Value]) -> Result[Vec[Value], Value] {
+    if id == B_FLOOR or id == B_CEIL {
+        let name = if id == B_FLOOR { "floor" } else { "ceil" };
+        let v = check_num(st, args, 0, name)?;
+        return Ok(one(match v {
+            Value.Num(x) => {
+                let r = if id == B_FLOOR { x.floor() } else { x.ceil() };
+                match float_to_int(r) {
+                    Some(i) => Value.Int(i),
+                    None => Value.Num(r),
+                }
+            }
+            other => other,
+        }));
+    }
+    if id == B_MAX or id == B_MIN {
+        let name = if id == B_MAX { "max" } else { "min" };
+        let mut best = check_num(st, args, 0, name)?;
+        for i in 1..args.len() {
+            let v = check_num(st, args, i, name)?;
+            let better = if id == B_MAX { num_less(best, v) } else { num_less(v, best) };
+            if better {
+                best = v;
+            }
+        }
+        return Ok(one(best));
+    }
+    if id == B_ABS {
+        let v = check_num(st, args, 0, "abs")?;
+        return Ok(one(match v {
+            Value.Int(i) => if i < 0 { Value.Int((0 as i64).wrapping_sub(i)) } else { Value.Int(i) },
+            Value.Num(x) => Value.Num(x.abs()),
+            other => other,
+        }));
+    }
+    if id == B_MTYPE {
+        let v = check_any(st, args, 0, "type")?;
+        return Ok(one(match v {
+            Value.Int(_) => Value.Text("integer".to_string()),
+            Value.Num(_) => Value.Text("float".to_string()),
+            _ => Value.Nil,
+        }));
+    }
+    if id == B_SQRT {
+        let v = check_num(st, args, 0, "sqrt")?;
+        return Ok(one(Value.Num(as_float(v).sqrt())));
+    }
+    // math.tointeger
+    return Ok(one(match arg(args, 0) {
+        Value.Int(i) => Value.Int(i),
+        Value.Num(x) => match float_to_int(x) {
+            Some(i) => Value.Int(i),
+            None => Value.Nil,
+        },
+        _ => Value.Nil,
+    }));
+}
+
+fn num_less(a: ref Value, b: ref Value) -> bool {
+    if let Value.Int(x) = a {
+        if let Value.Int(y) = b {
+            return *x < *y;
+        }
+    }
+    as_float(a) < as_float(b)
+}
+
+fn sort_less(ast: ref Ast, st: mut ref State, comp: ref Value, a: ref Value, b: ref Value) -> Result[bool, Value] {
+    if is_nil(comp) {
+        return less_than(ast, st, a, b, false);
+    }
+    let mut args: Vec[Value] = Vec.new();
+    args.push(a.clone());
+    args.push(b.clone());
+    let r = first(call_value(ast, st, comp, args)?);
+    Ok(truthy(r))
+}
+
+// A merge sort; the comparator may fail.
+fn merge_sort(ast: ref Ast, st: mut ref State, comp: ref Value, v: own Vec[Value]) -> Result[Vec[Value], Value] {
+    let n = v.len();
+    if n <= 1 {
+        return Ok(v);
+    }
+    let mut left: Vec[Value] = Vec.new();
+    let mut right: Vec[Value] = Vec.new();
+    let mut k: i64 = 0;
+    for x in v.into_iter() {
+        if k < n / 2 {
+            left.push(x);
+        } else {
+            right.push(x);
+        }
+        k += 1;
+    }
+    let l = merge_sort(ast, st, comp, left)?;
+    let r = merge_sort(ast, st, comp, right)?;
+    let mut out: Vec[Value] = Vec.new();
+    let mut i: i64 = 0;
+    let mut j: i64 = 0;
+    while i < l.len() and j < r.len() {
+        // take from the right only when it is strictly smaller: stable
+        if sort_less(ast, st, comp, r[j], l[i])? {
+            out.push(r[j].clone());
+            j += 1;
+        } else {
+            out.push(l[i].clone());
+            i += 1;
+        }
+    }
+    while i < l.len() {
+        out.push(l[i].clone());
+        i += 1;
+    }
+    while j < r.len() {
+        out.push(r[j].clone());
+        j += 1;
+    }
+    Ok(out)
+}
+
+fn table_lib(ast: ref Ast, st: mut ref State, id: i64, args: own Vec[Value]) -> Result[Vec[Value], Value] {
+    if id == B_INSERT {
+        let t = check_table(st, args, 0, "insert")?;
+        let e = t.len() + 1;
+        if args.len() == 2 {
+            t.set(Value.Int(e), arg(args, 1));
+            return Ok(none());
+        }
+        if args.len() != 3 {
+            return Err(st.lib_error("wrong number of arguments to 'insert'"));
+        }
+        let pos = check_int(st, args, 1, "insert")?;
+        if pos < 1 or pos > e {
+            return Err(bad_arg(st, 1, "insert", "position out of bounds"));
+        }
+        let mut i = e;
+        while i > pos {
+            let prev = t.get(Value.Int(i - 1));
+            t.set(Value.Int(i), prev);
+            i -= 1;
+        }
+        t.set(Value.Int(pos), arg(args, 2));
+        return Ok(none());
+    }
+    if id == B_REMOVE {
+        let t = check_table(st, args, 0, "remove")?;
+        let size = t.len();
+        let mut pos = opt_int(st, args, 1, "remove", size)?;
+        if args.len() >= 2 and pos != size and (pos < 1 or pos > size + 1) {
+            return Err(bad_arg(st, 1, "remove", "position out of bounds"));
+        }
+        let result = t.get(Value.Int(pos));
+        while pos < size {
+            let nxt = t.get(Value.Int(pos + 1));
+            t.set(Value.Int(pos), nxt);
+            pos += 1;
+        }
+        t.set(Value.Int(pos), Value.Nil);
+        return Ok(one(result));
+    }
+    if id == B_CONCAT {
+        let t = check_table(st, args, 0, "concat")?;
+        let sep = if args.len() >= 2 and not is_nil(args[1]) { check_str(st, args, 1, "concat")? } else { String.new() };
+        let i0 = opt_int(st, args, 2, "concat", 1)?;
+        let j0 = opt_int(st, args, 3, "concat", t.len())?;
+        let mut out = String.new();
+        let mut i = i0;
+        while i <= j0 {
+            match concat_piece(t.get(Value.Int(i))) {
+                Some(s) => out.push_str(s),
+                None => {
+                    return Err(st.lib_error(f"invalid value (at index {i}) in table for 'concat'"));
+                }
+            }
+            if i < j0 {
+                out.push_str(sep);
+            }
+            i += 1;
+        }
+        return Ok(one(Value.Text(out)));
+    }
+    if id == B_SORT {
+        let t = check_table(st, args, 0, "sort")?;
+        let comp = arg(args, 1);
+        let n = t.len();
+        let mut items: Vec[Value] = Vec.new();
+        for i in 1..n + 1 {
+            items.push(t.get(Value.Int(i)));
+        }
+        let sorted = merge_sort(ast, st, comp, items)?;
+        let mut i: i64 = 1;
+        for v in sorted.into_iter() {
+            t.set(Value.Int(i), v);
+            i += 1;
+        }
+        return Ok(none());
+    }
+    // table.unpack
+    let t = check_table(st, args, 0, "unpack")?;
+    let i0 = opt_int(st, args, 1, "unpack", 1)?;
+    let j0 = opt_int(st, args, 2, "unpack", t.len())?;
+    let mut out: Vec[Value] = Vec.new();
+    let mut i = i0;
+    while i <= j0 {
+        out.push(t.get(Value.Int(i)));
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn ascii_map(s: Str, upper: bool) -> String {
+    let mut b: Vec[u8] = Vec.new();
+    for c in s.bytes().iter() {
+        b.push(if upper { upper_byte(*c) } else { lower_byte(*c) });
+    }
+    text_of_bytes(b)
+}
+
+// The replacement for one gsub match.
+fn gsub_value(ast: ref Ast, st: mut ref State, ms: ref MatchState, s: i64, e: i64, repl: ref Value, out: mut ref Vec[u8]) -> Result[(), Value] {
+    let whole = ms.text(s, e);
+    let v = match repl {
+        Value.Tab(_) => {
+            let k = match ms.capture(0, s, e) {
+                Ok(k) => k,
+                Err(m) => return Err(st.lib_error(m)),
+            };
+            index_value(ast, st, repl.clone(), k, "")?
+        }
+        Value.Fun(_) => {
+            let caps = match ms.captures(s, e, true) {
+                Ok(c) => c,
+                Err(m) => return Err(st.lib_error(m)),
+            };
+            first(call_value(ast, st, repl, caps)?)
+        }
+        _ => {
+            // a string: %0-%9 and %%
+            let r = match concat_piece(repl) {
+                Some(r) => r,
+                None => String.new(),
+            };
+            let rb = r.bytes();
+            let mut i: i64 = 0;
+            while i < rb.len() {
+                let c = rb[i];
+                if c != b'%' {
+                    out.push(c);
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+                let d = if i < rb.len() { rb[i] } else { 0u8 };
+                if d == b'%' {
+                    out.push(b'%');
+                } else if is_digit(d) {
+                    let piece = if d == b'0' {
+                        whole.clone()
+                    } else {
+                        match ms.capture((d as i64) - 49, s, e) {
+                            Ok(v) => tostring_raw(v),
+                            Err(m) => return Err(st.lib_error(m)),
+                        }
+                    };
+                    for x in piece.bytes().iter() {
+                        out.push(*x);
+                    }
+                } else {
+                    return Err(st.lib_error("invalid use of '%' in replacement string"));
+                }
+                i += 1;
+            }
+            return Ok(());
+        }
+    };
+    let piece = match v {
+        Value.Nil => whole,
+        Value.Bool(false) => whole,
+        Value.Text(t) => t,
+        Value.Int(_) => number_text(v),
+        Value.Num(_) => number_text(v),
+        other => return Err(st.lib_error(f"invalid replacement value (a {type_name(other)})")),
+    };
+    for x in piece.bytes().iter() {
+        out.push(*x);
+    }
+    Ok(())
+}
+
+fn pattern_error(st: ref State, r: own Result[Vec[Value], String]) -> Result[Vec[Value], Value] {
+    match r {
+        Ok(v) => Ok(v),
+        Err(m) => Err(st.lib_error(m)),
+    }
+}
+
+fn string_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[Value]) -> Result[Vec[Value], Value] {
+    if id == B_GMATCH_ITER {
+        let s = match f.state[0] {
+            Value.Text(t) => t.clone(),
+            _ => String.new(),
+        };
+        let p = match f.state[1] {
+            Value.Text(t) => t.clone(),
+            _ => String.new(),
+        };
+        let pos: i64 = match f.state[2] {
+            Value.Int(i) => *i,
+            _ => 0,
+        };
+        let last: i64 = match f.state[3] {
+            Value.Int(i) => *i,
+            _ => -1,
+        };
+        let mut ms = new_match_state(s, p);
+        let mut src = pos;
+        while src <= ms.src.len() {
+            ms.reset();
+            let e = match ms.do_match(src, 0) {
+                Ok(e) => e,
+                Err(m) => return Err(st.lib_error(m)),
+            };
+            if e != -1 and e != last {
+                f.state[2] = Value.Int(e);
+                f.state[3] = Value.Int(e);
+                return pattern_error(st, ms.captures(src, e, true));
+            }
+            src += 1;
+        }
+        f.state[2] = Value.Int(src);
+        return Ok(one(Value.Nil));
+    }
+    let names: Array[Str, 14] = ["rep", "sub", "upper", "lower", "len", "byte", "char", "reverse", "format", "find", "match", "gmatch", "", "gsub"];
+    let fname = names[id - B_REP];
+    if id == B_CHAR {
+        let mut b: Vec[u8] = Vec.new();
+        for i in 0..args.len() {
+            let c = check_int(st, args, i, "char")?;
+            if c < 0 or c > 255 {
+                return Err(bad_arg(st, i, "char", "value out of range"));
+            }
+            b.push(c as u8);
+        }
+        return Ok(one(Value.Text(text_of_bytes(b))));
+    }
+    if id == B_FORMAT {
+        return Ok(one(Value.Text(format(ast, st, args)?)));
+    }
+    let s = check_str(st, args, 0, fname)?;
+    if id == B_REP {
+        let n = check_int(st, args, 1, "rep")?;
+        let sep = if args.len() >= 3 { check_str(st, args, 2, "rep")? } else { String.new() };
+        let mut out = String.new();
+        for i in 0..n {
+            if i > 0 {
+                out.push_str(sep);
+            }
+            out.push_str(s);
+        }
+        return Ok(one(Value.Text(out)));
+    }
+    if id == B_SUB {
+        let l = s.len();
+        let i = start_pos(opt_int(st, args, 1, "sub", 1)?, l);
+        let j = end_pos(opt_int(st, args, 2, "sub", -1)?, l);
+        if i > j {
+            return Ok(one(Value.Text(String.new())));
+        }
+        return Ok(one(Value.Text(byte_str(s.bytes(), i - 1, j))));
+    }
+    if id == B_UPPER {
+        return Ok(one(Value.Text(ascii_map(s, true))));
+    }
+    if id == B_LOWER {
+        return Ok(one(Value.Text(ascii_map(s, false))));
+    }
+    if id == B_LEN {
+        return Ok(one(Value.Int(s.len())));
+    }
+    if id == B_BYTE {
+        let l = s.len();
+        let i0 = opt_int(st, args, 1, "byte", 1)?;
+        let i = start_pos(i0, l);
+        let j = end_pos(opt_int(st, args, 2, "byte", i)?, l);
+        let b = s.bytes();
+        let mut out: Vec[Value] = Vec.new();
+        let mut k = i;
+        while k <= j {
+            out.push(Value.Int(b[k - 1] as i64));
+            k += 1;
+        }
+        return Ok(out);
+    }
+    if id == B_REVERSE {
+        let b = s.bytes();
+        let mut r: Vec[u8] = Vec.new();
+        let mut k = b.len() - 1;
+        while k >= 0 {
+            r.push(b[k]);
+            k -= 1;
+        }
+        return Ok(one(Value.Text(text_of_bytes(r))));
+    }
+    let p = check_str(st, args, 1, fname)?;
+    if id == B_FIND or id == B_MATCH {
+        let init = opt_int(st, args, 2, fname, 1)?;
+        let plain = args.len() >= 4 and truthy(args[3]);
+        return pattern_error(st, str_find(s, p, init, plain, id == B_FIND));
+    }
+    if id == B_GMATCH {
+        let mut it = LFunc { id: st.new_id(), proto: -1, env: None, elimit: 0, builtin: B_GMATCH_ITER, name: "gmatch_iter".to_string(), state: Vec.new() };
+        it.state.push(Value.Text(s));
+        it.state.push(Value.Text(p));
+        it.state.push(Value.Int(0));
+        it.state.push(Value.Int(-1));
+        return Ok(one(Value.Fun(it)));
+    }
+    // gsub
+    let repl = arg(args, 2);
+    match repl {
+        Value.Text(_) => {}
+        Value.Int(_) => {}
+        Value.Num(_) => {}
+        Value.Tab(_) => {}
+        Value.Fun(_) => {}
+        _ => return Err(bad_arg(st, 2, "gsub", f"string/function/table expected, got {got(args, 2)}")),
+    }
+    let max_n = opt_int(st, args, 3, "gsub", s.len() + 1)?;
+    let mut ms = new_match_state(s, p);
+    let anchor = ms.pat.len() > 0 and ms.pat[0] == b'^';
+    let p0 = if anchor { 1 } else { 0 };
+    let mut out: Vec[u8] = Vec.new();
+    let mut src: i64 = 0;
+    let mut last: i64 = -1;
+    let mut n: i64 = 0;
+    while n < max_n {
+        ms.reset();
+        let e = match ms.do_match(src, p0) {
+            Ok(e) => e,
+            Err(m) => return Err(st.lib_error(m)),
+        };
+        if e != -1 and e != last {
+            n += 1;
+            gsub_value(ast, st, ms, src, e, repl, mut out)?;
+            src = e;
+            last = e;
+        } else if src < ms.src.len() {
+            out.push(ms.src[src]);
+            src += 1;
+        } else {
+            break;
+        }
+        if anchor {
+            break;
+        }
+    }
+    while src < ms.src.len() {
+        out.push(ms.src[src]);
+        src += 1;
+    }
+    let mut res: Vec[Value] = Vec.new();
+    res.push(Value.Text(text_of_bytes(out)));
+    res.push(Value.Int(n));
+    Ok(res)
+}
+
+// ------------------------------------------------------------ string.format
+
+fn pad(s: own String, width: i64, left: bool, zero: bool) -> String {
+    let n = s.len();
+    if n >= width {
+        return s;
+    }
+    let mut fill = String.new();
+    for _ in 0..width - n {
+        fill.push_str(if zero and not left { "0" } else { " " });
+    }
+    if left {
+        return f"{s}{fill}";
+    }
+    if zero {
+        // zeros go after the sign
+        let b = s.bytes();
+        if b.len() > 0 and (b[0] == b'-' or b[0] == b'+' or b[0] == b' ') {
+            let sign = s.substring(0, 1);
+            let rest = s.substring(1);
+            return f"{sign}{fill}{rest}";
+        }
+    }
+    f"{fill}{s}"
+}
+
+// The digits of n read as an unsigned 64-bit number, in base 8 or 16.
+fn unsigned_text(n: i64, bits: i64, upper: bool) -> String {
+    let digits = if upper { "0123456789ABCDEF" } else { "0123456789abcdef" };
+    let db = digits.bytes();
+    let groups = (64 + bits - 1) / bits;
+    let mut out: Vec[u8] = Vec.new();
+    let mut g = groups - 1;
+    while g >= 0 {
+        let width = if g == groups - 1 { 64 - bits * (groups - 1) } else { bits };
+        let mask = (1 << width) - 1;
+        let v = (n >> (bits * g)) & mask;
+        if out.len() > 0 or v != 0 or g == 0 {
+            out.push(db[v]);
+        }
+        g -= 1;
+    }
+    text_of_bytes(out)
+}
+
+fn format(ast: ref Ast, st: mut ref State, args: ref Vec[Value]) -> Result[String, Value] {
+    let fmt = check_str(st, args, 0, "format")?;
+    let fb = fmt.bytes();
+    let mut out = String.new();
+    let mut run: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    let mut argi: i64 = 1;
+    while i < fb.len() {
+        let c = fb[i];
+        if c != b'%' {
+            run.push(c);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i < fb.len() and fb[i] == b'%' {
+            run.push(b'%');
+            i += 1;
+            continue;
+        }
+        out.push_str(text_of_bytes(run));
+        run = Vec.new();
+        let spec_start = i;
+        let mut left = false;
+        let mut zero = false;
+        let mut plus = false;
+        let mut space = false;
+        let mut alt = false;
+        while i < fb.len() and (fb[i] == b'-' or fb[i] == b'0' or fb[i] == b'+' or fb[i] == b' ' or fb[i] == b'#') {
+            if fb[i] == b'-' {
+                left = true;
+            } else if fb[i] == b'0' {
+                zero = true;
+            } else if fb[i] == b'+' {
+                plus = true;
+            } else if fb[i] == b' ' {
+                space = true;
+            } else {
+                alt = true;
+            }
+            i += 1;
+        }
+        let mut width: i64 = 0;
+        let mut wd = 0;
+        while i < fb.len() and is_digit(fb[i]) {
+            width = width * 10 + (fb[i] - b'0') as i64;
+            i += 1;
+            wd += 1;
+        }
+        let mut prec: i64 = -1;
+        let mut pd = 0;
+        if i < fb.len() and fb[i] == b'.' {
+            i += 1;
+            prec = 0;
+            while i < fb.len() and is_digit(fb[i]) {
+                prec = prec * 10 + (fb[i] - b'0') as i64;
+                i += 1;
+                pd += 1;
+            }
+        }
+        if i >= fb.len() {
+            return Err(st.lib_error("invalid conversion '%' to 'format'"));
+        }
+        let conv = fb[i];
+        i += 1;
+        if wd > 2 or pd > 2 {
+            let spec = byte_str(fb, spec_start, i);
+            return Err(st.lib_error(f"invalid conversion '%{spec}' to 'format'"));
+        }
+        if argi >= args.len() {
+            return Err(bad_arg(st, argi, "format", "no value"));
+        }
+        let piece = if conv == b'd' or conv == b'i' {
+            let n = check_int(st, args, argi, "format")?;
+            let neg = n < 0;
+            let mut digits = if neg {
+                let t = f"{n}";
+                t.substring(1)
+            } else {
+                f"{n}"
+            };
+            if prec >= 0 {
+                while digits.len() < prec {
+                    digits = f"0{digits}";
+                }
+                if prec == 0 and n == 0 {
+                    digits = String.new();
+                }
+            }
+            let sign = if neg { "-" } else if plus { "+" } else if space { " " } else { "" };
+            pad(f"{sign}{digits}", width, left, zero and prec < 0)
+        } else if conv == b'x' or conv == b'X' or conv == b'o' {
+            let n = check_int(st, args, argi, "format")?;
+            let bits = if conv == b'o' { 3 } else { 4 };
+            let mut digits = unsigned_text(n, bits, conv == b'X');
+            if prec >= 0 {
+                while digits.len() < prec {
+                    digits = f"0{digits}";
+                }
+            }
+            if alt and n != 0 {
+                digits = if conv == b'x' { f"0x{digits}" } else if conv == b'X' { f"0X{digits}" } else { f"0{digits}" };
+            }
+            pad(digits, width, left, zero and prec < 0)
+        } else if conv == b'c' {
+            let n = check_int(st, args, argi, "format")?;
+            let b: Vec[u8] = vec![n as u8];
+            pad(text_of_bytes(b), width, left, false)
+        } else if conv == b'e' or conv == b'E' or conv == b'f' or conv == b'F' or conv == b'g' or conv == b'G' {
+            let v = check_num(st, args, argi, "format")?;
+            let x = as_float(v);
+            let p = if prec < 0 { 6 } else { prec };
+            let upper = conv == b'E' or conv == b'F' or conv == b'G';
+            let mut t = if conv == b'e' or conv == b'E' {
+                fmt_e(x, p, upper)
+            } else if conv == b'f' or conv == b'F' {
+                fmt_f(x, p, upper)
+            } else {
+                fmt_g(x, p, upper, alt)
+            };
+            if not t.starts_with("-") {
+                if plus {
+                    t = f"+{t}";
+                } else if space {
+                    t = f" {t}";
+                }
+            }
+            let finite = x == x and x <= 1.7976931348623157e308 and x >= -1.7976931348623157e308;
+            pad(t, width, left, zero and finite)
+        } else if conv == b's' {
+            let mut t = tostring_meta(ast, st, args[argi])?;
+            if prec >= 0 and t.len() > prec {
+                t = byte_str(t.bytes(), 0, prec);
+            }
+            pad(t, width, left, false)
+        } else {
+            let spec = byte_str(fb, spec_start, i);
+            return Err(st.lib_error(f"invalid conversion '%{spec}' to 'format'"));
+        };
+        out.push_str(piece);
+        argi += 1;
+    }
+    out.push_str(text_of_bytes(run));
+    Ok(out)
+}
+
+// ------------------------------------------------------------ io
+
+fn write_piece(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Result[String, Value] {
+    let v = ref args[i];
+    match v {
+        Value.Text(s) => Ok(s.clone()),
+        Value.Int(n) => Ok(f"{n}"),
+        Value.Num(x) => Ok(fmt_g(*x, 14, false, false)),
+        _ => Err(bad_arg(st, i, fname, f"string expected, got {type_name(v)}")),
+    }
+}
+
+fn split_lines(content: Str) -> Vec[Value] {
+    let mut out: Vec[Value] = Vec.new();
+    let parts = content.split("\n");
+    let n = parts.len();
+    for i in 0..n {
+        if i == n - 1 and parts[i].len() == 0 {
+            break;
+        }
+        out.push(Value.Text(parts[i].clone()));
+    }
+    out
+}
+
+fn lines_iter(st: mut ref State, content: Str) -> Value {
+    let mut it = LFunc { id: st.new_id(), proto: -1, env: None, elimit: 0, builtin: B_LINES_ITER, name: "lines_iter".to_string(), state: Vec.new() };
+    it.state.push(Value.Int(1));
+    for l in split_lines(content).into_iter() {
+        it.state.push(l);
+    }
+    Value.Fun(it)
+}
+
+fn no_file(path: Str) -> String {
+    f"{path}: No such file or directory"
+}
+
+fn check_file(st: ref State, args: ref Vec[Value], fname: Str) -> Result[LTable, Value] {
+    match arg(args, 0) {
+        Value.Tab(t) => {
+            if t.ud.len() == 0 {
+                return Err(bad_arg(st, 0, fname, "FILE* expected, got table"));
+            }
+            if t.ud[2] == "closed" {
+                return Err(st.lib_error("attempt to use a closed file"));
+            }
+            Ok(t)
+        }
+        _ => Err(bad_arg(st, 0, fname, f"FILE* expected, got {got(args, 0)}")),
+    }
+}
+
+fn flush_handle(t: ref LTable) {
+    if t.ud[2] == "w" or t.ud[2] == "a" {
+        let _ = fs.write(t.ud[0].clone(), t.ud[1].clone());
+    }
+}
+
+fn io_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[Value]) -> Result[Vec[Value], Value] {
+    let _ = ast;
+    if id == B_WRITE {
+        let mut s = String.new();
+        for i in 0..args.len() {
+            s.push_str(write_piece(st, args, i, "write")?);
+        }
+        print(s);
+        return Ok(none());
+    }
+    if id == B_LINES {
+        let path = check_str(st, args, 0, "lines")?;
+        let content = match fs.read_to_string(path.clone()) {
+            Ok(c) => c,
+            Err(_) => return Err(st.lib_error(no_file(path))),
+        };
+        return Ok(one(lines_iter(st, content)));
+    }
+    if id == B_LINES_ITER {
+        let i: i64 = match f.state[0] {
+            Value.Int(i) => *i,
+            _ => 1,
+        };
+        if i >= f.state.len() {
+            return Ok(one(Value.Nil));
+        }
+        f.state[0] = Value.Int(i + 1);
+        return Ok(one(f.state[i].clone()));
+    }
+    if id == B_OPEN {
+        let path = check_str(st, args, 0, "open")?;
+        let mode = if args.len() >= 2 { check_str(st, args, 1, "open")? } else { "r".to_string() };
+        let m = mode.replace("b", "");
+        if m != "r" and m != "w" and m != "a" {
+            return Err(bad_arg(st, 1, "open", "invalid mode"));
+        }
+        let mut content = String.new();
+        if m == "r" or m == "a" {
+            match fs.read_to_string(path.clone()) {
+                Ok(c) => {
+                    content = c;
+                }
+                Err(_) => {
+                    if m == "r" {
+                        let mut out: Vec[Value] = Vec.new();
+                        out.push(Value.Nil);
+                        out.push(Value.Text(no_file(path)));
+                        out.push(Value.Int(2));
+                        return Ok(out);
+                    }
+                }
+            }
+        }
+        let h = st.new_table();
+        h.ud.push(path);
+        h.ud.push(content);
+        h.ud.push(m);
+        h.ud.push("0".to_string());
+        h.meta = Some(st.file_meta.clone());
+        st.handles.push(h.clone());
+        return Ok(one(Value.Tab(h)));
+    }
+    let h = check_file(st, args, "write")?;
+    if id == B_FWRITE {
+        if h.ud[2] == "r" {
+            let mut out: Vec[Value] = Vec.new();
+            out.push(Value.Nil);
+            out.push(Value.Text("Bad file descriptor".to_string()));
+            out.push(Value.Int(9));
+            return Ok(out);
+        }
+        let mut s = h.ud[1].clone();
+        for i in 1..args.len() {
+            s.push_str(write_piece(st, args, i, "write")?);
+        }
+        h.ud[1] = s;
+        return Ok(one(Value.Tab(h)));
+    }
+    if id == B_FCLOSE {
+        flush_handle(h);
+        h.ud[2] = "closed".to_string();
+        return Ok(one(Value.Bool(true)));
+    }
+    // read and lines work from the read position
+    let pos = match i64.parse(h.ud[3].clone()) {
+        Some(p) => p,
+        None => 0,
+    };
+    let rest = h.ud[1].substring(pos);
+    if id == B_FLINES {
+        h.ud[3] = f"{h.ud[1].len()}";
+        return Ok(one(lines_iter(st, rest)));
+    }
+    // read(fmt): "a" (the rest) or "l" (one line, the default)
+    let fmt = if args.len() >= 2 { check_str(st, args, 1, "read")? } else { "l".to_string() };
+    let fm = fmt.replace("*", "");
+    if fm == "a" {
+        h.ud[3] = f"{h.ud[1].len()}";
+        return Ok(one(Value.Text(rest)));
+    }
+    if fm != "l" {
+        return Err(bad_arg(st, 1, "read", "invalid format"));
+    }
+    if rest.len() == 0 {
+        return Ok(one(Value.Nil));
+    }
+    let (line, used) = match rest.find("\n") {
+        Some(k) => (rest.substring(0, k), k + 1),
+        None => (rest.clone(), rest.len()),
+    };
+    h.ud[3] = f"{pos + used}";
+    Ok(one(Value.Text(line)))
+}
+
+// ------------------------------------------------------------ setup
+
+fn new_state(chunk: Str) -> State {
+    let blank = LTable { id: 0, arr: Vec.new(), hkeys: Vec.new(), hvals: Vec.new(), index: Map.new(), meta: None, ud: Vec.new() };
+    let mut st = State {
+        next_id: 4096,
+        globals: blank.clone(),
+        strlib: blank.clone(),
+        str_meta: blank.clone(),
+        file_meta: blank,
+        handles: Vec.new(),
+        flua: Vec.new(),
+        fline: Vec.new(),
+        chunk: chunk.to_string(),
+    };
+    let g = st.new_table();
+    st.globals = g.clone();
+    let names: Array[Str, 18] = ["print", "type", "tostring", "tonumber", "ipairs", "", "pairs", "next", "select", "rawget", "rawset", "rawequal", "rawlen", "setmetatable", "getmetatable", "assert", "error", "pcall"];
+    for i in 0..18 {
+        if names[i] != "" {
+            st.register(g, names[i], i + 1);
+        }
+    }
+    g.set_str("_G", Value.Tab(g.clone()));
+    g.set_str("_VERSION", Value.Text("Lua 5.4".to_string()));
+
+    let math = st.new_table();
+    let mnames: Array[Str, 8] = ["floor", "ceil", "max", "min", "abs", "type", "sqrt", "tointeger"];
+    for i in 0..8 {
+        st.register(math, mnames[i], B_FLOOR + i);
+    }
+    math.set_str("maxinteger", Value.Int(9223372036854775807));
+    math.set_str("mininteger", Value.Int(-9223372036854775807 - 1));
+    math.set_str("huge", Value.Num(1.0 / 0.0));
+    math.set_str("pi", Value.Num(3.141592653589793));
+    g.set_str("math", Value.Tab(math));
+
+    let table = st.new_table();
+    let tnames: Array[Str, 5] = ["insert", "remove", "concat", "sort", "unpack"];
+    for i in 0..5 {
+        st.register(table, tnames[i], B_INSERT + i);
+    }
+    g.set_str("table", Value.Tab(table));
+
+    let string = st.new_table();
+    let snames: Array[Str, 14] = ["rep", "sub", "upper", "lower", "len", "byte", "char", "reverse", "format", "find", "match", "gmatch", "", "gsub"];
+    for i in 0..14 {
+        if snames[i] != "" {
+            st.register(string, snames[i], B_REP + i);
+        }
+    }
+    g.set_str("string", Value.Tab(string.clone()));
+    st.strlib = string.clone();
+    let sm = st.new_table();
+    sm.set_str("__index", Value.Tab(string));
+    st.str_meta = sm;
+
+    let io = st.new_table();
+    st.register(io, "write", B_WRITE);
+    st.register(io, "lines", B_LINES);
+    st.register(io, "open", B_OPEN);
+    g.set_str("io", Value.Tab(io));
+    let methods = st.new_table();
+    st.register(methods, "write", B_FWRITE);
+    st.register(methods, "close", B_FCLOSE);
+    st.register(methods, "lines", B_FLINES);
+    st.register(methods, "read", B_FREAD);
+    let fm = st.new_table();
+    fm.set_str("__index", Value.Tab(methods));
+    fm.set_str("__name", Value.Text("FILE*".to_string()));
+    st.file_meta = fm;
+    st
+}
+
+// Runs one script file the way `lua path` does.
+fn run_file(path: Str) {
+    let src = match fs.read_to_string(path.to_string()) {
+        Ok(s) => s,
+        Err(_) => {
+            println(f"lua: cannot open {path}");
+            return;
+        }
+    };
+    let ast = match parse(src) {
+        Ok(a) => a,
+        Err(e) => {
+            println(f"lua: {path}:{e}");
+            return;
+        }
+    };
+    let mut st = new_state(path);
+    let main = ast.protos.len() - 1;
+    let root = Env { names: Vec.new(), cells: Vec.new(), parent: None, plimit: 0 };
+    st.push_frame(true, 0);
+    let r = exec_stmts(ast, mut st, root, ast.protos[main].body);
+    for h in st.handles.iter() {
+        if h.ud[2] != "closed" {
+            flush_handle(h);
+        }
+    }
+    match r {
+        Ok(_) => {}
+        Err(e) => {
+            let msg = match e {
+                Value.Text(s) => s,
+                Value.Int(_) => number_text(e),
+                Value.Num(_) => number_text(e),
+                other => f"(error object is a {type_name(other)} value)",
+            };
+            println(f"lua: {msg}");
+        }
+    }
+}
+// ------------------------------------------------------------ the files
+
+fn basics_lua() -> String {
+    """
+-- numbers, strings and the conversions between them
+print(1 + 2, 7 - 10, 6 * 7, 7 / 2, 7 // 2, 7 % 3)
+print(-7 // 2, -7 % 3, 7 // -2, 7 % -3, 7.5 // 2, -7.5 % 2)
+print(2 ^ 10, 10 / 2, 3 * 1.0, 1e3, 0.1 + 0.2, 1 / 3)
+print(100 / 3, 2 ^ 53, 1e100, -0.0, 123456789012, 5 // 0.0)
+print(math.floor(3.7), math.floor(-3.2), math.max(3, 9, 4), math.min(2.5, 1), math.abs(-4))
+print("10" + 5, "3.5" * 2, 10 .. "", 1.5 .. "x", "a" .. "b" .. "c")
+print(#"hello", #"", ("x"):rep(3), ("abc"):upper(), ("MiXeD"):lower())
+print(1 == 1.0, "1" == 1, 2 < 3, "a" < "b", "abc" < "abd", 3 >= 3.0)
+print(tostring(12), tostring(1.25), tostring(nil), tostring(true), tonumber("42"), tonumber("0x1F"))
+print(tonumber("  7  "), tonumber("3.0"), tonumber("abc"), tonumber("12", 8), tonumber("ff", 16))
+print(type(1), type(1.5), type("s"), type({}), type(print), type(nil), type(false))
+print(math.type(1), math.type(1.0), math.type("1"))
+print(nil and 1, false or "dflt", 1 and 2, nil or false, not nil, not 0)
+local s = "The quick brown fox"
+print(s:sub(5, 9), s:sub(-3), s:sub(-9, -5), s:len(), s:byte(1), string.char(72, 105))
+print(string.format("%d|%5d|%-5d|%05d", 42, 42, 42, 42))
+print(string.format("%s|%10s|%-10s|%s", "hi", "right", "left", 12))
+print(string.format("%.2f|%8.3f|%x|%X|%%|%g|%g", 3.14159, 2.5, 255, 255, 0.5, 100))
+local big = 9007199254740993
+print(big, big + 1, math.maxinteger, math.mininteger, math.maxinteger + 1 == math.mininteger)
+
+"""
+}
+
+fn closures_lua() -> String {
+    """
+-- closures, upvalues and multiple results
+local function counter(start)
+  local n = start
+  return function(step)
+    n = n + (step or 1)
+    return n
+  end
+end
+local c1, c2 = counter(0), counter(100)
+print(c1(), c1(), c1(5), c2(), c1())
+
+local fns = {}
+for i = 1, 3 do
+  fns[i] = function() return i * 10 end
+end
+print(fns[1](), fns[2](), fns[3]())
+
+local function shared()
+  local v = 0
+  local function get() return v end
+  local function set(x) v = x end
+  return get, set
+end
+local get, set = shared()
+set(7)
+print(get())
+
+local function fib(n)
+  if n < 2 then return n end
+  return fib(n - 1) + fib(n - 2)
+end
+print(fib(20))
+
+local function map(t, f)
+  local out = {}
+  for i, v in ipairs(t) do out[i] = f(v) end
+  return out
+end
+local function filter(t, p)
+  local out = {}
+  for _, v in ipairs(t) do
+    if p(v) then out[#out + 1] = v end
+  end
+  return out
+end
+local function reduce(t, f, acc)
+  for _, v in ipairs(t) do acc = f(acc, v) end
+  return acc
+end
+local nums = {}
+for i = 1, 10 do nums[#nums + 1] = i end
+local sq = map(nums, function(x) return x * x end)
+local even = filter(sq, function(x) return x % 2 == 0 end)
+print(table.concat(even, ","), reduce(sq, function(a, b) return a + b end, 0))
+
+local function divmod(a, b) return a // b, a % b end
+local q, r = divmod(17, 5)
+print(q, r)
+local a, b, c = divmod(9, 4)
+print(a, b, c)
+local x, y = 1, 2
+x, y = y, x
+print(x, y)
+print((divmod(17, 5)))
+local t = {divmod(20, 6), divmod(7, 2)}
+print(#t, t[1], t[2], t[3])
+
+local acc = 0
+local i = 10
+while i > 0 do
+  acc = acc + i
+  i = i - 3
+end
+repeat acc = acc - 1 until acc % 4 == 0
+print(acc)
+for k = 10, 1, -4 do io.write(k, " ") end
+for k = 1, 2, 0.5 do io.write(k, " ") end
+print()
+for n = 1, 20 do
+  if n % 7 == 0 then print("first multiple of 7:", n) break end
+end
+
+"""
+}
+
+fn tables_lua() -> String {
+    """
+-- tables as arrays, records, sets and matrices
+local t = {10, 20, 30, x = 1, ["y z"] = 2, [100] = "hundred"}
+print(#t, t[1], t.x, t["y z"], t[100], t[4])
+t[#t + 1] = 40
+table.insert(t, 50)
+table.insert(t, 1, 5)
+print(#t, table.concat(t, " "))
+print(table.remove(t), table.remove(t, 1), #t, table.concat(t, "-"))
+t[2] = nil
+print(t[1], t[2], t[3])
+
+local words = {"pear", "apple", "fig", "banana", "cherry", "date"}
+table.sort(words)
+print(table.concat(words, " "))
+table.sort(words, function(a, b) return #a < #b or (#a == #b and a < b) end)
+print(table.concat(words, " "))
+local nums = {5, 3, 9, 1, 7, 2, 8, 6, 4}
+table.sort(nums, function(a, b) return a > b end)
+print(table.concat(nums, ","))
+
+local inventory = {apples = 4, pears = 0, plums = 12, kiwis = 3}
+local keys = {}
+for k in pairs(inventory) do keys[#keys + 1] = k end
+table.sort(keys)
+for _, k in ipairs(keys) do io.write(k, "=", inventory[k], " ") end
+print()
+inventory.pears = nil
+local n = 0
+for _, v in pairs(inventory) do n = n + v end
+print("total", n)
+
+local set = {}
+for w in ("a b c a b a"):gmatch("%a") do set[w] = (set[w] or 0) + 1 end
+print(set.a, set.b, set.c, set.d)
+
+local m = {}
+for i = 1, 3 do
+  m[i] = {}
+  for j = 1, 3 do m[i][j] = (i - 1) * 3 + j end
+end
+local rows = {}
+for i = 1, 3 do rows[i] = table.concat(m[i], " ") end
+print(table.concat(rows, " | "))
+local tr = {}
+for i = 1, 3 do
+  tr[i] = {}
+  for j = 1, 3 do tr[i][j] = m[j][i] end
+end
+print(tr[1][3], tr[3][1], #tr, #tr[2])
+
+local a = {1, 2, 3}
+local b = a
+b[1] = 99
+print(a[1], a == b, {} == {})
+local nested = {inner = {deep = {value = "found"}}}
+print(nested.inner.deep.value)
+local fkey = {}
+fkey[1.0] = "one"
+fkey[2] = "two"
+print(fkey[1], fkey[2.0], #fkey)
+local stack = {}
+for i = 1, 5 do stack[#stack + 1] = i * i end
+while #stack > 0 do io.write(table.remove(stack), " ") end
+print()
+print(select("#", 1, 2, 3), next({}))
+
+"""
+}
+
+fn oop_lua() -> String {
+    """
+-- classes with metatables
+local Account = {}
+Account.__index = Account
+
+function Account.new(owner, balance)
+  local self = setmetatable({}, Account)
+  self.owner = owner
+  self.balance = balance or 0
+  return self
+end
+
+function Account:deposit(v)
+  self.balance = self.balance + v
+  return self
+end
+
+function Account:withdraw(v)
+  if v > self.balance then
+    error("insufficient funds")
+  end
+  self.balance = self.balance - v
+end
+
+Account.__tostring = function(a)
+  return "Account(" .. a.owner .. ", " .. a.balance .. ")"
+end
+
+local acc = Account.new("ada", 100)
+acc:deposit(50):deposit(25)
+print(acc.balance, tostring(acc))
+print(acc)
+local ok, err = pcall(acc.withdraw, acc, 1000)
+print(ok, err)
+acc:withdraw(75)
+print(acc.balance)
+
+local Savings = setmetatable({}, {__index = Account})
+Savings.__index = Savings
+Savings.__tostring = Account.__tostring
+
+function Savings.new(owner, balance, rate)
+  local self = Account.new(owner, balance)
+  self.rate = rate
+  return setmetatable(self, Savings)
+end
+
+function Savings:interest()
+  return self.balance * self.rate
+end
+
+local s = Savings.new("grace", 1000, 0.05)
+s:deposit(200)
+print(s.balance, s:interest(), tostring(s), getmetatable(s) == Savings)
+print(rawget(s, "deposit"), s.deposit == Account.deposit)
+
+local Stack = {}
+Stack.__index = Stack
+function Stack.new() return setmetatable({items = {}, size = 0}, Stack) end
+function Stack:push(v) self.size = self.size + 1; self.items[self.size] = v end
+function Stack:pop()
+  if self.size == 0 then return nil end
+  local v = self.items[self.size]
+  self.items[self.size] = nil
+  self.size = self.size - 1
+  return v
+end
+local st = Stack.new()
+for _, w in ipairs({"a", "b", "c"}) do st:push(w) end
+print(st:pop(), st:pop(), st.size, st:pop(), st:pop())
+
+local defaults = setmetatable({}, {__index = function(t, k) return k .. "?" end})
+defaults.known = "yes"
+print(defaults.known, defaults.missing)
+
+local Vec = {}
+Vec.__index = Vec
+local function vec(x, y) return setmetatable({x = x, y = y}, Vec) end
+Vec.__add = function(a, b) return vec(a.x + b.x, a.y + b.y) end
+Vec.__eq = function(a, b) return a.x == b.x and a.y == b.y end
+Vec.__tostring = function(v) return "(" .. v.x .. ", " .. v.y .. ")" end
+Vec.__lt = function(a, b) return a.x < b.x end
+local p = vec(1, 2) + vec(3, 4)
+print(tostring(p), p == vec(4, 6), p == vec(0, 0), vec(1, 0) < vec(2, 0))
+
+"""
+}
+
+fn strings_lua() -> String {
+    """
+-- Lua patterns
+print(("hello world"):find("wor"), ("hello"):find("l"), ("hello"):find("xyz"))
+print(("a.b.c"):find(".", 1, true), ("a.b.c"):find("%."), ("abc"):find("b", 3))
+print(("key = value"):match("(%w+)%s*=%s*(%w+)"))
+print(("2026-10-15"):match("(%d+)-(%d+)-(%d+)"))
+print(("  padded  "):match("^%s*(.-)%s*$") .. "|")
+print(("[tag]"):match("%[(.*)%]"), ("x=1, y=22, z=333"):match("y=(%d+)"))
+print(("hello"):match(".-(l+)(.*)"))
+local parts = {}
+for k, v in ("a=1, b=2, c=3"):gmatch("(%w+)=(%w+)") do parts[#parts + 1] = k .. ":" .. v end
+print(table.concat(parts, " "))
+local words = {}
+for w in ("The rain in Spain stays mainly"):gmatch("%a+") do words[#words + 1] = w:lower() end
+print(#words, table.concat(words, ","))
+print(("hello world"):gsub("o", "0"))
+print(("hello world"):gsub("(%w+)", "<%1>"))
+print(("hello world"):gsub("%w+", function(w) return w:upper() end, 1))
+print(("$name is $age"):gsub("%$(%w+)", {name = "Ada", age = 36}))
+print(("abc"):gsub("", "-"))
+print(("one two  three"):gsub("%s+", " "))
+print(("x1y22z333"):gsub("%d+", function(d) return "[" .. #d .. "]" end))
+print(("CamelCaseString"):gsub("(%u)", " %1"))
+print(("trim me   "):gsub("%s+$", ""))
+print(("a,b,,c"):find(",,"), ("%d"):gsub("%%", "pct"))
+print(string.rep("ab", 3, "-"), ("abc"):reverse(), ("x"):byte(), ("ABC"):byte(2))
+print(("hello"):sub(2), ("hello"):sub(10), ("hello"):sub(0), ("hello"):sub(-100, 2))
+print(("f(a,b)"):match("^(%w+)%((.-)%)$"))
+print(("192.168.1.20"):match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$"))
+print(("path/to/file.txt"):match("([^/]+)$"), ("path/to/file.txt"):match("^(.*)/"))
+print(("file.tar.gz"):match("^(.-)%.(.*)$"))
+print(("  x  "):len(), ("%5.1f"):format(3.14159), ("<%s>"):format("fmt"))
+
+"""
+}
+
+fn errors_lua() -> String {
+    """
+-- errors and pcall
+local function risky(n)
+  if n > 2 then
+    error("too big: " .. n)
+  end
+  return n * 2
+end
+print(pcall(risky, 1))
+print(pcall(risky, 5))
+print(pcall(error, "plain", 0))
+local ok, e = pcall(error, {code = 42})
+print(ok, type(e), e.code)
+print(pcall(function() error("level two", 2) end))
+local function outer()
+  local function inner() error("deep") end
+  inner()
+end
+print(pcall(outer))
+print(pcall(assert, false, "assertion text"))
+print(pcall(assert, 1 == 1, "never"))
+print(select("#", pcall(assert, nil)))
+local ok2, msg = pcall(function()
+  local ok3, inner = pcall(error, "first")
+  error("second after " .. inner, 0)
+end)
+print(ok2, msg)
+local results = {}
+for i = 1, 4 do
+  local ok4, v = pcall(risky, i)
+  results[#results + 1] = ok4 and tostring(v) or "fail"
+end
+print(table.concat(results, " "))
+local function retry(times, f)
+  local last
+  for attempt = 1, times do
+    local ok5, v = pcall(f, attempt)
+    if ok5 then return v, attempt end
+    last = v
+  end
+  return nil, last
+end
+print(retry(3, function(n) if n < 3 then error("not yet", 0) end return "done" end))
+print(retry(2, function(n) error("never " .. n, 0) end))
+
+"""
+}
+
+fn logs_lua() -> String {
+    """
+-- an access-log report: parse each line with a pattern, aggregate, rank
+local pattern = '^(%S+) %S+ %S+ %[([^%]]+)%] "(%u+) (%S+) [^"]*" (%d+) (%d+) (%d+)ms "([^"]*)"$'
+local by_status, by_path, by_ip = {}, {}, {}
+local bytes, slow, total, bad = 0, {}, 0, 0
+for line in io.lines("data/access.log") do
+  local ip, when, method, path, status, size, ms, agent = line:match(pattern)
+  if not ip then
+    bad = bad + 1
+  else
+    total = total + 1
+    status = tonumber(status)
+    by_status[status] = (by_status[status] or 0) + 1
+    path = path:gsub("%?.*$", "")
+    local p = by_path[path] or {hits = 0, ms = 0, errors = 0}
+    p.hits = p.hits + 1
+    p.ms = p.ms + tonumber(ms)
+    if status >= 500 then p.errors = p.errors + 1 end
+    by_path[path] = p
+    by_ip[ip] = (by_ip[ip] or 0) + 1
+    bytes = bytes + tonumber(size)
+    if tonumber(ms) >= 800 then
+      slow[#slow + 1] = string.format("%s %s %s %dms", when:match(":(%d+:%d+:%d+)"), method, path, ms)
+    end
+  end
+end
+print(string.format("%d requests, %d unparsed, %.1f KiB sent", total, bad, bytes / 1024))
+local codes = {}
+for code in pairs(by_status) do codes[#codes + 1] = code end
+table.sort(codes)
+for _, code in ipairs(codes) do
+  print(string.format("  %d %3d %5.1f%%", code, by_status[code], 100 * by_status[code] / total))
+end
+local paths = {}
+for path, p in pairs(by_path) do paths[#paths + 1] = {path = path, p = p} end
+table.sort(paths, function(a, b)
+  if a.p.hits ~= b.p.hits then return a.p.hits > b.p.hits end
+  return a.path < b.path
+end)
+print("top paths:")
+for i = 1, 5 do
+  local e = paths[i]
+  print(string.format("  %-18s %3d hits  avg %6.1fms  %d errors", e.path, e.p.hits, e.p.ms / e.p.hits, e.p.errors))
+end
+local ips = {}
+for ip, n in pairs(by_ip) do ips[#ips + 1] = ip end
+table.sort(ips, function(a, b) return by_ip[a] > by_ip[b] or (by_ip[a] == by_ip[b] and a < b) end)
+io.write("clients:")
+for _, ip in ipairs(ips) do io.write(" ", ip, "=", by_ip[ip]) end
+print()
+print("slow requests (" .. #slow .. "):")
+for i = 1, math.min(4, #slow) do print("  " .. slow[i]) end
+local out = io.open("report.txt", "w")
+out:write("total=", total, "\\n", "bytes=", bytes, "\\n")
+out:close()
+local back = {}
+for l in io.lines("report.txt") do back[#back + 1] = l end
+print("report.txt: " .. table.concat(back, ";"))
+
+"""
+}
+
+fn access_log() -> String {
+    """
+10.0.0.1 - - [15/Oct/2026:10:00:00 +0000] "GET /static/app.js HTTP/1.1" 200 6668 667ms "kt-probe/1.0"
+10.0.0.2 - - [15/Oct/2026:10:00:10 +0000] "GET /index.html HTTP/1.1" 200 1150 520ms "curl/8.5"
+10.0.0.1 - - [15/Oct/2026:10:00:20 +0000] "GET /static/app.css HTTP/1.1" 200 1344 247ms "Mozilla/5.0"
+192.168.1.20 - - [15/Oct/2026:10:00:30 +0000] "POST / HTTP/1.1" 404 2228 229ms "kt-probe/1.0"
+10.0.0.2 - - [15/Oct/2026:10:00:40 +0000] "GET / HTTP/1.1" 404 6699 51ms "kt-probe/1.0"
+10.0.0.9 - - [15/Oct/2026:10:00:50 +0000] "GET /api/users HTTP/1.1" 200 7067 148ms "kt-probe/1.0"
+192.168.1.20 - - [15/Oct/2026:10:01:00 +0000] "GET /api/orders HTTP/1.1" 304 0 836ms "curl/8.5"
+10.0.0.1 - - [15/Oct/2026:10:01:10 +0000] "GET /api/search?q=kara HTTP/1.1" 404 3278 382ms "kt-probe/1.0"
+10.0.0.2 - - [15/Oct/2026:10:01:20 +0000] "GET /index.html HTTP/1.1" 404 1176 634ms "kt-probe/1.0"
+10.0.0.9 - - [15/Oct/2026:10:01:30 +0000] "GET /logout HTTP/1.1" 200 5346 477ms "Mozilla/5.0"
+172.16.4.4 - - [15/Oct/2026:10:01:40 +0000] "GET /api/orders HTTP/1.1" 200 3145 716ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:01:50 +0000] "POST /api/search?q=kara HTTP/1.1" 200 8804 507ms "Mozilla/5.0"
+10.0.0.9 - - [15/Oct/2026:10:02:00 +0000] "GET /api/orders HTTP/1.1" 404 1399 121ms "curl/8.5"
+10.0.0.1 - - [15/Oct/2026:10:02:10 +0000] "POST /static/app.js HTTP/1.1" 200 8211 432ms "curl/8.5"
+192.168.1.20 - - [15/Oct/2026:10:02:20 +0000] "GET /logout HTTP/1.1" 404 5340 349ms "kt-probe/1.0"
+172.16.4.4 - - [15/Oct/2026:10:02:30 +0000] "GET /login HTTP/1.1" 404 7674 71ms "Mozilla/5.0"
+10.0.0.1 - - [15/Oct/2026:10:02:40 +0000] "GET /login HTTP/1.1" 302 0 681ms "kt-probe/1.0"
+192.168.1.20 - - [15/Oct/2026:10:02:50 +0000] "GET /api/orders HTTP/1.1" 500 7501 292ms "kt-probe/1.0"
+10.0.0.2 - - [15/Oct/2026:10:03:00 +0000] "GET /static/app.js HTTP/1.1" 200 7764 364ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:03:10 +0000] "GET /login HTTP/1.1" 200 3775 787ms "kt-probe/1.0"
+10.0.0.7 - - [15/Oct/2026:10:03:20 +0000] "GET /api/users/42 HTTP/1.1" 200 6605 893ms "curl/8.5"
+172.16.4.4 - - [15/Oct/2026:10:03:30 +0000] "GET /login HTTP/1.1" 200 4752 141ms "kt-probe/1.0"
+10.0.0.3 - - [15/Oct/2026:10:03:40 +0000] "POST /api/orders HTTP/1.1" 302 0 426ms "Mozilla/5.0"
+10.0.0.2 - - [15/Oct/2026:10:03:50 +0000] "GET /api/users/42 HTTP/1.1" 200 1559 181ms "kt-probe/1.0"
+10.0.0.9 - - [15/Oct/2026:10:04:00 +0000] "GET /api/users/42 HTTP/1.1" 200 8145 852ms "Mozilla/5.0"
+10.0.0.9 - - [15/Oct/2026:10:04:10 +0000] "GET /api/orders HTTP/1.1" 200 2586 430ms "kt-probe/1.0"
+172.16.4.4 - - [15/Oct/2026:10:04:20 +0000] "GET /api/search?q=kara HTTP/1.1" 200 2256 708ms "kt-probe/1.0"
+10.0.0.7 - - [15/Oct/2026:10:04:30 +0000] "GET / HTTP/1.1" 200 6628 408ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:04:40 +0000] "GET /login HTTP/1.1" 500 6760 64ms "curl/8.5"
+10.0.0.9 - - [15/Oct/2026:10:04:50 +0000] "GET /login HTTP/1.1" 200 2001 349ms "curl/8.5"
+10.0.0.1 - - [15/Oct/2026:10:05:00 +0000] "GET / HTTP/1.1" 404 2678 550ms "kt-probe/1.0"
+10.0.0.7 - - [15/Oct/2026:10:05:10 +0000] "GET / HTTP/1.1" 200 3607 629ms "kt-probe/1.0"
+10.0.0.1 - - [15/Oct/2026:10:05:20 +0000] "GET /api/orders HTTP/1.1" 200 6166 486ms "Mozilla/5.0"
+10.0.0.1 - - [15/Oct/2026:10:05:30 +0000] "GET /login HTTP/1.1" 200 8127 320ms "curl/8.5"
+10.0.0.7 - - [15/Oct/2026:10:05:40 +0000] "POST /static/app.js HTTP/1.1" 302 0 272ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:05:50 +0000] "GET /logout HTTP/1.1" 200 3562 541ms "kt-probe/1.0"
+192.168.1.20 - - [15/Oct/2026:10:06:00 +0000] "GET /logout HTTP/1.1" 200 8852 306ms "kt-probe/1.0"
+10.0.0.2 - - [15/Oct/2026:10:06:10 +0000] "GET /api/orders HTTP/1.1" 304 0 376ms "curl/8.5"
+10.0.0.9 - - [15/Oct/2026:10:06:20 +0000] "GET /logout HTTP/1.1" 304 0 798ms "kt-probe/1.0"
+10.0.0.2 - - [15/Oct/2026:10:06:30 +0000] "GET /api/users/42 HTTP/1.1" 404 3397 826ms "kt-probe/1.0"
+garbage line that does not parse
+10.0.0.3 - - [15/Oct/2026:10:06:40 +0000] "POST /api/users/42 HTTP/1.1" 200 8680 505ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:06:50 +0000] "POST / HTTP/1.1" 200 7937 266ms "kt-probe/1.0"
+10.0.0.1 - - [15/Oct/2026:10:07:00 +0000] "GET /static/app.js HTTP/1.1" 200 5926 374ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:07:10 +0000] "GET /api/users/42 HTTP/1.1" 200 3422 346ms "kt-probe/1.0"
+10.0.0.3 - - [15/Oct/2026:10:07:20 +0000] "POST /api/search?q=kara HTTP/1.1" 200 8055 669ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:07:30 +0000] "GET /index.html HTTP/1.1" 200 3465 490ms "kt-probe/1.0"
+10.0.0.7 - - [15/Oct/2026:10:07:40 +0000] "POST /static/app.js HTTP/1.1" 200 6685 475ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:07:50 +0000] "GET /api/users HTTP/1.1" 200 2281 29ms "Mozilla/5.0"
+10.0.0.3 - - [15/Oct/2026:10:08:00 +0000] "GET /api/users HTTP/1.1" 404 7971 674ms "kt-probe/1.0"
+172.16.4.4 - - [15/Oct/2026:10:08:10 +0000] "POST /logout HTTP/1.1" 200 550 15ms "kt-probe/1.0"
+10.0.0.2 - - [15/Oct/2026:10:08:20 +0000] "GET /index.html HTTP/1.1" 304 0 768ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:08:30 +0000] "GET /api/users/42 HTTP/1.1" 200 4326 218ms "curl/8.5"
+10.0.0.7 - - [15/Oct/2026:10:08:40 +0000] "GET /api/search?q=kara HTTP/1.1" 200 4449 558ms "curl/8.5"
+172.16.4.4 - - [15/Oct/2026:10:08:50 +0000] "GET /static/app.js HTTP/1.1" 200 8666 431ms "curl/8.5"
+10.0.0.1 - - [15/Oct/2026:10:09:00 +0000] "GET /logout HTTP/1.1" 200 8777 523ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:09:10 +0000] "GET /api/search?q=kara HTTP/1.1" 200 2654 177ms "kt-probe/1.0"
+10.0.0.3 - - [15/Oct/2026:10:09:20 +0000] "POST /index.html HTTP/1.1" 304 0 64ms "kt-probe/1.0"
+172.16.4.4 - - [15/Oct/2026:10:09:30 +0000] "GET /logout HTTP/1.1" 304 0 495ms "kt-probe/1.0"
+10.0.0.1 - - [15/Oct/2026:10:09:40 +0000] "GET / HTTP/1.1" 200 3334 284ms "kt-probe/1.0"
+172.16.4.4 - - [15/Oct/2026:10:09:50 +0000] "GET /login HTTP/1.1" 304 0 29ms "Mozilla/5.0"
+10.0.0.9 - - [15/Oct/2026:10:10:00 +0000] "GET /static/app.js HTTP/1.1" 404 8482 621ms "kt-probe/1.0"
+172.16.4.4 - - [15/Oct/2026:10:10:10 +0000] "GET /api/orders HTTP/1.1" 200 8525 547ms "kt-probe/1.0"
+10.0.0.3 - - [15/Oct/2026:10:10:20 +0000] "GET /api/users/42 HTTP/1.1" 302 0 536ms "curl/8.5"
+10.0.0.7 - - [15/Oct/2026:10:10:30 +0000] "GET /login HTTP/1.1" 200 7026 125ms "Mozilla/5.0"
+10.0.0.1 - - [15/Oct/2026:10:10:40 +0000] "GET /index.html HTTP/1.1" 500 4142 439ms "kt-probe/1.0"
+192.168.1.20 - - [15/Oct/2026:10:10:50 +0000] "POST /api/orders HTTP/1.1" 200 2730 734ms "Mozilla/5.0"
+10.0.0.2 - - [15/Oct/2026:10:11:00 +0000] "POST /api/users HTTP/1.1" 200 2448 479ms "curl/8.5"
+172.16.4.4 - - [15/Oct/2026:10:11:10 +0000] "GET /static/app.css HTTP/1.1" 200 2867 684ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:11:20 +0000] "GET /static/app.css HTTP/1.1" 304 0 414ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:11:30 +0000] "GET /static/app.js HTTP/1.1" 200 1710 740ms "Mozilla/5.0"
+10.0.0.1 - - [15/Oct/2026:10:11:40 +0000] "GET /logout HTTP/1.1" 200 7416 721ms "Mozilla/5.0"
+10.0.0.1 - - [15/Oct/2026:10:11:50 +0000] "GET /logout HTTP/1.1" 404 5040 525ms "curl/8.5"
+10.0.0.1 - - [15/Oct/2026:10:12:00 +0000] "GET /index.html HTTP/1.1" 200 4551 279ms "Mozilla/5.0"
+10.0.0.2 - - [15/Oct/2026:10:12:10 +0000] "GET /api/users HTTP/1.1" 200 4437 416ms "kt-probe/1.0"
+10.0.0.3 - - [15/Oct/2026:10:12:20 +0000] "GET /api/search?q=kara HTTP/1.1" 200 5558 92ms "kt-probe/1.0"
+10.0.0.1 - - [15/Oct/2026:10:12:30 +0000] "POST /api/users HTTP/1.1" 200 1386 276ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:12:40 +0000] "GET /api/orders HTTP/1.1" 200 3843 69ms "Mozilla/5.0"
+10.0.0.9 - - [15/Oct/2026:10:12:50 +0000] "GET / HTTP/1.1" 200 7044 275ms "curl/8.5"
+10.0.0.1 - - [15/Oct/2026:10:13:00 +0000] "GET /logout HTTP/1.1" 302 0 245ms "Mozilla/5.0"
+192.168.1.20 - - [15/Oct/2026:10:13:10 +0000] "GET / HTTP/1.1" 200 3505 320ms "kt-probe/1.0"
+192.168.1.20 - - [15/Oct/2026:10:13:20 +0000] "GET /api/users/42 HTTP/1.1" 200 7502 513ms "Mozilla/5.0"
+10.0.0.1 - - [15/Oct/2026:10:13:30 +0000] "GET /static/app.js HTTP/1.1" 200 4303 38ms "kt-probe/1.0"
+10.0.0.9 - - [15/Oct/2026:10:13:40 +0000] "GET /logout HTTP/1.1" 304 0 195ms "curl/8.5"
+10.0.0.7 - - [15/Oct/2026:10:13:50 +0000] "GET /login HTTP/1.1" 200 7280 673ms "Mozilla/5.0"
+10.0.0.3 - - [15/Oct/2026:10:14:00 +0000] "GET /logout HTTP/1.1" 200 3725 236ms "kt-probe/1.0"
+172.16.4.4 - - [15/Oct/2026:10:14:10 +0000] "GET /api/users HTTP/1.1" 200 5894 56ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:14:20 +0000] "GET /index.html HTTP/1.1" 500 4387 442ms "curl/8.5"
+10.0.0.3 - - [15/Oct/2026:10:14:30 +0000] "GET /static/app.css HTTP/1.1" 304 0 687ms "curl/8.5"
+10.0.0.2 - - [15/Oct/2026:10:14:40 +0000] "GET /api/orders HTTP/1.1" 200 7727 190ms "Mozilla/5.0"
+10.0.0.9 - - [15/Oct/2026:10:14:50 +0000] "GET / HTTP/1.1" 200 6166 337ms "curl/8.5"
+
+"""
+}
+
+fn main() {
+    let names: Array[Str, 7] = ["basics", "closures", "tables", "oop", "strings", "errors", "logs"];
+    let texts: Array[String, 7] = [basics_lua(), closures_lua(), tables_lua(), oop_lua(), strings_lua(), errors_lua(), logs_lua()];
+    for dir in ["scripts", "data"] {
+        if let Err(e) = fs.create_dir_all(dir.to_string()) {
+            println(f"cannot create {dir}: {e}");
+            return;
+        }
+    }
+    for i in 0..7 {
+        fs.write(f"scripts/{names[i]}.lua", texts[i].clone()).unwrap();
+    }
+    fs.write("data/access.log".to_string(), access_log()).unwrap();
+    for i in 0..7 {
+        let path = f"scripts/{names[i]}.lua";
+        println(f"== {path}");
+        run_file(path);
+    }
+    let _ = fs.remove_file("report.txt".to_string());
+}
