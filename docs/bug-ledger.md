@@ -96,13 +96,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 259 |
-| codegen-gap | 258 |
-| false-positive | 183 |
+| missing-feature | 260 |
+| codegen-gap | 259 |
+| false-positive | 184 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 161 |
-| crash | 116 |
+| crash | 117 |
 | soundness | 105 |
 | use-after-free | 90 |
 
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2892 |
+| codegen | 2894 |
 | interp | 923 |
-| typecheck | 421 |
+| typecheck | 422 |
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
-| runtime | 70 |
+| runtime | 71 |
 | parser | 63 |
 | autopar | 59 |
 | resolver | 40 |
@@ -203,6 +203,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-70 | 2026-10-14 | typecheck | medium | `karac check` still refuses chained field receivers (`self.env.to.len()`, `self.env.to.push(x)`) with the `chained_field_receiver` error, a legacy-codegen deferral ("deferred to v1.x in codegen ... fails `karac build`"), although every v2 surface runs them: the corpus mir-* backends run check first, so any v2 program with a nested-field method call fails | — |
 | B-2026-10-14-72 | 2026-10-14 | interp+codegen | low | `BufReader.fill_buf()` (docs/library/io.md § Buffered I/O) is missing on both v2 backends: `karac check` and legacy `run --interp` accept and run it, but `__mir-run` stops at `call of unknown function BufReader[File].fill_buf` and `__mir-llvm-run` at `native `BufReader[File].fill_buf` is not lowered yet` | — |
 | B-2026-10-15-1 | 2026-10-15 | typecheck | medium | `karac check` types the items of `a.iter().zip(b.iter())` by value, so a `*x` on either half is rejected ("unary '*' requires 'ref T' ... found 'i64'"), design.md's own `Vec` equality example included (§ Conditional impls: `.zip(other.iter()).all(|(a, b)| *a == *b)`), and `chain` loses the item type the same way; `karac __mir-run` and `__mir-llvm-run` accept and run the same programs | — |
+| B-2026-10-15-3 | 2026-10-15 | codegen | medium | A user enum variant named `Err` or `Ok` captures the prelude `Result` constructors and patterns in the MIR builder: with `enum RedirKind { In, Out, Append, Err }` in scope, `return Err("..")` in a `Result`-returning fn builds "invalid MIR: variant 3 out of range" and a `match r { Ok(t) => .., Err(e) => .. }` stops with "this variant is not lowered yet"; `karac check` accepts both, and a variant at the same index as Result's (`enum Stream { Out, Err }`) only works by coincidence | — |
+| B-2026-10-15-4 | 2026-10-15 | codegen | medium | A closure inside a method that uses `self` is not lowered by the MIR builder: `fn all(self, v: ref Vec[i64]) -> Vec[i64] { v.iter().map(|x| self.add(*x)).collect() }` stops every MIR surface with "build: 5:26 in `S.all.c0`: `self` here is not lowered yet"; `karac check` accepts it | — |
+| B-2026-10-15-5 | 2026-10-15 | typecheck | medium | The I/O library returns `Result[Unit, IoError]` where docs/library/io.md says `Result[(), IoError]`, and `Unit` does not unify with `()`: `let r: Result[(), IoError] = fs.write("y.txt", "a");` is refused ("expected 'Result[(), IoError]', found 'Result[Unit, IoError]'") by `karac check` and the MIR typecheck, as is an `if` whose arms are a user fn returning `Result[(), IoError]` and `fs.write(..)` | — |
+| B-2026-10-15-6 | 2026-10-15 | runtime | medium | Child processes have no library spec, and the implemented `Command` cannot connect one child's stdout to another's stdin: docs/library has no process section (io.md specifies files, stdin/stdout and sockets only), `Stdio` is `Inherit | Null | Piped` with no way to pass a `ChildStdout` as a stdin, and there is no `current_dir`, so a shell pipeline must buffer each stage's whole output in the parent | — |
 
 ### Relocated
 

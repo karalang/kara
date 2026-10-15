@@ -1,0 +1,483 @@
+// A small POSIX-flavoured shell that runs a script. It tokenizes each line
+// with single quotes, double quotes, backslash escapes and `$NAME`, `${NAME}`
+// and `$?` expansion, parses `;`, `&&`, `||`, `|` and the redirects `<`,
+// `>`, `>>` and `2>`, and runs each simple command as a real child process
+// (no `sh` in between), passing exported variables in its environment.
+// Expansion happens when a command runs, so `$?` sees the status of the
+// command just before it. `export`, `unset` and `echo` are builtins. A
+// missing program is status 127, a parse error status 2.
+//
+// Pipeline stages run one after another, each stage's captured stdout
+// becoming the next stage's stdin (B-2026-10-15-6: no way to connect two
+// children).
+//
+// Workarounds for compiler gaps (revert when the row is fixed):
+//   B-2026-10-15-3   a user variant named `Err` breaks `Result`'s in MIR:
+//                    the redirect kind is `ErrOut`
+//   B-2026-10-15-4   a closure using `self` in a method is not lowered:
+//                    argv is built with a loop
+//   B-2026-10-15-5   fs.write's Result[Unit, ..] is not Result[(), ..]:
+//                    the two writes are compared with .is_ok()
+//   B-2026-10-14-53  a String passed to fs.write counts as moved: p.clone()
+//   B-2026-10-14-43  a string literal pattern can't match a Str: the
+//                    operator and command name are matched as String
+//   B-2026-10-14-36  String.clear is not lowered on the compiled backends
+
+const SCRIPT: Str = "# quoting and expansion
+echo hello   world
+echo 'single $GREETING stays' \"double [$GREETING]\" mixed'quo'\"tes\"
+export GREETING=\"hi there\"
+echo \"$GREETING, ${GREETING}!\" $GREETING
+echo escaped \\$GREETING and \"a \\\"quoted\\\" word\" back\\\\slash
+# pipes and redirects
+printf '%s\\n' banana apple cherry apple | sort | uniq -c
+printf 'b\\na\\nc\\n' > list.txt
+sort < list.txt
+echo appended >> list.txt
+cat list.txt | wc -l
+cat list.txt | tr a-z A-Z | head -n 2
+# status, && and ||
+grep zzz list.txt && echo found || echo \"not found, status $?\"
+false; echo \"after false: $?\"
+true && echo and-ran; true || echo never
+nosuchcmd arg; echo \"status $?\"
+ls nosuchdir 2> err.txt; echo \"ls failed: $?\"; wc -l < err.txt
+# the environment children see
+export COUNT=3
+sh -c 'echo child sees $COUNT'
+unset COUNT
+sh -c 'echo child sees \"[$COUNT]\"'
+echo \"${UNSET_VAR}empty\" '$?' $?
+# parse errors
+echo unterminated 'quote
+echo trailing pipe |
+echo >
+echo done";
+
+// One piece of a word: literal text, or a variable expanded at run time.
+enum Part { Lit(String), Var(String) }
+
+struct Word { parts: Vec[Part] }
+
+enum Tok { W(Word), Op(String) }
+
+enum RedirKind { In, Out, Append, ErrOut }
+
+struct Redirect { kind: RedirKind, target: Word }
+
+struct Simple { words: Vec[Word], redirects: Vec[Redirect] }
+
+// A pipeline, and the operator (`;`, `&&`, `||`) that came before it.
+struct Chain { op: String, stages: Vec[Simple] }
+
+struct Shell { vars: SortedMap[String, String], exported: SortedSet[String], status: i64 }
+
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() or c == '_'
+}
+
+fn flush_lit(parts: mut ref Vec[Part], lit: mut ref String) {
+    if not lit.is_empty() {
+        parts.push(Part.Lit(lit.clone()));
+        *lit = String.new();
+    }
+}
+
+// Splits a line into words and operators.
+fn tokenize(line: Str) -> Result[Vec[Tok], String] {
+    let cs: Vec[char] = line.chars().collect();
+    let mut toks: Vec[Tok] = Vec.new();
+    let mut parts: Vec[Part] = Vec.new();
+    let mut lit = String.new();
+    let mut in_word = false;
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == ' ' or c == '\t' {
+            if in_word {
+                flush_lit(mut parts, mut lit);
+                toks.push(Tok.W(Word { parts: parts }));
+                parts = Vec.new();
+                in_word = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '#' and not in_word {
+            break;
+        }
+        if c == ';' or c == '|' or c == '&' or c == '<' or c == '>' or (c == '2' and not in_word and i + 1 < cs.len() and cs[i + 1] == '>') {
+            if in_word {
+                flush_lit(mut parts, mut lit);
+                toks.push(Tok.W(Word { parts: parts }));
+                parts = Vec.new();
+                in_word = false;
+            }
+            let two = if i + 1 < cs.len() { f"{c}{cs[i + 1]}" } else { c.to_string() };
+            let op = if two == "&&" or two == "||" or two == ">>" or two == "2>" { two } else { c.to_string() };
+            if op == "&" {
+                return Err("background jobs (&) are not supported".to_string());
+            }
+            i += op.len();
+            toks.push(Tok.Op(op));
+            continue;
+        }
+        in_word = true;
+        if c == '\'' {
+            let mut j = i + 1;
+            while j < cs.len() and cs[j] != '\'' {
+                lit.push(cs[j]);
+                j += 1;
+            }
+            if j == cs.len() {
+                return Err("unterminated quote".to_string());
+            }
+            i = j + 1;
+            continue;
+        }
+        if c == '"' {
+            let mut j = i + 1;
+            while j < cs.len() and cs[j] != '"' {
+                if cs[j] == '\\' and j + 1 < cs.len() and (cs[j + 1] == '"' or cs[j + 1] == '\\' or cs[j + 1] == '$') {
+                    lit.push(cs[j + 1]);
+                    j += 2;
+                    continue;
+                }
+                if cs[j] == '$' {
+                    let (name, next) = var_name(cs, j + 1);
+                    if name.is_empty() {
+                        lit.push('$');
+                        j += 1;
+                    } else {
+                        flush_lit(mut parts, mut lit);
+                        parts.push(Part.Var(name));
+                        j = next;
+                    }
+                    continue;
+                }
+                lit.push(cs[j]);
+                j += 1;
+            }
+            if j == cs.len() {
+                return Err("unterminated quote".to_string());
+            }
+            i = j + 1;
+            continue;
+        }
+        if c == '\\' {
+            if i + 1 < cs.len() {
+                lit.push(cs[i + 1]);
+            }
+            i += 2;
+            continue;
+        }
+        if c == '$' {
+            let (name, next) = var_name(cs, i + 1);
+            if name.is_empty() {
+                lit.push('$');
+                i += 1;
+            } else {
+                flush_lit(mut parts, mut lit);
+                parts.push(Part.Var(name));
+                i = next;
+            }
+            continue;
+        }
+        lit.push(c);
+        i += 1;
+    }
+    if in_word {
+        flush_lit(mut parts, mut lit);
+        toks.push(Tok.W(Word { parts: parts }));
+    }
+    Ok(toks)
+}
+
+// The variable name after a `$` at `at`: `?`, `{NAME}` or NAME.
+fn var_name(cs: ref Vec[char], at: i64) -> (String, i64) {
+    if at >= cs.len() {
+        return (String.new(), at);
+    }
+    if cs[at] == '?' {
+        return ("?".to_string(), at + 1);
+    }
+    if cs[at] == '{' {
+        let mut j = at + 1;
+        let mut name = String.new();
+        while j < cs.len() and cs[j] != '}' {
+            name.push(cs[j]);
+            j += 1;
+        }
+        return (name, j + 1);
+    }
+    let mut j = at;
+    let mut name = String.new();
+    while j < cs.len() and is_name_char(cs[j]) {
+        name.push(cs[j]);
+        j += 1;
+    }
+    (name, j)
+}
+
+fn parse(toks: own Vec[Tok]) -> Result[Vec[Chain], String] {
+    let mut chains: Vec[Chain] = Vec.new();
+    let mut stages: Vec[Simple] = Vec.new();
+    let mut cur = Simple { words: Vec.new(), redirects: Vec.new() };
+    let mut op = ";".to_string();
+    let mut pending: Option[RedirKind] = None;
+    for t in toks.into_iter() {
+        match t {
+            Tok.W(w) => match pending.take() {
+                Some(k) => cur.redirects.push(Redirect { kind: k, target: w }),
+                None => cur.words.push(w),
+            },
+            Tok.Op(o) => {
+                if pending.is_some() {
+                    return Err(f"expected a file name before '{o}'");
+                }
+                match o.clone() {
+                    "<" => pending = Some(RedirKind.In),
+                    ">" => pending = Some(RedirKind.Out),
+                    ">>" => pending = Some(RedirKind.Append),
+                    "2>" => pending = Some(RedirKind.ErrOut),
+                    "|" => {
+                        if cur.words.is_empty() {
+                            return Err("expected a command before '|'".to_string());
+                        }
+                        stages.push(cur);
+                        cur = Simple { words: Vec.new(), redirects: Vec.new() };
+                    }
+                    _ => {
+                        if cur.words.is_empty() {
+                            return Err(f"expected a command before '{o}'");
+                        }
+                        stages.push(cur);
+                        chains.push(Chain { op: op, stages: stages });
+                        stages = Vec.new();
+                        cur = Simple { words: Vec.new(), redirects: Vec.new() };
+                        op = o;
+                    }
+                }
+            }
+        }
+    }
+    if pending.is_some() {
+        return Err("expected a file name at end of line".to_string());
+    }
+    if cur.words.is_empty() {
+        if not stages.is_empty() {
+            return Err("expected a command after '|'".to_string());
+        }
+        if op != ";" {
+            return Err(f"expected a command after '{op}'");
+        }
+    } else {
+        stages.push(cur);
+    }
+    if not stages.is_empty() {
+        chains.push(Chain { op: op, stages: stages });
+    }
+    Ok(chains)
+}
+
+// What one stage produced.
+struct Ran { out: String, code: i64 }
+
+impl Shell {
+    fn expand(self, w: ref Word) -> String {
+        let mut s = String.new();
+        for p in w.parts.iter() {
+            match p {
+                Part.Lit(t) => s.push_str(t),
+                Part.Var(n) => {
+                    if n == "?" {
+                        s.push_str(f"{self.status}");
+                    } else {
+                        s.push_str(self.vars.get(n).unwrap_or(""));
+                    }
+                }
+            }
+        }
+        s
+    }
+
+    // Runs one simple command with `input` as its stdin.
+    fn run_simple(mut ref self, cmd: ref Simple, input: own Option[String]) -> Ran {
+        let mut argv: Vec[String] = Vec.new();
+        for w in cmd.words.iter() {
+            argv.push(self.expand(w));
+        }
+        let mut stdin_text = input;
+        let mut out_to: Option[(String, bool)] = None;
+        let mut err_to: Option[String] = None;
+        for r in cmd.redirects.iter() {
+            let path = self.expand(r.target);
+            match r.kind {
+                RedirKind.In => match fs.read_to_string(path) {
+                    Ok(t) => stdin_text = Some(t),
+                    Err(_) => return Ran { out: f"mini_shell: {path}: No such file\n", code: 1 },
+                },
+                RedirKind.Out => out_to = Some((path, false)),
+                RedirKind.Append => out_to = Some((path, true)),
+                RedirKind.ErrOut => err_to = Some(path),
+            }
+        }
+        let (out, err, code) = self.exec(argv, stdin_text);
+        match err_to {
+            Some(p) => {
+                match fs.write(p.clone(), err) {
+                    Ok(_) => {}
+                    Err(_) => return Ran { out: f"mini_shell: cannot write {p}\n", code: 1 },
+                }
+            }
+            None => if not err.is_empty() {
+                // stderr goes to the terminal; the report shows it inline
+                print(f"[stderr] {err}");
+            },
+        }
+        match out_to {
+            Some((p, append)) => {
+                let ok = if append { append_file(p, out).is_ok() } else { fs.write(p.clone(), out).is_ok() };
+                if ok {
+                    Ran { out: String.new(), code: code }
+                } else {
+                    Ran { out: f"mini_shell: cannot write {p}\n", code: 1 }
+                }
+            }
+            None => Ran { out: out, code: code },
+        }
+    }
+
+    // (stdout, stderr, status) of a builtin or a child process.
+    fn exec(mut ref self, argv: own Vec[String], input: own Option[String]) -> (String, String, i64) {
+        let name = argv[0].clone();
+        match name {
+            "echo" => (argv[1..argv.len()].join(" ") + "\n", String.new(), 0),
+            "export" => {
+                for a in argv[1..argv.len()].iter() {
+                    match a.find("=") {
+                        Some(e) => {
+                            self.vars.insert(a[0..e].to_string(), a[e + 1..a.len()].to_string());
+                            self.exported.insert(a[0..e].to_string());
+                        }
+                        None => {
+                            self.exported.insert(a.clone());
+                        }
+                    }
+                }
+                (String.new(), String.new(), 0)
+            }
+            "unset" => {
+                for a in argv[1..argv.len()].iter() {
+                    self.vars.remove(a);
+                    self.exported.remove(a);
+                }
+                (String.new(), String.new(), 0)
+            }
+            _ => self.spawn(argv, input),
+        }
+    }
+
+    fn spawn(self, argv: own Vec[String], input: own Option[String]) -> (String, String, i64) {
+        let mut cmd = Command.new(argv[0].clone()).stdout(Stdio.Piped).stderr(Stdio.Piped);
+        for a in argv[1..argv.len()].iter() {
+            cmd = cmd.arg(a.clone());
+        }
+        for k in self.exported.iter() {
+            match self.vars.get(k) {
+                Some(v) => cmd = cmd.env(k.clone(), v.clone()),
+                None => {}
+            }
+        }
+        cmd = cmd.stdin(if input.is_some() { Stdio.Piped } else { Stdio.Null });
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(_) => return (String.new(), f"mini_shell: {argv[0]}: command not found\n", 127),
+        };
+        match input {
+            Some(text) => match child.stdin() {
+                Some(w) => {
+                    w.write(text).unwrap_or(());
+                    w.close().unwrap_or(());
+                }
+                None => {}
+            },
+            None => {}
+        }
+        let out = match child.stdout() {
+            Some(r) => r.read_to_string().unwrap_or(String.new()),
+            None => String.new(),
+        };
+        let err = match child.stderr() {
+            Some(r) => r.read_to_string().unwrap_or(String.new()),
+            None => String.new(),
+        };
+        match child.wait() {
+            Ok(st) => (out, err, st.code),
+            Err(_) => (out, err, 1),
+        }
+    }
+
+    fn run_line(mut ref self, line: Str) {
+        let toks = match tokenize(line) {
+            Ok(t) => t,
+            Err(e) => {
+                println(f"mini_shell: parse error: {e}");
+                self.status = 2;
+                return;
+            }
+        };
+        let chains = match parse(toks) {
+            Ok(c) => c,
+            Err(e) => {
+                println(f"mini_shell: parse error: {e}");
+                self.status = 2;
+                return;
+            }
+        };
+        for ch in chains.iter() {
+            if ch.op == "&&" and self.status != 0 {
+                continue;
+            }
+            if ch.op == "||" and self.status == 0 {
+                continue;
+            }
+            let mut input: Option[String] = None;
+            let mut last = Ran { out: String.new(), code: 0 };
+            for st in ch.stages.iter() {
+                last = self.run_simple(st, input);
+                input = Some(last.out.clone());
+            }
+            print(last.out);
+            self.status = last.code;
+        }
+    }
+}
+
+fn append_file(path: Str, text: Str) -> Result[(), IoError] {
+    let f = File.append(path)?;
+    let bytes = text.bytes();
+    let mut off = 0;
+    while off < bytes.len() {
+        off += f.write(bytes[off..bytes.len()])?;
+    }
+    Ok(())
+}
+
+fn main() {
+    let mut sh = Shell { vars: SortedMap.new(), exported: SortedSet.new(), status: 0 };
+    for line in SCRIPT.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with("#") {
+            println(line);
+            continue;
+        }
+        println(f"$ {line}");
+        sh.run_line(line);
+        if sh.status != 0 {
+            println(f"[status {sh.status}]");
+        }
+    }
+}

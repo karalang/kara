@@ -1,0 +1,60 @@
+# quoting and expansion
+$ echo hello   world
+hello world
+$ echo 'single $GREETING stays' "double [$GREETING]" mixed'quo'"tes"
+single $GREETING stays double [] mixedquotes
+$ export GREETING="hi there"
+$ echo "$GREETING, ${GREETING}!" $GREETING
+hi there, hi there! hi there
+$ echo escaped \$GREETING and "a \"quoted\" word" back\\slash
+escaped $GREETING and a "quoted" word back\slash
+# pipes and redirects
+$ printf '%s\n' banana apple cherry apple | sort | uniq -c
+      2 apple
+      1 banana
+      1 cherry
+$ printf 'b\na\nc\n' > list.txt
+$ sort < list.txt
+a
+b
+c
+$ echo appended >> list.txt
+$ cat list.txt | wc -l
+4
+$ cat list.txt | tr a-z A-Z | head -n 2
+B
+A
+# status, && and ||
+$ grep zzz list.txt && echo found || echo "not found, status $?"
+not found, status 1
+$ false; echo "after false: $?"
+after false: 1
+$ true && echo and-ran; true || echo never
+and-ran
+$ nosuchcmd arg; echo "status $?"
+[stderr] mini_shell: nosuchcmd: command not found
+status 127
+$ ls nosuchdir 2> err.txt; echo "ls failed: $?"; wc -l < err.txt
+ls failed: 2
+1
+# the environment children see
+$ export COUNT=3
+$ sh -c 'echo child sees $COUNT'
+child sees 3
+$ unset COUNT
+$ sh -c 'echo child sees "[$COUNT]"'
+child sees []
+$ echo "${UNSET_VAR}empty" '$?' $?
+empty $? 0
+# parse errors
+$ echo unterminated 'quote
+mini_shell: parse error: unterminated quote
+[status 2]
+$ echo trailing pipe |
+mini_shell: parse error: expected a command after '|'
+[status 2]
+$ echo >
+mini_shell: parse error: expected a file name at end of line
+[status 2]
+$ echo done
+done
