@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/683-k-empty-slots/bench/k_empty_slots.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "d4df8a9bc"
+extracted_src = "cd87db06"
+model_rev = "583cfb0d"
+model_src = "cd87db06"

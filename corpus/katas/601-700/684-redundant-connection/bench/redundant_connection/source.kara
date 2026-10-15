@@ -1,0 +1,98 @@
+// LeetCode #684: Redundant Connection -- union-find. Bench.
+//
+// 100 random trees of 20,000 vertices, each with one more edge, are
+// built once; then 30 rounds answer every graph.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut v = x;
+    while parent[v] != v {
+        parent[v] = parent[parent[v]];
+        v = parent[v];
+    }
+    v
+}
+
+fn find_redundant_connection(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = vec![1; n + 1];
+    for v in 0..n + 1 {
+        parent.push(v);
+    }
+    for (a, b) in edges.iter() {
+        let ra = find(mut parent, *a);
+        let rb = find(mut parent, *b);
+        if ra == rb {
+            return (*a, *b);
+        }
+        if size[ra] < size[rb] {
+            parent[ra] = rb;
+            size[rb] += size[ra];
+        } else {
+            parent[rb] = ra;
+            size[ra] += size[rb];
+        }
+    }
+    (0, 0)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 100;
+    let n = 20000;
+    let rounds = 30;
+    let mut seed = 684;
+    let mut graphs: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..count {
+        let mut name: Vec[i64] = Vec.new();
+        for v in 1..n + 1 {
+            name.push(v);
+        }
+        let mut i = n - 1;
+        while i > 0 {
+            let j = next_random(mut seed) % (i + 1);
+            name.swap(i, j);
+            i -= 1;
+        }
+        let mut up: Vec[i64] = vec![0; n];
+        let mut edges: Vec[(i64, i64)] = Vec.new();
+        for v in 1..n {
+            up[v] = next_random(mut seed) % v;
+            edges.push((name[up[v]], name[v]));
+        }
+        loop {
+            let x = next_random(mut seed) % n;
+            let y = next_random(mut seed) % n;
+            let (lo, hi) = if x < y { (x, y) } else { (y, x) };
+            if lo != hi and up[hi] != lo {
+                edges.push((name[lo], name[hi]));
+                break;
+            }
+        }
+        let mut k = n - 1;
+        while k > 0 {
+            let j = next_random(mut seed) % (k + 1);
+            edges.swap(k, j);
+            k -= 1;
+        }
+        for e in 0..n {
+            if next_random(mut seed) % 2 == 0 {
+                let (a, b) = edges[e];
+                edges[e] = (b, a);
+            }
+        }
+        graphs.push(edges);
+    }
+    let mut sum = 0;
+    for r in 0..rounds {
+        for c in 0..count {
+            let (a, b) = find_redundant_connection(graphs[c]);
+            sum = (sum * 31 + a * 20011 + b + r) % 1000000007;
+        }
+    }
+    println(f"{count * rounds} graphs answered, checksum {sum}");
+}

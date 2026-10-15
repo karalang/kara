@@ -1,0 +1,372 @@
+// LeetCode #684: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random trees with
+// one more edge.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_star(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut v = x;
+    while parent[v] != v {
+        parent[v] = parent[parent[v]];
+        v = parent[v];
+    }
+    v
+}
+
+fn find_redundant_connection_star(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = vec![1; n + 1];
+    for v in 0..n + 1 {
+        parent.push(v);
+    }
+    for (a, b) in edges.iter() {
+        let ra = find_star(mut parent, *a);
+        let rb = find_star(mut parent, *b);
+        if ra == rb {
+            return (*a, *b);
+        }
+        if size[ra] < size[rb] {
+            parent[ra] = rb;
+            size[rb] += size[ra];
+        } else {
+            parent[rb] = ra;
+            size[ra] += size[rb];
+        }
+    }
+    (0, 0)
+}
+
+// ---- search arm --------------------------------------------------------
+
+fn reachable_search(adj: ref Vec[Vec[i64]], from: i64, to: i64) -> bool {
+    let mut seen: Vec[bool] = vec![false; adj.len()];
+    let mut stack: Vec[i64] = vec![from];
+    seen[from] = true;
+    while let Some(v) = stack.pop() {
+        if v == to {
+            return true;
+        }
+        for w in adj[v].iter() {
+            if not seen[*w] {
+                seen[*w] = true;
+                stack.push(*w);
+            }
+        }
+    }
+    false
+}
+
+fn find_redundant_connection_search(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges.iter() {
+        if reachable_search(adj, *a, *b) {
+            return (*a, *b);
+        }
+        adj[*a].push(*b);
+        adj[*b].push(*a);
+    }
+    (0, 0)
+}
+
+// ---- peel arm ----------------------------------------------------------
+
+fn find_redundant_connection_peel(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    let mut degree: Vec[i64] = vec![0; n + 1];
+    for (a, b) in edges.iter() {
+        adj[*a].push(*b);
+        adj[*b].push(*a);
+        degree[*a] += 1;
+        degree[*b] += 1;
+    }
+    let mut leaves: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        if degree[v] == 1 {
+            leaves.push(v);
+        }
+    }
+    while let Some(v) = leaves.pop() {
+        degree[v] = 0;
+        for w in adj[v].iter() {
+            if degree[*w] > 0 {
+                degree[*w] -= 1;
+                if degree[*w] == 1 {
+                    leaves.push(*w);
+                }
+            }
+        }
+    }
+    let mut k = n - 1;
+    while k >= 0 {
+        let (a, b) = edges[k];
+        if degree[a] >= 2 and degree[b] >= 2 {
+            return (a, b);
+        }
+        k -= 1;
+    }
+    (0, 0)
+}
+
+// ---- removal arm -------------------------------------------------------
+
+fn connected_without_removal(edges: ref Vec[(i64, i64)], skip: i64) -> bool {
+    let n = edges.len();
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for k in 0..n {
+        if k != skip {
+            let (a, b) = edges[k];
+            adj[a].push(b);
+            adj[b].push(a);
+        }
+    }
+    let mut seen: Vec[bool] = vec![false; n + 1];
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    seen[1] = true;
+    queue.push_back(1);
+    let mut count = 1;
+    while let Some(v) = queue.pop_front() {
+        for w in adj[v].iter() {
+            if not seen[*w] {
+                seen[*w] = true;
+                count += 1;
+                queue.push_back(*w);
+            }
+        }
+    }
+    count == n
+}
+
+fn find_redundant_connection_removal(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let mut k = edges.len() - 1;
+    while k >= 0 {
+        if connected_without_removal(edges, k) {
+            return edges[k];
+        }
+        k -= 1;
+    }
+    (0, 0)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, edges: Vec[(i64, i64)]) -> (i64, i64) {
+    if which == 0 {
+        find_redundant_connection_star(edges)
+    } else if which == 1 {
+        find_redundant_connection_search(edges)
+    } else if which == 2 {
+        find_redundant_connection_peel(edges)
+    } else {
+        find_redundant_connection_removal(edges)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        v.push(x);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(seed) % (i + 1);
+        v.swap(i, j);
+        i -= 1;
+    }
+    v
+}
+
+// The edges in a random order, each written either way round, and
+// whether each came from `on_cycle` marked, moved along with it.
+fn scrambled(seed: mut ref i64, edges: ref Vec[(i64, i64)], marks: ref Vec[bool]) -> (Vec[(i64, i64)], Vec[bool]) {
+    let mut e = edges.clone();
+    let mut m = marks.clone();
+    let mut k = e.len() - 1;
+    while k > 0 {
+        let j = next_random(seed) % (k + 1);
+        e.swap(k, j);
+        m.swap(k, j);
+        k -= 1;
+    }
+    for i in 0..e.len() {
+        if next_random(seed) % 2 == 0 {
+            let (a, b) = e[i];
+            e[i] = (b, a);
+        }
+    }
+    (e, m)
+}
+
+// A cycle of `len` vertices, every other vertex hung below an earlier
+// one, so the cycle edges are known; they are marked true.
+fn with_cycle(seed: mut ref i64, n: i64, len: i64) -> (Vec[(i64, i64)], Vec[bool]) {
+    let name = shuffled(seed, n);
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    let mut marks: Vec[bool] = Vec.new();
+    for i in 0..len {
+        edges.push((name[i], name[(i + 1) % len]));
+        marks.push(true);
+    }
+    for v in len..n {
+        edges.push((name[next_random(seed) % v], name[v]));
+        marks.push(false);
+    }
+    scrambled(seed, edges, marks)
+}
+
+// A random tree on 1 to n with one more edge.
+fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
+    let name = shuffled(seed, n);
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for v in 1..n {
+        edges.push((name[next_random(seed) % v], name[v]));
+    }
+    loop {
+        let a = 1 + next_random(seed) % n;
+        let b = 1 + next_random(seed) % n;
+        let mut fresh = a != b;
+        for (x, y) in edges.iter() {
+            if (*x == a and *y == b) or (*x == b and *y == a) {
+                fresh = false;
+            }
+        }
+        if fresh {
+            edges.push((a, b));
+            break;
+        }
+    }
+    let marks: Vec[bool] = vec![false; n];
+    let (e, _) = scrambled(seed, edges, marks);
+    e
+}
+
+// The definition: the last edge in the input whose removal leaves a
+// tree, that is, leaves every vertex reachable from vertex 1, by the
+// transitive closure of the other edges.
+fn definition(edges: ref Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut k = n - 1;
+    while k >= 0 {
+        let mut reach: Vec[Vec[bool]] = Vec.new();
+        for v in 0..n + 1 {
+            let mut row: Vec[bool] = vec![false; n + 1];
+            row[v] = true;
+            reach.push(row);
+        }
+        for i in 0..n {
+            if i != k {
+                let (a, b) = edges[i];
+                reach[a][b] = true;
+                reach[b][a] = true;
+            }
+        }
+        for m in 1..n + 1 {
+            for i in 1..n + 1 {
+                if reach[i][m] {
+                    for j in 1..n + 1 {
+                        if reach[m][j] {
+                            reach[i][j] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut tree = true;
+        for v in 1..n + 1 {
+            if not reach[1][v] {
+                tree = false;
+            }
+        }
+        if tree {
+            return edges[k];
+        }
+        k -= 1;
+    }
+    (0, 0)
+}
+
+fn main() {
+    let mut seed = 6840;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1500;
+    for c in 0..cases {
+        let n = if c % 3 == 2 { 3 + next_random(mut seed) % 100 } else { 3 + next_random(mut seed) % 8 };
+        let edges = random_graph(mut seed, n);
+        let want = if n <= 10 { definition(edges) } else { (0, 0) };
+        let name = shuffled(mut seed, n);
+        let renamed: Vec[(i64, i64)] = edges.iter().map(|e| (name[e.0 - 1], name[e.1 - 1])).collect();
+        let len = 3 + next_random(mut seed) % (n - 2);
+        let (cyc, marks) = with_cycle(mut seed, n, len);
+        let mut last = 0;
+        for i in 0..n {
+            if marks[i] {
+                last = i;
+            }
+        }
+        for which in 0..arms {
+            let got = answer(which, edges.clone());
+            let at = edges.iter().position(|e| *e == got);
+            // P1: the definition's answer, on up to 10 vertices.
+            if n <= 10 {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the vertices renamed, the same edge renamed.
+            checks += 1;
+            if got.0 < 1 or got.1 < 1 or answer(which, renamed.clone()) != (name[got.0 - 1], name[got.1 - 1]) {
+                fails[1] += 1;
+            }
+            // P3: the answer moved to the end of the input is still the
+            // answer, since it is on the cycle.
+            checks += 1;
+            match at {
+                Some(i) => {
+                    let mut rest = edges.clone();
+                    rest.remove(i);
+                    rest.push(got);
+                    if answer(which, rest) != got {
+                        fails[2] += 1;
+                    }
+                }
+                None => {
+                    fails[2] += 1;
+                }
+            }
+            // P4: a built cycle: the cycle edge last in the input.
+            checks += 1;
+            if answer(which, cyc.clone()) != cyc[last] {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for k in 0..4 {
+        if fails[k] > 0 {
+            report.push_str(f"P{k + 1}: {fails[k]} failures | ");
+        }
+        total += fails[k];
+    }
+    println(f"{report}{cases} graphs, {arms} arms, {checks} checks, {total} failures");
+}

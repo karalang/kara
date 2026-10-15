@@ -1,0 +1,182 @@
+// LeetCode #684: Redundant Connection -- peel the leaves off.
+//
+// The graph is a tree with one extra edge, so it holds exactly one
+// cycle. Remove leaves over and over, each removal possibly making a new
+// leaf, until only vertices of degree 2 or more are left: those are the
+// cycle. Every edge of the cycle can be removed to leave a tree, and the
+// answer is the one that comes last in the input. O(n) time and space.
+
+fn find_redundant_connection(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    let mut degree: Vec[i64] = vec![0; n + 1];
+    for (a, b) in edges.iter() {
+        adj[*a].push(*b);
+        adj[*b].push(*a);
+        degree[*a] += 1;
+        degree[*b] += 1;
+    }
+    let mut leaves: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        if degree[v] == 1 {
+            leaves.push(v);
+        }
+    }
+    while let Some(v) = leaves.pop() {
+        degree[v] = 0;
+        for w in adj[v].iter() {
+            if degree[*w] > 0 {
+                degree[*w] -= 1;
+                if degree[*w] == 1 {
+                    leaves.push(*w);
+                }
+            }
+        }
+    }
+    let mut k = n - 1;
+    while k >= 0 {
+        let (a, b) = edges[k];
+        if degree[a] >= 2 and degree[b] >= 2 {
+            return (a, b);
+        }
+        k -= 1;
+    }
+    (0, 0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(edges: Vec[(i64, i64)]) {
+    println(f"{edges} -> {find_redundant_connection(edges.clone())}");
+}
+
+// Whether the edges connect the vertices 1 to n.
+fn connects(edges: ref Vec[(i64, i64)], n: i64) -> bool {
+    let mut label: Vec[i64] = Vec.new();
+    for v in 0..n + 1 {
+        label.push(v);
+    }
+    for (a, b) in edges.iter() {
+        let (from, to) = (label[*a], label[*b]);
+        if from != to {
+            for v in 1..n + 1 {
+                if label[v] == from {
+                    label[v] = to;
+                }
+            }
+        }
+    }
+    let mut ok = true;
+    for v in 2..n + 1 {
+        if label[v] != label[1] {
+            ok = false;
+        }
+    }
+    ok
+}
+
+// A random tree on 1 to n with one more edge, the edges in a random order
+// and each written either way round.
+fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
+    let mut name: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        name.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(seed) % (i + 1);
+        name.swap(i, j);
+        i -= 1;
+    }
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    let mut joined: Set[(i64, i64)] = Set.new();
+    for v in 1..n {
+        let u = next_random(seed) % v;
+        edges.push((name[u], name[v]));
+        joined.insert((name[u], name[v]));
+        joined.insert((name[v], name[u]));
+    }
+    loop {
+        let a = name[next_random(seed) % n];
+        let b = name[next_random(seed) % n];
+        if a != b and not joined.contains((a, b)) {
+            edges.push((a, b));
+            break;
+        }
+    }
+    let mut k = n - 1;
+    while k > 0 {
+        let j = next_random(seed) % (k + 1);
+        edges.swap(k, j);
+        k -= 1;
+    }
+    for e in 0..n {
+        if next_random(seed) % 2 == 0 {
+            let (a, b) = edges[e];
+            edges[e] = (b, a);
+        }
+    }
+    edges
+}
+
+fn main() {
+    show([(1, 2), (1, 3), (2, 3)]);
+    show([(1, 2), (2, 3), (3, 4), (1, 4), (1, 5)]);
+    show([(2, 3), (1, 3), (1, 2)]);
+    show([(3, 1), (2, 1), (3, 2)]);
+    show([(1, 4), (3, 4), (1, 3), (1, 2), (4, 5)]);
+    show([(1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 1)]);
+    show([(2, 1), (3, 1), (4, 2), (1, 4)]);
+    show([(1, 5), (3, 4), (3, 5), (4, 5), (2, 4)]);
+    show([(9, 10), (5, 8), (2, 6), (1, 5), (3, 8), (4, 9), (8, 10), (4, 10), (6, 8), (7, 9)]);
+
+    // Every tree on 3 to 6 vertices with one more edge, the edges listed
+    // in order and in reverse.
+    let mut graphs = 0;
+    let mut sum = 0;
+    for n in 3..7 {
+        let mut pairs: Vec[(i64, i64)] = Vec.new();
+        for a in 1..n + 1 {
+            for b in a + 1..n + 1 {
+                pairs.push((a, b));
+            }
+        }
+        let m = pairs.len();
+        for mask in 0..(1 << m) {
+            if mask.count_ones() as i64 == n {
+                let mut edges: Vec[(i64, i64)] = Vec.new();
+                for k in 0..m {
+                    if (mask >> k) & 1 == 1 {
+                        edges.push(pairs[k]);
+                    }
+                }
+                if connects(edges, n) {
+                    graphs += 1;
+                    let (a, b) = find_redundant_connection(edges.clone());
+                    edges.reverse();
+                    let (c, d) = find_redundant_connection(edges);
+                    sum = (sum * 31 + a * 1000 + b * 100 + c * 10 + d) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"trees with one more edge on 3 to 6 vertices: {graphs}, checksum {sum}");
+
+    // Random graphs of up to 1,000 vertices.
+    let mut seed = 684;
+    let mut checksum = 0;
+    for _ in 0..200 {
+        let n = 3 + next_random(mut seed) % 998;
+        let (a, b) = find_redundant_connection(random_graph(mut seed, n));
+        checksum = (checksum * 31 + a * 1009 + b) % 1000000007;
+    }
+    println(f"200 random graphs: checksum {checksum}");
+}
