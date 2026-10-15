@@ -2493,6 +2493,12 @@ fn main() {
     println(f"{c.rotate_left(1)} {c.rotate_right(9)}");
 }
 "#;
+    // The interpreter's natives agree (B-2026-10-15-67).
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(
+        interp.output,
+        "3 9223372036854775809\n3221225472 3 2147483649\n3 192\n"
+    );
     for opt in [0, 2] {
         let Some(out) = build_and_run(src, opt) else {
             return;
@@ -2630,4 +2636,36 @@ fn mir_borrowck_scales_to_long_functions() {
     karac::mir::lower::build_source(&src).expect("MIR");
     let took = start.elapsed();
     assert!(took < std::time::Duration::from_secs(60), "took {took:?}");
+}
+
+/// The MIR interpreter rotates signed and 128-bit integers too, and
+/// `partial_cmp` orders floats, with `None` for NaN (B-2026-10-15-67,
+/// B-2026-10-15-68). The compiled backends do not lower these yet.
+#[test]
+fn mir_interp_rotates_and_partially_orders() {
+    let src = r#"
+fn main() {
+    let d: i32 = -2;
+    let e: u128 = 1u128;
+    let c: u8 = 0x81u8;
+    println(f"{d.rotate_left(1)} {d.rotate_right(1)} {e.rotate_right(1)} {c.rotate_left(64)}");
+    match 2.5.partial_cmp(1.0) {
+        Some(Ordering.Greater) => println("greater"),
+        Some(_) => println("other"),
+        None => println("unordered"),
+    }
+    let n = 0.0 / 0.0;
+    println(f"{n.partial_cmp(1.0).is_none()}");
+    let mut v = [2.5, 1.0, 3.0];
+    v.sort_by(|p, q| p.partial_cmp(q).unwrap());
+    let x: f32 = 1.5;
+    println(f"{v[0]} {v[1]} {v[2]} {x.partial_cmp(1.5) == Some(Ordering.Equal)}");
+}
+"#;
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(
+        interp.output,
+        "-3 2147483647 170141183460469231731687303715884105728 129\ngreater\ntrue\n\
+         1.0 2.5 3.0 true\n"
+    );
 }

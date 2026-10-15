@@ -466,7 +466,7 @@ pub unsafe extern "C" fn karac_mir_tcp(
     let (code, v) = unsafe {
         match op {
             0 | 1 if !parses() => (7, 0),
-            0 => built(ev::karac_runtime_tcp_bind(ptr, len)),
+            0 => built(ev::tcp_bind(ptr, len, false)),
             1 => built(ev::karac_runtime_tcp_connect(ptr, len)),
             2 => built(ev::karac_runtime_tcp_accept(fd)),
             3 => match ev::karac_runtime_tcp_try_clone(fd) {
@@ -852,8 +852,9 @@ thread_local! {
 }
 
 /// Binds `addr` for `Server.serve`: the server, printing `BOUND_PORT=<n>`
-/// first as legacy does, or null with the `HttpError` message as a
-/// `String` at `msg`.
+/// on stderr first, where a test harness reads it and the program's own
+/// output does not carry it (B-2026-10-15-69), or null with the
+/// `HttpError` message as a `String` at `msg`.
 ///
 /// # Safety
 ///
@@ -870,9 +871,7 @@ pub unsafe extern "C" fn karac_mir_http_bind(
     let addr = unsafe { bytes_at(addr, len) };
     match http1::Server::bind(&String::from_utf8_lossy(addr)) {
         Ok((server, port)) => {
-            use std::io::Write;
-            println!("BOUND_PORT={port}");
-            let _ = std::io::stdout().flush();
+            eprintln!("BOUND_PORT={port}");
             Box::into_raw(Box::new(server))
         }
         Err(m) => {

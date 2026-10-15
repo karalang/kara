@@ -2037,8 +2037,32 @@ impl<'a> Interp<'a> {
                 | "checked_add" | "checked_sub" | "checked_mul" | "saturating_add"
                 | "saturating_sub" | "saturating_mul" | "clamp" | "overflowing_add"
                 | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes" | "to_le_bytes"
-                | "to_be_bytes",
+                | "to_be_bytes" | "rotate_left" | "rotate_right",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
+            // `None` when a float side is NaN (floats are `PartialOrd`, not
+            // `Ord`), else the order (B-2026-10-15-68).
+            (t, "partial_cmp") if matches!(t, "f64" | "f32") || int_width(t).is_some() => {
+                let [a, b] = args.as_slice() else {
+                    return err(format!("{name} takes two values"));
+                };
+                let (a, b) = (self.through_refs(a)?, self.through_refs(b)?);
+                let order = match (a, b) {
+                    (Value::Float(x), Value::Float(y)) => x.partial_cmp(&y),
+                    (Value::Int(x), Value::Int(y)) => Some(x.cmp(&y)),
+                    (a, b) => return err(format!("{name} of {a:?} and {b:?}")),
+                };
+                let Some(order) = order else {
+                    return self.option(ret, None);
+                };
+                let want = match order {
+                    std::cmp::Ordering::Less => "Less",
+                    std::cmp::Ordering::Equal => "Equal",
+                    std::cmp::Ordering::Greater => "Greater",
+                };
+                let t = self.payload_ty(ret, "Some")?;
+                let v = self.variant_named(t, None, want, Vec::new())?;
+                self.option(ret, Some(v))
+            }
             (t, "try_from" | "from") if int_width(t).is_some() || t == "char" => {
                 self.convert_from(name, t, method, &args, ret)
             }
@@ -4564,15 +4588,9 @@ impl<'a> Interp<'a> {
                 match text.parse::<std::net::SocketAddr>() {
                     Err(_) => Err(("InvalidInput", None)),
                     Ok(at) if method == "bind" => match std::net::TcpListener::bind(at) {
+                        // Nothing is printed: a program learns the port
+                        // with `local_addr` (B-2026-10-15-69).
                         Ok(l) => {
-                            if text.rsplit(':').next() == Some("0") {
-                                if let Ok(local) = l.local_addr() {
-                                    self.write_out(
-                                        false,
-                                        &format!("BOUND_PORT={}\n", local.port()),
-                                    );
-                                }
-                            }
                             let fd = socket_fd(&l);
                             self.sockets.listeners.insert(fd, l);
                             Ok(Value::Agg(vec![Value::Int(i128::from(fd))]))
@@ -6749,6 +6767,12 @@ impl<'a> Interp<'a> {
         } else {
             (0, (1i128 << bits) - 1)
         };
+        // A rotation's amount is a `u32`, taken modulo the width as Rust
+        // takes it (B-2026-10-15-67).
+        let amount = match args.get(1) {
+            Some(Value::Int(n)) => n.rem_euclid(i128::from(bits)) as u32,
+            _ => 0,
+        };
         // Every argument is the receiver's type; a literal one past
         // `i64::MAX` arrives as an `i64` bit pattern (B-2026-10-15-54).
         let ints: Vec<i128> = args
@@ -6770,6 +6794,26 @@ impl<'a> Interp<'a> {
             ("count_zeros", [a]) => Ok(Value::Int((bits - raw(*a).count_ones()) as i128)),
             ("count_ones", [a]) => Ok(Value::Int(raw(*a).count_ones() as i128)),
             ("abs_diff", [a, b]) => Ok(Value::Int((a - b).abs())),
+            ("rotate_left" | "rotate_right", [a, _]) => {
+                let x = raw(*a);
+                let n = if method == "rotate_left" {
+                    amount
+                } else {
+                    (bits - amount) % bits
+                };
+                let m = if n == 0 {
+                    x
+                } else {
+                    raw(((x << n) | (x >> (bits - n))) as i128)
+                };
+                Ok(Value::Int(
+                    if signed && bits < 128 && (m >> (bits - 1)) & 1 == 1 {
+                        m as i128 - (1i128 << bits)
+                    } else {
+                        m as i128
+                    },
+                ))
+            }
             // `lo` when below it, else `hi` when above it, as legacy: a
             // reversed range is not an error.
             ("clamp", [a, l, h]) => Ok(Value::Int(if a < l {
@@ -7378,6 +7422,15 @@ impl<'a> Interp<'a> {
         let k = self.tys.adt(a).variants.iter().position(|v| v.name == want);
         k.and_then(|k| self.tys.field_ty(ty, Some(k as u32), 0))
             .ok_or_else(|| Stop::Error(format!("{} has no {want} payload", self.tys.display(ty))))
+    }
+
+    /// `v`, or what it refers to when it is a reference.
+    fn through_refs(&mut self, v: &Value) -> R<Value> {
+        let mut v = v.clone();
+        while let Value::Ref(a) = v {
+            v = self.slot(&a)?;
+        }
+        Ok(v)
     }
 
     /// `Some(v)` or `None` in the `Option` type `ret`, by variant name.
@@ -10168,7 +10221,9 @@ impl<'a> Interp<'a> {
                 };
                 let mut server = match crate::http1::Server::bind(&addr) {
                     Ok((server, port)) => {
-                        self.write_out(false, &format!("BOUND_PORT={port}\n"));
+                        // On stderr, for a test harness, as the compiled
+                        // runtime prints it (B-2026-10-15-69).
+                        self.write_out(true, &format!("BOUND_PORT={port}\n"));
                         server
                     }
                     Err(message) => {

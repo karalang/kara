@@ -2054,6 +2054,19 @@ pub(crate) fn net_construct_error_code(e: &std::io::Error) -> i32 {
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { tcp_bind(addr_ptr, addr_len, true) }
+}
+
+/// [`karac_runtime_tcp_bind`], printing `BOUND_PORT=<port>` for an
+/// ephemeral bind only when `announce` is set. The v2 backends' `bind`
+/// writes nothing to the program's output (B-2026-10-15-69).
+///
+/// # Safety
+///
+/// As [`karac_runtime_tcp_bind`].
+#[cfg(unix)]
+pub(crate) unsafe fn tcp_bind(addr_ptr: *const u8, addr_len: i64, announce: bool) -> i64 {
     unsafe {
         use socket2::{Domain, Socket, Type};
         use std::os::unix::io::IntoRawFd;
@@ -2101,7 +2114,7 @@ pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i
         // the port. Treat `addr_str` ending in `:0` (or `:00...`) as the
         // ephemeral marker — the cheapest correct check is to look at
         // the bound port relative to the requested port.
-        if addr_str.rsplit(':').next() == Some("0") {
+        if announce && addr_str.rsplit(':').next() == Some("0") {
             if let Ok(local) = listener.local_addr() {
                 println!("BOUND_PORT={}", local.port());
                 use std::io::Write;

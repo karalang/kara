@@ -616,22 +616,17 @@ fn main() {
 fn udp_and_socket_options_match_the_interpreter() {
     let dir = Scratch::new("udp");
     let (interp, built) = interp_and_build(dir.path(), UDP);
-    // `bind` on port 0 announces the port it got (`BOUND_PORT=`).
-    let unported = |s: &str| {
-        s.lines()
-            .filter(|l| !l.starts_with("BOUND_PORT="))
-            .map(|l| format!("{l}\n"))
-            .collect::<String>()
-    };
+    // `bind` on port 0 prints nothing; the program asks `local_addr`
+    // (B-2026-10-15-69).
     assert_eq!(
-        unported(&interp),
+        interp,
         "ports differ: true\nsent 11\ngot 8 [hello wo] from a: true\nconnected\n\
          sent 4\ngot [pong]\ninvalid input\ntimeout set\ntimed out\nclone at a: true\n\
          addr in use\ninvalid input\ntcp timeout set\ntimed out\ntcp timeout cleared\n\
          tcp sent 1\ntcp got 1\nrefused, through the alias\n"
     );
     if let Some(built) = built {
-        assert_eq!(unported(&built), unported(&interp));
+        assert_eq!(built, interp);
     }
 }
 
@@ -881,7 +876,8 @@ fn main() {
 "#;
 
 /// Starts a server program, sends it `requests(port)` once it prints its
-/// `BOUND_PORT`, and stops it: the transcript of what came back.
+/// `BOUND_PORT` on stderr (B-2026-10-15-69), and stops it: the transcript
+/// of what came back.
 fn exchange(mut cmd: Command, requests: fn(u16) -> String) -> String {
     use std::io::{BufRead, BufReader, Read};
     let mut child = cmd
@@ -889,18 +885,14 @@ fn exchange(mut cmd: Command, requests: fn(u16) -> String) -> String {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn the server");
-    let mut out = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut err = BufReader::new(child.stderr.take().expect("stderr"));
     let mut line = String::new();
-    let _ = out.read_line(&mut line);
+    let _ = err.read_line(&mut line);
     let Some(port) = line.trim().strip_prefix("BOUND_PORT=") else {
         let _ = child.kill();
-        let mut err = String::new();
-        let _ = child
-            .stderr
-            .take()
-            .expect("stderr")
-            .read_to_string(&mut err);
-        panic!("the server printed {line:?}, not its port: {err}");
+        let mut rest = String::new();
+        let _ = err.read_to_string(&mut rest);
+        panic!("the server printed {line:?}, not its port: {rest}");
     };
     let transcript = requests(port.parse().expect("a port"));
     let _ = child.kill();
