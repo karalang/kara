@@ -4859,6 +4859,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // A borrowed `bool` (`for w in v.iter() { if w {..} }`) is read.
                 let bool_t = self.tys().bool();
                 let c = self.owned_operand(condition, bool_t)?;
+                let c = self.read_before_drops(c, bool_t);
                 self.pop_scope()?;
                 let then_bb = self.b.new_block();
                 let else_bb = self.b.new_block();
@@ -4984,6 +4985,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // A borrowed `bool` (`for w in v.iter() { if w {..} }`) is read.
                 let bool_t = self.tys().bool();
                 let c = self.owned_operand(condition, bool_t)?;
+                let c = self.read_before_drops(c, bool_t);
                 self.pop_scope()?;
                 self.goto_with(
                     TerminatorKind::SwitchInt {
@@ -10586,6 +10588,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// or (`range`) the part from `start` to `end`: the library's
     /// `as_slice` / `as_mut_slice`, or `slice` / `slice_mut` with `usize`
     /// bounds (an open end is the length).
+    /// `op` read into a local of its own when it names a part of a value,
+    /// so it outlives the scope that drops that value (`if mk(2).ok`;
+    /// B-2026-10-14-64).
+    fn read_before_drops(&mut self, op: Operand, t: Ty) -> Operand {
+        match &op {
+            Operand::Copy(p) | Operand::Move(p) if !p.projection.is_empty() => {
+                let l = self.temp(t);
+                self.assign(l, Rvalue::Use(op));
+                Operand::Move(Place::local(l))
+            }
+            _ => op,
+        }
+    }
+
     /// A view of the whole of the collection at `p` (of type `ct`) as
     /// `slice_t`.
     fn slice_view_of(&mut self, p: Place, ct: Ty, slice_t: Ty, mutable: bool) -> Local {

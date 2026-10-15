@@ -1722,3 +1722,38 @@ fn main() {
         }
     }
 }
+
+/// An `if` or `while` condition reading a field of a call's owned result is
+/// read before that result drops (B-2026-10-14-64).
+#[test]
+fn mir_condition_on_a_field_of_a_temporary() {
+    const SRC: &str = r#"
+struct A { ok: bool, s: String }
+
+fn mk(n: i64) -> A { A { ok: n > 1, s: "x".to_string() } }
+
+fn main() {
+    if mk(2).ok {
+        println("yes");
+    }
+    if mk(0).ok {
+        println("no");
+    } else {
+        println("else");
+    }
+    let mut i = 0;
+    while mk(3 - i).ok {
+        i += 1;
+    }
+    println(f"end {i}");
+}
+"#;
+    let want = "yes\nelse\nend 2\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
