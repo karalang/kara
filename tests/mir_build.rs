@@ -2579,3 +2579,20 @@ fn mir_unsuffixed_literals_past_i64_agree_on_both_backends() {
         }
     }
 }
+
+/// B-2026-10-15-57: the borrow checker's state is per held loan, not per
+/// local times loan, so a function of thousands of statements, each with a
+/// loan of its own, checks in linear-ish time. Before, 1000 `push_str`
+/// lines took 2 GB and 4000 ran out of memory; the bound here is loose.
+#[test]
+fn mir_borrowck_scales_to_long_functions() {
+    let mut src = String::from("fn build() -> String {\n    let mut s = String.new();\n");
+    for i in 0..3000u64 {
+        src.push_str(&format!("    s.push_str(\"{:096x}\");\n", i * 7919 + 12345));
+    }
+    src.push_str("    s\n}\nfn main() {\n    println(f\"{build().len()}\");\n}\n");
+    let start = std::time::Instant::now();
+    karac::mir::lower::build_source(&src).expect("MIR");
+    let took = start.elapsed();
+    assert!(took < std::time::Duration::from_secs(60), "took {took:?}");
+}

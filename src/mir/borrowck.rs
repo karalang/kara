@@ -46,6 +46,8 @@
 //! modelled; the builder takes a `mut ref self` receiver's borrow after
 //! the arguments (§5.6).
 
+use std::collections::BTreeMap;
+
 use super::place_ty::place_ty;
 use super::pretty::place as show_place;
 use super::syntax::*;
@@ -76,8 +78,110 @@ struct Loan {
     at: (usize, usize),
 }
 
-/// Per local, the loans its value may hold.
-type Origins = Vec<Vec<bool>>;
+/// A set of loans, by index: sorted and without repeats. Most values hold
+/// none or one, so a set is a short list rather than a row of flags, and an
+/// empty one allocates nothing (B-2026-10-15-57).
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+struct LoanSet(Vec<u32>);
+
+impl LoanSet {
+    fn insert(&mut self, li: usize) -> bool {
+        match self.0.binary_search(&(li as u32)) {
+            Ok(_) => false,
+            Err(i) => {
+                self.0.insert(i, li as u32);
+                true
+            }
+        }
+    }
+
+    /// Adds `other`'s loans; whether any was new.
+    fn union(&mut self, other: &LoanSet) -> bool {
+        if other.0.is_empty() {
+            return false;
+        }
+        let before = self.0.len();
+        if before == 0 {
+            self.0.clone_from(&other.0);
+            return true;
+        }
+        let mut out = Vec::with_capacity(before + other.0.len());
+        let (mut i, mut j) = (0, 0);
+        while i < self.0.len() && j < other.0.len() {
+            let (a, b) = (self.0[i], other.0[j]);
+            out.push(a.min(b));
+            i += usize::from(a <= b);
+            j += usize::from(b <= a);
+        }
+        out.extend_from_slice(&self.0[i..]);
+        out.extend_from_slice(&other.0[j..]);
+        let grew = out.len() != before;
+        self.0 = out;
+        grew
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().map(|&l| l as usize)
+    }
+}
+
+static NO_LOANS: LoanSet = LoanSet(Vec::new());
+
+/// Per local, the loans its value may hold; only the locals that hold any
+/// are kept, so a state costs what it holds, not locals times loans
+/// (B-2026-10-15-57).
+#[derive(Clone, Default, Debug)]
+struct Origins(BTreeMap<u32, LoanSet>);
+
+impl Origins {
+    fn get(&self, l: Local) -> &LoanSet {
+        self.0.get(&(l.index() as u32)).unwrap_or(&NO_LOANS)
+    }
+
+    fn set(&mut self, l: Local, v: LoanSet) {
+        if v.is_empty() {
+            self.0.remove(&(l.index() as u32));
+        } else {
+            self.0.insert(l.index() as u32, v);
+        }
+    }
+
+    fn clear(&mut self, l: Local) {
+        self.0.remove(&(l.index() as u32));
+    }
+
+    fn insert(&mut self, l: Local, li: usize) {
+        self.0.entry(l.index() as u32).or_default().insert(li);
+    }
+
+    fn union_into(&mut self, l: Local, v: &LoanSet) {
+        if !v.is_empty() {
+            self.0.entry(l.index() as u32).or_default().union(v);
+        }
+    }
+
+    /// Adds `other`'s origins; whether anything was new.
+    fn join(&mut self, other: &Origins) -> bool {
+        let mut changed = false;
+        for (l, v) in &other.0 {
+            changed |= self.0.entry(*l).or_default().union(v);
+        }
+        changed
+    }
+
+    /// The loans some local of `live` may hold.
+    fn live_loans(&self, live: &[Local]) -> LoanSet {
+        let mut out = LoanSet::default();
+        for l in live {
+            out.union(self.get(*l));
+        }
+        out
+    }
+}
 
 /// What a call's result borrows (§5.4).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -106,8 +210,7 @@ pub fn check_borrows(
     if loans.is_empty() {
         return if errs.is_empty() { Ok(()) } else { Err(errs) };
     }
-    let n_locals = body.locals.len();
-    let entry: Origins = vec![vec![false; loans.len()]; n_locals];
+    let entry = Origins::default();
     let cx = Cx {
         body,
         tys,
@@ -142,9 +245,15 @@ pub fn check_borrows(
             } else {
                 terminator_accesses(&block.terminator.kind)
             };
+            let live_loans = if accesses.is_empty() {
+                LoanSet::default()
+            } else {
+                o.live_loans(live)
+            };
             for (place, access) in accesses {
-                for (li, loan) in loans.iter().enumerate() {
-                    if loan.at == at || !loan_live(&o, li, live) {
+                for li in live_loans.iter() {
+                    let loan = &loans[li];
+                    if loan.at == at {
                         continue;
                     }
                     if conflicts(loan, &place, access) {
@@ -166,10 +275,8 @@ pub fn check_borrows(
             if si < n {
                 cx.transfer(&mut o, &block.statements[si].kind, at);
             } else if let TerminatorKind::Return = block.terminator.kind {
-                for (li, loan) in loans.iter().enumerate() {
-                    if !o[0][li] {
-                        continue;
-                    }
+                for li in o.get(Local::RETURN_PLACE).clone().iter() {
+                    let loan = &loans[li];
                     // A slice is a view: a borrow of one borrows what it
                     // views, as a borrow through a reference does.
                     let view_of = place_ty(body, tys, &loan.place)
@@ -220,8 +327,7 @@ pub(super) fn loan_liveness(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> (Vec<LoanSite>, Vec<Vec<Vec<bool>>>) {
     let loans = collect_loans(body, tys);
-    let n_locals = body.locals.len();
-    let entry: Origins = vec![vec![false; loans.len()]; n_locals];
+    let entry = Origins::default();
     let cx = Cx {
         body,
         tys,
@@ -249,7 +355,11 @@ pub(super) fn loan_liveness(
         }
         let mut points = Vec::with_capacity(n + 1);
         for (si, live) in live_before.iter().enumerate() {
-            points.push((0..loans.len()).map(|li| loan_live(&o, li, live)).collect());
+            let mut point = vec![false; loans.len()];
+            for li in o.live_loans(live).iter() {
+                point[li] = true;
+            }
+            points.push(point);
             if si < n {
                 cx.transfer(&mut o, &block.statements[si].kind, (bi, si));
             }
@@ -434,15 +544,13 @@ impl Cx<'_> {
 
     /// The origins of a value read from `place`: what its local holds,
     /// when its type can hold any.
-    fn place_origins(&self, o: &Origins, place: &Place, into: &mut [bool]) {
+    fn place_origins(&self, o: &Origins, place: &Place, into: &mut LoanSet) {
         if self.holds(place) {
-            for (d, s) in into.iter_mut().zip(&o[place.local.index()]) {
-                *d |= *s;
-            }
+            into.union(o.get(place.local));
         }
     }
 
-    fn operand_origins(&self, o: &Origins, op: &Operand, into: &mut [bool]) {
+    fn operand_origins(&self, o: &Origins, op: &Operand, into: &mut LoanSet) {
         if let Some(p) = op.place() {
             self.place_origins(o, p, into);
         }
@@ -462,27 +570,26 @@ impl Cx<'_> {
             })
     }
 
-    fn pointee_origins(&self, o: &Origins, op: &Operand, into: &mut [bool]) {
+    fn pointee_origins(&self, o: &Origins, op: &Operand, into: &mut LoanSet) {
         let Some(p) = op.place() else { return };
-        for (li, l) in self.loans.iter().enumerate() {
-            if o[p.local.index()][li] && !l.place.projection.contains(&ProjElem::Deref) {
+        for li in o.get(p.local).iter() {
+            let l = &self.loans[li];
+            if !l.place.projection.contains(&ProjElem::Deref) {
                 self.place_origins(o, &l.place, into);
             }
         }
     }
 
     /// `dest = <value with origins val>`.
-    fn assign(&self, o: &mut Origins, dest: &Place, mut val: Vec<bool>) {
+    fn assign(&self, o: &mut Origins, dest: &Place, mut val: LoanSet) {
         if !self.holds(dest) {
-            val.iter_mut().for_each(|b| *b = false);
+            val = LoanSet::default();
         }
         if dest.projection.is_empty() {
-            o[dest.local.index()] = val;
+            o.set(dest.local, val);
         } else if !dest.projection.contains(&ProjElem::Deref) {
             // A part of the local: what the rest held stays.
-            for (d, s) in o[dest.local.index()].iter_mut().zip(val) {
-                *d |= s;
-            }
+            o.union_into(dest.local, &val);
         } else {
             // A store through a reference: the places the reference
             // mutably borrows now hold `val` too.
@@ -494,29 +601,28 @@ impl Cx<'_> {
     /// local `r`: every local place `r` mutably borrows may now hold it, or
     /// every place it borrows at all when `through_shared` (a receiver that
     /// stores through `ref self`).
-    fn store_through(&self, o: &mut Origins, r: Local, val: &[bool], through_shared: bool) {
-        if !val.iter().any(|b| *b) {
+    fn store_through(&self, o: &mut Origins, r: Local, val: &LoanSet, through_shared: bool) {
+        if val.is_empty() {
             return;
         }
-        let targets: Vec<Local> = self
-            .loans
+        let targets: Vec<Local> = o
+            .get(r)
             .iter()
-            .enumerate()
-            .filter(|(li, l)| {
-                o[r.index()][*li]
-                    && (through_shared || l.kind == BorrowKind::Mut)
+            .map(|li| &self.loans[li])
+            .filter(|l| {
+                (through_shared || l.kind == BorrowKind::Mut)
                     && !l.place.projection.contains(&ProjElem::Deref)
                     && self.holds(&l.place)
             })
-            .map(|(_, l)| l.place.local)
+            .map(|l| l.place.local)
             .collect();
         // A value never holds a borrow of its own local.
         for t in targets {
-            for (li, s) in val.iter().enumerate() {
+            for li in val.iter() {
                 let own = self.loans[li].place.local == t
                     && !self.loans[li].place.projection.contains(&ProjElem::Deref);
-                if *s && !own {
-                    o[t.index()][li] = true;
+                if !own {
+                    o.insert(t, li);
                 }
             }
         }
@@ -525,22 +631,21 @@ impl Cx<'_> {
     fn transfer(&self, o: &mut Origins, s: &StatementKind, at: (usize, usize)) {
         let StatementKind::Assign(dest, rv) = s else {
             if let StatementKind::StorageDead(l) = s {
-                o[l.index()].iter_mut().for_each(|b| *b = false);
+                o.clear(*l);
             }
             return;
         };
-        let mut val = vec![false; self.loans.len()];
+        let mut val = LoanSet::default();
         match rv {
             Rvalue::Ref(_, place) => {
-                if let Some(li) = self.loans.iter().position(|l| l.at == at) {
-                    val[li] = true;
+                // Loans are collected in block order, one per `Ref` site.
+                if let Ok(li) = self.loans.binary_search_by(|l| l.at.cmp(&at)) {
+                    val.insert(li);
                 }
                 // A reborrow through a reference keeps that reference's
                 // loans, whatever the type of the place reborrowed.
                 if place.projection.contains(&ProjElem::Deref) {
-                    for (d, s) in val.iter_mut().zip(&o[place.local.index()]) {
-                        *d |= *s;
-                    }
+                    val.union(o.get(place.local));
                 }
             }
             // A raw pointer holds no loan (`unsafe` code answers for it).
@@ -599,14 +704,14 @@ impl Cx<'_> {
             let Some(through_shared) = stores.filter(|_| p.projection.is_empty()) else {
                 continue;
             };
-            let mut others = vec![false; self.loans.len()];
+            let mut others = LoanSet::default();
             let rest = args.iter().enumerate().filter(|(j, _)| *j != i);
             for a in std::iter::once(func).chain(rest.map(|(_, a)| a)) {
                 self.operand_origins(&before, a, &mut others);
             }
             self.store_through(o, p.local, &others, through_shared);
         }
-        let mut val = vec![false; self.loans.len()];
+        let mut val = LoanSet::default();
         // A closure called through a reference: what the closure holds.
         let callee_ref = func.place().is_some_and(|p| {
             place_ty(self.body, self.tys, p)
@@ -644,7 +749,7 @@ fn clear_moved<'o>(o: &mut Origins, ops: impl IntoIterator<Item = &'o Operand>) 
     for op in ops {
         if let Operand::Move(p) = op {
             if p.projection.is_empty() {
-                o[p.local.index()].iter_mut().for_each(|b| *b = false);
+                o.clear(p.local);
             }
         }
     }
@@ -749,18 +854,7 @@ fn origins_dataflow(cx: &Cx, entry: Origins) -> Vec<Option<Origins>> {
                     states[si] = Some(o.clone());
                     true
                 }
-                Some(cur) => {
-                    let mut changed = false;
-                    for (cl, nl) in cur.iter_mut().zip(&o) {
-                        for (c, n) in cl.iter_mut().zip(nl) {
-                            if *n && !*c {
-                                *c = true;
-                                changed = true;
-                            }
-                        }
-                    }
-                    changed
-                }
+                Some(cur) => cur.join(&o),
             };
             if changed && !work.contains(&si) {
                 work.push(si);
@@ -768,10 +862,6 @@ fn origins_dataflow(cx: &Cx, entry: Origins) -> Vec<Option<Origins>> {
         }
     }
     states
-}
-
-fn loan_live(o: &Origins, li: usize, live: &[Local]) -> bool {
-    live.iter().any(|l| o[l.index()][li])
 }
 
 // ---- liveness ----
