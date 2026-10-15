@@ -1752,6 +1752,48 @@ impl<'a> super::Resolver<'a> {
         if crate::prelude::is_importable_stdlib_module(&imp.path) {
             return;
         }
+        // A library module whose items are globals (B-2026-10-14-48): the
+        // items that resolve were dropped before resolution, so each one
+        // left is unknown, specified but unimplemented, or renamed.
+        if crate::prelude::library_global_module(&imp.path).is_some() {
+            for it in &imp.items {
+                if let Some(message) = crate::prelude::library_module_item_error(
+                    &imp.path,
+                    &it.name,
+                    it.alias.as_deref(),
+                ) {
+                    self.errors.push(ResolveError {
+                        message,
+                        span: it.span,
+                        kind: ResolveErrorKind::UnknownItemInModule,
+                        suggestion: None,
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                }
+            }
+            return;
+        }
+        // `import std.sync;` names a module of globals: there is no module
+        // value to bind, so say how to import from it.
+        for it in &imp.items {
+            let mut full = imp.path.clone();
+            full.push(it.name.clone());
+            if crate::prelude::library_global_module(&full).is_some() {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "`{m}` is imported item by item: `import {m}.{{..}};`",
+                        m = full.join(".")
+                    ),
+                    span: imp.span,
+                    kind: ResolveErrorKind::UnknownModule,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+                return;
+            }
+        }
         let bare_ok = imp.items.iter().any(|it| {
             let mut full = imp.path.clone();
             full.push(it.name.clone());

@@ -1417,6 +1417,7 @@ pub fn importable_stdlib_module_names() -> Vec<String> {
         .iter()
         .map(|(p, _)| p.join("."))
         .chain(std::iter::once(PRELUDE_PATH_SEGMENTS.join(".")))
+        .chain(LIBRARY_GLOBAL_MODULES.iter().map(|(p, _, _)| p.join(".")))
         .collect()
 }
 
@@ -1599,10 +1600,141 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
 /// names; import items the gated module does NOT define are left in
 /// the import declaration so the resolver's blind-bind path keeps
 /// owning that (pre-existing) behaviour.
+/// The library modules of docs/library/README.md whose items the
+/// implementation keeps as globals rather than as gated modules, each with
+/// the items that exist and those the spec names that are not implemented
+/// yet (B-2026-10-14-48). `import std.sync.{TaskGroup}` names the global, so
+/// the import binds nothing new and is dropped before resolution; any other
+/// item stays for the resolver to report (`library_module_item_error`).
+pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
+    (
+        &["std", "sync"],
+        &[
+            "Sender",
+            "Receiver",
+            "SendError",
+            "TaskGroup",
+            "TaskHandle",
+            "Mutex",
+            "Atomic",
+            "Channel",
+            "BoundedChannel",
+        ],
+        &["channel", "MutexGuard"],
+    ),
+    (
+        &["std", "time"],
+        &["Clock", "sleep_ms"],
+        &["Instant", "SystemTime", "Duration", "sleep"],
+    ),
+    (&["std", "random"], &[], &["next_u64"]),
+    (&["std", "uuid"], &[], &["v4"]),
+    (
+        &["std", "io"],
+        &["File", "SeekFrom", "BufReader", "BufWriter"],
+        &[],
+    ),
+    (
+        &["std", "net"],
+        &["TcpListener", "TcpStream", "TcpError"],
+        &[],
+    ),
+    (
+        &["std", "hash"],
+        &[
+            "Hasher",
+            "BuildHasher",
+            "SipHash13BuildHasher",
+            "FxBuildHasher",
+            "StableHash",
+        ],
+        &[],
+    ),
+    (&["std", "iter"], &[], &["DoubleEndedIterator", "Extend"]),
+    (
+        &["std", "process"],
+        &[
+            "Command",
+            "Stdio",
+            "Child",
+            "ChildStdout",
+            "ChildStderr",
+            "ChildStdin",
+            "ExitStatus",
+        ],
+        &["exit"],
+    ),
+    (
+        &["std", "log"],
+        &[],
+        &[
+            "debug",
+            "info",
+            "warn",
+            "error",
+            "init",
+            "Backend",
+            "Record",
+            "json_backend",
+            "text_backend",
+        ],
+    ),
+];
+
+/// The [`LIBRARY_GLOBAL_MODULES`] entry for `path`: its implemented and its
+/// specified-only items.
+pub fn library_global_module(
+    path: &[String],
+) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    LIBRARY_GLOBAL_MODULES
+        .iter()
+        .find(|(p, _, _)| {
+            p.len() == path.len() && p.iter().zip(path).all(|(a, b)| *a == b.as_str())
+        })
+        .map(|(_, have, spec)| (*have, *spec))
+}
+
+/// Why `import <path>.{name as alias}` from a [`LIBRARY_GLOBAL_MODULES`]
+/// module does not resolve, or `None` when it does (the import is dropped).
+pub fn library_module_item_error(
+    path: &[String],
+    name: &str,
+    alias: Option<&str>,
+) -> Option<String> {
+    let (have, spec) = library_global_module(path)?;
+    let module = path.join(".");
+    if have.contains(&name) {
+        return alias.map(|a| {
+            format!("`{module}.{name}` cannot be renamed (`as {a}`) yet; import it as `{name}`")
+        });
+    }
+    if spec.contains(&name) {
+        return Some(format!(
+            "`{module}.{name}` is in the library spec (docs/library) but not implemented yet"
+        ));
+    }
+    let mut msg = format!("`{module}` has no item `{name}`");
+    let names: Vec<&str> = have.iter().chain(spec.iter()).copied().collect();
+    if let Some(s) = crate::edit_distance::suggest_similar(name, &names) {
+        msg.push_str(&format!(", did you mean `{s}`?"));
+    }
+    Some(msg)
+}
+
 pub fn expand_gated_stdlib_imports(program: &mut Program) {
     let mut appended: Vec<Item> = Vec::new();
     for item in &mut program.items {
         let Item::Import(imp) = item else { continue };
+        if let Some((have, _)) = library_global_module(&imp.path) {
+            if imp.is_wildcard {
+                imp.items.clear();
+                imp.is_wildcard = false;
+            } else {
+                imp.items
+                    .retain(|ii| ii.alias.is_some() || !have.contains(&ii.name.as_str()));
+            }
+            continue;
+        }
         let Some(expansion) = gated_items_for_import(&imp.path, &imp.items) else {
             continue;
         };

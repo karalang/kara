@@ -4313,3 +4313,53 @@ fn question_then_member_access_propagates() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The library module paths of docs/library/README.md resolve to the
+/// globals the implementation keeps (B-2026-10-14-48): `import std.sync`,
+/// `std.io`, `std.net`, `std.hash` check and run. A specified name that is
+/// not implemented yet, an unknown one and a rename each get their own
+/// error rather than "unknown module".
+#[test]
+fn library_module_paths_resolve() {
+    let src = "import std.sync.{TaskGroup, Sender, Receiver, Mutex};\n\
+               import std.io.{File, BufReader};\n\
+               import std.net.{TcpListener, TcpError};\n\
+               import std.hash.{FxBuildHasher};\n\
+               fn main() {\n\
+                   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+                   tx.send(4);\n\
+                   println(f\"{rx.recv()}\");\n\
+               }\n";
+    let (dir, path) = fixture("library-paths", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept the library paths: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "4\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let src = "import std.sync.{channel, Mutx};\n\
+               import std.io.{File as F};\n\
+               fn main() {}\n";
+    let (dir, path) = fixture("library-paths-bad", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    for want in [
+        "`std.sync.channel` is in the library spec (docs/library) but not implemented yet",
+        "`std.sync` has no item `Mutx`, did you mean `Mutex`?",
+        "`std.io.File` cannot be renamed (`as F`) yet",
+    ] {
+        assert!(err.contains(want), "want {want:?} in\n{err}");
+    }
+    assert!(!err.contains("unknown module"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
