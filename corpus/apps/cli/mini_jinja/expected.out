@@ -1,0 +1,161 @@
+== out/index.html (1609 bytes)
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Home &mdash; Kara Notes</title>
+</head>
+<body>
+  <nav>
+    <a href="/" class="first">Home</a> |
+    <a href="/archive/">Archive</a> |
+    <a href="/about/">About</a>
+  </nav>
+  <p class="tagline">Small programs &amp; &lt;big&gt; ideas</p>
+  <main>
+    <h1>KARA NOTES</h1>
+    <p>3 posts, newest last.</p>
+    <article id="hello-world">
+      <h2><a href="/hello-world/">Hello, World</a></h2>
+      <p class="meta">2026-10-01 by Ada Lovelace &middot; 1532 views &middot; ****. 4.2</p>
+      <p>Why this blog exists.</p>
+      <p class="tags"><a class="tag" href="/tags/intro/">#intro</a>, <a class="tag" href="/tags/meta/">#meta</a></p>
+    </article>
+
+    <article id="parsing-toml">
+      <h2><a href="/parsing-toml/">Parsing Toml By Hand</a></h2>
+      <p class="meta">2026-10-07 by Grace Hopper &middot; 987 views &middot; ***.. 3.9</p>
+      <p>No summary.</p>
+      <p class="tags"><a class="tag" href="/tags/config/">#config</a>, <a class="tag" href="/tags/parsing/">#parsing</a>, <a class="tag" href="/tags/toml/">#toml</a></p>
+    </article>
+
+    <article id="rolling-checksums">
+      <h2><a href="/rolling-checksums/">Rolling Checksums &#34;explained&#34;</a></h2>
+      <p class="meta">2026-10-12 by Grace Hopper &middot; 20480 views &middot; ****. 4.5</p>
+      <p>How rsync finds what changed.</p>
+      <p class="tags"><a class="tag" href="/tags/algorithms/">#algorithms</a>, <a class="tag" href="/tags/sync/">#sync</a></p>
+    </article>
+
+  </main>
+  <footer>
+    Kara Notes v1.4.0 (e3e59dc)
+  </footer>
+</body>
+</html>
+== out/hello-world/index.html (766 bytes)
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Hello, World | Kara Notes</title>
+</head>
+<body>
+  <nav>
+    <a href="/" class="first">Home</a> |
+    <a href="/archive/">Archive</a> |
+    <a href="/about/">About</a>
+  </nav>
+  <p class="tagline">Small programs &amp; &lt;big&gt; ideas</p>
+  <main>
+    <article>
+      <h1>hello, world</h1>
+      <p class="meta">2026-10-01 &middot; 16 words &middot; <a class="tag" href="/tags/intro/">#intro</a> <a class="tag" href="/tags/meta/">#meta</a></p>
+      <p id="p1">Every language starts with a greeting.</p>
+      <p id="p2">This one compiles to native code &amp; runs on &lt;your&gt; machine.</p>
+    </article>
+  </main>
+  <footer>
+    Kara Notes v1.4.0 (e3e59dc)
+  </footer>
+</body>
+</html>
+== out/parsing-toml/index.html (997 bytes)
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Parsing Toml By Hand | Kara Notes</title>
+</head>
+<body>
+  <nav>
+    <a href="/" class="first">Home</a> |
+    <a href="/archive/">Archive</a> |
+    <a href="/about/">About</a>
+  </nav>
+  <p class="tagline">Small programs &amp; &lt;big&gt; ideas</p>
+  <main>
+    <article>
+      <h1>parsing TOML by hand</h1>
+      <p class="meta">2026-10-07 &middot; 26 words &middot; <a class="tag" href="/tags/config/">#config</a> <a class="tag" href="/tags/parsing/">#parsing</a> <a class="tag" href="/tags/toml/">#toml</a></p>
+      <p id="p1">Dates, times and dotted keys all need care.</p>
+      <p id="p2">The spec has 27 ways to be wrong; we test each one.</p>
+      <p id="p3">Inline tables may not span lines.</p>
+      <p>A <em>pre-rendered</em> note.</p>
+      <p class="prev">Previous: <a href="/hello-world/">Hello, world</a></p>
+    </article>
+  </main>
+  <footer>
+    Kara Notes v1.4.0 (e3e59dc)
+  </footer>
+</body>
+</html>
+== out/rolling-checksums/index.html (945 bytes)
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rolling Checksums &#34;explained&#34; | Kara Notes</title>
+</head>
+<body>
+  <nav>
+    <a href="/" class="first">Home</a> |
+    <a href="/archive/">Archive</a> |
+    <a href="/about/">About</a>
+  </nav>
+  <p class="tagline">Small programs &amp; &lt;big&gt; ideas</p>
+  <main>
+    <article>
+      <h1>rolling checksums &#34;explained&#34;</h1>
+      <p class="meta">2026-10-12 &middot; 22 words &middot; <a class="tag" href="/tags/algorithms/">#algorithms</a> <a class="tag" href="/tags/sync/">#sync</a></p>
+      <p id="p1">A weak sum slides one byte at a time.</p>
+      <p id="p2">A strong hash confirms each candidate block.</p>
+      <p id="p3">Only the differences cross the wire.</p>
+      <p class="prev">Previous: <a href="/parsing-toml/">Parsing toml by hand</a></p>
+    </article>
+  </main>
+  <footer>
+    Kara Notes v1.4.0 (e3e59dc)
+  </footer>
+</body>
+</html>
+== out/digest.txt (523 bytes)
+Kara Notes digest
+=================
+ 1. Hello, World (2 tags)
+    1532 views, 1.5k *
+ 2. Parsing Toml By Hand (3 tags)
+    987 views, 1.0k
+ 3. Rolling Checksums 'explained' (2 tags)
+    20480 views, 20.5k *
+Total views: 22999 over 3 posts
+Hot: rolling checksums "explained"
+Drafts: unfinished
+
+Authors:
+  Ada Lovelace   2 posts, ada@example.com
+  Alan Turing    0 posts, no email
+  Grace Hopper   2 posts, grace@example.com
+
+Template syntax looks like {{ this }} and {% this %}.
+Built from e3e59dc; 3.15625 average rating.
+== errors
+error: TemplateSyntaxError: Unexpected end of template. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'. (line 1)
+error: TemplateAssertionError: No filter named 'nosuch'. (line 1)
+error: UndefinedError: 'missing' is undefined
+error: TemplateSyntaxError: Encountered unknown tag 'endif'. (line 2)
+error: ZeroDivisionError: division by zero
+error: TemplateSyntaxError: Encountered unknown tag 'endif'. You probably made a nesting mistake. Jinja is expecting this tag, but currently looking for 'endfor' or 'else'. The innermost block that needs to be closed is 'for'. (line 3)
+error: TemplateSyntaxError: unexpected 'end of print statement' (line 1)
+error: TypeError: macro 'm' takes not more than 1 argument(s)
+ok: <>
+ok: &lt;b&gt;1 <b>1

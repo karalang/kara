@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | missing-feature | 269 |
-| codegen-gap | 261 |
-| false-positive | 195 |
+| codegen-gap | 262 |
+| false-positive | 198 |
 | other | 172 |
 | perf | 167 |
 | diagnostics | 162 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2905 |
-| interp | 931 |
-| typecheck | 434 |
+| codegen | 2906 |
+| interp | 932 |
+| typecheck | 435 |
 | other | 115 |
-| ownership | 101 |
+| ownership | 103 |
 | cli | 76 |
 | runtime | 72 |
 | parser | 64 |
@@ -221,6 +221,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-34 | 2026-10-15 | interp+codegen | medium | On the MIR backends an f-string can call a USER function named `format` in place of the formatting it lowers to: `fn format(n: i64) -> String { f"<{n}>" }` fails with "format takes 1 arguments, got 3" on `__mir-run` and "Incorrect number of arguments passed to called function" (`call void @kara.format(ptr %ret, ptr %arg, ptr %arg1, ptr %arg2)`) on `__mir-llvm-run` and `__mir-llvm-asan`; `karac check` passes and `karac run --interp` prints `<3>` | — |
 | B-2026-10-15-35 | 2026-10-15 | codegen | low | A bare variant pattern whose name a struct also holds passes `karac check` but stops the MIR builder with "this variant is not lowered yet": with `enum Block { Heading(i64), Rule }` and `struct Heading { level: i64 }`, `match b { Heading(n) => .., Rule => .. }` on a `Block` fails on `__mir-run` and `__mir-llvm-run` whichever is declared first; the qualified `Block.Heading(n)` runs | — |
 | B-2026-10-15-36 | 2026-10-15 | codegen | low | On the MIR compiled backend, `best[i] = best[i].max(x)` in an inner loop reloads the `Vec`'s data pointer and length and loads and stores `best[i]` through memory on every step: kata 651's bench runs 1.90-2.07 s on `karac build --mir` against 0.59-0.67 s on legacy `karac build`, 0.41-0.50 s in C and 0.66-0.69 s in Rust; the same loop with the running max in a local runs 0.72 s | — |
+| B-2026-10-15-37 | 2026-10-15 | typecheck | medium | A method call on a LOCAL or PARAMETER named `ast` or `compiler` is refused with E_COMPTIME_MODULE_AT_RUNTIME ("the `ast` module is only available inside a `comptime` context"): `fn f(ast: mut ref A) -> i64 { ast.add(3) }` fails `karac check` and every running surface, though the binding is in scope and should shadow the comptime module; the same program with the parameter renamed runs | — |
+| B-2026-10-15-38 | 2026-10-15 | ownership | low | `karac check` takes `f64.parse(t.text)` (and `i64.parse(t.text)`) as a MOVE of the field `t.text`, so a later `out.push(t)` is refused with "value 't.text' moved here, used again here"; the same call on a local String (`f64.parse(text)` then `T { text: text, .. }`) is accepted, the spec gives `parse(s: Str)` a borrowed parameter, and all four running surfaces run the program | — |
+| B-2026-10-15-39 | 2026-10-15 | ownership | medium | `karac check` reports a binding declared INSIDE a loop body as "moved inside a loop and not assigned again before the next iteration" when it is read in an `if` and then moved into an enum constructor that is itself a call argument (`let name = self.next()?; if c { self.bad = f"{name}"; } e = tree.add(E.F(e, name));`); each iteration has a fresh `name`, all four running surfaces run it, and binding the constructor first (`let x = E.F(e, name); e = tree.add(x);`) is accepted | — |
+| B-2026-10-15-40 | 2026-10-15 | interp+codegen | high | On the MIR backends a USER enum variant named `None` takes over every bare `None` of an `Option` in the program: with `enum V { None, Int(i64) }` declared, `fn half(x: i64) -> Option[i64] { .. None }` stops `__mir-run`, `__mir-llvm-run` and `__mir-llvm-asan` with "invalid MIR: half: bb9[0]: Option takes 1 fields, got 0" before anything runs; `karac check` passes and `karac run --interp` prints the right answer | — |
 
 ### Relocated
 
