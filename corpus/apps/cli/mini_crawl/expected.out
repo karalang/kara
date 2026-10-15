@@ -1,0 +1,313 @@
+== URL library
+urljoin("http://a/b/c/d;p?q", "g:h") = "g:h"
+urljoin("http://a/b/c/d;p?q", "g") = "http://a/b/c/g"
+urljoin("http://a/b/c/d;p?q", "./g") = "http://a/b/c/g"
+urljoin("http://a/b/c/d;p?q", "g/") = "http://a/b/c/g/"
+urljoin("http://a/b/c/d;p?q", "/g") = "http://a/g"
+urljoin("http://a/b/c/d;p?q", "//g") = "http://g"
+urljoin("http://a/b/c/d;p?q", "?y") = "http://a/b/c/d;p?y"
+urljoin("http://a/b/c/d;p?q", "g?y") = "http://a/b/c/g?y"
+urljoin("http://a/b/c/d;p?q", "#s") = "http://a/b/c/d;p?q#s"
+urljoin("http://a/b/c/d;p?q", "g#s") = "http://a/b/c/g#s"
+urljoin("http://a/b/c/d;p?q", "g?y#s") = "http://a/b/c/g?y#s"
+urljoin("http://a/b/c/d;p?q", ";x") = "http://a/b/c/;x"
+urljoin("http://a/b/c/d;p?q", "g;x") = "http://a/b/c/g;x"
+urljoin("http://a/b/c/d;p?q", "g;x?y#s") = "http://a/b/c/g;x?y#s"
+urljoin("http://a/b/c/d;p?q", "") = "http://a/b/c/d;p?q"
+urljoin("http://a/b/c/d;p?q", ".") = "http://a/b/c/"
+urljoin("http://a/b/c/d;p?q", "./") = "http://a/b/c/"
+urljoin("http://a/b/c/d;p?q", "..") = "http://a/b/"
+urljoin("http://a/b/c/d;p?q", "../") = "http://a/b/"
+urljoin("http://a/b/c/d;p?q", "../g") = "http://a/b/g"
+urljoin("http://a/b/c/d;p?q", "../..") = "http://a/"
+urljoin("http://a/b/c/d;p?q", "../../") = "http://a/"
+urljoin("http://a/b/c/d;p?q", "../../g") = "http://a/g"
+urljoin("http://a/b/c/d;p?q", "../../../g") = "http://a/g"
+urljoin("http://a/b/c/d;p?q", "../../../../g") = "http://a/g"
+urljoin("http://a/b/c/d;p?q", "/./g") = "http://a/g"
+urljoin("http://a/b/c/d;p?q", "/../g") = "http://a/g"
+urljoin("http://a/b/c/d;p?q", "g.") = "http://a/b/c/g."
+urljoin("http://a/b/c/d;p?q", ".g") = "http://a/b/c/.g"
+urljoin("http://a/b/c/d;p?q", "g..") = "http://a/b/c/g.."
+urljoin("http://a/b/c/d;p?q", "..g") = "http://a/b/c/..g"
+urljoin("http://a/b/c/d;p?q", "./../g") = "http://a/b/g"
+urljoin("http://a/b/c/d;p?q", "./g/.") = "http://a/b/c/g/"
+urljoin("http://a/b/c/d;p?q", "g/./h") = "http://a/b/c/g/h"
+urljoin("http://a/b/c/d;p?q", "g/../h") = "http://a/b/c/h"
+urljoin("http://a/b/c/d;p?q", "g;x=1/./y") = "http://a/b/c/g;x=1/y"
+urljoin("http://a/b/c/d;p?q", "g;x=1/../y") = "http://a/b/c/y"
+urljoin("http://a/b/c/d;p?q", "g?y/./x") = "http://a/b/c/g?y/./x"
+urljoin("http://a/b/c/d;p?q", "g?y/../x") = "http://a/b/c/g?y/../x"
+urljoin("http://a/b/c/d;p?q", "g#s/./x") = "http://a/b/c/g#s/./x"
+urljoin("http://a/b/c/d;p?q", "g#s/../x") = "http://a/b/c/g#s/../x"
+urljoin("http://a/b/c/d;p?q", "http:g") = "http://a/b/c/g"
+urljoin("http://a/b/c/d;p?q", "mailto:x@y") = "mailto:x@y"
+urljoin("http://a/b/c/d;p?q", "HTTP://A/g") = "http://A/g"
+urljoin("http://a/b/c/d;p?q", "//g:80/x") = "http://g:80/x"
+urljoin("https://example.com/a/b/", "c/../../d") = "https://example.com/a/d"
+urljoin("https://example.com", "x") = "https://example.com/x"
+urljoin("https://example.com/dir/file.html", "?page=2") = "https://example.com/dir/file.html?page=2"
+urljoin("mailto:a@b", "c") = "c"
+urljoin("file:///etc/hosts", "passwd") = "file:///etc/passwd"
+urlsplit("https://user:pa%20ss@Example.COM:8443/p/a;x?q=1&r=2#frag")
+  scheme="https" netloc="user:pa%20ss@Example.COM:8443" path="/p/a;x" query="q=1&r=2" fragment="frag"
+  username="user" password="pa%20ss" hostname="example.com" port=8443
+  unsplit="https://user:pa%20ss@Example.COM:8443/p/a;x?q=1&r=2#frag"
+urlsplit("http://[2001:DB8::1]:8080/index.html")
+  scheme="http" netloc="[2001:DB8::1]:8080" path="/index.html" query="" fragment=""
+  username=None password=None hostname="2001:db8::1" port=8080
+  unsplit="http://[2001:DB8::1]:8080/index.html"
+urlsplit("http://example.com:/empty-port")
+  scheme="http" netloc="example.com:" path="/empty-port" query="" fragment=""
+  username=None password=None hostname="example.com" port=None
+  unsplit="http://example.com:/empty-port"
+urlsplit("http://example.com?query-only")
+  scheme="http" netloc="example.com" path="" query="query-only" fragment=""
+  username=None password=None hostname="example.com" port=None
+  unsplit="http://example.com?query-only"
+urlsplit("HTTP://EXAMPLE.com#frag-only")
+  scheme="http" netloc="EXAMPLE.com" path="" query="" fragment="frag-only"
+  username=None password=None hostname="example.com" port=None
+  unsplit="http://EXAMPLE.com#frag-only"
+urlsplit("mailto:user@example.com?subject=Hi")
+  scheme="mailto" netloc="" path="user@example.com" query="subject=Hi" fragment=""
+  username=None password=None hostname=None port=None
+  unsplit="mailto:user@example.com?subject=Hi"
+urlsplit("//cdn.example.net/lib.js")
+  scheme="" netloc="cdn.example.net" path="/lib.js" query="" fragment=""
+  username=None password=None hostname="cdn.example.net" port=None
+  unsplit="//cdn.example.net/lib.js"
+urlsplit("relative/path?x#y")
+  scheme="" netloc="" path="relative/path" query="x" fragment="y"
+  username=None password=None hostname=None port=None
+  unsplit="relative/path?x#y"
+urlsplit("  \t https://ex\tample.com/sp ace\n")
+  scheme="https" netloc="example.com" path="/sp ace" query="" fragment=""
+  username=None password=None hostname="example.com" port=None
+  unsplit="https://example.com/sp ace"
+urlsplit("http://example.com:abc/")
+  scheme="http" netloc="example.com:abc" path="/" query="" fragment=""
+  username=None password=None hostname="example.com" port=ValueError("Port could not be cast to integer value as 'abc'")
+  unsplit="http://example.com:abc/"
+urlsplit("http://example.com:70000/")
+  scheme="http" netloc="example.com:70000" path="/" query="" fragment=""
+  username=None password=None hostname="example.com" port=ValueError("Port out of range 0-65535")
+  unsplit="http://example.com:70000/"
+urlsplit("http://@host/")
+  scheme="http" netloc="@host" path="/" query="" fragment=""
+  username="" password=None hostname="host" port=None
+  unsplit="http://@host/"
+urlsplit("tel:+1-555-0100")
+  scheme="tel" netloc="" path="+1-555-0100" query="" fragment=""
+  username=None password=None hostname=None port=None
+  unsplit="tel:+1-555-0100"
+urlsplit("1http://not-a-scheme/")
+  scheme="" netloc="" path="1http://not-a-scheme/" query="" fragment=""
+  username=None password=None hostname=None port=None
+  unsplit="1http://not-a-scheme/"
+urlsplit("a+b.c-d://ok/")
+  scheme="a+b.c-d" netloc="ok" path="/" query="" fragment=""
+  username=None password=None hostname="ok" port=None
+  unsplit="a+b.c-d://ok/"
+quote("/a b/c?d", safe="/") = "/a%20b/c%3Fd"
+quote("café/~user", safe="/") = "caf%C3%A9/~user"
+quote("a+b=c&d", safe="") = "a%2Bb%3Dc%26d"
+quote("100% sure!", safe="!") = "100%25%20sure!"
+quote("x/y", safe="") = "x%2Fy"
+quote_plus("a b&c=d/é") = "a+b%26c%3Dd%2F%C3%A9"
+quote_plus("already+plus") = "already%2Bplus"
+unquote("%7Euser%2Fdocs") = "~user/docs"
+unquote("caf%C3%A9") = "café"
+unquote("100%") = "100%"
+unquote("%zz%4") = "%zz%4"
+unquote("a+b") = "a+b"
+unquote_plus("a+b%2Bc") = "a b+c"
+parse_qsl("a=1&b=2&a=3") = [("a", "1"), ("b", "2"), ("a", "3")]
+parse_qsl("x=a+b%20c&empty=&novalue&&y=%3D") = [("x", "a b c"), ("empty", ""), ("novalue", ""), ("y", "=")]
+parse_qsl("utm_source=x&id=7") = [("utm_source", "x"), ("id", "7")]
+parse_qsl("") = []
+urlencode(4 pairs) = "q=kara+lang&path=%2Fa%2Fb&sym=a%26b%3Dc&u=%C3%A9"
+
+== robots.txt
+sitemaps: https://docs.example.com/sitemap.xml, https://docs.example.com/sitemap-api.xml
+kara-crawler/1.0: crawl-delay=1 request-rate=30/60 +++-+-+---+++++---+++
+Googlebot/2.1: crawl-delay=2 request-rate=None +-++++++++-+--+++++++
+BadBot/3.0: crawl-delay=None request-rate=None --------------+------
+friendly-bot: crawl-delay=None request-rate=None +++++++++++++++++++++
+probes: / /drafts/x.html /drafts/public-roadmap.html /internal/admin.html /internal/status.html /guide/setup.html?print=1 /guide/setup.html?lang=en&print= /tmp /tmpfiles/x /old/page.html /docs.pdf /docs.pdf?x=1 /search?q=1 /search/help /robots.txt /%7Euser/ /~user/x /archive/2024/old /archive/2024/old/x /caf%C3%A9.html /a$b
+
+== crawl
+[200] https://docs.example.com/ depth 0 "Example Docs & Guides © 2026"
+  link "/static/style.css" -> https://docs.example.com/static/style.css queued
+  link "/static/logo.svg" -> https://docs.example.com/static/logo.svg queued
+  script "//cdn.example.net/app.js" -> https://cdn.example.net/app.js external
+  a "guide/" -> https://docs.example.com/guide/ queued
+  a "guide/intro.html" -> https://docs.example.com/guide/intro.html queued
+  a "/api" -> https://docs.example.com/api queued
+  a "https://docs.example.com:443/changelog.html" -> https://docs.example.com/changelog.html queued
+  a "HTTPS://Docs.Example.COM/faq.html#top" -> https://docs.example.com/faq.html queued
+  a "  /faq.html  " -> https://docs.example.com/faq.html seen
+  a "#main" -> https://docs.example.com/ seen
+  a "mailto:docs@example.com" skipped, not http: mailto
+  a "javascript:void(0)" skipped, not http: javascript
+  a "tel:+1-555-0100" skipped, not http: tel
+  img "/static/logo.svg" -> https://docs.example.com/static/logo.svg seen
+  a "/drafts/plan.html" -> https://docs.example.com/drafts/plan.html queued
+  a "/drafts/public-roadmap.html" -> https://docs.example.com/drafts/public-roadmap.html queued
+  a "/internal/admin.html" -> https://docs.example.com/internal/admin.html queued
+  a "/internal/status.html" -> https://docs.example.com/internal/status.html queued
+  a "search?q=kara&utm_source=home&region=eu" -> https://docs.example.com/search?q=kara&region=eu queued
+  a (no value)
+  a "" -> https://docs.example.com/ seen
+  a "/login.html" -> https://docs.example.com/login.html nofollow
+  a "/missing.html" -> https://docs.example.com/missing.html queued
+  a "https://github.com/example/docs" -> https://github.com/example/docs external
+  a "http://example.org/blog/" -> http://example.org/blog/ external
+  a "https://github.com/example/docs/issues" -> https://github.com/example/docs/issues external
+  a "http://docs.example.com:8080/" -> http://docs.example.com:8080/ external
+  a "http://docs.example.com:http/" skipped, bad port: Port could not be cast to integer value as 'http'
+  a "/faq.html?lang=en&lang=de" -> https://docs.example.com/faq.html?lang=en&lang=de queued
+[200] https://docs.example.com/static/style.css asset, 34 bytes
+[200] https://docs.example.com/static/logo.svg asset, 70 bytes
+[200] https://docs.example.com/guide/ depth 1 "Guide"
+  a "intro.html" -> https://docs.example.com/guide/intro.html seen
+  a "./setup.html?print=1" -> https://docs.example.com/guide/setup.html?print=1 queued
+  a "setup.html?utm_campaign=launch&lang=en" -> https://docs.example.com/guide/setup.html?lang=en queued
+  a "caf%C3%A9.html" -> https://docs.example.com/guide/caf%C3%A9.html queued
+  a "café.html" -> https://docs.example.com/guide/caf%C3%A9.html seen
+  a "../api/" -> https://docs.example.com/api/ queued
+  a "/guide/../tmp/cache.html" -> https://docs.example.com/tmp/cache.html queued
+[200] https://docs.example.com/guide/intro.html depth 1 "Introduction — Guide"
+  a "../index.html" -> https://docs.example.com/index.html queued
+  a "setup.html" -> https://docs.example.com/guide/setup.html queued
+  a "../../../../escape.html" -> https://docs.example.com/escape.html queued
+  a "/guide/./intro.html#x" -> https://docs.example.com/guide/intro.html seen
+  a "a/b/../../setup.html" -> https://docs.example.com/guide/setup.html seen
+  a "%7Euser/notes.html" -> https://docs.example.com/guide/~user/notes.html queued
+  a "/%7Euser/" -> https://docs.example.com/~user/ queued
+  a "/search/help" -> https://docs.example.com/search/help queued
+[301] https://docs.example.com/api -> https://docs.example.com/api/
+[200] https://docs.example.com/changelog.html depth 1 "Changelog"
+  a "/" -> https://docs.example.com/ seen
+[200] https://docs.example.com/faq.html depth 1 "FAQ — 'Questions'"
+  a "index.html" -> https://docs.example.com/index.html seen
+[200] https://docs.example.com/drafts/plan.html depth 1 "Plan"
+[200] https://docs.example.com/drafts/public-roadmap.html depth 1 "Roadmap"
+[robots] https://docs.example.com/internal/admin.html (from https://docs.example.com/)
+[200] https://docs.example.com/internal/status.html depth 1 "Status: all green"
+[404] https://docs.example.com/search?q=kara&region=eu (from https://docs.example.com/)
+[404] https://docs.example.com/missing.html (from https://docs.example.com/)
+[200] https://docs.example.com/faq.html?lang=en&lang=de depth 1 "FAQ — 'Questions'"
+  a "index.html" -> https://docs.example.com/index.html seen
+[robots] https://docs.example.com/guide/setup.html?print=1 (from https://docs.example.com/guide/)
+[200] https://docs.example.com/guide/setup.html?lang=en depth 2 "Setup" robots=noindex
+  a "/guide/" -> https://docs.example.com/guide/ seen
+  a "/tmp/cache.html" -> https://docs.example.com/tmp/cache.html seen
+  a "/old/page.html" -> https://docs.example.com/old/page.html queued
+  a "/docs.pdf" -> https://docs.example.com/docs.pdf queued
+  a "/archive/2024/old" -> https://docs.example.com/archive/2024/old queued
+  a "/search?q=setup+guide&page=2" -> https://docs.example.com/search?q=setup+guide&page=2 queued
+  a "/old/" -> https://docs.example.com/old/ queued
+[200] https://docs.example.com/guide/caf%C3%A9.html depth 2 "Café notes"
+  a "intro.html" -> https://docs.example.com/guide/intro.html seen
+[200] https://docs.example.com/api/ depth 2 "API v1"
+  base https://docs.example.com/api/v1/
+  canonical https://docs.example.com/api/
+  link "https://docs.example.com/api/" -> https://docs.example.com/api/ seen
+  a "users.html" -> https://docs.example.com/api/v1/users.html queued
+  a "../v2/" -> https://docs.example.com/api/v2/ queued
+  a "/api/v1/users.html?b=2&a=1" -> https://docs.example.com/api/v1/users.html?b=2&a=1 queued
+  a "users.html?utm_source=x&utm_medium=y" -> https://docs.example.com/api/v1/users.html seen
+  a "orders.html;jsessionid=abc" -> https://docs.example.com/api/v1/orders.html;jsessionid=abc queued
+  iframe "/api/v1/playground.html" -> https://docs.example.com/api/v1/playground.html queued
+[robots] https://docs.example.com/tmp/cache.html (from https://docs.example.com/guide/)
+[200] https://docs.example.com/index.html depth 2 "Example Docs & Guides © 2026"
+  link "/static/style.css" -> https://docs.example.com/static/style.css seen
+  link "/static/logo.svg" -> https://docs.example.com/static/logo.svg seen
+  script "//cdn.example.net/app.js" -> https://cdn.example.net/app.js external
+  a "guide/" -> https://docs.example.com/guide/ seen
+  a "guide/intro.html" -> https://docs.example.com/guide/intro.html seen
+  a "/api" -> https://docs.example.com/api seen
+  a "https://docs.example.com:443/changelog.html" -> https://docs.example.com/changelog.html seen
+  a "HTTPS://Docs.Example.COM/faq.html#top" -> https://docs.example.com/faq.html seen
+  a "  /faq.html  " -> https://docs.example.com/faq.html seen
+  a "#main" -> https://docs.example.com/index.html seen
+  a "mailto:docs@example.com" skipped, not http: mailto
+  a "javascript:void(0)" skipped, not http: javascript
+  a "tel:+1-555-0100" skipped, not http: tel
+  img "/static/logo.svg" -> https://docs.example.com/static/logo.svg seen
+  a "/drafts/plan.html" -> https://docs.example.com/drafts/plan.html seen
+  a "/drafts/public-roadmap.html" -> https://docs.example.com/drafts/public-roadmap.html seen
+  a "/internal/admin.html" -> https://docs.example.com/internal/admin.html seen
+  a "/internal/status.html" -> https://docs.example.com/internal/status.html seen
+  a "search?q=kara&utm_source=home&region=eu" -> https://docs.example.com/search?q=kara&region=eu seen
+  a (no value)
+  a "" -> https://docs.example.com/index.html seen
+  a "/login.html" -> https://docs.example.com/login.html nofollow
+  a "/missing.html" -> https://docs.example.com/missing.html seen
+  a "https://github.com/example/docs" -> https://github.com/example/docs external
+  a "http://example.org/blog/" -> http://example.org/blog/ external
+  a "https://github.com/example/docs/issues" -> https://github.com/example/docs/issues external
+  a "http://docs.example.com:8080/" -> http://docs.example.com:8080/ external
+  a "http://docs.example.com:http/" skipped, bad port: Port could not be cast to integer value as 'http'
+  a "/faq.html?lang=en&lang=de" -> https://docs.example.com/faq.html?lang=en&lang=de seen
+[200] https://docs.example.com/guide/setup.html depth 2 "Setup" robots=noindex
+  a "/guide/" -> https://docs.example.com/guide/ seen
+  a "/tmp/cache.html" -> https://docs.example.com/tmp/cache.html seen
+  a "/old/page.html" -> https://docs.example.com/old/page.html seen
+  a "/docs.pdf" -> https://docs.example.com/docs.pdf seen
+  a "/archive/2024/old" -> https://docs.example.com/archive/2024/old seen
+  a "/search?q=setup+guide&page=2" -> https://docs.example.com/search?q=setup+guide&page=2 seen
+  a "/old/" -> https://docs.example.com/old/ seen
+[404] https://docs.example.com/escape.html (from https://docs.example.com/guide/intro.html)
+[200] https://docs.example.com/guide/~user/notes.html depth 2 "User notes"
+[robots] https://docs.example.com/~user/ (from https://docs.example.com/guide/intro.html)
+[200] https://docs.example.com/search/help asset, 10 bytes
+[robots] https://docs.example.com/old/page.html (from https://docs.example.com/guide/setup.html?lang=en)
+[404] https://docs.example.com/docs.pdf (from https://docs.example.com/guide/setup.html?lang=en)
+[robots] https://docs.example.com/archive/2024/old (from https://docs.example.com/guide/setup.html?lang=en)
+[404] https://docs.example.com/search?q=setup+guide&page=2 (from https://docs.example.com/guide/setup.html?lang=en)
+[robots] https://docs.example.com/old/ (from https://docs.example.com/guide/setup.html?lang=en)
+[200] https://docs.example.com/api/v1/users.html depth 3 "Users" robots=nofollow,noindex
+  a "orders.html" -> https://docs.example.com/api/v1/orders.html nofollow
+[200] https://docs.example.com/api/v2/ depth 3 "API v2 (beta)"
+  a "../v1/" -> https://docs.example.com/api/v1/ too deep
+  a "deep/one.html" -> https://docs.example.com/api/v2/deep/one.html too deep
+[200] https://docs.example.com/api/v1/users.html?b=2&a=1 depth 3 "Users" robots=nofollow,noindex
+  a "orders.html" -> https://docs.example.com/api/v1/orders.html nofollow
+[404] https://docs.example.com/api/v1/orders.html;jsessionid=abc (from https://docs.example.com/api/)
+[200] https://docs.example.com/api/v1/playground.html depth 3 "Playground"
+  a "/api/v2/" -> https://docs.example.com/api/v2/ seen
+
+== summary
+fetched 28 urls: 22 ok, 6 broken; 7 blocked by robots.txt
+broken https://docs.example.com/search?q=kara&region=eu <- https://docs.example.com/, https://docs.example.com/index.html
+broken https://docs.example.com/missing.html <- https://docs.example.com/, https://docs.example.com/index.html
+broken https://docs.example.com/escape.html <- https://docs.example.com/guide/intro.html
+broken https://docs.example.com/docs.pdf <- https://docs.example.com/guide/setup.html?lang=en, https://docs.example.com/guide/setup.html
+broken https://docs.example.com/search?q=setup+guide&page=2 <- https://docs.example.com/guide/setup.html?lang=en, https://docs.example.com/guide/setup.html
+broken https://docs.example.com/api/v1/orders.html;jsessionid=abc <- https://docs.example.com/api/
+external cdn.example.net x2
+external docs.example.com x2
+external example.org x2
+external github.com x4
+
+== data/out/sitemap.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://docs.example.com/</loc></url>
+  <url><loc>https://docs.example.com/api/</loc></url>
+  <url><loc>https://docs.example.com/api/v1/playground.html</loc></url>
+  <url><loc>https://docs.example.com/api/v2/</loc></url>
+  <url><loc>https://docs.example.com/changelog.html</loc></url>
+  <url><loc>https://docs.example.com/drafts/plan.html</loc></url>
+  <url><loc>https://docs.example.com/drafts/public-roadmap.html</loc></url>
+  <url><loc>https://docs.example.com/faq.html</loc></url>
+  <url><loc>https://docs.example.com/faq.html?lang=en&amp;lang=de</loc></url>
+  <url><loc>https://docs.example.com/guide/</loc></url>
+  <url><loc>https://docs.example.com/guide/caf%C3%A9.html</loc></url>
+  <url><loc>https://docs.example.com/guide/intro.html</loc></url>
+  <url><loc>https://docs.example.com/guide/~user/notes.html</loc></url>
+  <url><loc>https://docs.example.com/index.html</loc></url>
+  <url><loc>https://docs.example.com/internal/status.html</loc></url>
+</urlset>

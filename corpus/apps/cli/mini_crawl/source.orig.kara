@@ -1,0 +1,2698 @@
+// mini_crawl: a site crawler and link checker, the first stage of a
+// search indexer or a docs-site CI check. It reads a site from `data/site/`
+// as a web server would serve it, honours its robots.txt, follows links
+// breadth-first to a depth limit, and writes a sitemap and a status report
+// into `data/out/`. It answers what the same crawler written with
+// Python 3.13's `html.parser`, `urllib.parse` and `urllib.robotparser`
+// answers, so all three are ported here: an HTML tokenizer with its
+// character-reference rules, `urlsplit`/`urljoin`/`quote`/`parse_qsl`
+// and the rest, and RFC 9309 robots.txt matching with `*` and `$`.
+//
+// Before crawling it runs the URL library over `data/url-tests.tsv` (the
+// RFC 3986 reference-resolution examples among them) and robots.txt over
+// probe paths for four user agents.
+//
+// expected.out is the Python crawler's output, made by oracle.py.
+
+// ------------------------------------------------------------ bytes and lines
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn push_bytes(v: mut ref Vec[u8], s: Str) {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        v.push(b[i]);
+    }
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_upper(c: u8) -> bool {
+    c >= b'A' and c <= b'Z'
+}
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_alpha(c: u8) -> bool {
+    is_upper(c) or is_lower(c)
+}
+
+// A blank, as sort and join read fields.
+fn is_blank(c: u8) -> bool {
+    c == b' ' or c == b'\t'
+}
+
+// White space, as wc counts words.
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == 11 or c == 12 or c == b'\r'
+}
+
+fn upper(c: u8) -> u8 {
+    if is_lower(c) { c - 32 } else { c }
+}
+
+fn repeat_byte(c: u8, n: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        v.push(c);
+    }
+    from_bytes(v)
+}
+
+fn pad_left(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    if s.len() < width {
+        out.push_str(repeat_byte(b' ', width - s.len()));
+    }
+    out.push_str(s);
+    out
+}
+
+// The lines of a text, without their newlines; a last line with no
+// newline counts as a line.
+fn lines_of(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> i64 {
+    if is_digit(c) {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+
+fn lower(c: u8) -> u8 {
+    if is_upper(c) { c + 32 } else { c }
+}
+
+fn lower_str(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        v.push(lower(b[i]));
+    }
+    from_bytes(v)
+}
+
+// HTML's white space: what `str.strip(" \t\n\r\f")` removes.
+fn is_html_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 12
+}
+
+fn strip_ws(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and is_html_space(b[st]) {
+        st += 1;
+    }
+    while en > st and is_html_space(b[en - 1]) {
+        en -= 1;
+    }
+    byte_str(b, st, en)
+}
+
+// Python's `str.strip()` for ASCII text: also vertical tab and the
+// separators 0x1c-0x1f.
+fn strip_py(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and (is_html_space(b[st]) or b[st] == 11 or (b[st] >= 28 and b[st] <= 31)) {
+        st += 1;
+    }
+    while en > st and (is_html_space(b[en - 1]) or b[en - 1] == 11 or (b[en - 1] >= 28 and b[en - 1] <= 31)) {
+        en -= 1;
+    }
+    byte_str(b, st, en)
+}
+
+fn find_byte(b: ref Vec[u8], c: u8, from: i64) -> i64 {
+    let mut i = from;
+    while i < b.len() {
+        if b[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn rfind_byte(b: ref Vec[u8], c: u8) -> i64 {
+    let mut i = b.len();
+    while i > 0 {
+        i -= 1;
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn contains_byte(s: Str, c: u8) -> bool {
+    let b = to_bytes(s);
+    find_byte(b, c, 0) >= 0
+}
+
+fn starts_with_at(b: ref Vec[u8], at: i64, lit: Str) -> bool {
+    let l = lit.bytes();
+    if at + l.len() > b.len() {
+        return false;
+    }
+    for i in 0..l.len() {
+        if b[at + i] != l[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_str(b: ref Vec[u8], lit: Str, from: i64) -> i64 {
+    let mut i = from;
+    while i + lit.len() <= b.len() {
+        if starts_with_at(b, i, lit) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn utf8_encode(cp: i64, out: mut ref Vec[u8]) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 + (cp >> 6)) as u8);
+        out.push((0x80 + (cp & 63)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 + (cp >> 12)) as u8);
+        out.push((0x80 + ((cp >> 6) & 63)) as u8);
+        out.push((0x80 + (cp & 63)) as u8);
+    } else {
+        out.push((0xF0 + (cp >> 18)) as u8);
+        out.push((0x80 + ((cp >> 12) & 63)) as u8);
+        out.push((0x80 + ((cp >> 6) & 63)) as u8);
+        out.push((0x80 + (cp & 63)) as u8);
+    }
+}
+
+// A string as the report quotes it: in double quotes, with backslash,
+// quote, tab, newline and carriage return escaped.
+fn esc(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'"');
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == b'\\' {
+            push_bytes(mut out, "\\\\");
+        } else if c == b'"' {
+            push_bytes(mut out, "\\\"");
+        } else if c == b'\t' {
+            push_bytes(mut out, "\\t");
+        } else if c == b'\n' {
+            push_bytes(mut out, "\\n");
+        } else if c == b'\r' {
+            push_bytes(mut out, "\\r");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(b'"');
+    from_bytes(out)
+}
+
+fn esc_opt(s: ref Option[String]) -> String {
+    match s {
+        Some(v) => esc(v),
+        None => "None".to_string(),
+    }
+}
+fn cmp_bytes(x: ref Vec[u8], y: ref Vec[u8]) -> i64 {
+    let mut i: i64 = 0;
+    while i < x.len() and i < y.len() {
+        if x[i] != y[i] {
+            return if x[i] < y[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    if x.len() == y.len() {
+        return 0;
+    }
+    if x.len() < y.len() { -1 } else { 1 }
+}
+
+fn cmp_str(a: Str, b: Str) -> i64 {
+    let x = to_bytes(a);
+    let y = to_bytes(b);
+    cmp_bytes(x, y)
+}
+
+// A positive decimal number, or -1.
+fn parse_count(s: Str) -> i64 {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return -1;
+    }
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return -1;
+        }
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+// ------------------------------------------------------------ urllib.parse
+
+fn in_list(s: Str, list: ref Vec[String]) -> bool {
+    for i in 0..list.len() {
+        if list[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn words(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = -1;
+    for i in 0..b.len() + 1 {
+        let blank = i == b.len() or b[i] == b' ';
+        if blank and st >= 0 {
+            out.push(byte_str(b, st, i));
+            st = -1;
+        } else if not blank and st < 0 {
+            st = i;
+        }
+    }
+    out
+}
+
+// The scheme lists urllib.parse keys its rules on.
+struct Schemes {
+    relative: Vec[String],
+    netloc: Vec[String],
+    params: Vec[String],
+}
+
+fn schemes() -> Schemes {
+    let mut relative = words("ftp http gopher nntp imap wais file https shttp mms prospero rtsp rtsps rtspu sftp svn svn+ssh ws wss");
+    let mut netloc = words("ftp http gopher nntp telnet imap wais file mms https shttp snews prospero rtsp rtsps rtspu rsync svn svn+ssh sftp nfs git git+ssh ws wss itms-services");
+    let mut params = words("ftp hdl prospero http imap https shttp rtsp rtsps rtspu sip sips mms sftp tel");
+    relative.push(String.new());
+    netloc.push(String.new());
+    params.push(String.new());
+    Schemes { relative: relative, netloc: netloc, params: params }
+}
+
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+    params: String,
+    query: String,
+    fragment: String,
+}
+
+fn is_scheme_char(c: u8) -> bool {
+    is_alpha(c) or is_digit(c) or c == b'+' or c == b'-' or c == b'.'
+}
+
+// urlsplit: `params` is always empty.
+fn urlsplit(url_in: Str, default_scheme: Str) -> Split {
+    let raw = to_bytes(url_in);
+    let mut st: i64 = 0;
+    while st < raw.len() and raw[st] <= 32 {
+        st += 1;
+    }
+    let mut b: Vec[u8] = Vec.new();
+    for i in st..raw.len() {
+        let c = raw[i];
+        if c != b'\t' and c != b'\r' and c != b'\n' {
+            b.push(c);
+        }
+    }
+    let mut scheme = default_scheme.to_string();
+    let mut from: i64 = 0;
+    let colon = find_byte(b, b':', 0);
+    if colon > 0 and is_alpha(b[0]) {
+        let mut ok = true;
+        for i in 0..colon {
+            if not is_scheme_char(b[i]) {
+                ok = false;
+            }
+        }
+        if ok {
+            scheme = lower_str(byte_str(b, 0, colon));
+            from = colon + 1;
+        }
+    }
+    let mut netloc = String.new();
+    if from + 1 < b.len() and b[from] == b'/' and b[from + 1] == b'/' {
+        let mut delim = b.len();
+        let mut i = from + 2;
+        while i < b.len() {
+            if b[i] == b'/' or b[i] == b'?' or b[i] == b'#' {
+                delim = i;
+                break;
+            }
+            i += 1;
+        }
+        netloc = byte_str(b, from + 2, delim);
+        from = delim;
+    }
+    let mut end = b.len();
+    let mut fragment = String.new();
+    let hash = find_byte(b, b'#', from);
+    if hash >= 0 {
+        fragment = byte_str(b, hash + 1, b.len());
+        end = hash;
+    }
+    let mut query = String.new();
+    let mut q = from;
+    let mut qpos: i64 = -1;
+    while q < end {
+        if b[q] == b'?' {
+            qpos = q;
+            break;
+        }
+        q += 1;
+    }
+    if qpos >= 0 {
+        query = byte_str(b, qpos + 1, end);
+        end = qpos;
+    }
+    Split { scheme: scheme, netloc: netloc, path: byte_str(b, from, end), params: String.new(), query: query, fragment: fragment }
+}
+
+// urlparse: urlsplit, then the `;params` of the last path segment.
+fn urlparse(url: Str, default_scheme: Str, s: ref Schemes) -> Split {
+    let mut r = urlsplit(url, default_scheme);
+    if in_list(r.scheme, s.params) and contains_byte(r.path, b';') {
+        let b = to_bytes(r.path);
+        let slash = rfind_byte(b, b'/');
+        let semi = if slash >= 0 { find_byte(b, b';', slash) } else { find_byte(b, b';', 0) };
+        if semi >= 0 {
+            r.params = byte_str(b, semi + 1, b.len());
+            r.path = byte_str(b, 0, semi);
+        }
+    }
+    r
+}
+
+fn urlunsplit(scheme: Str, netloc: Str, path: Str, query: Str, fragment: Str, s: ref Schemes) -> String {
+    let mut url = path.to_string();
+    if netloc.len() > 0 {
+        if url.len() > 0 and not url.starts_with("/") {
+            url = f"/{url}";
+        }
+        url = f"//{netloc}{url}";
+    } else if url.starts_with("//") {
+        url = f"//{url}";
+    } else if scheme.len() > 0 and in_list(scheme, s.netloc) and (url.len() == 0 or url.starts_with("/")) {
+        url = f"//{url}";
+    }
+    if scheme.len() > 0 {
+        url = f"{scheme}:{url}";
+    }
+    if query.len() > 0 {
+        url = f"{url}?{query}";
+    }
+    if fragment.len() > 0 {
+        url = f"{url}#{fragment}";
+    }
+    url
+}
+
+fn urlunparse(p: ref Split, s: ref Schemes) -> String {
+    let path = if p.params.len() > 0 { f"{p.path};{p.params}" } else { p.path.clone() };
+    urlunsplit(p.scheme, p.netloc, path, p.query, p.fragment, s)
+}
+
+fn split_on(s: Str, c: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == c {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn urljoin(base: Str, url: Str, s: ref Schemes) -> String {
+    if base.len() == 0 {
+        return url.to_string();
+    }
+    if url.len() == 0 {
+        return base.to_string();
+    }
+    let bp = urlparse(base, "", s);
+    let mut p = urlparse(url, bp.scheme, s);
+    if p.scheme != bp.scheme or not in_list(p.scheme, s.relative) {
+        return url.to_string();
+    }
+    if in_list(p.scheme, s.netloc) {
+        if p.netloc.len() > 0 {
+            return urlunparse(p, s);
+        }
+        p.netloc = bp.netloc.clone();
+    }
+    if p.path.len() == 0 and p.params.len() == 0 {
+        p.path = bp.path.clone();
+        p.params = bp.params.clone();
+        if p.query.len() == 0 {
+            p.query = bp.query.clone();
+        }
+        return urlunparse(p, s);
+    }
+    let mut base_parts = split_on(bp.path, b'/');
+    if base_parts[base_parts.len() - 1].len() > 0 {
+        base_parts.pop();
+    }
+    let mut segments: Vec[String] = Vec.new();
+    if p.path.starts_with("/") {
+        segments = split_on(p.path, b'/');
+    } else {
+        let mut all = base_parts;
+        let rel = split_on(p.path, b'/');
+        for i in 0..rel.len() {
+            all.push(rel[i].clone());
+        }
+        for i in 0..all.len() {
+            if i == 0 or i == all.len() - 1 or all[i].len() > 0 {
+                segments.push(all[i].clone());
+            }
+        }
+    }
+    let mut resolved: Vec[String] = Vec.new();
+    for i in 0..segments.len() {
+        if segments[i] == ".." {
+            if resolved.len() > 0 {
+                resolved.pop();
+            }
+        } else if segments[i] != "." {
+            resolved.push(segments[i].clone());
+        }
+    }
+    let last = segments[segments.len() - 1].clone();
+    if last == "." or last == ".." {
+        resolved.push(String.new());
+    }
+    let mut joined = String.new();
+    for i in 0..resolved.len() {
+        if i > 0 {
+            joined.push_str("/");
+        }
+        joined.push_str(resolved[i]);
+    }
+    p.path = if joined.len() == 0 { "/".to_string() } else { joined };
+    urlunparse(p, s)
+}
+
+fn urldefrag(url: Str, s: ref Schemes) -> String {
+    if not contains_byte(url, b'#') {
+        return url.to_string();
+    }
+    let mut p = urlparse(url, "", s);
+    p.fragment = String.new();
+    urlunparse(p, s)
+}
+
+// The netloc's parts, as SplitResult's properties read them.
+fn after_at(netloc: Str) -> String {
+    let b = to_bytes(netloc);
+    let at = rfind_byte(b, b'@');
+    byte_str(b, at + 1, b.len())
+}
+
+fn username(netloc: Str) -> Option[String] {
+    let b = to_bytes(netloc);
+    let at = rfind_byte(b, b'@');
+    if at < 0 {
+        return None;
+    }
+    let colon = find_byte(b, b':', 0);
+    let end = if colon >= 0 and colon < at { colon } else { at };
+    Some(byte_str(b, 0, end))
+}
+
+fn password(netloc: Str) -> Option[String] {
+    let b = to_bytes(netloc);
+    let at = rfind_byte(b, b'@');
+    if at < 0 {
+        return None;
+    }
+    let colon = find_byte(b, b':', 0);
+    if colon < 0 or colon > at {
+        return None;
+    }
+    Some(byte_str(b, colon + 1, at))
+}
+
+// (host, port text) of the part after any `@`.
+fn host_info(netloc: Str) -> (String, String) {
+    let hi = to_bytes(after_at(netloc));
+    let open = find_byte(hi, b'[', 0);
+    if open >= 0 {
+        let close = find_byte(hi, b']', open + 1);
+        let hend = if close >= 0 { close } else { hi.len() };
+        let host = byte_str(hi, open + 1, hend);
+        let mut port = String.new();
+        if close >= 0 {
+            let colon = find_byte(hi, b':', close + 1);
+            if colon >= 0 {
+                port = byte_str(hi, colon + 1, hi.len());
+            }
+        }
+        return (host, port);
+    }
+    let colon = find_byte(hi, b':', 0);
+    if colon < 0 {
+        return (from_bytes(hi.clone()), String.new());
+    }
+    (byte_str(hi, 0, colon), byte_str(hi, colon + 1, hi.len()))
+}
+
+fn hostname(netloc: Str) -> Option[String] {
+    let (host, _) = host_info(netloc);
+    if host.len() == 0 {
+        return None;
+    }
+    let b = to_bytes(host);
+    let pct = find_byte(b, b'%', 0);
+    if pct < 0 {
+        return Some(lower_str(host));
+    }
+    let head = lower_str(byte_str(b, 0, pct));
+    let zone = byte_str(b, pct, b.len());
+    Some(f"{head}{zone}")
+}
+
+// The port: Ok(None) when there is none, Err with Python's ValueError
+// message when it is not a number in range.
+fn port_of(netloc: Str) -> Result[Option[i64], String] {
+    let (_, port) = host_info(netloc);
+    if port.len() == 0 {
+        return Ok(None);
+    }
+    let b = to_bytes(port);
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return Err(f"Port could not be cast to integer value as '{port}'");
+        }
+        if n < 1000000 {
+            n = n * 10 + (b[i] - b'0') as i64;
+        }
+    }
+    if n > 65535 {
+        return Err("Port out of range 0-65535".to_string());
+    }
+    Ok(Some(n))
+}
+
+fn is_always_safe(c: u8) -> bool {
+    is_alpha(c) or is_digit(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+fn hex_digit(n: i64) -> u8 {
+    "0123456789ABCDEF".bytes()[n]
+}
+
+fn quote_bytes(b: ref Vec[u8], safe: Str) -> String {
+    let sb = to_bytes(safe);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if is_always_safe(c) or find_byte(sb, c, 0) >= 0 {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex_digit((c >> 4) as i64));
+            out.push(hex_digit((c & 15) as i64));
+        }
+    }
+    from_bytes(out)
+}
+
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    quote_bytes(b, safe)
+}
+
+fn quote_plus(s: Str) -> String {
+    if not contains_byte(s, b' ') {
+        return quote(s, "");
+    }
+    let q = to_bytes(quote(s, " "));
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..q.len() {
+        out.push(if q[i] == b' ' { b'+' } else { q[i] });
+    }
+    from_bytes(out)
+}
+
+// %XX escapes as bytes; a `%` not followed by two hex digits stays.
+fn unquote_bytes(s: Str) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'%' and i + 2 < b.len() and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push((hex_val(b[i + 1]) * 16 + hex_val(b[i + 2])) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn unquote(s: Str) -> String {
+    from_bytes(unquote_bytes(s))
+}
+
+fn unquote_plus(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        v.push(if b[i] == b'+' { b' ' } else { b[i] });
+    }
+    unquote(from_bytes(v))
+}
+
+// parse_qsl with keep_blank_values=True.
+fn parse_qsl(qs: Str) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    if qs.len() == 0 {
+        return out;
+    }
+    let parts = split_on(qs, b'&');
+    for i in 0..parts.len() {
+        if parts[i].len() == 0 {
+            continue;
+        }
+        let b = to_bytes(parts[i]);
+        let eq = find_byte(b, b'=', 0);
+        let (name, value) = if eq < 0 {
+            (parts[i].clone(), String.new())
+        } else {
+            (byte_str(b, 0, eq), byte_str(b, eq + 1, b.len()))
+        };
+        out.push((unquote_plus(name), unquote_plus(value)));
+    }
+    out
+}
+
+fn urlencode(pairs: ref Vec[(String, String)]) -> String {
+    let mut out = String.new();
+    for i in 0..pairs.len() {
+        let (k, v) = pairs[i].clone();
+        if i > 0 {
+            out.push_str("&");
+        }
+        out.push_str(quote_plus(k));
+        out.push_str("=");
+        out.push_str(quote_plus(v));
+    }
+    out
+}
+
+// ------------------------------------------------------------ robots.txt
+
+// One Allow or Disallow line. `parts` is the path split at `*` (empty
+// when it has none); `full` is a trailing `$`.
+struct Rule {
+    path: String,
+    parts: Vec[String],
+    full: bool,
+    allow: bool,
+}
+
+struct Entry {
+    agents: Vec[String],
+    rules: Vec[Rule],
+    delay: i64,
+    rate_n: i64,
+    rate_s: i64,
+}
+
+fn rule_copy(r: ref Rule) -> Rule {
+    Rule { path: r.path.clone(), parts: r.parts.clone(), full: r.full, allow: r.allow }
+}
+
+fn entry_new() -> Entry {
+    Entry { agents: Vec.new(), rules: Vec.new(), delay: -1, rate_n: -1, rate_s: -1 }
+}
+
+fn entry_copy(e: ref Entry) -> Entry {
+    let mut rules: Vec[Rule] = Vec.new();
+    for i in 0..e.rules.len() {
+        rules.push(rule_copy(e.rules[i]));
+    }
+    Entry { agents: e.agents.clone(), rules: rules, delay: e.delay, rate_n: e.rate_n, rate_s: e.rate_s }
+}
+
+// The robots.txt groups, keyed by lowercased user agent in first-seen
+// order (several keys can hold copies of one entry).
+struct Robots {
+    keys: Vec[String],
+    groups: Vec[Entry],
+    sitemaps: Vec[String],
+}
+
+// robotparser's normalize: unquote, then quote with "/" safe.
+fn robots_normalize(s: Str) -> String {
+    let b = unquote_bytes(s);
+    quote_bytes(b, "/")
+}
+
+// Runs of characters outside `keep` are normalized.
+fn normalize_runs(s: Str, keep: Str) -> String {
+    let b = to_bytes(s);
+    let kb = to_bytes(keep);
+    let mut out = String.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() + 1 {
+        let kept = i < b.len() and find_byte(kb, b[i], 0) >= 0;
+        if i == b.len() or kept {
+            if i > st {
+                out.push_str(robots_normalize(byte_str(b, st, i)));
+            }
+            if kept {
+                out.push_str(byte_str(b, i, i + 1));
+            }
+            st = i + 1;
+        }
+    }
+    out
+}
+
+fn normalize_uri(s: Str) -> String {
+    let b = to_bytes(s);
+    let q = find_byte(b, b'?', 0);
+    if q < 0 {
+        return robots_normalize(s);
+    }
+    let path = robots_normalize(byte_str(b, 0, q));
+    let query = normalize_runs(byte_str(b, q + 1, b.len()), "=&");
+    f"{path}?{query}"
+}
+
+fn normalize_pattern(s: Str) -> String {
+    let b = to_bytes(s);
+    let q = find_byte(b, b'?', 0);
+    if q < 0 {
+        return normalize_runs(s, "*$");
+    }
+    let path = normalize_runs(byte_str(b, 0, q), "*$");
+    let query = normalize_runs(byte_str(b, q + 1, b.len()), "=&*$");
+    f"{path}?{query}"
+}
+
+// `**...` becomes `*`, and `$` followed by `$`s and `*`s becomes `$`.
+fn collapse_wildcards(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut stars: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        stars.push(b[i]);
+        if b[i] == b'*' {
+            while i + 1 < b.len() and b[i + 1] == b'*' {
+                i += 1;
+            }
+        }
+        i += 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    i = 0;
+    while i < stars.len() {
+        out.push(stars[i]);
+        if stars[i] == b'$' {
+            while i + 1 < stars.len() and (stars[i + 1] == b'$' or stars[i + 1] == b'*') {
+                i += 1;
+            }
+        }
+        i += 1;
+    }
+    from_bytes(out)
+}
+
+// A rule line, or None when its `$` is not at the end.
+fn make_rule(path_in: Str, allow_in: bool) -> Option[Rule] {
+    let allow = allow_in or path_in.len() == 0;
+    let pattern = normalize_pattern(collapse_wildcards(path_in));
+    let full = pattern.ends_with("$");
+    let mut b = to_bytes(pattern);
+    while b.len() > 0 and b[b.len() - 1] == b'$' {
+        b.pop();
+    }
+    if find_byte(b, b'$', 0) >= 0 {
+        return None;
+    }
+    let path = from_bytes(b);
+    let parts = if contains_byte(path, b'*') { split_on(path, b'*') } else { Vec.new() };
+    Some(Rule { path: path, parts: parts, full: full, allow: allow })
+}
+
+fn find_from(hay: ref Vec[u8], needle: Str, from: i64) -> i64 {
+    find_str(hay, needle, from)
+}
+
+fn rfind_from(hay: ref Vec[u8], needle: Str, from: i64) -> i64 {
+    let n = needle.len();
+    let mut i = hay.len() - n;
+    while i >= from {
+        if starts_with_at(hay, i, needle) {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+// How much of `path` a rule covers plus one, or 0 when it does not
+// apply, as RuleLine.applies_to answers.
+fn rule_applies(r: ref Rule, path: Str) -> i64 {
+    let b = to_bytes(path);
+    if r.parts.len() == 0 {
+        if r.full {
+            return if path == r.path { r.path.len() + 1 } else { 0 };
+        }
+        return if starts_with_at(b, 0, r.path) { r.path.len() + 1 } else { 0 };
+    }
+    if not starts_with_at(b, 0, r.parts[0]) {
+        return 0;
+    }
+    let mut pos = r.parts[0].len();
+    let n = r.parts.len();
+    for k in 1..n - 1 {
+        let at = find_from(b, r.parts[k], pos);
+        if at < 0 {
+            return 0;
+        }
+        pos = at + r.parts[k].len();
+    }
+    let last = r.parts[n - 1].clone();
+    if r.full {
+        if b.len() - last.len() >= pos and starts_with_at(b, b.len() - last.len(), last) {
+            return b.len() + 1;
+        }
+        return 0;
+    }
+    let at = rfind_from(b, last, pos);
+    if at < 0 {
+        return 0;
+    }
+    at + last.len() + 1
+}
+
+fn allowance(e: ref Entry, path: Str) -> bool {
+    let mut best: i64 = -1;
+    let mut allowed = true;
+    for i in 0..e.rules.len() {
+        let m = rule_applies(e.rules[i], path);
+        if m > 0 {
+            if m > best {
+                best = m;
+                allowed = e.rules[i].allow;
+            } else if m == best and not allowed {
+                allowed = e.rules[i].allow;
+            }
+        }
+    }
+    allowed
+}
+
+fn is_decimal(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return false;
+    }
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn add_entry(r: mut ref Robots, e: Entry) {
+    for a in 0..e.agents.len() {
+        let key = lower_str(e.agents[a]);
+        let mut found: i64 = -1;
+        for k in 0..r.keys.len() {
+            if r.keys[k] == key {
+                found = k;
+            }
+        }
+        if found < 0 {
+            r.keys.push(key);
+            r.groups.push(entry_copy(e));
+            continue;
+        }
+        let old = entry_copy(r.groups[found]);
+        let mut merged = entry_new();
+        for i in 0..old.agents.len() {
+            if in_list(old.agents[i], e.agents) {
+                merged.agents.push(old.agents[i].clone());
+            }
+        }
+        for i in 0..old.rules.len() {
+            merged.rules.push(rule_copy(old.rules[i]));
+        }
+        for i in 0..e.rules.len() {
+            merged.rules.push(rule_copy(e.rules[i]));
+        }
+        merged.delay = if e.delay < 0 { old.delay } else { e.delay };
+        if e.rate_n < 0 {
+            merged.rate_n = old.rate_n;
+            merged.rate_s = old.rate_s;
+        } else {
+            merged.rate_n = e.rate_n;
+            merged.rate_s = e.rate_s;
+        }
+        r.groups[found] = merged;
+    }
+}
+
+// Python's str.splitlines for ASCII text.
+fn split_lines(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\n' or c == b'\r' or c == 11 or c == 12 or (c >= 28 and c <= 30) {
+            out.push(byte_str(b, st, i));
+            if c == b'\r' and i + 1 < b.len() and b[i + 1] == b'\n' {
+                i += 1;
+            }
+            st = i + 1;
+        }
+        i += 1;
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+fn parse_robots(text: Str) -> Robots {
+    let mut r = Robots { keys: Vec.new(), groups: Vec.new(), sitemaps: Vec.new() };
+    let mut state: i64 = 0;
+    let mut entry = entry_new();
+    let lines = split_lines(text);
+    for li in 0..lines.len() {
+        let mut b = to_bytes(lines[li]);
+        let hash = find_byte(b, b'#', 0);
+        if hash >= 0 {
+            b = to_bytes(byte_str(b, 0, hash));
+        }
+        let line = strip_py(from_bytes(b));
+        if line.len() == 0 {
+            continue;
+        }
+        let lb = to_bytes(line);
+        let colon = find_byte(lb, b':', 0);
+        if colon < 0 {
+            continue;
+        }
+        let key = lower_str(strip_py(byte_str(lb, 0, colon)));
+        let value = strip_py(byte_str(lb, colon + 1, lb.len()));
+        if key == "user-agent" {
+            if state == 2 {
+                add_entry(mut r, entry);
+                entry = entry_new();
+            }
+            entry.agents.push(value);
+            state = 1;
+        } else if key == "disallow" or key == "allow" {
+            if state != 0 {
+                state = 2;
+                if let Some(rule) = make_rule(value, key == "allow") {
+                    entry.rules.push(rule);
+                }
+            }
+        } else if key == "crawl-delay" {
+            if state != 0 {
+                if is_decimal(value) {
+                    entry.delay = parse_count(value);
+                }
+                state = 2;
+            }
+        } else if key == "request-rate" {
+            if state != 0 {
+                let nums = split_on(value, b'/');
+                if nums.len() == 2 {
+                    let a = strip_py(nums[0]);
+                    let c = strip_py(nums[1]);
+                    if is_decimal(a) and is_decimal(c) {
+                        entry.rate_n = parse_count(a);
+                        entry.rate_s = parse_count(c);
+                    }
+                }
+                state = 2;
+            }
+        } else if key == "sitemap" {
+            r.sitemaps.push(value);
+        }
+    }
+    if state != 0 {
+        add_entry(mut r, entry);
+    }
+    r
+}
+
+fn entry_applies(e: ref Entry, agent: Str) -> bool {
+    let ab = to_bytes(agent);
+    let slash = find_byte(ab, b'/', 0);
+    let name = lower_str(if slash >= 0 { byte_str(ab, 0, slash) } else { agent.to_string() });
+    let nb = to_bytes(name);
+    for i in 0..e.agents.len() {
+        if e.agents[i] != "*" {
+            let a = lower_str(e.agents[i]);
+            if find_str(nb, a, 0) >= 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// The group for an agent, or -1.
+fn find_entry(r: ref Robots, agent: Str) -> i64 {
+    let key = lower_str(agent);
+    for k in 0..r.keys.len() {
+        if r.keys[k] == key {
+            return k;
+        }
+    }
+    for k in 0..r.groups.len() {
+        if entry_applies(r.groups[k], agent) {
+            return k;
+        }
+    }
+    for k in 0..r.keys.len() {
+        if r.keys[k] == "*" {
+            return k;
+        }
+    }
+    -1
+}
+
+fn can_fetch(r: ref Robots, agent: Str, url: Str, s: ref Schemes) -> bool {
+    let p = urlsplit(url, "");
+    let rel = urlunsplit("", "", p.path, p.query, p.fragment, s);
+    let mut path = normalize_uri(rel);
+    if path.len() == 0 {
+        path = "/".to_string();
+    }
+    if path == "/robots.txt" {
+        return true;
+    }
+    let k = find_entry(r, agent);
+    if k < 0 {
+        return true;
+    }
+    allowance(r.groups[k], path)
+}
+
+// ------------------------------------------------------------ HTML
+
+// The named character references this site's pages use, with and
+// without the semicolon where HTML5's table has both.
+fn entity(name: Str) -> Option[String] {
+    let table = "amp & amp; & lt < lt; < gt > gt; > quot \" quot; \" apos; ' nbsp \u{a0} nbsp; \u{a0} copy \u{a9} copy; \u{a9} reg \u{ae} reg; \u{ae} eacute \u{e9} eacute; \u{e9} mdash; \u{2014} ndash; \u{2013} hellip; \u{2026} rsquo; \u{2019} lsquo; \u{2018} laquo \u{ab} laquo; \u{ab} raquo \u{bb} raquo; \u{bb}";
+    let w = words(table);
+    let mut i: i64 = 0;
+    while i + 1 < w.len() {
+        if w[i] == name {
+            return Some(w[i + 1].clone());
+        }
+        i += 2;
+    }
+    None
+}
+
+// Windows-1252's characters for the C1 range, which a numeric
+// reference in 0x80-0x9f means (the five it leaves undefined map to
+// themselves).
+fn cp1252(n: i64) -> i64 {
+    let table: Array[i64, 32] = [0x20ac, 0x81, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8d, 0x017d, 0x8f, 0x90, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x9d, 0x017e, 0x0178];
+    table[n - 0x80]
+}
+
+// html.unescape's rule for one numeric reference.
+fn numeric_ref(num: i64, out: mut ref Vec[u8]) {
+    if num == 0 {
+        utf8_encode(0xfffd, mut out);
+        return;
+    }
+    if num == 0x0d {
+        out.push(13);
+        return;
+    }
+    if num >= 0x80 and num <= 0x9f {
+        utf8_encode(cp1252(num), mut out);
+        return;
+    }
+    if (num >= 0xd800 and num <= 0xdfff) or num > 0x10ffff {
+        utf8_encode(0xfffd, mut out);
+        return;
+    }
+    let invalid = (num >= 1 and num <= 8) or num == 11 or (num >= 0x0e and num <= 0x1f) or (num >= 0x7f and num <= 0x9f) or (num >= 0xfdd0 and num <= 0xfdef) or (num & 0xfffe) == 0xfffe;
+    if invalid {
+        return;
+    }
+    utf8_encode(num, mut out);
+}
+
+// Reads a numeric reference's digits at `at` (after `&#`); the value
+// (saturated past the last code point), where it ends, and whether
+// there were any digits.
+fn ref_digits(b: ref Vec[u8], at: i64) -> (i64, i64, bool) {
+    let mut i = at;
+    let hex = i < b.len() and (b[i] == b'x' or b[i] == b'X');
+    if hex {
+        i += 1;
+    }
+    let st = i;
+    let mut n: i64 = 0;
+    while i < b.len() and (if hex { is_hex(b[i]) } else { is_digit(b[i]) }) {
+        let d = if hex { hex_val(b[i]) } else { (b[i] - b'0') as i64 };
+        n = n * (if hex { 16 } else { 10 }) + d;
+        if n > 0x110000 {
+            n = 0x110000;
+        }
+        i += 1;
+    }
+    (n, i, i > st)
+}
+
+// html.unescape: numeric references, and named ones (the longest known
+// prefix of a name without its semicolon).
+fn html_unescape(s: Str) -> String {
+    let b = to_bytes(s);
+    if find_byte(b, b'&', 0) < 0 {
+        return s.to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'&' {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        if i + 1 < b.len() and b[i + 1] == b'#' {
+            let (n, end, any) = ref_digits(b, i + 2);
+            if any {
+                numeric_ref(n, mut out);
+                i = if end < b.len() and b[end] == b';' { end + 1 } else { end };
+                continue;
+            }
+            out.push(b'&');
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < b.len() and j - i - 1 < 32 and not (b[j] == b'\t' or b[j] == b'\n' or b[j] == 12 or b[j] == b' ' or b[j] == b'<' or b[j] == b'&' or b[j] == b'#' or b[j] == b';') {
+            j += 1;
+        }
+        if j == i + 1 {
+            out.push(b'&');
+            i += 1;
+            continue;
+        }
+        let end = if j < b.len() and b[j] == b';' { j + 1 } else { j };
+        let name = byte_str(b, i + 1, end);
+        match entity(name) {
+            Some(v) => push_bytes(mut out, v),
+            None => {
+                let nb = to_bytes(name);
+                let mut x = nb.len() - 1;
+                let mut done = false;
+                while x > 1 {
+                    if let Some(v) = entity(byte_str(nb, 0, x)) {
+                        push_bytes(mut out, v);
+                        push_bytes(mut out, byte_str(nb, x, nb.len()));
+                        done = true;
+                        break;
+                    }
+                    x -= 1;
+                }
+                if not done {
+                    out.push(b'&');
+                    push_bytes(mut out, name);
+                }
+            }
+        }
+        i = end;
+    }
+    from_bytes(out)
+}
+
+// html.parser's rule for references in attribute values: numeric ones
+// always, named ones only when exactly known and not followed by `=`.
+fn unescape_attr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'&' or i + 1 >= b.len() {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let numeric = b[j] == b'#';
+        if numeric {
+            let (_, end, any) = ref_digits(b, j + 1);
+            if not any {
+                out.push(b[i]);
+                i += 1;
+                continue;
+            }
+            j = end;
+        } else if is_alpha(b[j]) {
+            while j < b.len() and (is_alpha(b[j]) or is_digit(b[j])) {
+                j += 1;
+            }
+        } else {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        if j < b.len() and (b[j] == b';' or b[j] == b'=') {
+            j += 1;
+        }
+        let r = byte_str(b, i, j);
+        if numeric or (not r.ends_with("=") and entity(byte_str(b, i + 1, j)).is_some()) {
+            push_bytes(mut out, html_unescape(r));
+        } else {
+            push_bytes(mut out, r);
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+// What the crawler keeps from a page.
+struct PageInfo {
+    tags: Vec[String],
+    raws: Vec[Option[String]],
+    nofollows: Vec[bool],
+    base: Option[String],
+    canonical: Option[String],
+    robots: Vec[String],
+    title: Option[String],
+    in_title: bool,
+}
+
+fn is_tag_space(c: u8) -> bool {
+    c == b'\t' or c == b'\n' or c == b'\r' or c == 12 or c == b' '
+}
+
+fn is_name_stop(c: u8) -> bool {
+    is_tag_space(c) or c == b'/' or c == b'>'
+}
+
+// locatetagend: where a tag that starts with its name at `p` ends.
+fn locate_tag_end(b: ref Vec[u8], at: i64) -> i64 {
+    let n = b.len();
+    let mut p = at + 1;
+    while p < n and not is_name_stop(b[p]) {
+        p += 1;
+    }
+    while p < n and (is_tag_space(b[p]) or b[p] == b'/') {
+        p += 1;
+    }
+    while p < n and not is_name_stop(b[p]) {
+        let prev = b[p - 1];
+        if not (prev == b'\'' or prev == b'"' or is_tag_space(prev) or prev == b'/') {
+            break;
+        }
+        p += 1;
+        while p < n and not (is_name_stop(b[p]) or b[p] == b'=') {
+            p += 1;
+        }
+        let v = attr_value_end(b, p);
+        if v >= 0 {
+            p = v;
+        }
+        while p < n and (is_tag_space(b[p]) or b[p] == b'/') {
+            p += 1;
+        }
+    }
+    if p < n and b[p] == b'>' {
+        p += 1;
+    }
+    p
+}
+
+// After an attribute name at `p`: the end of `= value`, or -1 when
+// there is none.
+fn attr_value_end(b: ref Vec[u8], at: i64) -> i64 {
+    let n = b.len();
+    let mut p = at;
+    while p < n and is_tag_space(b[p]) {
+        p += 1;
+    }
+    if p >= n or b[p] != b'=' {
+        return -1;
+    }
+    p += 1;
+    while p < n and is_tag_space(b[p]) {
+        p += 1;
+    }
+    if p < n and (b[p] == b'\'' or b[p] == b'"') {
+        let close = find_byte(b, b[p], p + 1);
+        if close < 0 {
+            return -1;
+        }
+        return close + 1;
+    }
+    while p < n and not (b[p] == b'>' or is_tag_space(b[p])) {
+        p += 1;
+    }
+    p
+}
+
+fn skip_tag_gap(b: ref Vec[u8], at: i64) -> i64 {
+    let mut p = at;
+    while p < b.len() and (is_tag_space(b[p]) or (b[p] == b'/' and not (p + 1 < b.len() and b[p + 1] == b'>'))) {
+        p += 1;
+    }
+    p
+}
+
+fn attr_get(names: ref Vec[String], vals: ref Vec[Option[String]], name: Str) -> Option[String] {
+    for i in 0..names.len() {
+        if names[i] == name {
+            return vals[i].clone();
+        }
+    }
+    None
+}
+
+fn attr_has(names: ref Vec[String], name: Str) -> bool {
+    in_list(name, names)
+}
+
+fn url_attr(tag: Str) -> String {
+    if tag == "a" or tag == "link" {
+        "href".to_string()
+    } else if tag == "img" or tag == "script" or tag == "iframe" or tag == "source" {
+        "src".to_string()
+    } else {
+        String.new()
+    }
+}
+
+fn rel_words(v: ref Option[String]) -> Vec[String] {
+    let text = match v {
+        Some(s) => lower_str(s),
+        None => String.new(),
+    };
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = -1;
+    for i in 0..b.len() + 1 {
+        let gap = i == b.len() or is_space(b[i]) or b[i] == 28 or b[i] == 29 or b[i] == 30 or b[i] == 31;
+        if gap and st >= 0 {
+            out.push(byte_str(b, st, i));
+            st = -1;
+        } else if not gap and st < 0 {
+            st = i;
+        }
+    }
+    out
+}
+
+fn start_tag(pg: mut ref PageInfo, tag: Str, names: ref Vec[String], vals: ref Vec[Option[String]]) {
+    if tag == "title" and pg.title.is_none() {
+        pg.in_title = true;
+        pg.title = Some(String.new());
+    } else if tag == "base" and pg.base.is_none() and attr_get(names, vals, "href").is_some() {
+        pg.base = attr_get(names, vals, "href");
+    } else if tag == "meta" and lower_str(attr_get(names, vals, "name").unwrap_or(String.new())) == "robots" {
+        let content = attr_get(names, vals, "content").unwrap_or(String.new());
+        let toks = split_on(content, b',');
+        for i in 0..toks.len() {
+            let t = lower_str(strip_ws(toks[i]));
+            if not in_list(t, pg.robots) {
+                pg.robots.push(t);
+            }
+        }
+    }
+    if tag == "link" {
+        let rel = rel_words(attr_get(names, vals, "rel"));
+        if in_list("canonical", rel) {
+            pg.canonical = attr_get(names, vals, "href");
+        }
+    }
+    let attr = url_attr(tag);
+    if attr.len() > 0 and attr_has(names, attr) {
+        let rel = rel_words(attr_get(names, vals, "rel"));
+        pg.tags.push(tag.to_string());
+        pg.raws.push(attr_get(names, vals, attr));
+        pg.nofollows.push(in_list("nofollow", rel));
+    }
+}
+
+fn page_data(pg: mut ref PageInfo, text: Str) {
+    if pg.in_title {
+        let mut t = pg.title.clone().unwrap_or(String.new());
+        t.push_str(text);
+        pg.title = Some(t);
+    }
+}
+
+// Elements whose content is raw text (0) or escapable raw text (1);
+// -1 for the rest.
+fn content_mode(tag: Str) -> i64 {
+    if tag == "script" or tag == "style" or tag == "xmp" or tag == "iframe" or tag == "noembed" or tag == "noframes" or tag == "plaintext" {
+        0
+    } else if tag == "textarea" or tag == "title" {
+        1
+    } else {
+        -1
+    }
+}
+
+// The start of `</elem` (any case) followed by a tag-ending character.
+fn find_end_tag(b: ref Vec[u8], elem: Str, from: i64) -> i64 {
+    let e = to_bytes(elem);
+    let mut i = from;
+    while i + 2 + e.len() < b.len() {
+        if b[i] == b'<' and b[i + 1] == b'/' {
+            let mut ok = true;
+            for k in 0..e.len() {
+                if lower(b[i + 2 + k]) != e[k] {
+                    ok = false;
+                }
+            }
+            let c = b[i + 2 + e.len()];
+            if ok and (is_tag_space(c) or c == b'/' or c == b'>') {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    -1
+}
+
+// The page's start tags, title and data, as html.parser's goahead
+// tokenizes them (fed all at once, then closed).
+fn parse_html(text: Str) -> PageInfo {
+    let mut pg = PageInfo { tags: Vec.new(), raws: Vec.new(), nofollows: Vec.new(), base: None, canonical: None, robots: Vec.new(), title: None, in_title: false };
+    let b = to_bytes(text);
+    let n = b.len();
+    let mut i: i64 = 0;
+    let mut cdata = String.new();
+    let mut escapable = true;
+    while i < n {
+        let j = if cdata.len() == 0 {
+            let lt = find_byte(b, b'<', i);
+            if lt < 0 { n } else { lt }
+        } else {
+            find_end_tag(b, cdata, i)
+        };
+        if j < 0 {
+            break;
+        }
+        if i < j {
+            let chunk = byte_str(b, i, j);
+            if escapable {
+                page_data(mut pg, html_unescape(chunk));
+            } else {
+                page_data(mut pg, chunk);
+            }
+        }
+        i = j;
+        if i == n {
+            break;
+        }
+        let k = if i + 1 < n and is_alpha(b[i + 1]) {
+            let endpos = locate_tag_end(b, i + 1);
+            if b[endpos - 1] != b'>' {
+                -1
+            } else {
+                let mut p = i + 1;
+                while p < n and not is_name_stop(b[p]) {
+                    p += 1;
+                }
+                let tag = lower_str(byte_str(b, i + 1, p));
+                p = skip_tag_gap(b, p);
+                let mut names: Vec[String] = Vec.new();
+                let mut vals: Vec[Option[String]] = Vec.new();
+                while p < endpos {
+                    if is_name_stop(b[p]) {
+                        break;
+                    }
+                    let prev = b[p - 1];
+                    if not (prev == b'\'' or prev == b'"' or is_tag_space(prev) or prev == b'/') {
+                        break;
+                    }
+                    let ns = p;
+                    p += 1;
+                    while p < n and not (is_name_stop(b[p]) or b[p] == b'=') {
+                        p += 1;
+                    }
+                    let name = lower_str(byte_str(b, ns, p));
+                    let v = attr_value_end(b, p);
+                    let mut value: Option[String] = None;
+                    if v >= 0 {
+                        let mut q = p;
+                        while is_tag_space(b[q]) {
+                            q += 1;
+                        }
+                        q += 1;
+                        while is_tag_space(b[q]) {
+                            q += 1;
+                        }
+                        let mut raw = byte_str(b, q, v);
+                        let rb = to_bytes(raw);
+                        if rb.len() >= 2 and (rb[0] == b'\'' or rb[0] == b'"') and rb[rb.len() - 1] == rb[0] {
+                            raw = byte_str(rb, 1, rb.len() - 1);
+                        }
+                        if raw.len() > 0 {
+                            raw = unescape_attr(raw);
+                        }
+                        value = Some(raw);
+                        p = v;
+                    }
+                    names.push(name);
+                    vals.push(value);
+                    p = skip_tag_gap(b, p);
+                }
+                let tail = strip_py(byte_str(b, p, endpos));
+                if tail != ">" and tail != "/>" {
+                    page_data(mut pg, byte_str(b, i, endpos));
+                } else {
+                    start_tag(mut pg, tag, names, vals);
+                    if tail == "/>" {
+                        if tag == "title" {
+                            pg.in_title = false;
+                        }
+                    } else {
+                        let mode = content_mode(tag);
+                        if mode >= 0 {
+                            cdata = tag.clone();
+                            escapable = mode == 1;
+                        }
+                    }
+                }
+                endpos
+            }
+        } else if starts_with_at(b, i, "</") {
+            if find_byte(b, b'>', i + 2) < 0 {
+                -1
+            } else if not (i + 2 < n and is_alpha(b[i + 2])) {
+                if i + 2 < n and b[i + 2] == b'>' { i + 3 } else { find_byte(b, b'>', i + 2) + 1 }
+            } else {
+                let endpos = locate_tag_end(b, i + 2);
+                if b[endpos - 1] != b'>' {
+                    -1
+                } else {
+                    let mut p = i + 2;
+                    while p < n and not is_name_stop(b[p]) {
+                        p += 1;
+                    }
+                    let tag = lower_str(byte_str(b, i + 2, p));
+                    if tag == "title" {
+                        pg.in_title = false;
+                    }
+                    cdata = String.new();
+                    escapable = true;
+                    endpos
+                }
+            }
+        } else if starts_with_at(b, i, "<!--") {
+            if i + 4 < n and b[i + 4] == b'>' {
+                i + 5
+            } else if i + 5 < n and b[i + 4] == b'-' and b[i + 5] == b'>' {
+                i + 6
+            } else {
+                let a = find_str(b, "-->", i + 4);
+                let c = find_str(b, "--!>", i + 4);
+                if a < 0 and c < 0 {
+                    -1
+                } else if c < 0 or (a >= 0 and a < c) {
+                    a + 3
+                } else {
+                    c + 4
+                }
+            }
+        } else if starts_with_at(b, i, "<?") or starts_with_at(b, i, "<!") {
+            let gt = if starts_with_at(b, i, "<![CDATA[") { find_str(b, "]]>", i + 9) } else { find_byte(b, b'>', i + 2) };
+            if gt < 0 {
+                -1
+            } else if starts_with_at(b, i, "<![CDATA[") {
+                gt + 3
+            } else {
+                gt + 1
+            }
+        } else {
+            page_data(mut pg, "<");
+            i + 1
+        };
+        if k < 0 {
+            i = n;
+            break;
+        }
+        i = k;
+    }
+    if i < n {
+        let chunk = byte_str(b, i, n);
+        if escapable {
+            page_data(mut pg, html_unescape(chunk));
+        } else {
+            page_data(mut pg, chunk);
+        }
+    }
+    pg
+}
+
+// ------------------------------------------------------------ the files
+
+// data/site/api/index.html
+fn file_0() -> String {
+    """
+<html><head>
+<title>API v1</title>
+<base href="https://docs.example.com/api/v1/">
+<link rel="canonical" href="https://docs.example.com/api/">
+</head>
+<body>
+<a href="users.html">Users</a>
+<a href="../v2/">Version 2</a>
+<a href="/api/v1/users.html?b=2&a=1">Users, sorted</a>
+<a href="users.html?utm_source=x&utm_medium=y">Users from a campaign</a>
+<a href="orders.html;jsessionid=abc">Orders</a>
+<iframe src="/api/v1/playground.html"></iframe>
+</body></html>
+
+"""
+}
+
+// data/site/api/v1/index.html
+fn file_1() -> String {
+    """
+<html><head><title>API v1 index</title></head><body><a href=users.html>Users</a></body></html>
+
+"""
+}
+
+// data/site/api/v1/orders.html
+fn file_2() -> String {
+    """
+<html><head><title>Orders</title></head><body><a href='../'>Up</a></body></html>
+
+"""
+}
+
+// data/site/api/v1/playground.html
+fn file_3() -> String {
+    """
+<html><head><title>Playground</title></head><body><a href="/api/v2/">v2</a></body></html>
+
+"""
+}
+
+// data/site/api/v1/users.html
+fn file_4() -> String {
+    """
+<html><head><title>Users</title>
+<meta name="robots" content="noindex, nofollow"></head>
+<body><a href="orders.html">Orders</a></body></html>
+
+"""
+}
+
+// data/site/api/v2/deep/one.html
+fn file_5() -> String {
+    """
+<html><head><title>Deep one</title></head><body><a href="two.html">two</a></body></html>
+
+"""
+}
+
+// data/site/api/v2/deep/two.html
+fn file_6() -> String {
+    """
+<html><head><title>Deep two</title></head><body></body></html>
+
+"""
+}
+
+// data/site/api/v2/index.html
+fn file_7() -> String {
+    """
+<html><head><title>API v2 (beta)</title></head>
+<body><a href="../v1/">v1</a> <a href="deep/one.html">deeper</a></body></html>
+
+"""
+}
+
+// data/site/changelog.html
+fn file_8() -> String {
+    """
+<html><head><title>Changelog</title></head><body><a href="/">Home</a></body></html>
+
+"""
+}
+
+// data/site/drafts/plan.html
+fn file_9() -> String {
+    """
+<html><head><title>Plan</title></head><body></body></html>
+
+"""
+}
+
+// data/site/drafts/public-roadmap.html
+fn file_10() -> String {
+    """
+<html><head><title>Roadmap</title></head><body></body></html>
+
+"""
+}
+
+// data/site/faq.html
+fn file_11() -> String {
+    """
+<html><head><title>FAQ &#8212; &#x27;Questions&#39;</title></head><body><a href="index.html">Home</a></body></html>
+
+"""
+}
+
+// data/site/guide/café.html
+fn file_12() -> String {
+    """
+<html><head><title>Caf&eacute; notes</title></head>
+<body><a href="intro.html">Intro</a></body></html>
+
+"""
+}
+
+// data/site/guide/index.html
+fn file_13() -> String {
+    """
+<html><head><title>Guide</title></head>
+<body>
+<p>Start with <a href="intro.html">the introduction</a>, then
+<a href="./setup.html?print=1">print the setup page</a> or read
+<a href="setup.html?utm_campaign=launch&lang=en">setup</a>.</p>
+<p><a href="caf%C3%A9.html">Café notes</a> and
+<a href="café.html">the same notes</a>.</p>
+<a href="../api/">API reference</a>
+<a href="/guide/../tmp/cache.html">Cache</a>
+</body></html>
+
+"""
+}
+
+// data/site/guide/intro.html
+fn file_14() -> String {
+    """
+<html><head><title>Introduction &mdash; Guide</title></head>
+<body>
+<a href="../index.html">Home</a>
+<a href="setup.html">Setup</a>
+<a href="../../../../escape.html">Escape</a>
+<a href="/guide/./intro.html#x">Me</a>
+<a href="a/b/../../setup.html">Setup again</a>
+<a href="%7Euser/notes.html">Notes</a>
+<a href="/%7Euser/">User home</a>
+<a href="/search/help">Search help</a>
+</body></html>
+
+"""
+}
+
+// data/site/guide/setup.html
+fn file_15() -> String {
+    """
+<html><head>
+<title>Setup</title>
+<META NAME="Robots" CONTENT="NoIndex">
+</head>
+<body>
+<a href="/guide/">Back</a>
+<a href="/tmp/cache.html">Cache</a>
+<a href="/old/page.html">Old page</a>
+<a href="/docs.pdf">PDF</a>
+<a href="/archive/2024/old">Archive</a>
+<a href="/search?q=setup+guide&page=2">Search</a>
+<a href="/old/">Old</a>
+</body></html>
+
+"""
+}
+
+// data/site/guide/~user/notes.html
+fn file_16() -> String {
+    """
+<html><head><title>User notes</title></head><body></body></html>
+
+"""
+}
+
+// data/site/index.html
+fn file_17() -> String {
+    """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Example Docs &amp; Guides &copy 2026</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href=/static/logo.svg>
+  <script src="//cdn.example.net/app.js"></script>
+  <script>
+    // not a link: document.write('<a href="/fake.html">x</a>');
+    var u = "/also-fake.html";
+  </script>
+</head>
+<body>
+<!-- <a href="/secret.html">old link</a> -->
+<nav>
+  <A HREF="guide/">Guide</A>
+  <a href='guide/intro.html'>Intro</a>
+  <a href="/api">API</a>
+  <a href="https://docs.example.com:443/changelog.html">Changes</a>
+  <a href="HTTPS://Docs.Example.COM/faq.html#top">FAQ</a>
+  <a href="  /faq.html  ">FAQ again</a>
+  <a href="#main">Skip to content</a>
+  <a href="mailto:docs@example.com">Mail us</a>
+  <a href="javascript:void(0)">Menu</a>
+  <a href="tel:+1-555-0100">Call</a>
+</nav>
+<main id="main">
+  <img src="/static/logo.svg" alt="logo">
+  <a href="/drafts/plan.html">Plan</a>
+  <a href="/drafts/public-roadmap.html">Roadmap</a>
+  <a href="/internal/admin.html">Admin</a>
+  <a href="/internal/status.html">Status</a>
+  <a href="search?q=kara&amp;utm_source=home&region=eu">Search</a>
+  <a href>No target</a>
+  <a href="">This page</a>
+  <a rel="nofollow" href="/login.html">Log in</a>
+  <a href="/missing.html">Gone</a>
+  <a href="https://github.com/example/docs">GitHub</a>
+  <a href="http://example.org/blog/">Blog</a>
+  <a href="https://github.com/example/docs/issues">Issues</a>
+  <a href="http://docs.example.com:8080/">Staging</a>
+  <a href="http://docs.example.com:http/">Typo</a>
+  <a title="x"href="/faq.html?lang=en&amp;lang=de">FAQ in two languages</a>
+</main>
+</body>
+</html>
+
+"""
+}
+
+// data/site/internal/admin.html
+fn file_18() -> String {
+    """
+<html><head><title>Admin</title></head><body></body></html>
+
+"""
+}
+
+// data/site/internal/status.html
+fn file_19() -> String {
+    """
+<html><head><title>Status: all green</title></head><body></body></html>
+
+"""
+}
+
+// data/site/login.html
+fn file_20() -> String {
+    """
+<html><head><title>Log in</title></head><body></body></html>
+
+"""
+}
+
+// data/site/old/index.html
+fn file_21() -> String {
+    """
+<html><head><title>Old</title></head><body></body></html>
+
+"""
+}
+
+// data/site/robots.txt
+fn file_22() -> String {
+    """
+# robots.txt for docs.example.com
+User-agent: *
+Disallow: /drafts/
+Disallow: /search
+Allow: /drafts/public-roadmap.html
+Disallow: /*.pdf$
+Crawl-delay: 2
+
+User-agent: kara-crawler
+Disallow: /internal/
+Allow: /internal/status.html
+Disallow: /*?print=
+Disallow: /tmp*
+Disallow: /%7Euser/
+Disallow: /a$b
+Crawl-delay: 1
+Request-rate: 30/60
+
+User-agent: BadBot
+User-agent: EvilScraper
+Disallow: /
+
+User-agent: friendly-bot
+Disallow:
+
+# merged into the kara-crawler group above
+User-agent: kara-crawler
+Disallow: /old/
+Disallow: /archive/**/old$$
+Allow: /search/help
+
+Sitemap: https://docs.example.com/sitemap.xml
+sitemap: https://docs.example.com/sitemap-api.xml
+this line has no colon
+Unknown-field: ignored
+
+"""
+}
+
+// data/site/search/help
+fn file_23() -> String {
+    """
+help text
+
+"""
+}
+
+// data/site/static/logo.svg
+fn file_24() -> String {
+    """
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"></svg>
+
+"""
+}
+
+// data/site/static/style.css
+fn file_25() -> String {
+    """
+body { font-family: sans-serif; }
+
+"""
+}
+
+// data/site/tmp/cache.html
+fn file_26() -> String {
+    """
+<html><head><title>Cache</title></head><body></body></html>
+
+"""
+}
+
+// data/url-tests.tsv
+fn file_27() -> String {
+    """
+join	http://a/b/c/d;p?q	g:h
+join	http://a/b/c/d;p?q	g
+join	http://a/b/c/d;p?q	./g
+join	http://a/b/c/d;p?q	g/
+join	http://a/b/c/d;p?q	/g
+join	http://a/b/c/d;p?q	//g
+join	http://a/b/c/d;p?q	?y
+join	http://a/b/c/d;p?q	g?y
+join	http://a/b/c/d;p?q	#s
+join	http://a/b/c/d;p?q	g#s
+join	http://a/b/c/d;p?q	g?y#s
+join	http://a/b/c/d;p?q	;x
+join	http://a/b/c/d;p?q	g;x
+join	http://a/b/c/d;p?q	g;x?y#s
+join	http://a/b/c/d;p?q	
+join	http://a/b/c/d;p?q	.
+join	http://a/b/c/d;p?q	./
+join	http://a/b/c/d;p?q	..
+join	http://a/b/c/d;p?q	../
+join	http://a/b/c/d;p?q	../g
+join	http://a/b/c/d;p?q	../..
+join	http://a/b/c/d;p?q	../../
+join	http://a/b/c/d;p?q	../../g
+join	http://a/b/c/d;p?q	../../../g
+join	http://a/b/c/d;p?q	../../../../g
+join	http://a/b/c/d;p?q	/./g
+join	http://a/b/c/d;p?q	/../g
+join	http://a/b/c/d;p?q	g.
+join	http://a/b/c/d;p?q	.g
+join	http://a/b/c/d;p?q	g..
+join	http://a/b/c/d;p?q	..g
+join	http://a/b/c/d;p?q	./../g
+join	http://a/b/c/d;p?q	./g/.
+join	http://a/b/c/d;p?q	g/./h
+join	http://a/b/c/d;p?q	g/../h
+join	http://a/b/c/d;p?q	g;x=1/./y
+join	http://a/b/c/d;p?q	g;x=1/../y
+join	http://a/b/c/d;p?q	g?y/./x
+join	http://a/b/c/d;p?q	g?y/../x
+join	http://a/b/c/d;p?q	g#s/./x
+join	http://a/b/c/d;p?q	g#s/../x
+join	http://a/b/c/d;p?q	http:g
+join	http://a/b/c/d;p?q	mailto:x@y
+join	http://a/b/c/d;p?q	HTTP://A/g
+join	http://a/b/c/d;p?q	//g:80/x
+join	https://example.com/a/b/	c/../../d
+join	https://example.com	x
+join	https://example.com/dir/file.html	?page=2
+join	mailto:a@b	c
+join	file:///etc/hosts	passwd
+split	https://user:pa%20ss@Example.COM:8443/p/a;x?q=1&r=2#frag
+split	http://[2001:DB8::1]:8080/index.html
+split	http://example.com:/empty-port
+split	http://example.com?query-only
+split	HTTP://EXAMPLE.com#frag-only
+split	mailto:user@example.com?subject=Hi
+split	//cdn.example.net/lib.js
+split	relative/path?x#y
+split	  \\t https://ex\\tample.com/sp ace\\n
+split	http://example.com:abc/
+split	http://example.com:70000/
+split	http://@host/
+split	tel:+1-555-0100
+split	1http://not-a-scheme/
+split	a+b.c-d://ok/
+quote	/a b/c?d	/
+quote	café/~user	/
+quote	a+b=c&d	
+quote	100% sure!	!
+quote	x/y	
+quote_plus	a b&c=d/é
+quote_plus	already+plus
+unquote	%7Euser%2Fdocs
+unquote	caf%C3%A9
+unquote	100%
+unquote	%zz%4
+unquote	a+b
+unquote_plus	a+b%2Bc
+qsl	a=1&b=2&a=3
+qsl	x=a+b%20c&empty=&novalue&&y=%3D
+qsl	utm_source=x&id=7
+qsl	
+encode	q	kara lang	path	/a/b	sym	a&b=c	u	é
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data/site/api")?;
+    put("data/site/api/index.html", file_0())?;
+    make_dir("data/site/api/v1")?;
+    put("data/site/api/v1/index.html", file_1())?;
+    put("data/site/api/v1/orders.html", file_2())?;
+    put("data/site/api/v1/playground.html", file_3())?;
+    put("data/site/api/v1/users.html", file_4())?;
+    make_dir("data/site/api/v2/deep")?;
+    put("data/site/api/v2/deep/one.html", file_5())?;
+    put("data/site/api/v2/deep/two.html", file_6())?;
+    make_dir("data/site/api/v2")?;
+    put("data/site/api/v2/index.html", file_7())?;
+    make_dir("data/site")?;
+    put("data/site/changelog.html", file_8())?;
+    make_dir("data/site/drafts")?;
+    put("data/site/drafts/plan.html", file_9())?;
+    put("data/site/drafts/public-roadmap.html", file_10())?;
+    put("data/site/faq.html", file_11())?;
+    make_dir("data/site/guide")?;
+    put("data/site/guide/café.html", file_12())?;
+    put("data/site/guide/index.html", file_13())?;
+    put("data/site/guide/intro.html", file_14())?;
+    put("data/site/guide/setup.html", file_15())?;
+    make_dir("data/site/guide/~user")?;
+    put("data/site/guide/~user/notes.html", file_16())?;
+    put("data/site/index.html", file_17())?;
+    make_dir("data/site/internal")?;
+    put("data/site/internal/admin.html", file_18())?;
+    put("data/site/internal/status.html", file_19())?;
+    put("data/site/login.html", file_20())?;
+    make_dir("data/site/old")?;
+    put("data/site/old/index.html", file_21())?;
+    put("data/site/robots.txt", file_22())?;
+    make_dir("data/site/search")?;
+    put("data/site/search/help", file_23())?;
+    make_dir("data/site/static")?;
+    put("data/site/static/logo.svg", file_24())?;
+    put("data/site/static/style.css", file_25())?;
+    make_dir("data/site/tmp")?;
+    put("data/site/tmp/cache.html", file_26())?;
+    make_dir("data")?;
+    put("data/url-tests.tsv", file_27())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the URL cases
+
+fn unesc(a: Str) -> String {
+    let b = to_bytes(a);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'\\' and i + 1 < b.len() {
+            let c = b[i + 1];
+            out.push(if c == b't' { b'\t' } else if c == b'n' { b'\n' } else { c });
+            i += 2;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+fn url_cases(text: Str, s: ref Schemes) {
+    println("== URL library");
+    let lines = lines_of(text);
+    for li in 0..lines.len() {
+        let raw = split_on(lines[li], b'\t');
+        let mut args: Vec[String] = Vec.new();
+        for i in 1..raw.len() {
+            args.push(unesc(raw[i]));
+        }
+        let op = raw[0].clone();
+        if op == "join" {
+            let r = urljoin(args[0], args[1], s);
+            println(f"urljoin({esc(args[0])}, {esc(args[1])}) = {esc(r)}");
+        } else if op == "split" {
+            let p = urlsplit(args[0], "");
+            println(f"urlsplit({esc(args[0])})");
+            println(f"  scheme={esc(p.scheme)} netloc={esc(p.netloc)} path={esc(p.path)} query={esc(p.query)} fragment={esc(p.fragment)}");
+            let port = match port_of(p.netloc) {
+                Ok(Some(n)) => f"{n}",
+                Ok(None) => "None".to_string(),
+                Err(e) => f"ValueError({esc(e)})",
+            };
+            let user = esc_opt(username(p.netloc));
+            let pass = esc_opt(password(p.netloc));
+            let host = esc_opt(hostname(p.netloc));
+            println(f"  username={user} password={pass} hostname={host} port={port}");
+            let back = urlunsplit(p.scheme, p.netloc, p.path, p.query, p.fragment, s);
+            println(f"  unsplit={esc(back)}");
+        } else if op == "quote" {
+            println(f"quote({esc(args[0])}, safe={esc(args[1])}) = {esc(quote(args[0], args[1]))}");
+        } else if op == "quote_plus" {
+            println(f"quote_plus({esc(args[0])}) = {esc(quote_plus(args[0]))}");
+        } else if op == "unquote" {
+            println(f"unquote({esc(args[0])}) = {esc(unquote(args[0]))}");
+        } else if op == "unquote_plus" {
+            println(f"unquote_plus({esc(args[0])}) = {esc(unquote_plus(args[0]))}");
+        } else if op == "qsl" {
+            let pairs = parse_qsl(args[0]);
+            let mut shown = String.new();
+            for i in 0..pairs.len() {
+                let (k, v) = pairs[i].clone();
+                if i > 0 {
+                    shown.push_str(", ");
+                }
+                shown.push_str(f"({esc(k)}, {esc(v)})");
+            }
+            println(f"parse_qsl({esc(args[0])}) = [{shown}]");
+        } else if op == "encode" {
+            let mut pairs: Vec[(String, String)] = Vec.new();
+            let mut i: i64 = 0;
+            while i + 1 < args.len() {
+                pairs.push((args[i].clone(), args[i + 1].clone()));
+                i += 2;
+            }
+            let n = pairs.len();
+            println(f"urlencode({n} pairs) = {esc(urlencode(pairs))}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ the crawl
+
+// A crawl target: its normalized URL, or why it has none.
+fn normalize(url: Str, s: ref Schemes) -> Result[String, String] {
+    let defrag = urldefrag(url, s);
+    let p = urlsplit(defrag, "");
+    if p.scheme != "http" and p.scheme != "https" {
+        let what = if p.scheme.len() > 0 { p.scheme.clone() } else { "no scheme".to_string() };
+        return Err(f"not http: {what}");
+    }
+    let host = hostname(p.netloc).unwrap_or(String.new());
+    let port = match port_of(p.netloc) {
+        Ok(v) => v,
+        Err(e) => return Err(f"bad port: {e}"),
+    };
+    let default_port: i64 = if p.scheme == "http" { 80 } else { 443 };
+    let netloc = match port {
+        Some(n) => if n == default_port { host } else { f"{host}:{n}" },
+        None => host,
+    };
+    let mut path = quote(unquote(p.path), "/:@!$&'()*+,;=");
+    if path.len() == 0 {
+        path = "/".to_string();
+    }
+    let all = parse_qsl(p.query);
+    let mut kept: Vec[(String, String)] = Vec.new();
+    for i in 0..all.len() {
+        let (k, v) = all[i].clone();
+        if not k.starts_with("utm_") {
+            kept.push((k, v));
+        }
+    }
+    Ok(urlunsplit(p.scheme, netloc, path, urlencode(kept), "", s))
+}
+
+struct Fetch {
+    status: i64,
+    body: String,
+    location: String,
+}
+
+fn fetch(url: Str, s: ref Schemes) -> Fetch {
+    let p = urlsplit(url, "");
+    let path = unquote(p.path);
+    let file = if path.ends_with("/") { f"data/site{path}index.html" } else { f"data/site{path}" };
+    if let Ok(body) = fs.read_to_string(file) {
+        return Fetch { status: 200, body: body, location: String.new() };
+    }
+    if not path.ends_with("/") {
+        if let Ok(_) = fs.read_to_string(f"data/site{path}/index.html") {
+            let loc = urlunsplit(p.scheme, p.netloc, f"{p.path}/", p.query, "", s);
+            return Fetch { status: 301, body: String.new(), location: loc };
+        }
+    }
+    Fetch { status: 404, body: String.new(), location: String.new() }
+}
+
+fn netloc_of(url: Str) -> String {
+    urlsplit(url, "").netloc
+}
+
+fn title_text(t: ref Option[String]) -> String {
+    let raw = match t {
+        Some(v) => v.clone(),
+        None => String.new(),
+    };
+    let b = to_bytes(raw);
+    let mut out: Vec[u8] = Vec.new();
+    let mut gap = false;
+    for i in 0..b.len() {
+        if is_html_space(b[i]) {
+            gap = true;
+        } else {
+            if gap and out.len() > 0 {
+                out.push(b' ');
+            }
+            gap = false;
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn sort_strings(v: ref Vec[String]) -> Vec[String] {
+    let mut out = v.clone();
+    for i in 1..out.len() {
+        let mut j = i;
+        while j > 0 and cmp_str(out[j - 1], out[j]) > 0 {
+            let t = out[j - 1].clone();
+            out[j - 1] = out[j].clone();
+            out[j] = t;
+            j -= 1;
+        }
+    }
+    out
+}
+
+fn index_of(v: ref Vec[String], s: Str) -> i64 {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return i;
+        }
+    }
+    -1
+}
+
+fn xml_escape(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == b'&' {
+            push_bytes(mut out, "&amp;");
+        } else if b[i] == b'<' {
+            push_bytes(mut out, "&lt;");
+        } else if b[i] == b'>' {
+            push_bytes(mut out, "&gt;");
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+const SITE: Str = "https://docs.example.com";
+const AGENT: Str = "kara-crawler/1.0";
+const MAX_DEPTH: i64 = 3;
+
+fn robots_section(r: ref Robots, s: ref Schemes) {
+    println("");
+    println("== robots.txt");
+    let mut maps = String.new();
+    for i in 0..r.sitemaps.len() {
+        if i > 0 {
+            maps.push_str(", ");
+        }
+        maps.push_str(r.sitemaps[i]);
+    }
+    println(f"sitemaps: {maps}");
+    let agents: Array[Str, 4] = [AGENT, "Googlebot/2.1", "BadBot/3.0", "friendly-bot"];
+    let probes = words("/ /drafts/x.html /drafts/public-roadmap.html /internal/admin.html /internal/status.html /guide/setup.html?print=1 /guide/setup.html?lang=en&print= /tmp /tmpfiles/x /old/page.html /docs.pdf /docs.pdf?x=1 /search?q=1 /search/help /robots.txt /%7Euser/ /~user/x /archive/2024/old /archive/2024/old/x /caf%C3%A9.html /a$b");
+    for a in 0..4 {
+        let agent = agents[a];
+        let k = find_entry(r, agent);
+        let delay = if k < 0 or r.groups[k].delay < 0 { "None".to_string() } else { f"{r.groups[k].delay}" };
+        let rate = if k < 0 or r.groups[k].rate_n < 0 { "None".to_string() } else { f"{r.groups[k].rate_n}/{r.groups[k].rate_s}" };
+        let mut verdicts = String.new();
+        for p in 0..probes.len() {
+            let url = f"{SITE}{probes[p]}";
+            verdicts.push_str(if can_fetch(r, agent, url, s) { "+" } else { "-" });
+        }
+        println(f"{agent}: crawl-delay={delay} request-rate={rate} {verdicts}");
+    }
+    let mut all = String.new();
+    for p in 0..probes.len() {
+        if p > 0 {
+            all.push_str(" ");
+        }
+        all.push_str(probes[p]);
+    }
+    println(f"probes: {all}");
+}
+
+fn crawl(r: ref Robots, s: ref Schemes) -> Result[(), String] {
+    println("");
+    println("== crawl");
+    let start = normalize(f"{SITE}/", s).unwrap_or(String.new());
+    let site_netloc = netloc_of(start);
+    let mut q_url: Vec[String] = vec![start.clone()];
+    let mut q_depth: Vec[i64] = vec![0];
+    let mut q_ref: Vec[String] = vec!["(start)".to_string()];
+    let mut head: i64 = 0;
+    let mut seen: Vec[String] = vec![start.clone()];
+    let mut res_url: Vec[String] = Vec.new();
+    let mut res_status: Vec[i64] = Vec.new();
+    let mut ref_keys: Vec[String] = Vec.new();
+    let mut ref_lists: Vec[Vec[String]] = Vec.new();
+    let mut ext_hosts: Vec[String] = Vec.new();
+    let mut ext_counts: Vec[i64] = Vec.new();
+    let mut blocked: i64 = 0;
+    let mut sitemap: Vec[String] = Vec.new();
+    while head < q_url.len() {
+        let url = q_url[head].clone();
+        let depth = q_depth[head];
+        let from = q_ref[head].clone();
+        head += 1;
+        if not can_fetch(r, AGENT, url, s) {
+            println(f"[robots] {url} (from {from})");
+            blocked += 1;
+            continue;
+        }
+        let f = fetch(url, s);
+        if f.status == 301 {
+            let loc = f.location.clone();
+            println(f"[301] {url} -> {loc}");
+            if index_of(seen, loc) < 0 {
+                seen.push(loc.clone());
+                q_url.push(loc);
+                q_depth.push(depth);
+                q_ref.push(url.clone());
+            }
+            continue;
+        }
+        if f.status == 404 {
+            println(f"[404] {url} (from {from})");
+            res_url.push(url.clone());
+            res_status.push(404);
+            continue;
+        }
+        let bare = split_on(url, b'?')[0].clone();
+        if not url.ends_with("/") and not bare.ends_with(".html") {
+            let size = f.body.len();
+            println(f"[200] {url} asset, {size} bytes");
+            res_url.push(url.clone());
+            res_status.push(200);
+            continue;
+        }
+        let pg = parse_html(f.body);
+        let title = title_text(pg.title);
+        let mut flags: Vec[String] = Vec.new();
+        for i in 0..pg.robots.len() {
+            if pg.robots[i].len() > 0 {
+                flags.push(pg.robots[i].clone());
+            }
+        }
+        let flags = sort_strings(flags);
+        let mut line = f"[200] {url} depth {depth} {esc(title)}";
+        if flags.len() > 0 {
+            line.push_str(" robots=");
+            for i in 0..flags.len() {
+                if i > 0 {
+                    line.push_str(",");
+                }
+                line.push_str(flags[i]);
+            }
+        }
+        println(line);
+        res_url.push(url.clone());
+        res_status.push(200);
+        let base = match pg.base.clone() {
+            Some(b) => {
+                let joined = urljoin(url, strip_ws(b), s);
+                println(f"  base {joined}");
+                joined
+            }
+            None => url.clone(),
+        };
+        let noindex = in_list("noindex", pg.robots) or in_list("none", pg.robots);
+        if not noindex {
+            let mut canon = url.clone();
+            if let Some(c) = pg.canonical.clone() {
+                if let Ok(cn) = normalize(urljoin(base, strip_ws(c), s), s) {
+                    if netloc_of(cn) == site_netloc {
+                        println(f"  canonical {cn}");
+                        canon = cn;
+                    }
+                }
+            }
+            if not in_list(canon, sitemap) {
+                sitemap.push(canon);
+            }
+        }
+        let nofollow_page = in_list("nofollow", pg.robots) or in_list("none", pg.robots);
+        for li in 0..pg.tags.len() {
+            let tag = pg.tags[li].clone();
+            let raw = match pg.raws[li].clone() {
+                Some(v) => v,
+                None => {
+                    println(f"  {tag} (no value)");
+                    continue;
+                }
+            };
+            let head_text = f"  {tag} {esc(raw)}";
+            let target = match normalize(urljoin(base, strip_ws(raw), s), s) {
+                Ok(t) => t,
+                Err(why) => {
+                    println(f"{head_text} skipped, {why}");
+                    continue;
+                }
+            };
+            if netloc_of(target) != site_netloc {
+                let host = hostname(netloc_of(target)).unwrap_or(String.new());
+                let k = index_of(ext_hosts, host);
+                if k < 0 {
+                    ext_hosts.push(host);
+                    ext_counts.push(1);
+                } else {
+                    ext_counts[k] += 1;
+                }
+                println(f"{head_text} -> {target} external");
+                continue;
+            }
+            let rk = index_of(ref_keys, target);
+            if rk < 0 {
+                ref_keys.push(target.clone());
+                ref_lists.push(vec![url.clone()]);
+            } else if not in_list(url, ref_lists[rk]) {
+                ref_lists[rk].push(url.clone());
+            }
+            if pg.nofollows[li] or nofollow_page {
+                println(f"{head_text} -> {target} nofollow");
+            } else if index_of(seen, target) >= 0 {
+                println(f"{head_text} -> {target} seen");
+            } else if depth + 1 > MAX_DEPTH {
+                println(f"{head_text} -> {target} too deep");
+            } else {
+                seen.push(target.clone());
+                q_url.push(target.clone());
+                q_depth.push(depth + 1);
+                q_ref.push(url.clone());
+                println(f"{head_text} -> {target} queued");
+            }
+        }
+    }
+    println("");
+    println("== summary");
+    let mut ok: i64 = 0;
+    for i in 0..res_status.len() {
+        if res_status[i] == 200 {
+            ok += 1;
+        }
+    }
+    let total = res_url.len();
+    let broken = total - ok;
+    println(f"fetched {total} urls: {ok} ok, {broken} broken; {blocked} blocked by robots.txt");
+    for i in 0..res_url.len() {
+        if res_status[i] == 404 {
+            let u = res_url[i].clone();
+            let k = index_of(ref_keys, u);
+            let mut froms = String.new();
+            if k < 0 {
+                froms.push_str("(start)");
+            } else {
+                for j in 0..ref_lists[k].len() {
+                    if j > 0 {
+                        froms.push_str(", ");
+                    }
+                    froms.push_str(ref_lists[k][j]);
+                }
+            }
+            println(f"broken {u} <- {froms}");
+        }
+    }
+    let hosts = sort_strings(ext_hosts);
+    for i in 0..hosts.len() {
+        let k = index_of(ext_hosts, hosts[i]);
+        let h = hosts[i].clone();
+        let c = ext_counts[k];
+        println(f"external {h} x{c}");
+    }
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    let mut xml = String.new();
+    xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    xml.push_str("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+    let urls = sort_strings(sitemap);
+    for i in 0..urls.len() {
+        xml.push_str(f"  <url><loc>{xml_escape(urls[i])}</loc></url>\n");
+    }
+    xml.push_str("</urlset>\n");
+    put("data/out/sitemap.xml", xml)?;
+    let sorted = sort_strings(res_url);
+    let mut report = "url\tstatus\n".to_string();
+    for i in 0..sorted.len() {
+        let k = index_of(res_url, sorted[i]);
+        let u = sorted[i].clone();
+        let st = res_status[k];
+        report.push_str(f"{u}\t{st}\n");
+    }
+    put("data/out/report.tsv", report)?;
+    println("");
+    println("== data/out/sitemap.xml");
+    match fs.read_to_string("data/out/sitemap.xml".to_string()) {
+        Ok(t) => print(t),
+        Err(e) => return Err(f"cannot read data/out/sitemap.xml: {e}"),
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let s = schemes();
+    let tests = match fs.read_to_string("data/url-tests.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/url-tests.tsv: {e}"),
+    };
+    url_cases(tests, s);
+    let text = match fs.read_to_string("data/site/robots.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/site/robots.txt: {e}"),
+    };
+    let r = parse_robots(text);
+    robots_section(r, s);
+    crawl(r, s)
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_crawl: {e}");
+    }
+}
