@@ -1,0 +1,98 @@
+// LeetCode #666: Path Sum IV -- a fixed grid, each leaf walked up.
+//
+// The tree is at most four levels deep, so a 5 by 9 grid holds every
+// place, -1 where there is no node. A node is a leaf when both places
+// below it are empty; from each leaf, walk up through the parents,
+// position `(p + 1) / 2`, adding their values. O(n * depth) time,
+// O(1) space.
+
+fn path_sum(nums: Vec[i64]) -> i64 {
+    let mut grid = vec![vec![-1; 9]; 5];
+    for x in nums.iter() {
+        grid[*x / 100][*x / 10 % 10] = *x % 10;
+    }
+    let mut total = 0;
+    for x in nums.iter() {
+        let depth = *x / 100;
+        let position = *x / 10 % 10;
+        let leaf = depth == 4 or (grid[depth + 1][2 * position - 1] < 0 and grid[depth + 1][2 * position] < 0);
+        if leaf {
+            let mut d = depth;
+            let mut p = position;
+            while d >= 1 {
+                total += grid[d][p];
+                d -= 1;
+                p = (p + 1) / 2;
+            }
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random tree at most `levels` deep, as the problem lists it: level by
+// level, left to right. Each child is there with chance `chance` in 100.
+fn random_tree(levels: i64, chance: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = vec![110 + next_random(mut seed) % 10];
+    let mut level: Vec[i64] = vec![1];
+    for depth in 2..levels + 1 {
+        let mut next: Vec[i64] = Vec.new();
+        for p in level.iter() {
+            for c in 2 * *p - 1..2 * *p + 1 {
+                if next_random(mut seed) % 100 < chance {
+                    next.push(c);
+                    nums.push(depth * 100 + c * 10 + next_random(mut seed) % 10);
+                }
+            }
+        }
+        level = next;
+    }
+    nums
+}
+
+fn show(nums: Vec[i64]) {
+    let mut parts: Vec[String] = Vec.new();
+    for x in nums.iter() {
+        parts.push(f"{x}");
+    }
+    println(f"[{parts.join(",")}]: {path_sum(nums)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![113, 215, 221]);
+    show(vec![113, 221]);
+    // One node; a chain down the left; a chain down the right; a full tree
+    // of four levels of 9s; the same with every value 0.
+    show(vec![115]);
+    show(vec![111, 212, 313, 414]);
+    show(vec![119, 228, 347, 486]);
+    let mut nines: Vec[i64] = Vec.new();
+    let mut zeros: Vec[i64] = Vec.new();
+    for depth in 1..5 {
+        for p in 1..(1 << (depth - 1)) + 1 {
+            nines.push(depth * 100 + p * 10 + 9);
+            zeros.push(depth * 100 + p * 10);
+        }
+    }
+    show(nines);
+    show(zeros);
+    // 2,000 random trees of 1 to 4 levels: a checksum of their sums.
+    let mut seed: i64 = 666;
+    let mut sum = 0;
+    let mut most = 0;
+    for _ in 0..2000 {
+        let levels = 1 + next_random(mut seed) % 4;
+        let chance = 30 + next_random(mut seed) % 71;
+        let s = path_sum(random_tree(levels, chance, mut seed));
+        most = most.max(s);
+        sum = (sum * 31 + s) % 1000000007;
+    }
+    println(f"2000 random trees: largest {most}, checksum {sum}");
+}

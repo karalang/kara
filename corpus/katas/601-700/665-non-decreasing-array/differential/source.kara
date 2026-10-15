@@ -1,0 +1,214 @@
+// LeetCode #665: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn check_possibility_star(nums: Vec[i64]) -> bool {
+    let mut a = nums.clone();
+    let mut fixes = 0;
+    for i in 1..a.len() {
+        if a[i] < a[i - 1] {
+            fixes += 1;
+            if fixes > 1 {
+                return false;
+            }
+            if i < 2 or a[i - 2] <= a[i] {
+                a[i - 1] = a[i];
+            } else {
+                a[i] = a[i - 1];
+            }
+        }
+    }
+    true
+}
+
+// ---- drops arm ---------------------------------------------------------
+
+fn check_possibility_drops(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut drop = -1;
+    for i in 1..n {
+        if nums[i] < nums[i - 1] {
+            if drop >= 0 {
+                return false;
+            }
+            drop = i;
+        }
+    }
+    if drop < 0 {
+        return true;
+    }
+    let i = drop;
+    i == 1 or i == n - 1 or nums[i - 2] <= nums[i] or nums[i - 1] <= nums[i + 1]
+}
+
+// ---- remove arm --------------------------------------------------------
+
+fn check_possibility_remove(nums: Vec[i64]) -> bool {
+    let mut first = -1;
+    for i in 1..nums.len() {
+        if first < 0 and nums[i] < nums[i - 1] {
+            first = i;
+        }
+    }
+    first < 0 or sorted_without_remove(nums, first - 1) or sorted_without_remove(nums, first)
+}
+
+fn sorted_without_remove(nums: Vec[i64], skip: i64) -> bool {
+    let mut has_last = false;
+    let mut last = 0;
+    for i in 0..nums.len() {
+        if i != skip {
+            if has_last and nums[i] < last {
+                return false;
+            }
+            has_last = true;
+            last = nums[i];
+        }
+    }
+    true
+}
+
+// ---- longest arm -------------------------------------------------------
+
+fn check_possibility_longest(nums: Vec[i64]) -> bool {
+    let mut tails: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        let mut lo = 0;
+        let mut hi = tails.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if tails[mid] <= *x {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo == tails.len() {
+            tails.push(*x);
+        } else {
+            tails[lo] = *x;
+        }
+    }
+    tails.len() + 1 >= nums.len()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, nums: Vec[i64]) -> bool {
+    if which == 0 {
+        check_possibility_star(nums)
+    } else if which == 1 {
+        check_possibility_drops(nums)
+    } else if which == 2 {
+        check_possibility_remove(nums)
+    } else {
+        check_possibility_longest(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn in_order(a: Vec[i64]) -> bool {
+    for i in 1..a.len() {
+        if a[i] < a[i - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+// The definition: leave the array as it is, or set any one element to
+// any value already in it, a neighbour's included, and look for one
+// that comes out in order.
+fn definition(nums: Vec[i64]) -> bool {
+    if in_order(nums.clone()) {
+        return true;
+    }
+    for p in 0..nums.len() {
+        for v in nums.iter() {
+            let mut a = nums.clone();
+            a[p] = *v;
+            if in_order(a) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn main() {
+    // 2000 random arrays of 1 to 8 numbers from 0 to 2 up to 0 to 9.
+    let cases = 2000;
+    let mut seed: i64 = 665;
+    let mut count = 0;
+    let mut yes = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let n = 1 + next_random(mut seed) % 8;
+        let top = 3 + next_random(mut seed) % 8;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % top);
+        }
+        count += n;
+        let want = definition(nums.clone());
+        if want {
+            yes += 1;
+        }
+        // Reversed and negated; doubled plus 7; sorted, then one element
+        // set at random; and without the first or the last element.
+        let mut flipped: Vec[i64] = Vec.new();
+        let mut scaled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            flipped.push(-nums[n - 1 - i]);
+            scaled.push(nums[i] * 2 + 7);
+        }
+        let mut spoiled = nums.clone();
+        spoiled.sort();
+        spoiled[next_random(mut seed) % n] = next_random(mut seed) % 20 - 5;
+        let mut no_first: Vec[i64] = Vec.new();
+        let mut no_last: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if i > 0 {
+                no_first.push(nums[i]);
+            }
+            if i < n - 1 {
+                no_last.push(nums[i]);
+            }
+        }
+        for which in 0..4 {
+            let got = answer(which, nums.clone());
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: reversed and negated, the same.
+                answer(which, flipped.clone()) == got,
+                // P3: doubled plus 7, the same.
+                answer(which, scaled.clone()) == got,
+                // P4: a sorted array with one element changed can always
+                // be put back.
+                answer(which, spoiled.clone()),
+                // P5: an array one change sorts still is with its first
+                // or last element gone.
+                not got or (answer(which, no_first.clone()) and answer(which, no_last.clone())),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} arrays ({count} numbers, {yes} can be sorted), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

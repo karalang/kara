@@ -1,0 +1,104 @@
+// LeetCode #665: Non-decreasing Array -- fix each drop as it comes.
+//
+// Walk left to right. At a drop, `nums[i] < nums[i - 1]`, one of the two
+// must change. Lowering `nums[i - 1]` to `nums[i]` is the better fix,
+// since it leaves the most room ahead, but only when it stays at least
+// `nums[i - 2]`; otherwise raise `nums[i]` to `nums[i - 1]`. Count the
+// fixes on a copy of the array and refuse at the second. O(n) time,
+// O(n) space for the copy.
+
+fn check_possibility(nums: Vec[i64]) -> bool {
+    let mut a = nums.clone();
+    let mut fixes = 0;
+    for i in 1..a.len() {
+        if a[i] < a[i - 1] {
+            fixes += 1;
+            if fixes > 1 {
+                return false;
+            }
+            if i < 2 or a[i - 2] <= a[i] {
+                a[i - 1] = a[i];
+            } else {
+                a[i] = a[i - 1];
+            }
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    if nums.len() <= 12 {
+        let mut parts: Vec[String] = Vec.new();
+        for x in nums.iter() {
+            parts.push(f"{x}");
+        }
+        println(f"[{parts.join(",")}]: {check_possibility(nums)}");
+    } else {
+        println(f"{nums.len()} numbers from {nums[0]}: {check_possibility(nums)}");
+    }
+}
+
+// `n` numbers rising by 0 to 20 at each step from -100,000.
+fn rising(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut x = -100000;
+    for _ in 0..n {
+        v.push(x);
+        x += next_random(mut seed) % 21;
+    }
+    v
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![4, 2, 3]);
+    show(vec![4, 2, 1]);
+    // One number; drops that need the left one lowered, the right one
+    // raised, or either; and drops that no one change fixes.
+    show(vec![7]);
+    show(vec![1, 5, 2, 3]);
+    show(vec![1, 2, 4, 5, 3]);
+    show(vec![-1, 4, 2, 3]);
+    show(vec![3, 4, 2, 3]);
+    show(vec![5, 7, 1, 8]);
+    show(vec![2, 2, 2, 1, 2, 2]);
+    show(vec![1, 3, 2, 1]);
+    // The problem's longest, 10,000 numbers: rising; rising with one
+    // number changed; with two changed far apart; falling all the way.
+    let mut seed: i64 = 665;
+    let v = rising(10000, mut seed);
+    show(v.clone());
+    let mut one = v.clone();
+    one[5000] = 100000;
+    show(one.clone());
+    one[9000] = -100000;
+    show(one);
+    let mut falling: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        falling.push(5000 - i);
+    }
+    show(falling);
+    // 1,000 random arrays of 1 to 8 numbers from 0 to 3: how many one
+    // change can sort, with a checksum.
+    let mut yes = 0;
+    let mut sum = 0;
+    for i in 0..1000 {
+        let n = 1 + next_random(mut seed) % 8;
+        let mut a: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            a.push(next_random(mut seed) % 4);
+        }
+        if check_possibility(a) {
+            yes += 1;
+            sum = (sum * 31 + i) % 1000000007;
+        }
+    }
+    println(f"1000 random arrays: {yes} can be sorted, checksum {sum}");
+}

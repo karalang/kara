@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/666-path-sum-iv/bench/path_sum_iv.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "c0549f58d"
+extracted_src = "4f069ec5"
+model_rev = "1aa23105"
+model_src = "4f069ec5"

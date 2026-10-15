@@ -1,0 +1,69 @@
+// Benchmark for #666: the ★ arm (a map of places, walked from the root)
+// on a large workload.
+
+fn path_sum(nums: Vec[i64]) -> i64 {
+    let mut values: Map[i64, i64] = Map.new();
+    for x in nums.iter() {
+        values.insert(*x / 10, *x % 10);
+    }
+    walk(values, 11, 0)
+}
+
+fn walk(values: Map[i64, i64], key: i64, above: i64) -> i64 {
+    match values.get(key) {
+        None => 0,
+        Some(v) => {
+            let sum = above + *v;
+            let depth = key / 10;
+            let position = key % 10;
+            let left = (depth + 1) * 10 + 2 * position - 1;
+            let right = left + 1;
+            if not values.contains_key(left) and not values.contains_key(right) {
+                sum
+            } else {
+                walk(values, left, sum) + walk(values, right, sum)
+            }
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_tree(levels: i64, chance: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = vec![110 + next_random(mut seed) % 10];
+    let mut level: Vec[i64] = vec![1];
+    for depth in 2..levels + 1 {
+        let mut next: Vec[i64] = Vec.new();
+        for p in level.iter() {
+            for c in 2 * *p - 1..2 * *p + 1 {
+                if next_random(mut seed) % 100 < chance {
+                    next.push(c);
+                    nums.push(depth * 100 + c * 10 + next_random(mut seed) % 10);
+                }
+            }
+        }
+        level = next;
+    }
+    nums
+}
+
+fn main() {
+    // 256 random trees of the problem's deepest, four levels, each child
+    // there with chance 50 to 100 in 100, made once; then each round sums
+    // one, picked by the round, into a checksum.
+    let mut seed: i64 = 666;
+    let mut trees: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..256 {
+        let chance = 50 + next_random(mut seed) % 51;
+        trees.push(random_tree(4, chance, mut seed));
+    }
+    let rounds = 1000000;
+    let mut sum = 0;
+    for r in 0..rounds {
+        sum = (sum * 31 + path_sum(trees[r % 256]) + r) % 1000000007;
+    }
+    println(f"256 trees, {rounds} rounds: checksum {sum}");
+}

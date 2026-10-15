@@ -1,0 +1,275 @@
+// LeetCode #666: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random trees.
+
+// ---- star arm ----------------------------------------------------------
+
+fn path_sum_star(nums: Vec[i64]) -> i64 {
+    let mut values: Map[i64, i64] = Map.new();
+    for x in nums.iter() {
+        values.insert(*x / 10, *x % 10);
+    }
+    walk_star(values, 11, 0)
+}
+
+fn walk_star(values: Map[i64, i64], key: i64, above: i64) -> i64 {
+    match values.get(key) {
+        None => 0,
+        Some(v) => {
+            let sum = above + *v;
+            let depth = key / 10;
+            let position = key % 10;
+            let left = (depth + 1) * 10 + 2 * position - 1;
+            let right = left + 1;
+            if not values.contains_key(left) and not values.contains_key(right) {
+                sum
+            } else {
+                walk_star(values, left, sum) + walk_star(values, right, sum)
+            }
+        }
+    }
+}
+
+// ---- leaves arm --------------------------------------------------------
+
+fn path_sum_leaves(nums: Vec[i64]) -> i64 {
+    let mut leaves: Map[i64, i64] = Map.new();
+    let mut total = 0;
+    let mut i = nums.len() - 1;
+    while i >= 0 {
+        let key = nums[i] / 10;
+        let mut below = 0;
+        if let Some(c) = leaves.get(key) {
+            below = *c;
+        }
+        if below == 0 {
+            below = 1;
+        }
+        total += below * (nums[i] % 10);
+        let depth = key / 10;
+        let position = key % 10;
+        if depth > 1 {
+            let parent = (depth - 1) * 10 + (position + 1) / 2;
+            *leaves.entry(parent).or_insert(0) += below;
+        }
+        i -= 1;
+    }
+    total
+}
+
+// ---- grid arm ----------------------------------------------------------
+
+fn path_sum_grid(nums: Vec[i64]) -> i64 {
+    let mut grid = vec![vec![-1; 9]; 5];
+    for x in nums.iter() {
+        grid[*x / 100][*x / 10 % 10] = *x % 10;
+    }
+    let mut total = 0;
+    for x in nums.iter() {
+        let depth = *x / 100;
+        let position = *x / 10 % 10;
+        let leaf = depth == 4 or (grid[depth + 1][2 * position - 1] < 0 and grid[depth + 1][2 * position] < 0);
+        if leaf {
+            let mut d = depth;
+            let mut p = position;
+            while d >= 1 {
+                total += grid[d][p];
+                d -= 1;
+                p = (p + 1) / 2;
+            }
+        }
+    }
+    total
+}
+
+// ---- levels arm --------------------------------------------------------
+
+fn path_sum_levels(nums: Vec[i64]) -> i64 {
+    let mut sums: Map[i64, i64] = Map.new();
+    let mut has_child: Map[i64, bool] = Map.new();
+    for x in nums.iter() {
+        let key = *x / 10;
+        let depth = key / 10;
+        let position = key % 10;
+        let mut above = 0;
+        if depth > 1 {
+            let parent = (depth - 1) * 10 + (position + 1) / 2;
+            if let Some(s) = sums.get(parent) {
+                above = *s;
+            }
+            has_child.insert(parent, true);
+        }
+        sums.insert(key, above + *x % 10);
+    }
+    let mut total = 0;
+    for x in nums.iter() {
+        if not has_child.contains_key(*x / 10) {
+            total += sums[*x / 10];
+        }
+    }
+    total
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        path_sum_star(nums)
+    } else if which == 1 {
+        path_sum_leaves(nums)
+    } else if which == 2 {
+        path_sum_grid(nums)
+    } else {
+        path_sum_levels(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random tree, values from 0 to 8 so that each can be raised by 1.
+fn random_tree(levels: i64, chance: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = vec![110 + next_random(mut seed) % 9];
+    let mut level: Vec[i64] = vec![1];
+    for depth in 2..levels + 1 {
+        let mut next: Vec[i64] = Vec.new();
+        for p in level.iter() {
+            for c in 2 * *p - 1..2 * *p + 1 {
+                if next_random(mut seed) % 100 < chance {
+                    next.push(c);
+                    nums.push(depth * 100 + c * 10 + next_random(mut seed) % 9);
+                }
+            }
+        }
+        level = next;
+    }
+    nums
+}
+
+shared struct Node {
+    mut val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+}
+
+// The definition: build the tree as linked nodes, each number hung under
+// the node one level up at half its position rounded up, then list every
+// root-to-leaf path as its sum and its length.
+fn paths(nums: Vec[i64]) -> Vec[(i64, i64)] {
+    let mut nodes: Vec[(i64, Node)] = Vec.new();
+    for x in nums.iter() {
+        let n = Node { val: *x % 10, left: None, right: None };
+        let depth = *x / 100;
+        let position = *x / 10 % 10;
+        for (key, parent) in nodes.iter() {
+            if *key == (depth - 1) * 10 + (position + 1) / 2 {
+                if position % 2 == 1 {
+                    parent.left = Some(n);
+                } else {
+                    parent.right = Some(n);
+                }
+            }
+        }
+        nodes.push((depth * 10 + position, n));
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    collect(Some(nodes[0].1), 0, 0, mut out);
+    out
+}
+
+fn collect(node: Option[Node], above: i64, length: i64, out: mut ref Vec[(i64, i64)]) {
+    if let Some(n) = node {
+        let sum = above + n.val;
+        if n.left.is_none() and n.right.is_none() {
+            out.push((sum, length + 1));
+        } else {
+            collect(n.left, sum, length + 1, out);
+            collect(n.right, sum, length + 1, out);
+        }
+    }
+}
+
+fn main() {
+    // 1500 random trees of 1 to 4 levels, each child there with chance
+    // 30 to 100 in 100.
+    let cases = 1500;
+    let mut seed: i64 = 666;
+    let mut count = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let levels = 1 + next_random(mut seed) % 4;
+        let chance = 30 + next_random(mut seed) % 71;
+        let nums = random_tree(levels, chance, mut seed);
+        count += nums.len();
+        let all = paths(nums.clone());
+        let mut want = 0;
+        let mut lengths = 0;
+        for (s, l) in all.iter() {
+            want += *s;
+            lengths += *l;
+        }
+        // Mirrored; every value raised by 1; the root alone raised by 1;
+        // and two children of 0 under every node above the fourth level
+        // that has none.
+        let mut mirrored: Vec[i64] = Vec.new();
+        let mut raised: Vec[i64] = Vec.new();
+        let mut keys: Vec[i64] = Vec.new();
+        for x in nums.iter() {
+            let depth = *x / 100;
+            let position = *x / 10 % 10;
+            mirrored.push(depth * 100 + ((1 << (depth - 1)) + 1 - position) * 10 + *x % 10);
+            raised.push(*x + 1);
+            keys.push(*x / 10);
+        }
+        mirrored.sort();
+        let mut root_up = nums.clone();
+        root_up[0] += 1;
+        let mut grown = nums.clone();
+        let mut extra = 0;
+        for x in nums.iter() {
+            let depth = *x / 100;
+            let position = *x / 10 % 10;
+            let left = (depth + 1) * 10 + 2 * position - 1;
+            if depth < 4 and not keys.contains(left) and not keys.contains(left + 1) {
+                grown.push(left * 10);
+                grown.push((left + 1) * 10);
+            }
+        }
+        grown.sort();
+        for (s, l) in all.iter() {
+            if *l < 4 {
+                extra += *s;
+            }
+        }
+        for which in 0..4 {
+            let got = answer(which, nums.clone());
+            let ok = vec![
+                // P1: the definition's sum.
+                got == want,
+                // P2: the mirrored tree sums the same.
+                answer(which, mirrored.clone()) == got,
+                // P3: every value raised by 1 adds each path's length.
+                answer(which, raised.clone()) == got + lengths,
+                // P4: two children of 0 under each leaf above the fourth
+                // level count its path twice.
+                answer(which, grown.clone()) == got + extra,
+                // P5: the root raised by 1 adds one for each leaf.
+                answer(which, root_up.clone()) == got + all.len(),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} trees ({count} nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
