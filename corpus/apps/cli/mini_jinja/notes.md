@@ -64,9 +64,9 @@ Compiler gaps, worked around and cited in the source:
   module of that name. The syntax-tree parameter is `tree`.
 - B-2026-10-15-38 (new): `karac check` takes `f64.parse(t.text)` as a
   move of the field `t.text`. The lexer parses the number from a local.
-- B-2026-10-15-39 (new): `karac check` reports a loop-local `name`, read
-  in an `if` and then moved into an enum constructor inside a call, as
-  moved on the previous iteration. The parser clones the name.
+- B-2026-10-15-20: `karac check` reports a loop-local `name`, read in an
+  `if` and then moved into an enum constructor inside a call, as moved
+  on the previous iteration. The parser clones the name.
 - B-2026-10-15-40 (new): on MIR, a user enum variant named `None` takes
   over every bare `None` of an `Option` ("invalid MIR: Option takes 1
   fields, got 0"). Python's None is `Val.Nil`.

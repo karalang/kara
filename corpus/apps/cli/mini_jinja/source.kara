@@ -28,7 +28,7 @@
 // Workarounds for compiler gaps, each marked where it is applied:
 // B-2026-10-15-37 (the syntax tree parameter is `tree`, not `ast`),
 // B-2026-10-15-38 (numbers parsed from a local, not from `t.text`),
-// B-2026-10-15-39 (a filter or test name cloned into its node),
+// B-2026-10-15-20 (a filter or test name cloned into its node),
 // B-2026-10-15-40 (Python's None is `Val.Nil`).
 
 // ------------------------------------------------------------ bytes and strings
@@ -1723,7 +1723,7 @@ impl Parser {
                     kwv = v;
                 }
                 // a clone: `karac check` takes the read of `name` above as a use
-                // after this move on the next iteration (B-2026-10-15-39)
+                // after this move on the next iteration (B-2026-10-15-20)
                 e = tree.add_expr(Expr.Filter(e, name.clone(), args, kwn, kwv), line);
             } else if self.skip_name("is") {
                 let negated = self.skip_name("not");
