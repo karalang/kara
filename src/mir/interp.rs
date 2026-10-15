@@ -622,6 +622,9 @@ fn run_with(
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
         },
+        tasks: Vec::new(),
+        cur_task: 0,
+        wait: None,
     };
     let task = coroutines && program.bodies.contains_key(&coroutine::resume_name(entry));
     let outcome = if !problems.is_empty() {
@@ -917,6 +920,12 @@ struct Interp<'a> {
     resumes: u64,
     /// Drop the root's frame once it has been pending this often.
     cancel_after: Option<u64>,
+    /// The executor's tasks (B-2026-10-14-49), the root first, by id.
+    tasks: Vec<TaskSlot>,
+    /// The task the executor is running.
+    cur_task: usize,
+    /// What the running task's last `__ready` reported it waits for.
+    wait: Option<Wait>,
     /// The borrow flags each suspended coroutine frame holds, by its address.
     parked_flags: Vec<(Addr, Held)>,
     /// `std.tracing`'s minimum level, by rank (trace 0 .. error 4).
@@ -1378,6 +1387,7 @@ impl<'a> Interp<'a> {
                 Ok(std::mem::replace(slot, fill))
             }
             ("__yield_now", "") => Ok(Value::Unit),
+            ("__ready", "") => self.ready(&args),
             ("fence" | "compiler_fence", "") => {
                 // One thread runs the program; a fence orders nothing. A
                 // `Relaxed` one is refused, as legacy refuses it.
@@ -1546,6 +1556,14 @@ impl<'a> Interp<'a> {
             ("sleep_ms", "") => {
                 // `std.time::sleep_ms`, bodyless: a real pause, as legacy's
                 // sequential interpreter does; a negative count is a no-op.
+                // Under the executor, a task whose `__ready` waited the
+                // pause out has slept already.
+                if let Some(t) = self.tasks.get_mut(self.cur_task) {
+                    if t.slept {
+                        t.slept = false;
+                        return Ok(Value::Unit);
+                    }
+                }
                 if let [Value::Int(ms)] = args.as_slice() {
                     if *ms > 0 {
                         #[cfg(not(target_arch = "wasm32"))]
@@ -4230,6 +4248,10 @@ impl<'a> Interp<'a> {
                         return Ok(Value::Unit);
                     }
                     ("TcpListener", "accept", []) => match self.sockets.listeners.get(&fd) {
+                        Some(_) if self.sockets.accepted.contains_key(&fd) => {
+                            let s = self.sockets.accepted.remove(&fd).unwrap();
+                            Ok(self.sockets.stream(s))
+                        }
                         Some(l) => match l.accept() {
                             Ok((s, _)) => Ok(self.sockets.stream(s)),
                             Err(e) => Err(construct(&e)),
@@ -9026,38 +9048,241 @@ impl<'a> Interp<'a> {
             weak: 0,
             value: frame,
         });
-        let at = Addr {
-            root: Root::Heap(slot),
-            path: Path::new(),
-        };
+        self.tasks.push(TaskSlot {
+            frame: slot,
+            frame_ty,
+            resume,
+            deadline: None,
+            slept: false,
+        });
+        self.run_tasks(entry)
+    }
+
+    /// The executor (B-2026-10-14-49): one thread, a FIFO run queue, the
+    /// root (task 0) first. A task that yields goes to the back of the
+    /// queue, or, when its `__ready` saw its call unable to complete, is
+    /// parked until that condition holds; tasks that become ready together
+    /// are woken in the order they parked. The run ends when every task has
+    /// finished, with the root's result.
+    fn run_tasks(&mut self, entry: &str) -> R<Value> {
+        let mut queue = std::collections::VecDeque::from([0usize]);
+        let mut parked: Vec<(usize, Wait)> = Vec::new();
+        let mut root = None;
         loop {
+            let Some(t) = queue.pop_front() else {
+                if parked.is_empty() {
+                    break;
+                }
+                let mut still = Vec::new();
+                for (t, w) in std::mem::take(&mut parked) {
+                    if self.holds(&w)? {
+                        queue.push_back(t);
+                    } else {
+                        still.push((t, w));
+                    }
+                }
+                parked = still;
+                if queue.is_empty() {
+                    self.wait_for(&parked)?;
+                }
+                continue;
+            };
+            self.cur_task = t;
+            self.wait = None;
+            let (slot, frame_ty) = (self.tasks[t].frame, self.tasks[t].frame_ty);
+            let resume = self.tasks[t].resume.clone();
+            let at = Addr {
+                root: Root::Heap(slot),
+                path: Path::new(),
+            };
             match self.call(&resume, vec![Value::Ref(at.clone())])? {
                 Value::Variant(0, mut fs) if fs.len() == 1 => {
                     let frame = self.live(slot)?.value.clone();
                     if let Some(field) = self.frame_holds(&frame, frame_ty) {
                         return err(format!(
-                            "{entry} returned with its frame still holding a value in {field}"
+                            "{resume} returned with its frame still holding a value in {field}"
                         ));
                     }
                     self.free_slot(slot);
-                    return Ok(fs.remove(0));
+                    if t == 0 {
+                        root = Some(fs.remove(0));
+                    }
                 }
                 Value::Variant(1, _) => {
-                    self.resumes += 1;
-                    if self.cancel_after == Some(self.resumes) {
-                        let drop = coroutine::drop_frame_name(entry);
-                        self.call(&drop, vec![Value::Ref(at.clone())])?;
-                        let frame = self.live(slot)?.value.clone();
-                        if let Some(field) = self.frame_holds(&frame, frame_ty) {
-                            return err(format!("{drop} left a value in {field}"));
+                    if t == 0 {
+                        self.resumes += 1;
+                        if self.cancel_after == Some(self.resumes) {
+                            let drop = coroutine::drop_frame_name(entry);
+                            self.call(&drop, vec![Value::Ref(at)])?;
+                            let frame = self.live(slot)?.value.clone();
+                            if let Some(field) = self.frame_holds(&frame, frame_ty) {
+                                return err(format!("{drop} left a value in {field}"));
+                            }
+                            self.free_slot(slot);
+                            return Ok(Value::Unit);
                         }
-                        self.free_slot(slot);
-                        return Ok(Value::Unit);
+                    }
+                    match self.wait.take() {
+                        Some(w) => parked.push((t, w)),
+                        None => queue.push_back(t),
                     }
                 }
                 other => return err(format!("{resume} returned {other:?}, not a Poll")),
             }
         }
+        root.ok_or_else(|| Stop::Error(format!("{entry} never finished")))
+    }
+
+    /// With every task parked on `parked`: waits for the nearest deadline,
+    /// or a moment for a socket, or stops the run when only a channel no
+    /// running task can reach is waited on.
+    fn wait_for(&mut self, parked: &[(usize, Wait)]) -> R<()> {
+        let mut io = false;
+        let mut nearest: Option<std::time::Instant> = None;
+        for (_, w) in parked {
+            match w {
+                Wait::Until(at) => nearest = Some(nearest.map_or(*at, |n| n.min(*at))),
+                Wait::Accept(_) | Wait::Read(_) => io = true,
+                Wait::Recv(_) | Wait::Send(_) => {}
+            }
+        }
+        let step = std::time::Duration::from_millis(1);
+        let pause = match (nearest, io) {
+            (None, false) => {
+                return err("deadlock: every task waits on a channel that no running task sends to or receives from");
+            }
+            (None, true) => step,
+            (Some(at), io) => {
+                let left = at.saturating_duration_since(std::time::Instant::now());
+                if io {
+                    left.min(step)
+                } else {
+                    left
+                }
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::sleep(pause);
+        #[cfg(target_arch = "wasm32")]
+        let _ = pause;
+        Ok(())
+    }
+
+    /// `__ready(native, args..)`, which the coroutine transform puts before
+    /// each suspending native (B-2026-10-14-49): whether that call can
+    /// complete now. When it cannot, what it waits for is left in `wait`,
+    /// where the executor parks the task. Outside the executor every call
+    /// is ready, as each native completes there.
+    fn ready(&mut self, args: &[Value]) -> R<Value> {
+        let Some((callee, rest)) = args.split_first() else {
+            return err("__ready takes the native's name");
+        };
+        let callee = self.string_at(callee)?;
+        self.wait = None;
+        if self.tasks.is_empty() {
+            return Ok(Value::Bool(true));
+        }
+        let (ty, method) = split_method(&callee);
+        let base = ty.split('[').next().unwrap_or(ty);
+        let wait = match (base, method, rest) {
+            // A handle holds its task's result: the spawn ran the task.
+            ("TaskHandle", "join", _) => None,
+            ("Receiver" | "Channel", "recv" | "recv_blocking", [r, ..]) => {
+                Some(Wait::Recv(self.chan_id(Some(r), &callee)?))
+            }
+            // A full `BoundedChannel` refuses at once, by its policy.
+            ("BoundedChannel", "send", _) => None,
+            ("Sender" | "Channel", "send", [r, ..]) => {
+                Some(Wait::Send(self.chan_id(Some(r), &callee)?))
+            }
+            ("sleep_ms", "", [Value::Int(ms), ..]) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let ms = (*ms).max(0) as u64;
+                    let t = &mut self.tasks[self.cur_task];
+                    let at = *t.deadline.get_or_insert_with(|| {
+                        std::time::Instant::now() + std::time::Duration::from_millis(ms)
+                    });
+                    Some(Wait::Until(at))
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = ms;
+                    None
+                }
+            }
+            ("TcpListener", "accept", [l, ..]) => Some(Wait::Accept(self.socket_of(l, &callee)?)),
+            ("TcpStream", "read", [st, ..]) => Some(Wait::Read(self.socket_of(st, &callee)?)),
+            ("TcpStream", "connect", _) => None,
+            _ => return err(format!("__ready of {callee}, which does not suspend")),
+        };
+        let ready = match &wait {
+            None => true,
+            Some(w) => self.holds(w)?,
+        };
+        if !ready {
+            self.wait = wait;
+        } else if let Some(Wait::Until(_)) = wait {
+            // The pause is over: the `sleep_ms` after this returns at once.
+            let t = &mut self.tasks[self.cur_task];
+            t.deadline = None;
+            t.slept = true;
+        }
+        Ok(Value::Bool(ready))
+    }
+
+    /// The descriptor a `TcpListener` / `TcpStream` value names.
+    fn socket_of(&mut self, v: &Value, name: &str) -> R<i64> {
+        match self.struct_value(v, name)?.as_slice() {
+            [Value::Int(fd)] => Ok(*fd as i64),
+            other => err(format!("{name} of a handle holding {other:?}")),
+        }
+    }
+
+    /// Whether the condition `w` holds now. A socket is asked without
+    /// blocking; a connection that is waiting is accepted here and kept for
+    /// the `accept` that follows.
+    fn holds(&mut self, w: &Wait) -> R<bool> {
+        use std::io::ErrorKind::WouldBlock;
+        Ok(match w {
+            Wait::Recv(id) => {
+                let c = self.chan_mut(*id, "recv")?;
+                !c.queue.is_empty() || c.senders == 0
+            }
+            Wait::Send(id) => {
+                let c = self.chan_mut(*id, "send")?;
+                c.cap == 0 || c.queue.len() < c.cap || c.receivers == 0
+            }
+            Wait::Until(at) => std::time::Instant::now() >= *at,
+            Wait::Accept(fd) => {
+                if self.sockets.accepted.contains_key(fd) {
+                    return Ok(true);
+                }
+                let Some(l) = self.sockets.listeners.get(fd) else {
+                    return Ok(true);
+                };
+                let _ = l.set_nonblocking(true);
+                let got = l.accept();
+                let _ = l.set_nonblocking(false);
+                match got {
+                    Ok((s, _)) => {
+                        let _ = s.set_nonblocking(false);
+                        self.sockets.accepted.insert(*fd, s);
+                        true
+                    }
+                    Err(e) => e.kind() != WouldBlock,
+                }
+            }
+            Wait::Read(fd) => {
+                let Some(s) = self.sockets.streams.get(fd) else {
+                    return Ok(true);
+                };
+                let _ = s.set_nonblocking(true);
+                let got = s.peek(&mut [0u8; 1]);
+                let _ = s.set_nonblocking(false);
+                !matches!(got, Err(e) if e.kind() == WouldBlock)
+            }
+        })
     }
 
     /// Runs each static's initializer, in declaration order, before `main`.
@@ -10287,11 +10512,40 @@ fn fill_plain(buf: &mut Vec<Value>, v: &Value) -> bool {
     true
 }
 
+/// A task under the executor: its frame and the `resume` that runs it.
+struct TaskSlot {
+    frame: AllocId,
+    frame_ty: Ty,
+    resume: String,
+    /// The deadline a `sleep_ms` waits for, once its `__ready` has asked.
+    deadline: Option<std::time::Instant>,
+    /// Its `__ready` waited the pause out, so the `sleep_ms` after it
+    /// returns at once.
+    slept: bool,
+}
+
+/// What a parked task waits for: the condition its last `__ready` saw
+/// false.
+#[derive(Debug, Clone)]
+enum Wait {
+    /// A value in the channel, or no sender left.
+    Recv(i128),
+    /// Room in the channel, or no receiver left.
+    Send(i128),
+    Until(std::time::Instant),
+    /// A connection to accept, or bytes (or the end) to read.
+    Accept(i64),
+    Read(i64),
+}
+
 /// The interpreter's sockets, by descriptor (`Interp::tcp_method`).
 #[derive(Default)]
 struct Sockets {
     listeners: rustc_hash::FxHashMap<i64, std::net::TcpListener>,
     streams: rustc_hash::FxHashMap<i64, std::net::TcpStream>,
+    /// A connection `__ready` accepted for a listener, which its `accept`
+    /// takes next.
+    accepted: rustc_hash::FxHashMap<i64, std::net::TcpStream>,
 }
 
 impl Sockets {
@@ -10629,6 +10883,61 @@ mod tests {
     use crate::ids::DefId;
     use crate::mir::build::BodyBuilder;
     use crate::mir::ty::{AdtDef, VariantDef};
+
+    /// B-2026-10-14-49: `__ready` before a `sleep_ms`, as the coroutine
+    /// transform's readiness loop has it. Under the executor the task parks
+    /// on the deadline (resumed once for it, not polled), and the
+    /// `sleep_ms` after it does not pause again; run synchronously, every
+    /// call is ready.
+    #[test]
+    fn a_task_parks_on_a_sleep_deadline() {
+        use crate::mir::interp::{run, run_coroutines, Program};
+        let src = "
+fn main() -> () {
+    let mut _0: ();
+    let mut _1: bool;
+    let _2: ();
+    let _3: ();
+    let _4: ();
+    bb0: {
+        _1 = __ready(const \"sleep_ms\", const 200_i64) -> bb1;
+    }
+    bb1: {
+        switchInt(copy _1) -> [0: bb2, otherwise: bb3];
+    }
+    bb2: {
+        _2 = __yield_now() -> bb0;
+    }
+    bb3: {
+        _3 = sleep_ms(const 200_i64) -> bb4;
+    }
+    bb4: {
+        _4 = println(const \"slept\") -> bb5;
+    }
+    bb5: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = crate::mir::parse_module(src).unwrap();
+        let prog = Program::from_module(&m);
+        let t0 = std::time::Instant::now();
+        let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
+        let took = t0.elapsed();
+        assert_eq!(tasks.output, "slept\n", "{:?}", tasks.outcome);
+        assert_eq!(tasks.exit_code(), Some(0), "{:?}", tasks.outcome);
+        // Pending at the readiness loop's yield, then at the yield the
+        // transform puts before `sleep_ms`: two resumes, not a poll loop.
+        assert_eq!(tasks.resumes, 2);
+        assert!(took >= std::time::Duration::from_millis(200), "{took:?}");
+        assert!(
+            took < std::time::Duration::from_millis(390),
+            "slept twice: {took:?}"
+        );
+        let sync = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(sync.output, "slept\n", "{:?}", sync.outcome);
+    }
 
     fn inst(name: &str) -> InstanceId {
         InstanceId {
