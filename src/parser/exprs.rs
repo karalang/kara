@@ -3109,7 +3109,7 @@ impl super::Parser {
         // `{ ident :` — struct literal (explicit field)
         // `{ ident ,` — shorthand struct literal (at least 2 fields)
         // `{ ident }` — single-field shorthand struct literal (`P { a }`)
-        // `{ }` — empty struct literal
+        // `{ }` — empty struct literal (outside a condition, as `{ ident }`)
         // `{ ..` — struct update
         //
         // The single-field shorthand `{ ident }` is genuinely ambiguous with a
@@ -3130,13 +3130,18 @@ impl super::Parser {
             (next, after),
             (Token::Identifier { .. }, Token::Colon)
                 | (Token::Identifier { .. }, Token::Comma)
-                | (Token::RightBrace, _)
                 | (Token::DotDot, _)
         ) {
             return true;
         }
+        // `{ }` is an empty struct literal or an empty block, as ambiguous as
+        // `{ ident }`: in a condition it is the body (`if c == EOL { } else
+        // { .. }`, B-2026-10-15-46).
         !self.no_struct_literal
-            && matches!((next, after), (Token::Identifier { .. }, Token::RightBrace))
+            && matches!(
+                (next, after),
+                (Token::Identifier { .. }, Token::RightBrace) | (Token::RightBrace, _)
+            )
     }
 
     /// Parse an expression with the `no_struct_literal` restriction ACTIVE — a

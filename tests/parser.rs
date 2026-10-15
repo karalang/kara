@@ -16399,3 +16399,42 @@ fn seq_and_par_locals_read_as_names_in_conditions() {
     }
     assert!(matches!(&value(5).kind, ExprKind::Seq(_)));
 }
+
+/// B-2026-10-15-46: in a condition, `{ }` after an uppercase name is the
+/// empty body, not an empty struct literal; outside one it is still a
+/// struct literal.
+#[test]
+fn an_empty_body_after_an_uppercase_name_in_a_condition_is_the_body() {
+    let prog = parse_ok(
+        "const EOL: i64 = 0;
+        fn main() {
+            if c == EOL { } else { println(\"no\"); }
+            while c == EOL { }
+            let u = Unit {};
+        }",
+    );
+    let f = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .expect("a function");
+    let expr = |i: usize| match &f.body.stmts[i].kind {
+        StmtKind::Expr(e) => e.clone(),
+        StmtKind::Let { value, .. } => value.clone(),
+        other => panic!("statement {i}: got {other:?}"),
+    };
+    let is_eol = |e: &Expr| match &e.kind {
+        ExprKind::Binary { right, .. } => {
+            matches!(&right.kind, ExprKind::Identifier(n) if n == "EOL")
+        }
+        _ => false,
+    };
+    assert!(
+        matches!(&expr(0).kind, ExprKind::If { condition, else_branch: Some(_), .. } if is_eol(condition))
+    );
+    assert!(matches!(&expr(1).kind, ExprKind::While { condition, .. } if is_eol(condition)));
+    assert!(matches!(&expr(2).kind, ExprKind::StructLiteral { .. }));
+}
