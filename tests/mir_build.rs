@@ -1623,7 +1623,7 @@ fn main() {
 
 /// `collect`'s `C: FromIterator[V]` holds for the collection the context
 /// names: `String` collects `char`s, not `String`s or numbers
-/// (B-2026-10-14-48).
+/// (B-2026-10-15-2).
 #[test]
 fn mir_collect_checks_from_iterator_for_the_context_type() {
     for src in [

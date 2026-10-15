@@ -3548,7 +3548,7 @@ impl<'a> super::TypeChecker<'a> {
             self.discharge_type_bounds(wc, &solutions, &all_param_names, discharge_span);
             // A bound on a parameter only the context solves (`collect`'s
             // `C: FromIterator[V]`) is checked once the context has solved
-            // it (B-2026-10-14-48).
+            // it (B-2026-10-15-2).
             if self.library_methods_from_source {
                 let pending: Vec<WhereConstraint> = wc
                     .constraints
@@ -3647,7 +3647,7 @@ impl<'a> super::TypeChecker<'a> {
     /// because their parameter was still unsolved at the call: by now the
     /// context has solved it. Only a concrete answer is checked, and a
     /// parameterized bound (`FromIterator[V]`) holds when ANY impl of the
-    /// trait for the type takes those arguments (B-2026-10-14-48).
+    /// trait for the type takes those arguments (B-2026-10-15-2).
     pub(super) fn discharge_deferred_call_bounds(&mut self) {
         for d in std::mem::take(&mut self.deferred_call_bounds) {
             let mut solutions: HashMap<String, Type> = HashMap::new();

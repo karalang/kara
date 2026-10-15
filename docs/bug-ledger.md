@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 166 |
 | diagnostics | 161 |
 | crash | 116 |
-| soundness | 104 |
+| soundness | 105 |
 | use-after-free | 90 |
 
 ### By surface
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2892 |
 | interp | 923 |
-| typecheck | 420 |
+| typecheck | 421 |
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
@@ -204,6 +204,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-70 | 2026-10-14 | typecheck | medium | `karac check` still refuses chained field receivers (`self.env.to.len()`, `self.env.to.push(x)`) with the `chained_field_receiver` error, a legacy-codegen deferral ("deferred to v1.x in codegen ... fails `karac build`"), although every v2 surface runs them: the corpus mir-* backends run check first, so any v2 program with a nested-field method call fails | — |
 | B-2026-10-14-72 | 2026-10-14 | interp+codegen | low | `BufReader.fill_buf()` (docs/library/io.md § Buffered I/O) is missing on both v2 backends: `karac check` and legacy `run --interp` accept and run it, but `__mir-run` stops at `call of unknown function BufReader[File].fill_buf` and `__mir-llvm-run` at `native `BufReader[File].fill_buf` is not lowered yet` | — |
 | B-2026-10-15-1 | 2026-10-15 | typecheck | medium | `karac check` types the items of `a.iter().zip(b.iter())` by value, so a `*x` on either half is rejected ("unary '*' requires 'ref T' ... found 'i64'"), design.md's own `Vec` equality example included (§ Conditional impls: `.zip(other.iter()).all(|(a, b)| *a == *b)`), and `chain` loses the item type the same way; `karac __mir-run` and `__mir-llvm-run` accept and run the same programs | — |
+| B-2026-10-15-2 | 2026-10-15 | typecheck | high | `collect`'s `C: FromIterator[V]` bound is never checked on the library pipeline when only the context solves `C`: `let s: String = words.iter().map(|w| w.to_uppercase()).collect()` runs `String`'s `FromIterator[char]` impl on `String` items, writing 24 bytes into a `char` slot (ASan stack-buffer-overflow on `__mir-llvm-asan`, a leak on `__mir-run`) | — |
 
 ### Relocated
 

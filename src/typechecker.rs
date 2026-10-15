@@ -31,7 +31,7 @@ pub(super) type NestedEnumInstKey = (String, String, String);
 pub(super) type NestedEnumInstSite = (Span, String);
 
 /// A call's bounds on parameters the call itself left unsolved, with what is
-/// needed to resolve them once the context has (B-2026-10-14-48).
+/// needed to resolve them once the context has (B-2026-10-15-2).
 pub(super) struct DeferredCallBounds {
     pub(super) constraints: Vec<WhereConstraint>,
     pub(super) name_to_id: std::collections::HashMap<String, types::TypeVarId>,
