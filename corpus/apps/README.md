@@ -197,6 +197,7 @@ cli/mini_xz             XZ Utils xz -l/-lvv/-t/-d: streams, index, LZMA2/LZMA, d
 cli/mini_hashsum        coreutils md5sum/sha*sum/b2sum/cksum/sum: MD5, SHA-1/2, BLAKE2b, CRC; hashing and -c checks
 cli/mini_jsonschema     JSON Schema 2020-12 as jsonschema 4.26 reports it: keywords, $ref, error paths, best_match, json errors
 service/mini_statsd     statsd 0.9.0 over UDP/TCP: rates, percentiles, histograms, graphite namespaces, console, JS key order
+cli/mini_semver         npm semver 7.7.2 + CLI: ranges, inc, coerce, diff, simplify, outdated report
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

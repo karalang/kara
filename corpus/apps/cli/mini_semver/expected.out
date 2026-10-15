@@ -1,0 +1,528 @@
+$ semver
+SemVer 7.7.2
+
+A JavaScript implementation of the https://semver.org/ specification
+Copyright Isaac Z. Schlueter
+
+Usage: semver [options] <version> [<version> [...]]
+Prints valid versions sorted by SemVer precedence
+
+Options:
+-r --range <range>
+        Print versions that match the specified range.
+
+-i --increment [<level>]
+        Increment a version by the specified level.  Level can
+        be one of: major, minor, patch, premajor, preminor,
+        prepatch, prerelease, or release.  Default level is 'patch'.
+        Only one version may be specified.
+
+--preid <identifier>
+        Identifier to be used to prefix premajor, preminor,
+        prepatch or prerelease version increments.
+
+-l --loose
+        Interpret versions and ranges loosely
+
+-p --include-prerelease
+        Always include prerelease versions in range matching
+
+-c --coerce
+        Coerce a string into SemVer if possible
+        (does not imply --loose)
+
+--rtl
+        Coerce version strings right to left
+
+--ltr
+        Coerce version strings left to right (default)
+
+-n <base>
+        Base number to be used for the prerelease identifier.
+        Can be either 0 or 1, or false to omit the number altogether.
+        Defaults to 0.
+
+Program exits successfully if any valid version satisfies
+all supplied ranges, and prints all satisfying versions.
+
+If no satisfying versions are found, then exits failure.
+
+Versions are printed in ascending order, so supplying
+multiple versions to the utility will just sort them.
+
+$ semver 1.2.3 1.2.3-beta.1 1.2.3-alpha 1.2.3-alpha.10 1.2.3-alpha.9 1.2.3-alpha.beta 0.9.0 10.0.0 2.0.0 1.10.0 1.2.3-1 1.2.3-alpha.-1
+0.9.0
+1.2.3-1
+1.2.3-alpha
+1.2.3-alpha.9
+1.2.3-alpha.10
+1.2.3-alpha.-1
+1.2.3-alpha.beta
+1.2.3-beta.1
+1.2.3
+1.10.0
+2.0.0
+10.0.0
+
+$ semver -rv 1.2.3 2.0.0 1.10.0 1.2.3+build.1
+2.0.0
+1.10.0
+1.2.3
+1.2.3
+
+$ semver v1.2.3 =1.2.4 " 1.2.5 " 1.2 a.b.c 01.2.3 1.2.3-01 1.2.3+build.5 1.2.3-rc.1+exp.sha.5114f85 1.2.3+
+1.2.3-rc.1
+1.2.3
+1.2.3
+1.2.4
+1.2.5
+
+$ semver -l v1.2.3 =1.2.4 "=v 1.2.5" 01.2.3 1.2.3beta 1.2.3-01 "v 1.2.6"
+1.2.3
+1.2.4
+
+$ semver nope 1.2
+[exit status 1]
+
+$ semver -r ^1.2.3 1.2.2 1.2.3 1.9.9 2.0.0 2.0.0-rc.1 1.3.0-beta 1.2.3-beta
+1.2.3
+1.9.9
+
+$ semver -r ~1.2 1.1.9 1.2.0 1.2.99 1.3.0 1.3.0-0
+1.2.0
+1.2.99
+
+$ semver -r ~1 0.9.9 1.0.0 1.99.0 2.0.0
+1.0.0
+1.99.0
+
+$ semver -r "~> 1.2.3" 1.2.2 1.2.3 1.2.9 1.3.0
+1.2.3
+1.2.9
+
+$ semver -r "~1.2.3-beta.2" 1.2.3-beta.1 1.2.3-beta.4 1.2.3 1.2.5 1.2.5-beta.5 1.3.0
+1.2.3-beta.4
+1.2.3
+1.2.5
+
+$ semver -r "1.2.3 - 2.3" 1.2.2 1.2.3 2.3.9 2.4.0 2.4.0-0
+1.2.3
+2.3.9
+
+$ semver -r "1.2 - 2.3.4" 1.1.9 1.2.0 2.3.4 2.3.5
+1.2.0
+2.3.4
+
+$ semver -p -r "1.2.3 - 2.3.4" 1.2.3-0 2.3.4 2.3.5-0
+1.2.3-0
+2.3.4
+
+$ semver -r "1.x || >=2.5.0 || 5.0.0 - 7.2.3" 0.9.0 1.0.0 1.9.9 2.4.0 2.5.0 6.0.0 7.2.3 7.2.4
+1.0.0
+1.9.9
+2.5.0
+6.0.0
+7.2.3
+7.2.4
+
+$ semver -r ">=1.2.3-beta.2 <1.3" 1.2.3-beta.1 1.2.3-beta.2 1.2.3-beta.10 1.2.3 1.2.4-alpha 1.2.9
+1.2.3-beta.2
+1.2.3-beta.10
+1.2.3
+1.2.9
+
+$ semver -p -r ">=1.2.3-beta.2 <1.3" 1.2.3-beta.1 1.2.3-beta.2 1.2.4-alpha 1.3.0-0
+1.2.3-beta.2
+1.2.4-alpha
+
+$ semver -r ^0.0.3 0.0.3 0.0.4 0.0.3-1 0.0.3-rc
+0.0.3
+
+$ semver -r ^0.2 0.1.9 0.2.0 0.2.9 0.3.0
+0.2.0
+0.2.9
+
+$ semver -r ^0.0 0.0.0 0.0.9 0.1.0
+0.0.0
+0.0.9
+
+$ semver -r ^0.x 0.0.0 0.9.0 1.0.0
+0.0.0
+0.9.0
+
+$ semver -r "^1.2.3-rc.1" 1.2.3-rc.0 1.2.3-rc.2 1.2.4-rc.1 1.9.0 2.0.0-0
+1.2.3-rc.2
+1.9.0
+
+$ semver -r "> 1.2" 1.2.9 1.3.0
+1.3.0
+
+$ semver -r <=1.2 1.2.9 1.3.0-0 1.3.0
+1.2.9
+
+$ semver -r >1 1.9.9 2.0.0
+2.0.0
+
+$ semver -r <1.x 0.9.9 1.0.0
+0.9.9
+
+$ semver -r >=1.x.x 0.1.0 1.0.0 5.0.0
+1.0.0
+5.0.0
+
+$ semver -r <2.0.x 1.9.9 2.0.0 2.0.0-0
+1.9.9
+
+$ semver -r =1.2 1.1.0 1.2.0 1.2.7 1.3.0
+1.2.0
+1.2.7
+
+$ semver -r * 1.0.0 1.0.0-rc.1 0.0.0
+0.0.0
+1.0.0
+
+$ semver -p -r * 1.0.0-rc.1
+1.0.0-rc.1
+
+$ semver -r "" 2.0.0
+2.0.0
+
+$ semver -r x.X.* 3.0.0
+3.0.0
+
+$ semver -r >=0.0.0 0.0.0 1.0.0-alpha
+0.0.0
+
+$ semver -r ">=1.0.0 <1.0.0" 1.0.0
+[exit status 1]
+
+$ semver -r "<0.0.0" 0.0.0 0.0.0-0
+[exit status 1]
+
+$ semver -r ">1.0.0 >=1.0.0 <2.0.0" 1.0.0 1.0.1
+1.0.1
+
+$ semver -r ">=1.0.0" -r "<2.0.0" 0.5.0 1.5.0 2.5.0
+1.5.0
+
+$ semver -r "^ 1.2.3" 1.5.0
+1.5.0
+
+$ semver -r "= 1.2.3" 1.2.3
+1.2.3
+
+$ semver -r "1.2.3 || garbage" 1.2.3
+[exit status 1]
+
+$ semver -l -r "1.2.3 || garbage" 1.2.3
+1.2.3
+
+$ semver -r "  >=  1.2.3   <   1.5.0  " 1.4.9
+1.4.9
+
+$ semver -r "1.2.3 || 1.2.4 || >=0.0.0" 9.9.9
+9.9.9
+
+$ semver -r ">=1.0.0 1.0.0 >=1.0.0" 1.0.0
+1.0.0
+
+$ semver -i 1.2.3
+1.2.4
+
+$ semver -i minor 1.2.3
+1.3.0
+
+$ semver -i major 1.2.3-beta.1
+2.0.0
+
+$ semver -i major 1.0.0-5
+1.0.0
+
+$ semver -i minor 1.2.0-5
+1.2.0
+
+$ semver -i patch 1.2.0-5
+1.2.0
+
+$ semver -i premajor --preid rc 1.2.3
+2.0.0-rc.0
+
+$ semver -i preminor 1.2.3
+1.3.0-0
+
+$ semver -i prepatch --preid alpha 1.2.3-beta.1
+1.2.4-alpha.0
+
+$ semver -i prerelease 1.2.3-beta.1
+1.2.3-beta.2
+
+$ semver -i prerelease 1.2.3-beta.1.x
+1.2.3-beta.2.x
+
+$ semver -i prerelease 1.2.3-beta
+1.2.3-beta.0
+
+$ semver -i prerelease --preid beta 1.2.3-alpha.7
+1.2.3-beta.0
+
+$ semver -i prerelease --preid beta 1.2.3-beta.7
+1.2.3-beta.8
+
+$ semver -i prerelease --preid beta 1.2.3-beta.foo
+1.2.3-beta.0
+
+$ semver -i prerelease --preid beta -n 1 1.2.3
+1.2.4-beta.1
+
+$ semver -i prerelease --preid beta -n false 1.2.3
+1.2.4-beta
+
+$ semver -i prerelease --preid beta -n false 1.2.3-beta
+null
+
+$ semver -i prerelease -n false 1.2.3
+null
+
+$ semver -i release 1.2.3-rc.2
+1.2.3
+
+$ semver -i release 1.2.3
+null
+
+$ semver -i prerelease --preid "bad id" 1.2.3
+null
+
+$ semver -i prerelease --preid 01 1.2.3
+null
+
+$ semver -i bogus 1.2.3
+1.2.4
+
+$ semver -i prepatch 1.2.3 1.2.4
+--inc can only be used on a single version with no range
+[exit status 1]
+
+$ semver -i 1.2.3 -r ^1
+--inc can only be used on a single version with no range
+[exit status 1]
+
+$ semver -i=minor 1.2.3+build.7
+1.3.0
+
+$ semver --preid=rc -i prerelease 2.0.0
+2.0.1-rc.0
+
+$ semver -c v2 "version 3.1 beta" 1.2.3.4 abc 4.5.6-rc.1+build 10000000000000000000.1 1.123456789012345678.3
+1.0.0
+1.0.0
+1.2.3
+2.0.0
+3.1.0
+4.5.6
+
+$ semver -c --rtl 1.2.3.4 10.11.12.13 "v1.2 and v3"
+2.3.4
+3.0.0
+11.12.13
+
+$ semver -c -p 4.5.6-rc.1+build.9 "rel 7.8-pre"
+4.5.6-rc.1
+7.8.0-pre
+
+$ semver -c -p --rtl 1.2.3.4-rc
+2.3.4-rc
+
+$ semver -v 1.0.0 -v 0.1.0 --version 2.0.0
+0.1.0
+1.0.0
+2.0.0
+
+$ lib parse 1.2.3-beta.1+b.2
+1 2 3 pre=["beta",1] build=["b","2"]
+
+$ lib parse 1.2.3-alpha.007
+null
+
+$ lib parse 1.0.0-9007199254740991
+1 0 0 pre=["9007199254740991"] build=[]
+
+$ lib parse "  =v1.2.3  " --loose
+1 2 3 pre=[] build=[]
+
+$ lib parse 9007199254740992.0.0
+null
+
+$ lib validRange "1.2.3 - 2.3.4 || ~1.4"
+>=1.2.3 <=2.3.4||>=1.4.0 <1.5.0-0
+
+$ lib validRange "^1.2 <1.4.0-beta"
+>=1.2.0 <2.0.0-0 <1.4.0-beta
+
+$ lib validRange garbage
+null
+
+$ lib validRange "garbage || 1.x" --loose
+>=1.0.0 <2.0.0-0
+
+$ lib validRange ">=1.2.7 <1.3.0 || * || 2.x"
+*
+
+$ lib validRange "<0.0.0 || 1.0.0"
+<0.0.0||1.0.0
+
+$ lib validRange "^1.2.3" -p
+>=1.2.3 <2.0.0-0
+
+$ lib validRange "~ 1.2 || ^ 2.1"
+>=1.2.0 <1.3.0-0||>=2.1.0 <3.0.0-0
+
+$ lib minVersion ^1.2.3
+1.2.3
+
+$ lib minVersion ">1.2.3 <2"
+1.2.4
+
+$ lib minVersion ">1.2.3-beta.1"
+1.2.3-beta.1.0
+
+$ lib minVersion "<1.0.0"
+0.0.0
+
+$ lib minVersion "* || >=3"
+0.0.0
+
+$ lib minVersion ">4 <3"
+null
+
+$ lib minVersion "~2.x || >1.5.0 <1.6.0"
+1.5.1
+
+$ lib minVersion garbage
+error: Invalid comparator: garbage
+
+$ lib maxSatisfying ^1.2 1.2.0 1.2.9 1.3.0 2.0.0 1.10.0-rc.1
+1.3.0
+
+$ lib maxSatisfying ^1.2 1.2.0 1.2.9 1.3.0 2.0.0 1.10.0-rc.1 -p
+1.10.0-rc.1
+
+$ lib minSatisfying ">=1.2.0-rc.1" 1.2.0-rc.0 1.2.0-rc.2 1.2.1 1.3.0
+1.2.0-rc.2
+
+$ lib maxSatisfying garbage 1.0.0
+null
+
+$ lib intersects "^1.2" ">=1.5 <3"
+true
+
+$ lib intersects "1.x" ">=2"
+false
+
+$ lib intersects ">1.0.0 <1.0.0" "*"
+false
+
+$ lib intersects "<1.0.0" ">=1.0.0"
+false
+
+$ lib intersects "<=1.0.0" ">=1.0.0"
+true
+
+$ lib intersects "1.0.0" "~1.0 || >2"
+true
+
+$ lib intersects "1.0.0 - 2.0.0" "2.0.0 - 3.0.0"
+true
+
+$ lib intersects garbage ">1"
+error: Invalid comparator: garbage
+
+$ lib diff 1.2.3 1.2.3+build
+null
+
+$ lib diff 1.2.3 2.0.0
+major
+
+$ lib diff 1.2.3 1.3.0-rc.1
+preminor
+
+$ lib diff 1.0.0-1 1.0.0
+major
+
+$ lib diff 1.0.0-1 1.1.1
+major
+
+$ lib diff 1.1.0-1 1.1.0
+minor
+
+$ lib diff 1.1.1-1 1.1.1
+patch
+
+$ lib diff 2.0.0-alpha 2.0.0-beta
+prerelease
+
+$ lib diff 1.2.3 bogus
+error: Invalid Version: bogus
+
+$ lib compareBuild 1.2.3+b.10 1.2.3+b.9
+1
+
+$ lib compareBuild 1.2.3+b 1.2.3
+1
+
+$ lib simplify "1.x || >=2.0.0 <2.5" 1.0.0 1.2.0 2.0.0 2.4.0 2.5.0 3.0.0
+<=2.4.0
+
+$ lib simplify ">=1.2.0 <2" 1.0.0 1.2.0 1.5.0 2.0.0
+>=1.2.0 <2
+
+$ lib simplify "^1.0.0 || ^3.0.0" 1.0.0 1.5.0 2.0.0 3.0.0 3.1.0
+^1.0.0 || ^3.0.0
+
+$ lib simplify "1.5.0 || 3.0.0" 1.0.0 1.5.0 2.0.0 3.0.0
+1.5.0 || 3.0.0
+
+$ lib simplify "*" 1.0.0 2.0.0
+*
+
+$ lib coerce "release 42" --rtl
+42.0.0
+
+$ lib inc 1.2.3 prerelease beta 1
+1.2.4-beta.1
+
+$ outdated web
+Package     Current  Wanted   Latest   Type
+axios       0.27.2   1.7.9    1.7.9    dependencies
+eslint      8.57.1   8.57.1   9.17.0   devDependencies
+express     4.18.2   4.21.2   4.21.2   dependencies
+lodash      4.17.15  4.17.21  4.17.21  dependencies
+react-dom   18.2.0   18.2.0   18.3.1   dependencies
+typescript  5.6.3    5.6.3    5.7.2    devDependencies
+uuid        MISSING  INVALID  11.0.3   dependencies
+axios: 0.27.2 -> 1.7.9 (major)
+eslint: 9.17.0 is out of range "^8.56.0" (major)
+express: 4.18.2 -> 4.21.2 (minor)
+lodash: 4.17.15 -> 4.17.21 (patch)
+lodash: 4.17.15 is deprecated: Prototype pollution: upgrade to 4.17.19 or later
+react-dom: 18.3.1 is out of range "18.2.0" (minor)
+typescript: 5.7.2 is out of range "~5.6.0" (minor)
+uuid: "next" is not a range or a dist-tag
+
+$ outdated cli
+Package     Current       Wanted       Latest  Type
+chalk       4.1.2         4.1.2        5.4.1   dependencies
+commander   12.1.0        11.1.0       13.0.0  dependencies
+express     5.0.0-beta.3  5.1.0        4.21.2  dependencies
+fsevents    2.3.2         2.3.3        2.3.3   optionalDependencies
+react       19.0.0-rc.0   19.0.0-rc.1  18.3.1  dependencies
+typescript  MISSING       INVALID      5.7.2   dependencies
+chalk: 5.4.1 is out of range "^4.1.2" (major)
+commander: 12.1.0 is newer than "9.x || 11.x" allows; wanted 11.1.0
+commander: installed 12.1.0 does not satisfy "9.x || 11.x"
+commander: 13.0.0 is out of range "9.x || 11.x" (major)
+express: 5.0.0-beta.3 -> 5.1.0 (major)
+fsevents: 2.3.2 -> 2.3.3 (patch)
+is-even: not in the registry
+react: 19.0.0-rc.0 -> 19.0.0-rc.1 (prerelease)
+typescript: "github:microsoft/TypeScript" is not a range or a dist-tag
+

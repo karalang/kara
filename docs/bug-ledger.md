@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 170 |
 | diagnostics | 163 |
 | crash | 120 |
-| soundness | 110 |
+| soundness | 111 |
 | use-after-free | 91 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 938 |
 | typecheck | 445 |
 | other | 115 |
-| ownership | 105 |
+| ownership | 106 |
 | cli | 76 |
 | runtime | 75 |
 | parser | 67 |
@@ -224,6 +224,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-68 | 2026-10-15 | interp+codegen | medium | `f64.partial_cmp` passes `karac check` but neither v2 backend has it: `__mir-run` stops with `call of unknown function f64.partial_cmp` and `__mir-llvm-run` with ``native `f64.partial_cmp` is not lowered yet``, so the usual float sort `v.sort_by(|a, b| a.partial_cmp(b).unwrap())` runs on no v2 surface | — |
 | B-2026-10-15-69 | 2026-10-15 | interp+codegen | medium | On every v2 surface, `TcpListener.bind("127.0.0.1:0")` prints `BOUND_PORT=<n>` to the program's own stdout, a legacy test-harness convention that docs/library/io.md does not mention: any program that lets the OS choose a port (a test server, a daemon with an ephemeral console, a collector) gets an unrequested line with a random number in its output | — |
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
+| B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 
 ### Relocated
 

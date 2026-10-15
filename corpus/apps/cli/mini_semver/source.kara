@@ -1,0 +1,3935 @@
+// mini_semver: npm's semver 7.7.2, written from its source: versions
+// (strict and loose), comparison and sorting, ranges with carets,
+// tildes, x-ranges, hyphens, `||` and the prerelease rule, increments,
+// coercion left to right and right to left, diff, minVersion,
+// intersects and simplifyRange, all built on semver's own regular
+// expressions run by a small backtracking matcher. On top of it:
+// - the `semver` command-line tool, flag for flag;
+// - an `outdated` report that reads a package.json, its lock file and a
+//   registry index and says what npm would want and why.
+//
+// The jobs are in data/jobs.txt. expected.out is the output of real.js,
+// which runs the real semver 7.7.2 under node; oracle.py is the same
+// program in Python and matches it byte for byte.
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+// ------------------------------------------------------------ JSON values
+
+// Every decoded value is a node in one arena; a value is its index.
+// Objects keep their keys in document order, as Python's dict does, and a
+// string node per key so `propertyNames` can validate a key as a value.
+const K_NULL: i64 = 0;
+const K_BOOL: i64 = 1;
+const K_INT: i64 = 2;
+const K_FLOAT: i64 = 3;
+const K_STR: i64 = 4;
+const K_ARR: i64 = 5;
+const K_OBJ: i64 = 6;
+
+struct Node {
+    kind: i64,
+    b: bool,
+    i: i64,
+    f: f64,
+    s: String,
+    kids: Vec[i64],
+    keys: Vec[String],
+    key_nodes: Vec[i64],
+}
+
+struct Store {
+    nodes: Vec[Node],
+}
+
+fn new_node(kind: i64) -> Node {
+    Node { kind: kind, b: false, i: 0, f: 0.0, s: String.new(), kids: Vec.new(), keys: Vec.new(), key_nodes: Vec.new() }
+}
+
+fn add(a: mut ref Store, n: own Node) -> i64 {
+    a.nodes.push(n);
+    a.nodes.len() - 1
+}
+
+fn kind_of(a: ref Store, v: i64) -> i64 {
+    a.nodes[v].kind
+}
+
+// The value of key `k` in object `o`, or -1.
+fn get(a: ref Store, o: i64, k: Str) -> i64 {
+    let n = ref a.nodes[o];
+    if n.kind != K_OBJ {
+        return -1;
+    }
+    for j in 0..n.keys.len() {
+        if n.keys[j] == k {
+            return n.kids[j];
+        }
+    }
+    -1
+}
+
+fn has(a: ref Store, o: i64, k: Str) -> bool {
+    get(a, o, k) >= 0
+}
+
+// ------------------------------------------------------------ decoding
+
+// Python's json module: its scanner's error messages and positions, which
+// count characters, not bytes.
+struct Bad {
+    msg: String,
+    pos: i64,
+}
+
+struct Dec {
+    s: Vec[i64],
+}
+
+fn cp_at(d: ref Dec, i: i64) -> i64 {
+    if i < d.s.len() { d.s[i] } else { -1 }
+}
+
+fn is_json_ws(c: i64) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13
+}
+
+fn skip_ws(d: ref Dec, i: i64) -> i64 {
+    let mut j = i;
+    while j < d.s.len() and is_json_ws(d.s[j]) {
+        j += 1;
+    }
+    j
+}
+
+fn starts_at_cp(d: ref Dec, i: i64, word: Str) -> bool {
+    let w = to_bytes(word);
+    if i + w.len() > d.s.len() {
+        return false;
+    }
+    for j in 0..w.len() {
+        if d.s[i + j] != w[j] as i64 {
+            return false;
+        }
+    }
+    true
+}
+
+fn bad(msg: Str, pos: i64) -> Bad {
+    Bad { msg: msg.to_string(), pos: pos }
+}
+
+fn hex4(d: ref Dec, i: i64) -> Result[i64, Bad] {
+    let mut v: i64 = 0;
+    for j in 0..4 {
+        let c = cp_at(d, i + j);
+        if c < 0 or c > 127 or not is_hex(c as u8) {
+            return Err(bad("Invalid \\uXXXX escape", i - 1));
+        }
+        v = v * 16 + hex_val(c as u8) as i64;
+    }
+    Ok(v)
+}
+
+fn escape_char(c: i64) -> i64 {
+    if c == 34 or c == 92 or c == 47 {
+        c
+    } else if c == 98 {
+        8
+    } else if c == 102 {
+        12
+    } else if c == 110 {
+        10
+    } else if c == 114 {
+        13
+    } else if c == 116 {
+        9
+    } else {
+        -1
+    }
+}
+
+// `end` is just past the opening quote. Returns the string and the index
+// just past the closing quote.
+fn scan_string(d: ref Dec, start: i64) -> Result[(String, i64), Bad] {
+    let begin = start - 1;
+    let mut end = start;
+    let mut o: Vec[u8] = Vec.new();
+    loop {
+        if end >= d.s.len() {
+            return Err(bad("Unterminated string starting at", begin));
+        }
+        let c = d.s[end];
+        if c == 34 {
+            return Ok((from_bytes(o), end + 1));
+        }
+        if c == 92 {
+            if end + 1 >= d.s.len() {
+                return Err(bad("Unterminated string starting at", begin));
+            }
+            let e = d.s[end + 1];
+            if e != 117 {
+                let r = escape_char(e);
+                if r < 0 {
+                    return Err(bad("Invalid \\escape", end));
+                }
+                o.push(r as u8);
+                end += 2;
+                continue;
+            }
+            let mut u = hex4(d, end + 2)?;
+            end += 6;
+            if u >= 0xD800 and u <= 0xDBFF and cp_at(d, end) == 92 and cp_at(d, end + 1) == 117 {
+                let u2 = hex4(d, end + 2)?;
+                if u2 >= 0xDC00 and u2 <= 0xDFFF {
+                    u = 0x10000 + (((u - 0xD800) << 10) | (u2 - 0xDC00));
+                    end += 6;
+                }
+            }
+            push_code_point(mut o, u);
+            continue;
+        }
+        if c < 0x20 {
+            return Err(bad("Invalid control character at", end));
+        }
+        push_code_point(mut o, c);
+        end += 1;
+    }
+}
+
+fn is_dcp(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn scan_number(d: ref Dec, a: mut ref Store, i: i64) -> Option[(i64, i64)] {
+    let mut j = i;
+    if cp_at(d, j) == 45 {
+        j += 1;
+    }
+    if not is_dcp(cp_at(d, j)) {
+        return None;
+    }
+    if cp_at(d, j) == 48 {
+        j += 1;
+    } else {
+        while is_dcp(cp_at(d, j)) {
+            j += 1;
+        }
+    }
+    let mut is_float = false;
+    if cp_at(d, j) == 46 and is_dcp(cp_at(d, j + 1)) {
+        j += 2;
+        while is_dcp(cp_at(d, j)) {
+            j += 1;
+        }
+        is_float = true;
+    }
+    let e = cp_at(d, j);
+    if e == 101 or e == 69 {
+        let mut k = j + 1;
+        if cp_at(d, k) == 43 or cp_at(d, k) == 45 {
+            k += 1;
+        }
+        if is_dcp(cp_at(d, k)) {
+            while is_dcp(cp_at(d, k)) {
+                k += 1;
+            }
+            j = k;
+            is_float = true;
+        }
+    }
+    let mut tb: Vec[u8] = Vec.new();
+    for p in i..j {
+        tb.push(d.s[p] as u8);
+    }
+    let text = from_bytes(tb);
+    if is_float {
+        let mut n = new_node(K_FLOAT);
+        // `f64.parse` returns an Option on v2, not the spec's Result (B-2026-10-12-6)
+        n.f = match f64.parse(text) {
+            Some(x) => x,
+            None => 0.0,
+        };
+        return Some((add(a, n), j));
+    }
+    let mut n = new_node(K_INT);
+    n.i = match i64.parse(text) {
+        Some(x) => x,
+        None => 0,
+    };
+    Some((add(a, n), j))
+}
+
+fn scan_value(d: ref Dec, a: mut ref Store, i: i64) -> Result[(i64, i64), Bad] {
+    if i >= d.s.len() {
+        return Err(bad("Expecting value", i));
+    }
+    let c = d.s[i];
+    if c == 34 {
+        let (t, e) = scan_string(d, i + 1)?;
+        let mut n = new_node(K_STR);
+        n.s = t;
+        return Ok((add(a, n), e));
+    }
+    if c == 123 {
+        return scan_object(d, a, i + 1);
+    }
+    if c == 91 {
+        return scan_array(d, a, i + 1);
+    }
+    if starts_at_cp(d, i, "null") {
+        return Ok((add(a, new_node(K_NULL)), i + 4));
+    }
+    if starts_at_cp(d, i, "true") {
+        let mut n = new_node(K_BOOL);
+        n.b = true;
+        return Ok((add(a, n), i + 4));
+    }
+    if starts_at_cp(d, i, "false") {
+        return Ok((add(a, new_node(K_BOOL)), i + 5));
+    }
+    if let Some(r) = scan_number(d, a, i) {
+        return Ok(r);
+    }
+    Err(bad("Expecting value", i))
+}
+
+// Python's dict keeps a repeated key at its first position, with the last value.
+fn put_key(a: mut ref Store, o: i64, k: own String, v: i64) {
+    for j in 0..a.nodes[o].keys.len() {
+        if a.nodes[o].keys[j] == k {
+            a.nodes[o].kids[j] = v;
+            return;
+        }
+    }
+    let mut kn = new_node(K_STR);
+    kn.s = k.clone();
+    let kid = add(a, kn);
+    a.nodes[o].keys.push(k);
+    a.nodes[o].kids.push(v);
+    a.nodes[o].key_nodes.push(kid);
+}
+
+fn scan_object(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), Bad] {
+    let o = add(a, new_node(K_OBJ));
+    let mut end = start;
+    let mut nc = cp_at(d, end);
+    if nc != 34 {
+        if is_json_ws(nc) {
+            end = skip_ws(d, end);
+            nc = cp_at(d, end);
+        }
+        if nc == 125 {
+            return Ok((o, end + 1));
+        }
+        if nc != 34 {
+            return Err(bad("Expecting property name enclosed in double quotes", end));
+        }
+    }
+    end += 1;
+    loop {
+        let (key, e1) = scan_string(d, end)?;
+        end = e1;
+        if cp_at(d, end) != 58 {
+            end = skip_ws(d, end);
+            if cp_at(d, end) != 58 {
+                return Err(bad("Expecting ':' delimiter", end));
+            }
+        }
+        end += 1;
+        end = skip_ws(d, end);
+        let (v, e2) = scan_value(d, a, end)?;
+        end = e2;
+        put_key(a, o, key, v);
+        end = skip_ws(d, end);
+        nc = cp_at(d, end);
+        end += 1;
+        if nc == 125 {
+            return Ok((o, end));
+        }
+        if nc != 44 {
+            return Err(bad("Expecting ',' delimiter", end - 1));
+        }
+        let comma = end - 1;
+        end = skip_ws(d, end);
+        nc = cp_at(d, end);
+        end += 1;
+        if nc != 34 {
+            if nc == 125 {
+                return Err(bad("Illegal trailing comma before end of object", comma));
+            }
+            return Err(bad("Expecting property name enclosed in double quotes", end - 1));
+        }
+    }
+}
+
+fn scan_array(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), Bad] {
+    let arr = add(a, new_node(K_ARR));
+    let mut end = skip_ws(d, start);
+    if cp_at(d, end) == 93 {
+        return Ok((arr, end + 1));
+    }
+    loop {
+        let (v, e1) = scan_value(d, a, end)?;
+        end = e1;
+        a.nodes[arr].kids.push(v);
+        end = skip_ws(d, end);
+        let nc = cp_at(d, end);
+        end += 1;
+        if nc == 93 {
+            return Ok((arr, end));
+        }
+        if nc != 44 {
+            return Err(bad("Expecting ',' delimiter", end - 1));
+        }
+        let comma = end - 1;
+        end = skip_ws(d, end);
+        if cp_at(d, end) == 93 {
+            return Err(bad("Illegal trailing comma before end of array", comma));
+        }
+    }
+}
+
+fn decode(a: mut ref Store, text: Str) -> Result[i64, String] {
+    let d = Dec { s: code_points(text) };
+    let i = skip_ws(d, 0);
+    let r = scan_value(d, a, i);
+    match r {
+        Ok((v, end)) => {
+            let e = skip_ws(d, end);
+            if e != d.s.len() {
+                return Err(where_msg(d, "Extra data", e));
+            }
+            Ok(v)
+        }
+        Err(b) => Err(where_msg(d, b.msg, b.pos)),
+    }
+}
+
+// "msg: line L column C (char P)", as json.JSONDecodeError prints itself.
+fn where_msg(d: ref Dec, msg: Str, pos: i64) -> String {
+    let mut line: i64 = 1;
+    let mut last_nl: i64 = -1;
+    for j in 0..pos {
+        if d.s[j] == 10 {
+            line += 1;
+            last_nl = j;
+        }
+    }
+    let col = pos - last_nl;
+    f"{msg}: line {line} column {col} (char {pos})"
+}
+
+// ------------------------------------------------------------ patterns
+
+// A backtracking matcher for the JavaScript regular expressions semver
+// builds: literals, classes with ranges and negation, `\d \s` and their
+// negations, capturing groups and `(?:...)`, `|`, `* + ? {n} {n,} {n,m}`,
+// `^` and `$` (no multiline flag, so only the ends of the text). A group
+// that did not take part in a match is unset, as JavaScript's `undefined`
+// is, not empty. A pattern compiles to instructions; counted repeats are
+// expanded.
+const OP_CHAR: i64 = 0;
+const OP_ANY: i64 = 1;
+const OP_SET: i64 = 2;
+const OP_SPLIT: i64 = 3;
+const OP_JMP: i64 = 4;
+const OP_BOL: i64 = 5;
+const OP_EOL: i64 = 6;
+const OP_MATCH: i64 = 7;
+const OP_SAVE: i64 = 8;
+
+#[derive(Clone)]
+struct Ins {
+    op: i64,
+    c: i64,
+    x: i64,
+    y: i64,
+    neg: bool,
+    ranges: Vec[i64],
+}
+
+fn ins(op: i64, c: i64, x: i64, y: i64) -> Ins {
+    Ins { op: op, c: c, x: x, y: y, neg: false, ranges: Vec.new() }
+}
+
+struct Rx {
+    src: Vec[u8],
+    p: i64,
+    prog: Vec[Ins],
+    groups: i64,
+}
+
+struct Prog {
+    code: Vec[Ins],
+    groups: i64,
+}
+
+fn rx_peek(r: ref Rx) -> i64 {
+    if r.p < r.src.len() { r.src[r.p] as i64 } else { -1 }
+}
+
+// A copy of `body` moved by `d` instructions, its jumps retargeted.
+fn shifted(body: ref Vec[Ins], d: i64) -> Vec[Ins] {
+    let mut o: Vec[Ins] = Vec.new();
+    for b in body {
+        let mut n = b.clone();
+        if n.op == OP_SPLIT or n.op == OP_JMP {
+            n.x += d;
+            n.y += d;
+        }
+        o.push(n);
+    }
+    o
+}
+
+fn take_from(r: mut ref Rx, start: i64) -> Vec[Ins] {
+    let mut body: Vec[Ins] = Vec.new();
+    for j in start..r.prog.len() {
+        body.push(r.prog[j].clone());
+    }
+    while r.prog.len() > start {
+        r.prog.pop();
+    }
+    body
+}
+
+fn rx_alt(r: mut ref Rx) {
+    let mut start = r.prog.len();
+    rx_seq(r);
+    if rx_peek(r) != 124 {
+        return;
+    }
+    let mut jumps: Vec[i64] = Vec.new();
+    while rx_peek(r) == 124 {
+        r.p += 1;
+        let body = take_from(r, start);
+        let n = body.len();
+        r.prog.push(ins(OP_SPLIT, 0, start + 1, start + 2 + n));
+        r.prog.extend(shifted(body, 1));
+        jumps.push(r.prog.len());
+        r.prog.push(ins(OP_JMP, 0, -1, -1));
+        start = r.prog.len();
+        rx_seq(r);
+    }
+    let end = r.prog.len();
+    for j in jumps {
+        r.prog[j].x = end;
+    }
+}
+
+fn rx_seq(r: mut ref Rx) {
+    while r.p < r.src.len() and rx_peek(r) != 124 and rx_peek(r) != 41 {
+        rx_repeat(r);
+    }
+}
+
+fn add_ranges(o: mut ref Vec[i64], e: i64) {
+    // d s
+    if e == 100 {
+        o.extend(vec![48, 57]);
+    } else {
+        o.extend(vec![9, 13, 32, 32]);
+    }
+}
+
+fn rx_atom(r: mut ref Rx) {
+    let c = r.src[r.p] as i64;
+    r.p += 1;
+    if c == 40 {
+        if rx_peek(r) == 63 and r.p + 1 < r.src.len() and r.src[r.p + 1] == b':' {
+            r.p += 2;
+            rx_alt(r);
+        } else {
+            r.groups += 1;
+            let g = r.groups;
+            r.prog.push(ins(OP_SAVE, 2 * g, 0, 0));
+            rx_alt(r);
+            r.prog.push(ins(OP_SAVE, 2 * g + 1, 0, 0));
+        }
+        r.p += 1;
+    } else if c == 94 {
+        r.prog.push(ins(OP_BOL, 0, 0, 0));
+    } else if c == 36 {
+        r.prog.push(ins(OP_EOL, 0, 0, 0));
+    } else if c == 46 {
+        r.prog.push(ins(OP_ANY, 0, 0, 0));
+    } else if c == 91 {
+        let set = rx_class(r);
+        r.prog.push(set);
+    } else if c == 92 {
+        let e = r.src[r.p] as i64;
+        r.p += 1;
+        if e == 100 or e == 68 or e == 115 or e == 83 {
+            let mut set = ins(OP_SET, 0, 0, 0);
+            set.neg = e < 97;
+            add_ranges(mut set.ranges, e | 32);
+            r.prog.push(set);
+        } else {
+            r.prog.push(ins(OP_CHAR, e, 0, 0));
+        }
+    } else {
+        r.prog.push(ins(OP_CHAR, c, 0, 0));
+    }
+}
+
+fn rx_class(r: mut ref Rx) -> Ins {
+    let mut set = ins(OP_SET, 0, 0, 0);
+    if rx_peek(r) == 94 {
+        set.neg = true;
+        r.p += 1;
+    }
+    let mut first = true;
+    while first or rx_peek(r) != 93 {
+        first = false;
+        let mut c = r.src[r.p] as i64;
+        r.p += 1;
+        if c == 92 {
+            let e = r.src[r.p] as i64;
+            r.p += 1;
+            if e == 100 or e == 115 {
+                add_ranges(mut set.ranges, e);
+                continue;
+            }
+            c = e;
+        }
+        if rx_peek(r) == 45 and r.p + 1 < r.src.len() and r.src[r.p + 1] != b']' {
+            r.p += 1;
+            let mut hi = r.src[r.p] as i64;
+            r.p += 1;
+            if hi == 92 {
+                hi = r.src[r.p] as i64;
+                r.p += 1;
+            }
+            set.ranges.push(c);
+            set.ranges.push(hi);
+        } else {
+            set.ranges.push(c);
+            set.ranges.push(c);
+        }
+    }
+    r.p += 1;
+    set
+}
+
+fn rx_number(r: mut ref Rx) -> i64 {
+    let mut n: i64 = 0;
+    while r.p < r.src.len() and is_digit(r.src[r.p]) {
+        n = n * 10 + r.src[r.p] as i64 - 48;
+        r.p += 1;
+    }
+    n
+}
+
+fn rx_repeat(r: mut ref Rx) {
+    let start = r.prog.len();
+    rx_atom(r);
+    let c = rx_peek(r);
+    let mut lo: i64 = 0;
+    let mut hi: i64 = -1;
+    if c == 123 {
+        r.p += 1;
+        lo = rx_number(r);
+        hi = lo;
+        if rx_peek(r) == 44 {
+            r.p += 1;
+            hi = if rx_peek(r) == 125 { -1 } else { rx_number(r) };
+        }
+        r.p += 1;
+    } else if c == 42 {
+        r.p += 1;
+    } else if c == 43 {
+        r.p += 1;
+        lo = 1;
+    } else if c == 63 {
+        r.p += 1;
+        hi = 1;
+    } else {
+        return;
+    }
+    let body = take_from(r, start);
+    let n = body.len();
+    for _ in 0..lo {
+        let at = r.prog.len();
+        r.prog.extend(shifted(body, at - start));
+    }
+    if hi == -1 {
+        let l = r.prog.len();
+        r.prog.push(ins(OP_SPLIT, 0, l + 1, l + 2 + n));
+        r.prog.extend(shifted(body, l + 1 - start));
+        r.prog.push(ins(OP_JMP, 0, l, l));
+        return;
+    }
+    let mut ends: Vec[i64] = Vec.new();
+    for _ in 0..(hi - lo) {
+        let l = r.prog.len();
+        ends.push(l);
+        r.prog.push(ins(OP_SPLIT, 0, 0, 0));
+        r.prog.extend(shifted(body, l + 1 - start));
+    }
+    let end = r.prog.len();
+    for l in ends {
+        r.prog[l].x = l + 1;
+        r.prog[l].y = end;
+    }
+}
+
+fn compile_rx(pattern: Str) -> Prog {
+    let mut r = Rx { src: to_bytes(pattern), p: 0, prog: Vec.new(), groups: 0 };
+    rx_alt(mut r);
+    r.prog.push(ins(OP_MATCH, 0, 0, 0));
+    Prog { code: r.prog, groups: r.groups }
+}
+
+fn in_set(i: ref Ins, c: i64) -> bool {
+    let mut hit = false;
+    let mut j: i64 = 0;
+    while j + 1 < i.ranges.len() {
+        if i.ranges[j] <= c and c <= i.ranges[j + 1] {
+            hit = true;
+        }
+        j += 2;
+    }
+    hit != i.neg
+}
+
+struct Th {
+    pc: i64,
+    sp: i64,
+    caps: Vec[i64],
+}
+
+// The capture slots of the first match that starts at `start`, by the
+// leftmost-first rule; slot 2k and 2k+1 bound group k, -1 when unset.
+fn run_at(prog: ref Prog, s: ref Vec[u8], start: i64) -> Option[Vec[i64]] {
+    let mut caps: Vec[i64] = Vec.new();
+    for _ in 0..(2 * prog.groups + 2) {
+        caps.push(-1);
+    }
+    let mut stack: Vec[Th] = Vec.new();
+    stack.push(Th { pc: 0, sp: start, caps: caps });
+    let code = ref prog.code;
+    while stack.len() > 0 {
+        let th = stack.pop().unwrap();
+        let mut pc = th.pc;
+        let mut sp = th.sp;
+        let mut cs = th.caps;
+        loop {
+            let op = code[pc].op;
+            if op == OP_MATCH {
+                cs[0] = start;
+                cs[1] = sp;
+                return Some(cs);
+            }
+            if op == OP_CHAR {
+                if sp < s.len() and s[sp] as i64 == code[pc].c {
+                    pc += 1;
+                    sp += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_ANY {
+                if sp < s.len() and s[sp] != b'\n' {
+                    pc += 1;
+                    sp += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_SET {
+                if sp < s.len() and in_set(code[pc], s[sp] as i64) {
+                    pc += 1;
+                    sp += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_BOL {
+                if sp == 0 {
+                    pc += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_EOL {
+                if sp == s.len() {
+                    pc += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_SAVE {
+                cs[code[pc].c] = sp;
+                pc += 1;
+                continue;
+            }
+            if op == OP_JMP {
+                pc = code[pc].x;
+                continue;
+            }
+            stack.push(Th { pc: code[pc].y, sp: sp, caps: cs.clone() });
+            pc = code[pc].x;
+        }
+    }
+    None
+}
+
+// A match: the text it ran over and its capture slots.
+struct RxMatch {
+    text: Vec[u8],
+    caps: Vec[i64],
+}
+
+fn m_start(m: ref RxMatch) -> i64 {
+    m.caps[0]
+}
+
+fn m_end(m: ref RxMatch) -> i64 {
+    m.caps[1]
+}
+
+// Group k, or None when it did not take part (JavaScript's undefined).
+fn grp(m: ref RxMatch, k: i64) -> Option[String] {
+    let a = m.caps[2 * k];
+    let b = m.caps[2 * k + 1];
+    if a < 0 or b < 0 {
+        return None;
+    }
+    Some(byte_str(m.text, a, b))
+}
+
+// Group k, with an unset group as "".
+fn grp_s(m: ref RxMatch, k: i64) -> String {
+    match grp(m, k) {
+        Some(s) => s,
+        None => String.new(),
+    }
+}
+
+fn grp_len(m: ref RxMatch, k: i64) -> i64 {
+    let a = m.caps[2 * k];
+    let b = m.caps[2 * k + 1];
+    if a < 0 or b < 0 { 0 } else { b - a }
+}
+
+// RegExp.exec from index `from`: the leftmost match at or after it.
+fn search_from(prog: ref Prog, text: Str, from: i64) -> Option[RxMatch] {
+    let s = to_bytes(text);
+    let mut i = from;
+    while i <= s.len() {
+        if let Some(caps) = run_at(prog, s, i) {
+            return Some(RxMatch { text: s, caps: caps });
+        }
+        i += 1;
+    }
+    None
+}
+
+fn search(prog: ref Prog, text: Str) -> Option[RxMatch] {
+    search_from(prog, text, 0)
+}
+
+fn test(prog: ref Prog, text: Str) -> bool {
+    search(prog, text).is_some()
+}
+
+// The text with the first match replaced by `rep`, as String.replace does
+// with a non-global pattern.
+fn splice(m: ref RxMatch, rep: Str) -> String {
+    let mut o = byte_str(m.text, 0, m_start(m));
+    o.push_str(rep);
+    o.push_str(byte_str(m.text, m_end(m), m.text.len()));
+    o
+}
+
+// ------------------------------------------------------------ semver's patterns
+
+const MAX_LENGTH: i64 = 256;
+const MAX_SAFE_INTEGER: i64 = 9007199254740991;
+
+// The compiled patterns of internal/re.js, built from the same sources.
+// Like semver's safeRe, `\s*` and `\s+` become `\s{0,1}` and `\s{1,1}`
+// (inputs have their white space collapsed first); the bounds safeRe puts
+// on `\d` and on build identifiers are left out, since they only cut in
+// past 250 characters and no input comes near that.
+struct Rxs {
+    full: Prog,
+    loose: Prog,
+    pre: Prog,
+    pre_l: Prog,
+    xrange: Prog,
+    xrange_l: Prog,
+    coerce: Prog,
+    coerce_full: Prog,
+    tilde_trim: Prog,
+    tilde: Prog,
+    tilde_l: Prog,
+    caret_trim: Prog,
+    caret: Prog,
+    caret_l: Prog,
+    comp: Prog,
+    comp_l: Prog,
+    comp_trim: Prog,
+    hyphen: Prog,
+    hyphen_l: Prog,
+    star: Prog,
+    gte0: Prog,
+    gte0_pre: Prog,
+}
+
+fn safe(src: Str) -> Prog {
+    compile_rx(src.replace("\\s*", "\\s{0,1}").replace("\\s+", "\\s{1,1}"))
+}
+
+fn semver_rx() -> Rxs {
+    let ldn = "[a-zA-Z0-9-]";
+    let num = "0|[1-9]\\d*";
+    let num_l = "\\d+";
+    let nonnum = f"\\d*[a-zA-Z-]{ldn}*";
+    let mainv = f"({num})\\.({num})\\.({num})";
+    let mainv_l = f"({num_l})\\.({num_l})\\.({num_l})";
+    let preid = f"(?:{nonnum}|{num})";
+    let preid_l = f"(?:{nonnum}|{num_l})";
+    let pre = f"(?:-({preid}(?:\\.{preid})*))";
+    let pre_l = f"(?:-?({preid_l}(?:\\.{preid_l})*))";
+    let buildid = f"{ldn}+";
+    let build = f"(?:\\+({buildid}(?:\\.{buildid})*))";
+    let fullplain = f"v?{mainv}{pre}?{build}?";
+    let looseplain = f"[v=\\s]*{mainv_l}{pre_l}?{build}?";
+    let gtlt = "((?:<|>)?=?)";
+    let xid = f"{num}|x|X|\\*";
+    let xid_l = f"{num_l}|x|X|\\*";
+    let xplain = f"[v=\\s]*({xid})(?:\\.({xid})(?:\\.({xid})(?:{pre})?{build}?)?)?";
+    let xplain_l = f"[v=\\s]*({xid_l})(?:\\.({xid_l})(?:\\.({xid_l})(?:{pre_l})?{build}?)?)?";
+    let coerce_plain = "(^|[^\\d])(\\d{1,16})(?:\\.(\\d{1,16}))?(?:\\.(\\d{1,16}))?";
+    let lonetilde = "(?:~>?)";
+    let lonecaret = "(?:\\^)";
+    Rxs {
+        full: safe(f"^{fullplain}$"),
+        loose: safe(f"^{looseplain}$"),
+        pre: safe(pre),
+        pre_l: safe(pre_l),
+        xrange: safe(f"^{gtlt}\\s*{xplain}$"),
+        xrange_l: safe(f"^{gtlt}\\s*{xplain_l}$"),
+        coerce: safe(f"{coerce_plain}(?:$|[^\\d])"),
+        coerce_full: safe(f"{coerce_plain}(?:{pre})?(?:{build})?(?:$|[^\\d])"),
+        tilde_trim: safe(f"(\\s*){lonetilde}\\s+"),
+        tilde: safe(f"^{lonetilde}{xplain}$"),
+        tilde_l: safe(f"^{lonetilde}{xplain_l}$"),
+        caret_trim: safe(f"(\\s*){lonecaret}\\s+"),
+        caret: safe(f"^{lonecaret}{xplain}$"),
+        caret_l: safe(f"^{lonecaret}{xplain_l}$"),
+        comp: safe(f"^{gtlt}\\s*({fullplain})$|^$"),
+        comp_l: safe(f"^{gtlt}\\s*({looseplain})$|^$"),
+        comp_trim: safe(f"(\\s*){gtlt}\\s*({looseplain}|{xplain})"),
+        hyphen: safe(f"^\\s*({xplain})\\s+-\\s+({xplain})\\s*$"),
+        hyphen_l: safe(f"^\\s*({xplain_l})\\s+-\\s+({xplain_l})\\s*$"),
+        star: safe("(<|>)?=?\\s*\\*"),
+        gte0: safe("^\\s*>=\\s*0\\.0\\.0\\s*$"),
+        gte0_pre: safe("^\\s*>=\\s*0\\.0\\.0-0\\s*$"),
+    }
+}
+
+// ------------------------------------------------------------ JavaScript's strings and numbers
+
+// String.split(/\s+/): runs of white space split, and an empty text, or
+// one starting or ending in white space, gives empty words.
+fn split_js_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if is_ws(b[i]) {
+            out.push(byte_str(b, st, i));
+            while i < b.len() and is_ws(b[i]) {
+                i += 1;
+            }
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+// trim(), then each run of white space as one space.
+fn collapse_ws(s: Str) -> String {
+    let w = split_js_ws(strip(s));
+    join(w, " ")
+}
+
+fn all_digits(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return false;
+    }
+    for c in b {
+        if not is_digit(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// A run of digits as a number, or MAX_SAFE_INTEGER + 1 for one past the
+// range JavaScript keeps exact (every such number is rejected anyway).
+fn num_val(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i + 1 < b.len() and b[i] == b'0' {
+        i += 1;
+    }
+    if b.len() - i > 16 {
+        return MAX_SAFE_INTEGER + 1;
+    }
+    let mut n: i64 = 0;
+    while i < b.len() {
+        n = n * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    n
+}
+
+// `+s + 1` for a run of digits.
+fn plus1(s: Str) -> String {
+    f"{num_val(s) + 1}"
+}
+
+// Compares two runs of digits by value.
+fn cmp_digits(a: Str, b: Str) -> i64 {
+    let x = to_bytes(a);
+    let y = to_bytes(b);
+    let mut i: i64 = 0;
+    while i + 1 < x.len() and x[i] == b'0' {
+        i += 1;
+    }
+    let mut j: i64 = 0;
+    while j + 1 < y.len() and y[j] == b'0' {
+        j += 1;
+    }
+    let lx = x.len() - i;
+    let ly = y.len() - j;
+    if lx != ly {
+        return if lx < ly { -1 } else { 1 };
+    }
+    while i < x.len() {
+        if x[i] != y[j] {
+            return if x[i] < y[j] { -1 } else { 1 };
+        }
+        i += 1;
+        j += 1;
+    }
+    0
+}
+
+fn cmp_text(a: Str, b: Str) -> i64 {
+    if a == b {
+        0
+    } else if a < b {
+        -1
+    } else {
+        1
+    }
+}
+
+// Number(s) for a string: is it NaN, and is it zero. Covers the decimal,
+// hex, octal and binary forms and Infinity.
+fn js_number(s: Str) -> (bool, bool) {
+    let b = to_bytes(strip(s));
+    if b.len() == 0 {
+        return (false, true);
+    }
+    let t = from_bytes(b.clone());
+    if t == "Infinity" or t == "+Infinity" or t == "-Infinity" {
+        return (false, false);
+    }
+    if b.len() > 2 and b[0] == b'0' {
+        let k = lower_byte(b[1]);
+        let base: i64 = if k == b'x' { 16 } else if k == b'o' { 8 } else if k == b'b' { 2 } else { 0 };
+        if base > 0 {
+            let mut zero = true;
+            for i in 2..b.len() {
+                let c = lower_byte(b[i]);
+                let d: i64 = if is_digit(c) { (c - b'0') as i64 } else if c >= b'a' and c <= b'f' { (c - b'a') as i64 + 10 } else { 99 };
+                if d >= base {
+                    return (true, false);
+                }
+                if d != 0 {
+                    zero = false;
+                }
+            }
+            return (false, zero);
+        }
+    }
+    let mut i: i64 = 0;
+    if b[0] == b'+' or b[0] == b'-' {
+        i = 1;
+    }
+    let mut digits: i64 = 0;
+    let mut zero = true;
+    let mut dot = false;
+    while i < b.len() and (is_digit(b[i]) or (b[i] == b'.' and not dot)) {
+        if b[i] == b'.' {
+            dot = true;
+        } else {
+            digits += 1;
+            if b[i] != b'0' {
+                zero = false;
+            }
+        }
+        i += 1;
+    }
+    if digits == 0 {
+        return (true, false);
+    }
+    if i < b.len() and (b[i] == b'e' or b[i] == b'E') {
+        i += 1;
+        if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+        }
+        if i == st {
+            return (true, false);
+        }
+    }
+    if i != b.len() {
+        return (true, false);
+    }
+    (false, zero)
+}
+
+// ------------------------------------------------------------ versions
+
+// A prerelease identifier: a number (when it is all digits and below
+// MAX_SAFE_INTEGER) or a string. `s` is its text either way.
+#[derive(Clone)]
+struct Id {
+    num: bool,
+    s: String,
+}
+
+#[derive(Clone)]
+struct Ver {
+    major: i64,
+    minor: i64,
+    patch: i64,
+    pre: Vec[Id],
+    build: Vec[String],
+    version: String,
+    raw: String,
+    loose: bool,
+}
+
+fn format_ver(v: mut ref Ver) {
+    let mut s = f"{v.major}.{v.minor}.{v.patch}";
+    if v.pre.len() > 0 {
+        s.push_str("-");
+        for i in 0..v.pre.len() {
+            if i > 0 {
+                s.push_str(".");
+            }
+            s.push_str(v.pre[i].s);
+        }
+    }
+    v.version = s;
+}
+
+fn pre_text(v: ref Ver) -> String {
+    let mut s = String.new();
+    for i in 0..v.pre.len() {
+        if i > 0 {
+            s.push_str(".");
+        }
+        s.push_str(v.pre[i].s);
+    }
+    s
+}
+
+fn new_ver(rx: ref Rxs, version: Str, loose: bool) -> Result[Ver, String] {
+    if version.len() > MAX_LENGTH {
+        return Err(f"version is longer than {MAX_LENGTH} characters");
+    }
+    let m = match search(if loose { ref rx.loose } else { ref rx.full }, strip(version)) {
+        Some(m) => m,
+        None => return Err(f"Invalid Version: {version}"),
+    };
+    let major = num_val(grp_s(m, 1));
+    let minor = num_val(grp_s(m, 2));
+    let patch = num_val(grp_s(m, 3));
+    if major > MAX_SAFE_INTEGER {
+        return Err("Invalid major version".to_string());
+    }
+    if minor > MAX_SAFE_INTEGER {
+        return Err("Invalid minor version".to_string());
+    }
+    if patch > MAX_SAFE_INTEGER {
+        return Err("Invalid patch version".to_string());
+    }
+    let mut pre: Vec[Id] = Vec.new();
+    let p4 = grp_s(m, 4);
+    if p4.len() > 0 {
+        for id in split_on(p4, b'.') {
+            if all_digits(id) and num_val(id) < MAX_SAFE_INTEGER {
+                pre.push(Id { num: true, s: f"{num_val(id)}" });
+            } else {
+                pre.push(Id { num: false, s: id.clone() });
+            }
+        }
+    }
+    let p5 = grp_s(m, 5);
+    let build = if p5.len() > 0 { split_on(p5, b'.') } else { Vec.new() };
+    let mut v = Ver {
+        major: major,
+        minor: minor,
+        patch: patch,
+        pre: pre,
+        build: build,
+        version: String.new(),
+        raw: version.to_string(),
+        loose: loose,
+    };
+    format_ver(mut v);
+    Ok(v)
+}
+
+fn parse_ver(rx: ref Rxs, version: Str, loose: bool) -> Option[Ver] {
+    match new_ver(rx, version, loose) {
+        Ok(v) => Some(v),
+        Err(_) => None,
+    }
+}
+
+fn valid(rx: ref Rxs, version: Str) -> bool {
+    parse_ver(rx, version, false).is_some()
+}
+
+// compareIdentifiers: numbers below strings, numbers by value, strings
+// by code unit.
+fn cmp_ids(a: ref Id, b: ref Id) -> i64 {
+    let anum = all_digits(a.s);
+    let bnum = all_digits(b.s);
+    if anum and bnum {
+        return cmp_digits(a.s, b.s);
+    }
+    if anum {
+        return -1;
+    }
+    if bnum {
+        return 1;
+    }
+    cmp_text(a.s, b.s)
+}
+
+fn cmp_lists(a: ref Vec[Id], b: ref Vec[Id]) -> i64 {
+    let mut i: i64 = 0;
+    loop {
+        if i >= a.len() and i >= b.len() {
+            return 0;
+        }
+        if i >= b.len() {
+            return 1;
+        }
+        if i >= a.len() {
+            return -1;
+        }
+        if not (a[i].num == b[i].num and a[i].s == b[i].s) {
+            return cmp_ids(a[i], b[i]);
+        }
+        i += 1;
+    }
+}
+
+fn cmp_num(a: i64, b: i64) -> i64 {
+    if a == b {
+        0
+    } else if a < b {
+        -1
+    } else {
+        1
+    }
+}
+
+fn compare_main(a: ref Ver, b: ref Ver) -> i64 {
+    let c = cmp_num(a.major, b.major);
+    if c != 0 {
+        return c;
+    }
+    let c2 = cmp_num(a.minor, b.minor);
+    if c2 != 0 {
+        return c2;
+    }
+    cmp_num(a.patch, b.patch)
+}
+
+fn compare_pre(a: ref Ver, b: ref Ver) -> i64 {
+    if a.pre.len() > 0 and b.pre.len() == 0 {
+        return -1;
+    }
+    if a.pre.len() == 0 and b.pre.len() > 0 {
+        return 1;
+    }
+    if a.pre.len() == 0 {
+        return 0;
+    }
+    cmp_lists(a.pre, b.pre)
+}
+
+fn compare(a: ref Ver, b: ref Ver) -> i64 {
+    if a.version == b.version {
+        return 0;
+    }
+    let c = compare_main(a, b);
+    if c != 0 {
+        return c;
+    }
+    compare_pre(a, b)
+}
+
+fn build_ids(v: ref Ver) -> Vec[Id] {
+    let mut o: Vec[Id] = Vec.new();
+    for s in v.build {
+        o.push(Id { num: false, s: s.clone() });
+    }
+    o
+}
+
+fn compare_build(a: ref Ver, b: ref Ver) -> i64 {
+    cmp_lists(build_ids(a), build_ids(b))
+}
+
+// compare() on two version strings; both must parse.
+fn compare_strs(rx: ref Rxs, a: Str, b: Str, loose: bool) -> Result[i64, String] {
+    let x = new_ver(rx, a, loose)?;
+    let y = new_ver(rx, b, loose)?;
+    Ok(compare(x, y))
+}
+
+// ------------------------------------------------------------ increments
+
+// The prerelease base: `undefined`, `false`, or a string.
+const BASE_UNSET: i64 = 0;
+const BASE_FALSE: i64 = 1;
+const BASE_TEXT: i64 = 2;
+
+#[derive(Clone)]
+struct Base {
+    kind: i64,
+    s: String,
+}
+
+fn base_one(b: ref Base) -> bool {
+    if b.kind != BASE_TEXT {
+        return false;
+    }
+    let (nan, zero) = js_number(b.s);
+    not nan and not zero
+}
+
+fn ident_set(ident: ref Option[String]) -> bool {
+    match ident {
+        Some(s) => s.len() > 0,
+        None => false,
+    }
+}
+
+fn ident_text(ident: ref Option[String]) -> String {
+    match ident {
+        Some(s) => s.clone(),
+        None => String.new(),
+    }
+}
+
+// isNaN(prerelease[1]).
+fn second_nan(v: ref Ver) -> bool {
+    if v.pre.len() < 2 {
+        return true;
+    }
+    if v.pre[1].num {
+        return false;
+    }
+    let (nan, _) = js_number(v.pre[1].s);
+    nan
+}
+
+fn inc_ver(rx: ref Rxs, v: mut ref Ver, release: Str, ident: ref Option[String], base: ref Base) -> Result[(), String] {
+    let has_id = ident_set(ident);
+    let id = ident_text(ident);
+    if starts_with(release, "pre") {
+        if not has_id and base.kind == BASE_FALSE {
+            return Err("invalid increment argument: identifier is empty".to_string());
+        }
+        if has_id {
+            let dash = f"-{id}";
+            let ok = match search(if v.loose { ref rx.pre_l } else { ref rx.pre }, dash) {
+                Some(m) => grp_s(m, 1) == id,
+                None => false,
+            };
+            if not ok {
+                return Err(f"invalid identifier: {id}");
+            }
+        }
+    }
+    if release == "premajor" {
+        v.pre.clear();
+        v.patch = 0;
+        v.minor = 0;
+        v.major += 1;
+        inc_ver(rx, v, "pre", ident, base)?;
+    } else if release == "preminor" {
+        v.pre.clear();
+        v.patch = 0;
+        v.minor += 1;
+        inc_ver(rx, v, "pre", ident, base)?;
+    } else if release == "prepatch" {
+        v.pre.clear();
+        inc_ver(rx, v, "patch", ident, base)?;
+        inc_ver(rx, v, "pre", ident, base)?;
+    } else if release == "prerelease" {
+        if v.pre.len() == 0 {
+            inc_ver(rx, v, "patch", ident, base)?;
+        }
+        inc_ver(rx, v, "pre", ident, base)?;
+    } else if release == "release" {
+        if v.pre.len() == 0 {
+            return Err(f"version {v.raw} is not a prerelease");
+        }
+        v.pre.clear();
+    } else if release == "major" {
+        if v.minor != 0 or v.patch != 0 or v.pre.len() == 0 {
+            v.major += 1;
+        }
+        v.minor = 0;
+        v.patch = 0;
+        v.pre.clear();
+    } else if release == "minor" {
+        if v.patch != 0 or v.pre.len() == 0 {
+            v.minor += 1;
+        }
+        v.patch = 0;
+        v.pre.clear();
+    } else if release == "patch" {
+        if v.pre.len() == 0 {
+            v.patch += 1;
+        }
+        v.pre.clear();
+    } else if release == "pre" {
+        let b = if base_one(base) { "1" } else { "0" };
+        if v.pre.len() == 0 {
+            v.pre.push(Id { num: true, s: b.to_string() });
+        } else {
+            let mut i = v.pre.len() - 1;
+            let mut done = false;
+            while i >= 0 {
+                if v.pre[i].num {
+                    let n = num_val(v.pre[i].s) + 1;
+                    v.pre[i].s = f"{n}";
+                    done = true;
+                    break;
+                }
+                i -= 1;
+            }
+            if not done {
+                if has_id and id == pre_text(v) and base.kind == BASE_FALSE {
+                    return Err("invalid increment argument: identifier already exists".to_string());
+                }
+                v.pre.push(Id { num: true, s: b.to_string() });
+            }
+        }
+        if has_id {
+            let mut pre: Vec[Id] = Vec.new();
+            pre.push(Id { num: false, s: id.clone() });
+            if base.kind != BASE_FALSE {
+                pre.push(Id { num: true, s: b.to_string() });
+            }
+            let head = Id { num: false, s: id.clone() };
+            if cmp_ids(v.pre[0], head) == 0 {
+                if second_nan(v) {
+                    v.pre = pre;
+                }
+            } else {
+                v.pre = pre;
+            }
+        }
+    } else {
+        return Err(f"invalid increment argument: {release}");
+    }
+    format_ver(v);
+    let mut raw = v.version.clone();
+    if v.build.len() > 0 {
+        raw.push_str("+");
+        raw.push_str(join(v.build, "."));
+    }
+    v.raw = raw;
+    Ok(())
+}
+
+// semver.inc: the incremented version, or None when it throws.
+fn inc(rx: ref Rxs, version: Str, release: Str, loose: bool, ident: ref Option[String], base: ref Base) -> Option[String] {
+    let mut v = match new_ver(rx, version, loose) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    match inc_ver(rx, mut v, release, ident, base) {
+        Ok(()) => Some(v.version),
+        Err(_) => None,
+    }
+}
+
+// ------------------------------------------------------------ comparators
+
+#[derive(Clone)]
+struct Comparator {
+    op: String,
+    sv: Option[Ver],
+    value: String,
+}
+
+fn new_comp(rx: ref Rxs, text: Str, loose: bool) -> Result[Comparator, String] {
+    let comp = collapse_ws(text);
+    let m = match search(if loose { ref rx.comp_l } else { ref rx.comp }, comp) {
+        Some(m) => m,
+        None => return Err(f"Invalid comparator: {comp}"),
+    };
+    let mut op = grp_s(m, 1);
+    if op == "=" {
+        op = String.new();
+    }
+    let v2 = grp_s(m, 2);
+    if v2.len() == 0 {
+        return Ok(Comparator { op: op, sv: None, value: String.new() });
+    }
+    let sv = new_ver(rx, v2, loose)?;
+    let value = f"{op}{sv.version}";
+    Ok(Comparator { op: op, sv: Some(sv), value: value })
+}
+
+fn cmp_op(a: ref Ver, op: Str, b: ref Ver) -> bool {
+    let c = compare(a, b);
+    if op == "" {
+        c == 0
+    } else if op == ">" {
+        c > 0
+    } else if op == ">=" {
+        c >= 0
+    } else if op == "<" {
+        c < 0
+    } else {
+        c <= 0
+    }
+}
+
+fn comp_test(c: ref Comparator, v: ref Ver) -> bool {
+    match c.sv {
+        Some(ref sv) => cmp_op(v, c.op, sv),
+        None => true,
+    }
+}
+
+fn comp_intersects(rx: ref Rxs, a: ref Comparator, b: ref Comparator, loose: bool, incpre: bool) -> bool {
+    if a.op == "" {
+        if a.value == "" {
+            return true;
+        }
+        return match new_range(rx, b.value, loose, incpre) {
+            Ok(r) => range_test_str(rx, r, a.value),
+            Err(_) => false,
+        };
+    }
+    if b.op == "" {
+        if b.value == "" {
+            return true;
+        }
+        return match new_range(rx, a.value, loose, incpre) {
+            Ok(r) => match b.sv {
+                Some(ref sv) => range_test(r, sv),
+                None => false,
+            },
+            Err(_) => false,
+        };
+    }
+    if incpre and (a.value == "<0.0.0-0" or b.value == "<0.0.0-0") {
+        return false;
+    }
+    if not incpre and (starts_with(a.value, "<0.0.0") or starts_with(b.value, "<0.0.0")) {
+        return false;
+    }
+    if starts_with(a.op, ">") and starts_with(b.op, ">") {
+        return true;
+    }
+    if starts_with(a.op, "<") and starts_with(b.op, "<") {
+        return true;
+    }
+    let x = match a.sv {
+        Some(ref v) => v.clone(),
+        None => return false,
+    };
+    let y = match b.sv {
+        Some(ref v) => v.clone(),
+        None => return false,
+    };
+    if x.version == y.version and has_byte(a.op, b'=') and has_byte(b.op, b'=') {
+        return true;
+    }
+    if cmp_op(x, "<", y) and starts_with(a.op, ">") and starts_with(b.op, "<") {
+        return true;
+    }
+    if cmp_op(x, ">", y) and starts_with(a.op, "<") and starts_with(b.op, ">") {
+        return true;
+    }
+    false
+}
+
+// ------------------------------------------------------------ ranges
+
+struct Range {
+    loose: bool,
+    incpre: bool,
+    raw: String,
+    set: Vec[Vec[Comparator]],
+}
+
+fn is_x(id: ref Option[String]) -> bool {
+    match id {
+        Some(s) => s.len() == 0 or lower(s) == "x" or s == "*",
+        None => true,
+    }
+}
+
+fn opt_s(id: ref Option[String]) -> String {
+    match id {
+        Some(s) => s.clone(),
+        None => String.new(),
+    }
+}
+
+fn caret_rep(m: ref RxMatch, incpre: bool) -> String {
+    let z = if incpre { "-0" } else { "" };
+    let gm = grp(m, 1);
+    let gn = grp(m, 2);
+    let gp = grp(m, 3);
+    let gr = grp(m, 4);
+    let ma = opt_s(gm);
+    let mi = opt_s(gn);
+    let pa = opt_s(gp);
+    let pr = opt_s(gr);
+    if is_x(gm) {
+        return String.new();
+    }
+    if is_x(gn) {
+        return f">={ma}.0.0{z} <{plus1(ma)}.0.0-0";
+    }
+    if is_x(gp) {
+        if ma == "0" {
+            return f">={ma}.{mi}.0{z} <{ma}.{plus1(mi)}.0-0";
+        }
+        return f">={ma}.{mi}.0{z} <{plus1(ma)}.0.0-0";
+    }
+    if pr.len() > 0 {
+        if ma == "0" {
+            if mi == "0" {
+                return f">={ma}.{mi}.{pa}-{pr} <{ma}.{mi}.{plus1(pa)}-0";
+            }
+            return f">={ma}.{mi}.{pa}-{pr} <{ma}.{plus1(mi)}.0-0";
+        }
+        return f">={ma}.{mi}.{pa}-{pr} <{plus1(ma)}.0.0-0";
+    }
+    if ma == "0" {
+        if mi == "0" {
+            return f">={ma}.{mi}.{pa}{z} <{ma}.{mi}.{plus1(pa)}-0";
+        }
+        return f">={ma}.{mi}.{pa}{z} <{ma}.{plus1(mi)}.0-0";
+    }
+    f">={ma}.{mi}.{pa} <{plus1(ma)}.0.0-0"
+}
+
+fn tilde_rep(m: ref RxMatch) -> String {
+    let gm = grp(m, 1);
+    let gn = grp(m, 2);
+    let gp = grp(m, 3);
+    let ma = opt_s(gm);
+    let mi = opt_s(gn);
+    let pa = opt_s(gp);
+    let pr = grp_s(m, 4);
+    if is_x(gm) {
+        return String.new();
+    }
+    if is_x(gn) {
+        return f">={ma}.0.0 <{plus1(ma)}.0.0-0";
+    }
+    if is_x(gp) {
+        return f">={ma}.{mi}.0 <{ma}.{plus1(mi)}.0-0";
+    }
+    if pr.len() > 0 {
+        return f">={ma}.{mi}.{pa}-{pr} <{ma}.{plus1(mi)}.0-0";
+    }
+    f">={ma}.{mi}.{pa} <{ma}.{plus1(mi)}.0-0"
+}
+
+fn xrange_rep(m: ref RxMatch, incpre: bool) -> String {
+    let mut gtlt = grp_s(m, 1);
+    let gm = grp(m, 2);
+    let gn = grp(m, 3);
+    let gp = grp(m, 4);
+    let mut ma = opt_s(gm);
+    let mut mi = opt_s(gn);
+    let mut pa = opt_s(gp);
+    let xma = is_x(gm);
+    let xmi = xma or is_x(gn);
+    let xpa = xmi or is_x(gp);
+    if gtlt == "=" and xpa {
+        gtlt = String.new();
+    }
+    let mut pr = if incpre { "-0".to_string() } else { String.new() };
+    if xma {
+        if gtlt == ">" or gtlt == "<" {
+            return "<0.0.0-0".to_string();
+        }
+        return "*".to_string();
+    }
+    if gtlt.len() > 0 and xpa {
+        if xmi {
+            mi = "0".to_string();
+        }
+        pa = "0".to_string();
+        if gtlt == ">" {
+            gtlt = ">=".to_string();
+            if xmi {
+                ma = plus1(ma);
+                mi = "0".to_string();
+            } else {
+                mi = plus1(mi);
+            }
+        } else if gtlt == "<=" {
+            gtlt = "<".to_string();
+            if xmi {
+                ma = plus1(ma);
+            } else {
+                mi = plus1(mi);
+            }
+        }
+        if gtlt == "<" {
+            pr = "-0".to_string();
+        }
+        return f"{gtlt}{ma}.{mi}.{pa}{pr}";
+    }
+    if xmi {
+        return f">={ma}.0.0{pr} <{plus1(ma)}.0.0-0";
+    }
+    if xpa {
+        return f">={ma}.{mi}.0{pr} <{ma}.{plus1(mi)}.0-0";
+    }
+    byte_str(m.text, m_start(m), m_end(m))
+}
+
+fn hyphen_rep(m: ref RxMatch, incpre: bool) -> String {
+    let z = if incpre { "-0" } else { "" };
+    let fm = grp(m, 2);
+    let fn_ = grp(m, 3);
+    let fp = grp(m, 4);
+    let fpr = grp_s(m, 5);
+    let tm = grp(m, 8);
+    let tn = grp(m, 9);
+    let tp = grp(m, 10);
+    let tpr = grp_s(m, 11);
+    let from_all = grp_s(m, 1);
+    let to_all = grp_s(m, 7);
+    let from = if is_x(fm) {
+        String.new()
+    } else if is_x(fn_) {
+        f">={opt_s(fm)}.0.0{z}"
+    } else if is_x(fp) {
+        f">={opt_s(fm)}.{opt_s(fn_)}.0{z}"
+    } else if fpr.len() > 0 {
+        f">={from_all}"
+    } else {
+        f">={from_all}{z}"
+    };
+    let to = if is_x(tm) {
+        String.new()
+    } else if is_x(tn) {
+        f"<{plus1(opt_s(tm))}.0.0-0"
+    } else if is_x(tp) {
+        f"<{opt_s(tm)}.{plus1(opt_s(tn))}.0-0"
+    } else if tpr.len() > 0 {
+        f"<={opt_s(tm)}.{opt_s(tn)}.{opt_s(tp)}-{tpr}"
+    } else if incpre {
+        f"<{opt_s(tm)}.{opt_s(tn)}.{plus1(opt_s(tp))}-0"
+    } else {
+        f"<={to_all}"
+    };
+    strip(f"{from} {to}")
+}
+
+// A global String.replace of `prog` in `s`: mode 0 puts back groups 1-3
+// ("$1$2$3"), mode 1 group 1 and a tilde ("$1~"), mode 2 group 1 and a
+// caret ("$1^").
+fn sub_all(prog: ref Prog, s: Str, mode: i64) -> String {
+    let b = to_bytes(s);
+    let mut out = String.new();
+    let mut pos: i64 = 0;
+    let mut last: i64 = 0;
+    while pos <= b.len() {
+        let m = match search_from(prog, s, pos) {
+            Some(m) => m,
+            None => break,
+        };
+        out.push_str(byte_str(b, last, m_start(m)));
+        if mode == 0 {
+            out.push_str(grp_s(m, 1));
+            out.push_str(grp_s(m, 2));
+            out.push_str(grp_s(m, 3));
+        } else if mode == 1 {
+            out.push_str(grp_s(m, 1));
+            out.push_str("~");
+        } else {
+            out.push_str(grp_s(m, 1));
+            out.push_str("^");
+        }
+        last = m_end(m);
+        pos = if m_end(m) == m_start(m) { m_end(m) + 1 } else { m_end(m) };
+        if m_end(m) == m_start(m) and m_start(m) < b.len() {
+            out.push_str(byte_str(b, m_start(m), m_start(m) + 1));
+            last = m_start(m) + 1;
+        }
+    }
+    if last < b.len() {
+        out.push_str(byte_str(b, last, b.len()));
+    }
+    out
+}
+
+fn replace_caret(rx: ref Rxs, comp: Str, loose: bool, incpre: bool) -> String {
+    match search(if loose { ref rx.caret_l } else { ref rx.caret }, comp) {
+        Some(m) => splice(m, caret_rep(m, incpre)),
+        None => comp.to_string(),
+    }
+}
+
+fn replace_tilde(rx: ref Rxs, comp: Str, loose: bool) -> String {
+    match search(if loose { ref rx.tilde_l } else { ref rx.tilde }, comp) {
+        Some(m) => splice(m, tilde_rep(m)),
+        None => comp.to_string(),
+    }
+}
+
+fn replace_xrange(rx: ref Rxs, text: Str, loose: bool, incpre: bool) -> String {
+    let comp = strip(text);
+    match search(if loose { ref rx.xrange_l } else { ref rx.xrange }, comp) {
+        Some(m) => splice(m, xrange_rep(m, incpre)),
+        None => comp,
+    }
+}
+
+fn parse_comparator(rx: ref Rxs, comp: Str, loose: bool, incpre: bool) -> String {
+    let mut a: Vec[String] = Vec.new();
+    for c in split_js_ws(strip(comp)) {
+        a.push(replace_caret(rx, c, loose, incpre));
+    }
+    let mut b: Vec[String] = Vec.new();
+    for c in split_js_ws(strip(join(a, " "))) {
+        b.push(replace_tilde(rx, c, loose));
+    }
+    let mut x: Vec[String] = Vec.new();
+    for c in split_js_ws(join(b, " ")) {
+        x.push(replace_xrange(rx, c, loose, incpre));
+    }
+    let star_in = strip(join(x, " "));
+    match search(rx.star, star_in) {
+        Some(m) => splice(m, ""),
+        None => star_in,
+    }
+}
+
+fn parse_range(rx: ref Rxs, text: Str, loose: bool, incpre: bool) -> Result[Vec[Comparator], String] {
+    let mut r = text.to_string();
+    if let Some(m) = search(if loose { ref rx.hyphen_l } else { ref rx.hyphen }, r) {
+        r = splice(m, hyphen_rep(m, incpre));
+    }
+    r = sub_all(rx.comp_trim, r, 0);
+    r = sub_all(rx.tilde_trim, r, 1);
+    r = sub_all(rx.caret_trim, r, 2);
+    let mut parts: Vec[String] = Vec.new();
+    for c in split_on(r, b' ') {
+        parts.push(parse_comparator(rx, c, loose, incpre));
+    }
+    let mut list: Vec[String] = Vec.new();
+    for c in split_js_ws(join(parts, " ")) {
+        let t = strip(c);
+        let g = match search(if incpre { ref rx.gte0_pre } else { ref rx.gte0 }, t) {
+            Some(m) => splice(m, ""),
+            None => t,
+        };
+        if loose and not test(rx.comp_l, g) {
+            continue;
+        }
+        list.push(g);
+    }
+    let mut comps: Vec[Comparator] = Vec.new();
+    for c in list {
+        let comp = new_comp(rx, c, loose)?;
+        if comp.value == "<0.0.0-0" {
+            let mut one: Vec[Comparator] = Vec.new();
+            one.push(comp);
+            return Ok(one);
+        }
+        let mut found = false;
+        for j in 0..comps.len() {
+            if comps[j].value == comp.value {
+                comps[j] = comp.clone();
+                found = true;
+            }
+        }
+        if not found {
+            comps.push(comp);
+        }
+    }
+    if comps.len() > 1 {
+        let mut kept: Vec[Comparator] = Vec.new();
+        for c in comps {
+            if c.value != "" {
+                kept.push(c.clone());
+            }
+        }
+        return Ok(kept);
+    }
+    Ok(comps)
+}
+
+fn new_range(rx: ref Rxs, text: Str, loose: bool, incpre: bool) -> Result[Range, String] {
+    let raw = collapse_ws(text);
+    let mut set: Vec[Vec[Comparator]] = Vec.new();
+    for part in split_or(raw) {
+        let comps = parse_range(rx, strip(part), loose, incpre)?;
+        if comps.len() > 0 {
+            set.push(comps);
+        }
+    }
+    if set.len() == 0 {
+        return Err(f"Invalid SemVer Range: {raw}");
+    }
+    if set.len() > 1 {
+        let first = set[0].clone();
+        let mut live: Vec[Vec[Comparator]] = Vec.new();
+        for c in set {
+            if c[0].value != "<0.0.0-0" {
+                live.push(c.clone());
+            }
+        }
+        if live.len() == 0 {
+            live.push(first);
+        } else if live.len() > 1 {
+            let mut star: Vec[Vec[Comparator]] = Vec.new();
+            for c in live {
+                if c.len() == 1 and c[0].value == "" {
+                    star.push(c.clone());
+                    break;
+                }
+            }
+            if star.len() > 0 {
+                live = star;
+            }
+        }
+        set = live;
+    }
+    Ok(Range { loose: loose, incpre: incpre, raw: raw, set: set })
+}
+
+// raw.split('||').
+fn split_or(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        if b[i] == b'|' and b[i + 1] == b'|' {
+            out.push(byte_str(b, st, i));
+            i += 2;
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn range_str(r: ref Range) -> String {
+    let mut s = String.new();
+    for i in 0..r.set.len() {
+        if i > 0 {
+            s.push_str("||");
+        }
+        for k in 0..r.set[i].len() {
+            if k > 0 {
+                s.push_str(" ");
+            }
+            s.push_str(strip(r.set[i][k].value));
+        }
+    }
+    s
+}
+
+fn test_set(set: ref Vec[Comparator], v: ref Ver, incpre: bool) -> bool {
+    for c in set {
+        if not comp_test(c, v) {
+            return false;
+        }
+    }
+    if v.pre.len() > 0 and not incpre {
+        for c in set {
+            if let Some(ref a) = c.sv {
+                if a.pre.len() > 0 and a.major == v.major and a.minor == v.minor and a.patch == v.patch {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    true
+}
+
+fn range_test(r: ref Range, v: ref Ver) -> bool {
+    for s in r.set {
+        if test_set(s, v, r.incpre) {
+            return true;
+        }
+    }
+    false
+}
+
+fn range_test_str(rx: ref Rxs, r: ref Range, v: Str) -> bool {
+    if v.len() == 0 {
+        return false;
+    }
+    match new_ver(rx, v, r.loose) {
+        Ok(sv) => range_test(r, sv),
+        Err(_) => false,
+    }
+}
+
+fn satisfiable(rx: ref Rxs, comps: ref Vec[Comparator], loose: bool, incpre: bool) -> bool {
+    let mut rest = comps.clone();
+    let mut t = rest.pop().unwrap();
+    let mut result = true;
+    while result and rest.len() > 0 {
+        for o in rest {
+            if not comp_intersects(rx, t, o, loose, incpre) {
+                result = false;
+                break;
+            }
+        }
+        t = rest.pop().unwrap();
+    }
+    result
+}
+
+fn range_intersects(rx: ref Rxs, a: ref Range, b: ref Range, loose: bool, incpre: bool) -> bool {
+    for x in a.set {
+        if not satisfiable(rx, x, loose, incpre) {
+            continue;
+        }
+        for y in b.set {
+            if not satisfiable(rx, y, loose, incpre) {
+                continue;
+            }
+            let mut all = true;
+            for p in x {
+                for q in y {
+                    if not comp_intersects(rx, p, q, loose, incpre) {
+                        all = false;
+                    }
+                }
+            }
+            if all {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ the range functions
+
+fn satisfies(rx: ref Rxs, v: Str, range: Str, loose: bool, incpre: bool) -> bool {
+    match new_range(rx, range, loose, incpre) {
+        Ok(r) => range_test_str(rx, r, v),
+        Err(_) => false,
+    }
+}
+
+fn valid_range(rx: ref Rxs, range: Str, loose: bool, incpre: bool) -> Option[String] {
+    match new_range(rx, range, loose, incpre) {
+        Ok(r) => {
+            let s = range_str(r);
+            if s.len() == 0 { Some("*".to_string()) } else { Some(s) }
+        }
+        Err(_) => None,
+    }
+}
+
+// maxSatisfying (want -1) and minSatisfying (want 1).
+fn best_satisfying(rx: ref Rxs, versions: ref Vec[String], range: Str, loose: bool, incpre: bool, want: i64) -> Option[String] {
+    let r = match new_range(rx, range, loose, incpre) {
+        Ok(r) => r,
+        Err(_) => return None,
+    };
+    let mut best: Option[Ver] = None;
+    let mut best_s = String.new();
+    for v in versions {
+        if not range_test_str(rx, r, v) {
+            continue;
+        }
+        let take = match best {
+            None => true,
+            Some(ref b) => {
+                if b.version == v.as_str() {
+                    false
+                } else {
+                    match new_ver(rx, v, loose) {
+                        Ok(sv) => compare(b, sv) == want,
+                        Err(_) => false,
+                    }
+                }
+            }
+        };
+        if take {
+            best_s = v.clone();
+            best = parse_ver(rx, v, loose);
+        }
+    }
+    if best.is_some() { Some(best_s) } else { None }
+}
+
+fn min_version(rx: ref Rxs, range: Str, loose: bool, incpre: bool) -> Result[Option[Ver], String] {
+    let r = new_range(rx, range, loose, incpre)?;
+    let zero = new_ver(rx, "0.0.0", false)?;
+    if range_test(r, zero) {
+        return Ok(Some(zero));
+    }
+    let zero_pre = new_ver(rx, "0.0.0-0", false)?;
+    if range_test(r, zero_pre) {
+        return Ok(Some(zero_pre));
+    }
+    let mut minver: Option[Ver] = None;
+    for comps in r.set {
+        let mut set_min: Option[Ver] = None;
+        for c in comps {
+            let text = match c.sv {
+                Some(ref sv) => sv.version.clone(),
+                None => return Err("Invalid version. Must be a string. Got type \"undefined\".".to_string()),
+            };
+            let mut cv = new_ver(rx, text, false)?;
+            if c.op == ">" {
+                if cv.pre.len() == 0 {
+                    cv.patch += 1;
+                } else {
+                    cv.pre.push(Id { num: true, s: "0".to_string() });
+                }
+                format_ver(mut cv);
+            }
+            if c.op == ">" or c.op == "" or c.op == ">=" {
+                let take = match set_min {
+                    None => true,
+                    Some(ref s) => compare(cv, s) > 0,
+                };
+                if take {
+                    set_min = Some(cv);
+                }
+            }
+        }
+        if let Some(sm) = set_min {
+            let take = match minver {
+                None => true,
+                Some(ref m) => compare(m, sm) > 0,
+            };
+            if take {
+                minver = Some(sm);
+            }
+        }
+    }
+    match minver {
+        Some(m) => {
+            if range_test(r, m) {
+                Ok(Some(m))
+            } else {
+                Ok(None)
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn diff(rx: ref Rxs, a: Str, b: Str) -> Result[Option[String], String] {
+    let v1 = new_ver(rx, a, false)?;
+    let v2 = new_ver(rx, b, false)?;
+    let c = compare(v1, v2);
+    if c == 0 {
+        return Ok(None);
+    }
+    let (high, low) = if c > 0 { (v1.clone(), v2.clone()) } else { (v2.clone(), v1.clone()) };
+    let high_pre = high.pre.len() > 0;
+    let low_pre = low.pre.len() > 0;
+    if low_pre and not high_pre {
+        if low.patch == 0 and low.minor == 0 {
+            return Ok(Some("major".to_string()));
+        }
+        if compare_main(low, high) == 0 {
+            if low.minor != 0 and low.patch == 0 {
+                return Ok(Some("minor".to_string()));
+            }
+            return Ok(Some("patch".to_string()));
+        }
+    }
+    let prefix = if high_pre { "pre" } else { "" };
+    if v1.major != v2.major {
+        return Ok(Some(f"{prefix}major"));
+    }
+    if v1.minor != v2.minor {
+        return Ok(Some(f"{prefix}minor"));
+    }
+    if v1.patch != v2.patch {
+        return Ok(Some(f"{prefix}patch"));
+    }
+    Ok(Some("prerelease".to_string()))
+}
+
+// Array.sort with compare(): stable, so equal versions keep their order.
+fn sort_versions(rx: ref Rxs, versions: ref Vec[String], loose: bool, reverse: bool) -> Result[Vec[String], String] {
+    let mut vs: Vec[Ver] = Vec.new();
+    for v in versions {
+        vs.push(new_ver(rx, v, loose)?);
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..versions.len() {
+        let mut j = order.len();
+        while j > 0 {
+            let c = compare(vs[order[j - 1]], vs[i]);
+            let after = if reverse { c < 0 } else { c > 0 };
+            if not after {
+                break;
+            }
+            j -= 1;
+        }
+        order.insert(j, i);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for k in order {
+        out.push(versions[k].clone());
+    }
+    Ok(out)
+}
+
+fn simplify(rx: ref Rxs, versions: ref Vec[String], range: Str, loose: bool, incpre: bool) -> Result[String, String] {
+    let v = sort_versions(rx, versions, loose, false)?;
+    let mut lo: Vec[String] = Vec.new();
+    let mut hi: Vec[String] = Vec.new();
+    let mut first = String.new();
+    let mut prev = String.new();
+    let mut have_first = false;
+    let mut have_prev = false;
+    for ver in v {
+        if satisfies(rx, ver, range, loose, incpre) {
+            prev = ver.clone();
+            have_prev = true;
+            if not have_first {
+                first = ver.clone();
+                have_first = true;
+            }
+        } else {
+            if have_prev {
+                lo.push(first.clone());
+                hi.push(prev.clone());
+            }
+            have_prev = false;
+            have_first = false;
+        }
+    }
+    if have_first {
+        lo.push(first.clone());
+        hi.push(String.new());
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..lo.len() {
+        let a = lo[i].clone();
+        let b = hi[i].clone();
+        if a == b {
+            parts.push(a);
+        } else if b.len() == 0 and a == v[0] {
+            parts.push("*".to_string());
+        } else if b.len() == 0 {
+            parts.push(f">={a}");
+        } else if a == v[0] {
+            parts.push(f"<={b}");
+        } else {
+            parts.push(f"{a} - {b}");
+        }
+    }
+    let s = join(parts, " || ");
+    if s.len() < range.len() { Ok(s) } else { Ok(range.to_string()) }
+}
+
+fn coerce(rx: ref Rxs, version: Str, loose: bool, incpre: bool, rtl: bool) -> Option[Ver] {
+    let prog = if incpre { ref rx.coerce_full } else { ref rx.coerce };
+    let mut found: Option[RxMatch] = None;
+    if not rtl {
+        found = search(prog, version);
+    } else {
+        let mut pos: i64 = 0;
+        loop {
+            let next = match search_from(prog, version, pos) {
+                Some(m) => m,
+                None => break,
+            };
+            let at_end = match found {
+                Some(ref m) => m_end(m) == version.len(),
+                None => false,
+            };
+            if at_end {
+                break;
+            }
+            let take = match found {
+                Some(ref m) => m_end(next) != m_end(m),
+                None => true,
+            };
+            pos = m_start(next) + grp_len(next, 1) + grp_len(next, 2);
+            if take {
+                found = Some(next);
+            }
+        }
+    }
+    let m = match found {
+        Some(m) => m,
+        None => return None,
+    };
+    let major = grp_s(m, 2);
+    let mut minor = grp_s(m, 3);
+    if minor.len() == 0 {
+        minor = "0".to_string();
+    }
+    let mut patch = grp_s(m, 4);
+    if patch.len() == 0 {
+        patch = "0".to_string();
+    }
+    let mut text = f"{major}.{minor}.{patch}";
+    if incpre {
+        let pre = grp_s(m, 5);
+        if pre.len() > 0 {
+            text.push_str(f"-{pre}");
+        }
+        let bld = grp_s(m, 6);
+        if bld.len() > 0 {
+            text.push_str(f"+{bld}");
+        }
+    }
+    parse_ver(rx, text, loose)
+}
+
+// ------------------------------------------------------------ the command-line tool
+
+fn help_text() -> String {
+    """
+SemVer 7.7.2
+
+A JavaScript implementation of the https://semver.org/ specification
+Copyright Isaac Z. Schlueter
+
+Usage: semver [options] <version> [<version> [...]]
+Prints valid versions sorted by SemVer precedence
+
+Options:
+-r --range <range>
+        Print versions that match the specified range.
+
+-i --increment [<level>]
+        Increment a version by the specified level.  Level can
+        be one of: major, minor, patch, premajor, preminor,
+        prepatch, prerelease, or release.  Default level is 'patch'.
+        Only one version may be specified.
+
+--preid <identifier>
+        Identifier to be used to prefix premajor, preminor,
+        prepatch or prerelease version increments.
+
+-l --loose
+        Interpret versions and ranges loosely
+
+-p --include-prerelease
+        Always include prerelease versions in range matching
+
+-c --coerce
+        Coerce a string into SemVer if possible
+        (does not imply --loose)
+
+--rtl
+        Coerce version strings right to left
+
+--ltr
+        Coerce version strings left to right (default)
+
+-n <base>
+        Base number to be used for the prerelease identifier.
+        Can be either 0 or 1, or false to omit the number altogether.
+        Defaults to 0.
+
+Program exits successfully if any valid version satisfies
+all supplied ranges, and prints all satisfying versions.
+
+If no satisfying versions are found, then exits failure.
+
+Versions are printed in ascending order, so supplying
+multiple versions to the utility will just sort them.
+
+"""
+}
+
+fn is_level(s: Str) -> bool {
+    s == "major" or s == "minor" or s == "patch" or s == "prerelease" or s == "premajor" or s == "preminor" or s == "prepatch" or s == "release"
+}
+
+// The tool's standard output, standard error and exit status.
+struct Run {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+fn run_of(out: Str, err: Str, status: i64) -> Run {
+    Run { out: out.to_string(), err: err.to_string(), status: status }
+}
+
+// bin/semver.js on these arguments.
+fn semver_cli(rx: ref Rxs, args: ref Vec[String]) -> Run {
+    if args.len() == 0 {
+        return run_of(help_text(), "", 0);
+    }
+    let mut argv = args.clone();
+    let mut versions: Vec[String] = Vec.new();
+    let mut ranges: Vec[String] = Vec.new();
+    let mut missing_range = false;
+    let mut level = String.new();
+    let mut loose = false;
+    let mut incpre = false;
+    let mut want_coerce = false;
+    let mut rtl = false;
+    let mut reverse = false;
+    let mut ident: Option[String] = None;
+    let mut base = Base { kind: BASE_UNSET, s: String.new() };
+    while argv.len() > 0 {
+        let mut a = argv.remove(0);
+        let eq = find_byte(a, b'=');
+        if eq >= 0 {
+            let value = slice_from(a, eq + 1);
+            a = slice(a, 0, eq);
+            argv.insert(0, value);
+        }
+        if a == "-rv" or a == "-rev" or a == "--rev" or a == "--reverse" {
+            reverse = true;
+        } else if a == "-l" or a == "--loose" {
+            loose = true;
+        } else if a == "-p" or a == "--include-prerelease" {
+            incpre = true;
+        } else if a == "-v" or a == "--version" {
+            if argv.len() > 0 {
+                versions.push(argv.remove(0));
+            }
+        } else if a == "-i" or a == "--inc" or a == "--increment" {
+            if argv.len() > 0 and is_level(argv[0]) {
+                level = argv.remove(0);
+            } else {
+                level = "patch".to_string();
+            }
+        } else if a == "--preid" {
+            ident = if argv.len() > 0 { Some(argv.remove(0)) } else { None };
+        } else if a == "-r" or a == "--range" {
+            if argv.len() > 0 {
+                ranges.push(argv.remove(0));
+            } else {
+                missing_range = true;
+            }
+        } else if a == "-n" {
+            if argv.len() > 0 {
+                let b = argv.remove(0);
+                base = if b == "false" { Base { kind: BASE_FALSE, s: b } } else { Base { kind: BASE_TEXT, s: b } };
+            } else {
+                base = Base { kind: BASE_UNSET, s: String.new() };
+            }
+        } else if a == "-c" or a == "--coerce" {
+            want_coerce = true;
+        } else if a == "--rtl" {
+            rtl = true;
+        } else if a == "--ltr" {
+            rtl = false;
+        } else if a == "-h" or a == "--help" or a == "-?" {
+            return run_of(help_text(), "", 0);
+        } else {
+            versions.push(a);
+        }
+    }
+    let mut kept: Vec[String] = Vec.new();
+    for v in versions {
+        let t = if want_coerce {
+            match coerce(rx, v, loose, incpre, rtl) {
+                Some(c) => c.version,
+                None => v.clone(),
+            }
+        } else {
+            v.clone()
+        };
+        if valid(rx, t) {
+            kept.push(t);
+        }
+    }
+    if kept.len() == 0 {
+        return run_of("", "", 1);
+    }
+    if level.len() > 0 and (kept.len() != 1 or ranges.len() > 0 or missing_range) {
+        return run_of("", "--inc can only be used on a single version with no range\n", 1);
+    }
+    if missing_range {
+        return run_of("", "", 1);
+    }
+    for r in ranges {
+        let mut next: Vec[String] = Vec.new();
+        for v in kept {
+            if satisfies(rx, v, r, loose, incpre) {
+                next.push(v.clone());
+            }
+        }
+        kept = next;
+        if kept.len() == 0 {
+            return run_of("", "", 1);
+        }
+    }
+    let sorted = match sort_versions(rx, kept, loose, reverse) {
+        Ok(s) => s,
+        Err(e) => return run_of("", f"{e}\n", 1),
+    };
+    let mut out = String.new();
+    for v in sorted {
+        let cleaned = parse_ver(rx, strip_eq_v(strip(v)), loose);
+        let line = match cleaned {
+            Some(c) => {
+                if level.len() > 0 {
+                    match inc(rx, c.version, level, loose, ident, base) {
+                        Some(s) => s,
+                        None => "null".to_string(),
+                    }
+                } else {
+                    c.version
+                }
+            }
+            None => "null".to_string(),
+        };
+        out.push_str(line);
+        out.push_str("\n");
+    }
+    run_of(out, "", 0)
+}
+
+// clean()'s replace(/^[=v]+/, '').
+fn strip_eq_v(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i < b.len() and (b[i] == b'=' or b[i] == b'v') {
+        i += 1;
+    }
+    byte_str(b, i, b.len())
+}
+
+// ------------------------------------------------------------ library calls
+
+fn show(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => s.clone(),
+        None => "null".to_string(),
+    }
+}
+
+fn json_ids(ids: ref Vec[Id]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..ids.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        if ids[i].num {
+            s.push_str(ids[i].s);
+        } else {
+            s.push_str(f"\"{ids[i].s}\"");
+        }
+    }
+    s.push_str("]");
+    s
+}
+
+fn json_strs(xs: ref Vec[String]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..xs.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"\"{xs[i]}\"");
+    }
+    s.push_str("]");
+    s
+}
+
+fn bool_text(b: bool) -> String {
+    if b { "true".to_string() } else { "false".to_string() }
+}
+
+fn lib_call(rx: ref Rxs, name: Str, args: ref Vec[String]) -> Result[String, String] {
+    let mut loose = false;
+    let mut incpre = false;
+    let mut rtl = false;
+    let mut a: Vec[String] = Vec.new();
+    for x in args {
+        if x == "--loose" {
+            loose = true;
+        } else if x == "-p" {
+            incpre = true;
+        } else if x == "--rtl" {
+            rtl = true;
+        } else {
+            a.push(x.clone());
+        }
+    }
+    let rest: Vec[String] = if a.len() > 1 { a[1..].to_vec() } else { Vec.new() };
+    if name == "parse" {
+        return Ok(match parse_ver(rx, a[0], loose) {
+            Some(v) => f"{v.major} {v.minor} {v.patch} pre={json_ids(v.pre)} build={json_strs(v.build)}",
+            None => "null".to_string(),
+        });
+    }
+    if name == "validRange" {
+        return Ok(show(valid_range(rx, a[0], loose, incpre)));
+    }
+    if name == "minVersion" {
+        return Ok(match min_version(rx, a[0], loose, incpre)? {
+            Some(v) => v.version,
+            None => "null".to_string(),
+        });
+    }
+    if name == "maxSatisfying" {
+        return Ok(show(best_satisfying(rx, rest, a[0], loose, incpre, -1)));
+    }
+    if name == "minSatisfying" {
+        return Ok(show(best_satisfying(rx, rest, a[0], loose, incpre, 1)));
+    }
+    if name == "intersects" {
+        let r1 = new_range(rx, a[0], loose, incpre)?;
+        let r2 = new_range(rx, a[1], loose, incpre)?;
+        return Ok(bool_text(range_intersects(rx, r1, r2, loose, incpre)));
+    }
+    if name == "diff" {
+        return Ok(show(diff(rx, a[0], a[1])?));
+    }
+    if name == "compareBuild" {
+        let x = new_ver(rx, a[0], loose)?;
+        let y = new_ver(rx, a[1], loose)?;
+        let mut c = compare(x, y);
+        if c == 0 {
+            c = compare_build(x, y);
+        }
+        return Ok(f"{c}");
+    }
+    if name == "simplify" {
+        return simplify(rx, rest, a[0], loose, incpre);
+    }
+    if name == "coerce" {
+        return Ok(match coerce(rx, a[0], loose, incpre, rtl) {
+            Some(v) => v.version,
+            None => "null".to_string(),
+        });
+    }
+    if name == "inc" {
+        let ident: Option[String] = if a.len() > 2 { Some(a[2].clone()) } else { None };
+        let base = if a.len() > 3 {
+            if a[3] == "false" { Base { kind: BASE_FALSE, s: a[3].clone() } } else { Base { kind: BASE_TEXT, s: a[3].clone() } }
+        } else {
+            Base { kind: BASE_UNSET, s: String.new() }
+        };
+        return Ok(show(inc(rx, a[0], a[1], loose, ident, base)));
+    }
+    Ok(f"unknown function {name}")
+}
+
+fn lib_line(rx: ref Rxs, name: Str, args: ref Vec[String]) -> String {
+    match lib_call(rx, name, args) {
+        Ok(s) => s,
+        Err(e) => f"error: {e}",
+    }
+}
+
+// ------------------------------------------------------------ outdated
+
+fn load_json(st: mut ref Store, path: Str) -> Result[i64, String] {
+    let text = match fs.read_to_string(path.to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    decode(st, text)
+}
+
+fn str_of(st: ref Store, v: i64) -> String {
+    if v < 0 {
+        return String.new();
+    }
+    st.nodes[v].s.clone()
+}
+
+fn obj_get(st: ref Store, o: i64, k: Str) -> i64 {
+    if o < 0 {
+        return -1;
+    }
+    get(st, o, k)
+}
+
+// The version npm would want for `spec` from a registry entry.
+fn pick(rx: ref Rxs, st: ref Store, pk: i64, spec: Str) -> String {
+    let tags = obj_get(st, pk, "dist-tags");
+    if valid_range(rx, spec, false, false).is_none() {
+        let t = obj_get(st, tags, spec);
+        return if t >= 0 { str_of(st, t) } else { "INVALID".to_string() };
+    }
+    let latest = str_of(st, obj_get(st, tags, "latest"));
+    if latest.len() > 0 and satisfies(rx, latest, spec, false, false) {
+        return latest;
+    }
+    let dep = obj_get(st, pk, "deprecated");
+    let mut all: Vec[String] = Vec.new();
+    let mut live: Vec[String] = Vec.new();
+    let vs = obj_get(st, pk, "versions");
+    if vs >= 0 {
+        for k in st.nodes[vs].kids {
+            let v = str_of(st, k);
+            if obj_get(st, dep, v) < 0 {
+                live.push(v.clone());
+            }
+            all.push(v);
+        }
+    }
+    if let Some(v) = best_satisfying(rx, live, spec, false, false, -1) {
+        return v;
+    }
+    if let Some(v) = best_satisfying(rx, all, spec, false, false, -1) {
+        return v;
+    }
+    "NONE".to_string()
+}
+
+fn rstrip_spaces(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut j = b.len();
+    while j > 0 and b[j - 1] == b' ' {
+        j -= 1;
+    }
+    byte_str(b, 0, j)
+}
+
+fn table(rows: ref Vec[Vec[String]]) -> String {
+    let mut w: Vec[i64] = Vec.new();
+    for i in 0..rows[0].len() {
+        let mut m: i64 = 0;
+        for r in rows {
+            if r[i].len() > m {
+                m = r[i].len();
+            }
+        }
+        w.push(m);
+    }
+    let mut out = String.new();
+    for r in rows {
+        let mut line = String.new();
+        for i in 0..r.len() {
+            if i > 0 {
+                line.push_str("  ");
+            }
+            line.push_str(ljust(r[i], w[i]));
+        }
+        out.push_str(rstrip_spaces(line));
+        out.push_str("\n");
+    }
+    out
+}
+
+fn cmp_or_zero(rx: ref Rxs, a: Str, b: Str) -> i64 {
+    match compare_strs(rx, a, b, false) {
+        Ok(c) => c,
+        Err(_) => 0,
+    }
+}
+
+fn diff_text(rx: ref Rxs, a: Str, b: Str) -> String {
+    match diff(rx, a, b) {
+        Ok(d) => show(d),
+        Err(e) => e,
+    }
+}
+
+struct Dep {
+    name: String,
+    spec: String,
+    kind: String,
+}
+
+fn outdated(rx: ref Rxs, dir: Str) -> Result[String, String] {
+    let mut st = Store { nodes: Vec.new() };
+    let pj = load_json(mut st, f"data/{dir}/package.json")?;
+    let lock = load_json(mut st, f"data/{dir}/package-lock.json")?;
+    let reg = load_json(mut st, "data/registry.json")?;
+    let mut deps: Vec[Dep] = Vec.new();
+    for kind in vec!["dependencies", "devDependencies", "optionalDependencies"] {
+        let o = obj_get(st, pj, kind);
+        if o < 0 {
+            continue;
+        }
+        let keys = st.nodes[o].keys.clone();
+        let kids = st.nodes[o].kids.clone();
+        for j in 0..keys.len() {
+            let d = Dep { name: keys[j].clone(), spec: str_of(st, kids[j]), kind: kind.to_string() };
+            let mut at = deps.len();
+            while at > 0 and deps[at - 1].name > d.name {
+                at -= 1;
+            }
+            deps.insert(at, d);
+        }
+    }
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    rows.push(vec!["Package".to_string(), "Current".to_string(), "Wanted".to_string(), "Latest".to_string(), "Type".to_string()]);
+    let mut notes: Vec[String] = Vec.new();
+    let packages = obj_get(st, lock, "packages");
+    for d in deps {
+        let name = d.name.clone();
+        let spec = d.spec.clone();
+        let pk = obj_get(st, reg, name);
+        let entry = obj_get(st, packages, f"node_modules/{name}");
+        let current = if entry >= 0 { str_of(st, obj_get(st, entry, "version")) } else { "MISSING".to_string() };
+        if pk < 0 {
+            notes.push(f"{name}: not in the registry");
+            continue;
+        }
+        let wanted = pick(rx, st, pk, spec);
+        let mut latest = str_of(st, obj_get(st, obj_get(st, pk, "dist-tags"), "latest"));
+        if latest.len() == 0 {
+            latest = "NONE".to_string();
+        }
+        if current == wanted and current == latest {
+            continue;
+        }
+        rows.push(vec![name.clone(), current.clone(), wanted.clone(), latest.clone(), d.kind.clone()]);
+        if wanted == "INVALID" {
+            notes.push(f"{name}: \"{spec}\" is not a range or a dist-tag");
+            continue;
+        }
+        if wanted == "NONE" {
+            notes.push(f"{name}: nothing satisfies \"{spec}\"");
+            continue;
+        }
+        if current != "MISSING" and valid(rx, current) {
+            let c = cmp_or_zero(rx, current, wanted);
+            if c < 0 {
+                notes.push(f"{name}: {current} -> {wanted} ({diff_text(rx, current, wanted)})");
+            } else if c > 0 {
+                notes.push(f"{name}: {current} is newer than \"{spec}\" allows; wanted {wanted}");
+            }
+            if not satisfies(rx, current, spec, false, false) and valid_range(rx, spec, false, false).is_some() {
+                notes.push(f"{name}: installed {current} does not satisfy \"{spec}\"");
+            }
+        } else if current == "MISSING" {
+            notes.push(f"{name}: not installed; would install {wanted}");
+        }
+        if valid(rx, wanted) and cmp_or_zero(rx, latest, wanted) > 0 {
+            notes.push(f"{name}: {latest} is out of range \"{spec}\" ({diff_text(rx, wanted, latest)})");
+        }
+        let dep = obj_get(st, pk, "deprecated");
+        let why = obj_get(st, dep, current);
+        if why >= 0 {
+            notes.push(f"{name}: {current} is deprecated: {str_of(st, why)}");
+        }
+    }
+    let mut out = if rows.len() > 1 { table(rows) } else { "everything is up to date\n".to_string() };
+    for n in notes {
+        out.push_str(n);
+        out.push_str("\n");
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ jobs
+
+// A job's words: split on spaces, with "..." for a word holding spaces.
+fn words(line: Str) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b' ' {
+            i += 1;
+            continue;
+        }
+        if b[i] == b'"' {
+            let mut j = i + 1;
+            while j < b.len() and b[j] != b'"' {
+                j += 1;
+            }
+            out.push(byte_str(b, i + 1, j));
+            i = j + 1;
+        } else {
+            let mut j = i;
+            while j < b.len() and b[j] != b' ' {
+                j += 1;
+            }
+            out.push(byte_str(b, i, j));
+            i = j;
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ the files
+
+// data/cli/package-lock.json
+fn file_0() -> String {
+    """
+{
+  \"name\": \"cli\",
+  \"version\": \"1.0.0\",
+  \"lockfileVersion\": 3,
+  \"requires\": true,
+  \"packages\": {
+    \"\": {
+      \"name\": \"cli\",
+      \"version\": \"1.0.0\"
+    },
+    \"node_modules/chalk\": {
+      \"version\": \"4.1.2\",
+      \"resolved\": \"https://registry.npmjs.org/chalk/-/chalk-4.1.2.tgz\"
+    },
+    \"node_modules/commander\": {
+      \"version\": \"12.1.0\",
+      \"resolved\": \"https://registry.npmjs.org/commander/-/commander-12.1.0.tgz\"
+    },
+    \"node_modules/debug\": {
+      \"version\": \"4.4.0\",
+      \"resolved\": \"https://registry.npmjs.org/debug/-/debug-4.4.0.tgz\"
+    },
+    \"node_modules/semver\": {
+      \"version\": \"7.7.2\",
+      \"resolved\": \"https://registry.npmjs.org/semver/-/semver-7.7.2.tgz\"
+    },
+    \"node_modules/express\": {
+      \"version\": \"5.0.0-beta.3\",
+      \"resolved\": \"https://registry.npmjs.org/express/-/express-5.0.0-beta.3.tgz\"
+    },
+    \"node_modules/react\": {
+      \"version\": \"19.0.0-rc.0\",
+      \"resolved\": \"https://registry.npmjs.org/react/-/react-19.0.0-rc.0.tgz\"
+    },
+    \"node_modules/fsevents\": {
+      \"version\": \"2.3.2\",
+      \"resolved\": \"https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz\"
+    }
+  }
+}
+
+"""
+}
+
+// data/cli/package.json
+fn file_1() -> String {
+    """
+{
+  \"name\": \"cli\",
+  \"version\": \"1.0.0\",
+  \"private\": true,
+  \"dependencies\": {
+    \"chalk\": \"^4.1.2\",
+    \"commander\": \"9.x || 11.x\",
+    \"debug\": \"^4.3.4\",
+    \"semver\": \">=7.5.2\",
+    \"express\": \"^5.0.0-beta.1\",
+    \"react\": \"^19.0.0-rc.0\",
+    \"is-even\": \"^1.0.0\",
+    \"typescript\": \"github:microsoft/TypeScript\"
+  },
+  \"optionalDependencies\": {
+    \"fsevents\": \"~2.3.2\"
+  }
+}
+
+"""
+}
+
+// data/jobs.txt
+fn file_2() -> String {
+    """
+# mini_semver jobs. `semver` runs the command-line tool, `lib` calls one
+# library function, and `outdated` reports a project's dependencies
+# against data/registry.json. Words are split on spaces; \"...\" holds
+# spaces, and \"\" is an empty word.
+semver
+semver 1.2.3 1.2.3-beta.1 1.2.3-alpha 1.2.3-alpha.10 1.2.3-alpha.9 1.2.3-alpha.beta 0.9.0 10.0.0 2.0.0 1.10.0 1.2.3-1 1.2.3-alpha.-1
+semver -rv 1.2.3 2.0.0 1.10.0 1.2.3+build.1
+semver v1.2.3 =1.2.4 \" 1.2.5 \" 1.2 a.b.c 01.2.3 1.2.3-01 1.2.3+build.5 1.2.3-rc.1+exp.sha.5114f85 1.2.3+
+semver -l v1.2.3 =1.2.4 \"=v 1.2.5\" 01.2.3 1.2.3beta 1.2.3-01 \"v 1.2.6\"
+semver nope 1.2
+semver -r ^1.2.3 1.2.2 1.2.3 1.9.9 2.0.0 2.0.0-rc.1 1.3.0-beta 1.2.3-beta
+semver -r ~1.2 1.1.9 1.2.0 1.2.99 1.3.0 1.3.0-0
+semver -r ~1 0.9.9 1.0.0 1.99.0 2.0.0
+semver -r \"~> 1.2.3\" 1.2.2 1.2.3 1.2.9 1.3.0
+semver -r \"~1.2.3-beta.2\" 1.2.3-beta.1 1.2.3-beta.4 1.2.3 1.2.5 1.2.5-beta.5 1.3.0
+semver -r \"1.2.3 - 2.3\" 1.2.2 1.2.3 2.3.9 2.4.0 2.4.0-0
+semver -r \"1.2 - 2.3.4\" 1.1.9 1.2.0 2.3.4 2.3.5
+semver -p -r \"1.2.3 - 2.3.4\" 1.2.3-0 2.3.4 2.3.5-0
+semver -r \"1.x || >=2.5.0 || 5.0.0 - 7.2.3\" 0.9.0 1.0.0 1.9.9 2.4.0 2.5.0 6.0.0 7.2.3 7.2.4
+semver -r \">=1.2.3-beta.2 <1.3\" 1.2.3-beta.1 1.2.3-beta.2 1.2.3-beta.10 1.2.3 1.2.4-alpha 1.2.9
+semver -p -r \">=1.2.3-beta.2 <1.3\" 1.2.3-beta.1 1.2.3-beta.2 1.2.4-alpha 1.3.0-0
+semver -r ^0.0.3 0.0.3 0.0.4 0.0.3-1 0.0.3-rc
+semver -r ^0.2 0.1.9 0.2.0 0.2.9 0.3.0
+semver -r ^0.0 0.0.0 0.0.9 0.1.0
+semver -r ^0.x 0.0.0 0.9.0 1.0.0
+semver -r \"^1.2.3-rc.1\" 1.2.3-rc.0 1.2.3-rc.2 1.2.4-rc.1 1.9.0 2.0.0-0
+semver -r \"> 1.2\" 1.2.9 1.3.0
+semver -r <=1.2 1.2.9 1.3.0-0 1.3.0
+semver -r >1 1.9.9 2.0.0
+semver -r <1.x 0.9.9 1.0.0
+semver -r >=1.x.x 0.1.0 1.0.0 5.0.0
+semver -r <2.0.x 1.9.9 2.0.0 2.0.0-0
+semver -r =1.2 1.1.0 1.2.0 1.2.7 1.3.0
+semver -r * 1.0.0 1.0.0-rc.1 0.0.0
+semver -p -r * 1.0.0-rc.1
+semver -r \"\" 2.0.0
+semver -r x.X.* 3.0.0
+semver -r >=0.0.0 0.0.0 1.0.0-alpha
+semver -r \">=1.0.0 <1.0.0\" 1.0.0
+semver -r \"<0.0.0\" 0.0.0 0.0.0-0
+semver -r \">1.0.0 >=1.0.0 <2.0.0\" 1.0.0 1.0.1
+semver -r \">=1.0.0\" -r \"<2.0.0\" 0.5.0 1.5.0 2.5.0
+semver -r \"^ 1.2.3\" 1.5.0
+semver -r \"= 1.2.3\" 1.2.3
+semver -r \"1.2.3 || garbage\" 1.2.3
+semver -l -r \"1.2.3 || garbage\" 1.2.3
+semver -r \"  >=  1.2.3   <   1.5.0  \" 1.4.9
+semver -r \"1.2.3 || 1.2.4 || >=0.0.0\" 9.9.9
+semver -r \">=1.0.0 1.0.0 >=1.0.0\" 1.0.0
+semver -i 1.2.3
+semver -i minor 1.2.3
+semver -i major 1.2.3-beta.1
+semver -i major 1.0.0-5
+semver -i minor 1.2.0-5
+semver -i patch 1.2.0-5
+semver -i premajor --preid rc 1.2.3
+semver -i preminor 1.2.3
+semver -i prepatch --preid alpha 1.2.3-beta.1
+semver -i prerelease 1.2.3-beta.1
+semver -i prerelease 1.2.3-beta.1.x
+semver -i prerelease 1.2.3-beta
+semver -i prerelease --preid beta 1.2.3-alpha.7
+semver -i prerelease --preid beta 1.2.3-beta.7
+semver -i prerelease --preid beta 1.2.3-beta.foo
+semver -i prerelease --preid beta -n 1 1.2.3
+semver -i prerelease --preid beta -n false 1.2.3
+semver -i prerelease --preid beta -n false 1.2.3-beta
+semver -i prerelease -n false 1.2.3
+semver -i release 1.2.3-rc.2
+semver -i release 1.2.3
+semver -i prerelease --preid \"bad id\" 1.2.3
+semver -i prerelease --preid 01 1.2.3
+semver -i bogus 1.2.3
+semver -i prepatch 1.2.3 1.2.4
+semver -i 1.2.3 -r ^1
+semver -i=minor 1.2.3+build.7
+semver --preid=rc -i prerelease 2.0.0
+semver -c v2 \"version 3.1 beta\" 1.2.3.4 abc 4.5.6-rc.1+build 10000000000000000000.1 1.123456789012345678.3
+semver -c --rtl 1.2.3.4 10.11.12.13 \"v1.2 and v3\"
+semver -c -p 4.5.6-rc.1+build.9 \"rel 7.8-pre\"
+semver -c -p --rtl 1.2.3.4-rc
+semver -v 1.0.0 -v 0.1.0 --version 2.0.0
+lib parse 1.2.3-beta.1+b.2
+lib parse 1.2.3-alpha.007
+lib parse 1.0.0-9007199254740991
+lib parse \"  =v1.2.3  \" --loose
+lib parse 9007199254740992.0.0
+lib validRange \"1.2.3 - 2.3.4 || ~1.4\"
+lib validRange \"^1.2 <1.4.0-beta\"
+lib validRange garbage
+lib validRange \"garbage || 1.x\" --loose
+lib validRange \">=1.2.7 <1.3.0 || * || 2.x\"
+lib validRange \"<0.0.0 || 1.0.0\"
+lib validRange \"^1.2.3\" -p
+lib validRange \"~ 1.2 || ^ 2.1\"
+lib minVersion ^1.2.3
+lib minVersion \">1.2.3 <2\"
+lib minVersion \">1.2.3-beta.1\"
+lib minVersion \"<1.0.0\"
+lib minVersion \"* || >=3\"
+lib minVersion \">4 <3\"
+lib minVersion \"~2.x || >1.5.0 <1.6.0\"
+lib minVersion garbage
+lib maxSatisfying ^1.2 1.2.0 1.2.9 1.3.0 2.0.0 1.10.0-rc.1
+lib maxSatisfying ^1.2 1.2.0 1.2.9 1.3.0 2.0.0 1.10.0-rc.1 -p
+lib minSatisfying \">=1.2.0-rc.1\" 1.2.0-rc.0 1.2.0-rc.2 1.2.1 1.3.0
+lib maxSatisfying garbage 1.0.0
+lib intersects \"^1.2\" \">=1.5 <3\"
+lib intersects \"1.x\" \">=2\"
+lib intersects \">1.0.0 <1.0.0\" \"*\"
+lib intersects \"<1.0.0\" \">=1.0.0\"
+lib intersects \"<=1.0.0\" \">=1.0.0\"
+lib intersects \"1.0.0\" \"~1.0 || >2\"
+lib intersects \"1.0.0 - 2.0.0\" \"2.0.0 - 3.0.0\"
+lib intersects garbage \">1\"
+lib diff 1.2.3 1.2.3+build
+lib diff 1.2.3 2.0.0
+lib diff 1.2.3 1.3.0-rc.1
+lib diff 1.0.0-1 1.0.0
+lib diff 1.0.0-1 1.1.1
+lib diff 1.1.0-1 1.1.0
+lib diff 1.1.1-1 1.1.1
+lib diff 2.0.0-alpha 2.0.0-beta
+lib diff 1.2.3 bogus
+lib compareBuild 1.2.3+b.10 1.2.3+b.9
+lib compareBuild 1.2.3+b 1.2.3
+lib simplify \"1.x || >=2.0.0 <2.5\" 1.0.0 1.2.0 2.0.0 2.4.0 2.5.0 3.0.0
+lib simplify \">=1.2.0 <2\" 1.0.0 1.2.0 1.5.0 2.0.0
+lib simplify \"^1.0.0 || ^3.0.0\" 1.0.0 1.5.0 2.0.0 3.0.0 3.1.0
+lib simplify \"1.5.0 || 3.0.0\" 1.0.0 1.5.0 2.0.0 3.0.0
+lib simplify \"*\" 1.0.0 2.0.0
+lib coerce \"release 42\" --rtl
+lib inc 1.2.3 prerelease beta 1
+outdated web
+outdated cli
+
+"""
+}
+
+// data/registry.json
+fn file_3() -> String {
+    """
+{
+  \"express\": {
+    \"dist-tags\": {
+      \"latest\": \"4.21.2\",
+      \"next\": \"5.1.0\"
+    },
+    \"versions\": [
+      \"4.17.1\",
+      \"4.18.2\",
+      \"4.19.2\",
+      \"4.21.1\",
+      \"4.21.2\",
+      \"5.0.0-beta.3\",
+      \"5.0.0\",
+      \"5.1.0\"
+    ]
+  },
+  \"lodash\": {
+    \"dist-tags\": {
+      \"latest\": \"4.17.21\"
+    },
+    \"versions\": [
+      \"4.17.15\",
+      \"4.17.19\",
+      \"4.17.20\",
+      \"4.17.21\"
+    ],
+    \"deprecated\": {
+      \"4.17.15\": \"Prototype pollution: upgrade to 4.17.19 or later\"
+    }
+  },
+  \"react\": {
+    \"dist-tags\": {
+      \"latest\": \"18.3.1\",
+      \"next\": \"19.0.0-rc.1\",
+      \"canary\": \"19.1.0-canary-3\"
+    },
+    \"versions\": [
+      \"17.0.2\",
+      \"18.2.0\",
+      \"18.3.0\",
+      \"18.3.1\",
+      \"19.0.0-rc.0\",
+      \"19.0.0-rc.1\",
+      \"19.1.0-canary-3\"
+    ]
+  },
+  \"react-dom\": {
+    \"dist-tags\": {
+      \"latest\": \"18.3.1\"
+    },
+    \"versions\": [
+      \"17.0.2\",
+      \"18.2.0\",
+      \"18.3.1\"
+    ]
+  },
+  \"axios\": {
+    \"dist-tags\": {
+      \"latest\": \"1.7.9\"
+    },
+    \"versions\": [
+      \"0.21.4\",
+      \"0.27.2\",
+      \"1.6.8\",
+      \"1.7.2\",
+      \"1.7.9\",
+      \"1.8.0-beta.1\"
+    ]
+  },
+  \"left-pad\": {
+    \"dist-tags\": {
+      \"latest\": \"1.3.0\"
+    },
+    \"versions\": [
+      \"1.0.0\",
+      \"1.1.3\",
+      \"1.2.0\",
+      \"1.3.0\"
+    ],
+    \"deprecated\": {
+      \"1.3.0\": \"use String.prototype.padStart()\",
+      \"1.2.0\": \"use String.prototype.padStart()\"
+    }
+  },
+  \"typescript\": {
+    \"dist-tags\": {
+      \"latest\": \"5.7.2\",
+      \"beta\": \"5.8.0-beta\",
+      \"next\": \"5.8.0-dev.20250101\"
+    },
+    \"versions\": [
+      \"4.9.5\",
+      \"5.4.5\",
+      \"5.6.3\",
+      \"5.7.2\",
+      \"5.8.0-beta\",
+      \"5.8.0-dev.20250101\"
+    ]
+  },
+  \"eslint\": {
+    \"dist-tags\": {
+      \"latest\": \"9.17.0\"
+    },
+    \"versions\": [
+      \"8.56.0\",
+      \"8.57.1\",
+      \"9.0.0\",
+      \"9.16.0\",
+      \"9.17.0\"
+    ]
+  },
+  \"jest\": {
+    \"dist-tags\": {
+      \"latest\": \"29.7.0\"
+    },
+    \"versions\": [
+      \"27.5.1\",
+      \"28.1.3\",
+      \"29.6.4\",
+      \"29.7.0\",
+      \"30.0.0-alpha.6\"
+    ]
+  },
+  \"prettier\": {
+    \"dist-tags\": {
+      \"latest\": \"3.4.2\"
+    },
+    \"versions\": [
+      \"2.8.8\",
+      \"3.0.0\",
+      \"3.3.3\",
+      \"3.4.2\"
+    ]
+  },
+  \"chalk\": {
+    \"dist-tags\": {
+      \"latest\": \"5.4.1\"
+    },
+    \"versions\": [
+      \"4.1.2\",
+      \"5.0.0\",
+      \"5.3.0\",
+      \"5.4.1\"
+    ]
+  },
+  \"commander\": {
+    \"dist-tags\": {
+      \"latest\": \"13.0.0\"
+    },
+    \"versions\": [
+      \"9.5.0\",
+      \"11.1.0\",
+      \"12.1.0\",
+      \"13.0.0\"
+    ]
+  },
+  \"debug\": {
+    \"dist-tags\": {
+      \"latest\": \"4.4.0\"
+    },
+    \"versions\": [
+      \"2.6.9\",
+      \"3.2.7\",
+      \"4.3.4\",
+      \"4.3.7\",
+      \"4.4.0\"
+    ]
+  },
+  \"semver\": {
+    \"dist-tags\": {
+      \"latest\": \"7.7.2\"
+    },
+    \"versions\": [
+      \"5.7.2\",
+      \"6.3.1\",
+      \"7.5.4\",
+      \"7.6.3\",
+      \"7.7.0\",
+      \"7.7.1\",
+      \"7.7.2\"
+    ]
+  },
+  \"fsevents\": {
+    \"dist-tags\": {
+      \"latest\": \"2.3.3\"
+    },
+    \"versions\": [
+      \"1.2.13\",
+      \"2.3.2\",
+      \"2.3.3\"
+    ]
+  },
+  \"uuid\": {
+    \"dist-tags\": {
+      \"latest\": \"11.0.3\"
+    },
+    \"versions\": [
+      \"8.3.2\",
+      \"9.0.1\",
+      \"10.0.0\",
+      \"11.0.3\"
+    ]
+  }
+}
+
+"""
+}
+
+// data/web/package-lock.json
+fn file_4() -> String {
+    """
+{
+  \"name\": \"web\",
+  \"version\": \"1.0.0\",
+  \"lockfileVersion\": 3,
+  \"requires\": true,
+  \"packages\": {
+    \"\": {
+      \"name\": \"web\",
+      \"version\": \"1.0.0\"
+    },
+    \"node_modules/express\": {
+      \"version\": \"4.18.2\",
+      \"resolved\": \"https://registry.npmjs.org/express/-/express-4.18.2.tgz\"
+    },
+    \"node_modules/lodash\": {
+      \"version\": \"4.17.15\",
+      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz\"
+    },
+    \"node_modules/react\": {
+      \"version\": \"18.3.1\",
+      \"resolved\": \"https://registry.npmjs.org/react/-/react-18.3.1.tgz\"
+    },
+    \"node_modules/react-dom\": {
+      \"version\": \"18.2.0\",
+      \"resolved\": \"https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz\"
+    },
+    \"node_modules/axios\": {
+      \"version\": \"0.27.2\",
+      \"resolved\": \"https://registry.npmjs.org/axios/-/axios-0.27.2.tgz\"
+    },
+    \"node_modules/left-pad\": {
+      \"version\": \"1.3.0\",
+      \"resolved\": \"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\"
+    },
+    \"node_modules/typescript\": {
+      \"version\": \"5.6.3\",
+      \"resolved\": \"https://registry.npmjs.org/typescript/-/typescript-5.6.3.tgz\"
+    },
+    \"node_modules/eslint\": {
+      \"version\": \"8.57.1\",
+      \"resolved\": \"https://registry.npmjs.org/eslint/-/eslint-8.57.1.tgz\"
+    },
+    \"node_modules/jest\": {
+      \"version\": \"29.7.0\",
+      \"resolved\": \"https://registry.npmjs.org/jest/-/jest-29.7.0.tgz\"
+    },
+    \"node_modules/prettier\": {
+      \"version\": \"3.4.2\",
+      \"resolved\": \"https://registry.npmjs.org/prettier/-/prettier-3.4.2.tgz\"
+    }
+  }
+}
+
+"""
+}
+
+// data/web/package.json
+fn file_5() -> String {
+    """
+{
+  \"name\": \"web\",
+  \"version\": \"1.0.0\",
+  \"private\": true,
+  \"dependencies\": {
+    \"express\": \"^4.18.0\",
+    \"lodash\": \"~4.17.15\",
+    \"react\": \"^18.2.0\",
+    \"react-dom\": \"18.2.0\",
+    \"axios\": \">=0.21.0 <1.0.0 || ^1.6\",
+    \"left-pad\": \"1.x\",
+    \"uuid\": \"next\"
+  },
+  \"devDependencies\": {
+    \"typescript\": \"~5.6.0\",
+    \"eslint\": \"^8.56.0\",
+    \"jest\": \"29\",
+    \"prettier\": \"latest\"
+  }
+}
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// The bytes a block of hex digits spells; line breaks are skipped.
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut digits: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if is_hex(b[i]) {
+            digits.push(hex_val(b[i]));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data/cli")?;
+    put("data/cli/package-lock.json", file_0())?;
+    put("data/cli/package.json", file_1())?;
+    make_dir("data")?;
+    put("data/jobs.txt", file_2())?;
+    put("data/registry.json", file_3())?;
+    make_dir("data/web")?;
+    put("data/web/package-lock.json", file_4())?;
+    put("data/web/package.json", file_5())?;
+    Ok(())
+}
+
+// The names of the input files.
+fn data_names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("cli/package-lock.json".to_string());
+    v.push("cli/package.json".to_string());
+    v.push("jobs.txt".to_string());
+    v.push("registry.json".to_string());
+    v.push("web/package-lock.json".to_string());
+    v.push("web/package.json".to_string());
+    v
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let rx = semver_rx();
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.txt: {e}"),
+    };
+    for line in lines_of(text) {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let w = words(line);
+        let mut out = f"$ {line}\n";
+        let rest: Vec[String] = w[1..].to_vec();
+        if w[0] == "semver" {
+            let r = semver_cli(rx, rest);
+            out.push_str(r.out);
+            out.push_str(r.err);
+            if r.status != 0 {
+                out.push_str(f"[exit status {r.status}]\n");
+            }
+        } else if w[0] == "lib" {
+            let args: Vec[String] = rest[1..].to_vec();
+            out.push_str(lib_line(rx, rest[0], args));
+            out.push_str("\n");
+        } else if w[0] == "outdated" {
+            out.push_str(outdated(rx, rest[0])?);
+        }
+        println(out);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
