@@ -13096,7 +13096,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .tc
                 .core_task_moved_captures
                 .get(&SpanKey::from_span(&e.span))
-                .map(|v| v.iter().map(|(n, _)| n.clone()).collect())
+                .map(|v| v.iter().map(|(n, _, _)| n.clone()).collect())
                 .unwrap_or_default()
         } else {
             Vec::new()

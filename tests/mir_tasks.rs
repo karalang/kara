@@ -1,8 +1,10 @@
-//! Tasks on the compiled MIR backend under the coroutine transform
+//! Tasks on both MIR backends under the coroutine transform
 //! (`KARAC_MIR_COROUTINES=1`, B-2026-10-14-49): a spawn queues its closure
-//! as a task, and the runtime's executor (`runtime/src/mir_task.rs`) runs
-//! the tasks FIFO, each suspending only while its next blocking call cannot
-//! complete.
+//! as a task, and the executor runs the tasks FIFO, each suspending only
+//! while its next blocking call cannot complete. The compiled executor is
+//! `runtime/src/mir_task.rs`; the interpreter's is `run_tasks` in
+//! `src/mir/interp.rs` (B-2026-10-15-72), and each program's output is
+//! checked on both.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -61,6 +63,46 @@ fn stdout_of(name: &str, src: &str) -> Option<String> {
     Some(String::from_utf8(out.stdout).unwrap())
 }
 
+/// The program run by the MIR interpreter under the coroutine transform
+/// (`karac __mir-run`), whose executor spawns tasks as the runtime's does
+/// (B-2026-10-14-49): its output and how long it ran.
+fn interp_run(name: &str, src: &str) -> (Output, Duration) {
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("karac-mir-tasks-i-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    let start = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .env("KARAC_MIR_COROUTINES", "1")
+        .args(["__mir-run", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let took = start.elapsed();
+    let _ = std::fs::remove_dir_all(&dir);
+    (out, took)
+}
+
+/// The program's output on the interpreter, which must match the built
+/// binary's when the archive links.
+fn stdout_on_both(name: &str, src: &str) -> String {
+    let (out, _) = interp_run(name, src);
+    assert!(
+        out.status.success(),
+        "{name} on the interpreter: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let interp = String::from_utf8(out.stdout).unwrap();
+    if let Some(built) = stdout_of(name, src) {
+        assert_eq!(
+            built, interp,
+            "{name}: the build and the interpreter differ"
+        );
+    }
+    interp
+}
+
 /// Spawned tasks start when the spawner suspends, and interleave at their
 /// pauses: both start before either ends.
 #[test]
@@ -75,9 +117,7 @@ fn main() {
     println(f"{a.join() + b.join()}");
 }
 "#;
-    let Some(out) = stdout_of("interleave", src) else {
-        return;
-    };
+    let out = stdout_on_both("interleave", src);
     assert_eq!(out, "spawned both\na start\nb start\na end\nb end\n3\n");
 }
 
@@ -95,6 +135,13 @@ fn main() {
     println(f"{a.join() + b.join() + c.join()}");
 }
 "#;
+    let (i, took) = interp_run("pause", src);
+    assert!(i.status.success(), "{}", String::from_utf8_lossy(&i.stderr));
+    assert_eq!(String::from_utf8(i.stdout).unwrap(), "6\n");
+    assert!(
+        took >= Duration::from_millis(500),
+        "interpreter ran in {took:?}"
+    );
     let Some((out, took)) = build_and_run("pause", src) else {
         return;
     };
@@ -129,9 +176,7 @@ fn main() {
     println(f"total {total.join()}");
 }
 "#;
-    let Some(out) = stdout_of("recv", src) else {
-        return;
-    };
+    let out = stdout_on_both("recv", src);
     assert_eq!(
         out,
         "sent 0\nsent 1\nsent 2\ngot 0\ngot 1\ngot 2\ntotal 3\n"
@@ -158,9 +203,7 @@ fn main() {
     println(b.join());
 }
 "#;
-    let Some(out) = stdout_of("owned", src) else {
-        return;
-    };
+    let out = stdout_on_both("owned", src);
     // `main` returns first, dropping the handle of the slower task, which
     // then drops its result once.
     assert_eq!(out, "task-1\ntask-2\ndrop 7\n");
@@ -179,6 +222,10 @@ fn main() {
     tx.send(1).unwrap();
 }
 "#;
+    let (i, _) = interp_run("deadlock", src);
+    assert!(!i.status.success());
+    let err = String::from_utf8_lossy(&i.stderr);
+    assert!(err.contains("deadlock: every task waits"), "{err}");
     let Some((out, _)) = build_and_run("deadlock", src) else {
         return;
     };
@@ -265,6 +312,16 @@ fn main() {
     println(f"{a.join() + b.join() + c.join()}");
 }
 "#;
+    let (i, took) = interp_run("limit_one", src);
+    assert!(i.status.success(), "{}", String::from_utf8_lossy(&i.stderr));
+    assert_eq!(
+        String::from_utf8(i.stdout).unwrap(),
+        "a start\na end\nb start\nb end\nc start\nc end\n3\n"
+    );
+    assert!(
+        took >= Duration::from_millis(420),
+        "interpreter ran in {took:?}"
+    );
     let Some((out, took)) = build_and_run("limit_one", src) else {
         return;
     };
@@ -298,6 +355,13 @@ fn main() {
     println(f"{total}");
 }
 "#;
+    let (i, took) = interp_run("limit_two", src);
+    assert!(i.status.success(), "{}", String::from_utf8_lossy(&i.stderr));
+    assert_eq!(String::from_utf8(i.stdout).unwrap(), "6\n");
+    assert!(
+        took >= Duration::from_millis(550),
+        "interpreter ran in {took:?}"
+    );
     let Some((out, took)) = build_and_run("limit_two", src) else {
         return;
     };
@@ -328,9 +392,7 @@ fn main() {
     println("after the group");
 }
 "#;
-    let Some(out) = stdout_of("group_end", src) else {
-        return;
-    };
+    let out = stdout_on_both("group_end", src);
     assert_eq!(
         out,
         "scope ends\nquick task done\nslow task done\nafter the group\n"
@@ -359,8 +421,6 @@ fn main() {
     println("closed");
 }
 "#;
-    let Some(out) = stdout_of("moved_sender", src) else {
-        return;
-    };
+    let out = stdout_on_both("moved_sender", src);
     assert_eq!(out, "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 2\nclosed\n");
 }

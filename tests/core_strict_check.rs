@@ -4496,6 +4496,14 @@ fn a_task_of_a_borrowed_group_takes_locals_by_move() {
         "the use after the spawn must be refused: {err}"
     );
     assert!(err.contains("moved into a task of `group`"), "{err}");
+    // No local can be declared before a parameter, so the advice names the
+    // repairs that exist (B-2026-10-15-72).
+    assert!(
+        err.contains("`group` is a parameter, so every local drops before it"),
+        "{err}"
+    );
+    assert!(err.contains("take 'v' as a parameter too"), "{err}");
+    assert!(!err.contains("Declare 'v' before"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -623,6 +623,9 @@ fn run_with(
             _ => None,
         },
         tasks: Vec::new(),
+        handles: Vec::new(),
+        groups: Vec::new(),
+        spawned: Vec::new(),
         cur_task: 0,
         wait: None,
     };
@@ -921,6 +924,13 @@ struct Interp<'a> {
     cancel_after: Option<u64>,
     /// The executor's tasks (B-2026-10-14-49), the root first, by id.
     tasks: Vec<TaskSlot>,
+    /// The spawned tasks' handles under the executor, by id - 1.
+    handles: Vec<HandleSlot>,
+    /// Every `TaskGroup`, by id - 1: how many of its tasks may run at once,
+    /// and how many do (B-2026-10-15-30).
+    groups: Vec<GroupSlot>,
+    /// Tasks spawned while the running task ran, queued once it yields.
+    spawned: Vec<usize>,
     /// The task the executor is running.
     cur_task: usize,
     /// What the running task's last `__ready` reported it waits for.
@@ -4831,8 +4841,18 @@ impl<'a> Interp<'a> {
         arg_tys: &[Ty],
     ) -> R<Value> {
         match (base, method) {
-            ("TaskGroup", "new") => Ok(Value::Agg(vec![Value::Int(0)])),
+            // A group's id; its `limit` matters only under the executor,
+            // where a spawn waits for room (B-2026-10-15-30).
+            ("TaskGroup", "new") => {
+                let limit = match args.first() {
+                    Some(Value::Int(n)) => *n,
+                    _ => i128::from(i64::MAX),
+                };
+                self.groups.push(GroupSlot { limit, live: 0 });
+                Ok(Value::Agg(vec![Value::Int(self.groups.len() as i128)]))
+            }
             ("TaskGroup", "cancel" | "drop" | "end") => Ok(Value::Unit),
+            ("TaskGroup", "spawn_frame") => self.spawn_frame(name, args),
             ("TaskGroup", "spawn") => {
                 let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
                     return err(format!("{name} takes a closure"));
@@ -4841,6 +4861,13 @@ impl<'a> Interp<'a> {
                 let v = self.call_callee(&mut callee, Vec::new());
                 self.release_callee(callee, fty)?;
                 Ok(Value::Agg(vec![v?]))
+            }
+            ("TaskHandle", "join") if args.len() == 1 && self.exec_handle(&args[0])?.is_some() => {
+                let h = self.exec_handle(&args[0])?.unwrap_or(0);
+                match self.handles.get_mut(h - 1).and_then(|h| h.result.take()) {
+                    Some(v) => Ok(v),
+                    None => err(format!("{name} of a task that has not returned")),
+                }
             }
             ("TaskHandle", "join") => match args.as_slice() {
                 [Value::Agg(fs)] if fs.len() == 1 => Ok(fs[0].clone()),
@@ -4857,6 +4884,98 @@ impl<'a> Interp<'a> {
                 _ => err(format!("{name} of a handle holding {args:?}")),
             },
             _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// `TaskGroup.spawn_frame(g, "<task>#resume", closure)`, which the
+    /// coroutine transform makes of a spawn (B-2026-10-14-49): a fresh frame
+    /// of that resume body holding the closure, queued as a task of `g`. The
+    /// handle is `(id, ())`, which a plain spawn's `(result)` cannot be.
+    fn spawn_frame(&mut self, name: &str, args: Vec<Value>) -> R<Value> {
+        let [g, resume, closure] = <[Value; 3]>::try_from(args)
+            .map_err(|_| Stop::Error(format!("{name} takes a group, a body and a closure")))?;
+        let group = self.group_id(&g)?;
+        let resume = self.string_at(&resume)?;
+        let Some(body) = self.program.bodies.get(&resume) else {
+            return err(format!("{name}: no resume body {resume}"));
+        };
+        let TyKind::MutRef(frame_ty) = self.tys.kind(body.locals[1].ty) else {
+            return err(format!("{resume} does not take its frame"));
+        };
+        let Some(held) = self.tys.field_ty(body.return_ty(), Some(0), 0) else {
+            return err(format!("{resume} returns a Poll without a payload"));
+        };
+        let mut frame = self.fresh_frame(frame_ty);
+        if let Value::Agg(fs) = &mut frame {
+            fs[1] = closure;
+        }
+        let slot = self.alloc(HeapObj {
+            count: 1,
+            weak: 0,
+            value: frame,
+        });
+        self.handles.push(HandleSlot {
+            held,
+            result: None,
+            done: false,
+            detached: false,
+        });
+        let handle = self.handles.len();
+        if let Some(g) = self.groups.get_mut(group - 1) {
+            g.live += 1;
+        }
+        self.tasks.push(TaskSlot {
+            frame: slot,
+            frame_ty,
+            resume,
+            group,
+            handle,
+            deadline: None,
+            slept: false,
+        });
+        self.spawned.push(self.tasks.len() - 1);
+        Ok(Value::Agg(vec![Value::Int(handle as i128), Value::Unit]))
+    }
+
+    /// Spawned task `t` returned `v`: its handle holds it, or, dropped
+    /// already, drops it; its group runs one task fewer.
+    fn task_returned(&mut self, t: usize, v: Value) -> R<()> {
+        let (group, handle) = (self.tasks[t].group, self.tasks[t].handle);
+        if let Some(g) = group.checked_sub(1).and_then(|g| self.groups.get_mut(g)) {
+            g.live -= 1;
+        }
+        let Some(h) = handle.checked_sub(1).and_then(|h| self.handles.get_mut(h)) else {
+            return Ok(());
+        };
+        h.done = true;
+        if h.detached {
+            let held = h.held;
+            return self.drop_value(v, held);
+        }
+        h.result = Some(v);
+        Ok(())
+    }
+
+    /// The id of a spawned task's handle `v` (or a reference to one), or
+    /// `None` for a plain spawn's, which holds its result.
+    fn exec_handle(&mut self, v: &Value) -> R<Option<usize>> {
+        Ok(match self.through_refs(v)? {
+            Value::Agg(fs) => match fs.as_slice() {
+                [Value::Int(id), Value::Unit] => usize::try_from(*id).ok(),
+                _ => None,
+            },
+            _ => None,
+        })
+    }
+
+    /// The id of the `TaskGroup` `g` is or refers to.
+    fn group_id(&mut self, g: &Value) -> R<usize> {
+        match self.through_refs(g)? {
+            Value::Agg(fs) => match fs.as_slice() {
+                [Value::Int(id)] => Ok(usize::try_from(*id).unwrap_or(0)),
+                _ => err(format!("a TaskGroup holding {fs:?}")),
+            },
+            other => err(format!("a TaskGroup that is {other:?}")),
         }
     }
 
@@ -9302,6 +9421,28 @@ impl<'a> Interp<'a> {
         // The library cells keep their contents where the type's fields
         // would be (`atomic_method`, `once_method`, `arena_method`).
         // A user type of a library type's name is not that library type.
+        // A spawned task's handle under the executor (`spawn_frame`): its
+        // result if the task returned and nobody joined, else the task
+        // drops its result itself.
+        if adt.library_name() == Some("TaskHandle") {
+            if let Value::Agg(fs) = self.slot(addr)? {
+                if let [Value::Int(id), Value::Unit] = fs.as_slice() {
+                    let i = usize::try_from(*id - 1).unwrap_or(usize::MAX);
+                    let Some(h) = self.handles.get_mut(i) else {
+                        return Ok(());
+                    };
+                    if !h.done {
+                        h.detached = true;
+                        return Ok(());
+                    }
+                    let held = h.held;
+                    return match h.result.take() {
+                        Some(v) => self.drop_value(v, held),
+                        None => Ok(()),
+                    };
+                }
+            }
+        }
         let first = match adt.library_name().unwrap_or("") {
             // A `CString` holds its bytes as values.
             "Atomic" | "CString" | "Interner" => return Ok(()),
@@ -9702,6 +9843,8 @@ impl<'a> Interp<'a> {
             frame: slot,
             frame_ty,
             resume,
+            group: 0,
+            handle: 0,
             deadline: None,
             slept: false,
         });
@@ -9745,7 +9888,10 @@ impl<'a> Interp<'a> {
                 root: Root::Heap(slot),
                 path: Path::new(),
             };
-            match self.call(&resume, vec![Value::Ref(at.clone())])? {
+            let polled = self.call(&resume, vec![Value::Ref(at.clone())])?;
+            // Tasks it spawned run after it, in spawn order.
+            queue.extend(std::mem::take(&mut self.spawned));
+            match polled {
                 Value::Variant(0, mut fs) if fs.len() == 1 => {
                     let frame = self.live(slot)?.value.clone();
                     if let Some(field) = self.frame_holds(&frame, frame_ty) {
@@ -9756,6 +9902,8 @@ impl<'a> Interp<'a> {
                     self.free_slot(slot);
                     if t == 0 {
                         root = Some(fs.remove(0));
+                    } else {
+                        self.task_returned(t, fs.remove(0))?;
                     }
                 }
                 Value::Variant(1, _) => {
@@ -9793,7 +9941,7 @@ impl<'a> Interp<'a> {
             match w {
                 Wait::Until(at) => nearest = Some(nearest.map_or(*at, |n| n.min(*at))),
                 Wait::Accept(_) | Wait::Read(_) => io = true,
-                Wait::Recv(_) | Wait::Send(_) => {}
+                Wait::Recv(_) | Wait::Send(_) | Wait::Join(_) | Wait::Group(..) => {}
             }
         }
         let step = std::time::Duration::from_millis(1);
@@ -9835,10 +9983,14 @@ impl<'a> Interp<'a> {
         let (ty, method) = split_method(&callee);
         let base = ty.split('[').next().unwrap_or(ty);
         let wait = match (base, method, rest) {
-            // A handle holds its task's result: the spawn ran the task.
-            ("TaskHandle", "join", _) => None,
-            // A group's tasks ran at their spawns, so none is running.
-            ("TaskGroup", "spawn_frame" | "end", _) => None,
+            // A spawned task's handle waits for it to return; one from a
+            // plain spawn already holds its result.
+            ("TaskHandle", "join", [h, ..]) => self.exec_handle(h)?.map(Wait::Join),
+            // A spawn waits for room under the group's limit, and the
+            // group's end for its tasks to return (B-2026-10-15-30).
+            ("TaskGroup", "spawn_frame" | "end", [g, ..]) => {
+                Some(Wait::Group(self.group_id(g)?, method == "end"))
+            }
             ("Receiver" | "Channel", "recv" | "recv_blocking", [r, ..]) => {
                 Some(Wait::Recv(self.chan_id(Some(r), &callee)?))
             }
@@ -9906,6 +10058,12 @@ impl<'a> Interp<'a> {
                 c.cap == 0 || c.queue.len() < c.cap || c.receivers == 0
             }
             Wait::Until(at) => std::time::Instant::now() >= *at,
+            Wait::Join(h) => self.handles.get(h - 1).is_none_or(|h| h.done),
+            Wait::Group(g, end) => match self.groups.get(g - 1) {
+                Some(g) if *end => g.live == 0,
+                Some(g) => g.live < g.limit,
+                None => true,
+            },
             Wait::Accept(fd) => {
                 if self.sockets.accepted.contains_key(fd) {
                     return Ok(true);
@@ -11245,11 +11403,30 @@ struct TaskSlot {
     frame: AllocId,
     frame_ty: Ty,
     resume: String,
+    /// The group that spawned it and its handle, by id (0: the root).
+    group: usize,
+    handle: usize,
     /// The deadline a `sleep_ms` waits for, once its `__ready` has asked.
     deadline: Option<std::time::Instant>,
     /// Its `__ready` waited the pause out, so the `sleep_ms` after it
     /// returns at once.
     slept: bool,
+}
+
+/// A spawned task's handle under the executor: its result once the task
+/// returns, until `join` takes it.
+struct HandleSlot {
+    held: Ty,
+    result: Option<Value>,
+    done: bool,
+    /// The handle dropped first: the task drops its own result.
+    detached: bool,
+}
+
+/// A `TaskGroup`: its limit on running tasks, and how many run.
+struct GroupSlot {
+    limit: i128,
+    live: i128,
 }
 
 /// What a parked task waits for: the condition its last `__ready` saw
@@ -11264,6 +11441,10 @@ enum Wait {
     /// A connection to accept, or bytes (or the end) to read.
     Accept(i64),
     Read(i64),
+    /// A spawned task to return, by handle id.
+    Join(usize),
+    /// Room under a group's limit, or (`true`) all its tasks returned.
+    Group(usize, bool),
 }
 
 /// The interpreter's sockets, by descriptor (`Interp::tcp_method`).

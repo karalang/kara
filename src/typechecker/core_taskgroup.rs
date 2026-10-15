@@ -61,6 +61,10 @@ struct Group {
     decl: Decl,
     /// The group's block ends here; the group drops there.
     end: usize,
+    /// A parameter (`group: ref TaskGroup`): no local of the function can
+    /// be declared before it, so the repair is to take the place as a
+    /// parameter too (B-2026-10-15-72).
+    param: bool,
 }
 
 /// A spawn's capture of an outer place.
@@ -101,7 +105,7 @@ struct Walk<'t, 'a> {
     errors: Vec<(Span, String)>,
     /// Captures taken by move because the place drops before the group:
     /// the closure's span, the place and the group.
-    moved: Vec<(Span, String, String)>,
+    moved: Vec<(Span, String, String, bool)>,
     loop_depth: usize,
 }
 
@@ -112,7 +116,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         node_types: &FxHashMap<crate::ids::NodeId, (Type, u32)>,
         emit: bool,
-    ) -> FxHashMap<SpanKey, Vec<(String, String)>> {
+    ) -> FxHashMap<SpanKey, Vec<(String, String, bool)>> {
         let mut self_modes: FxHashMap<String, SelfParam> = FxHashMap::default();
         let mut fns: Vec<&Function> = Vec::new();
         for item in &self.program.items {
@@ -136,7 +140,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
         let mut errors = Vec::new();
-        let mut moved: FxHashMap<SpanKey, Vec<(String, String)>> = FxHashMap::default();
+        let mut moved: FxHashMap<SpanKey, Vec<(String, String, bool)>> = FxHashMap::default();
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             let mut w = Walk {
                 tc: self,
@@ -161,11 +165,11 @@ impl<'a> TypeChecker<'a> {
             w.block(&f.body);
             w.finish();
             errors.extend(w.errors);
-            for (closure, name, group) in w.moved {
+            for (closure, name, group, param) in w.moved {
                 moved
                     .entry(SpanKey::from_span(&closure))
                     .or_default()
-                    .push((name, group));
+                    .push((name, group, param));
             }
         }
         if emit {
@@ -252,6 +256,7 @@ impl Walk<'_, '_> {
                                 offset: pattern.span.offset,
                             },
                             end: usize::MAX,
+                            param: false,
                         });
                         self.open_groups.push((g, self.scopes.len()));
                     }
@@ -428,6 +433,7 @@ impl Walk<'_, '_> {
             name: name.to_string(),
             decl: Decl { offset: 0 },
             end: usize::MAX,
+            param: true,
         });
         self.open_groups.push((g, 1));
         Some(g)
@@ -617,7 +623,8 @@ impl Walk<'_, '_> {
             // be here) keeps the borrow, so no use of it may follow.
             if c.decl.offset > g.decl.offset && c.decl.offset != usize::MAX {
                 if !c.copy {
-                    self.moved.push((c.closure, c.name.clone(), g.name.clone()));
+                    self.moved
+                        .push((c.closure, c.name.clone(), g.name.clone(), g.param));
                     continue;
                 }
                 if seen.insert((c.decl.offset, c.group)) {
@@ -626,14 +633,23 @@ impl Walk<'_, '_> {
                         .iter()
                         .find(|u| u.decl == c.decl && u.span.offset > c.spawn.offset)
                     {
+                        let repair = if g.param {
+                            format!(
+                                "`{}` is a parameter, so every local drops before it; take \
+                                 `{}` as a parameter too",
+                                g.name, c.name
+                            )
+                        } else {
+                            format!("Declare `{}` before `{}`", c.name, g.name)
+                        };
                         self.errors.push((
                             u.span,
                             format!(
                                 "`{}` is used after a task of `{}` captured it by `mut ref` \
                                  (spawned at line {}). It drops before `{}`, so the task holds \
-                                 a copy whose writes this use would not see. Declare `{}` \
-                                 before `{}` to let the task borrow it (core-semantics.md §9.1)",
-                                c.name, g.name, c.spawn.line, g.name, c.name, g.name
+                                 a copy whose writes this use would not see. {repair} to let \
+                                 the task borrow it (core-semantics.md §9.1)",
+                                c.name, g.name, c.spawn.line, g.name
                             ),
                         ));
                     }

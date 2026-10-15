@@ -3202,13 +3202,18 @@ impl<'a> OwnershipChecker<'a> {
     ///
     /// A span with no entry answers `false`: no auto-fix, never a wrong one.
     /// The group whose task took `binding` by move at `span`, because the
-    /// place drops before the group (v2 core §9.1, §9.5).
-    fn task_moved_group(&self, span: &Span, binding: &str) -> Option<String> {
+    /// place drops before the group (v2 core §9.1, §9.5), and whether that
+    /// group is a parameter.
+    fn task_moved_group(&self, span: &Span, binding: &str) -> Option<(String, bool)> {
         self.typecheck_result
             .core_task_moved_captures
             .iter()
             .filter(|(k, _)| k.0 <= span.offset && span.offset < k.0 + k.1)
-            .find_map(|(_, v)| v.iter().find(|(n, _)| n == binding).map(|(_, g)| g.clone()))
+            .find_map(|(_, v)| {
+                v.iter()
+                    .find(|(n, _, _)| n == binding)
+                    .map(|(_, g, p)| (g.clone(), *p))
+            })
     }
 
     /// Whether `span` lies inside an escaping closure (v2 core §9.3).

@@ -185,14 +185,24 @@ impl<'a> super::OwnershipChecker<'a> {
                         .task_moved_group(&entry.consume_span, &binding)
                         .is_some() =>
                 {
-                    let group = self
+                    let (group, param) = self
                         .task_moved_group(&entry.consume_span, &binding)
                         .unwrap_or_default();
+                    // A parameter group outlives every local, so no local
+                    // can be declared before it (B-2026-10-15-72).
+                    let repair = if param {
+                        format!(
+                            "`{group}` is a parameter, so every local drops before it: take \
+                             '{binding}' as a parameter too to let the task borrow it, or give \
+                             the task a clone"
+                        )
+                    } else {
+                        format!("Declare '{binding}' before `{group}` to let the task borrow it")
+                    };
                     format!(
                         "value '{binding}' was moved into a task of `{group}` (captured at line \
                          {line}:{col}), used again here: it drops before `{group}`, so the task \
-                         takes it by move (core-semantics.md §9.1, §9.5). Declare '{binding}' \
-                         before `{group}` to let the task borrow it"
+                         takes it by move (core-semantics.md §9.1, §9.5). {repair}"
                     )
                 }
                 RcTrigger::ClosureCaptureWithOuterUse
