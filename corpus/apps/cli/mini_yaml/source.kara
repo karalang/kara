@@ -1,0 +1,3334 @@
+// mini_yaml: a YAML loader for the files deploy tooling reads (Kubernetes
+// manifests, docker-compose files, GitHub Actions workflows, Ansible
+// playbooks), answering what PyYAML's `yaml.safe_load_all` answers. The
+// run writes twelve files into `data/`, loads each and prints every
+// document as Python's `json.dumps(doc, indent=2, default=str)` prints
+// it, or PyYAML's error message; then it prints a deployment report read
+// off the loaded values.
+//
+// The loader is a port of PyYAML 6.0.1's pipeline: a scanner (tokens,
+// indentation, the simple-key rules), the parser's state machine
+// (events), the composer (nodes, anchors and aliases) and the safe
+// constructor (YAML 1.1's implicit types: `yes`/`no`/`on`/`off`, octal
+// `0755`, sexagesimal `22:22`, `.inf`, dates and timestamps; merge keys
+// `<<`). Values follow Python's: a mapping is a dict, where the keys 1,
+// 1.0 and True are the same key; a date prints as `str(date)` does. The
+// error messages and their line and column marks are PyYAML's.
+//
+// expected.out is PyYAML 6.0.1's and Python's json module's output on the
+// same files, made by oracle.py.
+
+// ------------------------------------------------------------ bytes and strings
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn hex_val(c: u8) -> i64 {
+    if is_digit(c) {
+        return (c - b'0') as i64;
+    }
+    if c >= b'a' and c <= b'f' {
+        return (c - b'a') as i64 + 10;
+    }
+    (c - b'A') as i64 + 10
+}
+
+fn contains_byte(s: Str, c: u8) -> bool {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        if b[i] == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn repeat_str(s: Str, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+// UTF-8 for one code point.
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 128 {
+        out.push(cp as u8);
+    } else if cp < 2048 {
+        out.push((192 + cp / 64) as u8);
+        out.push((128 + cp % 64) as u8);
+    } else if cp < 65536 {
+        out.push((224 + cp / 4096) as u8);
+        out.push((128 + (cp / 64) % 64) as u8);
+        out.push((128 + cp % 64) as u8);
+    } else {
+        out.push((240 + cp / 262144) as u8);
+        out.push((128 + (cp / 4096) % 64) as u8);
+        out.push((128 + (cp / 64) % 64) as u8);
+        out.push((128 + cp % 64) as u8);
+    }
+}
+
+// The code points of a UTF-8 string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = s.bytes();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 128 {
+            out.push(c);
+            i += 1;
+        } else if c < 224 {
+            out.push((c - 192) * 64 + (b[i + 1] as i64 - 128));
+            i += 2;
+        } else if c < 240 {
+            out.push((c - 224) * 4096 + (b[i + 1] as i64 - 128) * 64 + (b[i + 2] as i64 - 128));
+            i += 3;
+        } else {
+            out.push((c - 240) * 262144 + (b[i + 1] as i64 - 128) * 4096 + (b[i + 2] as i64 - 128) * 64 + (b[i + 3] as i64 - 128));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn hex4(n: i64) -> String {
+    let digits = "0123456789abcdef".bytes().to_vec();
+    let mut v: Vec[u8] = Vec.new();
+    let mut k: i64 = 3;
+    while k >= 0 {
+        let mut d = n;
+        for _ in 0..k {
+            d = d / 16;
+        }
+        v.push(digits[d % 16]);
+        k -= 1;
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+// ------------------------------------------------------------ Python's text for values
+
+fn is_finite(x: f64) -> bool {
+    x == x and x - x == 0.0
+}
+
+// The shortest digits of a finite double and the decimal point position
+// (the value is 0.DIGITS times ten to the power decpt), read off its
+// shortest round-trip text.
+fn shortest_digits(x: f64) -> (String, i64) {
+    let text = f"{x}";
+    let b = to_bytes(text);
+    let mut i: i64 = 0;
+    if i < b.len() and b[i] == b'-' {
+        i += 1;
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    let mut point: i64 = -1;
+    while i < b.len() and b[i] != b'e' and b[i] != b'E' {
+        if b[i] == b'.' {
+            point = digits.len();
+        } else {
+            digits.push(b[i]);
+        }
+        i += 1;
+    }
+    if point < 0 {
+        point = digits.len();
+    }
+    let mut exp: i64 = 0;
+    if i < b.len() {
+        i += 1;
+        let mut neg = false;
+        if b[i] == b'+' {
+            i += 1;
+        } else if b[i] == b'-' {
+            neg = true;
+            i += 1;
+        }
+        while i < b.len() {
+            exp = exp * 10 + (b[i] - b'0') as i64;
+            i += 1;
+        }
+        if neg {
+            exp = 0 - exp;
+        }
+    }
+    let mut st: i64 = 0;
+    while st < digits.len() and digits[st] == b'0' {
+        st += 1;
+    }
+    let mut e = digits.len();
+    while e > st and digits[e - 1] == b'0' {
+        e -= 1;
+    }
+    (byte_str(digits, st, e), point - st + exp)
+}
+
+// Python's repr of a float (what json.dumps writes, with NaN and Infinity
+// for the special values).
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "NaN".to_string();
+    }
+    if not is_finite(x) {
+        return if x > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() };
+    }
+    let sign = if x < 0.0 or (x == 0.0 and 1.0 / x < 0.0) { "-" } else { "" };
+    let (digits, decpt) = shortest_digits(x);
+    let n = digits.len();
+    if n == 0 {
+        return f"{sign}0.0";
+    }
+    let db = to_bytes(digits);
+    let e = decpt - 1;
+    let mut out = sign.to_string();
+    if e < -4 or e >= 16 {
+        out.push_str(byte_str(db, 0, 1));
+        if n > 1 {
+            out.push_str(".");
+            out.push_str(byte_str(db, 1, n));
+        }
+        out.push_str(if e < 0 { "e-" } else { "e+" });
+        let a = if e < 0 { 0 - e } else { e };
+        if a < 10 {
+            out.push_str("0");
+        }
+        out.push_str(f"{a}");
+        return out;
+    }
+    if decpt <= 0 {
+        out.push_str("0.");
+        out.push_str(repeat_str("0", 0 - decpt));
+        out.push_str(digits);
+    } else if decpt >= n {
+        out.push_str(digits);
+        out.push_str(repeat_str("0", decpt - n));
+        out.push_str(".0");
+    } else {
+        out.push_str(byte_str(db, 0, decpt));
+        out.push_str(".");
+        out.push_str(byte_str(db, decpt, n));
+    }
+    out
+}
+
+// A JSON string as json.dumps writes it (ensure_ascii).
+fn json_str(s: Str) -> String {
+    let cps = code_points(s);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'"');
+    for i in 0..cps.len() {
+        let c = cps[i];
+        if c == 34 {
+            out.push(b'\\');
+            out.push(b'"');
+        } else if c == 92 {
+            out.push(b'\\');
+            out.push(b'\\');
+        } else if c == 10 {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == 13 {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == 9 {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == 8 {
+            out.push(b'\\');
+            out.push(b'b');
+        } else if c == 12 {
+            out.push(b'\\');
+            out.push(b'f');
+        } else if c < 32 or c > 126 {
+            let mut units: Vec[i64] = Vec.new();
+            if c > 65535 {
+                let v = c - 65536;
+                units.push(55296 + v / 1024);
+                units.push(56320 + v % 1024);
+            } else {
+                units.push(c);
+            }
+            for k in 0..units.len() {
+                out.push(b'\\');
+                out.push(b'u');
+                let h = to_bytes(hex4(units[k]));
+                for j in 0..h.len() {
+                    out.push(h[j]);
+                }
+            }
+        } else {
+            out.push(c as u8);
+        }
+    }
+    out.push(b'"');
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+// Python's repr of a str.
+fn py_str_repr(s: Str) -> String {
+    let q = if contains_byte(s, b'\'') and not contains_byte(s, b'"') { b'"' } else { b'\'' };
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == b'\\' or c == q {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+// ------------------------------------------------------------ marks and errors
+
+#[derive(Copy, Clone)]
+struct Mark {
+    index: i64,
+    line: i64,
+    column: i64,
+}
+
+fn no_mark() -> Mark {
+    Mark { index: -1, line: 0, column: 0 }
+}
+
+// A PyYAML MarkedYAMLError: an optional context with its mark, and the
+// problem with its mark. An empty string or a mark with index -1 is
+// Python's None.
+struct YamlError {
+    context: String,
+    cmark: Mark,
+    problem: String,
+    pmark: Mark,
+}
+
+fn yerr(context: Str, cmark: Mark, problem: Str, pmark: Mark) -> YamlError {
+    YamlError { context: context.to_string(), cmark: cmark, problem: problem.to_string(), pmark: pmark }
+}
+
+fn mark_text(m: ref Mark, name: Str) -> String {
+    let l = m.line + 1;
+    let c = m.column + 1;
+    f"  in \"{name}\", line {l}, column {c}"
+}
+
+// str(error), as MarkedYAMLError.__str__ builds it.
+fn error_text(e: ref YamlError, name: Str) -> String {
+    let mut lines: Vec[String] = Vec.new();
+    if e.context.len() > 0 {
+        lines.push(e.context.clone());
+    }
+    let same = e.pmark.index >= 0 and e.cmark.line == e.pmark.line and e.cmark.column == e.pmark.column;
+    if e.cmark.index >= 0 and (e.problem.len() == 0 or not same) {
+        lines.push(mark_text(e.cmark, name));
+    }
+    if e.problem.len() > 0 {
+        lines.push(e.problem.clone());
+    }
+    if e.pmark.index >= 0 {
+        lines.push(mark_text(e.pmark, name));
+    }
+    let mut out = String.new();
+    for i in 0..lines.len() {
+        if i > 0 {
+            out.push_str("\n");
+        }
+        out.push_str(lines[i]);
+    }
+    out
+}
+
+// Python's %r of one character.
+fn char_repr(c: u8) -> String {
+    if c == 0 {
+        return "'\\x00'".to_string();
+    }
+    if c == b'\t' {
+        return "'\\t'".to_string();
+    }
+    if c == b'\n' {
+        return "'\\n'".to_string();
+    }
+    if c == b'\r' {
+        return "'\\r'".to_string();
+    }
+    if c == b'\'' {
+        return "\"'\"".to_string();
+    }
+    if c == b'\\' {
+        return "'\\\\'".to_string();
+    }
+    let s = String.from_utf8(vec![c]).unwrap_or("?".to_string());
+    f"'{s}'"
+}
+
+// ------------------------------------------------------------ tokens
+
+const T_STREAM_START: i64 = 0;
+const T_STREAM_END: i64 = 1;
+const T_DIRECTIVE: i64 = 2;
+const T_DOC_START: i64 = 3;
+const T_DOC_END: i64 = 4;
+const T_BSEQ_START: i64 = 5;
+const T_BMAP_START: i64 = 6;
+const T_BLOCK_END: i64 = 7;
+const T_FSEQ_START: i64 = 8;
+const T_FMAP_START: i64 = 9;
+const T_FSEQ_END: i64 = 10;
+const T_FMAP_END: i64 = 11;
+const T_KEY: i64 = 12;
+const T_VALUE: i64 = 13;
+const T_BLOCK_ENTRY: i64 = 14;
+const T_FLOW_ENTRY: i64 = 15;
+const T_ALIAS: i64 = 16;
+const T_ANCHOR: i64 = 17;
+const T_TAG: i64 = 18;
+const T_SCALAR: i64 = 19;
+
+// The token's id, as PyYAML's messages show it.
+fn token_id(kind: i64) -> String {
+    let ids: Array[Str, 20] = ["<stream start>", "<stream end>", "<directive>", "<document start>", "<document end>", "<block sequence start>", "<block mapping start>", "<block end>", "[", "{", "]", "}", "?", ":", "-", ",", "<alias>", "<anchor>", "<tag>", "<scalar>"];
+    ids[kind].to_string()
+}
+
+// `style` is 0 for plain, or `'`, `"`, `|` or `>`.
+struct Token {
+    kind: i64,
+    value: String,
+    plain: bool,
+    style: u8,
+    start: Mark,
+    end: Mark,
+}
+
+fn token(kind: i64, start: Mark, end: Mark) -> Token {
+    Token { kind: kind, value: String.new(), plain: false, style: 0, start: start, end: end }
+}
+
+fn clone_token(t: ref Token) -> Token {
+    Token { kind: t.kind, value: t.value.clone(), plain: t.plain, style: t.style, start: t.start, end: t.end }
+}
+
+// A place a simple key (one without `?`) may start, one per flow level.
+struct SimpleKey {
+    on: bool,
+    token_number: i64,
+    required: bool,
+    index: i64,
+    line: i64,
+    column: i64,
+    mark: Mark,
+}
+
+// Whitespace and line breaks, and the end (byte 0).
+fn is_blank_or_end(c: u8) -> bool {
+    c == 0 or c == b' ' or c == b'\t' or c == b'\r' or c == b'\n'
+}
+
+fn is_break_or_end(c: u8) -> bool {
+    c == 0 or c == b'\r' or c == b'\n'
+}
+
+fn is_break(c: u8) -> bool {
+    c == b'\r' or c == b'\n'
+}
+
+// ------------------------------------------------------------ the scanner
+
+struct Scanner {
+    b: Vec[u8],
+    index: i64,
+    line: i64,
+    column: i64,
+    done: bool,
+    flow_level: i64,
+    tokens: Vec[Token],
+    head: i64,
+    tokens_taken: i64,
+    indent: i64,
+    indents: Vec[i64],
+    allow_simple_key: bool,
+    keys: Vec[SimpleKey],
+}
+
+fn new_scanner(text: Str) -> Scanner {
+    let mut s = Scanner { b: to_bytes(text), index: 0, line: 0, column: 0, done: false, flow_level: 0, tokens: Vec.new(), head: 0, tokens_taken: 0, indent: -1, indents: Vec.new(), allow_simple_key: true, keys: Vec.new() };
+    let m = s.mark();
+    s.tokens.push(token(T_STREAM_START, m, m));
+    s
+}
+
+impl Scanner {
+    // ---- reading
+
+    fn peek(ref self, k: i64) -> u8 {
+        if self.index + k < self.b.len() { self.b[self.index + k] } else { 0 }
+    }
+
+    fn prefix(ref self, n: i64) -> String {
+        let end = if self.index + n < self.b.len() { self.index + n } else { self.b.len() };
+        byte_str(self.b, self.index, end)
+    }
+
+    fn at_separator(ref self) -> bool {
+        let p = self.prefix(3);
+        (p == "---" or p == "...") and is_blank_or_end(self.peek(3))
+    }
+
+    fn forward(mut ref self, n: i64) {
+        for _ in 0..n {
+            if self.index >= self.b.len() {
+                return;
+            }
+            let c = self.b[self.index];
+            self.index += 1;
+            if c == b'\n' or (c == b'\r' and self.peek(0) != b'\n') {
+                self.line += 1;
+                self.column = 0;
+            } else if c < 128 or c >= 192 {
+                // a code point starts here (not a continuation byte)
+                self.column += 1;
+            }
+        }
+    }
+
+    fn mark(ref self) -> Mark {
+        Mark { index: self.index, line: self.line, column: self.column }
+    }
+
+    // ---- the token queue
+
+    fn queued(ref self) -> i64 {
+        self.tokens.len() - self.head
+    }
+
+    fn need_more_tokens(mut ref self) -> Result[bool, YamlError] {
+        if self.done {
+            return Ok(false);
+        }
+        if self.queued() == 0 {
+            return Ok(true);
+        }
+        self.stale_possible_simple_keys()?;
+        Ok(self.next_possible_simple_key() == self.tokens_taken)
+    }
+
+    fn fill(mut ref self) -> Result[(), YamlError] {
+        while self.need_more_tokens()? {
+            self.fetch_more_tokens()?;
+        }
+        Ok(())
+    }
+
+    // The kind of the next token (-1 when there is none).
+    fn peek_kind(mut ref self) -> Result[i64, YamlError] {
+        self.fill()?;
+        if self.queued() == 0 {
+            return Ok(-1);
+        }
+        Ok(self.tokens[self.head].kind)
+    }
+
+    fn peek_token(mut ref self) -> Result[Token, YamlError] {
+        self.fill()?;
+        Ok(clone_token(self.tokens[self.head]))
+    }
+
+    fn get_token(mut ref self) -> Result[Token, YamlError] {
+        self.fill()?;
+        let t = clone_token(self.tokens[self.head]);
+        self.head += 1;
+        self.tokens_taken += 1;
+        Ok(t)
+    }
+
+    fn push_token(mut ref self, t: own Token) {
+        self.tokens.push(t);
+    }
+
+    // ---- fetching
+
+    fn fetch_more_tokens(mut ref self) -> Result[(), YamlError] {
+        self.scan_to_next_token();
+        self.stale_possible_simple_keys()?;
+        let col = self.column;
+        self.unwind_indent(col);
+        let ch = self.peek(0);
+        if ch == 0 {
+            return self.fetch_stream_end();
+        }
+        if ch == b'%' and self.column == 0 {
+            return Err(yerr("while scanning a directive", self.mark(), "directives are not supported", self.mark()));
+        }
+        if ch == b'-' and self.column == 0 and self.at_separator() {
+            return self.fetch_document_indicator(T_DOC_START);
+        }
+        if ch == b'.' and self.column == 0 and self.at_separator() {
+            return self.fetch_document_indicator(T_DOC_END);
+        }
+        if ch == b'[' {
+            return self.fetch_flow_collection_start(T_FSEQ_START);
+        }
+        if ch == b'{' {
+            return self.fetch_flow_collection_start(T_FMAP_START);
+        }
+        if ch == b']' {
+            return self.fetch_flow_collection_end(T_FSEQ_END);
+        }
+        if ch == b'}' {
+            return self.fetch_flow_collection_end(T_FMAP_END);
+        }
+        if ch == b',' {
+            return self.fetch_flow_entry();
+        }
+        if ch == b'-' and is_blank_or_end(self.peek(1)) {
+            return self.fetch_block_entry();
+        }
+        if ch == b'?' and (self.flow_level > 0 or is_blank_or_end(self.peek(1))) {
+            return self.fetch_key();
+        }
+        if ch == b':' and (self.flow_level > 0 or is_blank_or_end(self.peek(1))) {
+            return self.fetch_value();
+        }
+        if ch == b'*' {
+            return self.fetch_anchor(T_ALIAS);
+        }
+        if ch == b'&' {
+            return self.fetch_anchor(T_ANCHOR);
+        }
+        if ch == b'!' {
+            return Err(yerr("while scanning a tag", self.mark(), "tags are not supported", self.mark()));
+        }
+        if (ch == b'|' or ch == b'>') and self.flow_level == 0 {
+            return self.fetch_block_scalar(ch);
+        }
+        if ch == b'\'' or ch == b'"' {
+            return self.fetch_flow_scalar(ch);
+        }
+        if self.check_plain() {
+            return self.fetch_plain();
+        }
+        let shown = char_repr(ch);
+        Err(yerr("while scanning for the next token", no_mark(), f"found character {shown} that cannot start any token", self.mark()))
+    }
+
+    fn next_possible_simple_key(ref self) -> i64 {
+        let mut least: i64 = -1;
+        for i in 0..self.keys.len() {
+            if self.keys[i].on and (least < 0 or self.keys[i].token_number < least) {
+                least = self.keys[i].token_number;
+            }
+        }
+        least
+    }
+
+    fn stale_possible_simple_keys(mut ref self) -> Result[(), YamlError] {
+        for i in 0..self.keys.len() {
+            if self.keys[i].on and (self.keys[i].line != self.line or self.index - self.keys[i].index > 1024) {
+                if self.keys[i].required {
+                    return Err(yerr("while scanning a simple key", self.keys[i].mark, "could not find expected ':'", self.mark()));
+                }
+                self.keys[i].on = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn save_possible_simple_key(mut ref self) -> Result[(), YamlError] {
+        let required = self.flow_level == 0 and self.indent == self.column;
+        if self.allow_simple_key {
+            self.remove_possible_simple_key()?;
+            let n = self.tokens_taken + self.queued();
+            while self.keys.len() <= self.flow_level {
+                self.keys.push(SimpleKey { on: false, token_number: 0, required: false, index: 0, line: 0, column: 0, mark: no_mark() });
+            }
+            let lvl = self.flow_level;
+            self.keys[lvl] = SimpleKey { on: true, token_number: n, required: required, index: self.index, line: self.line, column: self.column, mark: self.mark() };
+        }
+        Ok(())
+    }
+
+    fn remove_possible_simple_key(mut ref self) -> Result[(), YamlError] {
+        let lvl = self.flow_level;
+        if lvl < self.keys.len() and self.keys[lvl].on {
+            if self.keys[lvl].required {
+                return Err(yerr("while scanning a simple key", self.keys[lvl].mark, "could not find expected ':'", self.mark()));
+            }
+            self.keys[lvl].on = false;
+        }
+        Ok(())
+    }
+
+    fn unwind_indent(mut ref self, column: i64) {
+        if self.flow_level > 0 {
+            return;
+        }
+        while self.indent > column {
+            let m = self.mark();
+            self.indent = self.indents.pop().unwrap_or(-1);
+            self.push_token(token(T_BLOCK_END, m, m));
+        }
+    }
+
+    fn add_indent(mut ref self, column: i64) -> bool {
+        if self.indent < column {
+            let old = self.indent;
+            self.indents.push(old);
+            self.indent = column;
+            return true;
+        }
+        false
+    }
+
+    fn fetch_stream_end(mut ref self) -> Result[(), YamlError] {
+        self.unwind_indent(-1);
+        self.remove_possible_simple_key()?;
+        self.allow_simple_key = false;
+        self.keys.clear();
+        let m = self.mark();
+        self.push_token(token(T_STREAM_END, m, m));
+        self.done = true;
+        Ok(())
+    }
+
+    fn fetch_document_indicator(mut ref self, kind: i64) -> Result[(), YamlError] {
+        self.unwind_indent(-1);
+        self.remove_possible_simple_key()?;
+        self.allow_simple_key = false;
+        let start = self.mark();
+        self.forward(3);
+        let end = self.mark();
+        self.push_token(token(kind, start, end));
+        Ok(())
+    }
+
+    fn fetch_flow_collection_start(mut ref self, kind: i64) -> Result[(), YamlError] {
+        self.save_possible_simple_key()?;
+        self.flow_level += 1;
+        self.allow_simple_key = true;
+        let start = self.mark();
+        self.forward(1);
+        let end = self.mark();
+        self.push_token(token(kind, start, end));
+        Ok(())
+    }
+
+    fn fetch_flow_collection_end(mut ref self, kind: i64) -> Result[(), YamlError] {
+        self.remove_possible_simple_key()?;
+        self.flow_level -= 1;
+        self.allow_simple_key = false;
+        let start = self.mark();
+        self.forward(1);
+        let end = self.mark();
+        self.push_token(token(kind, start, end));
+        Ok(())
+    }
+
+    fn fetch_flow_entry(mut ref self) -> Result[(), YamlError] {
+        self.allow_simple_key = true;
+        self.remove_possible_simple_key()?;
+        let start = self.mark();
+        self.forward(1);
+        let end = self.mark();
+        self.push_token(token(T_FLOW_ENTRY, start, end));
+        Ok(())
+    }
+
+    fn fetch_block_entry(mut ref self) -> Result[(), YamlError] {
+        if self.flow_level == 0 {
+            if not self.allow_simple_key {
+                return Err(yerr("", no_mark(), "sequence entries are not allowed here", self.mark()));
+            }
+            let col = self.column;
+            if self.add_indent(col) {
+                let m = self.mark();
+                self.push_token(token(T_BSEQ_START, m, m));
+            }
+        }
+        self.allow_simple_key = true;
+        self.remove_possible_simple_key()?;
+        let start = self.mark();
+        self.forward(1);
+        let end = self.mark();
+        self.push_token(token(T_BLOCK_ENTRY, start, end));
+        Ok(())
+    }
+
+    fn fetch_key(mut ref self) -> Result[(), YamlError] {
+        if self.flow_level == 0 {
+            if not self.allow_simple_key {
+                return Err(yerr("", no_mark(), "mapping keys are not allowed here", self.mark()));
+            }
+            let col = self.column;
+            if self.add_indent(col) {
+                let m = self.mark();
+                self.push_token(token(T_BMAP_START, m, m));
+            }
+        }
+        self.allow_simple_key = self.flow_level == 0;
+        self.remove_possible_simple_key()?;
+        let start = self.mark();
+        self.forward(1);
+        let end = self.mark();
+        self.push_token(token(T_KEY, start, end));
+        Ok(())
+    }
+
+    fn fetch_value(mut ref self) -> Result[(), YamlError] {
+        let lvl = self.flow_level;
+        if lvl < self.keys.len() and self.keys[lvl].on {
+            self.keys[lvl].on = false;
+            let at = self.head + self.keys[lvl].token_number - self.tokens_taken;
+            let km = self.keys[lvl].mark;
+            self.tokens.insert(at, token(T_KEY, km, km));
+            if self.flow_level == 0 {
+                let col = self.keys[lvl].column;
+                if self.add_indent(col) {
+                    self.tokens.insert(at, token(T_BMAP_START, km, km));
+                }
+            }
+            self.allow_simple_key = false;
+        } else {
+            if self.flow_level == 0 {
+                if not self.allow_simple_key {
+                    return Err(yerr("", no_mark(), "mapping values are not allowed here", self.mark()));
+                }
+                let col = self.column;
+                if self.add_indent(col) {
+                    let m = self.mark();
+                    self.push_token(token(T_BMAP_START, m, m));
+                }
+            }
+            self.allow_simple_key = self.flow_level == 0;
+            self.remove_possible_simple_key()?;
+        }
+        let start = self.mark();
+        self.forward(1);
+        let end = self.mark();
+        self.push_token(token(T_VALUE, start, end));
+        Ok(())
+    }
+
+    fn fetch_anchor(mut ref self, kind: i64) -> Result[(), YamlError] {
+        self.save_possible_simple_key()?;
+        self.allow_simple_key = false;
+        let t = self.scan_anchor(kind)?;
+        self.push_token(t);
+        Ok(())
+    }
+
+    fn fetch_block_scalar(mut ref self, style: u8) -> Result[(), YamlError] {
+        self.allow_simple_key = true;
+        self.remove_possible_simple_key()?;
+        let t = self.scan_block_scalar(style)?;
+        self.push_token(t);
+        Ok(())
+    }
+
+    fn fetch_flow_scalar(mut ref self, style: u8) -> Result[(), YamlError] {
+        self.save_possible_simple_key()?;
+        self.allow_simple_key = false;
+        let t = self.scan_flow_scalar(style)?;
+        self.push_token(t);
+        Ok(())
+    }
+
+    fn fetch_plain(mut ref self) -> Result[(), YamlError] {
+        self.save_possible_simple_key()?;
+        self.allow_simple_key = false;
+        let t = self.scan_plain();
+        self.push_token(t);
+        Ok(())
+    }
+
+    fn check_plain(ref self) -> bool {
+        let ch = self.peek(0);
+        let specials = "-?:,[]{}#&*!|>'\"%@`";
+        if not is_blank_or_end(ch) and not contains_byte(specials, ch) {
+            return true;
+        }
+        not is_blank_or_end(self.peek(1)) and (ch == b'-' or (self.flow_level == 0 and (ch == b'?' or ch == b':')))
+    }
+
+    // ---- scanning
+
+    // Returns whether a line break was there (and steps over it).
+    fn scan_line_break(mut ref self) -> bool {
+        let ch = self.peek(0);
+        if ch == b'\r' or ch == b'\n' {
+            if ch == b'\r' and self.peek(1) == b'\n' {
+                self.forward(2);
+            } else {
+                self.forward(1);
+            }
+            return true;
+        }
+        false
+    }
+
+    fn scan_to_next_token(mut ref self) {
+        loop {
+            while self.peek(0) == b' ' {
+                self.forward(1);
+            }
+            if self.peek(0) == b'#' {
+                while not is_break_or_end(self.peek(0)) {
+                    self.forward(1);
+                }
+            }
+            if self.scan_line_break() {
+                if self.flow_level == 0 {
+                    self.allow_simple_key = true;
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn scan_anchor(mut ref self, kind: i64) -> Result[Token, YamlError] {
+        let start = self.mark();
+        let name = if kind == T_ALIAS { "alias" } else { "anchor" };
+        self.forward(1);
+        let mut length: i64 = 0;
+        while is_alnum(self.peek(length)) or self.peek(length) == b'-' or self.peek(length) == b'_' {
+            length += 1;
+        }
+        if length == 0 {
+            let shown = char_repr(self.peek(0));
+            return Err(yerr(f"while scanning an {name}", start, f"expected alphabetic or numeric character, but found {shown}", self.mark()));
+        }
+        let value = self.prefix(length);
+        self.forward(length);
+        let ch = self.peek(0);
+        if not is_blank_or_end(ch) and not contains_byte("?:,]}%@`", ch) {
+            let shown = char_repr(ch);
+            return Err(yerr(f"while scanning an {name}", start, f"expected alphabetic or numeric character, but found {shown}", self.mark()));
+        }
+        let mut t = token(kind, start, self.mark());
+        t.value = value;
+        Ok(t)
+    }
+
+    fn scan_block_scalar(mut ref self, style: u8) -> Result[Token, YamlError] {
+        let folded = style == b'>';
+        let mut chunks = String.new();
+        let start = self.mark();
+        self.forward(1);
+        // indicators: chomping (+ keep, - strip; 0 is clip) and increment
+        let mut chomping: i64 = 0;
+        let mut increment: i64 = 0;
+        let mut ch = self.peek(0);
+        if ch == b'+' or ch == b'-' {
+            chomping = if ch == b'+' { 1 } else { -1 };
+            self.forward(1);
+            ch = self.peek(0);
+            if is_digit(ch) {
+                increment = (ch - b'0') as i64;
+                if increment == 0 {
+                    return Err(yerr("while scanning a block scalar", start, "expected indentation indicator in the range 1-9, but found 0", self.mark()));
+                }
+                self.forward(1);
+            }
+        } else if is_digit(ch) {
+            increment = (ch - b'0') as i64;
+            if increment == 0 {
+                return Err(yerr("while scanning a block scalar", start, "expected indentation indicator in the range 1-9, but found 0", self.mark()));
+            }
+            self.forward(1);
+            ch = self.peek(0);
+            if ch == b'+' or ch == b'-' {
+                chomping = if ch == b'+' { 1 } else { -1 };
+                self.forward(1);
+            }
+        }
+        ch = self.peek(0);
+        if not (ch == 0 or ch == b' ' or is_break(ch)) {
+            let shown = char_repr(ch);
+            return Err(yerr("while scanning a block scalar", start, f"expected chomping or indentation indicators, but found {shown}", self.mark()));
+        }
+        // the rest of the indicator line
+        while self.peek(0) == b' ' {
+            self.forward(1);
+        }
+        if self.peek(0) == b'#' {
+            while not is_break_or_end(self.peek(0)) {
+                self.forward(1);
+            }
+        }
+        ch = self.peek(0);
+        if not is_break_or_end(ch) {
+            let shown = char_repr(ch);
+            return Err(yerr("while scanning a block scalar", start, f"expected a comment or a line break, but found {shown}", self.mark()));
+        }
+        self.scan_line_break();
+        let mut min_indent = self.indent + 1;
+        if min_indent < 1 {
+            min_indent = 1;
+        }
+        let mut breaks = String.new();
+        let mut end = self.mark();
+        let mut indent: i64 = 0;
+        if increment == 0 {
+            // the indentation is the first non-empty line's
+            let mut max_indent: i64 = 0;
+            while self.peek(0) == b' ' or is_break(self.peek(0)) {
+                if self.peek(0) != b' ' {
+                    self.scan_line_break();
+                    breaks.push_str("\n");
+                    end = self.mark();
+                } else {
+                    self.forward(1);
+                    if self.column > max_indent {
+                        max_indent = self.column;
+                    }
+                }
+            }
+            indent = if min_indent > max_indent { min_indent } else { max_indent };
+        } else {
+            indent = min_indent + increment - 1;
+            let (bk, e) = self.block_breaks(indent);
+            breaks = bk;
+            end = e;
+        }
+        let mut line_break = String.new();
+        while self.column == indent and self.peek(0) != 0 {
+            chunks.push_str(breaks);
+            let leading_non_space = self.peek(0) != b' ' and self.peek(0) != b'\t';
+            let mut length: i64 = 0;
+            while not is_break_or_end(self.peek(length)) {
+                length += 1;
+            }
+            chunks.push_str(self.prefix(length));
+            self.forward(length);
+            line_break = if self.scan_line_break() { "\n".to_string() } else { String.new() };
+            let (bk, e) = self.block_breaks(indent);
+            breaks = bk;
+            end = e;
+            if self.column == indent and self.peek(0) != 0 {
+                if folded and line_break == "\n" and leading_non_space and self.peek(0) != b' ' and self.peek(0) != b'\t' {
+                    if breaks.len() == 0 {
+                        chunks.push_str(" ");
+                    }
+                } else {
+                    chunks.push_str(line_break);
+                }
+            } else {
+                break;
+            }
+        }
+        if chomping != -1 {
+            chunks.push_str(line_break);
+        }
+        if chomping == 1 {
+            chunks.push_str(breaks);
+        }
+        let mut t = token(T_SCALAR, start, end);
+        t.value = chunks;
+        t.style = style;
+        Ok(t)
+    }
+
+    // The empty lines inside a block scalar, as line breaks.
+    fn block_breaks(mut ref self, indent: i64) -> (String, Mark) {
+        let mut chunks = String.new();
+        let mut end = self.mark();
+        while self.column < indent and self.peek(0) == b' ' {
+            self.forward(1);
+        }
+        while is_break(self.peek(0)) {
+            self.scan_line_break();
+            chunks.push_str("\n");
+            end = self.mark();
+            while self.column < indent and self.peek(0) == b' ' {
+                self.forward(1);
+            }
+        }
+        (chunks, end)
+    }
+
+    fn scan_flow_scalar(mut ref self, style: u8) -> Result[Token, YamlError] {
+        let double = style == b'"';
+        let mut chunks: Vec[u8] = Vec.new();
+        let start = self.mark();
+        let quote = self.peek(0);
+        self.forward(1);
+        self.flow_non_spaces(double, start, mut chunks)?;
+        while self.peek(0) != quote {
+            self.flow_spaces(start, mut chunks)?;
+            self.flow_non_spaces(double, start, mut chunks)?;
+        }
+        self.forward(1);
+        let mut t = token(T_SCALAR, start, self.mark());
+        t.value = String.from_utf8(chunks).unwrap_or("?".to_string());
+        t.style = style;
+        Ok(t)
+    }
+
+    fn flow_non_spaces(mut ref self, double: bool, start: Mark, chunks: mut ref Vec[u8]) -> Result[(), YamlError] {
+        loop {
+            let mut length: i64 = 0;
+            loop {
+                let c = self.peek(length);
+                if c == b'\'' or c == b'"' or c == b'\\' or is_blank_or_end(c) {
+                    break;
+                }
+                length += 1;
+            }
+            for k in 0..length {
+                chunks.push(self.peek(k));
+            }
+            self.forward(length);
+            let ch = self.peek(0);
+            if not double and ch == b'\'' and self.peek(1) == b'\'' {
+                chunks.push(b'\'');
+                self.forward(2);
+            } else if (double and ch == b'\'') or (not double and (ch == b'"' or ch == b'\\')) {
+                chunks.push(ch);
+                self.forward(1);
+            } else if double and ch == b'\\' {
+                self.forward(1);
+                let e = self.peek(0);
+                let mut rep: i64 = -1;
+                if e == b'0' {
+                    rep = 0;
+                } else if e == b'a' {
+                    rep = 7;
+                } else if e == b'b' {
+                    rep = 8;
+                } else if e == b't' or e == b'\t' {
+                    rep = 9;
+                } else if e == b'n' {
+                    rep = 10;
+                } else if e == b'v' {
+                    rep = 11;
+                } else if e == b'f' {
+                    rep = 12;
+                } else if e == b'r' {
+                    rep = 13;
+                } else if e == b'e' {
+                    rep = 27;
+                } else if e == b' ' or e == b'"' or e == b'\\' or e == b'/' {
+                    rep = e as i64;
+                } else if e == b'N' {
+                    rep = 133;
+                } else if e == b'_' {
+                    rep = 160;
+                } else if e == b'L' {
+                    rep = 8232;
+                } else if e == b'P' {
+                    rep = 8233;
+                }
+                if rep >= 0 {
+                    push_utf8(chunks, rep);
+                    self.forward(1);
+                } else if e == b'x' or e == b'u' or e == b'U' {
+                    let length = if e == b'x' { 2 } else if e == b'u' { 4 } else { 8 };
+                    self.forward(1);
+                    let mut code: i64 = 0;
+                    for k in 0..length {
+                        let h = self.peek(k);
+                        if not is_hex(h) {
+                            let shown = char_repr(h);
+                            return Err(yerr("while scanning a double-quoted scalar", start, f"expected escape sequence of {length} hexadecimal numbers, but found {shown}", self.mark()));
+                        }
+                        code = code * 16 + hex_val(h);
+                    }
+                    push_utf8(chunks, code);
+                    self.forward(length);
+                } else if is_break(e) {
+                    self.scan_line_break();
+                    self.flow_breaks(start, chunks)?;
+                } else {
+                    let shown = char_repr(e);
+                    return Err(yerr("while scanning a double-quoted scalar", start, f"found unknown escape character {shown}", self.mark()));
+                }
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    fn flow_spaces(mut ref self, start: Mark, chunks: mut ref Vec[u8]) -> Result[(), YamlError] {
+        let mut length: i64 = 0;
+        while self.peek(length) == b' ' or self.peek(length) == b'\t' {
+            length += 1;
+        }
+        let mut whitespace: Vec[u8] = Vec.new();
+        for k in 0..length {
+            whitespace.push(self.peek(k));
+        }
+        self.forward(length);
+        let ch = self.peek(0);
+        if ch == 0 {
+            return Err(yerr("while scanning a quoted scalar", start, "found unexpected end of stream", self.mark()));
+        }
+        if is_break(ch) {
+            self.scan_line_break();
+            let mut breaks: Vec[u8] = Vec.new();
+            self.flow_breaks(start, mut breaks)?;
+            if breaks.len() == 0 {
+                chunks.push(b' ');
+            }
+            for k in 0..breaks.len() {
+                chunks.push(breaks[k]);
+            }
+        } else {
+            for k in 0..whitespace.len() {
+                chunks.push(whitespace[k]);
+            }
+        }
+        Ok(())
+    }
+
+    fn flow_breaks(mut ref self, start: Mark, chunks: mut ref Vec[u8]) -> Result[(), YamlError] {
+        loop {
+            if self.at_separator() {
+                return Err(yerr("while scanning a quoted scalar", start, "found unexpected document separator", self.mark()));
+            }
+            while self.peek(0) == b' ' or self.peek(0) == b'\t' {
+                self.forward(1);
+            }
+            if is_break(self.peek(0)) {
+                self.scan_line_break();
+                chunks.push(b'\n');
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    fn scan_plain(mut ref self) -> Token {
+        let mut chunks = String.new();
+        let start = self.mark();
+        let mut end = start;
+        let indent = self.indent + 1;
+        let mut spaces = String.new();
+        loop {
+            let mut length: i64 = 0;
+            if self.peek(0) == b'#' {
+                break;
+            }
+            loop {
+                let ch = self.peek(length);
+                if is_blank_or_end(ch) {
+                    break;
+                }
+                if ch == b':' {
+                    let next = self.peek(length + 1);
+                    if is_blank_or_end(next) or (self.flow_level > 0 and contains_byte(",[]{}", next)) {
+                        break;
+                    }
+                }
+                if self.flow_level > 0 and contains_byte(",?[]{}", ch) {
+                    break;
+                }
+                length += 1;
+            }
+            if length == 0 {
+                break;
+            }
+            self.allow_simple_key = false;
+            chunks.push_str(spaces);
+            chunks.push_str(self.prefix(length));
+            self.forward(length);
+            end = self.mark();
+            let (sp, found) = self.plain_spaces();
+            spaces = sp;
+            if not found or self.peek(0) == b'#' or (self.flow_level == 0 and self.column < indent) {
+                break;
+            }
+        }
+        let mut t = token(T_SCALAR, start, end);
+        t.value = chunks;
+        t.plain = true;
+        t
+    }
+
+    // The spaces and line breaks after a run of a plain scalar, folded;
+    // `found` is false where scan_plain_spaces returns nothing.
+    fn plain_spaces(mut ref self) -> (String, bool) {
+        let mut chunks = String.new();
+        let mut length: i64 = 0;
+        while self.peek(length) == b' ' {
+            length += 1;
+        }
+        let whitespace = self.prefix(length);
+        self.forward(length);
+        let ch = self.peek(0);
+        if is_break(ch) {
+            self.scan_line_break();
+            self.allow_simple_key = true;
+            if self.at_separator() {
+                return (chunks, false);
+            }
+            let mut breaks = String.new();
+            while self.peek(0) == b' ' or is_break(self.peek(0)) {
+                if self.peek(0) == b' ' {
+                    self.forward(1);
+                } else {
+                    self.scan_line_break();
+                    breaks.push_str("\n");
+                    if self.at_separator() {
+                        return (chunks, false);
+                    }
+                }
+            }
+            if breaks.len() == 0 {
+                chunks.push_str(" ");
+            }
+            chunks.push_str(breaks);
+        } else if whitespace.len() > 0 {
+            chunks.push_str(whitespace);
+        }
+        let found = chunks.len() > 0;
+        (chunks, found)
+    }
+}
+
+// ------------------------------------------------------------ the parser (events)
+
+const E_STREAM_START: i64 = 0;
+const E_STREAM_END: i64 = 1;
+const E_DOC_START: i64 = 2;
+const E_DOC_END: i64 = 3;
+const E_ALIAS: i64 = 4;
+const E_SCALAR: i64 = 5;
+const E_SEQ_START: i64 = 6;
+const E_SEQ_END: i64 = 7;
+const E_MAP_START: i64 = 8;
+const E_MAP_END: i64 = 9;
+
+// An event. `anchor` is the anchor of a node (or the alias's name),
+// empty for none; `plain` says a scalar was plain, which is what lets
+// the resolver give it a type.
+struct Event {
+    kind: i64,
+    anchor: String,
+    value: String,
+    plain: bool,
+    start: Mark,
+    end: Mark,
+}
+
+fn event(kind: i64, start: Mark, end: Mark) -> Event {
+    Event { kind: kind, anchor: String.new(), value: String.new(), plain: false, start: start, end: end }
+}
+
+fn empty_scalar(m: Mark) -> Event {
+    let mut e = event(E_SCALAR, m, m);
+    e.plain = true;
+    e
+}
+
+fn clone_event(e: ref Event) -> Event {
+    Event { kind: e.kind, anchor: e.anchor.clone(), value: e.value.clone(), plain: e.plain, start: e.start, end: e.end }
+}
+
+// The parser's states, named after PyYAML's parse_* methods.
+const S_STREAM_START: i64 = 0;
+const S_IMPLICIT_DOCUMENT_START: i64 = 1;
+const S_DOCUMENT_START: i64 = 2;
+const S_DOCUMENT_END: i64 = 3;
+const S_DOCUMENT_CONTENT: i64 = 4;
+const S_BLOCK_NODE: i64 = 5;
+const S_BLOCK_SEQUENCE_FIRST_ENTRY: i64 = 6;
+const S_BLOCK_SEQUENCE_ENTRY: i64 = 7;
+const S_INDENTLESS_SEQUENCE_ENTRY: i64 = 8;
+const S_BLOCK_MAPPING_FIRST_KEY: i64 = 9;
+const S_BLOCK_MAPPING_KEY: i64 = 10;
+const S_BLOCK_MAPPING_VALUE: i64 = 11;
+const S_FLOW_SEQUENCE_FIRST_ENTRY: i64 = 12;
+const S_FLOW_SEQUENCE_ENTRY: i64 = 13;
+const S_FLOW_SEQUENCE_ENTRY_MAPPING_KEY: i64 = 14;
+const S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE: i64 = 15;
+const S_FLOW_SEQUENCE_ENTRY_MAPPING_END: i64 = 16;
+const S_FLOW_MAPPING_FIRST_KEY: i64 = 17;
+const S_FLOW_MAPPING_KEY: i64 = 18;
+const S_FLOW_MAPPING_VALUE: i64 = 19;
+const S_FLOW_MAPPING_EMPTY_VALUE: i64 = 20;
+const S_NONE: i64 = 21;
+
+struct YamlParser {
+    sc: Scanner,
+    state: i64,
+    states: Vec[i64],
+    marks: Vec[Mark],
+    cur: Event,
+    has_cur: bool,
+}
+
+fn new_parser(text: Str) -> YamlParser {
+    YamlParser { sc: new_scanner(text), state: S_STREAM_START, states: Vec.new(), marks: Vec.new(), cur: event(E_STREAM_END, no_mark(), no_mark()), has_cur: false }
+}
+
+fn quoted_id(kind: i64) -> String {
+    let id = token_id(kind);
+    f"'{id}'"
+}
+
+impl YamlParser {
+    fn peek_event(mut ref self) -> Result[Event, YamlError] {
+        if not self.has_cur {
+            self.cur = self.next_event()?;
+            self.has_cur = true;
+        }
+        Ok(clone_event(self.cur))
+    }
+
+    fn peek_kind(mut ref self) -> Result[i64, YamlError] {
+        let e = self.peek_event()?;
+        Ok(e.kind)
+    }
+
+    fn get_event(mut ref self) -> Result[Event, YamlError] {
+        let e = self.peek_event()?;
+        self.has_cur = false;
+        Ok(e)
+    }
+
+    fn pop_state(mut ref self) {
+        self.state = self.states.pop().unwrap_or(S_NONE);
+    }
+
+    fn last_mark(ref self) -> Mark {
+        if self.marks.len() > 0 { self.marks[self.marks.len() - 1] } else { no_mark() }
+    }
+
+    fn next_event(mut ref self) -> Result[Event, YamlError] {
+        let s = self.state;
+        if s == S_STREAM_START {
+            let t = self.sc.get_token()?;
+            self.state = S_IMPLICIT_DOCUMENT_START;
+            return Ok(event(E_STREAM_START, t.start, t.end));
+        }
+        if s == S_IMPLICIT_DOCUMENT_START {
+            let k = self.sc.peek_kind()?;
+            if k != T_DIRECTIVE and k != T_DOC_START and k != T_STREAM_END {
+                let t = self.sc.peek_token()?;
+                self.states.push(S_DOCUMENT_END);
+                self.state = S_BLOCK_NODE;
+                return Ok(event(E_DOC_START, t.start, t.start));
+            }
+            return self.document_start();
+        }
+        if s == S_DOCUMENT_START {
+            return self.document_start();
+        }
+        if s == S_DOCUMENT_END {
+            let t = self.sc.peek_token()?;
+            let start = t.start;
+            let mut end = t.start;
+            if t.kind == T_DOC_END {
+                let d = self.sc.get_token()?;
+                end = d.end;
+            }
+            self.state = S_DOCUMENT_START;
+            return Ok(event(E_DOC_END, start, end));
+        }
+        if s == S_DOCUMENT_CONTENT {
+            let k = self.sc.peek_kind()?;
+            if k == T_DIRECTIVE or k == T_DOC_START or k == T_DOC_END or k == T_STREAM_END {
+                let t = self.sc.peek_token()?;
+                self.pop_state();
+                return Ok(empty_scalar(t.start));
+            }
+            return self.parse_node(true, false);
+        }
+        if s == S_BLOCK_NODE {
+            return self.parse_node(true, false);
+        }
+        if s == S_BLOCK_SEQUENCE_FIRST_ENTRY {
+            let t = self.sc.get_token()?;
+            self.marks.push(t.start);
+            return self.block_sequence_entry();
+        }
+        if s == S_BLOCK_SEQUENCE_ENTRY {
+            return self.block_sequence_entry();
+        }
+        if s == S_INDENTLESS_SEQUENCE_ENTRY {
+            if self.sc.peek_kind()? == T_BLOCK_ENTRY {
+                let t = self.sc.get_token()?;
+                let k = self.sc.peek_kind()?;
+                if k != T_BLOCK_ENTRY and k != T_KEY and k != T_VALUE and k != T_BLOCK_END {
+                    self.states.push(S_INDENTLESS_SEQUENCE_ENTRY);
+                    return self.parse_node(true, false);
+                }
+                self.state = S_INDENTLESS_SEQUENCE_ENTRY;
+                return Ok(empty_scalar(t.end));
+            }
+            let t = self.sc.peek_token()?;
+            self.pop_state();
+            return Ok(event(E_SEQ_END, t.start, t.start));
+        }
+        if s == S_BLOCK_MAPPING_FIRST_KEY {
+            let t = self.sc.get_token()?;
+            self.marks.push(t.start);
+            return self.block_mapping_key();
+        }
+        if s == S_BLOCK_MAPPING_KEY {
+            return self.block_mapping_key();
+        }
+        if s == S_BLOCK_MAPPING_VALUE {
+            if self.sc.peek_kind()? == T_VALUE {
+                let t = self.sc.get_token()?;
+                let k = self.sc.peek_kind()?;
+                if k != T_KEY and k != T_VALUE and k != T_BLOCK_END {
+                    self.states.push(S_BLOCK_MAPPING_KEY);
+                    return self.parse_node(true, true);
+                }
+                self.state = S_BLOCK_MAPPING_KEY;
+                return Ok(empty_scalar(t.end));
+            }
+            self.state = S_BLOCK_MAPPING_KEY;
+            let t = self.sc.peek_token()?;
+            return Ok(empty_scalar(t.start));
+        }
+        if s == S_FLOW_SEQUENCE_FIRST_ENTRY {
+            let t = self.sc.get_token()?;
+            self.marks.push(t.start);
+            return self.flow_sequence_entry(true);
+        }
+        if s == S_FLOW_SEQUENCE_ENTRY {
+            return self.flow_sequence_entry(false);
+        }
+        if s == S_FLOW_SEQUENCE_ENTRY_MAPPING_KEY {
+            let t = self.sc.get_token()?;
+            let k = self.sc.peek_kind()?;
+            if k != T_VALUE and k != T_FLOW_ENTRY and k != T_FSEQ_END {
+                self.states.push(S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE);
+                return self.parse_node(false, false);
+            }
+            self.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE;
+            return Ok(empty_scalar(t.end));
+        }
+        if s == S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE {
+            if self.sc.peek_kind()? == T_VALUE {
+                let t = self.sc.get_token()?;
+                let k = self.sc.peek_kind()?;
+                if k != T_FLOW_ENTRY and k != T_FSEQ_END {
+                    self.states.push(S_FLOW_SEQUENCE_ENTRY_MAPPING_END);
+                    return self.parse_node(false, false);
+                }
+                self.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_END;
+                return Ok(empty_scalar(t.end));
+            }
+            self.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_END;
+            let t = self.sc.peek_token()?;
+            return Ok(empty_scalar(t.start));
+        }
+        if s == S_FLOW_SEQUENCE_ENTRY_MAPPING_END {
+            self.state = S_FLOW_SEQUENCE_ENTRY;
+            let t = self.sc.peek_token()?;
+            return Ok(event(E_MAP_END, t.start, t.start));
+        }
+        if s == S_FLOW_MAPPING_FIRST_KEY {
+            let t = self.sc.get_token()?;
+            self.marks.push(t.start);
+            return self.flow_mapping_key(true);
+        }
+        if s == S_FLOW_MAPPING_KEY {
+            return self.flow_mapping_key(false);
+        }
+        if s == S_FLOW_MAPPING_VALUE {
+            if self.sc.peek_kind()? == T_VALUE {
+                let t = self.sc.get_token()?;
+                let k = self.sc.peek_kind()?;
+                if k != T_FLOW_ENTRY and k != T_FMAP_END {
+                    self.states.push(S_FLOW_MAPPING_KEY);
+                    return self.parse_node(false, false);
+                }
+                self.state = S_FLOW_MAPPING_KEY;
+                return Ok(empty_scalar(t.end));
+            }
+            self.state = S_FLOW_MAPPING_KEY;
+            let t = self.sc.peek_token()?;
+            return Ok(empty_scalar(t.start));
+        }
+        if s == S_FLOW_MAPPING_EMPTY_VALUE {
+            self.state = S_FLOW_MAPPING_KEY;
+            let t = self.sc.peek_token()?;
+            return Ok(empty_scalar(t.start));
+        }
+        Ok(event(E_STREAM_END, no_mark(), no_mark()))
+    }
+
+    fn document_start(mut ref self) -> Result[Event, YamlError] {
+        while self.sc.peek_kind()? == T_DOC_END {
+            self.sc.get_token()?;
+        }
+        if self.sc.peek_kind()? != T_STREAM_END {
+            let t = self.sc.peek_token()?;
+            let start = t.start;
+            if t.kind != T_DOC_START {
+                let shown = quoted_id(t.kind);
+                return Err(yerr("", no_mark(), f"expected '<document start>', but found {shown}", t.start));
+            }
+            let d = self.sc.get_token()?;
+            self.states.push(S_DOCUMENT_END);
+            self.state = S_DOCUMENT_CONTENT;
+            return Ok(event(E_DOC_START, start, d.end));
+        }
+        let t = self.sc.get_token()?;
+        self.state = S_NONE;
+        Ok(event(E_STREAM_END, t.start, t.end))
+    }
+
+    fn parse_node(mut ref self, block: bool, indentless: bool) -> Result[Event, YamlError] {
+        if self.sc.peek_kind()? == T_ALIAS {
+            let t = self.sc.get_token()?;
+            let mut e = event(E_ALIAS, t.start, t.end);
+            e.anchor = t.value;
+            self.pop_state();
+            return Ok(e);
+        }
+        let mut anchor = String.new();
+        let mut start = no_mark();
+        let mut end = no_mark();
+        if self.sc.peek_kind()? == T_ANCHOR {
+            let t = self.sc.get_token()?;
+            start = t.start;
+            end = t.end;
+            anchor = t.value;
+        }
+        if start.index < 0 {
+            let t = self.sc.peek_token()?;
+            start = t.start;
+            end = t.start;
+        }
+        let k = self.sc.peek_kind()?;
+        if indentless and k == T_BLOCK_ENTRY {
+            let t = self.sc.peek_token()?;
+            let mut e = event(E_SEQ_START, start, t.end);
+            e.anchor = anchor;
+            self.state = S_INDENTLESS_SEQUENCE_ENTRY;
+            return Ok(e);
+        }
+        if k == T_SCALAR {
+            let t = self.sc.get_token()?;
+            let mut e = event(E_SCALAR, start, t.end);
+            e.anchor = anchor;
+            e.value = t.value;
+            e.plain = t.plain;
+            self.pop_state();
+            return Ok(e);
+        }
+        if k == T_FSEQ_START or k == T_FMAP_START {
+            let t = self.sc.peek_token()?;
+            let kind = if k == T_FSEQ_START { E_SEQ_START } else { E_MAP_START };
+            let mut e = event(kind, start, t.end);
+            e.anchor = anchor;
+            self.state = if k == T_FSEQ_START { S_FLOW_SEQUENCE_FIRST_ENTRY } else { S_FLOW_MAPPING_FIRST_KEY };
+            return Ok(e);
+        }
+        if block and (k == T_BSEQ_START or k == T_BMAP_START) {
+            let t = self.sc.peek_token()?;
+            let kind = if k == T_BSEQ_START { E_SEQ_START } else { E_MAP_START };
+            let mut e = event(kind, start, t.start);
+            e.anchor = anchor;
+            self.state = if k == T_BSEQ_START { S_BLOCK_SEQUENCE_FIRST_ENTRY } else { S_BLOCK_MAPPING_FIRST_KEY };
+            return Ok(e);
+        }
+        if anchor.len() > 0 {
+            let mut e = event(E_SCALAR, start, end);
+            e.anchor = anchor;
+            e.plain = true;
+            self.pop_state();
+            return Ok(e);
+        }
+        let node = if block { "block" } else { "flow" };
+        let t = self.sc.peek_token()?;
+        let shown = quoted_id(t.kind);
+        Err(yerr(f"while parsing a {node} node", start, f"expected the node content, but found {shown}", t.start))
+    }
+
+    fn block_sequence_entry(mut ref self) -> Result[Event, YamlError] {
+        if self.sc.peek_kind()? == T_BLOCK_ENTRY {
+            let t = self.sc.get_token()?;
+            let k = self.sc.peek_kind()?;
+            if k != T_BLOCK_ENTRY and k != T_BLOCK_END {
+                self.states.push(S_BLOCK_SEQUENCE_ENTRY);
+                return self.parse_node(true, false);
+            }
+            self.state = S_BLOCK_SEQUENCE_ENTRY;
+            return Ok(empty_scalar(t.end));
+        }
+        if self.sc.peek_kind()? != T_BLOCK_END {
+            let t = self.sc.peek_token()?;
+            let shown = quoted_id(t.kind);
+            return Err(yerr("while parsing a block collection", self.last_mark(), f"expected <block end>, but found {shown}", t.start));
+        }
+        let t = self.sc.get_token()?;
+        self.pop_state();
+        self.marks.pop();
+        Ok(event(E_SEQ_END, t.start, t.end))
+    }
+
+    fn block_mapping_key(mut ref self) -> Result[Event, YamlError] {
+        if self.sc.peek_kind()? == T_KEY {
+            let t = self.sc.get_token()?;
+            let k = self.sc.peek_kind()?;
+            if k != T_KEY and k != T_VALUE and k != T_BLOCK_END {
+                self.states.push(S_BLOCK_MAPPING_VALUE);
+                return self.parse_node(true, true);
+            }
+            self.state = S_BLOCK_MAPPING_VALUE;
+            return Ok(empty_scalar(t.end));
+        }
+        if self.sc.peek_kind()? != T_BLOCK_END {
+            let t = self.sc.peek_token()?;
+            let shown = quoted_id(t.kind);
+            return Err(yerr("while parsing a block mapping", self.last_mark(), f"expected <block end>, but found {shown}", t.start));
+        }
+        let t = self.sc.get_token()?;
+        self.pop_state();
+        self.marks.pop();
+        Ok(event(E_MAP_END, t.start, t.end))
+    }
+
+    fn flow_sequence_entry(mut ref self, first: bool) -> Result[Event, YamlError] {
+        if self.sc.peek_kind()? != T_FSEQ_END {
+            if not first {
+                if self.sc.peek_kind()? == T_FLOW_ENTRY {
+                    self.sc.get_token()?;
+                } else {
+                    let t = self.sc.peek_token()?;
+                    let shown = quoted_id(t.kind);
+                    return Err(yerr("while parsing a flow sequence", self.last_mark(), f"expected ',' or ']', but got {shown}", t.start));
+                }
+            }
+            let k = self.sc.peek_kind()?;
+            if k == T_KEY {
+                let t = self.sc.peek_token()?;
+                self.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_KEY;
+                return Ok(event(E_MAP_START, t.start, t.end));
+            }
+            if k != T_FSEQ_END {
+                self.states.push(S_FLOW_SEQUENCE_ENTRY);
+                return self.parse_node(false, false);
+            }
+        }
+        let t = self.sc.get_token()?;
+        self.pop_state();
+        self.marks.pop();
+        Ok(event(E_SEQ_END, t.start, t.end))
+    }
+
+    fn flow_mapping_key(mut ref self, first: bool) -> Result[Event, YamlError] {
+        if self.sc.peek_kind()? != T_FMAP_END {
+            if not first {
+                if self.sc.peek_kind()? == T_FLOW_ENTRY {
+                    self.sc.get_token()?;
+                } else {
+                    let t = self.sc.peek_token()?;
+                    let shown = quoted_id(t.kind);
+                    return Err(yerr("while parsing a flow mapping", self.last_mark(), f"expected ',' or '}}', but got {shown}", t.start));
+                }
+            }
+            let k = self.sc.peek_kind()?;
+            if k == T_KEY {
+                let t = self.sc.get_token()?;
+                let k2 = self.sc.peek_kind()?;
+                if k2 != T_VALUE and k2 != T_FLOW_ENTRY and k2 != T_FMAP_END {
+                    self.states.push(S_FLOW_MAPPING_VALUE);
+                    return self.parse_node(false, false);
+                }
+                self.state = S_FLOW_MAPPING_VALUE;
+                return Ok(empty_scalar(t.end));
+            }
+            if k != T_FMAP_END {
+                self.states.push(S_FLOW_MAPPING_EMPTY_VALUE);
+                return self.parse_node(false, false);
+            }
+        }
+        let t = self.sc.get_token()?;
+        self.pop_state();
+        self.marks.pop();
+        Ok(event(E_MAP_END, t.start, t.end))
+    }
+}
+
+// ------------------------------------------------------------ the composer (nodes)
+
+const K_SCALAR: i64 = 0;
+const K_SEQ: i64 = 1;
+const K_MAP: i64 = 2;
+
+// resolved tags
+const TAG_STR: i64 = 0;
+const TAG_NULL: i64 = 1;
+const TAG_BOOL: i64 = 2;
+const TAG_INT: i64 = 3;
+const TAG_FLOAT: i64 = 4;
+const TAG_TIMESTAMP: i64 = 5;
+const TAG_MERGE: i64 = 6;
+const TAG_VALUE: i64 = 7;
+const TAG_SEQ: i64 = 8;
+const TAG_MAP: i64 = 9;
+
+fn tag_name(t: i64) -> String {
+    let names: Array[Str, 10] = ["str", "null", "bool", "int", "float", "timestamp", "merge", "value", "seq", "map"];
+    let n = names[t];
+    f"tag:yaml.org,2002:{n}"
+}
+
+fn node_id(kind: i64) -> String {
+    if kind == K_SCALAR { "scalar".to_string() } else if kind == K_SEQ { "sequence".to_string() } else { "mapping".to_string() }
+}
+
+// A node: a scalar's text, a sequence's items, or a mapping's keys and
+// values in turn (key, value, key, value, ...).
+struct YNode {
+    kind: i64,
+    tag: i64,
+    value: String,
+    items: Vec[i64],
+    start: Mark,
+}
+
+struct Loader {
+    p: YamlParser,
+    nodes: Vec[YNode],
+    anchor_names: Vec[String],
+    anchor_nodes: Vec[i64],
+}
+
+impl Loader {
+    fn add(mut ref self, n: own YNode) -> i64 {
+        self.nodes.push(n);
+        self.nodes.len() - 1
+    }
+
+    fn anchor_of(ref self, name: Str) -> i64 {
+        for i in 0..self.anchor_names.len() {
+            if self.anchor_names[i] == name {
+                return self.anchor_nodes[i];
+            }
+        }
+        -1
+    }
+
+    fn set_anchor(mut ref self, name: Str, node: i64) {
+        for i in 0..self.anchor_names.len() {
+            if self.anchor_names[i] == name {
+                self.anchor_nodes[i] = node;
+                return;
+            }
+        }
+        self.anchor_names.push(name.to_string());
+        self.anchor_nodes.push(node);
+    }
+
+    fn compose_node(mut ref self) -> Result[i64, YamlError] {
+        let e = self.p.peek_event()?;
+        if e.kind == E_ALIAS {
+            self.p.get_event()?;
+            let n = self.anchor_of(e.anchor);
+            if n < 0 {
+                let shown = py_str_repr(e.anchor);
+                return Err(yerr("", no_mark(), f"found undefined alias {shown}", e.start));
+            }
+            return Ok(n);
+        }
+        if e.anchor.len() > 0 {
+            let first = self.anchor_of(e.anchor);
+            if first >= 0 {
+                let shown = py_str_repr(e.anchor);
+                return Err(yerr(f"found duplicate anchor {shown}; first occurrence", self.nodes[first].start, "second occurrence", e.start));
+            }
+        }
+        if e.kind == E_SCALAR {
+            self.p.get_event()?;
+            let tag = if e.plain { resolve_plain(e.value) } else { TAG_STR };
+            let n = self.add(YNode { kind: K_SCALAR, tag: tag, value: e.value.clone(), items: Vec.new(), start: e.start });
+            if e.anchor.len() > 0 {
+                self.set_anchor(e.anchor, n);
+            }
+            return Ok(n);
+        }
+        let is_seq = e.kind == E_SEQ_START;
+        self.p.get_event()?;
+        let n = self.add(YNode { kind: if is_seq { K_SEQ } else { K_MAP }, tag: if is_seq { TAG_SEQ } else { TAG_MAP }, value: String.new(), items: Vec.new(), start: e.start });
+        if e.anchor.len() > 0 {
+            self.set_anchor(e.anchor, n);
+        }
+        let end_kind = if is_seq { E_SEQ_END } else { E_MAP_END };
+        let mut items: Vec[i64] = Vec.new();
+        while self.p.peek_kind()? != end_kind {
+            items.push(self.compose_node()?);
+        }
+        self.nodes[n].items = items;
+        self.p.get_event()?;
+        Ok(n)
+    }
+}
+
+// ------------------------------------------------------------ the resolver
+
+// A cursor over a scalar's text, for the resolver's patterns.
+struct Cur {
+    b: Vec[u8],
+    i: i64,
+}
+
+impl Cur {
+    fn at_end(ref self) -> bool {
+        self.i >= self.b.len()
+    }
+
+    fn peek(ref self) -> u8 {
+        if self.i < self.b.len() { self.b[self.i] } else { 0 }
+    }
+
+    fn eat(mut ref self, c: u8) -> bool {
+        if self.peek() == c and not self.at_end() {
+            self.i += 1;
+            return true;
+        }
+        false
+    }
+
+    fn sign(mut ref self) {
+        if self.peek() == b'-' or self.peek() == b'+' {
+            self.i += 1;
+        }
+    }
+
+    fn digit(mut ref self) -> bool {
+        if not self.at_end() and is_digit(self.peek()) {
+            self.i += 1;
+            return true;
+        }
+        false
+    }
+
+    // [chars]* where `ok` says which bytes; returns how many.
+    fn digits_or_underscores(mut ref self) -> i64 {
+        let st = self.i;
+        while not self.at_end() and (is_digit(self.peek()) or self.peek() == b'_') {
+            self.i += 1;
+        }
+        self.i - st
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let wb = w.bytes();
+        for k in 0..wb.len() {
+            if self.i + k >= self.b.len() or self.b[self.i + k] != wb[k] {
+                return false;
+            }
+        }
+        self.i += wb.len();
+        true
+    }
+
+    // (?:[eE][-+][0-9]+)?
+    fn exponent(mut ref self) -> bool {
+        if self.peek() == b'e' or self.peek() == b'E' {
+            let save = self.i;
+            self.i += 1;
+            if self.peek() != b'-' and self.peek() != b'+' {
+                self.i = save;
+                return false;
+            }
+            self.i += 1;
+            if not self.digit() {
+                self.i = save;
+                return false;
+            }
+            while self.digit() {
+            }
+        }
+        true
+    }
+
+    // (?::[0-5]?[0-9])+
+    fn sexagesimal(mut ref self) -> bool {
+        let mut n: i64 = 0;
+        loop {
+            if self.peek() != b':' {
+                break;
+            }
+            let save = self.i;
+            self.i += 1;
+            let a = self.peek();
+            if not is_digit(a) {
+                self.i = save;
+                break;
+            }
+            self.i += 1;
+            if a <= b'5' and is_digit(self.peek()) {
+                self.i += 1;
+            }
+            n += 1;
+        }
+        n > 0
+    }
+}
+
+fn cur(s: Str) -> Cur {
+    Cur { b: to_bytes(s), i: 0 }
+}
+
+fn is_bool_text(s: Str) -> bool {
+    let words: Array[Str, 18] = ["yes", "Yes", "YES", "no", "No", "NO", "true", "True", "TRUE", "false", "False", "FALSE", "on", "On", "ON", "off", "Off", "OFF"];
+    for i in 0..18 {
+        if s == words[i] {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_float_text(s: Str) -> bool {
+    // [-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?
+    let mut c = cur(s);
+    c.sign();
+    if c.digit() {
+        c.digits_or_underscores();
+        if c.eat(b'.') {
+            c.digits_or_underscores();
+            if c.exponent() and c.at_end() {
+                return true;
+            }
+        }
+    }
+    // \.[0-9][0-9_]*(?:[eE][-+][0-9]+)?
+    let mut c2 = cur(s);
+    if c2.eat(b'.') and c2.digit() {
+        c2.digits_or_underscores();
+        if c2.exponent() and c2.at_end() {
+            return true;
+        }
+    }
+    // [-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*
+    let mut c3 = cur(s);
+    c3.sign();
+    if c3.digit() {
+        c3.digits_or_underscores();
+        if c3.sexagesimal() and c3.eat(b'.') {
+            c3.digits_or_underscores();
+            if c3.at_end() {
+                return true;
+            }
+        }
+    }
+    // [-+]?\.(?:inf|Inf|INF) and \.(?:nan|NaN|NAN)
+    let mut c4 = cur(s);
+    c4.sign();
+    if c4.eat(b'.') and (c4.word("inf") or c4.word("Inf") or c4.word("INF")) and c4.at_end() {
+        return true;
+    }
+    s == ".nan" or s == ".NaN" or s == ".NAN"
+}
+
+fn is_int_text(s: Str) -> bool {
+    let mut c = cur(s);
+    c.sign();
+    let body = c.i;
+    // 0b[0-1_]+
+    if c.word("0b") {
+        let st = c.i;
+        while not c.at_end() and (c.peek() == b'0' or c.peek() == b'1' or c.peek() == b'_') {
+            c.i += 1;
+        }
+        if c.i > st and c.at_end() {
+            return true;
+        }
+    }
+    // 0x[0-9a-fA-F_]+
+    c.i = body;
+    if c.word("0x") {
+        let st = c.i;
+        while not c.at_end() and (is_hex(c.peek()) or c.peek() == b'_') {
+            c.i += 1;
+        }
+        if c.i > st and c.at_end() {
+            return true;
+        }
+    }
+    // 0[0-7_]+ and 0
+    c.i = body;
+    if c.eat(b'0') {
+        if c.at_end() {
+            return true;
+        }
+        let st = c.i;
+        while not c.at_end() and ((c.peek() >= b'0' and c.peek() <= b'7') or c.peek() == b'_') {
+            c.i += 1;
+        }
+        if c.i > st and c.at_end() {
+            return true;
+        }
+    }
+    // [1-9][0-9_]* and [1-9][0-9_]*(?::[0-5]?[0-9])+
+    c.i = body;
+    if not c.at_end() and c.peek() >= b'1' and c.peek() <= b'9' {
+        c.i += 1;
+        c.digits_or_underscores();
+        if c.at_end() {
+            return true;
+        }
+        if c.sexagesimal() and c.at_end() {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_timestamp_text(s: Str) -> bool {
+    timestamp_parts(s).len() > 0
+}
+
+// The parts of a timestamp: year, month, day, and when there is a time,
+// hour, minute, second, fraction digits, then the zone ("" for none, "Z",
+// or sign, hours, minutes). Empty when the text is not one.
+fn timestamp_parts(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut c = cur(s);
+    let st = c.i;
+    for _ in 0..4 {
+        if not c.digit() {
+            return Vec.new();
+        }
+    }
+    out.push(byte_str(b, st, c.i));
+    // month and day: two digits, or one or two when a time follows
+    let mut short = false;
+    for _ in 0..2 {
+        if not c.eat(b'-') {
+            return Vec.new();
+        }
+        let p = c.i;
+        if not c.digit() {
+            return Vec.new();
+        }
+        if not c.digit() {
+            short = true;
+        }
+        out.push(byte_str(b, p, c.i));
+    }
+    if c.at_end() {
+        if short {
+            return Vec.new();
+        }
+        return out;
+    }
+    // (?:[Tt]|[ \t]+)
+    if c.peek() == b'T' or c.peek() == b't' {
+        c.i += 1;
+    } else {
+        let p = c.i;
+        while c.peek() == b' ' or c.peek() == b'\t' {
+            c.i += 1;
+        }
+        if c.i == p {
+            return Vec.new();
+        }
+    }
+    let h = c.i;
+    if not c.digit() {
+        return Vec.new();
+    }
+    c.digit();
+    out.push(byte_str(b, h, c.i));
+    for _ in 0..2 {
+        if not c.eat(b':') {
+            return Vec.new();
+        }
+        let p = c.i;
+        if not c.digit() or not c.digit() {
+            return Vec.new();
+        }
+        out.push(byte_str(b, p, c.i));
+    }
+    let mut fraction = String.new();
+    if c.eat(b'.') {
+        let p = c.i;
+        while c.digit() {
+        }
+        fraction = byte_str(b, p, c.i);
+    }
+    out.push(fraction);
+    while c.peek() == b' ' or c.peek() == b'\t' {
+        c.i += 1;
+    }
+    if c.at_end() {
+        out.push(String.new());
+        return out;
+    }
+    if c.eat(b'Z') {
+        if not c.at_end() {
+            return Vec.new();
+        }
+        out.push("Z".to_string());
+        return out;
+    }
+    let sign = c.peek();
+    if sign != b'-' and sign != b'+' {
+        return Vec.new();
+    }
+    c.i += 1;
+    let p = c.i;
+    if not c.digit() {
+        return Vec.new();
+    }
+    c.digit();
+    let tz_hour = byte_str(b, p, c.i);
+    let mut tz_minute = String.new();
+    if c.eat(b':') {
+        let q = c.i;
+        if not c.digit() or not c.digit() {
+            return Vec.new();
+        }
+        tz_minute = byte_str(b, q, c.i);
+    }
+    if not c.at_end() {
+        return Vec.new();
+    }
+    let sign_text = if sign == b'-' { "-" } else { "+" };
+    out.push(f"{sign_text}{tz_hour}:{tz_minute}");
+    out
+}
+
+// The tag a plain scalar resolves to, in PyYAML's order.
+fn resolve_plain(s: Str) -> i64 {
+    if is_bool_text(s) {
+        return TAG_BOOL;
+    }
+    if is_float_text(s) {
+        return TAG_FLOAT;
+    }
+    if is_int_text(s) {
+        return TAG_INT;
+    }
+    if s == "<<" {
+        return TAG_MERGE;
+    }
+    if s == "~" or s == "null" or s == "Null" or s == "NULL" or s.len() == 0 {
+        return TAG_NULL;
+    }
+    if is_timestamp_text(s) {
+        return TAG_TIMESTAMP;
+    }
+    if s == "=" {
+        return TAG_VALUE;
+    }
+    TAG_STR
+}
+
+// ------------------------------------------------------------ the constructor (values)
+
+// A value as Python holds it after safe_load. A Date holds str() of the
+// date or datetime. A Map keeps its keys and values in insertion order.
+enum V {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Date(String),
+    Seq(Vec[V]),
+    Map(Vec[V], Vec[V]),
+}
+
+fn without_underscores(s: Str) -> String {
+    let b = s.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] != b'_' {
+            v.push(b[i]);
+        }
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn lower(s: Str) -> String {
+    let b = s.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        v.push(if c >= b'A' and c <= b'Z' { c + 32 } else { c });
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn parse_radix(s: Str, radix: i64) -> i64 {
+    let b = s.bytes();
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        n = n * radix + hex_val(b[i]);
+    }
+    n
+}
+
+fn split_colons(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b':' {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn construct_int(text: Str) -> i64 {
+    let v = without_underscores(text);
+    let b = to_bytes(v);
+    let mut sign: i64 = 1;
+    let mut st: i64 = 0;
+    if b[0] == b'-' {
+        sign = -1;
+    }
+    if b[0] == b'-' or b[0] == b'+' {
+        st = 1;
+    }
+    let body = byte_str(b, st, b.len());
+    let bb = to_bytes(body);
+    if body == "0" {
+        return 0;
+    }
+    if bb.len() > 1 and bb[0] == b'0' and bb[1] == b'b' {
+        return sign * parse_radix(byte_str(bb, 2, bb.len()), 2);
+    }
+    if bb.len() > 1 and bb[0] == b'0' and bb[1] == b'x' {
+        return sign * parse_radix(byte_str(bb, 2, bb.len()), 16);
+    }
+    if bb[0] == b'0' {
+        return sign * parse_radix(body, 8);
+    }
+    if contains_byte(body, b':') {
+        let parts = split_colons(body);
+        let mut value: i64 = 0;
+        let mut base: i64 = 1;
+        let mut k = parts.len() - 1;
+        while k >= 0 {
+            value += parse_radix(parts[k], 10) * base;
+            base *= 60;
+            k -= 1;
+        }
+        return sign * value;
+    }
+    sign * parse_radix(body, 10)
+}
+
+fn construct_float(text: Str) -> f64 {
+    let v = lower(without_underscores(text));
+    let b = to_bytes(v);
+    let mut sign = 1.0;
+    let mut st: i64 = 0;
+    if b[0] == b'-' {
+        sign = -1.0;
+    }
+    if b[0] == b'-' or b[0] == b'+' {
+        st = 1;
+    }
+    let body = byte_str(b, st, b.len());
+    if body == ".inf" {
+        return sign * (1.0 / 0.0);
+    }
+    if body == ".nan" {
+        return 0.0 / 0.0;
+    }
+    if contains_byte(body, b':') {
+        let parts = split_colons(body);
+        let mut value = 0.0;
+        let mut base = 1.0;
+        let mut k = parts.len() - 1;
+        while k >= 0 {
+            value += f64.parse(parts[k].clone()).unwrap_or(0.0) * base;
+            base *= 60.0;
+            k -= 1;
+        }
+        return sign * value;
+    }
+    sign * f64.parse(body).unwrap_or(0.0)
+}
+
+fn pad2(s: Str) -> String {
+    if s.len() < 2 { f"0{s}" } else { s.to_string() }
+}
+
+// str() of the date or datetime PyYAML builds from a timestamp.
+fn construct_timestamp(text: Str) -> String {
+    let p = timestamp_parts(text);
+    let date = f"{p[0]}-{pad2(p[1])}-{pad2(p[2])}";
+    if p.len() == 3 {
+        return date;
+    }
+    let mut out = f"{date} {pad2(p[3])}:{p[4]}:{p[5]}";
+    let fraction = to_bytes(p[6]);
+    if fraction.len() > 0 {
+        let mut f: Vec[u8] = Vec.new();
+        for k in 0..6 {
+            f.push(if k < fraction.len() { fraction[k] } else { b'0' });
+        }
+        let digits = String.from_utf8(f).unwrap_or("?".to_string());
+        if digits != "000000" {
+            out.push_str(".");
+            out.push_str(digits);
+        }
+    }
+    let tz = p[7].clone();
+    if tz == "Z" {
+        out.push_str("+00:00");
+    } else if tz.len() > 0 {
+        let tb = to_bytes(tz);
+        let sign = byte_str(tb, 0, 1);
+        let parts = split_colons(byte_str(tb, 1, tb.len()));
+        let mins = if parts[1].len() == 0 { "00".to_string() } else { parts[1].clone() };
+        out.push_str(f"{sign}{pad2(parts[0])}:{mins}");
+    }
+    out
+}
+
+fn as_number(v: ref V) -> Option[f64] {
+    match v {
+        V.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        V.Int(n) => Some(*n as f64),
+        V.Float(x) => Some(*x),
+        _ => None,
+    }
+}
+
+// Python's == for dict keys: 1, 1.0 and True are one key.
+fn key_eq(a: ref V, b: ref V) -> bool {
+    let na = as_number(a);
+    let nb = as_number(b);
+    if let Some(x) = na {
+        if let Some(y) = nb {
+            return x == y;
+        }
+        return false;
+    }
+    match a {
+        V.Null => match b {
+            V.Null => true,
+            _ => false,
+        },
+        V.Str(s) => match b {
+            V.Str(t) => s == t,
+            _ => false,
+        },
+        V.Date(s) => match b {
+            V.Date(t) => s == t,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn is_collection(v: ref V) -> bool {
+    match v {
+        V.Seq(_) => true,
+        V.Map(_, _) => true,
+        _ => false,
+    }
+}
+
+impl Loader {
+    // PyYAML's flatten_mapping: merge keys are taken out and the pairs
+    // they bring are put in front of the mapping's own.
+    fn flatten(mut ref self, n: i64) -> Result[(), YamlError] {
+        let mut merge: Vec[i64] = Vec.new();
+        let mut items = self.nodes[n].items.clone();
+        let mut index: i64 = 0;
+        while index * 2 < items.len() {
+            let k = items[index * 2];
+            let v = items[index * 2 + 1];
+            if self.nodes[k].tag == TAG_MERGE {
+                items.remove(index * 2);
+                items.remove(index * 2);
+                let vk = self.nodes[v].kind;
+                if vk == K_MAP {
+                    self.flatten(v)?;
+                    let sub = self.nodes[v].items.clone();
+                    for j in 0..sub.len() {
+                        merge.push(sub[j]);
+                    }
+                } else if vk == K_SEQ {
+                    let subs = self.nodes[v].items.clone();
+                    let mut submerge: Vec[Vec[i64]] = Vec.new();
+                    for j in 0..subs.len() {
+                        let s = subs[j];
+                        if self.nodes[s].kind != K_MAP {
+                            let id = node_id(self.nodes[s].kind);
+                            return Err(yerr("while constructing a mapping", self.nodes[n].start, f"expected a mapping for merging, but found {id}", self.nodes[s].start));
+                        }
+                        self.flatten(s)?;
+                        submerge.push(self.nodes[s].items.clone());
+                    }
+                    let mut j = submerge.len() - 1;
+                    while j >= 0 {
+                        for q in 0..submerge[j].len() {
+                            merge.push(submerge[j][q]);
+                        }
+                        j -= 1;
+                    }
+                } else {
+                    let id = node_id(vk);
+                    return Err(yerr("while constructing a mapping", self.nodes[n].start, f"expected a mapping or list of mappings for merging, but found {id}", self.nodes[v].start));
+                }
+            } else {
+                if self.nodes[k].tag == TAG_VALUE {
+                    self.nodes[k].tag = TAG_STR;
+                }
+                index += 1;
+            }
+        }
+        if merge.len() > 0 {
+            for j in 0..items.len() {
+                merge.push(items[j]);
+            }
+            items = merge;
+        }
+        self.nodes[n].items = items;
+        Ok(())
+    }
+
+    fn construct(mut ref self, n: i64) -> Result[V, YamlError] {
+        let kind = self.nodes[n].kind;
+        if kind == K_SCALAR {
+            let tag = self.nodes[n].tag;
+            let text = self.nodes[n].value.clone();
+            if tag == TAG_NULL {
+                return Ok(V.Null);
+            }
+            if tag == TAG_BOOL {
+                let l = lower(text);
+                return Ok(V.Bool(l == "yes" or l == "true" or l == "on"));
+            }
+            if tag == TAG_INT {
+                return Ok(V.Int(construct_int(text)));
+            }
+            if tag == TAG_FLOAT {
+                return Ok(V.Float(construct_float(text)));
+            }
+            if tag == TAG_TIMESTAMP {
+                return Ok(V.Date(construct_timestamp(text)));
+            }
+            if tag == TAG_MERGE or tag == TAG_VALUE {
+                let shown = py_str_repr(tag_name(tag));
+                return Err(yerr("", no_mark(), f"could not determine a constructor for the tag {shown}", self.nodes[n].start));
+            }
+            return Ok(V.Str(text));
+        }
+        if kind == K_SEQ {
+            let items = self.nodes[n].items.clone();
+            let mut out: Vec[V] = Vec.new();
+            for i in 0..items.len() {
+                out.push(self.construct(items[i])?);
+            }
+            return Ok(V.Seq(out));
+        }
+        self.flatten(n)?;
+        let items = self.nodes[n].items.clone();
+        let mut keys: Vec[V] = Vec.new();
+        let mut vals: Vec[V] = Vec.new();
+        let mut i: i64 = 0;
+        while i + 1 < items.len() {
+            let key = self.construct(items[i])?;
+            if is_collection(key) {
+                return Err(yerr("while constructing a mapping", self.nodes[n].start, "found unhashable key", self.nodes[items[i]].start));
+            }
+            let value = self.construct(items[i + 1])?;
+            let mut found: i64 = -1;
+            for j in 0..keys.len() {
+                if key_eq(keys[j], key) {
+                    found = j;
+                }
+            }
+            if found >= 0 {
+                vals[found] = value;
+            } else {
+                keys.push(key);
+                vals.push(value);
+            }
+            i += 2;
+        }
+        Ok(V.Map(keys, vals))
+    }
+}
+
+// yaml.safe_load_all over a file's text: its documents, or the error.
+fn load_all(text: Str) -> Result[Vec[V], YamlError] {
+    let mut ld = Loader { p: new_parser(text), nodes: Vec.new(), anchor_names: Vec.new(), anchor_nodes: Vec.new() };
+    let mut docs: Vec[V] = Vec.new();
+    if ld.p.peek_kind()? == E_STREAM_START {
+        ld.p.get_event()?;
+    }
+    while ld.p.peek_kind()? != E_STREAM_END {
+        ld.p.get_event()?;
+        let root = ld.compose_node()?;
+        ld.p.get_event()?;
+        ld.anchor_names.clear();
+        ld.anchor_nodes.clear();
+        docs.push(ld.construct(root)?);
+    }
+    Ok(docs)
+}
+
+// ------------------------------------------------------------ json.dumps(indent=2)
+
+fn json_key(k: ref V) -> String {
+    match k {
+        V.Str(s) => json_str(s),
+        V.Int(n) => {
+            let t = f"{n}";
+            json_str(t)
+        }
+        V.Float(x) => json_str(float_repr(*x)),
+        V.Bool(b) => json_str(if *b { "true" } else { "false" }),
+        V.Null => json_str("null"),
+        V.Date(s) => json_str(s),
+        _ => json_str("?"),
+    }
+}
+
+fn dump(v: ref V, level: i64, out: mut ref String) {
+    match v {
+        V.Null => out.push_str("null"),
+        V.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        V.Int(n) => {
+            let t = f"{n}";
+            out.push_str(t);
+        }
+        V.Float(x) => out.push_str(float_repr(*x)),
+        V.Str(s) => out.push_str(json_str(s)),
+        V.Date(s) => out.push_str(json_str(s)),
+        V.Seq(items) => {
+            if items.len() == 0 {
+                out.push_str("[]");
+                return;
+            }
+            out.push_str("[\n");
+            let pad = repeat_str("  ", level + 1);
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push_str(",\n");
+                }
+                out.push_str(pad);
+                dump(items[i], level + 1, out);
+            }
+            out.push_str("\n");
+            out.push_str(repeat_str("  ", level));
+            out.push_str("]");
+        }
+        V.Map(keys, vals) => {
+            if keys.len() == 0 {
+                out.push_str("{}");
+                return;
+            }
+            out.push_str("{\n");
+            let pad = repeat_str("  ", level + 1);
+            for i in 0..keys.len() {
+                if i > 0 {
+                    out.push_str(",\n");
+                }
+                out.push_str(pad);
+                out.push_str(json_key(keys[i]));
+                out.push_str(": ");
+                dump(vals[i], level + 1, out);
+            }
+            out.push_str("\n");
+            out.push_str(repeat_str("  ", level));
+            out.push_str("}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+fn file_alias_yaml() -> String {
+    """
+base: &base {a: 1}
+derived:
+  <<: *bse
+
+"""
+}
+
+fn file_ci_yml() -> String {
+    """
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        python: ["3.11", "3.12", 3.10]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[test]"
+      - name: Test
+        run: pytest -q --maxfail=1
+        env:
+          CI: true
+          PYTHONHASHSEED: 0
+      - name: Summary
+        if: ${{ always() }}
+        run: >-
+          echo "tests finished for
+          ${{ matrix.os }}" >> $GITHUB_STEP_SUMMARY
+
+"""
+}
+
+fn file_compose_yaml() -> String {
+    """
+version: "3.8"
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+
+services:
+  web:
+    <<: *common
+    image: nginx:1.27
+    ports:
+      - "8080:80"
+      - 443:443
+    depends_on: [api]
+  api:
+    <<: *common
+    build: ./api
+    restart: always
+    environment:
+      - DATABASE_URL=postgres://shop@db/shop
+      - WORKERS=4
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      retries: 3
+  db:
+    image: postgres:16
+    ports:
+      - 5432:5432
+    volumes:
+      - db-data:/var/lib/postgresql/data
+  ssh:
+    image: linuxserver/openssh-server
+    ports:
+      - 22:22
+
+volumes:
+  db-data:
+
+"""
+}
+
+fn file_dash_yaml() -> String {
+    """
+steps:
+  - run: make
+  run: test
+
+"""
+}
+
+fn file_deploy_yaml() -> String {
+    """
+# shop API: deployment, service and config
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-api
+  namespace: shop
+  labels: &labels
+    app: shop-api
+    tier: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels: *labels
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      containers:
+        - name: api
+          image: registry.example.com/shop/api:1.9.0
+          args: ["--port=8000", "--workers", "4"]
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          env:
+            - name: DEBUG
+              value: "false"
+            - name: CACHE_TTL
+              value: '300'
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits:
+              cpu: "1"
+              memory: 512Mi
+        - name: log-shipper
+          image: registry.example.com/infra/vector:0.41
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-api
+  namespace: shop
+spec:
+  type: ClusterIP
+  selector:
+    app: shop-api
+  ports:
+  - port: 80
+    targetPort: 8000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-api-config
+data:
+  app.ini: |
+    [server]
+    port = 8000
+
+    [cache]
+    ttl = 300
+  motd: >
+    Welcome to the shop API.
+    Deploys happen on Tuesdays.
+
+    Ask in #shop-ops.
+  empty.txt: ""
+
+"""
+}
+
+fn file_edge_yaml() -> String {
+    """
+# scalars the way YAML 1.1 (and PyYAML) read them
+country: NO
+answer: yes
+switch: off
+nothing: ~
+empty:
+octal: 0755
+hex: 0x1F
+binary: 0b1010
+million: 1_000_000
+sexagesimal: 190:20:30
+negative: -42
+float: 3.0
+half: .5
+exponent: 6.02e+23
+not_a_float: 1e3
+infinity: -.inf
+version: 1.10
+date: 2026-10-14
+stamp: 2026-10-14T09:12:01Z
+local: 2026-10-14 09:12:01.5
+quoted: "tab\\there, \\u00e9, \\"quotes\\", \\\\"
+single: 'it''s ''quoted'''
+unicode: café
+url: http://example.com/a#b
+hash: not # a comment
+folded plain: this plain scalar
+  goes on over
+  three lines
+key with spaces: "value with: colon"
+spaced value:   padded   
+nested: {a: 1, b: [x, y, {c: d}], "e f": null}
+list of lists:
+- [1, 2]
+- - 3
+  - 4
+-   five
+keep: |+
+  kept
+
+strip: |-
+  stripped
+indented: |2
+    two extra
+duplicate: first
+duplicate: second
+1: one
+true: yes
+null: z
+3.5: f
+
+"""
+}
+
+fn file_flow_yaml() -> String {
+    """
+ports: [80, 443
+env: prod
+
+"""
+}
+
+fn file_indent_yaml() -> String {
+    """
+services:
+  web:
+    image: nginx
+   ports: [80]
+
+"""
+}
+
+fn file_multi_yaml() -> String {
+    """
+--- # first document
+a: 1
+...
+---
+- b
+- c
+--- plain document
+---
+
+"""
+}
+
+fn file_quote_yaml() -> String {
+    """
+name: shop
+motd: "Welcome,
+  please
+
+"""
+}
+
+fn file_site_yml() -> String {
+    """
+- hosts: web
+  become: yes
+  vars:
+    http_port: 80
+    max_clients: 200
+  tasks:
+    - name: install nginx
+      apt: name=nginx state=present update_cache=yes
+    - name: write config
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        mode: 0644
+      notify: restart nginx
+    - name: config dir
+      file: {path: /etc/nginx/conf.d, state: directory, mode: "0755"}
+    - name: open firewall
+      ufw: rule=allow port={{ http_port }}
+      when: ansible_os_family == "Debian" and firewall_enabled
+  handlers:
+    - name: restart nginx
+      service: name=nginx state=restarted
+
+"""
+}
+
+fn file_tab_yaml() -> String {
+    """
+server:
+	port: 8000
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    put("data/alias.yaml", file_alias_yaml())?;
+    put("data/ci.yml", file_ci_yml())?;
+    put("data/compose.yaml", file_compose_yaml())?;
+    put("data/dash.yaml", file_dash_yaml())?;
+    put("data/deploy.yaml", file_deploy_yaml())?;
+    put("data/edge.yaml", file_edge_yaml())?;
+    put("data/flow.yaml", file_flow_yaml())?;
+    put("data/indent.yaml", file_indent_yaml())?;
+    put("data/multi.yaml", file_multi_yaml())?;
+    put("data/quote.yaml", file_quote_yaml())?;
+    put("data/site.yml", file_site_yml())?;
+    put("data/tab.yaml", file_tab_yaml())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the report
+
+fn clone_v(v: ref V) -> V {
+    match v {
+        V.Null => V.Null,
+        V.Bool(b) => V.Bool(*b),
+        V.Int(n) => V.Int(*n),
+        V.Float(x) => V.Float(*x),
+        V.Str(s) => V.Str(s.clone()),
+        V.Date(s) => V.Date(s.clone()),
+        V.Seq(items) => {
+            let mut out: Vec[V] = Vec.new();
+            for i in 0..items.len() {
+                out.push(clone_v(items[i]));
+            }
+            V.Seq(out)
+        }
+        V.Map(keys, vals) => {
+            let mut ks: Vec[V] = Vec.new();
+            let mut vs: Vec[V] = Vec.new();
+            for i in 0..keys.len() {
+                ks.push(clone_v(keys[i]));
+                vs.push(clone_v(vals[i]));
+            }
+            V.Map(ks, vs)
+        }
+    }
+}
+
+fn is_str_key(k: ref V, name: Str) -> bool {
+    match k {
+        V.Str(s) => s == name,
+        _ => false,
+    }
+}
+
+// d.get(name): the value under a string key, or Null when there is none.
+fn get(v: ref V, name: Str) -> V {
+    match v {
+        V.Map(keys, vals) => {
+            for i in 0..keys.len() {
+                if is_str_key(keys[i], name) {
+                    return clone_v(vals[i]);
+                }
+            }
+            V.Null
+        }
+        _ => V.Null,
+    }
+}
+
+fn has(v: ref V, name: Str) -> bool {
+    match v {
+        V.Map(keys, _) => {
+            for i in 0..keys.len() {
+                if is_str_key(keys[i], name) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn items_of(v: ref V) -> Vec[V] {
+    match v {
+        V.Seq(items) => {
+            let mut out: Vec[V] = Vec.new();
+            for i in 0..items.len() {
+                out.push(clone_v(items[i]));
+            }
+            out
+        }
+        _ => Vec.new(),
+    }
+}
+
+fn keys_of(v: ref V) -> Vec[V] {
+    match v {
+        V.Map(keys, _) => {
+            let mut out: Vec[V] = Vec.new();
+            for i in 0..keys.len() {
+                out.push(clone_v(keys[i]));
+            }
+            out
+        }
+        _ => Vec.new(),
+    }
+}
+
+fn vals_of(v: ref V) -> Vec[V] {
+    match v {
+        V.Map(_, vals) => {
+            let mut out: Vec[V] = Vec.new();
+            for i in 0..vals.len() {
+                out.push(clone_v(vals[i]));
+            }
+            out
+        }
+        _ => Vec.new(),
+    }
+}
+
+fn is_map(v: ref V) -> bool {
+    match v {
+        V.Map(_, _) => true,
+        _ => false,
+    }
+}
+
+fn is_null(v: ref V) -> bool {
+    match v {
+        V.Null => true,
+        _ => false,
+    }
+}
+
+// Python's str() of a value.
+fn py_str(v: ref V) -> String {
+    match v {
+        V.Null => "None".to_string(),
+        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Int(n) => f"{n}",
+        V.Float(x) => float_repr(*x),
+        V.Str(s) => s.clone(),
+        V.Date(s) => s.clone(),
+        _ => "?".to_string(),
+    }
+}
+
+// Python's repr() of a scalar value.
+fn py_repr(v: ref V) -> String {
+    match v {
+        V.Str(s) => py_str_repr(s),
+        _ => py_str(v),
+    }
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn report_deploy(docs: ref Vec[V]) {
+    for i in 0..docs.len() {
+        let d = clone_v(docs[i]);
+        let kind = py_str(get(d, "kind"));
+        let name = py_str(get(get(d, "metadata"), "name"));
+        let spec = get(d, "spec");
+        if kind == "Deployment" {
+            let cs = items_of(get(get(get(spec, "template"), "spec"), "containers"));
+            let mut images: Vec[String] = Vec.new();
+            for j in 0..cs.len() {
+                images.push(py_str(get(cs[j], "image")));
+            }
+            let replicas = py_str(get(spec, "replicas"));
+            let shown = join(images, ", ");
+            println(f"deployment {name}: {replicas} replicas, {shown}");
+        } else if kind == "Service" {
+            let ps = items_of(get(spec, "ports"));
+            let mut parts: Vec[String] = Vec.new();
+            for j in 0..ps.len() {
+                let port = py_str(get(ps[j], "port"));
+                let target = py_str(get(ps[j], "targetPort"));
+                parts.push(f"{port}->{target}");
+            }
+            let shown = join(parts, ", ");
+            println(f"service {name}: {shown}");
+        } else {
+            let data = get(d, "data");
+            let ks = keys_of(data);
+            let vs = vals_of(data);
+            let mut parts: Vec[String] = Vec.new();
+            for j in 0..ks.len() {
+                let k = py_str(ks[j]);
+                let n = code_points(py_str(vs[j])).len();
+                parts.push(f"{k} ({n} bytes)");
+            }
+            let shown = join(parts, ", ");
+            println(f"configmap {name}: {shown}");
+        }
+    }
+}
+
+fn report_compose(c: ref V) {
+    let services = get(c, "services");
+    let names = keys_of(services);
+    let specs = vals_of(services);
+    for i in 0..names.len() {
+        let name = py_str(names[i]);
+        let s = clone_v(specs[i]);
+        let ports = items_of(get(s, "ports"));
+        let mut shown: Vec[String] = Vec.new();
+        for j in 0..ports.len() {
+            match ports[j] {
+                V.Str(p) => shown.push(p.clone()),
+                _ => {
+                    let p = py_str(ports[j]);
+                    shown.push(f"{p} (read as a number, not host:container)");
+                }
+            }
+        }
+        let restart = if has(s, "restart") { py_str(get(s, "restart")) } else { "no".to_string() };
+        let mut line = f"service {name}: restart={restart}";
+        if shown.len() > 0 {
+            line.push_str(", ports ");
+            line.push_str(join(shown, ", "));
+        }
+        println(line);
+    }
+}
+
+fn report_workflow(wf: ref V) {
+    let ks = keys_of(wf);
+    let mut triggers: Vec[String] = Vec.new();
+    for i in 0..ks.len() {
+        if not is_str_key(ks[i], "name") and not is_str_key(ks[i], "jobs") {
+            triggers.push(py_repr(ks[i]));
+        }
+    }
+    let shown = join(triggers, ", ");
+    println(f"workflow triggers: {shown}");
+    let jobs = get(wf, "jobs");
+    let names = keys_of(jobs);
+    let specs = vals_of(jobs);
+    for i in 0..names.len() {
+        let jname = py_str(names[i]);
+        let steps = items_of(get(specs[i], "steps")).len();
+        let pythons = items_of(get(get(get(specs[i], "strategy"), "matrix"), "python"));
+        let mut parts: Vec[String] = Vec.new();
+        for j in 0..pythons.len() {
+            parts.push(py_repr(pythons[j]));
+        }
+        let shown = join(parts, ", ");
+        println(f"job {jname}: {steps} steps, matrix python {shown}");
+    }
+}
+
+fn report_playbook(plays: ref V) {
+    let ps = items_of(plays);
+    for i in 0..ps.len() {
+        let tasks = items_of(get(ps[i], "tasks"));
+        for j in 0..tasks.len() {
+            let t = clone_v(tasks[j]);
+            let ks = keys_of(t);
+            let vs = vals_of(t);
+            let mut module: i64 = -1;
+            for k in 0..ks.len() {
+                if module < 0 and not is_str_key(ks[k], "name") and not is_str_key(ks[k], "notify") and not is_str_key(ks[k], "when") {
+                    module = k;
+                }
+            }
+            let tname = py_repr(get(t, "name"));
+            let mname = py_str(ks[module]);
+            let mut line = f"task {tname}: {mname}";
+            if is_map(vs[module]) {
+                let mode = get(vs[module], "mode");
+                if not is_null(mode) {
+                    line.push_str(", mode ");
+                    line.push_str(py_repr(mode));
+                }
+            }
+            println(line);
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let files: Array[Str, 12] = ["deploy.yaml", "compose.yaml", "ci.yml", "site.yml", "edge.yaml", "multi.yaml", "tab.yaml", "quote.yaml", "indent.yaml", "alias.yaml", "flow.yaml", "dash.yaml"];
+    let mut loaded: Vec[Vec[V]] = Vec.new();
+    for i in 0..files.len() {
+        let f = files[i];
+        println(f"== {f}");
+        let path = f"data/{f}";
+        let text = match fs.read_to_string(path.clone()) {
+            Ok(t) => t,
+            Err(e) => return Err(f"cannot read {path}: {e}"),
+        };
+        match load_all(text) {
+            Ok(docs) => {
+                for k in 0..docs.len() {
+                    let n = k + 1;
+                    println(f"--- document {n}");
+                    let mut out = String.new();
+                    dump(docs[k], 0, mut out);
+                    println(out);
+                }
+                loaded.push(docs);
+            }
+            Err(e) => {
+                let shown = error_text(e, path);
+                println(f"error: {shown}");
+                loaded.push(Vec.new());
+            }
+        }
+    }
+    println("== report");
+    report_deploy(loaded[0]);
+    report_compose(loaded[1][0]);
+    report_workflow(loaded[2][0]);
+    report_playbook(loaded[3][0]);
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_yaml: {e}");
+    }
+}

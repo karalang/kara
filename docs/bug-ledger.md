@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 269 |
 | codegen-gap | 262 |
-| false-positive | 199 |
+| false-positive | 200 |
 | other | 172 |
 | perf | 167 |
 | diagnostics | 162 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 103 |
 | cli | 76 |
 | runtime | 72 |
-| parser | 64 |
+| parser | 65 |
 | autopar | 59 |
 | resolver | 42 |
 | effect | 32 |
@@ -217,6 +217,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-38 | 2026-10-15 | ownership | low | `karac check` takes `f64.parse(t.text)` (and `i64.parse(t.text)`) as a MOVE of the field `t.text`, so a later `out.push(t)` is refused with "value 't.text' moved here, used again here"; the same call on a local String (`f64.parse(text)` then `T { text: text, .. }`) is accepted, the spec gives `parse(s: Str)` a borrowed parameter, and all four running surfaces run the program | — |
 | B-2026-10-15-41 | 2026-10-15 | typecheck+resolver | medium | A user `struct Range` captures every range literal: with `struct Range { lo: i64, hi: i64 }` in scope, `for i in 0..v.len() { v[i] }` fails `karac check` with "index must be an integer or range, found 'T'" at the index (52 such errors in a 1480-line program, none at the struct), with no prelude_shadow warning, and the MIR front end refuses the program with a location-less "'Range' is already defined" whose span is in the library source | — |
 | B-2026-10-15-42 | 2026-10-15 | codegen | low | A user type named like a library type the I/O library returns (`struct IoError { .. }`) replaces it inside the library on both MIR backends: `match fs.read_to_string("missing") { Ok(_) => .., Err(_) => .. }` stops `__mir-run` with "IoError has no variant NotFound" and `__mir-llvm-run` with "`IoError` has no variant NotFound"; `karac check` accepts it with only the prelude_shadow warning | — |
+| B-2026-10-15-43 | 2026-10-15 | parser | medium | A LOCAL NAMED `seq` OR `par` IN CONDITION POSITION PARSES AS A `seq {}` / `par {}` BLOCK, so `let seq = true; let q = if seq { 3 } else { 4 };` fails `karac check` and every MIR surface with `Expected LeftBrace, found Else` pointing at the `else`; `while seq { seq = false; }` fails at the NEXT statement. Nothing in the message names the contextual keyword. | — |
 
 ### Relocated
 

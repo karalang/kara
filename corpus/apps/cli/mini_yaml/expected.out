@@ -1,0 +1,402 @@
+== deploy.yaml
+--- document 1
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "shop-api",
+    "namespace": "shop",
+    "labels": {
+      "app": "shop-api",
+      "tier": "backend"
+    }
+  },
+  "spec": {
+    "replicas": 3,
+    "selector": {
+      "matchLabels": {
+        "app": "shop-api",
+        "tier": "backend"
+      }
+    },
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "shop-api",
+          "tier": "backend"
+        }
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "api",
+            "image": "registry.example.com/shop/api:1.9.0",
+            "args": [
+              "--port=8000",
+              "--workers",
+              "4"
+            ],
+            "ports": [
+              {
+                "containerPort": 8000,
+                "protocol": "TCP"
+              }
+            ],
+            "env": [
+              {
+                "name": "DEBUG",
+                "value": "false"
+              },
+              {
+                "name": "CACHE_TTL",
+                "value": "300"
+              }
+            ],
+            "resources": {
+              "requests": {
+                "cpu": "250m",
+                "memory": "256Mi"
+              },
+              "limits": {
+                "cpu": "1",
+                "memory": "512Mi"
+              }
+            }
+          },
+          {
+            "name": "log-shipper",
+            "image": "registry.example.com/infra/vector:0.41"
+          }
+        ]
+      }
+    }
+  }
+}
+--- document 2
+{
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+    "name": "shop-api",
+    "namespace": "shop"
+  },
+  "spec": {
+    "type": "ClusterIP",
+    "selector": {
+      "app": "shop-api"
+    },
+    "ports": [
+      {
+        "port": 80,
+        "targetPort": 8000
+      }
+    ]
+  }
+}
+--- document 3
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+    "name": "shop-api-config"
+  },
+  "data": {
+    "app.ini": "[server]\nport = 8000\n\n[cache]\nttl = 300\n",
+    "motd": "Welcome to the shop API. Deploys happen on Tuesdays.\nAsk in #shop-ops.\n",
+    "empty.txt": ""
+  }
+}
+== compose.yaml
+--- document 1
+{
+  "version": "3.8",
+  "x-common": {
+    "restart": "unless-stopped",
+    "logging": {
+      "driver": "json-file",
+      "options": {
+        "max-size": "10m",
+        "max-file": "3"
+      }
+    }
+  },
+  "services": {
+    "web": {
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "image": "nginx:1.27",
+      "ports": [
+        "8080:80",
+        "443:443"
+      ],
+      "depends_on": [
+        "api"
+      ]
+    },
+    "api": {
+      "restart": "always",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "build": "./api",
+      "environment": [
+        "DATABASE_URL=postgres://shop@db/shop",
+        "WORKERS=4"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8000/healthz"
+        ],
+        "interval": "30s",
+        "retries": 3
+      }
+    },
+    "db": {
+      "image": "postgres:16",
+      "ports": [
+        "5432:5432"
+      ],
+      "volumes": [
+        "db-data:/var/lib/postgresql/data"
+      ]
+    },
+    "ssh": {
+      "image": "linuxserver/openssh-server",
+      "ports": [
+        1342
+      ]
+    }
+  },
+  "volumes": {
+    "db-data": null
+  }
+}
+== ci.yml
+--- document 1
+{
+  "name": "CI",
+  "true": {
+    "push": {
+      "branches": [
+        "main"
+      ]
+    },
+    "pull_request": null
+  },
+  "jobs": {
+    "test": {
+      "runs-on": "${{ matrix.os }}",
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "os": [
+            "ubuntu-24.04",
+            "macos-14"
+          ],
+          "python": [
+            "3.11",
+            "3.12",
+            3.1
+          ]
+        }
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v4"
+        },
+        {
+          "name": "Install",
+          "run": "python -m pip install -U pip\npip install -e \".[test]\"\n"
+        },
+        {
+          "name": "Test",
+          "run": "pytest -q --maxfail=1",
+          "env": {
+            "CI": true,
+            "PYTHONHASHSEED": 0
+          }
+        },
+        {
+          "name": "Summary",
+          "if": "${{ always() }}",
+          "run": "echo \"tests finished for ${{ matrix.os }}\" >> $GITHUB_STEP_SUMMARY"
+        }
+      ]
+    }
+  }
+}
+== site.yml
+--- document 1
+[
+  {
+    "hosts": "web",
+    "become": true,
+    "vars": {
+      "http_port": 80,
+      "max_clients": 200
+    },
+    "tasks": [
+      {
+        "name": "install nginx",
+        "apt": "name=nginx state=present update_cache=yes"
+      },
+      {
+        "name": "write config",
+        "template": {
+          "src": "nginx.conf.j2",
+          "dest": "/etc/nginx/nginx.conf",
+          "mode": 420
+        },
+        "notify": "restart nginx"
+      },
+      {
+        "name": "config dir",
+        "file": {
+          "path": "/etc/nginx/conf.d",
+          "state": "directory",
+          "mode": "0755"
+        }
+      },
+      {
+        "name": "open firewall",
+        "ufw": "rule=allow port={{ http_port }}",
+        "when": "ansible_os_family == \"Debian\" and firewall_enabled"
+      }
+    ],
+    "handlers": [
+      {
+        "name": "restart nginx",
+        "service": "name=nginx state=restarted"
+      }
+    ]
+  }
+]
+== edge.yaml
+--- document 1
+{
+  "country": false,
+  "answer": true,
+  "switch": false,
+  "nothing": null,
+  "empty": null,
+  "octal": 493,
+  "hex": 31,
+  "binary": 10,
+  "million": 1000000,
+  "sexagesimal": 685230,
+  "negative": -42,
+  "float": 3.0,
+  "half": 0.5,
+  "exponent": 6.02e+23,
+  "not_a_float": "1e3",
+  "infinity": -Infinity,
+  "version": 1.1,
+  "date": "2026-10-14",
+  "stamp": "2026-10-14 09:12:01+00:00",
+  "local": "2026-10-14 09:12:01.500000",
+  "quoted": "tab\there, \u00e9, \"quotes\", \\",
+  "single": "it's 'quoted'",
+  "unicode": "caf\u00e9",
+  "url": "http://example.com/a#b",
+  "hash": "not",
+  "folded plain": "this plain scalar goes on over three lines",
+  "key with spaces": "value with: colon",
+  "spaced value": "padded",
+  "nested": {
+    "a": 1,
+    "b": [
+      "x",
+      "y",
+      {
+        "c": "d"
+      }
+    ],
+    "e f": null
+  },
+  "list of lists": [
+    [
+      1,
+      2
+    ],
+    [
+      3,
+      4
+    ],
+    "five"
+  ],
+  "keep": "kept\n\n",
+  "strip": "stripped",
+  "indented": "  two extra\n",
+  "duplicate": "second",
+  "1": true,
+  "null": "z",
+  "3.5": "f"
+}
+== multi.yaml
+--- document 1
+{
+  "a": 1
+}
+--- document 2
+[
+  "b",
+  "c"
+]
+--- document 3
+"plain document"
+--- document 4
+null
+== tab.yaml
+error: while scanning for the next token
+found character '\t' that cannot start any token
+  in "data/tab.yaml", line 2, column 1
+== quote.yaml
+error: while scanning a quoted scalar
+  in "data/quote.yaml", line 2, column 7
+found unexpected end of stream
+  in "data/quote.yaml", line 4, column 1
+== indent.yaml
+error: while parsing a block mapping
+  in "data/indent.yaml", line 2, column 3
+expected <block end>, but found '<block mapping start>'
+  in "data/indent.yaml", line 4, column 4
+== alias.yaml
+error: found undefined alias 'bse'
+  in "data/alias.yaml", line 3, column 7
+== flow.yaml
+error: while parsing a flow sequence
+  in "data/flow.yaml", line 1, column 8
+expected ',' or ']', but got ':'
+  in "data/flow.yaml", line 2, column 4
+== dash.yaml
+error: while parsing a block collection
+  in "data/dash.yaml", line 2, column 3
+expected <block end>, but found '?'
+  in "data/dash.yaml", line 3, column 3
+== report
+deployment shop-api: 3 replicas, registry.example.com/shop/api:1.9.0, registry.example.com/infra/vector:0.41
+service shop-api: 80->8000
+configmap shop-api-config: app.ini (40 bytes), motd (71 bytes), empty.txt (0 bytes)
+service web: restart=unless-stopped, ports 8080:80, 443:443
+service api: restart=always
+service db: restart=no, ports 5432:5432
+service ssh: restart=no, ports 1342 (read as a number, not host:container)
+workflow triggers: True
+job test: 4 steps, matrix python '3.11', '3.12', 3.1
+task 'install nginx': apt
+task 'write config': template, mode 420
+task 'config dir': file, mode '0755'
+task 'open firewall': ufw
