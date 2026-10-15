@@ -165,6 +165,7 @@ cli/delta_sync       rsync-style directory sync: rolling weak checksum + MD5 blo
 cli/mini_lua         a Lua 5.4 subset interpreter: closures over shared cells, metatables, pcall/error positions, Lua patterns from lstrlib.c, exact %.14g floats; seven scripts and an access-log report, output identical to real Lua 5.4.6
 cli/mini_jinja       a Jinja2 subset rendering a blog: extends/super, include, import, macros with defaults, namespace, raw, trim/lstrip whitespace rules, autoescape, Jinja's error messages; output identical to Jinja2 3.1.6
 cli/mini_jq           a jq 1.7 subset running 47 invocations over pod, release, log and config JSON: paths and updates, reduce/foreach, defs, formats, dates, jq's number printing and error messages; output identical to jq 1.7
+cli/mini_patch        difflib's unified diff of two service trees, then GNU patch -p1 applying it: clean, -R, a drifted copy with offsets and a reject file, a malformed patch and garbage; output identical to difflib and GNU patch 2.7.6
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

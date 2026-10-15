@@ -1,0 +1,1483 @@
+// mini_patch: the diff and patch half of a code-review or config-rollout
+// tool. The run writes three copies of a small service's tree (`before/`,
+// `after/` and `drifted/`, a copy someone edited locally after branching)
+// and two broken patch files, then:
+// - diffs `before` against `after` into `changes.patch` (unified, three
+//   lines of context, git-style `a/`/`b/` names, `/dev/null` for an added
+//   or deleted file, `\ No newline at end of file`);
+// - applies the patch to a copy of `before`, which then matches `after`;
+// - applies it in reverse (-R), which gets `before` back;
+// - applies it to the drifted copy: hunks found at an offset, one hunk
+//   whose lines were edited (FAILED, saved to a .rej file);
+// - applies a malformed patch and a file with no patch in it.
+// After each run it prints the patch's messages, its exit status, and how
+// the tree differs from the one it should equal, as a unified diff.
+//
+// The diff is Python difflib's: its SequenceMatcher (longest matching
+// block first, then the pieces on each side; lines that make up more than
+// 1% of a file of 200 or more lines are not used to start a match) and
+// unified_diff's hunk grouping. Applying follows GNU patch 2.7 with -p1
+// and --fuzz=0: each hunk is looked for at its line number shifted by the
+// offset the previous hunk was found at, then one line further each way
+// in turn; a hunk with less leading than trailing context must start the
+// file, and one with less trailing context must end it. GNU patch's
+// messages, line numbers in them and reject files are reproduced.
+//
+// expected.out is real difflib's and real GNU patch 2.7.6's output on the
+// same trees, made by oracle.py.
+//
+// Works around B-2026-10-15-41: the matcher's work-queue struct is `Todo`,
+// because a user `struct Range` captures every `a..b` in the program.
+
+// ------------------------------------------------------------ bytes and strings
+
+fn byte_str(b: Slice[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn sub(s: Str, from: i64, to: i64) -> String {
+    byte_str(s.bytes(), from, to)
+}
+
+fn starts_with(s: Str, head: Str) -> bool {
+    let b = s.bytes();
+    let h = head.bytes();
+    if h.len() > b.len() {
+        return false;
+    }
+    for i in 0..h.len() {
+        if b[i] != h[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_with(s: Str, tail: Str) -> bool {
+    let b = s.bytes();
+    let t = tail.bytes();
+    if t.len() > b.len() {
+        return false;
+    }
+    for i in 0..t.len() {
+        if b[b.len() - t.len() + i] != t[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// Lines, each keeping its "\n" (the last one may have none).
+fn split_lines(text: Str) -> Vec[String] {
+    let b = text.bytes();
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i + 1));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+fn same_lines(a: ref Vec[String], b: ref Vec[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn join_lines(lines: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for i in 0..lines.len() {
+        out.push_str(lines[i]);
+    }
+    out
+}
+
+fn plural(n: i64, word: Str) -> String {
+    if n == 1 {
+        return word.to_string();
+    }
+    f"{word}s"
+}
+
+// ------------------------------------------------------------ difflib
+
+// A run of `size` equal lines at a[a..] and b[b..].
+struct Block { a: i64, b: i64, size: i64 }
+
+const OP_EQUAL: i64 = 0;
+const OP_REPLACE: i64 = 1;
+const OP_DELETE: i64 = 2;
+const OP_INSERT: i64 = 3;
+
+// a[i1..i2] becomes b[j1..j2]
+struct Op { tag: i64, i1: i64, i2: i64, j1: i64, j2: i64 }
+
+fn op(tag: i64, i1: i64, i2: i64, j1: i64, j2: i64) -> Op {
+    Op { tag: tag, i1: i1, i2: i2, j1: j1, j2: j2 }
+}
+
+// difflib's autojunk: in a b of 200 lines or more, a line that occurs
+// more than len/100 + 1 times is "popular" and starts no match.
+fn popular_lines(b: ref Vec[String]) -> Vec[bool] {
+    let n = b.len();
+    let mut pop: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        pop.push(false);
+    }
+    if n < 200 {
+        return pop;
+    }
+    let limit = n / 100 + 1;
+    for j in 0..n {
+        let mut count: i64 = 0;
+        for k in 0..n {
+            if b[k] == b[j] {
+                count += 1;
+            }
+        }
+        pop[j] = count > limit;
+    }
+    pop
+}
+
+// SequenceMatcher.find_longest_match: the longest block of equal lines
+// in a[alo..ahi] and b[blo..bhi], the earliest in a (then in b) among the
+// longest, grown by equal lines on both sides.
+fn longest_match(a: ref Vec[String], b: ref Vec[String], pop: ref Vec[bool], alo: i64, ahi: i64, blo: i64, bhi: i64) -> Block {
+    let mut besti = alo;
+    let mut bestj = blo;
+    let mut best: i64 = 0;
+    // run[j + 1]: the length of the equal run ending at a[i - 1], b[j]
+    let mut prev: Vec[i64] = Vec.new();
+    for _ in 0..b.len() + 1 {
+        prev.push(0);
+    }
+    for i in alo..ahi {
+        let mut cur: Vec[i64] = Vec.new();
+        for _ in 0..b.len() + 1 {
+            cur.push(0);
+        }
+        for j in blo..bhi {
+            if pop[j] or a[i] != b[j] {
+                continue;
+            }
+            let k = prev[j] + 1;
+            cur[j + 1] = k;
+            if k > best {
+                besti = i - k + 1;
+                bestj = j - k + 1;
+                best = k;
+            }
+        }
+        prev = cur;
+    }
+    while besti > alo and bestj > blo and a[besti - 1] == b[bestj - 1] {
+        besti -= 1;
+        bestj -= 1;
+        best += 1;
+    }
+    while besti + best < ahi and bestj + best < bhi and a[besti + best] == b[bestj + best] {
+        best += 1;
+    }
+    Block { a: besti, b: bestj, size: best }
+}
+
+// a[alo..ahi] against b[blo..bhi], still to match
+struct Todo { alo: i64, ahi: i64, blo: i64, bhi: i64 }
+
+fn block_before(x: ref Block, y: ref Block) -> bool {
+    if x.a != y.a {
+        return x.a < y.a;
+    }
+    if x.b != y.b {
+        return x.b < y.b;
+    }
+    x.size < y.size
+}
+
+// get_matching_blocks: the longest match, then the same on the pieces
+// before and after it, sorted, adjacent blocks merged, and a final
+// empty block at the ends.
+fn matching_blocks(a: ref Vec[String], b: ref Vec[String]) -> Vec[Block] {
+    let pop = popular_lines(b);
+    let mut found: Vec[Block] = Vec.new();
+    let mut queue: Vec[Todo] = Vec.new();
+    queue.push(Todo { alo: 0, ahi: a.len(), blo: 0, bhi: b.len() });
+    while queue.len() > 0 {
+        let q = queue.pop().unwrap();
+        let m = longest_match(a, b, pop, q.alo, q.ahi, q.blo, q.bhi);
+        if m.size == 0 {
+            continue;
+        }
+        if q.alo < m.a and q.blo < m.b {
+            queue.push(Todo { alo: q.alo, ahi: m.a, blo: q.blo, bhi: m.b });
+        }
+        if m.a + m.size < q.ahi and m.b + m.size < q.bhi {
+            queue.push(Todo { alo: m.a + m.size, ahi: q.ahi, blo: m.b + m.size, bhi: q.bhi });
+        }
+        found.push(m);
+    }
+    // insertion sort; there are few blocks
+    let mut sorted: Vec[Block] = Vec.new();
+    for i in 0..found.len() {
+        let x = ref found[i];
+        let mut at = sorted.len();
+        while at > 0 and block_before(x, sorted[at - 1]) {
+            at -= 1;
+        }
+        sorted.insert(at, Block { a: x.a, b: x.b, size: x.size });
+    }
+    let mut out: Vec[Block] = Vec.new();
+    let mut i1: i64 = 0;
+    let mut j1: i64 = 0;
+    let mut k1: i64 = 0;
+    for i in 0..sorted.len() {
+        let x = ref sorted[i];
+        if i1 + k1 == x.a and j1 + k1 == x.b {
+            k1 += x.size;
+        } else {
+            if k1 > 0 {
+                out.push(Block { a: i1, b: j1, size: k1 });
+            }
+            i1 = x.a;
+            j1 = x.b;
+            k1 = x.size;
+        }
+    }
+    if k1 > 0 {
+        out.push(Block { a: i1, b: j1, size: k1 });
+    }
+    out.push(Block { a: a.len(), b: b.len(), size: 0 });
+    out
+}
+
+fn opcodes(a: ref Vec[String], b: ref Vec[String]) -> Vec[Op] {
+    let blocks = matching_blocks(a, b);
+    let mut out: Vec[Op] = Vec.new();
+    let mut i: i64 = 0;
+    let mut j: i64 = 0;
+    for k in 0..blocks.len() {
+        let m = ref blocks[k];
+        let tag = if i < m.a and j < m.b {
+            OP_REPLACE
+        } else if i < m.a {
+            OP_DELETE
+        } else if j < m.b {
+            OP_INSERT
+        } else {
+            -1
+        };
+        if tag >= 0 {
+            out.push(op(tag, i, m.a, j, m.b));
+        }
+        i = m.a + m.size;
+        j = m.b + m.size;
+        if m.size > 0 {
+            out.push(op(OP_EQUAL, m.a, i, m.b, j));
+        }
+    }
+    out
+}
+
+fn min(x: i64, y: i64) -> i64 {
+    if x < y { x } else { y }
+}
+
+fn max(x: i64, y: i64) -> i64 {
+    if x > y { x } else { y }
+}
+
+// get_grouped_opcodes: the changes with n lines of context, split where
+// more than 2n equal lines separate them.
+fn grouped(a: ref Vec[String], b: ref Vec[String], n: i64) -> Vec[Vec[Op]] {
+    let mut codes = opcodes(a, b);
+    if codes.len() == 0 {
+        codes.push(op(OP_EQUAL, 0, 1, 0, 1));
+    }
+    let c0 = op(codes[0].tag, codes[0].i1, codes[0].i2, codes[0].j1, codes[0].j2);
+    if c0.tag == OP_EQUAL {
+        codes[0] = op(OP_EQUAL, max(c0.i1, c0.i2 - n), c0.i2, max(c0.j1, c0.j2 - n), c0.j2);
+    }
+    let last = codes.len() - 1;
+    let cl = op(codes[last].tag, codes[last].i1, codes[last].i2, codes[last].j1, codes[last].j2);
+    if cl.tag == OP_EQUAL {
+        codes[last] = op(OP_EQUAL, cl.i1, min(cl.i2, cl.i1 + n), cl.j1, min(cl.j2, cl.j1 + n));
+    }
+    let mut groups: Vec[Vec[Op]] = Vec.new();
+    let mut group: Vec[Op] = Vec.new();
+    for k in 0..codes.len() {
+        let c = ref codes[k];
+        let mut i1 = c.i1;
+        let mut j1 = c.j1;
+        if c.tag == OP_EQUAL and c.i2 - i1 > 2 * n {
+            group.push(op(OP_EQUAL, i1, min(c.i2, i1 + n), j1, min(c.j2, j1 + n)));
+            groups.push(group);
+            group = Vec.new();
+            i1 = max(i1, c.i2 - n);
+            j1 = max(j1, c.j2 - n);
+        }
+        group.push(op(c.tag, i1, c.i2, j1, c.j2));
+    }
+    if group.len() > 0 and not (group.len() == 1 and group[0].tag == OP_EQUAL) {
+        groups.push(group);
+    }
+    groups
+}
+
+// A hunk range as diff -u writes it: "start,len", just "start" for one
+// line, and the line before for an empty range.
+fn range_text(start: i64, stop: i64) -> String {
+    let len = stop - start;
+    if len == 1 {
+        return f"{start + 1}";
+    }
+    if len == 0 {
+        return f"{start},0";
+    }
+    f"{start + 1},{len}"
+}
+
+// A diff line, with the marker for a last line that has no newline.
+fn diff_line(mark: Str, line: Str, out: mut ref String) {
+    out.push_str(mark);
+    out.push_str(line);
+    if not ends_with(line, "\n") {
+        out.push_str("\n\\ No newline at end of file\n");
+    }
+}
+
+fn unified(a: ref Vec[String], b: ref Vec[String], from: Str, to: Str) -> String {
+    let groups = grouped(a, b, 3);
+    let mut out = String.new();
+    if groups.len() == 0 {
+        return out;
+    }
+    out.push_str(f"--- {from}\n+++ {to}\n");
+    for g in 0..groups.len() {
+        let group = ref groups[g];
+        let first = ref group[0];
+        let last = ref group[group.len() - 1];
+        out.push_str(f"@@ -{range_text(first.i1, last.i2)} +{range_text(first.j1, last.j2)} @@\n");
+        for k in 0..group.len() {
+            let c = ref group[k];
+            if c.tag == OP_EQUAL {
+                for i in c.i1..c.i2 {
+                    diff_line(" ", a[i], mut out);
+                }
+                continue;
+            }
+            if c.tag == OP_REPLACE or c.tag == OP_DELETE {
+                for i in c.i1..c.i2 {
+                    diff_line("-", a[i], mut out);
+                }
+            }
+            if c.tag == OP_REPLACE or c.tag == OP_INSERT {
+                for j in c.j1..c.j2 {
+                    diff_line("+", b[j], mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ trees
+
+fn list_files(dir: Str) -> Vec[String] {
+    match fs.read_dir(dir.to_string()) {
+        Ok(names) => names,
+        Err(_) => Vec.new(),
+    }
+}
+
+fn has(names: ref Vec[String], n: Str) -> bool {
+    for i in 0..names.len() {
+        if names[i] == n {
+            return true;
+        }
+    }
+    false
+}
+
+fn read_lines_of(path: Str) -> Result[Vec[String], String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(split_lines(t)),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+// The unified diff of two trees, file by file in name order (.rej files
+// left out), each under a `diff -u` line.
+fn tree_diff(old: Str, new: Str, ap: Str, bp: Str) -> Result[String, String] {
+    let olds = list_files(old);
+    let news = list_files(new);
+    let mut names: Vec[String] = Vec.new();
+    for i in 0..olds.len() {
+        names.push(olds[i].clone());
+    }
+    for i in 0..news.len() {
+        if not has(names, news[i]) {
+            names.push(news[i].clone());
+        }
+    }
+    // read_dir sorts each side; merge them
+    let mut sorted: Vec[String] = Vec.new();
+    for i in 0..names.len() {
+        let mut at = sorted.len();
+        while at > 0 and sorted[at - 1] > names[i] {
+            at -= 1;
+        }
+        sorted.insert(at, names[i].clone());
+    }
+    let mut out = String.new();
+    for i in 0..sorted.len() {
+        let n = sorted[i].clone();
+        if ends_with(n, ".rej") {
+            continue;
+        }
+        let in_a = has(olds, n);
+        let in_b = has(news, n);
+        let la = if in_a { read_lines_of(f"{old}/{n}")? } else { Vec.new() };
+        let lb = if in_b { read_lines_of(f"{new}/{n}")? } else { Vec.new() };
+        if same_lines(la, lb) {
+            continue;
+        }
+        let from = if in_a { f"{ap}{n}" } else { "/dev/null".to_string() };
+        let to = if in_b { f"{bp}{n}" } else { "/dev/null".to_string() };
+        out.push_str(f"diff -u {ap}{n} {bp}{n}\n");
+        out.push_str(unified(la, lb, from, to));
+    }
+    Ok(out)
+}
+
+fn copy_tree(from: Str, to: Str) -> Result[(), String] {
+    if fs.exists(to.to_string()) {
+        if let Err(e) = fs.remove_dir_all(to.to_string()) {
+            return Err(f"cannot remove {to}: {e}");
+        }
+    }
+    if let Err(e) = fs.create_dir_all(to.to_string()) {
+        return Err(f"cannot create {to}: {e}");
+    }
+    let names = list_files(from);
+    for i in 0..names.len() {
+        let n = ref names[i];
+        if let Err(e) = fs.copy(f"{from}/{n}", f"{to}/{n}") {
+            return Err(f"cannot copy {n}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ reading a patch
+
+// One hunk: its ranges, the lines it expects (`olds`) and puts in their
+// place (`news`), each with its "\n" unless a `\ No newline` line follows
+// it, its leading and trailing context counts, and its text as it was in
+// the patch (for a reject file).
+struct Hunk {
+    old_start: i64,
+    old_len: i64,
+    new_start: i64,
+    new_len: i64,
+    olds: Vec[String],
+    news: Vec[String],
+    prefix: i64,
+    suffix: i64,
+    text: Vec[String],
+}
+
+struct FilePatch { old_name: String, new_name: String, hunks: Vec[Hunk] }
+
+// A file name from a `---` or `+++` line, without its first directory
+// (-p1); /dev/null stays as it is.
+fn patch_name(line: Str) -> String {
+    let b = line.bytes();
+    let mut e: i64 = 4;
+    while e < b.len() and b[e] != b'\t' and b[e] != b'\n' {
+        e += 1;
+    }
+    let name = byte_str(b, 4, e);
+    if name == "/dev/null" {
+        return name;
+    }
+    let nb = name.bytes();
+    for i in 0..nb.len() {
+        if nb[i] == b'/' {
+            return byte_str(nb, i + 1, nb.len());
+        }
+    }
+    name
+}
+
+// "start[,len]" from a hunk header; a missing length is 1.
+fn parse_range(text: Str) -> Option[(i64, i64)] {
+    let b = text.bytes();
+    let mut comma: i64 = -1;
+    for i in 0..b.len() {
+        if b[i] == b',' {
+            comma = i;
+        }
+    }
+    if comma < 0 {
+        let start = i64.parse(text.to_string())?;
+        return Some((start, 1));
+    }
+    let start = i64.parse(byte_str(b, 0, comma))?;
+    let len = i64.parse(byte_str(b, comma + 1, b.len()))?;
+    Some((start, len))
+}
+
+// "@@ -a,b +c,d @@" (anything may follow the second @@)
+fn parse_header(line: Str) -> Option[(i64, i64, i64, i64)] {
+    if not starts_with(line, "@@ -") {
+        return None;
+    }
+    let b = line.bytes();
+    let mut i: i64 = 4;
+    while i < b.len() and b[i] != b' ' {
+        i += 1;
+    }
+    let old = parse_range(byte_str(b, 4, i))?;
+    if i + 2 >= b.len() or b[i + 1] != b'+' {
+        return None;
+    }
+    let st = i + 2;
+    let mut j = st;
+    while j < b.len() and b[j] != b' ' {
+        j += 1;
+    }
+    let new = parse_range(byte_str(b, st, j))?;
+    if not starts_with(sub(line, j, line.len()), " @@") {
+        return None;
+    }
+    let (os, ol) = old;
+    let (ns, nl) = new;
+    Some((os, ol, ns, nl))
+}
+
+fn without_newline(s: Str) -> String {
+    if ends_with(s, "\n") {
+        return sub(s, 0, s.len() - 1);
+    }
+    s.to_string()
+}
+
+// What reading a patch stopped at: the hunk, or GNU patch's message for
+// a malformed one.
+struct Reader { lines: Vec[String], pos: i64 }
+
+impl Reader {
+    // The next file header (`---` then `+++`), skipping what comes before
+    // it; false at the end of the patch.
+    fn next_file(mut ref self) -> bool {
+        while self.pos + 1 < self.lines.len() {
+            if starts_with(self.lines[self.pos], "--- ") and starts_with(self.lines[self.pos + 1], "+++ ") {
+                return true;
+            }
+            self.pos += 1;
+        }
+        self.pos = self.lines.len();
+        false
+    }
+
+    fn malformed(ref self) -> String {
+        let line = ref self.lines[self.pos];
+        f"patch: **** malformed patch at line {self.pos + 1}: {line}\n"
+    }
+
+    // The hunks after a file header.
+    fn hunks(mut ref self) -> Result[Vec[Hunk], String] {
+        let mut out: Vec[Hunk] = Vec.new();
+        while self.pos < self.lines.len() {
+            let head = match parse_header(self.lines[self.pos]) {
+                Some(h) => h,
+                None => break,
+            };
+            let (os, ol, ns, nl) = head;
+            let mut h = Hunk { old_start: os, old_len: ol, new_start: ns, new_len: nl, olds: Vec.new(), news: Vec.new(), prefix: 0, suffix: 0, text: Vec.new() };
+            self.pos += 1;
+            let mut old_left = ol;
+            let mut new_left = nl;
+            // which list the last line went to: 1 old, 2 new, 3 both
+            let mut last: i64 = 0;
+            let mut changed = false;
+            while old_left > 0 or new_left > 0 {
+                if self.pos >= self.lines.len() {
+                    return Err("patch: **** unexpected end of file in patch\n".to_string());
+                }
+                let line = self.lines[self.pos].clone();
+                let b = line.bytes();
+                let c = if b.len() > 0 { b[0] } else { b'\n' };
+                if c == b'\\' and last > 0 {
+                    h.text.push(line.clone());
+                    self.pos += 1;
+                    strip_last(mut h, last);
+                    continue;
+                }
+                let body = if c == b'\n' { "\n".to_string() } else { byte_str(b, 1, b.len()) };
+                if (c == b' ' or c == b'\n') and old_left > 0 and new_left > 0 {
+                    h.olds.push(body.clone());
+                    h.news.push(body);
+                    old_left -= 1;
+                    new_left -= 1;
+                    last = 3;
+                    if changed {
+                        h.suffix += 1;
+                    } else {
+                        h.prefix += 1;
+                    }
+                } else if c == b'-' and old_left > 0 {
+                    h.olds.push(body);
+                    old_left -= 1;
+                    last = 1;
+                    changed = true;
+                    h.suffix = 0;
+                } else if c == b'+' and new_left > 0 {
+                    h.news.push(body);
+                    new_left -= 1;
+                    last = 2;
+                    changed = true;
+                    h.suffix = 0;
+                } else {
+                    return Err(self.malformed());
+                }
+                h.text.push(line);
+                self.pos += 1;
+            }
+            // a `\ No newline` after the hunk's last line
+            if self.pos < self.lines.len() and starts_with(self.lines[self.pos], "\\") and last > 0 {
+                h.text.push(self.lines[self.pos].clone());
+                self.pos += 1;
+                strip_last(mut h, last);
+            }
+            if not changed {
+                // all context: the trailing count is the leading one
+                h.suffix = h.prefix;
+            }
+            out.push(h);
+        }
+        Ok(out)
+    }
+}
+
+fn strip_last(h: mut ref Hunk, last: i64) {
+    if last == 1 or last == 3 {
+        let i = h.olds.len() - 1;
+        h.olds[i] = without_newline(h.olds[i]);
+    }
+    if last == 2 or last == 3 {
+        let i = h.news.len() - 1;
+        h.news[i] = without_newline(h.news[i]);
+    }
+}
+
+// ------------------------------------------------------------ applying a patch
+
+fn lines_at(input: ref Vec[String], want: ref Vec[String], pos: i64) -> bool {
+    for k in 0..want.len() {
+        if input[pos - 1 + k] != want[k] {
+            return false;
+        }
+    }
+    true
+}
+
+// Where the hunk's old lines are (1-based), looking from `guess` one
+// line further each way in turn, never before `cursor` (lines already
+// patched); -1 when nowhere.
+fn locate(input: ref Vec[String], h: ref Hunk, guess: i64, cursor: i64) -> i64 {
+    let n = h.olds.len();
+    let lo = cursor + 1;
+    let hi = input.len() - n + 1;
+    if hi < lo {
+        return -1;
+    }
+    // too little context on one side pins the hunk to that end of the file
+    if h.prefix < h.suffix {
+        return if lo <= 1 and 1 <= hi and lines_at(input, h.olds, 1) { 1 } else { -1 };
+    }
+    if h.suffix < h.prefix {
+        return if lo <= hi and lines_at(input, h.olds, hi) { hi } else { -1 };
+    }
+    let mut offset: i64 = 0;
+    loop {
+        let up = guess + offset;
+        let down = guess - offset;
+        if up > hi and down < lo {
+            return -1;
+        }
+        if up >= lo and up <= hi and lines_at(input, h.olds, up) {
+            return up;
+        }
+        if offset > 0 and down >= lo and down <= hi and lines_at(input, h.olds, down) {
+            return down;
+        }
+        offset += 1;
+    }
+}
+
+fn range_from(start: i64, len: i64) -> String {
+    if len == 1 {
+        return f"{start}";
+    }
+    f"{start},{len}"
+}
+
+fn reversed(h: ref Hunk) -> Hunk {
+    let mut text: Vec[String] = Vec.new();
+    for i in 0..h.text.len() {
+        let line = ref h.text[i];
+        if starts_with(line, "+") {
+            text.push(f"-{sub(line, 1, line.len())}");
+        } else if starts_with(line, "-") {
+            text.push(f"+{sub(line, 1, line.len())}");
+        } else {
+            text.push(line.clone());
+        }
+    }
+    Hunk { old_start: h.new_start, old_len: h.new_len, new_start: h.old_start, new_len: h.old_len, olds: h.news.clone(), news: h.olds.clone(), prefix: h.prefix, suffix: h.suffix, text: text }
+}
+
+// Applies one file's hunks under `dir`, as GNU patch does: messages to
+// `out`; returns whether every hunk applied.
+fn apply_file(dir: Str, fp: ref FilePatch, reverse: bool, out: mut ref String) -> Result[bool, String] {
+    let old_name = if reverse { fp.new_name.clone() } else { fp.old_name.clone() };
+    let new_name = if reverse { fp.old_name.clone() } else { fp.new_name.clone() };
+    let target = if old_name == "/dev/null" { new_name.clone() } else { old_name.clone() };
+    let path = f"{dir}/{target}";
+    let input = if old_name == "/dev/null" { Vec.new() } else { read_lines_of(path)? };
+    let mut result: Vec[String] = Vec.new();
+    let mut rejects = String.new();
+    let mut failed: i64 = 0;
+    let mut cursor: i64 = 0;
+    let mut out_offset: i64 = 0;
+    let mut last_offset: i64 = 0;
+    for k in 0..fp.hunks.len() {
+        let h = if reverse { reversed(fp.hunks[k]) } else { clone_hunk(fp.hunks[k]) };
+        let first = if h.old_len == 0 { h.old_start + 1 } else { h.old_start };
+        let at = locate(input, h, first + last_offset, cursor);
+        let num = k + 1;
+        if at < 0 {
+            failed += 1;
+            out.push_str(f"Hunk #{num} FAILED at {h.old_start + out_offset}.\n");
+            rejects.push_str(f"@@ -{range_from(h.old_start + out_offset, h.old_len)} +{range_from(h.new_start + out_offset, h.new_len)} @@\n");
+            for i in 0..h.text.len() {
+                rejects.push_str(h.text[i]);
+            }
+            continue;
+        }
+        for i in cursor..at - 1 {
+            result.push(input[i].clone());
+        }
+        for i in 0..h.news.len() {
+            result.push(h.news[i].clone());
+        }
+        cursor = at - 1 + h.olds.len();
+        let offset = at - first;
+        last_offset = offset;
+        if offset != 0 {
+            let a = if offset < 0 { 0 - offset } else { offset };
+            out.push_str(f"Hunk #{num} succeeded at {at + out_offset} (offset {offset} {plural(a, "line")}).\n");
+        }
+        out_offset += h.new_len - h.old_len;
+    }
+    for i in cursor..input.len() {
+        result.push(input[i].clone());
+    }
+    if failed > 0 {
+        let total = fp.hunks.len();
+        out.push_str(f"{failed} out of {total} {plural(total, "hunk")} FAILED -- saving rejects to file {target}.rej\n");
+        let rej = f"--- {old_name}\n+++ {new_name}\n{rejects}";
+        if let Err(e) = fs.write(f"{path}.rej", rej) {
+            return Err(f"cannot write {path}.rej: {e}");
+        }
+    }
+    if new_name == "/dev/null" and result.len() == 0 {
+        if let Err(e) = fs.remove_file(path.clone()) {
+            return Err(f"cannot remove {path}: {e}");
+        }
+        return Ok(failed == 0);
+    }
+    if let Err(e) = fs.write(path.clone(), join_lines(result)) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(failed == 0)
+}
+
+fn clone_hunk(h: ref Hunk) -> Hunk {
+    Hunk { old_start: h.old_start, old_len: h.old_len, new_start: h.new_start, new_len: h.new_len, olds: h.olds.clone(), news: h.news.clone(), prefix: h.prefix, suffix: h.suffix, text: h.text.clone() }
+}
+
+// `patch -p1 --fuzz=0 [-R]` in `dir`: its messages and exit status (1
+// when a hunk failed, 2 for a patch it cannot read).
+fn apply_patch(dir: Str, text: Str, reverse: bool, out: mut ref String) -> Result[i64, String] {
+    let mut rd = Reader { lines: split_lines(text), pos: 0 };
+    let mut status: i64 = 0;
+    let mut files: i64 = 0;
+    while rd.next_file() {
+        let old_name = patch_name(rd.lines[rd.pos]);
+        let new_name = patch_name(rd.lines[rd.pos + 1]);
+        rd.pos += 2;
+        files += 1;
+        let shown = if (if reverse { new_name.clone() } else { old_name.clone() }) == "/dev/null" {
+            if reverse { old_name.clone() } else { new_name.clone() }
+        } else {
+            if reverse { new_name.clone() } else { old_name.clone() }
+        };
+        out.push_str(f"patching file {shown}\n");
+        let hunks = match rd.hunks() {
+            Ok(h) => h,
+            Err(m) => {
+                out.push_str(m);
+                return Ok(2);
+            }
+        };
+        let fp = FilePatch { old_name: old_name, new_name: new_name, hunks: hunks };
+        if not apply_file(dir, fp, reverse, out)? {
+            status = 1;
+        }
+    }
+    if files == 0 {
+        out.push_str("patch: **** Only garbage was found in the patch input.\n");
+        return Ok(2);
+    }
+    Ok(status)
+}
+
+// ------------------------------------------------------------ the files
+
+fn before_readme_md() -> String {
+    """
+# shop
+
+The order service behind shop.example.com.
+
+## Running
+
+    SHOP_CONFIG=shop.json python3 app.py
+
+## Configuration
+
+`shop.json` holds the log level and the database URL.
+
+"""
+}
+
+fn before_app_py() -> String {
+    """
+import json
+import logging
+import os
+
+log = logging.getLogger("shop")
+
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 100
+
+
+def load_config(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def page_size(params):
+    size = int(params.get("size", DEFAULT_PAGE_SIZE))
+    if size > MAX_PAGE_SIZE:
+        size = MAX_PAGE_SIZE
+    return size
+
+
+def list_orders(db, params):
+    size = page_size(params)
+    offset = int(params.get("offset", 0))
+    rows = db.query("SELECT * FROM orders LIMIT ? OFFSET ?", size, offset)
+    return [dict(r) for r in rows]
+
+
+def cancel_order(db, order_id):
+    order = db.get("orders", order_id)
+    if order is None:
+        return False
+    db.update("orders", order_id, status="cancelled")
+    log.info("cancelled %s", order_id)
+    return True
+
+
+def main():
+    config = load_config(os.environ.get("SHOP_CONFIG", "shop.json"))
+    log.setLevel(config.get("log_level", "INFO"))
+    print("shop starting")
+
+
+if __name__ == "__main__":
+    main()
+
+"""
+}
+
+fn before_legacy_ini() -> String {
+    """
+[server]
+port = 8000
+workers = 2
+
+[db]
+url = sqlite:///shop.db
+
+"""
+}
+
+fn before_nginx_conf() -> String {
+    """
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 768;
+    multi_accept off;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    types_hash_max_size 2048;
+    server_tokens on;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+    gzip_types text/plain text/css application/json;
+
+    upstream app {
+        server 127.0.0.1:8000;
+    }
+
+    server {
+        listen 80;
+        server_name shop.example.com;
+
+        location / {
+            proxy_pass http://app;
+            proxy_set_header Host $host;
+        }
+
+        location /static/ {
+            alias /srv/shop/static/;
+        }
+    }
+}
+
+"""
+}
+
+fn before_schema_sql() -> String {
+    """
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT
+);
+
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    status TEXT NOT NULL DEFAULT 'new',
+    total_cents INTEGER NOT NULL
+);
+
+CREATE TABLE order_items (
+    order_id INTEGER NOT NULL REFERENCES orders(id),
+    sku TEXT NOT NULL,
+    quantity INTEGER NOT NULL
+);
+
+CREATE INDEX orders_by_customer ON orders(customer_id);
+
+"""
+}
+
+fn after_readme_md() -> String {
+    """
+# shop
+
+The order service behind shop.example.com.
+
+## Running
+
+    SHOP_CONFIG=shop.json python3 app.py
+
+## Configuration
+
+`shop.json` holds the log level, the port and the database URL.
+
+See deploy.sh for the production rollout.
+"""
+}
+
+fn after_app_py() -> String {
+    """
+import json
+import logging
+import os
+import time
+
+log = logging.getLogger("shop")
+
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 100
+
+
+def load_config(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def page_size(params):
+    size = int(params.get("size", DEFAULT_PAGE_SIZE))
+    if size < 1:
+        size = 1
+    if size > MAX_PAGE_SIZE:
+        size = MAX_PAGE_SIZE
+    return size
+
+
+def list_orders(db, params):
+    size = page_size(params)
+    offset = int(params.get("offset", 0))
+    rows = db.query("SELECT * FROM orders LIMIT ? OFFSET ?", size, offset)
+    return [dict(r) for r in rows]
+
+
+def cancel_order(db, order_id):
+    order = db.get("orders", order_id)
+    if order is None or order["status"] == "shipped":
+        return False
+    db.update("orders", order_id, status="cancelled", at=time.time())
+    log.info("cancelled %s", order_id)
+    return True
+
+
+def main():
+    config = load_config(os.environ.get("SHOP_CONFIG", "shop.json"))
+    log.setLevel(config.get("log_level", "INFO"))
+    log.info("shop starting on %s", config.get("port", 8000))
+
+
+if __name__ == "__main__":
+    main()
+
+"""
+}
+
+fn after_deploy_sh() -> String {
+    """
+#!/bin/sh
+set -eu
+rsync -a --delete ./ shop@prod:/srv/shop/
+ssh shop@prod 'sudo systemctl reload nginx && sudo systemctl restart shop'
+
+"""
+}
+
+fn after_nginx_conf() -> String {
+    """
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 4096;
+    multi_accept on;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    types_hash_max_size 2048;
+    server_tokens off;
+    client_max_body_size 16m;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+    gzip_types text/plain text/css application/json;
+
+    upstream app {
+        server 127.0.0.1:8000;
+        server 127.0.0.1:8001;
+        keepalive 32;
+    }
+
+    server {
+        listen 80;
+        server_name shop.example.com;
+
+        location / {
+            proxy_pass http://app;
+            proxy_set_header Host $host;
+        }
+
+        location /static/ {
+            alias /srv/shop/static/;
+            expires 7d;
+        }
+    }
+}
+
+"""
+}
+
+fn after_schema_sql() -> String {
+    """
+CREATE TABLE products (
+    sku TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    price_cents INTEGER NOT NULL
+);
+
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE order_items (
+    order_id INTEGER NOT NULL REFERENCES orders(id),
+    sku TEXT NOT NULL REFERENCES products(sku),
+    quantity INTEGER NOT NULL
+);
+
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    status TEXT NOT NULL DEFAULT 'new',
+    total_cents INTEGER NOT NULL
+);
+
+CREATE INDEX orders_by_customer ON orders(customer_id);
+CREATE INDEX orders_by_status ON orders(status);
+
+"""
+}
+
+fn drifted_readme_md() -> String {
+    """
+# shop
+
+The order service behind shop.example.com.
+
+## Running
+
+    SHOP_CONFIG=shop.json python3 app.py
+
+## Configuration
+
+`shop.json` holds the log level and the database URL.
+
+"""
+}
+
+fn drifted_app_py() -> String {
+    """
+import json
+import logging
+import os
+
+log = logging.getLogger("shop")
+
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 100
+
+
+def load_config(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def page_size(params):
+    size = int(params.get("size", DEFAULT_PAGE_SIZE))
+    if size > MAX_PAGE_SIZE:
+        size = MAX_PAGE_SIZE
+    return size
+
+
+def list_orders(db, params):
+    size = page_size(params)
+    offset = int(params.get("offset", 0))
+    rows = db.query("SELECT * FROM orders LIMIT ? OFFSET ?", size, offset)
+    return [dict(r) for r in rows]
+
+
+def health(db):
+    return db.ping()
+
+
+def cancel_order(db, order_id):
+    order = db.get("orders", order_id)
+    if order is None:
+        return False
+    db.update("orders", order_id, status="canceled")
+    log.info("cancelled %s", order_id)
+    return True
+
+
+def main():
+    config = load_config(os.environ.get("SHOP_CONFIG", "shop.json"))
+    log.setLevel(config.get("log_level", "INFO"))
+    print("shop starting")
+
+
+if __name__ == "__main__":
+    main()
+
+"""
+}
+
+fn drifted_legacy_ini() -> String {
+    """
+[server]
+port = 8000
+workers = 2
+
+[db]
+url = sqlite:///shop.db
+
+"""
+}
+
+fn drifted_nginx_conf() -> String {
+    """
+# local tuning, see ops ticket 4411
+worker_rlimit_nofile 8192;
+
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 768;
+    multi_accept off;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    types_hash_max_size 2048;
+    server_tokens on;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+    gzip_types text/plain text/css application/json;
+
+    upstream app {
+        server 127.0.0.1:8000;
+    }
+
+    server {
+        listen 80;
+        server_name shop.example.com;
+
+        location / {
+            proxy_pass http://app;
+            proxy_set_header Host $host;
+        }
+
+        location /static/ {
+            alias /srv/shop/static/;
+        }
+    }
+}
+
+"""
+}
+
+fn drifted_schema_sql() -> String {
+    """
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT
+);
+
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    status TEXT NOT NULL DEFAULT 'new',
+    total_cents INTEGER NOT NULL
+);
+
+CREATE TABLE order_items (
+    order_id INTEGER NOT NULL REFERENCES orders(id),
+    sku TEXT NOT NULL,
+    quantity INTEGER NOT NULL
+);
+
+CREATE INDEX orders_by_customer ON orders(customer_id);
+
+"""
+}
+
+fn patches_bad_patch() -> String {
+    """
+diff -u a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1,3 +1,4 @@
+ import json
++import sys
+ import logging
+import os
+
+"""
+}
+
+fn patches_notes_patch() -> String {
+    """
+Release notes for 1.9:
+- faster checkout
+- fewer timeouts
+
+"""
+}
+
+fn write_trees() -> Result[(), String] {
+    let dirs: Array[Str, 4] = ["before", "after", "drifted", "patches"];
+    for i in 0..4 {
+        let d = dirs[i];
+        if let Err(e) = fs.create_dir_all(d.to_string()) {
+            return Err(f"cannot create {d}: {e}");
+        }
+    }
+    put("before/README.md", before_readme_md())?;
+    put("before/app.py", before_app_py())?;
+    put("before/legacy.ini", before_legacy_ini())?;
+    put("before/nginx.conf", before_nginx_conf())?;
+    put("before/schema.sql", before_schema_sql())?;
+    put("after/README.md", after_readme_md())?;
+    put("after/app.py", after_app_py())?;
+    put("after/deploy.sh", after_deploy_sh())?;
+    put("after/nginx.conf", after_nginx_conf())?;
+    put("after/schema.sql", after_schema_sql())?;
+    put("drifted/README.md", drifted_readme_md())?;
+    put("drifted/app.py", drifted_app_py())?;
+    put("drifted/legacy.ini", drifted_legacy_ini())?;
+    put("drifted/nginx.conf", drifted_nginx_conf())?;
+    put("drifted/schema.sql", drifted_schema_sql())?;
+    put("patches/bad.patch", patches_bad_patch())?;
+    put("patches/notes.patch", patches_notes_patch())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the runs
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// Prints how `tree` differs from `want`, then each reject file in it.
+fn compare(tree: Str, want: Str) -> Result[(), String] {
+    let d = tree_diff(want, tree, "want/", "got/")?;
+    if d.len() == 0 {
+        println(f"identical to {want}");
+    } else {
+        print(d);
+    }
+    let names = list_files(tree);
+    for i in 0..names.len() {
+        let n = ref names[i];
+        if ends_with(n, ".rej") {
+            println(f"-- {n}");
+            let text = match fs.read_to_string(f"{tree}/{n}") {
+                Ok(t) => t,
+                Err(e) => return Err(f"cannot read {tree}/{n}: {e}"),
+            };
+            print(text);
+        }
+    }
+    Ok(())
+}
+
+// One `patch -p1` run in `tree`, reading the patch from `pfile`.
+fn run_patch(tree: Str, pfile: Str, reverse: bool) -> Result[(), String] {
+    let text = match fs.read_to_string(pfile.to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {pfile}: {e}"),
+    };
+    let mut out = String.new();
+    let status = apply_patch(tree, text, reverse, mut out)?;
+    print(out);
+    println(f"[exit {status}]");
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_trees()?;
+    let p = tree_diff("before", "after", "a/", "b/")?;
+    put("changes.patch", p.clone())?;
+    println("== mini_patch diff before after > changes.patch");
+    print(p);
+
+    copy_tree("before", "work")?;
+    println("== mini_patch apply -p1 work < changes.patch");
+    run_patch("work", "changes.patch", false)?;
+    compare("work", "after")?;
+    println("== mini_patch apply -R -p1 work < changes.patch");
+    run_patch("work", "changes.patch", true)?;
+    compare("work", "before")?;
+
+    copy_tree("drifted", "work")?;
+    println("== mini_patch apply -p1 drifted < changes.patch");
+    run_patch("work", "changes.patch", false)?;
+    compare("work", "after")?;
+
+    let broken: Array[Str, 2] = ["bad.patch", "notes.patch"];
+    for i in 0..2 {
+        let name = broken[i];
+        copy_tree("before", "work")?;
+        println(f"== mini_patch apply -p1 before < {name}");
+        run_patch("work", f"patches/{name}", false)?;
+        compare("work", "before")?;
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_patch: {e}");
+    }
+}

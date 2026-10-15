@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 269 |
 | codegen-gap | 262 |
-| false-positive | 198 |
+| false-positive | 199 |
 | other | 172 |
 | perf | 167 |
 | diagnostics | 162 |
@@ -112,14 +112,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2906 |
 | interp | 932 |
-| typecheck | 435 |
+| typecheck | 436 |
 | other | 115 |
 | ownership | 103 |
 | cli | 76 |
 | runtime | 72 |
 | parser | 64 |
 | autopar | 59 |
-| resolver | 41 |
+| resolver | 42 |
 | effect | 32 |
 | lexer | 11 |
 ## Current state
@@ -223,6 +223,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-37 | 2026-10-15 | typecheck | medium | A method call on a LOCAL or PARAMETER named `ast` or `compiler` is refused with E_COMPTIME_MODULE_AT_RUNTIME ("the `ast` module is only available inside a `comptime` context"): `fn f(ast: mut ref A) -> i64 { ast.add(3) }` fails `karac check` and every running surface, though the binding is in scope and should shadow the comptime module; the same program with the parameter renamed runs | — |
 | B-2026-10-15-38 | 2026-10-15 | ownership | low | `karac check` takes `f64.parse(t.text)` (and `i64.parse(t.text)`) as a MOVE of the field `t.text`, so a later `out.push(t)` is refused with "value 't.text' moved here, used again here"; the same call on a local String (`f64.parse(text)` then `T { text: text, .. }`) is accepted, the spec gives `parse(s: Str)` a borrowed parameter, and all four running surfaces run the program | — |
 | B-2026-10-15-40 | 2026-10-15 | interp+codegen | high | On the MIR backends a USER enum variant named `None` takes over every bare `None` of an `Option` in the program: with `enum V { None, Int(i64) }` declared, `fn half(x: i64) -> Option[i64] { .. None }` stops `__mir-run`, `__mir-llvm-run` and `__mir-llvm-asan` with "invalid MIR: half: bb9[0]: Option takes 1 fields, got 0" before anything runs; `karac check` passes and `karac run --interp` prints the right answer | — |
+| B-2026-10-15-41 | 2026-10-15 | typecheck+resolver | medium | A user `struct Range` captures every range literal: with `struct Range { lo: i64, hi: i64 }` in scope, `for i in 0..v.len() { v[i] }` fails `karac check` with "index must be an integer or range, found 'T'" at the index (52 such errors in a 1480-line program, none at the struct), with no prelude_shadow warning, and the MIR front end refuses the program with a location-less "'Range' is already defined" whose span is in the library source | — |
 
 ### Relocated
 

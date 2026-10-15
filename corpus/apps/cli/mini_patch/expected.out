@@ -1,0 +1,246 @@
+== mini_patch diff before after > changes.patch
+diff -u a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -8,4 +8,6 @@
+ 
+ ## Configuration
+ 
+-`shop.json` holds the log level and the database URL.
++`shop.json` holds the log level, the port and the database URL.
++
++See deploy.sh for the production rollout.
+\ No newline at end of file
+diff -u a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1,6 +1,7 @@
+ import json
+ import logging
+ import os
++import time
+ 
+ log = logging.getLogger("shop")
+ 
+@@ -15,6 +16,8 @@
+ 
+ def page_size(params):
+     size = int(params.get("size", DEFAULT_PAGE_SIZE))
++    if size < 1:
++        size = 1
+     if size > MAX_PAGE_SIZE:
+         size = MAX_PAGE_SIZE
+     return size
+@@ -29,9 +32,9 @@
+ 
+ def cancel_order(db, order_id):
+     order = db.get("orders", order_id)
+-    if order is None:
++    if order is None or order["status"] == "shipped":
+         return False
+-    db.update("orders", order_id, status="cancelled")
++    db.update("orders", order_id, status="cancelled", at=time.time())
+     log.info("cancelled %s", order_id)
+     return True
+ 
+@@ -39,7 +42,7 @@
+ def main():
+     config = load_config(os.environ.get("SHOP_CONFIG", "shop.json"))
+     log.setLevel(config.get("log_level", "INFO"))
+-    print("shop starting")
++    log.info("shop starting on %s", config.get("port", 8000))
+ 
+ 
+ if __name__ == "__main__":
+diff -u a/deploy.sh b/deploy.sh
+--- /dev/null
++++ b/deploy.sh
+@@ -0,0 +1,4 @@
++#!/bin/sh
++set -eu
++rsync -a --delete ./ shop@prod:/srv/shop/
++ssh shop@prod 'sudo systemctl reload nginx && sudo systemctl restart shop'
+diff -u a/legacy.ini b/legacy.ini
+--- a/legacy.ini
++++ /dev/null
+@@ -1,6 +0,0 @@
+-[server]
+-port = 8000
+-workers = 2
+-
+-[db]
+-url = sqlite:///shop.db
+diff -u a/nginx.conf b/nginx.conf
+--- a/nginx.conf
++++ b/nginx.conf
+@@ -3,15 +3,16 @@
+ pid /run/nginx.pid;
+ 
+ events {
+-    worker_connections 768;
+-    multi_accept off;
++    worker_connections 4096;
++    multi_accept on;
+ }
+ 
+ http {
+     sendfile on;
+     tcp_nopush on;
+     types_hash_max_size 2048;
+-    server_tokens on;
++    server_tokens off;
++    client_max_body_size 16m;
+ 
+     include /etc/nginx/mime.types;
+     default_type application/octet-stream;
+@@ -24,6 +25,8 @@
+ 
+     upstream app {
+         server 127.0.0.1:8000;
++        server 127.0.0.1:8001;
++        keepalive 32;
+     }
+ 
+     server {
+@@ -37,6 +40,7 @@
+ 
+         location /static/ {
+             alias /srv/shop/static/;
++            expires 7d;
+         }
+     }
+ }
+diff -u a/schema.sql b/schema.sql
+--- a/schema.sql
++++ b/schema.sql
+@@ -1,7 +1,20 @@
++CREATE TABLE products (
++    sku TEXT PRIMARY KEY,
++    title TEXT NOT NULL,
++    price_cents INTEGER NOT NULL
++);
++
+ CREATE TABLE customers (
+     id INTEGER PRIMARY KEY,
+     email TEXT NOT NULL UNIQUE,
+-    name TEXT
++    name TEXT,
++    created_at TEXT NOT NULL
++);
++
++CREATE TABLE order_items (
++    order_id INTEGER NOT NULL REFERENCES orders(id),
++    sku TEXT NOT NULL REFERENCES products(sku),
++    quantity INTEGER NOT NULL
+ );
+ 
+ CREATE TABLE orders (
+@@ -11,10 +24,5 @@
+     total_cents INTEGER NOT NULL
+ );
+ 
+-CREATE TABLE order_items (
+-    order_id INTEGER NOT NULL REFERENCES orders(id),
+-    sku TEXT NOT NULL,
+-    quantity INTEGER NOT NULL
+-);
+-
+ CREATE INDEX orders_by_customer ON orders(customer_id);
++CREATE INDEX orders_by_status ON orders(status);
+== mini_patch apply -p1 work < changes.patch
+patching file README.md
+patching file app.py
+patching file deploy.sh
+patching file legacy.ini
+patching file nginx.conf
+patching file schema.sql
+[exit 0]
+identical to after
+== mini_patch apply -R -p1 work < changes.patch
+patching file README.md
+patching file app.py
+patching file deploy.sh
+patching file legacy.ini
+patching file nginx.conf
+patching file schema.sql
+[exit 0]
+identical to before
+== mini_patch apply -p1 drifted < changes.patch
+patching file README.md
+patching file app.py
+Hunk #3 FAILED at 32.
+Hunk #4 succeeded at 46 (offset 4 lines).
+1 out of 4 hunks FAILED -- saving rejects to file app.py.rej
+patching file deploy.sh
+patching file legacy.ini
+patching file nginx.conf
+Hunk #1 succeeded at 6 (offset 3 lines).
+Hunk #2 succeeded at 28 (offset 3 lines).
+Hunk #3 succeeded at 43 (offset 3 lines).
+patching file schema.sql
+[exit 1]
+diff -u want/app.py got/app.py
+--- want/app.py
++++ got/app.py
+@@ -5,7 +5,7 @@
+ 
+ log = logging.getLogger("shop")
+ 
+-DEFAULT_PAGE_SIZE = 20
++DEFAULT_PAGE_SIZE = 50
+ MAX_PAGE_SIZE = 100
+ 
+ 
+@@ -30,11 +30,15 @@
+     return [dict(r) for r in rows]
+ 
+ 
++def health(db):
++    return db.ping()
++
++
+ def cancel_order(db, order_id):
+     order = db.get("orders", order_id)
+-    if order is None or order["status"] == "shipped":
++    if order is None:
+         return False
+-    db.update("orders", order_id, status="cancelled", at=time.time())
++    db.update("orders", order_id, status="canceled")
+     log.info("cancelled %s", order_id)
+     return True
+ 
+diff -u want/nginx.conf got/nginx.conf
+--- want/nginx.conf
++++ got/nginx.conf
+@@ -1,3 +1,6 @@
++# local tuning, see ops ticket 4411
++worker_rlimit_nofile 8192;
++
+ user www-data;
+ worker_processes auto;
+ pid /run/nginx.pid;
+-- app.py.rej
+--- app.py
++++ app.py
+@@ -32,9 +35,9 @@
+ 
+ def cancel_order(db, order_id):
+     order = db.get("orders", order_id)
+-    if order is None:
++    if order is None or order["status"] == "shipped":
+         return False
+-    db.update("orders", order_id, status="cancelled")
++    db.update("orders", order_id, status="cancelled", at=time.time())
+     log.info("cancelled %s", order_id)
+     return True
+ 
+== mini_patch apply -p1 before < bad.patch
+patching file app.py
+patch: **** malformed patch at line 8: import os
+
+[exit 2]
+identical to before
+== mini_patch apply -p1 before < notes.patch
+patch: **** Only garbage was found in the patch input.
+[exit 2]
+identical to before
