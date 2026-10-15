@@ -5183,7 +5183,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         match self.lcx.res.get(&e.id) {
             Some(Res::Def(d)) => {
                 let d = *d;
-                match self.lcx.variant(d) {
+                // A variant of an enum not registered yet is placed by
+                // name below.
+                let variant = self.lcx.variant(d).or_else(|| {
+                    (self.lcx.defs.table.get(d).kind == DefKind::Variant).then_some((d, 0))
+                });
+                match variant {
                     Some((_, idx)) => {
                         // A fieldless variant takes its destination's type
                         // when the checker left a parameter free (`None`).
@@ -5197,6 +5202,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 t = dt;
                             }
                         }
+                        let idx = self.variant_at(d, t).unwrap_or(idx);
                         self.build_variant(t, idx, Vec::new(), dest);
                         Ok(())
                     }
@@ -9002,17 +9008,24 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// name that two enums share (`Str(n)`) may have resolved to the other
     /// one's; the scrutinee's enum decides, by name.
     fn variant_at(&mut self, v: DefId, t: Ty) -> Option<u32> {
-        let (e, idx) = self.lcx.variant(v)?;
-        let tcx = self.tys().tcx();
-        let def = match tcx.kind(t) {
+        let found = self.lcx.variant(v);
+        let def = match self.tys().tcx().kind(t) {
             HK::Adt { def, .. } | HK::Shared { def, .. } => def,
-            _ => return Some(idx),
+            _ => return found.map(|(_, idx)| idx),
         };
-        if def == e {
-            return Some(idx);
+        match found {
+            Some((e, idx)) if def == e => return Some(idx),
+            Some(_) => {}
+            // A struct (a struct pattern's path) has no variant.
+            None if self.lcx.defs.table.get(v).kind != DefKind::Variant => return None,
+            None => {}
         }
+        // A user variant named like a prelude one (`Err`) resolves to the
+        // user's enum, which may not even be registered; the scrutinee's
+        // enum decides, by name (B-2026-10-15-3).
+        self.lcx.register_adt(def).ok()?;
         let name = self.lcx.def_name(v);
-        let (adt, _) = tcx.adt_of(t)?;
+        let (adt, _) = self.tys().tcx().adt_of(t)?;
         adt.variants
             .iter()
             .position(|x| x.name == name.as_str())
@@ -9618,7 +9631,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             Callee::Builtin(name) => self.builtin_call(e, &name, args, dest),
             Callee::Value => self.call_value(e, callee, args, dest),
             Callee::Def(d) => {
-                if let Some((_, idx)) = self.lcx.variant(d) {
+                if self.lcx.variant(d).is_some()
+                    || self.lcx.defs.table.get(d).kind == DefKind::Variant
+                {
                     let t = self.expr_ty(e)?;
                     // A constructor handed to a borrowed parameter builds
                     // the value it lends (`show(Ok(x))` for `ref Result`).
@@ -9626,6 +9641,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let t = match self.tys().tcx().kind(t) {
                         HK::Ref(inner) | HK::MutRef(inner) => inner,
                         _ => t,
+                    };
+                    // A bare `Err(..)` may have resolved to a user variant of
+                    // the same name; the value's enum decides
+                    // (B-2026-10-15-3).
+                    let Some(idx) = self.variant_at(d, t) else {
+                        return self.unsupported(e.span, "this variant");
                     };
                     let mut ops = Vec::new();
                     for (i, a) in args.iter().enumerate() {

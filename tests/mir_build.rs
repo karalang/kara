@@ -1884,3 +1884,72 @@ fn main() {
         }
     }
 }
+
+/// A user variant named like a prelude one (`Err`, `Ok`, `None`) does not
+/// capture the prelude constructors or patterns (B-2026-10-15-3): the
+/// value's enum decides which variant a bare name means, whether or not the
+/// user's enum is used anywhere else and whatever its variant indices are.
+#[test]
+fn mir_user_variant_named_err_does_not_capture_result() {
+    for (src, want) in [
+        (
+            r#"
+enum RedirKind { In, Out, Append, Err }
+fn tk(s: Str) -> Result[i64, String] {
+    if s.is_empty() { return Err("empty".to_string()); }
+    Ok(2)
+}
+fn main() {
+    let k = RedirKind.In;
+    match k { RedirKind.Err => println("e"), _ => println("other") }
+    match tk("ab") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match tk("") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+}
+"#,
+            "other\n2\nempty\n",
+        ),
+        (
+            r#"
+enum Level { Err, Ok }
+fn f(n: i64) -> Result[i64, String] {
+    if n < 0 { return Err("neg".to_string()); }
+    Ok(n * 2)
+}
+fn main() {
+    let l = Level.Ok;
+    match l { Level.Err => println("lerr"), Level.Ok => println("lok") }
+    match f(2) { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match f(-1) { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+}
+"#,
+            "lok\n4\nneg\n",
+        ),
+        (
+            r#"
+enum RedirKind { In, Out, Append, Err }
+enum Opt { None, Some(i64) }
+fn tk(s: Str) -> Result[i64, String] {
+    if s.is_empty() { return Err("empty".to_string()); }
+    Ok(2)
+}
+fn g(b: bool) -> Option[i64] { if b { Some(3) } else { None } }
+fn main() {
+    match tk("ab") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match tk("") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match g(false) { Some(x) => println(f"{x}"), None => println("none") }
+    let r: Result[i64, String] = Err("x".to_string());
+    if let Err(e) = r { println(e); }
+}
+"#,
+            "2\nempty\nnone\nx\n",
+        ),
+    ] {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want);
+        for opt in [0, 2] {
+            if let Some(out) = build_and_run(src, opt) {
+                assert_eq!(out, want, "at -O{opt}");
+            }
+        }
+    }
+}
