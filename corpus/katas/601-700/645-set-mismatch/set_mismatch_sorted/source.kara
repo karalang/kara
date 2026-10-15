@@ -1,0 +1,102 @@
+// LeetCode #645: Set Mismatch -- sorting a copy.
+//
+// Sorted, the values run 1, 2, ... with one repeat and one gap: the
+// repeat is two equal neighbours, and the gap is where a value jumps by
+// two, or a missing 1 at the start or n at the end. O(n log n) time,
+// O(n) space.
+
+fn find_error_nums(nums: Vec[i64]) -> Vec[i64] {
+    let mut values = nums.clone();
+    values.sort();
+    let n = values.len();
+    let mut twice = 0;
+    // The value before the first, so a missing 1 shows as a jump.
+    let mut last = 0;
+    let mut missing = n;
+    for v in values.iter() {
+        if *v == last {
+            twice = *v;
+        } else if *v > last + 1 {
+            missing = last + 1;
+        }
+        last = *v;
+    }
+    vec![twice, missing]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut text = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            text.push_str(",");
+        }
+        text.push_str(f"{nums[i]}");
+    }
+    let got = find_error_nums(nums);
+    println(f"[{text}] -> [{got[0]},{got[1]}]");
+}
+
+// 1 to `n` in a random order, then the value at one random place
+// overwritten with the value at another.
+fn mismatched(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        nums.push(v);
+    }
+    for i in 0..n - 1 {
+        let j = i + next_random(mut seed) % (n - i);
+        let t = nums[i];
+        nums[i] = nums[j];
+        nums[j] = t;
+    }
+    let from = next_random(mut seed) % n;
+    let mut to = next_random(mut seed) % (n - 1);
+    if to >= from {
+        to += 1;
+    }
+    nums[to] = nums[from];
+    nums
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 2, 2, 4]);
+    show(vec![1, 1]);
+    // The copy and the gap next to each other, far apart, at either end of
+    // the values, and the smallest copying the largest and the other way.
+    show(vec![2, 2]);
+    show(vec![1, 2, 3, 3]);
+    show(vec![3, 2, 3, 4, 6, 5]);
+    show(vec![1, 5, 3, 2, 2, 7, 6, 4, 9, 10]);
+    show(vec![1, 2, 3, 4, 1]);
+    show(vec![5, 2, 3, 4, 5]);
+    // 300 random cases of 2 to 40 values.
+    let mut seed: i64 = 645;
+    let mut twice_sum = 0;
+    let mut missing_sum = 0;
+    let mut gaps = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 39;
+        let got = find_error_nums(mismatched(n, mut seed));
+        twice_sum += got[0];
+        missing_sum += got[1];
+        if got[0] > got[1] {
+            gaps += got[0] - got[1];
+        } else {
+            gaps += got[1] - got[0];
+        }
+    }
+    println(f"300 random cases: copies add to {twice_sum}, missing values to {missing_sum}, gaps to {gaps}");
+    // The problem's largest: 10,000 values, three times.
+    for _ in 0..3 {
+        let got = find_error_nums(mismatched(10000, mut seed));
+        println(f"10000 values -> [{got[0]},{got[1]}]");
+    }
+}

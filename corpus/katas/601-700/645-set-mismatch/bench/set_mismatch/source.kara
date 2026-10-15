@@ -1,0 +1,67 @@
+// Benchmark for #645: the ★ arm (counting each value) on a large
+// workload.
+
+fn find_error_nums(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut seen = vec![0; n + 1];
+    for x in nums.iter() {
+        seen[*x] += 1;
+    }
+    let mut twice = 0;
+    let mut missing = 0;
+    for v in 1..n + 1 {
+        if seen[v] == 2 {
+            twice = v;
+        } else if seen[v] == 0 {
+            missing = v;
+        }
+    }
+    vec![twice, missing]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1 to `n` in a random order, then the value at one random place
+// overwritten with the value at another.
+fn mismatched(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        nums.push(v);
+    }
+    for i in 0..n - 1 {
+        let j = i + next_random(mut seed) % (n - i);
+        let t = nums[i];
+        nums[i] = nums[j];
+        nums[j] = t;
+    }
+    let from = next_random(mut seed) % n;
+    let mut to = next_random(mut seed) % (n - 1);
+    if to >= from {
+        to += 1;
+    }
+    nums[to] = nums[from];
+    nums
+}
+
+fn main() {
+    // 20 arrays of 100,000 values made once; then 2,000 rounds each find
+    // the copy and the missing value of one array, picked by the round,
+    // adding them up.
+    let mut seed: i64 = 645;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20 {
+        arrays.push(mismatched(100000, mut seed));
+    }
+    let rounds = 2000;
+    let mut twice_sum = 0;
+    let mut missing_sum = 0;
+    for r in 0..rounds {
+        let got = find_error_nums(arrays[r % 20]);
+        twice_sum += got[0];
+        missing_sum += got[1];
+    }
+    println(f"{rounds} rounds over 20 arrays of 100000 values: copies add to {twice_sum}, missing values to {missing_sum}");
+}

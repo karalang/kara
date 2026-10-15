@@ -1,0 +1,223 @@
+// LeetCode #645: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random cases.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_error_nums_star(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut seen = vec![0; n + 1];
+    for x in nums.iter() {
+        seen[*x] += 1;
+    }
+    let mut twice = 0;
+    let mut missing = 0;
+    for v in 1..n + 1 {
+        if seen[v] == 2 {
+            twice = v;
+        } else if seen[v] == 0 {
+            missing = v;
+        }
+    }
+    vec![twice, missing]
+}
+
+// ---- sums arm ----------------------------------------------------------
+
+fn find_error_nums_sums(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut sum = 0;
+    let mut squares = 0;
+    for x in nums.iter() {
+        sum += *x;
+        squares += *x * *x;
+    }
+    let diff = sum - n * (n + 1) / 2;
+    let square_diff = squares - n * (n + 1) * (2 * n + 1) / 6;
+    let both = square_diff / diff;
+    let twice = (both + diff) / 2;
+    vec![twice, twice - diff]
+}
+
+// ---- xor arm -----------------------------------------------------------
+
+fn find_error_nums_xor(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut both = 0;
+    for i in 0..n {
+        both = both ^ nums[i] ^ (i + 1);
+    }
+    let bit = both & -both;
+    let mut a = 0;
+    let mut b = 0;
+    for i in 0..n {
+        if nums[i] & bit != 0 {
+            a = a ^ nums[i];
+        } else {
+            b = b ^ nums[i];
+        }
+        if (i + 1) & bit != 0 {
+            a = a ^ (i + 1);
+        } else {
+            b = b ^ (i + 1);
+        }
+    }
+    for x in nums.iter() {
+        if *x == a {
+            return vec![a, b];
+        }
+    }
+    vec![b, a]
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn find_error_nums_sorted(nums: Vec[i64]) -> Vec[i64] {
+    let mut values = nums.clone();
+    values.sort();
+    let n = values.len();
+    let mut twice = 0;
+    // The value before the first, so a missing 1 shows as a jump.
+    let mut last = 0;
+    let mut missing = n;
+    for v in values.iter() {
+        if *v == last {
+            twice = *v;
+        } else if *v > last + 1 {
+            missing = last + 1;
+        }
+        last = *v;
+    }
+    vec![twice, missing]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, nums: Vec[i64]) -> Vec[i64] {
+    if which == 0 {
+        find_error_nums_star(nums)
+    } else if which == 1 {
+        find_error_nums_sums(nums)
+    } else if which == 2 {
+        find_error_nums_xor(nums)
+    } else {
+        find_error_nums_sorted(nums)
+    }
+}
+
+// How many times `v` appears, counted from scratch.
+fn count(nums: Vec[i64], v: i64) -> i64 {
+    let mut c = 0;
+    for x in nums.iter() {
+        if *x == v {
+            c += 1;
+        }
+    }
+    c
+}
+
+// The definition: every value from 1 to n counted from scratch.
+fn definition(nums: Vec[i64]) -> Vec[i64] {
+    let mut twice = 0;
+    let mut missing = 0;
+    for v in 1..nums.len() + 1 {
+        let c = count(nums, v);
+        if c == 2 {
+            twice = v;
+        } else if c == 0 {
+            missing = v;
+        }
+    }
+    vec![twice, missing]
+}
+
+// 1 to `n` in a random order, then the value at one random place
+// overwritten with the value at another.
+fn mismatched(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        nums.push(v);
+    }
+    for i in 0..n - 1 {
+        let j = i + next_random(mut seed) % (n - i);
+        let t = nums[i];
+        nums[i] = nums[j];
+        nums[j] = t;
+    }
+    let from = next_random(mut seed) % n;
+    let mut to = next_random(mut seed) % (n - 1);
+    if to >= from {
+        to += 1;
+    }
+    nums[to] = nums[from];
+    nums
+}
+
+fn main() {
+    let count_cases = 1000;
+    let mut seed: i64 = 6450;
+    let mut checks = 0;
+    let mut values = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count_cases {
+        // 2 to 30 values.
+        let n = 2 + next_random(mut seed) % 29;
+        let nums = mismatched(n, mut seed);
+        values += n;
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut mirrored: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+            mirrored.push(n + 1 - nums[i]);
+        }
+        let want = definition(nums);
+        for which in 0..4 {
+            let got = answer(which, nums);
+            // P2: putting the missing value back in place of one copy gives
+            // every value from 1 to n once.
+            let mut fixed = nums.clone();
+            for i in 0..n {
+                if fixed[i] == got[0] {
+                    fixed[i] = got[1];
+                    break;
+                }
+            }
+            let mut whole = true;
+            for v in 1..n + 1 {
+                if count(fixed, v) != 1 {
+                    whole = false;
+                }
+            }
+            let back = answer(which, reversed);
+            let flipped = answer(which, mirrored);
+            let ok = vec![
+                // P1: the definition's answer.
+                got[0] == want[0] and got[1] == want[1],
+                whole,
+                // P3: the copy appears twice and the missing value never.
+                count(nums, got[0]) == 2 and count(nums, got[1]) == 0,
+                // P4: the values in reverse give the same answer.
+                back[0] == got[0] and back[1] == got[1],
+                // P5: every value `v` turned into `n + 1 - v` turns the
+                // answer the same way.
+                flipped[0] == n + 1 - got[0] and flipped[1] == n + 1 - got[1],
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count_cases} cases ({values} values), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
