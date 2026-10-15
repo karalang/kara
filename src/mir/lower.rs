@@ -1620,6 +1620,9 @@ struct Bx<'l, 'a> {
     closure_escapes: bool,
     /// The captures a closure body assigns to, found with its moves.
     assigned_caps: std::cell::RefCell<FxHashSet<SymbolId>>,
+    /// `let f = |..| ..` bindings whose closure is later stored where it
+    /// escapes, by the binding pattern's id (see `let_closure_escapes`).
+    escaping_lets: FxHashSet<NodeId>,
     /// Types for expressions the checker left untyped, taken from where
     /// they are used (`v.push(None)` gives `None` the element type).
     ty_hints: FxHashMap<NodeId, Ty>,
@@ -1664,6 +1667,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_key: false,
             closure_task: false,
             closure_escapes: false,
+            escaping_lets: FxHashSet::default(),
             assigned_caps: Default::default(),
             ty_hints: FxHashMap::default(),
             par_acc: None,
@@ -2839,6 +2843,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // the `errdefer` bodies too.
         let ret = Place::local(Local::RETURN_PLACE);
         self.push_scope();
+        self.note_escaping_lets(&f.body);
         for s in &f.body.stmts {
             self.stmt(s)?;
         }
@@ -2940,6 +2945,7 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     fn block_into(&mut self, block: &'a Block, dest: Place) -> R<()> {
         self.push_scope();
+        self.note_escaping_lets(block);
         for s in &block.stmts {
             self.stmt(s)?;
         }
@@ -2961,6 +2967,55 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => self.assign(dest, Rvalue::Use(unit_const(self.unit()))),
         }
         self.pop_scope()
+    }
+
+    /// Record the `let f = |..| ..` bindings of `block` whose closure escapes.
+    fn note_escaping_lets(&mut self, block: &Block) {
+        for s in &block.stmts {
+            let StmtKind::Let { pattern, value, .. } = &s.kind else {
+                continue;
+            };
+            let (PatternKind::Binding(name), ExprKind::Closure { .. }) =
+                (&pattern.kind, &value.kind)
+            else {
+                continue;
+            };
+            let sym = self
+                .lcx
+                .binding_syms
+                .get(&(pattern.id, name.clone()))
+                .copied();
+            if sym.is_some_and(|sym| self.let_closure_escapes(block, sym)) {
+                self.escaping_lets.insert(pattern.id);
+            }
+        }
+    }
+
+    /// Whether the closure a `let` in `block` binds to `sym` is later stored
+    /// where it escapes: a struct field, a collection, a tuple or array, a
+    /// `return`, or the block's value. Core semantics §9.3 makes such a
+    /// closure capture by move (B-2026-10-15-27).
+    fn let_closure_escapes(&self, block: &Block, sym: SymbolId) -> bool {
+        let is_sym = |e: &Expr| {
+            matches!(e.kind, ExprKind::Identifier(_))
+                && matches!(self.lcx.res.get(&e.id), Some(Res::Local(s)) if *s == sym)
+        };
+        if block.final_expr.as_deref().is_some_and(is_sym) {
+            return true;
+        }
+        let mut found = false;
+        crate::span_visitor::for_each_expr_in_block(block, &mut |e| {
+            found |= match &e.kind {
+                ExprKind::StructLiteral { fields, .. } => fields.iter().any(|f| is_sym(&f.value)),
+                ExprKind::MethodCall { method, args, .. } if stores_argument(method) => {
+                    args.iter().any(|a| is_sym(&a.value))
+                }
+                ExprKind::Return(Some(v)) => is_sym(v),
+                ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => es.iter().any(is_sym),
+                _ => false,
+            };
+        });
+        found
     }
 
     /// Whether `e`, a block's final expression, has a value that `dest`, a
@@ -2989,6 +3044,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     );
                     if item && self.is_fn_typed(pattern.id) {
                         self.push_scope();
+                        if self.escaping_lets.contains(&pattern.id) {
+                            self.closure_escapes = true;
+                        }
                         let (op, t) = self.fn_value(value)?;
                         let l = self.user_local(name, t, pattern.id);
                         self.assign(l, Rvalue::Use(op));
@@ -6997,6 +7055,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         // The branches' bindings join the enclosing scope, so they live on
         // past the block.
+        self.note_escaping_lets(b);
         for s in &b.stmts {
             let entry = self.branch_begin();
             self.stmt(s)?;

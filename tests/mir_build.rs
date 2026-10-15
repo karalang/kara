@@ -2067,3 +2067,44 @@ fn main() {
         }
     }
 }
+
+/// A `let`-bound closure that is later stored where it escapes (a struct
+/// field pushed into a returned `Vec`, a returned struct) captures by move
+/// (core semantics §9.3), so its captured `String` outlives the function
+/// (B-2026-10-15-27); one that is only called still borrows.
+#[test]
+fn mir_let_bound_closure_stored_in_a_returned_value_captures_by_move() {
+    let src = r#"
+struct T { f: Fn(i64) -> String with allocates(Heap) }
+fn make(host: own String) -> Vec[T] {
+    let mut v: Vec[T] = Vec.new();
+    let f: Fn(i64) -> String with allocates(Heap) = |n| f"{host}-{n}";
+    v.push(T { f: f });
+    v
+}
+fn one(host: own String) -> T {
+    let g = |n: i64| f"{host}:{n}";
+    T { f: g }
+}
+fn local_only(host: own String) -> i64 {
+    let h = |n: i64| host.len() as i64 + n;
+    let r = h(1);
+    r + host.len() as i64
+}
+fn main() {
+    let v = make("web-1".to_string());
+    println((v[0].f)(7));
+    let t = one("db".to_string());
+    println((t.f)(3));
+    println(f"{local_only("abc".to_string())}");
+}
+"#;
+    let want = "web-1-7\ndb:3\n7\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
