@@ -1,0 +1,326 @@
+== strptime
+'2026-10-15 08:00:01' '%Y-%m-%d %H:%M:%S': 2026-10-15T08:00:01
+'2026-10-15T08:00:01.250Z' '%Y-%m-%dT%H:%M:%S.%f%z': 2026-10-15T08:00:01.250000+00:00 [UTC]
+'15/Oct/2026:08:00:01 +0200' '%d/%b/%Y:%H:%M:%S %z': 2026-10-15T08:00:01+02:00 [UTC+02:00]
+'Thu, 15 Oct 2026 04:00:07 -0400' '%a, %d %b %Y %H:%M:%S %z': 2026-10-15T04:00:07-04:00 [UTC-04:00]
+'THURSDAY october 15 2026' '%A %B %d %Y': 2026-10-15T00:00:00
+'10/15/2026 8:00:05 PM' '%m/%d/%Y %I:%M:%S %p': 2026-10-15T20:00:05
+'10/15/2026 12:00:00 AM' '%m/%d/%Y %I:%M:%S %p': 2026-10-15T00:00:00
+'10/15/2026 12:30:00 pm' '%m/%d/%Y %I:%M:%S %p': 2026-10-15T12:30:00
+'2026-288' '%Y-%j': 2026-10-15T00:00:00
+'2026-W42-4' '%G-W%V-%u': 2026-10-15T00:00:00
+'2026 42 4' '%Y %W %w': 2026-10-22T00:00:00
+'2026 00 0' '%Y %U %w': 2025-12-28T00:00:00
+'2027 00 3' '%Y %W %w': 2026-12-30T00:00:00
+'2026-10-15 08:00:01 +05:30:15.5' '%Y-%m-%d %H:%M:%S %z': 2026-10-15T08:00:01+05:30:15.500000 [UTC+05:30:15.500000]
+'2026-10-15 08:00:01 +05:3015' '%Y-%m-%d %H:%M:%S %z': ValueError: Inconsistent use of : in +05:3015
+'20261015' '%Y%m%d': 2026-10-15T00:00:00
+'2026105' '%Y%m%d': 2026-10-05T00:00:00
+'2026-10-151' '%Y-%m-%d': ValueError: unconverted data remains: 1
+'2026-1-5' '%Y-%m-%d': 2026-01-05T00:00:00
+'2026-10-15 \t  08:00' '%Y-%m-%d %H:%M': 2026-10-15T08:00:00
+'26-10-15' '%y-%m-%d': 2026-10-15T00:00:00
+'69-10-15' '%y-%m-%d': 1969-10-15T00:00:00
+'68-10-15' '%y-%m-%d': 2068-10-15T00:00:00
+'2026-02-29' '%Y-%m-%d': ValueError: day is out of range for month
+'2024-02-29' '%Y-%m-%d': 2024-02-29T00:00:00
+'08:00' '%H:%M': 1900-01-01T08:00:00
+'2026-10-15 24:00' '%Y-%m-%d %H:%M': ValueError: time data '2026-10-15 24:00' does not match format '%Y-%m-%d %H:%M'
+'2026-10-15 23:61' '%Y-%m-%d %H:%M': ValueError: unconverted data remains: 1
+'2026-10-15 08:00:60' '%Y-%m-%d %H:%M:%S': ValueError: second must be in 0..59
+'1792051201' '%s': ValueError: 's' is a bad directive in format '%s'
+'2026-10-15' '%Y-%m-%d %H': ValueError: time data '2026-10-15' does not match format '%Y-%m-%d %H'
+'2026 %' '%Y %%': 2026-01-01T00:00:00
+'2026' '%Y %': ValueError: stray % in format '%Y %'
+'2026 x' '%Y %Ex': ValueError: 'Ex' is a bad directive in format '%Y %Ex'
+'Oct 15 2026 08:00:01 UTC' '%b %d %Y %H:%M:%S %Z': 2026-10-15T08:00:01
+'2026-10-15 08:00:01 GMT+0200' '%Y-%m-%d %H:%M:%S %Z%z': 2026-10-15T08:00:01+02:00 [GMT]
+'2026-10-15 08:00:01 EST' '%Y-%m-%d %H:%M:%S %Z': ValueError: time data '2026-10-15 08:00:01 EST' does not match format '%Y-%m-%d %H:%M:%S %Z'
+'12 AM' '%I %p': 1900-01-01T00:00:00
+'13 PM' '%I %p': ValueError: time data '13 PM' does not match format '%I %p'
+'2026-W53-5' '%G-W%V-%u': 2027-01-01T00:00:00
+'2025-W53-1' '%G-W%V-%u': ValueError: Invalid week: 53
+'2026 42' '%G %V': ValueError: ISO year directive '%G' must be used with the ISO week directive '%V' and a weekday directive ('%A', '%a', '%w', or '%u').
+'2026 42 4' '%Y %V %u': ValueError: ISO week directive '%V' is incompatible with the year directive '%Y'. Use the ISO year '%G' instead.
+'2026 288 4' '%G %j %u': ValueError: Day of the year directive '%j' is not compatible with ISO year directive '%G'. Use '%Y' instead.
+' 5 Oct 2026' '%e %b %Y': 2026-10-05T00:00:00
+'8:05:09 pm' '%l:%M:%S %P': 1900-01-01T20:05:09
+'2026-10-15 08:00:01.1234567' '%Y-%m-%d %H:%M:%S.%f': ValueError: unconverted data remains: 7
+'2026-10-15T08:00:01+9900' '%Y-%m-%dT%H:%M:%S%z': ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=4, seconds=10800).
+'Thu Oct 15 08:00:01 2026' '%c': 2026-10-15T08:00:01
+'10/15/26 08:00:01' '%x %X': 2026-10-15T08:00:01
+'08:00:01 PM' '%r': 1900-01-01T20:00:01
+'2026-10-15 8' '%Y-%m-%d %k': 2026-10-15T08:00:00
+'2026-10-15' '%Y-%m-%d%Q': ValueError: 'Q' is a bad directive in format '%Y-%m-%d%Q'
+'Monday 2026 01 0' '%A %Y %U %w': 2026-01-04T00:00:00
+'2026-10-15 08:00 Z' '%Y-%m-%d %H:%M %z': 2026-10-15T08:00:00+00:00 [UTC]
+'2026-10-15 08:00 z' '%Y-%m-%d %H:%M %z': ValueError: time data '2026-10-15 08:00 z' does not match format '%Y-%m-%d %H:%M %z'
+'2026-10-15 -0000' '%Y-%m-%d %z': 2026-10-15T00:00:00+00:00 [UTC]
+'2026-10-15 08:00:01 +02:00' '%F %T %z': ValueError: 'F' is a bad directive in format '%F %T %z'
+'2026.10.15 (08h00)' '%Y.%m.%d (%Hh%M)': 2026-10-15T08:00:00
+'2026-10-15 08:00' '%Y-%m-%d %-H:%M': 2026-10-15T08:00:00
+'2026-10-15 8:00' '%Y-%m-%d %OH:%OM': ValueError: time data '2026-10-15 8:00' does not match format '%Y-%m-%d %OH:%OM'
+'2026-10-15 :' '%Y-%m-%d %OH:': 2026-10-15T00:00:00
+== strftime
+'%Y-%m-%d %H:%M:%S.%f%z'
+  2026-10-15T08:00:01.250000+02:00: '2026-10-15 08:00:01.250000+0200'
+  2027-01-01T00:00:00: '2027-01-01 00:00:00.000000'
+  0005-01-02T03:04:05: '5-01-02 03:04:05.000000'
+  2024-02-29T23:59:59.999999-03:30: '2024-02-29 23:59:59.999999-0330'
+  2026-12-28T12:30:00+00:00: '2026-12-28 12:30:00.000000+0000'
+'%a %A %b %B %h'
+  2026-10-15T08:00:01.250000+02:00: 'Thu Thursday Oct October Oct'
+  2027-01-01T00:00:00: 'Fri Friday Jan January Jan'
+  0005-01-02T03:04:05: 'Sun Sunday Jan January Jan'
+  2024-02-29T23:59:59.999999-03:30: 'Thu Thursday Feb February Feb'
+  2026-12-28T12:30:00+00:00: 'Mon Monday Dec December Dec'
+'%c'
+  2026-10-15T08:00:01.250000+02:00: 'Thu Oct 15 08:00:01 2026'
+  2027-01-01T00:00:00: 'Fri Jan  1 00:00:00 2027'
+  0005-01-02T03:04:05: 'Sun Jan  2 03:04:05 5'
+  2024-02-29T23:59:59.999999-03:30: 'Thu Feb 29 23:59:59 2024'
+  2026-12-28T12:30:00+00:00: 'Mon Dec 28 12:30:00 2026'
+'%x %X %D %T %R %r'
+  2026-10-15T08:00:01.250000+02:00: '10/15/26 08:00:01 10/15/26 08:00:01 08:00 08:00:01 AM'
+  2027-01-01T00:00:00: '01/01/27 00:00:00 01/01/27 00:00:00 00:00 12:00:00 AM'
+  0005-01-02T03:04:05: '01/02/05 03:04:05 01/02/05 03:04:05 03:04 03:04:05 AM'
+  2024-02-29T23:59:59.999999-03:30: '02/29/24 23:59:59 02/29/24 23:59:59 23:59 11:59:59 PM'
+  2026-12-28T12:30:00+00:00: '12/28/26 12:30:00 12/28/26 12:30:00 12:30 12:30:00 PM'
+'%C %y %G %g'
+  2026-10-15T08:00:01.250000+02:00: '20 26 2026 26'
+  2027-01-01T00:00:00: '20 27 2026 26'
+  0005-01-02T03:04:05: '0 05 4 04'
+  2024-02-29T23:59:59.999999-03:30: '20 24 2024 24'
+  2026-12-28T12:30:00+00:00: '20 26 2026 26'
+'%j %U %W %V %u %w'
+  2026-10-15T08:00:01.250000+02:00: '288 41 41 42 4 4'
+  2027-01-01T00:00:00: '001 00 00 53 5 5'
+  0005-01-02T03:04:05: '002 01 00 53 7 0'
+  2024-02-29T23:59:59.999999-03:30: '060 08 09 09 4 4'
+  2026-12-28T12:30:00+00:00: '362 52 52 53 1 1'
+'%e|%k|%l|%I|%p|%P'
+  2026-10-15T08:00:01.250000+02:00: '15| 8| 8|08|AM|am'
+  2027-01-01T00:00:00: ' 1| 0|12|12|AM|am'
+  0005-01-02T03:04:05: ' 2| 3| 3|03|AM|am'
+  2024-02-29T23:59:59.999999-03:30: '29|23|11|11|PM|pm'
+  2026-12-28T12:30:00+00:00: '28|12|12|12|PM|pm'
+'%s'
+  2026-10-15T08:00:01.250000+02:00: '1792051201'
+  2027-01-01T00:00:00: '1798761600'
+  0005-01-02T03:04:05: '-62009268955'
+  2024-02-29T23:59:59.999999-03:30: '1709251199'
+  2026-12-28T12:30:00+00:00: '1798461000'
+'%Z|%z|%:z'
+  2026-10-15T08:00:01.250000+02:00: 'UTC+02:00|+0200|+02:00'
+  2027-01-01T00:00:00: '||'
+  0005-01-02T03:04:05: '||'
+  2024-02-29T23:59:59.999999-03:30: 'UTC-03:30|-0330|-03:30'
+  2026-12-28T12:30:00+00:00: 'UTC|+0000|+00:00'
+'%-d %-m %-H %-j %-y'
+  2026-10-15T08:00:01.250000+02:00: '15 10 8 288 26'
+  2027-01-01T00:00:00: '1 1 0 1 27'
+  0005-01-02T03:04:05: '2 1 3 2 5'
+  2024-02-29T23:59:59.999999-03:30: '29 2 23 60 24'
+  2026-12-28T12:30:00+00:00: '28 12 12 362 26'
+'%_d %_m %_H %_j'
+  2026-10-15T08:00:01.250000+02:00: '15 10  8 288'
+  2027-01-01T00:00:00: ' 1  1  0   1'
+  0005-01-02T03:04:05: ' 2  1  3   2'
+  2024-02-29T23:59:59.999999-03:30: '29  2 23  60'
+  2026-12-28T12:30:00+00:00: '28 12 12 362'
+'%0e %0k %0l'
+  2026-10-15T08:00:01.250000+02:00: '15 08 08'
+  2027-01-01T00:00:00: '01 00 12'
+  0005-01-02T03:04:05: '02 03 03'
+  2024-02-29T23:59:59.999999-03:30: '29 23 11'
+  2026-12-28T12:30:00+00:00: '28 12 12'
+'%^a %^B %#b %#A %#p %^p'
+  2026-10-15T08:00:01.250000+02:00: 'THU OCTOBER OCT THURSDAY am AM'
+  2027-01-01T00:00:00: 'FRI JANUARY JAN FRIDAY am AM'
+  0005-01-02T03:04:05: 'SUN JANUARY JAN SUNDAY am AM'
+  2024-02-29T23:59:59.999999-03:30: 'THU FEBRUARY FEB THURSDAY pm PM'
+  2026-12-28T12:30:00+00:00: 'MON DECEMBER DEC MONDAY pm PM'
+'%10Y|%-10Y|%_10Y'
+  2026-10-15T08:00:01.250000+02:00: '0000002026|      2026|      2026'
+  2027-01-01T00:00:00: '0000002027|      2027|      2027'
+  0005-01-02T03:04:05: '0000000005|         5|         5'
+  2024-02-29T23:59:59.999999-03:30: '0000002024|      2024|      2024'
+  2026-12-28T12:30:00+00:00: '0000002026|      2026|      2026'
+'%5d|%_5d|%-5d|%1d'
+  2026-10-15T08:00:01.250000+02:00: '00015|   15|   15|15'
+  2027-01-01T00:00:00: '00001|    1|    1|01'
+  0005-01-02T03:04:05: '00002|    2|    2|02'
+  2024-02-29T23:59:59.999999-03:30: '00029|   29|   29|29'
+  2026-12-28T12:30:00+00:00: '00028|   28|   28|28'
+'%10A|%-10A|%010A|%_10b'
+  2026-10-15T08:00:01.250000+02:00: '  Thursday|  Thursday|00Thursday|       Oct'
+  2027-01-01T00:00:00: '    Friday|    Friday|0000Friday|       Jan'
+  0005-01-02T03:04:05: '    Sunday|    Sunday|0000Sunday|       Jan'
+  2024-02-29T23:59:59.999999-03:30: '  Thursday|  Thursday|00Thursday|       Feb'
+  2026-12-28T12:30:00+00:00: '    Monday|    Monday|0000Monday|       Dec'
+'%%|%n|%t|'
+  2026-10-15T08:00:01.250000+02:00: '%|\n|\t|'
+  2027-01-01T00:00:00: '%|\n|\t|'
+  0005-01-02T03:04:05: '%|\n|\t|'
+  2024-02-29T23:59:59.999999-03:30: '%|\n|\t|'
+  2026-12-28T12:30:00+00:00: '%|\n|\t|'
+'%Q %Ey %Od'
+  2026-10-15T08:00:01.250000+02:00: '%Q 26 15'
+  2027-01-01T00:00:00: '%Q 27 01'
+  0005-01-02T03:04:05: '%Q 05 02'
+  2024-02-29T23:59:59.999999-03:30: '%Q 24 29'
+  2026-12-28T12:30:00+00:00: '%Q 26 28'
+'100%'
+  2026-10-15T08:00:01.250000+02:00: '100%'
+  2027-01-01T00:00:00: '100%'
+  0005-01-02T03:04:05: '100%'
+  2024-02-29T23:59:59.999999-03:30: '100%'
+  2026-12-28T12:30:00+00:00: '100%'
+'week %V of %G, day %u'
+  2026-10-15T08:00:01.250000+02:00: 'week 42 of 2026, day 4'
+  2027-01-01T00:00:00: 'week 53 of 2026, day 5'
+  0005-01-02T03:04:05: 'week 53 of 4, day 7'
+  2024-02-29T23:59:59.999999-03:30: 'week 09 of 2024, day 4'
+  2026-12-28T12:30:00+00:00: 'week 53 of 2026, day 1'
+'%Y%m%dT%H%M%S'
+  2026-10-15T08:00:01.250000+02:00: '20261015T080001'
+  2027-01-01T00:00:00: '20270101T000000'
+  0005-01-02T03:04:05: '50102T030405'
+  2024-02-29T23:59:59.999999-03:30: '20240229T235959'
+  2026-12-28T12:30:00+00:00: '20261228T123000'
+== fromisoformat
+datetime.fromisoformat('2026-10-15'): 2026-10-15T00:00:00
+datetime.fromisoformat('20261015'): 2026-10-15T00:00:00
+datetime.fromisoformat('2026-W42'): 2026-10-12T00:00:00
+datetime.fromisoformat('2026-W42-4'): 2026-10-15T00:00:00
+datetime.fromisoformat('2026W424'): 2026-10-15T00:00:00
+datetime.fromisoformat('2026-288'): ValueError: Invalid isoformat string: '2026-288'
+datetime.fromisoformat('2026-10-15T08:00'): 2026-10-15T08:00:00
+datetime.fromisoformat('2026-10-15T08'): 2026-10-15T08:00:00
+datetime.fromisoformat('2026-10-15T0800'): 2026-10-15T08:00:00
+datetime.fromisoformat('2026-10-15T080001'): 2026-10-15T08:00:01
+datetime.fromisoformat('2026-10-15T08:00:01.5'): 2026-10-15T08:00:01.500000
+datetime.fromisoformat('2026-10-15T08:00:01,123456789'): 2026-10-15T08:00:01.123456
+datetime.fromisoformat('2026-10-15 08:00:01Z'): 2026-10-15T08:00:01+00:00 [UTC]
+datetime.fromisoformat('2026-10-15T08:00:01+02'): 2026-10-15T08:00:01+02:00 [UTC+02:00]
+datetime.fromisoformat('2026-10-15T08:00:01+0200'): 2026-10-15T08:00:01+02:00 [UTC+02:00]
+datetime.fromisoformat('2026-10-15T08:00:01+02:00'): 2026-10-15T08:00:01+02:00 [UTC+02:00]
+datetime.fromisoformat('2026-10-15T08:00:01+02:00:30'): 2026-10-15T08:00:01+02:00:30 [UTC+02:00:30]
+datetime.fromisoformat('2026-10-15T08:00:01-05:30'): 2026-10-15T08:00:01-05:30 [UTC-05:30]
+datetime.fromisoformat('2026-10-15T08:00:01+00:00'): 2026-10-15T08:00:01+00:00 [UTC]
+datetime.fromisoformat('2026-10-15T08:00:01-00:00'): 2026-10-15T08:00:01+00:00 [UTC]
+datetime.fromisoformat('2026-10-15x08:00'): 2026-10-15T08:00:00
+datetime.fromisoformat('2026-10-15T08:00:01.1234567'): 2026-10-15T08:00:01.123456
+datetime.fromisoformat('2026-10-15T8:00'): ValueError: Invalid isoformat string: '2026-10-15T8:00'
+datetime.fromisoformat('2026-10-15T08:00:0'): ValueError: Invalid isoformat string: '2026-10-15T08:00:0'
+datetime.fromisoformat('2026-10-15T'): ValueError: Invalid isoformat string: '2026-10-15T'
+datetime.fromisoformat('2026-10-15T08:00:01.'): ValueError: Invalid isoformat string: '2026-10-15T08:00:01.'
+datetime.fromisoformat('2026-10-15T08:0001'): ValueError: Invalid isoformat string: '2026-10-15T08:0001'
+datetime.fromisoformat('2026-W53-1'): 2026-12-28T00:00:00
+datetime.fromisoformat('2025-W53-1'): ValueError: Invalid isoformat string: '2025-W53-1'
+datetime.fromisoformat('2026-W01-8'): ValueError: Invalid isoformat string: '2026-W01-8'
+datetime.fromisoformat('2026-02-30'): ValueError: day is out of range for month
+datetime.fromisoformat('2026-10-15T24:00'): ValueError: hour must be in 0..23
+datetime.fromisoformat('2026-10-15T08:00:01+2'): ValueError: Invalid isoformat string: '2026-10-15T08:00:01+2'
+datetime.fromisoformat('2026-10-15T08:00:01-'): ValueError: Invalid isoformat string: '2026-10-15T08:00:01-'
+datetime.fromisoformat('2026-1015'): ValueError: Invalid isoformat string: '2026-1015'
+datetime.fromisoformat('20261015T080001.25+0530'): 2026-10-15T08:00:01.250000+05:30 [UTC+05:30]
+datetime.fromisoformat('2026-10-15T08:00:01+24:00'): ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=1).
+date.fromisoformat('2026-10-15'): 2026-10-15
+date.fromisoformat('2026-10-15T08:00'): ValueError: Invalid isoformat string: '2026-10-15T08:00'
+date.fromisoformat('2026-W42-4'): 2026-10-15
+time.fromisoformat('08:00:01.5+02:00'): 08:00:01.500000+02:00 [UTC+02:00]
+time.fromisoformat('T08:00'): 08:00:00
+time.fromisoformat('25:00'): ValueError: hour must be in 0..23
+time.fromisoformat('08:00:01Z'): 08:00:01+00:00 [UTC]
+time.fromisoformat('0800'): 08:00:00
+== timedelta
+td days=1 hours=-25: -1 day, 23:00:00 = datetime.timedelta(days=-1, seconds=82800)
+td seconds=-1: -1 day, 23:59:59 = datetime.timedelta(days=-1, seconds=86399)
+td microseconds=-1: -1 day, 23:59:59.999999 = datetime.timedelta(days=-1, seconds=86399, microseconds=999999)
+td weeks=2 days=3 hours=4 minutes=5 seconds=6 milliseconds=7 microseconds=8: 17 days, 4:05:06.007008 = datetime.timedelta(days=17, seconds=14706, microseconds=7008)
+td hours=-24: -1 day, 0:00:00 = datetime.timedelta(days=-1)
+td minutes=90: 1:30:00 = datetime.timedelta(seconds=5400)
+td days=0: 0:00:00 = datetime.timedelta(0)
+td days=999999999 hours=23 minutes=59 seconds=59 microseconds=999999: 999999999 days, 23:59:59.999999 = datetime.timedelta(days=999999999, seconds=86399, microseconds=999999)
+td days=1000000000: OverflowError: days=1000000000; must have magnitude <= 999999999
+td days=-999999999: -999999999 days, 0:00:00 = datetime.timedelta(days=-999999999)
+td days=-999999999 microseconds=-1: OverflowError: days=-1000000000; must have magnitude <= 999999999
+add 2026-10-15T08:00:00 days=30: 2026-11-14T08:00:00
+add 2026-12-31T23:59:59.999999 microseconds=1: 2027-01-01T00:00:00
+add 2024-02-28T12:00:00+02:00 days=1 hours=12: 2024-03-01T00:00:00+02:00 [UTC+02:00]
+add 9999-12-31T00:00:00 days=1: OverflowError: date value out of range
+add 0001-01-01T00:00:00 seconds=-1: OverflowError: date value out of range
+sub 2026-03-08T12:00:00+02:00 2026-03-01T00:00:00-05:00: 7 days, 5:00:00 = datetime.timedelta(days=7, seconds=18000)
+sub 2026-10-15T08:00:00 2026-10-15T08:00:00.000001: -1 day, 23:59:59.999999 = datetime.timedelta(days=-1, seconds=86399, microseconds=999999)
+sub 2026-10-15T08:00:00 2026-10-15T08:00:00+00:00: TypeError: can't subtract offset-naive and offset-aware datetimes
+mul days=1 hours=6 3: 3 days, 18:00:00 = datetime.timedelta(days=3, seconds=64800)
+mul hours=-1 minutes=-1 2: -1 day, 21:58:00 = datetime.timedelta(days=-1, seconds=79080)
+floordiv hours=1 / minutes=7: 8
+floordiv hours=-1 / minutes=7: -9
+floordiv hours=1 / days=0: ZeroDivisionError: integer division or modulo by zero
+mod hours=1 / minutes=7: 0:04:00 = datetime.timedelta(seconds=240)
+mod hours=-1 / minutes=7: 0:03:00 = datetime.timedelta(seconds=180)
+neg hours=1: -1 day, 23:00:00 = datetime.timedelta(days=-1, seconds=82800)
+neg days=-1 seconds=1: 23:59:59 = datetime.timedelta(seconds=86399)
+abs days=-1 seconds=1: 23:59:59 = datetime.timedelta(seconds=86399)
+== normalize
+nginx: 5 lines, 4 parsed, 1 failed
+  line 2: ValueError: time data '15/Oct/2026:08:00:07.5 +0200' does not match format '%d/%b/%Y:%H:%M:%S %z'
+  line 4: -1 day, 23:59:47 out of order
+app: 5 lines, 4 parsed, 1 failed
+  line 5: ValueError: time data '2026-10-15 06:02:30.5' does not match format '%Y-%m-%d %H:%M:%S,%f'
+syslog: 5 lines, 4 parsed, 1 failed
+  line 4: ValueError: second must be in 0..59
+apache: 4 lines, 3 parsed, 1 failed
+  line 4: ValueError: time data 'Thu Oct 15 8:01:31 2026' does not match format '%a %b %d %H:%M:%S.%f %Y'
+windows: 4 lines, 3 parsed, 1 failed
+  line 3: -1 day, 22:00:28 out of order
+  line 4: ValueError: time data '15/10/2026 2:02:00 AM' does not match format '%m/%d/%Y %I:%M:%S %p'
+mail: 4 lines, 2 parsed, 2 failed
+  line 3: ValueError: time data 'Thu, 15 Oct 2026 06:01:13 GMT' does not match format '%a, %d %b %Y %H:%M:%S %z'
+  line 4: ValueError: time data '15 Oct 2026 06:01:14 +0000 |' does not match format '%a, %d %b %Y %H:%M:%S %z'
+edge: 4 lines, 3 parsed, 1 failed
+  line 4: ValueError: not an epoch time: '17920512x9'
+java: 4 lines, 3 parsed, 1 failed
+  line 4: ValueError: time data 'Oct 15, 2026 13:00:00 PM' does not match format '%b %d, %Y %I:%M:%S %p'
+mes: 4 lines, 3 parsed, 1 failed
+  line 4: ValueError: time data '2026-W43 15:01:12' does not match format '%G-W%V-%u %H:%M:%S'
+-- timeline (UTC)
+2026-10-15T04:01:40.000+00:00               - windows  2026-10-15 00:01:40.000000-04:00* Warning,Shop,clock was set back
+2026-10-15T06:00:01.000+00:00         1:58:21 nginx    2026-10-15 08:00:01.000000+02:00  203.0.113.7 - - "GET / HTTP/1.1" 200 512
+2026-10-15T06:00:02.123+00:00  0:00:01.123456 syslog   2026-10-15 06:00:02.123456+00:00  <34>1 db1 postgres 811 - - checkpoint starting
+2026-10-15T06:00:03.250+00:00  0:00:01.126544 app      2026-10-15 06:00:03.250000+00:00* INFO shop: started on :8080
+2026-10-15T06:00:04.512+00:00  0:00:01.262345 apache   2026-10-15 08:00:04.512345+02:00* [core:error] [pid 811] AH00124: request exceeded the limit
+2026-10-15T06:00:05.000+00:00  0:00:00.487655 windows  2026-10-15 02:00:05.000000-04:00* Information,Service Control Manager,Shop service entered the running state
+2026-10-15T06:00:06.500+00:00  0:00:01.500000 edge     2026-10-15 06:00:06.500000+00:00  GET /health 200
+2026-10-15T06:00:07.000+00:00  0:00:00.500000 mail     2026-10-15 02:00:07.000000-04:00  from=<alice@example.com> status=sent
+2026-10-15T06:00:09.000+00:00         0:00:02 java     2026-10-15 07:00:09.000000+01:00* org.apache.catalina.startup.Catalina start
+2026-10-15T06:00:10.000+00:00         0:00:01 mes      2026-10-15 15:00:10.000000+09:00* line3 conveyor stop
+2026-10-15T06:00:58.000+00:00         0:00:48 syslog   2026-10-15 08:00:58.000000+02:00  <34>1 db1 postgres 811 - - checkpoint complete
+2026-10-15T06:00:59.000+00:00         0:00:01 nginx    2026-10-15 08:00:59.000000+02:00  198.51.100.4 - - "GET /retry HTTP/1.1" 200 12
+2026-10-15T06:00:59.999+00:00  0:00:00.999000 app      2026-10-15 06:00:59.999000+00:00* WARNING shop: slow checkout
+2026-10-15T06:01:12.000+00:00  0:00:12.001000 nginx    2026-10-15 08:01:12.000000+02:00  198.51.100.4 - - "POST /checkout HTTP/1.1" 502 37
+2026-10-15T06:01:12.000+00:00         0:00:00 windows  2026-10-15 02:01:12.000000-04:00* Error,Shop,Unhandled exception in checkout
+2026-10-15T06:01:12.000+00:00         0:00:00 mail     2026-10-15 08:01:12.000000+02:00  from=<bob@example.com> status=deferred
+2026-10-15T06:01:12.000+00:00         0:00:00 edge     2026-10-15 06:01:12.000000+00:00  GET /checkout 502
+2026-10-15T06:01:12.000+00:00         0:00:00 java     2026-10-15 07:01:12.000000+01:00* org.apache.catalina.core.StandardWrapperValve invoke
+2026-10-15T06:01:12.000+00:00         0:00:00 mes      2026-10-15 15:01:12.000000+09:00* line3 conveyor start
+2026-10-15T06:01:12.000+00:00  0:00:00.000001 apache   2026-10-15 08:01:12.000001+02:00* [proxy:error] [pid 812] AH01114: HTTP: failed to make connection
+2026-10-15T06:01:12.004+00:00  0:00:00.003999 app      2026-10-15 06:01:12.004000+00:00* ERROR shop: payment gateway returned 502
+2026-10-15T06:01:12.250+00:00  0:00:00.246000 edge     2026-10-15 06:01:12.250000+00:00  GET /checkout 200
+2026-10-15T06:01:12.500+00:00  0:00:00.250000 syslog   2026-10-15 06:01:12.500000+00:00* <34>1 db1 postgres 811 - - connection reset
+2026-10-15T06:01:30.000+00:00  0:00:17.500000 apache   2026-10-15 08:01:30.000000+02:00* [mpm_event:notice] [pid 1] the weekday does not matter
+2026-10-15T06:02:00.000+00:00         0:00:30 nginx    2026-10-15 06:02:00.000000+00:00  203.0.113.7 - - "GET /health HTTP/1.1" 200 2
+2026-10-15T06:02:01.000+00:00         0:00:01 syslog   2026-10-15 07:02:01.000000+01:00  <34>1 db1 postgres 811 - - vacuum done
+2026-10-15T06:02:30.500+00:00  0:00:29.500000 app      2026-10-15 06:02:30.500000+00:00* INFO shop: cache warmed
+2026-10-15T11:00:00.000+00:00  4:57:29.500000 java     2026-10-15 12:00:00.000000+01:00* org.apache.catalina.core.StandardServer await
+2026-10-18T06:01:12.000+00:00 2 days, 19:01:12 mes      2026-10-18 15:01:12.000000+09:00* line3 sunday shift
+-- per minute
+10-15 04:01 # 1
+10-15 06:00 ############ 12
+10-15 06:01 ########### 11
+10-15 06:02 ### 3
+10-15 11:00 # 1
+10-18 06:01 # 1
+span 2026-10-15T04:01:40+00:00 to 2026-10-18T06:01:12+00:00: 3 days, 1:59:32, 29 events

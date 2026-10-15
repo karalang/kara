@@ -1,0 +1,2777 @@
+// mini_datetime: the date and time handling a log pipeline needs, done
+// the way Python 3.13's datetime module does it in the C locale:
+// - datetime.strptime, with _strptime's regular expressions, their
+//   backtracking, the ISO week and %U/%W rules, %z and %Z, and every
+//   error it gives;
+// - datetime.strftime, with Python's own %z, %:z, %Z and %f and the rest
+//   from glibc: flags, widths, E and O modifiers and unknown directives;
+// - datetime, date and time fromisoformat, ported from the C parser;
+// - timedelta arithmetic, str and repr, with its overflow errors;
+// - and a normalizer that reads nine kinds of log files, parses their
+//   timestamps, puts them on one UTC timeline and counts them per minute.
+//
+// The inputs are the files in data/. expected.out is the output of
+// oracle.py, the same program run through Python's datetime.
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+// ------------------------------------------------------------ the calendar
+
+const US_PER_SEC: i64 = 1000000;
+const US_PER_DAY: i64 = 86400000000;
+const MAX_ORDINAL: i64 = 3652059;
+const DAYS_BEFORE_MONTH: Array[i64, 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const DAYS_IN_MONTH: Array[i64, 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const WEEKDAYS: Array[Str, 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const MONTHS: Array[Str, 13] = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+// Division and remainder that round toward minus infinity, as Python's do.
+fn fdiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn fmod(a: i64, b: i64) -> i64 {
+    a - fdiv(a, b) * b
+}
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 and is_leap(y) { 29 } else { DAYS_IN_MONTH[m] }
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let p = y - 1;
+    p * 365 + p / 4 - p / 100 + p / 400
+}
+
+fn days_before_month(y: i64, m: i64) -> i64 {
+    let extra = if m > 2 and is_leap(y) { 1 } else { 0 };
+    DAYS_BEFORE_MONTH[m] + extra
+}
+
+// Day 1 is 0001-01-01.
+fn ymd_to_ord(y: i64, m: i64, d: i64) -> i64 {
+    days_before_year(y) + days_before_month(y, m) + d
+}
+
+fn ord_to_ymd(ord: i64) -> (i64, i64, i64) {
+    let mut n = ord - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let mut year = n400 * 400 + 1;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    year += n100 * 100 + n4 * 4 + n1;
+    if n1 == 4 or n100 == 4 {
+        return (year - 1, 12, 31);
+    }
+    let leap = n1 == 3 and (n4 != 24 or n100 == 3);
+    let mut month = (n + 50) / 32;
+    let mut preceding = DAYS_BEFORE_MONTH[month];
+    if month > 2 and leap {
+        preceding += 1;
+    }
+    if preceding > n {
+        month -= 1;
+        preceding -= DAYS_IN_MONTH[month];
+        if month == 2 and leap {
+            preceding -= 1;
+        }
+    }
+    (year, month, n - preceding + 1)
+}
+
+// Monday is 0.
+fn weekday_of(y: i64, m: i64, d: i64) -> i64 {
+    (ymd_to_ord(y, m, d) + 6) % 7
+}
+
+fn iso_week1_monday(y: i64) -> i64 {
+    let first = ymd_to_ord(y, 1, 1);
+    let wd = (first + 6) % 7;
+    let mut monday = first - wd;
+    if wd > 3 {
+        monday += 7;
+    }
+    monday
+}
+
+// date.isocalendar(): (ISO year, week, weekday from 1).
+fn iso_calendar(y: i64, m: i64, d: i64) -> (i64, i64, i64) {
+    let mut year = y;
+    let today = ymd_to_ord(y, m, d);
+    let mut monday = iso_week1_monday(year);
+    let mut week = fdiv(today - monday, 7);
+    let mut day = fmod(today - monday, 7);
+    if week < 0 {
+        year -= 1;
+        monday = iso_week1_monday(year);
+        week = fdiv(today - monday, 7);
+        day = fmod(today - monday, 7);
+    } else if week >= 52 and today >= iso_week1_monday(year + 1) {
+        year += 1;
+        week = 0;
+    }
+    (year, week + 1, day + 1)
+}
+
+// The ISO year, week and weekday as a date, or which part is wrong:
+// 1 the year, 2 the week, 3 the weekday.
+fn iso_to_ymd(y: i64, w: i64, d: i64) -> Result[(i64, i64, i64), i64] {
+    if y < 1 or y > 9999 {
+        return Err(1);
+    }
+    if w <= 0 or w >= 53 {
+        let mut bad = true;
+        if w == 53 {
+            let first = (ymd_to_ord(y, 1, 1) + 6) % 7;
+            if first == 3 or (first == 2 and is_leap(y)) {
+                bad = false;
+            }
+        }
+        if bad {
+            return Err(2);
+        }
+    }
+    if d <= 0 or d >= 8 {
+        return Err(3);
+    }
+    Ok(ord_to_ymd(iso_week1_monday(y) + (w - 1) * 7 + d - 1))
+}
+
+fn pad(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+// ------------------------------------------------------------ timedelta
+
+#[derive(Clone)]
+struct Delta {
+    days: i64,
+    secs: i64,
+    us: i64,
+}
+
+fn td_new(days: i64, secs: i64, us: i64) -> Result[Delta, String] {
+    let s = secs + fdiv(us, US_PER_SEC);
+    let d = days + fdiv(s, 86400);
+    if d > 999999999 or d < -999999999 {
+        return Err(f"OverflowError: days={d}; must have magnitude <= 999999999");
+    }
+    Ok(Delta { days: d, secs: fmod(s, 86400), us: fmod(us, US_PER_SEC) })
+}
+
+fn td_from_us(us: i64) -> Result[Delta, String] {
+    td_new(0, 0, us)
+}
+
+fn td_us(t: ref Delta) -> i64 {
+    t.days * US_PER_DAY + t.secs * US_PER_SEC + t.us
+}
+
+fn td_neg(t: ref Delta) -> Result[Delta, String] {
+    td_new(-t.days, -t.secs, -t.us)
+}
+
+fn td_str(t: ref Delta) -> String {
+    let mm = t.secs / 60;
+    let ss = t.secs % 60;
+    let hh = mm / 60;
+    let mut s = f"{hh}:{pad(mm % 60, 2)}:{pad(ss, 2)}";
+    if t.days != 0 {
+        let plural = if t.days == 1 or t.days == -1 { "" } else { "s" };
+        s = f"{t.days} day{plural}, {s}";
+    }
+    if t.us != 0 {
+        s.push_str(f".{pad(t.us, 6)}");
+    }
+    s
+}
+
+fn td_repr(t: ref Delta) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    if t.days != 0 {
+        parts.push(f"days={t.days}");
+    }
+    if t.secs != 0 {
+        parts.push(f"seconds={t.secs}");
+    }
+    if t.us != 0 {
+        parts.push(f"microseconds={t.us}");
+    }
+    if parts.len() == 0 {
+        parts.push("0".to_string());
+    }
+    f"datetime.timedelta({join(parts, ", ")})"
+}
+
+// ------------------------------------------------------------ datetime
+
+// A datetime, a date or a time. `off` is the UTC offset in microseconds
+// when `aware`; `zone` is the timezone's name when it was given one.
+#[derive(Clone)]
+struct DateTime {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+    aware: bool,
+    off: i64,
+    zone: String,
+}
+
+fn naive(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64, us: i64) -> DateTime {
+    DateTime { y: y, mo: mo, d: d, h: h, mi: mi, s: s, us: us, aware: false, off: 0, zone: String.new() }
+}
+
+// timezone(timedelta(microseconds=off)): its range check.
+fn check_offset(off: i64) -> Result[(), String] {
+    if off <= -US_PER_DAY or off >= US_PER_DAY {
+        let t = td_from_us(off)?;
+        return Err(f"ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not {td_repr(t)}.");
+    }
+    Ok(())
+}
+
+fn check_date(y: i64, mo: i64, d: i64) -> Result[(), String] {
+    if y < 1 or y > 9999 {
+        return Err(f"ValueError: year {y} is out of range");
+    }
+    if mo < 1 or mo > 12 {
+        return Err("ValueError: month must be in 1..12".to_string());
+    }
+    if d < 1 or d > days_in_month(y, mo) {
+        return Err("ValueError: day is out of range for month".to_string());
+    }
+    Ok(())
+}
+
+fn check_time(h: i64, mi: i64, s: i64, us: i64) -> Result[(), String] {
+    if h < 0 or h > 23 {
+        return Err("ValueError: hour must be in 0..23".to_string());
+    }
+    if mi < 0 or mi > 59 {
+        return Err("ValueError: minute must be in 0..59".to_string());
+    }
+    if s < 0 or s > 59 {
+        return Err("ValueError: second must be in 0..59".to_string());
+    }
+    if us < 0 or us > 999999 {
+        return Err("ValueError: microsecond must be in 0..999999".to_string());
+    }
+    Ok(())
+}
+
+// The datetime(...) constructor.
+fn make_dt(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64, us: i64) -> Result[DateTime, String] {
+    check_date(y, mo, d)?;
+    check_time(h, mi, s, us)?;
+    Ok(naive(y, mo, d, h, mi, s, us))
+}
+
+fn with_zone(dt: own DateTime, off: i64, zone: own String) -> DateTime {
+    let mut out = dt;
+    out.aware = true;
+    out.off = off;
+    out.zone = zone;
+    out
+}
+
+// The wall time in microseconds since 0001-01-01.
+fn wall_us(dt: ref DateTime) -> i64 {
+    (ymd_to_ord(dt.y, dt.mo, dt.d) - 1) * US_PER_DAY + ((dt.h * 60 + dt.mi) * 60 + dt.s) * US_PER_SEC + dt.us
+}
+
+fn utc_us(dt: ref DateTime) -> i64 {
+    wall_us(dt) - dt.off
+}
+
+// A datetime from a wall time, keeping the timezone of `tz`.
+fn from_wall(us: i64, tz: ref DateTime) -> Result[DateTime, String] {
+    if us < 0 or us >= MAX_ORDINAL * US_PER_DAY {
+        return Err("OverflowError: date value out of range".to_string());
+    }
+    let (y, mo, d) = ord_to_ymd(us / US_PER_DAY + 1);
+    let rest = us % US_PER_DAY;
+    let secs = rest / US_PER_SEC;
+    let mut out = naive(y, mo, d, secs / 3600, secs / 60 % 60, secs % 60, rest % US_PER_SEC);
+    out.aware = tz.aware;
+    out.off = tz.off;
+    out.zone = tz.zone.clone();
+    Ok(out)
+}
+
+fn dt_add(dt: ref DateTime, t: ref Delta) -> Result[DateTime, String] {
+    if t.days > MAX_ORDINAL or t.days < -MAX_ORDINAL {
+        return Err("OverflowError: date value out of range".to_string());
+    }
+    from_wall(wall_us(dt) + td_us(t), dt)
+}
+
+fn dt_sub(a: ref DateTime, b: ref DateTime) -> Result[Delta, String] {
+    if a.aware != b.aware {
+        return Err("TypeError: can't subtract offset-naive and offset-aware datetimes".to_string());
+    }
+    td_from_us(utc_us(a) - utc_us(b))
+}
+
+fn as_utc(dt: ref DateTime) -> Result[DateTime, String] {
+    let utc = with_zone(naive(1, 1, 1, 0, 0, 0, 0), 0, String.new());
+    from_wall(utc_us(dt), utc)
+}
+
+// The offset as isoformat writes it: +HH:MM[:SS[.ffffff]], with `sep`.
+fn offset_text(off: i64, sep: Str) -> String {
+    let sign = if off < 0 { "-" } else { "+" };
+    let a = if off < 0 { -off } else { off };
+    let secs = a / US_PER_SEC;
+    let us = a % US_PER_SEC;
+    let mut s = f"{sign}{pad(secs / 3600, 2)}{sep}{pad(secs / 60 % 60, 2)}";
+    if secs % 60 != 0 or us != 0 {
+        s.push_str(f"{sep}{pad(secs % 60, 2)}");
+    }
+    if us != 0 {
+        s.push_str(f".{pad(us, 6)}");
+    }
+    s
+}
+
+fn tzname(dt: ref DateTime) -> String {
+    if dt.zone.len() > 0 {
+        return dt.zone.clone();
+    }
+    if dt.off == 0 {
+        return "UTC".to_string();
+    }
+    f"UTC{offset_text(dt.off, ":")}"
+}
+
+fn date_iso(dt: ref DateTime) -> String {
+    f"{pad(dt.y, 4)}-{pad(dt.mo, 2)}-{pad(dt.d, 2)}"
+}
+
+// time.isoformat(timespec): "auto", "milliseconds" or "microseconds".
+fn time_iso(dt: ref DateTime, spec: Str) -> String {
+    let mut s = f"{pad(dt.h, 2)}:{pad(dt.mi, 2)}:{pad(dt.s, 2)}";
+    if spec == "milliseconds" {
+        s.push_str(f".{pad(dt.us / 1000, 3)}");
+    } else if spec == "microseconds" or dt.us != 0 {
+        s.push_str(f".{pad(dt.us, 6)}");
+    }
+    if dt.aware {
+        s.push_str(offset_text(dt.off, ":"));
+    }
+    s
+}
+
+fn dt_iso(dt: ref DateTime, sep: Str, spec: Str) -> String {
+    f"{date_iso(dt)}{sep}{time_iso(dt, spec)}"
+}
+
+// The oracle's show(): isoformat, and the zone's name when there is one.
+fn show_dt(dt: ref DateTime) -> String {
+    let s = dt_iso(dt, "T", "auto");
+    if dt.aware { f"{s} [{tzname(dt)}]" } else { s }
+}
+
+fn show_time(dt: ref DateTime) -> String {
+    let s = time_iso(dt, "auto");
+    if dt.aware { f"{s} [{tzname(dt)}]" } else { s }
+}
+
+// ------------------------------------------------------------ strftime
+
+// datetime.strftime first replaces %z, %:z, %Z and %f itself, then hands
+// the rest to the C library's strftime: glibc's, in the C locale.
+fn py_strftime(fmt: Str, dt: ref DateTime) -> String {
+    let b = to_bytes(fmt);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c != b'%' {
+            out.push_str(byte_str(b, i, i + 1));
+            i += 1;
+            continue;
+        }
+        if i + 1 >= b.len() {
+            out.push_str("%");
+            i += 1;
+            continue;
+        }
+        let n = b[i + 1];
+        if n == b'z' {
+            if dt.aware {
+                out.push_str(offset_text(dt.off, ""));
+            }
+            i += 2;
+        } else if n == b':' and i + 2 < b.len() and b[i + 2] == b'z' {
+            if dt.aware {
+                out.push_str(offset_text(dt.off, ":"));
+            }
+            i += 3;
+        } else if n == b'Z' {
+            if dt.aware {
+                let name = to_bytes(tzname(dt));
+                for k in 0..name.len() {
+                    if name[k] == b'%' {
+                        out.push_str("%%");
+                    } else {
+                        out.push_str(byte_str(name, k, k + 1));
+                    }
+                }
+            }
+            i += 2;
+        } else if n == b'f' {
+            out.push_str(pad(dt.us, 6));
+            i += 2;
+        } else {
+            out.push_str(byte_str(b, i, i + 2));
+            i += 2;
+        }
+    }
+    glibc_strftime(out, dt)
+}
+
+// One directive's flags: the padding flag, ^ and #, and the width.
+struct Spec {
+    pad: u8,
+    upper: bool,
+    lower: bool,
+    width: i64,
+}
+
+// Text with the directive's case and width applied.
+fn put_text(out: mut ref String, s: Str, sp: ref Spec) {
+    let t = if sp.lower { lower(s) } else if sp.upper { upper(s) } else { s.to_string() };
+    let fill = if sp.pad == b'0' { "0" } else { " " };
+    let mut n = t.len();
+    while n < sp.width {
+        out.push_str(fill);
+        n += 1;
+    }
+    out.push_str(t);
+}
+
+// A number padded to `digits` (or to the width when that is wider) with
+// zeros, or with spaces under `_`; `-` turns that off.
+fn put_number(out: mut ref String, v: i64, digits_in: i64, sp: ref Spec) {
+    let digits = if sp.width > digits_in { sp.width } else { digits_in };
+    let neg = v < 0;
+    let body = if neg { f"{-v}" } else { f"{v}" };
+    let mut len = body.len();
+    if neg {
+        len += 1;
+    }
+    let mut width = sp.width;
+    if sp.pad != b'-' and digits > len {
+        let padding = digits - len;
+        if sp.pad == b'_' {
+            for _ in 0..padding {
+                out.push_str(" ");
+            }
+            if neg {
+                out.push_str("-");
+            }
+        } else {
+            if neg {
+                out.push_str("-");
+            }
+            for _ in 0..padding {
+                out.push_str("0");
+            }
+        }
+        width = if width > padding { width - padding } else { 0 };
+        put_text(out, body, Spec { pad: sp.pad, upper: false, lower: false, width: width - len + body.len() });
+    } else {
+        let shown = if neg { f"-{body}" } else { body };
+        put_text(out, shown, Spec { pad: sp.pad, upper: false, lower: false, width: width });
+    }
+}
+
+fn put_spacepad(out: mut ref String, v: i64, digits: i64, sp: ref Spec) {
+    let p = if sp.pad == 0 { b'_' } else { sp.pad };
+    put_number(out, v, digits, Spec { pad: p, upper: sp.upper, lower: sp.lower, width: sp.width });
+}
+
+fn hour12(h: i64) -> i64 {
+    if h % 12 == 0 { 12 } else { h % 12 }
+}
+
+fn glibc_strftime(fmt: Str, dt: ref DateTime) -> String {
+    let b = to_bytes(fmt);
+    let mut out = String.new();
+    let wday = (weekday_of(dt.y, dt.mo, dt.d) + 1) % 7;
+    let yday = days_before_month(dt.y, dt.mo) + dt.d - 1;
+    let (iy, iw, _) = iso_calendar(dt.y, dt.mo, dt.d);
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'%' {
+            out.push_str(byte_str(b, i, i + 1));
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        let mut sp = Spec { pad: 0, upper: false, lower: false, width: -1 };
+        let mut change = false;
+        while i < b.len() {
+            let c = b[i];
+            if c == b'_' or c == b'-' or c == b'0' {
+                sp.pad = c;
+            } else if c == b'^' {
+                sp.upper = true;
+            } else if c == b'#' {
+                change = true;
+            } else {
+                break;
+            }
+            i += 1;
+        }
+        if i < b.len() and is_digit(b[i]) {
+            sp.width = 0;
+            while i < b.len() and is_digit(b[i]) {
+                sp.width = sp.width * 10 + (b[i] - b'0') as i64;
+                i += 1;
+            }
+        }
+        let mut modifier: u8 = 0;
+        if i < b.len() and (b[i] == b'E' or b[i] == b'O') {
+            modifier = b[i];
+            i += 1;
+        }
+        let fc: u8 = if i < b.len() { b[i] } else { 0 };
+        let e = modifier == b'E';
+        let o = modifier == b'O';
+        let mut bad = false;
+        if fc == b'%' {
+            put_text(mut out, "%", sp);
+        } else if fc == b'a' or fc == b'A' {
+            if modifier != 0 {
+                bad = true;
+            } else {
+                if change {
+                    sp.upper = true;
+                }
+                let name = WEEKDAYS[(wday + 6) % 7];
+                put_text(mut out, if fc == b'a' { slice(name, 0, 3) } else { name.to_string() }, sp);
+            }
+        } else if fc == b'b' or fc == b'h' or fc == b'B' {
+            if e {
+                bad = true;
+            } else {
+                if change {
+                    sp.upper = true;
+                }
+                let name = MONTHS[dt.mo];
+                put_text(mut out, if fc == b'B' { name.to_string() } else { slice(name, 0, 3) }, sp);
+            }
+        } else if fc == b'c' or fc == b'D' or fc == b'F' or fc == b'R' or fc == b'T' or fc == b'r' or fc == b'x' or fc == b'X' {
+            if (o and (fc == b'c' or fc == b'x' or fc == b'X')) or (modifier != 0 and (fc == b'D' or fc == b'F' or fc == b'R' or fc == b'T')) {
+                bad = true;
+            } else {
+                let sub = if fc == b'c' {
+                    "%a %b %e %H:%M:%S %Y"
+                } else if fc == b'D' or fc == b'x' {
+                    "%m/%d/%y"
+                } else if fc == b'F' {
+                    "%Y-%m-%d"
+                } else if fc == b'R' {
+                    "%H:%M"
+                } else if fc == b'r' {
+                    "%I:%M:%S %p"
+                } else {
+                    "%H:%M:%S"
+                };
+                put_text(mut out, glibc_strftime(sub, dt), sp);
+            }
+        } else if fc == b'C' {
+            put_number(mut out, dt.y / 100, 1, sp);
+        } else if fc == b'd' or fc == b'e' {
+            if e {
+                bad = true;
+            } else if fc == b'd' {
+                put_number(mut out, dt.d, 2, sp);
+            } else {
+                put_spacepad(mut out, dt.d, 2, sp);
+            }
+        } else if fc == b'g' or fc == b'G' {
+            if e {
+                bad = true;
+            } else if fc == b'g' {
+                put_number(mut out, fmod(iy, 100), 2, sp);
+            } else {
+                put_number(mut out, iy, 1, sp);
+            }
+        } else if fc == b'H' or fc == b'I' or fc == b'k' or fc == b'l' or fc == b'm' or fc == b'M' or fc == b'S' or fc == b'j' or fc == b'U' or fc == b'V' or fc == b'W' {
+            if e {
+                bad = true;
+            } else if fc == b'H' {
+                put_number(mut out, dt.h, 2, sp);
+            } else if fc == b'I' {
+                put_number(mut out, hour12(dt.h), 2, sp);
+            } else if fc == b'k' {
+                put_spacepad(mut out, dt.h, 2, sp);
+            } else if fc == b'l' {
+                put_spacepad(mut out, hour12(dt.h), 2, sp);
+            } else if fc == b'm' {
+                put_number(mut out, dt.mo, 2, sp);
+            } else if fc == b'M' {
+                put_number(mut out, dt.mi, 2, sp);
+            } else if fc == b'S' {
+                put_number(mut out, dt.s, 2, sp);
+            } else if fc == b'j' {
+                put_number(mut out, yday + 1, 3, sp);
+            } else if fc == b'U' {
+                put_number(mut out, (yday - wday + 7) / 7, 2, sp);
+            } else if fc == b'V' {
+                put_number(mut out, iw, 2, sp);
+            } else {
+                put_number(mut out, (yday - (wday + 6) % 7 + 7) / 7, 2, sp);
+            }
+        } else if fc == b'n' {
+            put_text(mut out, "\n", sp);
+        } else if fc == b't' {
+            put_text(mut out, "\t", sp);
+        } else if fc == b'p' or fc == b'P' {
+            if fc == b'P' or change {
+                sp.lower = true;
+            }
+            put_text(mut out, if dt.h >= 12 { "PM" } else { "AM" }, sp);
+        } else if fc == b's' {
+            let days = ymd_to_ord(dt.y, dt.mo, dt.d) - ymd_to_ord(1970, 1, 1);
+            let v = days * 86400 + (dt.h * 60 + dt.mi) * 60 + dt.s;
+            // %s pads only to its width, never to more digits
+            put_text(mut out, f"{v}", Spec { pad: sp.pad, upper: false, lower: false, width: sp.width });
+        } else if fc == b'u' {
+            put_number(mut out, (wday + 6) % 7 + 1, 1, sp);
+        } else if fc == b'w' {
+            put_number(mut out, wday, 1, sp);
+        } else if fc == b'y' {
+            put_number(mut out, fmod(dt.y, 100), 2, sp);
+        } else if fc == b'Y' {
+            if o {
+                bad = true;
+            } else {
+                put_number(mut out, dt.y, 1, sp);
+            }
+        } else if fc == b'z' or fc == b'Z' {
+            // the zone from a time tuple with tm_isdst -1: nothing
+        } else {
+            bad = true;
+        }
+        if bad {
+            // copied as it is, from the % to the directive's last character
+            let end = if fc == 0 { b.len() } else { i + 1 };
+            put_text(mut out, byte_str(b, start, end), Spec { pad: sp.pad, upper: false, lower: false, width: sp.width });
+        }
+        i += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ strptime
+
+// _strptime turns the format into a regular expression and matches it
+// case-insensitively. Each part of the expression is one of these.
+const LIT: i64 = 0;
+const SPACE: i64 = 1;
+const GROUP: i64 = 2;
+// how a group finds where it can end
+const ALTS: i64 = 0;
+const FRACTION: i64 = 1;
+const OFFSET: i64 = 2;
+
+#[derive(Clone)]
+struct El {
+    kind: i64,
+    ch: u8,
+    name: String,
+    alts: Vec[String],
+    how: i64,
+}
+
+fn words_by_length(words: ref Vec[String]) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for w in words {
+        v.push(w.clone());
+    }
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j].len() > v[j - 1].len() {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+fn group(name: Str, alts: Str) -> El {
+    El { kind: GROUP, ch: 0, name: name.to_string(), alts: split_on(alts, b'|'), how: ALTS }
+}
+
+fn names_group(name: Str, full: bool, months: bool) -> El {
+    let mut words: Vec[String] = Vec.new();
+    if months {
+        for m in 1..13 {
+            let name = MONTHS[m];
+            words.push(lower(if full { name.to_string() } else { slice(name, 0, 3) }));
+        }
+    } else {
+        for d in 0..7 {
+            let name = WEEKDAYS[d];
+            words.push(lower(if full { name.to_string() } else { slice(name, 0, 3) }));
+        }
+    }
+    El { kind: GROUP, ch: 0, name: name.to_string(), alts: words_by_length(words), how: ALTS }
+}
+
+// The TimeRE entry for a directive: Ok(true) when it added its parts,
+// Ok(false) when its pattern is empty, Err when there is no such entry.
+fn directive(key: Str, els: mut ref Vec[El]) -> Result[bool, ()] {
+    let el = if key == "d" or key == "e" {
+        group("d", "3[0-1]|[1-2]\\d|0[1-9]|[1-9]| [1-9]")
+    } else if key == "f" {
+        El { kind: GROUP, ch: 0, name: "f".to_string(), alts: Vec.new(), how: FRACTION }
+    } else if key == "H" or key == "k" {
+        group("H", "2[0-3]|[0-1]\\d|\\d| \\d")
+    } else if key == "I" or key == "l" {
+        group("I", "1[0-2]|0[1-9]|[1-9]| [1-9]")
+    } else if key == "G" {
+        group("G", "\\d\\d\\d\\d")
+    } else if key == "j" {
+        group("j", "36[0-6]|3[0-5]\\d|[1-2]\\d\\d|0[1-9]\\d|00[1-9]|[1-9]\\d|0[1-9]|[1-9]")
+    } else if key == "m" {
+        group("m", "1[0-2]|0[1-9]|[1-9]")
+    } else if key == "M" {
+        group("M", "[0-5]\\d|\\d")
+    } else if key == "S" {
+        group("S", "6[0-1]|[0-5]\\d|\\d")
+    } else if key == "U" {
+        group("U", "5[0-3]|[0-4]\\d|\\d")
+    } else if key == "W" {
+        group("W", "5[0-3]|[0-4]\\d|\\d")
+    } else if key == "w" {
+        group("w", "[0-6]")
+    } else if key == "u" {
+        group("u", "[1-7]")
+    } else if key == "V" {
+        group("V", "5[0-3]|0[1-9]|[1-4]\\d|\\d")
+    } else if key == "y" {
+        group("y", "\\d\\d")
+    } else if key == "Y" {
+        group("Y", "\\d\\d\\d\\d")
+    } else if key == "z" {
+        El { kind: GROUP, ch: 0, name: "z".to_string(), alts: Vec.new(), how: OFFSET }
+    } else if key == "A" {
+        names_group("A", true, false)
+    } else if key == "a" {
+        names_group("a", false, false)
+    } else if key == "B" {
+        names_group("B", true, true)
+    } else if key == "b" {
+        names_group("b", false, true)
+    } else if key == "p" or key == "P" or key == "Op" {
+        group("p", "am|pm")
+    } else if key == "Z" {
+        group("Z", "utc|gmt")
+    } else if key == "%" {
+        El { kind: LIT, ch: b'%', name: String.new(), alts: Vec.new(), how: ALTS }
+    } else if key == "T" or key == "R" or key == "r" or key == "X" or key == "x" or key == "c" {
+        let sub = if key == "T" or key == "X" {
+            "%H:%M:%S"
+        } else if key == "R" {
+            "%H:%M"
+        } else if key == "r" {
+            "%I:%M:%S %p"
+        } else if key == "x" {
+            "%m/%d/%y"
+        } else {
+            "%a %b %d %H:%M:%S %Y"
+        };
+        let _ = compile(sub, els);
+        return Ok(true);
+    } else if key == "Od" or key == "Oe" or key == "Om" or key == "Ow" or key == "Oy" or key == "OC" or key == "OH" or key == "OI" or key == "OM" or key == "OS" {
+        // the C locale's alt_digits is empty, which makes these match nothing
+        return Ok(false);
+    } else {
+        return Err(());
+    };
+    els.push(el);
+    Ok(true)
+}
+
+// The characters re.escape-like quoting puts a backslash before.
+fn is_regex_special(c: u8) -> bool {
+    has_byte("\\.^$*+?(){}[]|", c)
+}
+
+// TimeRE.pattern: the parts for a format, or the error for a bad one.
+fn compile(fmt: Str, els: mut ref Vec[El]) -> Result[(), String] {
+    let b = to_bytes(fmt);
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if is_ws(c) {
+            while i < b.len() and is_ws(b[i]) {
+                i += 1;
+            }
+            els.push(El { kind: SPACE, ch: 0, name: String.new(), alts: Vec.new(), how: ALTS });
+            continue;
+        }
+        if c != b'%' {
+            els.push(El { kind: LIT, ch: c, name: String.new(), alts: Vec.new(), how: ALTS });
+            i += 1;
+            continue;
+        }
+        i += 1;
+        while i < b.len() and has_byte("-_0^#", b[i]) {
+            i += 1;
+        }
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+        }
+        let mut key = String.new();
+        if i < b.len() and (b[i] == b'O' or b[i] == b'E') {
+            key.push_str(byte_str(b, i, i + 1));
+            i += 1;
+        }
+        // what the error shows: the key with its quoting taken out again
+        if i >= b.len() or is_ws(b[i]) {
+            if key.len() == 0 {
+                return Err("stray %");
+            }
+            return Err(key);
+        }
+        let n = b[i];
+        key.push_str(byte_str(b, i, i + 1));
+        i += 1;
+        if is_regex_special(n) or n == b'\'' {
+            return Err(key);
+        }
+        match directive(key, els) {
+            Ok(_) => {}
+            Err(_) => return Err(key),
+        }
+    }
+    Ok(())
+}
+
+// Where one alternative ending at `pos` would end, or -1.
+fn alt_end(alt: Str, b: ref Vec[u8], pos: i64) -> i64 {
+    let a = to_bytes(alt);
+    let mut j: i64 = 0;
+    let mut p = pos;
+    while j < a.len() {
+        if p >= b.len() {
+            return -1;
+        }
+        let c = b[p];
+        if a[j] == b'\\' {
+            if not is_digit(c) {
+                return -1;
+            }
+            j += 2;
+        } else if a[j] == b'[' {
+            if c < a[j + 1] or c > a[j + 3] {
+                return -1;
+            }
+            j += 5;
+        } else {
+            if lower_byte(c) != lower_byte(a[j]) {
+                return -1;
+            }
+            j += 1;
+        }
+        p += 1;
+    }
+    p
+}
+
+fn is_0_to_5(c: u8) -> bool {
+    c >= b'0' and c <= b'5'
+}
+
+fn byte_at(b: ref Vec[u8], k: i64) -> u8 {
+    if k < b.len() { b[k] } else { 0 }
+}
+
+// The ends a group can match at, in the order the regex engine tries them.
+fn group_ends(el: ref El, b: ref Vec[u8], pos: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if el.how == ALTS {
+        for alt in el.alts {
+            let e = alt_end(alt, b, pos);
+            if e >= 0 {
+                out.push(e);
+            }
+        }
+    } else if el.how == FRACTION {
+        let mut n: i64 = 0;
+        while n < 6 and is_digit(byte_at(b, pos + n)) {
+            n += 1;
+        }
+        while n >= 1 {
+            out.push(pos + n);
+            n -= 1;
+        }
+    } else {
+        // [+-]\d\d:?[0-5]\d(:?[0-5]\d(\.\d{1,6})?)?|(?-i:Z)
+        if (byte_at(b, pos) == b'+' or byte_at(b, pos) == b'-') and is_digit(byte_at(b, pos + 1)) and is_digit(byte_at(b, pos + 2)) {
+            let p = pos + 3;
+            for colon in [true, false] {
+                if colon and byte_at(b, p) != b':' {
+                    continue;
+                }
+                let q = if colon { p + 1 } else { p };
+                if not (is_0_to_5(byte_at(b, q)) and is_digit(byte_at(b, q + 1))) {
+                    continue;
+                }
+                let r = q + 2;
+                for colon2 in [true, false] {
+                    if colon2 and byte_at(b, r) != b':' {
+                        continue;
+                    }
+                    let s = if colon2 { r + 1 } else { r };
+                    if not (is_0_to_5(byte_at(b, s)) and is_digit(byte_at(b, s + 1))) {
+                        continue;
+                    }
+                    let t = s + 2;
+                    if byte_at(b, t) == b'.' {
+                        let mut n: i64 = 0;
+                        while n < 6 and is_digit(byte_at(b, t + 1 + n)) {
+                            n += 1;
+                        }
+                        while n >= 1 {
+                            out.push(t + 1 + n);
+                            n -= 1;
+                        }
+                    }
+                    out.push(t);
+                }
+                out.push(r);
+            }
+        }
+        if byte_at(b, pos) == b'Z' {
+            out.push(pos + 1);
+        }
+    }
+    out
+}
+
+// Backtracking match of parts k.. at pos; ends[k] is where part k ended.
+fn match_from(els: ref Vec[El], b: ref Vec[u8], k: i64, pos: i64, ends: mut ref Vec[i64]) -> bool {
+    if k == els.len() {
+        return true;
+    }
+    let el = els[k].clone();
+    if el.kind == LIT {
+        if pos < b.len() and lower_byte(b[pos]) == lower_byte(el.ch) {
+            ends[k] = pos + 1;
+            return match_from(els, b, k + 1, pos + 1, ends);
+        }
+        return false;
+    }
+    if el.kind == SPACE {
+        let mut e = pos;
+        while e < b.len() and is_ws(b[e]) {
+            e += 1;
+        }
+        while e > pos {
+            ends[k] = e;
+            if match_from(els, b, k + 1, e, ends) {
+                return true;
+            }
+            e -= 1;
+        }
+        return false;
+    }
+    for e in group_ends(el, b, pos) {
+        ends[k] = e;
+        if match_from(els, b, k + 1, e, ends) {
+            return true;
+        }
+    }
+    false
+}
+
+// What a group matched, as groupdict() gives it.
+struct Found {
+    names: Vec[String],
+    texts: Vec[String],
+}
+
+impl Found {
+    fn get(ref self, name: Str) -> Option[String] {
+        for i in 0..self.names.len() {
+            if self.names[i] == name {
+                return Some(self.texts[i].clone());
+            }
+        }
+        None
+    }
+
+}
+
+fn index_of(words: ref Vec[String], w: Str) -> i64 {
+    for i in 0..words.len() {
+        if words[i] == w {
+            return i;
+        }
+    }
+    -1
+}
+
+fn julian_from_u_or_w(year: i64, week: i64, day_of_week: i64, starts_mon: bool) -> i64 {
+    let mut first = weekday_of(year, 1, 1);
+    let mut day = day_of_week;
+    if not starts_mon {
+        first = (first + 1) % 7;
+        day = (day + 1) % 7;
+    }
+    let week0 = (7 - first) % 7;
+    if week == 0 {
+        1 + day - first
+    } else {
+        1 + week0 + 7 * (week - 1) + day
+    }
+}
+
+// datetime.strptime(s, fmt)
+fn strptime(data: Str, fmt: Str) -> Result[DateTime, String] {
+    let mut els: Vec[El] = Vec.new();
+    if let Err(bad) = compile(fmt, mut els) {
+        if bad == "stray %" {
+            return Err(f"ValueError: stray % in format '{fmt}'");
+        }
+        return Err(f"ValueError: '{bad}' is a bad directive in format '{fmt}'");
+    }
+    let b = to_bytes(data);
+    let mut ends: Vec[i64] = Vec.new();
+    for _ in 0..els.len() {
+        ends.push(0);
+    }
+    if not match_from(els, b, 0, 0, mut ends) {
+        return Err(f"ValueError: time data {py_repr(data)} does not match format {py_repr(fmt)}");
+    }
+    let end = if els.len() > 0 { ends[els.len() - 1] } else { 0 };
+    if end != b.len() {
+        return Err(f"ValueError: unconverted data remains: {byte_str(b, end, b.len())}");
+    }
+    let mut found = Found { names: Vec.new(), texts: Vec.new() };
+    for k in 0..els.len() {
+        if els[k].kind == GROUP {
+            let st = if k > 0 { ends[k - 1] } else { 0 };
+            found.names.push(els[k].name.clone());
+            found.texts.push(byte_str(b, st, ends[k]));
+        }
+    }
+    let mut iso_year: Option[i64] = None;
+    let mut year: Option[i64] = None;
+    let mut month: i64 = 1;
+    let mut day: i64 = 1;
+    let mut hour: i64 = 0;
+    let mut minute: i64 = 0;
+    let mut second: i64 = 0;
+    let mut fraction: i64 = 0;
+    let mut gmtoff: Option[i64] = None;
+    let mut gmtoff_fraction: i64 = 0;
+    let mut iso_week: Option[i64] = None;
+    let mut week_of_year: Option[i64] = None;
+    let mut week_starts_mon = false;
+    let mut weekday: Option[i64] = None;
+    let mut julian: Option[i64] = None;
+    let mut months: Vec[String] = Vec.new();
+    let mut days: Vec[String] = Vec.new();
+    for m in 0..13 {
+        months.push(lower(MONTHS[m]));
+    }
+    for d in 0..7 {
+        days.push(lower(WEEKDAYS[d]));
+    }
+    for i in 0..found.names.len() {
+        let key = found.names[i].clone();
+        let text = found.texts[i].clone();
+        let n = py_int(text).unwrap_or(0);
+        if key == "y" {
+            year = Some(if n <= 68 { n + 2000 } else { n + 1900 });
+        } else if key == "Y" {
+            year = Some(n);
+        } else if key == "G" {
+            iso_year = Some(n);
+        } else if key == "m" {
+            month = n;
+        } else if key == "B" {
+            month = index_of(months, lower(text));
+        } else if key == "b" {
+            for m in 1..13 {
+                if slice(months[m], 0, 3) == lower(text) {
+                    month = m;
+                }
+            }
+        } else if key == "d" {
+            day = n;
+        } else if key == "H" {
+            hour = n;
+        } else if key == "I" {
+            hour = n;
+            let ampm = lower(found.get("p").unwrap_or(String.new()));
+            if ampm.len() == 0 or ampm == "am" {
+                if hour == 12 {
+                    hour = 0;
+                }
+            } else if ampm == "pm" and hour != 12 {
+                hour += 12;
+            }
+        } else if key == "M" {
+            minute = n;
+        } else if key == "S" {
+            second = n;
+        } else if key == "f" {
+            let mut s = text.clone();
+            while s.len() < 6 {
+                s.push_str("0");
+            }
+            fraction = py_int(s).unwrap_or(0);
+        } else if key == "A" {
+            weekday = Some(index_of(days, lower(text)));
+        } else if key == "a" {
+            let mut w: i64 = -1;
+            for d in 0..7 {
+                if slice(days[d], 0, 3) == lower(text) {
+                    w = d;
+                }
+            }
+            weekday = Some(w);
+        } else if key == "w" {
+            weekday = Some(if n == 0 { 6 } else { n - 1 });
+        } else if key == "u" {
+            weekday = Some(n - 1);
+        } else if key == "j" {
+            julian = Some(n);
+        } else if key == "U" or key == "W" {
+            week_of_year = Some(n);
+            week_starts_mon = key == "W";
+        } else if key == "V" {
+            iso_week = Some(n);
+        } else if key == "z" {
+            if text == "Z" {
+                gmtoff = Some(0);
+            } else {
+                let mut z = text.clone();
+                if to_bytes(z)[3] == b':' {
+                    z = f"{slice(z, 0, 3)}{slice_from(z, 4)}";
+                    if z.len() > 5 {
+                        if to_bytes(z)[5] != b':' {
+                            return Err(f"ValueError: Inconsistent use of : in {text}");
+                        }
+                        z = f"{slice(z, 0, 5)}{slice_from(z, 6)}";
+                    }
+                }
+                let hours = py_int(slice(z, 1, 3)).unwrap_or(0);
+                let minutes = py_int(slice(z, 3, 5)).unwrap_or(0);
+                let seconds = if z.len() >= 7 { py_int(slice(z, 5, 7)).unwrap_or(0) } else { 0 };
+                let mut off = hours * 3600 + minutes * 60 + seconds;
+                let mut rem = if z.len() > 8 { slice_from(z, 8) } else { String.new() };
+                while rem.len() < 6 {
+                    rem.push_str("0");
+                }
+                let mut frac = py_int(rem).unwrap_or(0);
+                if first_byte(z) == b'-' {
+                    off = -off;
+                    frac = -frac;
+                }
+                gmtoff = Some(off);
+                gmtoff_fraction = frac;
+            }
+        }
+    }
+    if iso_year.is_some() {
+        if julian.is_some() {
+            return Err("ValueError: Day of the year directive '%j' is not compatible with ISO year directive '%G'. Use '%Y' instead.".to_string());
+        }
+        if iso_week.is_none() or weekday.is_none() {
+            return Err("ValueError: ISO year directive '%G' must be used with the ISO week directive '%V' and a weekday directive ('%A', '%a', '%w', or '%u').".to_string());
+        }
+    } else if iso_week.is_some() {
+        if year.is_none() or weekday.is_none() {
+            return Err("ValueError: ISO week directive '%V' must be used with the ISO year directive '%G' and a weekday directive ('%A', '%a', '%w', or '%u').".to_string());
+        }
+        return Err("ValueError: ISO week directive '%V' is incompatible with the year directive '%Y'. Use the ISO year '%G' instead.".to_string());
+    }
+    let mut leap_fix = false;
+    let mut y = match year {
+        Some(v) => v,
+        None => {
+            if month == 2 and day == 29 {
+                leap_fix = true;
+                1904
+            } else {
+                1900
+            }
+        }
+    };
+    if julian.is_none() and weekday.is_some() {
+        let wd = weekday.unwrap_or(0);
+        if week_of_year.is_some() {
+            check_date(y, 1, 1)?;
+            julian = Some(julian_from_u_or_w(y, week_of_year.unwrap_or(0), wd, week_starts_mon));
+        } else if iso_year.is_some() and iso_week.is_some() {
+            let iy = iso_year.unwrap_or(0);
+            let iw = iso_week.unwrap_or(0);
+            match iso_to_ymd(iy, iw, wd + 1) {
+                Ok((a, m, d)) => {
+                    y = a;
+                    month = m;
+                    day = d;
+                }
+                Err(1) => return Err(f"ValueError: Year is out of range: {iy}"),
+                Err(2) => return Err(f"ValueError: Invalid week: {iw}"),
+                Err(_) => return Err(f"ValueError: Invalid weekday: {wd + 1} (range is [1, 7])"),
+            }
+        }
+        if let Some(j) = julian {
+            if j <= 0 {
+                y -= 1;
+                let yday = if is_leap(y) { 366 } else { 365 };
+                julian = Some(j + yday);
+            }
+        }
+    }
+    match julian {
+        None => check_date(y, month, day)?,
+        Some(j) => {
+            check_date(y, 1, 1)?;
+            let ord = j - 1 + ymd_to_ord(y, 1, 1);
+            if ord < 1 {
+                return Err("ValueError: ordinal must be >= 1".to_string());
+            }
+            let (a, m, d) = ord_to_ymd(ord);
+            check_date(a, m, d)?;
+            y = a;
+            month = m;
+            day = d;
+        }
+    }
+    if leap_fix {
+        y = 1900;
+    }
+    let mut zone_off: i64 = 0;
+    if let Some(g) = gmtoff {
+        zone_off = g * US_PER_SEC + gmtoff_fraction;
+        check_offset(zone_off)?;
+    }
+    let dt = make_dt(y, month, day, hour, minute, second, fraction)?;
+    match gmtoff {
+        Some(_) => Ok(with_zone(dt, zone_off, found.get("Z").unwrap_or(String.new()))),
+        None => Ok(dt),
+    }
+}
+
+// ------------------------------------------------------------ fromisoformat
+
+// CPython's C parser, which reads a NUL-terminated string: byte_at gives
+// 0 past the end, where the C code would see the NUL.
+
+fn digits_at(b: ref Vec[u8], p: i64, n: i64) -> Option[(i64, i64)] {
+    let mut v: i64 = 0;
+    for k in 0..n {
+        let c = byte_at(b, p + k);
+        if not is_digit(c) {
+            return None;
+        }
+        v = v * 10 + (c - b'0') as i64;
+    }
+    Some((v, p + n))
+}
+
+// Where the date part ends: _find_isoformat_datetime_separator.
+fn iso_separator(b: ref Vec[u8]) -> i64 {
+    let len = b.len();
+    if len == 7 {
+        return 7;
+    }
+    if byte_at(b, 4) == b'-' {
+        if byte_at(b, 5) == b'W' {
+            if len < 8 {
+                return -1;
+            }
+            if len > 8 and byte_at(b, 8) == b'-' {
+                if len == 9 {
+                    return -1;
+                }
+                if len > 10 and is_digit(byte_at(b, 10)) {
+                    return 8;
+                }
+                return 10;
+            }
+            return 8;
+        }
+        return 10;
+    }
+    if byte_at(b, 4) == b'W' {
+        let mut idx: i64 = 7;
+        while idx < len and is_digit(b[idx]) {
+            idx += 1;
+        }
+        if idx < 9 {
+            return idx;
+        }
+        return if idx % 2 == 0 { 7 } else { 8 };
+    }
+    8
+}
+
+// parse_isoformat_date: (year, month, day), or a negative code.
+fn iso_date(b: ref Vec[u8], len: i64) -> Result[(i64, i64, i64), i64] {
+    let (y, p0) = match digits_at(b, 0, 4) {
+        Some(r) => r,
+        None => return Err(-1),
+    };
+    let mut p = p0;
+    let sep = byte_at(b, p) == b'-';
+    if sep {
+        p += 1;
+    }
+    if byte_at(b, p) == b'W' {
+        let (w, p1) = match digits_at(b, p + 1, 2) {
+            Some(r) => r,
+            None => return Err(-3),
+        };
+        p = p1;
+        let mut d: i64 = 1;
+        if p < len {
+            if sep {
+                let c = byte_at(b, p);
+                p += 1;
+                if c != b'-' {
+                    return Err(-2);
+                }
+            }
+            d = match digits_at(b, p, 1) {
+                Some((v, _)) => v,
+                None => return Err(-4),
+            };
+        }
+        return match iso_to_ymd(y, w, d) {
+            Ok(r) => Ok(r),
+            Err(_) => Err(-5),
+        };
+    }
+    let (m, p2) = match digits_at(b, p, 2) {
+        Some(r) => r,
+        None => return Err(-1),
+    };
+    p = p2;
+    if sep {
+        let c = byte_at(b, p);
+        p += 1;
+        if c != b'-' {
+            return Err(-2);
+        }
+    }
+    match digits_at(b, p, 2) {
+        Some((d, _)) => Ok((y, m, d)),
+        None => Err(-1),
+    }
+}
+
+// parse_hh_mm_ss_ff over b[start..end]: [hour, minute, second,
+// microsecond, 1 when something follows], or a negative code.
+fn iso_hms(b: ref Vec[u8], start: i64, end: i64) -> Result[Vec[i64], i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    for _ in 0..5 {
+        vals.push(0);
+    }
+    let mut p = start;
+    let mut has_sep = true;
+    for i in 0..3 {
+        let (v, p1) = match digits_at(b, p, 2) {
+            Some(r) => r,
+            None => return Err(-3),
+        };
+        vals[i] = v;
+        let c = byte_at(b, p1);
+        p = p1 + 1;
+        if i == 0 {
+            has_sep = c == b':';
+        }
+        if p >= end {
+            vals[4] = if c != 0 { 1 } else { 0 };
+            return Ok(vals);
+        } else if has_sep and c == b':' {
+            continue;
+        } else if c == b'.' or c == b',' {
+            break;
+        } else if not has_sep {
+            p -= 1;
+        } else {
+            return Err(-4);
+        }
+    }
+    // the fraction: up to six digits count, the rest are skipped
+    let left = end - p;
+    let n = if left >= 6 { 6 } else { left };
+    let (us, p2) = match digits_at(b, p, n) {
+        Some(r) => r,
+        None => return Err(-3),
+    };
+    let mut scale: i64 = 1;
+    for _ in n..6 {
+        scale *= 10;
+    }
+    vals[3] = us * scale;
+    p = p2;
+    while is_digit(byte_at(b, p)) {
+        p += 1;
+    }
+    vals[4] = if byte_at(b, p) != 0 { 1 } else { 0 };
+    Ok(vals)
+}
+
+// parse_isoformat_time: a time with no zone, or one with its offset.
+struct IsoTime {
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+    aware: bool,
+    off: i64,
+}
+
+fn iso_time(b: ref Vec[u8], start: i64, end: i64) -> Result[IsoTime, i64] {
+    let mut tz = start;
+    loop {
+        let c = byte_at(b, tz);
+        if c == b'Z' or c == b'+' or c == b'-' {
+            break;
+        }
+        tz += 1;
+        if tz >= end {
+            break;
+        }
+    }
+    let t = iso_hms(b, start, tz)?;
+    let mut out = IsoTime { h: t[0], mi: t[1], s: t[2], us: t[3], aware: false, off: 0 };
+    if tz == end {
+        if t[4] == 1 {
+            return Err(-5);
+        }
+        return Ok(out);
+    }
+    out.aware = true;
+    if byte_at(b, tz) == b'Z' {
+        if byte_at(b, tz + 1) != 0 {
+            return Err(-5);
+        }
+        return Ok(out);
+    }
+    let sign: i64 = if byte_at(b, tz) == b'-' { -1 } else { 1 };
+    let z = match iso_hms(b, tz + 1, end) {
+        Ok(z) => z,
+        Err(_) => return Err(-5),
+    };
+    if z[4] != 0 {
+        return Err(-5);
+    }
+    out.off = sign * (((z[0] * 60 + z[1]) * 60 + z[2]) * US_PER_SEC + z[3]);
+    Ok(out)
+}
+
+fn invalid_iso(s: Str) -> String {
+    f"ValueError: Invalid isoformat string: {py_repr(s)}"
+}
+
+// The zone fromisoformat attaches: timezone.utc, or timezone(offset).
+fn iso_zone(dt: own DateTime, t: ref IsoTime) -> DateTime {
+    if t.aware { with_zone(dt, t.off, String.new()) } else { dt }
+}
+
+fn datetime_fromisoformat(s: Str) -> Result[DateTime, String] {
+    let b = to_bytes(s);
+    let sep = iso_separator(b);
+    let (y, mo, d) = match iso_date(b, sep) {
+        Ok(r) => r,
+        Err(_) => return Err(invalid_iso(s)),
+    };
+    let mut t = IsoTime { h: 0, mi: 0, s: 0, us: 0, aware: false, off: 0 };
+    if b.len() > sep {
+        t = match iso_time(b, sep + 1, b.len()) {
+            Ok(t) => t,
+            Err(_) => return Err(invalid_iso(s)),
+        };
+    }
+    if t.aware {
+        check_offset(t.off)?;
+    }
+    let dt = make_dt(y, mo, d, t.h, t.mi, t.s, t.us)?;
+    Ok(iso_zone(dt, t))
+}
+
+fn date_fromisoformat(s: Str) -> Result[DateTime, String] {
+    let b = to_bytes(s);
+    let len = b.len();
+    if len != 7 and len != 8 and len != 10 {
+        return Err(invalid_iso(s));
+    }
+    let (y, mo, d) = match iso_date(b, len) {
+        Ok(r) => r,
+        Err(_) => return Err(invalid_iso(s)),
+    };
+    check_date(y, mo, d)?;
+    Ok(naive(y, mo, d, 0, 0, 0, 0))
+}
+
+fn time_fromisoformat(s: Str) -> Result[DateTime, String] {
+    let b = to_bytes(s);
+    let start: i64 = if byte_at(b, 0) == b'T' { 1 } else { 0 };
+    let t = match iso_time(b, start, b.len()) {
+        Ok(t) => t,
+        Err(_) => return Err(invalid_iso(s)),
+    };
+    if t.aware {
+        check_offset(t.off)?;
+    }
+    check_time(t.h, t.mi, t.s, t.us)?;
+    Ok(iso_zone(naive(1900, 1, 1, t.h, t.mi, t.s, t.us), t))
+}
+
+// ------------------------------------------------------------ the files
+
+// data/deltas.txt
+fn file_0() -> String {
+    """
+# td <fields>, add <datetime> <fields>, sub <datetime> <datetime>,
+# mul <fields> <n>, floordiv <fields> / <fields>, mod <fields> / <fields>,
+# neg <fields>, abs <fields>
+td days=1 hours=-25
+td seconds=-1
+td microseconds=-1
+td weeks=2 days=3 hours=4 minutes=5 seconds=6 milliseconds=7 microseconds=8
+td hours=-24
+td minutes=90
+td days=0
+td days=999999999 hours=23 minutes=59 seconds=59 microseconds=999999
+td days=1000000000
+td days=-999999999
+td days=-999999999 microseconds=-1
+add 2026-10-15T08:00:00 days=30
+add 2026-12-31T23:59:59.999999 microseconds=1
+add 2024-02-28T12:00:00+02:00 days=1 hours=12
+add 9999-12-31T00:00:00 days=1
+add 0001-01-01T00:00:00 seconds=-1
+sub 2026-03-08T12:00:00+02:00 2026-03-01T00:00:00-05:00
+sub 2026-10-15T08:00:00 2026-10-15T08:00:00.000001
+sub 2026-10-15T08:00:00 2026-10-15T08:00:00+00:00
+mul days=1 hours=6 3
+mul hours=-1 minutes=-1 2
+floordiv hours=1 / minutes=7
+floordiv hours=-1 / minutes=7
+floordiv hours=1 / days=0
+mod hours=1 / minutes=7
+mod hours=-1 / minutes=7
+neg hours=1
+neg days=-1 seconds=1
+abs days=-1 seconds=1
+
+"""
+}
+
+// data/iso.txt
+fn file_1() -> String {
+    """
+# datetime.fromisoformat, or date/time with a `date ` or `time ` prefix
+2026-10-15
+20261015
+2026-W42
+2026-W42-4
+2026W424
+2026-288
+2026-10-15T08:00
+2026-10-15T08
+2026-10-15T0800
+2026-10-15T080001
+2026-10-15T08:00:01.5
+2026-10-15T08:00:01,123456789
+2026-10-15 08:00:01Z
+2026-10-15T08:00:01+02
+2026-10-15T08:00:01+0200
+2026-10-15T08:00:01+02:00
+2026-10-15T08:00:01+02:00:30
+2026-10-15T08:00:01-05:30
+2026-10-15T08:00:01+00:00
+2026-10-15T08:00:01-00:00
+2026-10-15x08:00
+2026-10-15T08:00:01.1234567
+2026-10-15T8:00
+2026-10-15T08:00:0
+2026-10-15T
+2026-10-15T08:00:01.
+2026-10-15T08:0001
+2026-W53-1
+2025-W53-1
+2026-W01-8
+2026-02-30
+2026-10-15T24:00
+2026-10-15T08:00:01+2
+2026-10-15T08:00:01-
+2026-1015
+20261015T080001.25+0530
+2026-10-15T08:00:01+24:00
+date 2026-10-15
+date 2026-10-15T08:00
+date 2026-W42-4
+time 08:00:01.5+02:00
+time T08:00
+time 25:00
+time 08:00:01Z
+time 0800
+
+"""
+}
+
+// data/logs/access.log
+fn file_2() -> String {
+    """
+203.0.113.7 - - [15/Oct/2026:08:00:01 +0200] \"GET / HTTP/1.1\" 200 512
+203.0.113.9 - - [15/Oct/2026:08:00:07.5 +0200] \"GET /cart HTTP/1.1\" 200 88
+198.51.100.4 - - [15/Oct/2026:08:01:12 +0200] \"POST /checkout HTTP/1.1\" 502 37
+198.51.100.4 - - [15/Oct/2026:08:00:59 +0200] \"GET /retry HTTP/1.1\" 200 12
+203.0.113.7 - - [15/Oct/2026:06:02:00 +0000] \"GET /health HTTP/1.1\" 200 2
+
+"""
+}
+
+// data/logs/app.log
+fn file_3() -> String {
+    """
+2026-10-15 06:00:03,250 INFO shop: started on :8080
+2026-10-15 06:00:59,999 WARNING shop: slow checkout
+2026-10-15 06:01:12,004 ERROR shop: payment gateway returned 502
+2026-10-15 6:02:30,5 INFO shop: cache warmed
+2026-10-15 06:02:30.5 INFO shop: wrong separator
+
+"""
+}
+
+// data/logs/catalina.out
+fn file_4() -> String {
+    """
+Oct 15, 2026 7:00:09 AM org.apache.catalina.startup.Catalina start
+Oct 15, 2026 7:01:12 AM org.apache.catalina.core.StandardWrapperValve invoke
+Oct 15, 2026 12:00:00 PM org.apache.catalina.core.StandardServer await
+Oct 15, 2026 13:00:00 PM org.apache.catalina.core.StandardServer bad hour
+
+"""
+}
+
+// data/logs/edge.log
+fn file_5() -> String {
+    """
+1792044006.500 GET /health 200
+1792044072 GET /checkout 502
+1792044072.25 GET /checkout 200
+17920512x9 GET /broken 000
+
+"""
+}
+
+// data/logs/error.log
+fn file_6() -> String {
+    """
+[Thu Oct 15 08:00:04.512345 2026] [core:error] [pid 811] AH00124: request exceeded the limit
+[Thu Oct 15 08:01:12.000001 2026] [proxy:error] [pid 812] AH01114: HTTP: failed to make connection
+[Fri Oct 15 08:01:30.000000 2026] [mpm_event:notice] [pid 1] the weekday does not matter
+[Thu Oct 15 8:01:31 2026] [core:warn] no microseconds
+
+"""
+}
+
+// data/logs/events.csv
+fn file_7() -> String {
+    """
+10/15/2026 2:00:05 AM,Information,Service Control Manager,Shop service entered the running state
+10/15/2026 2:01:12 AM,Error,Shop,Unhandled exception in checkout
+10/15/2026 12:01:40 AM,Warning,Shop,clock was set back
+15/10/2026 2:02:00 AM,Information,Shop,day and month swapped
+
+"""
+}
+
+// data/logs/line3.log
+fn file_8() -> String {
+    """
+2026-W42-4 15:00:10 line3 conveyor stop
+2026-W42-4 15:01:12 line3 conveyor start
+2026-W42-7 15:01:12 line3 sunday shift
+2026-W43 15:01:12 line3 no weekday
+
+"""
+}
+
+// data/logs/mail.log
+fn file_9() -> String {
+    """
+Thu, 15 Oct 2026 02:00:07 -0400 | from=<alice@example.com> status=sent
+Thu, 15 Oct 2026 08:01:12 +0200 | from=<bob@example.com> status=deferred
+Thu, 15 Oct 2026 06:01:13 GMT | from=<carol@example.com> status=sent
+15 Oct 2026 06:01:14 +0000 | from=<dave@example.com> status=sent
+
+"""
+}
+
+// data/logs/syslog.log
+fn file_10() -> String {
+    """
+<34>1 2026-10-15T06:00:02.123456Z db1 postgres 811 - - checkpoint starting
+<34>1 2026-10-15T08:00:58+02:00 db1 postgres 811 - - checkpoint complete
+<34>1 2026-10-15T06:01:12.5 db1 postgres 811 - - connection reset
+<34>1 2026-10-15T06:01:60 db1 postgres 811 - - bad second
+<34>1 2026-10-15T07:02:01+01 db1 postgres 811 - - vacuum done
+
+"""
+}
+
+// data/sources.txt
+fn file_11() -> String {
+    """
+# name | log | how to find the timestamp | format | offset for naive times
+nginx | access.log | bracket | %d/%b/%Y:%H:%M:%S %z | +00:00
+app | app.log | fields:2 | %Y-%m-%d %H:%M:%S,%f | +00:00
+syslog | syslog.log | field:2 | iso | +00:00
+apache | error.log | bracket | %a %b %d %H:%M:%S.%f %Y | +02:00
+windows | events.csv | upto:, | %m/%d/%Y %I:%M:%S %p | -04:00
+mail | mail.log | fields:6 | %a, %d %b %Y %H:%M:%S %z | +00:00
+edge | edge.log | field:1 | epoch | +00:00
+java | catalina.out | fields:5 | %b %d, %Y %I:%M:%S %p | +01:00
+mes | line3.log | fields:2 | %G-W%V-%u %H:%M:%S | +09:00
+
+"""
+}
+
+// data/strftime.txt
+fn file_12() -> String {
+    """
+# one format per line
+%Y-%m-%d %H:%M:%S.%f%z
+%a %A %b %B %h
+%c
+%x %X %D %T %R %r
+%C %y %G %g
+%j %U %W %V %u %w
+%e|%k|%l|%I|%p|%P
+%s
+%Z|%z|%:z
+%-d %-m %-H %-j %-y
+%_d %_m %_H %_j
+%0e %0k %0l
+%^a %^B %#b %#A %#p %^p
+%10Y|%-10Y|%_10Y
+%5d|%_5d|%-5d|%1d
+%10A|%-10A|%010A|%_10b
+%%|%n|%t|
+%Q %Ey %Od
+100%
+week %V of %G, day %u
+%Y%m%dT%H%M%S
+
+"""
+}
+
+// data/strptime.txt
+fn file_13() -> String {
+    """
+# input | format
+2026-10-15 08:00:01 | %Y-%m-%d %H:%M:%S
+2026-10-15T08:00:01.250Z | %Y-%m-%dT%H:%M:%S.%f%z
+15/Oct/2026:08:00:01 +0200 | %d/%b/%Y:%H:%M:%S %z
+Thu, 15 Oct 2026 04:00:07 -0400 | %a, %d %b %Y %H:%M:%S %z
+THURSDAY october 15 2026 | %A %B %d %Y
+10/15/2026 8:00:05 PM | %m/%d/%Y %I:%M:%S %p
+10/15/2026 12:00:00 AM | %m/%d/%Y %I:%M:%S %p
+10/15/2026 12:30:00 pm | %m/%d/%Y %I:%M:%S %p
+2026-288 | %Y-%j
+2026-W42-4 | %G-W%V-%u
+2026 42 4 | %Y %W %w
+2026 00 0 | %Y %U %w
+2027 00 3 | %Y %W %w
+2026-10-15 08:00:01 +05:30:15.5 | %Y-%m-%d %H:%M:%S %z
+2026-10-15 08:00:01 +05:3015 | %Y-%m-%d %H:%M:%S %z
+20261015 | %Y%m%d
+2026105 | %Y%m%d
+2026-10-151 | %Y-%m-%d
+2026-1-5 | %Y-%m-%d
+2026-10-15 	  08:00 | %Y-%m-%d %H:%M
+26-10-15 | %y-%m-%d
+69-10-15 | %y-%m-%d
+68-10-15 | %y-%m-%d
+2026-02-29 | %Y-%m-%d
+2024-02-29 | %Y-%m-%d
+08:00 | %H:%M
+2026-10-15 24:00 | %Y-%m-%d %H:%M
+2026-10-15 23:61 | %Y-%m-%d %H:%M
+2026-10-15 08:00:60 | %Y-%m-%d %H:%M:%S
+1792051201 | %s
+2026-10-15 | %Y-%m-%d %H
+2026 % | %Y %%
+2026 | %Y %
+2026 x | %Y %Ex
+Oct 15 2026 08:00:01 UTC | %b %d %Y %H:%M:%S %Z
+2026-10-15 08:00:01 GMT+0200 | %Y-%m-%d %H:%M:%S %Z%z
+2026-10-15 08:00:01 EST | %Y-%m-%d %H:%M:%S %Z
+12 AM | %I %p
+13 PM | %I %p
+2026-W53-5 | %G-W%V-%u
+2025-W53-1 | %G-W%V-%u
+2026 42 | %G %V
+2026 42 4 | %Y %V %u
+2026 288 4 | %G %j %u
+ 5 Oct 2026 | %e %b %Y
+8:05:09 pm | %l:%M:%S %P
+2026-10-15 08:00:01.1234567 | %Y-%m-%d %H:%M:%S.%f
+2026-10-15T08:00:01+9900 | %Y-%m-%dT%H:%M:%S%z
+Thu Oct 15 08:00:01 2026 | %c
+10/15/26 08:00:01 | %x %X
+08:00:01 PM | %r
+2026-10-15 8 | %Y-%m-%d %k
+2026-10-15 | %Y-%m-%d%Q
+Monday 2026 01 0 | %A %Y %U %w
+2026-10-15 08:00 Z | %Y-%m-%d %H:%M %z
+2026-10-15 08:00 z | %Y-%m-%d %H:%M %z
+2026-10-15 -0000 | %Y-%m-%d %z
+2026-10-15 08:00:01 +02:00 | %F %T %z
+2026.10.15 (08h00) | %Y.%m.%d (%Hh%M)
+2026-10-15 08:00 | %Y-%m-%d %-H:%M
+2026-10-15 8:00 | %Y-%m-%d %OH:%OM
+2026-10-15 : | %Y-%m-%d %OH:
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/deltas.txt", file_0())?;
+    put("data/iso.txt", file_1())?;
+    make_dir("data/logs")?;
+    put("data/logs/access.log", file_2())?;
+    put("data/logs/app.log", file_3())?;
+    put("data/logs/catalina.out", file_4())?;
+    put("data/logs/edge.log", file_5())?;
+    put("data/logs/error.log", file_6())?;
+    put("data/logs/events.csv", file_7())?;
+    put("data/logs/line3.log", file_8())?;
+    put("data/logs/mail.log", file_9())?;
+    put("data/logs/syslog.log", file_10())?;
+    put("data/sources.txt", file_11())?;
+    put("data/strftime.txt", file_12())?;
+    put("data/strptime.txt", file_13())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the reports
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+// The lines of a data file that are not empty and not comments.
+fn data_lines(path: Str) -> Result[Vec[String], String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in split_on(read(path)?, b'\n') {
+        if l.len() > 0 and first_byte(l) != b'#' {
+            out.push(l.clone());
+        }
+    }
+    Ok(out)
+}
+
+// str.split(sep) and str.partition(sep) on a separator of several bytes.
+fn split_str(s: Str, sep: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, sep) {
+            out.push(byte_str(b, st, i));
+            i += sep.len();
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn partition_str(s: Str, sep: Str) -> (String, String) {
+    let i = find_str(s, sep);
+    if i < 0 {
+        return (s.to_string(), String.new());
+    }
+    (slice(s, 0, i), slice_from(s, i + sep.len()))
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn section_strptime() -> Result[(), String] {
+    println("== strptime");
+    for l in data_lines("data/strptime.txt")? {
+        let (s, f) = partition_str(l, " | ");
+        let out = match strptime(s, f) {
+            Ok(dt) => show_dt(dt),
+            Err(e) => e,
+        };
+        println(f"{py_repr(s)} {py_repr(f)}: {out}");
+    }
+    Ok(())
+}
+
+fn samples() -> Vec[DateTime] {
+    let mut v: Vec[DateTime] = Vec.new();
+    v.push(with_zone(naive(2026, 10, 15, 8, 0, 1, 250000), 2 * 3600 * US_PER_SEC, String.new()));
+    v.push(naive(2027, 1, 1, 0, 0, 0, 0));
+    v.push(naive(5, 1, 2, 3, 4, 5, 0));
+    v.push(with_zone(naive(2024, 2, 29, 23, 59, 59, 999999), -(3 * 3600 + 30 * 60) * US_PER_SEC, String.new()));
+    v.push(with_zone(naive(2026, 12, 28, 12, 30, 0, 0), 0, String.new()));
+    v
+}
+
+fn section_strftime() -> Result[(), String] {
+    println("== strftime");
+    let all = samples();
+    for f in data_lines("data/strftime.txt")? {
+        println(py_repr(f));
+        for d in all {
+            println(f"  {dt_iso(d, "T", "auto")}: {py_repr(py_strftime(f, d))}");
+        }
+    }
+    Ok(())
+}
+
+fn section_iso() -> Result[(), String] {
+    println("== fromisoformat");
+    for l in data_lines("data/iso.txt")? {
+        let (cls, out) = if starts_with(l, "date ") {
+            let s = slice_from(l, 5);
+            let r = match date_fromisoformat(s) {
+                Ok(d) => date_iso(d),
+                Err(e) => e,
+            };
+            ("date", f"{py_repr(s)}): {r}")
+        } else if starts_with(l, "time ") {
+            let s = slice_from(l, 5);
+            let r = match time_fromisoformat(s) {
+                Ok(t) => show_time(t),
+                Err(e) => e,
+            };
+            ("time", f"{py_repr(s)}): {r}")
+        } else {
+            let r = match datetime_fromisoformat(l) {
+                Ok(d) => show_dt(d),
+                Err(e) => e,
+            };
+            ("datetime", f"{py_repr(l)}): {r}")
+        };
+        println(f"{cls}.fromisoformat({out}");
+    }
+    Ok(())
+}
+
+// timedelta(**fields) from words like hours=-25.
+fn delta(fields: ref Vec[String]) -> Result[Delta, String] {
+    let mut days: i64 = 0;
+    let mut secs: i64 = 0;
+    let mut us: i64 = 0;
+    for f in fields {
+        let (k, _, v) = partition(f, b'=');
+        let n = match py_int(v) {
+            Some(n) => n,
+            None => return Err(f"ValueError: invalid literal for int() with base 10: {py_repr(v)}"),
+        };
+        if k == "weeks" {
+            days += n * 7;
+        } else if k == "days" {
+            days += n;
+        } else if k == "hours" {
+            secs += n * 3600;
+        } else if k == "minutes" {
+            secs += n * 60;
+        } else if k == "seconds" {
+            secs += n;
+        } else if k == "milliseconds" {
+            us += n * 1000;
+        } else if k == "microseconds" {
+            us += n;
+        } else {
+            return Err(f"TypeError: '{k}' is an invalid keyword argument for __new__()");
+        }
+    }
+    td_new(days, secs, us)
+}
+
+fn show_td(t: ref Delta) -> String {
+    f"{td_str(t)} = {td_repr(t)}"
+}
+
+fn words_from(w: ref Vec[String], from: i64, to: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in from..to {
+        out.push(w[i].clone());
+    }
+    out
+}
+
+fn run_delta(cmd: Str, w: ref Vec[String]) -> Result[String, String] {
+    if cmd == "td" {
+        return Ok(show_td(delta(w)?));
+    }
+    if cmd == "add" {
+        let d = datetime_fromisoformat(w[0])?;
+        let t = delta(words_from(w, 1, w.len()))?;
+        return Ok(show_dt(dt_add(d, t)?));
+    }
+    if cmd == "sub" {
+        let a = datetime_fromisoformat(w[0])?;
+        let b = datetime_fromisoformat(w[1])?;
+        return Ok(show_td(dt_sub(a, b)?));
+    }
+    if cmd == "mul" {
+        let mut i: i64 = 0;
+        while i < w.len() and has_byte(w[i], b'=') {
+            i += 1;
+        }
+        let t = delta(words_from(w, 0, i))?;
+        let n = py_int(w[i]).unwrap_or(0);
+        return Ok(show_td(td_new(t.days * n, t.secs * n, t.us * n)?));
+    }
+    if cmd == "floordiv" or cmd == "mod" {
+        let mut k: i64 = 0;
+        while w[k] != "/" {
+            k += 1;
+        }
+        let a = td_us(delta(words_from(w, 0, k))?);
+        let b = td_us(delta(words_from(w, k + 1, w.len()))?);
+        if b == 0 {
+            return Err("ZeroDivisionError: integer division or modulo by zero".to_string());
+        }
+        if cmd == "floordiv" {
+            return Ok(f"{fdiv(a, b)}");
+        }
+        return Ok(show_td(td_from_us(fmod(a, b))?));
+    }
+    let t = delta(w)?;
+    if cmd == "neg" or t.days < 0 {
+        return Ok(show_td(td_neg(t)?));
+    }
+    Ok(show_td(t))
+}
+
+fn section_deltas() -> Result[(), String] {
+    println("== timedelta");
+    for l in data_lines("data/deltas.txt")? {
+        let words = split_on(l, b' ');
+        let out = match run_delta(words[0], words_from(words, 1, words.len())) {
+            Ok(s) => s,
+            Err(e) => e,
+        };
+        println(f"{l}: {out}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the normalizer
+
+fn find_stamp(line: Str, rule: Str) -> Option[String] {
+    if rule == "bracket" {
+        let b = to_bytes(line);
+        let a = find_byte(line, b'[');
+        let mut e: i64 = -1;
+        let mut i = a + 1;
+        while i < b.len() {
+            if b[i] == b']' {
+                e = i;
+                break;
+            }
+            i += 1;
+        }
+        if a >= 0 and e >= 0 {
+            return Some(byte_str(b, a + 1, e));
+        }
+        return None;
+    }
+    let (kind, _, arg) = partition(rule, b':');
+    let words = split_on(line, b' ');
+    if kind == "field" {
+        let n = py_int(arg).unwrap_or(0);
+        return if words.len() >= n { Some(words[n - 1].clone()) } else { None };
+    }
+    if kind == "fields" {
+        let n = py_int(arg).unwrap_or(0);
+        return if words.len() >= n { Some(join(words_from(words, 0, n), " ")) } else { None };
+    }
+    let i = find_str(line, arg);
+    if i >= 0 { Some(slice(line, 0, i)) } else { None }
+}
+
+fn all_digits(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return false;
+    }
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn parse_stamp(s: Str, fmt: Str) -> Result[DateTime, String] {
+    if fmt == "iso" {
+        return datetime_fromisoformat(s);
+    }
+    if fmt == "epoch" {
+        let (whole, _, frac) = partition(s, b'.');
+        if not all_digits(whole) or (frac.len() > 0 and not all_digits(frac)) or frac.len() > 6 {
+            return Err(f"ValueError: not an epoch time: {py_repr(s)}");
+        }
+        let mut f = frac.clone();
+        while f.len() < 6 {
+            f.push_str("0");
+        }
+        let us = py_int(f).unwrap_or(0);
+        let epoch = with_zone(naive(1970, 1, 1, 0, 0, 0, 0), 0, String.new());
+        let t = td_new(0, py_int(whole).unwrap_or(0), us)?;
+        return dt_add(epoch, t);
+    }
+    strptime(s, fmt)
+}
+
+// The offset for naive times, "+HH:MM", in microseconds.
+fn offset_of(s: Str) -> i64 {
+    let sign: i64 = if first_byte(s) == b'-' { -1 } else { 1 };
+    let h = py_int(slice(s, 1, 3)).unwrap_or(0);
+    let m = py_int(slice(s, 4, 6)).unwrap_or(0);
+    sign * (h * 3600 + m * 60) * US_PER_SEC
+}
+
+// str.replace(cut, "", 1)
+fn remove_first(s: Str, cut: Str) -> String {
+    let i = find_str(s, cut);
+    if i < 0 {
+        return s.to_string();
+    }
+    f"{slice(s, 0, i)}{slice_from(s, i + cut.len())}"
+}
+
+// str.strip(" ,|")
+fn strip_punct(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and has_byte(" ,|", b[i]) {
+        i += 1;
+    }
+    while j > i and has_byte(" ,|", b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+#[derive(Clone)]
+struct Ev {
+    utc: i64,
+    k: i64,
+    n: i64,
+    name: String,
+    dt: DateTime,
+    assumed: bool,
+    rest: String,
+}
+
+fn ev_before(a: ref Ev, b: ref Ev) -> bool {
+    if a.utc != b.utc {
+        return a.utc < b.utc;
+    }
+    if a.k != b.k {
+        return a.k < b.k;
+    }
+    a.n < b.n
+}
+
+fn utc_dt(us: i64) -> Result[DateTime, String] {
+    from_wall(us, with_zone(naive(1, 1, 1, 0, 0, 0, 0), 0, String.new()))
+}
+
+fn section_normalize() -> Result[(), String] {
+    println("== normalize");
+    let mut events: Vec[Ev] = Vec.new();
+    let sources = data_lines("data/sources.txt")?;
+    for k in 0..sources.len() {
+        let parts = split_str(sources[k], " | ");
+        let name = parts[0].clone();
+        let rule = parts[2].clone();
+        let fmt = parts[3].clone();
+        let mut good: i64 = 0;
+        let mut bad: i64 = 0;
+        let mut notes: Vec[String] = Vec.new();
+        let mut last: Option[i64] = None;
+        let lines = data_lines(f"data/logs/{parts[1]}")?;
+        for i in 0..lines.len() {
+            let n = i + 1;
+            let line = lines[i].clone();
+            let found = find_stamp(line, rule);
+            let parsed = match found {
+                Some(st) => parse_stamp(st, fmt),
+                None => Err("ValueError: no timestamp found".to_string()),
+            };
+            let mut dt = match parsed {
+                Ok(d) => d,
+                Err(e) => {
+                    bad += 1;
+                    notes.push(f"  line {n}: {e}");
+                    continue;
+                }
+            };
+            let assumed = not dt.aware;
+            if assumed {
+                dt = with_zone(dt, offset_of(parts[4]), String.new());
+            }
+            let utc = utc_us(dt);
+            if let Some(l) = last {
+                if utc < l {
+                    notes.push(f"  line {n}: {td_str(td_from_us(utc - l)?)} out of order");
+                }
+            }
+            last = Some(utc);
+            good += 1;
+            let stamp = find_stamp(line, rule).unwrap_or(String.new());
+            let cut = if rule == "bracket" { f"[{stamp}]" } else { stamp };
+            let rest = strip_punct(join(split_ws(remove_first(line, cut)), " "));
+            events.push(Ev { utc: utc, k: k, n: n, name: name.clone(), dt: dt, assumed: assumed, rest: rest });
+        }
+        println(f"{name}: {good + bad} lines, {good} parsed, {bad} failed");
+        for x in notes {
+            println(x);
+        }
+    }
+    for i in 1..events.len() {
+        let mut j = i;
+        while j > 0 and ev_before(events[j], events[j - 1]) {
+            events.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    println("-- timeline (UTC)");
+    for i in 0..events.len() {
+        let e = events[i].clone();
+        let gap = if i == 0 { "-".to_string() } else { td_str(td_from_us(e.utc - events[i - 1].utc)?) };
+        let mark = if e.assumed { "*" } else { " " };
+        let u = utc_dt(e.utc)?;
+        println(f"{dt_iso(u, "T", "milliseconds")} {rjust(gap, 15)} {ljust(e.name, 8)} {dt_iso(e.dt, " ", "microseconds")}{mark} {e.rest}");
+    }
+    println("-- per minute");
+    let minute: i64 = 60 * US_PER_SEC;
+    let mut i: i64 = 0;
+    while i < events.len() {
+        let key = events[i].utc - events[i].utc % minute;
+        let mut count: i64 = 0;
+        while i < events.len() and events[i].utc - events[i].utc % minute == key {
+            count += 1;
+            i += 1;
+        }
+        let mut bar = String.new();
+        for _ in 0..count {
+            bar.push_str("#");
+        }
+        println(f"{py_strftime("%m-%d %H:%M", utc_dt(key)?)} {bar} {count}");
+    }
+    let first = events[0].utc;
+    let last = events[events.len() - 1].utc;
+    println(f"span {dt_iso(utc_dt(first)?, "T", "auto")} to {dt_iso(utc_dt(last)?, "T", "auto")}: {td_str(td_from_us(last - first)?)}, {events.len()} events");
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    section_strptime()?;
+    section_strftime()?;
+    section_iso()?;
+    section_deltas()?;
+    section_normalize()
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_datetime: {e}");
+    }
+}
