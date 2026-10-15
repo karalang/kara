@@ -1,0 +1,993 @@
+// A small git: a real `.git` directory that the real `git` can read.
+//
+// Objects are stored the way git stores them: `<type> <len>\0<body>`,
+// named by its SHA-1 and zlib-compressed. The compressor writes stored
+// (uncompressed) deflate blocks; the decompressor handles all three block
+// types, and is checked on two objects that real git compressed. Trees use
+// git's binary format and ordering, so blob, tree and commit ids match the
+// ones `git` itself computes for the same files, author and timestamp.
+// The index is this program's own text file, not git's binary one.
+//
+// Runs: init, add, commit, status (staged / unstaged / untracked), diff,
+// rm, a second commit, log, ls-tree, checkout of the first commit and back,
+// and fsck, which then catches an object rewritten with the wrong content.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-14-44  File.open / File.create take String
+//   B-2026-10-12-6   i64.parse returns Option
+//   B-2026-10-15-15  no `rfind`: parent_dir scans bytes by hand
+//   B-2026-10-15-16  see the comment at `victim` in run()
+
+// Everything happens inside this directory, so the files the program was
+// started next to are not part of the work tree.
+const ROOT: Str = "proj";
+const AUTHOR: Str = "Ada Lovelace <ada@example.com> 1700000000 +0000";
+
+// Two objects written by real git 2.x (`git hash-object -w`), copied from
+// .git/objects as hex. The first uses a dynamic Huffman block, the second a
+// fixed one.
+const REAL_ID_1: Str = "0769cd4d9046198627f6e63d1ad02a7c34456c86";
+const REAL_HEX_1: Str = "780105c1cb0d8020140440cf54b10578f3603d7c1625597806d044ab7726c802f66d39291972b78a4e2f1c65bac1682d41a57145b47a758ec184f0e25309f013f32412b3bf35213e94fb017f551c72";
+const REAL_ID_2: Str = "51c58a0ee0d53a01e061d94002e84926562b9c07";
+const REAL_HEX_2: Str = "78014bcac94f52306528c9ccabe4020019b103c3";
+
+// ---- SHA-1 ------------------------------------------------------------
+
+fn rotl(x: u32, n: u32) -> u32 {
+    (x << n) | (x >> (32u32 - n))
+}
+
+fn sha1(data: Slice[u8]) -> String {
+    let mut msg: Vec[u8] = Vec.new();
+    for b in data {
+        msg.push(b);
+    }
+    let bit_len: u64 = (data.len() as u64) * 8u64;
+    msg.push(0x80u8);
+    while msg.len() % 64 != 56 {
+        msg.push(0u8);
+    }
+    let mut s = 56u64;
+    loop {
+        msg.push(((bit_len >> s) & 0xffu64) as u8);
+        if s == 0u64 {
+            break;
+        }
+        s = s - 8u64;
+    }
+    let mut h: Vec[u32] = vec![0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32];
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut chunk = 0;
+    while chunk < msg.len() {
+        for i in 0..16 {
+            let at = chunk + i * 4;
+            w[i] = ((msg[at] as u32) << 24u32) | ((msg[at + 1] as u32) << 16u32)
+                | ((msg[at + 2] as u32) << 8u32) | (msg[at + 3] as u32);
+        }
+        for i in 16..80 {
+            w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1u32);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for i in 0..80 {
+            let (f, k) = if i < 20 {
+                ((b & c) | ((~b) & d), 0x5A827999u32)
+            } else if i < 40 {
+                (b ^ c ^ d, 0x6ED9EBA1u32)
+            } else if i < 60 {
+                ((b & c) | (b & d) | (c & d), 0x8F1BBCDCu32)
+            } else {
+                (b ^ c ^ d, 0xCA62C1D6u32)
+            };
+            let t = rotl(a, 5u32).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[i]);
+            e = d;
+            d = c;
+            c = rotl(b, 30u32);
+            b = a;
+            a = t;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        chunk = chunk + 64;
+    }
+    let mut out = String.new();
+    for x in h.iter() {
+        out.push_str(f"{x:08x}");
+    }
+    out
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= 48u8 and c <= 57u8 {
+        c - 48u8
+    } else {
+        c - 87u8
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16u8 + hex_val(b[i + 1]));
+        i = i + 2;
+    }
+    out
+}
+
+fn to_hex(b: Slice[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        out.push_str(f"{x:02x}");
+    }
+    out
+}
+
+// ---- zlib -------------------------------------------------------------
+
+fn adler32(data: Slice[u8]) -> u32 {
+    let mut a: u32 = 1u32;
+    let mut b: u32 = 0u32;
+    for x in data {
+        a = (a + (x as u32)) % 65521u32;
+        b = (b + a) % 65521u32;
+    }
+    (b << 16u32) | a
+}
+
+// zlib with stored deflate blocks: valid for any inflater, real git's too.
+fn zlib_store(data: Slice[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = vec![0x78u8, 0x01u8];
+    let mut at = 0;
+    loop {
+        let n = if data.len() - at > 65535 { 65535 } else { data.len() - at };
+        let last = at + n == data.len();
+        out.push(if last { 1u8 } else { 0u8 });
+        out.push((n & 0xff) as u8);
+        out.push((n >> 8) as u8);
+        out.push(((~n) & 0xff) as u8);
+        out.push((((~n) >> 8) & 0xff) as u8);
+        for i in at..at + n {
+            out.push(data[i]);
+        }
+        at = at + n;
+        if last {
+            break;
+        }
+    }
+    let sum = adler32(data);
+    out.push((sum >> 24u32) as u8);
+    out.push(((sum >> 16u32) & 0xffu32) as u8);
+    out.push(((sum >> 8u32) & 0xffu32) as u8);
+    out.push((sum & 0xffu32) as u8);
+    out
+}
+
+struct Bits { data: Vec[u8], pos: i64, bit: i64 }
+
+impl Bits {
+    fn need(mut ref self, n: i64) -> Result[i64, String] {
+        let mut v = 0;
+        for i in 0..n {
+            if self.pos >= self.data.len() {
+                return Err("inflate: out of input".to_string());
+            }
+            let b = ((self.data[self.pos] as i64) >> self.bit) & 1;
+            v = v | (b << i);
+            self.bit += 1;
+            if self.bit == 8 {
+                self.bit = 0;
+                self.pos += 1;
+            }
+        }
+        Ok(v)
+    }
+
+    fn align(mut ref self) {
+        if self.bit != 0 {
+            self.bit = 0;
+            self.pos += 1;
+        }
+    }
+}
+
+// A canonical Huffman code: how many codes of each length, and the symbols
+// in code order (the decoding scheme of zlib's puff.c).
+struct Huff { count: Vec[i64], symbol: Vec[i64] }
+
+fn huff(lengths: Slice[i64]) -> Huff {
+    let mut count: Vec[i64] = Vec.new();
+    for _ in 0..16 {
+        count.push(0);
+    }
+    for l in lengths {
+        count[l] += 1;
+    }
+    let mut offs: Vec[i64] = vec![0, 0];
+    for len in 1..15 {
+        offs.push(offs[len] + count[len]);
+    }
+    let mut symbol: Vec[i64] = Vec.new();
+    for _ in 0..lengths.len() {
+        symbol.push(0);
+    }
+    for s in 0..lengths.len() {
+        if lengths[s] != 0 {
+            symbol[offs[lengths[s]]] = s;
+            offs[lengths[s]] += 1;
+        }
+    }
+    count[0] = 0;
+    Huff { count: count, symbol: symbol }
+}
+
+fn decode(bits: mut ref Bits, h: ref Huff) -> Result[i64, String] {
+    let mut code = 0;
+    let mut first = 0;
+    let mut index = 0;
+    for len in 1..16 {
+        code = code | bits.need(1)?;
+        let count = h.count[len];
+        if code - count < first {
+            return Ok(h.symbol[index + (code - first)]);
+        }
+        index += count;
+        first += count;
+        first = first << 1;
+        code = code << 1;
+    }
+    Err("inflate: bad code".to_string())
+}
+
+fn codes(bits: mut ref Bits, out: mut ref Vec[u8], lit: ref Huff, dist: ref Huff) -> Result[(), String] {
+    let len_base = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+    let len_extra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+    let dist_base = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+    let dist_extra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+    loop {
+        let sym = decode(bits, lit)?;
+        if sym < 256 {
+            out.push(sym as u8);
+        } else if sym == 256 {
+            return Ok(());
+        } else {
+            let li = sym - 257;
+            if li >= 29 {
+                return Err("inflate: bad length symbol".to_string());
+            }
+            let len = len_base[li] + bits.need(len_extra[li])?;
+            let di = decode(bits, dist)?;
+            if di >= 30 {
+                return Err("inflate: bad distance symbol".to_string());
+            }
+            let d = dist_base[di] + bits.need(dist_extra[di])?;
+            if d > out.len() {
+                return Err("inflate: distance too far back".to_string());
+            }
+            for _ in 0..len {
+                let b = out[out.len() - d];
+                out.push(b);
+            }
+        }
+    }
+}
+
+fn fixed_tables() -> (Huff, Huff) {
+    let mut l: Vec[i64] = Vec.new();
+    for s in 0..288 {
+        l.push(if s < 144 { 8 } else if s < 256 { 9 } else if s < 280 { 7 } else { 8 });
+    }
+    let mut d: Vec[i64] = Vec.new();
+    for _ in 0..30 {
+        d.push(5);
+    }
+    (huff(l), huff(d))
+}
+
+fn dynamic_tables(bits: mut ref Bits) -> Result[(Huff, Huff), String] {
+    let order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+    let nlen = bits.need(5)? + 257;
+    let ndist = bits.need(5)? + 1;
+    let ncode = bits.need(4)? + 4;
+    let mut cl: Vec[i64] = Vec.new();
+    for _ in 0..19 {
+        cl.push(0);
+    }
+    for i in 0..ncode {
+        cl[order[i]] = bits.need(3)?;
+    }
+    let lencode = huff(cl);
+    let mut lengths: Vec[i64] = Vec.new();
+    while lengths.len() < nlen + ndist {
+        let sym = decode(bits, lencode)?;
+        if sym < 16 {
+            lengths.push(sym);
+        } else {
+            let (val, rep) = if sym == 16 {
+                if lengths.len() == 0 {
+                    return Err("inflate: repeat with no length".to_string());
+                }
+                (lengths[lengths.len() - 1], 3 + bits.need(2)?)
+            } else if sym == 17 {
+                (0, 3 + bits.need(3)?)
+            } else {
+                (0, 11 + bits.need(7)?)
+            };
+            for _ in 0..rep {
+                lengths.push(val);
+            }
+        }
+    }
+    let lit = huff(lengths[0..nlen]);
+    let dist = huff(lengths[nlen..nlen + ndist]);
+    Ok((lit, dist))
+}
+
+fn inflate(data: Slice[u8]) -> Result[Vec[u8], String] {
+    if data.len() < 6 or (((data[0] as i64) << 8) | (data[1] as i64)) % 31 != 0 {
+        return Err("zlib: bad header".to_string());
+    }
+    let mut body: Vec[u8] = Vec.new();
+    for i in 2..data.len() {
+        body.push(data[i]);
+    }
+    let mut bits = Bits { data: body, pos: 0, bit: 0 };
+    let mut out: Vec[u8] = Vec.new();
+    loop {
+        let last = bits.need(1)?;
+        let kind = bits.need(2)?;
+        if kind == 0 {
+            bits.align();
+            if bits.pos + 4 > bits.data.len() {
+                return Err("inflate: stored header cut".to_string());
+            }
+            let n = (bits.data[bits.pos] as i64) | ((bits.data[bits.pos + 1] as i64) << 8);
+            bits.pos += 4;
+            if bits.pos + n > bits.data.len() {
+                return Err("inflate: stored block cut".to_string());
+            }
+            for i in 0..n {
+                out.push(bits.data[bits.pos + i]);
+            }
+            bits.pos += n;
+        } else if kind == 1 {
+            let (lit, dist) = fixed_tables();
+            codes(mut bits, mut out, lit, dist)?;
+        } else if kind == 2 {
+            let (lit, dist) = dynamic_tables(mut bits)?;
+            codes(mut bits, mut out, lit, dist)?;
+        } else {
+            return Err("inflate: bad block type".to_string());
+        }
+        if last == 1 {
+            break;
+        }
+    }
+    bits.align();
+    if bits.pos + 4 > bits.data.len() {
+        return Err("zlib: missing checksum".to_string());
+    }
+    let want: u32 = ((bits.data[bits.pos] as u32) << 24u32) | ((bits.data[bits.pos + 1] as u32) << 16u32)
+        | ((bits.data[bits.pos + 2] as u32) << 8u32) | (bits.data[bits.pos + 3] as u32);
+    if adler32(out) != want {
+        return Err("zlib: checksum mismatch".to_string());
+    }
+    Ok(out)
+}
+
+// ---- files ------------------------------------------------------------
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.PermissionDenied => "permission denied".to_string(),
+        IoError.Other(m) => m.clone(),
+        _ => "io error".to_string(),
+    }
+}
+
+fn sh(script: Str) -> Result[String, String] {
+    let child = match Command.new("sh").arg("-c").arg(f"mkdir -p {ROOT} && cd {ROOT} && {script}")
+        .stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        Ok(c) => c,
+        Err(e) => return Err(f"spawn: {show(e)}"),
+    };
+    let out = match child.stdout() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    let err = match child.stderr() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    match child.wait() {
+        Ok(st) => if st.code == 0 { Ok(out) } else { Err(f"exit {st.code}: {err.trim()}") },
+        Err(e) => Err(f"wait: {show(e)}"),
+    }
+}
+
+fn read_bytes(path: Str) -> Result[Vec[u8], String] {
+    let f = match File.open(f"{ROOT}/{path}") {
+        Ok(f) => f,
+        Err(e) => return Err(f"{path}: {show(e)}"),
+    };
+    let mut out: Vec[u8] = Vec.new();
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in 0..512 {
+        buf.push(0u8);
+    }
+    loop {
+        let n = match f.read(mut buf[0..512]) {
+            Ok(n) => n,
+            Err(e) => return Err(f"{path}: {show(e)}"),
+        };
+        if n == 0 {
+            break;
+        }
+        for i in 0..n {
+            out.push(buf[i]);
+        }
+    }
+    Ok(out)
+}
+
+fn write_bytes(path: Str, bytes: Slice[u8]) -> Result[(), String] {
+    let f = match File.create(f"{ROOT}/{path}") {
+        Ok(f) => f,
+        Err(e) => return Err(f"{path}: {show(e)}"),
+    };
+    let mut off = 0;
+    while off < bytes.len() {
+        match f.write(bytes[off..bytes.len()]) {
+            Ok(n) => off += n as i64,
+            Err(e) => return Err(f"{path}: {show(e)}"),
+        }
+    }
+    Ok(())
+}
+
+// No `rfind` in the library (B-2026-10-15-15): the last '/' by hand.
+fn parent_dir(path: Str) -> Option[String] {
+    let b = path.bytes();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == 47u8 {
+            return Some(path[0..i].to_string());
+        }
+        i = i - 1;
+    }
+    None
+}
+
+fn write_file(path: Str, text: Str) -> Result[(), String] {
+    match parent_dir(path) {
+        Some(d) => {
+            sh(f"mkdir -p '{d}'")?;
+        }
+        None => {}
+    }
+    write_bytes(path, text.bytes())
+}
+
+fn text_of(bytes: Vec[u8]) -> String {
+    match String.from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => "<binary>".to_string(),
+    }
+}
+
+// Every file under the work tree, outside .git, sorted.
+fn work_files() -> Result[Vec[String], String] {
+    let listing = sh("find . -type f -not -path './.git/*'")?;
+    let mut out: Vec[String] = Vec.new();
+    for l in listing.lines() {
+        if l.starts_with("./") {
+            out.push(l[2..l.len()].to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+// ---- objects ----------------------------------------------------------
+
+fn object_path(id: Str) -> String {
+    f".git/objects/{id[0..2]}/{id[2..id.len()]}"
+}
+
+fn frame(kind: Str, body: Slice[u8]) -> Vec[u8] {
+    let mut raw: Vec[u8] = Vec.new();
+    for b in f"{kind} {body.len()}".bytes() {
+        raw.push(b);
+    }
+    raw.push(0u8);
+    for b in body {
+        raw.push(b);
+    }
+    raw
+}
+
+fn write_object(kind: Str, body: Slice[u8]) -> Result[String, String] {
+    let raw = frame(kind, body);
+    let id = sha1(raw);
+    sh(f"mkdir -p .git/objects/{id[0..2]}")?;
+    write_bytes(object_path(id), zlib_store(raw))?;
+    Ok(id)
+}
+
+struct Object { kind: String, body: Vec[u8] }
+
+fn parse_object(raw: Slice[u8]) -> Result[Object, String] {
+    let mut sp = -1;
+    let mut nul = -1;
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == 32u8 and sp < 0 {
+            sp = i;
+        }
+        if raw[i] == 0u8 {
+            nul = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if sp < 0 or nul < 0 {
+        return Err("object: no header".to_string());
+    }
+    let mut kind_bytes: Vec[u8] = Vec.new();
+    for j in 0..sp {
+        kind_bytes.push(raw[j]);
+    }
+    let mut len_bytes: Vec[u8] = Vec.new();
+    for j in sp + 1..nul {
+        len_bytes.push(raw[j]);
+    }
+    let len = match i64.parse(text_of(len_bytes)) {
+        Some(n) => n,
+        None => return Err("object: bad length".to_string()),
+    };
+    if nul + 1 + len != raw.len() {
+        return Err(f"object: length {len} but {raw.len() - nul - 1} bytes");
+    }
+    let mut body: Vec[u8] = Vec.new();
+    for j in nul + 1..raw.len() {
+        body.push(raw[j]);
+    }
+    Ok(Object { kind: text_of(kind_bytes), body: body })
+}
+
+fn read_object(id: Str) -> Result[Object, String] {
+    let packed = read_bytes(object_path(id))?;
+    let raw = inflate(packed)?;
+    if sha1(raw) != id {
+        return Err(f"object {id[0..7]} does not hash to its name");
+    }
+    parse_object(raw)
+}
+
+struct TreeEntry { mode: String, name: String, id: String }
+
+fn parse_tree(body: Slice[u8]) -> Result[Vec[TreeEntry], String] {
+    let mut out: Vec[TreeEntry] = Vec.new();
+    let mut at = 0;
+    while at < body.len() {
+        let mut sp = at;
+        while sp < body.len() and body[sp] != 32u8 {
+            sp = sp + 1;
+        }
+        let mut nul = sp;
+        while nul < body.len() and body[nul] != 0u8 {
+            nul = nul + 1;
+        }
+        if nul + 21 > body.len() {
+            return Err("tree: entry cut short".to_string());
+        }
+        let mut mode: Vec[u8] = Vec.new();
+        for j in at..sp {
+            mode.push(body[j]);
+        }
+        let mut name: Vec[u8] = Vec.new();
+        for j in sp + 1..nul {
+            name.push(body[j]);
+        }
+        out.push(TreeEntry { mode: text_of(mode), name: text_of(name), id: to_hex(body[nul + 1..nul + 21]) });
+        at = nul + 21;
+    }
+    Ok(out)
+}
+
+// Builds the tree for one directory level from `path -> blob id` entries
+// whose paths are relative to it. Git orders entries by name, with a tree
+// compared as if its name ended in '/'.
+fn write_tree(entries: ref SortedMap[String, String]) -> Result[String, String] {
+    let mut subdirs: SortedMap[String, SortedMap[String, String]] = SortedMap.new();
+    let mut ordered: SortedMap[String, TreeEntry] = SortedMap.new();
+    for (path, id) in entries.iter() {
+        match path.find("/") {
+            Some(i) => {
+                let dir = path[0..i].to_string();
+                let rest = path[i + 1..path.len()].to_string();
+                subdirs.entry(dir).or_insert(SortedMap.new()).insert(rest, id.clone());
+            }
+            None => {
+                ordered.insert(path.clone(), TreeEntry { mode: "100644".to_string(), name: path.clone(), id: id.clone() });
+            }
+        }
+    }
+    for (dir, sub) in subdirs.iter() {
+        let id = write_tree(sub)?;
+        ordered.insert(f"{dir}/", TreeEntry { mode: "40000".to_string(), name: dir.clone(), id: id });
+    }
+    let mut body: Vec[u8] = Vec.new();
+    for (_, e) in ordered.iter() {
+        for b in f"{e.mode} {e.name}".bytes() {
+            body.push(b);
+        }
+        body.push(0u8);
+        for b in unhex(e.id) {
+            body.push(b);
+        }
+    }
+    write_object("tree", body)
+}
+
+// Flattens a tree into `path -> blob id`.
+fn read_tree(id: Str, prefix: Str, out: mut ref SortedMap[String, String]) -> Result[(), String] {
+    let obj = read_object(id)?;
+    if obj.kind != "tree" {
+        return Err(f"{id[0..7]} is a {obj.kind}, not a tree");
+    }
+    for e in parse_tree(obj.body)? {
+        let path = f"{prefix}{e.name}";
+        if e.mode == "40000" {
+            read_tree(e.id, f"{path}/", mut out)?;
+        } else {
+            out.insert(path, e.id.clone());
+        }
+    }
+    Ok(())
+}
+
+struct Commit { tree: String, parent: Option[String], message: String }
+
+fn parse_commit(body: Vec[u8]) -> Result[Commit, String] {
+    let text = text_of(body);
+    let split = match text.find("\n\n") {
+        Some(i) => i,
+        None => return Err("commit: no message".to_string()),
+    };
+    let mut tree = String.new();
+    let mut parent: Option[String] = None;
+    for line in text[0..split].lines() {
+        if line.starts_with("tree ") {
+            tree = line[5..line.len()].to_string();
+        } else if line.starts_with("parent ") {
+            parent = Some(line[7..line.len()].to_string());
+        }
+    }
+    Ok(Commit { tree: tree, parent: parent, message: text[split + 2..text.len()].trim().to_string() })
+}
+
+// ---- repository -------------------------------------------------------
+
+struct Repo { index: SortedMap[String, String] }
+
+fn init() -> Result[Repo, String] {
+    sh("mkdir -p .git/objects .git/refs/heads")?;
+    write_file(".git/HEAD", "ref: refs/heads/main\n")?;
+    Ok(Repo { index: SortedMap.new() })
+}
+
+fn save_index(repo: ref Repo) -> Result[(), String] {
+    let mut s = String.new();
+    for (path, id) in repo.index.iter() {
+        s.push_str(f"{id} {path}\n");
+    }
+    write_file(".git/kara-index", s)
+}
+
+fn head() -> Option[String] {
+    match read_bytes(".git/refs/heads/main") {
+        Ok(b) => Some(text_of(b).trim().to_string()),
+        Err(_) => None,
+    }
+}
+
+fn head_files() -> Result[SortedMap[String, String], String] {
+    let mut files: SortedMap[String, String] = SortedMap.new();
+    match head() {
+        Some(c) => {
+            let commit = parse_commit(read_object(c)?.body)?;
+            read_tree(commit.tree, "", mut files)?;
+        }
+        None => {}
+    }
+    Ok(files)
+}
+
+fn add(repo: mut ref Repo, path: Str) -> Result[(), String] {
+    let bytes = read_bytes(path)?;
+    let id = write_object("blob", bytes)?;
+    repo.index.insert(path.to_string(), id);
+    save_index(repo)
+}
+
+fn rm(repo: mut ref Repo, path: Str) -> Result[(), String] {
+    match repo.index.remove(path.to_string()) {
+        Some(_) => {}
+        None => return Err(f"{path} is not tracked"),
+    }
+    sh(f"rm -f '{path}'")?;
+    save_index(repo)
+}
+
+fn commit(repo: ref Repo, message: Str) -> Result[String, String] {
+    let tree = write_tree(repo.index)?;
+    let mut text = f"tree {tree}\n";
+    match head() {
+        Some(p) => text.push_str(f"parent {p}\n"),
+        None => {}
+    }
+    text.push_str(f"author {AUTHOR}\ncommitter {AUTHOR}\n\n{message}\n");
+    let id = write_object("commit", text.bytes())?;
+    write_file(".git/refs/heads/main", f"{id}\n")?;
+    Ok(id)
+}
+
+fn blob_id_of(path: Str) -> Result[String, String] {
+    let bytes = read_bytes(path)?;
+    Ok(sha1(frame("blob", bytes)))
+}
+
+fn status(repo: ref Repo) -> Result[(), String] {
+    let committed = head_files()?;
+    let mut lines: Vec[String] = Vec.new();
+    for (path, id) in repo.index.iter() {
+        match committed.get(path) {
+            Some(old) => if old != id { lines.push(f"staged:    modified {path}"); },
+            None => lines.push(f"staged:    new file {path}"),
+        }
+    }
+    for (path, _) in committed.iter() {
+        if not repo.index.contains_key(path) {
+            lines.push(f"staged:    deleted  {path}");
+        }
+    }
+    let work = work_files()?;
+    for (path, id) in repo.index.iter() {
+        let mut present = false;
+        for w in work.iter() {
+            if w == path {
+                present = true;
+            }
+        }
+        if not present {
+            lines.push(f"unstaged:  deleted  {path}");
+        } else if blob_id_of(path)? != id {
+            lines.push(f"unstaged:  modified {path}");
+        }
+    }
+    for w in work.iter() {
+        if not repo.index.contains_key(w) {
+            lines.push(f"untracked: {w}");
+        }
+    }
+    if lines.len() == 0 {
+        println("  nothing to commit, working tree clean");
+    }
+    for l in lines.iter() {
+        println(f"  {l}");
+    }
+    Ok(())
+}
+
+// A line diff from the longest common subsequence, printed as one hunk of
+// changes with a line of context on each side of every change.
+fn diff(old: Str, new: Str) {
+    let a: Vec[String] = old.lines().iter().map(|l| l.to_string()).collect();
+    let b: Vec[String] = new.lines().iter().map(|l| l.to_string()).collect();
+    let n = a.len();
+    let m = b.len();
+    let mut t: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..m + 1 {
+            row.push(0);
+        }
+        t.push(row);
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        let mut j = m - 1;
+        while j >= 0 {
+            t[i][j] = if a[i] == b[j] {
+                t[i + 1][j + 1] + 1
+            } else if t[i + 1][j] >= t[i][j + 1] {
+                t[i + 1][j]
+            } else {
+                t[i][j + 1]
+            };
+            j = j - 1;
+        }
+        i = i - 1;
+    }
+    let mut ops: Vec[String] = Vec.new();
+    let mut x = 0;
+    let mut y = 0;
+    while x < n or y < m {
+        if x < n and y < m and a[x] == b[y] {
+            ops.push(f" {a[x]}");
+            x = x + 1;
+            y = y + 1;
+        } else if y < m and (x == n or t[x][y + 1] >= t[x + 1][y]) {
+            ops.push(f"+{b[y]}");
+            y = y + 1;
+        } else {
+            ops.push(f"-{a[x]}");
+            x = x + 1;
+        }
+    }
+    for k in 0..ops.len() {
+        let near = (k > 0 and not ops[k - 1].starts_with(" "))
+            or (k + 1 < ops.len() and not ops[k + 1].starts_with(" "))
+            or not ops[k].starts_with(" ");
+        if near {
+            println(f"  {ops[k]}");
+        }
+    }
+}
+
+fn checkout(repo: mut ref Repo, id: Str) -> Result[(), String] {
+    let target_commit = parse_commit(read_object(id)?.body)?;
+    let mut target: SortedMap[String, String] = SortedMap.new();
+    read_tree(target_commit.tree, "", mut target)?;
+    for (path, _) in repo.index.iter() {
+        if not target.contains_key(path) {
+            sh(f"rm -f '{path}'")?;
+        }
+    }
+    for (path, blob) in target.iter() {
+        let obj = read_object(blob)?;
+        write_file(path, text_of(obj.body))?;
+    }
+    repo.index = target;
+    save_index(repo)?;
+    write_file(".git/refs/heads/main", f"{id}\n")
+}
+
+fn log() -> Result[(), String] {
+    let mut at = head();
+    loop {
+        let id = match at {
+            Some(i) => i,
+            None => break,
+        };
+        let c = parse_commit(read_object(id)?.body)?;
+        println(f"  commit {id}");
+        println(f"      {c.message}");
+        at = c.parent;
+    }
+    Ok(())
+}
+
+// Checks that every object inflates and hashes to its own name.
+fn fsck() -> Result[i64, String] {
+    let listing = sh("find .git/objects -type f")?;
+    let mut paths: Vec[String] = Vec.new();
+    for l in listing.lines() {
+        paths.push(l.to_string());
+    }
+    paths.sort();
+    let mut bad = 0;
+    for p in paths.iter() {
+        let id = f"{p[13..15]}{p[16..p.len()]}";
+        match read_object(id) {
+            Ok(_) => {}
+            Err(e) => {
+                println(f"  error: {e}");
+                bad += 1;
+            }
+        }
+    }
+    println(f"  {paths.len()} objects, {bad} bad");
+    Ok(bad)
+}
+
+fn run() -> Result[(), String] {
+    println("== init");
+    let mut repo = init()?;
+    write_file("README.md", "# demo\n\nA tiny project.\nIt has three parts.\nSee docs/guide.txt.\n")?;
+    write_file("b.txt", "scratch notes\n")?;
+    write_file("src/main.c", "int main(void) { return helper(); }\n")?;
+    write_file("src/util/str.c", "int helper(void) { return 0; }\n")?;
+    write_file("docs/guide.txt", "Build with make.\n")?;
+    write_file("src.txt", "a file that sorts between src and src/\n")?;
+    for p in work_files()? {
+        add(mut repo, p)?;
+    }
+    let first = commit(repo, "initial import")?;
+    println(f"  [main {first[0..7]}] initial import");
+    println("== status");
+    status(repo)?;
+
+    println("== change things");
+    write_file("README.md", "# demo\n\nA tiny project.\nIt has four parts now.\nSee docs/guide.txt.\nMIT licensed.\n")?;
+    sh("rm b.txt")?;
+    write_file("NEWS.txt", "0.2: second release\n")?;
+    write_file("src/util/str.c", "int helper(void) { return 1; }\n")?;
+    add(mut repo, "src/util/str.c")?;
+    status(repo)?;
+
+    println("== diff README.md");
+    let committed = head_files()?;
+    let old = text_of(read_object(committed.get("README.md").unwrap_or(String.new()))?.body);
+    let now = text_of(read_bytes("README.md")?);
+    diff(old, now);
+
+    println("== second commit");
+    add(mut repo, "README.md")?;
+    add(mut repo, "NEWS.txt")?;
+    rm(mut repo, "b.txt")?;
+    let second = commit(repo, "second release")?;
+    println(f"  [main {second[0..7]}] second release");
+    status(repo)?;
+
+    println("== log");
+    log()?;
+
+    println("== ls-tree -r HEAD");
+    for (path, id) in head_files()?.iter() {
+        println(f"  {id} {path}");
+    }
+
+    println("== checkout first commit");
+    checkout(mut repo, first)?;
+    println(f"  files: {work_files()?.join(" ")}");
+    println(f"  b.txt: {text_of(read_bytes("b.txt")?).trim()}");
+    status(repo)?;
+    println("== checkout second again");
+    checkout(mut repo, second)?;
+    println(f"  files: {work_files()?.join(" ")}");
+
+    println("== objects from real git");
+    let reals = [(REAL_ID_1, REAL_HEX_1), (REAL_ID_2, REAL_HEX_2)];
+    for (id, hex) in reals {
+        let raw = inflate(unhex(hex))?;
+        let ok = if sha1(raw) == id { "ok" } else { "MISMATCH" };
+        let obj = parse_object(raw)?;
+        println(f"  {id[0..7]} {obj.kind} {obj.body.len()} bytes, hash {ok}: {text_of(obj.body).lines()[0]}");
+    }
+
+    println("== fsck");
+    fsck()?;
+    println("== fsck after an object is rewritten");
+    // `.unwrap_or(String.new())` here borrows a temporary (core-semantics
+    // §5.1); check misses it and v2 refuses it without a location
+    // (B-2026-10-15-16), so default to a literal and copy.
+    let victim = repo.index.get("docs/guide.txt").unwrap_or("").clone();
+    write_bytes(object_path(victim), zlib_store(frame("blob", "Build with cmake.\n".bytes())))?;
+    let bad = fsck()?;
+    match read_object(victim) {
+        Ok(_) => println("  read: ok"),
+        Err(e) => println(f"  read: {e}"),
+    }
+    println(f"  exit status would be {if bad > 0 { 1 } else { 0 }}");
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"fatal: {e}"),
+    }
+}

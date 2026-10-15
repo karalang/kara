@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| missing-feature | 263 |
+| missing-feature | 264 |
 | codegen-gap | 259 |
 | false-positive | 188 |
 | other | 172 |
 | perf | 166 |
-| diagnostics | 161 |
+| diagnostics | 162 |
 | crash | 118 |
 | soundness | 105 |
 | use-after-free | 90 |
@@ -112,9 +112,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2895 |
 | interp | 925 |
-| typecheck | 425 |
+| typecheck | 427 |
 | other | 115 |
-| ownership | 97 |
+| ownership | 98 |
 | cli | 76 |
 | runtime | 72 |
 | parser | 63 |
@@ -212,6 +212,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-12 | 2026-10-15 | ownership | medium | `karac check` keeps a closure's borrow of a captured value alive after the closure is gone: `let redo = skip.iter().any(|s| s == d.name); if redo { continue; } kept.push(d);` is refused with "cannot consume `d` while closure at line 8:36 captures `d.name` by `ref` (borrow still live)", though the closure was consumed by `any` on the line before; the same test written as a `for` loop passes, and every MIR surface runs the closure form | — |
 | B-2026-10-15-13 | 2026-10-15 | typecheck | medium | A `mut ref name` pattern binding (core-semantics.md §4.6), the one spelling the spec gives for a mutable borrow of an element or field in a local, passes `karac check` but every MIR surface refuses it with the LEGACY-backend message "`mut ref p` pattern bindings are not supported by the legacy `build` / `run` backends, which would bind a copy; `karac check` accepts them for the v2 backend" | — |
 | B-2026-10-15-14 | 2026-10-15 | ownership | medium | `karac check` refuses a `mut ref` local bound to a projection of a named place, which core-semantics.md §5.1 allows: `let p: mut ref P = w.p; p.n += 5;` is refused twice ("cannot compound-assign through `p` — declared without `mut`", then "value 'w.p' moved here"), and `let p: mut ref P = w.ps[1];` with E_INDEX_MOVE_NON_COPY, while `__mir-run` runs the field form and prints the updated value; there is also no expression form `mut ref place` (only `ref place`), so a mutable borrow of an element has no `let` spelling at all | — |
+| B-2026-10-15-15 | 2026-10-15 | typecheck | low | The string library has no reverse search: docs/library/strings.md lists `find` but no `rfind`, `rsplit_once`, `split_once` or `strip_suffix`, and there is no path module, so taking a path's parent directory, a file's extension or the last field of a line means scanning the bytes by hand | — |
+| B-2026-10-15-16 | 2026-10-15 | typecheck+ownership | medium | `let v = m.get(k).unwrap_or(String.new());` binds a borrow of a temporary (core-semantics.md §5.1: `String.new()` in a `ref` slot is a temporary), but `karac check` passes it; every MIR surface then refuses the whole program with `borrow check main: bb10[term]: drop of _9 while it is borrowed (borrow at bb9[0]) [E0516]`, which names a basic block and no source line | — |
 
 ### Relocated
 

@@ -1,0 +1,46 @@
+== init
+  [main 50d2533] initial import
+== status
+  nothing to commit, working tree clean
+== change things
+  staged:    modified src/util/str.c
+  unstaged:  modified README.md
+  unstaged:  deleted  b.txt
+  untracked: NEWS.txt
+== diff README.md
+   A tiny project.
+  +It has four parts now.
+  -It has three parts.
+   See docs/guide.txt.
+  +MIT licensed.
+== second commit
+  [main df2c4cb] second release
+  nothing to commit, working tree clean
+== log
+  commit df2c4cb74280178ecfceb93480367b597f6258a7
+      second release
+  commit 50d25336b5c8fe88666646ffa0c875c1457c5b7f
+      initial import
+== ls-tree -r HEAD
+  cb11b5e5ef150e177e9f4cbcd7e1e36993d551e6 NEWS.txt
+  d7879c8a4194ea42514939e62c8cabf17c29cb27 README.md
+  02f1534538cbec8ced9fcc4bfcc1c78704989823 docs/guide.txt
+  dc71da68086f8f55888f57d69d1f19258eb4d2f9 src.txt
+  c5049d695d3b7f1c61c81225d207543613fd278c src/main.c
+  6678252dba7a40c0fd4b65bb6c6462f26a41449f src/util/str.c
+== checkout first commit
+  files: README.md b.txt docs/guide.txt src.txt src/main.c src/util/str.c
+  b.txt: scratch notes
+  nothing to commit, working tree clean
+== checkout second again
+  files: NEWS.txt README.md docs/guide.txt src.txt src/main.c src/util/str.c
+== objects from real git
+  0769cd4 blob 73 bytes, hash ok: hello from real git
+  51c58a0 blob 5 bytes, hash ok: tiny
+== fsck
+  18 objects, 0 bad
+== fsck after an object is rewritten
+  error: object 02f1534 does not hash to its name
+  18 objects, 1 bad
+  read: object 02f1534 does not hash to its name
+  exit status would be 1
