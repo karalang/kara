@@ -187,7 +187,7 @@ cli/mini_pathlib        POSIX and Windows pure paths as Python's pathlib; packag
 cli/mini_zoneinfo       time zones from real TZif files as Python's zoneinfo; transitions and a meeting planner
 cli/mini_gettext        .po compiler, .mo catalogs, fallback chains and plural forms (gettext)
 cli/mini_logging        a service's logs through Python's logging: handlers, rotation, dictConfig reloads
-cli/mini_datetime        strptime, strftime, fromisoformat, timedelta and a log normalizer
+cli/mini_datetime       strptime, strftime, fromisoformat, timedelta and a log normalizer
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
