@@ -12529,3 +12529,78 @@ fn test_par_block_inside_an_interpolation_hole_is_still_conflict_checked() {
         );
     }
 }
+
+// ── B-2026-10-14-58: `allocates(Heap)` does not constrain a bare Fn slot ──
+//
+// design.md § Effects: "Default-permitted effects do not constrain a slot.
+// `allocates(Heap)` and `panics` are permitted in function types too, so a
+// value that allocates or may panic fits a slot whose clause omits them."
+// B-2026-08-24-8 did this for `panics`; `allocates(Heap)` was still
+// compared, so any function value reaching a seeded allocator (`push_str`,
+// `Vec.new`, `Vec.push`) was refused by a bare slot. The row blamed
+// recursion; the measurement here says otherwise: the non-recursive cells
+// failed the same way, and its control (`f"n={n}"`) only passed because
+// string formatting is not seeded `allocates(Heap)`.
+
+/// Every cell reaches a seeded allocator, three without recursion, and
+/// fits both a bare argument slot and a bare `let` annotation.
+#[test]
+fn test_allocates_heap_does_not_constrain_a_bare_fn_slot() {
+    for (callee, what) in [
+        (
+            "fn rec(n: i64, out: mut ref String) { if n > 0 { out.push_str(\"x\"); rec(n - 1, mut out); } }\n\
+             fn show(n: i64) -> String { let mut s = String.new(); rec(n, mut s); s }",
+            "through a recursive helper (the row's program)",
+        ),
+        (
+            "fn show(n: i64) -> String { let mut s = String.new(); s.push_str(\"x\"); s }",
+            "push_str directly",
+        ),
+        (
+            "fn show(n: i64) -> String { let mut v: Vec[i64] = Vec.new(); v.push(n); f\"{v.len()}\" }",
+            "Vec.new and push",
+        ),
+        (
+            "fn helper(out: mut ref String) { out.push_str(\"x\"); }\n\
+             fn show(n: i64) -> String { let mut s = String.new(); helper(mut s); s }",
+            "through a non-recursive helper",
+        ),
+    ] {
+        let source = format!(
+            "{callee}\n\
+             fn call(f: Fn(i64) -> String) -> String {{ f(2) }}\n\
+             fn main() {{ let a = call(show); let g: Fn(i64) -> String = show; let b = g(1); }}"
+        );
+        let parsed = parse(&source);
+        assert!(parsed.errors.is_empty(), "{what}: parse: {:?}", parsed.errors);
+        let errs: Vec<String> = effectcheck(&parsed.program)
+            .errors
+            .into_iter()
+            .filter(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+            .map(|e| e.message)
+            .collect();
+        assert!(
+            errs.is_empty(),
+            "{what}: `allocates(Heap)` must not constrain a bare slot; got {errs:?}"
+        );
+    }
+}
+
+/// The permit is the Default profile's, so `embedded`, which forbids
+/// `allocates(Heap)`, still refuses an allocating value in a bare slot.
+#[test]
+fn test_allocates_heap_still_constrains_a_bare_fn_slot_under_embedded() {
+    let errs = profile_errors(
+        "fn show(n: i64) -> String { let mut s = String.new(); s.push_str(\"x\"); s }\n\
+         fn call(f: Fn(i64) -> String) -> String { f(2) }\n\
+         fn main() { let a = call(show); }",
+        CompileProfile::Embedded,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation
+                && e.message.contains("allocates(Heap)")),
+        "embedded must still check `allocates(Heap)` against a bare slot; got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

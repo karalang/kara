@@ -478,15 +478,14 @@ impl<'a> super::EffectChecker<'a> {
             let arg_str: Vec<String> = arg_effects
                 .effects
                 .iter()
-                .filter(|te| !self.is_slot_transparent_verb(&te.effect.verb))
+                .filter(|te| !self.is_slot_transparent(&te.effect))
                 .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
                 .collect();
             let offending_str: Vec<String> = arg_effects
                 .effects
                 .iter()
                 .filter(|te| {
-                    !self.is_slot_transparent_verb(&te.effect.verb)
-                        && !slot_effects.contains(&te.effect)
+                    !self.is_slot_transparent(&te.effect) && !slot_effects.contains(&te.effect)
                 })
                 .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
                 .collect();
@@ -508,7 +507,7 @@ impl<'a> super::EffectChecker<'a> {
             };
 
             for te in &arg_effects.effects {
-                let is_transparent = self.is_slot_transparent_verb(&te.effect.verb);
+                let is_transparent = self.is_slot_transparent(&te.effect);
                 if !slot_effects.contains(&te.effect) && !is_transparent {
                     let effect_str =
                         format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);
@@ -610,8 +609,17 @@ impl<'a> super::EffectChecker<'a> {
     /// non-conflicting (`src/concurrency/conflicts.rs`), because a Kāra panic
     /// is a process exit rather than an unwind. Different question, same verb,
     /// same reason it behaves unlike the other five resource verbs.
-    fn is_slot_transparent_verb(&self, verb: &EffectVerbKind) -> bool {
-        matches!(verb, EffectVerbKind::Panics) || self.is_transparent_verb(verb)
+    ///
+    /// The default-permitted `allocates(Heap)` is ignored the same way
+    /// (B-2026-10-14-58): design.md § Effects, "Default-permitted effects do
+    /// not constrain a slot ... a value that allocates or may panic fits a
+    /// slot whose clause omits them". It goes through
+    /// [`Self::is_default_permitted_effect`], so the `embedded` / `kernel`
+    /// profiles, which forbid it, still check it.
+    fn is_slot_transparent(&self, effect: &Effect) -> bool {
+        matches!(effect.verb, EffectVerbKind::Panics)
+            || self.is_transparent_verb(&effect.verb)
+            || self.is_default_permitted_effect(effect)
     }
 
     /// A struct field's declared `TypeExpr`, by struct name and field name.
@@ -1043,21 +1051,20 @@ impl<'a> super::EffectChecker<'a> {
         let value_str: Vec<String> = value_effects
             .effects
             .iter()
-            .filter(|te| !self.is_slot_transparent_verb(&te.effect.verb))
+            .filter(|te| !self.is_slot_transparent(&te.effect))
             .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
             .collect();
         let offending_str: Vec<String> = value_effects
             .effects
             .iter()
             .filter(|te| {
-                !self.is_slot_transparent_verb(&te.effect.verb)
-                    && !slot_effects.contains(&te.effect)
+                !self.is_slot_transparent(&te.effect) && !slot_effects.contains(&te.effect)
             })
             .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
             .collect();
 
         for te in &value_effects.effects {
-            if slot_effects.contains(&te.effect) || self.is_slot_transparent_verb(&te.effect.verb) {
+            if slot_effects.contains(&te.effect) || self.is_slot_transparent(&te.effect) {
                 continue;
             }
             let effect_str = format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);
