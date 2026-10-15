@@ -1,0 +1,317 @@
+> log app | INFO | starting shop-api %s | s:2.4.1
+> log app | WARNING | config file %r not found, using defaults | s:/etc/shop/shop.toml
+stderr| config file '/etc/shop/shop.toml' not found, using defaults
+> basic | level=INFO
+> log app | INFO | listening on port %d | i:8080
+stderr| INFO:app:listening on port 8080
+> log app.http | DEBUG | not shown: the root logger is at INFO
+> basic | level=DEBUG | stream=stdout | format=%(levelname)s %(message)s
+> log app.http | DEBUG | not shown either: the second basicConfig did nothing
+> basic | force | level=DEBUG | stream=stdout | format=%(asctime)s %(levelname)-8s %(name)s %(message)s
+> log app.http | DEBUG | shown: force replaced the handler
+2026-10-15 08:00:01,250 DEBUG    app.http shown: force replaced the handler
+> getlogger app.cache.redis
+> log app.cache.redis | INFO | connected to %s:%d | s:10.0.0.7 | i:6379
+2026-10-15 08:00:01,250 INFO     app.cache.redis connected to 10.0.0.7:6379
+> log urllib3.connectionpool | DEBUG | Starting new HTTPS connection (%d): %s:%s | i:1 | s:payments.example | i:443
+2026-10-15 08:00:01,250 DEBUG    urllib3.connectionpool Starting new HTTPS connection (1): payments.example:443
+> log app | INFO | %-6s|%6s|%06.2f|%+d|%x|%X|%o|%5.1f%% | s:ab | s:cd | f:3.14159 | i:42 | i:255 | i:48879 | i:8 | f:99.5
+2026-10-15 08:00:01,250 INFO     app ab    |    cd|003.14|+42|ff|BEEF|10| 99.5%
+> log app | INFO | %r %r %r %.3s | s:it's | s:say "hi" | i:-7 | s:truncated
+2026-10-15 08:00:01,250 INFO     app "it's" 'say "hi"' -7 tru
+> tree
+  root: level DEBUG; handlers - (StreamHandler stdout)
+  app: level NOTSET (effective DEBUG)
+  app.cache: placeholder
+  app.cache.redis: level NOTSET (effective DEBUG)
+  app.http: level NOTSET (effective DEBUG)
+  urllib3: placeholder
+  urllib3.connectionpool: level NOTSET (effective DEBUG)
+> config | data/config/base.json
+> tree
+  root: level INFO; handlers console (StreamHandler stdout at INFO), errors (StreamHandler stderr at ERROR)
+  app: level NOTSET (effective INFO); disabled
+  app.cache: placeholder
+  app.cache.redis: level NOTSET (effective INFO); disabled
+  app.db: level DEBUG; handlers buffer (MemoryHandler 0/3 to db_file)
+  app.http: level NOTSET (effective INFO); disabled
+  app.http.access: level INFO; no propagate; handlers access_file (RotatingFileHandler data/logs/access.log)
+  urllib3: placeholder
+  urllib3.connectionpool: level NOTSET (effective INFO); disabled
+> enabled app.db
+  app.db: DEBUG=yes INFO=yes WARNING=yes ERROR=yes CRITICAL=yes
+> enabled app.http.access
+  app.http.access: DEBUG=no INFO=yes WARNING=yes ERROR=yes CRITICAL=yes
+> enabled app
+  app: DEBUG=no INFO=no WARNING=no ERROR=no CRITICAL=no
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/products | i:200 | i:5123 | f:12.34 | x:request_id=r-1001
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/products/42 | i:200 | i:811 | f:3.07 | x:request_id=r-1002
+> log app.http.access | INFO | %s %s %d %dB %sms | s:POST | s:/api/cart | i:201 | i:96 | f:18.91 | x:request_id=r-1003
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/cart | i:200 | i:412 | f:4.2 | x:request_id=r-1004
+> log app.db | DEBUG | SELECT * FROM products WHERE id = %d | i:42
+> log app.db.pool | DEBUG | checked out connection %d of %d | i:3 | i:10
+> log app.db | INFO | migration %s applied | s:0042_add_index
+2026-10-15 08:00:04,120 INFO     app.db: migration 0042_add_index applied
+> log app.http.access | INFO | %s %s %d %dB %sms | s:DELETE | s:/api/cart/7 | i:204 | i:0 | f:6.66 | x:request_id=r-1005
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/favicon.ico | i:404 | i:9 | f:0.31
+> log app.http.access | INFO | %s %s %d %dB %sms | s:POST | s:/api/checkout | i:502 | i:37 | f:1504.88 | x:request_id=r-1007
+> log app.db | ERROR | deadlock detected, retrying (%d/%d) | i:1 | i:3
+2026-10-15 08:00:06,586 ERROR    app.db: deadlock detected, retrying (1/3)
+stderr| {"t": "2026-10-15 08:00:06,586", "lvl": "ERROR", "logger": "app.db", "msg": "deadlock detected, retrying (1/3)"}
+> log app.db | DEBUG | ROLLBACK
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/products?page=2 | i:200 | i:4980 | f:11.1 | x:request_id=r-1008
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/health | i:200 | i:17 | f:0.38
+> log app.http.access | INFO | %s %s %d %dB %sms | s:PUT | s:/api/profile | i:200 | i:233 | f:27.02 | x:request_id=r-1010
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/orders | i:200 | i:2048 | f:15.51 | x:request_id=r-1011
+> log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/robots.txt | i:200 | i:24 | f:0.29 | x:request_id=r-1012
+> log app.http.access | INFO | %s %s | s:GET | x:name=oops
+  KeyError: "Attempt to overwrite 'name' in LogRecord"
+> log app.http.access | INFO | %s %s | s:GET | x:message=oops
+  KeyError: "Attempt to overwrite 'message' in LogRecord"
+> log urllib3.connectionpool | WARNING | Retrying (%s) after connection broken | s:Retry(total=2)
+> log app | WARNING | low disk space: %d%% free | i:7
+> log app.cache.redis | WARNING | evicted %d keys | i:1200
+> log stripe.http | WARNING | slow response from %s | s:api.stripe.example
+> log stripe.http | ERROR | charge %s failed: card_declined | s:ch_3P
+stderr| {"t": "2026-10-15 08:00:13,436", "lvl": "ERROR", "logger": "stripe.http", "msg": "charge ch_3P failed: card_declined"}
+> log app.payments | WARNING | charge %s declined, asking the customer | s:ch_3P
+2026-10-15 08:00:13,436 WARNING  app.payments: charge ch_3P declined, asking the customer
+> level app.db | WARNING
+> enabled app.db.pool
+  app.db.pool: DEBUG=no INFO=no WARNING=yes ERROR=yes CRITICAL=yes
+> log app.db.pool | INFO | pool resized to %d | i:20
+> log app.db | WARNING | replica lag %d s | i:12
+2026-10-15 08:00:13,436 WARNING  app.db: replica lag 12 s
+> level app.db | DEBUG
+> disable | WARNING
+> log app.payments | WARNING | not shown: logging.disable(WARNING)
+> log app.payments | ERROR | refund %s failed | s:re_9
+2026-10-15 08:00:13,436 ERROR    app.payments: refund re_9 failed
+stderr| {"t": "2026-10-15 08:00:13,436", "lvl": "ERROR", "logger": "app.payments", "msg": "refund re_9 failed"}
+> disable | NOTSET
+> addlevel | 25 | NOTICE
+> log app.payments | NOTICE | payout %s scheduled | s:po_77
+2026-10-15 08:00:13,436 NOTICE   app.payments: payout po_77 scheduled
+> log app.payments | 15 | not shown: level 15 is below the root's INFO
+> level app.payments | 15
+> log app.payments | 15 | shown? the logger allows it, but console is at INFO
+> log app.payments | 35 | level 35 has no name
+2026-10-15 08:00:13,436 Level 35 app.payments: level 35 has no name
+> tree
+  root: level INFO; handlers console (StreamHandler stdout at INFO), errors (StreamHandler stderr at ERROR)
+  app: level NOTSET (effective INFO); disabled
+  app.cache: placeholder
+  app.cache.redis: level NOTSET (effective INFO); disabled
+  app.db: level DEBUG; handlers buffer (MemoryHandler 2/3 to db_file)
+  app.db.pool: level NOTSET (effective DEBUG)
+  app.http: level NOTSET (effective INFO); disabled
+  app.http.access: level INFO; no propagate; handlers access_file (RotatingFileHandler data/logs/access.log)
+  app.payments: level Level 15
+  stripe: placeholder
+  stripe.http: level NOTSET (effective INFO)
+  urllib3: placeholder
+  urllib3.connectionpool: level NOTSET (effective INFO); disabled
+> config | data/config/verbose.json
+> tree
+  root: level WARNING; handlers console (StreamHandler stdout)
+  app: level DEBUG
+  app.cache: placeholder
+  app.cache.redis: level NOTSET (effective DEBUG); disabled
+  app.db: level DEBUG; no propagate; handlers db_file (FileHandler data/logs/db.log)
+  app.db.pool: level NOTSET (effective DEBUG)
+  app.http: level NOTSET (effective DEBUG); disabled
+  app.http.access: level NOTSET (effective DEBUG)
+  app.payments: level NOTSET (effective DEBUG)
+  stripe: level WARNING; no propagate; handlers trash (NullHandler)
+  stripe.http: level NOTSET (effective WARNING)
+  urllib3: placeholder
+  urllib3.connectionpool: level NOTSET (effective WARNING)
+> log app | DEBUG | app is enabled again
+08:00:15.436 DEBUG    [            app] app is enabled again
+> log app.http | INFO | %s requests in the last minute | i:12
+> log app.http.access | INFO | %s %s %d | s:GET | s:/api/after-reload | i:200 | x:request_id=r-2001
+08:00:15.436 INFO     [app.http.access] GET /api/after-reload 200
+> log app.db | INFO | vacuum finished in %.2f s | f:4.567
+> log app.db.pool | WARNING | connection %d reset | i:4
+> log stripe | ERROR | not shown: stripe goes to a NullHandler
+> log app.payments | 15 | reset by the reload, so INFO is the effective level
+08:00:15.436 Level 15 [   app.payments] reset by the reload, so INFO is the effective level
+> log app.payments | NOTICE | NOTICE survives the reload
+08:00:15.436 NOTICE   [   app.payments] NOTICE survives the reload
+> config | data/config/broken/no_version.json
+  ValueError: dictionary doesn't specify a version
+> log app.db | WARNING | after no_version
+> log app | WARNING | after no_version
+08:00:15.536 WARNING  [            app] after no_version
+> config | data/config/broken/version_two.json
+  ValueError: Unsupported version: 2
+> log app.db | WARNING | after version_two
+> log app | WARNING | after version_two
+08:00:15.636 WARNING  [            app] after version_two
+> config | data/config/broken/percent_brace.json
+  ValueError: Unable to configure formatter 'plain'
+    from ValueError: Invalid format '{levelname} {message}' for '%' style
+> log app.db | WARNING | after percent_brace
+> log app | WARNING | after percent_brace
+08:00:15.736 WARNING  [            app] after percent_brace
+> config | data/config/broken/bad_style.json
+  ValueError: Unable to configure formatter 'plain'
+    from ValueError: Style must be one of: %,{,$
+> log app.db | WARNING | after bad_style
+> log app | WARNING | after bad_style
+08:00:15.836 WARNING  [            app] after bad_style
+> config | data/config/broken/dollar_no_fields.json
+  ValueError: Unable to configure formatter 'tpl'
+    from ValueError: invalid format: no fields
+> log app.db | WARNING | after dollar_no_fields
+> log app | WARNING | after dollar_no_fields
+08:00:15.936 WARNING  [            app] after dollar_no_fields
+> config | data/config/broken/brace_conversion.json
+  ValueError: Unable to configure formatter 'x'
+    from ValueError: invalid format: invalid conversion: 'x'
+> log app.db | WARNING | after brace_conversion
+> log app | WARNING | after brace_conversion
+08:00:16.036 WARNING  [            app] after brace_conversion
+> config | data/config/broken/brace_spec.json
+  ValueError: Unable to configure formatter 'x'
+    from ValueError: invalid format: bad specifier: '<8q'
+> log app.db | WARNING | after brace_spec
+> log app | WARNING | after brace_spec
+08:00:16.136 WARNING  [            app] after brace_spec
+> config | data/config/broken/bare_dollar.json
+  ValueError: Unable to configure formatter 'x'
+    from ValueError: invalid format: bare '$' not allowed
+> log app.db | WARNING | after bare_dollar
+> log app | WARNING | after bare_dollar
+08:00:16.236 WARNING  [            app] after bare_dollar
+> config | data/config/broken/bad_level.json
+  ValueError: Unable to configure handler 'console'
+    from ValueError: Unknown level: 'VERBOSE'
+> log app.db | WARNING | after bad_level
+> log app | WARNING | after bad_level
+08:00:16.336 WARNING  [            app] after bad_level
+> config | data/config/broken/bad_class.json
+  ValueError: Unable to configure handler 'rotating'
+    from ValueError: Cannot resolve 'logging.handlers.RotatingHandler': No module named 'logging.handlers.RotatingHandler'; 'logging.handlers' is not a package
+    from ModuleNotFoundError: No module named 'logging.handlers.RotatingHandler'; 'logging.handlers' is not a package
+> log app.db | WARNING | after bad_class
+> log app | WARNING | after bad_class
+08:00:16.436 WARNING  [            app] after bad_class
+> config | data/config/broken/bad_kwarg.json
+  ValueError: Unable to configure handler 'access_file'
+    from TypeError: RotatingFileHandler.__init__() got an unexpected keyword argument 'max_bytes'. Did you mean 'maxBytes'?
+> log app.db | WARNING | after bad_kwarg
+> log app | WARNING | after bad_kwarg
+08:00:16.536 WARNING  [            app] after bad_kwarg
+> config | data/config/broken/bad_target.json
+  ValueError: Unable to configure handler 'buf'
+    from ValueError: Unable to set target handler 'missing'
+    from KeyError: 'missing'
+> log app.db | WARNING | after bad_target
+> log app | WARNING | after bad_target
+08:00:16.636 WARNING  [            app] after bad_target
+> config | data/config/broken/bad_flush_level.json
+  ValueError: Unable to configure handler 'buf'
+    from ValueError: Unknown level: 'LOUD'
+> log app.db | WARNING | after bad_flush_level
+> log app | WARNING | after bad_flush_level
+08:00:16.736 WARNING  [            app] after bad_flush_level
+> config | data/config/broken/bad_formatter_ref.json
+  ValueError: Unable to configure handler 'console'
+    from ValueError: Unable to set formatter 'fancy'
+    from KeyError: 'fancy'
+> log app.db | WARNING | after bad_formatter_ref
+> log app | WARNING | after bad_formatter_ref
+08:00:16.836 WARNING  [            app] after bad_formatter_ref
+> config | data/config/broken/bad_ref.json
+  ValueError: Unable to configure logger 'app.db'
+    from ValueError: Unable to add handler 'nope'
+    from KeyError: 'nope'
+> log app.db | WARNING | after bad_ref
+WARNING app.db: after bad_ref
+> log app | WARNING | after bad_ref
+08:00:16.936 WARNING  [            app] after bad_ref
+> tree
+  root: level WARNING; handlers console (StreamHandler stdout, closed)
+  app: level DEBUG
+  app.cache: placeholder
+  app.cache.redis: level NOTSET (effective DEBUG); disabled
+  app.db: level DEBUG; no propagate; handlers console2 (StreamHandler stdout)
+  app.db.pool: level NOTSET (effective DEBUG)
+  app.http: level NOTSET (effective DEBUG); disabled
+  app.http.access: level NOTSET (effective DEBUG)
+  app.payments: level NOTSET (effective DEBUG)
+  stripe: level WARNING; no propagate; handlers trash (NullHandler, closed)
+  stripe.http: level NOTSET (effective WARNING)
+  urllib3: placeholder
+  urllib3.connectionpool: level NOTSET (effective WARNING)
+> config | data/config/final.json
+> log app.http | INFO | buffered %d | i:1
+> log app | WARNING | not buffered
+WARNING app: not buffered
+> log app.http | ERROR | buffered %d, and ERROR is the default flush level | i:2
+INFO app.http: buffered 1
+ERROR app.http: buffered 2, and ERROR is the default flush level
+> log app.http | INFO | buffered %d, still in the buffer at exit | i:3
+> tree
+  root: level INFO; handlers console (StreamHandler stdout)
+  app: level DEBUG
+  app.cache: placeholder
+  app.cache.redis: level NOTSET (effective DEBUG)
+  app.db: level DEBUG; no propagate; handlers console2 (StreamHandler stdout, closed)
+  app.db.pool: level NOTSET (effective DEBUG)
+  app.http: level NOTSET (effective DEBUG); no propagate; handlers buffer (MemoryHandler 1/100 to console)
+  app.http.access: level NOTSET (effective DEBUG)
+  app.payments: level NOTSET (effective DEBUG)
+  stripe: level WARNING; no propagate; handlers trash (NullHandler, closed)
+  stripe.http: level NOTSET (effective WARNING)
+  urllib3: placeholder
+  urllib3.connectionpool: level NOTSET (effective INFO)
+> shutdown
+INFO app.http: buffered 3, still in the buffer at exit
+> files
+  access.log: 372 bytes
+    15/Oct/2026:08:00:06 r-1007 POST /api/checkout 502 37B 1504.88ms
+    15/Oct/2026:08:00:07 r-1008 GET /api/products?page=2 200 4980B 11.1ms
+    15/Oct/2026:08:00:08 - GET /api/health 200 17B 0.38ms
+    15/Oct/2026:08:00:10 r-1010 PUT /api/profile 200 233B 27.02ms
+    15/Oct/2026:08:00:11 r-1011 GET /api/orders 200 2048B 15.51ms
+    15/Oct/2026:08:00:13 r-1012 GET /robots.txt 200 24B 0.29ms
+  access.log.1: 360 bytes
+    15/Oct/2026:08:00:02 r-1001 GET /api/products 200 5123B 12.34ms
+    15/Oct/2026:08:00:03 r-1002 GET /api/products/42 200 811B 3.07ms
+    15/Oct/2026:08:00:03 r-1003 POST /api/cart 201 96B 18.91ms
+    15/Oct/2026:08:00:04 r-1004 GET /api/cart 200 412B 4.2ms
+    15/Oct/2026:08:00:04 r-1005 DELETE /api/cart/7 204 0B 6.66ms
+    15/Oct/2026:08:00:05 - GET /favicon.ico 404 9B 0.31ms
+  access.log.2: 348 bytes
+    14/Oct/2026:23:50:00 r-0900 GET /api/health 200 17B 0.4ms
+    14/Oct/2026:23:51:01 r-0911 GET /api/health 200 17B 0.4ms
+    14/Oct/2026:23:52:02 r-0922 GET /api/health 200 17B 0.4ms
+    14/Oct/2026:23:53:03 r-0933 GET /api/health 200 17B 0.4ms
+    14/Oct/2026:23:54:04 r-0944 GET /api/health 200 17B 0.4ms
+    14/Oct/2026:23:55:05 r-0955 GET /api/health 200 17B 0.4ms
+  audit.log: 0 bytes
+  db.log: 1209 bytes
+        4120 ms D app.db      |SELECT * FROM products WHERE id = 42
+        4120 ms D app.db.pool |checked out connection 3 of 10
+        4120 ms I app.db      |migration 0042_add_index applied
+        6586 ms E app.db      |deadlock detected, retrying (1/3)
+        6586 ms D app.db      |ROLLBACK
+       13436 ms W app.db      |replica lag 12 s
+    Thu 15 Oct 08:00:15 INFO app.db: vacuum finished in 4.57 s
+    Thu 15 Oct 08:00:15 WARNING app.db.pool: connection 4 reset
+    Thu 15 Oct 08:00:15 WARNING app.db: after no_version
+    Thu 15 Oct 08:00:15 WARNING app.db: after version_two
+    Thu 15 Oct 08:00:15 WARNING app.db: after percent_brace
+    Thu 15 Oct 08:00:15 WARNING app.db: after bad_style
+    Thu 15 Oct 08:00:15 WARNING app.db: after dollar_no_fields
+    Thu 15 Oct 08:00:16 WARNING app.db: after brace_conversion
+    Thu 15 Oct 08:00:16 WARNING app.db: after brace_spec
+    Thu 15 Oct 08:00:16 WARNING app.db: after bare_dollar
+    Thu 15 Oct 08:00:16 WARNING app.db: after bad_level
+    Thu 15 Oct 08:00:16 WARNING app.db: after bad_class
+    Thu 15 Oct 08:00:16 WARNING app.db: after bad_kwarg
+    Thu 15 Oct 08:00:16 WARNING app.db: after bad_target
+    Thu 15 Oct 08:00:16 WARNING app.db: after bad_flush_level
+    Thu 15 Oct 08:00:16 WARNING app.db: after bad_formatter_ref

@@ -1,0 +1,3759 @@
+// mini_logging: a web service's logging from startup to shutdown, done
+// the way Python 3.13's logging package does it:
+// - the logger tree with placeholders, effective levels, propagation,
+//   disabled loggers, logging.disable and custom level names;
+// - Formatter in all three styles (%, str.format and string.Template)
+//   with their validation errors, defaults, datefmt and msecs;
+// - StreamHandler, FileHandler, RotatingFileHandler, MemoryHandler and
+//   NullHandler, with handler levels, name filters, the last-resort
+//   handler, and how each behaves once it has been closed;
+// - basicConfig, with and without force, and dictConfig: formatters,
+//   filters, handlers (deferred targets), loggers and root, the rules
+//   for loggers that already exist, and every error a broken config
+//   gives, after the part of the config that had already been applied.
+//
+// The inputs are the files in data/. expected.out is the output of
+// oracle.py, the same program run through Python's logging.
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+// ------------------------------------------------------------ JSON
+
+// A JSON value. Objects keep their keys in order, as Python's dict does.
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Text(String),
+    Arr(Vec[JValue]),
+    Obj(Vec[String], Vec[JValue]),
+}
+
+struct JParser {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JParser {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() and is_ws(self.b[self.at]) {
+            self.at += 1;
+        }
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        self.at += 1;
+        let mut out: Vec[u8] = Vec.new();
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                return Ok(from_bytes(out));
+            }
+            if c == b'\\' {
+                let e = self.b[self.at];
+                self.at += 1;
+                if e == b'n' {
+                    out.push(b'\n');
+                } else if e == b't' {
+                    out.push(b'\t');
+                } else if e == b'u' {
+                    let mut cp: i64 = 0;
+                    for k in 0..4 {
+                        cp = cp * 16 + hex_val(self.b[self.at + k]) as i64;
+                    }
+                    self.at += 4;
+                    push_code_point(mut out, cp);
+                } else {
+                    out.push(e);
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        Err("unterminated string".to_string())
+    }
+
+    fn value(mut ref self) -> Result[JValue, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut keys: Vec[String] = Vec.new();
+            let mut vals: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.b[self.at] == b'}' {
+                self.at += 1;
+                return Ok(JValue.Obj(keys, vals));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                self.at += 1;
+                let v = self.value()?;
+                keys.push(k);
+                vals.push(v);
+                self.ws();
+                let d = self.b[self.at];
+                self.at += 1;
+                if d == b'}' {
+                    return Ok(JValue.Obj(keys, vals));
+                }
+            }
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.b[self.at] == b']' {
+                self.at += 1;
+                return Ok(JValue.Arr(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                let d = self.b[self.at];
+                self.at += 1;
+                if d == b']' {
+                    return Ok(JValue.Arr(items));
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(JValue.Text(self.string()?));
+        }
+        if starts_at(self.b, self.at, "true") {
+            self.at += 4;
+            return Ok(JValue.Bool(true));
+        }
+        if starts_at(self.b, self.at, "false") {
+            self.at += 5;
+            return Ok(JValue.Bool(false));
+        }
+        if starts_at(self.b, self.at, "null") {
+            self.at += 4;
+            return Ok(JValue.Null);
+        }
+        let st = self.at;
+        if c == b'-' {
+            self.at += 1;
+        }
+        while self.at < self.b.len() and is_digit(self.b[self.at]) {
+            self.at += 1;
+        }
+        match py_int(byte_str(self.b, st, self.at)) {
+            Some(n) => Ok(JValue.Int(n)),
+            None => Err(f"bad JSON at byte {st}"),
+        }
+    }
+}
+
+fn parse_json(text: Str) -> Result[JValue, String] {
+    let mut p = JParser { b: to_bytes(text), at: 0 };
+    p.value()
+}
+
+fn obj_get(j: ref JValue, key: Str) -> Option[JValue] {
+    match j {
+        JValue.Obj(keys, vals) => {
+            for i in 0..keys.len() {
+                if keys[i] == key {
+                    return Some(vals[i].clone());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn obj_keys(j: ref JValue) -> Vec[String] {
+    match j {
+        JValue.Obj(keys, _) => keys.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn json_text(j: ref JValue) -> Option[String] {
+    match j {
+        JValue.Text(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn json_int(j: ref JValue) -> i64 {
+    match j {
+        JValue.Int(n) => *n,
+        _ => 0,
+    }
+}
+
+fn json_list(j: ref JValue) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let JValue.Arr(items) = j {
+        for it in items {
+            if let JValue.Text(s) = it {
+                out.push(s.clone());
+            }
+        }
+    }
+    out
+}
+
+// Python's truth value of a JSON value.
+fn truthy(j: ref JValue) -> bool {
+    match j {
+        JValue.Null => false,
+        JValue.Bool(b) => *b,
+        JValue.Int(n) => *n != 0,
+        JValue.Text(s) => s.len() > 0,
+        JValue.Arr(items) => items.len() > 0,
+        JValue.Obj(keys, _) => keys.len() > 0,
+    }
+}
+
+// str() of a JSON value, for the messages that show one.
+fn json_str(j: ref JValue) -> String {
+    match j {
+        JValue.Null => "None".to_string(),
+        JValue.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        JValue.Int(n) => f"{n}",
+        JValue.Text(s) => s.clone(),
+        _ => "...".to_string(),
+    }
+}
+
+// ------------------------------------------------------------ values
+
+// A value a format can show: a str, an int, or a float kept as the
+// text of its repr.
+#[derive(Clone)]
+enum Val {
+    S(String),
+    I(i64),
+    F(String),
+}
+
+fn val_str(v: ref Val) -> String {
+    match v {
+        Val.S(s) => s.clone(),
+        Val.I(n) => f"{n}",
+        Val.F(t) => t.clone(),
+    }
+}
+
+fn val_repr(v: ref Val) -> String {
+    match v {
+        Val.S(s) => py_repr(s),
+        Val.I(n) => f"{n}",
+        Val.F(t) => t.clone(),
+    }
+}
+
+fn json_val(j: ref JValue) -> Val {
+    match j {
+        JValue.Int(n) => Val.I(*n),
+        _ => Val.S(json_str(j)),
+    }
+}
+
+// The float in `t` (a repr) to `prec` decimals, rounding half to even
+// on an exact tie.
+fn fixed(t: Str, prec: i64) -> String {
+    let b = to_bytes(t);
+    let neg = b.len() > 0 and b[0] == b'-';
+    let mut digits: Vec[u8] = Vec.new();
+    let mut point: i64 = -1;
+    for i in 0..b.len() {
+        if b[i] == b'.' {
+            point = digits.len();
+        } else if is_digit(b[i]) {
+            digits.push(b[i] - b'0');
+        }
+    }
+    if point < 0 {
+        point = digits.len();
+    }
+    // the digits kept: `point` integer digits and `prec` decimals
+    let keep = point + prec;
+    while digits.len() < keep {
+        digits.push(0);
+    }
+    let mut kept: Vec[u8] = Vec.new();
+    for i in 0..keep {
+        kept.push(digits[i]);
+    }
+    let mut round_up = false;
+    if digits.len() > keep {
+        let first = digits[keep];
+        let mut rest_zero = true;
+        for i in keep + 1..digits.len() {
+            if digits[i] != 0 {
+                rest_zero = false;
+            }
+        }
+        if first > 5 or (first == 5 and not rest_zero) {
+            round_up = true;
+        } else if first == 5 {
+            round_up = keep > 0 and kept[keep - 1] % 2 == 1;
+        }
+    }
+    let mut ip = point;
+    if round_up {
+        let mut i = keep - 1;
+        loop {
+            if i < 0 {
+                kept.insert(0, 1);
+                ip += 1;
+                break;
+            }
+            if kept[i] == 9 {
+                kept[i] = 0;
+                i -= 1;
+            } else {
+                kept[i] += 1;
+                break;
+            }
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(b'-');
+    }
+    if ip == 0 {
+        out.push(b'0');
+    }
+    for i in 0..kept.len() {
+        if i == ip {
+            out.push(b'.');
+        }
+        out.push(kept[i] + b'0');
+    }
+    from_bytes(out)
+}
+
+// int() of a float repr: the digits before the point.
+fn trunc_text(t: Str) -> i64 {
+    let (ip, _, _) = partition(t, b'.');
+    py_int(ip).unwrap_or(0)
+}
+
+fn digits_in(n: i64, base: i64, upper_case: bool) -> String {
+    let set = if upper_case { to_bytes("0123456789ABCDEF") } else { to_bytes("0123456789abcdef") };
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut m = if n < 0 { -n } else { n };
+    let mut rev: Vec[u8] = Vec.new();
+    while m > 0 {
+        rev.push(set[m % base]);
+        m /= base;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if n < 0 {
+        out.push(b'-');
+    }
+    let mut i = rev.len() - 1;
+    while i >= 0 {
+        out.push(rev[i]);
+        i -= 1;
+    }
+    from_bytes(out)
+}
+
+fn byte_text(c: u8) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    v.push(c);
+    from_bytes(v)
+}
+
+fn repeat(c: u8, n: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        out.push(c);
+    }
+    from_bytes(out)
+}
+
+fn cp_len(s: Str) -> i64 {
+    code_points(s).len()
+}
+
+fn cp_prefix(s: Str, n: i64) -> String {
+    let cps = code_points(s);
+    if cps.len() <= n {
+        return s.to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..n {
+        push_code_point(mut out, cps[i]);
+    }
+    from_bytes(out)
+}
+
+// Pads a number's text to `width`: with zeros after any sign, or with
+// spaces on the left or (for `-`) on the right.
+fn pad_num(body: Str, width: i64, left: bool, zero: bool) -> String {
+    let n = cp_len(body);
+    if n >= width {
+        return body.to_string();
+    }
+    if left {
+        return f"{body}{repeat(b' ', width - n)}";
+    }
+    if zero {
+        let b = to_bytes(body);
+        if b.len() > 0 and (b[0] == b'-' or b[0] == b'+' or b[0] == b' ') {
+            return f"{byte_str(b, 0, 1)}{repeat(b'0', width - n)}{byte_str(b, 1, b.len())}";
+        }
+        return f"{repeat(b'0', width - n)}{body}";
+    }
+    f"{repeat(b' ', width - n)}{body}"
+}
+
+// ------------------------------------------------------------ printf-style
+
+// One conversion of the % operator.
+fn convert(v: ref Val, conv: u8, flags: Str, width: i64, prec: i64) -> Result[String, String] {
+    let left = has_byte(flags, b'-');
+    let zero = has_byte(flags, b'0') and not left;
+    let plus = has_byte(flags, b'+');
+    let space = has_byte(flags, b' ');
+    if conv == b's' or conv == b'r' or conv == b'a' {
+        let mut s = if conv == b's' { val_str(v) } else { val_repr(v) };
+        if prec >= 0 {
+            s = cp_prefix(s, prec);
+        }
+        let n = cp_len(s);
+        if n >= width {
+            return Ok(s);
+        }
+        return Ok(if left { f"{s}{repeat(b' ', width - n)}" } else { f"{repeat(b' ', width - n)}{s}" });
+    }
+    let sign_of = |neg: bool| {
+        if neg {
+            "-".to_string()
+        } else if plus {
+            "+".to_string()
+        } else if space {
+            " ".to_string()
+        } else {
+            String.new()
+        }
+    };
+    if conv == b'd' or conv == b'i' or conv == b'u' or conv == b'x' or conv == b'X' or conv == b'o' {
+        let n = match v {
+            Val.I(n) => *n,
+            Val.F(t) => trunc_text(t),
+            Val.S(_) => return Err("%d format: a real number is required, not str".to_string()),
+        };
+        let base = if conv == b'x' or conv == b'X' { 16 } else if conv == b'o' { 8 } else { 10 };
+        let mag = digits_in(if n < 0 { -n } else { n }, base, conv == b'X');
+        return Ok(pad_num(f"{sign_of(n < 0)}{mag}", width, left, zero));
+    }
+    if conv == b'f' or conv == b'F' {
+        let t = match v {
+            Val.I(n) => f"{n}",
+            Val.F(t) => t.clone(),
+            Val.S(_) => return Err("must be real number, not str".to_string()),
+        };
+        let p = if prec < 0 { 6 } else { prec };
+        let body = fixed(t, p);
+        let neg = starts_with(body, "-");
+        let mag = if neg { slice_from(body, 1) } else { body };
+        return Ok(pad_num(f"{sign_of(neg)}{mag}", width, left, zero));
+    }
+    Err(f"unsupported format character '{byte_text(conv)}'")
+}
+
+fn word_byte(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 0x80
+}
+
+// `fmt % args`, or `fmt % mapping` when `look` names each %(key).
+fn percent(fmt: Str, args: ref Vec[Val], keys: ref Vec[String], vals: ref Vec[Val]) -> Result[String, String] {
+    let b = to_bytes(fmt);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    let mut next_arg: i64 = 0;
+    let mut st: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'%' {
+            i += 1;
+            continue;
+        }
+        out.push_str(byte_str(b, st, i));
+        i += 1;
+        let mut key: Option[String] = None;
+        if i < b.len() and b[i] == b'(' {
+            let ks = i + 1;
+            let mut depth: i64 = 1;
+            i += 1;
+            while i < b.len() and depth > 0 {
+                if b[i] == b'(' {
+                    depth += 1;
+                } else if b[i] == b')' {
+                    depth -= 1;
+                }
+                i += 1;
+            }
+            key = Some(byte_str(b, ks, i - 1));
+        }
+        let fs = i;
+        while i < b.len() and (b[i] == b'-' or b[i] == b'+' or b[i] == b' ' or b[i] == b'#' or b[i] == b'0') {
+            i += 1;
+        }
+        let flags = byte_str(b, fs, i);
+        let mut width: i64 = 0;
+        while i < b.len() and is_digit(b[i]) {
+            width = width * 10 + (b[i] - b'0') as i64;
+            i += 1;
+        }
+        let mut prec: i64 = -1;
+        if i < b.len() and b[i] == b'.' {
+            i += 1;
+            prec = 0;
+            while i < b.len() and is_digit(b[i]) {
+                prec = prec * 10 + (b[i] - b'0') as i64;
+                i += 1;
+            }
+        }
+        if i >= b.len() {
+            return Err("incomplete format".to_string());
+        }
+        let conv = b[i];
+        i += 1;
+        st = i;
+        if conv == b'%' {
+            out.push_str("%");
+            continue;
+        }
+        let v = match key {
+            Some(k) => {
+                let found = lookup(keys, vals, k);
+                match found {
+                    Some(v) => v,
+                    None => return Err(f"KeyError: {py_repr(k)}"),
+                }
+            }
+            None => {
+                if next_arg >= args.len() {
+                    return Err("not enough arguments for format string".to_string());
+                }
+                next_arg += 1;
+                args[next_arg - 1].clone()
+            }
+        };
+        out.push_str(convert(v, conv, flags, width, prec)?);
+    }
+    out.push_str(byte_str(b, st, b.len()));
+    if next_arg < args.len() {
+        return Err("not all arguments converted during string formatting".to_string());
+    }
+    Ok(out)
+}
+
+fn lookup(keys: ref Vec[String], vals: ref Vec[Val], k: Str) -> Option[Val] {
+    for j in 0..keys.len() {
+        if keys[j] == k {
+            return Some(vals[j].clone());
+        }
+    }
+    None
+}
+
+// ------------------------------------------------------------ str.format
+
+fn align_byte(c: u8) -> bool {
+    c == b'<' or c == b'>' or c == b'=' or c == b'^'
+}
+
+// format(value, spec) for the spec mini-language a log format uses.
+fn format_spec(v: ref Val, spec: Str) -> Result[String, String] {
+    let b = to_bytes(spec);
+    let mut i: i64 = 0;
+    let mut fill: u8 = b' ';
+    let mut align: u8 = 0;
+    if b.len() >= 2 and align_byte(b[1]) {
+        fill = b[0];
+        align = b[1];
+        i = 2;
+    } else if b.len() >= 1 and align_byte(b[0]) {
+        align = b[0];
+        i = 1;
+    }
+    let mut sign: u8 = 0;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-' or b[i] == b' ') {
+        sign = b[i];
+        i += 1;
+    }
+    if i < b.len() and b[i] == b'0' {
+        if align == 0 {
+            fill = b'0';
+            align = b'=';
+        }
+        i += 1;
+    }
+    let mut width: i64 = 0;
+    while i < b.len() and is_digit(b[i]) {
+        width = width * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    let mut prec: i64 = -1;
+    if i < b.len() and b[i] == b'.' {
+        i += 1;
+        prec = 0;
+        while i < b.len() and is_digit(b[i]) {
+            prec = prec * 10 + (b[i] - b'0') as i64;
+            i += 1;
+        }
+    }
+    let ty: u8 = if i < b.len() { b[i] } else { 0 };
+    let numeric = match v {
+        Val.S(_) => false,
+        _ => true,
+    };
+    let mut body = match v {
+        Val.S(s) => {
+            if ty != 0 and ty != b's' {
+                return Err(f"Unknown format code '{byte_str(b, i, i + 1)}' for object of type 'str'");
+            }
+            if prec >= 0 { cp_prefix(s, prec) } else { s.clone() }
+        }
+        Val.I(n) => {
+            if ty == b'f' {
+                fixed(f"{n}", if prec < 0 { 6 } else { prec })
+            } else {
+                f"{n}"
+            }
+        }
+        Val.F(t) => {
+            if ty == b'f' {
+                fixed(t, if prec < 0 { 6 } else { prec })
+            } else if ty == b'd' {
+                return Err("Unknown format code 'd' for object of type 'float'".to_string());
+            } else {
+                t.clone()
+            }
+        }
+    };
+    if numeric and sign == b'+' and not starts_with(body, "-") {
+        body = f"+{body}";
+    } else if numeric and sign == b' ' and not starts_with(body, "-") {
+        body = f" {body}";
+    }
+    let n = cp_len(body);
+    if n >= width {
+        return Ok(body);
+    }
+    let pad = width - n;
+    let a = if align != 0 { align } else if numeric { b'>' } else { b'<' };
+    let fs = byte_text(fill);
+    let fill_n = |k: i64| {
+        let mut s = String.new();
+        for _ in 0..k {
+            s.push_str(fs);
+        }
+        s
+    };
+    if a == b'<' {
+        return Ok(f"{body}{fill_n(pad)}");
+    }
+    if a == b'^' {
+        return Ok(f"{fill_n(pad / 2)}{body}{fill_n(pad - pad / 2)}");
+    }
+    if a == b'=' {
+        let bb = to_bytes(body);
+        if bb.len() > 0 and (bb[0] == b'-' or bb[0] == b'+' or bb[0] == b' ') {
+            return Ok(f"{byte_str(bb, 0, 1)}{fill_n(pad)}{byte_str(bb, 1, bb.len())}");
+        }
+    }
+    Ok(f"{fill_n(pad)}{body}")
+}
+
+// One piece of a str.format string: literal text, then a field.
+#[derive(Clone)]
+struct Piece {
+    literal: String,
+    has_field: bool,
+    field: String,
+    conv: String,
+    spec: String,
+}
+
+// string.Formatter().parse
+fn parse_braces(fmt: Str) -> Result[Vec[Piece], String] {
+    let b = to_bytes(fmt);
+    let mut out: Vec[Piece] = Vec.new();
+    let mut lit: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'}' {
+            if i + 1 < b.len() and b[i + 1] == b'}' {
+                lit.push(b'}');
+                i += 2;
+                continue;
+            }
+            return Err("Single '}' encountered in format string".to_string());
+        }
+        if c != b'{' {
+            lit.push(c);
+            i += 1;
+            continue;
+        }
+        if i + 1 < b.len() and b[i + 1] == b'{' {
+            lit.push(b'{');
+            i += 2;
+            continue;
+        }
+        // the field runs to the matching '}'
+        let st = i + 1;
+        let mut depth: i64 = 1;
+        let mut j = st;
+        while j < b.len() {
+            if b[j] == b'{' {
+                depth += 1;
+            } else if b[j] == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            j += 1;
+        }
+        if j >= b.len() {
+            return Err("expected '}' before end of string".to_string());
+        }
+        let inner = byte_str(b, st, j);
+        let ib = to_bytes(inner);
+        let mut k: i64 = 0;
+        let mut bracket = false;
+        while k < ib.len() {
+            if ib[k] == b'[' {
+                bracket = true;
+            } else if ib[k] == b']' {
+                bracket = false;
+            } else if not bracket and (ib[k] == b'!' or ib[k] == b':') {
+                break;
+            }
+            k += 1;
+        }
+        let field = byte_str(ib, 0, k);
+        let mut conv = String.new();
+        let mut spec = String.new();
+        if k < ib.len() and ib[k] == b'!' {
+            if k + 1 >= ib.len() {
+                return Err("end of string while looking for conversion specifier".to_string());
+            }
+            conv = byte_str(ib, k + 1, k + 2);
+            k += 2;
+            if k < ib.len() and ib[k] != b':' {
+                return Err("expected ':' after conversion specifier".to_string());
+            }
+        }
+        if k < ib.len() and ib[k] == b':' {
+            spec = byte_str(ib, k + 1, ib.len());
+        }
+        out.push(Piece { literal: from_bytes(lit.clone()), has_field: true, field: field, conv: conv, spec: spec });
+        lit = Vec.new();
+        i = j + 1;
+    }
+    if lit.len() > 0 {
+        out.push(Piece { literal: from_bytes(lit), has_field: false, field: String.new(), conv: String.new(), spec: String.new() });
+    }
+    Ok(out)
+}
+
+// StrFormatStyle.field_spec: ^(\d+|\w+)(\.\w+|\[[^]]+\])*$
+fn field_ok(f: Str) -> bool {
+    let b = to_bytes(f);
+    let mut i: i64 = 0;
+    while i < b.len() and word_byte(b[i]) {
+        i += 1;
+    }
+    if i == 0 {
+        return false;
+    }
+    while i < b.len() {
+        if b[i] == b'.' {
+            let st = i + 1;
+            i += 1;
+            while i < b.len() and word_byte(b[i]) {
+                i += 1;
+            }
+            if i == st {
+                return false;
+            }
+        } else if b[i] == b'[' {
+            let st = i + 1;
+            i += 1;
+            while i < b.len() and b[i] != b']' {
+                i += 1;
+            }
+            if i >= b.len() or i == st {
+                return false;
+            }
+            i += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+// StrFormatStyle.fmt_spec, a case-blind regex:
+// ^(.?[<>=^])?[+ -]?#?0?(\d+|{\w+})?[,_]?(\.(\d+|{\w+}))?[bcdefgnosx%]?$
+fn spec_tail_ok(b: ref Vec[u8], at: i64) -> bool {
+    let mut i = at;
+    let digits_or_name = |i0: i64| {
+        let mut j = i0;
+        if j < b.len() and b[j] == b'{' {
+            j += 1;
+            let st = j;
+            while j < b.len() and word_byte(b[j]) {
+                j += 1;
+            }
+            if j > st and j < b.len() and b[j] == b'}' {
+                return j + 1;
+            }
+            return i0;
+        }
+        while j < b.len() and is_digit(b[j]) {
+            j += 1;
+        }
+        j
+    };
+    if i < b.len() and (b[i] == b'+' or b[i] == b' ' or b[i] == b'-') {
+        i += 1;
+    }
+    if i < b.len() and b[i] == b'#' {
+        i += 1;
+    }
+    if i < b.len() and b[i] == b'0' {
+        i += 1;
+    }
+    i = digits_or_name(i);
+    if i < b.len() and (b[i] == b',' or b[i] == b'_') {
+        i += 1;
+    }
+    if i < b.len() and b[i] == b'.' {
+        let j = digits_or_name(i + 1);
+        if j > i + 1 {
+            i = j;
+        }
+    }
+    if i < b.len() and has_byte("bcdefgnosx%", lower_byte(b[i])) {
+        i += 1;
+    }
+    i == b.len()
+}
+
+fn spec_ok(spec: Str) -> bool {
+    let b = to_bytes(spec);
+    if spec_tail_ok(b, 0) {
+        return true;
+    }
+    if b.len() >= 1 and align_byte(b[0]) and spec_tail_ok(b, 1) {
+        return true;
+    }
+    b.len() >= 2 and align_byte(b[1]) and spec_tail_ok(b, 2)
+}
+
+fn validate_brace(fmt: Str) -> Result[(), String] {
+    let pieces = match parse_braces(fmt) {
+        Ok(p) => p,
+        Err(e) => return Err(f"invalid format: {e}"),
+    };
+    let mut fields: i64 = 0;
+    for p in pieces {
+        if not p.has_field {
+            continue;
+        }
+        if p.field.len() > 0 {
+            if not field_ok(p.field) {
+                return Err(f"invalid format: invalid field name/expression: {py_repr(p.field)}");
+            }
+            fields += 1;
+        }
+        if p.conv.len() > 0 and not has_byte("rsa", first_byte(p.conv)) {
+            return Err(f"invalid format: invalid conversion: {py_repr(p.conv)}");
+        }
+        if p.spec.len() > 0 and not spec_ok(p.spec) {
+            return Err(f"invalid format: bad specifier: {py_repr(p.spec)}");
+        }
+    }
+    if fields == 0 {
+        return Err("invalid format: no fields".to_string());
+    }
+    Ok(())
+}
+
+fn format_braces(fmt: Str, keys: ref Vec[String], vals: ref Vec[Val]) -> Result[String, String] {
+    let mut out = String.new();
+    for p in parse_braces(fmt)? {
+        out.push_str(p.literal);
+        if not p.has_field {
+            continue;
+        }
+        let v = match lookup(keys, vals, p.field) {
+            Some(v) => v,
+            None => return Err(f"KeyError: {py_repr(p.field)}"),
+        };
+        let shown = if p.conv == "r" { Val.S(val_repr(v)) } else if p.conv == "s" { Val.S(val_str(v)) } else { v };
+        out.push_str(format_spec(shown, p.spec)?);
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ string.Template
+
+fn ident_start(c: u8) -> bool {
+    is_alpha(c) or c == b'_'
+}
+
+// One match of Template.pattern at a '$': 0 escaped, 1 named, 2 braced,
+// 3 invalid; and the name and the end of the match.
+fn template_at(b: ref Vec[u8], i: i64) -> (i64, String, i64) {
+    if i + 1 < b.len() and b[i + 1] == b'$' {
+        return (0, String.new(), i + 2);
+    }
+    if i + 1 < b.len() and ident_start(b[i + 1]) {
+        let mut j = i + 2;
+        while j < b.len() and (is_alnum(b[j]) or b[j] == b'_') {
+            j += 1;
+        }
+        return (1, byte_str(b, i + 1, j), j);
+    }
+    if i + 2 < b.len() and b[i + 1] == b'{' and ident_start(b[i + 2]) {
+        let mut j = i + 3;
+        while j < b.len() and (is_alnum(b[j]) or b[j] == b'_') {
+            j += 1;
+        }
+        if j < b.len() and b[j] == b'}' {
+            return (2, byte_str(b, i + 2, j), j + 1);
+        }
+    }
+    (3, String.new(), i + 1)
+}
+
+fn validate_template(fmt: Str) -> Result[(), String] {
+    let b = to_bytes(fmt);
+    let mut fields: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        let (kind, _, end) = template_at(b, i);
+        if kind == 1 or kind == 2 {
+            fields += 1;
+        } else if kind == 3 {
+            return Err("invalid format: bare '$' not allowed".to_string());
+        }
+        i = end;
+    }
+    if fields == 0 {
+        return Err("invalid format: no fields".to_string());
+    }
+    Ok(())
+}
+
+fn substitute(fmt: Str, keys: ref Vec[String], vals: ref Vec[Val]) -> Result[String, String] {
+    let b = to_bytes(fmt);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    let mut st: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        out.push_str(byte_str(b, st, i));
+        let (kind, name, end) = template_at(b, i);
+        if kind == 0 {
+            out.push_str("$");
+        } else if kind == 3 {
+            return Err("Invalid placeholder in string".to_string());
+        } else {
+            match lookup(keys, vals, name) {
+                Some(v) => out.push_str(val_str(v)),
+                None => return Err(f"KeyError: {py_repr(name)}"),
+            }
+        }
+        i = end;
+        st = i;
+    }
+    out.push_str(byte_str(b, st, b.len()));
+    Ok(out)
+}
+
+// PercentStyle.validation_pattern, searched for anywhere in the format:
+// %\(\w+\)[#0+ -]*(\*|\d+)?(\.(\*|\d+))?[diouxefgcrsa%], case-blind.
+fn validate_percent(fmt: Str) -> bool {
+    let b = to_bytes(fmt);
+    for at in 0..b.len() {
+        if not (b[at] == b'%' and at + 1 < b.len() and b[at + 1] == b'(') {
+            continue;
+        }
+        let mut i = at + 2;
+        let st = i;
+        while i < b.len() and word_byte(b[i]) {
+            i += 1;
+        }
+        if i == st or i >= b.len() or b[i] != b')' {
+            continue;
+        }
+        i += 1;
+        while i < b.len() and has_byte("#0+ -", b[i]) {
+            i += 1;
+        }
+        if i < b.len() and b[i] == b'*' {
+            i += 1;
+        } else {
+            while i < b.len() and is_digit(b[i]) {
+                i += 1;
+            }
+        }
+        if i + 1 < b.len() and b[i] == b'.' and (b[i + 1] == b'*' or is_digit(b[i + 1])) {
+            i += 2;
+            while i < b.len() and is_digit(b[i]) {
+                i += 1;
+            }
+        }
+        if i < b.len() and has_byte("diouxefgcrsa%", lower_byte(b[i])) {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ the clock
+
+fn fdiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn days_from_civil(year: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+const DAY_NAMES: Array[Str, 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MONTH_NAMES: Array[Str, 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// time.strftime(fmt, time.gmtime(secs)) for the directives a log uses.
+fn strftime(fmt: Str, secs: i64) -> String {
+    let days = fdiv(secs, 86400);
+    let s = secs - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    let wd = ((days + 3) % 7 + 7) % 7;
+    let b = to_bytes(fmt);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'%' or i + 1 >= b.len() {
+            out.push_str(byte_str(b, i, i + 1));
+            i += 1;
+            continue;
+        }
+        let c = b[i + 1];
+        i += 2;
+        if c == b'Y' {
+            out.push_str(f"{y}");
+        } else if c == b'm' {
+            out.push_str(pad2(m));
+        } else if c == b'd' {
+            out.push_str(pad2(d));
+        } else if c == b'H' {
+            out.push_str(pad2(s / 3600));
+        } else if c == b'M' {
+            out.push_str(pad2(s / 60 % 60));
+        } else if c == b'S' {
+            out.push_str(pad2(s % 60));
+        } else if c == b'a' {
+            out.push_str(DAY_NAMES[wd]);
+        } else if c == b'b' {
+            out.push_str(MONTH_NAMES[m - 1]);
+        } else if c == b'y' {
+            out.push_str(pad2(y % 100));
+        } else if c == b'%' {
+            out.push_str("%");
+        } else {
+            out.push_str(byte_str(b, i - 2, i));
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ levels, records, formatters
+
+const NOTSET: i64 = 0;
+const DEBUG: i64 = 10;
+const INFO: i64 = 20;
+const WARNING: i64 = 30;
+const ERROR: i64 = 40;
+
+// 2026-10-15T08:00:00Z, the clock's start, in nanoseconds
+const START: i64 = 1792051200000000000;
+
+// The attributes a LogRecord has, which `extra` may not replace.
+const RECORD_ATTRS: Array[Str, 21] = ["name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName", "created", "msecs", "relativeCreated", "thread", "threadName", "processName", "process", "taskName"];
+
+#[derive(Clone)]
+struct Rec {
+    name: String,
+    levelno: i64,
+    levelname: String,
+    msg: String,
+    args: Vec[Val],
+    ns: i64,
+    extra_keys: Vec[String],
+    extra_vals: Vec[Val],
+}
+
+const PERCENT: i64 = 0;
+const BRACE: i64 = 1;
+const DOLLAR: i64 = 2;
+
+#[derive(Clone)]
+struct Fmt {
+    style: i64,
+    fmt: String,
+    datefmt: String,
+    dkeys: Vec[String],
+    dvals: Vec[Val],
+}
+
+// logging.Formatter(fmt, datefmt, style, validate, defaults=...)
+fn new_formatter(fmt: own Option[String], datefmt: own String, style: Str, validate: bool, dkeys: own Vec[String], dvals: own Vec[Val]) -> Result[Fmt, String] {
+    let s = if style == "%" {
+        PERCENT
+    } else if style == "{" {
+        BRACE
+    } else if style == "$" {
+        DOLLAR
+    } else {
+        return Err("ValueError: Style must be one of: %,{,$".to_string());
+    };
+    let given = fmt.unwrap_or(String.new());
+    let text = if given.len() > 0 {
+        given
+    } else if s == PERCENT {
+        "%(message)s".to_string()
+    } else if s == BRACE {
+        "{message}".to_string()
+    } else {
+        "${message}".to_string()
+    };
+    if validate {
+        if s == PERCENT and not validate_percent(text) {
+            return Err(f"ValueError: Invalid format '{text}' for '%' style");
+        }
+        if s == BRACE {
+            if let Err(e) = validate_brace(text) {
+                return Err(f"ValueError: {e}");
+            }
+        }
+        if s == DOLLAR {
+            if let Err(e) = validate_template(text) {
+                return Err(f"ValueError: {e}");
+            }
+        }
+    }
+    Ok(Fmt { style: s, fmt: text, datefmt: datefmt, dkeys: dkeys, dvals: dvals })
+}
+
+fn default_formatter() -> Fmt {
+    Fmt { style: PERCENT, fmt: "%(message)s".to_string(), datefmt: String.new(), dkeys: Vec.new(), dvals: Vec.new() }
+}
+
+fn uses_time(f: ref Fmt) -> bool {
+    if f.style == PERCENT {
+        find_str(f.fmt, "%(asctime)") >= 0
+    } else if f.style == BRACE {
+        find_str(f.fmt, "{asctime") >= 0
+    } else {
+        find_str(f.fmt, "$asctime") >= 0 or find_str(f.fmt, "${asctime}") >= 0
+    }
+}
+
+fn pad3(n: i64) -> String {
+    if n < 10 {
+        f"00{n}"
+    } else if n < 100 {
+        f"0{n}"
+    } else {
+        f"{n}"
+    }
+}
+
+// Formatter.formatTime, with time.gmtime as the converter.
+fn format_time(r: ref Rec, datefmt: Str) -> String {
+    let secs = r.ns / 1000000000;
+    if datefmt.len() > 0 {
+        return strftime(datefmt, secs);
+    }
+    let msecs = (r.ns % 1000000000) / 1000000;
+    f"{strftime("%Y-%m-%d %H:%M:%S", secs)},{pad3(msecs)}"
+}
+
+// LogRecord.getMessage
+fn get_message(r: ref Rec) -> Result[String, String] {
+    if r.args.len() == 0 {
+        return Ok(r.msg.clone());
+    }
+    let none_k: Vec[String] = Vec.new();
+    let none_v: Vec[Val] = Vec.new();
+    match percent(r.msg, r.args, none_k, none_v) {
+        Ok(s) => Ok(s),
+        Err(e) => Err(f"TypeError: {e}"),
+    }
+}
+
+// Formatter.format: the record's attributes, then the formatter's
+// defaults, through the style.
+fn format_record(f: ref Fmt, r: ref Rec) -> Result[String, String] {
+    let message = get_message(r)?;
+    let mut keys: Vec[String] = Vec.new();
+    let mut vals: Vec[Val] = Vec.new();
+    keys.push("name".to_string());
+    vals.push(Val.S(r.name.clone()));
+    keys.push("msg".to_string());
+    vals.push(Val.S(r.msg.clone()));
+    keys.push("levelname".to_string());
+    vals.push(Val.S(r.levelname.clone()));
+    keys.push("levelno".to_string());
+    vals.push(Val.I(r.levelno));
+    keys.push("msecs".to_string());
+    vals.push(Val.F(f"{(r.ns % 1000000000) / 1000000}.0"));
+    keys.push("relativeCreated".to_string());
+    vals.push(Val.F(f"{(r.ns - START) / 1000000}.0"));
+    keys.push("message".to_string());
+    vals.push(Val.S(message));
+    if uses_time(f) {
+        keys.push("asctime".to_string());
+        vals.push(Val.S(format_time(r, f.datefmt)));
+    }
+    for i in 0..r.extra_keys.len() {
+        keys.push(r.extra_keys[i].clone());
+        vals.push(r.extra_vals[i].clone());
+    }
+    for i in 0..f.dkeys.len() {
+        keys.push(f.dkeys[i].clone());
+        vals.push(f.dvals[i].clone());
+    }
+    let out = if f.style == PERCENT {
+        percent(f.fmt, Vec.new(), keys, vals)
+    } else if f.style == BRACE {
+        format_braces(f.fmt, keys, vals)
+    } else {
+        substitute(f.fmt, keys, vals)
+    };
+    match out {
+        Ok(s) => Ok(s),
+        Err(e) => Err(f"ValueError: Formatting field not found in record: {e}"),
+    }
+}
+
+// logging.Filter(name)
+fn filter_pass(fname: Str, rname: Str) -> bool {
+    let n = fname.len();
+    if n == 0 or fname == rname {
+        return true;
+    }
+    if not starts_with(rname, fname) {
+        return false;
+    }
+    to_bytes(rname)[n] == b'.'
+}
+
+// ------------------------------------------------------------ handlers
+
+const STREAM: i64 = 0;
+const FILE: i64 = 1;
+const ROTATING: i64 = 2;
+const MEMORY: i64 = 3;
+const NULL: i64 = 4;
+
+const STDOUT: i64 = 0;
+const STDERR: i64 = 1;
+
+#[derive(Clone)]
+struct Hd {
+    name: String,
+    kind: i64,
+    level: i64,
+    fmt: i64,
+    filters: Vec[i64],
+    closed: bool,
+    stream: i64,
+    path: String,
+    mode: String,
+    open: bool,
+    content: String,
+    max_bytes: i64,
+    backup: i64,
+    capacity: i64,
+    flush_level: i64,
+    target: i64,
+    flush_on_close: bool,
+    buffer: Vec[Rec],
+}
+
+fn new_handler(kind: i64) -> Hd {
+    Hd {
+        name: String.new(),
+        kind: kind,
+        level: NOTSET,
+        fmt: -1,
+        filters: Vec.new(),
+        closed: false,
+        stream: STDERR,
+        path: String.new(),
+        mode: "a".to_string(),
+        open: false,
+        content: String.new(),
+        max_bytes: 0,
+        backup: 0,
+        capacity: 0,
+        flush_level: ERROR,
+        target: -1,
+        flush_on_close: true,
+        buffer: Vec.new(),
+    }
+}
+
+fn kind_name(k: i64) -> String {
+    if k == STREAM {
+        "StreamHandler".to_string()
+    } else if k == FILE {
+        "FileHandler".to_string()
+    } else if k == ROTATING {
+        "RotatingFileHandler".to_string()
+    } else if k == MEMORY {
+        "MemoryHandler".to_string()
+    } else {
+        "NullHandler".to_string()
+    }
+}
+
+// What the service writes to stderr is shown on stdout, tagged.
+fn write_stream(stream: i64, text: Str) {
+    for line in lines_of(text) {
+        if stream == STDERR {
+            println(f"stderr| {line}");
+        } else {
+            println(line);
+        }
+    }
+}
+
+// ------------------------------------------------------------ loggers
+
+#[derive(Clone)]
+struct Lg {
+    name: String,
+    placeholder: bool,
+    level: i64,
+    propagate: bool,
+    disabled: bool,
+    handlers: Vec[i64],
+    filters: Vec[i64],
+}
+
+fn new_logger(name: Str, placeholder: bool) -> Lg {
+    Lg { name: name.to_string(), placeholder: placeholder, level: NOTSET, propagate: true, disabled: false, handlers: Vec.new(), filters: Vec.new() }
+}
+
+// The whole logging package's state.
+struct St {
+    // lgs[0] is the root logger
+    lgs: Vec[Lg],
+    hds: Vec[Hd],
+    fmts: Vec[Fmt],
+    // each Filter's name, by id
+    filters: Vec[String],
+    // logging._handlerList: the live handlers in the order they were made
+    handler_list: Vec[i64],
+    last_resort: i64,
+    disable: i64,
+    level_nums: Vec[i64],
+    level_names: Vec[String],
+    name_keys: Vec[String],
+    name_vals: Vec[i64],
+    // the fake clock, in nanoseconds
+    now: i64,
+}
+
+fn new_state() -> St {
+    let mut root = new_logger("root", false);
+    root.level = WARNING;
+    let mut lr = new_handler(STREAM);
+    lr.level = WARNING;
+    let mut st = St {
+        lgs: Vec.new(),
+        hds: Vec.new(),
+        fmts: Vec.new(),
+        filters: Vec.new(),
+        handler_list: Vec.new(),
+        last_resort: 0,
+        disable: 0,
+        level_nums: Vec.new(),
+        level_names: Vec.new(),
+        name_keys: Vec.new(),
+        name_vals: Vec.new(),
+        now: START,
+    };
+    st.lgs.push(root);
+    st.hds.push(lr);
+    // the last-resort handler is a Handler like any other
+    st.handler_list.push(0);
+    st.level_nums.push(50);
+    st.level_names.push("CRITICAL".to_string());
+    st.level_nums.push(40);
+    st.level_names.push("ERROR".to_string());
+    st.level_nums.push(30);
+    st.level_names.push("WARNING".to_string());
+    st.level_nums.push(20);
+    st.level_names.push("INFO".to_string());
+    st.level_nums.push(10);
+    st.level_names.push("DEBUG".to_string());
+    st.level_nums.push(0);
+    st.level_names.push("NOTSET".to_string());
+    st.name_keys.push("CRITICAL".to_string());
+    st.name_vals.push(50);
+    st.name_keys.push("FATAL".to_string());
+    st.name_vals.push(50);
+    st.name_keys.push("ERROR".to_string());
+    st.name_vals.push(40);
+    st.name_keys.push("WARN".to_string());
+    st.name_vals.push(30);
+    st.name_keys.push("WARNING".to_string());
+    st.name_vals.push(30);
+    st.name_keys.push("INFO".to_string());
+    st.name_vals.push(20);
+    st.name_keys.push("DEBUG".to_string());
+    st.name_vals.push(10);
+    st.name_keys.push("NOTSET".to_string());
+    st.name_vals.push(0);
+    st
+}
+
+impl St {
+    fn level_name(ref self, n: i64) -> String {
+        for i in 0..self.level_nums.len() {
+            if self.level_nums[i] == n {
+                return self.level_names[i].clone();
+            }
+        }
+        f"Level {n}"
+    }
+
+    fn level_by_name(ref self, s: Str) -> Option[i64] {
+        for i in 0..self.name_keys.len() {
+            if self.name_keys[i] == s {
+                return Some(self.name_vals[i]);
+            }
+        }
+        None
+    }
+
+    fn add_level_name(mut ref self, n: i64, s: Str) {
+        let mut done = false;
+        for i in 0..self.level_nums.len() {
+            if self.level_nums[i] == n {
+                self.level_names[i] = s.to_string();
+                done = true;
+            }
+        }
+        if not done {
+            self.level_nums.push(n);
+            self.level_names.push(s.to_string());
+        }
+        for i in 0..self.name_keys.len() {
+            if self.name_keys[i] == s {
+                self.name_vals[i] = n;
+                return;
+            }
+        }
+        self.name_keys.push(s.to_string());
+        self.name_vals.push(n);
+    }
+
+    // logging._checkLevel
+    fn check_level(ref self, j: ref JValue) -> Result[i64, String] {
+        match j {
+            JValue.Int(n) => Ok(*n),
+            JValue.Text(s) => match self.level_by_name(s) {
+                Some(n) => Ok(n),
+                None => Err(f"ValueError: Unknown level: {py_repr(s)}"),
+            },
+            _ => Err(f"TypeError: Level not an integer or a valid string: {json_str(j)}"),
+        }
+    }
+
+    // A name in Manager.loggerDict (the root is not in it).
+    fn find(ref self, name: Str) -> i64 {
+        for i in 1..self.lgs.len() {
+            if self.lgs[i].name == name {
+                return i;
+            }
+        }
+        -1
+    }
+
+    // logging.getLogger: a placeholder becomes a logger, and the missing
+    // ancestors up to the nearest logger become placeholders.
+    fn get_logger(mut ref self, name: Str) -> i64 {
+        if name.len() == 0 or name == "root" {
+            return 0;
+        }
+        let at = self.find(name);
+        if at >= 0 {
+            if self.lgs[at].placeholder {
+                self.lgs[at] = new_logger(name, false);
+            }
+            return at;
+        }
+        self.lgs.push(new_logger(name, false));
+        let made = self.lgs.len() - 1;
+        let mut prefix = name.to_string();
+        loop {
+            let k = rfind_byte(prefix, b'.');
+            if k <= 0 {
+                break;
+            }
+            prefix = slice(prefix, 0, k);
+            let p = self.find(prefix);
+            if p < 0 {
+                self.lgs.push(new_logger(prefix, true));
+            } else if not self.lgs[p].placeholder {
+                break;
+            }
+        }
+        made
+    }
+
+    // Logger.parent: the nearest ancestor that is a logger, else the root.
+    fn parent(ref self, i: i64) -> i64 {
+        if i == 0 {
+            return -1;
+        }
+        let mut prefix = self.lgs[i].name.clone();
+        loop {
+            let k = rfind_byte(prefix, b'.');
+            if k <= 0 {
+                return 0;
+            }
+            prefix = slice(prefix, 0, k);
+            let p = self.find(prefix);
+            if p >= 0 and not self.lgs[p].placeholder {
+                return p;
+            }
+        }
+    }
+
+    fn effective(ref self, i: i64) -> i64 {
+        let mut c = i;
+        while c >= 0 {
+            if self.lgs[c].level != NOTSET {
+                return self.lgs[c].level;
+            }
+            c = self.parent(c);
+        }
+        NOTSET
+    }
+
+    fn is_enabled(ref self, i: i64, level: i64) -> bool {
+        if self.lgs[i].disabled {
+            return false;
+        }
+        if self.disable >= level {
+            return false;
+        }
+        level >= self.effective(i)
+    }
+
+    fn passes(ref self, filters: ref Vec[i64], rname: Str) -> bool {
+        for f in filters {
+            if not filter_pass(self.filters[*f], rname) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Logger.log
+    fn log(mut ref self, i: i64, level: i64, msg: Str, args: own Vec[Val], ek: own Vec[String], ev: own Vec[Val], now: i64) -> Result[(), String] {
+        if not self.is_enabled(i, level) {
+            return Ok(());
+        }
+        for k in ek {
+            let mut taken = k == "message" or k == "asctime";
+            for a in RECORD_ATTRS {
+                if a == k {
+                    taken = true;
+                }
+            }
+            if taken {
+                return Err(f"KeyError: {py_repr(f"Attempt to overwrite {py_repr(k)} in LogRecord")}");
+            }
+        }
+        let r = Rec {
+            name: self.lgs[i].name.clone(),
+            levelno: level,
+            levelname: self.level_name(level),
+            msg: msg.to_string(),
+            args: args,
+            ns: now,
+            extra_keys: ek,
+            extra_vals: ev,
+        };
+        let lf = self.lgs[i].filters.clone();
+        if not self.passes(lf, r.name) {
+            return Ok(());
+        }
+        self.call_handlers(i, r);
+        Ok(())
+    }
+
+    fn call_handlers(mut ref self, i: i64, r: ref Rec) {
+        let mut c = i;
+        let mut found: i64 = 0;
+        while c >= 0 {
+            let hs = self.lgs[c].handlers.clone();
+            for h in hs {
+                found += 1;
+                if r.levelno >= self.hds[h].level {
+                    self.handle(h, r);
+                }
+            }
+            if not self.lgs[c].propagate {
+                break;
+            }
+            c = self.parent(c);
+        }
+        if found == 0 {
+            let lr = self.last_resort;
+            if r.levelno >= self.hds[lr].level {
+                self.handle(lr, r);
+            }
+        }
+    }
+
+    // Handler.handle
+    fn handle(mut ref self, h: i64, r: ref Rec) {
+        if self.hds[h].kind == NULL {
+            return;
+        }
+        let hf = self.hds[h].filters.clone();
+        if not self.passes(hf, r.name) {
+            return;
+        }
+        self.emit(h, r);
+    }
+
+    fn format(ref self, h: i64, r: ref Rec) -> Result[String, String] {
+        let f = if self.hds[h].fmt >= 0 { self.fmts[self.hds[h].fmt].clone() } else { default_formatter() };
+        format_record(f, r)
+    }
+
+    fn emit(mut ref self, h: i64, r: ref Rec) {
+        let kind = self.hds[h].kind;
+        if kind == MEMORY {
+            self.hds[h].buffer.push(r.clone());
+            let n = self.hds[h].buffer.len();
+            if n >= self.hds[h].capacity or r.levelno >= self.hds[h].flush_level {
+                self.flush(h);
+            }
+            return;
+        }
+        if kind == ROTATING {
+            if self.should_rollover(h, r) {
+                self.do_rollover(h);
+            }
+        }
+        if kind == FILE or kind == ROTATING {
+            if not self.hds[h].open {
+                if self.hds[h].mode != "w" or not self.hds[h].closed {
+                    self.open_file(h);
+                }
+            }
+            if not self.hds[h].open {
+                return;
+            }
+        }
+        let msg = match self.format(h, r) {
+            Ok(m) => m,
+            Err(e) => {
+                write_stream(STDERR, f"--- Logging error ---\n{e}\n");
+                return;
+            }
+        };
+        if kind == STREAM {
+            write_stream(self.hds[h].stream, f"{msg}\n");
+        } else {
+            self.append_file(h, f"{msg}\n");
+        }
+    }
+
+    fn open_file(mut ref self, h: i64) {
+        let path = self.hds[h].path.clone();
+        let mut content = String.new();
+        if self.hds[h].mode != "w" {
+            if let Ok(t) = fs.read_to_string(path.clone()) {
+                content = t;
+            }
+        }
+        if content.len() == 0 {
+            let _ = fs.write(path.clone(), String.new());
+        }
+        self.hds[h].content = content;
+        self.hds[h].open = true;
+    }
+
+    fn append_file(mut ref self, h: i64, text: Str) {
+        self.hds[h].content.push_str(text);
+        let _ = fs.write(self.hds[h].path.clone(), self.hds[h].content.clone());
+    }
+
+    // RotatingFileHandler.shouldRollover: the file's size in bytes plus
+    // the record's length in characters.
+    fn should_rollover(mut ref self, h: i64, r: ref Rec) -> bool {
+        if not self.hds[h].open {
+            self.open_file(h);
+        }
+        if self.hds[h].max_bytes <= 0 {
+            return false;
+        }
+        let pos = self.hds[h].content.len();
+        if pos == 0 {
+            return false;
+        }
+        let msg = match self.format(h, r) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        pos + cp_len(msg) + 1 >= self.hds[h].max_bytes
+    }
+
+    fn do_rollover(mut ref self, h: i64) {
+        self.hds[h].open = false;
+        let base = self.hds[h].path.clone();
+        let backup = self.hds[h].backup;
+        if backup > 0 {
+            let mut i = backup - 1;
+            while i > 0 {
+                let sfn = f"{base}.{i}";
+                let dfn = f"{base}.{i + 1}";
+                if fs.exists(sfn.clone()) {
+                    if fs.exists(dfn.clone()) {
+                        let _ = fs.remove_file(dfn.clone());
+                    }
+                    let _ = fs.rename(sfn.clone(), dfn.clone());
+                }
+                i -= 1;
+            }
+            let dfn = f"{base}.1";
+            if fs.exists(dfn.clone()) {
+                let _ = fs.remove_file(dfn.clone());
+            }
+            if fs.exists(base.clone()) {
+                let _ = fs.rename(base.clone(), dfn.clone());
+            }
+        }
+        self.open_file(h);
+    }
+
+    // MemoryHandler.flush
+    fn flush(mut ref self, h: i64) {
+        if self.hds[h].kind != MEMORY {
+            return;
+        }
+        let t = self.hds[h].target;
+        if t < 0 {
+            return;
+        }
+        let recs = self.hds[h].buffer.clone();
+        for r in recs {
+            self.handle(t, r);
+        }
+        self.hds[h].buffer = Vec.new();
+    }
+
+    fn close(mut ref self, h: i64) {
+        let kind = self.hds[h].kind;
+        if kind == FILE or kind == ROTATING {
+            self.hds[h].open = false;
+        }
+        if kind == MEMORY {
+            if self.hds[h].flush_on_close {
+                self.flush(h);
+            }
+            self.hds[h].target = -1;
+        }
+        self.hds[h].closed = true;
+    }
+
+    // logging.shutdown: newest handler first.
+    fn shutdown(mut ref self) {
+        let list = self.handler_list.clone();
+        let mut i = list.len() - 1;
+        while i >= 0 {
+            let h = list[i];
+            if self.hds[h].kind != MEMORY or self.hds[h].flush_on_close {
+                self.flush(h);
+            }
+            self.close(h);
+            i -= 1;
+        }
+    }
+
+    fn add_handler(mut ref self, hd: own Hd) -> i64 {
+        self.hds.push(hd);
+        let h = self.hds.len() - 1;
+        self.handler_list.push(h);
+        h
+    }
+
+    fn add_filter(mut ref self, name: Str) -> i64 {
+        self.filters.push(name.to_string());
+        self.filters.len() - 1
+    }
+}
+
+// ------------------------------------------------------------ basicConfig
+
+// logging.basicConfig. `opts` are the script's key=value fields.
+fn basic_config(st: mut ref St, opts: ref Vec[String]) -> Result[(), String] {
+    let mut force = false;
+    let mut level: Option[String] = None;
+    let mut stream = STDERR;
+    let mut format = "%(levelname)s:%(name)s:%(message)s".to_string();
+    for o in opts {
+        let (k, _, v) = partition(o, b'=');
+        if k == "force" {
+            force = true;
+        } else if k == "level" {
+            level = Some(v);
+        } else if k == "stream" {
+            stream = if v == "stdout" { STDOUT } else { STDERR };
+        } else if k == "format" {
+            format = v;
+        }
+    }
+    if force {
+        let old = st.lgs[0].handlers.clone();
+        st.lgs[0].handlers = Vec.new();
+        for h in old {
+            st.close(h);
+            // nothing refers to it any more, so it leaves _handlerList
+            let mut kept: Vec[i64] = Vec.new();
+            for x in st.handler_list.clone() {
+                if x != h {
+                    kept.push(x);
+                }
+            }
+            st.handler_list = kept;
+        }
+    }
+    if st.lgs[0].handlers.len() > 0 {
+        return Ok(());
+    }
+    let mut hd = new_handler(STREAM);
+    hd.stream = stream;
+    let f = new_formatter(Some(format), String.new(), "%", true, Vec.new(), Vec.new())?;
+    st.fmts.push(f);
+    hd.fmt = st.fmts.len() - 1;
+    let h = st.add_handler(hd);
+    st.lgs[0].handlers.push(h);
+    if let Some(l) = level {
+        st.lgs[0].level = st.check_level(JValue.Text(l))?;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ dictConfig
+
+// An error and the chain of exceptions it was raised from, outermost
+// first, each as "Type: message".
+fn wrap(outer: Str, chain: own Vec[String]) -> Vec[String] {
+    let mut chain = chain;
+    chain.insert(0, outer.to_string());
+    chain
+}
+
+fn one(e: Str) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(e.to_string());
+    v
+}
+
+// CPython's keyword-argument suggestion: Levenshtein distance where a
+// case change costs 1 and any other edit 2.
+fn edit_distance(a: Str, b: Str) -> i64 {
+    let x = to_bytes(a);
+    let y = to_bytes(b);
+    let mut prev: Vec[i64] = Vec.new();
+    for j in 0..y.len() + 1 {
+        prev.push(j * 2);
+    }
+    for i in 1..x.len() + 1 {
+        let mut cur: Vec[i64] = Vec.new();
+        cur.push(i * 2);
+        for j in 1..y.len() + 1 {
+            let sub = if x[i - 1] == y[j - 1] {
+                0
+            } else if lower_byte(x[i - 1]) == lower_byte(y[j - 1]) {
+                1
+            } else {
+                2
+            };
+            let mut best = prev[j - 1] + sub;
+            if prev[j] + 2 < best {
+                best = prev[j] + 2;
+            }
+            if cur[j - 1] + 2 < best {
+                best = cur[j - 1] + 2;
+            }
+            cur.push(best);
+        }
+        prev = cur;
+    }
+    prev[y.len()]
+}
+
+fn suggestion(name: Str, params: ref Vec[String]) -> Option[String] {
+    let mut best: Option[String] = None;
+    let mut best_d: i64 = 1 << 60;
+    for p in params {
+        if p == name {
+            continue;
+        }
+        let mut max_d = (name.len() + p.len() + 3) * 2 / 6;
+        if best_d - 1 < max_d {
+            max_d = best_d - 1;
+        }
+        let d = edit_distance(name, p);
+        if d > max_d {
+            continue;
+        }
+        if best.is_none() or d < best_d {
+            best = Some(p.clone());
+            best_d = d;
+        }
+    }
+    best
+}
+
+fn handler_class(cname: Str) -> Result[i64, Vec[String]] {
+    if cname == "logging.StreamHandler" {
+        return Ok(STREAM);
+    }
+    if cname == "logging.FileHandler" {
+        return Ok(FILE);
+    }
+    if cname == "logging.NullHandler" {
+        return Ok(NULL);
+    }
+    if cname == "logging.handlers.RotatingFileHandler" {
+        return Ok(ROTATING);
+    }
+    if cname == "logging.handlers.MemoryHandler" {
+        return Ok(MEMORY);
+    }
+    // the importer's message for a name that is neither attribute nor module
+    let (pkg, _, _) = rpartition(cname, b'.');
+    let why = if pkg == "logging" {
+        f"No module named {py_repr(cname)}"
+    } else {
+        f"No module named {py_repr(cname)}; {py_repr(pkg)} is not a package"
+    };
+    let mut chain = one(f"ModuleNotFoundError: {why}");
+    chain = wrap(f"ValueError: Cannot resolve {py_repr(cname)}: {why}", chain);
+    Err(chain)
+}
+
+// The parameters of each handler class's __init__, self included.
+fn init_params(kind: i64) -> Vec[String] {
+    let names = if kind == STREAM {
+        "self stream"
+    } else if kind == FILE {
+        "self filename mode encoding delay errors"
+    } else if kind == ROTATING {
+        "self filename mode maxBytes backupCount encoding delay errors"
+    } else if kind == MEMORY {
+        "self capacity flushLevel target flushOnClose"
+    } else {
+        "self level"
+    };
+    split_on(names, b' ')
+}
+
+fn init_owner(kind: i64) -> String {
+    if kind == NULL { "Handler".to_string() } else { kind_name(kind) }
+}
+
+// The configured handlers of one dictConfig call, by name.
+struct Built {
+    names: Vec[String],
+    ids: Vec[i64],
+}
+
+fn built_get(b: ref Built, name: Str) -> i64 {
+    for i in 0..b.names.len() {
+        if b.names[i] == name {
+            return b.ids[i];
+        }
+    }
+    -1
+}
+
+// DictConfigurator.configure_handler. Err(true, ..) means the handler
+// waits for a target that is configured later.
+fn configure_handler(st: mut ref St, cfg: ref JValue, fmts: ref Built, filters: ref Built, handler_names: ref Vec[String], done: ref Built) -> Result[i64, (bool, Vec[String])] {
+    let mut fmt_id: i64 = -1;
+    if let Some(fj) = obj_get(cfg, "formatter") {
+        if truthy(fj) {
+            let fname = json_str(fj);
+            fmt_id = built_get(fmts, fname);
+            if fmt_id < 0 {
+                let chain = wrap(f"ValueError: Unable to set formatter {py_repr(fname)}", one(f"KeyError: {py_repr(fname)}"));
+                return Err((false, chain));
+            }
+        }
+    }
+    let cname = match obj_get(cfg, "class") {
+        Some(c) => json_str(c),
+        None => return Err((false, one("KeyError: 'class'"))),
+    };
+    let kind = match handler_class(cname) {
+        Ok(k) => k,
+        Err(chain) => return Err((false, chain)),
+    };
+    let mut hd = new_handler(kind);
+    if kind == STREAM {
+        hd.stream = STDERR;
+    }
+    let params = init_params(kind);
+    let mut filename = String.new();
+    let mut flush_level = ERROR;
+    for key in obj_keys(cfg) {
+        if kind != MEMORY {
+            break;
+        }
+        let v = obj_get(cfg, key).unwrap_or(JValue.Null);
+        if key == "flushLevel" {
+            flush_level = match st.check_level(v) {
+                Ok(n) => n,
+                Err(e) => return Err((false, one(e))),
+            };
+        }
+        if key == "target" {
+            let tn = json_str(v);
+            let t = built_get(done, tn);
+            if t < 0 {
+                let known = contains_name(handler_names, tn);
+                let cause = if known { "TypeError: target not configured yet".to_string() } else { f"KeyError: {py_repr(tn)}" };
+                return Err((known, wrap(f"ValueError: Unable to set target handler {py_repr(tn)}", one(cause))));
+            }
+            hd.target = t;
+        }
+    }
+    for key in obj_keys(cfg) {
+        if key == "formatter" or key == "level" or key == "filters" or key == "class" {
+            continue;
+        }
+        if kind == MEMORY and (key == "flushLevel" or key == "target") {
+            continue;
+        }
+        let v = obj_get(cfg, key).unwrap_or(JValue.Null);
+        let mut ok = false;
+        for p in params {
+            if *p == key {
+                ok = true;
+            }
+        }
+        if not ok {
+            let mut msg = f"TypeError: {init_owner(kind)}.__init__() got an unexpected keyword argument {py_repr(key)}";
+            if let Some(s) = suggestion(key, params) {
+                msg = f"{msg}. Did you mean {py_repr(s)}?";
+            }
+            return Err((false, one(msg)));
+        }
+        if key == "stream" {
+            hd.stream = if json_str(v) == "ext://sys.stdout" { STDOUT } else { STDERR };
+        } else if key == "filename" {
+            filename = json_str(v);
+        } else if key == "mode" {
+            hd.mode = json_str(v);
+        } else if key == "maxBytes" {
+            hd.max_bytes = json_int(v);
+        } else if key == "backupCount" {
+            hd.backup = json_int(v);
+        } else if key == "capacity" {
+            hd.capacity = json_int(v);
+        } else if key == "flushOnClose" {
+            hd.flush_on_close = truthy(v);
+        }
+    }
+    hd.flush_level = flush_level;
+    if kind == ROTATING and hd.max_bytes > 0 {
+        hd.mode = "a".to_string();
+    }
+    hd.path = filename;
+    hd.fmt = fmt_id;
+    let h = st.add_handler(hd);
+    if kind == FILE or kind == ROTATING {
+        st.open_file(h);
+    }
+    if let Some(lj) = obj_get(cfg, "level") {
+        if not is_null(lj) {
+            st.hds[h].level = match st.check_level(lj) {
+                Ok(n) => n,
+                Err(e) => return Err((false, one(e))),
+            };
+        }
+    }
+    if let Some(fj) = obj_get(cfg, "filters") {
+        for f in json_list(fj) {
+            let id = built_get(filters, f);
+            if id < 0 {
+                return Err((false, wrap(f"ValueError: Unable to add filter {py_repr(f)}", one(f"KeyError: {py_repr(f)}"))));
+            }
+            if not has_id(st.hds[h].filters, id) {
+                st.hds[h].filters.push(id);
+            }
+        }
+    }
+    Ok(h)
+}
+
+fn is_null(j: ref JValue) -> bool {
+    match j {
+        JValue.Null => true,
+        _ => false,
+    }
+}
+
+fn has_id(v: ref Vec[i64], x: i64) -> bool {
+    for y in v {
+        if *y == x {
+            return true;
+        }
+    }
+    false
+}
+
+// DictConfigurator.common_logger_config
+fn common_logger_config(st: mut ref St, lg: i64, cfg: ref JValue, handlers: ref Built, filters: ref Built) -> Result[(), Vec[String]] {
+    if let Some(lj) = obj_get(cfg, "level") {
+        if not is_null(lj) {
+            st.lgs[lg].level = match st.check_level(lj) {
+                Ok(n) => n,
+                Err(e) => return Err(one(e)),
+            };
+        }
+    }
+    st.lgs[lg].handlers = Vec.new();
+    if let Some(hj) = obj_get(cfg, "handlers") {
+        for name in json_list(hj) {
+            let h = built_get(handlers, name);
+            if h < 0 {
+                return Err(wrap(f"ValueError: Unable to add handler {py_repr(name)}", one(f"KeyError: {py_repr(name)}")));
+            }
+            if not has_id(st.lgs[lg].handlers, h) {
+                st.lgs[lg].handlers.push(h);
+            }
+        }
+    }
+    if let Some(fj) = obj_get(cfg, "filters") {
+        for f in json_list(fj) {
+            let id = built_get(filters, f);
+            if id < 0 {
+                return Err(wrap(f"ValueError: Unable to add filter {py_repr(f)}", one(f"KeyError: {py_repr(f)}")));
+            }
+            if not has_id(st.lgs[lg].filters, id) {
+                st.lgs[lg].filters.push(id);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j] < v[j - 1] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+}
+
+fn contains_name(v: ref Vec[String], s: Str) -> bool {
+    for x in v {
+        if *x == s {
+            return true;
+        }
+    }
+    false
+}
+
+// logging.config.dictConfig, applied up to the point where it fails.
+fn dict_config(st: mut ref St, cfg: ref JValue) -> Result[(), Vec[String]] {
+    let version = match obj_get(cfg, "version") {
+        Some(v) => v,
+        None => return Err(one("ValueError: dictionary doesn't specify a version")),
+    };
+    if json_int(version) != 1 {
+        return Err(one(f"ValueError: Unsupported version: {json_str(version)}"));
+    }
+    let disable_existing = match obj_get(cfg, "disable_existing_loggers") {
+        Some(v) => truthy(v),
+        None => true,
+    };
+    // _clearExistingHandlers
+    st.shutdown();
+    st.handler_list = Vec.new();
+
+    let empty = JValue.Obj(Vec.new(), Vec.new());
+    let mut fmts = Built { names: Vec.new(), ids: Vec.new() };
+    let fcfg = obj_get(cfg, "formatters").unwrap_or(empty.clone());
+    for name in obj_keys(fcfg) {
+        let c = obj_get(fcfg, name).unwrap_or(empty.clone());
+        let fmt = match obj_get(c, "format") {
+            Some(j) => json_text(j),
+            None => None,
+        };
+        let datefmt = match obj_get(c, "datefmt") {
+            Some(j) => json_text(j).unwrap_or(String.new()),
+            None => String.new(),
+        };
+        let style = match obj_get(c, "style") {
+            Some(j) => json_str(j),
+            None => "%".to_string(),
+        };
+        let validate = match obj_get(c, "validate") {
+            Some(j) => truthy(j),
+            None => true,
+        };
+        let mut dk: Vec[String] = Vec.new();
+        let mut dv: Vec[Val] = Vec.new();
+        if let Some(d) = obj_get(c, "defaults") {
+            for k in obj_keys(d) {
+                dv.push(json_val(obj_get(d, k).unwrap_or(JValue.Null)));
+                dk.push(k.clone());
+            }
+        }
+        match new_formatter(fmt, datefmt, style, validate, dk, dv) {
+            Ok(f) => {
+                st.fmts.push(f);
+                fmts.names.push(name.clone());
+                fmts.ids.push(st.fmts.len() - 1);
+            }
+            Err(e) => return Err(wrap(f"ValueError: Unable to configure formatter {py_repr(name)}", one(e))),
+        }
+    }
+
+    let mut filters = Built { names: Vec.new(), ids: Vec.new() };
+    let flcfg = obj_get(cfg, "filters").unwrap_or(empty.clone());
+    for name in obj_keys(flcfg) {
+        let c = obj_get(flcfg, name).unwrap_or(empty.clone());
+        let fname = match obj_get(c, "name") {
+            Some(j) => json_str(j),
+            None => String.new(),
+        };
+        let id = st.add_filter(fname);
+        filters.names.push(name.clone());
+        filters.ids.push(id);
+    }
+
+    // handlers, in sorted order, then the ones waiting for a target
+    let hcfg = obj_get(cfg, "handlers").unwrap_or(empty.clone());
+    let mut hnames = obj_keys(hcfg);
+    sort_strings(mut hnames);
+    let mut handlers = Built { names: Vec.new(), ids: Vec.new() };
+    let mut deferred: Vec[String] = Vec.new();
+    for name in hnames {
+        let c = obj_get(hcfg, name).unwrap_or(empty.clone());
+        match configure_handler(st, c, fmts, filters, hnames, handlers) {
+            Ok(h) => {
+                st.hds[h].name = name.clone();
+                handlers.names.push(name.clone());
+                handlers.ids.push(h);
+            }
+            Err((wait, chain)) => {
+                if wait {
+                    deferred.push(name.clone());
+                } else {
+                    return Err(wrap(f"ValueError: Unable to configure handler {py_repr(name)}", chain));
+                }
+            }
+        }
+    }
+    for name in deferred {
+        let c = obj_get(hcfg, name).unwrap_or(empty.clone());
+        match configure_handler(st, c, fmts, filters, hnames, handlers) {
+            Ok(h) => {
+                st.hds[h].name = name.clone();
+                handlers.names.push(name.clone());
+                handlers.ids.push(h);
+            }
+            Err((_, chain)) => return Err(wrap(f"ValueError: Unable to configure handler {py_repr(name)}", chain)),
+        }
+    }
+
+    // loggers, and the ones that already exist
+    let mut existing: Vec[String] = Vec.new();
+    for i in 1..st.lgs.len() {
+        existing.push(st.lgs[i].name.clone());
+    }
+    sort_strings(mut existing);
+    let mut children: Vec[String] = Vec.new();
+    let lcfg = obj_get(cfg, "loggers").unwrap_or(empty.clone());
+    for name in obj_keys(lcfg) {
+        let mut at: i64 = -1;
+        for i in 0..existing.len() {
+            if existing[i] == name and at < 0 {
+                at = i;
+            }
+        }
+        if at >= 0 {
+            let prefixed = f"{name}.";
+            for i in at + 1..existing.len() {
+                if starts_with(existing[i], prefixed) {
+                    children.push(existing[i].clone());
+                }
+            }
+            existing.remove(at);
+        }
+        let c = obj_get(lcfg, name).unwrap_or(empty.clone());
+        let lg = st.get_logger(name);
+        if let Err(chain) = common_logger_config(st, lg, c, handlers, filters) {
+            return Err(wrap(f"ValueError: Unable to configure logger {py_repr(name)}", chain));
+        }
+        st.lgs[lg].disabled = false;
+        if let Some(p) = obj_get(c, "propagate") {
+            if not is_null(p) {
+                st.lgs[lg].propagate = truthy(p);
+            }
+        }
+    }
+    for name in existing {
+        let lg = st.find(name);
+        if contains_name(children, name) {
+            if not st.lgs[lg].placeholder {
+                st.lgs[lg].level = NOTSET;
+                st.lgs[lg].handlers = Vec.new();
+                st.lgs[lg].propagate = true;
+            }
+        } else {
+            st.lgs[lg].disabled = disable_existing;
+        }
+    }
+
+    if let Some(r) = obj_get(cfg, "root") {
+        if truthy(r) {
+            if let Err(chain) = common_logger_config(st, 0, r, handlers, filters) {
+                return Err(wrap("ValueError: Unable to configure root logger", chain));
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the files
+
+// data/config/base.json
+fn file_0() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"plain\": {
+      \"format\": \"%(asctime)s %(levelname)-8s %(name)s: %(message)s\"
+    },
+    \"access\": {
+      \"format\": \"{asctime} {request_id} {message}\",
+      \"style\": \"{\",
+      \"datefmt\": \"%d/%b/%Y:%H:%M:%S\",
+      \"defaults\": {
+        \"request_id\": \"-\"
+      }
+    },
+    \"json\": {
+      \"format\": \"{\\\"t\\\": \\\"$asctime\\\", \\\"lvl\\\": \\\"$levelname\\\", \\\"logger\\\": \\\"${name}\\\", \\\"msg\\\": \\\"$message\\\"}\",
+      \"style\": \"$\"
+    },
+    \"db\": {
+      \"format\": \"%(relativeCreated)8d ms %(levelname).1s %(name)-12s|%(message)s\"
+    }
+  },
+  \"filters\": {
+    \"app_only\": {
+      \"name\": \"app\"
+    }
+  },
+  \"handlers\": {
+    \"console\": {
+      \"class\": \"logging.StreamHandler\",
+      \"level\": \"INFO\",
+      \"formatter\": \"plain\",
+      \"filters\": [
+        \"app_only\"
+      ],
+      \"stream\": \"ext://sys.stdout\"
+    },
+    \"errors\": {
+      \"class\": \"logging.StreamHandler\",
+      \"level\": \"ERROR\",
+      \"formatter\": \"json\",
+      \"stream\": \"ext://sys.stderr\"
+    },
+    \"access_file\": {
+      \"class\": \"logging.handlers.RotatingFileHandler\",
+      \"filename\": \"data/logs/access.log\",
+      \"maxBytes\": 400,
+      \"backupCount\": 2,
+      \"formatter\": \"access\",
+      \"encoding\": \"utf-8\"
+    },
+    \"db_file\": {
+      \"class\": \"logging.FileHandler\",
+      \"filename\": \"data/logs/db.log\",
+      \"mode\": \"w\",
+      \"formatter\": \"db\",
+      \"encoding\": \"utf-8\"
+    },
+    \"buffer\": {
+      \"class\": \"logging.handlers.MemoryHandler\",
+      \"capacity\": 3,
+      \"flushLevel\": \"ERROR\",
+      \"target\": \"db_file\"
+    }
+  },
+  \"loggers\": {
+    \"app.http.access\": {
+      \"handlers\": [
+        \"access_file\"
+      ],
+      \"level\": \"INFO\",
+      \"propagate\": false
+    },
+    \"app.db\": {
+      \"handlers\": [
+        \"buffer\"
+      ],
+      \"level\": \"DEBUG\"
+    }
+  },
+  \"root\": {
+    \"level\": \"INFO\",
+    \"handlers\": [
+      \"console\",
+      \"errors\"
+    ]
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_class.json
+fn file_1() -> String {
+    """
+{
+  \"version\": 1,
+  \"handlers\": {
+    \"rotating\": {
+      \"class\": \"logging.handlers.RotatingHandler\",
+      \"filename\": \"data/logs/x.log\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_flush_level.json
+fn file_2() -> String {
+    """
+{
+  \"version\": 1,
+  \"handlers\": {
+    \"buf\": {
+      \"class\": \"logging.handlers.MemoryHandler\",
+      \"capacity\": 10,
+      \"flushLevel\": \"LOUD\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_formatter_ref.json
+fn file_3() -> String {
+    """
+{
+  \"version\": 1,
+  \"handlers\": {
+    \"console\": {
+      \"class\": \"logging.StreamHandler\",
+      \"formatter\": \"fancy\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_kwarg.json
+fn file_4() -> String {
+    """
+{
+  \"version\": 1,
+  \"handlers\": {
+    \"access_file\": {
+      \"class\": \"logging.handlers.RotatingFileHandler\",
+      \"filename\": \"data/logs/access.log\",
+      \"max_bytes\": 1000
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_level.json
+fn file_5() -> String {
+    """
+{
+  \"version\": 1,
+  \"handlers\": {
+    \"audit\": {
+      \"class\": \"logging.FileHandler\",
+      \"filename\": \"data/logs/audit.log\",
+      \"mode\": \"w\"
+    },
+    \"console\": {
+      \"class\": \"logging.StreamHandler\",
+      \"level\": \"VERBOSE\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_ref.json
+fn file_6() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"short\": {
+      \"format\": \"$levelname $name: $message\",
+      \"style\": \"$\"
+    }
+  },
+  \"handlers\": {
+    \"console2\": {
+      \"class\": \"logging.StreamHandler\",
+      \"formatter\": \"short\",
+      \"stream\": \"ext://sys.stdout\"
+    }
+  },
+  \"loggers\": {
+    \"app.db\": {
+      \"handlers\": [
+        \"console2\",
+        \"nope\"
+      ]
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_style.json
+fn file_7() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"plain\": {
+      \"format\": \"%(message)s\",
+      \"style\": \"%%\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bad_target.json
+fn file_8() -> String {
+    """
+{
+  \"version\": 1,
+  \"handlers\": {
+    \"buf\": {
+      \"class\": \"logging.handlers.MemoryHandler\",
+      \"capacity\": 10,
+      \"target\": \"missing\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/bare_dollar.json
+fn file_9() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"x\": {
+      \"format\": \"$levelname costs $5\",
+      \"style\": \"$\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/brace_conversion.json
+fn file_10() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"x\": {
+      \"format\": \"{message!x}\",
+      \"style\": \"{\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/brace_spec.json
+fn file_11() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"x\": {
+      \"format\": \"{levelname:<8q} {message}\",
+      \"style\": \"{\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/dollar_no_fields.json
+fn file_12() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"tpl\": {
+      \"format\": \"%(message)s\",
+      \"style\": \"$\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/no_version.json
+fn file_13() -> String {
+    """
+{
+  \"handlers\": {
+    \"console\": {
+      \"class\": \"logging.StreamHandler\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/percent_brace.json
+fn file_14() -> String {
+    """
+{
+  \"version\": 1,
+  \"formatters\": {
+    \"plain\": {
+      \"format\": \"{levelname} {message}\"
+    }
+  },
+  \"handlers\": {
+    \"console\": {
+      \"class\": \"logging.StreamHandler\",
+      \"formatter\": \"plain\"
+    }
+  }
+}
+
+"""
+}
+
+// data/config/broken/version_two.json
+fn file_15() -> String {
+    """
+{
+  \"version\": 2
+}
+
+"""
+}
+
+// data/config/final.json
+fn file_16() -> String {
+    """
+{
+  \"version\": 1,
+  \"disable_existing_loggers\": false,
+  \"formatters\": {
+    \"plain\": {
+      \"format\": \"%(levelname)s %(name)s: %(message)s\"
+    }
+  },
+  \"handlers\": {
+    \"console\": {
+      \"class\": \"logging.StreamHandler\",
+      \"formatter\": \"plain\",
+      \"stream\": \"ext://sys.stdout\"
+    },
+    \"buffer\": {
+      \"class\": \"logging.handlers.MemoryHandler\",
+      \"capacity\": 100,
+      \"target\": \"console\"
+    }
+  },
+  \"loggers\": {
+    \"app.http\": {
+      \"handlers\": [
+        \"buffer\"
+      ],
+      \"propagate\": false
+    }
+  },
+  \"root\": {
+    \"level\": \"INFO\",
+    \"handlers\": [
+      \"console\"
+    ]
+  }
+}
+
+"""
+}
+
+// data/config/verbose.json
+fn file_17() -> String {
+    """
+{
+  \"version\": 1,
+  \"disable_existing_loggers\": false,
+  \"formatters\": {
+    \"brace\": {
+      \"format\": \"{asctime}.{msecs:03.0f} {levelname:<8} [{name:>15}] {message}\",
+      \"style\": \"{\",
+      \"datefmt\": \"%H:%M:%S\"
+    },
+    \"db\": {
+      \"format\": \"%(asctime)s %(levelname)s %(name)s: %(message)s\",
+      \"datefmt\": \"%a %d %b %H:%M:%S\"
+    }
+  },
+  \"handlers\": {
+    \"console\": {
+      \"class\": \"logging.StreamHandler\",
+      \"formatter\": \"brace\",
+      \"stream\": \"ext://sys.stdout\"
+    },
+    \"db_file\": {
+      \"class\": \"logging.FileHandler\",
+      \"filename\": \"data/logs/db.log\",
+      \"formatter\": \"db\",
+      \"encoding\": \"utf-8\"
+    },
+    \"trash\": {
+      \"class\": \"logging.NullHandler\"
+    }
+  },
+  \"loggers\": {
+    \"app\": {
+      \"level\": \"DEBUG\"
+    },
+    \"app.db\": {
+      \"handlers\": [
+        \"db_file\"
+      ],
+      \"propagate\": false
+    },
+    \"stripe\": {
+      \"level\": \"WARNING\",
+      \"handlers\": [
+        \"trash\"
+      ],
+      \"propagate\": false
+    }
+  },
+  \"root\": {
+    \"level\": \"WARNING\",
+    \"handlers\": [
+      \"console\"
+    ]
+  }
+}
+
+"""
+}
+
+// data/logs/access.log
+fn file_18() -> String {
+    """
+14/Oct/2026:23:50:00 r-0900 GET /api/health 200 17B 0.4ms
+14/Oct/2026:23:51:01 r-0911 GET /api/health 200 17B 0.4ms
+14/Oct/2026:23:52:02 r-0922 GET /api/health 200 17B 0.4ms
+14/Oct/2026:23:53:03 r-0933 GET /api/health 200 17B 0.4ms
+14/Oct/2026:23:54:04 r-0944 GET /api/health 200 17B 0.4ms
+14/Oct/2026:23:55:05 r-0955 GET /api/health 200 17B 0.4ms
+
+"""
+}
+
+// data/logs/access.log.1
+fn file_19() -> String {
+    """
+14/Oct/2026:22:00:00 r-0800 GET /api/products 200 5123B 9.1ms
+
+"""
+}
+
+// data/logs/access.log.2
+fn file_20() -> String {
+    """
+14/Oct/2026:21:00:00 r-0700 GET /api/products 200 5123B 8.7ms
+
+"""
+}
+
+// data/logs/audit.log
+fn file_21() -> String {
+    """
+2026-10-14 audit trail that a failed reload truncates
+
+"""
+}
+
+// data/logs/db.log
+fn file_22() -> String {
+    """
+yesterday's database log, which mode 'w' replaces
+
+"""
+}
+
+// data/run.txt
+fn file_23() -> String {
+    """
+# shop-api: a web service's logging from startup to shutdown.
+# Fields are separated by ' | '. Message arguments are s: (str),
+# i: (int) and f: (float); x:key=value is an `extra` field.
+
+# Nothing is configured yet, so only the last-resort handler runs.
+log app | INFO | starting shop-api %s | s:2.4.1
+log app | WARNING | config file %r not found, using defaults | s:/etc/shop/shop.toml
+tick 250
+basic | level=INFO
+log app | INFO | listening on port %d | i:8080
+log app.http | DEBUG | not shown: the root logger is at INFO
+basic | level=DEBUG | stream=stdout | format=%(levelname)s %(message)s
+log app.http | DEBUG | not shown either: the second basicConfig did nothing
+tick 1000
+basic | force | level=DEBUG | stream=stdout | format=%(asctime)s %(levelname)-8s %(name)s %(message)s
+log app.http | DEBUG | shown: force replaced the handler
+getlogger app.cache.redis
+log app.cache.redis | INFO | connected to %s:%d | s:10.0.0.7 | i:6379
+log urllib3.connectionpool | DEBUG | Starting new HTTPS connection (%d): %s:%s | i:1 | s:payments.example | i:443
+log app | INFO | %-6s|%6s|%06.2f|%+d|%x|%X|%o|%5.1f%% | s:ab | s:cd | f:3.14159 | i:42 | i:255 | i:48879 | i:8 | f:99.5
+log app | INFO | %r %r %r %.3s | s:it's | s:say \"hi\" | i:-7 | s:truncated
+tree
+
+tick 1500
+config | data/config/base.json
+tree
+enabled app.db
+enabled app.http.access
+enabled app
+tick 137
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/products | i:200 | i:5123 | f:12.34 | x:request_id=r-1001
+tick 274
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/products/42 | i:200 | i:811 | f:3.07 | x:request_id=r-1002
+tick 411
+log app.http.access | INFO | %s %s %d %dB %sms | s:POST | s:/api/cart | i:201 | i:96 | f:18.91 | x:request_id=r-1003
+tick 548
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/cart | i:200 | i:412 | f:4.2 | x:request_id=r-1004
+log app.db | DEBUG | SELECT * FROM products WHERE id = %d | i:42
+log app.db.pool | DEBUG | checked out connection %d of %d | i:3 | i:10
+log app.db | INFO | migration %s applied | s:0042_add_index
+tick 685
+log app.http.access | INFO | %s %s %d %dB %sms | s:DELETE | s:/api/cart/7 | i:204 | i:0 | f:6.66 | x:request_id=r-1005
+tick 822
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/favicon.ico | i:404 | i:9 | f:0.31
+tick 959
+log app.http.access | INFO | %s %s %d %dB %sms | s:POST | s:/api/checkout | i:502 | i:37 | f:1504.88 | x:request_id=r-1007
+log app.db | ERROR | deadlock detected, retrying (%d/%d) | i:1 | i:3
+log app.db | DEBUG | ROLLBACK
+tick 1096
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/products?page=2 | i:200 | i:4980 | f:11.1 | x:request_id=r-1008
+tick 1233
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/health | i:200 | i:17 | f:0.38
+tick 1370
+log app.http.access | INFO | %s %s %d %dB %sms | s:PUT | s:/api/profile | i:200 | i:233 | f:27.02 | x:request_id=r-1010
+tick 1507
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/api/orders | i:200 | i:2048 | f:15.51 | x:request_id=r-1011
+tick 1644
+log app.http.access | INFO | %s %s %d %dB %sms | s:GET | s:/robots.txt | i:200 | i:24 | f:0.29 | x:request_id=r-1012
+log app.http.access | INFO | %s %s | s:GET | x:name=oops
+log app.http.access | INFO | %s %s | s:GET | x:message=oops
+log urllib3.connectionpool | WARNING | Retrying (%s) after connection broken | s:Retry(total=2)
+log app | WARNING | low disk space: %d%% free | i:7
+log app.cache.redis | WARNING | evicted %d keys | i:1200
+log stripe.http | WARNING | slow response from %s | s:api.stripe.example
+log stripe.http | ERROR | charge %s failed: card_declined | s:ch_3P
+log app.payments | WARNING | charge %s declined, asking the customer | s:ch_3P
+
+level app.db | WARNING
+enabled app.db.pool
+log app.db.pool | INFO | pool resized to %d | i:20
+log app.db | WARNING | replica lag %d s | i:12
+level app.db | DEBUG
+disable | WARNING
+log app.payments | WARNING | not shown: logging.disable(WARNING)
+log app.payments | ERROR | refund %s failed | s:re_9
+disable | NOTSET
+addlevel | 25 | NOTICE
+log app.payments | NOTICE | payout %s scheduled | s:po_77
+log app.payments | 15 | not shown: level 15 is below the root's INFO
+level app.payments | 15
+log app.payments | 15 | shown? the logger allows it, but console is at INFO
+log app.payments | 35 | level 35 has no name
+tree
+
+tick 2000
+config | data/config/verbose.json
+tree
+log app | DEBUG | app is enabled again
+log app.http | INFO | %s requests in the last minute | i:12
+log app.http.access | INFO | %s %s %d | s:GET | s:/api/after-reload | i:200 | x:request_id=r-2001
+log app.db | INFO | vacuum finished in %.2f s | f:4.567
+log app.db.pool | WARNING | connection %d reset | i:4
+log stripe | ERROR | not shown: stripe goes to a NullHandler
+log app.payments | 15 | reset by the reload, so INFO is the effective level
+log app.payments | NOTICE | NOTICE survives the reload
+
+# Reloads that fail part way.
+tick 100
+config | data/config/broken/no_version.json
+log app.db | WARNING | after no_version
+log app | WARNING | after no_version
+tick 100
+config | data/config/broken/version_two.json
+log app.db | WARNING | after version_two
+log app | WARNING | after version_two
+tick 100
+config | data/config/broken/percent_brace.json
+log app.db | WARNING | after percent_brace
+log app | WARNING | after percent_brace
+tick 100
+config | data/config/broken/bad_style.json
+log app.db | WARNING | after bad_style
+log app | WARNING | after bad_style
+tick 100
+config | data/config/broken/dollar_no_fields.json
+log app.db | WARNING | after dollar_no_fields
+log app | WARNING | after dollar_no_fields
+tick 100
+config | data/config/broken/brace_conversion.json
+log app.db | WARNING | after brace_conversion
+log app | WARNING | after brace_conversion
+tick 100
+config | data/config/broken/brace_spec.json
+log app.db | WARNING | after brace_spec
+log app | WARNING | after brace_spec
+tick 100
+config | data/config/broken/bare_dollar.json
+log app.db | WARNING | after bare_dollar
+log app | WARNING | after bare_dollar
+tick 100
+config | data/config/broken/bad_level.json
+log app.db | WARNING | after bad_level
+log app | WARNING | after bad_level
+tick 100
+config | data/config/broken/bad_class.json
+log app.db | WARNING | after bad_class
+log app | WARNING | after bad_class
+tick 100
+config | data/config/broken/bad_kwarg.json
+log app.db | WARNING | after bad_kwarg
+log app | WARNING | after bad_kwarg
+tick 100
+config | data/config/broken/bad_target.json
+log app.db | WARNING | after bad_target
+log app | WARNING | after bad_target
+tick 100
+config | data/config/broken/bad_flush_level.json
+log app.db | WARNING | after bad_flush_level
+log app | WARNING | after bad_flush_level
+tick 100
+config | data/config/broken/bad_formatter_ref.json
+log app.db | WARNING | after bad_formatter_ref
+log app | WARNING | after bad_formatter_ref
+tick 100
+config | data/config/broken/bad_ref.json
+log app.db | WARNING | after bad_ref
+log app | WARNING | after bad_ref
+tree
+
+tick 3000
+config | data/config/final.json
+log app.http | INFO | buffered %d | i:1
+log app | WARNING | not buffered
+log app.http | ERROR | buffered %d, and ERROR is the default flush level | i:2
+log app.http | INFO | buffered %d, still in the buffer at exit | i:3
+tree
+shutdown
+files
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data/config")?;
+    put("data/config/base.json", file_0())?;
+    make_dir("data/config/broken")?;
+    put("data/config/broken/bad_class.json", file_1())?;
+    put("data/config/broken/bad_flush_level.json", file_2())?;
+    put("data/config/broken/bad_formatter_ref.json", file_3())?;
+    put("data/config/broken/bad_kwarg.json", file_4())?;
+    put("data/config/broken/bad_level.json", file_5())?;
+    put("data/config/broken/bad_ref.json", file_6())?;
+    put("data/config/broken/bad_style.json", file_7())?;
+    put("data/config/broken/bad_target.json", file_8())?;
+    put("data/config/broken/bare_dollar.json", file_9())?;
+    put("data/config/broken/brace_conversion.json", file_10())?;
+    put("data/config/broken/brace_spec.json", file_11())?;
+    put("data/config/broken/dollar_no_fields.json", file_12())?;
+    put("data/config/broken/no_version.json", file_13())?;
+    put("data/config/broken/percent_brace.json", file_14())?;
+    put("data/config/broken/version_two.json", file_15())?;
+    put("data/config/final.json", file_16())?;
+    put("data/config/verbose.json", file_17())?;
+    make_dir("data/logs")?;
+    put("data/logs/access.log", file_18())?;
+    put("data/logs/access.log.1", file_19())?;
+    put("data/logs/access.log.2", file_20())?;
+    put("data/logs/audit.log", file_21())?;
+    put("data/logs/db.log", file_22())?;
+    make_dir("data")?;
+    put("data/run.txt", file_23())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the service script
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn level_of(st: ref St, s: Str) -> i64 {
+    match py_int(s) {
+        Some(n) => n,
+        None => st.level_by_name(s).unwrap_or(0),
+    }
+}
+
+fn show_error(chain: ref Vec[String]) {
+    for i in 0..chain.len() {
+        if i == 0 {
+            println(f"  {chain[i]}");
+        } else {
+            println(f"    from {chain[i]}");
+        }
+    }
+}
+
+fn describe(st: ref St, h: i64) -> String {
+    let hd = st.hds[h].clone();
+    let name = if hd.name.len() > 0 { hd.name.clone() } else { "-".to_string() };
+    let detail = if hd.kind == FILE or hd.kind == ROTATING {
+        hd.path.clone()
+    } else if hd.kind == MEMORY {
+        let t = if hd.target >= 0 { st.hds[hd.target].name.clone() } else { "none".to_string() };
+        f"{hd.buffer.len()}/{hd.capacity} to {t}"
+    } else if hd.kind == STREAM {
+        if hd.stream == STDERR { "stderr".to_string() } else { "stdout".to_string() }
+    } else {
+        String.new()
+    };
+    let mut s = f"{name} ({kind_name(hd.kind)}";
+    if detail.len() > 0 {
+        s.push_str(f" {detail}");
+    }
+    if hd.level != NOTSET {
+        s.push_str(f" at {st.level_name(hd.level)}");
+    }
+    if hd.closed {
+        s.push_str(", closed");
+    }
+    s.push_str(")");
+    s
+}
+
+fn show_logger(st: ref St, i: i64) {
+    let lg = st.lgs[i].clone();
+    if lg.placeholder {
+        println(f"  {lg.name}: placeholder");
+        return;
+    }
+    let mut parts: Vec[String] = Vec.new();
+    let mut first = f"level {st.level_name(lg.level)}";
+    if lg.level == NOTSET {
+        first.push_str(f" (effective {st.level_name(st.effective(i))})");
+    }
+    parts.push(first);
+    if not lg.propagate {
+        parts.push("no propagate".to_string());
+    }
+    if lg.disabled {
+        parts.push("disabled".to_string());
+    }
+    if lg.handlers.len() > 0 {
+        let mut hs: Vec[String] = Vec.new();
+        for h in lg.handlers {
+            hs.push(describe(st, h));
+        }
+        parts.push(f"handlers {join(hs, ", ")}");
+    }
+    if lg.filters.len() > 0 {
+        let mut fs: Vec[String] = Vec.new();
+        for f in lg.filters {
+            fs.push(py_repr(st.filters[f]));
+        }
+        parts.push(f"filters {join(fs, ", ")}");
+    }
+    println(f"  {lg.name}: {join(parts, "; ")}");
+}
+
+fn show_tree(st: ref St) {
+    show_logger(st, 0);
+    let mut names: Vec[String] = Vec.new();
+    for i in 1..st.lgs.len() {
+        names.push(st.lgs[i].name.clone());
+    }
+    sort_strings(mut names);
+    for n in names {
+        show_logger(st, st.find(n));
+    }
+}
+
+fn show_files() -> Result[(), String] {
+    let mut names = match fs.read_dir("data/logs".to_string()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list data/logs: {e}"),
+    };
+    sort_strings(mut names);
+    for name in names {
+        let text = read(f"data/logs/{name}")?;
+        println(f"  {name}: {text.len()} bytes");
+        for l in lines_of(text) {
+            println(f"    {l}");
+        }
+    }
+    Ok(())
+}
+
+fn run_line(st: mut ref St, line: Str) -> Result[(), String] {
+    if starts_with(line, "tick ") {
+        st.now += py_int(slice_from(line, 5)).unwrap_or(0) * 1000000;
+        return Ok(());
+    }
+    println(f"> {line}");
+    let mut fields: Vec[String] = Vec.new();
+    let b = to_bytes(line);
+    let mut st0: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, " | ") {
+            fields.push(byte_str(b, st0, i));
+            i += 3;
+            st0 = i;
+        } else {
+            i += 1;
+        }
+    }
+    fields.push(byte_str(b, st0, b.len()));
+    let (cmd, _, arg) = partition(fields[0], b' ');
+    if cmd == "log" {
+        let level = level_of(st, fields[1]);
+        let mut args: Vec[Val] = Vec.new();
+        let mut ek: Vec[String] = Vec.new();
+        let mut ev: Vec[Val] = Vec.new();
+        for k in 3..fields.len() {
+            let f = fields[k].clone();
+            let kind = first_byte(f);
+            let v = slice_from(f, 2);
+            if kind == b's' {
+                args.push(Val.S(v));
+            } else if kind == b'i' {
+                args.push(Val.I(py_int(v).unwrap_or(0)));
+            } else if kind == b'f' {
+                args.push(Val.F(v));
+            } else {
+                let (key, _, val) = partition(v, b'=');
+                ek.push(key);
+                ev.push(Val.S(val));
+            }
+        }
+        let lg = st.get_logger(arg);
+        if let Err(e) = st.log(lg, level, fields[2], args, ek, ev, st.now) {
+            println(f"  {e}");
+        }
+    } else if cmd == "basic" {
+        let mut opts: Vec[String] = Vec.new();
+        for k in 1..fields.len() {
+            opts.push(fields[k].clone());
+        }
+        if let Err(e) = basic_config(st, opts) {
+            println(f"  {e}");
+        }
+    } else if cmd == "getlogger" {
+        let _ = st.get_logger(arg);
+    } else if cmd == "config" {
+        let cfg = parse_json(read(fields[1])?)?;
+        if let Err(chain) = dict_config(st, cfg) {
+            show_error(chain);
+        }
+    } else if cmd == "tree" {
+        show_tree(st);
+    } else if cmd == "enabled" {
+        let lg = st.get_logger(arg);
+        let mut parts: Vec[String] = Vec.new();
+        for n in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] {
+            let yes = if st.is_enabled(lg, level_of(st, n)) { "yes" } else { "no" };
+            parts.push(f"{n}={yes}");
+        }
+        println(f"  {arg}: {join(parts, " ")}");
+    } else if cmd == "level" {
+        let lg = st.get_logger(arg);
+        st.lgs[lg].level = level_of(st, fields[1]);
+    } else if cmd == "disable" {
+        st.disable = level_of(st, fields[1]);
+    } else if cmd == "addlevel" {
+        st.add_level_name(py_int(fields[1]).unwrap_or(0), fields[2]);
+    } else if cmd == "shutdown" {
+        st.shutdown();
+    } else if cmd == "files" {
+        show_files()?;
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut st = new_state();
+    for line in lines_of(read("data/run.txt")?) {
+        if line.len() > 0 and first_byte(line) != b'#' {
+            run_line(mut st, line)?;
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_logging: {e}");
+    }
+}
