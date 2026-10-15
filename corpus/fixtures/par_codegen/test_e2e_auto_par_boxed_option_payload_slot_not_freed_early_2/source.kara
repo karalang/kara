@@ -11,5 +11,5 @@ fn main() {
     ns.push(P { val: 5, kids: [1] });
     let hit = get(ns, 5);
     let miss = get(ns, 9);
-    println(f"{hit?.val} {miss?.val}");
+    println(f"{hit.map(|w| w.val)} {miss.map(|w| w.val)}");
 }

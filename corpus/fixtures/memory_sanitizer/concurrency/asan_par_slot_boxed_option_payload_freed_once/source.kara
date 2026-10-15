@@ -18,8 +18,8 @@ fn build(seed: i64) -> i64 {
     // A READING consumer — `?.` projects out of the box without moving the
     // binding, so the parent stays the owner and its adopted drop is what has
     // to fire. See the doc comment on why a moving consumer is excluded.
-    let a = hit?.f3;
-    let b = miss?.f3;
+    let a = hit.map(|w| w.f3);
+    let b = miss.map(|w| w.f3);
     return match a { Some(x) => x, None => -1 } + match b { Some(x) => x, None => -1 };
 }
 

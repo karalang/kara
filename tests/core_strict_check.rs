@@ -4272,3 +4272,44 @@ fn main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `?` is postfix, so `f()?.x` is `(f()?).x` and `f()?.m()` is `(f()?).m()`
+/// (design.md § Results and propagation; B-2026-10-14-50). The check took
+/// `?.` for the removed optional-chaining operator and refused it on every
+/// `Result`; on an `Option` it is propagation too, not a chained `Option`.
+#[test]
+fn question_then_member_access_propagates() {
+    let src = "fn f() -> Result[Vec[i64], String] { Ok(vec![1, 2]) }\n\
+               fn h(ok: bool) -> Result[String, String] {\n\
+                   if ok { Ok(\"abc\".to_string()) } else { Err(\"no\".to_string()) }\n\
+               }\n\
+               struct P { x: i64 }\n\
+               fn mk(some: bool) -> Option[P] { if some { Some(P { x: 7 }) } else { None } }\n\
+               fn g() -> Result[i64, String] {\n\
+                   let n = f()?.len();\n\
+                   Ok(n + h(true)?.len())\n\
+               }\n\
+               fn k(ok: bool) -> Result[i64, String] { Ok(h(ok)?.to_uppercase().len()) }\n\
+               fn o(some: bool) -> Option[i64] { Some(mk(some)?.x + 1) }\n\
+               fn main() {\n\
+                   println(f\"{g().unwrap()}\");\n\
+                   println(f\"{k(true).unwrap()}\");\n\
+                   match k(false) { Ok(_) => println(\"?\"), Err(e) => println(e) }\n\
+                   println(f\"{o(true).unwrap()} {o(false).is_none()}\");\n\
+               }\n";
+    let (dir, path) = fixture("question-member", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept `?.` as `?` then `.`: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "5\n3\nno\n8 true\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

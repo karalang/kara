@@ -878,6 +878,9 @@ pub trait MutVisitor {
     fn node_id(&mut self, _id: &mut NodeId) {}
     /// Every type expression, before its parts are walked.
     fn type_expr(&mut self, _t: &mut TypeExpr) {}
+    /// Every expression, before anything in it is visited, so a visitor
+    /// can rewrite the node and have the walk continue into the result.
+    fn expr(&mut self, _e: &mut Expr) {}
 }
 
 struct SpanOnly<F>(F);
@@ -923,6 +926,7 @@ pub fn expr_node_ids(e: &Expr) -> Vec<NodeId> {
 }
 
 fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
+    visit.expr(e);
     visit.span(&mut e.span);
     visit.node_id(&mut e.id);
     match &mut e.kind {

@@ -14513,6 +14513,8 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     }
     let mut program = parsed.program;
     mark_library_builtins(&mut program, user_len);
+    // `f()?.x` is `(f()?).x` (B-2026-10-14-50).
+    crate::question_chain::postfix_question(&mut program);
     crate::desugar::with_collect_through_from_iterator(|| {
         crate::prepare_for_resolve(&mut program);
     });

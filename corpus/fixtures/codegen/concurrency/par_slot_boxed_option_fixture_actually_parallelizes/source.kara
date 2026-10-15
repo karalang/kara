@@ -13,8 +13,8 @@ fn build(seed: i64) -> i64 {
     ns.push(W { f0: seed, f1: seed + 1, f2: seed + 2, f3: seed + 3 });
     let hit = get(ns, seed);
     let miss = get(ns, seed + 99);
-    let a = hit?.f3;
-    let b = miss?.f3;
+    let a = hit.map(|w| w.f3);
+    let b = miss.map(|w| w.f3);
     return match a { Some(x) => x, None => -1 } + match b { Some(x) => x, None => -1 };
 }
 

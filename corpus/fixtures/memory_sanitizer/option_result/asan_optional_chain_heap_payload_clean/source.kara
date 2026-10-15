@@ -8,12 +8,18 @@ fn mk(i: i64) -> User {
     return User { address: None };
 }
 
+// `?` propagates (design.md § Results and propagation): the chain
+// that was `u.address?.city` here.
+fn city_of(u: own User) -> Option[City] {
+    u.address?.city
+}
+
 fn main() {
     let mut total = 0;
     let mut i = 0;
     while i < 200 {
         let u = mk(i);
-        let c = u.address?.city;
+        let c = city_of(u);
         match c { Some(v) => { total = total + (v.name.len() as i64); } None => { total = total + 1; } }
         i = i + 1;
     }

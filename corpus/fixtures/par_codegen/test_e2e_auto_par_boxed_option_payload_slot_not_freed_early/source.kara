@@ -11,5 +11,5 @@ fn main() {
     ns.push(W { f0: 5, f1: 1111, f2: 2222, f3: 3333 });
     let hit = get(ns, 5);
     let miss = get(ns, 9);
-    println(f"{hit?.f0} {hit?.f1} {hit?.f2} {hit?.f3} {miss?.f0}");
+    println(f"{hit.map(|w| w.f0)} {hit.map(|w| w.f1)} {hit.map(|w| w.f2)} {hit.map(|w| w.f3)} {miss.map(|w| w.f0)}");
 }

@@ -1232,6 +1232,10 @@ impl Pipeline {
         // Against the library, `collect` is the library's (through
         // `FromIterator`), so a non-`Vec` target reaches the checker as
         // written, as it does on the MIR pipeline.
+        // `f()?.x` is `(f()?).x` under the v2 check (B-2026-10-14-50).
+        if self.strict_core {
+            crate::question_chain::postfix_question(&mut self.parsed.program);
+        }
         let (target_tombstones, schema_diags) = if self.library_len.is_some() {
             crate::desugar::with_collect_through_from_iterator(|| {
                 crate::prepare_for_resolve(&mut self.parsed.program)
