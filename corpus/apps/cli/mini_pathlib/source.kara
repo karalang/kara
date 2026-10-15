@@ -1,0 +1,1884 @@
+// mini_pathlib: paths as Python 3.13's pathlib handles them, without
+// touching a disk, and a packaging step that does touch one:
+// - PurePosixPath and PureWindowsPath parsing, with drives, roots, UNC
+//   shares, device and extended-length paths, and every property: parts,
+//   name, suffix, suffixes, stem, parent, parents, anchor, is_absolute,
+//   as_posix and repr;
+// - joining with posixpath.join and ntpath.join, with_name, with_suffix
+//   and with_stem with their ValueError messages, relative_to with and
+//   without walk_up, is_relative_to, match, full_match, equality and
+//   ordering (case-blind on Windows), and as_uri;
+// - a walk over a real source tree, include/exclude rules decided by
+//   full_match with the last match winning, a count by suffixes, and the
+//   install and object paths of the selected files.
+//
+// The inputs are the files in data/. expected.out is the output of
+// oracle.py, the same program written with pathlib.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+// ------------------------------------------------------------ parsing
+
+// A pure path: the flavour, and the drive, root and tail that
+// PurePath._parse_path makes of the joined raw path.
+#[derive(Clone)]
+struct PPath {
+    win: bool,
+    drv: String,
+    root: String,
+    tail: Vec[String],
+}
+
+fn sep_of(win: bool) -> u8 {
+    if win { b'\\' } else { b'/' }
+}
+
+fn sep_str(win: bool) -> String {
+    if win { "\\".to_string() } else { "/".to_string() }
+}
+
+fn replace_byte(s: Str, from: u8, to: u8) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(if b[i] == from { to } else { b[i] });
+    }
+    from_bytes(out)
+}
+
+fn find_from(b: ref Vec[u8], c: u8, from: i64) -> i64 {
+    let mut i = from;
+    while i < b.len() {
+        if b[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn ends_with_byte(s: Str, c: u8) -> bool {
+    let b = to_bytes(s);
+    b.len() > 0 and b[b.len() - 1] == c
+}
+
+// posixpath.splitroot and ntpath.splitroot: (drive, root, tail).
+fn split_root(win: bool, p: Str) -> (String, String, String) {
+    let b = to_bytes(p);
+    if not win {
+        if b.len() == 0 or b[0] != b'/' {
+            return (String.new(), String.new(), p.to_string());
+        }
+        if b.len() < 2 or b[1] != b'/' or (b.len() > 2 and b[2] == b'/') {
+            // one slash, or three and more
+            return (String.new(), "/".to_string(), slice_from(p, 1));
+        }
+        return (String.new(), "//".to_string(), slice_from(p, 2));
+    }
+    let n = to_bytes(replace_byte(p, b'/', b'\\'));
+    if n.len() > 0 and n[0] == b'\\' {
+        if n.len() > 1 and n[1] == b'\\' {
+            // UNC drives, \\server\share or \\?\UNC\server\share, and
+            // device drives, \\.\device or \\?\device
+            let head = byte_str(n, 0, if n.len() < 8 { n.len() } else { 8 });
+            let start: i64 = if upper(head) == "\\\\?\\UNC\\" { 8 } else { 2 };
+            let index = find_from(n, b'\\', start);
+            if index < 0 {
+                return (p.to_string(), String.new(), String.new());
+            }
+            let index2 = find_from(n, b'\\', index + 1);
+            if index2 < 0 {
+                return (p.to_string(), String.new(), String.new());
+            }
+            return (byte_str(b, 0, index2), byte_str(b, index2, index2 + 1), byte_str(b, index2 + 1, b.len()));
+        }
+        // rooted but relative, \Windows
+        return (String.new(), byte_str(b, 0, 1), slice_from(p, 1));
+    }
+    if n.len() > 1 and n[1] == b':' {
+        if n.len() > 2 and n[2] == b'\\' {
+            return (byte_str(b, 0, 2), byte_str(b, 2, 3), byte_str(b, 3, b.len()));
+        }
+        return (byte_str(b, 0, 2), String.new(), byte_str(b, 2, b.len()));
+    }
+    (String.new(), String.new(), p.to_string())
+}
+
+fn split_drive(win: bool, p: Str) -> String {
+    let (d, _, _) = split_root(win, p);
+    d
+}
+
+fn parse_path(win: bool, raw: Str) -> PPath {
+    let mut out = PPath { win: win, drv: String.new(), root: String.new(), tail: Vec.new() };
+    if raw.len() == 0 {
+        return out;
+    }
+    let sep = sep_of(win);
+    let path = if win { replace_byte(raw, b'/', b'\\') } else { raw.to_string() };
+    let (drv, root, rel) = split_root(win, path);
+    out.root = root;
+    if out.root.len() == 0 and first_byte(drv) == sep and not ends_with_byte(drv, sep) {
+        let parts = split_on(drv, sep);
+        if parts.len() == 4 and parts[2] != "" and parts[2] != "?" and parts[2] != "." and parts[2] != "?." {
+            // \\server\share
+            out.root = sep_str(win);
+        } else if parts.len() == 6 {
+            // \\?\UNC\server\share
+            out.root = sep_str(win);
+        }
+    }
+    out.drv = drv;
+    let segs = split_on(rel, sep);
+    for i in 0..segs.len() {
+        if segs[i].len() > 0 and segs[i] != "." {
+            out.tail.push(segs[i].clone());
+        }
+    }
+    out
+}
+
+// posixpath.join and ntpath.join, on the raw strings.
+fn join_raw(win: bool, args: ref Vec[String]) -> String {
+    if args.len() == 0 {
+        return String.new();
+    }
+    if not win {
+        let mut path = args[0].clone();
+        for i in 1..args.len() {
+            let b = args[i].clone();
+            if first_byte(b) == b'/' or path.len() == 0 {
+                path = b;
+            } else if ends_with_byte(path, b'/') {
+                path.push_str(b);
+            } else {
+                path.push_str("/");
+                path.push_str(b);
+            }
+        }
+        return path;
+    }
+    let (d0, r0, p0) = split_root(true, args[0]);
+    let mut drive = d0;
+    let mut root = r0;
+    let mut path = p0;
+    for i in 1..args.len() {
+        let (pd, pr, pp) = split_root(true, args[i]);
+        if pr.len() > 0 {
+            // the second path is absolute
+            if pd.len() > 0 or drive.len() == 0 {
+                drive = pd;
+            }
+            root = pr;
+            path = pp;
+            continue;
+        } else if pd.len() > 0 and pd != drive {
+            if lower(pd) != lower(drive) {
+                // a different drive: the first path is dropped
+                drive = pd;
+                root = pr;
+                path = pp;
+                continue;
+            }
+            // the same drive in a different case
+            drive = pd;
+        }
+        // the second path is relative to the first
+        if path.len() > 0 and not ends_with_byte(path, b'\\') and not ends_with_byte(path, b'/') {
+            path.push_str("\\");
+        }
+        path.push_str(pp);
+    }
+    // a separator between a UNC drive and a relative path
+    if path.len() > 0 and root.len() == 0 and drive.len() > 0 and not ends_with_byte(drive, b':') and not ends_with_byte(drive, b'\\') and not ends_with_byte(drive, b'/') {
+        return f"{drive}\\{path}";
+    }
+    f"{drive}{root}{path}"
+}
+
+fn new_path(win: bool, args: ref Vec[String]) -> PPath {
+    parse_path(win, join_raw(win, args))
+}
+
+fn path_of(win: bool, s: Str) -> PPath {
+    parse_path(win, s)
+}
+
+// p / s: the path's string joined with s, as pathlib joins raw paths.
+fn join_to(p: ref PPath, s: Str) -> PPath {
+    let mut args: Vec[String] = Vec.new();
+    args.push(path_str(p));
+    args.push(s.to_string());
+    new_path(p.win, args)
+}
+
+fn from_parts(win: bool, drv: Str, root: Str, tail: own Vec[String]) -> PPath {
+    PPath { win: win, drv: drv.to_string(), root: root.to_string(), tail: tail }
+}
+
+// ------------------------------------------------------------ the properties
+
+fn format_parts(win: bool, drv: Str, root: Str, tail: ref Vec[String]) -> String {
+    let sep = sep_str(win);
+    if drv.len() > 0 or root.len() > 0 {
+        return f"{drv}{root}{join(tail, sep)}";
+    }
+    if tail.len() > 0 and split_drive(win, tail[0]).len() > 0 {
+        return f".{sep}{join(tail, sep)}";
+    }
+    join(tail, sep)
+}
+
+fn path_str(p: ref PPath) -> String {
+    let s = format_parts(p.win, p.drv, p.root, p.tail);
+    if s.len() == 0 { ".".to_string() } else { s }
+}
+
+fn as_posix(p: ref PPath) -> String {
+    if p.win { replace_byte(path_str(p), b'\\', b'/') } else { path_str(p) }
+}
+
+fn path_repr(p: ref PPath) -> String {
+    let cls = if p.win { "PureWindowsPath" } else { "PurePosixPath" };
+    f"{cls}({py_repr(as_posix(p))})"
+}
+
+fn anchor(p: ref PPath) -> String {
+    f"{p.drv}{p.root}"
+}
+
+fn parts(p: ref PPath) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if p.drv.len() > 0 or p.root.len() > 0 {
+        out.push(anchor(p));
+    }
+    for i in 0..p.tail.len() {
+        out.push(p.tail[i].clone());
+    }
+    out
+}
+
+fn prefix(v: ref Vec[String], n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..n {
+        out.push(v[i].clone());
+    }
+    out
+}
+
+fn parent(p: ref PPath) -> PPath {
+    if p.tail.len() == 0 {
+        return p.clone();
+    }
+    from_parts(p.win, p.drv, p.root, prefix(p.tail, p.tail.len() - 1))
+}
+
+fn parents(p: ref PPath) -> Vec[PPath] {
+    let mut out: Vec[PPath] = Vec.new();
+    for i in 0..p.tail.len() {
+        out.push(from_parts(p.win, p.drv, p.root, prefix(p.tail, p.tail.len() - 1 - i)));
+    }
+    out
+}
+
+fn name(p: ref PPath) -> String {
+    if p.tail.len() == 0 { String.new() } else { p.tail[p.tail.len() - 1].clone() }
+}
+
+fn suffix(p: ref PPath) -> String {
+    let n = name(p);
+    let i = rfind_byte(n, b'.');
+    if 0 < i and i < n.len() - 1 { slice_from(n, i) } else { String.new() }
+}
+
+fn stem(p: ref PPath) -> String {
+    let n = name(p);
+    let i = rfind_byte(n, b'.');
+    if 0 < i and i < n.len() - 1 { slice(n, 0, i) } else { n }
+}
+
+fn suffixes(p: ref PPath) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = name(p);
+    if ends_with_byte(n, b'.') {
+        return out;
+    }
+    let b = to_bytes(n);
+    let mut st: i64 = 0;
+    while st < b.len() and b[st] == b'.' {
+        st += 1;
+    }
+    let pieces = split_on(byte_str(b, st, b.len()), b'.');
+    for i in 1..pieces.len() {
+        out.push(f".{pieces[i]}");
+    }
+    out
+}
+
+fn is_absolute(p: ref PPath) -> bool {
+    if not p.win {
+        return p.root.len() > 0;
+    }
+    let s = to_bytes(replace_byte(slice(path_str(p), 0, min_i(3, path_str(p).len())), b'/', b'\\'));
+    (s.len() >= 3 and s[1] == b':' and s[2] == b'\\') or (s.len() >= 2 and s[0] == b'\\' and s[1] == b'\\')
+}
+
+fn min_i(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+// ------------------------------------------------------------ comparing
+
+fn normcase(p: ref PPath) -> String {
+    if p.win { lower(path_str(p)) } else { path_str(p) }
+}
+
+fn path_eq(a: ref PPath, b: ref PPath) -> bool {
+    a.win == b.win and normcase(a) == normcase(b)
+}
+
+fn path_lt(a: ref PPath, b: ref PPath) -> bool {
+    let x = split_on(normcase(a), sep_of(a.win));
+    let y = split_on(normcase(b), sep_of(b.win));
+    let mut i: i64 = 0;
+    while i < x.len() and i < y.len() {
+        if x[i] != y[i] {
+            return x[i] < y[i];
+        }
+        i += 1;
+    }
+    x.len() < y.len()
+}
+
+fn sort_paths(v: mut ref Vec[PPath]) {
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and path_lt(v[j], v[j - 1]) {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+}
+
+fn contains_path(v: ref Vec[PPath], p: ref PPath) -> bool {
+    for i in 0..v.len() {
+        if path_eq(v[i], p) {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ deriving paths
+
+fn with_name(p: ref PPath, n: Str) -> Result[PPath, String] {
+    if n.len() == 0 or has_byte(n, sep_of(p.win)) or (p.win and has_byte(n, b'/')) or n == "." {
+        return Err(f"Invalid name {py_repr(n)}");
+    }
+    if p.tail.len() == 0 {
+        return Err(f"{path_repr(p)} has an empty name");
+    }
+    let mut tail = prefix(p.tail, p.tail.len() - 1);
+    tail.push(n.to_string());
+    Ok(from_parts(p.win, p.drv, p.root, tail))
+}
+
+fn with_stem(p: ref PPath, s: Str) -> Result[PPath, String] {
+    let suf = suffix(p);
+    if suf.len() == 0 {
+        return with_name(p, s);
+    }
+    if s.len() == 0 {
+        return Err(f"{path_repr(p)} has a non-empty suffix");
+    }
+    with_name(p, f"{s}{suf}")
+}
+
+fn with_suffix(p: ref PPath, s: Str) -> Result[PPath, String] {
+    let st = stem(p);
+    if st.len() == 0 {
+        return Err(f"{path_repr(p)} has an empty name");
+    }
+    if s.len() > 0 and not (first_byte(s) == b'.' and s.len() > 1) {
+        return Err(f"Invalid suffix {py_repr(s)}");
+    }
+    with_name(p, f"{st}{s}")
+}
+
+fn relative_to(p: ref PPath, other: ref PPath, walk_up: bool) -> Result[PPath, String] {
+    let mut chain: Vec[PPath] = Vec.new();
+    chain.push(other.clone());
+    let ups = parents(other);
+    for i in 0..ups.len() {
+        chain.push(ups[i].clone());
+    }
+    let mine = parents(p);
+    let mut found: i64 = -1;
+    for step in 0..chain.len() {
+        if path_eq(chain[step], p) or contains_path(mine, chain[step]) {
+            found = step;
+            break;
+        } else if not walk_up {
+            return Err(f"{py_repr(path_str(p))} is not in the subpath of {py_repr(path_str(other))}");
+        } else if name(chain[step]) == ".." {
+            return Err(f"'..' segment in {py_repr(path_str(other))} cannot be walked");
+        }
+    }
+    if found < 0 {
+        return Err(f"{py_repr(path_str(p))} and {py_repr(path_str(other))} have different anchors");
+    }
+    let mut tail: Vec[String] = Vec.new();
+    for _ in 0..found {
+        tail.push("..".to_string());
+    }
+    for i in chain[found].tail.len()..p.tail.len() {
+        tail.push(p.tail[i].clone());
+    }
+    Ok(from_parts(p.win, "", "", tail))
+}
+
+fn is_relative_to(p: ref PPath, other: ref PPath) -> bool {
+    path_eq(other, p) or contains_path(parents(p), other)
+}
+
+// ------------------------------------------------------------ glob patterns
+
+// One step of a translated pattern, the pieces glob.translate builds its
+// regular expression from.
+const LIT: i64 = 0;      // one byte
+const ONE: i64 = 1;      // ?, one byte that is not a separator
+const STAR: i64 = 2;     // * inside a segment, [^/]*
+const PLUS: i64 = 3;     // a whole * segment, [^/]+
+const SEP: i64 = 4;      // a separator
+const SEGS: i64 = 5;     // ** before more segments, (?:.+/)?
+const ALL: i64 = 6;      // ** at the end, .*
+const CLASS: i64 = 7;    // [...] or [!...]
+const NEVER: i64 = 8;    // [] matches nothing
+const ANY: i64 = 9;      // [!] matches any byte
+
+#[derive(Clone)]
+struct Tok {
+    kind: i64,
+    c: u8,
+    neg: bool,
+    // ranges as pairs of bytes, lo then hi
+    set: Vec[u8],
+}
+
+fn tok(kind: i64, c: u8) -> Tok {
+    Tok { kind: kind, c: c, neg: false, set: Vec.new() }
+}
+
+// fnmatch._translate on one segment.
+fn translate_part(pat: Str, out: mut ref Vec[Tok]) {
+    let b = to_bytes(pat);
+    let n = b.len();
+    let start = out.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let c = b[i];
+        i += 1;
+        if c == b'*' {
+            // runs of * are one star
+            if out.len() == start or out[out.len() - 1].kind != STAR {
+                out.push(tok(STAR, 0));
+            }
+        } else if c == b'?' {
+            out.push(tok(ONE, 0));
+        } else if c == b'[' {
+            let mut j = i;
+            if j < n and b[j] == b'!' {
+                j += 1;
+            }
+            if j < n and b[j] == b']' {
+                j += 1;
+            }
+            while j < n and b[j] != b']' {
+                j += 1;
+            }
+            if j >= n {
+                out.push(tok(LIT, b'['));
+            } else {
+                let stuff = byte_str(b, i, j);
+                i = j + 1;
+                if stuff.len() == 0 {
+                    out.push(tok(NEVER, 0));
+                } else if stuff == "!" {
+                    out.push(tok(ANY, 0));
+                } else {
+                    let s = to_bytes(stuff);
+                    let mut t = tok(CLASS, 0);
+                    let mut k: i64 = 0;
+                    if s[0] == b'!' {
+                        t.neg = true;
+                        k = 1;
+                    }
+                    while k < s.len() {
+                        if k + 2 < s.len() and s[k + 1] == b'-' {
+                            t.set.push(s[k]);
+                            t.set.push(s[k + 2]);
+                            k += 3;
+                        } else {
+                            t.set.push(s[k]);
+                            t.set.push(s[k]);
+                            k += 1;
+                        }
+                    }
+                    out.push(t);
+                }
+            }
+        } else {
+            out.push(tok(LIT, c));
+        }
+    }
+}
+
+// glob.translate(pat, recursive=..., include_hidden=True, seps=sep)
+fn translate(pat: Str, sep: u8, recursive: bool) -> Vec[Tok] {
+    let mut out: Vec[Tok] = Vec.new();
+    let parts = split_on(pat, sep);
+    let last = parts.len() - 1;
+    for idx in 0..parts.len() {
+        let part = parts[idx].clone();
+        if part == "*" {
+            out.push(tok(PLUS, 0));
+            if idx < last {
+                out.push(tok(SEP, 0));
+            }
+        } else if recursive and part == "**" {
+            if idx < last {
+                if parts[idx + 1] != "**" {
+                    out.push(tok(SEGS, 0));
+                }
+            } else {
+                out.push(tok(ALL, 0));
+            }
+        } else {
+            if part.len() > 0 {
+                translate_part(part, mut out);
+            }
+            if idx < last {
+                out.push(tok(SEP, 0));
+            }
+        }
+    }
+    out
+}
+
+fn in_class(t: ref Tok, c: u8) -> bool {
+    let mut k: i64 = 0;
+    while k < t.set.len() {
+        if c >= t.set[k] and c <= t.set[k + 1] {
+            return not t.neg;
+        }
+        k += 2;
+    }
+    t.neg
+}
+
+// Whether toks[ti..] matches all of s[si..].
+fn match_at(toks: ref Vec[Tok], ti: i64, s: ref Vec[u8], si: i64, sep: u8) -> bool {
+    if ti == toks.len() {
+        return si == s.len();
+    }
+    let t = toks[ti].clone();
+    let more = si < s.len();
+    if t.kind == LIT {
+        return more and s[si] == t.c and match_at(toks, ti + 1, s, si + 1, sep);
+    }
+    if t.kind == ONE {
+        return more and s[si] != sep and match_at(toks, ti + 1, s, si + 1, sep);
+    }
+    if t.kind == CLASS {
+        return more and in_class(t, s[si]) and match_at(toks, ti + 1, s, si + 1, sep);
+    }
+    if t.kind == ANY {
+        return more and match_at(toks, ti + 1, s, si + 1, sep);
+    }
+    if t.kind == NEVER {
+        return false;
+    }
+    if t.kind == SEP {
+        return more and s[si] == sep and match_at(toks, ti + 1, s, si + 1, sep);
+    }
+    if t.kind == STAR or t.kind == PLUS {
+        let mut j = si;
+        if t.kind == PLUS {
+            if not more or s[si] == sep {
+                return false;
+            }
+            j += 1;
+        }
+        loop {
+            if match_at(toks, ti + 1, s, j, sep) {
+                return true;
+            }
+            if j < s.len() and s[j] != sep {
+                j += 1;
+            } else {
+                return false;
+            }
+        }
+    }
+    if t.kind == SEGS {
+        if match_at(toks, ti + 1, s, si, sep) {
+            return true;
+        }
+        for j in si + 1..s.len() {
+            if s[j] == sep and match_at(toks, ti + 1, s, j + 1, sep) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // ALL
+    for j in si..s.len() + 1 {
+        if match_at(toks, ti + 1, s, j, sep) {
+            return true;
+        }
+    }
+    false
+}
+
+fn glob_match(pat: Str, s: Str, sep: u8, recursive: bool, fold: bool) -> bool {
+    let p = if fold { lower(pat) } else { pat.to_string() };
+    let t = if fold { lower(s) } else { s.to_string() };
+    match_at(translate(p, sep, recursive), 0, to_bytes(t), 0, sep)
+}
+
+// The string a pattern sees: the empty path matches no wildcard.
+fn pattern_str(p: ref PPath) -> String {
+    let s = path_str(p);
+    if s == "." { String.new() } else { s }
+}
+
+fn full_match(p: ref PPath, pat: Str) -> bool {
+    let pp = path_of(p.win, pat);
+    glob_match(pattern_str(pp), pattern_str(p), sep_of(p.win), true, p.win)
+}
+
+// PurePath.match: segment by segment from the right.
+fn path_match(p: ref PPath, pat: Str) -> Result[bool, String] {
+    let pp = path_of(p.win, pat);
+    let mine = parts(p);
+    let theirs = parts(pp);
+    if theirs.len() == 0 {
+        return Err("empty pattern".to_string());
+    }
+    if mine.len() < theirs.len() {
+        return Ok(false);
+    }
+    if mine.len() > theirs.len() and anchor(pp).len() > 0 {
+        return Ok(false);
+    }
+    for k in 0..theirs.len() {
+        let a = mine[mine.len() - 1 - k].clone();
+        let b = theirs[theirs.len() - 1 - k].clone();
+        if not glob_match(b, a, sep_of(p.win), false, p.win) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+// ------------------------------------------------------------ file URIs
+
+// urllib.parse.quote_from_bytes with "/" safe.
+fn quote(s: Str) -> String {
+    let b = to_bytes(s);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~' or c == b'/' {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn as_uri(p: ref PPath) -> Result[String, String] {
+    if not is_absolute(p) {
+        return Err("relative path can't be expressed as a file URI".to_string());
+    }
+    let d = to_bytes(p.drv);
+    if d.len() == 2 and d[1] == b':' {
+        // a path on a local drive
+        return Ok(f"file:///{p.drv}{quote(slice_from(as_posix(p), 2))}");
+    }
+    if d.len() > 0 {
+        // a path on a network drive
+        return Ok(f"file:{quote(as_posix(p))}");
+    }
+    Ok(f"file://{quote(path_str(p))}")
+}
+
+// ------------------------------------------------------------ the reports
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn py_list(v: ref Vec[String]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(v[i]));
+    }
+    out.push_str("]");
+    out
+}
+
+fn py_tuple(v: ref Vec[String]) -> String {
+    let mut out = "(".to_string();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(v[i]));
+    }
+    if v.len() == 1 {
+        out.push_str(",");
+    }
+    out.push_str(")");
+    out
+}
+
+fn strs(v: ref Vec[PPath]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        out.push(path_str(v[i]));
+    }
+    out
+}
+
+fn show_path(fl: Str, s: Str) {
+    let p = path_of(fl == "win", s);
+    println(f"{fl} {py_repr(s)}");
+    println(f"  str {py_repr(path_str(p))} {path_repr(p)}");
+    println(f"  drive {py_repr(p.drv)} root {py_repr(p.root)} anchor {py_repr(anchor(p))}");
+    println(f"  parts {py_tuple(parts(p))}");
+    println(f"  name {py_repr(name(p))} suffix {py_repr(suffix(p))} suffixes {py_list(suffixes(p))} stem {py_repr(stem(p))}");
+    println(f"  parent {py_repr(path_str(parent(p)))} parents {py_list(strs(parents(p)))}");
+    println(f"  absolute {py_bool(is_absolute(p))} posix {py_repr(as_posix(p))}");
+}
+
+fn shown(r: Result[PPath, String]) -> String {
+    match r {
+        Ok(p) => py_repr(path_str(p)),
+        Err(e) => f"ValueError: {e}",
+    }
+}
+
+fn op(a: ref Vec[String]) {
+    let what = a[0].clone();
+    let fl = a[1].clone();
+    let win = fl == "win";
+    let mut args: Vec[String] = Vec.new();
+    for i in 2..a.len() {
+        args.push(a[i].clone());
+    }
+    let r = if what == "join" {
+        py_repr(path_str(new_path(win, args)))
+    } else if what == "with_name" {
+        shown(with_name(path_of(win, args[0]), args[1]))
+    } else if what == "with_suffix" {
+        shown(with_suffix(path_of(win, args[0]), args[1]))
+    } else if what == "with_stem" {
+        shown(with_stem(path_of(win, args[0]), args[1]))
+    } else if what == "relative_to" {
+        shown(relative_to(path_of(win, args[0]), path_of(win, args[1]), args.len() > 2))
+    } else if what == "is_relative_to" {
+        py_bool(is_relative_to(path_of(win, args[0]), path_of(win, args[1])))
+    } else if what == "match" {
+        match path_match(path_of(win, args[0]), args[1]) {
+            Ok(b) => py_bool(b),
+            Err(e) => f"ValueError: {e}",
+        }
+    } else if what == "full_match" {
+        py_bool(full_match(path_of(win, args[0]), args[1]))
+    } else if what == "eq" {
+        py_bool(path_eq(path_of(win, args[0]), path_of(win, args[1])))
+    } else if what == "lt" {
+        py_bool(path_lt(path_of(win, args[0]), path_of(win, args[1])))
+    } else if what == "uri" {
+        match as_uri(path_of(win, args[0])) {
+            Ok(u) => u,
+            Err(e) => f"ValueError: {e}",
+        }
+    } else {
+        let mut ps: Vec[PPath] = Vec.new();
+        for i in 0..args.len() {
+            ps.push(path_of(win, args[i]));
+        }
+        sort_paths(mut ps);
+        py_list(strs(ps))
+    };
+    println(f"{what} {fl} {py_list(args)} -> {r}");
+}
+
+// ------------------------------------------------------------ the files
+
+// data/ops.txt
+fn file_0() -> String {
+    """
+join	posix	a	b	c
+join	posix	a	/b	c
+join	posix	/a/	b//c	./d
+join	posix		a
+join	posix	a	
+join	win	c:\\a	d:b
+join	win	c:\\a	\\b
+join	win	c:\\a	C:b
+join	win	c:\\a	c:b
+join	win	\\\\srv\\sh	x
+join	win	//srv/sh	\\\\srv\\sh\\y
+join	win	a	c:
+join	win	c:	x
+join	win	\\\\srv\\sh\\	\\x
+with_name	posix	a/b.txt	c.py
+with_name	posix	a/b.txt	
+with_name	posix	a/b.txt	x/y
+with_name	posix	a/b.txt	.
+with_name	posix	/	x
+with_name	posix	a/b.txt	..
+with_name	win	c:\\a\\b	x/y
+with_name	win	c:\\	x
+with_name	win	a\\b	c:d
+with_name	posix	a/b	x\\y
+with_suffix	posix	a/b.txt	.md
+with_suffix	posix	a/b.tar.gz	.zip
+with_suffix	posix	a/b.txt	
+with_suffix	posix	a/b	md
+with_suffix	posix	a/b	.
+with_suffix	posix	a/.bashrc	.bak
+with_suffix	posix	/	.x
+with_suffix	posix	a/b.	.c
+with_suffix	posix	a/b	.a.b
+with_suffix	win	c:\\x\\y.TXT	.doc
+with_suffix	posix	a/b	./c
+with_stem	posix	a/b.txt	c
+with_stem	posix	a/b.txt	
+with_stem	posix	a/b	c
+with_stem	posix	a/b	
+with_stem	posix	a/.x	y
+with_stem	posix	a/b.tar.gz	c
+relative_to	posix	/etc/passwd	/
+relative_to	posix	/etc/passwd	/etc
+relative_to	posix	/etc/passwd	/usr
+relative_to	posix	/etc/passwd	/usr	walk
+relative_to	posix	a/b/c	a
+relative_to	posix	a/b/c	a/b/c
+relative_to	posix	a	/a
+relative_to	posix	a	/a	walk
+relative_to	posix	a/b	x/../y	walk
+relative_to	posix	a/b	x/y/z	walk
+relative_to	posix	/a/b	//a	walk
+relative_to	win	C:\\Users\\Bob\\f	c:\\users
+relative_to	win	C:\\Users\\Bob\\f	d:\\	walk
+relative_to	win	C:\\a\\b	c:\\x\\y	walk
+relative_to	win	\\\\s\\h\\a	\\\\S\\H
+relative_to	posix	a/b	
+relative_to	posix	a/b	a/b/c	walk
+is_relative_to	posix	/a/b	/a
+is_relative_to	posix	/a/b	/A
+is_relative_to	win	c:\\a\\b	C:/A
+is_relative_to	posix	a/b	b
+match	posix	a/b.py	*.py
+match	posix	/a/b/c.py	b/*.py
+match	posix	/a/b/c.py	/*.py
+match	posix	/a/b/c.py	/a/*/*.py
+match	posix	a/b.py	
+match	posix	a/b.PY	*.py
+match	win	C:\\a\\B.PY	*.py
+match	win	c:\\a\\b.py	C:/a/*
+match	posix	a/b/c	**
+match	posix	a/b.py	a/b.py/c
+match	posix	x/y	[xz]/[!a-c]
+full_match	posix	a/b/c.py	**/*.py
+full_match	posix	c.py	**/*.py
+full_match	posix	a/b/c.py	*.py
+full_match	posix	a/b/c.py	a/**
+full_match	posix	a	a/**
+full_match	posix	a/b/c	a/**/c
+full_match	posix	a/c	a/**/c
+full_match	posix	a/.hidden/x	*/*/x
+full_match	posix	.	*
+full_match	posix		**
+full_match	posix	/a/b	/**
+full_match	posix	a/b/c	**/**/c
+full_match	win	C:\\X\\y.TXT	c:/x/*.txt
+full_match	posix	f1.txt	f[0-9].txt
+full_match	posix	fa.txt	f[!0-9].txt
+full_match	posix	a/b	a?b
+full_match	posix	a[/]b	a[/]b
+full_match	posix	x.c	*.[ch]
+full_match	posix	ab	a**b
+full_match	posix	a/xb/c	a/*b/c
+eq	posix	a/b	a//b/
+eq	posix	a/b	A/B
+eq	win	a\\b	A/B
+eq	win	c:\\a	C:\\A\\
+lt	posix	a/b	a-b
+lt	posix	a-b	a/b
+lt	win	A\\b	a\\B
+lt	posix	/a	a
+uri	posix	/etc/hosts
+uri	posix	/a b/c%d#e
+uri	posix	a/b
+uri	win	c:\\Program Files\\x
+uri	win	\\\\srv\\share\\f.txt
+uri	win	\\rooted
+uri	posix	//host/x
+uri	win	c:x
+sort	posix	b	a/b	a-b	a	/a	A	./c
+sort	win	B	a\\b	A-b	c:	\\\\s\\h	a	c:\\
+
+"""
+}
+
+// data/paths.txt
+fn file_1() -> String {
+    """
+posix	
+posix	.
+posix	a/b.tar.gz
+posix	/etc/hosts
+posix	//net/share/x
+posix	///usr//lib/./x.so.1
+posix	a/../b
+posix	.bashrc
+posix	archive.
+posix	x/.config.d/
+posix	/
+posix	...
+posix	a\\b.txt
+posix	src/main.c
+posix	c:/win
+posix	./a/./b/
+posix	name with space.tar.bz2
+posix	.tar.gz
+win	
+win	c:\\Windows\\System32\\drivers\\etc\\hosts
+win	C:/Program Files/App/app.exe
+win	c:relative\\x.txt
+win	\\rooted\\only
+win	\\\\server\\share\\dir\\f.doc
+win	//server/share
+win	\\\\server
+win	\\\\?\\c:\\very\\long
+win	\\\\?\\UNC\\srv\\sh\\x
+win	\\\\.\\PhysicalDrive0
+win	a/b\\c.d.e
+win	d:
+win	d:\\
+win	x:y:z
+win	./c:x
+win	nul.txt
+win	a\\..\\b
+win	\\\\?\\Volume{1}\\f
+
+"""
+}
+
+// data/rules.txt
+fn file_2() -> String {
+    """
+# last matching rule wins; files no rule names are left out
+include **
+exclude .*
+exclude **/.*/**
+exclude build/**
+exclude dist/**
+exclude docs/_build/**
+exclude **/*.py[co]
+exclude **/*.o
+exclude src/*.egg-info/**
+include .gitignore
+include dist/*.whl
+
+"""
+}
+
+// data/tree/.env
+fn file_3() -> String {
+    """
+contents of .env
+
+"""
+}
+
+// data/tree/.gitignore
+fn file_4() -> String {
+    """
+contents of .gitignore
+
+"""
+}
+
+// data/tree/.venv/lib/site.py
+fn file_5() -> String {
+    """
+contents of .venv/lib/site.py
+
+"""
+}
+
+// data/tree/README.md
+fn file_6() -> String {
+    """
+contents of README.md
+
+"""
+}
+
+// data/tree/a-b/c.txt
+fn file_7() -> String {
+    """
+contents of a-b/c.txt
+
+"""
+}
+
+// data/tree/a/b.txt
+fn file_8() -> String {
+    """
+contents of a/b.txt
+
+"""
+}
+
+// data/tree/build/lib/pkg/core.py
+fn file_9() -> String {
+    """
+contents of build/lib/pkg/core.py
+
+"""
+}
+
+// data/tree/dist/pkg-1.0-py3-none-any.whl
+fn file_10() -> String {
+    """
+contents of dist/pkg-1.0-py3-none-any.whl
+
+"""
+}
+
+// data/tree/dist/pkg-1.0.tar.gz
+fn file_11() -> String {
+    """
+contents of dist/pkg-1.0.tar.gz
+
+"""
+}
+
+// data/tree/docs/_build/html/index.html
+fn file_12() -> String {
+    """
+contents of docs/_build/html/index.html
+
+"""
+}
+
+// data/tree/docs/api/core.md
+fn file_13() -> String {
+    """
+contents of docs/api/core.md
+
+"""
+}
+
+// data/tree/docs/index.md
+fn file_14() -> String {
+    """
+contents of docs/index.md
+
+"""
+}
+
+// data/tree/pyproject.toml
+fn file_15() -> String {
+    """
+contents of pyproject.toml
+
+"""
+}
+
+// data/tree/scripts/release.sh
+fn file_16() -> String {
+    """
+contents of scripts/release.sh
+
+"""
+}
+
+// data/tree/src/pkg-extras/plugin.py
+fn file_17() -> String {
+    """
+contents of src/pkg-extras/plugin.py
+
+"""
+}
+
+// data/tree/src/pkg.egg-info/PKG-INFO
+fn file_18() -> String {
+    """
+contents of src/pkg.egg-info/PKG-INFO
+
+"""
+}
+
+// data/tree/src/pkg/__init__.py
+fn file_19() -> String {
+    """
+contents of src/pkg/__init__.py
+
+"""
+}
+
+// data/tree/src/pkg/_native/fast.c
+fn file_20() -> String {
+    """
+contents of src/pkg/_native/fast.c
+
+"""
+}
+
+// data/tree/src/pkg/_native/fast.h
+fn file_21() -> String {
+    """
+contents of src/pkg/_native/fast.h
+
+"""
+}
+
+// data/tree/src/pkg/_native/fast.o
+fn file_22() -> String {
+    """
+contents of src/pkg/_native/fast.o
+
+"""
+}
+
+// data/tree/src/pkg/core.py
+fn file_23() -> String {
+    """
+contents of src/pkg/core.py
+
+"""
+}
+
+// data/tree/src/pkg/data/logo.PNG
+fn file_24() -> String {
+    """
+contents of src/pkg/data/logo.PNG
+
+"""
+}
+
+// data/tree/src/pkg/data/schema.json
+fn file_25() -> String {
+    """
+contents of src/pkg/data/schema.json
+
+"""
+}
+
+// data/tree/src/pkg/util/__init__.py
+fn file_26() -> String {
+    """
+contents of src/pkg/util/__init__.py
+
+"""
+}
+
+// data/tree/src/pkg/util/cache.cpython-313.pyc
+fn file_27() -> String {
+    """
+contents of src/pkg/util/cache.cpython-313.pyc
+
+"""
+}
+
+// data/tree/src/pkg/util/strings.py
+fn file_28() -> String {
+    """
+contents of src/pkg/util/strings.py
+
+"""
+}
+
+// data/tree/tests/conftest.py
+fn file_29() -> String {
+    """
+contents of tests/conftest.py
+
+"""
+}
+
+// data/tree/tests/data/case 1.txt
+fn file_30() -> String {
+    """
+contents of tests/data/case 1.txt
+
+"""
+}
+
+// data/tree/tests/data/case2.tar.gz
+fn file_31() -> String {
+    """
+contents of tests/data/case2.tar.gz
+
+"""
+}
+
+// data/tree/tests/test_core.py
+fn file_32() -> String {
+    """
+contents of tests/test_core.py
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/ops.txt", file_0())?;
+    put("data/paths.txt", file_1())?;
+    put("data/rules.txt", file_2())?;
+    make_dir("data/tree")?;
+    put("data/tree/.env", file_3())?;
+    put("data/tree/.gitignore", file_4())?;
+    make_dir("data/tree/.venv/lib")?;
+    put("data/tree/.venv/lib/site.py", file_5())?;
+    put("data/tree/README.md", file_6())?;
+    make_dir("data/tree/a-b")?;
+    put("data/tree/a-b/c.txt", file_7())?;
+    make_dir("data/tree/a")?;
+    put("data/tree/a/b.txt", file_8())?;
+    make_dir("data/tree/build/lib/pkg")?;
+    put("data/tree/build/lib/pkg/core.py", file_9())?;
+    make_dir("data/tree/dist")?;
+    put("data/tree/dist/pkg-1.0-py3-none-any.whl", file_10())?;
+    put("data/tree/dist/pkg-1.0.tar.gz", file_11())?;
+    make_dir("data/tree/docs/_build/html")?;
+    put("data/tree/docs/_build/html/index.html", file_12())?;
+    make_dir("data/tree/docs/api")?;
+    put("data/tree/docs/api/core.md", file_13())?;
+    make_dir("data/tree/docs")?;
+    put("data/tree/docs/index.md", file_14())?;
+    put("data/tree/pyproject.toml", file_15())?;
+    make_dir("data/tree/scripts")?;
+    put("data/tree/scripts/release.sh", file_16())?;
+    make_dir("data/tree/src/pkg-extras")?;
+    put("data/tree/src/pkg-extras/plugin.py", file_17())?;
+    make_dir("data/tree/src/pkg.egg-info")?;
+    put("data/tree/src/pkg.egg-info/PKG-INFO", file_18())?;
+    make_dir("data/tree/src/pkg")?;
+    put("data/tree/src/pkg/__init__.py", file_19())?;
+    make_dir("data/tree/src/pkg/_native")?;
+    put("data/tree/src/pkg/_native/fast.c", file_20())?;
+    put("data/tree/src/pkg/_native/fast.h", file_21())?;
+    put("data/tree/src/pkg/_native/fast.o", file_22())?;
+    put("data/tree/src/pkg/core.py", file_23())?;
+    make_dir("data/tree/src/pkg/data")?;
+    put("data/tree/src/pkg/data/logo.PNG", file_24())?;
+    put("data/tree/src/pkg/data/schema.json", file_25())?;
+    make_dir("data/tree/src/pkg/util")?;
+    put("data/tree/src/pkg/util/__init__.py", file_26())?;
+    put("data/tree/src/pkg/util/cache.cpython-313.pyc", file_27())?;
+    put("data/tree/src/pkg/util/strings.py", file_28())?;
+    make_dir("data/tree/tests")?;
+    put("data/tree/tests/conftest.py", file_29())?;
+    make_dir("data/tree/tests/data")?;
+    put("data/tree/tests/data/case 1.txt", file_30())?;
+    put("data/tree/tests/data/case2.tar.gz", file_31())?;
+    put("data/tree/tests/test_core.py", file_32())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the tree
+
+const ROOT: Str = "data/tree";
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+// Every path under the tree, relative to it, with whether it is a
+// directory.
+fn walk(dir: Str, out: mut ref Vec[PPath], dirs: mut ref Vec[bool]) -> Result[(), String] {
+    let full = if dir.len() > 0 { f"{ROOT}/{dir}" } else { ROOT.to_string() };
+    let names = match fs.read_dir(full.clone()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list {full}: {e}"),
+    };
+    for i in 0..names.len() {
+        let rel = if dir.len() > 0 { f"{dir}/{names[i]}" } else { names[i].clone() };
+        let is_dir = match fs.metadata(f"{ROOT}/{rel}") {
+            Ok(m) => m.is_dir,
+            Err(e) => return Err(f"cannot stat {rel}: {e}"),
+        };
+        out.push(path_of(false, rel));
+        dirs.push(is_dir);
+        if is_dir {
+            walk(rel, out, dirs)?;
+        }
+    }
+    Ok(())
+}
+
+fn show_tree() -> Result[(), String] {
+    let mut paths: Vec[PPath] = Vec.new();
+    let mut is_dir: Vec[bool] = Vec.new();
+    walk("", mut paths, mut is_dir)?;
+    // sorted as pathlib sorts, segment by segment
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..paths.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 and path_lt(paths[order[j]], paths[order[j - 1]]) {
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    println("== tree");
+    for k in 0..order.len() {
+        let i = order[k];
+        println(f"{path_str(paths[i])}{if is_dir[i] { "/" } else { "" }}");
+    }
+    let mut verbs: Vec[String] = Vec.new();
+    let mut pats: Vec[String] = Vec.new();
+    for line in lines_of(read("data/rules.txt")?) {
+        if line.len() == 0 or first_byte(line) == b'#' {
+            continue;
+        }
+        let (verb, _, pat) = partition(line, b' ');
+        verbs.push(verb);
+        pats.push(pat);
+    }
+    println("== select");
+    let mut chosen: Vec[PPath] = Vec.new();
+    for k in 0..order.len() {
+        let i = order[k];
+        if is_dir[i] {
+            continue;
+        }
+        let p = paths[i].clone();
+        let mut keep = false;
+        let mut why = "-".to_string();
+        for r in 0..pats.len() {
+            if full_match(p, pats[r]) {
+                keep = verbs[r] == "include";
+                why = f"{r + 1}:{verbs[r]} {pats[r]}";
+            }
+        }
+        println(f"{if keep { "+" } else { "-" }} {path_str(p)}  ({why})");
+        if keep {
+            chosen.push(p);
+        }
+    }
+    println("== sdist");
+    let mut kinds: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for p in chosen {
+        let mut k = join(suffixes(p), "");
+        if k.len() == 0 {
+            k = "(none)".to_string();
+        }
+        let mut at: i64 = -1;
+        for j in 0..kinds.len() {
+            if kinds[j] == k {
+                at = j;
+            }
+        }
+        if at < 0 {
+            kinds.push(k);
+            counts.push(1);
+        } else {
+            counts[at] += 1;
+        }
+    }
+    for i in 1..kinds.len() {
+        let mut j = i;
+        while j > 0 and kinds[j] < kinds[j - 1] {
+            kinds.swap(j - 1, j);
+            counts.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    for i in 0..kinds.len() {
+        println(f"{kinds[i]} {counts[i]}");
+    }
+    println("== install");
+    let base = path_of(true, "C:/Users/dev/AppData/Local/pkg");
+    let src = path_of(false, "src");
+    for p in chosen {
+        if not full_match(p, "src/**/*.py") {
+            continue;
+        }
+        let rel = relative_to(p, src, false)?;
+        let dest = join_to(base, as_posix(rel));
+        println(f"{path_str(p)} -> {path_str(dest)}");
+        println(f"  {as_uri(dest)?}");
+        let pyc = with_suffix(dest, ".pyc")?;
+        println(f"  {path_str(relative_to(pyc, join_to(base, "pkg"), true)?)}");
+    }
+    println("== objects");
+    let obj_root = path_of(false, "build/obj");
+    for p in chosen {
+        if not path_match(p, "_native/*.c")? {
+            continue;
+        }
+        let obj = join_to(obj_root, path_str(with_suffix(relative_to(p, src, false)?, ".o")?));
+        let up = relative_to(parent(obj), parent(p), true)?;
+        println(f"{path_str(p)} -> {path_str(obj)} ({path_str(up)})");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    println("== paths");
+    for line in lines_of(read("data/paths.txt")?) {
+        let (fl, _, s) = partition(line, b'\t');
+        show_path(fl, s);
+    }
+    println("== ops");
+    for line in lines_of(read("data/ops.txt")?) {
+        op(split_on(line, b'\t'));
+    }
+    show_tree()
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_pathlib: {e}");
+    }
+}

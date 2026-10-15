@@ -1,0 +1,487 @@
+== paths
+posix ''
+  str '.' PurePosixPath('.')
+  drive '' root '' anchor ''
+  parts ()
+  name '' suffix '' suffixes [] stem ''
+  parent '.' parents []
+  absolute False posix '.'
+posix '.'
+  str '.' PurePosixPath('.')
+  drive '' root '' anchor ''
+  parts ()
+  name '' suffix '' suffixes [] stem ''
+  parent '.' parents []
+  absolute False posix '.'
+posix 'a/b.tar.gz'
+  str 'a/b.tar.gz' PurePosixPath('a/b.tar.gz')
+  drive '' root '' anchor ''
+  parts ('a', 'b.tar.gz')
+  name 'b.tar.gz' suffix '.gz' suffixes ['.tar', '.gz'] stem 'b.tar'
+  parent 'a' parents ['a', '.']
+  absolute False posix 'a/b.tar.gz'
+posix '/etc/hosts'
+  str '/etc/hosts' PurePosixPath('/etc/hosts')
+  drive '' root '/' anchor '/'
+  parts ('/', 'etc', 'hosts')
+  name 'hosts' suffix '' suffixes [] stem 'hosts'
+  parent '/etc' parents ['/etc', '/']
+  absolute True posix '/etc/hosts'
+posix '//net/share/x'
+  str '//net/share/x' PurePosixPath('//net/share/x')
+  drive '' root '//' anchor '//'
+  parts ('//', 'net', 'share', 'x')
+  name 'x' suffix '' suffixes [] stem 'x'
+  parent '//net/share' parents ['//net/share', '//net', '//']
+  absolute True posix '//net/share/x'
+posix '///usr//lib/./x.so.1'
+  str '/usr/lib/x.so.1' PurePosixPath('/usr/lib/x.so.1')
+  drive '' root '/' anchor '/'
+  parts ('/', 'usr', 'lib', 'x.so.1')
+  name 'x.so.1' suffix '.1' suffixes ['.so', '.1'] stem 'x.so'
+  parent '/usr/lib' parents ['/usr/lib', '/usr', '/']
+  absolute True posix '/usr/lib/x.so.1'
+posix 'a/../b'
+  str 'a/../b' PurePosixPath('a/../b')
+  drive '' root '' anchor ''
+  parts ('a', '..', 'b')
+  name 'b' suffix '' suffixes [] stem 'b'
+  parent 'a/..' parents ['a/..', 'a', '.']
+  absolute False posix 'a/../b'
+posix '.bashrc'
+  str '.bashrc' PurePosixPath('.bashrc')
+  drive '' root '' anchor ''
+  parts ('.bashrc',)
+  name '.bashrc' suffix '' suffixes [] stem '.bashrc'
+  parent '.' parents ['.']
+  absolute False posix '.bashrc'
+posix 'archive.'
+  str 'archive.' PurePosixPath('archive.')
+  drive '' root '' anchor ''
+  parts ('archive.',)
+  name 'archive.' suffix '' suffixes [] stem 'archive.'
+  parent '.' parents ['.']
+  absolute False posix 'archive.'
+posix 'x/.config.d/'
+  str 'x/.config.d' PurePosixPath('x/.config.d')
+  drive '' root '' anchor ''
+  parts ('x', '.config.d')
+  name '.config.d' suffix '.d' suffixes ['.d'] stem '.config'
+  parent 'x' parents ['x', '.']
+  absolute False posix 'x/.config.d'
+posix '/'
+  str '/' PurePosixPath('/')
+  drive '' root '/' anchor '/'
+  parts ('/',)
+  name '' suffix '' suffixes [] stem ''
+  parent '/' parents []
+  absolute True posix '/'
+posix '...'
+  str '...' PurePosixPath('...')
+  drive '' root '' anchor ''
+  parts ('...',)
+  name '...' suffix '' suffixes [] stem '...'
+  parent '.' parents ['.']
+  absolute False posix '...'
+posix 'a\\b.txt'
+  str 'a\\b.txt' PurePosixPath('a\\b.txt')
+  drive '' root '' anchor ''
+  parts ('a\\b.txt',)
+  name 'a\\b.txt' suffix '.txt' suffixes ['.txt'] stem 'a\\b'
+  parent '.' parents ['.']
+  absolute False posix 'a\\b.txt'
+posix 'src/main.c'
+  str 'src/main.c' PurePosixPath('src/main.c')
+  drive '' root '' anchor ''
+  parts ('src', 'main.c')
+  name 'main.c' suffix '.c' suffixes ['.c'] stem 'main'
+  parent 'src' parents ['src', '.']
+  absolute False posix 'src/main.c'
+posix 'c:/win'
+  str 'c:/win' PurePosixPath('c:/win')
+  drive '' root '' anchor ''
+  parts ('c:', 'win')
+  name 'win' suffix '' suffixes [] stem 'win'
+  parent 'c:' parents ['c:', '.']
+  absolute False posix 'c:/win'
+posix './a/./b/'
+  str 'a/b' PurePosixPath('a/b')
+  drive '' root '' anchor ''
+  parts ('a', 'b')
+  name 'b' suffix '' suffixes [] stem 'b'
+  parent 'a' parents ['a', '.']
+  absolute False posix 'a/b'
+posix 'name with space.tar.bz2'
+  str 'name with space.tar.bz2' PurePosixPath('name with space.tar.bz2')
+  drive '' root '' anchor ''
+  parts ('name with space.tar.bz2',)
+  name 'name with space.tar.bz2' suffix '.bz2' suffixes ['.tar', '.bz2'] stem 'name with space.tar'
+  parent '.' parents ['.']
+  absolute False posix 'name with space.tar.bz2'
+posix '.tar.gz'
+  str '.tar.gz' PurePosixPath('.tar.gz')
+  drive '' root '' anchor ''
+  parts ('.tar.gz',)
+  name '.tar.gz' suffix '.gz' suffixes ['.gz'] stem '.tar'
+  parent '.' parents ['.']
+  absolute False posix '.tar.gz'
+win ''
+  str '.' PureWindowsPath('.')
+  drive '' root '' anchor ''
+  parts ()
+  name '' suffix '' suffixes [] stem ''
+  parent '.' parents []
+  absolute False posix '.'
+win 'c:\\Windows\\System32\\drivers\\etc\\hosts'
+  str 'c:\\Windows\\System32\\drivers\\etc\\hosts' PureWindowsPath('c:/Windows/System32/drivers/etc/hosts')
+  drive 'c:' root '\\' anchor 'c:\\'
+  parts ('c:\\', 'Windows', 'System32', 'drivers', 'etc', 'hosts')
+  name 'hosts' suffix '' suffixes [] stem 'hosts'
+  parent 'c:\\Windows\\System32\\drivers\\etc' parents ['c:\\Windows\\System32\\drivers\\etc', 'c:\\Windows\\System32\\drivers', 'c:\\Windows\\System32', 'c:\\Windows', 'c:\\']
+  absolute True posix 'c:/Windows/System32/drivers/etc/hosts'
+win 'C:/Program Files/App/app.exe'
+  str 'C:\\Program Files\\App\\app.exe' PureWindowsPath('C:/Program Files/App/app.exe')
+  drive 'C:' root '\\' anchor 'C:\\'
+  parts ('C:\\', 'Program Files', 'App', 'app.exe')
+  name 'app.exe' suffix '.exe' suffixes ['.exe'] stem 'app'
+  parent 'C:\\Program Files\\App' parents ['C:\\Program Files\\App', 'C:\\Program Files', 'C:\\']
+  absolute True posix 'C:/Program Files/App/app.exe'
+win 'c:relative\\x.txt'
+  str 'c:relative\\x.txt' PureWindowsPath('c:relative/x.txt')
+  drive 'c:' root '' anchor 'c:'
+  parts ('c:', 'relative', 'x.txt')
+  name 'x.txt' suffix '.txt' suffixes ['.txt'] stem 'x'
+  parent 'c:relative' parents ['c:relative', 'c:']
+  absolute False posix 'c:relative/x.txt'
+win '\\rooted\\only'
+  str '\\rooted\\only' PureWindowsPath('/rooted/only')
+  drive '' root '\\' anchor '\\'
+  parts ('\\', 'rooted', 'only')
+  name 'only' suffix '' suffixes [] stem 'only'
+  parent '\\rooted' parents ['\\rooted', '\\']
+  absolute False posix '/rooted/only'
+win '\\\\server\\share\\dir\\f.doc'
+  str '\\\\server\\share\\dir\\f.doc' PureWindowsPath('//server/share/dir/f.doc')
+  drive '\\\\server\\share' root '\\' anchor '\\\\server\\share\\'
+  parts ('\\\\server\\share\\', 'dir', 'f.doc')
+  name 'f.doc' suffix '.doc' suffixes ['.doc'] stem 'f'
+  parent '\\\\server\\share\\dir' parents ['\\\\server\\share\\dir', '\\\\server\\share\\']
+  absolute True posix '//server/share/dir/f.doc'
+win '//server/share'
+  str '\\\\server\\share\\' PureWindowsPath('//server/share/')
+  drive '\\\\server\\share' root '\\' anchor '\\\\server\\share\\'
+  parts ('\\\\server\\share\\',)
+  name '' suffix '' suffixes [] stem ''
+  parent '\\\\server\\share\\' parents []
+  absolute True posix '//server/share/'
+win '\\\\server'
+  str '\\\\server' PureWindowsPath('//server')
+  drive '\\\\server' root '' anchor '\\\\server'
+  parts ('\\\\server',)
+  name '' suffix '' suffixes [] stem ''
+  parent '\\\\server' parents []
+  absolute True posix '//server'
+win '\\\\?\\c:\\very\\long'
+  str '\\\\?\\c:\\very\\long' PureWindowsPath('//?/c:/very/long')
+  drive '\\\\?\\c:' root '\\' anchor '\\\\?\\c:\\'
+  parts ('\\\\?\\c:\\', 'very', 'long')
+  name 'long' suffix '' suffixes [] stem 'long'
+  parent '\\\\?\\c:\\very' parents ['\\\\?\\c:\\very', '\\\\?\\c:\\']
+  absolute True posix '//?/c:/very/long'
+win '\\\\?\\UNC\\srv\\sh\\x'
+  str '\\\\?\\UNC\\srv\\sh\\x' PureWindowsPath('//?/UNC/srv/sh/x')
+  drive '\\\\?\\UNC\\srv\\sh' root '\\' anchor '\\\\?\\UNC\\srv\\sh\\'
+  parts ('\\\\?\\UNC\\srv\\sh\\', 'x')
+  name 'x' suffix '' suffixes [] stem 'x'
+  parent '\\\\?\\UNC\\srv\\sh\\' parents ['\\\\?\\UNC\\srv\\sh\\']
+  absolute True posix '//?/UNC/srv/sh/x'
+win '\\\\.\\PhysicalDrive0'
+  str '\\\\.\\PhysicalDrive0' PureWindowsPath('//./PhysicalDrive0')
+  drive '\\\\.\\PhysicalDrive0' root '' anchor '\\\\.\\PhysicalDrive0'
+  parts ('\\\\.\\PhysicalDrive0',)
+  name '' suffix '' suffixes [] stem ''
+  parent '\\\\.\\PhysicalDrive0' parents []
+  absolute True posix '//./PhysicalDrive0'
+win 'a/b\\c.d.e'
+  str 'a\\b\\c.d.e' PureWindowsPath('a/b/c.d.e')
+  drive '' root '' anchor ''
+  parts ('a', 'b', 'c.d.e')
+  name 'c.d.e' suffix '.e' suffixes ['.d', '.e'] stem 'c.d'
+  parent 'a\\b' parents ['a\\b', 'a', '.']
+  absolute False posix 'a/b/c.d.e'
+win 'd:'
+  str 'd:' PureWindowsPath('d:')
+  drive 'd:' root '' anchor 'd:'
+  parts ('d:',)
+  name '' suffix '' suffixes [] stem ''
+  parent 'd:' parents []
+  absolute False posix 'd:'
+win 'd:\\'
+  str 'd:\\' PureWindowsPath('d:/')
+  drive 'd:' root '\\' anchor 'd:\\'
+  parts ('d:\\',)
+  name '' suffix '' suffixes [] stem ''
+  parent 'd:\\' parents []
+  absolute True posix 'd:/'
+win 'x:y:z'
+  str 'x:y:z' PureWindowsPath('x:y:z')
+  drive 'x:' root '' anchor 'x:'
+  parts ('x:', 'y:z')
+  name 'y:z' suffix '' suffixes [] stem 'y:z'
+  parent 'x:' parents ['x:']
+  absolute False posix 'x:y:z'
+win './c:x'
+  str '.\\c:x' PureWindowsPath('./c:x')
+  drive '' root '' anchor ''
+  parts ('c:x',)
+  name 'c:x' suffix '' suffixes [] stem 'c:x'
+  parent '.' parents ['.']
+  absolute False posix './c:x'
+win 'nul.txt'
+  str 'nul.txt' PureWindowsPath('nul.txt')
+  drive '' root '' anchor ''
+  parts ('nul.txt',)
+  name 'nul.txt' suffix '.txt' suffixes ['.txt'] stem 'nul'
+  parent '.' parents ['.']
+  absolute False posix 'nul.txt'
+win 'a\\..\\b'
+  str 'a\\..\\b' PureWindowsPath('a/../b')
+  drive '' root '' anchor ''
+  parts ('a', '..', 'b')
+  name 'b' suffix '' suffixes [] stem 'b'
+  parent 'a\\..' parents ['a\\..', 'a', '.']
+  absolute False posix 'a/../b'
+win '\\\\?\\Volume{1}\\f'
+  str '\\\\?\\Volume{1}\\f' PureWindowsPath('//?/Volume{1}/f')
+  drive '\\\\?\\Volume{1}' root '\\' anchor '\\\\?\\Volume{1}\\'
+  parts ('\\\\?\\Volume{1}\\', 'f')
+  name 'f' suffix '' suffixes [] stem 'f'
+  parent '\\\\?\\Volume{1}\\' parents ['\\\\?\\Volume{1}\\']
+  absolute True posix '//?/Volume{1}/f'
+== ops
+join posix ['a', 'b', 'c'] -> 'a/b/c'
+join posix ['a', '/b', 'c'] -> '/b/c'
+join posix ['/a/', 'b//c', './d'] -> '/a/b/c/d'
+join posix ['', 'a'] -> 'a'
+join posix ['a', ''] -> 'a'
+join win ['c:\\a', 'd:b'] -> 'd:b'
+join win ['c:\\a', '\\b'] -> 'c:\\b'
+join win ['c:\\a', 'C:b'] -> 'C:\\a\\b'
+join win ['c:\\a', 'c:b'] -> 'c:\\a\\b'
+join win ['\\\\srv\\sh', 'x'] -> '\\\\srv\\sh\\x'
+join win ['//srv/sh', '\\\\srv\\sh\\y'] -> '\\\\srv\\sh\\y'
+join win ['a', 'c:'] -> 'c:'
+join win ['c:', 'x'] -> 'c:x'
+join win ['\\\\srv\\sh\\', '\\x'] -> '\\\\srv\\sh\\x'
+with_name posix ['a/b.txt', 'c.py'] -> 'a/c.py'
+with_name posix ['a/b.txt', ''] -> ValueError: Invalid name ''
+with_name posix ['a/b.txt', 'x/y'] -> ValueError: Invalid name 'x/y'
+with_name posix ['a/b.txt', '.'] -> ValueError: Invalid name '.'
+with_name posix ['/', 'x'] -> ValueError: PurePosixPath('/') has an empty name
+with_name posix ['a/b.txt', '..'] -> 'a/..'
+with_name win ['c:\\a\\b', 'x/y'] -> ValueError: Invalid name 'x/y'
+with_name win ['c:\\', 'x'] -> ValueError: PureWindowsPath('c:/') has an empty name
+with_name win ['a\\b', 'c:d'] -> 'a\\c:d'
+with_name posix ['a/b', 'x\\y'] -> 'a/x\\y'
+with_suffix posix ['a/b.txt', '.md'] -> 'a/b.md'
+with_suffix posix ['a/b.tar.gz', '.zip'] -> 'a/b.tar.zip'
+with_suffix posix ['a/b.txt', ''] -> 'a/b'
+with_suffix posix ['a/b', 'md'] -> ValueError: Invalid suffix 'md'
+with_suffix posix ['a/b', '.'] -> ValueError: Invalid suffix '.'
+with_suffix posix ['a/.bashrc', '.bak'] -> 'a/.bashrc.bak'
+with_suffix posix ['/', '.x'] -> ValueError: PurePosixPath('/') has an empty name
+with_suffix posix ['a/b.', '.c'] -> 'a/b..c'
+with_suffix posix ['a/b', '.a.b'] -> 'a/b.a.b'
+with_suffix win ['c:\\x\\y.TXT', '.doc'] -> 'c:\\x\\y.doc'
+with_suffix posix ['a/b', './c'] -> ValueError: Invalid name 'b./c'
+with_stem posix ['a/b.txt', 'c'] -> 'a/c.txt'
+with_stem posix ['a/b.txt', ''] -> ValueError: PurePosixPath('a/b.txt') has a non-empty suffix
+with_stem posix ['a/b', 'c'] -> 'a/c'
+with_stem posix ['a/b', ''] -> ValueError: Invalid name ''
+with_stem posix ['a/.x', 'y'] -> 'a/y'
+with_stem posix ['a/b.tar.gz', 'c'] -> 'a/c.gz'
+relative_to posix ['/etc/passwd', '/'] -> 'etc/passwd'
+relative_to posix ['/etc/passwd', '/etc'] -> 'passwd'
+relative_to posix ['/etc/passwd', '/usr'] -> ValueError: '/etc/passwd' is not in the subpath of '/usr'
+relative_to posix ['/etc/passwd', '/usr', 'walk'] -> '../etc/passwd'
+relative_to posix ['a/b/c', 'a'] -> 'b/c'
+relative_to posix ['a/b/c', 'a/b/c'] -> '.'
+relative_to posix ['a', '/a'] -> ValueError: 'a' is not in the subpath of '/a'
+relative_to posix ['a', '/a', 'walk'] -> ValueError: 'a' and '/a' have different anchors
+relative_to posix ['a/b', 'x/../y', 'walk'] -> ValueError: '..' segment in 'x/../y' cannot be walked
+relative_to posix ['a/b', 'x/y/z', 'walk'] -> '../../../a/b'
+relative_to posix ['/a/b', '//a', 'walk'] -> ValueError: '/a/b' and '//a' have different anchors
+relative_to win ['C:\\Users\\Bob\\f', 'c:\\users'] -> 'Bob\\f'
+relative_to win ['C:\\Users\\Bob\\f', 'd:\\', 'walk'] -> ValueError: 'C:\\Users\\Bob\\f' and 'd:\\' have different anchors
+relative_to win ['C:\\a\\b', 'c:\\x\\y', 'walk'] -> '..\\..\\a\\b'
+relative_to win ['\\\\s\\h\\a', '\\\\S\\H'] -> 'a'
+relative_to posix ['a/b', ''] -> 'a/b'
+relative_to posix ['a/b', 'a/b/c', 'walk'] -> '..'
+is_relative_to posix ['/a/b', '/a'] -> True
+is_relative_to posix ['/a/b', '/A'] -> False
+is_relative_to win ['c:\\a\\b', 'C:/A'] -> True
+is_relative_to posix ['a/b', 'b'] -> False
+match posix ['a/b.py', '*.py'] -> True
+match posix ['/a/b/c.py', 'b/*.py'] -> True
+match posix ['/a/b/c.py', '/*.py'] -> False
+match posix ['/a/b/c.py', '/a/*/*.py'] -> True
+match posix ['a/b.py', ''] -> ValueError: empty pattern
+match posix ['a/b.PY', '*.py'] -> False
+match win ['C:\\a\\B.PY', '*.py'] -> True
+match win ['c:\\a\\b.py', 'C:/a/*'] -> True
+match posix ['a/b/c', '**'] -> True
+match posix ['a/b.py', 'a/b.py/c'] -> False
+match posix ['x/y', '[xz]/[!a-c]'] -> True
+full_match posix ['a/b/c.py', '**/*.py'] -> True
+full_match posix ['c.py', '**/*.py'] -> True
+full_match posix ['a/b/c.py', '*.py'] -> False
+full_match posix ['a/b/c.py', 'a/**'] -> True
+full_match posix ['a', 'a/**'] -> False
+full_match posix ['a/b/c', 'a/**/c'] -> True
+full_match posix ['a/c', 'a/**/c'] -> True
+full_match posix ['a/.hidden/x', '*/*/x'] -> True
+full_match posix ['.', '*'] -> False
+full_match posix ['', '**'] -> True
+full_match posix ['/a/b', '/**'] -> True
+full_match posix ['a/b/c', '**/**/c'] -> True
+full_match win ['C:\\X\\y.TXT', 'c:/x/*.txt'] -> True
+full_match posix ['f1.txt', 'f[0-9].txt'] -> True
+full_match posix ['fa.txt', 'f[!0-9].txt'] -> True
+full_match posix ['a/b', 'a?b'] -> False
+full_match posix ['a[/]b', 'a[/]b'] -> True
+full_match posix ['x.c', '*.[ch]'] -> True
+full_match posix ['ab', 'a**b'] -> True
+full_match posix ['a/xb/c', 'a/*b/c'] -> True
+eq posix ['a/b', 'a//b/'] -> True
+eq posix ['a/b', 'A/B'] -> False
+eq win ['a\\b', 'A/B'] -> True
+eq win ['c:\\a', 'C:\\A\\'] -> True
+lt posix ['a/b', 'a-b'] -> True
+lt posix ['a-b', 'a/b'] -> False
+lt win ['A\\b', 'a\\B'] -> False
+lt posix ['/a', 'a'] -> True
+uri posix ['/etc/hosts'] -> file:///etc/hosts
+uri posix ['/a b/c%d#e'] -> file:///a%20b/c%25d%23e
+uri posix ['a/b'] -> ValueError: relative path can't be expressed as a file URI
+uri win ['c:\\Program Files\\x'] -> file:///c:/Program%20Files/x
+uri win ['\\\\srv\\share\\f.txt'] -> file://srv/share/f.txt
+uri win ['\\rooted'] -> ValueError: relative path can't be expressed as a file URI
+uri posix ['//host/x'] -> file:////host/x
+uri win ['c:x'] -> ValueError: relative path can't be expressed as a file URI
+sort posix ['b', 'a/b', 'a-b', 'a', '/a', 'A', './c'] -> ['/a', 'A', 'a', 'a/b', 'a-b', 'b', 'c']
+sort win ['B', 'a\\b', 'A-b', 'c:', '\\\\s\\h', 'a', 'c:\\'] -> ['\\\\s\\h\\', 'a', 'a\\b', 'A-b', 'B', 'c:', 'c:\\']
+== tree
+.env
+.gitignore
+.venv/
+.venv/lib/
+.venv/lib/site.py
+README.md
+a/
+a/b.txt
+a-b/
+a-b/c.txt
+build/
+build/lib/
+build/lib/pkg/
+build/lib/pkg/core.py
+dist/
+dist/pkg-1.0-py3-none-any.whl
+dist/pkg-1.0.tar.gz
+docs/
+docs/_build/
+docs/_build/html/
+docs/_build/html/index.html
+docs/api/
+docs/api/core.md
+docs/index.md
+pyproject.toml
+scripts/
+scripts/release.sh
+src/
+src/pkg/
+src/pkg/__init__.py
+src/pkg/_native/
+src/pkg/_native/fast.c
+src/pkg/_native/fast.h
+src/pkg/_native/fast.o
+src/pkg/core.py
+src/pkg/data/
+src/pkg/data/logo.PNG
+src/pkg/data/schema.json
+src/pkg/util/
+src/pkg/util/__init__.py
+src/pkg/util/cache.cpython-313.pyc
+src/pkg/util/strings.py
+src/pkg-extras/
+src/pkg-extras/plugin.py
+src/pkg.egg-info/
+src/pkg.egg-info/PKG-INFO
+tests/
+tests/conftest.py
+tests/data/
+tests/data/case 1.txt
+tests/data/case2.tar.gz
+tests/test_core.py
+== select
+- .env  (2:exclude .*)
++ .gitignore  (10:include .gitignore)
+- .venv/lib/site.py  (3:exclude **/.*/**)
++ README.md  (1:include **)
++ a/b.txt  (1:include **)
++ a-b/c.txt  (1:include **)
+- build/lib/pkg/core.py  (4:exclude build/**)
++ dist/pkg-1.0-py3-none-any.whl  (11:include dist/*.whl)
+- dist/pkg-1.0.tar.gz  (5:exclude dist/**)
+- docs/_build/html/index.html  (6:exclude docs/_build/**)
++ docs/api/core.md  (1:include **)
++ docs/index.md  (1:include **)
++ pyproject.toml  (1:include **)
++ scripts/release.sh  (1:include **)
++ src/pkg/__init__.py  (1:include **)
++ src/pkg/_native/fast.c  (1:include **)
++ src/pkg/_native/fast.h  (1:include **)
+- src/pkg/_native/fast.o  (8:exclude **/*.o)
++ src/pkg/core.py  (1:include **)
++ src/pkg/data/logo.PNG  (1:include **)
++ src/pkg/data/schema.json  (1:include **)
++ src/pkg/util/__init__.py  (1:include **)
+- src/pkg/util/cache.cpython-313.pyc  (7:exclude **/*.py[co])
++ src/pkg/util/strings.py  (1:include **)
++ src/pkg-extras/plugin.py  (1:include **)
+- src/pkg.egg-info/PKG-INFO  (9:exclude src/*.egg-info/**)
++ tests/conftest.py  (1:include **)
++ tests/data/case 1.txt  (1:include **)
++ tests/data/case2.tar.gz  (1:include **)
++ tests/test_core.py  (1:include **)
+== sdist
+(none) 1
+.0-py3-none-any.whl 1
+.PNG 1
+.c 1
+.h 1
+.json 1
+.md 3
+.py 7
+.sh 1
+.tar.gz 1
+.toml 1
+.txt 3
+== install
+src/pkg/__init__.py -> C:\Users\dev\AppData\Local\pkg\pkg\__init__.py
+  file:///C:/Users/dev/AppData/Local/pkg/pkg/__init__.py
+  __init__.pyc
+src/pkg/core.py -> C:\Users\dev\AppData\Local\pkg\pkg\core.py
+  file:///C:/Users/dev/AppData/Local/pkg/pkg/core.py
+  core.pyc
+src/pkg/util/__init__.py -> C:\Users\dev\AppData\Local\pkg\pkg\util\__init__.py
+  file:///C:/Users/dev/AppData/Local/pkg/pkg/util/__init__.py
+  util\__init__.pyc
+src/pkg/util/strings.py -> C:\Users\dev\AppData\Local\pkg\pkg\util\strings.py
+  file:///C:/Users/dev/AppData/Local/pkg/pkg/util/strings.py
+  util\strings.pyc
+src/pkg-extras/plugin.py -> C:\Users\dev\AppData\Local\pkg\pkg-extras\plugin.py
+  file:///C:/Users/dev/AppData/Local/pkg/pkg-extras/plugin.py
+  ..\pkg-extras\plugin.pyc
+== objects
+src/pkg/_native/fast.c -> build/obj/pkg/_native/fast.o (../../../build/obj/pkg/_native)
