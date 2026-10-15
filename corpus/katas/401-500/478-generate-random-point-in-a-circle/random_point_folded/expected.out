@@ -1,6 +1,6 @@
-radius 1 at (0, 0): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
-radius 10 at (5, -7.5): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
-radius 0.01 at (-73839, 9500000): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
-radius 100000000 at (10000000, -10000000): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
+radius 1.0 at (0.0, 0.0): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
+radius 10.0 at (5.0, -7.5): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
+radius 0.01 at (-73839.0, 9500000.0): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
+radius 100000000.0 at (10000000.0, -10000000.0): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
 radius 0.5 at (0.25, 0.25): 100000 points, inside true, quadrants true, sectors true, rings true, grid true, centred true
 1000 points from one seed twice: same true; from another seed: different true

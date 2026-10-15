@@ -835,7 +835,7 @@ class Model:
 
             def do_let():
                 if pat[0] == "pbind" and not pat[2]:
-                    v = self.value(init)
+                    v = self.as_declared(self.value(init), ty)
                     if isinstance(v, Ref) and ty is not None and ty[0] not in ("ref", "mutref"):
                         # an owned annotation on a reference: Copy is read, anything else is C3
                         r = self.read_through_ref(self.deref_refs(v))
@@ -988,6 +988,20 @@ class Model:
             for x in v.elems:
                 self.check_no_temp_origin(x)
 
+    FLOAT_TYPES = ("f64", "f32", "f16", "bf16")
+
+    def as_declared(self, v, ty):
+        """An integer literal's value where the declared type is a float
+        (`let x: f64 = 1`, `let v: Vec[f64] = [1, 2]`, a float parameter or
+        field) is that float: it prints `1.0`, as core-types.md § Printing has it."""
+        if ty is None or not isinstance(ty, tuple) or ty[0] != "app":
+            return v
+        if isinstance(v, Prim) and v.kind == "int" and ty[1] in self.FLOAT_TYPES and not ty[2]:
+            return Prim(float(v.v), "float")
+        if isinstance(v, VecV) and ty[1] in ("Vec", "Array") and len(ty[2]) == 1:
+            v.elems = [self.as_declared(x, ty[2][0]) for x in v.elems]
+        return v
+
     def args_for(self, fdef: FnDef, args):
         if len(args) != len(fdef.params):
             raise Unsupported(f"arity mismatch calling {fdef.name}")
@@ -995,6 +1009,7 @@ class Model:
         for prm, a in zip(fdef.params, args):
             if prm.mode == "own":
                 v = self.value(a)
+                v = self.as_declared(v, prm.ty)
                 if isinstance(v, Ref) and not self.generic_param(fdef, prm):
                     r = self.read_through_ref(self.deref_refs(v))
                     if r is not None:
@@ -1008,6 +1023,7 @@ class Model:
 
     def store_owned(self, v, ty, what):
         """A value stored into an owned field or payload: a reference is read (Copy), counted (handle) or C3."""
+        v = self.as_declared(v, ty)
         if not isinstance(v, Ref):
             return v
         if ty is not None and ty[0] != "tuple" and self.loose_type(ty):
@@ -1503,8 +1519,8 @@ class Model:
                     return "NaN"
                 if x in (float("inf"), float("-inf")):
                     return "inf" if x > 0 else "-inf"
-                if x == int(x) and abs(x) < 1e16:
-                    return str(int(x))
+                # core-types.md § Printing: always a `.` or an exponent, so
+                # `100.0` prints `100.0`; exponent form as Python's repr.
                 return repr(x)
             if v.kind == "unit":
                 return "()"
