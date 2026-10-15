@@ -5160,9 +5160,9 @@ impl<'a> Interp<'a> {
         let (mut v, mut ty) = (v.clone(), ty);
         while let Value::Ref(a) = v {
             v = self.slot(&a)?;
-            ty = ty.and_then(|t| match self.tys.kind(t) {
-                TyKind::Ref(i) | TyKind::MutRef(i) => Some(i),
-                _ => Some(t),
+            ty = ty.map(|t| match self.tys.kind(t) {
+                TyKind::Ref(i) | TyKind::MutRef(i) => i,
+                _ => t,
             });
         }
         let some = match ty.map(|t| self.tys.kind(t)) {
