@@ -824,8 +824,14 @@ impl super::Parser {
                     // rejected before the minus is ever seen. Gated on the
                     // `i128` suffix so the identical magnitude under `u128` —
                     // where it is an ordinary positive value — is left to the
-                    // literal arm (B-2026-08-19-23).
-                    if m == (1u128 << 127) && matches!(sfx, Some(crate::token::IntSuffix::I128)) {
+                    // literal arm (B-2026-08-19-23). An UNSUFFIXED `2^127`
+                    // folds too: it takes its type from inference like any
+                    // literal past i64 (B-2026-10-15-54), and the typechecker
+                    // refuses it in any type narrower than i128
+                    // (B-2026-10-15-73).
+                    if m == (1u128 << 127)
+                        && matches!(sfx, Some(crate::token::IntSuffix::I128) | None)
+                    {
                         self.advance();
                         return Some(Expr {
                             id: crate::ids::NodeId::DUMMY,

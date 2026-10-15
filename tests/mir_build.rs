@@ -2586,6 +2586,34 @@ fn mir_unsuffixed_literals_past_i64_agree_on_both_backends() {
     }
 }
 
+/// An unsuffixed `i128::MIN` is legal where the type is `i128` and refused
+/// as out of range for `i64` where nothing gives it a type
+/// (B-2026-10-15-73).
+#[test]
+fn mir_unsuffixed_i128_min_takes_its_type_from_inference() {
+    const SRC: &str = "fn main() {\n    \
+        let w: i128 = -170141183460469231731687303715884105728;\n    \
+        println(f\"{w} {w + 1}\");\n}\n";
+    let want =
+        "-170141183460469231731687303715884105728 -170141183460469231731687303715884105727\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    let err = karac::mir::lower::run_source(
+        "fn main() {\n    let w = -170141183460469231731687303715884105728;\n    println(f\"{w}\");\n}\n",
+    )
+    .err()
+    .expect("an untyped i128::MIN is out of range for i64");
+    assert!(
+        format!("{err:?}").contains("out of range for 'i64'"),
+        "{err:?}"
+    );
+}
+
 /// A string literal is a `Str` wherever a `Str` is expected, including a
 /// method argument checked after it is inferred, a tuple after a `Str`
 /// element and a tuple inside `Some` (B-2026-10-14-68).

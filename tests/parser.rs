@@ -16467,3 +16467,22 @@ fn test_unsuffixed_magnitude_past_i64_parses_whole() {
         "got {errors:?}"
     );
 }
+
+// An unsuffixed `i128::MIN` folds under its unary minus like the suffixed
+// spelling and like `i64::MIN`: the magnitude `2^127` is one past
+// `i128::MAX`, so `Neg(Integer(n))` cannot carry it (B-2026-10-15-73).
+#[test]
+fn test_unsuffixed_i128_min_folds_to_a_single_integer_node() {
+    let prog = parse_ok("fn main() { let w: i128 = -170141183460469231731687303715884105728; }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected a function");
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+        panic!("expected a let");
+    };
+    assert!(
+        matches!(value.kind, ExprKind::Integer(n, None) if n == i128::MIN),
+        "got {:?}",
+        value.kind
+    );
+}
