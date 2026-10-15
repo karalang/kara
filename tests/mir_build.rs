@@ -2794,3 +2794,35 @@ fn main() {
         }
     }
 }
+
+/// A struct update whose base is a call evaluates the base once, after the
+/// written fields (B-2026-10-15-47), on a plain and a generic struct.
+#[test]
+fn mir_struct_update_with_a_call_base() {
+    let src = r#"
+#[derive(Clone)]
+struct D { a: i64, b: String, c: bool }
+fn base() -> D { println("base"); D { a: 1, b: "x".to_string(), c: true } }
+fn two() -> i64 { println("two"); 2 }
+struct W[T] { v: T, n: i64 }
+fn wb() -> W[String] { W { v: "w".to_string(), n: 4 } }
+fn main() {
+    let d = D { a: 5, ..base() };
+    println(f"{d.a} {d.b} {d.c}");
+    let e = D { a: two(), b: "y".to_string(), ..base() };
+    println(f"{e.a} {e.b} {e.c}");
+    let w = W { n: 9, ..wb() };
+    println(f"{w.v} {w.n}");
+    let h = D { c: false, ..d };
+    println(f"{h.a} {h.b} {h.c}");
+}
+"#;
+    let want = "base\n5 x true\ntwo\nbase\n2 y true\nw 9\n5 x false\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

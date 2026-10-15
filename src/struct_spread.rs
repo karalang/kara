@@ -30,27 +30,39 @@
 //! the feature and the advice cannot disagree.
 //!
 //! THE BASE MUST BE RE-EVALUABLE. Each copied field re-evaluates the base
-//! expression, so this only fires for a side-effect-free place: a plain
-//! binding or `self`. `P { x: 1, ..make()! }` would otherwise call `make()`
-//! once per copied field — a silent change in both effect count and cost. Any
-//! other base keeps the spread node, and the typechecker's existing
-//! unsupported-spread error still fires on it with a message naming the
-//! restriction.
+//! expression, so the copies are written against a side-effect-free place: a
+//! plain binding, `self` or a field path off one. Any other base (`..make()`)
+//! is first evaluated ONCE into a hidden local, B-2026-10-15-47:
+//!
+//! ```text
+//! P { x: f(), ..make() }   ==>   { let __x = f(); let __b = make(); P { x: __x, y: __b.y } }
+//! ```
+//!
+//! Written fields that could have an effect are hoisted ahead of it, so the
+//! fields still evaluate in written order with the base last
+//! (core-semantics.md §8.1).
 
-use crate::ast::{Expr, ExprKind, FieldInit, ImplItem, Item, Program, TraitItem};
+use crate::ast::{
+    Expr, ExprKind, FieldInit, ImplItem, Item, Pattern, PatternKind, Program, TraitItem, TypeExpr,
+};
 use crate::token::Span;
 use std::collections::HashMap;
 
-/// Field names per struct, in declaration order.
-type StructFields = HashMap<String, Vec<String>>;
+/// Field names per struct, in declaration order, with each field's declared
+/// type for a non-generic struct (`None` for a generic one).
+type StructFields = HashMap<String, Vec<(String, Option<TypeExpr>)>>;
 
 pub fn expand_struct_spreads(program: &mut Program) {
     let mut fields: StructFields = HashMap::new();
     for item in &program.items {
         if let Item::StructDef(s) = item {
+            let generic = s.generic_params.is_some();
             fields.insert(
                 s.name.clone(),
-                s.fields.iter().map(|f| f.name.clone()).collect(),
+                s.fields
+                    .iter()
+                    .map(|f| (f.name.clone(), (!generic).then(|| f.ty.clone())))
+                    .collect(),
             );
         }
     }
@@ -97,6 +109,132 @@ fn base_is_reevaluable(e: &Expr) -> bool {
     }
 }
 
+/// True for a written field value whose evaluation nothing can observe, so
+/// evaluating the base before it is unobservable (core-semantics.md §8.4).
+fn value_is_inert(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::StringLit(_)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::SelfValue
+        | ExprKind::Path { .. }
+        | ExprKind::Closure { .. } => true,
+        ExprKind::FieldAccess { object, .. } => value_is_inert(object),
+        _ => false,
+    }
+}
+
+/// A binding of `name` at a synthetic zero-length span at `offset`.
+fn synth_let(name: &str, offset: usize, like: Span, ty: Option<TypeExpr>, value: Expr) -> Stmt {
+    let span = Span {
+        line: like.line,
+        column: like.column,
+        offset,
+        length: 0,
+    };
+    Stmt {
+        id: crate::ids::NodeId::DUMMY,
+        kind: StmtKind::Let {
+            is_mut: false,
+            pattern: Pattern {
+                kind: PatternKind::Binding(name.to_string()),
+                span,
+                id: crate::ids::NodeId::DUMMY,
+            },
+            ty,
+            value,
+        },
+        span,
+    }
+}
+
+/// `P { .., ..base }` with a base that is not a re-evaluable place becomes a
+/// block that evaluates it once into a hidden local and spreads that
+/// (B-2026-10-15-47). See the module note.
+fn hoist_spread_base(e: &mut Expr, structs: &StructFields) {
+    let ExprKind::StructLiteral {
+        path,
+        fields,
+        spread,
+        ..
+    } = &mut e.kind
+    else {
+        return;
+    };
+    let Some(base) = spread.as_ref() else {
+        return;
+    };
+    if base_is_reevaluable(base) {
+        return;
+    }
+    let Some(declared) = path.last().and_then(|n| structs.get(n.as_str())) else {
+        return;
+    };
+    // A base that copies nothing stays, for the typechecker's "has no
+    // effect" error (see `rewrite_struct_literal`).
+    if declared
+        .iter()
+        .all(|(d, _)| fields.iter().any(|f| &f.name == d))
+    {
+        return;
+    }
+    let mut stmts = Vec::new();
+    for f in fields.iter_mut() {
+        if value_is_inert(&f.value) {
+            continue;
+        }
+        let at = f.value.span;
+        let name = format!("__spread_field_{}_{}", at.offset, f.name);
+        let ty = declared
+            .iter()
+            .find(|(d, _)| *d == f.name)
+            .and_then(|(_, t)| t.clone());
+        let value = std::mem::replace(
+            &mut f.value,
+            Expr {
+                id: crate::ids::NodeId::DUMMY,
+                kind: ExprKind::Identifier(name.clone()),
+                span: Span {
+                    offset: at.offset + 1,
+                    length: 0,
+                    ..at
+                },
+            },
+        );
+        stmts.push(synth_let(&name, at.offset, at, ty, value));
+    }
+    let base = spread.take().expect("checked above");
+    let at = base.span;
+    let name = format!("__spread_base_{}", at.offset);
+    *spread = Some(Box::new(Expr {
+        id: crate::ids::NodeId::DUMMY,
+        kind: ExprKind::Identifier(name.clone()),
+        span: Span { length: 0, ..at },
+    }));
+    stmts.push(synth_let(&name, at.offset, at, None, *base));
+    let literal = std::mem::replace(
+        e,
+        Expr {
+            id: crate::ids::NodeId::DUMMY,
+            kind: ExprKind::Tuple(Vec::new()),
+            span: e.span,
+        },
+    );
+    let span = literal.span;
+    *e = Expr {
+        id: crate::ids::NodeId::DUMMY,
+        kind: ExprKind::Block(Block {
+            stmts,
+            final_expr: Some(Box::new(literal)),
+            span,
+        }),
+        span,
+    };
+}
+
 fn rewrite_struct_literal(e: &mut Expr, structs: &StructFields) {
     let ExprKind::StructLiteral {
         path,
@@ -124,6 +262,7 @@ fn rewrite_struct_literal(e: &mut Expr, structs: &StructFields) {
     let given: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
     let missing: Vec<String> = declared
         .iter()
+        .map(|(d, _)| d)
         .filter(|d| !given.contains(&d.as_str()))
         .cloned()
         .collect();
@@ -232,6 +371,7 @@ fn walk_expr(e: &mut Expr, s: &StructFields) {
     // literal with a spread still has its own base expanded by the recursion
     // below (the clone happens before the children are walked, so walk the
     // rewritten node's children afterwards).
+    hoist_spread_base(e, s);
     rewrite_struct_literal(e, s);
     match &mut e.kind {
         ExprKind::StructLiteral { fields, spread, .. } => {
