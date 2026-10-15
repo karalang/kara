@@ -1687,3 +1687,38 @@ fn main() {
         }
     }
 }
+
+/// A stored function value is called through a `ref` (design.md § Function
+/// values; B-2026-10-14-61).
+#[test]
+fn mir_function_value_is_called_through_a_ref() {
+    const SRC: &str = r#"
+fn dbl(n: i64) -> i64 { n * 2 }
+fn inc(n: i64) -> i64 { n + 1 }
+fn apply(f: ref Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+
+fn main() {
+    let fs: Vec[Fn(i64) -> i64] = vec![dbl, inc];
+    let mut t = 0;
+    for f in fs.iter() {
+        t += f(10);
+    }
+    println(f"{t}");
+    let k = 3;
+    let gs: Vec[Fn(i64) -> i64] = vec![|x| x + k, dbl];
+    let mut u = 0;
+    for g in gs.iter() {
+        u += g(1);
+    }
+    println(f"{u} {apply(fs[0], 7)}");
+}
+"#;
+    let want = "31\n6 14\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

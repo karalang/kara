@@ -4363,3 +4363,20 @@ fn library_module_paths_resolve() {
     assert!(!err.contains("unknown module"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-14-61: a stored function value is called through a `ref`
+/// (design.md § Function values), as a parameter and as an item of `iter()`.
+#[test]
+fn a_function_value_is_called_through_a_ref() {
+    accepted(
+        "fn-through-ref",
+        "fn dbl(n: i64) -> i64 { n * 2 }\n\
+         fn apply(f: ref Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+         fn main() {\n\
+             let fs: Vec[Fn(i64) -> i64] = vec![dbl];\n\
+             let mut t = 0;\n\
+             for f in fs.iter() { t += f(10); }\n\
+             println(f\"{t} {apply(fs[0], 7)}\");\n\
+         }\n",
+    );
+}

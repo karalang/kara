@@ -2474,6 +2474,15 @@ impl<'a> super::TypeChecker<'a> {
                 callee_ty = f;
             }
         }
+        // A stored function value is called through a `ref` (design.md
+        // § Function values): `for f in fs.iter() { f(10) }`
+        // (B-2026-10-14-61).
+        if (self.library_methods_from_source || self.cli_lint_overrides.strict_core)
+            && matches!(&callee_ty, Type::Ref(_) | Type::MutRef(_))
+            && matches!(peeled, Type::Function { .. } | Type::OnceFunction { .. })
+        {
+            callee_ty = peeled;
+        }
 
         // Closure-VALUE call through a non-identifier callee — a struct field
         // `(h.f)(x)`, a Vec/array index `v[i](x)`, a tuple index `(t.0)(x)`,
