@@ -173,6 +173,7 @@ cli/mini_textutils    GNU coreutils text tools (sort, cut, uniq, tr, wc, head, t
 cli/mini_crawl         a site crawler and link checker with robots.txt, URL normalization, base and canonical links and a sitemap; ports html.parser, urllib.parse and urllib.robotparser; output identical to the same crawler in Python 3.13
 cli/mini_bc            an arbitrary-precision calculator: bc's whole language, its scale rules, obase and ibase, wrapped output and error recovery; output identical to GNU bc 1.07.1
 cli/mini_pip            a pip resolver on a port of packaging 26.3 (versions, specifiers, markers)
+cli/mini_m4             a GNU m4 1.4.19 clone: rescanned macro expansion, quoting and comments, regex, eval and diversion builtins; output identical to GNU m4
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
