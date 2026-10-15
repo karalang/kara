@@ -602,11 +602,26 @@ impl<'a> super::TypeChecker<'a> {
     /// collection constructor (`Vec.new()`) inside a nested tuple needs its
     /// slot for the same reason. Gated on the SLOT, so a `[1, 2]` under a
     /// `Vec` slot keeps synthesis mode and its integer handling.
+    /// Type a collection literal's later element against its first one's
+    /// type where only check mode can type it as written: `("two", "cd")`
+    /// after `("one", AB)` with `AB: Str` (B-2026-10-14-68).
+    fn infer_later_elem(&mut self, elem: &Expr, first_ty: &Type) -> Type {
+        if Self::literal_needs_array_slot(elem, first_ty) {
+            self.check_expr(elem, first_ty)
+        } else {
+            self.infer_expr(elem)
+        }
+    }
+
     pub(super) fn literal_needs_array_slot(e: &Expr, slot: &Type) -> bool {
         match (&e.kind, slot) {
             (ExprKind::ArrayLiteral(_) | ExprKind::RepeatLiteral { .. }, Type::Array { .. }) => {
                 true
             }
+            // A string literal is a `Str` only where a `Str` is expected, so
+            // inside a tuple or a payload it needs its slot too
+            // (B-2026-10-14-68).
+            (ExprKind::StringLit(_), slot) if is_str_view(slot) => true,
             (ExprKind::Tuple(inner), Type::Tuple(inner_slots))
                 if inner.len() == inner_slots.len() =>
             {
@@ -6386,7 +6401,11 @@ impl<'a> super::TypeChecker<'a> {
                 element: Box::new(Type::UInt(UIntSize::U8)),
                 size: ConstArg::Literal(bytes.len() as i64),
             },
-            ExprKind::StringLit(_) => Type::Str,
+            ExprKind::StringLit(_) => {
+                self.string_literal_spans
+                    .insert(crate::resolver::SpanKey::from_span(&expr.span), expr.id);
+                Type::Str
+            }
             // `c"..."` C-string literal — typed `ref CStr` per
             // design.md § C-String Literals (v60 item 18). The
             // underlying `CStr` type itself is Phase 8 stdlib work
@@ -8588,7 +8607,11 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     let first_ty = self.infer_expr(&elements[0]);
                     for elem in &elements[1..] {
-                        let elem_ty = self.infer_expr(elem);
+                        // A later element takes the first one's type where
+                        // only check mode can type it as written: `("two",
+                        // "cd")` after `("one", AB)` with `AB: Str`
+                        // (B-2026-10-14-68).
+                        let elem_ty = self.infer_later_elem(elem, &first_ty);
                         self.check_assignable(&first_ty, &elem_ty, elem.span);
                     }
                     Type::Named {
@@ -8624,7 +8647,7 @@ impl<'a> super::TypeChecker<'a> {
                     "Array" => {
                         let first_ty = self.infer_expr(&items[0]);
                         for item in &items[1..] {
-                            let ty = self.infer_expr(item);
+                            let ty = self.infer_later_elem(item, &first_ty);
                             self.check_assignable(&first_ty, &ty, item.span);
                         }
                         Type::Array {
@@ -8635,7 +8658,7 @@ impl<'a> super::TypeChecker<'a> {
                     "Vec" => {
                         let first_ty = self.infer_expr(&items[0]);
                         for item in &items[1..] {
-                            let ty = self.infer_expr(item);
+                            let ty = self.infer_later_elem(item, &first_ty);
                             self.check_assignable(&first_ty, &ty, item.span);
                         }
                         Type::Named {
@@ -8646,7 +8669,7 @@ impl<'a> super::TypeChecker<'a> {
                     "Set" => {
                         let first_ty = self.infer_expr(&items[0]);
                         for item in &items[1..] {
-                            let ty = self.infer_expr(item);
+                            let ty = self.infer_later_elem(item, &first_ty);
                             self.check_assignable(&first_ty, &ty, item.span);
                         }
                         Type::Named {

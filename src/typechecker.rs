@@ -2940,6 +2940,10 @@ pub struct TypeChecker<'a> {
     pub(super) float_coerced_arg_sites: FxHashMap<SpanKey, types::FloatSize>,
     pub(super) cast_source_unsigned: FxHashSet<SpanKey>,
     pub(super) weak_elem_store_sites: FxHashSet<SpanKey>,
+    /// B-2026-10-14-68 — the spans of string literals typed by synthesis
+    /// (`String`), so a slot that wants a `Str` can still take one as a
+    /// `Str` wherever its check is an infer-then-compare.
+    pub(super) string_literal_spans: FxHashMap<SpanKey, crate::ids::NodeId>,
     pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
     /// B-2026-08-26-21 — index expressions whose read produces a FRESH
     /// value rather than an alias of a stored element: a range slice
@@ -3340,6 +3344,7 @@ impl<'a> TypeChecker<'a> {
             float_coerced_arg_sites: FxHashMap::default(),
             cast_source_unsigned: FxHashSet::default(),
             weak_elem_store_sites: FxHashSet::default(),
+            string_literal_spans: FxHashMap::default(),
             weak_elem_read_sites: FxHashSet::default(),
             index_read_is_fresh_value: FxHashSet::default(),
             call_type_subs_mangle: FxHashMap::default(),
@@ -5698,6 +5703,30 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        // design.md § String literals: a literal is a `Str` wherever a `Str`
+        // is expected, including the slots whose check infers the argument
+        // first (`v.push("a")` on a `Vec[Str]`, `d.contains("a")`;
+        // B-2026-10-14-68).
+        let literal = matches!(found, Type::Str)
+            .then(|| {
+                self.string_literal_spans
+                    .get(&SpanKey::from_span(&span))
+                    .copied()
+            })
+            .flatten();
+        if let Some(id) = literal {
+            let want = inference::resolve_type_var_top(expected, &self.env.substitutions);
+            let view = match &want {
+                Type::Ref(inner) => inner.as_ref(),
+                t => t,
+            };
+            if exprs::is_str_view(view) {
+                let view = view.clone();
+                self.record_expr_type(&span, &view);
+                self.record_node_type(id, &view);
+                return true;
+            }
+        }
         // B-2026-10-01-53 — a `match` arm handing back a binding whose type
         // is a scrutinee param no argument fixed (`Err(e) => e` over
         // `Result.Ok(a)`) is what solves that param.

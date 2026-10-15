@@ -126,6 +126,8 @@ impl<'a> super::TypeChecker<'a> {
                             ) || matches!(&elem, Type::Array { .. }))
                     }
                     ExprKind::Identifier(n) => n == "None",
+                    // A literal into a `Str` slot is a `Str` (B-2026-10-14-68).
+                    ExprKind::StringLit(_) => super::exprs::is_str_view(&elem),
                     ExprKind::Call { callee, .. } => match &callee.kind {
                         ExprKind::Identifier(n) => ctor(n),
                         ExprKind::Path { segments, .. } => segments.last().is_some_and(|n| ctor(n)),

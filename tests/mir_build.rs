@@ -2580,6 +2580,41 @@ fn mir_unsuffixed_literals_past_i64_agree_on_both_backends() {
     }
 }
 
+/// A string literal is a `Str` wherever a `Str` is expected, including a
+/// method argument checked after it is inferred, a tuple after a `Str`
+/// element and a tuple inside `Some` (B-2026-10-14-68).
+#[test]
+fn mir_string_literal_into_str_slots() {
+    let src = r#"
+const DB: Str = "kv.db";
+const AB: Str = "ab";
+fn g() -> Option[(Str, Str)] { Some(("a", "b")) }
+fn f(s: ref Str) -> i64 { s.len() }
+fn main() {
+    let mut v: Vec[Str] = Vec.new();
+    v.push("a");
+    v.push(AB);
+    for p in [DB, "kv.wal"].iter() { println(p); }
+    let files = vec![("one", AB), ("two", "cd")];
+    for (n, x) in files.iter() { println(f"{n}={x}"); }
+    match g() { Some((a, b)) => println(f"{a}{b}"), None => {} }
+    let mut m: Map[Str, i64] = Map.new();
+    m.insert("k", 1);
+    let mut d: VecDeque[Str] = VecDeque.new();
+    d.push_back("x");
+    println(f"{m.len()} {v.len()} {v.contains("a")} {v.contains("z")} {d.len()} {f("abc")}");
+}
+"#;
+    let want = "kv.db\nkv.wal\none=ab\ntwo=cd\nab\n1 2 true false 1 3\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-15-57: the borrow checker's state is per held loan, not per
 /// local times loan, so a function of thousands of statements, each with a
 /// loan of its own, checks in linear-ish time. Before, 1000 `push_str`

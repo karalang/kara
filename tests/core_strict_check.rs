@@ -4797,3 +4797,32 @@ fn main() { println(Json.serialize(Bad.A(1))); }
         "`Bad.A` is a tuple variant",
     );
 }
+
+#[test]
+fn check_string_literal_into_str_slots() {
+    // B-2026-10-14-68: a literal is a `Str` in a method argument, a tuple
+    // after a `Str` element and a tuple inside `Some`.
+    accepted(
+        "lit-str-slots",
+        r#"
+const DB: Str = "kv.db";
+const AB: Str = "ab";
+fn g() -> Option[(Str, Str)] { Some(("a", "b")) }
+fn f(s: ref Str) -> i64 { s.len() }
+fn main() {
+    let mut v: Vec[Str] = Vec.new();
+    v.push("a");
+    v.push(AB);
+    for p in [DB, "kv.wal"].iter() { println(p); }
+    let files = vec![("one", AB), ("two", "cd")];
+    for (n, x) in files.iter() { println(f"{n}={x}"); }
+    match g() { Some((a, b)) => println(f"{a}{b}"), None => {} }
+    let mut m: Map[Str, i64] = Map.new();
+    m.insert("k", 1);
+    let mut d: VecDeque[Str] = VecDeque.new();
+    d.push_back("x");
+    println(f"{m.len()} {v.len()} {v.contains("a")} {v.contains("z")} {d.len()} {f("abc")}");
+}
+"#,
+    );
+}

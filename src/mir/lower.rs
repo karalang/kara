@@ -4597,6 +4597,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return Ok(None);
         }
+        // A `Str` is already a view of static text: borrow a local copy of
+        // it rather than a static holding the view (B-2026-10-14-68).
+        if let (ExprKind::StringLit(s), HK::StaticStr) = (&e.kind, self.tys().tcx().kind(t)) {
+            let op = self.static_str(s);
+            let v = self.temp(t);
+            self.assign(v, Rvalue::Use(op));
+            let r = self.temp(self.tys().tcx().reference(t, false));
+            self.assign(r, Rvalue::Ref(BorrowKind::Shared, Place::local(v)));
+            return Ok(Some(Operand::Move(Place::local(r))));
+        }
         let i = self.lcx.literal_static(e, t);
         Ok(Some(Operand::Const(Const {
             ty: self.tys().tcx().reference(t, false),
