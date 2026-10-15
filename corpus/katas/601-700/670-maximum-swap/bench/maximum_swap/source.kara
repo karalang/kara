@@ -1,0 +1,56 @@
+// Benchmark for #670: the ★ arm (the last place of each digit) on a
+// large workload.
+
+fn digits_of(num: i64) -> Vec[i64] {
+    let mut d: Vec[i64] = Vec.new();
+    let mut x = num;
+    while x > 0 {
+        d.push(x % 10);
+        x /= 10;
+    }
+    if d.is_empty() {
+        d.push(0);
+    }
+    d.reverse();
+    d
+}
+
+fn number_of(d: Vec[i64]) -> i64 {
+    let mut x = 0;
+    for v in d.iter() {
+        x = x * 10 + v;
+    }
+    x
+}
+
+fn maximum_swap(num: i64) -> i64 {
+    let mut d = digits_of(num);
+    let mut last = vec![-1; 10];
+    for i in 0..d.len() {
+        last[d[i]] = i;
+    }
+    for i in 0..d.len() {
+        let mut v = 9;
+        while v > d[i] {
+            if last[v] > i {
+                let j = last[v];
+                d[j] = d[i];
+                d[i] = v;
+                return number_of(d);
+            }
+            v -= 1;
+        }
+    }
+    num
+}
+
+fn main() {
+    // 3,000,000 numbers spread up to the problem's largest, 100,000,000:
+    // the i-th is i * 33 + i % 7. Each answer goes into a checksum.
+    let count = 3000000;
+    let mut sum = 0;
+    for i in 0..count {
+        sum = (sum * 31 + maximum_swap(i * 33 + i % 7)) % 1000000007;
+    }
+    println(f"{count} numbers: checksum {sum}");
+}

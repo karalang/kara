@@ -1,0 +1,229 @@
+// LeetCode #669: Trim a Binary Search Tree -- every node from a stack.
+//
+// Find the new root as the first node in range on the way down. Then
+// take kept nodes from a stack: while a node's left child is out of
+// range, splice it out, putting its right subtree in its place if it is
+// below `low` and its left if above `high`; the same for the right
+// child; then push both children, now in range. Every kept node is
+// visited once, so O(nodes) time, with the stack in place of recursion.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn in_range(child: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    let mut c = child;
+    let mut done = false;
+    while not done {
+        match c {
+            None => done = true,
+            Some(n) => {
+                if n.val < low {
+                    c = n.right;
+                } else if n.val > high {
+                    c = n.left;
+                } else {
+                    done = true;
+                }
+            }
+        }
+    }
+    c
+}
+
+fn trim_bst(root: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    let top = in_range(root, low, high);
+    if let Some(t) = top {
+        let mut stack: Vec[TreeNode] = vec![t];
+        while let Some(n) = stack.pop() {
+            n.left = in_range(n.left, low, high);
+            n.right = in_range(n.right, low, high);
+            if let Some(l) = n.left {
+                stack.push(l);
+            }
+            if let Some(r) = n.right {
+                stack.push(r);
+            }
+        }
+    }
+    top
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A binary search tree from inserting `values` in order; a value already
+// there is skipped.
+fn bst(values: Vec[i64]) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = leaf(values[0]);
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut at = root;
+        let mut placed = false;
+        while not placed {
+            if v < at.val {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else if v > at.val {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else {
+                placed = true;
+            }
+        }
+    }
+    Some(root)
+}
+
+// 1 to `n`, each the right child of the one before.
+fn chain(n: i64) -> Option[TreeNode] {
+    let root = leaf(1);
+    let mut at = root;
+    for v in 2..n + 1 {
+        let next = leaf(v);
+        at.right = Some(next);
+        at = next;
+    }
+    Some(root)
+}
+
+// 0 to n - 1 in a random order.
+fn shuffled(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(i);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        let t = v[i];
+        v[i] = v[j];
+        v[j] = t;
+    }
+    v
+}
+
+// LeetCode's level order, `null` for a missing child, trailing ones
+// dropped.
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        match at {
+            None => parts.push("null"),
+            Some(n) => {
+                parts.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// Nodes, height and a checksum of the values in preorder.
+fn stats(root: Option[TreeNode]) -> String {
+    let mut count = 0;
+    let mut height = 0;
+    let mut sum = 0;
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 1));
+    }
+    while let Some(top) = stack.pop() {
+        let (n, depth) = top;
+        count += 1;
+        height = height.max(depth);
+        sum = (sum * 31 + n.val) % 1000000007;
+        if let Some(r) = n.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = n.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    f"size {count}, height {height}, checksum {sum}"
+}
+
+fn show(values: Vec[i64], low: i64, high: i64) {
+    let before = level_order(bst(values.clone()));
+    println(f"{before} in [{low}, {high}]: {level_order(trim_bst(bst(values), low, high))}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 0, 2], 1, 2);
+    show(vec![3, 0, 4, 2, 1], 1, 3);
+    // One node, kept and cut; everything kept; everything cut; a range of
+    // one value; the root cut from below and from above.
+    show(vec![5], 5, 5);
+    show(vec![5], 6, 9);
+    show(vec![4, 2, 6, 1, 3, 5, 7], 0, 10);
+    show(vec![4, 2, 6, 1, 3, 5, 7], 8, 10);
+    show(vec![4, 2, 6, 1, 3, 5, 7], 3, 3);
+    show(vec![4, 2, 6, 1, 3, 5, 7], 5, 7);
+    show(vec![4, 2, 6, 1, 3, 5, 7], 1, 3);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 2, 13);
+    // The problem's largest, 10,000 nodes: 0 to 9,999 inserted in a
+    // random order, trimmed five ways, a fresh tree each time; then a
+    // chain of 10,000 trimmed twice.
+    let mut seed: i64 = 669;
+    let order = shuffled(10000, mut seed);
+    println(f"random 10000: {stats(bst(order.clone()))}");
+    let ranges = [(0, 9999), (2500, 7499), (5000, 5000), (-5, -1), (9000, 20000)];
+    for r in ranges.iter() {
+        let (low, high) = r;
+        println(f"  in [{low}, {high}]: {stats(trim_bst(bst(order.clone()), low, high))}");
+    }
+    println(f"chain 10000 in [100, 9900]: {stats(trim_bst(chain(10000), 100, 9900))}");
+    println(f"chain 10000 in [5000, 5000]: {stats(trim_bst(chain(10000), 5000, 5000))}");
+    // 1,000 random trees of up to 20 values from 0 to 39, each trimmed to
+    // a random range, into a checksum.
+    let mut sum = 0;
+    let mut kept = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 21;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 40);
+        }
+        let low = next_random(mut seed) % 44 - 2;
+        let high = low + next_random(mut seed) % 20;
+        let s = level_order(trim_bst(bst(values), low, high));
+        for b in s.bytes().iter() {
+            sum = (sum * 31 + b as i64) % 1000000007;
+        }
+        if s != "[]" {
+            kept += 1;
+        }
+    }
+    println(f"1000 random trees: {kept} not empty, checksum {sum}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/670-maximum-swap/bench/maximum_swap.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "85dccd703"
+extracted_src = "519b96d2"
+model_rev = "1aa23105"
+model_src = "519b96d2"

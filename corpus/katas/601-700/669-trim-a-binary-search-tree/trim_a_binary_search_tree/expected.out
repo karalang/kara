@@ -1,0 +1,19 @@
+[1,0,2] in [1, 2]: [1,null,2]
+[3,0,4,null,2,null,null,1] in [1, 3]: [3,2,null,1]
+[5] in [5, 5]: [5]
+[5] in [6, 9]: []
+[4,2,6,1,3,5,7] in [0, 10]: [4,2,6,1,3,5,7]
+[4,2,6,1,3,5,7] in [8, 10]: []
+[4,2,6,1,3,5,7] in [3, 3]: [3]
+[4,2,6,1,3,5,7] in [5, 7]: [6,5,7]
+[4,2,6,1,3,5,7] in [1, 3]: [2,1,3]
+[8,3,10,1,6,null,14,null,null,4,7,13] in [2, 13]: [8,3,10,null,6,null,13,4,7]
+random 10000: size 10000, height 31, checksum 687874359
+  in [0, 9999]: size 10000, height 31, checksum 687874359
+  in [2500, 7499]: size 5000, height 27, checksum 975406270
+  in [5000, 5000]: size 1, height 1, checksum 5000
+  in [-5, -1]: size 0, height 0, checksum 0
+  in [9000, 20000]: size 1000, height 22, checksum 997074356
+chain 10000 in [100, 9900]: size 9801, height 9801, checksum 458228220
+chain 10000 in [5000, 5000]: size 1, height 1, checksum 5000
+1000 random trees: 659 not empty, checksum 393755351

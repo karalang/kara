@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/669-trim-a-binary-search-tree/bench/trim_a_binary_search_tree.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "85dccd703"
+extracted_src = "cd0e209d"
+model_rev = "1aa23105"
+model_src = "cd0e209d"

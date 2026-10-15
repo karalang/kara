@@ -1,0 +1,390 @@
+// LeetCode #669: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn trim_bst_star(root: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(n) => {
+            if n.val < low {
+                trim_bst_star(n.right, low, high)
+            } else if n.val > high {
+                trim_bst_star(n.left, low, high)
+            } else {
+                n.left = trim_bst_star(n.left, low, high);
+                n.right = trim_bst_star(n.right, low, high);
+                Some(n)
+            }
+        }
+    }
+}
+
+// ---- edges arm ---------------------------------------------------------
+
+fn trim_bst_edges(root: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    let mut cur = root;
+    let mut found = false;
+    while not found {
+        match cur {
+            None => return None,
+            Some(n) => {
+                if n.val < low {
+                    cur = n.right;
+                } else if n.val > high {
+                    cur = n.left;
+                } else {
+                    found = true;
+                }
+            }
+        }
+    }
+    let top = cur.unwrap();
+    let mut node = top;
+    let mut done = false;
+    while not done {
+        match node.left {
+            None => done = true,
+            Some(l) => {
+                if l.val < low {
+                    node.left = l.right;
+                } else {
+                    node = l;
+                }
+            }
+        }
+    }
+    node = top;
+    done = false;
+    while not done {
+        match node.right {
+            None => done = true,
+            Some(r) => {
+                if r.val > high {
+                    node.right = r.left;
+                } else {
+                    node = r;
+                }
+            }
+        }
+    }
+    Some(top)
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn in_range_stack(child: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    let mut c = child;
+    let mut done = false;
+    while not done {
+        match c {
+            None => done = true,
+            Some(n) => {
+                if n.val < low {
+                    c = n.right;
+                } else if n.val > high {
+                    c = n.left;
+                } else {
+                    done = true;
+                }
+            }
+        }
+    }
+    c
+}
+
+fn trim_bst_stack(root: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    let top = in_range_stack(root, low, high);
+    if let Some(t) = top {
+        let mut stack: Vec[TreeNode] = vec![t];
+        while let Some(n) = stack.pop() {
+            n.left = in_range_stack(n.left, low, high);
+            n.right = in_range_stack(n.right, low, high);
+            if let Some(l) = n.left {
+                stack.push(l);
+            }
+            if let Some(r) = n.right {
+                stack.push(r);
+            }
+        }
+    }
+    top
+}
+
+// ---- copy arm ----------------------------------------------------------
+
+fn trim_bst_copy(root: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(n) => {
+            if n.val < low {
+                trim_bst_copy(n.right, low, high)
+            } else if n.val > high {
+                trim_bst_copy(n.left, low, high)
+            } else {
+                Some(TreeNode {
+                    val: n.val,
+                    left: trim_bst_copy(n.left, low, high),
+                    right: trim_bst_copy(n.right, low, high),
+                })
+            }
+        }
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode], low: i64, high: i64) -> Option[TreeNode] {
+    if which == 0 {
+        trim_bst_star(root, low, high)
+    } else if which == 1 {
+        trim_bst_edges(root, low, high)
+    } else if which == 2 {
+        trim_bst_stack(root, low, high)
+    } else {
+        trim_bst_copy(root, low, high)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A binary search tree from inserting `values` in order, repeats
+// skipped. Every arm gets a fresh one, since three of them rewire it.
+fn bst(values: Vec[i64]) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = leaf(values[0]);
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut at = root;
+        let mut placed = false;
+        while not placed {
+            if v < at.val {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else if v > at.val {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else {
+                placed = true;
+            }
+        }
+    }
+    Some(root)
+}
+
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        match at {
+            None => parts.push("null"),
+            Some(n) => {
+                parts.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// A kept node's place, packed into one number: its value, its parent's
+// value (-1000 for the root), and which side of the parent it hangs on
+// (0 for the root, 1 left, 2 right). Sorted, so two trees compare.
+fn pack(val: i64, parent: i64, side: i64) -> i64 {
+    val * 100000 + (parent + 1000) * 10 + side
+}
+
+// The definition: in the trimmed tree, each kept node hangs from its
+// nearest kept ancestor in the original, on the side its value says.
+fn definition(root: Option[TreeNode], low: i64, high: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, -1000));
+    }
+    while let Some(top) = stack.pop() {
+        let (n, above) = top;
+        let mut below = above;
+        if n.val >= low and n.val <= high {
+            let side = if above == -1000 { 0 } else if n.val < above { 1 } else { 2 };
+            out.push(pack(n.val, above, side));
+            below = n.val;
+        }
+        if let Some(l) = n.left {
+            stack.push((l, below));
+        }
+        if let Some(r) = n.right {
+            stack.push((r, below));
+        }
+    }
+    out.sort();
+    out
+}
+
+// The same places, read off a trimmed tree.
+fn places(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, -1000, 0));
+    }
+    while let Some(top) = stack.pop() {
+        let (n, parent, side) = top;
+        out.push(pack(n.val, parent, side));
+        if let Some(l) = n.left {
+            stack.push((l, n.val, 1));
+        }
+        if let Some(r) = n.right {
+            stack.push((r, n.val, 2));
+        }
+    }
+    out.sort();
+    out
+}
+
+// The values in order, left to right.
+fn in_order(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    let mut at = root;
+    let mut done = false;
+    while not done {
+        match at {
+            Some(n) => {
+                stack.push(n);
+                at = n.left;
+            }
+            None => match stack.pop() {
+                None => done = true,
+                Some(n) => {
+                    out.push(n.val);
+                    at = n.right;
+                }
+            },
+        }
+    }
+    out
+}
+
+// Every node within the bounds its ancestors set, and within the range.
+fn ordered_in(root: Option[TreeNode], low: i64, high: i64) -> bool {
+    let mut stack: Vec[(TreeNode, i64, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, low, high));
+    }
+    while let Some(top) = stack.pop() {
+        let (n, lo, hi) = top;
+        if n.val < lo or n.val > hi {
+            return false;
+        }
+        if let Some(l) = n.left {
+            stack.push((l, lo, n.val - 1));
+        }
+        if let Some(r) = n.right {
+            stack.push((r, n.val + 1, hi));
+        }
+    }
+    true
+}
+
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    // 2000 random trees of up to 15 values from 0 to 29, each trimmed to
+    // a random range that may reach past either end.
+    let cases = 2000;
+    let mut seed: i64 = 669;
+    let mut nodes = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let n = next_random(mut seed) % 16;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 30);
+        }
+        let low = next_random(mut seed) % 34 - 2;
+        let high = low + next_random(mut seed) % 16;
+        let all = in_order(bst(values.clone()));
+        nodes += all.len();
+        let want = definition(bst(values.clone()), low, high);
+        let mut kept: Vec[i64] = Vec.new();
+        for v in all.iter() {
+            if v >= low and v <= high {
+                kept.push(v);
+            }
+        }
+        for which in 0..4 {
+            let got = answer(which, bst(values.clone()), low, high);
+            let shape = level_order(got);
+            // P1: every kept node where the definition puts it. P2: the
+            // kept values, in order. P3: a search tree within the range.
+            // P4: trimming it again changes nothing. P5: the same as
+            // trimming from below, then from above.
+            let p1 = same(places(got), want.clone());
+            let p2 = same(in_order(got), kept.clone());
+            let p3 = ordered_in(got, low, high);
+            let again = level_order(answer(which, got, low, high));
+            let below = answer(which, bst(values.clone()), low, 1000);
+            let twice = level_order(answer(which, below, -1000, high));
+            let ok = [p1, p2, p3, again == shape, twice == shape];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} trees ({nodes} nodes), 4 arms, {checks} checks, {total} failures");
+}

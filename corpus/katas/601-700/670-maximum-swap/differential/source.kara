@@ -1,0 +1,346 @@
+// LeetCode #670: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random numbers.
+
+// ---- star arm ----------------------------------------------------------
+
+fn digits_of_star(num: i64) -> Vec[i64] {
+    let mut d: Vec[i64] = Vec.new();
+    let mut x = num;
+    while x > 0 {
+        d.push(x % 10);
+        x /= 10;
+    }
+    if d.is_empty() {
+        d.push(0);
+    }
+    d.reverse();
+    d
+}
+
+fn number_of_star(d: Vec[i64]) -> i64 {
+    let mut x = 0;
+    for v in d.iter() {
+        x = x * 10 + v;
+    }
+    x
+}
+
+fn maximum_swap_star(num: i64) -> i64 {
+    let mut d = digits_of_star(num);
+    let mut last = vec![-1; 10];
+    for i in 0..d.len() {
+        last[d[i]] = i;
+    }
+    for i in 0..d.len() {
+        let mut v = 9;
+        while v > d[i] {
+            if last[v] > i {
+                let j = last[v];
+                d[j] = d[i];
+                d[i] = v;
+                return number_of_star(d);
+            }
+            v -= 1;
+        }
+    }
+    num
+}
+
+// ---- suffix arm --------------------------------------------------------
+
+fn digits_of_suffix(num: i64) -> Vec[i64] {
+    let mut d: Vec[i64] = Vec.new();
+    let mut x = num;
+    while x > 0 {
+        d.push(x % 10);
+        x /= 10;
+    }
+    if d.is_empty() {
+        d.push(0);
+    }
+    d.reverse();
+    d
+}
+
+fn number_of_suffix(d: Vec[i64]) -> i64 {
+    let mut x = 0;
+    for v in d.iter() {
+        x = x * 10 + v;
+    }
+    x
+}
+
+fn maximum_swap_suffix(num: i64) -> i64 {
+    let mut d = digits_of_suffix(num);
+    let n = d.len();
+    let mut best = n - 1;
+    let mut left = -1;
+    let mut right = -1;
+    let mut i = n - 1;
+    while i >= 0 {
+        if d[i] > d[best] {
+            best = i;
+        } else if d[i] < d[best] {
+            left = i;
+            right = best;
+        }
+        i -= 1;
+    }
+    if left < 0 {
+        return num;
+    }
+    let t = d[left];
+    d[left] = d[right];
+    d[right] = t;
+    number_of_suffix(d)
+}
+
+// ---- pairs arm ---------------------------------------------------------
+
+fn digits_of_pairs(num: i64) -> Vec[i64] {
+    let mut d: Vec[i64] = Vec.new();
+    let mut x = num;
+    while x > 0 {
+        d.push(x % 10);
+        x /= 10;
+    }
+    if d.is_empty() {
+        d.push(0);
+    }
+    d.reverse();
+    d
+}
+
+fn number_of_pairs(d: Vec[i64]) -> i64 {
+    let mut x = 0;
+    for v in d.iter() {
+        x = x * 10 + v;
+    }
+    x
+}
+
+fn maximum_swap_pairs(num: i64) -> i64 {
+    let mut d = digits_of_pairs(num);
+    let mut best = num;
+    for i in 0..d.len() {
+        for j in i + 1..d.len() {
+            let t = d[i];
+            d[i] = d[j];
+            d[j] = t;
+            best = best.max(number_of_pairs(d));
+            d[j] = d[i];
+            d[i] = t;
+        }
+    }
+    best
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn digits_of_sorted(num: i64) -> Vec[i64] {
+    let mut d: Vec[i64] = Vec.new();
+    let mut x = num;
+    while x > 0 {
+        d.push(x % 10);
+        x /= 10;
+    }
+    if d.is_empty() {
+        d.push(0);
+    }
+    d.reverse();
+    d
+}
+
+fn number_of_sorted(d: Vec[i64]) -> i64 {
+    let mut x = 0;
+    for v in d.iter() {
+        x = x * 10 + v;
+    }
+    x
+}
+
+fn maximum_swap_sorted(num: i64) -> i64 {
+    let mut d = digits_of_sorted(num);
+    let mut s = d.clone();
+    s.sort();
+    s.reverse();
+    for i in 0..d.len() {
+        if d[i] != s[i] {
+            let mut j = d.len() - 1;
+            while d[j] != s[i] {
+                j -= 1;
+            }
+            d[j] = d[i];
+            d[i] = s[i];
+            return number_of_sorted(d);
+        }
+    }
+    num
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, num: i64) -> i64 {
+    if which == 0 {
+        maximum_swap_star(num)
+    } else if which == 1 {
+        maximum_swap_suffix(num)
+    } else if which == 2 {
+        maximum_swap_pairs(num)
+    } else {
+        maximum_swap_sorted(num)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The digit of `num` at the place worth `p`.
+fn digit_at(num: i64, p: i64) -> i64 {
+    num / p % 10
+}
+
+// The definition, by arithmetic rather than digit lists: for every two
+// places worth `p` and `q`, swapping their digits adds the difference
+// of the digits times `q - p`; keep the largest result, no swap
+// included.
+fn definition(num: i64) -> i64 {
+    let mut best = num;
+    let mut p = 1;
+    while p <= num {
+        let mut q = p * 10;
+        while q <= num {
+            let a = digit_at(num, p);
+            let b = digit_at(num, q);
+            best = best.max(num + (b - a) * p + (a - b) * q);
+            q *= 10;
+        }
+        p *= 10;
+    }
+    best
+}
+
+// How many times each digit appears, and how many digits.
+fn counts(num: i64) -> Vec[i64] {
+    let mut c = vec![0; 11];
+    let mut x = num;
+    c[x % 10] += 1;
+    c[10] += 1;
+    x /= 10;
+    while x > 0 {
+        c[x % 10] += 1;
+        c[10] += 1;
+        x /= 10;
+    }
+    c
+}
+
+// The places where two numbers of the same length differ.
+fn places_differing(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    let mut n = 0;
+    while x > 0 or y > 0 {
+        if x % 10 != y % 10 {
+            n += 1;
+        }
+        x /= 10;
+        y /= 10;
+    }
+    n
+}
+
+// The digits of `num` in falling order: the largest number they make.
+fn falling(num: i64) -> i64 {
+    let c = counts(num);
+    let mut x = 0;
+    let mut d = 9;
+    while d >= 0 {
+        for _ in 0..c[d] {
+            x = x * 10 + d;
+        }
+        d -= 1;
+    }
+    x
+}
+
+fn leading(num: i64) -> i64 {
+    let mut x = num;
+    while x >= 10 {
+        x /= 10;
+    }
+    x
+}
+
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    a.len() == b.len()
+}
+
+fn main() {
+    // 3000 numbers: a third up to 100,000,000; the rest of 1 to 9 digits
+    // drawn from only two or three digits, so that repeats are common.
+    let cases = 3000;
+    let mut seed: i64 = 670;
+    let mut raised = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for c in 0..cases {
+        let mut num = 0;
+        if c % 3 == 0 {
+            num = (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000001;
+        } else {
+            let len = 1 + next_random(mut seed) % 9;
+            let base = next_random(mut seed) % 8;
+            let spread = 2 + c % 2;
+            for _ in 0..len {
+                num = num * 10 + base + next_random(mut seed) % spread;
+            }
+        }
+        let want = definition(num);
+        if want != num {
+            raised += 1;
+        }
+        let mut biggest = 0;
+        for d in 0..10 {
+            if counts(num)[d] > 0 {
+                biggest = d;
+            }
+        }
+        for which in 0..4 {
+            let got = answer(which, num);
+            // P1: the definition's answer. P2: no smaller than the
+            // number. P3: the same digits, in at most two other places.
+            // P4: no larger than the digits in falling order. P5: led by
+            // the largest digit.
+            let ok = [
+                got == want,
+                got >= num,
+                same(counts(got), counts(num)) and places_differing(got, num) <= 2,
+                got <= falling(num),
+                leading(got) == biggest,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} numbers ({raised} raised), 4 arms, {checks} checks, {total} failures");
+}
