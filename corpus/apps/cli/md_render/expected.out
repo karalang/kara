@@ -1,0 +1,287 @@
+== CHANGELOG.md: 788 bytes, 14 blocks, 7 headings, 1 links
+-- site/CHANGELOG.html: 1653 bytes
+  Changelog  #changelog
+    Unreleased  #unreleased
+      Added  #added
+      Fixed  #fixed
+    1.4.0 - 2026-09-30  #140---2026-09-30
+      Changed  #changed
+      Removed  #removed
+-- body
+<h1>Changelog</h1>
+<p>All notable changes to this project are documented here. The format is
+based on <em>Keep a Changelog</em>, and versions follow semantic versioning.</p>
+<h2>Unreleased</h2>
+<h3>Added</h3>
+<ul>
+<li><code>kt toml check</code> validates TOML 1.0 files and reports the line of the
+first error.</li>
+<li><code>kt grep</code> learned <code>--count</code> and <code>--files-with-matches</code>.</li>
+</ul>
+<h3>Fixed</h3>
+<ul>
+<li>Archives larger than 4 GB are no longer truncated (#212).</li>
+<li><code>kt rotate</code> keeps the file mode of the log it rotates.</li>
+</ul>
+<h2>1.4.0 - 2026-09-30</h2>
+<h3>Changed</h3>
+<ul>
+<li>The default compression level is now 6, not 9. Level 9 was <strong>twice as
+slow</strong> for a gain of under 1%.</li>
+<li><code>--quiet</code> is now <code>-q</code>; the old spelling still works.</li>
+</ul>
+<h3>Removed</h3>
+<ul>
+<li>The <code>kt legacy</code> command, deprecated since 1.1.</li>
+</ul>
+<hr />
+<p>Older releases are listed in <a href="HISTORY.md">HISTORY</a>.</p>
+== README.md: 1145 bytes, 14 blocks, 4 headings, 5 links
+-- site/README.html: 1973 bytes
+  Kara Tools  #kara-tools
+    Install  #install
+    Usage  #usage
+    Contributing  #contributing
+-- body
+<h1>Kara Tools</h1>
+<p><a href="https://ci.example.com/kara"><img src="https://ci.example.com/badge.svg" alt="build" /></a>
+A set of <em>small</em>, <strong>fast</strong> command-line tools for working with logs,
+config files and archives. See the <a href="guide.md">guide</a> and the
+<a href="CHANGELOG.md#unreleased">changelog</a> for details.</p>
+<h2>Install</h2>
+<p>Download a release, or build from source:</p>
+<pre><code class="language-sh">git clone https://example.com/kara-tools.git
+cd kara-tools &amp;&amp; make install PREFIX=~/.local
+</code></pre>
+<p>You need:</p>
+<ul>
+<li>a C compiler (<code>cc</code> or <code>clang</code>)</li>
+<li>GNU make 4.0 or newer</li>
+<li>about 50 MB of disk</li>
+</ul>
+<h2>Usage</h2>
+<pre><code>kt grep -i error app.log
+kt toml check Cargo.toml
+</code></pre>
+<p>Every tool reads <code>stdin</code> when no file is given, and exits with status
+<code>1</code> when it finds nothing. Flags follow the usual rules:</p>
+<ol>
+<li>Short flags combine: <code>-iv</code> is <code>-i -v</code>.</li>
+<li>A <code>--</code> ends the flags.</li>
+<li>Long flags take <code>=</code>: <code>--color=never</code>.</li>
+</ol>
+<h2>Contributing</h2>
+<p>Bug reports are welcome at <a href="https://example.com/kara-tools/issues">https://example.com/kara-tools/issues</a>.
+Please read <a href="https://example.com/kara-tools/CONTRIBUTING" title="How to contribute">the contributing notes</a> first, and run the tests
+with <code>make check</code>.</p>
+<p>Licensed under the MIT license. Copyright (c) 2026 the Kara authors.</p>
+== guide.md: 1858 bytes, 21 blocks, 6 headings, 5 links
+-- site/guide.html: 3102 bytes
+  User guide  #user-guide
+    Searching logs  #searching-logs
+      Exit codes  #exit-codes
+    Rotating files  #rotating-files
+    Emphasis, briefly  #emphasis-briefly
+    Images and links  #images-and-links
+-- body
+<h1>User guide</h1>
+<blockquote>
+<p><strong>Note:</strong> this guide covers version 1.4. Commands marked <em>(new)</em> need
+the unreleased build.</p>
+</blockquote>
+<h2>Searching logs</h2>
+<p>The <code>kt grep</code> command takes a pattern and a list of files:</p>
+<pre><code class="language-console">$ kt grep -c &quot;timeout&quot; /var/log/app/*.log
+app-1.log:3
+app-2.log:0
+</code></pre>
+<p>A pattern is matched against each line. These rules apply:</p>
+<ul>
+<li>
+<p>Matching is case-sensitive unless you pass <code>-i</code>.</p>
+</li>
+<li>
+<p>A pattern that starts with <code>-</code> must follow <code>--</code>.</p>
+<p>For example, <code>kt grep -- -v notes.txt</code> searches for <code>-v</code>.</p>
+</li>
+<li>
+<p>Use <code>-e `pat` </code> to pass a pattern holding backticks.</p>
+</li>
+</ul>
+<h3>Exit codes</h3>
+<ol start="3">
+<li>Found at least one match: the status is <code>0</code>.</li>
+<li>Found nothing: the status is <code>1</code>.</li>
+<li>An error: the status is <code>2</code>.</li>
+</ol>
+<h2>Rotating files</h2>
+<p>To rotate <code>app.log</code> when it reaches 10 MB, keeping five old copies:</p>
+<pre><code>kt rotate --size 10M --keep 5 app.log
+</code></pre>
+<p>Rotation renames <code>app.log</code> to <code>app.log.1</code>, shifts the older copies up
+by one, and deletes the copy past the limit.<br />
+The rename is atomic, so a reader never sees a missing file.</p>
+<h2>Emphasis, briefly</h2>
+<p>Text can be <em>emphasised</em>, <em>also like this</em>, or <strong>strong</strong>. Mixed forms
+nest: <em><strong>both at once</strong></em>, <em>emphasis with <strong>strong</strong> inside</em>, and
+<strong>strong with <em>emphasis</em> inside</strong>. Underscores inside words do not
+count, so <code>snake_case_name</code> and snake_case_name stay as they are, and
+2 * 3 * 4 is arithmetic. A literal *star* needs a backslash.</p>
+<p>Two spaces at the end of a line<br />
+make a hard break.</p>
+<h2>Images and links</h2>
+<p><img src="img/arch.png" alt="Architecture diagram" title="How the tools fit together" /></p>
+<p>Links can be <a href="https://example.com/docs" title="Docs home">inline</a>,
+<a href="https://example.com/ref">by reference</a>, <a href="https://example.com/collapsed">collapsed</a> or just <a href="https://example.com/shortcut" title="Shortcut title">shortcut</a>. A path with
+spaces needs angle brackets: <a href="docs/release%20notes.md">notes</a>.</p>
+<hr />
+<p>Questions? Open an issue.</p>
+== cases
+-- 00
+<p><em>foo bar</em></p>
+-- 01
+<p>a * foo bar*</p>
+-- 02
+<p><em>foo bar</em></p>
+-- 03
+<p>foo_bar_</p>
+-- 04
+<p><em>foo<strong>bar</strong>baz</em></p>
+-- 05
+<p><em>foo**bar</em></p>
+-- 06
+<p><strong>foo<em>bar</em>baz</strong></p>
+-- 07
+<p>foo<em><strong>bar</strong></em>baz</p>
+-- 08
+<p><em>(<em>foo</em>)</em></p>
+-- 09
+<p><strong>foo, <strong>bar</strong>, baz</strong></p>
+-- 10
+<p><strong>foo &quot;<em>bar</em>&quot; foo</strong></p>
+-- 11
+<p><em>foo <a href="/url">bar</a></em></p>
+-- 12
+<p><a href="/uri">link <em>foo <strong>bar</strong> <code>#</code></em></a></p>
+-- 13
+<p><a href="/u">a [b] c</a></p>
+-- 14
+<p>[a <a href="/inner">b</a> c](/outer)</p>
+-- 15
+<p><img src="/img.png" alt="a b c" /></p>
+-- 16
+<p><code>foo ` bar</code></p>
+-- 17
+<p><code>``</code></p>
+-- 18
+<p>foo<br />
+bar</p>
+-- 19
+<p>a * b _ c [d]</p>
+-- 20
+<p><a href="http://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean">http://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean</a></p>
+-- 21
+<p><a href="/url" title="title &quot;q&quot;">x</a></p>
+-- 22
+<p><a href="/my%20uri">x</a></p>
+-- 23
+<p><a href="foo(and(bar))">x</a></p>
+-- 24
+<p><a href="/caf%C3%A9">x</a></p>
+-- 25
+<ul>
+<li>
+<p>one</p>
+</li>
+<li>
+<p>two</p>
+</li>
+<li>
+<p>three</p>
+</li>
+</ul>
+-- 26
+<ol>
+<li>
+<p>a</p>
+<p>b</p>
+</li>
+<li>
+<p>c</p>
+</li>
+</ol>
+-- 27
+<ul>
+<li>a
+<ul>
+<li>b
+<ul>
+<li>c</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>d</li>
+</ul>
+-- 28
+<blockquote>
+<p>a</p>
+<ul>
+<li>b</li>
+<li>c</li>
+</ul>
+</blockquote>
+-- 29
+<h1>Title</h1>
+<h2>Second</h2>
+<h3>Third ###x</h3>
+-- 30
+<h1>Heading</h1>
+<h2>Sub</h2>
+<p>text</p>
+-- 31
+<hr />
+<hr />
+<hr />
+-- 32
+<pre><code class="language-python">print(1)
+</code></pre>
+-- 33
+<pre><code>```
+nested
+```
+</code></pre>
+-- 34
+<p><em>a <code>*</code> b</em></p>
+-- 35
+<p><em>foo_bar_baz</em></p>
+-- 36
+<p><strong>a</strong>b<strong>c</strong></p>
+-- 37
+<p><a href="/x">foo   bar</a> and <a href="/x">FOO BAR</a></p>
+-- 38
+<ol>
+<li>a</li>
+<li>b</li>
+<li>c</li>
+</ol>
+-- 39
+<ul>
+<li>a</li>
+</ul>
+<ul>
+<li>b</li>
+</ul>
+<ul>
+<li>c</li>
+</ul>
+-- 40
+<p>text</p>
+<ul>
+<li>item</li>
+</ul>
+<ol start="2">
+<li>not a start</li>
+</ol>
+-- 41
+<p>[no link] and [also](missing</p>

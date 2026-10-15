@@ -160,6 +160,7 @@ service/static_files static file server: CRC-32 ETags and If-None-Match, RFC 911
 service/log_shipper  Vector-style log shipper: checksum-fingerprinted checkpoints, rename/copytruncate rotation, JSON-lines + combined parsers via a generic bound, closure transforms, idempotent NDJSON batches, 503 backoff, 413 splitting, dead letters
 cli/btree_kv         page-based B+tree KV store: 256-byte pages, leaf chain, node splits, CRC-framed WAL with torn-tail recovery, shadow commits, invariant checks; db file byte-identical to the mirror
 cli/toml_check       TOML 1.0 parser and validator over real config files: all string/number/date forms, tomllib redefinition rules, 27 rejected documents; mirror cross-checked against tomllib
+cli/md_render        CommonMark Markdown-to-HTML renderer and docs-site build: nested tight/loose lists, delimiter-run emphasis, reference links, heading ids and TOC; matches markdown-it on all 45 inputs
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

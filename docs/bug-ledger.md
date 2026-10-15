@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 268 |
 | codegen-gap | 259 |
-| false-positive | 192 |
+| false-positive | 193 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 162 |
@@ -119,7 +119,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 72 |
 | parser | 64 |
 | autopar | 59 |
-| resolver | 40 |
+| resolver | 41 |
 | effect | 32 |
 | lexer | 11 |
 ## Current state
@@ -217,6 +217,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-26 | 2026-10-15 | codegen | high | Calling an element of a `Vec[Fn(..)]` filled by `push` fails on every v2 surface though `karac check` passes: `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(w); v[0](7)` is "call through Fn(..w..), which is not a function value" on `__mir-run`, a silent exit 101 on `__mir-llvm-run` and an ASan stack-buffer-overflow; the same Vec built with `vec![w]` works, as does a closure in a struct field | — |
 | B-2026-10-15-27 | 2026-10-15 | codegen | high | A closure that escapes inside a value (stored in a struct in a returned `Vec`) captures BY REFERENCE on v2, though core-semantics.md §9.3 says an escaping closure captures every place by move: the captured owned `String` dangles after the function returns (`__mir-run` "dangling reference to a local of a function that returned", ASan heap-use-after-free); `karac check` refuses the program with the legacy backend's `escaping_closure` deferral | — |
 | B-2026-10-15-28 | 2026-10-15 | typecheck | low | The library has no read-write or positional file access: io.md's `File` opens for reading, for writing with truncation, or for appending, and has no `set_len`, so a page-based store (SQLite, LMDB, bbolt, a B+tree index) cannot rewrite one page in place or trim a torn log tail; it must rewrite the whole file. There is also no byte-level `fs.read`/`fs.write` beside the String ones | — |
+| B-2026-10-15-29 | 2026-10-15 | resolver | medium | A top-level type declared AFTER an enum that has a variant of the same name is refused as "'Heading' is already defined in this scope" by `karac check`, `__mir-run` and `__mir-llvm-run`, while the same program with the type declared BEFORE the enum is accepted and runs; so the common `enum Shape { Circle(Circle), .. }` shape works or fails depending on declaration order | — |
 
 ### Relocated
 

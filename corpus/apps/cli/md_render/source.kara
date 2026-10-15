@@ -1,0 +1,1519 @@
+// md_render: a CommonMark Markdown-to-HTML renderer and a small docs-site
+// build over real files. It writes three documents (a README, a
+// CHANGELOG, a user guide) to docs/, renders each to HTML, and writes
+// site/<name>.html with heading ids, a table of contents and .md links
+// rewritten to .html. Then it renders 42 edge cases taken from the
+// CommonMark spec's corners.
+//
+// Blocks: ATX and setext headings, thematic breaks, indented and fenced
+// code (with an info string), block quotes, bullet and ordered lists with
+// the tight/loose rule and nesting by content column, paragraphs, and
+// link reference definitions. Inlines: backslash escapes, code spans,
+// emphasis and strong emphasis by the spec's delimiter-run algorithm
+// (flanking rules, the rule of three), inline, full, collapsed and
+// shortcut links, images, autolinks, and soft and hard line breaks.
+// Link destinations are percent-encoded the way markdown-it does it.
+//
+// Not supported: raw HTML, entity references, tabs, and lazy
+// continuation lines. The documents avoid them.
+//
+// The output matches the Python mirror byte for byte, and
+// check_markdown_it.py checks that every document and case renders
+// exactly as markdown-it-py's CommonMark preset renders it.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-15-29  `struct Heading` is declared before `enum Block`,
+//                    whose variant `Heading` would otherwise make the
+//                    resolver call the struct a duplicate
+
+const PUNCT: Str = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+
+fn esc(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '&' {
+            out.push_str("&amp;");
+        } else if c == '<' {
+            out.push_str("&lt;");
+        } else if c == '>' {
+            out.push_str("&gt;");
+        } else if c == '"' {
+            out.push_str("&quot;");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_digit(c: char) -> bool {
+    match c {
+        '0'..='9' => true,
+        _ => false,
+    }
+}
+
+fn is_alnum(c: char) -> bool {
+    match c {
+        '0'..='9' | 'a'..='z' | 'A'..='Z' => true,
+        _ => false,
+    }
+}
+
+fn is_punct(c: char) -> bool {
+    for p in PUNCT.chars() {
+        if p == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn chars_of(s: Str) -> Vec[char] {
+    s.chars().collect()
+}
+
+// Lines here are ASCII up to the point any of these look at, so byte
+// offsets and character offsets agree.
+fn indent_of(line: Str) -> i64 {
+    let mut n: i64 = 0;
+    for c in line.chars() {
+        if c != ' ' {
+            break;
+        }
+        n += 1;
+    }
+    n
+}
+
+fn is_blank(line: Str) -> bool {
+    for c in line.chars() {
+        if c != ' ' and c != '\t' {
+            return false;
+        }
+    }
+    true
+}
+
+// drop up to n leading spaces
+fn strip_cols(line: Str, n: i64) -> String {
+    let k = indent_of(line);
+    line.substring(if k < n { k } else { n })
+}
+
+fn strip_ws(s: Str) -> String {
+    let cs = chars_of(s);
+    let mut a: i64 = 0;
+    let mut b = cs.len();
+    while a < b and (cs[a] == ' ' or cs[a] == '\t') {
+        a += 1;
+    }
+    while b > a and (cs[b - 1] == ' ' or cs[b - 1] == '\t') {
+        b -= 1;
+    }
+    let mut out = String.new();
+    for i in a..b {
+        out.push(cs[i]);
+    }
+    out
+}
+
+fn rstrip_ws(s: Str) -> String {
+    let cs = chars_of(s);
+    let mut b = cs.len();
+    while b > 0 and (cs[b - 1] == ' ' or cs[b - 1] == '\t') {
+        b -= 1;
+    }
+    let mut out = String.new();
+    for i in 0..b {
+        out.push(cs[i]);
+    }
+    out
+}
+
+fn rstrip_spaces(s: Str) -> String {
+    let cs = chars_of(s);
+    let mut b = cs.len();
+    while b > 0 and cs[b - 1] == ' ' {
+        b -= 1;
+    }
+    let mut out = String.new();
+    for i in 0..b {
+        out.push(cs[i]);
+    }
+    out
+}
+
+fn first_char(s: Str) -> char {
+    for c in s.chars() {
+        return c;
+    }
+    '\u{0}'
+}
+
+fn all_same(s: Str, c: char) -> bool {
+    for x in s.chars() {
+        if x != c {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ block starts
+
+fn is_hr(line: Str) -> bool {
+    if indent_of(line) > 3 {
+        return false;
+    }
+    let s = strip_ws(line);
+    let c = first_char(s);
+    if c != '*' and c != '-' and c != '_' {
+        return false;
+    }
+    let mut n: i64 = 0;
+    for x in s.chars() {
+        if x == c {
+            n += 1;
+        } else if x != ' ' and x != '\t' {
+            return false;
+        }
+    }
+    n >= 3
+}
+
+struct Atx { level: i64, text: String }
+
+fn atx(line: Str) -> Option[Atx] {
+    let ind = indent_of(line);
+    if ind > 3 {
+        return None;
+    }
+    let s = chars_of(line.substring(ind));
+    let mut n: i64 = 0;
+    while n < s.len() and s[n] == '#' {
+        n += 1;
+    }
+    if n == 0 or n > 6 or (n < s.len() and s[n] != ' ' and s[n] != '\t') {
+        return None;
+    }
+    let mut tail = String.new();
+    for i in n..s.len() {
+        tail.push(s[i]);
+    }
+    let rest = chars_of(strip_ws(tail));
+    let mut j = rest.len();
+    while j > 0 and rest[j - 1] == '#' {
+        j -= 1;
+    }
+    let mut text = String.new();
+    if j == rest.len() or (j > 0 and (rest[j - 1] == ' ' or rest[j - 1] == '\t')) {
+        for i in 0..j {
+            text.push(rest[i]);
+        }
+        text = rstrip_ws(text);
+    } else if j > 0 {
+        for i in 0..rest.len() {
+            text.push(rest[i]);
+        }
+    }
+    Some(Atx { level: n, text: text })
+}
+
+struct Fence { ch: char, len: i64, indent: i64, info: String }
+
+fn fence_open(line: Str) -> Option[Fence] {
+    let ind = indent_of(line);
+    if ind > 3 {
+        return None;
+    }
+    let s = chars_of(line.substring(ind));
+    if s.len() == 0 or (s[0] != '`' and s[0] != '~') {
+        return None;
+    }
+    let mut n: i64 = 0;
+    while n < s.len() and s[n] == s[0] {
+        n += 1;
+    }
+    if n < 3 {
+        return None;
+    }
+    let mut tail = String.new();
+    for i in n..s.len() {
+        tail.push(s[i]);
+    }
+    let info = strip_ws(tail);
+    if s[0] == '`' and info.contains("`") {
+        return None;
+    }
+    Some(Fence { ch: s[0], len: n, indent: ind, info: info })
+}
+
+fn is_fence_close(line: Str, c: char, n: i64) -> bool {
+    if indent_of(line) > 3 {
+        return false;
+    }
+    let s = strip_ws(line);
+    s.len() >= n and all_same(s, c)
+}
+
+fn quote_content(line: Str) -> Option[String] {
+    let ind = indent_of(line);
+    if ind > 3 or ind >= line.len() or line.substring(ind, ind + 1) != ">" {
+        return None;
+    }
+    let rest = line.substring(ind + 1);
+    if rest.starts_with(" ") {
+        return Some(rest.substring(1));
+    }
+    Some(rest)
+}
+
+// kind is the bullet character or the ordered delimiter; start is -1 for
+// a bullet; width is the content column
+struct Marker { kind: char, start: i64, width: i64, content: String }
+
+fn list_marker(line: Str) -> Option[Marker] {
+    let ind = indent_of(line);
+    if ind > 3 {
+        return None;
+    }
+    let s = chars_of(line.substring(ind));
+    if s.len() == 0 {
+        return None;
+    }
+    let mut start: i64 = -1;
+    let mut kind = s[0];
+    let mut mlen: i64 = 1;
+    if kind != '-' and kind != '+' and kind != '*' {
+        let mut j: i64 = 0;
+        while j < s.len() and j < 9 and is_digit(s[j]) {
+            j += 1;
+        }
+        if j == 0 or j >= s.len() or (s[j] != '.' and s[j] != ')') {
+            return None;
+        }
+        kind = s[j];
+        start = 0;
+        for i in 0..j {
+            start = start * 10 + (s[i] as i64 - '0' as i64);
+        }
+        mlen = j + 1;
+    }
+    if mlen < s.len() and s[mlen] != ' ' {
+        return None;
+    }
+    let mut sp: i64 = 0;
+    while mlen + sp < s.len() and s[mlen + sp] == ' ' {
+        sp += 1;
+    }
+    let after = s.len() - mlen;
+    if sp == after {
+        return Some(Marker { kind: kind, start: start, width: ind + mlen + 1, content: String.new() });
+    }
+    let skip = if sp >= 5 { 1 } else { sp };
+    let mut content = String.new();
+    for i in (mlen + skip)..s.len() {
+        content.push(s[i]);
+    }
+    Some(Marker { kind: kind, start: start, width: ind + mlen + skip, content: content })
+}
+
+fn setext(line: Str) -> i64 {
+    if indent_of(line) > 3 {
+        return 0;
+    }
+    let s = strip_ws(line);
+    if s.len() > 0 and all_same(s, '=') {
+        return 1;
+    }
+    if s.len() > 0 and all_same(s, '-') {
+        return 2;
+    }
+    0
+}
+
+// whether the line starts a block that can interrupt a paragraph
+fn interrupts(line: Str) -> bool {
+    if atx(line).is_some() or fence_open(line).is_some() or is_hr(line) or quote_content(line).is_some() {
+        return true;
+    }
+    match list_marker(line) {
+        None => false,
+        Some(m) => m.content.len() > 0 and (m.start < 0 or m.start == 1),
+    }
+}
+
+fn norm_label(s: Str) -> String {
+    let mut out = String.new();
+    for w in s.to_lowercase().split_whitespace() {
+        if out.len() > 0 {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    out
+}
+
+fn unescape(s: Str) -> String {
+    let cs = chars_of(s);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < cs.len() {
+        if cs[i] == '\\' and i + 1 < cs.len() and is_punct(cs[i + 1]) {
+            out.push(cs[i + 1]);
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ blocks
+
+// B-2026-10-15-29: a type named like an enum variant must be declared
+// before the enum, or the resolver calls it a duplicate
+struct Heading { level: i64, text: String }
+
+enum Block {
+    Para(String),
+    Heading(i64, String),
+    Rule,
+    Code(String, String),
+    Quote(Vec[Block]),
+    List(bool, i64, bool, Vec[Vec[Block]]),
+}
+
+struct Parsed { blocks: Vec[Block], gap: bool }
+
+struct Ref { href: String, title: String }
+
+struct BlockParser { refs: Map[String, Ref] }
+
+fn closer_for(c: char) -> char {
+    if c == '(' { ')' } else { c }
+}
+
+impl BlockParser {
+    // a one-line link reference definition, recorded; false if it is not one
+    fn ref_def(mut ref self, line: Str) -> bool {
+        let s = line.trim();
+        if not s.starts_with("[") {
+            return false;
+        }
+        let k = match s.find("]:") {
+            Some(k) => k,
+            None => return false,
+        };
+        let label = s.substring(1, k);
+        if k < 2 or label.contains("[") or label.contains("]") {
+            return false;
+        }
+        let mut rest = s.substring(k + 2).trim().to_string();
+        if rest.len() == 0 {
+            return false;
+        }
+        let mut dest = String.new();
+        if rest.starts_with("<") {
+            let e = match rest.find(">") {
+                Some(e) => e,
+                None => return false,
+            };
+            dest = rest.substring(1, e);
+            rest = rest.substring(e + 1);
+        } else {
+            let e = match rest.find(" ") {
+                Some(e) => e,
+                None => rest.len(),
+            };
+            dest = rest.substring(0, e);
+            rest = rest.substring(e);
+        }
+        let mut title = String.new();
+        let t = chars_of(rest.trim());
+        if t.len() > 0 {
+            if t.len() < 2 or (t[0] != '"' and t[0] != '\'' and t[0] != '(') or t[t.len() - 1] != closer_for(t[0]) or not rest.starts_with(" ") {
+                return false;
+            }
+            for i in 1..(t.len() - 1) {
+                title.push(t[i]);
+            }
+        }
+        let key = norm_label(label);
+        if key.len() == 0 {
+            return false;
+        }
+        if not self.refs.contains_key(key) {
+            self.refs.insert(key, Ref { href: unescape(dest), title: unescape(title) });
+        }
+        true
+    }
+
+    // the blocks of `lines`, and whether a blank line separates two of them
+    fn parse(mut ref self, lines: ref Vec[String]) -> Parsed {
+        let mut blocks: Vec[Block] = Vec.new();
+        let mut gap = false;
+        let mut blank = false;
+        let mut i: i64 = 0;
+        let n = lines.len();
+        while i < n {
+            let line = lines[i].clone();
+            if is_blank(line) {
+                blank = true;
+                i += 1;
+                continue;
+            }
+            if blocks.len() > 0 and blank {
+                gap = true;
+            }
+            blank = false;
+            if indent_of(line) >= 4 {
+                let mut buf: Vec[String] = Vec.new();
+                while i < n and (is_blank(lines[i]) or indent_of(lines[i]) >= 4) {
+                    buf.push(strip_cols(lines[i], 4));
+                    i += 1;
+                }
+                while buf.len() > 0 and is_blank(buf[buf.len() - 1]) {
+                    buf.pop();
+                    blank = true;
+                }
+                blocks.push(Block.Code(String.new(), joined_lines(buf)));
+                continue;
+            }
+            if let Some(f) = fence_open(line) {
+                i += 1;
+                let mut buf: Vec[String] = Vec.new();
+                while i < n {
+                    if is_fence_close(lines[i], f.ch, f.len) {
+                        i += 1;
+                        break;
+                    }
+                    buf.push(strip_cols(lines[i], f.indent));
+                    i += 1;
+                }
+                let lang = match f.info.find(" ") {
+                    Some(sp) => f.info.substring(0, sp),
+                    None => f.info.clone(),
+                };
+                blocks.push(Block.Code(unescape(lang), joined_lines(buf)));
+                continue;
+            }
+            if let Some(h) = atx(line) {
+                blocks.push(Block.Heading(h.level, h.text));
+                i += 1;
+                continue;
+            }
+            if is_hr(line) {
+                blocks.push(Block.Rule);
+                i += 1;
+                continue;
+            }
+            if quote_content(line).is_some() {
+                let mut buf: Vec[String] = Vec.new();
+                while i < n {
+                    match quote_content(lines[i]) {
+                        Some(q) => buf.push(q),
+                        None => break,
+                    }
+                    i += 1;
+                }
+                let sub = self.parse(buf);
+                blocks.push(Block.Quote(sub.blocks));
+                continue;
+            }
+            if let Some(first) = list_marker(line) {
+                let kind = first.kind;
+                let start = first.start;
+                let mut items: Vec[Vec[Block]] = Vec.new();
+                let mut loose = false;
+                let mut trailing: i64 = 0;
+                while i < n {
+                    let m = match list_marker(lines[i]) {
+                        Some(m) => m,
+                        None => break,
+                    };
+                    if m.kind != kind or is_hr(lines[i]) {
+                        break;
+                    }
+                    if trailing > 0 {
+                        loose = true;
+                    }
+                    let w = m.width;
+                    let mut buf: Vec[String] = Vec.new();
+                    buf.push(m.content);
+                    i += 1;
+                    while i < n and (is_blank(lines[i]) or indent_of(lines[i]) >= w) {
+                        if is_blank(lines[i]) {
+                            buf.push(String.new());
+                        } else {
+                            buf.push(lines[i].substring(w));
+                        }
+                        i += 1;
+                    }
+                    trailing = 0;
+                    while buf.len() > 1 and buf[buf.len() - 1].len() == 0 {
+                        buf.pop();
+                        trailing += 1;
+                    }
+                    let sub = self.parse(buf);
+                    if sub.gap {
+                        loose = true;
+                    }
+                    items.push(sub.blocks);
+                }
+                blocks.push(Block.List(start >= 0, start, not loose, items));
+                if trailing > 0 {
+                    blank = true;
+                }
+                continue;
+            }
+            let mut buf: Vec[String] = Vec.new();
+            buf.push(line);
+            i += 1;
+            let mut level: i64 = 0;
+            while i < n and not is_blank(lines[i]) {
+                level = setext(lines[i]);
+                if level > 0 {
+                    i += 1;
+                    break;
+                }
+                if interrupts(lines[i]) {
+                    break;
+                }
+                buf.push(lines[i].clone());
+                i += 1;
+            }
+            let mut first: i64 = 0;
+            while first < buf.len() and self.ref_def(buf[first]) {
+                first += 1;
+            }
+            if first == buf.len() {
+                continue;
+            }
+            let mut text = String.new();
+            for j in first..buf.len() {
+                if j > first {
+                    text.push('\n');
+                }
+                text.push_str(buf[j].trim_start());
+            }
+            let text = rstrip_ws(text);
+            if level > 0 {
+                blocks.push(Block.Heading(level, text));
+            } else {
+                blocks.push(Block.Para(text));
+            }
+        }
+        Parsed { blocks: blocks, gap: gap }
+    }
+}
+
+fn joined_lines(buf: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for x in buf.iter() {
+        out.push_str(x);
+        out.push('\n');
+    }
+    out
+}
+
+// ------------------------------------------------------------ links
+
+const SAFE: Str = ";/?:@&=+$,-_.!~*'()#";
+
+fn hex_digit(b: u8) -> bool {
+    (b >= 48 and b <= 57) or (b >= 65 and b <= 70) or (b >= 97 and b <= 102)
+}
+
+// mdurl.encode: keep what a URL may hold, %XX the rest as UTF-8
+fn encode_url(s: Str) -> String {
+    let hexd: Array[Str, 16] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let x = b[i];
+        if x == 37 and i + 2 < b.len() and hex_digit(b[i + 1]) and hex_digit(b[i + 2]) {
+            out.push_str(s.substring(i, i + 3));
+            i += 3;
+            continue;
+        }
+        let c = x as char;
+        let mut keep = x < 128 and is_alnum(c);
+        if x < 128 and not keep {
+            for k in SAFE.chars() {
+                if k == c {
+                    keep = true;
+                }
+            }
+        }
+        if keep {
+            out.push(c);
+        } else {
+            let v = x as i64;
+            out.push('%');
+            out.push_str(hexd[v / 16]);
+            out.push_str(hexd[v % 16]);
+        }
+        i += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ inlines
+
+const T_TEXT: i64 = 0;
+const T_HTML: i64 = 1;
+const T_CODE: i64 = 2;
+const T_DELIM: i64 = 3;
+const T_BRACKET: i64 = 4;
+
+struct Tok { kind: i64, text: String, opens: Vec[String], closes: Vec[String] }
+
+fn tok(kind: i64, text: own String) -> Tok {
+    Tok { kind: kind, text: text, opens: Vec.new(), closes: Vec.new() }
+}
+
+#[derive(Copy, Clone)]
+struct Delim { tok: i64, ch: char, n: i64, orig: i64, open: bool, close: bool, live: bool }
+
+#[derive(Copy, Clone)]
+struct Bracket { tok: i64, image: bool, active: bool, dbot: i64, src: i64 }
+
+struct Link { href: String, title: String, end: i64 }
+
+fn is_ws(c: char) -> bool {
+    c == '\u{0}' or c == ' ' or c == '\t' or c == '\n'
+}
+
+fn run_of(c: char, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push(c);
+    }
+    out
+}
+
+struct Inline { s: Vec[char], p: i64, toks: Vec[Tok], delims: Vec[Delim], brackets: Vec[Bracket] }
+
+fn new_inline(src: Str) -> Inline {
+    Inline { s: chars_of(src), p: 0, toks: Vec.new(), delims: Vec.new(), brackets: Vec.new() }
+}
+
+impl Inline {
+    // the character at i, or NUL past either end
+    fn at(ref self, i: i64) -> char {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { '\u{0}' }
+    }
+
+    fn slice(ref self, a: i64, b: i64) -> String {
+        let mut out = String.new();
+        for i in a..b {
+            out.push(self.s[i]);
+        }
+        out
+    }
+
+    fn find_from(ref self, c: char, from: i64) -> i64 {
+        let mut i = from;
+        while i < self.s.len() {
+            if self.s[i] == c {
+                return i;
+            }
+            i += 1;
+        }
+        -1
+    }
+
+    fn text(mut ref self, t: Str) {
+        let last = self.toks.len() - 1;
+        if last >= 0 and self.toks[last].kind == T_TEXT {
+            self.toks[last].text.push_str(t);
+        } else {
+            self.toks.push(tok(T_TEXT, t.to_string()));
+        }
+    }
+
+    fn text_char(mut ref self, c: char) {
+        let mut t = String.new();
+        t.push(c);
+        self.text(t);
+    }
+
+    fn html(mut ref self, t: Str) {
+        self.toks.push(tok(T_HTML, t.to_string()));
+    }
+
+    fn skip_spaces(mut ref self) {
+        while self.at(self.p) == ' ' {
+            self.p += 1;
+        }
+    }
+
+    fn run(mut ref self, refs: ref Map[String, Ref]) -> String {
+        while self.p < self.s.len() {
+            let c = self.s[self.p];
+            if c == '\\' {
+                let nx = self.at(self.p + 1);
+                if nx == '\n' {
+                    self.p += 2;
+                    self.html("<br />\n");
+                    self.skip_spaces();
+                } else if is_punct(nx) {
+                    self.text_char(nx);
+                    self.p += 2;
+                } else {
+                    self.text("\\");
+                    self.p += 1;
+                }
+            } else if c == '`' {
+                self.code_span();
+            } else if c == '*' or c == '_' {
+                self.delim_run();
+            } else if c == '[' {
+                self.open_bracket(false, 1);
+            } else if c == '!' and self.at(self.p + 1) == '[' {
+                self.open_bracket(true, 2);
+            } else if c == ']' {
+                self.close_bracket(refs);
+            } else if c == '<' and self.autolink() {
+            } else if c == '\n' {
+                let mut spaces: i64 = 0;
+                let last = self.toks.len() - 1;
+                if last >= 0 and self.toks[last].kind == T_TEXT {
+                    let t = self.toks[last].text.clone();
+                    let kept = rstrip_spaces(t);
+                    spaces = t.len() - kept.len();
+                    self.toks[last].text = kept;
+                }
+                self.html(if spaces >= 2 { "<br />\n" } else { "\n" });
+                self.p += 1;
+                self.skip_spaces();
+            } else {
+                self.text_char(c);
+                self.p += 1;
+            }
+        }
+        self.process_emphasis(0);
+        self.render(0, false)
+    }
+
+    fn open_bracket(mut ref self, image: bool, width: i64) {
+        self.brackets.push(Bracket { tok: self.toks.len(), image: image, active: true, dbot: self.delims.len(), src: self.p + width });
+        self.toks.push(tok(T_BRACKET, if image { "![".to_string() } else { "[".to_string() }));
+        self.p += width;
+    }
+
+    fn code_span(mut ref self) {
+        let st = self.p;
+        let mut n: i64 = 0;
+        while self.at(st + n) == '`' {
+            n += 1;
+        }
+        let mut j = st + n;
+        loop {
+            let k = self.find_from('`', j);
+            if k < 0 {
+                self.text(run_of('`', n));
+                self.p = st + n;
+                return;
+            }
+            let mut m: i64 = 0;
+            while self.at(k + m) == '`' {
+                m += 1;
+            }
+            if m == n {
+                let body = self.slice(st + n, k).replace("\n", " ");
+                let bs = chars_of(body);
+                let mut out = body.clone();
+                if bs.len() >= 2 and bs[0] == ' ' and bs[bs.len() - 1] == ' ' and not all_same(body, ' ') {
+                    out = body.substring(1, body.len() - 1);
+                }
+                self.toks.push(tok(T_CODE, out));
+                self.p = k + m;
+                return;
+            }
+            j = k + m;
+        }
+    }
+
+    fn delim_run(mut ref self) {
+        let c = self.s[self.p];
+        let st = self.p;
+        while self.at(self.p) == c {
+            self.p += 1;
+        }
+        let n = self.p - st;
+        let before = self.at(st - 1);
+        let after = self.at(self.p);
+        let left = not is_ws(after) and (not is_punct(after) or is_ws(before) or is_punct(before));
+        let right = not is_ws(before) and (not is_punct(before) or is_ws(after) or is_punct(after));
+        let can_open = if c == '*' { left } else { left and (not right or is_punct(before)) };
+        let can_close = if c == '*' { right } else { right and (not left or is_punct(after)) };
+        self.delims.push(Delim { tok: self.toks.len(), ch: c, n: n, orig: n, open: can_open, close: can_close, live: true });
+        self.toks.push(tok(T_DELIM, run_of(c, n)));
+    }
+
+    fn process_emphasis(mut ref self, bottom: i64) {
+        // openers_bottom, by (character, closer can open, length mod 3)
+        let mut obot: Vec[i64] = Vec.new();
+        for _ in 0..12 {
+            obot.push(bottom - 1);
+        }
+        let mut cur = bottom;
+        while cur < self.delims.len() {
+            let c = self.delims[cur];
+            if not c.live or not c.close {
+                cur += 1;
+                continue;
+            }
+            let key = (if c.ch == '*' { 0 } else { 6 }) + (if c.open { 3 } else { 0 }) + c.orig % 3;
+            let lo = obot[key];
+            let mut j = cur - 1;
+            let mut found: i64 = -1;
+            while j > lo {
+                let o = self.delims[j];
+                if o.live and o.open and o.ch == c.ch {
+                    let odd = (o.close or c.open) and (o.orig + c.orig) % 3 == 0 and not (o.orig % 3 == 0 and c.orig % 3 == 0);
+                    if not odd {
+                        found = j;
+                        break;
+                    }
+                }
+                j -= 1;
+            }
+            if found < 0 {
+                obot[key] = cur - 1;
+                if not c.open {
+                    self.delims[cur].live = false;
+                }
+                cur += 1;
+                continue;
+            }
+            let o = self.delims[found];
+            let used: i64 = if o.n >= 2 and c.n >= 2 { 2 } else { 1 };
+            let tag = if used == 2 { "strong" } else { "em" };
+            let on = o.n - used;
+            let cn = c.n - used;
+            self.delims[found].n = on;
+            self.delims[cur].n = cn;
+            self.toks[o.tok].text = run_of(o.ch, on);
+            self.toks[c.tok].text = run_of(c.ch, cn);
+            self.toks[o.tok].opens.insert(0, f"<{tag}>");
+            self.toks[c.tok].closes.push(f"</{tag}>");
+            for k in (found + 1)..cur {
+                self.delims[k].live = false;
+            }
+            if on == 0 {
+                self.delims[found].live = false;
+            }
+            if cn == 0 {
+                self.delims[cur].live = false;
+                cur += 1;
+            }
+        }
+        self.delims.truncate(bottom);
+    }
+
+    fn close_bracket(mut ref self, refs: ref Map[String, Ref]) {
+        if self.brackets.len() == 0 {
+            self.text("]");
+            self.p += 1;
+            return;
+        }
+        let b = self.brackets[self.brackets.len() - 1];
+        if not b.active {
+            self.brackets.pop();
+            self.text("]");
+            self.p += 1;
+            return;
+        }
+        let mut res = self.inline_link(self.p + 1);
+        if res.is_none() {
+            let q = self.p + 1;
+            let mut label = self.slice(b.src, self.p);
+            let mut next = q;
+            if self.at(q) == '[' {
+                let k = self.find_from(']', q + 1);
+                if k >= 0 {
+                    let inner = self.slice(q + 1, k);
+                    if not inner.contains("[") {
+                        if inner.trim().len() > 0 {
+                            label = inner;
+                        }
+                        next = k + 1;
+                    }
+                }
+            }
+            let key = norm_label(label);
+            if let Some(r) = refs.get(key) {
+                res = Some(Link { href: r.href.clone(), title: r.title.clone(), end: next });
+            }
+        }
+        let link = match res {
+            Some(l) => l,
+            None => {
+                self.brackets.pop();
+                self.text("]");
+                self.p += 1;
+                return;
+            }
+        };
+        self.process_emphasis(b.dbot);
+        let attrs = if link.title.len() > 0 { f" title=\"{esc(link.title)}\"" } else { String.new() };
+        if b.image {
+            let alt = self.render(b.tok + 1, true);
+            self.toks.truncate(b.tok);
+            self.html(f"<img src=\"{esc(encode_url(link.href))}\" alt=\"{esc(alt)}\"{attrs} />");
+        } else {
+            self.toks[b.tok] = tok(T_HTML, f"<a href=\"{esc(encode_url(link.href))}\"{attrs}>");
+            self.html("</a>");
+            for x in 0..(self.brackets.len() - 1) {
+                if not self.brackets[x].image {
+                    self.brackets[x].active = false;
+                }
+            }
+        }
+        self.brackets.pop();
+        self.p = link.end;
+    }
+
+    fn skip_ws_at(ref self, q0: i64) -> i64 {
+        let mut q = q0;
+        while q < self.s.len() and is_ws(self.s[q]) {
+            q += 1;
+        }
+        q
+    }
+
+    // `(dest "title")` at q, else None
+    fn inline_link(ref self, q0: i64) -> Option[Link] {
+        if self.at(q0) != '(' {
+            return None;
+        }
+        let mut q = self.skip_ws_at(q0 + 1);
+        let mut dest = String.new();
+        if self.at(q) == '<' {
+            let mut e = q + 1;
+            while self.at(e) != '>' and self.at(e) != '\u{0}' and self.at(e) != '\n' and self.at(e) != '<' {
+                e += if self.at(e) == '\\' { 2 } else { 1 };
+            }
+            if self.at(e) != '>' {
+                return None;
+            }
+            dest = self.slice(q + 1, e);
+            q = e + 1;
+        } else {
+            let st = q;
+            let mut depth: i64 = 0;
+            loop {
+                let c = self.at(q);
+                if c == '\u{0}' or c == ' ' or c == '\t' or c == '\n' {
+                    break;
+                }
+                if c == '\\' and is_punct(self.at(q + 1)) {
+                    q += 2;
+                    continue;
+                }
+                if c == '(' {
+                    depth += 1;
+                } else if c == ')' {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                q += 1;
+            }
+            dest = self.slice(st, q);
+        }
+        let mut title = String.new();
+        let sp = q;
+        q = self.skip_ws_at(q);
+        let c = self.at(q);
+        if q > sp and (c == '"' or c == '\'' or c == '(') {
+            let close = closer_for(c);
+            let mut e = q + 1;
+            while self.at(e) != close {
+                if self.at(e) == '\u{0}' {
+                    return None;
+                }
+                e += if self.at(e) == '\\' and self.at(e + 1) != '\u{0}' { 2 } else { 1 };
+            }
+            title = self.slice(q + 1, e);
+            q = self.skip_ws_at(e + 1);
+        }
+        if self.at(q) != ')' {
+            return None;
+        }
+        Some(Link { href: unescape(dest), title: unescape(title), end: q + 1 })
+    }
+
+    fn autolink(mut ref self) -> bool {
+        let st = self.p + 1;
+        let mut q = st;
+        while is_alnum(self.at(q)) or self.at(q) == '+' or self.at(q) == '.' or self.at(q) == '-' {
+            q += 1;
+        }
+        let scheme = q - st;
+        if scheme < 2 or scheme > 32 or not is_alnum(self.at(st)) or is_digit(self.at(st)) or self.at(q) != ':' {
+            return false;
+        }
+        while self.at(q) != '\u{0}' and self.at(q) != '>' and self.at(q) != '<' and not is_ws(self.at(q)) {
+            q += 1;
+        }
+        if self.at(q) != '>' {
+            return false;
+        }
+        let url = self.slice(st, q);
+        self.html(f"<a href=\"{esc(encode_url(url))}\">{esc(url)}</a>");
+        self.p = q + 1;
+        true
+    }
+
+    // the tokens from `from` on as HTML, or as plain text for alt and ids
+    fn render(ref self, from: i64, plain: bool) -> String {
+        let mut out = String.new();
+        for i in from..self.toks.len() {
+            let t = ref self.toks[i];
+            if plain {
+                if t.kind != T_HTML {
+                    out.push_str(t.text);
+                }
+                continue;
+            }
+            if t.kind == T_HTML {
+                out.push_str(t.text);
+            } else if t.kind == T_CODE {
+                out.push_str(f"<code>{esc(t.text)}</code>");
+            } else {
+                for x in t.closes.iter() {
+                    out.push_str(x);
+                }
+                out.push_str(esc(t.text));
+                for x in t.opens.iter() {
+                    out.push_str(x);
+                }
+            }
+        }
+        out
+    }
+}
+
+fn inline(text: Str, refs: ref Map[String, Ref]) -> String {
+    let mut il = new_inline(text);
+    il.run(refs)
+}
+
+fn plain_text(text: Str, refs: ref Map[String, Ref]) -> String {
+    let mut il = new_inline(text);
+    il.run(refs);
+    il.render(0, true)
+}
+
+// ------------------------------------------------------------ rendering
+
+struct Html { out: String, headings: Vec[Heading] }
+
+impl Html {
+    fn blocks(mut ref self, blocks: ref Vec[Block], tight: bool, refs: ref Map[String, Ref]) {
+        for i in 0..blocks.len() {
+            let b = ref blocks[i];
+            match b {
+                Block.Para(text) => {
+                    if tight {
+                        self.out.push_str(inline(text, refs));
+                        if i + 1 < blocks.len() {
+                            self.out.push('\n');
+                        }
+                    } else {
+                        self.out.push_str(f"<p>{inline(text, refs)}</p>\n");
+                    }
+                }
+                Block.Heading(level, text) => {
+                    self.headings.push(Heading { level: *level, text: plain_text(text, refs) });
+                    self.out.push_str(f"<h{level}>{inline(text, refs)}</h{level}>\n");
+                }
+                Block.Rule => self.out.push_str("<hr />\n"),
+                Block.Code(lang, text) => {
+                    let cls = if lang.len() > 0 { f" class=\"language-{esc(lang)}\"" } else { String.new() };
+                    self.out.push_str(f"<pre><code{cls}>{esc(text)}</code></pre>\n");
+                }
+                Block.Quote(sub) => {
+                    self.out.push_str("<blockquote>\n");
+                    self.blocks(sub, false, refs);
+                    self.out.push_str("</blockquote>\n");
+                }
+                Block.List(ordered, start, tight_list, items) => {
+                    if not *ordered {
+                        self.out.push_str("<ul>\n");
+                    } else if *start == 1 {
+                        self.out.push_str("<ol>\n");
+                    } else {
+                        self.out.push_str(f"<ol start=\"{start}\">\n");
+                    }
+                    for item in items.iter() {
+                        self.out.push_str("<li>");
+                        if item.len() > 0 and (not *tight_list or not is_para(item[0])) {
+                            self.out.push('\n');
+                        }
+                        self.blocks(item, *tight_list, refs);
+                        self.out.push_str("</li>\n");
+                    }
+                    self.out.push_str(if *ordered { "</ol>\n" } else { "</ul>\n" });
+                }
+            }
+        }
+    }
+}
+
+fn is_para(b: ref Block) -> bool {
+    match b {
+        Block.Para(_) => true,
+        _ => false,
+    }
+}
+
+struct Rendered { body: String, headings: Vec[Heading], nblocks: i64 }
+
+fn render_md(src: Str) -> Rendered {
+    let mut lines: Vec[String] = src.replace("\r\n", "\n").split("\n");
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    let mut bp = BlockParser { refs: Map.new() };
+    let parsed = bp.parse(lines);
+    let mut h = Html { out: String.new(), headings: Vec.new() };
+    h.blocks(parsed.blocks, false, bp.refs);
+    Rendered { body: h.out, headings: h.headings, nblocks: parsed.blocks.len() }
+}
+
+// ------------------------------------------------------------ the site
+
+fn slug(text: Str, seen: mut ref Map[String, i64]) -> String {
+    let mut s = String.new();
+    for c in text.to_lowercase().chars() {
+        if is_alnum(c) or c == '-' or c == '_' {
+            s.push(c);
+        } else if c == ' ' {
+            s.push('-');
+        }
+    }
+    let n: i64 = seen.get(s).unwrap_or(0);
+    seen.insert(s.clone(), n + 1);
+    if n == 0 { s } else { f"{s}-{n}" }
+}
+
+struct Page { html: String, slugs: Vec[String] }
+
+fn site_page(body: Str, headings: ref Vec[Heading], title: Str) -> Page {
+    let mut seen: Map[String, i64] = Map.new();
+    let mut slugs: Vec[String] = Vec.new();
+    for h in headings.iter() {
+        slugs.push(slug(h.text, mut seen));
+    }
+    // give each heading its id, in order
+    let b = chars_of(body);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    let mut k: i64 = 0;
+    while i < b.len() {
+        if k < slugs.len() and b[i] == '<' and i + 3 < b.len() and b[i + 1] == 'h' and is_digit(b[i + 2]) and b[i + 3] == '>' {
+            out.push_str(f"<h{b[i + 2]} id=\"{slugs[k]}\">");
+            k += 1;
+            i += 4;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    // links to sibling .md files point at their pages
+    let linked = out.replace(".md\"", ".html\"").replace(".md#", ".html#");
+    let mut nav = String.new();
+    for j in 0..headings.len() {
+        nav.push_str(f"<li class=\"h{headings[j].level}\"><a href=\"#{slugs[j]}\">{esc(headings[j].text)}</a></li>\n");
+    }
+    let page = f"<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{esc(title)}</title>\n</head>\n<body>\n<nav>\n<ul>\n{nav}</ul>\n</nav>\n<main>\n{linked}</main>\n</body>\n</html>\n";
+    Page { html: page, slugs: slugs }
+}
+
+fn count_of(s: Str, pat: Str) -> i64 {
+    let mut n: i64 = 0;
+    let mut rest = s.to_string();
+    loop {
+        match rest.find(pat) {
+            Some(k) => {
+                n += 1;
+                rest = rest.substring(k + pat.len());
+            }
+            None => return n,
+        }
+    }
+}
+
+// ------------------------------------------------------------ the documents
+fn readme_md() -> String {
+    """
+# Kara Tools
+
+[![build](https://ci.example.com/badge.svg)](https://ci.example.com/kara)
+A set of *small*, **fast** command-line tools for working with logs,
+config files and archives. See the [guide](guide.md) and the
+[changelog](CHANGELOG.md#unreleased) for details.
+
+## Install
+
+Download a release, or build from source:
+
+```sh
+git clone https://example.com/kara-tools.git
+cd kara-tools && make install PREFIX=~/.local
+```
+
+You need:
+
+- a C compiler (`cc` or `clang`)
+- GNU make 4.0 or newer
+- about 50 MB of disk
+
+## Usage
+
+    kt grep -i error app.log
+    kt toml check Cargo.toml
+
+Every tool reads `stdin` when no file is given, and exits with status
+`1` when it finds nothing. Flags follow the usual rules:
+
+1. Short flags combine: `-iv` is `-i -v`.
+2. A `--` ends the flags.
+3. Long flags take `=`: `--color=never`.
+
+## Contributing
+
+Bug reports are welcome at <https://example.com/kara-tools/issues>.
+Please read [the contributing notes][contrib] first, and run the tests
+with `make check`.
+
+Licensed under the MIT license. Copyright (c) 2026 the Kara authors.
+
+[contrib]: https://example.com/kara-tools/CONTRIBUTING "How to contribute"
+
+"""
+}
+
+fn changelog_md() -> String {
+    """
+Changelog
+=========
+
+All notable changes to this project are documented here. The format is
+based on *Keep a Changelog*, and versions follow semantic versioning.
+
+Unreleased
+----------
+
+### Added
+
+- `kt toml check` validates TOML 1.0 files and reports the line of the
+  first error.
+- `kt grep` learned `--count` and `--files-with-matches`.
+
+### Fixed
+
+- Archives larger than 4 GB are no longer truncated (#212).
+- `kt rotate` keeps the file mode of the log it rotates.
+
+## 1.4.0 - 2026-09-30
+
+### Changed
+
+* The default compression level is now 6, not 9. Level 9 was **twice as
+  slow** for a gain of under 1%.
+* `--quiet` is now `-q`; the old spelling still works.
+
+### Removed
+
+* The `kt legacy` command, deprecated since 1.1.
+
+***
+
+Older releases are listed in [HISTORY](HISTORY.md).
+
+"""
+}
+
+fn guide_md() -> String {
+    """
+# User guide
+
+> **Note:** this guide covers version 1.4. Commands marked *(new)* need
+> the unreleased build.
+
+## Searching logs
+
+The `kt grep` command takes a pattern and a list of files:
+
+```console
+$ kt grep -c "timeout" /var/log/app/*.log
+app-1.log:3
+app-2.log:0
+```
+
+A pattern is matched against each line. These rules apply:
+
+- Matching is case-sensitive unless you pass `-i`.
+
+- A pattern that starts with `-` must follow `--`.
+
+  For example, `kt grep -- -v notes.txt` searches for `-v`.
+
+- Use ``-e `pat` `` to pass a pattern holding backticks.
+
+### Exit codes
+
+3. Found at least one match: the status is `0`.
+4. Found nothing: the status is `1`.
+5. An error: the status is `2`.
+
+## Rotating files
+
+To rotate `app.log` when it reaches 10 MB, keeping five old copies:
+
+    kt rotate --size 10M --keep 5 app.log
+
+Rotation renames `app.log` to `app.log.1`, shifts the older copies up
+by one, and deletes the copy past the limit.\\
+The rename is atomic, so a reader never sees a missing file.
+
+## Emphasis, briefly
+
+Text can be *emphasised*, _also like this_, or **strong**. Mixed forms
+nest: ***both at once***, *emphasis with **strong** inside*, and
+**strong with *emphasis* inside**. Underscores inside words do not
+count, so `snake_case_name` and snake_case_name stay as they are, and
+2 * 3 * 4 is arithmetic. A literal \\*star\\* needs a backslash.
+
+Two spaces at the end of a line  
+make a hard break.
+
+## Images and links
+
+![Architecture diagram](img/arch.png "How the tools fit together")
+
+Links can be [inline](https://example.com/docs "Docs home"),
+[by reference][ref], [collapsed][] or just [shortcut]. A path with
+spaces needs angle brackets: [notes](<docs/release notes.md>).
+
+[ref]: https://example.com/ref
+[collapsed]: https://example.com/collapsed
+[shortcut]: https://example.com/shortcut 'Shortcut title'
+
+* * *
+
+Questions? Open an issue.
+
+"""
+}
+
+fn cases() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("*foo bar*");
+    v.push("a * foo bar*");
+    v.push("_foo bar_");
+    v.push("foo_bar_");
+    v.push("*foo**bar**baz*");
+    v.push("*foo**bar*");
+    v.push("**foo*bar*baz**");
+    v.push("foo***bar***baz");
+    v.push("*(*foo*)*");
+    v.push("__foo, __bar__, baz__");
+    v.push("**foo \"*bar*\" foo**");
+    v.push("*foo [bar](/url)*");
+    v.push("[link *foo **bar** `#`*](/uri)");
+    v.push("[a [b] c](/u)");
+    v.push("[a [b](/inner) c](/outer)");
+    v.push("![a *b* c](/img.png)");
+    v.push("`` foo ` bar ``");
+    v.push("` `` `");
+    v.push("foo\\\nbar");
+    v.push("a \\* b \\_ c \\[d\\]");
+    v.push("<http://foo.bar.baz/test?q=hello&id=22&boolean>");
+    v.push("[x](/url \"title \\\"q\\\"\")");
+    v.push("[x](</my uri>)");
+    v.push("[x](foo(and(bar)))");
+    v.push("[x](/caf\u{e9})");
+    v.push("- one\n- two\n\n- three");
+    v.push("1. a\n\n   b\n2. c");
+    v.push("- a\n  - b\n    - c\n- d");
+    v.push("> a\n> - b\n> - c");
+    v.push("# Title #\n## Second ##########\n### Third ###x");
+    v.push("Heading\n===\nSub\n---\ntext");
+    v.push("***\n---\n___");
+    v.push("~~~ python extra\nprint(1)\n~~~");
+    v.push("````\n```\nnested\n```\n````");
+    v.push("*a `*` b*");
+    v.push("_foo_bar_baz_");
+    v.push("**a**b**c**");
+    v.push("[Foo Bar]: /x\n\n[foo   bar] and [FOO BAR][]");
+    v.push("1. a\n1. b\n10. c");
+    v.push("- a\n* b\n+ c");
+    v.push("text\n- item\n2. not a start");
+    v.push("[no link] and [also](missing");
+    v
+}
+
+fn main() {
+    let names: Array[Str, 3] = ["README.md", "CHANGELOG.md", "guide.md"];
+    let texts: Array[String, 3] = [readme_md(), changelog_md(), guide_md()];
+    for dir in ["docs", "site"] {
+        if let Err(e) = fs.create_dir_all(dir.to_string()) {
+            println(f"cannot create {dir}: {e}");
+            return;
+        }
+    }
+    for i in 0..3 {
+        fs.write(f"docs/{names[i]}", texts[i].clone()).unwrap();
+    }
+    let mut listing = match fs.read_dir("docs".to_string()) {
+        Ok(v) => v,
+        Err(e) => {
+            println(f"cannot list docs: {e}");
+            return;
+        }
+    };
+    listing.sort();
+    for name in listing.iter() {
+        let src = match fs.read_to_string(f"docs/{name}") {
+            Ok(s) => s,
+            Err(e) => {
+                println(f"== {name}: cannot read: {e}");
+                continue;
+            }
+        };
+        let r = render_md(src);
+        let title = if r.headings.len() > 0 { r.headings[0].text.clone() } else { name.clone() };
+        let page = site_page(r.body, r.headings, title);
+        let stem = name.substring(0, name.len() - 3);
+        fs.write(f"site/{stem}.html", page.html.clone()).unwrap();
+        println(f"== {name}: {src.len()} bytes, {r.nblocks} blocks, {r.headings.len()} headings, {count_of(r.body, "<a ")} links");
+        println(f"-- site/{stem}.html: {page.html.len()} bytes");
+        for j in 0..r.headings.len() {
+            let mut pad = String.new();
+            for _ in 1..r.headings[j].level {
+                pad.push_str("  ");
+            }
+            println(f"  {pad}{r.headings[j].text}  #{page.slugs[j]}");
+        }
+        println("-- body");
+        print(r.body);
+    }
+    println("== cases");
+    let cs = cases();
+    for i in 0..cs.len() {
+        let r = render_md(cs[i]);
+        println(f"-- {i:02}");
+        print(r.body);
+    }
+}
