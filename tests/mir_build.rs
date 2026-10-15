@@ -1757,3 +1757,35 @@ fn main() {
         }
     }
 }
+
+/// A `match` on a field reached through a call that returns a `ref` is
+/// matched where it lies, through that reference (B-2026-10-14-56).
+#[test]
+fn mir_match_on_a_field_through_a_returned_reference() {
+    const SRC: &str = r#"
+enum V { T(String), L(Vec[String]) }
+struct It { v: V, n: i64 }
+fn first(v: ref Vec[It]) -> ref It { ref v[0] }
+fn main() {
+    let mut m: Map[String, It] = Map.new();
+    m.insert("b".to_string(), It { v: V.L(vec!["p".to_string(), "q".to_string()]), n: 4 });
+    let t = match m.get("b").unwrap().v { V.T(_) => 1, V.L(q) => q.len() };
+    let xs: Vec[It] = vec![It { v: V.T("qq".to_string()), n: 1 }];
+    let u = match first(xs).v { V.T(s) => s.len(), V.L(q) => q.len() };
+    let o: Option[ref It] = Some(first(xs));
+    let w = match o.unwrap().v { V.T(_) => 1, V.L(_) => 2 };
+    if let V.T(s) = first(xs).v { println(s); }
+    println(f"{t} {u} {w} {xs.len()} {m.len()}");
+}
+"#;
+    let want = "qq
+2 2 1 1 1
+";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

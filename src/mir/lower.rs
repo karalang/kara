@@ -8321,7 +8321,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 _ => false,
             }
         }
-        let element = element(scrutinee);
+        let element = element(scrutinee) || self.through_a_reference(scrutinee);
         let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
             self.expr_place(scrutinee, false)?
         } else {
@@ -8349,6 +8349,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => (place, st, false),
         })
+    }
+
+    /// Whether `e` is a field (or tuple part) reached through a value that
+    /// is a reference: `first(xs).v`, `m.get(k).unwrap().v`. It is matched
+    /// where it lies, through that reference (B-2026-10-14-56).
+    fn through_a_reference(&self, e: &'a Expr) -> bool {
+        match &e.kind {
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                let by_ref = self.lcx.node_types.get(&object.id).is_some_and(|&t| {
+                    matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                });
+                by_ref || self.through_a_reference(object)
+            }
+            _ => false,
+        }
     }
 
     /// `if let pattern = value { then } else { .. }`: a two-arm match.
