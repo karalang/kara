@@ -2669,3 +2669,35 @@ fn main() {
          1.0 2.5 3.0 true\n"
     );
 }
+
+/// A variant constructed through a type alias is the target's variant:
+/// `Err(OldE.B(7))`, `Older.C { code: 3 }` and `Older.A` with `type OldE =
+/// NetE` (B-2026-10-15-50).
+#[test]
+fn mir_variant_constructed_through_a_type_alias() {
+    let src = r#"
+enum NetE { A, B(i32), C { code: i64 } }
+type OldE = NetE;
+type Older = OldE;
+struct Pt { x: i64 }
+impl Pt { fn origin() -> Pt { Pt { x: 0 } } }
+type P = Pt;
+fn f(x: i64) -> Result[i64, OldE] { if x > 0 { Ok(x) } else { Err(OldE.B(7)) } }
+fn main() {
+    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
+    let e = Older.C { code: 3 };
+    match e { OldE.C { code } => println(f"c {code}"), _ => println("x") }
+    let a = Older.A;
+    match a { NetE.A => println("a"), _ => println("x") }
+    println(f"{P.origin().x}");
+}
+"#;
+    let want = "b 7\nc 3\na\n0\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

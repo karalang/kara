@@ -1082,6 +1082,15 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn resolve_path_type(&mut self, segments: &[String], span: &Span) -> Type {
+        // A path through a type alias names the target's members: with
+        // `type OldE = NetE;`, `OldE.B` is `NetE.B` (B-2026-10-15-50).
+        if segments.len() >= 2 {
+            if let Some(target) = self.alias_path_head(&segments[0]) {
+                let mut segs = segments.to_vec();
+                segs[0] = target;
+                return self.resolve_path_type(&segs, span);
+            }
+        }
         // Value-binding-rooted field path — `F.value`, `CFG.max`,
         // `OUTER.inner.field`, where the leading segment is a value binding
         // (uppercase local or module-level `let`), not a type. The parser
@@ -1635,6 +1644,28 @@ impl<'a> super::TypeChecker<'a> {
             || crate::prelude::STDLIB_PROGRAMS
                 .iter()
                 .any(|(_, p)| in_items(&p.items))
+    }
+
+    /// The enum or struct a non-generic type alias names, when `name` is
+    /// such an alias heading a path and no value binding shadows it
+    /// (B-2026-10-15-50).
+    pub(super) fn alias_path_head(&self, name: &str) -> Option<String> {
+        if self.env.enums.contains_key(name)
+            || self.env.structs.contains_key(name)
+            || self.local_scope.lookup(name).is_some()
+        {
+            return None;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut cur = name.to_string();
+        while let Some(Type::Named { name: inner, args }) = self.env.type_aliases.get(&cur) {
+            if !args.is_empty() || !seen.insert(cur.clone()) {
+                return None;
+            }
+            cur = inner.clone();
+        }
+        (cur != name && (self.env.enums.contains_key(&cur) || self.env.structs.contains_key(&cur)))
+            .then_some(cur)
     }
 
     pub(super) fn type_has_comptime_derive(&self, type_name: &str) -> bool {

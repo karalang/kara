@@ -8167,7 +8167,14 @@ impl<'a> super::TypeChecker<'a> {
                 // (else `infer_struct_literal` looks up `Variant` as a struct
                 // and rejects "not a struct"). See `enum_struct_variant_fields`.
                 if path.len() >= 2 {
-                    let enum_name = path[path.len() - 2].clone();
+                    let mut enum_name = path[path.len() - 2].clone();
+                    // Through a type alias, the alias's target
+                    // (B-2026-10-15-50).
+                    if path.len() == 2 {
+                        if let Some(target) = self.alias_path_head(&enum_name) {
+                            enum_name = target;
+                        }
+                    }
                     if let Some(decl_fields) =
                         self.enum_struct_variant_fields(&enum_name, &target_name)
                     {

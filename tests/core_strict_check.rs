@@ -4826,3 +4826,29 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn check_variant_constructed_through_a_type_alias() {
+    // B-2026-10-15-50: a path through a type alias names the target's
+    // variants, in a call, a struct-shaped literal and a unit variant.
+    accepted(
+        "alias-variant",
+        r#"
+enum NetE { A, B(i32), C { code: i64 } }
+type OldE = NetE;
+type Older = OldE;
+struct Pt { x: i64 }
+impl Pt { fn origin() -> Pt { Pt { x: 0 } } }
+type P = Pt;
+fn f(x: i64) -> Result[i64, OldE] { if x > 0 { Ok(x) } else { Err(OldE.B(7)) } }
+fn main() {
+    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
+    let e = Older.C { code: 3 };
+    match e { OldE.C { code } => println(f"c {code}"), _ => println("x") }
+    let a = Older.A;
+    match a { NetE.A => println("a"), _ => println("x") }
+    println(f"{P.origin().x}");
+}
+"#,
+    );
+}
