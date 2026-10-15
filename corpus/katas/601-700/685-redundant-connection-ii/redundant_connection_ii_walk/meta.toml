@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/685-redundant-connection-ii/redundant_connection_ii_walk.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "7cb1840d6"
+extracted_src = "42217541"
+model_rev = "583cfb0d"
+model_src = "42217541"

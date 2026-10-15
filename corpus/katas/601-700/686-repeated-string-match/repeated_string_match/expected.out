@@ -1,0 +1,17 @@
+a = abcd, b = cdabcdab -> 3
+a = a, b = aa -> 2
+a = abc, b = wxyz -> -1
+a = abc, b = abc -> 1
+a = abc, b = cabcabca -> 4
+a = aa, b = a -> 1
+a = ab, b = ba -> 2
+a = abab, b = aba -> 1
+a = abc, b = cba -> -1
+a = a, b = aaaaaaaaaa -> 10
+a = abcabcabcabc, b = abac -> -1
+a = baa, b = abaab -> 3
+two letters, a up to 4 and b up to 7: by answer -1 and 1 to 7 [7084, 162, 270, 88, 10, 2, 2, 2], checksum 562120740
+300 random pairs: 115 with no answer, checksum 314633541
+long: 2, changed: -1
+long: 2, changed: -1
+long: 2, changed: -1

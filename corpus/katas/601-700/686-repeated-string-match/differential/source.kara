@@ -1,0 +1,274 @@
+// LeetCode #686: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random pairs of
+// strings.
+
+// ---- star arm ----------------------------------------------------------
+
+fn repeated_string_match_star(a: String, b: String) -> i64 {
+    let n = a.len();
+    let m = b.len();
+    let mut q = (m + n - 1) / n;
+    let mut s = String.new();
+    for _ in 0..q {
+        s.push_str(a);
+    }
+    if s.contains(b) {
+        return q;
+    }
+    s.push_str(a);
+    q += 1;
+    if s.contains(b) {
+        return q;
+    }
+    -1
+}
+
+// ---- kmp arm -----------------------------------------------------------
+
+fn repeated_string_match_kmp(a: String, b: String) -> i64 {
+    let x = a.bytes();
+    let y = b.bytes();
+    let n = x.len();
+    let m = y.len();
+    let mut fail: Vec[i64] = vec![0; m];
+    let mut k = 0;
+    for i in 1..m {
+        while k > 0 and y[i] != y[k] {
+            k = fail[k - 1];
+        }
+        if y[i] == y[k] {
+            k += 1;
+        }
+        fail[i] = k;
+    }
+    let mut j = 0;
+    for i in 0..n + m {
+        let c = x[i % n];
+        while j > 0 and c != y[j] {
+            j = fail[j - 1];
+        }
+        if c == y[j] {
+            j += 1;
+        }
+        if j == m {
+            return (i + 1 + n - 1) / n;
+        }
+    }
+    -1
+}
+
+// ---- hash arm ----------------------------------------------------------
+
+fn repeated_string_match_hash(a: String, b: String) -> i64 {
+    let x = a.bytes();
+    let y = b.bytes();
+    let n = x.len();
+    let m = y.len();
+    let p = 1000000007;
+    let base = 131;
+    let mut want = 0;
+    let mut have = 0;
+    let mut top = 1;
+    for i in 0..m {
+        want = (want * base + y[i] as i64) % p;
+        have = (have * base + x[i % n] as i64) % p;
+        if i > 0 {
+            top = top * base % p;
+        }
+    }
+    for s in 0..n {
+        if have == want {
+            let mut same = true;
+            let mut j = 0;
+            while same and j < m {
+                if x[(s + j) % n] != y[j] {
+                    same = false;
+                }
+                j += 1;
+            }
+            if same {
+                return (s + m + n - 1) / n;
+            }
+        }
+        let out = x[s % n] as i64;
+        let into = x[(s + m) % n] as i64;
+        have = ((have - out * top % p + p) % p * base + into) % p;
+    }
+    -1
+}
+
+// ---- brute arm ---------------------------------------------------------
+
+fn repeated_string_match_brute(a: String, b: String) -> i64 {
+    let x = a.bytes();
+    let y = b.bytes();
+    let n = x.len();
+    let m = y.len();
+    for s in 0..n {
+        let mut j = 0;
+        while j < m and x[(s + j) % n] == y[j] {
+            j += 1;
+        }
+        if j == m {
+            return (s + m + n - 1) / n;
+        }
+    }
+    -1
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, a: String, b: String) -> i64 {
+    if which == 0 {
+        repeated_string_match_star(a, b)
+    } else if which == 1 {
+        repeated_string_match_kmp(a, b)
+    } else if which == 2 {
+        repeated_string_match_hash(a, b)
+    } else {
+        repeated_string_match_brute(a, b)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(((97 + next_random(seed) % letters) as u8) as char);
+    }
+    s
+}
+
+// `len` letters of the repetition of `a`, from position `start`.
+fn slice_of_repeats(a: ref String, start: i64, len: i64) -> String {
+    let x = a.bytes();
+    let n = x.len();
+    let mut s = String.new();
+    for i in 0..len {
+        s.push(x[(start + i) % n] as char);
+    }
+    s
+}
+
+fn reversed(s: ref String) -> String {
+    s.chars().rev().collect()
+}
+
+// Every letter moved on by `shift` places in a 26-letter alphabet.
+fn shifted(s: ref String, shift: i64) -> String {
+    let mut t = String.new();
+    for c in s.chars() {
+        t.push(((97 + (c as i64 - 97 + shift) % 26) as u8) as char);
+    }
+    t
+}
+
+// The definition: the fewest copies of `a`, joined, that hold `b`,
+// trying 1, 2, 3, ... copies up to 3 more than `b` needs to fit,
+// each checked against every start by comparing letter by letter.
+fn definition(a: ref String, b: ref String) -> i64 {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let n = x.len();
+    let m = y.len();
+    for k in 1..m / n + 4 {
+        let mut text: Vec[char] = Vec.new();
+        for _ in 0..k {
+            for c in x.iter() {
+                text.push(*c);
+            }
+        }
+        let mut s = 0;
+        while s + m <= text.len() {
+            let mut same = true;
+            for j in 0..m {
+                if text[s + j] != y[j] {
+                    same = false;
+                }
+            }
+            if same {
+                return k;
+            }
+            s += 1;
+        }
+    }
+    -1
+}
+
+fn main() {
+    let mut seed = 6860;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 2000;
+    let mut found = 0;
+    for c in 0..cases {
+        let n = if c % 4 == 3 { 1 + next_random(mut seed) % 60 } else { 1 + next_random(mut seed) % 8 };
+        let letters = 1 + next_random(mut seed) % 3;
+        let a = random_word(mut seed, n, letters);
+        let m = 1 + next_random(mut seed) % (3 * n + 4);
+        let b = if c % 2 == 0 {
+            let start = next_random(mut seed) % n;
+            let s = slice_of_repeats(a, start, m);
+            if next_random(mut seed) % 4 == 0 {
+                let at = next_random(mut seed) % m;
+                let mut t = s.bytes().to_vec();
+                t[at] = (97 + next_random(mut seed) % 3) as u8;
+                String.from_utf8(t).unwrap()
+            } else {
+                s
+            }
+        } else {
+            random_word(mut seed, m, letters)
+        };
+        let want = if n <= 8 { definition(a, b) } else { -2 };
+        let shift = 1 + next_random(mut seed) % 25;
+        let k = 1 + next_random(mut seed) % 5;
+        let mut copies = String.new();
+        for _ in 0..k {
+            copies.push_str(a);
+        }
+        for which in 0..arms {
+            let got = answer(which, a.clone(), b.clone());
+            if which == 0 and got != -1 {
+                found += 1;
+            }
+            // P1: the definition's answer, for `a` of up to 8 letters.
+            if want != -2 {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: every letter of both moved on alike changes nothing.
+            checks += 1;
+            if answer(which, shifted(a, shift), shifted(b, shift)) != got {
+                fails[1] += 1;
+            }
+            // P3: both strings reversed changes nothing.
+            checks += 1;
+            if answer(which, reversed(a), reversed(b)) != got {
+                fails[2] += 1;
+            }
+            // P4: k copies of `a` need exactly k.
+            checks += 1;
+            if answer(which, a.clone(), copies.clone()) != k {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for k in 0..4 {
+        if fails[k] > 0 {
+            report.push_str(f"P{k + 1}: {fails[k]} failures | ");
+        }
+        total += fails[k];
+    }
+    println(f"{report}{cases} pairs ({found} with an answer), {arms} arms, {checks} checks, {total} failures");
+}

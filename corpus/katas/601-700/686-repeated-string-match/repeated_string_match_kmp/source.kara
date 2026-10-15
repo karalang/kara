@@ -1,0 +1,156 @@
+// LeetCode #686: Repeated String Match -- Knuth-Morris-Pratt.
+//
+// Run the KMP automaton for `b` over the repetition of `a` without
+// building it: the text byte at position i is a[i mod n]. A match must
+// start within the first copy of `a`, so the text never needs to run
+// past n + m bytes. A match ending at position e takes e / n copies,
+// rounded up. O(n + m) time, O(m) space.
+
+fn repeated_string_match(a: String, b: String) -> i64 {
+    let x = a.bytes();
+    let y = b.bytes();
+    let n = x.len();
+    let m = y.len();
+    let mut fail: Vec[i64] = vec![0; m];
+    let mut k = 0;
+    for i in 1..m {
+        while k > 0 and y[i] != y[k] {
+            k = fail[k - 1];
+        }
+        if y[i] == y[k] {
+            k += 1;
+        }
+        fail[i] = k;
+    }
+    let mut j = 0;
+    for i in 0..n + m {
+        let c = x[i % n];
+        while j > 0 and c != y[j] {
+            j = fail[j - 1];
+        }
+        if c == y[j] {
+            j += 1;
+        }
+        if j == m {
+            return (i + 1 + n - 1) / n;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(a: String, b: String) {
+    println(f"a = {a}, b = {b} -> {repeated_string_match(a, b)}");
+}
+
+// The string of `len` letters from `letters` that `code` numbers.
+fn word(code: i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    let mut c = code;
+    for _ in 0..len {
+        s.push(((97 + c % letters) as u8) as char);
+        c /= letters;
+    }
+    s
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(((97 + next_random(seed) % letters) as u8) as char);
+    }
+    s
+}
+
+// `len` letters of the repetition of `a`, from position `start`.
+fn slice_of_repeats(a: ref String, start: i64, len: i64) -> String {
+    let x = a.bytes();
+    let n = x.len();
+    let mut s = String.new();
+    for i in 0..len {
+        s.push(x[(start + i) % n] as char);
+    }
+    s
+}
+
+fn main() {
+    show("abcd", "cdabcdab");
+    show("a", "aa");
+    show("abc", "wxyz");
+    show("abc", "abc");
+    show("abc", "cabcabca");
+    show("aa", "a");
+    show("ab", "ba");
+    show("abab", "aba");
+    show("abc", "cba");
+    show("a", "aaaaaaaaaa");
+    show("abcabcabcabc", "abac");
+    show("baa", "abaab");
+
+    // Every `a` of 1 to 4 letters and `b` of 1 to 7 over two letters.
+    let mut counts: Vec[i64] = vec![0; 8];
+    let mut sum = 0;
+    for la in 1..5 {
+        for ca in 0..(1 << la) {
+            let a = word(ca, la, 2);
+            for lb in 1..8 {
+                for cb in 0..(1 << lb) {
+                    let r = repeated_string_match(a.clone(), word(cb, lb, 2));
+                    counts[if r == -1 { 0 } else { r }] += 1;
+                    sum = (sum * 31 + r + 2) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"two letters, a up to 4 and b up to 7: by answer -1 and 1 to 7 {counts}, checksum {sum}");
+
+    // Random pairs: half of them `b` cut from the repetition of `a`, one
+    // in four of those with a letter changed.
+    let mut seed = 686;
+    let mut none = 0;
+    let mut checksum = 0;
+    for c in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let letters = 1 + next_random(mut seed) % 3;
+        let a = random_word(mut seed, n, letters);
+        let m = 1 + next_random(mut seed) % (4 * n + 4);
+        let b = if c % 2 == 0 {
+            let start = next_random(mut seed) % n;
+            let s = slice_of_repeats(a, start, m);
+            if next_random(mut seed) % 4 == 0 {
+                let at = next_random(mut seed) % m;
+                let mut t = s.bytes().to_vec();
+                t[at] = (97 + next_random(mut seed) % 3) as u8;
+                String.from_utf8(t).unwrap()
+            } else {
+                s
+            }
+        } else {
+            random_word(mut seed, m, letters)
+        };
+        let r = repeated_string_match(a, b);
+        if r == -1 {
+            none += 1;
+        }
+        checksum = (checksum * 31 + r + 2) % 1000000007;
+    }
+    println(f"300 random pairs: {none} with no answer, checksum {checksum}");
+
+    // Long strings: `a` of 10,000 letters and `b` of 10,000 cut from
+    // its repetition, and the same `b` with its last letter changed.
+    for _ in 0..3 {
+        let a = random_word(mut seed, 10000, 26);
+        let start = next_random(mut seed) % 10000;
+        let b = slice_of_repeats(a, start, 10000);
+        let mut t = b.bytes().to_vec();
+        t[9999] = if t[9999] == 97 { 98 } else { 97 };
+        let changed = String.from_utf8(t).unwrap();
+        println(f"long: {repeated_string_match(a.clone(), b)}, changed: {repeated_string_match(a, changed)}");
+    }
+}

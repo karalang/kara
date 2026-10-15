@@ -1,0 +1,480 @@
+// LeetCode #685: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random rooted trees
+// with one more edge.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_star(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut v = x;
+    while parent[v] != v {
+        parent[v] = parent[parent[v]];
+        v = parent[v];
+    }
+    v
+}
+
+fn find_redundant_directed_connection_star(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut into: Vec[i64] = vec![-1; n + 1];
+    let mut first = -1;
+    let mut second = -1;
+    for i in 0..n {
+        let (_, b) = edges[i];
+        if into[b] == -1 {
+            into[b] = i;
+        } else {
+            first = into[b];
+            second = i;
+        }
+    }
+    let mut parent: Vec[i64] = Vec.new();
+    for v in 0..n + 1 {
+        parent.push(v);
+    }
+    for i in 0..n {
+        if i != second {
+            let (a, b) = edges[i];
+            let ra = find_star(mut parent, a);
+            let rb = find_star(mut parent, b);
+            if ra == rb {
+                return if first == -1 { edges[i] } else { edges[first] };
+            }
+            parent[rb] = ra;
+        }
+    }
+    edges[second]
+}
+
+// ---- peel arm ----------------------------------------------------------
+
+fn find_redundant_directed_connection_peel(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    let mut degree: Vec[i64] = vec![0; n + 1];
+    let mut into: Vec[i64] = vec![-1; n + 1];
+    let mut first = -1;
+    let mut second = -1;
+    for i in 0..n {
+        let (a, b) = edges[i];
+        adj[a].push(b);
+        adj[b].push(a);
+        degree[a] += 1;
+        degree[b] += 1;
+        if into[b] == -1 {
+            into[b] = i;
+        } else {
+            first = into[b];
+            second = i;
+        }
+    }
+    let mut leaves: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        if degree[v] == 1 {
+            leaves.push(v);
+        }
+    }
+    while let Some(v) = leaves.pop() {
+        degree[v] = 0;
+        for w in adj[v].iter() {
+            if degree[*w] > 0 {
+                degree[*w] -= 1;
+                if degree[*w] == 1 {
+                    leaves.push(*w);
+                }
+            }
+        }
+    }
+    let on_cycle = |i: i64| {
+        let (a, b) = edges[i];
+        degree[a] >= 2 and degree[b] >= 2
+    };
+    if second != -1 {
+        if on_cycle(second) {
+            return edges[second];
+        }
+        return edges[first];
+    }
+    let mut k = n - 1;
+    while not on_cycle(k) {
+        k -= 1;
+    }
+    edges[k]
+}
+
+// ---- walk arm ----------------------------------------------------------
+
+fn find_redundant_directed_connection_walk(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut up: Vec[i64] = vec![0; n + 1];
+    let mut into: Vec[i64] = vec![-1; n + 1];
+    let mut first = -1;
+    let mut second = -1;
+    for i in 0..n {
+        let (a, b) = edges[i];
+        if into[b] == -1 {
+            into[b] = i;
+            up[b] = a;
+        } else {
+            first = into[b];
+            second = i;
+        }
+    }
+    // 0: not seen, 1: on the current walk, 2: done.
+    let mut color: Vec[i64] = vec![0; n + 1];
+    let mut on_cycle: Vec[bool] = vec![false; n + 1];
+    let mut found = false;
+    for start in 1..n + 1 {
+        let mut v = start;
+        while v != 0 and color[v] == 0 {
+            color[v] = 1;
+            v = up[v];
+        }
+        if v != 0 and color[v] == 1 {
+            found = true;
+            let mut w = v;
+            loop {
+                on_cycle[w] = true;
+                w = up[w];
+                if w == v {
+                    break;
+                }
+            }
+        }
+        let mut u = start;
+        while u != 0 and color[u] == 1 {
+            color[u] = 2;
+            u = up[u];
+        }
+    }
+    if not found {
+        return edges[second];
+    }
+    if second != -1 {
+        return edges[first];
+    }
+    let mut k = n - 1;
+    loop {
+        let (a, b) = edges[k];
+        if on_cycle[a] and on_cycle[b] {
+            return (a, b);
+        }
+        k -= 1;
+    }
+}
+
+// ---- removal arm -------------------------------------------------------
+
+fn rooted_tree_without_removal(edges: ref Vec[(i64, i64)], skip: i64) -> bool {
+    let n = edges.len();
+    let mut children: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        children.push(Vec.new());
+    }
+    let mut parents: Vec[i64] = vec![0; n + 1];
+    for k in 0..n {
+        if k != skip {
+            let (a, b) = edges[k];
+            children[a].push(b);
+            parents[b] += 1;
+        }
+    }
+    let mut root = 0;
+    for v in 1..n + 1 {
+        if parents[v] > 1 {
+            return false;
+        }
+        if parents[v] == 0 {
+            if root != 0 {
+                return false;
+            }
+            root = v;
+        }
+    }
+    if root == 0 {
+        return false;
+    }
+    let mut stack: Vec[i64] = vec![root];
+    let mut count = 0;
+    while let Some(v) = stack.pop() {
+        count += 1;
+        for w in children[v].iter() {
+            stack.push(*w);
+        }
+    }
+    count == n
+}
+
+fn find_redundant_directed_connection_removal(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let mut k = edges.len() - 1;
+    while k >= 0 {
+        if rooted_tree_without_removal(edges, k) {
+            return edges[k];
+        }
+        k -= 1;
+    }
+    (0, 0)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, edges: Vec[(i64, i64)]) -> (i64, i64) {
+    if which == 0 {
+        find_redundant_directed_connection_star(edges)
+    } else if which == 1 {
+        find_redundant_directed_connection_peel(edges)
+    } else if which == 2 {
+        find_redundant_directed_connection_walk(edges)
+    } else {
+        find_redundant_directed_connection_removal(edges)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        v.push(x);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(seed) % (i + 1);
+        v.swap(i, j);
+        i -= 1;
+    }
+    v
+}
+
+// A random rooted tree on 1 to n, as parent pointers (0 for the root),
+// and one more edge (a, b), every edge in a random order. Half the time
+// the new edge tries to point up the tree, at the root or at an
+// ancestor of `a` other than its parent.
+fn random_graph(seed: mut ref i64, n: i64) -> (Vec[(i64, i64)], Vec[i64], i64, i64) {
+    let name = shuffled(seed, n);
+    let mut up: Vec[i64] = vec![0; n + 1];
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for v in 1..n {
+        let a = name[next_random(seed) % v];
+        up[name[v]] = a;
+        edges.push((a, name[v]));
+    }
+    let mut a = 0;
+    let mut b = 0;
+    if next_random(seed) % 2 == 0 {
+        // Up from a random vertex other than the root to some ancestor
+        // that is not its parent; a few tries, since few vertices of a
+        // shallow tree have one.
+        let mut tries = 0;
+        while b == 0 and tries < 20 {
+            tries += 1;
+            a = name[1 + next_random(seed) % (n - 1)];
+            let mut path: Vec[i64] = Vec.new();
+            let mut w = up[a];
+            while w != 0 {
+                path.push(w);
+                w = up[w];
+            }
+            if path.len() >= 2 {
+                b = path[1 + next_random(seed) % (path.len() - 1)];
+            }
+        }
+    }
+    if b == 0 {
+        loop {
+            a = 1 + next_random(seed) % n;
+            b = 1 + next_random(seed) % n;
+            if a != b and up[b] != a {
+                break;
+            }
+        }
+    }
+    edges.push((a, b));
+    let mut k = n - 1;
+    while k > 0 {
+        let j = next_random(seed) % (k + 1);
+        edges.swap(k, j);
+        k -= 1;
+    }
+    (edges, up, a, b)
+}
+
+fn index_of(edges: ref Vec[(i64, i64)], e: (i64, i64)) -> i64 {
+    let mut i = 0;
+    while edges[i] != e {
+        i += 1;
+    }
+    i
+}
+
+// The answer from how the graph was built. An edge into the root closes
+// a cycle down the tree to `a` and back: the last of its edges. An edge
+// into an ancestor of `a` closes a cycle too, and only the new edge
+// breaks it. Any other edge only gives `b` a second parent: the later of
+// its two.
+fn built_answer(edges: ref Vec[(i64, i64)], up: ref Vec[i64], a: i64, b: i64) -> (i64, i64) {
+    if up[b] == 0 {
+        let mut last = index_of(edges, (a, b));
+        let mut w = a;
+        while up[w] != 0 {
+            let i = index_of(edges, (up[w], w));
+            if i > last {
+                last = i;
+            }
+            w = up[w];
+        }
+        return edges[last];
+    }
+    let mut w = up[a];
+    while w != 0 {
+        if w == b {
+            return (a, b);
+        }
+        w = up[w];
+    }
+    if index_of(edges, (a, b)) > index_of(edges, (up[b], b)) { (a, b) } else { (up[b], b) }
+}
+
+// 0: the new edge points at the root; 1: at an ancestor of `a`; 2: at
+// any other vertex.
+fn kind(up: ref Vec[i64], a: i64, b: i64) -> i64 {
+    if up[b] == 0 {
+        return 0;
+    }
+    let mut w = up[a];
+    while w != 0 {
+        if w == b {
+            return 1;
+        }
+        w = up[w];
+    }
+    2
+}
+
+// The definition: the last edge in the input without which exactly one
+// vertex has no parent, no vertex has two, and the root reaches every
+// vertex, by the transitive closure of the other edges.
+fn definition(edges: ref Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut k = n - 1;
+    while k >= 0 {
+        let mut reach: Vec[Vec[bool]] = Vec.new();
+        for v in 0..n + 1 {
+            let mut row: Vec[bool] = vec![false; n + 1];
+            row[v] = true;
+            reach.push(row);
+        }
+        let mut parents: Vec[i64] = vec![0; n + 1];
+        for i in 0..n {
+            if i != k {
+                let (a, b) = edges[i];
+                reach[a][b] = true;
+                parents[b] += 1;
+            }
+        }
+        for m in 1..n + 1 {
+            for i in 1..n + 1 {
+                if reach[i][m] {
+                    for j in 1..n + 1 {
+                        if reach[m][j] {
+                            reach[i][j] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut roots = 0;
+        let mut root = 0;
+        let mut ok = true;
+        for v in 1..n + 1 {
+            if parents[v] == 0 {
+                roots += 1;
+                root = v;
+            }
+            if parents[v] > 1 {
+                ok = false;
+            }
+        }
+        if ok and roots == 1 {
+            for v in 1..n + 1 {
+                if not reach[root][v] {
+                    ok = false;
+                }
+            }
+            if ok {
+                return edges[k];
+            }
+        }
+        k -= 1;
+    }
+    (0, 0)
+}
+
+fn main() {
+    let mut seed = 6850;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1500;
+    let mut kinds = [0, 0, 0];
+    for c in 0..cases {
+        let n = if c % 3 == 2 { 3 + next_random(mut seed) % 100 } else { 3 + next_random(mut seed) % 8 };
+        let (edges, up, a, b) = random_graph(mut seed, n);
+        let want = if n <= 10 { definition(edges) } else { (0, 0) };
+        let built = built_answer(edges, up, a, b);
+        kinds[kind(up, a, b)] += 1;
+        let name = shuffled(mut seed, n);
+        let renamed: Vec[(i64, i64)] = edges.iter().map(|e| (name[e.0 - 1], name[e.1 - 1])).collect();
+        for which in 0..arms {
+            let got = answer(which, edges.clone());
+            // P1: the definition's answer, on up to 10 vertices.
+            if n <= 10 {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the vertices renamed, the same edge renamed.
+            checks += 1;
+            if got.0 < 1 or got.1 < 1 or answer(which, renamed.clone()) != (name[got.0 - 1], name[got.1 - 1]) {
+                fails[1] += 1;
+            }
+            // P3: the answer moved to the end of the input is still the
+            // answer, since leaving it out leaves a rooted tree.
+            checks += 1;
+            match edges.iter().position(|e| *e == got) {
+                Some(i) => {
+                    let mut rest = edges.clone();
+                    rest.remove(i);
+                    rest.push(got);
+                    if answer(which, rest) != got {
+                        fails[2] += 1;
+                    }
+                }
+                None => {
+                    fails[2] += 1;
+                }
+            }
+            // P4: the answer from how the graph was built.
+            checks += 1;
+            if got != built {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for k in 0..4 {
+        if fails[k] > 0 {
+            report.push_str(f"P{k + 1}: {fails[k]} failures | ");
+        }
+        total += fails[k];
+    }
+    println(f"{report}{cases} graphs ({kinds[0]} into the root, {kinds[1]} up the tree, {kinds[2]} across), {arms} arms, {checks} checks, {total} failures");
+}

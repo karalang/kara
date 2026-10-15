@@ -1,0 +1,190 @@
+// LeetCode #685: Redundant Connection II -- union-find and two candidates.
+//
+// A rooted tree with one more directed edge either gives some vertex two
+// parents, or points back at the root and closes a cycle with no root
+// left. Look for a vertex with two parents first: its two incoming edges
+// are the only candidates, the earlier and the later. Then add every edge
+// but the later candidate to a disjoint-set forest. If none closes a
+// cycle, the later candidate is the answer; if one does, the answer is
+// the earlier candidate when there is one, else the edge that closed the
+// cycle, which is the cycle's last edge in the input. O(n α(n)) time,
+// O(n) space.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut v = x;
+    while parent[v] != v {
+        parent[v] = parent[parent[v]];
+        v = parent[v];
+    }
+    v
+}
+
+fn find_redundant_directed_connection(edges: Vec[(i64, i64)]) -> (i64, i64) {
+    let n = edges.len();
+    let mut into: Vec[i64] = vec![-1; n + 1];
+    let mut first = -1;
+    let mut second = -1;
+    for i in 0..n {
+        let (_, b) = edges[i];
+        if into[b] == -1 {
+            into[b] = i;
+        } else {
+            first = into[b];
+            second = i;
+        }
+    }
+    let mut parent: Vec[i64] = Vec.new();
+    for v in 0..n + 1 {
+        parent.push(v);
+    }
+    for i in 0..n {
+        if i != second {
+            let (a, b) = edges[i];
+            let ra = find(mut parent, a);
+            let rb = find(mut parent, b);
+            if ra == rb {
+                return if first == -1 { edges[i] } else { edges[first] };
+            }
+            parent[rb] = ra;
+        }
+    }
+    edges[second]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(edges: Vec[(i64, i64)]) {
+    println(f"{edges} -> {find_redundant_directed_connection(edges.clone())}");
+}
+
+// Whether the parent pointers `up` (0 for the root) make a tree: every
+// vertex reaches the root within n steps.
+fn is_tree(up: ref Vec[i64], n: i64) -> bool {
+    for v in 1..n + 1 {
+        let mut w = v;
+        let mut steps = 0;
+        while up[w] != 0 {
+            w = up[w];
+            steps += 1;
+            if steps > n {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// A random rooted tree on 1 to n with one more edge, the edges in a
+// random order.
+fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
+    let mut name: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        name.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(seed) % (i + 1);
+        name.swap(i, j);
+        i -= 1;
+    }
+    let mut up: Vec[i64] = vec![0; n + 1];
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for v in 1..n {
+        let a = name[next_random(seed) % v];
+        up[name[v]] = a;
+        edges.push((a, name[v]));
+    }
+    loop {
+        let a = 1 + next_random(seed) % n;
+        let b = 1 + next_random(seed) % n;
+        if a != b and up[b] != a {
+            edges.push((a, b));
+            break;
+        }
+    }
+    let mut k = n - 1;
+    while k > 0 {
+        let j = next_random(seed) % (k + 1);
+        edges.swap(k, j);
+        k -= 1;
+    }
+    edges
+}
+
+fn main() {
+    show([(1, 2), (1, 3), (2, 3)]);
+    show([(1, 2), (2, 3), (3, 4), (4, 1), (1, 5)]);
+    show([(2, 1), (3, 1), (4, 2), (1, 4)]);
+    show([(3, 1), (2, 1), (4, 2), (1, 4)]);
+    show([(1, 2), (2, 3), (3, 1)]);
+    show([(3, 1), (1, 2), (2, 3)]);
+    show([(1, 2), (2, 1), (1, 3)]);
+    show([(2, 1), (1, 2), (1, 3)]);
+    show([(4, 1), (1, 2), (2, 3), (3, 4), (1, 5)]);
+    show([(5, 2), (5, 3), (2, 4), (4, 1), (3, 4)]);
+    show([(6, 3), (8, 4), (9, 6), (3, 2), (5, 10), (10, 7), (2, 1), (7, 6), (4, 5), (2, 8)]);
+
+    // Every rooted tree on 3 to 5 vertices with every edge it does not
+    // have added, at a place that depends on the edge, the edges listed
+    // in order and in reverse.
+    let mut graphs = 0;
+    let mut sum = 0;
+    for n in 3..6 {
+        let mut total = 1;
+        for _ in 0..n {
+            total *= n + 1;
+        }
+        for code in 0..total {
+            let mut up: Vec[i64] = vec![0; n + 1];
+            let mut c = code;
+            let mut roots = 0;
+            let mut fits = true;
+            for v in 1..n + 1 {
+                up[v] = c % (n + 1);
+                c /= n + 1;
+                if up[v] == 0 {
+                    roots += 1;
+                }
+                if up[v] == v {
+                    fits = false;
+                }
+            }
+            if fits and roots == 1 and is_tree(up, n) {
+                for a in 1..n + 1 {
+                    for b in 1..n + 1 {
+                        if a != b and up[b] != a {
+                            let mut edges: Vec[(i64, i64)] = Vec.new();
+                            for v in 1..n + 1 {
+                                if up[v] != 0 {
+                                    edges.push((up[v], v));
+                                }
+                            }
+                            edges.insert((a * 7 + b) % n, (a, b));
+                            graphs += 1;
+                            let (p, q) = find_redundant_directed_connection(edges.clone());
+                            edges.reverse();
+                            let (r, s) = find_redundant_directed_connection(edges);
+                            sum = (sum * 31 + p * 1000 + q * 100 + r * 10 + s) % 1000000007;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println(f"rooted trees with one more edge on 3 to 5 vertices: {graphs}, checksum {sum}");
+
+    // Random graphs of up to 1,000 vertices.
+    let mut seed = 685;
+    let mut checksum = 0;
+    for _ in 0..200 {
+        let n = 3 + next_random(mut seed) % 998;
+        let (a, b) = find_redundant_directed_connection(random_graph(mut seed, n));
+        checksum = (checksum * 31 + a * 1009 + b) % 1000000007;
+    }
+    println(f"200 random graphs: checksum {checksum}");
+}
