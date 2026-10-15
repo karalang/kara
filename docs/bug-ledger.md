@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 272 |
 | codegen-gap | 262 |
-| false-positive | 204 |
+| false-positive | 205 |
 | other | 172 |
 | perf | 170 |
 | diagnostics | 163 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2912 |
 | interp | 935 |
-| typecheck | 443 |
+| typecheck | 444 |
 | other | 115 |
 | ownership | 104 |
 | cli | 76 |
@@ -219,6 +219,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-57 | 2026-10-15 | ownership | medium | The MIR borrow checker's `origins_dataflow` grows faster than quadratically with the number of statements in one function: a function of N `s.push_str("<96 hex chars>");` statements takes 155 MB / 2.0 s at N=250, 386 MB / 3.4 s at N=500 and 2.15 GB / 12.8 s at N=1000 under `karac __mir-run` (debug karac), and an app embedding two SQLite files as hex (functions of about 2,800 and 900 such lines) reached 12 GB and was killed; `karac check` alone is 0.35 s, 1.06 s and 4.42 s at the same sizes, while `karac run --interp` takes 0.22 s / 94 MB at N=1000 | — |
 | B-2026-10-15-58 | 2026-10-15 | typecheck | low | `f64.from_bits(bits)` (the Rust spelling) is refused with `no associated function 'from_bits' on type 'f64'` and no hint that the library's spelling is `bits.bits_as_f64()` on an `i64`; neither `bits_as_f64` nor `to_bits` appears in design.md, so a binary-format reader has no documented way to decode an IEEE double | — |
 | B-2026-10-15-59 | 2026-10-15 | runtime | medium | The fs library cannot create a symbolic link, see one, or read or set a file's permissions or modification time, so an archive extractor (unzip, tar), an installer or a sync tool cannot restore what the archive records | — |
+| B-2026-10-15-60 | 2026-10-15 | typecheck | low | `karac check` refuses `.to_vec()` on an `Array[T, N]` (`no method 'to_vec' on type 'Array'`), though design.md § Method resolution says an `Array[T, N]` receiver also finds `Slice[T]`'s methods; `a.contains(x)` already resolves that way and `a.as_slice().to_vec()` works. | — |
 
 ### Relocated
 

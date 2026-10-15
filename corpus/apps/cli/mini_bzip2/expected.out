@@ -1,0 +1,138 @@
+$ bzip2 -tv access.log.bz2 big.txt.bz2 empty.bz2 concat.bz2
+  access.log.bz2: ok
+  big.txt.bz2:    ok
+  empty.bz2:      ok
+  concat.bz2:     ok
+
+$ bzip2 -tvv big.txt.bz2
+  big.txt.bz2: 
+    [1: huff+mtf rt+rld]
+    ok
+
+$ bzip2 -t trunc.bz2
+bzip2: trunc.bz2: file ends unexpectedly
+
+You can use the `bzip2recover' program to attempt to recover
+data from undamaged sections of corrupted files.
+
+[exit status 2]
+
+$ bzip2 -t flipped.bz2
+bzip2: flipped.bz2: data integrity (CRC) error in data
+
+You can use the `bzip2recover' program to attempt to recover
+data from undamaged sections of corrupted files.
+
+[exit status 2]
+
+$ bzip2 -tv trailing.bz2
+  trailing.bz2: trailing garbage after EOF ignored
+ok
+
+$ bzip2 -t notes.bz2
+bzip2: notes.bz2: bad magic number (file not created by bzip2)
+
+You can use the `bzip2recover' program to attempt to recover
+data from undamaged sections of corrupted files.
+
+[exit status 2]
+
+$ bzip2 -t missing.bz2
+bzip2: Can't open input missing.bz2: No such file or directory.
+[exit status 1]
+
+$ bzip2 -dc concat.bz2
+block lazy fox brown quick compiles jumps lazy over
+twice kara lazy jumps dogs brown while quick quick
+over while every lazy fox dogs kara quick jumps
+quick twice jumps twice quick compiles compiles dogs fox
+dogs lazy fox every lazy kara fox dogs compiles
+quick over lazy over jumps kara dogs compiles jumps
+jumps compiles every the compiles kara fox the lazy
+over brown kara twice jumps lazy lazy jumps over
+quick twice twice block kara quick while compiles quick
+dogs fox quick block over the over the every
+kara compiles every over twice twice the compiles compiles
+brown dogs quick over brown dogs while over dogs
+compiles compiles kara the fox the block lazy lazy
+twice fox compiles while every quick the quick dogs
+compiles lazy block compiles fox while kara fox dogs
+over twice brown while lazy quick every block quick
+the brown compiles every kara block every jumps compiles
+block every dogs block quick lazy dogs brown the
+over twice over twice the quick over lazy while
+while while quick block block quick jumps while kara
+quick quick kara fox brown compiles quick while while
+jumps jumps over block fox fox kara lazy dogs
+the fox kara dogs brown while quick dogs brown
+twice quick block twice while brown brown kara while
+brown lazy kara kara twice every quick lazy twice
+the fox brown block twice quick every every every
+lazy brown jumps while kara the lazy quick dogs
+jumps while compiles block twice block the lazy lazy
+jumps quick fox jumps while quick compiles lazy over
+dogs fox compiles while brown kara while quick lazy
+compiles jumps jumps every kara jumps fox over quick
+lazy block dogs lazy over compiles lazy over dogs
+quick the jumps twice while the brown while lazy
+while over lazy twice fox compiles quick every over
+the over over dogs fox while every while dogs
+every the over lazy kara quick the every kara
+over fox over kara every over twice jumps fox
+kara block kara the over brown dogs quick while
+block block over the twice quick fox jumps kara
+jumps block block lazy compiles twice over lazy quick
+jumps kara compiles quick quick lazy fox twice jumps
+over the over brown twice brown block jumps compiles
+jumps the block dogs the lazy kara quick while
+brown over compiles every the kara compiles block fox
+kara while the twice every dogs lazy over compiles
+compiles twice quick brown block quick dogs compiles block
+brown lazy block dogs compiles lazy block quick dogs
+over every every quick twice quick twice over compiles
+twice while every quick every quick lazy jumps every
+compiles while quick twice fox quick lazy over while
+brown twice quick brown twice jumps dogs lazy the
+lazy lazy fox compiles every dogs dogs lazy every
+block lazy while block dogs quick while every twice
+brown block kara over fox the over twice brown
+compiles over lazy kara block while compiles lazy dogs
+kara kara twice dogs over block kara brown dogs
+every lazy over quick every dogs fox compiles jumps
+over every lazy kara the jumps quick block twice
+jumps lazy fox every fox lazy kara quick while
+brown lazy while dogs lazy dogs quick fox brown
+a second stream, appended with cat
+
+$ bzip2 -dk big.txt.bz2
+
+$ sha256sum big.txt
+81079e3822dbf8074972b148d708dc7d7bf17c3bcce6e2f299a785cc6d92275f  big.txt
+
+$ bzip2 -kv -9 poem.txt
+  poem.txt:  5.752:1,  1.391 bits/byte, 82.61% saved, 3060 in, 532 out.
+
+$ sha256sum poem.txt.bz2
+44c74bb8f4e65e3b33f9f988c5078a9992bacd90b08af1afe5ad04c250b7437f  poem.txt.bz2
+
+$ bzip2 -kv -1 runs.bin
+  runs.bin:  4.111:1,  1.946 bits/byte, 75.67% saved, 2335 in, 568 out.
+
+$ sha256sum runs.bin.bz2
+3b0ff935ca022b366473661d3111820146ee0ba43ed5985aae0194ed8942a5a1  runs.bin.bz2
+
+$ bzip2 -k empty.txt
+
+$ sha256sum empty.txt.bz2
+d3dda84eb03b9738d118eb2be78e246106900493c0ae07819ad60815134a8058  empty.txt.bz2
+
+$ bzip2 -k access.log
+bzip2: Output file access.log.bz2 already exists.
+[exit status 1]
+
+$ bzip2 -kfv -6 access.log
+  access.log: 12.699:1,  0.630 bits/byte, 92.13% saved, 41715 in, 3285 out.
+
+$ sha256sum access.log.bz2
+36eceb662d690e9ce46971c49c59e5a25bdbd1cf80274aae99ebbf7408cb18cd  access.log.bz2
+
