@@ -97,24 +97,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 272 |
-| codegen-gap | 263 |
+| codegen-gap | 264 |
 | false-positive | 205 |
-| other | 172 |
+| other | 173 |
 | perf | 170 |
 | diagnostics | 163 |
 | crash | 120 |
-| soundness | 109 |
+| soundness | 110 |
 | use-after-free | 91 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2914 |
-| interp | 936 |
+| codegen | 2916 |
+| interp | 938 |
 | typecheck | 445 |
 | other | 115 |
-| ownership | 104 |
+| ownership | 105 |
 | cli | 76 |
 | runtime | 75 |
 | parser | 67 |
@@ -222,6 +222,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-60 | 2026-10-15 | typecheck | low | `karac check` refuses `.to_vec()` on an `Array[T, N]` (`no method 'to_vec' on type 'Array'`), though design.md § Method resolution says an `Array[T, N]` receiver also finds `Slice[T]`'s methods; `a.contains(x)` already resolves that way and `a.as_slice().to_vec()` works. | — |
 | B-2026-10-15-61 | 2026-10-15 | typecheck+codegen | high | `karac check` accepts writing through a read-only `Slice`: `let mut t = s.bytes(); t[i] = x;` and `let mut w = v[0..2]; w[0] = x;` both pass, though `bytes()` and a range subscript give `Slice[T]` and collections.md says writing needs a `mut Slice[T]`. Both backends then write into the source, the String's or the Vec's own buffer, even when it is not `mut`; for `bytes()` the MIR compiled backend writes into the String (a literal's too: `let s = "hello"` then prints `aello`) while `__mir-run` writes into a snapshot copy, so run and build differ | — |
 | B-2026-10-15-67 | 2026-10-15 | interp+codegen | medium | `u32.rotate_left` / `u64.rotate_right` (and the other rotate widths) pass `karac check` but neither v2 backend has them: `__mir-run` stops with `call of unknown function u32.rotate_left` and `__mir-llvm-run` with ``native `u32.rotate_left` is not lowered yet`` | — |
+| B-2026-10-15-68 | 2026-10-15 | interp+codegen | medium | `f64.partial_cmp` passes `karac check` but neither v2 backend has it: `__mir-run` stops with `call of unknown function f64.partial_cmp` and `__mir-llvm-run` with ``native `f64.partial_cmp` is not lowered yet``, so the usual float sort `v.sort_by(|a, b| a.partial_cmp(b).unwrap())` runs on no v2 surface | — |
+| B-2026-10-15-69 | 2026-10-15 | interp+codegen | medium | On every v2 surface, `TcpListener.bind("127.0.0.1:0")` prints `BOUND_PORT=<n>` to the program's own stdout, a legacy test-harness convention that docs/library/io.md does not mention: any program that lets the OS choose a port (a test server, a daemon with an ephemeral console, a collector) gets an unrequested line with a random number in its output | — |
+| B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 
 ### Relocated
 

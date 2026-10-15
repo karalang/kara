@@ -1,0 +1,2101 @@
+// mini_statsd: Etsy's statsd 0.9.0 daemon with its graphite backend,
+// written from statsd's sources and run over real sockets:
+// - the UDP protocol: counters with sample rates, timers, gauges with
+//   +/- deltas, sets, several metrics in one packet, DogStatsD tags,
+//   key sanitizing, and the validity checks with JS's Number() rules;
+// - the flush: per-second rates, timer percentiles (top and bottom),
+//   std, median and histogram bins, calculatedTimerMetrics, idle-stat
+//   deletion and the gauge TTL;
+// - the graphite text protocol in the legacy and the new namespace,
+//   with prefixes, a suffix, tags and the backend's own stats;
+// - the management console: counters, timers and gauges printed the
+//   way node's util.inspect prints them, delcounters, deltimers and
+//   delgauges with `.*` folders, health, help and quit;
+// - JS's object key order and number formatting throughout.
+//
+// The daemon, the clients and the graphite collector all run in this
+// program over 127.0.0.1 sockets with OS-chosen ports, and the wall
+// clock is a virtual one. expected.out is real statsd's output, run by
+// real.py; oracle.py is the same program in Python.
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn is_ascii(s: Str) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn ljust(s: Str, width: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rjust(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn plural(n: i64, one: Str, many: Str) -> String {
+    if n == 1 { one.to_string() } else { many.to_string() }
+}
+
+// ------------------------------------------------------------ JS numbers
+
+fn signed_int(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    let mut n: i64 = 0;
+    while i < b.len() {
+        n = n * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -n } else { n }
+}
+
+fn zeros(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push_str("0");
+    }
+    s
+}
+
+// JS's Number::toString: the shortest digits that round-trip (which
+// `{x}` prints too, Python-style), laid out by ECMA-262's rules.
+fn js_num(x: f64) -> String {
+    if x != x {
+        return "NaN".to_string();
+    }
+    if x > 1.7976931348623157e308 {
+        return "Infinity".to_string();
+    }
+    if x < -1.7976931348623157e308 {
+        return "-Infinity".to_string();
+    }
+    if x == 0.0 {
+        return "0".to_string();
+    }
+    if x < 0.0 {
+        return f"-{js_num(-x)}";
+    }
+    let r = f"{x}";
+    let mut (m, has_e, e) = partition(r, b'e');
+    let mb = to_bytes(m);
+    let mut digits: Vec[u8] = Vec.new();
+    let mut point = mb.len();
+    for i in 0..mb.len() {
+        if mb[i] == b'.' {
+            point = i;
+        } else {
+            digits.push(mb[i]);
+        }
+    }
+    let mut n = point;
+    if has_e {
+        n += signed_int(e);
+    }
+    while digits.len() > 0 and digits[0] == b'0' {
+        digits.remove(0);
+        n -= 1;
+    }
+    while digits.len() > 0 and digits[digits.len() - 1] == b'0' {
+        digits.pop();
+    }
+    let k = digits.len();
+    let d = from_bytes(digits);
+    if k <= n and n <= 21 {
+        return f"{d}{zeros(n - k)}";
+    }
+    if 0 < n and n <= 21 {
+        return f"{slice(d, 0, n)}.{slice_from(d, n)}";
+    }
+    if -6 < n and n <= 0 {
+        return f"0.{zeros(-n)}{d}";
+    }
+    let sign = if n - 1 >= 0 { "+" } else { "-" };
+    let mut mant = slice(d, 0, 1);
+    if k > 1 {
+        mant.push_str(".");
+        mant.push_str(slice_from(d, 1));
+    }
+    let ex = if n - 1 < 0 { 1 - n } else { n - 1 };
+    f"{mant}e{sign}{ex}"
+}
+
+fn all_bytes(b: ref Vec[u8], from: i64, ok: Fn(u8) -> bool) -> bool {
+    if from >= b.len() {
+        return false;
+    }
+    for i in from..b.len() {
+        if not ok(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_oct(c: u8) -> bool {
+    c >= b'0' and c <= b'7'
+}
+
+fn is_bin(c: u8) -> bool {
+    c == b'0' or c == b'1'
+}
+
+fn radix_value(b: ref Vec[u8], base: f64) -> f64 {
+    let mut v = 0.0;
+    for i in 2..b.len() {
+        v = v * base + hex_val(b[i]) as f64;
+    }
+    v
+}
+
+// Whether `b` is a StrDecimalLiteral without its sign: digits with an
+// optional fraction, or a bare fraction, then an optional exponent.
+fn decimal_literal(b: ref Vec[u8], from: i64) -> bool {
+    let mut i = from;
+    let mut int_digits: i64 = 0;
+    while i < b.len() and is_digit(b[i]) {
+        i += 1;
+        int_digits += 1;
+    }
+    let mut frac_digits: i64 = 0;
+    if i < b.len() and b[i] == b'.' {
+        i += 1;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+            frac_digits += 1;
+        }
+    }
+    if int_digits + frac_digits == 0 {
+        return false;
+    }
+    if i < b.len() and (b[i] == b'e' or b[i] == b'E') {
+        i += 1;
+        if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+        }
+        if i == st {
+            return false;
+        }
+    }
+    i == b.len()
+}
+
+fn infinity() -> f64 {
+    let z = 0.0;
+    1.0 / z
+}
+
+fn not_a_number() -> f64 {
+    let z = 0.0;
+    z / z
+}
+
+// JS's Number(string).
+fn js_number(s: Str) -> f64 {
+    let t = strip(s);
+    let b = to_bytes(t);
+    if b.len() == 0 {
+        return 0.0;
+    }
+    if b.len() > 2 and b[0] == b'0' {
+        let p = lower_byte(b[1]);
+        if p == b'x' and all_bytes(b, 2, is_hex) {
+            return radix_value(b, 16.0);
+        }
+        if p == b'o' and all_bytes(b, 2, is_oct) {
+            return radix_value(b, 8.0);
+        }
+        if p == b'b' and all_bytes(b, 2, is_bin) {
+            return radix_value(b, 2.0);
+        }
+    }
+    let mut from: i64 = 0;
+    let mut neg = false;
+    if b[0] == b'+' or b[0] == b'-' {
+        neg = b[0] == b'-';
+        from = 1;
+    }
+    let body = slice_from(t, from);
+    if body == "Infinity" {
+        return if neg { -infinity() } else { infinity() };
+    }
+    if not decimal_literal(b, from) {
+        return not_a_number();
+    }
+    // f64.parse wants a digit before an exponent: "5.e3" is "5e3".
+    let mut lit = String.new();
+    let bb = to_bytes(body);
+    for i in 0..bb.len() {
+        if bb[i] == b'.' and (i + 1 == bb.len() or not is_digit(bb[i + 1])) {
+            continue;
+        }
+        lit.push_str(slice(body, i, i + 1));
+    }
+    let v = f64.parse(lit).unwrap_or(not_a_number());
+    if neg { -v } else { v }
+}
+
+// JS's Math.round: halves go up.
+fn js_round(x: f64) -> f64 {
+    (x + 0.5).floor()
+}
+
+// ------------------------------------------------------------ JS objects
+
+// Whether a key is an array index, which a JS object lists first, in
+// numeric order, before its other keys in the order they were added.
+fn is_index(k: Str) -> bool {
+    let b = to_bytes(k);
+    if b.len() == 0 or b.len() > 10 or not all_bytes(b, 0, is_digit) {
+        return false;
+    }
+    if b[0] == b'0' and b.len() > 1 {
+        return false;
+    }
+    signed_int(k) < 4294967295
+}
+
+// A JS object's own properties: a key list and the values beside it.
+struct Obj[V] {
+    keys: Vec[String],
+    vals: Vec[V],
+}
+
+impl[V] Obj[V] {
+    fn new() -> Obj[V] {
+        Obj { keys: Vec.new(), vals: Vec.new() }
+    }
+
+    fn find(ref self, k: Str) -> i64 {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == k {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn has(ref self, k: Str) -> bool {
+        self.find(k) >= 0
+    }
+
+    fn set(mut ref self, k: Str, v: own V) {
+        let i = self.find(k);
+        if i >= 0 {
+            self.vals[i] = v;
+        } else {
+            self.keys.push(k.to_string());
+            self.vals.push(v);
+        }
+    }
+
+    fn delete(mut ref self, k: Str) {
+        let i = self.find(k);
+        if i >= 0 {
+            self.keys.remove(i);
+            self.vals.remove(i);
+        }
+    }
+
+    fn len(ref self) -> i64 {
+        self.keys.len()
+    }
+
+    // The keys in JS's order: array indices ascending, then the rest.
+    fn order(ref self) -> Vec[String] {
+        let mut idx: Vec[i64] = Vec.new();
+        for i in 0..self.keys.len() {
+            if is_index(self.keys[i]) {
+                idx.push(signed_int(self.keys[i]));
+            }
+        }
+        idx.sort();
+        let mut out: Vec[String] = Vec.new();
+        for n in idx.iter() {
+            out.push(f"{n}");
+        }
+        for i in 0..self.keys.len() {
+            if not is_index(self.keys[i]) {
+                out.push(self.keys[i].clone());
+            }
+        }
+        out
+    }
+}
+
+// ------------------------------------------------------------ config files
+
+// A statsd config file is a JS object literal, which statsd evals. This
+// reads the part of the language config files use: objects, arrays,
+// quoted strings, numbers, true and false, and both kinds of comment.
+#[derive(Clone)]
+enum JsVal {
+    Num(f64),
+    Text(String),
+    Flag(bool),
+    List(Vec[JsVal]),
+    Record(Vec[Field]),
+}
+
+#[derive(Clone)]
+struct Field {
+    key: String,
+    val: JsVal,
+}
+
+struct ConfigReader {
+    b: Vec[u8],
+    i: i64,
+}
+
+impl ConfigReader {
+    fn ws(mut ref self) {
+        while self.i < self.b.len() {
+            if is_ws(self.b[self.i]) {
+                self.i += 1;
+            } else if starts_at(self.b, self.i, "//") {
+                while self.i < self.b.len() and self.b[self.i] != b'\n' {
+                    self.i += 1;
+                }
+            } else if starts_at(self.b, self.i, "/*") {
+                self.i += 2;
+                while self.i < self.b.len() and not starts_at(self.b, self.i, "*/") {
+                    self.i += 1;
+                }
+                self.i += 2;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn word_byte(c: u8) -> bool {
+        is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'+'
+    }
+
+    fn value(mut ref self) -> JsVal {
+        self.ws();
+        let c = self.b[self.i];
+        if c == b'{' {
+            self.i += 1;
+            let mut fields: Vec[Field] = Vec.new();
+            loop {
+                self.ws();
+                if self.b[self.i] == b',' {
+                    self.i += 1;
+                    continue;
+                }
+                if self.b[self.i] == b'}' {
+                    self.i += 1;
+                    return JsVal.Record(fields);
+                }
+                let st = self.i;
+                while is_alnum(self.b[self.i]) or self.b[self.i] == b'_' {
+                    self.i += 1;
+                }
+                let key = byte_str(self.b, st, self.i);
+                self.ws();
+                self.i += 1; // the ':'
+                let val = self.value();
+                fields.push(Field { key: key, val: val });
+            }
+        }
+        if c == b'[' {
+            self.i += 1;
+            let mut items: Vec[JsVal] = Vec.new();
+            loop {
+                self.ws();
+                if self.b[self.i] == b',' {
+                    self.i += 1;
+                    continue;
+                }
+                if self.b[self.i] == b']' {
+                    self.i += 1;
+                    return JsVal.List(items);
+                }
+                items.push(self.value());
+            }
+        }
+        if c == b'\'' or c == b'"' {
+            let st = self.i + 1;
+            self.i = st;
+            while self.b[self.i] != c {
+                self.i += 1;
+            }
+            let s = byte_str(self.b, st, self.i);
+            self.i += 1;
+            return JsVal.Text(s);
+        }
+        let st = self.i;
+        while self.i < self.b.len() and ConfigReader.word_byte(self.b[self.i]) {
+            self.i += 1;
+        }
+        let w = byte_str(self.b, st, self.i);
+        if w == "true" {
+            JsVal.Flag(true)
+        } else if w == "false" {
+            JsVal.Flag(false)
+        } else {
+            JsVal.Num(js_number(w))
+        }
+    }
+}
+
+fn parse_config(text: Str) -> Vec[Field] {
+    let mut p = ConfigReader { b: to_bytes(text), i: 0 };
+    match p.value() {
+        JsVal.Record(fields) => fields,
+        _ => Vec.new(),
+    }
+}
+
+fn lookup(cfg: ref Vec[Field], k: Str) -> Option[JsVal] {
+    for f in cfg.iter() {
+        if f.key == k {
+            return Some(f.val.clone());
+        }
+    }
+    None
+}
+
+fn num_or(cfg: ref Vec[Field], k: Str, dflt: f64) -> f64 {
+    match lookup(cfg, k) {
+        Some(JsVal.Num(n)) => n,
+        _ => dflt,
+    }
+}
+
+fn flag_or(cfg: ref Vec[Field], k: Str, dflt: bool) -> bool {
+    match lookup(cfg, k) {
+        Some(JsVal.Flag(b)) => b,
+        _ => dflt,
+    }
+}
+
+fn text_or(cfg: ref Vec[Field], k: Str, dflt: Str) -> String {
+    match lookup(cfg, k) {
+        Some(JsVal.Text(s)) => s,
+        _ => dflt.to_string(),
+    }
+}
+
+fn record_of(cfg: ref Vec[Field], k: Str) -> Vec[Field] {
+    match lookup(cfg, k) {
+        Some(JsVal.Record(f)) => f,
+        _ => Vec.new(),
+    }
+}
+
+fn texts_of(cfg: ref Vec[Field], k: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    match lookup(cfg, k) {
+        Some(JsVal.List(items)) => {
+            for it in items.iter() {
+                match it {
+                    JsVal.Text(s) => out.push(s.clone()),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+// ------------------------------------------------------------ the daemon
+
+const START_TIME: i64 = 1760000000;
+
+// A histogram bin's upper bound: a number, or 'inf'.
+enum Bin {
+    Below(f64),
+    Inf,
+}
+
+struct Histogram {
+    metric: String,
+    bins: Vec[Bin],
+}
+
+struct Stat {
+    name: String,
+    v: f64,
+}
+
+struct Daemon {
+    interval: f64,
+    ttl_max: f64,
+    del_counters: bool,
+    del_timers: bool,
+    del_sets: bool,
+    del_gauges: bool,
+    sanitize: bool,
+    prefix_stats: String,
+    bad: String,
+    packets: String,
+    metrics: String,
+    lag: String,
+    counters: Obj[f64],
+    timers: Obj[Vec[f64]],
+    tcount: Obj[f64],
+    gauges: Obj[f64],
+    ttl: Obj[f64],
+    sets: Obj[Obj[bool]],
+    pcts: Vec[f64],
+    hist: Vec[Histogram],
+    calc: Vec[String],
+    health: String,
+    legacy: bool,
+    suffix: String,
+    flush_counts: bool,
+    ns_global: Vec[String],
+    ns_counter: Vec[String],
+    ns_timer: Vec[String],
+    ns_gauge: Vec[String],
+    ns_set: Vec[String],
+    k: i64,
+    last_flush: i64,
+    last_len: i64,
+}
+
+fn histograms(cfg: ref Vec[Field]) -> Vec[Histogram] {
+    let mut out: Vec[Histogram] = Vec.new();
+    match lookup(cfg, "histogram") {
+        Some(JsVal.List(items)) => {
+            for it in items.iter() {
+                match it {
+                    JsVal.Record(f) => {
+                        let mut bins: Vec[Bin] = Vec.new();
+                        match lookup(f, "bins") {
+                            Some(JsVal.List(bs)) => {
+                                for b in bs.iter() {
+                                    match b {
+                                        JsVal.Num(n) => bins.push(Bin.Below(n)),
+                                        _ => bins.push(Bin.Inf),
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        out.push(Histogram { metric: text_or(f, "metric", ""), bins: bins });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn percents(cfg: ref Vec[Field]) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    match lookup(cfg, "percentThreshold") {
+        Some(JsVal.Num(n)) => out.push(n),
+        Some(JsVal.List(items)) => {
+            for it in items.iter() {
+                match it {
+                    JsVal.Num(n) => out.push(n),
+                    _ => {}
+                }
+            }
+        }
+        _ => out.push(90.0),
+    }
+    out
+}
+
+fn namespace(base: ref Vec[String], g: ref Vec[Field], key: Str, dflt: Str) -> Vec[String] {
+    let mut ns = base.clone();
+    let p = text_or(g, key, dflt);
+    if p != "" {
+        ns.push(p);
+    }
+    ns
+}
+
+fn one(s: Str) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(s.to_string());
+    v
+}
+
+fn two(a: Str, b: Str) -> Vec[String] {
+    let mut v = one(a);
+    v.push(b.to_string());
+    v
+}
+
+// statsd's key sanitizing: white space runs become '_', '/' becomes '-',
+// and anything outside [a-zA-Z_\-0-9.;=] goes.
+fn sanitize_key(k: Str) -> String {
+    let b = to_bytes(k);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if is_ws(c) {
+            while i < b.len() and is_ws(b[i]) {
+                i += 1;
+            }
+            out.push(b'_');
+            continue;
+        }
+        if c == b'/' {
+            out.push(b'-');
+        } else if is_alnum(c) or c == b'_' or c == b'-' or c == b'.' or c == b';' or c == b'=' {
+            out.push(c);
+        }
+        i += 1;
+    }
+    from_bytes(out)
+}
+
+// A string's replace(a, b) on the first occurrence, as JS does it.
+fn replace_first(s: Str, a: Str, b: Str) -> String {
+    let i = find_str(s, a);
+    if i < 0 {
+        return s.to_string();
+    }
+    f"{slice(s, 0, i)}{b}{slice_from(s, i + a.len())}"
+}
+
+fn split_str(s: Str, sep: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i + sep.len() <= b.len() {
+        if starts_at(b, i, sep) {
+            out.push(byte_str(b, st, i));
+            i += sep.len();
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn is_number(s: Str) -> bool {
+    s != "" and js_number(s) == js_number(s)
+}
+
+fn valid_rate(s: Str) -> bool {
+    s.len() > 1 and first_byte(s) == b'@' and is_number(slice_from(s, 1)) and first_byte(slice_from(s, 1)) != b'-'
+}
+
+// helpers.is_valid_packet.
+fn valid_packet(f: ref Vec[String]) -> bool {
+    if f.len() < 2 {
+        return false;
+    }
+    if f.len() > 2 and not valid_rate(f[2]) {
+        return false;
+    }
+    if f[1] == "s" {
+        return true;
+    }
+    if f[1] == "ms" {
+        return is_number(f[0]) and js_number(f[0]) >= 0.0;
+    }
+    is_number(f[0])
+}
+
+// The digits of a sample rate: what /^@([\d\.]+)/ captures.
+fn rate_digits(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 1;
+    while i < b.len() and (is_digit(b[i]) or b[i] == b'.') {
+        i += 1;
+    }
+    byte_str(b, 1, i)
+}
+
+// JS truthiness of a number: 0 and NaN are false.
+fn truthy(x: f64) -> bool {
+    x == x and x != 0.0
+}
+
+fn clean_pct(p: f64) -> String {
+    replace_first(replace_first(js_num(p), ".", "_"), "-", "top")
+}
+
+// The calculatedTimerMetrics filter: a trailing _<digits> or _top<digits>
+// becomes _percent before the name is looked up.
+fn percent_name(k: Str) -> String {
+    let b = to_bytes(k);
+    let mut j = b.len();
+    while j > 0 and is_digit(b[j - 1]) {
+        j -= 1;
+    }
+    if j == b.len() {
+        return k.to_string();
+    }
+    let mut st = j;
+    if st >= 3 and byte_str(b, st - 3, st) == "top" {
+        st -= 3;
+    }
+    if st >= 1 and b[st - 1] == b'_' {
+        return f"{byte_str(b, 0, st - 1)}_percent";
+    }
+    k.to_string()
+}
+
+// Updates through a field's element, which check refuses in place.
+fn add_at(o: mut ref Obj[f64], i: i64, dv: f64) {
+    o.vals[i] += dv;
+}
+
+fn push_at(o: mut ref Obj[Vec[f64]], i: i64, v: f64) {
+    o.vals[i].push(v);
+}
+
+fn insert_at(o: mut ref Obj[Obj[bool]], i: i64, member: own String) {
+    o.vals[i].set(member, true);
+}
+
+impl Daemon {
+    fn new(cfg: ref Vec[Field]) -> Daemon {
+        let mut ttl_max = num_or(cfg, "gaugesMaxTTL", 1.0);
+        if not (ttl_max == ttl_max.floor() and ttl_max > 1.0) {
+            ttl_max = 1.0;
+        }
+        let idle = flag_or(cfg, "deleteIdleStats", false);
+        let ps = text_or(cfg, "prefixStats", "statsd");
+        let g = record_of(cfg, "graphite");
+        let legacy = flag_or(g, "legacyNamespace", true);
+        let gp = text_or(g, "globalPrefix", "stats");
+        let suffix = match lookup(g, "globalSuffix") {
+            Some(JsVal.Text(s)) => f".{s}",
+            _ => String.new(),
+        };
+        let mut base: Vec[String] = Vec.new();
+        if gp != "" {
+            base.push(gp);
+        }
+        let mut d = Daemon {
+            interval: num_or(cfg, "flushInterval", 10000.0) / 1000.0,
+            ttl_max: ttl_max,
+            del_counters: flag_or(cfg, "deleteCounters", idle),
+            del_timers: flag_or(cfg, "deleteTimers", idle),
+            del_sets: flag_or(cfg, "deleteSets", idle),
+            del_gauges: flag_or(cfg, "deleteGauges", idle),
+            sanitize: flag_or(cfg, "keyNameSanitize", true),
+            prefix_stats: ps.clone(),
+            bad: f"{ps}.bad_lines_seen",
+            packets: f"{ps}.packets_received",
+            metrics: f"{ps}.metrics_received",
+            lag: f"{ps}.timestamp_lag",
+            counters: Obj.new(),
+            timers: Obj.new(),
+            tcount: Obj.new(),
+            gauges: Obj.new(),
+            ttl: Obj.new(),
+            sets: Obj.new(),
+            pcts: percents(cfg),
+            hist: histograms(cfg),
+            calc: texts_of(cfg, "calculatedTimerMetrics"),
+            health: "up".to_string(),
+            legacy: legacy,
+            suffix: suffix,
+            flush_counts: flag_or(cfg, "flush_counts", true),
+            ns_global: if legacy { one("stats") } else { base.clone() },
+            ns_counter: if legacy { one("stats") } else { namespace(base, g, "prefixCounter", "counters") },
+            ns_timer: if legacy { two("stats", "timers") } else { namespace(base, g, "prefixTimer", "timers") },
+            ns_gauge: if legacy { two("stats", "gauges") } else { namespace(base, g, "prefixGauge", "gauges") },
+            ns_set: if legacy { two("stats", "sets") } else { namespace(base, g, "prefixSet", "sets") },
+            k: 0,
+            last_flush: START_TIME,
+            last_len: 0,
+        };
+        let names = [d.bad.clone(), d.packets.clone(), d.metrics.clone()];
+        for n in names.iter() {
+            d.counters.set(n, 0.0);
+        }
+        d.flush(); // the first flush, before any packet
+        d
+    }
+
+    // `counters[key]++`, which turns a deleted counter into NaN.
+    fn bump(mut ref self, key: Str) {
+        let i = self.counters.find(key);
+        if i < 0 {
+            self.counters.set(key, not_a_number());
+        } else {
+            add_at(mut self.counters, i, 1.0); // B-2026-10-14-70, B-2026-10-15-14
+        }
+    }
+
+    fn packet(mut ref self, data: Str) {
+        let packets = self.packets.clone();
+        let metrics = self.metrics.clone();
+        let bad = self.bad.clone();
+        self.bump(packets);
+        for line in split_on(data, b'\n').iter() {
+            if line.len() == 0 {
+                continue;
+            }
+            self.bump(metrics);
+            let parts = split_str(line, "|#");
+            let mut tags: Vec[String] = Vec.new();
+            if parts.len() > 1 and parts[1].len() > 0 {
+                tags = split_on(parts[1], b',');
+            }
+            let mut bits = split_on(parts[0], b':');
+            let mut key = bits.remove(0);
+            if tags.len() > 0 {
+                for t in tags.iter() {
+                    key.push_str(";");
+                    key.push_str(replace_first(replace_first(t, ";", "_"), ":", "="));
+                }
+            }
+            if self.sanitize {
+                key = sanitize_key(key);
+            }
+            if bits.len() == 0 {
+                bits.push("1".to_string());
+            }
+            for bit in bits.iter() {
+                let f = split_on(bit, b'|');
+                if not valid_packet(f) {
+                    self.bump(bad);
+                    continue;
+                }
+                let mut rate = 1.0;
+                if f.len() > 2 and f[2] != "" {
+                    rate = js_number(rate_digits(f[2]));
+                }
+                let kind = strip(f[1]);
+                let inv = 1.0 / rate;
+                if kind == "ms" {
+                    let i = self.timers.find(key);
+                    if i < 0 {
+                        self.timers.set(key, Vec.new());
+                        self.tcount.set(key, 0.0);
+                    }
+                    // B-2026-10-14-70, B-2026-10-15-14
+                    let i = self.timers.find(key);
+                    push_at(mut self.timers, i, js_number(f[0]));
+                    let j = self.tcount.find(key);
+                    add_at(mut self.tcount, j, inv);
+                } else if kind == "g" {
+                    if self.del_gauges {
+                        self.ttl.set(key, self.ttl_max);
+                    }
+                    let i = self.gauges.find(key);
+                    let delta = first_byte(f[0]) == b'+' or first_byte(f[0]) == b'-';
+                    let g = ref self.gauges; // B-2026-10-14-70
+                    if i >= 0 and truthy(g.vals[i]) and delta {
+                        add_at(mut self.gauges, i, js_number(f[0])); // B-2026-10-15-14
+                    } else {
+                        self.gauges.set(key, js_number(f[0]));
+                    }
+                } else if kind == "s" {
+                    if not self.sets.has(key) {
+                        self.sets.set(key, Obj.new());
+                    }
+                    let i = self.sets.find(key);
+                    let member = if f[0] == "" { "0".to_string() } else { f[0].clone() };
+                    insert_at(mut self.sets, i, member); // B-2026-10-14-70, B-2026-10-15-14
+                } else {
+                    let i = self.counters.find(key);
+                    let c = ref self.counters; // B-2026-10-14-70
+                    if i < 0 or not truthy(c.vals[i]) {
+                        self.counters.set(key, 0.0);
+                    }
+                    let v = if f[0] == "" { 1.0 } else { js_number(f[0]) };
+                    let i = self.counters.find(key);
+                    add_at(mut self.counters, i, v * inv); // B-2026-10-15-14
+                }
+            }
+        }
+    }
+
+    // process_metrics for one timer, filtered by calculatedTimerMetrics.
+    fn timer_data(ref self, key: Str) -> Vec[Stat] {
+        let t = ref self.timers; // B-2026-10-14-70
+        let mut vals = t.vals[t.find(key)].clone();
+        // B-2026-10-15-68: f64.partial_cmp runs on no v2 surface.
+        vals.sort_by(|a, b| if a < b { Ordering.Less } else if a > b { Ordering.Greater } else { Ordering.Equal });
+        let mut d: Vec[Stat] = Vec.new();
+        let n = vals.len();
+        if n == 0 {
+            d.push(Stat { name: "count_ps".to_string(), v: 0.0 });
+            d.push(Stat { name: "count".to_string(), v: 0.0 });
+        } else {
+            let mut cum: Vec[f64] = Vec.new();
+            let mut cumsq: Vec[f64] = Vec.new();
+            cum.push(vals[0]);
+            cumsq.push(vals[0] * vals[0]);
+            for i in 1..n {
+                cum.push(vals[i] + cum[i - 1]);
+                cumsq.push(vals[i] * vals[i] + cumsq[i - 1]);
+            }
+            let mut sum = vals[0];
+            let mut sq = vals[0] * vals[0];
+            let mut mean = vals[0];
+            let mut bound = vals[n - 1];
+            for p in self.pcts.iter() {
+                let mut num = n;
+                if n > 1 {
+                    num = js_round(p.abs() / 100.0 * n as f64) as i64;
+                    if num == 0 {
+                        continue;
+                    }
+                    if p > 0.0 {
+                        bound = vals[num - 1];
+                        sum = cum[num - 1];
+                        sq = cumsq[num - 1];
+                    } else {
+                        bound = vals[n - num];
+                        sum = cum[n - 1] - cum[n - num - 1];
+                        sq = cumsq[n - 1] - cumsq[n - num - 1];
+                    }
+                    mean = sum / num as f64;
+                }
+                let c = clean_pct(p);
+                let side = if p > 0.0 { "upper_" } else { "lower_" };
+                d.push(Stat { name: f"count_{c}", v: num as f64 });
+                d.push(Stat { name: f"mean_{c}", v: mean });
+                d.push(Stat { name: f"{side}{c}", v: bound });
+                d.push(Stat { name: f"sum_{c}", v: sum });
+                d.push(Stat { name: f"sum_squares_{c}", v: sq });
+            }
+            sum = cum[n - 1];
+            sq = cumsq[n - 1];
+            mean = sum / n as f64;
+            let mut diffs = 0.0;
+            for v in vals.iter() {
+                diffs += (v - mean) * (v - mean);
+            }
+            let mid = n / 2;
+            let median = if n % 2 == 1 { vals[mid] } else { (vals[mid - 1] + vals[mid]) / 2.0 };
+            let tcs = ref self.tcount; // B-2026-10-14-70
+            let tc = tcs.vals[tcs.find(key)];
+            d.push(Stat { name: "std".to_string(), v: (diffs / n as f64).sqrt() });
+            d.push(Stat { name: "upper".to_string(), v: vals[n - 1] });
+            d.push(Stat { name: "lower".to_string(), v: vals[0] });
+            d.push(Stat { name: "count".to_string(), v: tc });
+            d.push(Stat { name: "count_ps".to_string(), v: tc / self.interval });
+            d.push(Stat { name: "sum".to_string(), v: sum });
+            d.push(Stat { name: "sum_squares".to_string(), v: sq });
+            d.push(Stat { name: "mean".to_string(), v: mean });
+            d.push(Stat { name: "median".to_string(), v: median });
+            for h in self.hist.iter() {
+                if find_str(key, h.metric) >= 0 {
+                    let mut i: i64 = 0;
+                    for b in h.bins.iter() {
+                        let mut freq: i64 = 0;
+                        let label = match b {
+                            Bin.Inf => {
+                                freq = n - i;
+                                i = n;
+                                "inf".to_string()
+                            }
+                            Bin.Below(limit) => {
+                                while i < n and vals[i] < limit {
+                                    freq += 1;
+                                    i += 1;
+                                }
+                                replace_first(js_num(limit), ".", "_")
+                            }
+                        };
+                        d.push(Stat { name: f"histogram.bin_{label}", v: freq as f64 });
+                    }
+                    break;
+                }
+            }
+        }
+        if self.calc.len() == 0 {
+            return d;
+        }
+        let mut kept: Vec[Stat] = Vec.new();
+        for s in d.iter() {
+            let pn = percent_name(s.name);
+            let mut want = false;
+            for c in self.calc.iter() {
+                if c == pn {
+                    want = true;
+                }
+            }
+            if want {
+                kept.push(Stat { name: s.name.clone(), v: s.v });
+            }
+        }
+        kept
+    }
+
+    // The graphite backend's format(): namespace, key, extras, suffix, tags.
+    fn fmt(ref self, ns: ref Vec[String], key: Str, extra: Str) -> String {
+        let parts = split_on(key, b';');
+        let name = if self.sanitize { parts[0].clone() } else { sanitize_key(parts[0]) };
+        let mut all = ns.clone();
+        all.push(name);
+        if extra != "" {
+            for e in split_on(extra, b'.').iter() {
+                all.push(e.clone());
+            }
+        }
+        let mut s = join(all, ".");
+        s.push_str(self.suffix);
+        for i in 1..parts.len() {
+            s.push_str(";");
+            s.push_str(parts[i]);
+        }
+        s
+    }
+
+    fn flush(mut ref self) -> String {
+        let ts = START_TIME + self.interval as i64 * (self.k + 1);
+        if self.k > 0 {
+            let lag = self.lag.clone();
+            self.gauges.set(lag, 0.0);
+        }
+        let mut text = String.new();
+        let mut num: i64 = 0;
+        for k in self.counters.order().iter() {
+            let c = ref self.counters; // B-2026-10-14-70
+            let v = c.vals[c.find(k)];
+            let r = v / self.interval;
+            if self.legacy {
+                text.push_str(f"{self.fmt(self.ns_counter, k, "")} {js_num(r)} {ts}\n");
+                if self.flush_counts {
+                    text.push_str(f"stats_counts.{k}{self.suffix} {js_num(v)} {ts}\n");
+                }
+            } else {
+                text.push_str(f"{self.fmt(self.ns_counter, k, "rate")} {js_num(r)} {ts}\n");
+                if self.flush_counts {
+                    text.push_str(f"{self.fmt(self.ns_counter, k, "count")} {js_num(v)} {ts}\n");
+                }
+            }
+            num += 1;
+        }
+        for k in self.timers.order().iter() {
+            for s in self.timer_data(k).iter() {
+                text.push_str(f"{self.fmt(self.ns_timer, k, s.name)} {js_num(s.v)} {ts}\n");
+            }
+            num += 1;
+        }
+        for k in self.gauges.order().iter() {
+            let g = ref self.gauges; // B-2026-10-14-70
+            let v = g.vals[g.find(k)];
+            text.push_str(f"{self.fmt(self.ns_gauge, k, "")} {js_num(v)} {ts}\n");
+            num += 1;
+        }
+        for k in self.sets.order().iter() {
+            let st = ref self.sets; // B-2026-10-14-70
+            let size = st.vals[st.find(k)].len();
+            text.push_str(f"{self.fmt(self.ns_set, k, "count")} {size} {ts}\n");
+            num += 1;
+        }
+        let ps = self.prefix_stats.clone();
+        let sfx = self.suffix.clone();
+        if self.legacy {
+            text.push_str(f"{ps}.numStats{sfx} {num} {ts}\n");
+            text.push_str(f"stats.{ps}.graphiteStats.calculationtime{sfx} 0 {ts}\n");
+            text.push_str(f"stats.{ps}.processing_time{sfx} 0 {ts}\n");
+        } else {
+            text.push_str(f"{self.fmt(self.ns_global, ps, "numStats")} {num} {ts}\n");
+            text.push_str(f"{self.fmt(self.ns_global, ps, "graphiteStats.calculationtime")} 0 {ts}\n");
+            text.push_str(f"{self.fmt(self.ns_global, ps, "processing_time")} 0 {ts}\n");
+        }
+        let mut gns = self.ns_global.clone();
+        gns.push(ps);
+        let base = join(gns, ".");
+        text.push_str(f"{base}.graphiteStats.last_exception{sfx} 0 {ts}\n");
+        text.push_str(f"{base}.graphiteStats.last_flush{sfx} {self.last_flush} {ts}\n");
+        text.push_str(f"{base}.graphiteStats.flush_time{sfx} 0 {ts}\n");
+        text.push_str(f"{base}.graphiteStats.flush_length{sfx} {self.last_len} {ts}\n");
+        self.last_len = text.len();
+        self.last_flush = ts;
+        self.k += 1;
+        self.reset();
+        text
+    }
+
+    // The flush's clear_metrics listener.
+    fn reset(mut ref self) {
+        for k in self.counters.order().iter() {
+            let keep = find_str(k, "packets_received") >= 0 or find_str(k, "metrics_received") >= 0
+                or find_str(k, "bad_lines_seen") >= 0;
+            if self.del_counters and not keep {
+                self.counters.delete(k);
+            } else {
+                self.counters.set(k, 0.0);
+            }
+        }
+        for k in self.timers.order().iter() {
+            if self.del_timers {
+                self.timers.delete(k);
+                self.tcount.delete(k);
+            } else {
+                self.timers.set(k, Vec.new());
+                self.tcount.set(k, 0.0);
+            }
+        }
+        for k in self.sets.order().iter() {
+            if self.del_sets {
+                self.sets.delete(k);
+            } else {
+                self.sets.set(k, Obj.new());
+            }
+        }
+        if self.del_gauges {
+            for k in self.ttl.order().iter() {
+                let i = self.ttl.find(k);
+                add_at(mut self.ttl, i, -1.0); // B-2026-10-14-70, B-2026-10-15-14
+                let t = ref self.ttl;
+                if t.vals[i] < 1.0 {
+                    self.gauges.delete(k);
+                    self.ttl.delete(k);
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ the console
+
+fn is_ident(k: Str) -> bool {
+    let b = to_bytes(k);
+    if b.len() == 0 or is_digit(b[0]) {
+        return false;
+    }
+    for c in b.iter() {
+        if not (is_alnum(c) or c == b'_') {
+            return false;
+        }
+    }
+    true
+}
+
+fn prop_name(k: Str) -> String {
+    if is_ident(k) { k.to_string() } else { f"'{k}'" }
+}
+
+// util.inspect's reduceToSingleString with breakLength 80: one line
+// when the entries fit, else one entry per line.
+fn braces(items: ref Vec[String], open: Str, close: Str, indent: i64) -> String {
+    if items.len() == 0 {
+        return f"{open}{close}";
+    }
+    let mut total = items.len() + items.len() + indent + open.len() + 10;
+    let mut multi = false;
+    for it in items.iter() {
+        total += it.len();
+        if has_byte(it, b'\n') {
+            multi = true;
+        }
+    }
+    if total <= 80 and not multi {
+        return f"{open} {join(items, ", ")} {close}";
+    }
+    let pad = f"\n{zeros(indent).replace("0", " ")}";
+    let mut s = f"{open}{pad}  ";
+    s.push_str(join(items, f",{pad}  "));
+    s.push_str(pad);
+    s.push_str(close);
+    s
+}
+
+fn inspect_nums(o: ref Obj[f64]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    for k in o.order().iter() {
+        items.push(f"{prop_name(k)}: {js_num(o.vals[o.find(k)])}");
+    }
+    braces(items, "{", "}", 0)
+}
+
+fn inspect_lists(o: ref Obj[Vec[f64]]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    for k in o.order().iter() {
+        let mut nums: Vec[String] = Vec.new();
+        for v in o.vals[o.find(k)].iter() {
+            nums.push(js_num(v));
+        }
+        items.push(f"{prop_name(k)}: {braces(nums, "[", "]", 2)}");
+    }
+    braces(items, "{", "}", 0)
+}
+
+// mgmt_console.existing_stats: the key itself, and with a trailing .*
+// every key in that folder.
+fn matching(keys: ref Vec[String], has: bool, bucket: Str) -> Vec[String] {
+    let mut found: Vec[String] = Vec.new();
+    if has {
+        found.push(bucket.to_string());
+    }
+    if bucket.len() >= 2 and slice_from(bucket, bucket.len() - 2) == ".*" {
+        let folder = slice(bucket, 0, bucket.len() - 1);
+        for k in keys.iter() {
+            if starts_with(k, folder) {
+                found.push(k.clone());
+            }
+        }
+    }
+    found
+}
+
+fn delete_report(found: ref Vec[String], bucket: Str) -> String {
+    let mut r = String.new();
+    if found.len() == 0 {
+        r.push_str(f"metric {bucket} not found\n");
+    }
+    for k in found.iter() {
+        r.push_str(f"deleted: {k}\n");
+    }
+    r
+}
+
+impl Daemon {
+    // One management command; None for quit, which closes the stream.
+    fn admin(mut ref self, line: Str) -> Option[String] {
+        let words = split_on(strip(line), b' ');
+        let cmd = words[0].clone();
+        if cmd == "help" {
+            return Some("Commands: stats, counters, timers, gauges, delcounters, deltimers, delgauges, health, config, quit\n\n".to_string());
+        }
+        if cmd == "health" {
+            if words.len() > 1 {
+                let a = lower(words[1]);
+                if a == "up" or a == "down" {
+                    self.health = a;
+                }
+            }
+            return Some(f"health: {self.health}\n");
+        }
+        if cmd == "counters" {
+            return Some(f"{inspect_nums(self.counters)}\nEND\n\n");
+        }
+        if cmd == "gauges" {
+            return Some(f"{inspect_nums(self.gauges)}\nEND\n\n");
+        }
+        if cmd == "timers" {
+            return Some(f"{inspect_lists(self.timers)}\nEND\n\n");
+        }
+        if cmd == "delcounters" or cmd == "deltimers" or cmd == "delgauges" {
+            let mut r = String.new();
+            for i in 1..words.len() {
+                let b = words[i].clone();
+                if cmd == "delcounters" {
+                    let found = matching(self.counters.order(), self.counters.has(b), b);
+                    for k in found.iter() {
+                        self.counters.delete(k);
+                    }
+                    r.push_str(delete_report(found, b));
+                } else if cmd == "deltimers" {
+                    let found = matching(self.timers.order(), self.timers.has(b), b);
+                    for k in found.iter() {
+                        self.timers.delete(k);
+                    }
+                    r.push_str(delete_report(found, b));
+                } else {
+                    let found = matching(self.gauges.order(), self.gauges.has(b), b);
+                    for k in found.iter() {
+                        self.gauges.delete(k);
+                    }
+                    r.push_str(delete_report(found, b));
+                }
+            }
+            r.push_str("END\n\n");
+            return Some(r);
+        }
+        if cmd == "quit" {
+            return None;
+        }
+        Some("ERROR\n".to_string())
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/jobs.txt
+fn file_0() -> String {
+    """
+# mini_statsd jobs. `config` (re)starts the daemon with a config file from
+# data/, `send` sends one UDP packet (\\n separates metrics inside it),
+# `admin` sends one command to the management port, and `flush` waits for
+# the next flush to the graphite collector and prints what arrived.
+config statsd-classic.js
+send gorets:1|c
+send gorets:1|c|@0.1
+send gorets:2|c|@0.3
+send glork:320|ms\\nglork:100|ms\\nglork:250|ms|@0.5
+send api.latency:12|ms|#env:prod,region:eu
+send api.latency:48|ms|#env:prod,region:eu\\napi.latency:75|ms|#env:prod,region:eu\\napi.latency:260|ms|#env:prod,region:eu\\napi.latency:101|ms|#env:prod,region:eu
+send gaugor:333|g
+send gaugor:-10|g\\ngaugor:+4|g
+send uniques:765|s\\nuniques:765|s\\nuniques:3|s\\nuniques:|s
+send users online:7|g
+send a/b/c:1|c
+send weird$key!:5|c
+send 404:1|c
+send multi:1|c:2|c:3|ms
+send nokey\\nbad1:|c\\nbad2:abc|c\\nbad3:-5|ms\\nbad4:5|c|0.1\\nbad5:5|c|@-1
+send hex:0x10|c\\nspaced: 7 |c\\nexp:1e2|ms\\nrate:1|c|@1e-1\\nfrac:.5|c\\nhisto:3|h\\nlate:5|ms \\nzero:1|c|@0
+send \\n\\n
+admin counters
+admin timers
+admin gauges
+flush
+send gorets:5|c
+send glork:42|ms
+send gaugor:+8|g
+flush
+admin delcounters gorets
+admin delcounters stats.* bad*
+admin delcounters statsd.*
+send gorets:1|c
+admin counters
+admin deltimers glork api.*
+admin delgauges nothing.here
+admin health
+admin health down
+admin health
+admin help
+admin bogus
+admin quit
+send glork:7|ms
+flush
+config statsd-modern.js
+send api.req:1|c\\napi.req:1|c|@0.5
+send svc.time:10|ms\\nsvc.time:20|ms\\nsvc.time:30|ms
+send temp:21.5|g
+send visitors:a|s\\nvisitors:b|s
+send my key/x:2|c|#team:core
+flush
+send svc.time:15|ms
+flush
+flush
+admin counters
+admin gauges
+
+"""
+}
+
+// data/statsd-classic.js
+fn file_1() -> String {
+    """
+/*
+ * A classic deployment: graphite backend in legacy namespace,
+ * three percentile thresholds and one histogram.
+ */
+{
+  port: 8125
+, mgmt_port: 8126
+, graphitePort: 2003
+, graphiteHost: \"127.0.0.1\"
+, flushInterval: 5000
+, percentThreshold: [90, 99.5, -10]
+, histogram: [ { metric: 'api.latency', bins: [ 50, 100, 250, 'inf' ] } ]
+}
+
+"""
+}
+
+// data/statsd-modern.js
+fn file_2() -> String {
+    """
+// A modern deployment: idle stats are deleted, keys are left as sent,
+// and graphite uses the new namespace with prefixes and a suffix.
+{
+  port: 8125,
+  mgmt_port: 8126,
+  graphitePort: 2003,
+  graphiteHost: \"127.0.0.1\",
+  flushInterval: 5000,
+  deleteIdleStats: true,
+  gaugesMaxTTL: 2,
+  percentThreshold: 99.9,
+  calculatedTimerMetrics: ['count', 'mean', 'upper', 'upper_99_9', 'count_ps'],
+  prefixStats: 'agg',
+  keyNameSanitize: false,
+  graphite: {
+    legacyNamespace: false,
+    globalPrefix: 'acme',
+    prefixCounter: '',
+    prefixTimer: 't',
+    globalSuffix: 'host1'
+  },
+  flush_counts: false
+}
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+// The bytes a block of hex digits spells; line breaks are skipped.
+fn unhex(s: String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut digits: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if is_hex(b[i]) {
+            digits.push(hex_val(b[i]));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/jobs.txt", file_0())?;
+    put("data/statsd-classic.js", file_1())?;
+    put("data/statsd-modern.js", file_2())?;
+    Ok(())
+}
+
+// The names of the input files.
+fn data_names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("jobs.txt".to_string());
+    v.push("statsd-classic.js".to_string());
+    v.push("statsd-modern.js".to_string());
+    v
+}
+
+// ------------------------------------------------------------ the sockets
+
+fn read_all(conn: ref TcpStream) -> String {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 4096] = [0u8; 4096];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    String.from_utf8(bytes).unwrap_or("?".to_string())
+}
+
+struct Net {
+    udp: UdpSocket,
+    udp_addr: String,
+    client: UdpSocket,
+    mgmt: TcpListener,
+    mgmt_addr: String,
+    graphite: TcpListener,
+    graphite_addr: String,
+}
+
+// The daemon's sockets on the ports its config names. (Port 0, letting
+// the OS choose, would print a BOUND_PORT line: B-2026-10-15-69.)
+fn open_net(cfg: ref Vec[Field]) -> Result[Net, String] {
+    let host = text_or(cfg, "address", "127.0.0.1");
+    let udp_addr = f"{host}:{num_or(cfg, "port", 8125.0) as i64}";
+    let mgmt_addr = f"{text_or(cfg, "mgmt_address", "127.0.0.1")}:{num_or(cfg, "mgmt_port", 8126.0) as i64}";
+    let graphite_addr = f"{text_or(cfg, "graphiteHost", "127.0.0.1")}:{num_or(cfg, "graphitePort", 2003.0) as i64}";
+    let udp = match UdpSocket.bind(udp_addr) {
+        Ok(s) => s,
+        Err(_) => return Err(f"cannot bind {udp_addr}"),
+    };
+    let client = match UdpSocket.bind("127.0.0.1:0") {
+        Ok(s) => s,
+        Err(_) => return Err("udp client bind failed".to_string()),
+    };
+    let mgmt = match TcpListener.bind(mgmt_addr) {
+        Ok(l) => l,
+        Err(_) => return Err(f"cannot bind {mgmt_addr}"),
+    };
+    let graphite = match TcpListener.bind(graphite_addr) {
+        Ok(l) => l,
+        Err(_) => return Err(f"cannot bind {graphite_addr}"),
+    };
+    Ok(Net {
+        udp: udp,
+        udp_addr: udp_addr,
+        client: client,
+        mgmt: mgmt,
+        mgmt_addr: mgmt_addr,
+        graphite: graphite,
+        graphite_addr: graphite_addr,
+    })
+}
+
+// A client sends one datagram; the daemon receives it and handles it.
+fn send(net: ref Net, d: mut ref Daemon, payload: Str) {
+    match net.client.send_to(payload.bytes(), net.udp_addr) {
+        Ok(_) => {}
+        Err(_) => {
+            println("send failed");
+            return;
+        }
+    }
+    let mut buf: Array[u8, 8192] = [0u8; 8192];
+    match net.udp.recv_from(mut buf) {
+        Ok((n, _)) => {
+            let mut v: Vec[u8] = Vec.new();
+            for i in 0..n {
+                v.push(buf[i]);
+            }
+            d.packet(from_bytes(v));
+        }
+        Err(_) => println("recv failed"),
+    }
+}
+
+// A console client sends one command; the daemon answers it.
+fn admin(net: ref Net, d: mut ref Daemon, command: Str) {
+    let client = match TcpStream.connect(net.mgmt_addr) {
+        Ok(c) => c,
+        Err(_) => {
+            println("connect failed");
+            return;
+        }
+    };
+    match client.write_all(command.bytes()) {
+        Ok(_) => {}
+        Err(_) => println("client write failed"),
+    }
+    match client.shutdown_write() {
+        Ok(_) => {}
+        Err(_) => println("shutdown failed"),
+    }
+    let mut closed = false;
+    match net.mgmt.accept() {
+        Ok(conn) => {
+            let line = read_all(conn);
+            match d.admin(line) {
+                Some(reply) => {
+                    match conn.write_all(reply.bytes()) {
+                        Ok(_) => {}
+                        Err(_) => println("server write failed"),
+                    }
+                }
+                None => closed = true,
+            }
+        }
+        Err(_) => println("accept failed"),
+    }
+    print(read_all(client));
+    if closed {
+        println("(connection closed)");
+    }
+}
+
+// The graphite backend connects and writes one flush; the collector
+// reads it.
+fn flush(net: ref Net, d: mut ref Daemon) {
+    let payload = d.flush();
+    let backend = match TcpStream.connect(net.graphite_addr) {
+        Ok(c) => c,
+        Err(_) => {
+            println("graphite connect failed");
+            return;
+        }
+    };
+    match backend.write_all(payload.bytes()) {
+        Ok(_) => {}
+        Err(_) => println("graphite write failed"),
+    }
+    match backend.shutdown_write() {
+        Ok(_) => {}
+        Err(_) => println("graphite shutdown failed"),
+    }
+    match net.graphite.accept() {
+        Ok(conn) => print(read_all(conn)),
+        Err(_) => println("graphite accept failed"),
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        println(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt") {
+        Ok(t) => t,
+        Err(_) => {
+            println("cannot read data/jobs.txt");
+            return;
+        }
+    };
+    let mut daemon: Option[Daemon] = None;
+    let mut net: Option[Net] = None;
+    for line in lines_of(jobs).iter() {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        println(f"$ {line}");
+        let (cmd, _, arg) = partition(line, b' ');
+        if cmd == "config" {
+            match fs.read_to_string(f"data/{arg}") {
+                Ok(text) => {
+                    let cfg = parse_config(text);
+                    net = None; // the old daemon's sockets close first
+                    match open_net(cfg) {
+                        Ok(n) => net = Some(n),
+                        Err(e) => println(e),
+                    }
+                    daemon = Some(Daemon.new(cfg));
+                }
+                Err(_) => println(f"cannot read data/{arg}"),
+            }
+        } else {
+            match daemon {
+                Some(mut ref d) => match net {
+                    Some(ref n) => {
+                        if cmd == "send" {
+                            send(n, mut d, arg.replace("\\n", "\n"));
+                        } else if cmd == "admin" {
+                            admin(n, mut d, arg);
+                        } else if cmd == "flush" {
+                            flush(n, mut d);
+                        }
+                    }
+                    None => println("no sockets"),
+                },
+                None => println("no daemon running"),
+            }
+        }
+        println("");
+    }
+}

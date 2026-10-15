@@ -1,0 +1,531 @@
+$ config statsd-classic.js
+
+$ send gorets:1|c
+
+$ send gorets:1|c|@0.1
+
+$ send gorets:2|c|@0.3
+
+$ send glork:320|ms\nglork:100|ms\nglork:250|ms|@0.5
+
+$ send api.latency:12|ms|#env:prod,region:eu
+
+$ send api.latency:48|ms|#env:prod,region:eu\napi.latency:75|ms|#env:prod,region:eu\napi.latency:260|ms|#env:prod,region:eu\napi.latency:101|ms|#env:prod,region:eu
+
+$ send gaugor:333|g
+
+$ send gaugor:-10|g\ngaugor:+4|g
+
+$ send uniques:765|s\nuniques:765|s\nuniques:3|s\nuniques:|s
+
+$ send users online:7|g
+
+$ send a/b/c:1|c
+
+$ send weird$key!:5|c
+
+$ send 404:1|c
+
+$ send multi:1|c:2|c:3|ms
+
+$ send nokey\nbad1:|c\nbad2:abc|c\nbad3:-5|ms\nbad4:5|c|0.1\nbad5:5|c|@-1
+
+$ send hex:0x10|c\nspaced: 7 |c\nexp:1e2|ms\nrate:1|c|@1e-1\nfrac:.5|c\nhisto:3|h\nlate:5|ms \nzero:1|c|@0
+
+$ send \n\n
+
+$ admin counters
+{
+  '404': 1,
+  'statsd.bad_lines_seen': 6,
+  'statsd.packets_received': 17,
+  'statsd.metrics_received': 37,
+  gorets: 17.666666666666668,
+  'a-b-c': 1,
+  weirdkey: 5,
+  multi: 3,
+  hex: 16,
+  spaced: 7,
+  rate: 1,
+  frac: 0.5,
+  histo: 3,
+  zero: Infinity
+}
+END
+
+
+$ admin timers
+{
+  glork: [ 320, 100, 250 ],
+  'api.latency;env=prod;region=eu': [ 12, 48, 75, 260, 101 ],
+  multi: [ 3 ],
+  exp: [ 100 ],
+  late: [ 5 ]
+}
+END
+
+
+$ admin gauges
+{ gaugor: 327, users_online: 7 }
+END
+
+
+$ flush
+stats.404 0.2 1760000010
+stats_counts.404 1 1760000010
+stats.statsd.bad_lines_seen 1.2 1760000010
+stats_counts.statsd.bad_lines_seen 6 1760000010
+stats.statsd.packets_received 3.4 1760000010
+stats_counts.statsd.packets_received 17 1760000010
+stats.statsd.metrics_received 7.4 1760000010
+stats_counts.statsd.metrics_received 37 1760000010
+stats.gorets 3.5333333333333337 1760000010
+stats_counts.gorets 17.666666666666668 1760000010
+stats.a-b-c 0.2 1760000010
+stats_counts.a-b-c 1 1760000010
+stats.weirdkey 1 1760000010
+stats_counts.weirdkey 5 1760000010
+stats.multi 0.6 1760000010
+stats_counts.multi 3 1760000010
+stats.hex 3.2 1760000010
+stats_counts.hex 16 1760000010
+stats.spaced 1.4 1760000010
+stats_counts.spaced 7 1760000010
+stats.rate 0.2 1760000010
+stats_counts.rate 1 1760000010
+stats.frac 0.1 1760000010
+stats_counts.frac 0.5 1760000010
+stats.histo 0.6 1760000010
+stats_counts.histo 3 1760000010
+stats.zero Infinity 1760000010
+stats_counts.zero Infinity 1760000010
+stats.timers.glork.count_90 3 1760000010
+stats.timers.glork.mean_90 223.33333333333334 1760000010
+stats.timers.glork.upper_90 320 1760000010
+stats.timers.glork.sum_90 670 1760000010
+stats.timers.glork.sum_squares_90 174900 1760000010
+stats.timers.glork.count_99_5 3 1760000010
+stats.timers.glork.mean_99_5 223.33333333333334 1760000010
+stats.timers.glork.upper_99_5 320 1760000010
+stats.timers.glork.sum_99_5 670 1760000010
+stats.timers.glork.sum_squares_99_5 174900 1760000010
+stats.timers.glork.std 91.77266598624136 1760000010
+stats.timers.glork.upper 320 1760000010
+stats.timers.glork.lower 100 1760000010
+stats.timers.glork.count 4 1760000010
+stats.timers.glork.count_ps 0.8 1760000010
+stats.timers.glork.sum 670 1760000010
+stats.timers.glork.sum_squares 174900 1760000010
+stats.timers.glork.mean 223.33333333333334 1760000010
+stats.timers.glork.median 250 1760000010
+stats.timers.api.latency.count_90;env=prod;region=eu 5 1760000010
+stats.timers.api.latency.mean_90;env=prod;region=eu 99.2 1760000010
+stats.timers.api.latency.upper_90;env=prod;region=eu 260 1760000010
+stats.timers.api.latency.sum_90;env=prod;region=eu 496 1760000010
+stats.timers.api.latency.sum_squares_90;env=prod;region=eu 85874 1760000010
+stats.timers.api.latency.count_99_5;env=prod;region=eu 5 1760000010
+stats.timers.api.latency.mean_99_5;env=prod;region=eu 99.2 1760000010
+stats.timers.api.latency.upper_99_5;env=prod;region=eu 260 1760000010
+stats.timers.api.latency.sum_99_5;env=prod;region=eu 496 1760000010
+stats.timers.api.latency.sum_squares_99_5;env=prod;region=eu 85874 1760000010
+stats.timers.api.latency.count_top10;env=prod;region=eu 1 1760000010
+stats.timers.api.latency.mean_top10;env=prod;region=eu 260 1760000010
+stats.timers.api.latency.lower_top10;env=prod;region=eu 260 1760000010
+stats.timers.api.latency.sum_top10;env=prod;region=eu 260 1760000010
+stats.timers.api.latency.sum_squares_top10;env=prod;region=eu 67600 1760000010
+stats.timers.api.latency.std;env=prod;region=eu 85.63971041520401 1760000010
+stats.timers.api.latency.upper;env=prod;region=eu 260 1760000010
+stats.timers.api.latency.lower;env=prod;region=eu 12 1760000010
+stats.timers.api.latency.count;env=prod;region=eu 5 1760000010
+stats.timers.api.latency.count_ps;env=prod;region=eu 1 1760000010
+stats.timers.api.latency.sum;env=prod;region=eu 496 1760000010
+stats.timers.api.latency.sum_squares;env=prod;region=eu 85874 1760000010
+stats.timers.api.latency.mean;env=prod;region=eu 99.2 1760000010
+stats.timers.api.latency.median;env=prod;region=eu 75 1760000010
+stats.timers.api.latency.histogram.bin_50;env=prod;region=eu 2 1760000010
+stats.timers.api.latency.histogram.bin_100;env=prod;region=eu 1 1760000010
+stats.timers.api.latency.histogram.bin_250;env=prod;region=eu 1 1760000010
+stats.timers.api.latency.histogram.bin_inf;env=prod;region=eu 1 1760000010
+stats.timers.multi.count_90 1 1760000010
+stats.timers.multi.mean_90 3 1760000010
+stats.timers.multi.upper_90 3 1760000010
+stats.timers.multi.sum_90 3 1760000010
+stats.timers.multi.sum_squares_90 9 1760000010
+stats.timers.multi.count_99_5 1 1760000010
+stats.timers.multi.mean_99_5 3 1760000010
+stats.timers.multi.upper_99_5 3 1760000010
+stats.timers.multi.sum_99_5 3 1760000010
+stats.timers.multi.sum_squares_99_5 9 1760000010
+stats.timers.multi.count_top10 1 1760000010
+stats.timers.multi.mean_top10 3 1760000010
+stats.timers.multi.lower_top10 3 1760000010
+stats.timers.multi.sum_top10 3 1760000010
+stats.timers.multi.sum_squares_top10 9 1760000010
+stats.timers.multi.std 0 1760000010
+stats.timers.multi.upper 3 1760000010
+stats.timers.multi.lower 3 1760000010
+stats.timers.multi.count 1 1760000010
+stats.timers.multi.count_ps 0.2 1760000010
+stats.timers.multi.sum 3 1760000010
+stats.timers.multi.sum_squares 9 1760000010
+stats.timers.multi.mean 3 1760000010
+stats.timers.multi.median 3 1760000010
+stats.timers.exp.count_90 1 1760000010
+stats.timers.exp.mean_90 100 1760000010
+stats.timers.exp.upper_90 100 1760000010
+stats.timers.exp.sum_90 100 1760000010
+stats.timers.exp.sum_squares_90 10000 1760000010
+stats.timers.exp.count_99_5 1 1760000010
+stats.timers.exp.mean_99_5 100 1760000010
+stats.timers.exp.upper_99_5 100 1760000010
+stats.timers.exp.sum_99_5 100 1760000010
+stats.timers.exp.sum_squares_99_5 10000 1760000010
+stats.timers.exp.count_top10 1 1760000010
+stats.timers.exp.mean_top10 100 1760000010
+stats.timers.exp.lower_top10 100 1760000010
+stats.timers.exp.sum_top10 100 1760000010
+stats.timers.exp.sum_squares_top10 10000 1760000010
+stats.timers.exp.std 0 1760000010
+stats.timers.exp.upper 100 1760000010
+stats.timers.exp.lower 100 1760000010
+stats.timers.exp.count 1 1760000010
+stats.timers.exp.count_ps 0.2 1760000010
+stats.timers.exp.sum 100 1760000010
+stats.timers.exp.sum_squares 10000 1760000010
+stats.timers.exp.mean 100 1760000010
+stats.timers.exp.median 100 1760000010
+stats.timers.late.count_90 1 1760000010
+stats.timers.late.mean_90 5 1760000010
+stats.timers.late.upper_90 5 1760000010
+stats.timers.late.sum_90 5 1760000010
+stats.timers.late.sum_squares_90 25 1760000010
+stats.timers.late.count_99_5 1 1760000010
+stats.timers.late.mean_99_5 5 1760000010
+stats.timers.late.upper_99_5 5 1760000010
+stats.timers.late.sum_99_5 5 1760000010
+stats.timers.late.sum_squares_99_5 25 1760000010
+stats.timers.late.count_top10 1 1760000010
+stats.timers.late.mean_top10 5 1760000010
+stats.timers.late.lower_top10 5 1760000010
+stats.timers.late.sum_top10 5 1760000010
+stats.timers.late.sum_squares_top10 25 1760000010
+stats.timers.late.std 0 1760000010
+stats.timers.late.upper 5 1760000010
+stats.timers.late.lower 5 1760000010
+stats.timers.late.count 1 1760000010
+stats.timers.late.count_ps 0.2 1760000010
+stats.timers.late.sum 5 1760000010
+stats.timers.late.sum_squares 25 1760000010
+stats.timers.late.mean 5 1760000010
+stats.timers.late.median 5 1760000010
+stats.gauges.gaugor 327 1760000010
+stats.gauges.users_online 7 1760000010
+stats.gauges.statsd.timestamp_lag 0 1760000010
+stats.sets.uniques.count 3 1760000010
+statsd.numStats 23 1760000010
+stats.statsd.graphiteStats.calculationtime 0 1760000010
+stats.statsd.processing_time 0 1760000010
+stats.statsd.graphiteStats.last_exception 0 1760000010
+stats.statsd.graphiteStats.last_flush 1760000005 1760000010
+stats.statsd.graphiteStats.flush_time 0 1760000010
+stats.statsd.graphiteStats.flush_length 621 1760000010
+
+$ send gorets:5|c
+
+$ send glork:42|ms
+
+$ send gaugor:+8|g
+
+$ flush
+stats.404 0 1760000015
+stats_counts.404 0 1760000015
+stats.statsd.bad_lines_seen 0 1760000015
+stats_counts.statsd.bad_lines_seen 0 1760000015
+stats.statsd.packets_received 0.6 1760000015
+stats_counts.statsd.packets_received 3 1760000015
+stats.statsd.metrics_received 0.6 1760000015
+stats_counts.statsd.metrics_received 3 1760000015
+stats.gorets 1 1760000015
+stats_counts.gorets 5 1760000015
+stats.a-b-c 0 1760000015
+stats_counts.a-b-c 0 1760000015
+stats.weirdkey 0 1760000015
+stats_counts.weirdkey 0 1760000015
+stats.multi 0 1760000015
+stats_counts.multi 0 1760000015
+stats.hex 0 1760000015
+stats_counts.hex 0 1760000015
+stats.spaced 0 1760000015
+stats_counts.spaced 0 1760000015
+stats.rate 0 1760000015
+stats_counts.rate 0 1760000015
+stats.frac 0 1760000015
+stats_counts.frac 0 1760000015
+stats.histo 0 1760000015
+stats_counts.histo 0 1760000015
+stats.zero 0 1760000015
+stats_counts.zero 0 1760000015
+stats.timers.glork.count_90 1 1760000015
+stats.timers.glork.mean_90 42 1760000015
+stats.timers.glork.upper_90 42 1760000015
+stats.timers.glork.sum_90 42 1760000015
+stats.timers.glork.sum_squares_90 1764 1760000015
+stats.timers.glork.count_99_5 1 1760000015
+stats.timers.glork.mean_99_5 42 1760000015
+stats.timers.glork.upper_99_5 42 1760000015
+stats.timers.glork.sum_99_5 42 1760000015
+stats.timers.glork.sum_squares_99_5 1764 1760000015
+stats.timers.glork.count_top10 1 1760000015
+stats.timers.glork.mean_top10 42 1760000015
+stats.timers.glork.lower_top10 42 1760000015
+stats.timers.glork.sum_top10 42 1760000015
+stats.timers.glork.sum_squares_top10 1764 1760000015
+stats.timers.glork.std 0 1760000015
+stats.timers.glork.upper 42 1760000015
+stats.timers.glork.lower 42 1760000015
+stats.timers.glork.count 1 1760000015
+stats.timers.glork.count_ps 0.2 1760000015
+stats.timers.glork.sum 42 1760000015
+stats.timers.glork.sum_squares 1764 1760000015
+stats.timers.glork.mean 42 1760000015
+stats.timers.glork.median 42 1760000015
+stats.timers.api.latency.count_ps;env=prod;region=eu 0 1760000015
+stats.timers.api.latency.count;env=prod;region=eu 0 1760000015
+stats.timers.multi.count_ps 0 1760000015
+stats.timers.multi.count 0 1760000015
+stats.timers.exp.count_ps 0 1760000015
+stats.timers.exp.count 0 1760000015
+stats.timers.late.count_ps 0 1760000015
+stats.timers.late.count 0 1760000015
+stats.gauges.gaugor 335 1760000015
+stats.gauges.users_online 7 1760000015
+stats.gauges.statsd.timestamp_lag 0 1760000015
+stats.sets.uniques.count 0 1760000015
+statsd.numStats 23 1760000015
+stats.statsd.graphiteStats.calculationtime 0 1760000015
+stats.statsd.processing_time 0 1760000015
+stats.statsd.graphiteStats.last_exception 0 1760000015
+stats.statsd.graphiteStats.last_flush 1760000010 1760000015
+stats.statsd.graphiteStats.flush_time 0 1760000015
+stats.statsd.graphiteStats.flush_length 7280 1760000015
+
+$ admin delcounters gorets
+deleted: gorets
+END
+
+
+$ admin delcounters stats.* bad*
+metric stats.* not found
+metric bad* not found
+END
+
+
+$ admin delcounters statsd.*
+deleted: statsd.bad_lines_seen
+deleted: statsd.packets_received
+deleted: statsd.metrics_received
+END
+
+
+$ send gorets:1|c
+
+$ admin counters
+{
+  '404': 0,
+  'a-b-c': 0,
+  weirdkey: 0,
+  multi: 0,
+  hex: 0,
+  spaced: 0,
+  rate: 0,
+  frac: 0,
+  histo: 0,
+  zero: 0,
+  'statsd.packets_received': NaN,
+  'statsd.metrics_received': NaN,
+  gorets: 1
+}
+END
+
+
+$ admin deltimers glork api.*
+deleted: glork
+deleted: api.latency;env=prod;region=eu
+END
+
+
+$ admin delgauges nothing.here
+metric nothing.here not found
+END
+
+
+$ admin health
+health: up
+
+$ admin health down
+health: down
+
+$ admin health
+health: down
+
+$ admin help
+Commands: stats, counters, timers, gauges, delcounters, deltimers, delgauges, health, config, quit
+
+
+$ admin bogus
+ERROR
+
+$ admin quit
+(connection closed)
+
+$ send glork:7|ms
+
+$ flush
+stats.404 0 1760000020
+stats_counts.404 0 1760000020
+stats.a-b-c 0 1760000020
+stats_counts.a-b-c 0 1760000020
+stats.weirdkey 0 1760000020
+stats_counts.weirdkey 0 1760000020
+stats.multi 0 1760000020
+stats_counts.multi 0 1760000020
+stats.hex 0 1760000020
+stats_counts.hex 0 1760000020
+stats.spaced 0 1760000020
+stats_counts.spaced 0 1760000020
+stats.rate 0 1760000020
+stats_counts.rate 0 1760000020
+stats.frac 0 1760000020
+stats_counts.frac 0 1760000020
+stats.histo 0 1760000020
+stats_counts.histo 0 1760000020
+stats.zero 0 1760000020
+stats_counts.zero 0 1760000020
+stats.statsd.packets_received NaN 1760000020
+stats_counts.statsd.packets_received NaN 1760000020
+stats.statsd.metrics_received NaN 1760000020
+stats_counts.statsd.metrics_received NaN 1760000020
+stats.gorets 0.2 1760000020
+stats_counts.gorets 1 1760000020
+stats.timers.multi.count_ps 0 1760000020
+stats.timers.multi.count 0 1760000020
+stats.timers.exp.count_ps 0 1760000020
+stats.timers.exp.count 0 1760000020
+stats.timers.late.count_ps 0 1760000020
+stats.timers.late.count 0 1760000020
+stats.timers.glork.count_90 1 1760000020
+stats.timers.glork.mean_90 7 1760000020
+stats.timers.glork.upper_90 7 1760000020
+stats.timers.glork.sum_90 7 1760000020
+stats.timers.glork.sum_squares_90 49 1760000020
+stats.timers.glork.count_99_5 1 1760000020
+stats.timers.glork.mean_99_5 7 1760000020
+stats.timers.glork.upper_99_5 7 1760000020
+stats.timers.glork.sum_99_5 7 1760000020
+stats.timers.glork.sum_squares_99_5 49 1760000020
+stats.timers.glork.count_top10 1 1760000020
+stats.timers.glork.mean_top10 7 1760000020
+stats.timers.glork.lower_top10 7 1760000020
+stats.timers.glork.sum_top10 7 1760000020
+stats.timers.glork.sum_squares_top10 49 1760000020
+stats.timers.glork.std 0 1760000020
+stats.timers.glork.upper 7 1760000020
+stats.timers.glork.lower 7 1760000020
+stats.timers.glork.count 1 1760000020
+stats.timers.glork.count_ps 0.2 1760000020
+stats.timers.glork.sum 7 1760000020
+stats.timers.glork.sum_squares 49 1760000020
+stats.timers.glork.mean 7 1760000020
+stats.timers.glork.median 7 1760000020
+stats.gauges.gaugor 335 1760000020
+stats.gauges.users_online 7 1760000020
+stats.gauges.statsd.timestamp_lag 0 1760000020
+stats.sets.uniques.count 0 1760000020
+statsd.numStats 21 1760000020
+stats.statsd.graphiteStats.calculationtime 0 1760000020
+stats.statsd.processing_time 0 1760000020
+stats.statsd.graphiteStats.last_exception 0 1760000020
+stats.statsd.graphiteStats.last_flush 1760000015 1760000020
+stats.statsd.graphiteStats.flush_time 0 1760000020
+stats.statsd.graphiteStats.flush_length 2795 1760000020
+
+$ config statsd-modern.js
+
+$ send api.req:1|c\napi.req:1|c|@0.5
+
+$ send svc.time:10|ms\nsvc.time:20|ms\nsvc.time:30|ms
+
+$ send temp:21.5|g
+
+$ send visitors:a|s\nvisitors:b|s
+
+$ send my key/x:2|c|#team:core
+
+$ flush
+acme.agg.bad_lines_seen.rate.host1 0 1760000010
+acme.agg.packets_received.rate.host1 1 1760000010
+acme.agg.metrics_received.rate.host1 1.8 1760000010
+acme.api.req.rate.host1 0.6 1760000010
+acme.my_key-x.rate.host1;team=core 0.4 1760000010
+acme.t.svc.time.upper.host1 30 1760000010
+acme.t.svc.time.count.host1 3 1760000010
+acme.t.svc.time.count_ps.host1 0.6 1760000010
+acme.t.svc.time.mean.host1 20 1760000010
+acme.gauges.temp.host1 21.5 1760000010
+acme.gauges.agg.timestamp_lag.host1 0 1760000010
+acme.sets.visitors.count.host1 2 1760000010
+acme.agg.numStats.host1 9 1760000010
+acme.agg.graphiteStats.calculationtime.host1 0 1760000010
+acme.agg.processing_time.host1 0 1760000010
+acme.agg.graphiteStats.last_exception.host1 0 1760000010
+acme.agg.graphiteStats.last_flush.host1 1760000005 1760000010
+acme.agg.graphiteStats.flush_time.host1 0 1760000010
+acme.agg.graphiteStats.flush_length.host1 514 1760000010
+
+$ send svc.time:15|ms
+
+$ flush
+acme.agg.bad_lines_seen.rate.host1 0 1760000015
+acme.agg.packets_received.rate.host1 0.2 1760000015
+acme.agg.metrics_received.rate.host1 0.2 1760000015
+acme.t.svc.time.upper.host1 15 1760000015
+acme.t.svc.time.count.host1 1 1760000015
+acme.t.svc.time.count_ps.host1 0.2 1760000015
+acme.t.svc.time.mean.host1 15 1760000015
+acme.gauges.temp.host1 21.5 1760000015
+acme.gauges.agg.timestamp_lag.host1 0 1760000015
+acme.agg.numStats.host1 6 1760000015
+acme.agg.graphiteStats.calculationtime.host1 0 1760000015
+acme.agg.processing_time.host1 0 1760000015
+acme.agg.graphiteStats.last_exception.host1 0 1760000015
+acme.agg.graphiteStats.last_flush.host1 1760000010 1760000015
+acme.agg.graphiteStats.flush_time.host1 0 1760000015
+acme.agg.graphiteStats.flush_length.host1 909 1760000015
+
+$ flush
+acme.agg.bad_lines_seen.rate.host1 0 1760000020
+acme.agg.packets_received.rate.host1 0 1760000020
+acme.agg.metrics_received.rate.host1 0 1760000020
+acme.gauges.agg.timestamp_lag.host1 0 1760000020
+acme.agg.numStats.host1 4 1760000020
+acme.agg.graphiteStats.calculationtime.host1 0 1760000020
+acme.agg.processing_time.host1 0 1760000020
+acme.agg.graphiteStats.last_exception.host1 0 1760000020
+acme.agg.graphiteStats.last_flush.host1 1760000015 1760000020
+acme.agg.graphiteStats.flush_time.host1 0 1760000020
+acme.agg.graphiteStats.flush_length.host1 778 1760000020
+
+$ admin counters
+{
+  'agg.bad_lines_seen': 0,
+  'agg.packets_received': 0,
+  'agg.metrics_received': 0
+}
+END
+
+
+$ admin gauges
+{ 'agg.timestamp_lag': 0 }
+END
+
+
