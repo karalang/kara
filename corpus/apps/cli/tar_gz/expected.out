@@ -1,0 +1,30 @@
+crc32("123456789") = cbf43926
+length codes: 3 -> 257, 10 -> 264, 11 -> 265, 257 -> 284, 258 -> 285
+distance codes: 1 -> 0, 5 -> 4, 24577 -> 29, 32768 -> 29
+wrote 5 files under site/
+tar: 7 entries, 10240 bytes
+deflate empty.txt: 0 -> 2 bytes, fixed (bits: stored 40, fixed 10, dynamic 92; 0 tokens, 0 matches, rescales 0)
+deflate notes.txt: 26 -> 25 bytes, fixed (bits: stored 248, fixed 193, dynamic 317; 22 tokens, 1 matches, rescales 0)
+deflate data.bin: 2000 -> 2005 bytes, stored (bits: stored 16040, fixed 16902, dynamic 16360; 2000 tokens, 0 matches, rescales 0)
+deflate index.html: 1003 -> 160 bytes, dynamic (bits: stored 8064, fixed 1400, dynamic 1280; 146 tokens, 19 matches, rescales 0)
+deflate site.tar: 10240 -> 2636 bytes, dynamic (bits: stored 81960, fixed 21293, dynamic 21082; 2413 tokens, 104 matches, rescales 0)
+wrote site.tar.gz: 2654 bytes, crc32 90134dcc
+gunzip: 10240 bytes, blocks ['dynamic'], identical true
+  drwxr-xr-x kara/kara      0 2025-10-09 08:53 site/
+  -rw-r--r-- kara/kara   1003 2025-10-09 08:53 site/index.html
+  -rw-r--r-- kara/kara     26 2025-10-09 08:53 site/notes.txt
+  -rw-r--r-- kara/kara      0 2025-10-09 08:53 site/empty.txt
+  -rw-r--r-- kara/kara   2000 2025-10-09 08:53 site/data.bin
+  drwxr-xr-x kara/kara      0 2025-10-09 08:53 site/a_rather_long_directory_name_that_pushes_the_path_past_the_ustar_limit/
+  -rw-r--r-- kara/kara      5 2025-10-09 08:53 site/a_rather_long_directory_name_that_pushes_the_path_past_the_ustar_limit/of_one_hundred_bytes.txt
+extracted into out/: 5 of 5 files identical to the originals
+reference stream from zlib -9: 195 -> 696 bytes, blocks ['dynamic'], crc 8004368b, 10 lines, last [done.]
+our gzip of the same text: 194 bytes
+== damage
+  flipped trailer crc: crc mismatch: trailer 90134d33, data 90134dcc
+  truncated by 20 bytes: unexpected end of stream
+  flipped bit in byte 40: bad literal/length code
+  extra byte after trailer: 1 bytes after the trailer
+  not gzip: not a gzip file
+  tar with a flipped header byte: header checksum at 512: stored 6115, computed 6116
+  truncated tar: site/index.html: data runs past the end

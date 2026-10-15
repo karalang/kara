@@ -1,0 +1,1264 @@
+// A ustar archiver and a gzip codec, written from the specs: POSIX ustar
+// headers (octal fields, the checksum, the 155-byte prefix for long
+// names), DEFLATE from RFC 1951 (an LZ77 match finder over hash chains,
+// and stored, fixed-Huffman and dynamic-Huffman blocks, whichever is
+// smallest), and the RFC 1952 gzip wrapper with its CRC-32 trailer.
+//
+// The program writes a small site to disk, packs it into site.tar.gz,
+// reads that back, lists it the way `tar tv` does and extracts it. The
+// file it writes is a real .tar.gz: GNU tar, gzip -t and Python's tarfile
+// all read it. The inflater is a full one, so it also decodes a stream
+// that zlib -9 produced, and it reports where a damaged archive breaks.
+
+const MTIME: i64 = 1760000000;
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+fn crc_table() -> Vec[u32] {
+    let mut table: Vec[u32] = Vec.new();
+    for n in 0..256 {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            if c & 1u32 == 1u32 {
+                c = 0xEDB88320u32 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        table.push(c);
+    }
+    table
+}
+
+fn crc32(table: ref Vec[u32], data: Slice[u8]) -> u32 {
+    let mut c = 0xFFFFFFFFu32;
+    for b in data.iter() {
+        let idx = ((c ^ (*b as u32)) & 0xFFu32) as i64;
+        c = table[idx] ^ (c >> 8);
+    }
+    c ^ 0xFFFFFFFFu32
+}
+
+fn octal(v0: i64, width: i64) -> String {
+    let mut digits = String.new();
+    let mut v = v0;
+    while v > 0 {
+        digits = f"{v % 8}{digits}";
+        v = v / 8;
+    }
+    let mut s = String.new();
+    for _ in digits.len()..width {
+        s.push_str("0");
+    }
+    s.push_str(digits);
+    s
+}
+
+// ---------------------------------------------------------------- tables
+
+struct Tables {
+    lbase: Vec[i64],
+    lextra: Vec[i64],
+    dbase: Vec[i64],
+    dextra: Vec[i64],
+    order: Vec[i64],
+    crc: Vec[u32],
+}
+
+fn tables() -> Tables {
+    let mut lbase: Vec[i64] = Vec.new();
+    let mut lextra: Vec[i64] = Vec.new();
+    let mut b = 3;
+    for code in 0..28 {
+        let e = if code < 8 { 0 } else { (code - 4) / 4 };
+        lbase.push(b);
+        lextra.push(e);
+        b += 1 << e;
+    }
+    lbase.push(258);
+    lextra.push(0);
+    let mut dbase: Vec[i64] = Vec.new();
+    let mut dextra: Vec[i64] = Vec.new();
+    let mut b2 = 1;
+    for code in 0..30 {
+        let e = if code < 4 { 0 } else { (code - 2) / 2 };
+        dbase.push(b2);
+        dextra.push(e);
+        b2 += 1 << e;
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for x in [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15] {
+        order.push(x);
+    }
+    Tables { lbase: lbase, lextra: lextra, dbase: dbase, dextra: dextra, order: order, crc: crc_table() }
+}
+
+fn length_code(t: ref Tables, n: i64) -> i64 {
+    let mut c = 0;
+    while c < 28 and t.lbase[c + 1] <= n {
+        c += 1;
+    }
+    c
+}
+
+fn dist_code(t: ref Tables, d: i64) -> i64 {
+    let mut c = 0;
+    while c < 29 and t.dbase[c + 1] <= d {
+        c += 1;
+    }
+    c
+}
+
+fn fixed_lit() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for s in 0..288 {
+        v.push(if s < 144 { 8 } else if s < 256 { 9 } else if s < 280 { 7 } else { 8 });
+    }
+    v
+}
+
+fn fixed_dist() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..30 {
+        v.push(5);
+    }
+    v
+}
+
+fn cl_extra(s: i64) -> i64 {
+    if s == 16 { 2 } else if s == 17 { 3 } else if s == 18 { 7 } else { 0 }
+}
+
+// ---------------------------------------------------------------- compress
+
+// One LZ77 token: a literal byte (dist 0) or a match of `len` bytes
+// `dist` back.
+struct Tokens { len: Vec[i64], dist: Vec[i64] }
+
+fn hash3(d: Slice[u8], i: i64) -> i64 {
+    (((d[i] as i64) << 10) ^ ((d[i + 1] as i64) << 5) ^ (d[i + 2] as i64)) & 0x7FFF
+}
+
+fn insert(d: Slice[u8], head: mut ref Vec[i64], prev: mut ref Vec[i64], p: i64) {
+    if p + 2 < d.len() {
+        let hv = hash3(d, p);
+        prev[p] = head[hv];
+        head[hv] = p;
+    }
+}
+
+fn lz77(d: Slice[u8]) -> Tokens {
+    let n = d.len();
+    let mut head = zeros(32768);
+    for k in 0..32768 {
+        head[k] = -1;
+    }
+    let mut prev = zeros(n);
+    let mut toks = Tokens { len: Vec.new(), dist: Vec.new() };
+    let mut i = 0;
+    while i < n {
+        let mut best = 0;
+        let mut bdist = 0;
+        if i + 2 < n {
+            let mut j = head[hash3(d, i)];
+            let mut chain = 0;
+            let maxl = if n - i < 258 { n - i } else { 258 };
+            while j >= 0 and i - j <= 32768 and chain < 64 {
+                let mut l = 0;
+                while l < maxl and d[j + l] == d[i + l] {
+                    l += 1;
+                }
+                if l > best {
+                    best = l;
+                    bdist = i - j;
+                    if l == maxl {
+                        break;
+                    }
+                }
+                j = prev[j];
+                chain += 1;
+            }
+        }
+        if best >= 3 {
+            toks.len.push(best);
+            toks.dist.push(bdist);
+            for p in i..i + best {
+                insert(d, mut head, mut prev, p);
+            }
+            i += best;
+        } else {
+            toks.len.push(d[i] as i64);
+            toks.dist.push(0);
+            insert(d, mut head, mut prev, i);
+            i += 1;
+        }
+    }
+    toks
+}
+
+// Huffman code lengths: repeatedly merge the two lightest nodes (ties go
+// to the earlier node), then read each leaf's depth.
+fn huffman(f: ref Vec[i64]) -> Vec[i64] {
+    let mut lens = zeros(f.len());
+    let mut syms: Vec[i64] = Vec.new();
+    for i in 0..f.len() {
+        if f[i] > 0 {
+            syms.push(i);
+        }
+    }
+    if syms.len() == 0 {
+        return lens;
+    }
+    if syms.len() == 1 {
+        lens[syms[0]] = 1;
+        return lens;
+    }
+    let mut weight: Vec[i64] = Vec.new();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut active: Vec[i64] = Vec.new();
+    for k in 0..syms.len() {
+        weight.push(f[syms[k]]);
+        parent.push(-1);
+        active.push(k);
+    }
+    while active.len() > 1 {
+        let a = take_lightest(weight, mut active);
+        let b = take_lightest(weight, mut active);
+        weight.push(weight[a] + weight[b]);
+        parent.push(-1);
+        let node = weight.len() - 1;
+        parent[a] = node;
+        parent[b] = node;
+        active.push(node);
+    }
+    for k in 0..syms.len() {
+        let mut depth = 0;
+        let mut x = k;
+        while parent[x] != -1 {
+            x = parent[x];
+            depth += 1;
+        }
+        lens[syms[k]] = depth;
+    }
+    lens
+}
+
+fn take_lightest(weight: ref Vec[i64], active: mut ref Vec[i64]) -> i64 {
+    let mut k = 0;
+    for x in 1..active.len() {
+        if weight[active[x]] < weight[active[k]] {
+            k = x;
+        }
+    }
+    active.remove(k)
+}
+
+fn max_of(v: ref Vec[i64]) -> i64 {
+    let mut m = 0;
+    for x in v.iter() {
+        if *x > m {
+            m = *x;
+        }
+    }
+    m
+}
+
+// Lengths no longer than `limit`: halve the counts until the tree fits.
+fn limited(f0: ref Vec[i64], limit: i64, rescales: mut ref i64) -> Vec[i64] {
+    let mut f = f0.clone();
+    loop {
+        let lens = huffman(f);
+        if max_of(lens) <= limit {
+            return lens;
+        }
+        for k in 0..f.len() {
+            f[k] = (f[k] + 1) / 2;
+        }
+        *rescales += 1;
+    }
+}
+
+fn canonical(lens: ref Vec[i64]) -> Vec[i64] {
+    let mut count = zeros(16);
+    for x in lens.iter() {
+        if *x > 0 {
+            count[*x] += 1;
+        }
+    }
+    let mut next = zeros(16);
+    let mut code = 0;
+    for b in 2..16 {
+        code = (code + count[b - 1]) << 1;
+        next[b] = code;
+    }
+    let mut out = zeros(lens.len());
+    for s in 0..lens.len() {
+        let x = lens[s];
+        if x > 0 {
+            out[s] = next[x];
+            next[x] += 1;
+        }
+    }
+    out
+}
+
+struct Bits { out: Vec[u8], acc: i64, n: i64 }
+
+impl Bits {
+    fn put(mut ref self, v: i64, n: i64) {
+        self.acc = self.acc | (v << self.n);
+        self.n += n;
+        while self.n >= 8 {
+            self.out.push((self.acc & 0xFF) as u8);
+            self.acc = self.acc >> 8;
+            self.n -= 8;
+        }
+    }
+
+    // Huffman codes go out most-significant bit first.
+    fn huff(mut ref self, code0: i64, n: i64) {
+        let mut code = code0;
+        let mut r = 0;
+        for _ in 0..n {
+            r = (r << 1) | (code & 1);
+            code = code >> 1;
+        }
+        self.put(r, n);
+    }
+
+    fn flush(mut ref self) {
+        if self.n > 0 {
+            self.out.push((self.acc & 0xFF) as u8);
+        }
+        self.acc = 0;
+        self.n = 0;
+    }
+}
+
+// Run-length code the code lengths with symbols 16 (repeat previous),
+// 17 and 18 (runs of zeros). `sym` and `extra` are parallel.
+struct ClCodes { sym: Vec[i64], extra: Vec[i64] }
+
+fn rle(seq: ref Vec[i64]) -> ClCodes {
+    let mut out = ClCodes { sym: Vec.new(), extra: Vec.new() };
+    let mut i = 0;
+    while i < seq.len() {
+        let v = seq[i];
+        let mut run = 1;
+        while i + run < seq.len() and seq[i + run] == v {
+            run += 1;
+        }
+        if v == 0 and run >= 3 {
+            let r = if run < 138 { run } else { 138 };
+            if r >= 11 {
+                out.sym.push(18);
+                out.extra.push(r - 11);
+            } else {
+                out.sym.push(17);
+                out.extra.push(r - 3);
+            }
+            i += r;
+        } else if v != 0 and run >= 4 {
+            out.sym.push(v);
+            out.extra.push(0);
+            let r = if run - 1 < 6 { run - 1 } else { 6 };
+            out.sym.push(16);
+            out.extra.push(r - 3);
+            i += 1 + r;
+        } else {
+            out.sym.push(v);
+            out.extra.push(0);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn data_bits(t: ref Tables, toks: ref Tokens, ll: ref Vec[i64], dl: ref Vec[i64]) -> i64 {
+    let mut bits = ll[256];
+    for k in 0..toks.len.len() {
+        let v = toks.len[k];
+        let d = toks.dist[k];
+        if d == 0 {
+            bits += ll[v];
+        } else {
+            let lc = length_code(t, v);
+            let dc = dist_code(t, d);
+            bits += ll[257 + lc] + t.lextra[lc] + dl[dc] + t.dextra[dc];
+        }
+    }
+    bits
+}
+
+fn count_nonzero(v: ref Vec[i64]) -> i64 {
+    let mut n = 0;
+    for x in v.iter() {
+        if *x != 0 {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn write_tokens(t: ref Tables, w: mut ref Bits, toks: ref Tokens, ll: ref Vec[i64], dl: ref Vec[i64]) {
+    let lcodes = canonical(ll);
+    let dcodes = canonical(dl);
+    for k in 0..toks.len.len() {
+        let v = toks.len[k];
+        let d = toks.dist[k];
+        if d == 0 {
+            w.huff(lcodes[v], ll[v]);
+        } else {
+            let lc = length_code(t, v);
+            let dc = dist_code(t, d);
+            w.huff(lcodes[257 + lc], ll[257 + lc]);
+            w.put(v - t.lbase[lc], t.lextra[lc]);
+            w.huff(dcodes[dc], dl[dc]);
+            w.put(d - t.dbase[dc], t.dextra[dc]);
+        }
+    }
+    w.huff(lcodes[256], ll[256]);
+}
+
+struct Deflated { body: Vec[u8], info: String }
+
+fn deflate(t: ref Tables, d: Slice[u8]) -> Deflated {
+    let toks = lz77(d);
+    let mut lf = zeros(286);
+    let mut df = zeros(30);
+    let mut matches = 0;
+    for k in 0..toks.len.len() {
+        if toks.dist[k] == 0 {
+            lf[toks.len[k]] += 1;
+        } else {
+            lf[257 + length_code(t, toks.len[k])] += 1;
+            df[dist_code(t, toks.dist[k])] += 1;
+            matches += 1;
+        }
+    }
+    lf[256] += 1;
+    if count_nonzero(lf) < 2 and lf[0] == 0 {
+        lf[0] = 1;
+    }
+    if count_nonzero(df) < 2 {
+        if df[0] == 0 {
+            df[0] = 1;
+        }
+        if df[1] == 0 {
+            df[1] = 1;
+        }
+    }
+    let mut rescales = 0;
+    let ll = limited(lf, 15, mut rescales);
+    let dl = limited(df, 15, mut rescales);
+    let mut hlit = 286;
+    while hlit > 257 and ll[hlit - 1] == 0 {
+        hlit -= 1;
+    }
+    let mut hdist = 30;
+    while hdist > 1 and dl[hdist - 1] == 0 {
+        hdist -= 1;
+    }
+    let mut seq: Vec[i64] = Vec.new();
+    for k in 0..hlit {
+        seq.push(ll[k]);
+    }
+    for k in 0..hdist {
+        seq.push(dl[k]);
+    }
+    let cl_syms = rle(seq);
+    let mut cf = zeros(19);
+    for s in cl_syms.sym.iter() {
+        cf[*s] += 1;
+    }
+    let cl = limited(cf, 7, mut rescales);
+    let mut hclen = 19;
+    while hclen > 4 and cl[t.order[hclen - 1]] == 0 {
+        hclen -= 1;
+    }
+    let mut dynamic = 3 + 14 + 3 * hclen + data_bits(t, toks, ll, dl);
+    for s in cl_syms.sym.iter() {
+        dynamic += cl[*s] + cl_extra(*s);
+    }
+    let fl = fixed_lit();
+    let fd = fixed_dist();
+    let fixed = 3 + data_bits(t, toks, fl, fd);
+    let fits = d.len() <= 65535;
+    let stored = if fits { 8 + 32 + 8 * d.len() } else { 1 << 40 };
+    let mut kind = "stored";
+    let mut best = stored;
+    if fixed <= best {
+        kind = "fixed";
+        best = fixed;
+    }
+    if dynamic < best {
+        kind = "dynamic";
+    }
+    let mut w = Bits { out: Vec.new(), acc: 0, n: 0 };
+    w.put(1, 1);
+    if kind == "stored" {
+        w.put(0, 2);
+        w.flush();
+        let n = d.len();
+        w.out.push((n & 0xFF) as u8);
+        w.out.push((n >> 8) as u8);
+        w.out.push((~n & 0xFF) as u8);
+        w.out.push(((~n >> 8) & 0xFF) as u8);
+        for b in d.iter() {
+            w.out.push(*b);
+        }
+    } else if kind == "fixed" {
+        w.put(1, 2);
+        write_tokens(t, mut w, toks, fl, fd);
+        w.flush();
+    } else {
+        w.put(2, 2);
+        w.put(hlit - 257, 5);
+        w.put(hdist - 1, 5);
+        w.put(hclen - 4, 4);
+        for k in 0..hclen {
+            w.put(cl[t.order[k]], 3);
+        }
+        let cc = canonical(cl);
+        for k in 0..cl_syms.sym.len() {
+            let s = cl_syms.sym[k];
+            w.huff(cc[s], cl[s]);
+            if s >= 16 {
+                w.put(cl_syms.extra[k], cl_extra(s));
+            }
+        }
+        write_tokens(t, mut w, toks, ll, dl);
+        w.flush();
+    }
+    let stored_text = if fits { f"{stored}" } else { "n/a".to_string() };
+    let info = f"{kind} (bits: stored {stored_text}, fixed {fixed}, dynamic {dynamic}; {toks.len.len()} tokens, {matches} matches, rescales {rescales})";
+    Deflated { body: w.out, info: info }
+}
+
+// ---------------------------------------------------------------- inflate
+
+struct Reader { d: Vec[u8], pos: i64, buf: i64, cnt: i64 }
+
+impl Reader {
+    fn bits(mut ref self, n: i64) -> Result[i64, String] {
+        let mut v = self.buf;
+        while self.cnt < n {
+            if self.pos >= self.d.len() {
+                return Err("unexpected end of stream".to_string());
+            }
+            v = v | ((self.d[self.pos] as i64) << self.cnt);
+            self.pos += 1;
+            self.cnt += 8;
+        }
+        self.buf = v >> n;
+        self.cnt -= n;
+        Ok(v & ((1 << n) - 1))
+    }
+}
+
+// A canonical code as counts per length plus symbols in code order
+// (Mark Adler's puff). `left` is the unused code space: 0 complete,
+// positive incomplete, -1 over-subscribed.
+struct Huff { count: Vec[i64], symbol: Vec[i64], left: i64 }
+
+fn build_huff(lens: Slice[i64]) -> Huff {
+    let mut count = zeros(16);
+    for x in lens.iter() {
+        count[*x] += 1;
+    }
+    let mut left = 1;
+    let mut over = false;
+    for b in 1..16 {
+        left = (left << 1) - count[b];
+        if left < 0 {
+            over = true;
+            break;
+        }
+    }
+    let mut offs = zeros(16);
+    for b in 1..15 {
+        offs[b + 1] = offs[b] + count[b];
+    }
+    let mut symbol = zeros(lens.len());
+    for s in 0..lens.len() {
+        let x = lens[s];
+        if x > 0 {
+            symbol[offs[x]] = s;
+            offs[x] += 1;
+        }
+    }
+    Huff { count: count, symbol: symbol, left: if over { -1 } else { left } }
+}
+
+fn decode(r: mut ref Reader, h: ref Huff) -> Result[i64, String] {
+    let mut code = 0;
+    let mut first = 0;
+    let mut index = 0;
+    for b in 1..16 {
+        code = code | r.bits(1)?;
+        let count = h.count[b];
+        if code - count < first {
+            return Ok(h.symbol[index + (code - first)]);
+        }
+        index += count;
+        first += count;
+        first = first << 1;
+        code = code << 1;
+    }
+    Err("ran out of codes".to_string())
+}
+
+fn codes(t: ref Tables, r: mut ref Reader, out: mut ref Vec[u8], lc: ref Huff, dc: ref Huff) -> Result[(), String] {
+    loop {
+        let s = decode(r, lc)?;
+        if s < 256 {
+            out.push(s as u8);
+        } else if s == 256 {
+            return Ok(());
+        } else {
+            let ls = s - 257;
+            if ls >= 29 {
+                return Err(f"invalid length symbol {s}");
+            }
+            let n = t.lbase[ls] + r.bits(t.lextra[ls])?;
+            let ds = decode(r, dc)?;
+            if ds >= 30 {
+                return Err(f"invalid distance symbol {ds}");
+            }
+            let dist = t.dbase[ds] + r.bits(t.dextra[ds])?;
+            if dist > out.len() {
+                return Err(f"distance {dist} too far back (have {out.len()})");
+            }
+            for _ in 0..n {
+                let b = out[out.len() - dist];
+                out.push(b);
+            }
+        }
+    }
+}
+
+struct Inflated { out: Vec[u8], end: i64, kinds: String }
+
+fn add_kind(kinds: mut ref String, k: Str) {
+    if kinds.len() > 0 {
+        kinds.push_str(", ");
+    }
+    kinds.push_str(f"'{k}'");
+}
+
+fn dynamic_block(t: ref Tables, r: mut ref Reader, out: mut ref Vec[u8]) -> Result[(), String] {
+    let nlen = r.bits(5)? + 257;
+    let ndist = r.bits(5)? + 1;
+    let ncode = r.bits(4)? + 4;
+    if nlen > 286 or ndist > 30 {
+        return Err(f"bad code counts {nlen}/{ndist}");
+    }
+    let mut cl = zeros(19);
+    for k in 0..ncode {
+        cl[t.order[k]] = r.bits(3)?;
+    }
+    let ch = build_huff(cl);
+    if ch.left != 0 {
+        return Err("incomplete code-length code".to_string());
+    }
+    let mut lens: Vec[i64] = Vec.new();
+    while lens.len() < nlen + ndist {
+        let s = decode(r, ch)?;
+        if s < 16 {
+            lens.push(s);
+        } else {
+            let mut v = 0;
+            let mut rep = 0;
+            if s == 16 {
+                if lens.len() == 0 {
+                    return Err("repeat with no previous length".to_string());
+                }
+                v = lens[lens.len() - 1];
+                rep = 3 + r.bits(2)?;
+            } else if s == 17 {
+                rep = 3 + r.bits(3)?;
+            } else {
+                rep = 11 + r.bits(7)?;
+            }
+            if lens.len() + rep > nlen + ndist {
+                return Err("too many code lengths".to_string());
+            }
+            for _ in 0..rep {
+                lens.push(v);
+            }
+        }
+    }
+    if lens[256] == 0 {
+        return Err("no end-of-block code".to_string());
+    }
+    let lh = build_huff(lens[0..nlen]);
+    if lh.left < 0 or (lh.left > 0 and nlen - lh.count[0] != 1) {
+        return Err("bad literal/length code".to_string());
+    }
+    let dh = build_huff(lens[nlen..nlen + ndist]);
+    if dh.left < 0 or (dh.left > 0 and ndist - dh.count[0] != 1) {
+        return Err("bad distance code".to_string());
+    }
+    codes(t, r, out, lh, dh)
+}
+
+fn inflate(t: ref Tables, data: ref Vec[u8], pos: i64) -> Result[Inflated, String] {
+    let mut r = Reader { d: data.clone(), pos: pos, buf: 0, cnt: 0 };
+    let mut out: Vec[u8] = Vec.new();
+    let mut kinds = String.new();
+    loop {
+        let last = r.bits(1)?;
+        let ty = r.bits(2)?;
+        if ty == 0 {
+            add_kind(mut kinds, "stored");
+            r.buf = 0;
+            r.cnt = 0;
+            if r.pos + 4 > data.len() {
+                return Err("unexpected end of stream".to_string());
+            }
+            let p = r.pos;
+            let n = (data[p] as i64) | ((data[p + 1] as i64) << 8);
+            let nn = (data[p + 2] as i64) | ((data[p + 3] as i64) << 8);
+            if n != (~nn & 0xFFFF) {
+                return Err("stored length does not match its complement".to_string());
+            }
+            r.pos += 4;
+            if r.pos + n > data.len() {
+                return Err("unexpected end of stream".to_string());
+            }
+            for k in r.pos..r.pos + n {
+                out.push(data[k]);
+            }
+            r.pos += n;
+        } else if ty == 1 {
+            add_kind(mut kinds, "fixed");
+            let fl = fixed_lit();
+            let fd = fixed_dist();
+            codes(t, mut r, mut out, build_huff(fl), build_huff(fd))?;
+        } else if ty == 2 {
+            add_kind(mut kinds, "dynamic");
+            dynamic_block(t, mut r, mut out)?;
+        } else {
+            return Err("invalid block type 3".to_string());
+        }
+        if last == 1 {
+            return Ok(Inflated { out: out, end: r.pos, kinds: f"[{kinds}]" });
+        }
+    }
+}
+
+// ---------------------------------------------------------------- gzip
+
+fn put_le32(out: mut ref Vec[u8], v: i64) {
+    for s in [0, 8, 16, 24] {
+        out.push(((v >> s) & 0xFF) as u8);
+    }
+}
+
+fn le32(d: ref Vec[u8], at: i64) -> i64 {
+    (d[at] as i64) | ((d[at + 1] as i64) << 8) | ((d[at + 2] as i64) << 16) | ((d[at + 3] as i64) << 24)
+}
+
+fn gzip(t: ref Tables, d: Slice[u8]) -> Vec[u8] {
+    let body = deflate(t, d).body;
+    let mut out: Vec[u8] = Vec.new();
+    for b in [0x1Fu8, 0x8Bu8, 8u8, 0u8] {
+        out.push(b);
+    }
+    put_le32(mut out, MTIME);
+    out.push(0u8);
+    out.push(3u8);
+    for b in body.iter() {
+        out.push(*b);
+    }
+    put_le32(mut out, crc32(t.crc, d) as i64);
+    put_le32(mut out, d.len());
+    out
+}
+
+fn gunzip(t: ref Tables, g: ref Vec[u8]) -> Result[Inflated, String] {
+    if g.len() < 18 or g[0] != 0x1Fu8 or g[1] != 0x8Bu8 {
+        return Err("not a gzip file".to_string());
+    }
+    if g[2] != 8u8 {
+        return Err(f"unsupported method {g[2]}");
+    }
+    let flags = g[3] as i64;
+    let mut pos = 10;
+    if flags & 4 != 0 {
+        pos += 2 + ((g[pos] as i64) | ((g[pos + 1] as i64) << 8));
+    }
+    for bit in [8, 16] {
+        if flags & bit != 0 {
+            while pos < g.len() and g[pos] != 0u8 {
+                pos += 1;
+            }
+            pos += 1;
+        }
+    }
+    if flags & 2 != 0 {
+        pos += 2;
+    }
+    let inf = inflate(t, g, pos)?;
+    let end = inf.end;
+    if end + 8 > g.len() {
+        return Err("missing trailer".to_string());
+    }
+    let stored = le32(g, end) as u32;
+    let size = le32(g, end + 4);
+    let got = crc32(t.crc, inf.out);
+    if stored != got {
+        return Err(f"crc mismatch: trailer {stored:08x}, data {got:08x}");
+    }
+    if size != (inf.out.len() & 0xFFFFFFFF) {
+        return Err(f"size mismatch: trailer {size}, data {inf.out.len()}");
+    }
+    if end + 8 != g.len() {
+        return Err(f"{g.len() - end - 8} bytes after the trailer");
+    }
+    Ok(inf)
+}
+
+// ---------------------------------------------------------------- tar
+
+fn field(h: mut ref Vec[u8], at: i64, text: Str) {
+    let mut k = at;
+    for b in text.bytes() {
+        h[k] = *b;
+        k += 1;
+    }
+}
+
+fn header(full: Str, size: i64, mode: i64, kind: u8) -> Result[Vec[u8], String] {
+    let mut h: Vec[u8] = Vec.new();
+    for _ in 0..512 {
+        h.push(0u8);
+    }
+    let bytes = full.bytes();
+    let mut name_at = 0;
+    if full.len() > 100 {
+        let mut p = 0;
+        while p < full.len() and (bytes[p] != 47u8 or full.len() - p - 1 > 100) {
+            p += 1;
+        }
+        if p >= full.len() or p > 155 {
+            return Err(f"name too long for ustar: {full}");
+        }
+        field(mut h, 345, full[0..p]);
+        name_at = p + 1;
+    }
+    field(mut h, 0, full[name_at..full.len()]);
+    field(mut h, 100, octal(mode, 7));
+    field(mut h, 108, octal(1000, 7));
+    field(mut h, 116, octal(1000, 7));
+    field(mut h, 124, octal(size, 11));
+    field(mut h, 136, octal(MTIME, 11));
+    field(mut h, 148, "        ");
+    h[156] = kind;
+    field(mut h, 257, "ustar");
+    field(mut h, 263, "00");
+    field(mut h, 265, "kara");
+    field(mut h, 297, "kara");
+    field(mut h, 329, octal(0, 7));
+    field(mut h, 337, octal(0, 7));
+    let mut sum = 0;
+    for b in h.iter() {
+        sum += *b as i64;
+    }
+    field(mut h, 148, octal(sum, 6));
+    h[154] = 0u8;
+    h[155] = 32u8;
+    Ok(h)
+}
+
+struct Source { name: String, is_dir: bool, data: Vec[u8] }
+
+fn tar(entries: ref Vec[Source]) -> Result[Vec[u8], String] {
+    let mut out: Vec[u8] = Vec.new();
+    for e in entries.iter() {
+        let h = if e.is_dir {
+            header(e.name, 0, 493, 53u8)?
+        } else {
+            header(e.name, e.data.len(), 420, 48u8)?
+        };
+        for b in h.iter() {
+            out.push(*b);
+        }
+        for b in e.data.iter() {
+            out.push(*b);
+        }
+        while out.len() % 512 != 0 {
+            out.push(0u8);
+        }
+    }
+    for _ in 0..1024 {
+        out.push(0u8);
+    }
+    while out.len() % 10240 != 0 {
+        out.push(0u8);
+    }
+    Ok(out)
+}
+
+fn cstr(t: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut end = from;
+    while end < to and t[end] != 0u8 {
+        end += 1;
+    }
+    match String.from_utf8(t[from..end]) {
+        Ok(s) => s,
+        Err(_) => "?".to_string(),
+    }
+}
+
+fn parse_octal(t: ref Vec[u8], from: i64, to: i64, what: Str, at: i64) -> Result[i64, String] {
+    let mut v = 0;
+    let mut seen = false;
+    for k in from..to {
+        let c = t[k] as i64;
+        if c == 0 or c == 32 {
+            if seen {
+                break;
+            }
+            continue;
+        }
+        if c < 48 or c > 55 {
+            return Err(f"bad octal {what} in header at {at}");
+        }
+        v = v * 8 + c - 48;
+        seen = true;
+    }
+    Ok(v)
+}
+
+fn all_zero(t: ref Vec[u8], from: i64, to: i64) -> bool {
+    for k in from..to {
+        if t[k] != 0u8 {
+            return false;
+        }
+    }
+    true
+}
+
+struct Entry { name: String, mode: i64, kind: u8, uname: String, gname: String, mtime: i64, data: Vec[u8] }
+
+fn untar(t: ref Vec[u8]) -> Result[Vec[Entry], String] {
+    let mut out: Vec[Entry] = Vec.new();
+    let mut at = 0;
+    loop {
+        if at + 512 > t.len() {
+            return Err(f"archive ends inside a header at {at}");
+        }
+        if all_zero(t, at, at + 512) {
+            if at + 1024 > t.len() or !all_zero(t, at + 512, at + 1024) {
+                return Err(f"lone zero block at {at}");
+            }
+            return Ok(out);
+        }
+        let want = parse_octal(t, at + 148, at + 156, "checksum", at)?;
+        let mut got = 8 * 32;
+        for k in at..at + 512 {
+            if k < at + 148 or k >= at + 156 {
+                got += t[k] as i64;
+            }
+        }
+        if want != got {
+            return Err(f"header checksum at {at}: stored {want}, computed {got}");
+        }
+        if cstr(t, at + 257, at + 262) != "ustar" {
+            return Err(f"not a ustar header at {at}");
+        }
+        let mut name = cstr(t, at, at + 100);
+        let prefix = cstr(t, at + 345, at + 500);
+        if prefix.len() > 0 {
+            name = f"{prefix}/{name}";
+        }
+        let size = parse_octal(t, at + 124, at + 136, "size", at)?;
+        if at + 512 + size > t.len() {
+            return Err(f"{name}: data runs past the end");
+        }
+        let mut data: Vec[u8] = Vec.new();
+        for k in at + 512..at + 512 + size {
+            data.push(t[k]);
+        }
+        out.push(Entry {
+            name: name,
+            mode: parse_octal(t, at + 100, at + 108, "mode", at)?,
+            kind: t[at + 156],
+            uname: cstr(t, at + 265, at + 297),
+            gname: cstr(t, at + 297, at + 329),
+            mtime: parse_octal(t, at + 136, at + 148, "mtime", at)?,
+            data: data,
+        });
+        at += 512 + (size + 511) / 512 * 512;
+    }
+}
+
+fn perms(mode: i64, kind: u8) -> String {
+    let mut s = if kind == 53u8 { "d".to_string() } else { "-".to_string() };
+    for k in 0..9 {
+        if mode & (1 << (8 - k)) != 0 {
+            s.push_str(if k % 3 == 0 { "r" } else if k % 3 == 1 { "w" } else { "x" });
+        } else {
+            s.push_str("-");
+        }
+    }
+    s
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    if a >= 0 { a / b } else { (a - b + 1) / b }
+}
+
+fn when(t: i64) -> String {
+    let days = floor_div(t, 86400);
+    let secs = t - days * 86400;
+    let z = days + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    f"{y}-{m:02}-{d:02} {secs / 3600:02}:{secs % 3600 / 60:02}"
+}
+
+// ---------------------------------------------------------------- files
+
+fn write_bytes(path: Str, bytes: Slice[u8]) -> Result[(), IoError] {
+    let f = File.create(path.to_string())?;
+    let mut off = 0;
+    while off < bytes.len() {
+        let n = f.write(bytes[off..bytes.len()])?;
+        off += n as i64;
+    }
+    Ok(())
+}
+
+fn read_bytes(path: Str) -> Result[Vec[u8], IoError] {
+    let f = File.open(path.to_string())?;
+    let size = f.seek(SeekFrom.End, 0)?;
+    f.seek(SeekFrom.Start, 0)?;
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in 0..size {
+        buf.push(0u8);
+    }
+    let mut got = 0;
+    while got < size {
+        let n = f.read(mut buf[got..size])?;
+        if n == 0 {
+            return Err(IoError.UnexpectedEof);
+        }
+        got += n as i64;
+    }
+    Ok(buf)
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(*b);
+    }
+    v
+}
+
+fn from_hex(s: Str) -> Vec[u8] {
+    let b = s.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        v.push((hex_digit(b[i]) * 16 + hex_digit(b[i + 1])) as u8);
+        i += 2;
+    }
+    v
+}
+
+fn hex_digit(c: u8) -> i64 {
+    let x = c as i64;
+    if x >= 97 { x - 87 } else { x - 48 }
+}
+
+const LONG_DIR: Str = "site/a_rather_long_directory_name_that_pushes_the_path_past_the_ustar_limit";
+
+fn site_files() -> Vec[Source] {
+    let mut page = "<!doctype html>\n<html><head><title>Kara</title></head>\n<body>\n".to_string();
+    for k in 0..12 {
+        page.push_str(f"  <p class=\"row\">Row {k}: the same markup, over and over, compresses well.</p>\n");
+    }
+    page.push_str("</body></html>\n");
+    let mut seed = 12345;
+    let mut blob: Vec[u8] = Vec.new();
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        blob.push(((seed >> 16) & 0xFF) as u8);
+    }
+    let mut v: Vec[Source] = Vec.new();
+    v.push(Source { name: "site/index.html".to_string(), is_dir: false, data: to_bytes(page) });
+    v.push(Source { name: "site/notes.txt".to_string(), is_dir: false, data: to_bytes("Ship it.\nThen measure it.\n") });
+    v.push(Source { name: "site/empty.txt".to_string(), is_dir: false, data: Vec.new() });
+    v.push(Source { name: "site/data.bin".to_string(), is_dir: false, data: blob });
+    v.push(Source { name: f"{LONG_DIR}/of_one_hundred_bytes.txt", is_dir: false, data: to_bytes("deep\n") });
+    v
+}
+
+const REFERENCE: Str = "1f8b0800000000000203ed8f3172c3300c047bbde21ee0d1075cbbb2d365dcc3242822910019a4a438af0f95cca4c8133ce900cce16eef4c4e0836cd32724135285559b99d22a366b765c8b85cae2f079046482db04dd94b961953138d104d6dc7cddc6d2b7d775ad91f488b862aa6881c46f266beff724a1c6a39627659a9f2afac20d3ba27f2f463e81cfbee3533ee8b8477dc9ab722d907de96696e102d645763a4cf07a20d8d6f20d16fca3f53df9dff5b3e4dcb68ca7df7058b360480b8020000";
+
+fn report(label: Str, r: Result[Inflated, String]) {
+    match r {
+        Ok(_) => println(f"  {label}: accepted"),
+        Err(e) => println(f"  {label}: {e}"),
+    }
+}
+
+fn run() -> Result[(), String] {
+    let t = tables();
+    println(f"crc32(\"123456789\") = {crc32(t.crc, "123456789".bytes()):08x}");
+    println(f"length codes: 3 -> {length_code(t, 3) + 257}, 10 -> {length_code(t, 10) + 257}, 11 -> {length_code(t, 11) + 257}, 257 -> {length_code(t, 257) + 257}, 258 -> {length_code(t, 258) + 257}");
+    println(f"distance codes: 1 -> {dist_code(t, 1)}, 5 -> {dist_code(t, 5)}, 24577 -> {dist_code(t, 24577)}, 32768 -> {dist_code(t, 32768)}");
+
+    let files = site_files();
+    match fs.create_dir_all(LONG_DIR) {
+        Ok(_) => {}
+        Err(e) => return Err(f"mkdir: {show(e)}"),
+    }
+    for f in files.iter() {
+        match write_bytes(f.name, f.data) {
+            Ok(_) => {}
+            Err(e) => return Err(f"write {f.name}: {show(e)}"),
+        }
+    }
+    println(f"wrote {files.len()} files under site/");
+
+    let mut entries: Vec[Source] = Vec.new();
+    entries.push(Source { name: "site/".to_string(), is_dir: true, data: Vec.new() });
+    let mut long_added = false;
+    for f in files.iter() {
+        if f.name.starts_with(f"{LONG_DIR}/") and !long_added {
+            entries.push(Source { name: f"{LONG_DIR}/", is_dir: true, data: Vec.new() });
+            long_added = true;
+        }
+        let data = match read_bytes(f.name) {
+            Ok(d) => d,
+            Err(e) => return Err(f"read {f.name}: {show(e)}"),
+        };
+        entries.push(Source { name: f.name.clone(), is_dir: false, data: data });
+    }
+    let archive = tar(entries)?;
+    println(f"tar: {entries.len()} entries, {archive.len()} bytes");
+
+    let labels = ["empty.txt", "notes.txt", "data.bin", "index.html"];
+    let picks = [2, 1, 3, 0];
+    for k in 0..4 {
+        let data = files[picks[k]].data.clone();
+        let z = deflate(t, data);
+        println(f"deflate {labels[k]}: {data.len()} -> {z.body.len()} bytes, {z.info}");
+    }
+    let z = deflate(t, archive);
+    println(f"deflate site.tar: {archive.len()} -> {z.body.len()} bytes, {z.info}");
+
+    let gz = gzip(t, archive);
+    match write_bytes("site.tar.gz", gz) {
+        Ok(_) => {}
+        Err(e) => return Err(f"write site.tar.gz: {show(e)}"),
+    }
+    println(f"wrote site.tar.gz: {gz.len()} bytes, crc32 {crc32(t.crc, archive):08x}");
+
+    let on_disk = match read_bytes("site.tar.gz") {
+        Ok(d) => d,
+        Err(e) => return Err(f"read site.tar.gz: {show(e)}"),
+    };
+    let back = gunzip(t, on_disk)?;
+    let same = back.out == archive;
+    println(f"gunzip: {back.out.len()} bytes, blocks {back.kinds}, identical {same}");
+    let listing = untar(back.out)?;
+    for e in listing.iter() {
+        println(f"  {perms(e.mode, e.kind)} {e.uname}/{e.gname} {e.data.len():>6} {when(e.mtime)} {e.name}");
+    }
+    let mut identical = 0;
+    for e in listing.iter() {
+        let path = f"out/{e.name}";
+        if e.kind == 53u8 {
+            match fs.create_dir_all(path) {
+                Ok(_) => {}
+                Err(err) => return Err(f"mkdir {path}: {show(err)}"),
+            }
+        } else {
+            match write_bytes(path, e.data) {
+                Ok(_) => {}
+                Err(err) => return Err(f"write {path}: {show(err)}"),
+            }
+            match (read_bytes(path), read_bytes(e.name)) {
+                (Ok(a), Ok(b)) => {
+                    if a == b {
+                        identical += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    println(f"extracted into out/: {identical} of {files.len()} files identical to the originals");
+
+    let reference = from_hex(REFERENCE);
+    let r = gunzip(t, reference)?;
+    let text = match String.from_utf8(r.out) {
+        Ok(s) => s,
+        Err(_) => return Err("reference text is not UTF-8".to_string()),
+    };
+    let lines = text.lines();
+    println(f"reference stream from zlib -9: {reference.len()} -> {r.out.len()} bytes, blocks {r.kinds}, crc {crc32(t.crc, r.out):08x}, {lines.len()} lines, last [{lines[lines.len() - 1]}]");
+    let again = gzip(t, r.out);
+    println(f"our gzip of the same text: {again.len()} bytes");
+
+    println("== damage");
+    let mut g1 = gz.clone();
+    let at = g1.len() - 8;
+    g1[at] = g1[at] ^ 0xFFu8;
+    report("flipped trailer crc", gunzip(t, g1));
+    let mut g2: Vec[u8] = Vec.new();
+    for k in 0..gz.len() - 20 {
+        g2.push(gz[k]);
+    }
+    report("truncated by 20 bytes", gunzip(t, g2));
+    let mut g3 = gz.clone();
+    g3[40] = g3[40] ^ 0x10u8;
+    report("flipped bit in byte 40", gunzip(t, g3));
+    let mut g4 = gz.clone();
+    g4.push(0u8);
+    report("extra byte after trailer", gunzip(t, g4));
+    let mut g5: Vec[u8] = Vec.new();
+    for k in 0..64 {
+        g5.push(archive[k]);
+    }
+    report("not gzip", gunzip(t, g5));
+    let mut t1 = archive.clone();
+    t1[600] = t1[600] ^ 1u8;
+    match untar(t1) {
+        Ok(_) => println("  tar with a flipped header byte: accepted"),
+        Err(e) => println(f"  tar with a flipped header byte: {e}"),
+    }
+    let mut t2: Vec[u8] = Vec.new();
+    for k in 0..1500 {
+        t2.push(archive[k]);
+    }
+    match untar(t2) {
+        Ok(_) => println("  truncated tar: accepted"),
+        Err(e) => println(f"  truncated tar: {e}"),
+    }
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"error: {e}"),
+    }
+}

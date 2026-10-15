@@ -151,6 +151,7 @@ service/ws_chat     WebSocket chat server (RFC 6455): own SHA-1 + base64 handsha
 service/dns_server  authoritative DNS over TCP (RFC 7766): zone-file parser, name compression, CNAME chasing, wildcards, NXDOMAIN/NODATA with SOA, REFUSED/NOTIMP/FORMERR, RFC 5952 AAAA text
 service/inventory   order service generic over a Store trait (memory + append-log file store with compaction and torn-write recovery), Money with Add/Sub/Display, idempotent commands, all-or-nothing reservations
 cli/cron_sched      cron scheduler: 5-field crontab with names/ranges/steps/macros and the Vixie dom-or-dow rule, hand-written days-from-civil, missed-run catch-up over sh, a state file
+cli/tar_gz          ustar archiver + gzip/DEFLATE codec from the RFCs: LZ77 hash chains, stored/fixed/dynamic blocks, puff-style inflater; real tar and gzip read its output
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
