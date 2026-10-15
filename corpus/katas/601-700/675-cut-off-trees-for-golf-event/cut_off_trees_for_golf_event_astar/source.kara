@@ -1,0 +1,182 @@
+// LeetCode #675: Cut Off Trees for Golf Event -- A* search for each
+// walk.
+//
+// The route is the same as the ★ arm's, tree after tree from the
+// shortest. Each walk is an A* search: a priority queue ordered by the
+// steps taken plus the Manhattan distance still to go, which never
+// overestimates on a grid, so the target is first taken from the queue
+// along a shortest path. Entries made stale by a shorter path found
+// later are skipped. O(trees * rows * cols * log(rows * cols)).
+
+fn manhattan(r: i64, c: i64, tr: i64, tc: i64) -> i64 {
+    (r - tr).abs() + (c - tc).abs()
+}
+
+fn steps(forest: Vec[Vec[i64]], sr: i64, sc: i64, tr: i64, tc: i64) -> i64 {
+    let rows = forest.len();
+    let cols = forest[0].len();
+    let mut best = vec![-1; rows * cols];
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    best[sr * cols + sc] = 0;
+    queue.push((manhattan(sr, sc, tr, tc), 0, sr * cols + sc));
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    while let Some((_, g, cell)) = queue.pop() {
+        if g > best[cell] {
+            continue;
+        }
+        let r = cell / cols;
+        let c = cell % cols;
+        if r == tr and c == tc {
+            return g;
+        }
+        for (dr, dc) in moves.iter() {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and forest[nr][nc] != 0 {
+                let next = nr * cols + nc;
+                if best[next] < 0 or g + 1 < best[next] {
+                    best[next] = g + 1;
+                    queue.push((g + 1 + manhattan(nr, nc, tr, tc), g + 1, next));
+                }
+            }
+        }
+    }
+    -1
+}
+
+fn cut_off_tree(forest: Vec[Vec[i64]]) -> i64 {
+    let mut trees: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..forest.len() {
+        for c in 0..forest[0].len() {
+            if forest[r][c] > 1 {
+                trees.push((forest[r][c], r, c));
+            }
+        }
+    }
+    trees.sort_by(|a, b| a.0.cmp(b.0));
+    let mut total = 0;
+    let mut r = 0;
+    let mut c = 0;
+    for (_, tr, tc) in trees.iter() {
+        let d = steps(forest, r, c, tr, tc);
+        if d < 0 {
+            return -1;
+        }
+        total += d;
+        r = tr;
+        c = tc;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A `rows` by `cols` forest: each cell other than (0, 0) a wall with a
+// chance of `walls` in 100, else open, and an open cell a tree with a
+// chance of `trees` in 100. The trees' heights are distinct, in a
+// shuffled order.
+fn random_forest(seed: mut ref i64, rows: i64, cols: i64, walls: i64, trees: i64) -> Vec[Vec[i64]] {
+    let mut forest: Vec[Vec[i64]] = Vec.new();
+    let mut spots: Vec[i64] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            let k = next_random(seed) % 100;
+            if (r > 0 or c > 0) and k < walls {
+                row.push(0);
+            } else {
+                row.push(1);
+                if k < walls + trees {
+                    spots.push(r * cols + c);
+                }
+            }
+        }
+        forest.push(row);
+    }
+    let mut i = spots.len();
+    while i > 1 {
+        let j = next_random(seed) % i;
+        i -= 1;
+        spots.swap(i, j);
+    }
+    for k in 0..spots.len() {
+        forest[spots[k] / cols][spots[k] % cols] = 2 + k * 7;
+    }
+    forest
+}
+
+fn show(forest: Vec[Vec[i64]]) -> String {
+    if forest.len() * forest[0].len() <= 12 {
+        let mut rows: Vec[String] = Vec.new();
+        for row in forest.iter() {
+            let mut cells: Vec[String] = Vec.new();
+            for v in row.iter() {
+                cells.push(f"{v}");
+            }
+            rows.push(f"[{cells.join(",")}]");
+        }
+        return f"[{rows.join(",")}]";
+    }
+    f"{forest.len()}x{forest[0].len()}"
+}
+
+fn main() {
+    // The three LeetCode examples; one cell, empty and a tree; a row; a
+    // column cut by a wall; trees in the four corners; a wall to walk
+    // round; diagonal cells walled apart; a 50 by 50 serpentine whose
+    // two trees sit at the ends of its long path; and two random 50 by
+    // 50 forests, one all trees and one with walls.
+    let mut cases: Vec[Vec[Vec[i64]]] = Vec.new();
+    cases.push(vec![vec![1, 2, 3], vec![0, 0, 4], vec![7, 6, 5]]);
+    cases.push(vec![vec![1, 2, 3], vec![0, 0, 0], vec![7, 6, 5]]);
+    cases.push(vec![vec![2, 3, 4], vec![0, 0, 5], vec![8, 7, 6]]);
+    cases.push(vec![vec![1]]);
+    cases.push(vec![vec![5]]);
+    cases.push(vec![vec![1, 1, 1, 9, 1, 1, 4]]);
+    cases.push(vec![vec![1], vec![3], vec![0], vec![2]]);
+    cases.push(vec![vec![3, 1, 2], vec![1, 0, 1], vec![4, 1, 5]]);
+    cases.push(vec![vec![1, 1, 1], vec![1, 0, 1], vec![1, 1, 9]]);
+    cases.push(vec![vec![1, 0, 1], vec![0, 1, 0], vec![1, 0, 2]]);
+    let mut snake: Vec[Vec[i64]] = Vec.new();
+    for r in 0..50 {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..50 {
+            if r % 2 == 1 and ((r % 4 == 1 and c < 49) or (r % 4 == 3 and c > 0)) {
+                row.push(0);
+            } else {
+                row.push(1);
+            }
+        }
+        snake.push(row);
+    }
+    snake[49][49] = 1000000000;
+    snake[0][49] = 999999999;
+    cases.push(snake);
+    let mut seed: i64 = 675;
+    cases.push(random_forest(mut seed, 50, 50, 0, 15));
+    cases.push(random_forest(mut seed, 50, 50, 12, 30));
+    for forest in cases.iter() {
+        println(f"{show(forest)}: {cut_off_tree(forest)}");
+    }
+    // 200 random forests up to 20 by 20, with walls on 0, 10, 25 or 40
+    // in 100 cells, into a checksum.
+    let mut sum = 0;
+    let mut reached = 0;
+    let walls = [0, 10, 25, 40];
+    for c in 0..200 {
+        let rows = 1 + next_random(mut seed) % 20;
+        let cols = 1 + next_random(mut seed) % 20;
+        let forest = random_forest(mut seed, rows, cols, walls[c % 4], 30);
+        let got = cut_off_tree(forest);
+        if got >= 0 {
+            reached += 1;
+        }
+        sum = (sum * 31 + got + 1) % 1000000007;
+    }
+    println(f"200 random: {reached} reachable, checksum {sum}");
+}

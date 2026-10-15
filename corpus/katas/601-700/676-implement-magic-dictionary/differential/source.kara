@@ -1,0 +1,385 @@
+// LeetCode #676: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each with a driver that builds a dictionary
+// and searches it, held to five properties on random dictionaries.
+
+// ---- star arm ----------------------------------------------------------
+
+struct MagicDictionary_star {
+    words: Vec[String],
+}
+
+impl MagicDictionary_star {
+    fn new() -> MagicDictionary_star {
+        MagicDictionary_star { words: Vec.new() }
+    }
+
+    fn build_dict(mut ref self, dictionary: Vec[String]) {
+        self.words = dictionary.clone();
+    }
+
+    fn search(ref self, search_word: String) -> bool {
+        let b = search_word.bytes();
+        for w in self.words.iter() {
+            let a = w.bytes();
+            if a.len() == b.len() {
+                let mut diff = 0;
+                for i in 0..a.len() {
+                    if a[i] != b[i] {
+                        diff += 1;
+                    }
+                }
+                if diff == 1 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+fn drive_star(dictionary: Vec[String], searches: Vec[String]) -> Vec[bool] {
+    let mut d = MagicDictionary_star.new();
+    d.build_dict(dictionary);
+    let mut out: Vec[bool] = Vec.new();
+    for w in searches.iter() {
+        out.push(d.search(w));
+    }
+    out
+}
+
+// ---- patterns arm ------------------------------------------------------
+
+struct MagicDictionary_patterns {
+    words: Set[String],
+    patterns: Map[String, i64],
+}
+
+fn pattern_patterns(word: String, i: i64) -> String {
+    f"{word[0..i]}*{word[i + 1..word.len()]}"
+}
+
+impl MagicDictionary_patterns {
+    fn new() -> MagicDictionary_patterns {
+        MagicDictionary_patterns { words: Set.new(), patterns: Map.new() }
+    }
+
+    fn build_dict(mut ref self, dictionary: Vec[String]) {
+        for w in dictionary.iter() {
+            self.words.insert(w.clone());
+            for i in 0..w.len() {
+                let p = pattern_patterns(w, i);
+                let n = match self.patterns.get(p) {
+                    Some(count) => count,
+                    None => 0,
+                };
+                self.patterns.insert(p, n + 1);
+            }
+        }
+    }
+
+    fn search(ref self, search_word: String) -> bool {
+        let mut need = 1;
+        if self.words.contains(search_word) {
+            need = 2;
+        }
+        for i in 0..search_word.len() {
+            let n = match self.patterns.get(pattern_patterns(search_word, i)) {
+                Some(count) => count,
+                None => 0,
+            };
+            if n >= need {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn drive_patterns(dictionary: Vec[String], searches: Vec[String]) -> Vec[bool] {
+    let mut d = MagicDictionary_patterns.new();
+    d.build_dict(dictionary);
+    let mut out: Vec[bool] = Vec.new();
+    for w in searches.iter() {
+        out.push(d.search(w));
+    }
+    out
+}
+
+// ---- trie arm ----------------------------------------------------------
+
+struct Node_trie {
+    children: Vec[i64],
+    end: bool,
+}
+
+struct MagicDictionary_trie {
+    nodes: Vec[Node_trie],
+}
+
+fn new_node_trie() -> Node_trie {
+    Node_trie { children: vec![-1; 26], end: false }
+}
+
+fn walk_trie(nodes: Vec[Node_trie], node: i64, word: Slice[u8], i: i64, changed: bool) -> bool {
+    if i == word.len() {
+        return changed and nodes[node].end;
+    }
+    let want = word[i] as i64 - 97;
+    for b in 0..26 {
+        let child = nodes[node].children[b];
+        if child != -1 {
+            if b == want {
+                if walk_trie(nodes, child, word, i + 1, changed) {
+                    return true;
+                }
+            } else if not changed {
+                if walk_trie(nodes, child, word, i + 1, true) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+impl MagicDictionary_trie {
+    fn new() -> MagicDictionary_trie {
+        MagicDictionary_trie { nodes: vec![new_node_trie()] }
+    }
+
+    fn build_dict(mut ref self, dictionary: Vec[String]) {
+        for w in dictionary.iter() {
+            let mut node = 0;
+            for c in w.bytes().iter() {
+                let b = c as i64 - 97;
+                if self.nodes[node].children[b] == -1 {
+                    self.nodes.push(new_node_trie());
+                    self.nodes[node].children[b] = self.nodes.len() - 1;
+                }
+                node = self.nodes[node].children[b];
+            }
+            self.nodes[node].end = true;
+        }
+    }
+
+    fn search(ref self, search_word: String) -> bool {
+        walk_trie(self.nodes, 0, search_word.bytes(), 0, false)
+    }
+}
+
+fn drive_trie(dictionary: Vec[String], searches: Vec[String]) -> Vec[bool] {
+    let mut d = MagicDictionary_trie.new();
+    d.build_dict(dictionary);
+    let mut out: Vec[bool] = Vec.new();
+    for w in searches.iter() {
+        out.push(d.search(w));
+    }
+    out
+}
+
+// ---- candidates arm ----------------------------------------------------
+
+struct MagicDictionary_candidates {
+    sorted: Vec[String],
+}
+
+fn found_candidates(sorted: Vec[String], word: String) -> bool {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < word {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo < sorted.len() and sorted[lo] == word
+}
+
+impl MagicDictionary_candidates {
+    fn new() -> MagicDictionary_candidates {
+        MagicDictionary_candidates { sorted: Vec.new() }
+    }
+
+    fn build_dict(mut ref self, dictionary: Vec[String]) {
+        self.sorted = dictionary.clone();
+        self.sorted.sort();
+    }
+
+    fn search(ref self, search_word: String) -> bool {
+        let n = search_word.len();
+        for i in 0..n {
+            for k in 0..26 {
+                let c = ((97 + k) as u8) as char;
+                if search_word[i..i + 1] != f"{c}" {
+                    let candidate = f"{search_word[0..i]}{c}{search_word[i + 1..n]}";
+                    if found_candidates(self.sorted, candidate) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+fn drive_candidates(dictionary: Vec[String], searches: Vec[String]) -> Vec[bool] {
+    let mut d = MagicDictionary_candidates.new();
+    d.build_dict(dictionary);
+    let mut out: Vec[bool] = Vec.new();
+    for w in searches.iter() {
+        out.push(d.search(w));
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, dictionary: Vec[String], searches: Vec[String]) -> Vec[bool] {
+    if which == 0 {
+        drive_star(dictionary, searches)
+    } else if which == 1 {
+        drive_patterns(dictionary, searches)
+    } else if which == 2 {
+        drive_trie(dictionary, searches)
+    } else {
+        drive_candidates(dictionary, searches)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, most: i64, letters: i64) -> String {
+    let n = 1 + next_random(seed) % most;
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(seed) % letters) as u8) as char);
+    }
+    s
+}
+
+// The definition: some dictionary word other than the search word
+// becomes the search word when one of its places takes the search
+// word's letter there.
+fn definition(dictionary: Vec[String], word: String) -> bool {
+    for w in dictionary.iter() {
+        if w.len() == word.len() and w != word {
+            for i in 0..w.len() {
+                if f"{w[0..i]}{word[i..i + 1]}{w[i + 1..w.len()]}" == word {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn reversed(word: String) -> String {
+    let mut out = String.new();
+    let b = word.bytes();
+    let mut i = b.len();
+    while i > 0 {
+        i -= 1;
+        out.push(b[i] as char);
+    }
+    out
+}
+
+fn main() {
+    // 500 random dictionaries of up to 30 words of 1 to 6 letters over 2
+    // to 4 letters, each searched 20 times with words of the same kind.
+    let cases = 500;
+    let mut seed: i64 = 676;
+    let mut checks = 0;
+    let mut hits = 0;
+    let mut failures = vec![0; 5];
+    for c in 0..cases {
+        let letters = 2 + c % 3;
+        let most = 1 + c % 6;
+        let mut dictionary: Vec[String] = Vec.new();
+        let size = 1 + next_random(mut seed) % 30;
+        for _ in 0..size {
+            let w = random_word(mut seed, most, letters);
+            if not dictionary.contains(w) {
+                dictionary.push(w);
+            }
+        }
+        let mut searches: Vec[String] = Vec.new();
+        for _ in 0..20 {
+            searches.push(random_word(mut seed, most, letters));
+        }
+        // A dictionary word with one place changed to another letter.
+        let base = dictionary[next_random(mut seed) % dictionary.len()].clone();
+        let at = next_random(mut seed) % base.len();
+        let old = base.bytes()[at] as i64 - 97;
+        let new = ((97 + (old + 1 + next_random(mut seed) % 25) % 26) as u8) as char;
+        let mut probes: Vec[String] = Vec.new();
+        probes.push(f"{base[0..at]}{new}{base[at + 1..base.len()]}");
+        // A word longer than any in the dictionary.
+        probes.push(random_word(mut seed, 1, letters) + base.clone() + "aaaaaa");
+        // The dictionary with more words, and everything reversed.
+        let mut bigger = dictionary.clone();
+        for _ in 0..10 {
+            let w = random_word(mut seed, most, letters);
+            if not bigger.contains(w) {
+                bigger.push(w);
+            }
+        }
+        let mut back_dictionary: Vec[String] = Vec.new();
+        for w in dictionary.iter() {
+            back_dictionary.push(reversed(w));
+        }
+        let mut back_searches: Vec[String] = Vec.new();
+        for w in searches.iter() {
+            back_searches.push(reversed(w));
+        }
+        let mut want: Vec[bool] = Vec.new();
+        for w in searches.iter() {
+            want.push(definition(dictionary, w));
+        }
+        for which in 0..4 {
+            let got = answer(which, dictionary, searches);
+            let probed = answer(which, dictionary, probes);
+            let more = answer(which, bigger, searches);
+            let back = answer(which, back_dictionary, back_searches);
+            for k in 0..searches.len() {
+                if which == 0 and got[k] {
+                    hits += 1;
+                }
+                // P1: the definition's answer. P4: more words never turn
+                // a found word into a missing one. P5: the same with
+                // every word reversed.
+                let ok = [got[k] == want[k], not got[k] or more[k], back[k] == got[k]];
+                let props = [0, 3, 4];
+                for j in 0..3 {
+                    checks += 1;
+                    if not ok[j] {
+                        failures[props[j]] += 1;
+                    }
+                }
+            }
+            // P2: a dictionary word with one letter changed is found.
+            // P3: a word longer than every dictionary word is not.
+            checks += 2;
+            if not probed[0] {
+                failures[1] += 1;
+            }
+            if probed[1] {
+                failures[2] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} dictionaries, {cases * 20} searches ({hits} found), 4 arms, {checks} checks, {total} failures");
+}

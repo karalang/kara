@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/675-cut-off-trees-for-golf-event/cut_off_trees_for_golf_event_detours.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "f606941b7"
+extracted_src = "4239aeac"
+model_rev = "1aa23105"
+model_src = "4239aeac"

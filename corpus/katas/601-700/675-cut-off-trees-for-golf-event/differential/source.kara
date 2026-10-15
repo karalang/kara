@@ -1,0 +1,489 @@
+// LeetCode #675: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random forests.
+
+// ---- star arm ----------------------------------------------------------
+
+fn steps_star(forest: Vec[Vec[i64]], sr: i64, sc: i64, tr: i64, tc: i64) -> i64 {
+    if sr == tr and sc == tc {
+        return 0;
+    }
+    let rows = forest.len();
+    let cols = forest[0].len();
+    let mut seen = vec![false; rows * cols];
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(sr * cols + sc);
+    seen[sr * cols + sc] = true;
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    let mut head = 0;
+    let mut dist = 0;
+    while head < queue.len() {
+        let end = queue.len();
+        dist += 1;
+        while head < end {
+            let cell = queue[head];
+            head += 1;
+            let r = cell / cols;
+            let c = cell % cols;
+            for (dr, dc) in moves.iter() {
+                let nr = r + dr;
+                let nc = c + dc;
+                if nr >= 0 and nr < rows and nc >= 0 and nc < cols and forest[nr][nc] != 0 and not seen[nr * cols + nc] {
+                    if nr == tr and nc == tc {
+                        return dist;
+                    }
+                    seen[nr * cols + nc] = true;
+                    queue.push(nr * cols + nc);
+                }
+            }
+        }
+    }
+    -1
+}
+
+fn cut_off_tree_star(forest: Vec[Vec[i64]]) -> i64 {
+    let mut trees: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..forest.len() {
+        for c in 0..forest[0].len() {
+            if forest[r][c] > 1 {
+                trees.push((forest[r][c], r, c));
+            }
+        }
+    }
+    trees.sort_by(|a, b| a.0.cmp(b.0));
+    let mut total = 0;
+    let mut r = 0;
+    let mut c = 0;
+    for (_, tr, tc) in trees.iter() {
+        let d = steps_star(forest, r, c, tr, tc);
+        if d < 0 {
+            return -1;
+        }
+        total += d;
+        r = tr;
+        c = tc;
+    }
+    total
+}
+
+// ---- astar arm ---------------------------------------------------------
+
+fn manhattan_astar(r: i64, c: i64, tr: i64, tc: i64) -> i64 {
+    (r - tr).abs() + (c - tc).abs()
+}
+
+fn steps_astar(forest: Vec[Vec[i64]], sr: i64, sc: i64, tr: i64, tc: i64) -> i64 {
+    let rows = forest.len();
+    let cols = forest[0].len();
+    let mut best = vec![-1; rows * cols];
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    best[sr * cols + sc] = 0;
+    queue.push((manhattan_astar(sr, sc, tr, tc), 0, sr * cols + sc));
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    while let Some((_, g, cell)) = queue.pop() {
+        if g > best[cell] {
+            continue;
+        }
+        let r = cell / cols;
+        let c = cell % cols;
+        if r == tr and c == tc {
+            return g;
+        }
+        for (dr, dc) in moves.iter() {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and forest[nr][nc] != 0 {
+                let next = nr * cols + nc;
+                if best[next] < 0 or g + 1 < best[next] {
+                    best[next] = g + 1;
+                    queue.push((g + 1 + manhattan_astar(nr, nc, tr, tc), g + 1, next));
+                }
+            }
+        }
+    }
+    -1
+}
+
+fn cut_off_tree_astar(forest: Vec[Vec[i64]]) -> i64 {
+    let mut trees: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..forest.len() {
+        for c in 0..forest[0].len() {
+            if forest[r][c] > 1 {
+                trees.push((forest[r][c], r, c));
+            }
+        }
+    }
+    trees.sort_by(|a, b| a.0.cmp(b.0));
+    let mut total = 0;
+    let mut r = 0;
+    let mut c = 0;
+    for (_, tr, tc) in trees.iter() {
+        let d = steps_astar(forest, r, c, tr, tc);
+        if d < 0 {
+            return -1;
+        }
+        total += d;
+        r = tr;
+        c = tc;
+    }
+    total
+}
+
+// ---- bidir arm ---------------------------------------------------------
+
+fn steps_bidir(forest: Vec[Vec[i64]], sr: i64, sc: i64, tr: i64, tc: i64) -> i64 {
+    if sr == tr and sc == tc {
+        return 0;
+    }
+    let rows = forest.len();
+    let cols = forest[0].len();
+    // Which side marked each cell (0 for neither, 1 the start's, 2 the
+    // target's), and its distance from that side's end.
+    let mut side = vec![0; rows * cols];
+    let mut dist = vec![0; rows * cols];
+    let mut fronts: Vec[Vec[i64]] = Vec.new();
+    fronts.push(vec![sr * cols + sc]);
+    fronts.push(vec![tr * cols + tc]);
+    side[sr * cols + sc] = 1;
+    side[tr * cols + tc] = 2;
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    while fronts[0].len() > 0 and fronts[1].len() > 0 {
+        let mut s = 0;
+        if fronts[1].len() < fronts[0].len() {
+            s = 1;
+        }
+        let mut next: Vec[i64] = Vec.new();
+        for cell in fronts[s].iter() {
+            let r = cell / cols;
+            let c = cell % cols;
+            for (dr, dc) in moves.iter() {
+                let nr = r + dr;
+                let nc = c + dc;
+                if nr >= 0 and nr < rows and nc >= 0 and nc < cols and forest[nr][nc] != 0 {
+                    let n = nr * cols + nc;
+                    if side[n] == 0 {
+                        side[n] = s + 1;
+                        dist[n] = dist[cell] + 1;
+                        next.push(n);
+                    } else if side[n] != s + 1 {
+                        return dist[cell] + 1 + dist[n];
+                    }
+                }
+            }
+        }
+        fronts[s] = next;
+    }
+    -1
+}
+
+fn cut_off_tree_bidir(forest: Vec[Vec[i64]]) -> i64 {
+    let mut trees: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..forest.len() {
+        for c in 0..forest[0].len() {
+            if forest[r][c] > 1 {
+                trees.push((forest[r][c], r, c));
+            }
+        }
+    }
+    trees.sort_by(|a, b| a.0.cmp(b.0));
+    let mut total = 0;
+    let mut r = 0;
+    let mut c = 0;
+    for (_, tr, tc) in trees.iter() {
+        let d = steps_bidir(forest, r, c, tr, tc);
+        if d < 0 {
+            return -1;
+        }
+        total += d;
+        r = tr;
+        c = tc;
+    }
+    total
+}
+
+// ---- detours arm -------------------------------------------------------
+
+fn steps_detours(forest: Vec[Vec[i64]], sr: i64, sc: i64, tr: i64, tc: i64) -> i64 {
+    let rows = forest.len();
+    let cols = forest[0].len();
+    let mut done = vec![false; rows * cols];
+    let mut now: Vec[i64] = Vec.new();
+    let mut later: Vec[i64] = Vec.new();
+    now.push(sr * cols + sc);
+    let base = (sr - tr).abs() + (sc - tc).abs();
+    let mut detours = 0;
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    loop {
+        if now.is_empty() {
+            if later.is_empty() {
+                return -1;
+            }
+            detours += 1;
+            now = later;
+            later = Vec.new();
+        }
+        let cell = now.pop().unwrap();
+        if done[cell] {
+            continue;
+        }
+        done[cell] = true;
+        let r = cell / cols;
+        let c = cell % cols;
+        if r == tr and c == tc {
+            return base + 2 * detours;
+        }
+        for (dr, dc) in moves.iter() {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and forest[nr][nc] != 0 and not done[nr * cols + nc] {
+                if (nr - tr).abs() + (nc - tc).abs() < (r - tr).abs() + (c - tc).abs() {
+                    now.push(nr * cols + nc);
+                } else {
+                    later.push(nr * cols + nc);
+                }
+            }
+        }
+    }
+}
+
+fn cut_off_tree_detours(forest: Vec[Vec[i64]]) -> i64 {
+    let mut trees: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..forest.len() {
+        for c in 0..forest[0].len() {
+            if forest[r][c] > 1 {
+                trees.push((forest[r][c], r, c));
+            }
+        }
+    }
+    trees.sort_by(|a, b| a.0.cmp(b.0));
+    let mut total = 0;
+    let mut r = 0;
+    let mut c = 0;
+    for (_, tr, tc) in trees.iter() {
+        let d = steps_detours(forest, r, c, tr, tc);
+        if d < 0 {
+            return -1;
+        }
+        total += d;
+        r = tr;
+        c = tc;
+    }
+    total
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, forest: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        cut_off_tree_star(forest)
+    } else if which == 1 {
+        cut_off_tree_astar(forest)
+    } else if which == 2 {
+        cut_off_tree_bidir(forest)
+    } else {
+        cut_off_tree_detours(forest)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_forest(seed: mut ref i64, rows: i64, cols: i64, walls: i64, trees: i64) -> Vec[Vec[i64]] {
+    let mut forest: Vec[Vec[i64]] = Vec.new();
+    let mut spots: Vec[i64] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            let k = next_random(seed) % 100;
+            if (r > 0 or c > 0) and k < walls {
+                row.push(0);
+            } else {
+                row.push(1);
+                if k < walls + trees {
+                    spots.push(r * cols + c);
+                }
+            }
+        }
+        forest.push(row);
+    }
+    let mut i = spots.len();
+    while i > 1 {
+        let j = next_random(seed) % i;
+        i -= 1;
+        spots.swap(i, j);
+    }
+    for k in 0..spots.len() {
+        forest[spots[k] / cols][spots[k] % cols] = 2 + k * 7;
+    }
+    forest
+}
+
+// The trees' places, shortest first, after (0, 0).
+fn route(forest: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let mut trees: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..forest.len() {
+        for c in 0..forest[0].len() {
+            if forest[r][c] > 1 {
+                trees.push((forest[r][c], r, c));
+            }
+        }
+    }
+    trees.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    out.push((0, 0));
+    for (_, r, c) in trees.iter() {
+        out.push((r, c));
+    }
+    out
+}
+
+// The definition: distances from a cell found by relaxing every open
+// cell against its neighbours until nothing changes, and the route's
+// walks added up.
+fn definition(forest: Vec[Vec[i64]]) -> i64 {
+    let rows = forest.len();
+    let cols = forest[0].len();
+    let stops = route(forest);
+    let far = rows * cols + 1;
+    let mut total = 0;
+    for k in 1..stops.len() {
+        let (sr, sc) = stops[k - 1];
+        let (tr, tc) = stops[k];
+        let mut dist = vec![far; rows * cols];
+        dist[sr * cols + sc] = 0;
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for r in 0..rows {
+                for c in 0..cols {
+                    if forest[r][c] != 0 {
+                        let mut d = dist[r * cols + c];
+                        if r > 0 {
+                            d = d.min(dist[(r - 1) * cols + c] + 1);
+                        }
+                        if r + 1 < rows {
+                            d = d.min(dist[(r + 1) * cols + c] + 1);
+                        }
+                        if c > 0 {
+                            d = d.min(dist[r * cols + c - 1] + 1);
+                        }
+                        if c + 1 < cols {
+                            d = d.min(dist[r * cols + c + 1] + 1);
+                        }
+                        if d < dist[r * cols + c] {
+                            dist[r * cols + c] = d;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if dist[tr * cols + tc] >= far {
+            return -1;
+        }
+        total += dist[tr * cols + tc];
+    }
+    total
+}
+
+// The route's Manhattan distances added up: a lower bound, and the
+// answer's parity, since every step changes `r + c` by one.
+fn straight(forest: Vec[Vec[i64]]) -> i64 {
+    let stops = route(forest);
+    let mut total = 0;
+    for k in 1..stops.len() {
+        let (a, b) = stops[k - 1];
+        let (c, d) = stops[k];
+        total += (a - c).abs() + (b - d).abs();
+    }
+    total
+}
+
+fn transposed(forest: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..forest[0].len() {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..forest.len() {
+            row.push(forest[r][c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn main() {
+    // 600 random forests: 200 of up to 6 by 6, held to the definition,
+    // and 400 of up to 15 by 15, with walls on 0, 15, 30 or 45 in 100
+    // cells.
+    let small = 200;
+    let cases = small + 400;
+    let mut seed: i64 = 675;
+    let mut checks = 0;
+    let mut reached = 0;
+    let mut failures = vec![0; 5];
+    let walls = [0, 15, 30, 45];
+    for c in 0..cases {
+        let mut most = 15;
+        if c < small {
+            most = 6;
+        }
+        let rows = 1 + next_random(mut seed) % most;
+        let cols = 1 + next_random(mut seed) % most;
+        let forest = random_forest(mut seed, rows, cols, walls[c % 4], 20 + c % 3 * 20);
+        let mut want = 0;
+        if c < small {
+            want = definition(forest);
+        }
+        let low = straight(forest);
+        // One wall, if any, knocked down.
+        let mut opened = forest.clone();
+        let mut spots: Vec[i64] = Vec.new();
+        for r in 0..rows {
+            for k in 0..cols {
+                if forest[r][k] == 0 {
+                    spots.push(r * cols + k);
+                }
+            }
+        }
+        if spots.len() > 0 {
+            let s = spots[next_random(mut seed) % spots.len()];
+            opened[s / cols][s % cols] = 1;
+        }
+        for which in 0..4 {
+            let got = answer(which, forest);
+            if which == 0 and got >= 0 {
+                reached += 1;
+            }
+            let more = answer(which, opened);
+            // P1: the definition's answer. P2: -1 or at least the
+            // straight-line route. P3: -1 or of the same parity. P4: the
+            // same transposed. P5: a wall knocked down never lengthens a
+            // possible route or makes it impossible.
+            let ok = [
+                c >= small or got == want,
+                got == -1 or got >= low,
+                got == -1 or (got - low) % 2 == 0,
+                answer(which, transposed(forest)) == got,
+                got == -1 or (more >= 0 and more <= got),
+            ];
+            for p in 0..5 {
+                if p > 0 or c < small {
+                    checks += 1;
+                    if not ok[p] {
+                        failures[p] += 1;
+                    }
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} forests ({small} against the definition, {reached} reachable), 4 arms, {checks} checks, {total} failures");
+}

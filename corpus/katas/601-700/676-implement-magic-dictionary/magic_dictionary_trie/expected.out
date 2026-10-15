@@ -1,0 +1,7 @@
+[null,null,false,true,false,false]
+[null,null,false,true,false,true]
+[null,null,true,true,false,false,true]
+[null,null,true,true,true,false]
+[null,null,true,true,true,true,false]
+[null,null,true,true,false,false]
+6000 random searches: 4066 true, checksum 529168847

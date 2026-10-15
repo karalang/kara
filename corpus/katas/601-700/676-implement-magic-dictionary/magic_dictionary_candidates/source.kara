@@ -1,0 +1,157 @@
+// LeetCode #676: Implement Magic Dictionary -- every one-letter change
+// looked up.
+//
+// Keep the words sorted. A search makes every word one change away from
+// the search word, each other letter at each place, and looks each up
+// by binary search. A search costs O(25 * length * (length + log n)).
+
+struct MagicDictionary {
+    sorted: Vec[String],
+}
+
+fn found(sorted: Vec[String], word: String) -> bool {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < word {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo < sorted.len() and sorted[lo] == word
+}
+
+impl MagicDictionary {
+    fn new() -> MagicDictionary {
+        MagicDictionary { sorted: Vec.new() }
+    }
+
+    fn build_dict(mut ref self, dictionary: Vec[String]) {
+        self.sorted = dictionary.clone();
+        self.sorted.sort();
+    }
+
+    fn search(ref self, search_word: String) -> bool {
+        let n = search_word.len();
+        for i in 0..n {
+            for k in 0..26 {
+                let c = ((97 + k) as u8) as char;
+                if search_word[i..i + 1] != f"{c}" {
+                    let candidate = f"{search_word[0..i]}{c}{search_word[i + 1..n]}";
+                    if found(self.sorted, candidate) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A dictionary built from `dictionary`, then searched for each of
+// `searches`; the results as LeetCode prints them, `null` first for the
+// constructor and for `buildDict`.
+fn run_all(dictionary: Vec[String], searches: Vec[String]) -> String {
+    let mut d = MagicDictionary.new();
+    d.build_dict(dictionary);
+    let mut out: Vec[String] = Vec.new();
+    out.push("null".to_string());
+    out.push("null".to_string());
+    for w in searches.iter() {
+        if d.search(w) {
+            out.push("true".to_string());
+        } else {
+            out.push("false".to_string());
+        }
+    }
+    f"[{out.join(",")}]"
+}
+
+fn words(text: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for part in text.split(",") {
+        out.push(part.to_string());
+    }
+    out
+}
+
+// `n` copies of `s`.
+fn repeated(s: String, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+// A word of 1 to `most` letters, each one of the first `letters` of the
+// alphabet.
+fn random_word(seed: mut ref i64, most: i64, letters: i64) -> String {
+    let n = 1 + next_random(seed) % most;
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // The LeetCode example; one letter; two words that are each other's
+    // neighbours; a search word in the dictionary next to another word,
+    // and away from it; three words, one far from the rest; and a word of
+    // 100 letters, the problem's longest.
+    println(run_all(words("hello,leetcode"), words("hello,hhllo,hell,leetcoded")));
+    println(run_all(words("a"), words("a,b,aa,z")));
+    println(run_all(words("ab,ba"), words("aa,bb,ab,ba,cb")));
+    println(run_all(words("hello,hallo"), words("hello,hallo,hullo,hxllx")));
+    println(run_all(words("abc,abd,xyz"), words("abc,abz,xbz,ayz,xyzz")));
+    let long = repeated("a", 100);
+    let mut searches: Vec[String] = Vec.new();
+    searches.push(f"{repeated("a", 99)}b");
+    searches.push(f"b{repeated("a", 99)}");
+    searches.push(long.clone());
+    searches.push(repeated("a", 101));
+    let mut one: Vec[String] = Vec.new();
+    one.push(long);
+    println(run_all(one, searches));
+    // 300 random dictionaries of up to 30 words over 2 to 4 letters, each
+    // searched 20 times, into a checksum.
+    let mut seed: i64 = 676;
+    let mut sum = 0;
+    let mut hits = 0;
+    let mut total = 0;
+    for c in 0..300 {
+        let letters = 2 + c % 3;
+        let most = 1 + c % 6;
+        let mut dictionary: Vec[String] = Vec.new();
+        let size = 1 + next_random(mut seed) % 30;
+        for _ in 0..size {
+            let w = random_word(mut seed, most, letters);
+            if not dictionary.contains(w) {
+                dictionary.push(w);
+            }
+        }
+        let mut d = MagicDictionary.new();
+        d.build_dict(dictionary);
+        for _ in 0..20 {
+            let got = d.search(random_word(mut seed, most, letters));
+            total += 1;
+            let mut bit = 0;
+            if got {
+                hits += 1;
+                bit = 1;
+            }
+            sum = (sum * 3 + bit) % 1000000007;
+        }
+    }
+    println(f"{total} random searches: {hits} true, checksum {sum}");
+}
