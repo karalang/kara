@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 172 |
 | perf | 167 |
 | diagnostics | 162 |
-| crash | 119 |
+| crash | 120 |
 | soundness | 105 |
 | use-after-free | 91 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2906 |
+| codegen | 2907 |
 | interp | 932 |
 | typecheck | 436 |
 | other | 115 |
@@ -197,7 +197,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-5 | 2026-10-15 | typecheck | medium | The I/O library returns `Result[Unit, IoError]` where docs/library/io.md says `Result[(), IoError]`, and `Unit` does not unify with `()`: `let r: Result[(), IoError] = fs.write("y.txt", "a");` is refused ("expected 'Result[(), IoError]', found 'Result[Unit, IoError]'") by `karac check` and the MIR typecheck, as is an `if` whose arms are a user fn returning `Result[(), IoError]` and `fs.write(..)` | — |
 | B-2026-10-15-6 | 2026-10-15 | runtime | medium | Child processes have no library spec, and the implemented `Command` cannot connect one child's stdout to another's stdin: docs/library has no process section (io.md specifies files, stdin/stdout and sockets only), `Stdio` is `Inherit | Null | Piped` with no way to pass a `ChildStdout` as a stdin, and there is no `current_dir`, so a shell pipeline must buffer each stage's whole output in the parent | — |
 | B-2026-10-15-7 | 2026-10-15 | typecheck | medium | `karac check` refuses a `match v[i]` arm that only READS its binding with `==` or in an f-string: `match v[0] { Tok.Sym(t) => t == s, .. }` and `Tok.Sym(t) => println(f"{t}")` are E_INDEX_MOVE_NON_COPY ("this arm consumes `t`"), as is `Tok.Sym(ref t) => t == s`, though design.md says `==` borrows its operands and core-semantics.md §4.6 makes a binding into a borrowed place a `ref`; `t.len()` in the same position is accepted, and every MIR surface runs all of them | — |
-| B-2026-10-15-8 | 2026-10-15 | interp | medium | A user `struct Unit` with a heap field breaks the MIR interpreter on any `fs.write` result: with `struct Unit { n: Vec[i64] }` in scope, `match fs.write("x.txt", s) { Ok(_) => .., Err(_) => .. }` stops `__mir-run` with "run: in main at bb20[term]: ADT place holds Unit", because the library's `Result[Unit, IoError]` resolves `Unit` to the user's type; `karac check` passes with no prelude_shadow warning (it warns for `Parser`), and the compiled MIR surfaces run it | — |
 | B-2026-10-15-10 | 2026-10-15 | runtime | medium | Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
 | B-2026-10-15-12 | 2026-10-15 | ownership | medium | `karac check` keeps a closure's borrow of a captured value alive after the closure is gone: `let redo = skip.iter().any(|s| s == d.name); if redo { continue; } kept.push(d);` is refused with "cannot consume `d` while closure at line 8:36 captures `d.name` by `ref` (borrow still live)", though the closure was consumed by `any` on the line before; the same test written as a `for` loop passes, and every MIR surface runs the closure form | — |
 | B-2026-10-15-13 | 2026-10-15 | typecheck | medium | A `mut ref name` pattern binding (core-semantics.md §4.6), the one spelling the spec gives for a mutable borrow of an element or field in a local, passes `karac check` but every MIR surface refuses it with the LEGACY-backend message "`mut ref p` pattern bindings are not supported by the legacy `build` / `run` backends, which would bind a copy; `karac check` accepts them for the v2 backend" | — |
@@ -224,6 +223,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-38 | 2026-10-15 | ownership | low | `karac check` takes `f64.parse(t.text)` (and `i64.parse(t.text)`) as a MOVE of the field `t.text`, so a later `out.push(t)` is refused with "value 't.text' moved here, used again here"; the same call on a local String (`f64.parse(text)` then `T { text: text, .. }`) is accepted, the spec gives `parse(s: Str)` a borrowed parameter, and all four running surfaces run the program | — |
 | B-2026-10-15-40 | 2026-10-15 | interp+codegen | high | On the MIR backends a USER enum variant named `None` takes over every bare `None` of an `Option` in the program: with `enum V { None, Int(i64) }` declared, `fn half(x: i64) -> Option[i64] { .. None }` stops `__mir-run`, `__mir-llvm-run` and `__mir-llvm-asan` with "invalid MIR: half: bb9[0]: Option takes 1 fields, got 0" before anything runs; `karac check` passes and `karac run --interp` prints the right answer | — |
 | B-2026-10-15-41 | 2026-10-15 | typecheck+resolver | medium | A user `struct Range` captures every range literal: with `struct Range { lo: i64, hi: i64 }` in scope, `for i in 0..v.len() { v[i] }` fails `karac check` with "index must be an integer or range, found 'T'" at the index (52 such errors in a 1480-line program, none at the struct), with no prelude_shadow warning, and the MIR front end refuses the program with a location-less "'Range' is already defined" whose span is in the library source | — |
+| B-2026-10-15-42 | 2026-10-15 | codegen | low | A user type named like a library type the I/O library returns (`struct IoError { .. }`) replaces it inside the library on both MIR backends: `match fs.read_to_string("missing") { Ok(_) => .., Err(_) => .. }` stops `__mir-run` with "IoError has no variant NotFound" and `__mir-llvm-run` with "`IoError` has no variant NotFound"; `karac check` accepts it with only the prelude_shadow warning | — |
 
 ### Relocated
 
@@ -4077,6 +4077,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-14-64 | codegen | medium | The MIR move check refuses an `if` or `while` condition that reads a field of a call's owned result when that result has a non-`Copy` field: `if mk(2… | fd293a634b |
 | B-2026-10-14-65 | codegen | medium | A closure bound with a full `Fn(i64) -> Result[i64, String]` annotation whose body has an early `return Err("..".to_string());` builds invalid MIR: `… | bac24781dd |
 | B-2026-10-15-2 | typecheck | high | `collect`'s `C: FromIterator[V]` bound is never checked on the library pipeline when only the context solves `C`: `let s: String = words.iter().map(\|… | 6e47e41e3b |
+| B-2026-10-15-8 | interp | medium | A user `struct Unit` with a heap field breaks the MIR interpreter on any `fs.write` result: with `struct Unit { n: Vec[i64] }` in scope, `match fs.wr… | b4c775b2e9 |
 | B-2026-10-15-9 | interp+codegen | medium | The spec's channel constructor `channel(cap) -> (Sender[T], Receiver[T])` (docs/library/concurrency.md, imported from `std.sync`) does not exist, and… | 803e7dac6a |
 | B-2026-10-15-11 | typecheck | medium | The implemented `TaskGroup` / channel surface is not the one docs/library/concurrency.md specifies, beyond the `channel(cap)` name of B-2026-10-14-48… | 803e7dac6a |
 | B-2026-10-15-21 | effect | medium | A call through a generic bound is charged the effects of EVERY impl of the trait method instead of the instance's (design.md §12 Trait methods and ge… | 8d40e1a762 |
