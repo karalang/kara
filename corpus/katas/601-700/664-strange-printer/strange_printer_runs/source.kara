@@ -1,0 +1,113 @@
+// LeetCode #664: Strange Printer -- runs squashed, copies linked.
+//
+// A run of one letter always takes one turn, so squash each run to a
+// single letter first. Then fill the table by interval length, each
+// interval led by its first letter: printed alone, or its turn stretched
+// to a later copy. A link from each letter to the next copy of itself
+// visits only those copies, not every letter between. O(m^3) time over
+// the `m` runs in the worst case, O(m^2) space.
+
+fn strange_printer(s: String) -> i64 {
+    let mut b: Vec[u8] = Vec.new();
+    for c in s.bytes().iter() {
+        if b.is_empty() or b[b.len() - 1] != *c {
+            b.push(*c);
+        }
+    }
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut next = vec![m; m];
+    let mut last = vec![m; 256];
+    let mut k = m - 1;
+    while k >= 0 {
+        next[k] = last[b[k] as i64];
+        last[b[k] as i64] = k;
+        k -= 1;
+    }
+    let mut turns = vec![vec![0; m + 1]; m + 1];
+    for length in 1..m + 1 {
+        for i in 0..m - length + 1 {
+            let j = i + length - 1;
+            let mut best = 1 + turns[i + 1][j];
+            let mut k = next[i];
+            while k <= j {
+                best = best.min(turns[i + 1][k - 1] + turns[k][j]);
+                k = next[k];
+            }
+            turns[i][j] = best;
+        }
+    }
+    turns[0][m - 1]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` letters drawn from the first `letters` of the alphabet.
+fn random_text(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn show(s: String) {
+    if s.len() <= 30 {
+        println(f"\"{s}\": {strange_printer(s)}");
+    } else {
+        println(f"\"{s.substring(0, 12)}...\" ({s.len()} letters): {strange_printer(s)}");
+    }
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("aaabbb".to_string());
+    show("aba".to_string());
+    // One letter; a palindrome; two letters taking turns; a word repeated.
+    show("z".to_string());
+    show("abcba".to_string());
+    show("abab".to_string());
+    show("tbgtgb".to_string());
+    show("abcabc".to_string());
+    // The problem's longest, 100 letters: one letter; `ab` 50 times; the
+    // alphabet nearly four times; and the alphabet up and down twice.
+    let mut same = String.new();
+    let mut pairs = String.new();
+    let mut alphabet = String.new();
+    let mut mountain = String.new();
+    for i in 0..100 {
+        same.push('q');
+        pairs.push(if i % 2 == 0 { 'a' } else { 'b' });
+        alphabet.push(((97 + i % 26) as u8) as char);
+        let up = i % 50;
+        let at = if up < 25 { up } else { 49 - up };
+        mountain.push(((97 + at) as u8) as char);
+    }
+    show(same);
+    show(pairs);
+    show(alphabet);
+    show(mountain);
+    // 300 random texts of 1 to 20 letters from 2 to 5 letters: a
+    // checksum of the turns.
+    let mut seed: i64 = 664;
+    let mut sum = 0;
+    let mut most = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let letters = 2 + next_random(mut seed) % 4;
+        let t = strange_printer(random_text(n, letters, mut seed));
+        most = most.max(t);
+        sum = (sum * 31 + t) % 1000000007;
+    }
+    println(f"300 random texts: most {most} turns, checksum {sum}");
+    // Random texts of 100 letters from 3 and from 26.
+    show(random_text(100, 3, mut seed));
+    show(random_text(100, 26, mut seed));
+}

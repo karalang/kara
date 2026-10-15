@@ -1,0 +1,55 @@
+// Benchmark for #664: the ★ arm (intervals, by their last letter) on a
+// large workload.
+
+fn strange_printer(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut turns = vec![vec![0; n]; n];
+    let mut i = n - 1;
+    while i >= 0 {
+        turns[i][i] = 1;
+        for j in i + 1..n {
+            let mut best = turns[i][j - 1] + 1;
+            for k in i..j {
+                if b[k] == b[j] {
+                    let between = if k + 1 <= j - 1 { turns[k + 1][j - 1] } else { 0 };
+                    best = best.min(turns[i][k] + between);
+                }
+            }
+            turns[i][j] = best;
+        }
+        i -= 1;
+    }
+    turns[0][n - 1]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 texts of the problem's longest, 100 letters, made once, from 2 to
+    // 26 letters; then each round prints one, picked by the round, and
+    // puts its turns into a checksum.
+    let mut seed: i64 = 664;
+    let mut texts: Vec[String] = Vec.new();
+    for t in 0..64 {
+        let letters = 2 + t % 25;
+        let mut s = String.new();
+        for _ in 0..100 {
+            s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+        }
+        texts.push(s);
+    }
+    let rounds = 2000;
+    let mut sum = 0;
+    for r in 0..rounds {
+        let t = strange_printer(texts[r % 64]);
+        sum = (sum * 31 + t + r) % 1000000007;
+    }
+    println(f"64 texts of 100 letters, {rounds} rounds: checksum {sum}");
+}

@@ -1,0 +1,13 @@
+[5,10,10,null,null,2,3]: true
+[1,2,10,null,null,2,20]: false
+[0]: false
+[0,0]: true
+[0,-1,1]: false
+[1,-1]: false
+[1,1]: true
+chain of 10000 ones: true
+the same, its last node 2: false
+300 random trees: 75 split, checksum 304497315
+10000 nodes grown at random: false
+0 over two copies of 4999: true
+the same, one value raised by 2: false

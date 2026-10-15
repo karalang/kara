@@ -1,0 +1,204 @@
+// LeetCode #663: Equal Tree Partition -- the subtree sums, listed.
+//
+// Cutting the edge above a node splits off that node's subtree, so a cut
+// makes two equal halves exactly when some subtree other than the whole
+// tree sums to half the total. One walk from the bottom up lists every
+// subtree's sum; the root's, the last listed, is the total and is left
+// out, since there is no edge above the root. O(nodes) time and space.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn check_equal_tree(root: Option[TreeNode]) -> bool {
+    let mut sums: Vec[i64] = Vec.new();
+    let total = subtree_sum(root, mut sums);
+    if total % 2 != 0 {
+        return false;
+    }
+    sums.pop();
+    for s in sums.iter() {
+        if *s == total / 2 {
+            return true;
+        }
+    }
+    false
+}
+
+fn subtree_sum(node: Option[TreeNode], sums: mut ref Vec[i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let s = n.val + subtree_sum(n.left, sums) + subtree_sum(n.right, sums);
+            sums.push(s);
+            s
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A random tree at most `levels` deep: each child is there with chance
+// `chance` in 100; values from -`spread` to `spread`.
+fn random_tree(levels: i64, chance: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if levels == 0 {
+        return None;
+    }
+    let n = leaf(next_random(mut seed) % (2 * spread + 1) - spread);
+    if next_random(mut seed) % 100 < chance {
+        n.left = random_tree(levels - 1, chance, spread, mut seed);
+    }
+    if next_random(mut seed) % 100 < chance {
+        n.right = random_tree(levels - 1, chance, spread, mut seed);
+    }
+    Some(n)
+}
+
+// `count` nodes with values from -100,000 to 100,000, each hung where a
+// random walk down from the root first finds no child.
+fn grown_tree(count: i64, seed: mut ref i64) -> TreeNode {
+    let root = leaf(next_random(mut seed) % 200001 - 100000);
+    for _ in 1..count {
+        let mut at = root;
+        let mut placed = false;
+        while not placed {
+            if next_random(mut seed) % 2 == 0 {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(leaf(next_random(mut seed) % 200001 - 100000));
+                        placed = true;
+                    }
+                }
+            } else {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(leaf(next_random(mut seed) % 200001 - 100000));
+                        placed = true;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A chain of `count` nodes of 1, turning left at every third, its last
+// node `last`.
+fn chain(count: i64, last: i64) -> Option[TreeNode] {
+    let top = leaf(1);
+    let mut bottom = top;
+    for i in 1..count {
+        let c = leaf(1);
+        if i % 3 == 0 {
+            bottom.left = Some(c);
+        } else {
+            bottom.right = Some(c);
+        }
+        bottom = c;
+    }
+    bottom.val = last;
+    Some(top)
+}
+
+// Every check is given a tree of its own, since one arm writes into the
+// tree it is given.
+fn copy(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: copy(n.left), right: copy(n.right) }),
+    }
+}
+
+fn show(label: String, root: Option[TreeNode]) {
+    println(f"{label}: {check_equal_tree(root)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("[5,10,10,null,null,2,3]".to_string(), from_level(vec![Some(5), Some(10), Some(10), None, None, Some(2), Some(3)]));
+    show("[1,2,10,null,null,2,20]".to_string(), from_level(vec![Some(1), Some(2), Some(10), None, None, Some(2), Some(20)]));
+    // One node, with no edge to cut; and small trees summing to 0, where
+    // the whole tree's sum is half the total and must not count.
+    show("[0]".to_string(), from_level(vec![Some(0)]));
+    show("[0,0]".to_string(), from_level(vec![Some(0), Some(0)]));
+    show("[0,-1,1]".to_string(), from_level(vec![Some(0), Some(-1), Some(1)]));
+    show("[1,-1]".to_string(), from_level(vec![Some(1), Some(-1)]));
+    show("[1,1]".to_string(), from_level(vec![Some(1), Some(1)]));
+    // A chain of the problem's largest, 10,000 nodes of 1, cut in the
+    // middle; and the same with its last node 2, an odd total.
+    show("chain of 10000 ones".to_string(), chain(10000, 1));
+    show("the same, its last node 2".to_string(), chain(10000, 2));
+    // 300 random trees at most 1 to 10 levels deep, values from -3 to 3
+    // so that equal halves are common.
+    let mut seed: i64 = 663;
+    let mut yes = 0;
+    let mut sum = 0;
+    for i in 0..300 {
+        let levels = 1 + next_random(mut seed) % 10;
+        let chance = 40 + next_random(mut seed) % 61;
+        let ok = check_equal_tree(random_tree(levels, chance, 3, mut seed));
+        if ok {
+            yes += 1;
+            sum = (sum * 31 + i) % 1000000007;
+        }
+    }
+    println(f"300 random trees: {yes} split, checksum {sum}");
+    // The problem's largest, 10,000 nodes: one grown at random; a root of
+    // 0 over two copies of a tree of 4,999; and the same with one value
+    // in the right copy raised by 2.
+    show("10000 nodes grown at random".to_string(), Some(grown_tree(10000, mut seed)));
+    let half = grown_tree(4999, mut seed);
+    let root = leaf(0);
+    root.left = copy(Some(half));
+    root.right = copy(Some(half));
+    show("0 over two copies of 4999".to_string(), Some(root));
+    let root = leaf(0);
+    root.left = copy(Some(half));
+    let right = copy(Some(half)).unwrap();
+    right.val = right.val + 2;
+    root.right = Some(right);
+    show("the same, one value raised by 2".to_string(), Some(root));
+}

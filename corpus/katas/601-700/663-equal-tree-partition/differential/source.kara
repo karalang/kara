@@ -1,0 +1,285 @@
+// LeetCode #663: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn check_equal_tree_star(root: Option[TreeNode]) -> bool {
+    let mut sums: Vec[i64] = Vec.new();
+    let total = subtree_sum_star(root, mut sums);
+    if total % 2 != 0 {
+        return false;
+    }
+    sums.pop();
+    for s in sums.iter() {
+        if *s == total / 2 {
+            return true;
+        }
+    }
+    false
+}
+
+fn subtree_sum_star(node: Option[TreeNode], sums: mut ref Vec[i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let s = n.val + subtree_sum_star(n.left, sums) + subtree_sum_star(n.right, sums);
+            sums.push(s);
+            s
+        }
+    }
+}
+
+// ---- count arm ---------------------------------------------------------
+
+fn check_equal_tree_count(root: Option[TreeNode]) -> bool {
+    let mut counts: Map[i64, i64] = Map.new();
+    let total = count_sums_count(root, mut counts);
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let mut found = 0;
+    if let Some(c) = counts.get(half) {
+        found = *c;
+    }
+    if half == total {
+        found -= 1;
+    }
+    found > 0
+}
+
+fn count_sums_count(node: Option[TreeNode], counts: mut ref Map[i64, i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let s = n.val + count_sums_count(n.left, counts) + count_sums_count(n.right, counts);
+            *counts.entry(s).or_insert(0) += 1;
+            s
+        }
+    }
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn check_equal_tree_stack(root: Option[TreeNode]) -> bool {
+    let mut todo: Vec[(Option[TreeNode], bool)] = vec![(root, false)];
+    let mut done: Vec[i64] = Vec.new();
+    let mut sums: Vec[i64] = Vec.new();
+    while let Some((node, expanded)) = todo.pop() {
+        match node {
+            None => done.push(0),
+            Some(n) => {
+                if expanded {
+                    let right = done.pop().unwrap();
+                    let left = done.pop().unwrap();
+                    let s = n.val + left + right;
+                    done.push(s);
+                    sums.push(s);
+                } else {
+                    todo.push((Some(n), true));
+                    todo.push((n.right, false));
+                    todo.push((n.left, false));
+                }
+            }
+        }
+    }
+    let total = done.pop().unwrap();
+    if total % 2 != 0 {
+        return false;
+    }
+    sums.pop();
+    sums.contains(total / 2)
+}
+
+// ---- inplace arm -------------------------------------------------------
+
+fn check_equal_tree_inplace(root: Option[TreeNode]) -> bool {
+    match root {
+        None => false,
+        Some(r) => {
+            let total = fold_inplace(Some(r));
+            total % 2 == 0 and (holds_inplace(r.left, total / 2) or holds_inplace(r.right, total / 2))
+        }
+    }
+}
+
+fn fold_inplace(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            n.val = n.val + fold_inplace(n.left) + fold_inplace(n.right);
+            n.val
+        }
+    }
+}
+
+fn holds_inplace(node: Option[TreeNode], half: i64) -> bool {
+    match node {
+        None => false,
+        Some(n) => n.val == half or holds_inplace(n.left, half) or holds_inplace(n.right, half),
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// Each arm is given a copy, since one writes into the tree it is given.
+fn answer(which: i64, root: Option[TreeNode]) -> bool {
+    let tree = copy(root);
+    if which == 0 {
+        check_equal_tree_star(tree)
+    } else if which == 1 {
+        check_equal_tree_count(tree)
+    } else if which == 2 {
+        check_equal_tree_stack(tree)
+    } else {
+        check_equal_tree_inplace(tree)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn random_tree(levels: i64, chance: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if levels == 0 {
+        return None;
+    }
+    let n = leaf(next_random(mut seed) % 7 - 3);
+    if next_random(mut seed) % 100 < chance {
+        n.left = random_tree(levels - 1, chance, mut seed);
+    }
+    if next_random(mut seed) % 100 < chance {
+        n.right = random_tree(levels - 1, chance, mut seed);
+    }
+    Some(n)
+}
+
+fn copy(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: copy(n.left), right: copy(n.right) }),
+    }
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+fn negated(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: -n.val, left: negated(n.left), right: negated(n.right) }),
+    }
+}
+
+fn nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        nodes(n.left, out);
+        nodes(n.right, out);
+    }
+}
+
+// The sum of the tree with the subtree at the `cut`th node in walk order
+// left out; `at` counts the nodes walked so far.
+fn sum_without(node: Option[TreeNode], cut: i64, at: mut ref i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let here = *at;
+            *at += 1;
+            let left = sum_without(n.left, cut, at);
+            let right = sum_without(n.right, cut, at);
+            if here == cut { 0 } else { n.val + left + right }
+        }
+    }
+}
+
+// The definition: cut each edge in turn, the one above every node but the
+// root, and add up the two trees it leaves.
+fn definition(root: Option[TreeNode]) -> bool {
+    let mut all: Vec[TreeNode] = Vec.new();
+    nodes(root, mut all);
+    for i in 1..all.len() {
+        let mut none = 0;
+        let below = sum_without(Some(all[i]), -1, mut none);
+        let mut at = 0;
+        let above = sum_without(root, i, mut at);
+        if below == above {
+            return true;
+        }
+    }
+    false
+}
+
+fn main() {
+    // 1000 random trees 1 to 8 levels deep, each child there with chance
+    // 30 to 100 in 100, values from -3 to 3.
+    let cases = 1000;
+    let mut seed: i64 = 663;
+    let mut count = 0;
+    let mut yes = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let levels = 1 + next_random(mut seed) % 8;
+        let chance = 30 + next_random(mut seed) % 71;
+        let root = random_tree(levels, chance, mut seed);
+        let want = definition(root);
+        let mut all: Vec[TreeNode] = Vec.new();
+        nodes(root, mut all);
+        count += all.len();
+        if want {
+            yes += 1;
+        }
+        // The tree twice over, under a new root of 0.
+        let twice = leaf(0);
+        twice.left = copy(root);
+        twice.right = copy(root);
+        // The tree with its root raised by 1.
+        let raised = copy(root).unwrap();
+        raised.val = raised.val + 1;
+        for which in 0..4 {
+            let got = answer(which, root);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: the mirrored tree splits just the same.
+                answer(which, mirrored(root)) == got,
+                // P3: so does the tree with every value negated.
+                answer(which, negated(root)) == got,
+                // P4: two copies under a new root of 0 always split.
+                answer(which, Some(twice)),
+                // P5: a tree that splits has an even total, so raising
+                // its root by 1 leaves one that cannot.
+                not got or not answer(which, Some(raised)),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} trees ({count} nodes, {yes} split), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

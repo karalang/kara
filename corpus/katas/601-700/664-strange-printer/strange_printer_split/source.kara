@@ -1,0 +1,104 @@
+// LeetCode #664: Strange Printer -- split, or share the ends.
+//
+// When an interval starts and ends with the same letter, the turn that
+// prints one end can print the other too, so it costs what the interval
+// without its last letter does. Otherwise two separate parts print it:
+// try every place to cut and keep the cheapest pair. O(n^3) time, O(n^2)
+// space.
+
+fn strange_printer(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut turns = vec![vec![0; n]; n];
+    for i in 0..n {
+        turns[i][i] = 1;
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            if b[i] == b[j] {
+                turns[i][j] = turns[i][j - 1];
+            } else {
+                let mut best = length;
+                for k in i..j {
+                    best = best.min(turns[i][k] + turns[k + 1][j]);
+                }
+                turns[i][j] = best;
+            }
+        }
+    }
+    turns[0][n - 1]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` letters drawn from the first `letters` of the alphabet.
+fn random_text(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn show(s: String) {
+    if s.len() <= 30 {
+        println(f"\"{s}\": {strange_printer(s)}");
+    } else {
+        println(f"\"{s.substring(0, 12)}...\" ({s.len()} letters): {strange_printer(s)}");
+    }
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("aaabbb".to_string());
+    show("aba".to_string());
+    // One letter; a palindrome; two letters taking turns; a word repeated.
+    show("z".to_string());
+    show("abcba".to_string());
+    show("abab".to_string());
+    show("tbgtgb".to_string());
+    show("abcabc".to_string());
+    // The problem's longest, 100 letters: one letter; `ab` 50 times; the
+    // alphabet nearly four times; and the alphabet up and down twice.
+    let mut same = String.new();
+    let mut pairs = String.new();
+    let mut alphabet = String.new();
+    let mut mountain = String.new();
+    for i in 0..100 {
+        same.push('q');
+        pairs.push(if i % 2 == 0 { 'a' } else { 'b' });
+        alphabet.push(((97 + i % 26) as u8) as char);
+        let up = i % 50;
+        let at = if up < 25 { up } else { 49 - up };
+        mountain.push(((97 + at) as u8) as char);
+    }
+    show(same);
+    show(pairs);
+    show(alphabet);
+    show(mountain);
+    // 300 random texts of 1 to 20 letters from 2 to 5 letters: a
+    // checksum of the turns.
+    let mut seed: i64 = 664;
+    let mut sum = 0;
+    let mut most = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let letters = 2 + next_random(mut seed) % 4;
+        let t = strange_printer(random_text(n, letters, mut seed));
+        most = most.max(t);
+        sum = (sum * 31 + t) % 1000000007;
+    }
+    println(f"300 random texts: most {most} turns, checksum {sum}");
+    // Random texts of 100 letters from 3 and from 26.
+    show(random_text(100, 3, mut seed));
+    show(random_text(100, 26, mut seed));
+}

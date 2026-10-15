@@ -1,0 +1,267 @@
+// LeetCode #664: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random texts.
+
+// ---- star arm ----------------------------------------------------------
+
+fn strange_printer_star(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut turns = vec![vec![0; n]; n];
+    let mut i = n - 1;
+    while i >= 0 {
+        turns[i][i] = 1;
+        for j in i + 1..n {
+            let mut best = turns[i][j - 1] + 1;
+            for k in i..j {
+                if b[k] == b[j] {
+                    let between = if k + 1 <= j - 1 { turns[k + 1][j - 1] } else { 0 };
+                    best = best.min(turns[i][k] + between);
+                }
+            }
+            turns[i][j] = best;
+        }
+        i -= 1;
+    }
+    turns[0][n - 1]
+}
+
+// ---- memo arm ----------------------------------------------------------
+
+fn strange_printer_memo(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut memo = vec![vec![-1; n]; n];
+    turns_memo(b, 0, n - 1, mut memo)
+}
+
+fn turns_memo(b: Slice[u8], i: i64, j: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if i > j {
+        return 0;
+    }
+    if memo[i][j] >= 0 {
+        return memo[i][j];
+    }
+    let mut best = 1 + turns_memo(b, i + 1, j, memo);
+    for k in i + 1..j + 1 {
+        if b[k] == b[i] {
+            best = best.min(turns_memo(b, i + 1, k - 1, memo) + turns_memo(b, k, j, memo));
+        }
+    }
+    memo[i][j] = best;
+    best
+}
+
+// ---- runs arm ----------------------------------------------------------
+
+fn strange_printer_runs(s: String) -> i64 {
+    let mut b: Vec[u8] = Vec.new();
+    for c in s.bytes().iter() {
+        if b.is_empty() or b[b.len() - 1] != *c {
+            b.push(*c);
+        }
+    }
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut next = vec![m; m];
+    let mut last = vec![m; 256];
+    let mut k = m - 1;
+    while k >= 0 {
+        next[k] = last[b[k] as i64];
+        last[b[k] as i64] = k;
+        k -= 1;
+    }
+    let mut turns = vec![vec![0; m + 1]; m + 1];
+    for length in 1..m + 1 {
+        for i in 0..m - length + 1 {
+            let j = i + length - 1;
+            let mut best = 1 + turns[i + 1][j];
+            let mut k = next[i];
+            while k <= j {
+                best = best.min(turns[i + 1][k - 1] + turns[k][j]);
+                k = next[k];
+            }
+            turns[i][j] = best;
+        }
+    }
+    turns[0][m - 1]
+}
+
+// ---- split arm ---------------------------------------------------------
+
+fn strange_printer_split(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut turns = vec![vec![0; n]; n];
+    for i in 0..n {
+        turns[i][i] = 1;
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            if b[i] == b[j] {
+                turns[i][j] = turns[i][j - 1];
+            } else {
+                let mut best = length;
+                for k in i..j {
+                    best = best.min(turns[i][k] + turns[k + 1][j]);
+                }
+                turns[i][j] = best;
+            }
+        }
+    }
+    turns[0][n - 1]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, s: String) -> i64 {
+    if which == 0 {
+        strange_printer_star(s)
+    } else if which == 1 {
+        strange_printer_memo(s)
+    } else if which == 2 {
+        strange_printer_runs(s)
+    } else {
+        strange_printer_split(s)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+// The definition, run backwards: the last turn leaves one letter over its
+// whole range, so undo turns from the finished text, each over a range
+// whose letters not yet undone are all one letter, until every letter is
+// undone. A breadth-first search over the sets of undone letters finds
+// the fewest turns.
+fn definition(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let full = (1 << n) - 1;
+    let mut dist = vec![-1; full + 1];
+    dist[0] = 0;
+    let mut queue: Vec[i64] = vec![0];
+    let mut head = 0;
+    while head < queue.len() {
+        let undone = queue[head];
+        head += 1;
+        for i in 0..n {
+            let mut letter = -1;
+            let mut range = 0;
+            for j in i..n {
+                if (undone >> j) & 1 == 0 {
+                    if letter == -1 {
+                        letter = b[j] as i64;
+                    } else if b[j] as i64 != letter {
+                        break;
+                    }
+                }
+                range = range | (1 << j);
+                let next = undone | range;
+                if letter != -1 and dist[next] == -1 {
+                    dist[next] = dist[undone] + 1;
+                    queue.push(next);
+                }
+            }
+        }
+    }
+    dist[full]
+}
+
+fn reversed(s: String) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        out.push(b[i] as char);
+        i -= 1;
+    }
+    out
+}
+
+// Every letter swapped for its mirror in the alphabet, `a` for `z`.
+fn renamed(s: String) -> String {
+    let mut out = String.new();
+    for c in s.bytes().iter() {
+        out.push((219 - *c as i64) as u8 as char);
+    }
+    out
+}
+
+fn main() {
+    // 1500 random texts of 1 to 8 letters from 2 to 4 letters.
+    let cases = 1500;
+    let mut seed: i64 = 664;
+    let mut letters_seen = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let n = 1 + next_random(mut seed) % 8;
+        let letters = 2 + next_random(mut seed) % 3;
+        let s = random_text(n, letters, mut seed);
+        letters_seen += n;
+        let want = definition(s.clone());
+        let b = s.bytes();
+        let mut runs = 0;
+        let mut distinct = 0;
+        let mut seen = vec![false; 256];
+        for i in 0..b.len() {
+            if i == 0 or b[i] != b[i - 1] {
+                runs += 1;
+            }
+            if not seen[b[i] as i64] {
+                seen[b[i] as i64] = true;
+                distinct += 1;
+            }
+        }
+        let mut longer = s.clone();
+        longer.push(b[0] as char);
+        for which in 0..4 {
+            let got = answer(which, s.clone());
+            let ok = vec![
+                // P1: the definition's turns.
+                got == want,
+                // P2: the text reversed takes as many.
+                answer(which, reversed(s.clone())) == got,
+                // P3: so does the text with its letters renamed.
+                answer(which, renamed(s.clone())) == got,
+                // P4: at least one turn for each letter used, at most one
+                // for each run.
+                got >= distinct and got <= runs,
+                // P5: the first letter again at the end costs nothing,
+                // since the first turn can stretch to it.
+                answer(which, longer.clone()) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} texts ({letters_seen} letters), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/663-equal-tree-partition/bench/equal_tree_partition.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "3908b27a2"
+extracted_src = "512d0ede"
+model_rev = "1aa23105"
+model_src = "512d0ede"
