@@ -1,0 +1,50 @@
+// Benchmark for #647: the ★ arm (expanding from each center) on a large
+// workload.
+
+fn count_substrings(s: String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut count = 0;
+    for center in 0..2 * n - 1 {
+        let mut lo = center / 2;
+        let mut hi = lo + center % 2;
+        while lo >= 0 and hi < n and bytes[lo] == bytes[hi] {
+            count += 1;
+            lo -= 1;
+            hi += 1;
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 texts of 2,000 letters, each from the first 1 to 3 letters of
+    // the alphabet, the count picked for each text, made once; then 300
+    // times answers one of them, picked by the round, adding up the
+    // answers and putting each into a checksum.
+    let inputs = 20;
+    let rounds = 300;
+    let mut seed: i64 = 647;
+    let mut texts: Vec[String] = Vec.new();
+    for _ in 0..inputs {
+        let letters = 1 + next_random(mut seed) % 3;
+        let mut s = String.new();
+        for _ in 0..2000 {
+            s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+        }
+        texts.push(s);
+    }
+    let mut sum = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let c = count_substrings(texts[(r * 7) % inputs]);
+        sum += c;
+        checksum = (checksum * 31 + c) % 1000000007;
+    }
+    println(f"{inputs} inputs, {rounds} rounds: total {sum}, checksum {checksum}");
+}

@@ -1,0 +1,15 @@
+"abc" -> 3
+"aaa" -> 6
+"z" -> 1
+"ab" -> 2
+"bb" -> 3
+"racecar" -> 10
+"abba" -> 6
+"xabbay" -> 8
+"aaaabaaaa" -> 25
+"abababa" -> 16
+"abacdfgdcaba" -> 14
+300 random cases: total 30414, checksum 603626908
+1000 of one letter: 500500
+1000 of two letters: 2907
+1000 of 26 letters: 1092

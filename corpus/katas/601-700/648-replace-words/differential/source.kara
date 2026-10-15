@@ -1,0 +1,245 @@
+// LeetCode #648: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random cases.
+
+// ---- star arm ----------------------------------------------------------
+
+fn replace_words_star(dictionary: Vec[String], sentence: String) -> String {
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    let mut ends: Vec[bool] = Vec.new();
+    next.push(vec![0; 26]);
+    ends.push(false);
+    for root in dictionary.iter() {
+        let mut node = 0;
+        for b in root.bytes().iter() {
+            let c = (*b - b'a') as i64;
+            if next[node][c] == 0 {
+                next[node][c] = next.len();
+                next.push(vec![0; 26]);
+                ends.push(false);
+            }
+            node = next[node][c];
+        }
+        ends[node] = true;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in sentence.split(" ").iter() {
+        let bytes = word.bytes();
+        let mut node = 0;
+        let mut length = 0;
+        while length < bytes.len() and not ends[node] {
+            node = next[node][(bytes[length] - b'a') as i64];
+            if node == 0 {
+                break;
+            }
+            length += 1;
+        }
+        if node != 0 and ends[node] {
+            out.push(word.slice(0, length).to_string());
+        } else {
+            out.push(word.clone());
+        }
+    }
+    out.join(" ")
+}
+
+// ---- prefixes arm ------------------------------------------------------
+
+fn replace_words_prefixes(dictionary: Vec[String], sentence: String) -> String {
+    let mut roots: Set[String] = Set.new();
+    let mut longest = 0;
+    for root in dictionary.iter() {
+        roots.insert(root.clone());
+        if root.len() > longest {
+            longest = root.len();
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in sentence.split(" ").iter() {
+        let mut replaced = word.clone();
+        for k in 1..word.len().min(longest) + 1 {
+            let prefix = word.slice(0, k).to_string();
+            if roots.contains(prefix) {
+                replaced = prefix;
+                break;
+            }
+        }
+        out.push(replaced);
+    }
+    out.join(" ")
+}
+
+// ---- shortest arm ------------------------------------------------------
+
+fn replace_words_shortest(dictionary: Vec[String], sentence: String) -> String {
+    let mut roots = dictionary.clone();
+    roots.sort_by(|a, b| a.len().cmp(b.len()));
+    let mut out: Vec[String] = Vec.new();
+    for word in sentence.split(" ").iter() {
+        let mut replaced = word.clone();
+        for root in roots.iter() {
+            if word.starts_with(root) {
+                replaced = root.clone();
+                break;
+            }
+        }
+        out.push(replaced);
+    }
+    out.join(" ")
+}
+
+// ---- every arm ---------------------------------------------------------
+
+fn replace_words_every(dictionary: Vec[String], sentence: String) -> String {
+    let mut out: Vec[String] = Vec.new();
+    for word in sentence.split(" ").iter() {
+        let mut replaced = word.clone();
+        for root in dictionary.iter() {
+            if root.len() < replaced.len() and word.starts_with(root) {
+                replaced = root.clone();
+            }
+        }
+        out.push(replaced);
+    }
+    out.join(" ")
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, dictionary: Vec[String], sentence: String) -> String {
+    if which == 0 {
+        replace_words_star(dictionary, sentence)
+    } else if which == 1 {
+        replace_words_prefixes(dictionary, sentence)
+    } else if which == 2 {
+        replace_words_shortest(dictionary, sentence)
+    } else {
+        replace_words_every(dictionary, sentence)
+    }
+}
+
+// Whether the first `k` letters of `word` are exactly `root`, letter by
+// letter.
+fn is_prefix(root: String, word: String, k: i64) -> bool {
+    let r = root.bytes();
+    let w = word.bytes();
+    if r.len() != k or k > w.len() {
+        return false;
+    }
+    for i in 0..k {
+        if r[i] != w[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// The definition: each word's prefixes tried from one letter up, each
+// against every root, the first that is a root replacing the word.
+fn definition(dictionary: Vec[String], sentence: String) -> String {
+    let words = sentence.split(" ");
+    let mut out = String.new();
+    for i in 0..words.len() {
+        if i > 0 {
+            out.push(' ');
+        }
+        let word = words[i].clone();
+        let mut length = word.len();
+        let mut k = 1;
+        while k < length {
+            for root in dictionary.iter() {
+                if is_prefix(root, word, k) {
+                    length = k;
+                }
+            }
+            k += 1;
+        }
+        for j in 0..length {
+            out.push(word.bytes()[j] as char);
+        }
+    }
+    out
+}
+
+// `shortest` to `longest` letters, each one of the first `letters` of
+// the alphabet.
+fn random_word(shortest: i64, longest: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let n = shortest + next_random(mut seed) % (longest - shortest + 1);
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    let count_cases = 1000;
+    let mut seed: i64 = 6480;
+    let mut checks = 0;
+    let mut words_seen = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count_cases {
+        // 1 to 6 roots of 1 to 3 letters and 1 to 6 words of 1 to 6
+        // letters, from the first 2 or 3 letters of the alphabet.
+        let letters = 2 + next_random(mut seed) % 2;
+        let mut dictionary: Vec[String] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 6 {
+            dictionary.push(random_word(1, 3, letters, mut seed));
+        }
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 6 {
+            words.push(random_word(1, 6, letters, mut seed));
+        }
+        words_seen += words.len();
+        let sentence = words.join(" ");
+        let mut reversed: Vec[String] = Vec.new();
+        for i in 0..dictionary.len() {
+            reversed.push(dictionary[dictionary.len() - 1 - i].clone());
+        }
+        let want = definition(dictionary, sentence);
+        for which in 0..4 {
+            let got = answer(which, dictionary, sentence);
+            let parts = got.split(" ");
+            // P2: one word out for each word in, each a prefix of its word.
+            let mut shaped = parts.len() == words.len();
+            // P4: each word replaced on its own gives the same word.
+            let mut alone = shaped;
+            if shaped {
+                for i in 0..words.len() {
+                    if parts[i].len() == 0 or not words[i].starts_with(parts[i]) {
+                        shaped = false;
+                    }
+                    if answer(which, dictionary, words[i]) != parts[i] {
+                        alone = false;
+                    }
+                }
+            }
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                shaped,
+                // P3: the roots in reverse give the same answer.
+                answer(which, reversed, sentence) == got,
+                alone,
+                // P5: replacing again changes nothing.
+                answer(which, dictionary, got) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count_cases} cases ({words_seen} words), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

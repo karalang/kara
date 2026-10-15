@@ -1,0 +1,11 @@
+[cat,bat,rat] "the cattle was rattled by the battery" -> "the cat was rat by the bat"
+[a,b,c] "aadsfasf absbs bbab cadsfafs" -> "a a b c"
+[cat] "cat cats ca" -> "cat cat ca"
+[catalog] "cat catalogue" -> "cat catalog"
+[aaa,aa,a] "aaaa baaa" -> "a baaa"
+[xyz,q] "abc def" -> "abc def"
+[be,be] "bed bee be b" -> "be be be b"
+[e] "e" -> "e"
+300 random cases: 6420 characters, checksum 982333948
+1000 roots, 5000 words of 4 letters: 18747 characters, checksum 344566299
+1000 roots, 5000 words of 26 letters: 32457 characters, checksum 839235547

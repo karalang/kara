@@ -1,0 +1,107 @@
+// LeetCode #648: Replace Words -- a set of the roots, prefixes tried
+// shortest first.
+//
+// The roots go into a `Set[String]`. Each word tries its prefixes from one
+// letter up to the longest root's length, and the first prefix in the set
+// is the shortest root that starts it. O(total letters times the longest
+// root) time, counting each lookup as the length of its key.
+
+fn replace_words(dictionary: Vec[String], sentence: String) -> String {
+    let mut roots: Set[String] = Set.new();
+    let mut longest = 0;
+    for root in dictionary.iter() {
+        roots.insert(root.clone());
+        if root.len() > longest {
+            longest = root.len();
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in sentence.split(" ").iter() {
+        let mut replaced = word.clone();
+        for k in 1..word.len().min(longest) + 1 {
+            let prefix = word.slice(0, k).to_string();
+            if roots.contains(prefix) {
+                replaced = prefix;
+                break;
+            }
+        }
+        out.push(replaced);
+    }
+    out.join(" ")
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(dictionary: Vec[String], sentence: String) {
+    println(f"[{dictionary.join(",")}] \"{sentence}\" -> \"{replace_words(dictionary, sentence)}\"");
+}
+
+// `shortest` to `longest` letters, each one of the first `letters` of
+// the alphabet.
+fn random_word(shortest: i64, longest: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let n = shortest + next_random(mut seed) % (longest - shortest + 1);
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn random_words(count: i64, shortest: i64, longest: i64, letters: i64, seed: mut ref i64) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count {
+        words.push(random_word(shortest, longest, letters, mut seed));
+    }
+    words
+}
+
+// A count and a checksum of the characters of a result.
+fn digest(s: String, total: mut ref i64, checksum: mut ref i64) {
+    for b in s.bytes().iter() {
+        *total += 1;
+        *checksum = (*checksum * 31 + *b as i64) % 1000000007;
+    }
+    *checksum = (*checksum * 31 + 1) % 1000000007;
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec!["cat", "bat", "rat"], "the cattle was rattled by the battery");
+    show(vec!["a", "b", "c"], "aadsfasf absbs bbab cadsfafs");
+    // A root that is a whole word; a root longer than the word; roots
+    // inside roots, the shortest winning; no word with a root; a root
+    // given twice; one word.
+    show(vec!["cat"], "cat cats ca");
+    show(vec!["catalog"], "cat catalogue");
+    show(vec!["aaa", "aa", "a"], "aaaa baaa");
+    show(vec!["xyz", "q"], "abc def");
+    show(vec!["be", "be"], "bed bee be b");
+    show(vec!["e"], "e");
+    // 300 random cases: 1 to 10 roots of 1 to 4 letters and 1 to 10 words
+    // of 1 to 8 letters, all from the first 3 letters of the alphabet.
+    let mut seed: i64 = 648;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let roots = random_words(1 + next_random(mut seed) % 10, 1, 4, 3, mut seed);
+        let words = random_words(1 + next_random(mut seed) % 10, 1, 8, 3, mut seed);
+        digest(replace_words(roots, words.join(" ")), mut total, mut checksum);
+    }
+    println(f"300 random cases: {total} characters, checksum {checksum}");
+    // 1,000 roots of 3 to 6 letters and 5,000 words of 1 to 10, from the
+    // first 4 letters, where most words have a root; and the same from all
+    // 26, where few do.
+    for letters in [4, 26] {
+        let roots = random_words(1000, 3, 6, letters, mut seed);
+        let words = random_words(5000, 1, 10, letters, mut seed);
+        let mut t = 0;
+        let mut c = 0;
+        digest(replace_words(roots, words.join(" ")), mut t, mut c);
+        println(f"1000 roots, 5000 words of {letters} letters: {t} characters, checksum {c}");
+    }
+}

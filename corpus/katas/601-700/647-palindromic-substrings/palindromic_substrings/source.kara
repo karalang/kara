@@ -1,0 +1,78 @@
+// LeetCode #647: Palindromic Substrings -- expanding from each center.
+//
+// Every palindrome has a center: a character for an odd length, the gap
+// between two characters for an even one. From each of the 2n - 1
+// centers, widen the window one character each way while its two ends
+// match; every step is one more palindrome. O(n^2) time, O(1) space.
+
+fn count_substrings(s: String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut count = 0;
+    for center in 0..2 * n - 1 {
+        let mut lo = center / 2;
+        let mut hi = lo + center % 2;
+        while lo >= 0 and hi < n and bytes[lo] == bytes[hi] {
+            count += 1;
+            lo -= 1;
+            hi += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {count_substrings(s)}");
+}
+
+// `n` letters, each one of the first `letters` of the alphabet.
+fn random_text(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("abc");
+    show("aaa");
+    // One letter; two different and two equal; odd and even palindromes
+    // as the whole string; one inside another; a long run with a break;
+    // and palindromes that overlap.
+    show("z");
+    show("ab");
+    show("bb");
+    show("racecar");
+    show("abba");
+    show("xabbay");
+    show("aaaabaaaa");
+    show("abababa");
+    show("abacdfgdcaba");
+    // 300 random cases of 1 to 40 letters from the first 1 to 4 of the
+    // alphabet.
+    let mut seed: i64 = 647;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let letters = 1 + next_random(mut seed) % 4;
+        let c = count_substrings(random_text(n, letters, mut seed));
+        sum += c;
+        checksum = (checksum * 31 + c) % 1000000007;
+    }
+    println(f"300 random cases: total {sum}, checksum {checksum}");
+    // The problem's largest, 1,000 letters: all one letter, from two
+    // letters and from all 26.
+    println(f"1000 of one letter: {count_substrings(random_text(1000, 1, mut seed))}");
+    println(f"1000 of two letters: {count_substrings(random_text(1000, 2, mut seed))}");
+    println(f"1000 of 26 letters: {count_substrings(random_text(1000, 26, mut seed))}");
+}
