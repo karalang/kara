@@ -1,0 +1,56 @@
+// LeetCode #651: 4 Keys Keyboard -- only the last few copies.
+//
+// As in the table of every count, but a copy is only ever worth pasting
+// two to five times. A block of Ctrl-A, Ctrl-C and `k` Ctrl-Vs takes
+// `k + 2` presses and multiplies the screen by `k + 1`; a block of seven
+// presses multiplies by 6, no more than blocks of three and four (2 and
+// 3), and longer blocks lose to splitting. So `best[i]` looks back to
+// `best[i - 3]` through `best[i - 6]` only. O(n) time.
+
+fn max_a(n: i64) -> i64 {
+    let mut best = vec![0; n + 1];
+    for i in 1..n + 1 {
+        best[i] = best[i - 1] + 1;
+        for times in 2..6 {
+            let j = i - times - 1;
+            if j >= 1 {
+                best[i] = best[i].max(best[j] * times);
+            }
+        }
+    }
+    best[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"{n} -> {max_a(n)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3);
+    show(7);
+    // One press; the most that typing alone is best for; the first
+    // copies; the largest count allowed, with a few between.
+    show(1);
+    show(6);
+    show(8);
+    show(9);
+    show(10);
+    show(11);
+    show(15);
+    show(20);
+    show(31);
+    show(42);
+    show(50);
+    // Every count from 1 to 50: the total and a checksum of the answers.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..51 {
+        let a = max_a(n);
+        total += a;
+        checksum = (checksum * 31 + a) % 1000000007;
+    }
+    println(f"1 to 50: total {total}, checksum {checksum}");
+}

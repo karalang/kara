@@ -1,0 +1,52 @@
+// LeetCode #651: 4 Keys Keyboard -- the best for every count of presses.
+//
+// `best[i]` is the most 'A's that `i` presses can print. The last press
+// is either an `A`, after `best[i - 1]`, or one of a run of Ctrl-V that
+// follows the last Ctrl-A, Ctrl-C: if that pair comes after press `j`,
+// the remaining `i - j - 2` presses each paste `best[j]`, leaving
+// `best[j] * (i - j - 1)`. `best[i]` is the most of these. O(n^2) time.
+
+fn max_a(n: i64) -> i64 {
+    let mut best = vec![0; n + 1];
+    for i in 1..n + 1 {
+        best[i] = best[i - 1] + 1;
+        for j in 1..i - 2 {
+            best[i] = best[i].max(best[j] * (i - j - 1));
+        }
+    }
+    best[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"{n} -> {max_a(n)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3);
+    show(7);
+    // One press; the most that typing alone is best for; the first
+    // copies; the largest count allowed, with a few between.
+    show(1);
+    show(6);
+    show(8);
+    show(9);
+    show(10);
+    show(11);
+    show(15);
+    show(20);
+    show(31);
+    show(42);
+    show(50);
+    // Every count from 1 to 50: the total and a checksum of the answers.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..51 {
+        let a = max_a(n);
+        total += a;
+        checksum = (checksum * 31 + a) % 1000000007;
+    }
+    println(f"1 to 50: total {total}, checksum {checksum}");
+}

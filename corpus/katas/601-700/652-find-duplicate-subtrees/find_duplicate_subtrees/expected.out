@@ -1,0 +1,11 @@
+10 values -> 2 kinds [2,4,#,#,#] [4,#,#]
+3 values -> 1 kinds [1,#,#]
+7 values -> 2 kinds [2,3,#,#,#] [3,#,#]
+1 values -> 0 kinds
+7 values -> 2 kinds [1,#,#] [1,1,#,#,1,#,#]
+7 values -> 1 kinds [3,#,#]
+8 values -> 0 kinds
+7 values -> 2 kinds [-200,#,#] [200,-200,#,#,#]
+300 random trees: 742 kinds, checksum 627292591
+1500 nodes of 2 values: 68 kinds, checksum 637697258
+2000 nodes of 401 values: 211 kinds, checksum 943222477

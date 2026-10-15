@@ -1,0 +1,29 @@
+// Benchmark for #651: the ★ arm (the best for every count of presses) on
+// a large workload.
+
+fn max_a(n: i64) -> i64 {
+    let mut best = vec![0; n + 1];
+    for i in 1..n + 1 {
+        best[i] = best[i - 1] + 1;
+        for j in 1..i - 2 {
+            best[i] = best[i].max(best[j] * (i - j - 1));
+        }
+    }
+    best[n]
+}
+
+fn main() {
+    // 200,000 calls, the count of presses for each picked by the call
+    // from 1 to 150, three times the problem's limit and about the most
+    // whose answer fits in 64 bits; the answers added up and put into a
+    // checksum in order.
+    let calls = 200000;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..calls {
+        let a = max_a(1 + (c * 37) % 150);
+        total = (total + a) % 1000000007;
+        checksum = (checksum * 31 + a % 1000000007) % 1000000007;
+    }
+    println(f"{calls} calls: total {total}, checksum {checksum}");
+}

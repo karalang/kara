@@ -1,0 +1,70 @@
+// LeetCode #651: 4 Keys Keyboard -- the screens and buffers worth keeping.
+//
+// After `i` presses the state that matters is the count on the screen and
+// the count in the buffer. From the states after `i - 1` presses, an `A`
+// or a Ctrl-V moves on one press; from those after `i - 2`, Ctrl-A and
+// Ctrl-C copy the screen into the buffer. A state beaten on both counts
+// by another can never do better, so each step keeps only the states no
+// other one beats, a handful, and the answer is the largest screen.
+
+fn max_a(n: i64) -> i64 {
+    let mut levels: Vec[Vec[(i64, i64)]] = Vec.new();
+    levels.push(vec![(0, 0)]);
+    for i in 1..n + 1 {
+        let mut candidates: Vec[(i64, i64)] = Vec.new();
+        for state in levels[i - 1].iter() {
+            candidates.push((state.0 + 1, state.1));
+            candidates.push((state.0 + state.1, state.1));
+        }
+        if i >= 2 {
+            for state in levels[i - 2].iter() {
+                candidates.push((state.0, state.0));
+            }
+        }
+        candidates.sort_by(|a, b| b.cmp(a));
+        let mut kept: Vec[(i64, i64)] = Vec.new();
+        let mut top = -1;
+        for state in candidates.iter() {
+            if state.1 > top {
+                kept.push(*state);
+                top = state.1;
+            }
+        }
+        levels.push(kept);
+    }
+    levels[n][0].0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"{n} -> {max_a(n)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3);
+    show(7);
+    // One press; the most that typing alone is best for; the first
+    // copies; the largest count allowed, with a few between.
+    show(1);
+    show(6);
+    show(8);
+    show(9);
+    show(10);
+    show(11);
+    show(15);
+    show(20);
+    show(31);
+    show(42);
+    show(50);
+    // Every count from 1 to 50: the total and a checksum of the answers.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..51 {
+        let a = max_a(n);
+        total += a;
+        checksum = (checksum * 31 + a) % 1000000007;
+    }
+    println(f"1 to 50: total {total}, checksum {checksum}");
+}

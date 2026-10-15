@@ -1,0 +1,182 @@
+// LeetCode #651: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on every count of
+// presses up to 50.
+
+// ---- star arm ----------------------------------------------------------
+
+fn max_a_star(n: i64) -> i64 {
+    let mut best = vec![0; n + 1];
+    for i in 1..n + 1 {
+        best[i] = best[i - 1] + 1;
+        for j in 1..i - 2 {
+            best[i] = best[i].max(best[j] * (i - j - 1));
+        }
+    }
+    best[n]
+}
+
+// ---- window arm --------------------------------------------------------
+
+fn max_a_window(n: i64) -> i64 {
+    let mut best = vec![0; n + 1];
+    for i in 1..n + 1 {
+        best[i] = best[i - 1] + 1;
+        for times in 2..6 {
+            let j = i - times - 1;
+            if j >= 1 {
+                best[i] = best[i].max(best[j] * times);
+            }
+        }
+    }
+    best[n]
+}
+
+// ---- blocks arm --------------------------------------------------------
+
+fn max_a_blocks(n: i64) -> i64 {
+    let mut most = vec![0; n + 1];
+    most[0] = 1;
+    for r in 3..n + 1 {
+        for size in 3..r + 1 {
+            most[r] = most[r].max(most[r - size] * (size - 1));
+        }
+    }
+    let mut best = 0;
+    for typed in 1..n + 1 {
+        best = best.max(typed * most[n - typed]);
+    }
+    best
+}
+
+// ---- frontier arm ------------------------------------------------------
+
+fn max_a_frontier(n: i64) -> i64 {
+    let mut levels: Vec[Vec[(i64, i64)]] = Vec.new();
+    levels.push(vec![(0, 0)]);
+    for i in 1..n + 1 {
+        let mut candidates: Vec[(i64, i64)] = Vec.new();
+        for state in levels[i - 1].iter() {
+            candidates.push((state.0 + 1, state.1));
+            candidates.push((state.0 + state.1, state.1));
+        }
+        if i >= 2 {
+            for state in levels[i - 2].iter() {
+                candidates.push((state.0, state.0));
+            }
+        }
+        candidates.sort_by(|a, b| b.cmp(a));
+        let mut kept: Vec[(i64, i64)] = Vec.new();
+        let mut top = -1;
+        for state in candidates.iter() {
+            if state.1 > top {
+                kept.push(*state);
+                top = state.1;
+            }
+        }
+        levels.push(kept);
+    }
+    levels[n][0].0
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        max_a_star(n)
+    } else if which == 1 {
+        max_a_window(n)
+    } else if which == 2 {
+        max_a_blocks(n)
+    } else {
+        max_a_frontier(n)
+    }
+}
+
+// The definition: the four keys pressed literally, a press at a time,
+// from an empty screen, buffer and selection. `A` adds one to the
+// screen, Ctrl-A selects the whole screen, Ctrl-C puts the selection in
+// the buffer and Ctrl-V adds the buffer to the screen. Every state
+// reached is kept in a set, and `most[i]` is the largest screen reached
+// in `i` presses or fewer.
+fn definition(presses: i64) -> Vec[i64] {
+    let mut reached: Set[(i64, i64, i64)] = Set.new();
+    let mut level: Vec[(i64, i64, i64)] = Vec.new();
+    level.push((0, 0, 0));
+    reached.insert((0, 0, 0));
+    let mut most = vec![0; presses + 1];
+    for i in 1..presses + 1 {
+        let mut next: Vec[(i64, i64, i64)] = Vec.new();
+        for state in level.iter() {
+            let (screen, buffer, selected) = *state;
+            let moves = vec![
+                (screen + 1, buffer, selected),
+                (screen, buffer, screen),
+                (screen, selected, selected),
+                (screen + buffer, buffer, selected),
+            ];
+            for m in moves.iter() {
+                if not reached.contains(*m) {
+                    reached.insert(*m);
+                    next.push(*m);
+                }
+            }
+        }
+        most[i] = most[i - 1];
+        for state in next.iter() {
+            most[i] = most[i].max(state.0);
+        }
+        level = next;
+    }
+    most
+}
+
+fn main() {
+    // Every count of presses from 1 to 50, the problem's limit; the
+    // definition up to 22.
+    let limit = 50;
+    let defined = 22;
+    let most = definition(defined);
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for n in 1..limit + 1 {
+        for which in 0..4 {
+            let got = answer(which, n);
+            // P4: typing `a` presses' worth, then one block of Ctrl-A,
+            // Ctrl-C and Ctrl-Vs.
+            let mut blocks = true;
+            for a in 1..n - 2 {
+                if got < answer(which, a) * (n - a - 1) {
+                    blocks = false;
+                }
+            }
+            let applies = vec![n <= defined, true, true, true, n >= 11];
+            let ok = vec![
+                // P1: the definition's answer.
+                n <= defined and got == most[n],
+                // P2: one more press prints more.
+                answer(which, n + 1) > got,
+                // P3: never fewer than `n`, and more than `n` from 7
+                // presses on.
+                got >= n and (got == n) == (n <= 6),
+                blocks,
+                // P5: from 11 presses on, five more print four times as
+                // many.
+                answer(which, n + 5) == 4 * got,
+            ];
+            for p in 0..5 {
+                if applies[p] {
+                    checks += 1;
+                    if not ok[p] {
+                        failures[p] += 1;
+                    }
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{limit} counts, 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

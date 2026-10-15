@@ -1,0 +1,104 @@
+// Benchmark for #652: the ★ arm (a number for every shape) on a large
+// workload.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_duplicate_subtrees(root: Option[TreeNode]) -> Vec[TreeNode] {
+    let mut ids: Map[(i64, i64, i64), i64] = Map.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut found: Vec[TreeNode] = Vec.new();
+    number(root, mut ids, mut counts, mut found);
+    found
+}
+
+fn number(
+    node: Option[TreeNode],
+    ids: mut ref Map[(i64, i64, i64), i64],
+    counts: mut ref Vec[i64],
+    found: mut ref Vec[TreeNode],
+) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let key = (n.val, number(n.left, ids, counts, found), number(n.right, ids, counts, found));
+            let id = match ids.get(key) {
+                Some(i) => *i,
+                None => {
+                    counts.push(0);
+                    ids.insert(key, counts.len());
+                    counts.len()
+                }
+            };
+            counts[id - 1] += 1;
+            if counts[id - 1] == 2 {
+                found.push(n);
+            }
+            id
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree of `size` nodes: each new node walks down from the root, going
+// left or right with even chances, and takes the first empty place it
+// meets. Values are 0 to `spread - 1`.
+fn random_tree(size: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = TreeNode { val: next_random(mut seed) % spread, left: None, right: None };
+    for _ in 1..size {
+        let c = TreeNode { val: next_random(mut seed) % spread, left: None, right: None };
+        let mut node = root;
+        loop {
+            if next_random(mut seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(n) => node = n,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn main() {
+    // Four trees of 100,000 nodes, with 2, 3, 5 and 401 values, made
+    // once; then 40 rounds each find the duplicates of one, picked by the
+    // round, adding up the kinds and putting the found roots' values into
+    // a checksum.
+    let inputs = 4;
+    let rounds = 40;
+    let spreads = vec![2, 3, 5, 401];
+    let mut seed: i64 = 652;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for i in 0..inputs {
+        trees.push(random_tree(100000, spreads[i], mut seed));
+    }
+    let mut kinds = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let found = find_duplicate_subtrees(trees[r % inputs]);
+        kinds += found.len();
+        for n in found.iter() {
+            checksum = (checksum * 31 + n.val + 1) % 1000000007;
+        }
+    }
+    println(f"{inputs} trees, {rounds} rounds: {kinds} kinds, checksum {checksum}");
+}

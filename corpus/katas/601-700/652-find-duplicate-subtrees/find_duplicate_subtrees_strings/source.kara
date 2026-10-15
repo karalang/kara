@@ -1,0 +1,187 @@
+// LeetCode #652: Find Duplicate Subtrees -- every subtree written out.
+//
+// Each subtree is written as a `String`, its value and then its two
+// children's strings, `#` for an empty child, built children first. Two
+// subtrees are the same exactly when their strings are, so a `Map` from
+// string to count keeps a subtree when its count reaches 2. O(nodes^2)
+// time and space in the worst case, for the strings of a long chain.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_duplicate_subtrees(root: Option[TreeNode]) -> Vec[TreeNode] {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut found: Vec[TreeNode] = Vec.new();
+    write_out(root, mut counts, mut found);
+    found
+}
+
+fn write_out(node: Option[TreeNode], counts: mut ref Map[String, i64], found: mut ref Vec[TreeNode]) -> String {
+    match node {
+        None => "#".to_string(),
+        Some(n) => {
+            let left = write_out(n.left, counts, found);
+            let right = write_out(n.right, counts, found);
+            let text = f"{n.val},{left},{right}";
+            let count = counts.entry(text.clone()).or_insert(0);
+            *count += 1;
+            if *count == 2 {
+                found.push(n);
+            }
+            text
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A tree of `size` nodes: each new node walks down from the root, going
+// left with chance lean / 100, and takes the first empty place it meets.
+// Values are `low` to `low + spread - 1`.
+fn random_tree(size: i64, lean: i64, low: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for _ in 0..size {
+        let c = leaf(low + next_random(mut seed) % spread);
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if next_random(mut seed) % 100 < lean {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A subtree written in preorder, `#` for an empty child.
+fn write(node: Option[TreeNode]) -> String {
+    match node {
+        None => "#".to_string(),
+        Some(n) => f"{n.val},{write(n.left)},{write(n.right)}",
+    }
+}
+
+// The duplicates found, each written out, in sorted order.
+fn duplicates(root: Option[TreeNode]) -> Vec[String] {
+    let mut texts: Vec[String] = Vec.new();
+    for n in find_duplicate_subtrees(root).iter() {
+        texts.push(write(Some(*n)));
+    }
+    texts.sort();
+    texts
+}
+
+fn checksum(texts: Vec[String]) -> i64 {
+    let mut h = 0;
+    for t in texts.iter() {
+        for b in t.bytes().iter() {
+            h = (h * 131 + *b as i64) % 1000000007;
+        }
+        h = (h * 131 + 59) % 1000000007;
+    }
+    h
+}
+
+fn show(values: Vec[Option[i64]]) {
+    let texts = duplicates(from_level(values));
+    let mut line = f"{values.len()} values -> {texts.len()} kinds";
+    for t in texts.iter() {
+        line.push_str(f" [{t}]");
+    }
+    println(line);
+}
+
+fn main() {
+    // The three LeetCode examples.
+    show(vec![Some(1), Some(2), Some(3), Some(4), None, Some(2), Some(4), None, None, Some(4)]);
+    show(vec![Some(2), Some(1), Some(1)]);
+    show(vec![Some(2), Some(2), Some(2), Some(3), None, Some(3), None]);
+    // One node; a full tree of one value; the same values in mirrored
+    // shapes, which only share their leaves; a chain down the left of one
+    // value; the smallest and largest values.
+    show(vec![Some(5)]);
+    show(vec![Some(1), Some(1), Some(1), Some(1), Some(1), Some(1), Some(1)]);
+    show(vec![Some(1), Some(2), Some(2), Some(3), None, None, Some(3)]);
+    show(vec![Some(0), Some(0), None, Some(0), None, Some(0), None, Some(0)]);
+    show(vec![Some(-200), Some(200), Some(200), Some(-200), None, Some(-200), None]);
+    // 300 random trees of 1 to 40 nodes of values 0 to 2, leaning left
+    // with chance 20, 50 or 80 in 100.
+    let mut seed: i64 = 652;
+    let mut kinds = 0;
+    let mut sum = 0;
+    for _ in 0..300 {
+        let leans = vec![20, 50, 80];
+        let size = 1 + next_random(mut seed) % 40;
+        let lean = leans[next_random(mut seed) % 3];
+        let texts = duplicates(random_tree(size, lean, 0, 3, mut seed));
+        kinds += texts.len();
+        sum = (sum + checksum(texts)) % 1000000007;
+    }
+    println(f"300 random trees: {kinds} kinds, checksum {sum}");
+    // Large trees: 1,500 nodes of values 0 and 1, and 2,000 over the
+    // problem's whole range, -200 to 200.
+    let texts = duplicates(random_tree(1500, 50, 0, 2, mut seed));
+    println(f"1500 nodes of 2 values: {texts.len()} kinds, checksum {checksum(texts)}");
+    let texts = duplicates(random_tree(2000, 50, -200, 401, mut seed));
+    println(f"2000 nodes of 401 values: {texts.len()} kinds, checksum {checksum(texts)}");
+}

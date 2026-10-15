@@ -1,0 +1,358 @@
+// LeetCode #652: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_duplicate_subtrees_star(root: Option[TreeNode]) -> Vec[TreeNode] {
+    let mut ids: Map[(i64, i64, i64), i64] = Map.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut found: Vec[TreeNode] = Vec.new();
+    number_star(root, mut ids, mut counts, mut found);
+    found
+}
+
+fn number_star(
+    node: Option[TreeNode],
+    ids: mut ref Map[(i64, i64, i64), i64],
+    counts: mut ref Vec[i64],
+    found: mut ref Vec[TreeNode],
+) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let key = (n.val, number_star(n.left, ids, counts, found), number_star(n.right, ids, counts, found));
+            let id = match ids.get(key) {
+                Some(i) => *i,
+                None => {
+                    counts.push(0);
+                    ids.insert(key, counts.len());
+                    counts.len()
+                }
+            };
+            counts[id - 1] += 1;
+            if counts[id - 1] == 2 {
+                found.push(n);
+            }
+            id
+        }
+    }
+}
+
+// ---- strings arm -------------------------------------------------------
+
+fn find_duplicate_subtrees_strings(root: Option[TreeNode]) -> Vec[TreeNode] {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut found: Vec[TreeNode] = Vec.new();
+    write_out_strings(root, mut counts, mut found);
+    found
+}
+
+fn write_out_strings(node: Option[TreeNode], counts: mut ref Map[String, i64], found: mut ref Vec[TreeNode]) -> String {
+    match node {
+        None => "#".to_string(),
+        Some(n) => {
+            let left = write_out_strings(n.left, counts, found);
+            let right = write_out_strings(n.right, counts, found);
+            let text = f"{n.val},{left},{right}";
+            let count = counts.entry(text.clone()).or_insert(0);
+            *count += 1;
+            if *count == 2 {
+                found.push(n);
+            }
+            text
+        }
+    }
+}
+
+// ---- pairwise arm ------------------------------------------------------
+
+fn find_duplicate_subtrees_pairwise(root: Option[TreeNode]) -> Vec[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    list_pairwise(root, mut nodes);
+    let mut found: Vec[TreeNode] = Vec.new();
+    for i in 0..nodes.len() {
+        let mut first = true;
+        for j in 0..i {
+            if same_pairwise(Some(nodes[i]), Some(nodes[j])) {
+                first = false;
+                break;
+            }
+        }
+        if first {
+            for j in i + 1..nodes.len() {
+                if same_pairwise(Some(nodes[i]), Some(nodes[j])) {
+                    found.push(nodes[i]);
+                    break;
+                }
+            }
+        }
+    }
+    found
+}
+
+fn list_pairwise(node: Option[TreeNode], nodes: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        nodes.push(n);
+        list_pairwise(n.left, nodes);
+        list_pairwise(n.right, nodes);
+    }
+}
+
+fn same_pairwise(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same_pairwise(x.left, y.left) and same_pairwise(x.right, y.right),
+        _ => false,
+    }
+}
+
+// ---- hashed arm --------------------------------------------------------
+
+fn find_duplicate_subtrees_hashed(root: Option[TreeNode]) -> Vec[TreeNode] {
+    let mut kinds: Map[i64, Vec[(TreeNode, i64)]] = Map.new();
+    let mut found: Vec[TreeNode] = Vec.new();
+    hash_hashed(root, mut kinds, mut found);
+    found
+}
+
+fn hash_hashed(node: Option[TreeNode], kinds: mut ref Map[i64, Vec[(TreeNode, i64)]], found: mut ref Vec[TreeNode]) -> i64 {
+    match node {
+        None => 1,
+        Some(n) => {
+            let h = (n.val + 201 + 403 * hash_hashed(n.left, kinds, found) + 7919 * hash_hashed(n.right, kinds, found)) % 1000000007;
+            let bucket = kinds.entry(h).or_insert(Vec.new());
+            let mut matched = false;
+            for k in 0..bucket.len() {
+                if same_hashed(Some(bucket[k].0), Some(n)) {
+                    bucket[k].1 += 1;
+                    if bucket[k].1 == 2 {
+                        found.push(n);
+                    }
+                    matched = true;
+                    break;
+                }
+            }
+            if not matched {
+                bucket.push((n, 1));
+            }
+            h
+        }
+    }
+}
+
+fn same_hashed(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same_hashed(x.left, y.left) and same_hashed(x.right, y.right),
+        _ => false,
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode]) -> Vec[TreeNode] {
+    if which == 0 {
+        find_duplicate_subtrees_star(root)
+    } else if which == 1 {
+        find_duplicate_subtrees_strings(root)
+    } else if which == 2 {
+        find_duplicate_subtrees_pairwise(root)
+    } else {
+        find_duplicate_subtrees_hashed(root)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes: each new node walks down from the root, going
+// left with chance lean / 100, and takes the first empty place it meets.
+fn random_tree(size: i64, lean: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for _ in 0..size {
+        let c = leaf(next_random(mut seed) % spread);
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if next_random(mut seed) % 100 < lean {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A subtree written in preorder, `#` for an empty child: two subtrees are
+// the same exactly when they are written the same.
+fn write(node: Option[TreeNode]) -> String {
+    match node {
+        None => "#".to_string(),
+        Some(n) => f"{n.val},{write(n.left)},{write(n.right)}",
+    }
+}
+
+fn every_node(node: Option[TreeNode], texts: mut ref Vec[String]) {
+    if let Some(n) = node {
+        texts.push(write(Some(n)));
+        every_node(n.left, texts);
+        every_node(n.right, texts);
+    }
+}
+
+// The definition: every subtree written out, and each text met twice or
+// more is one kind of duplicate; sorted. With `twice` false, every
+// distinct subtree instead.
+fn definition(root: Option[TreeNode], twice: bool) -> Vec[String] {
+    let mut texts: Vec[String] = Vec.new();
+    every_node(root, mut texts);
+    texts.sort();
+    let mut kinds: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < texts.len() {
+        let mut j = i;
+        while j < texts.len() and texts[j] == texts[i] {
+            j += 1;
+        }
+        if j - i >= 2 or not twice {
+            kinds.push(texts[i].clone());
+        }
+        i = j;
+    }
+    kinds
+}
+
+fn written(found: Vec[TreeNode]) -> Vec[String] {
+    let mut texts: Vec[String] = Vec.new();
+    for n in found.iter() {
+        texts.push(write(Some(*n)));
+    }
+    texts.sort();
+    texts
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+fn copied(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: copied(n.left), right: copied(n.right) }),
+    }
+}
+
+fn main() {
+    // 1,000 random trees of 1 to 30 nodes, with 1 to 4 values, leaning
+    // left with chance 20, 50 or 80 in 100.
+    let cases = 1000;
+    let mut seed: i64 = 652;
+    let mut nodes = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let leans = vec![20, 50, 80];
+        let size = 1 + next_random(mut seed) % 30;
+        let lean = leans[next_random(mut seed) % 3];
+        let spread = 1 + next_random(mut seed) % 4;
+        let root = random_tree(size, lean, spread, mut seed);
+        nodes += size;
+        let want = definition(root, true);
+        let distinct = definition(root, false);
+        // A new root holding two copies of the tree.
+        let doubled = Some(TreeNode { val: 9, left: copied(root), right: copied(root) });
+        for which in 0..4 {
+            let found = answer(which, root);
+            let got = written(found);
+            // P2: each found subtree is met at least twice in the tree,
+            // and no two found are the same.
+            let mut real = true;
+            let mut all: Vec[String] = Vec.new();
+            every_node(root, mut all);
+            for k in 0..got.len() {
+                let mut met = 0;
+                for t in all.iter() {
+                    if *t == got[k] {
+                        met += 1;
+                    }
+                }
+                if met < 2 or (k > 0 and got[k] == got[k - 1]) {
+                    real = false;
+                }
+            }
+            // P5: the children of a found subtree are found too.
+            let mut closed = true;
+            for n in found.iter() {
+                for child in vec![n.left, n.right].iter() {
+                    if let Some(c) = child {
+                        let text = write(Some(c));
+                        let mut there = false;
+                        for t in got.iter() {
+                            if *t == text {
+                                there = true;
+                            }
+                        }
+                        if not there {
+                            closed = false;
+                        }
+                    }
+                }
+            }
+            let ok = vec![
+                // P1: the definition's kinds.
+                got == want,
+                real,
+                // P3: the mirrored tree has as many kinds.
+                answer(which, mirrored(root)).len() == got.len(),
+                // P4: two copies under a new root duplicate every distinct
+                // subtree of the tree.
+                answer(which, doubled).len() == distinct.len(),
+                closed,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} trees ({nodes} nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
