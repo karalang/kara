@@ -1,0 +1,314 @@
+// LeetCode #654: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random lists.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn construct_maximum_binary_tree_star(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut stack: Vec[TreeNode] = Vec.new();
+    for x in nums.iter() {
+        let node = TreeNode { val: *x, left: None, right: None };
+        while not stack.is_empty() and stack[stack.len() - 1].val < *x {
+            node.left = stack.pop();
+        }
+        if not stack.is_empty() {
+            stack[stack.len() - 1].right = Some(node);
+        }
+        stack.push(node);
+    }
+    if stack.is_empty() { None } else { Some(stack[0]) }
+}
+
+// ---- split arm ---------------------------------------------------------
+
+fn construct_maximum_binary_tree_split(nums: Vec[i64]) -> Option[TreeNode] {
+    build_split(nums, 0, nums.len())
+}
+
+fn build_split(nums: Vec[i64], from: i64, to: i64) -> Option[TreeNode] {
+    if from >= to {
+        return None;
+    }
+    let mut top = from;
+    for i in from + 1..to {
+        if nums[i] > nums[top] {
+            top = i;
+        }
+    }
+    Some(TreeNode { val: nums[top], left: build_split(nums, from, top), right: build_split(nums, top + 1, to) })
+}
+
+// ---- insert arm --------------------------------------------------------
+
+fn construct_maximum_binary_tree_insert(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for x in nums.iter() {
+        root = Some(insert_insert(root, *x));
+    }
+    root
+}
+
+fn insert_insert(tree: Option[TreeNode], x: i64) -> TreeNode {
+    match tree {
+        Some(n) if n.val > x => {
+            n.right = Some(insert_insert(n.right, x));
+            n
+        }
+        _ => TreeNode { val: x, left: tree, right: None },
+    }
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn construct_maximum_binary_tree_table(nums: Vec[i64]) -> Option[TreeNode] {
+    let n = nums.len();
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    let mut first: Vec[i64] = Vec.new();
+    for i in 0..n {
+        first.push(i);
+    }
+    best.push(first);
+    let mut width = 1;
+    while width * 2 <= n {
+        let k = best.len() - 1;
+        let mut level: Vec[i64] = Vec.new();
+        for i in 0..n - width * 2 + 1 {
+            let a = best[k][i];
+            let b = best[k][i + width];
+            level.push(if nums[a] > nums[b] { a } else { b });
+        }
+        best.push(level);
+        width *= 2;
+    }
+    build_table(nums, best, 0, n)
+}
+
+fn largest_table(nums: Vec[i64], best: Vec[Vec[i64]], from: i64, to: i64) -> i64 {
+    let mut level = 0;
+    while (1 << (level + 1)) <= to - from {
+        level += 1;
+    }
+    let a = best[level][from];
+    let b = best[level][to - (1 << level)];
+    if nums[a] > nums[b] { a } else { b }
+}
+
+fn build_table(nums: Vec[i64], best: Vec[Vec[i64]], from: i64, to: i64) -> Option[TreeNode] {
+    if from >= to {
+        return None;
+    }
+    let top = largest_table(nums, best, from, to);
+    Some(TreeNode { val: nums[top], left: build_table(nums, best, from, top), right: build_table(nums, best, top + 1, to) })
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, nums: Vec[i64]) -> Option[TreeNode] {
+    if which == 0 {
+        construct_maximum_binary_tree_star(nums)
+    } else if which == 1 {
+        construct_maximum_binary_tree_split(nums)
+    } else if which == 2 {
+        construct_maximum_binary_tree_insert(nums)
+    } else {
+        construct_maximum_binary_tree_table(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while not queue.is_empty() {
+        match queue.pop_front().unwrap() {
+            None => items.push("null".to_string()),
+            Some(n) => {
+                items.push(f"{n.val}");
+                queue.push_back(n.left);
+                queue.push_back(n.right);
+            }
+        }
+    }
+    while not items.is_empty() and items[items.len() - 1] == "null" {
+        items.pop();
+    }
+    f"[{items.join(",")}]"
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+// The definition, with no tree: a number's parent is the smaller of the
+// nearest larger numbers on its left and on its right, it being the
+// right child of one on its left and the left child of one on its right;
+// the largest has none. Written as the parent's value, -1 for none, and
+// `L` or `R` for the side, per number.
+fn definition(nums: Vec[i64]) -> Vec[String] {
+    let mut parents: Vec[String] = Vec.new();
+    for i in 0..nums.len() {
+        let mut left = -1;
+        let mut j = i - 1;
+        while j >= 0 {
+            if nums[j] > nums[i] {
+                left = nums[j];
+                break;
+            }
+            j -= 1;
+        }
+        let mut right = -1;
+        let mut j = i + 1;
+        while j < nums.len() {
+            if nums[j] > nums[i] {
+                right = nums[j];
+                break;
+            }
+            j += 1;
+        }
+        if left == -1 and right == -1 {
+            parents.push("-1".to_string());
+        } else if right == -1 or (left != -1 and left < right) {
+            parents.push(f"{left}R");
+        } else {
+            parents.push(f"{right}L");
+        }
+    }
+    parents
+}
+
+// The same, read off a tree, in the order of `nums`.
+fn parents_of(root: Option[TreeNode], nums: Vec[i64]) -> Vec[String] {
+    let mut found: Map[i64, String] = Map.new();
+    if let Some(r) = root {
+        found.insert(r.val, "-1".to_string());
+    }
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        if let Some(l) = n.left {
+            found.insert(l.val, f"{n.val}L");
+            stack.push(l);
+        }
+        if let Some(r) = n.right {
+            found.insert(r.val, f"{n.val}R");
+            stack.push(r);
+        }
+    }
+    let mut parents: Vec[String] = Vec.new();
+    for x in nums.iter() {
+        parents.push(match found.get(*x) {
+            Some(p) => p.clone(),
+            None => "missing".to_string(),
+        });
+    }
+    parents
+}
+
+fn in_order(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        in_order(n.left, out);
+        out.push(n.val);
+        in_order(n.right, out);
+    }
+}
+
+fn heap(node: Option[TreeNode]) -> bool {
+    match node {
+        None => true,
+        Some(n) => {
+            let below_left = match n.left {
+                Some(l) => l.val < n.val,
+                None => true,
+            };
+            let below_right = match n.right {
+                Some(r) => r.val < n.val,
+                None => true,
+            };
+            below_left and below_right and heap(n.left) and heap(n.right)
+        }
+    }
+}
+
+fn main() {
+    // 1,000 random lists of 1 to 40 distinct numbers from 0 to 1,000.
+    let cases = 1000;
+    let mut seed: i64 = 654;
+    let mut total = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let n = 1 + next_random(mut seed) % 40;
+        let mut seen: Set[i64] = Set.new();
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < n {
+            let v = next_random(mut seed) % 1001;
+            if not seen.contains(v) {
+                seen.insert(v);
+                nums.push(v);
+            }
+        }
+        total += n;
+        let want = definition(nums);
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let mut top = 0;
+        for i in 1..n {
+            if nums[i] > nums[top] {
+                top = i;
+            }
+        }
+        let mut before: Vec[i64] = Vec.new();
+        for i in 0..top {
+            before.push(nums[i]);
+        }
+        for which in 0..4 {
+            let root = answer(which, nums);
+            let mut order: Vec[i64] = Vec.new();
+            in_order(root, mut order);
+            let left_of_root = match root {
+                Some(r) => r.left,
+                None => None,
+            };
+            let ok = vec![
+                // P1: the definition's parents.
+                parents_of(root, nums) == want,
+                // P2: read in order, the tree gives back the numbers.
+                order == nums,
+                // P3: each node is larger than its children.
+                heap(root),
+                // P4: the numbers reversed give the mirror image.
+                level_order(answer(which, reversed)) == level_order(mirrored(root)),
+                // P5: the root's left subtree is the tree of the numbers
+                // before the largest.
+                level_order(left_of_root) == level_order(answer(which, before)),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} lists ({total} numbers), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

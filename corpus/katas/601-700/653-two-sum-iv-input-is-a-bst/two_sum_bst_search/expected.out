@@ -1,0 +1,12 @@
+6 values, k = 9 -> true
+6 values, k = 28 -> false
+1 values, k = 2 -> false
+3 values, k = 4 -> true
+3 values, k = 6 -> false
+3 values, k = 0 -> true
+3 values, k = -20000 -> false
+3 values, k = 10000 -> true
+10 values, k = 19 -> true
+10 values, k = 20 -> false
+200 random trees: 2305 of 4000 found, checksum 904163346
+10000 values: 29 of 40 found, checksum 81480376

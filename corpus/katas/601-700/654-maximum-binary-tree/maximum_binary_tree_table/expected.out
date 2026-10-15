@@ -1,0 +1,11 @@
+6 numbers -> [6,3,5,null,2,0,null,null,1]
+3 numbers -> [3,null,2,null,1]
+1 numbers -> [7]
+4 numbers -> [4,3,null,2,null,1]
+5 numbers -> [5,3,4,1,null,null,2]
+6 numbers -> [9,2,8,null,null,1,7,null,null,3]
+3 numbers -> [1000,0,999]
+300 random orders: total height 2380, checksum 565539263
+1000 shuffled: height 25, checksum 263690923
+1000 rising: height 1000, checksum 349668069
+1000 falling: height 1000, checksum 134365819

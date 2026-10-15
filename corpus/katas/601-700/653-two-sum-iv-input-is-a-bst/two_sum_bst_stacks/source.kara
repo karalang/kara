@@ -1,0 +1,176 @@
+// LeetCode #653: Two Sum IV - Input is a BST -- two in-order walks at once.
+//
+// As with the list and two ends, but without the list: one stack walks
+// the tree in rising order and another in falling order, each yielding
+// its next value on demand. The walks move toward each other as the two
+// ends do, and stop when they reach the same value. O(nodes) time,
+// O(height) space.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_target(root: Option[TreeNode], k: i64) -> bool {
+    let mut rising: Vec[TreeNode] = Vec.new();
+    let mut falling: Vec[TreeNode] = Vec.new();
+    push_left(root, mut rising);
+    push_right(root, mut falling);
+    if rising.is_empty() {
+        return false;
+    }
+    let mut low = next_rising(mut rising);
+    let mut high = next_falling(mut falling);
+    while low < high {
+        let sum = low + high;
+        if sum == k {
+            return true;
+        } else if sum < k {
+            low = next_rising(mut rising);
+        } else {
+            high = next_falling(mut falling);
+        }
+    }
+    false
+}
+
+fn push_left(node: Option[TreeNode], stack: mut ref Vec[TreeNode]) {
+    let mut at = node;
+    while let Some(n) = at {
+        stack.push(n);
+        at = n.left;
+    }
+}
+
+fn push_right(node: Option[TreeNode], stack: mut ref Vec[TreeNode]) {
+    let mut at = node;
+    while let Some(n) = at {
+        stack.push(n);
+        at = n.right;
+    }
+}
+
+// The next value up; the walks cross before either runs out.
+fn next_rising(stack: mut ref Vec[TreeNode]) -> i64 {
+    let n = stack.pop().unwrap();
+    push_left(n.right, stack);
+    n.val
+}
+
+fn next_falling(stack: mut ref Vec[TreeNode]) -> i64 {
+    let n = stack.pop().unwrap();
+    push_right(n.left, stack);
+    n.val
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The binary search tree made by inserting `values` in order.
+fn bst(values: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for v in values.iter() {
+        let c = TreeNode { val: *v, left: None, right: None };
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if *v < node.val {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// `count` distinct values from `low` to `high`, in random order.
+fn distinct(count: i64, low: i64, high: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut seen: Set[i64] = Set.new();
+    let mut values: Vec[i64] = Vec.new();
+    while values.len() < count {
+        let v = low + next_random(mut seed) % (high - low + 1);
+        if not seen.contains(v) {
+            seen.insert(v);
+            values.push(v);
+        }
+    }
+    values
+}
+
+fn show(values: Vec[i64], k: i64) {
+    let found = find_target(bst(values), k);
+    println(f"{values.len()} values, k = {k} -> {found}");
+}
+
+fn main() {
+    // The two LeetCode examples, inserted to give their trees.
+    show(vec![5, 3, 6, 2, 4, 7], 9);
+    show(vec![5, 3, 6, 2, 4, 7], 28);
+    // One node, which cannot pair with itself; a sum of two leaves; a
+    // value that would need itself twice; the smallest and largest values
+    // with 0; a chain of rising values.
+    show(vec![1], 2);
+    show(vec![2, 1, 3], 4);
+    show(vec![2, 1, 3], 6);
+    show(vec![0, -10000, 10000], 0);
+    show(vec![0, -10000, 10000], -20000);
+    show(vec![0, -10000, 10000], 10000);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 19);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 20);
+    // 200 random trees of 1 to 60 values from -100 to 100, each asked 20
+    // targets from -200 to 200.
+    let mut seed: i64 = 653;
+    let mut asked = 0;
+    let mut yes = 0;
+    let mut checksum = 0;
+    for _ in 0..200 {
+        let size = 1 + next_random(mut seed) % 60;
+        let root = bst(distinct(size, -100, 100, mut seed));
+        for _ in 0..20 {
+            let k = next_random(mut seed) % 401 - 200;
+            let found = find_target(root, k);
+            asked += 1;
+            if found {
+                yes += 1;
+            }
+            checksum = (checksum * 2 + if found { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"200 random trees: {yes} of {asked} found, checksum {checksum}");
+    // The problem's largest: 10,000 values from -10,000 to 10,000, asked
+    // 40 targets from -30,000 to 30,000.
+    let root = bst(distinct(10000, -10000, 10000, mut seed));
+    let mut yes = 0;
+    let mut checksum = 0;
+    for _ in 0..40 {
+        let k = next_random(mut seed) % 60001 - 30000;
+        let found = find_target(root, k);
+        if found {
+            yes += 1;
+        }
+        checksum = (checksum * 2 + if found { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"10000 values: {yes} of 40 found, checksum {checksum}");
+}

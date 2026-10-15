@@ -1,0 +1,276 @@
+// LeetCode #653: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random search trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_target_star(root: Option[TreeNode], k: i64) -> bool {
+    let mut values: Vec[i64] = Vec.new();
+    in_order_star(root, mut values);
+    if values.len() < 2 {
+        return false;
+    }
+    let mut low = 0;
+    let mut high = values.len() - 1;
+    while low < high {
+        let sum = values[low] + values[high];
+        if sum == k {
+            return true;
+        } else if sum < k {
+            low += 1;
+        } else {
+            high -= 1;
+        }
+    }
+    false
+}
+
+fn in_order_star(node: Option[TreeNode], values: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        in_order_star(n.left, values);
+        values.push(n.val);
+        in_order_star(n.right, values);
+    }
+}
+
+// ---- seen arm ----------------------------------------------------------
+
+fn find_target_seen(root: Option[TreeNode], k: i64) -> bool {
+    let mut seen: Set[i64] = Set.new();
+    walk_seen(root, k, mut seen)
+}
+
+fn walk_seen(node: Option[TreeNode], k: i64, seen: mut ref Set[i64]) -> bool {
+    match node {
+        None => false,
+        Some(n) => {
+            if seen.contains(k - n.val) {
+                return true;
+            }
+            seen.insert(n.val);
+            walk_seen(n.left, k, seen) or walk_seen(n.right, k, seen)
+        }
+    }
+}
+
+// ---- search arm --------------------------------------------------------
+
+fn find_target_search(root: Option[TreeNode], k: i64) -> bool {
+    each_search(root, root, k)
+}
+
+fn each_search(node: Option[TreeNode], root: Option[TreeNode], k: i64) -> bool {
+    match node {
+        None => false,
+        Some(n) => {
+            let partner = k - n.val;
+            (partner != n.val and contains_search(root, partner)) or each_search(n.left, root, k) or each_search(n.right, root, k)
+        }
+    }
+}
+
+fn contains_search(root: Option[TreeNode], value: i64) -> bool {
+    let mut node = root;
+    loop {
+        match node {
+            None => return false,
+            Some(n) => {
+                if value == n.val {
+                    return true;
+                }
+                node = if value < n.val { n.left } else { n.right };
+            }
+        }
+    }
+}
+
+// ---- stacks arm --------------------------------------------------------
+
+fn find_target_stacks(root: Option[TreeNode], k: i64) -> bool {
+    let mut rising: Vec[TreeNode] = Vec.new();
+    let mut falling: Vec[TreeNode] = Vec.new();
+    push_left_stacks(root, mut rising);
+    push_right_stacks(root, mut falling);
+    if rising.is_empty() {
+        return false;
+    }
+    let mut low = next_rising_stacks(mut rising);
+    let mut high = next_falling_stacks(mut falling);
+    while low < high {
+        let sum = low + high;
+        if sum == k {
+            return true;
+        } else if sum < k {
+            low = next_rising_stacks(mut rising);
+        } else {
+            high = next_falling_stacks(mut falling);
+        }
+    }
+    false
+}
+
+fn push_left_stacks(node: Option[TreeNode], stack: mut ref Vec[TreeNode]) {
+    let mut at = node;
+    while let Some(n) = at {
+        stack.push(n);
+        at = n.left;
+    }
+}
+
+fn push_right_stacks(node: Option[TreeNode], stack: mut ref Vec[TreeNode]) {
+    let mut at = node;
+    while let Some(n) = at {
+        stack.push(n);
+        at = n.right;
+    }
+}
+
+// The next value up; the walks cross before either runs out.
+fn next_rising_stacks(stack: mut ref Vec[TreeNode]) -> i64 {
+    let n = stack.pop().unwrap();
+    push_left_stacks(n.right, stack);
+    n.val
+}
+
+fn next_falling_stacks(stack: mut ref Vec[TreeNode]) -> i64 {
+    let n = stack.pop().unwrap();
+    push_right_stacks(n.left, stack);
+    n.val
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode], k: i64) -> bool {
+    if which == 0 {
+        find_target_star(root, k)
+    } else if which == 1 {
+        find_target_seen(root, k)
+    } else if which == 2 {
+        find_target_search(root, k)
+    } else {
+        find_target_stacks(root, k)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The binary search tree made by inserting `values` in order.
+fn bst(values: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for v in values.iter() {
+        let c = TreeNode { val: *v, left: None, right: None };
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if *v < node.val {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// The definition: some two different values of the list sum to `k`.
+fn definition(values: Vec[i64], k: i64) -> bool {
+    for i in 0..values.len() {
+        for j in i + 1..values.len() {
+            if values[i] + values[j] == k {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn main() {
+    // 2,000 random trees of 1 to 40 distinct values from -r to r, r being
+    // 5, 50 or 1,000, each asked a target from -2r - 2 to 2r + 2.
+    let cases = 2000;
+    let mut seed: i64 = 653;
+    let mut nodes = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let ranges = vec![5, 50, 1000];
+        let r = ranges[next_random(mut seed) % 3];
+        let size = 1 + next_random(mut seed) % (40.min(2 * r + 1));
+        let mut seen: Set[i64] = Set.new();
+        let mut values: Vec[i64] = Vec.new();
+        while values.len() < size {
+            let v = next_random(mut seed) % (2 * r + 1) - r;
+            if not seen.contains(v) {
+                seen.insert(v);
+                values.push(v);
+            }
+        }
+        nodes += size;
+        let k = next_random(mut seed) % (4 * r + 5) - 2 * r - 2;
+        let root = bst(values);
+        let want = definition(values, k);
+        let mut negated: Vec[i64] = Vec.new();
+        for v in values.iter() {
+            negated.push(-*v);
+        }
+        let mut sorted = values.clone();
+        sorted.sort();
+        // Two different values, when there are two.
+        let a = next_random(mut seed) % size;
+        let b = (a + 1 + next_random(mut seed) % 40) % size;
+        for which in 0..4 {
+            let got = answer(which, root, k);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: the values negated, and the target, answer the same.
+                answer(which, bst(negated), -k) == got,
+                // P3: the sum of two different values is found.
+                size < 2 or a == b or answer(which, root, values[a] + values[b]),
+                // P4: a target past the two largest, or below the two
+                // smallest, is not found.
+                size < 2 or (not answer(which, root, sorted[size - 1] + sorted[size - 2] + 1)
+                    and not answer(which, root, sorted[0] + sorted[1] - 1)),
+                // P5: the same values inserted rising, a chain, answer the
+                // same.
+                answer(which, bst(sorted), k) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} trees ({nodes} nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

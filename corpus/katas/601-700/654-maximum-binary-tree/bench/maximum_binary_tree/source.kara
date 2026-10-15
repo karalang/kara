@@ -1,0 +1,72 @@
+// Benchmark for #654: the ★ arm (a stack of the right spine) on a large
+// workload.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn construct_maximum_binary_tree(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut stack: Vec[TreeNode] = Vec.new();
+    for x in nums.iter() {
+        let node = TreeNode { val: *x, left: None, right: None };
+        while not stack.is_empty() and stack[stack.len() - 1].val < *x {
+            node.left = stack.pop();
+        }
+        if not stack.is_empty() {
+            stack[stack.len() - 1].right = Some(node);
+        }
+        stack.push(node);
+    }
+    if stack.is_empty() { None } else { Some(stack[0]) }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // Eight random orders of the numbers 0 to 199,999, made once; then 100
+    // rounds each build the tree of one, picked by the round, and walk its
+    // left and right edges, putting their lengths into a checksum.
+    let inputs = 8;
+    let rounds = 100;
+    let n = 200000;
+    let mut seed: i64 = 654;
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..inputs {
+        let mut nums: Vec[i64] = Vec.new();
+        for i in 0..n {
+            nums.push(i);
+        }
+        let mut i = n - 1;
+        while i > 0 {
+            let j = (next_random(mut seed) * 32768 + next_random(mut seed)) % (i + 1);
+            let t = nums[i];
+            nums[i] = nums[j];
+            nums[j] = t;
+            i -= 1;
+        }
+        lists.push(nums);
+    }
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let root = construct_maximum_binary_tree(lists[(r * 3) % inputs]);
+        let mut left = 0;
+        let mut at = root;
+        while let Some(node) = at {
+            left += 1;
+            at = node.left;
+        }
+        let mut right = 0;
+        let mut at = root;
+        while let Some(node) = at {
+            right += 1;
+            at = node.right;
+        }
+        checksum = (checksum * 31 + left * 1000 + right) % 1000000007;
+    }
+    println(f"{inputs} orders of {n}, {rounds} rounds: checksum {checksum}");
+}

@@ -1,0 +1,99 @@
+// Benchmark for #653: the ★ arm (in order, then two ends) on a large
+// workload.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_target(root: Option[TreeNode], k: i64) -> bool {
+    let mut values: Vec[i64] = Vec.new();
+    in_order(root, mut values);
+    if values.len() < 2 {
+        return false;
+    }
+    let mut low = 0;
+    let mut high = values.len() - 1;
+    while low < high {
+        let sum = values[low] + values[high];
+        if sum == k {
+            return true;
+        } else if sum < k {
+            low += 1;
+        } else {
+            high -= 1;
+        }
+    }
+    false
+}
+
+fn in_order(node: Option[TreeNode], values: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        in_order(n.left, values);
+        values.push(n.val);
+        in_order(n.right, values);
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // A search tree of 200,000 distinct values from 0 to 999,999, inserted
+    // in random order, made once; then 300 targets from 0 to 2,999,999,
+    // counting those found and putting each answer into a checksum.
+    let size = 200000;
+    let queries = 300;
+    let mut seed: i64 = 653;
+    let mut seen: Set[i64] = Set.new();
+    let mut root: Option[TreeNode] = None;
+    let mut count = 0;
+    while count < size {
+        let v = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000;
+        if seen.contains(v) {
+            continue;
+        }
+        seen.insert(v);
+        count += 1;
+        let c = TreeNode { val: v, left: None, right: None };
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if v < node.val {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..queries {
+        let k = (next_random(mut seed) * 32768 + next_random(mut seed)) % 3000000;
+        let hit = find_target(root, k);
+        if hit {
+            found += 1;
+        }
+        checksum = (checksum * 2 + if hit { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"{size} values, {queries} targets: {found} found, checksum {checksum}");
+}

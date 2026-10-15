@@ -1,0 +1,136 @@
+// LeetCode #654: Maximum Binary Tree -- each number inserted from the root.
+//
+// The tree of the first `i` numbers changes in one place when the next
+// number arrives: walking from the root down the right edge, it stops at
+// the first node smaller than itself (or past the end). That node and
+// everything below it become the new node's left subtree, and the new
+// node takes its place. O(n^2) time when the numbers fall.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn construct_maximum_binary_tree(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for x in nums.iter() {
+        root = Some(insert(root, *x));
+    }
+    root
+}
+
+fn insert(tree: Option[TreeNode], x: i64) -> TreeNode {
+    match tree {
+        Some(n) if n.val > x => {
+            n.right = Some(insert(n.right, x));
+            n
+        }
+        _ => TreeNode { val: x, left: tree, right: None },
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level order, `null` for a missing child, trailing ones
+// dropped.
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while not queue.is_empty() {
+        match queue.pop_front().unwrap() {
+            None => items.push("null".to_string()),
+            Some(n) => {
+                items.push(f"{n.val}");
+                queue.push_back(n.left);
+                queue.push_back(n.right);
+            }
+        }
+    }
+    while not items.is_empty() and items[items.len() - 1] == "null" {
+        items.pop();
+    }
+    f"[{items.join(",")}]"
+}
+
+fn height(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + height(n.left).max(height(n.right)),
+    }
+}
+
+// The values in preorder, folded into a checksum.
+fn fold(node: Option[TreeNode], h: i64) -> i64 {
+    match node {
+        None => (h * 31 + 7) % 1000000007,
+        Some(n) => fold(n.right, fold(n.left, (h * 31 + n.val + 11) % 1000000007)),
+    }
+}
+
+// The numbers 0 to n - 1 in random order.
+fn shuffled(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        nums.push(i);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        let t = nums[i];
+        nums[i] = nums[j];
+        nums[j] = t;
+        i -= 1;
+    }
+    nums
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums.len()} numbers -> {level_order(construct_maximum_binary_tree(nums))}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![3, 2, 1, 6, 0, 5]);
+    show(vec![3, 2, 1]);
+    // One number; rising numbers, a chain down the left; the largest in
+    // the middle; a zigzag; the problem's largest value.
+    show(vec![7]);
+    show(vec![1, 2, 3, 4]);
+    show(vec![1, 3, 5, 4, 2]);
+    show(vec![2, 9, 1, 8, 3, 7]);
+    show(vec![0, 1000, 999]);
+    // 300 random orders of 1 to 50 numbers: total height and a checksum
+    // of the trees.
+    let mut seed: i64 = 654;
+    let mut heights = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 50;
+        let root = construct_maximum_binary_tree(shuffled(n, mut seed));
+        heights += height(root);
+        checksum = fold(root, checksum);
+    }
+    println(f"300 random orders: total height {heights}, checksum {checksum}");
+    // The problem's largest: 1,000 numbers in random order, rising and
+    // falling.
+    let nums = shuffled(1000, mut seed);
+    let root = construct_maximum_binary_tree(nums);
+    println(f"1000 shuffled: height {height(root)}, checksum {fold(root, 0)}");
+    let mut rising: Vec[i64] = Vec.new();
+    let mut falling: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        rising.push(i);
+        falling.push(999 - i);
+    }
+    let root = construct_maximum_binary_tree(rising);
+    println(f"1000 rising: height {height(root)}, checksum {fold(root, 0)}");
+    let root = construct_maximum_binary_tree(falling);
+    println(f"1000 falling: height {height(root)}, checksum {fold(root, 0)}");
+}
