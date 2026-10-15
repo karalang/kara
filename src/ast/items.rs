@@ -8576,7 +8576,7 @@ pub fn closure_as_function(params: &[super::ClosureParam], body: &Expr) -> Funct
                 doc_comment: None,
                 is_comptime: false,
                 is_frozen: false,
-                is_own: false,
+                is_own: cp.is_own,
                 is_named: false,
             })
             .collect(),

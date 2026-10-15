@@ -477,6 +477,9 @@ pub struct ClosureParam {
     pub pattern: Pattern,
     pub ty: Option<TypeExpr>,
     pub span: Span,
+    /// `|x: own T|` (D5, design.md § Function values): the annotation sets
+    /// this parameter's mode to owned, as `x: own T` does on a `fn`.
+    pub is_own: bool,
 }
 
 /// Discriminator for active label-stack entries — distinguishes labeled

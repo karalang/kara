@@ -7372,6 +7372,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                     ty: None,
                     span: sp,
+                    is_own: false,
                 }],
                 capture_mode: None,
                 prefix_span: None,

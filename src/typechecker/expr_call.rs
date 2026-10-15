@@ -2481,6 +2481,7 @@ impl<'a> super::TypeChecker<'a> {
                                 Some(Self::type_to_type_expr(&t))
                             }),
                             span: p.span,
+                            is_own: p.is_own,
                         })
                         .collect();
                     Some(Expr {

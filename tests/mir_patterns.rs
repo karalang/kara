@@ -328,3 +328,48 @@ fn main() {
         "30 7 4\nbob 3\nada\n3 1 b a\n",
     );
 }
+
+/// B-2026-10-15-25: `|v: own T|` parses and runs; the annotation sets the
+/// parameter's mode.
+#[test]
+fn a_closure_with_an_own_parameter_runs() {
+    assert_runs(
+        r#"
+fn main() {
+    let f: Fn(own Vec[i64]) -> i64 = |v: own Vec[i64]| v.len();
+    let v: Vec[i64] = Vec.new();
+    println(f(v));
+    let g = |w: own Vec[i64], k: i64| w.len() + k;
+    let u: Vec[i64] = vec![1];
+    println(g(u, 10));
+}
+"#,
+        "0\n11\n",
+    );
+}
+
+/// B-2026-10-15-29: a struct declared after an enum with a variant of the
+/// same name is not a duplicate; both are usable.
+#[test]
+fn a_struct_after_an_enum_with_its_name_as_a_variant_runs() {
+    assert_runs(
+        r#"
+enum Block { Heading(i64), Rule }
+struct Heading { level: i64 }
+enum Shape { Circle(Circle), Dot }
+struct Circle { r: i64 }
+fn main() {
+    let h = Heading { level: 3 };
+    match Block.Heading(2) {
+        Block.Heading(n) => println(f"{n} {h.level}"),
+        Block.Rule => println("rule"),
+    }
+    match Shape.Circle(Circle { r: 4 }) {
+        Shape.Circle(c) => println(c.r),
+        Shape.Dot => println("dot"),
+    }
+}
+"#,
+        "2 3\n4\n",
+    );
+}

@@ -382,7 +382,7 @@ impl super::Formatter {
                     }
                     self.format_pattern(&p.pattern);
                     if let Some(ref t) = p.ty {
-                        self.write_str(": ");
+                        self.write_str(if p.is_own { ": own " } else { ": " });
                         self.format_type_expr(t);
                     }
                 }

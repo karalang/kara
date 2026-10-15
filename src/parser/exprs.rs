@@ -2174,7 +2174,17 @@ impl super::Parser {
             while !self.check(&Token::Pipe) && !self.is_at_end() {
                 let pstart = self.current_span();
                 let pattern = self.parse_param_pattern()?;
+                // `|x: own T|` sets the parameter's mode, as `x: own T` does
+                // on a `fn` (B-2026-10-15-25). A type named `own` still
+                // parses: the keyword reading needs a type after it.
+                let mut is_own = false;
                 let ty = if self.eat(&Token::Colon) {
+                    is_own = self.at_kw("own")
+                        && !matches!(
+                            self.peek_token_ref_at(1),
+                            Token::Comma | Token::Pipe | Token::Equal
+                        )
+                        && self.eat_kw("own");
                     Some(self.parse_type()?)
                 } else {
                     None
@@ -2183,6 +2193,7 @@ impl super::Parser {
                     pattern,
                     ty,
                     span: self.span_from(&pstart),
+                    is_own,
                 });
                 if !self.eat(&Token::Comma) {
                     break;

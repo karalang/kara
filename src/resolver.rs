@@ -411,7 +411,16 @@ impl SymbolTable {
             let existing = &self.symbols[existing_id.0];
             // Allow user definitions to shadow prelude/built-in symbols (synthetic span 0:0)
             let is_prelude = existing.span.line == 0 && existing.span.column == 0;
-            if !is_prelude {
+            // An enum variant's bare name is a convenience, not a slot of
+            // its own: `collect_enum` registers it only when nothing else
+            // holds the name, so an item declared BEFORE the enum keeps it.
+            // An item declared AFTER takes it over the same way, which makes
+            // `enum Block { Heading(i64) }` beside `struct Heading` legal in
+            // either order (B-2026-10-15-29). The variant stays reachable
+            // through its enum.
+            let variant_yields = matches!(existing.kind, SymbolKind::EnumVariant { .. })
+                && !matches!(kind, SymbolKind::EnumVariant { .. });
+            if !is_prelude && !variant_yields {
                 return Err(ResolveError {
                     message: format!(
                         "'{}' is already defined in this scope (first defined at {}:{})",

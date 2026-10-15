@@ -4498,3 +4498,46 @@ fn a_task_of_a_borrowed_group_takes_locals_by_move() {
     assert!(err.contains("moved into a task of `group`"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-15-25: an annotation sets one closure parameter's mode, as on a
+/// `fn` (design.md § Function values): `|v: own Vec[i64]| ..`.
+#[test]
+fn a_closure_parameter_annotation_sets_its_mode() {
+    accepted(
+        "closure-param-own",
+        "fn main() {\n\
+             let f: Fn(own Vec[i64]) -> i64 = |v: own Vec[i64]| v.len();\n\
+             let g = |w: own Vec[i64], k: i64| w.len() + k;\n\
+             let h = |x: ref Vec[i64]| x.len();\n\
+             let v: Vec[i64] = Vec.new();\n\
+             println(h(v));\n\
+             println(f(v));\n\
+             let u: Vec[i64] = vec![1];\n\
+             println(g(u, 10));\n\
+         }\n",
+    );
+}
+
+/// B-2026-10-15-29: a type may share a name with an enum variant whichever
+/// is declared first; the variant is reached through its enum.
+#[test]
+fn a_type_after_an_enum_may_share_a_variant_name() {
+    accepted(
+        "variant-then-type",
+        "enum Block { Heading(i64), Rule }\n\
+         struct Heading { level: i64 }\n\
+         enum Shape { Circle(Circle), Dot }\n\
+         struct Circle { r: i64 }\n\
+         fn main() {\n\
+             let h = Heading { level: 3 };\n\
+             match Block.Heading(2) {\n\
+                 Block.Heading(n) => println(f\"{n} {h.level}\"),\n\
+                 Block.Rule => println(\"rule\"),\n\
+             }\n\
+             match Shape.Circle(Circle { r: 4 }) {\n\
+                 Shape.Circle(c) => println(c.r),\n\
+                 Shape.Dot => println(\"dot\"),\n\
+             }\n\
+         }\n",
+    );
+}

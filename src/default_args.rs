@@ -800,6 +800,7 @@ fn value_closure(name: &str, params: &[(String, TypeExpr)], span: crate::token::
                     },
                     ty: Some(t.clone()),
                     span,
+                    is_own: false,
                 })
                 .collect(),
             capture_mode: None,
