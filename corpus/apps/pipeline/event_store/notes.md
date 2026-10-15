@@ -50,8 +50,7 @@ PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
 Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-64 and
 B-2026-10-14-44 are fixed, so `if self.account(acct).exists` reads the
 field directly and the `fs` and `File` calls take the `Str` consts and
-count in `usize`. `{c:<34}` stays `{c.to_string():<34}`:
-B-2026-10-14-66's fix holds on `__mir-run`, but on `__mir-llvm-run` a
-width on the `ref Str` loop variable allocates a garbage length and
-aborts (a note on that row). Each of these is the original line again,
-and the app still matches on all four MIR surfaces.
+count in `usize`. At 3385ce51b1 the rest of B-2026-10-14-66 is fixed
+too, so `{c:<34}` formats the `ref Str` loop variable itself. Each of
+these is the original line again, and the app still matches on all four
+MIR surfaces.

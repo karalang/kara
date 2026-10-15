@@ -1333,8 +1333,7 @@ impl Daemon {
     fn timer_data(ref self, key: Str) -> Vec[Stat] {
         let t = ref self.timers; // B-2026-10-14-70
         let mut vals = t.vals[t.find(key)].clone();
-        // B-2026-10-15-68: f64.partial_cmp runs on no v2 surface.
-        vals.sort_by(|a, b| if a < b { Ordering.Less } else if a > b { Ordering.Greater } else { Ordering.Equal });
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut d: Vec[Stat] = Vec.new();
         let n = vals.len();
         if n == 0 {

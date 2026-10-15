@@ -9,8 +9,6 @@
 // Command ids make retries idempotent.
 //
 // Workarounds for compiler gaps (revert when the row is fixed):
-//   B-2026-10-14-66  `{c:<34}` on a `ref Str` loop variable allocates a garbage
-//                    length on the compiled surfaces: `{c.to_string():<34}`
 //   B-2026-10-14-65  a closure with an early `return Err(..)` builds invalid
 //                    MIR: the amount parser is a top-level fn, not a closure
 //   B-2026-10-14-67  join needs String elements: the words stay Vec[String]
@@ -483,8 +481,8 @@ fn recover() -> Result[Store, String] {
 fn run(store: mut ref Store, cmds: Slice[Str]) {
     for c in cmds.iter() {
         match store.handle(c) {
-            Ok(m) => println(f"  {c.to_string():<34} ok: {m}"),
-            Err(e) => println(f"  {c.to_string():<34} rejected: {e}"),
+            Ok(m) => println(f"  {c:<34} ok: {m}"),
+            Err(e) => println(f"  {c:<34} rejected: {e}"),
         }
         match store.flush() {
             Ok(_) => {}

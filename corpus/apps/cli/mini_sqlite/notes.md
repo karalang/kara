@@ -77,3 +77,10 @@ After that, the output matched `expected.out` on `__mir-run`,
 `__mir-llvm-run` and `__mir-llvm-asan` on the first run.
 
 Written 2026-10-15 by the real-world apps thread; karac at eb605b2e5b.
+
+Reverted 2026-10-15, karac at 3385ce51b1: B-2026-10-15-57 is fixed, so
+the test databases are the original functions of 48-byte `push_str`
+calls again, with the original `unhex`. `__mir-run` now runs the program
+in 5 s and 212 MB, and the app still matches on all four MIR surfaces.
+`karac check` on it takes about 42 s and 1.8 GB, which the drop schedule
+thread puts in the frozen legacy auto-par conflict graph.

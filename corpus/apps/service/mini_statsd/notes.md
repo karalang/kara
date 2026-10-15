@@ -84,3 +84,8 @@ binding port 0 no longer prints anything. The daemon still binds the
 ports its config names, since that is what the real statsd does and the
 config reload depends on it; the original's port-0 binding would only
 come back as a partial, mixed revert.
+
+Reverted 2026-10-15, karac at 3385ce51b1: B-2026-10-15-68 is fixed, so
+the timer sort is the natural `sort_by(|a, b|
+a.partial_cmp(b).unwrap())` again, and the app still matches on all four
+MIR surfaces.
