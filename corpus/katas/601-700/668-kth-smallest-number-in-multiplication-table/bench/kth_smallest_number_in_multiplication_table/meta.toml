@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/668-kth-smallest-number-in-multiplication-table/bench/kth_smallest_number_in_multiplication_table.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "35fcd8197"
+extracted_src = "c3417fef"
+model_rev = "1aa23105"
+model_src = "c3417fef"

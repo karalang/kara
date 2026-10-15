@@ -1,0 +1,98 @@
+// LeetCode #667: Beautiful Arrangement II -- each place by formula.
+//
+// The zigzag over 1 to k + 1 has a closed form: at an even place `i` it
+// holds `i / 2 + 1`, counting up from the low end, and at an odd place
+// `k + 1 - i / 2`, counting down from the high end. Every place after
+// `k` holds `i + 1`. Each number is computed on its own, so the array is
+// filled in place. O(n).
+
+fn construct_array(n: i64, k: i64) -> Vec[i64] {
+    let mut out = vec![0; n];
+    for i in 0..n {
+        out[i] = if i > k {
+            i + 1
+        } else if i % 2 == 0 {
+            i / 2 + 1
+        } else {
+            k + 1 - i / 2
+        };
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// How many different differences between neighbours.
+fn distinct_steps(a: Vec[i64]) -> i64 {
+    let mut seen = vec![false; a.len() + 1];
+    let mut count = 0;
+    for i in 1..a.len() {
+        let d = (a[i] - a[i - 1]).abs();
+        if not seen[d] {
+            seen[d] = true;
+            count += 1;
+        }
+    }
+    count
+}
+
+fn checksum(a: Vec[i64]) -> i64 {
+    let mut h = 0;
+    for x in a.iter() {
+        h = (h * 31 + x) % 1000000007;
+    }
+    h
+}
+
+fn show(n: i64, k: i64) {
+    let a = construct_array(n, k);
+    let steps = distinct_steps(a.clone());
+    if n <= 12 {
+        let mut parts: Vec[String] = Vec.new();
+        for x in a.iter() {
+            parts.push(f"{x}");
+        }
+        println(f"n={n} k={k}: [{parts.join(",")}], distinct differences {steps}");
+    } else {
+        let ends = f"starts {a[0]},{a[1]},{a[2]}, ends {a[n - 1]}";
+        println(f"n={n} k={k}: {ends}, distinct differences {steps}, checksum {checksum(a)}");
+    }
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3, 1);
+    show(3, 2);
+    // The smallest; every difference from 1 to n - 1; one difference;
+    // k odd and even.
+    show(2, 1);
+    show(6, 5);
+    show(7, 1);
+    show(8, 3);
+    show(8, 4);
+    show(12, 7);
+    // The problem's largest n, 10,000, with k at 1, 5,000 and 9,999.
+    show(10000, 1);
+    show(10000, 5000);
+    show(10000, 9999);
+    // 1,000 random cases, n from 2 to 61: how many come out with
+    // exactly k differences, with a checksum of every arrangement.
+    let mut seed: i64 = 667;
+    let mut good = 0;
+    let mut sum = 0;
+    for _ in 0..1000 {
+        let n = 2 + next_random(mut seed) % 60;
+        let k = 1 + next_random(mut seed) % (n - 1);
+        let a = construct_array(n, k);
+        if distinct_steps(a.clone()) == k {
+            good += 1;
+        }
+        sum = (sum * 31 + checksum(a)) % 1000000007;
+    }
+    println(f"1000 random cases: {good} with exactly k differences, checksum {sum}");
+}

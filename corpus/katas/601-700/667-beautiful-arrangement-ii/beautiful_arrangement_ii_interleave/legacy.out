@@ -1,0 +1,12 @@
+n=3 k=1: [1,2,3], distinct differences 1
+n=3 k=2: [1,3,2], distinct differences 2
+n=2 k=1: [1,2], distinct differences 1
+n=6 k=5: [1,6,2,5,3,4], distinct differences 5
+n=7 k=1: [1,2,3,4,5,6,7], distinct differences 1
+n=8 k=3: [1,4,2,3,5,6,7,8], distinct differences 3
+n=8 k=4: [1,5,2,4,3,6,7,8], distinct differences 4
+n=12 k=7: [1,8,2,7,3,6,4,5,9,10,11,12], distinct differences 7
+n=10000 k=1: starts 1,2,3, ends 10000, distinct differences 1, checksum 166442834
+n=10000 k=5000: starts 1,5001,2, ends 10000, distinct differences 5000, checksum 696903027
+n=10000 k=9999: starts 1,10000,2, ends 5001, distinct differences 9999, checksum 125275082
+1000 random cases: 1000 with exactly k differences, checksum 141252324

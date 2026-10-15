@@ -1,0 +1,89 @@
+// LeetCode #668: Kth Smallest Number in Multiplication Table -- binary
+// search on the value, counting along a staircase.
+//
+// The entries at most `x` fill a staircase from the table's top-left
+// corner: each row holds as many as the row below it, or more. Walk its
+// edge from the bottom-left corner, moving right while the entry is at
+// most `x` and up when it is not, adding a whole column's height at each
+// step right. Binary search on `x` as before. O((m + n) log(m n)).
+
+fn count_at_most(m: i64, n: i64, x: i64) -> i64 {
+    let mut count = 0;
+    let mut i = m;
+    let mut j = 1;
+    while i >= 1 and j <= n {
+        if i * j <= x {
+            count += i;
+            j += 1;
+        } else {
+            i -= 1;
+        }
+    }
+    count
+}
+
+fn find_kth_number(m: i64, n: i64, k: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = m * n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if count_at_most(m, n, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(m: i64, n: i64, k: i64) {
+    println(f"m={m} n={n} k={k}: {find_kth_number(m, n, k)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(3, 3, 5);
+    show(2, 3, 6);
+    // One cell; the first and the last entry; one row; one column; a
+    // tall table and a wide one; the middle of a 12 by 12 table.
+    show(1, 1, 1);
+    show(4, 5, 1);
+    show(4, 5, 20);
+    show(1, 9, 7);
+    show(9, 1, 7);
+    show(20, 3, 31);
+    show(3, 20, 31);
+    show(12, 12, 72);
+    // The problem's largest table, 30,000 by 30,000: the first entry,
+    // the middle one, the last, and a few between.
+    show(30000, 30000, 1);
+    show(30000, 30000, 450000000);
+    show(30000, 30000, 900000000);
+    show(30000, 30000, 123456789);
+    show(30000, 17, 400000);
+    show(17, 30000, 400000);
+    // Every k of a 6 by 7 table, in order.
+    let mut parts: Vec[String] = Vec.new();
+    for k in 1..43 {
+        parts.push(f"{find_kth_number(6, 7, k)}");
+    }
+    println(f"6 by 7: {parts.join(",")}");
+    // 1,000 random tables of 1 to 40 by 1 to 40, each with a random k,
+    // into a checksum.
+    let mut seed: i64 = 668;
+    let mut sum = 0;
+    for _ in 0..1000 {
+        let m = 1 + next_random(mut seed) % 40;
+        let n = 1 + next_random(mut seed) % 40;
+        let k = 1 + next_random(mut seed) % (m * n);
+        sum = (sum * 31 + find_kth_number(m, n, k)) % 1000000007;
+    }
+    println(f"1000 random tables: checksum {sum}");
+}

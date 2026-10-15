@@ -1,0 +1,192 @@
+// LeetCode #668: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random tables.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_kth_number_star(m: i64, n: i64, k: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = m * n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let mut count = 0;
+        for i in 1..m + 1 {
+            count += (mid / i).min(n);
+        }
+        if count >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- staircase arm -----------------------------------------------------
+
+fn count_at_most_staircase(m: i64, n: i64, x: i64) -> i64 {
+    let mut count = 0;
+    let mut i = m;
+    let mut j = 1;
+    while i >= 1 and j <= n {
+        if i * j <= x {
+            count += i;
+            j += 1;
+        } else {
+            i -= 1;
+        }
+    }
+    count
+}
+
+fn find_kth_number_staircase(m: i64, n: i64, k: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = m * n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if count_at_most_staircase(m, n, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- blocks arm --------------------------------------------------------
+
+fn count_at_most_blocks(m: i64, n: i64, x: i64) -> i64 {
+    let full = (x / n).min(m);
+    let mut count = full * n;
+    let mut i = full + 1;
+    let last = x.min(m);
+    while i <= last {
+        let q = x / i;
+        let end = (x / q).min(last);
+        count += q * (end - i + 1);
+        i = end + 1;
+    }
+    count
+}
+
+fn find_kth_number_blocks(m: i64, n: i64, k: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = m * n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if count_at_most_blocks(m, n, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- entries arm -------------------------------------------------------
+
+fn find_kth_number_entries(m: i64, n: i64, k: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = m * n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let mut count = 0;
+        let mut largest = 0;
+        for i in 1..m + 1 {
+            let c = (mid / i).min(n);
+            count += c;
+            largest = largest.max(i * c);
+        }
+        if count >= k {
+            hi = largest;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, m: i64, n: i64, k: i64) -> i64 {
+    if which == 0 {
+        find_kth_number_star(m, n, k)
+    } else if which == 1 {
+        find_kth_number_staircase(m, n, k)
+    } else if which == 2 {
+        find_kth_number_blocks(m, n, k)
+    } else {
+        find_kth_number_entries(m, n, k)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: write out every entry of the table, sort them, and
+// take the k-th.
+fn definition(m: i64, n: i64, k: i64) -> i64 {
+    let mut all: Vec[i64] = Vec.new();
+    for i in 1..m + 1 {
+        for j in 1..n + 1 {
+            all.push(i * j);
+        }
+    }
+    all.sort();
+    all[k - 1]
+}
+
+// Whether `x` appears in the table.
+fn in_table(m: i64, n: i64, x: i64) -> bool {
+    for i in 1..m + 1 {
+        if x % i == 0 and x / i <= n {
+            return true;
+        }
+    }
+    false
+}
+
+fn main() {
+    // 2000 random tables of 1 to 12 by 1 to 12, each with a random k.
+    let cases = 2000;
+    let mut seed: i64 = 668;
+    let mut cells = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        let k = 1 + next_random(mut seed) % (m * n);
+        cells += m * n;
+        let want = definition(m, n, k);
+        for which in 0..4 {
+            let got = answer(which, m, n, k);
+            // P1: the definition's answer. P2: the same with m and n
+            // swapped. P3: an entry of the table. P4: at most the answer
+            // for k + 1. P5: at least the answer with one more row.
+            let ok = [
+                got == want,
+                answer(which, n, m, k) == got,
+                in_table(m, n, got),
+                k == m * n or got <= answer(which, m, n, k + 1),
+                answer(which, m + 1, n, k) <= got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..5 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} tables ({cells} cells), 4 arms, {checks} checks, {total} failures");
+}

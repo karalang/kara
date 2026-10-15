@@ -1,0 +1,236 @@
+// LeetCode #667: differential -- the four arms against a reference.
+//
+// Copies of the four arms, held to four properties on random cases.
+
+// ---- star arm ----------------------------------------------------------
+
+fn construct_array_star(n: i64, k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut lo = 1;
+    let mut hi = k + 1;
+    while lo <= hi {
+        out.push(lo);
+        lo += 1;
+        if lo <= hi {
+            out.push(hi);
+            hi -= 1;
+        }
+    }
+    for x in k + 2..n + 1 {
+        out.push(x);
+    }
+    out
+}
+
+// ---- formula arm -------------------------------------------------------
+
+fn construct_array_formula(n: i64, k: i64) -> Vec[i64] {
+    let mut out = vec![0; n];
+    for i in 0..n {
+        out[i] = if i > k {
+            i + 1
+        } else if i % 2 == 0 {
+            i / 2 + 1
+        } else {
+            k + 1 - i / 2
+        };
+    }
+    out
+}
+
+// ---- steps arm ---------------------------------------------------------
+
+fn construct_array_steps(n: i64, k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = 1;
+    out.push(x);
+    let mut up = true;
+    let mut d = k;
+    while d >= 1 {
+        if up {
+            x += d;
+        } else {
+            x -= d;
+        }
+        out.push(x);
+        up = not up;
+        d -= 1;
+    }
+    for y in k + 2..n + 1 {
+        out.push(y);
+    }
+    out
+}
+
+// ---- interleave arm ----------------------------------------------------
+
+fn construct_array_interleave(n: i64, k: i64) -> Vec[i64] {
+    let half = (k + 2) / 2;
+    let mut lows: Vec[i64] = Vec.new();
+    for x in 1..half + 1 {
+        lows.push(x);
+    }
+    let mut highs: Vec[i64] = Vec.new();
+    let mut x = k + 1;
+    while x > half {
+        highs.push(x);
+        x -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..lows.len() {
+        out.push(lows[i]);
+        if i < highs.len() {
+            out.push(highs[i]);
+        }
+    }
+    for y in k + 2..n + 1 {
+        out.push(y);
+    }
+    out
+}
+
+// ---- the reference and the properties -------------------------------------
+
+fn answer(which: i64, n: i64, k: i64) -> Vec[i64] {
+    if which == 0 {
+        construct_array_star(n, k)
+    } else if which == 1 {
+        construct_array_formula(n, k)
+    } else if which == 2 {
+        construct_array_steps(n, k)
+    } else {
+        construct_array_interleave(n, k)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The reference, by a different road: start from 1 to n in order and,
+// for each place `i` from 1 to k - 1, turn the stretch from `i` to `k`
+// back to front. The first turn puts k + 1 second, the next puts 2
+// third, and so on into the same zigzag.
+fn reference(n: i64, k: i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        a.push(x);
+    }
+    for i in 1..k {
+        let mut lo = i;
+        let mut hi = k;
+        while lo < hi {
+            let t = a[lo];
+            a[lo] = a[hi];
+            a[hi] = t;
+            lo += 1;
+            hi -= 1;
+        }
+    }
+    a
+}
+
+// Each of 1 to n exactly once.
+fn is_permutation(a: Vec[i64], n: i64) -> bool {
+    if a.len() != n {
+        return false;
+    }
+    let mut seen = vec![false; n + 1];
+    for x in a.iter() {
+        if x < 1 or x > n or seen[x] {
+            return false;
+        }
+        seen[x] = true;
+    }
+    true
+}
+
+// The differences between neighbours, each counted once, by comparing
+// with every earlier one.
+fn count_distinct(a: Vec[i64]) -> i64 {
+    let mut count = 0;
+    for i in 1..a.len() {
+        let d = (a[i] - a[i - 1]).abs();
+        let mut new = true;
+        for j in 1..i {
+            if (a[j] - a[j - 1]).abs() == d {
+                new = false;
+            }
+        }
+        if new {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn largest_step(a: Vec[i64]) -> i64 {
+    let mut most = 0;
+    for i in 1..a.len() {
+        most = most.max((a[i] - a[i - 1]).abs());
+    }
+    most
+}
+
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    // 2000 random cases, n from 2 to 41 and k from 1 to n - 1, with every
+    // k for n = 2 to 12 among them.
+    let mut seed: i64 = 667;
+    let mut cases: Vec[(i64, i64)] = Vec.new();
+    for n in 2..13 {
+        for k in 1..n {
+            cases.push((n, k));
+        }
+    }
+    while cases.len() < 2000 {
+        let n = 2 + next_random(mut seed) % 40;
+        cases.push((n, 1 + next_random(mut seed) % (n - 1)));
+    }
+    let mut numbers = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 4];
+    for c in cases.iter() {
+        let (n, k) = c;
+        numbers += n;
+        let want = reference(n, k);
+        for which in 0..4 {
+            let a = answer(which, n, k);
+            // P1: a permutation of 1 to n. P2: exactly k different
+            // differences. P3: the reference's arrangement. P4: no
+            // difference above k.
+            let ok = [
+                is_permutation(a.clone(), n),
+                count_distinct(a.clone()) == k,
+                same(a.clone(), want.clone()),
+                largest_step(a) <= k,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..4 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases.len()} cases ({numbers} numbers), 4 arms, {checks} checks, {total} failures");
+}
