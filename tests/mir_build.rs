@@ -1953,3 +1953,80 @@ fn main() {
         }
     }
 }
+
+/// A `Copy` payload bound out of an element (`match v[i] { J.I(n) => .. }`)
+/// reads through `*n` as `karac check`'s `ref` binding does
+/// (B-2026-10-15-24), in a free function and on `self.vals[i]`.
+#[test]
+fn mir_deref_of_a_copy_payload_of_an_element() {
+    let src = r#"
+enum J { I(i64), S(String) }
+struct H { vals: Vec[J] }
+impl H {
+    fn first(ref self) -> Option[i64] {
+        match self.vals[0] { J.I(n) => Some(*n), _ => None }
+    }
+}
+fn first_int(vals: ref Vec[J]) -> Option[i64] {
+    match vals[0] {
+        J.I(n) => Some(*n),
+        _ => None,
+    }
+}
+fn plain(vals: ref Vec[J]) -> i64 {
+    match vals[0] { J.I(n) => n + 1, _ => 0 }
+}
+fn main() {
+    let mut v: Vec[J] = Vec.new();
+    v.push(J.I(7));
+    v.push(J.S("s".to_string()));
+    println(f"{first_int(v).unwrap_or(0)} {plain(v)}");
+    let h = H { vals: v };
+    println(f"{h.first().unwrap_or(0)}");
+}
+"#;
+    let want = "7 8\n7\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// A `mut ref name` pattern binding (core semantics §4.6) borrows its part
+/// mutably, so a write through it lands in the element, the variant
+/// payload or the local it was matched in (B-2026-10-15-13).
+#[test]
+fn mir_mut_ref_pattern_binding_writes_through() {
+    let src = r#"
+struct P { n: i64 }
+enum E { A(P), B }
+fn main() {
+    let mut ps = vec![P { n: 1 }, P { n: 2 }];
+    match ps[1] {
+        mut ref p => { p.n += 5; }
+    }
+    println(f"{ps[1].n}");
+    let mut es = vec![E.A(P { n: 3 }), E.B];
+    match es[0] {
+        E.A(mut ref p) => { p.n *= 10; }
+        E.B => {}
+    }
+    if let E.A(mut ref p) = es[0] { p.n += 1; }
+    match es[0] { E.A(p) => println(f"{p.n}"), E.B => println("b") }
+    let mut q = P { n: 4 };
+    match q { mut ref r => { r.n = 9; } }
+    println(f"{q.n}");
+}
+"#;
+    let want = "7\n31\n9\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

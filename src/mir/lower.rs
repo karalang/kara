@@ -140,6 +140,7 @@ pub fn lower_program<'a>(
             })
             .collect(),
         ref_bindings: &program.ref_binding_spans,
+        mut_ref_bindings: &program.mut_ref_binding_spans,
         escaping_fns: &program.escaping_fn_types,
         defs,
         res,
@@ -425,6 +426,8 @@ struct Lcx<'a> {
     refined: FxHashMap<String, &'a Expr>,
     /// `ref name` pattern bindings, by the binding's span.
     ref_bindings: &'a FxHashSet<SpanKey>,
+    /// `mut ref name` pattern bindings, by the binding's span.
+    mut_ref_bindings: &'a FxHashSet<SpanKey>,
     /// The types of `escaping Fn(..)` parameters, by span.
     escaping_fns: &'a FxHashSet<SpanKey>,
     /// Which arguments of each `#[compiler_builtin]` method (by its type's
@@ -3097,7 +3100,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // enclosing block; the scrutinee's temporaries are the
                 // statement's, dropped on either path.
                 self.push_scope();
-                let (place, st, by_ref) = self.scrutinee(value)?;
+                let (place, st, by_ref) = self.scrutinee(value, self.binds_mut_ref([pattern]))?;
                 let fail = self.b.new_block();
                 self.test_pattern(pattern, &place, st, fail)?;
                 let matched = self.cur;
@@ -3213,6 +3216,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         match &pat.kind {
             PatternKind::Wildcard => Ok(()),
+            PatternKind::Binding(name)
+                if self
+                    .lcx
+                    .mut_ref_bindings
+                    .contains(&SpanKey::from_span(&pat.span)) =>
+            {
+                self.bind_mut_ref(name, pat.id, place, t, out);
+                Ok(())
+            }
             PatternKind::Binding(name)
                 if self
                     .lcx
@@ -8200,7 +8212,10 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         // The scrutinee temporary lives as long as the whole match.
         self.push_scope();
-        let (place, st, by_ref) = self.scrutinee(scrutinee)?;
+        let (place, st, by_ref) = self.scrutinee(
+            scrutinee,
+            self.binds_mut_ref(arms.iter().map(|a| &a.pattern)),
+        )?;
         let join = self.b.new_block();
         for arm in arms {
             if let PatternKind::Or(alts) = &arm.pattern.kind {
@@ -8325,7 +8340,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// in the current scope unless it names a local's place), seen through
     /// any reference: the place, its type, and whether it binds by
     /// reference.
-    fn scrutinee(&mut self, scrutinee: &'a Expr) -> R<(Place, Ty, bool)> {
+    /// Whether any of `pats` binds a `mut ref name` (core semantics §4.6).
+    fn binds_mut_ref<'p>(&self, pats: impl IntoIterator<Item = &'p Pattern>) -> bool {
+        pats.into_iter().any(|p| {
+            p.binding_name_spans()
+                .iter()
+                .any(|(_, s)| self.lcx.mut_ref_bindings.contains(&SpanKey::from_span(s)))
+        })
+    }
+
+    /// The place a pattern is matched against. `mutable` when a pattern
+    /// binds a `mut ref` into it (`match v[i] { mut ref p => .. }`), so a
+    /// place is reached for writing and reborrowed mutably
+    /// (B-2026-10-15-13).
+    fn scrutinee(&mut self, scrutinee: &'a Expr, mutable: bool) -> R<(Place, Ty, bool)> {
         let st = self.expr_ty(scrutinee)?;
         // An element (`v[i]`) is matched where it lies, as a local is: a
         // binding then copies, counts or borrows it out of the collection.
@@ -8340,7 +8368,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let element = element(scrutinee) || self.through_a_reference(scrutinee);
         let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
-            self.expr_place(scrutinee, false)?
+            self.expr_place(scrutinee, mutable)?
         } else {
             let l = self.temp_of(scrutinee, st)?;
             Place::local(l)
@@ -8359,9 +8387,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 )
             }) =>
             {
-                let rt = self.tys().tcx().reference(st, false);
+                let rt = self.tys().tcx().reference(st, mutable);
                 let r = self.temp(rt);
-                self.assign(r, Rvalue::Ref(BorrowKind::Shared, place));
+                let kind = if mutable {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                self.assign(r, Rvalue::Ref(kind, place));
                 (Place::local(r).project(ProjElem::Deref), st, true)
             }
             _ => (place, st, false),
@@ -8393,7 +8426,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         dest: Place,
     ) -> R<()> {
         self.push_scope();
-        let (place, st, by_ref) = self.scrutinee(value)?;
+        let (place, st, by_ref) = self.scrutinee(value, self.binds_mut_ref([pattern]))?;
         let else_bb = self.b.new_block();
         let join = self.b.new_block();
         self.test_pattern(pattern, &place, st, else_bb)?;
@@ -8636,7 +8669,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         exit: BasicBlock,
     ) -> R<()> {
         self.push_scope();
-        let (place, st, by_ref) = self.scrutinee(value)?;
+        let (place, st, by_ref) = self.scrutinee(value, self.binds_mut_ref([pattern]))?;
         let fail = self.b.new_block();
         self.test_pattern(pattern, &place, st, fail)?;
         let matched = self.cur;
@@ -9147,6 +9180,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if matches!(self.lcx.res.get(&pat.id), Some(Res::Def(_))) {
                     return Ok(());
                 }
+                if self
+                    .lcx
+                    .mut_ref_bindings
+                    .contains(&SpanKey::from_span(&pat.span))
+                {
+                    self.bind_mut_ref(name, pat.id, place.clone(), t, out);
+                    return Ok(());
+                }
                 let by_ref = by_ref
                     || self
                         .lcx
@@ -9361,6 +9402,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             out.push((l, t));
         }
+    }
+
+    /// A `mut ref name` binding: a mutable borrow of its part, `Copy` or
+    /// not (core semantics §4.6, B-2026-10-15-13).
+    fn bind_mut_ref(
+        &mut self,
+        name: &str,
+        node: NodeId,
+        place: Place,
+        t: Ty,
+        out: &mut Vec<(Local, Ty)>,
+    ) {
+        let rt = self.tys().tcx().reference(t, true);
+        let l = self.user_local(name, rt, node);
+        self.assign(l, Rvalue::Ref(BorrowKind::Mut, place));
+        out.push((l, rt));
     }
 
     // ── calls ───────────────────────────────────────────────────────

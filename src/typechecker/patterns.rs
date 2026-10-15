@@ -1177,7 +1177,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.reject_core_move_out_binding(name, &pattern.span, expected, mode);
                 // The legacy backends bind a `mut ref name` as a copy, so a
                 // write through it would be lost: only the v2 core takes it.
-                if !self.cli_lint_overrides.strict_core
+                if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source)
                     && self
                         .program
                         .mut_ref_binding_spans
@@ -1205,7 +1205,15 @@ impl<'a> super::TypeChecker<'a> {
                     // at its declared type still binds a copy.
                     self.record_node_type(pattern.id, &binding_ty);
                 }
-                let clone_view = self.current_scrutinee_clone_view
+                // On the MIR pipeline a `Copy` part of a borrowed place
+                // (`match v[i] { J.I(n) => .. }`) binds a copy, and `*n`
+                // reads it as the binding, as `karac check`'s `ref` reads
+                // through (B-2026-10-15-24).
+                let lib_part_view = self.library_methods_from_source
+                    && !self.cli_lint_overrides.strict_core
+                    && self.current_scrutinee_core_borrowed
+                    && matches!(mode, ScrutineeMode::Owned);
+                let clone_view = (self.current_scrutinee_clone_view || lib_part_view)
                     && !matches!(binding_ty, Type::Ref(_) | Type::MutRef(_))
                     && self.is_copy_type_during_check(&binding_ty);
                 self.local_scope.insert(name.clone(), binding_ty);
