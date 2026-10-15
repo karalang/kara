@@ -1,0 +1,49 @@
+== memory store
+  r1: ok KB-1 on_hand=10
+  r2: ok MS-2 on_hand=25
+  r3: ok MN-3 on_hand=4
+  r4: ok CB-4 on_hand=100
+  r5: ok quote subtotal=$139.96 total=$139.96
+  r6: ok o1 subtotal=$164.91 total=$164.91
+  r7: ok o2 subtotal=$616.99 total=$555.29
+  r8: error short MN-3: want 2, have 1
+  r9: error unknown sku XX-9
+  r6: ok o1 subtotal=$164.91 total=$164.91 (replayed)
+  r10: ok o1 shipped
+  r11: error order o1 is shipped
+  r12: ok o2 cancelled
+  r13: ok o3 subtotal=$382.99 total=$363.84
+  r14: ok MN-3 on_hand=6
+  r15: error bad quantity 0 for MN-3
+  r16: ok dropped MS-2
+  r17: error cannot drop CB-4
+  r18: ok HB-5 on_hand=3
+  r19: error store full (4 items)
+  r20: error bad command [frobnicate]
+  r21: ok o3 shipped
+  r22: ok quote subtotal=$586.99 total=$528.29
+  | CB-4 cable on_hand=94 reserved=0 price=$4.99
+  | HB-5 hub on_hand=3 reserved=0 price=$25.99
+  | KB-1 keyboard on_hand=8 reserved=0 price=$49.99
+  | MN-3 monitor on_hand=4 reserved=0 price=$179.00
+  | stock value $1662.95
+  | most available: CB-4=94, KB-1=8
+  | orders: cancelled=1 shipped=2
+== file store
+  transcript identical to memory store: true
+  log lines=8 compactions=1
+  audit: 12 events, last: shipped o3
+== reopen from disk
+  | CB-4 cable on_hand=94 reserved=0 price=$4.99
+  | HB-5 hub on_hand=3 reserved=0 price=$25.99
+  | KB-1 keyboard on_hand=8 reserved=0 price=$49.99
+  | MN-3 monitor on_hand=4 reserved=0 price=$179.00
+  | stock value $1662.95
+  | most available: CB-4=94, KB-1=8
+  | orders: 
+== torn write
+  file store: dropped a torn last line, 4 items recovered
+  | CB-4 cable on_hand=94 reserved=0 price=$4.99
+  log after recovery: 4 lines
+== corrupt middle line
+  open refused: io: corrupt log line 3

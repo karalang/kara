@@ -1,0 +1,575 @@
+// An inventory and order service over two storage backends.
+//
+// `Service[S: Store]` holds the business rules: stock, reservations with
+// all-or-nothing semantics, quotes with tiered discounts, idempotent
+// order commands and an audit trail. It is generic over a `Store` trait,
+// with an in-memory store and a file store. The file store keeps an
+// append-only log, compacts it when it grows, and replays it on open,
+// ignoring a torn last line, as after a crash.
+//
+// The commands come from a script file. The same script runs against both
+// stores and the two transcripts are compared. Then the file store is
+// reopened from disk, its log is torn, and it is reopened again.
+
+#[derive(Copy, Clone, PartialEq)]
+struct Money { cents: i64 }
+
+impl Add for Money {
+    type Output = Money;
+    fn add(own self, rhs: own Money) -> Money {
+        Money { cents: self.cents + rhs.cents }
+    }
+}
+
+impl Sub for Money {
+    type Output = Money;
+    fn sub(own self, rhs: own Money) -> Money {
+        Money { cents: self.cents - rhs.cents }
+    }
+}
+
+impl Display for Money {
+    fn to_string(self) -> String {
+        let sign = if self.cents < 0 { "-" } else { "" };
+        let c = if self.cents < 0 { 0 - self.cents } else { self.cents };
+        let frac = c % 100;
+        let pad = if frac < 10 { "0" } else { "" };
+        f"{sign}${c / 100}.{pad}{frac}"
+    }
+}
+
+impl Money {
+    fn times(self, n: i64) -> Money {
+        Money { cents: self.cents * n }
+    }
+
+    // Percent off, rounded half up to the cent.
+    fn percent_off(self, pct: i64) -> Money {
+        Money { cents: (self.cents * pct + 50) / 100 }
+    }
+}
+
+#[derive(Clone)]
+struct Item { sku: String, name: String, on_hand: i64, reserved: i64, price: Money }
+
+impl Item {
+    fn available(self) -> i64 {
+        self.on_hand - self.reserved
+    }
+}
+
+enum StoreError { Full(i64), Io(String) }
+
+impl Display for StoreError {
+    fn to_string(self) -> String {
+        match self {
+            StoreError.Full(n) => f"store full ({n} items)",
+            StoreError.Io(m) => f"io: {m}",
+        }
+    }
+}
+
+trait Store {
+    fn get(self, sku: Str) -> Option[Item];
+    fn put(mut ref self, item: own Item) -> Result[(), StoreError];
+    fn remove(mut ref self, sku: Str) -> bool;
+    fn skus(self) -> Vec[String];
+    fn label(self) -> String {
+        "store".to_string()
+    }
+}
+
+// ---- memory store -----------------------------------------------------
+
+struct MemStore { items: SortedMap[String, Item], limit: i64 }
+
+impl Store for MemStore {
+    fn get(self, sku: Str) -> Option[Item] {
+        match self.items.get(sku) {
+            Some(i) => Some(i.clone()),
+            None => None,
+        }
+    }
+
+    fn put(mut ref self, item: own Item) -> Result[(), StoreError] {
+        if not self.items.contains_key(item.sku) and self.items.len() >= self.limit {
+            return Err(StoreError.Full(self.limit));
+        }
+        self.items.insert(item.sku.clone(), item);
+        Ok(())
+    }
+
+    fn remove(mut ref self, sku: Str) -> bool {
+        self.items.remove(sku).is_some()
+    }
+
+    fn skus(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for (k, _) in self.items.iter() {
+            out.push(k.clone());
+        }
+        out
+    }
+
+    fn label(self) -> String {
+        "memory".to_string()
+    }
+}
+
+// ---- file store -------------------------------------------------------
+
+struct FileStore { path: String, cache: SortedMap[String, Item], log_lines: i64, compactions: i64, limit: i64 }
+
+fn encode_item(i: ref Item) -> String {
+    f"put|{i.sku}|{i.name}|{i.on_hand}|{i.reserved}|{i.price.cents}"
+}
+
+fn decode_line(line: Str) -> Option[(String, Option[Item])] {
+    let f: Vec[String] = line.split("|");
+    if f.len() == 2 and f[0] == "del" {
+        return Some((f[1].clone(), None));
+    }
+    if f.len() != 6 or f[0] != "put" {
+        return None;
+    }
+    let on_hand = i64.parse(f[3])?;
+    let reserved = i64.parse(f[4])?;
+    let cents = i64.parse(f[5])?;
+    Some((f[1].clone(), Some(Item { sku: f[1].clone(), name: f[2].clone(), on_hand: on_hand, reserved: reserved, price: Money { cents: cents } })))
+}
+
+impl FileStore {
+    // Replays the log. A line that does not decode can only be the last
+    // one, torn by a crash mid-write; it is dropped and the log rewritten.
+    fn open(path: Str, limit: i64) -> Result[FileStore, StoreError] {
+        let mut s = FileStore { path: path.to_string(), cache: SortedMap.new(), log_lines: 0, compactions: 0, limit: limit };
+        let text = match fs.read_to_string(path.to_string()) {
+            Ok(t) => t,
+            Err(_) => String.new(),
+        };
+        let lines: Vec[String] = text.lines().iter().map(|l| l.to_string()).collect();
+        let mut torn = false;
+        for k in 0..lines.len() {
+            match decode_line(lines[k]) {
+                Some((sku, Some(item))) => {
+                    s.cache.insert(sku, item);
+                }
+                Some((sku, None)) => {
+                    s.cache.remove(sku);
+                }
+                None => {
+                    if k + 1 == lines.len() {
+                        torn = true;
+                    } else {
+                        return Err(StoreError.Io(f"corrupt log line {k + 1}"));
+                    }
+                }
+            }
+            s.log_lines += 1;
+        }
+        if torn or not text.ends_with("\n") and text.len() > 0 {
+            println(f"  file store: dropped a torn last line, {s.cache.len()} items recovered");
+            s.compact()?;
+        }
+        Ok(s)
+    }
+
+    fn append(mut ref self, line: Str) -> Result[(), StoreError] {
+        let mut text = match fs.read_to_string(self.path.clone()) {
+            Ok(t) => t,
+            Err(_) => String.new(),
+        };
+        text.push_str(line);
+        text.push('\n');
+        match fs.write(self.path.clone(), text) {
+            Ok(_) => {}
+            Err(_) => return Err(StoreError.Io("append failed".to_string())),
+        }
+        self.log_lines += 1;
+        if self.log_lines > 2 * self.cache.len() + 8 {
+            self.compact()?;
+        }
+        Ok(())
+    }
+
+    // Rewrites the log as one `put` per live item.
+    fn compact(mut ref self) -> Result[(), StoreError] {
+        let mut text = String.new();
+        for (_, item) in self.cache.iter() {
+            text.push_str(encode_item(item));
+            text.push('\n');
+        }
+        match fs.write(self.path.clone(), text) {
+            Ok(_) => {}
+            Err(_) => return Err(StoreError.Io("compaction failed".to_string())),
+        }
+        self.log_lines = self.cache.len();
+        self.compactions += 1;
+        Ok(())
+    }
+}
+
+impl Store for FileStore {
+    fn get(self, sku: Str) -> Option[Item] {
+        match self.cache.get(sku) {
+            Some(i) => Some(i.clone()),
+            None => None,
+        }
+    }
+
+    fn put(mut ref self, item: own Item) -> Result[(), StoreError] {
+        if not self.cache.contains_key(item.sku) and self.cache.len() >= self.limit {
+            return Err(StoreError.Full(self.limit));
+        }
+        let line = encode_item(item);
+        self.cache.insert(item.sku.clone(), item);
+        self.append(line)
+    }
+
+    fn remove(mut ref self, sku: Str) -> bool {
+        if self.cache.remove(sku).is_none() {
+            return false;
+        }
+        self.append(f"del|{sku}").is_ok()
+    }
+
+    fn skus(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for (k, _) in self.cache.iter() {
+            out.push(k.clone());
+        }
+        out
+    }
+
+    fn label(self) -> String {
+        "file".to_string()
+    }
+}
+
+// ---- service ----------------------------------------------------------
+
+struct Line { sku: String, qty: i64 }
+
+struct Order { id: String, lines: Vec[Line], state: String }
+
+struct Service[S: Store] {
+    store: S,
+    orders: SortedMap[String, Order],
+    seen: SortedMap[String, String],
+    audit: Vec[String],
+}
+
+// Tiered discount on the whole quote.
+fn discount_pct(subtotal: Money) -> i64 {
+    if subtotal.cents >= 50000 {
+        10
+    } else if subtotal.cents >= 20000 {
+        5
+    } else {
+        0
+    }
+}
+
+fn top_n[T: Ord + Clone](xs: ref Vec[T], n: i64) -> Vec[T] {
+    let mut v = xs.clone();
+    v.sort();
+    v.reverse();
+    let mut out: Vec[T] = Vec.new();
+    for k in 0..n {
+        if k < v.len() {
+            out.push(v[k].clone());
+        }
+    }
+    out
+}
+
+impl[S: Store] Service[S] {
+    fn new(store: own S) -> Service[S] {
+        Service { store: store, orders: SortedMap.new(), seen: SortedMap.new(), audit: Vec.new() }
+    }
+
+    fn stock(mut ref self, sku: Str, name: Str, qty: i64, price: Money) -> String {
+        let item = match self.store.get(sku) {
+            Some(mut i) => {
+                i.on_hand += qty;
+                i.price = price;
+                i
+            }
+            None => Item { sku: sku.to_string(), name: name.to_string(), on_hand: qty, reserved: 0, price: price },
+        };
+        let total = item.on_hand;
+        match self.store.put(item) {
+            Ok(_) => {
+                self.audit.push(f"stock {sku} +{qty}");
+                f"ok {sku} on_hand={total}"
+            }
+            Err(e) => f"error {e}",
+        }
+    }
+
+    fn quote(self, lines: ref Vec[Line]) -> Result[(Money, Money), String] {
+        let mut subtotal = Money { cents: 0 };
+        for l in lines.iter() {
+            match self.store.get(l.sku) {
+                Some(i) => subtotal = subtotal + i.price.times(l.qty),
+                None => return Err(f"unknown sku {l.sku}"),
+            }
+        }
+        let off = subtotal.percent_off(discount_pct(subtotal));
+        Ok((subtotal, subtotal - off))
+    }
+
+    // All lines are reserved or none are.
+    fn reserve(mut ref self, id: Str, lines: own Vec[Line]) -> String {
+        if self.orders.contains_key(id) {
+            return f"error order {id} exists";
+        }
+        for l in lines.iter() {
+            let avail = match self.store.get(l.sku) {
+                Some(i) => i.available(),
+                None => return f"error unknown sku {l.sku}",
+            };
+            if l.qty <= 0 {
+                return f"error bad quantity {l.qty} for {l.sku}";
+            }
+            if avail < l.qty {
+                return f"error short {l.sku}: want {l.qty}, have {avail}";
+            }
+        }
+        let (sub, total) = match self.quote(lines) {
+            Ok(q) => q,
+            Err(e) => return f"error {e}",
+        };
+        for l in lines.iter() {
+            let mut i = self.store.get(l.sku).unwrap();
+            i.reserved += l.qty;
+            match self.store.put(i) {
+                Ok(_) => {}
+                Err(e) => return f"error {e}",
+            }
+        }
+        self.audit.push(f"reserve {id}");
+        self.orders.insert(id.to_string(), Order { id: id.to_string(), lines: lines, state: "reserved".to_string() });
+        f"ok {id} subtotal={sub} total={total}"
+    }
+
+    fn finish(mut ref self, id: Str, commit: bool) -> String {
+        let lines: Vec[(String, i64)] = match self.orders.get(id) {
+            Some(o) => {
+                if o.state != "reserved" {
+                    return f"error order {id} is {o.state}";
+                }
+                o.lines.iter().map(|l| (l.sku.clone(), l.qty)).collect()
+            }
+            None => return f"error no order {id}",
+        };
+        for (sku, qty) in lines.iter() {
+            let mut i = self.store.get(sku).unwrap();
+            i.reserved -= qty;
+            if commit {
+                i.on_hand -= qty;
+            }
+            match self.store.put(i) {
+                Ok(_) => {}
+                Err(e) => return f"error {e}",
+            }
+        }
+        let state = if commit { "shipped" } else { "cancelled" };
+        match self.orders.get_mut(id) {
+            Some(o) => o.state = state.to_string(),
+            None => {}
+        }
+        self.audit.push(f"{state} {id}");
+        f"ok {id} {state}"
+    }
+
+    // Commands carry a request key; a repeated key gets the first reply.
+    fn run(mut ref self, key: Str, cmd: Str) -> String {
+        match self.seen.get(key) {
+            Some(r) => return f"{r} (replayed)",
+            None => {}
+        }
+        let w: Vec[String] = cmd.split(" ");
+        let reply = if w[0] == "stock" and w.len() == 5 {
+            let qty = i64.parse(w[3]).unwrap_or(0);
+            let cents = i64.parse(w[4]).unwrap_or(0);
+            self.stock(w[1], w[2], qty, Money { cents: cents })
+        } else if (w[0] == "reserve" or w[0] == "quote") and w.len() >= 3 {
+            let mut lines: Vec[Line] = Vec.new();
+            for k in 2..w.len() {
+                let parts: Vec[String] = w[k].split("x");
+                if parts.len() == 2 {
+                    lines.push(Line { sku: parts[0].clone(), qty: i64.parse(parts[1]).unwrap_or(0) });
+                }
+            }
+            if w[0] == "quote" {
+                match self.quote(lines) {
+                    Ok((s, t)) => f"ok quote subtotal={s} total={t}",
+                    Err(e) => f"error {e}",
+                }
+            } else {
+                self.reserve(w[1], lines)
+            }
+        } else if w[0] == "ship" and w.len() == 2 {
+            self.finish(w[1], true)
+        } else if w[0] == "cancel" and w.len() == 2 {
+            self.finish(w[1], false)
+        } else if w[0] == "drop" and w.len() == 2 {
+            let ok = match self.store.get(w[1]) {
+                Some(i) => i.reserved == 0 and self.store.remove(w[1]),
+                None => false,
+            };
+            if ok { f"ok dropped {w[1]}" } else { f"error cannot drop {w[1]}" }
+        } else {
+            f"error bad command [{cmd}]"
+        };
+        self.seen.insert(key.to_string(), reply.clone());
+        reply
+    }
+
+    fn report(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut value = Money { cents: 0 };
+        let mut avail: Vec[(i64, String)] = Vec.new();
+        for sku in self.store.skus().iter() {
+            let i = self.store.get(sku).unwrap();
+            value = value + i.price.times(i.on_hand);
+            out.push(f"{i.sku} {i.name} on_hand={i.on_hand} reserved={i.reserved} price={i.price}");
+            avail.push((i.available(), i.sku.clone()));
+        }
+        out.push(f"stock value {value}");
+        let top = top_n(avail, 2);
+        let mut names: Vec[String] = Vec.new();
+        for (n, s) in top.iter() {
+            names.push(f"{s}={n}");
+        }
+        out.push(f"most available: {names.join(", ")}");
+        let mut states: SortedMap[String, i64] = SortedMap.new();
+        for (_, o) in self.orders.iter() {
+            *states.entry(o.state.clone()).or_insert(0) += 1;
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for (s, n) in states.iter() {
+            parts.push(f"{s}={n}");
+        }
+        out.push(f"orders: {parts.join(" ")}");
+        out
+    }
+}
+
+const SCRIPT: Str = "r1 stock KB-1 keyboard 10 4999
+r2 stock MS-2 mouse 25 1999
+r3 stock MN-3 monitor 4 18900
+r4 stock CB-4 cable 100 499
+r5 quote q KB-1x2 MS-2x2
+r6 reserve o1 KB-1x2 MS-2x2 CB-4x5
+r7 reserve o2 MN-3x3 KB-1x1
+r8 reserve o3 MN-3x2 CB-4x1
+r9 reserve o4 KB-1x1 XX-9x1
+r6 reserve o1 KB-1x2 MS-2x2 CB-4x5
+r10 ship o1
+r11 ship o1
+r12 cancel o2
+r13 reserve o3 MN-3x2 CB-4x1
+r14 stock MN-3 monitor 2 17900
+r15 reserve o5 MN-3x0
+r16 drop MS-2
+r17 drop CB-4
+r18 stock HB-5 hub 3 2599
+r19 stock DK-6 dock 1 15900
+r20 frobnicate
+r21 ship o3
+r22 quote q MN-3x3 KB-1x1
+";
+
+fn drive[S: Store](svc: mut ref Service[S], script: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for line in script.lines() {
+        match line.find(" ") {
+            Some(sp) => {
+                let reply = svc.run(line[0..sp], line[sp + 1..line.len()]);
+                out.push(f"{line[0..sp]}: {reply}");
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+fn main() {
+    match fs.write("orders.txt".to_string(), SCRIPT.to_string()) {
+        Ok(_) => {}
+        Err(_) => {
+            println("cannot write orders.txt");
+            return;
+        }
+    }
+    let script = fs.read_to_string("orders.txt".to_string()).unwrap_or(String.new());
+
+    let mut mem = Service.new(MemStore { items: SortedMap.new(), limit: 4 });
+    println(f"== {mem.store.label()} store");
+    let a = drive(mut mem, script);
+    for l in a.iter() {
+        println(f"  {l}");
+    }
+    for l in mem.report().iter() {
+        println(f"  | {l}");
+    }
+
+    let fstore = match FileStore.open("inventory.log", 4) {
+        Ok(s) => s,
+        Err(e) => {
+            println(f"open: {e}");
+            return;
+        }
+    };
+    let mut file = Service.new(fstore);
+    println(f"== {file.store.label()} store");
+    let b = drive(mut file, script);
+    let same = a.len() == b.len() and a.iter().zip(b.iter()).all(|(x, y)| x == y);
+    println(f"  transcript identical to memory store: {same}");
+    println(f"  log lines={file.store.log_lines} compactions={file.store.compactions}");
+    println(f"  audit: {file.audit.len()} events, last: {file.audit[file.audit.len() - 1]}");
+
+    println("== reopen from disk");
+    let again = match FileStore.open("inventory.log", 4) {
+        Ok(s) => Service.new(s),
+        Err(e) => {
+            println(f"open: {e}");
+            return;
+        }
+    };
+    for l in again.report().iter() {
+        println(f"  | {l}");
+    }
+
+    println("== torn write");
+    let mut log = fs.read_to_string("inventory.log".to_string()).unwrap_or(String.new());
+    log.push_str("put|KB-1|keyboard|9");
+    match fs.write("inventory.log".to_string(), log) {
+        Ok(_) => {}
+        Err(_) => println("  write failed"),
+    }
+    match FileStore.open("inventory.log", 4) {
+        Ok(s) => {
+            let svc = Service.new(s);
+            let r = svc.report();
+            println(f"  | {r[0]}");
+            let lines = fs.read_to_string("inventory.log".to_string()).unwrap_or(String.new()).lines().count();
+            println(f"  log after recovery: {lines} lines");
+        }
+        Err(e) => println(f"  open: {e}"),
+    }
+    println("== corrupt middle line");
+    let mut text = fs.read_to_string("inventory.log".to_string()).unwrap_or(String.new());
+    text = text.replacen("put|DK-6", "pot|DK-6", 1);
+    text.push_str("del|HB-5\n");
+    match fs.write("inventory.log".to_string(), text) {
+        Ok(_) => {}
+        Err(_) => println("  write failed"),
+    }
+    match FileStore.open("inventory.log", 4) {
+        Ok(_) => println("  opened a corrupt log"),
+        Err(e) => println(f"  open refused: {e}"),
+    }
+}

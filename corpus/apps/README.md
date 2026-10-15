@@ -149,6 +149,7 @@ service/rev_proxy   reverse proxy over loopback origins: longest-prefix routes, 
 cli/mini_git        a small git writing a real .git: own SHA-1 and zlib inflate (stored/fixed/dynamic), binary trees, commit ids matching real git, status, diff, checkout, fsck
 service/ws_chat     WebSocket chat server (RFC 6455): own SHA-1 + base64 handshake, masked and fragmented frames, ping/pong, close codes 1001/1002/1007/1009, a room with /nick /who /history
 service/dns_server  authoritative DNS over TCP (RFC 7766): zone-file parser, name compression, CNAME chasing, wildcards, NXDOMAIN/NODATA with SOA, REFUSED/NOTIMP/FORMERR, RFC 5952 AAAA text
+service/inventory   order service generic over a Store trait (memory + append-log file store with compaction and torn-write recovery), Money with Add/Sub/Display, idempotent commands, all-or-nothing reservations
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

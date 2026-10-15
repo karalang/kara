@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 266 |
 | codegen-gap | 259 |
-| false-positive | 188 |
+| false-positive | 191 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 162 |
@@ -112,15 +112,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2896 |
 | interp | 926 |
-| typecheck | 429 |
+| typecheck | 430 |
 | other | 115 |
-| ownership | 98 |
+| ownership | 99 |
 | cli | 76 |
 | runtime | 72 |
 | parser | 63 |
 | autopar | 59 |
 | resolver | 40 |
-| effect | 31 |
+| effect | 32 |
 | lexer | 11 |
 ## Current state
 
@@ -215,6 +215,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-16 | 2026-10-15 | typecheck+ownership | medium | `let v = m.get(k).unwrap_or(String.new());` binds a borrow of a temporary (core-semantics.md §5.1: `String.new()` in a `ref` slot is a temporary), but `karac check` passes it; every MIR surface then refuses the whole program with `borrow check main: bb10[term]: drop of _9 while it is borrowed (borrow at bb9[0]) [E0516]`, which names a basic block and no source line | — |
 | B-2026-10-15-17 | 2026-10-15 | typecheck | low | The library has no byte encodings or digests: docs/library/ defines no base64, no hex encode/decode, and no SHA-1 / SHA-256, so a WebSocket handshake, HTTP basic auth, a JWT, an ETag or a content-addressed store each needs its own hand-written SHA-1 and base64 | — |
 | B-2026-10-15-18 | 2026-10-15 | typecheck+interp+codegen | medium | There is no UDP socket: docs/library/io.md § Networking defines only `TcpListener` and `TcpStream`, and `UdpSocket.bind(..)` is "undefined name 'UdpSocket'" in check and on every MIR surface, so DNS, statsd, syslog, NTP, DHCP, mDNS and QUIC clients and servers cannot be written | — |
+| B-2026-10-15-19 | 2026-10-15 | typecheck | medium | A `String` argument is not accepted for a `Str` parameter when the method is called through a generic bound: `fn look[S: Store](s: ref S, k: ref String) -> i64 { s.get(k).unwrap_or(0) }` with `fn get(self, key: Str)` is refused with "expected 'StringSlice', found 'ref String'" by check and by the MIR front end, though the same call on the concrete type (`m.get(k)`) is accepted | — |
+| B-2026-10-15-20 | 2026-10-15 | ownership | medium | `karac check` reports "value 'i' is moved inside a loop and not assigned again before the next iteration" for a binding declared INSIDE the loop body, when it is mutated inside an `if` before the move: `for k in ks.iter() { let mut i = It { n: k }; if k > 1 { i.n -= 1; } s.take(i); }` is refused, while the same body without the `if` (or with `i.n -= if k > 1 { 1 } else { 0 };`) passes, and every MIR surface runs the refused form | — |
+| B-2026-10-15-21 | 2026-10-15 | effect | medium | A call through a generic bound is charged the effects of EVERY impl of the trait method instead of the instance's (design.md §12 Trait methods and generic calls): `pub fn mem_only(m: mut ref Mem) with allocates(Heap) { store_twice(mut m); }` is refused as performing writes(FileSystem), which only the other impl (`Disk`) does; `karac check` also prints a bogus "mutual recursion group" note pairing `MemStore.get` with `FileStore.get` | — |
 
 ### Relocated
 
