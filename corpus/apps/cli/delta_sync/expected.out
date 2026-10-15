@@ -1,0 +1,28 @@
+block size 256; md5('') = d41d8cd98f00b204e9800998ecf8427e
+== round 1
+  README: created, 0 -> 56 bytes; 0 blocks signed, 0 copied, 56 literal bytes, 0 probes (0 false), delta 82 bytes 9c69e98333c25ec57cf558badc15e274
+  config.ini: up to date (66 bytes)
+  data.bin: updated, 8900 -> 9000 bytes; 35 blocks signed, 30 copied, 1320 literal bytes, 30 probes (0 false), delta 1511 bytes 21f941f47bbd0d5189a121287b12c400
+  log.txt: updated, 3183 -> 5306 bytes; 13 blocks signed, 12 copied, 2234 literal bytes, 13 probes (1 false), delta 2320 bytes 26e2312682b414cb1270918addb7077c
+  notes.txt: updated, 3795 -> 4196 bytes; 15 blocks signed, 13 copied, 913 literal bytes, 12 probes (0 false), delta 1009 bytes 361df53ec94a36787918931aecb9391a
+  stale.tmp: deleted
+  sent 4922 of 18624 bytes
+== verify
+  15c1dcdf5b7bb02b8cef43d70e27b0fa  README
+  ff68246053318829b639046bd545faaa  config.ini
+  188e8e60b2e1177533e00df06b0747ce  data.bin
+  1123ae555cafbf84fe7cab29e46de498  log.txt
+  5499a9a2361eb5fd0a3eb3783af36fe5  notes.txt
+  trees match
+== round 2
+  README: up to date (56 bytes)
+  config.ini: up to date (66 bytes)
+  data.bin: up to date (9000 bytes)
+  log.txt: up to date (5306 bytes)
+  notes.txt: up to date (4196 bytes)
+  sent 0 of 18624 bytes
+== damaged deltas
+  flipped literal byte: refused, checksum mismatch: d3d6c10fa9b14641b2e7b4cb52969e79 != 5499a9a2361eb5fd0a3eb3783af36fe5
+  truncated: refused, truncated delta
+  bad magic: refused, not a delta file
+  copy past the end: refused, copy of block 999 past the old file

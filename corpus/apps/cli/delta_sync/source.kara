@@ -1,0 +1,585 @@
+// delta_sync: an rsync-style sync of one directory onto another. The
+// destination holds an older copy of the source tree. For each changed
+// file the destination's blocks are signed (a rolling weak checksum and an
+// MD5 per 256-byte block), the source is scanned with the rolling checksum
+// to find blocks the destination already has, and a binary delta of block
+// copies and literal runs is written to deltas/, read back, applied to the
+// old file, checked against the new file's MD5 carried in the delta, and
+// renamed into place. Files gone from the source are deleted. A second
+// round finds everything up to date, and four damaged deltas are refused.
+//
+// Delta format: "KDL1", then ops: 1 COPY u32 block, 2 LIT u32 len bytes,
+// 0 END followed by the 16-byte MD5 of the result. Integers are
+// little-endian.
+//
+// MD5 is written from RFC 1321. The output matches the Python mirror byte
+// for byte, and check_hashlib.py checks the mirror's MD5 against hashlib
+// and its rolling checksum against a direct sum at every window.
+
+const BLOCK: i64 = 256;
+const MOD: i64 = 65536;
+
+const OP_END: u8 = 0;
+const OP_COPY: u8 = 1;
+const OP_LIT: u8 = 2;
+
+// ------------------------------------------------------------ MD5 (RFC 1321)
+
+fn rotl(x: u32, n: u32) -> u32 {
+    (x << n) | (x >> (32u32 - n))
+}
+
+fn md5_raw(data: Slice[u8]) -> Vec[u8] {
+    let s: Array[u32, 16] = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+    let k: Array[u32, 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+    ];
+    let mut msg: Vec[u8] = Vec.new();
+    for b in data {
+        msg.push(b);
+    }
+    let bits: u64 = (data.len() as u64) * 8u64;
+    msg.push(0x80u8);
+    while msg.len() % 64 != 56 {
+        msg.push(0u8);
+    }
+    for i in 0..8 {
+        msg.push(((bits >> ((8 * i) as u64)) & 0xffu64) as u8);
+    }
+    let mut h: Array[u32, 4] = [0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32];
+    let mut m: Array[u32, 16] = [0u32; 16];
+    let mut off: i64 = 0;
+    while off < msg.len() {
+        for j in 0..16 {
+            let at = off + 4 * j;
+            m[j] = (msg[at] as u32) | ((msg[at + 1] as u32) << 8u32) | ((msg[at + 2] as u32) << 16u32) | ((msg[at + 3] as u32) << 24u32);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        for i in 0..64 {
+            let (f, g) = if i < 16 {
+                ((b & c) | ((~b) & d), i)
+            } else if i < 32 {
+                ((d & b) | ((~d) & c), (5 * i + 1) % 16)
+            } else if i < 48 {
+                (b ^ c ^ d, (3 * i + 5) % 16)
+            } else {
+                (c ^ (b | (~d)), (7 * i) % 16)
+            };
+            let t = f.wrapping_add(a).wrapping_add(k[i]).wrapping_add(m[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(rotl(t, s[(i / 16) * 4 + i % 4]));
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        off += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h.iter() {
+        for j in 0..4 {
+            out.push(((x >> ((8 * j) as u32)) & 0xffu32) as u8);
+        }
+    }
+    out
+}
+
+fn hex(b: Slice[u8]) -> String {
+    let digits: Array[Str, 16] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+    let mut out = String.new();
+    for x in b {
+        let v = x as i64;
+        out.push_str(digits[v / 16]);
+        out.push_str(digits[v % 16]);
+    }
+    out
+}
+
+fn md5(data: Slice[u8]) -> String {
+    hex(md5_raw(data))
+}
+
+// ------------------------------------------------------------ checksums
+
+// the rsync weak checksum of data[at..at+n] as (a, b)
+fn weak(data: ref Vec[u8], at: i64, n: i64) -> (i64, i64) {
+    let mut a: i64 = 0;
+    let mut b: i64 = 0;
+    for i in 0..n {
+        let x = data[at + i] as i64;
+        a = (a + x) % MOD;
+        b = (b + (n - i) * x) % MOD;
+    }
+    (a, b)
+}
+
+fn modp(x: i64) -> i64 {
+    ((x % MOD) + MOD) % MOD
+}
+
+struct Sig { weak: Vec[i64], strong: Vec[String], lens: Vec[i64] }
+
+fn signature(data: ref Vec[u8]) -> Sig {
+    let mut s = Sig { weak: Vec.new(), strong: Vec.new(), lens: Vec.new() };
+    let mut at: i64 = 0;
+    while at < data.len() {
+        let n = if data.len() - at < BLOCK { data.len() - at } else { BLOCK };
+        let (a, b) = weak(data, at, n);
+        s.weak.push(b * MOD + a);
+        s.strong.push(md5(data[at..at + n]));
+        s.lens.push(n);
+        at += n;
+    }
+    s
+}
+
+// ------------------------------------------------------------ deltas
+
+fn put32(out: mut ref Vec[u8], v: i64) {
+    for k in 0..4 {
+        out.push(((v >> (8 * k)) & 0xff) as u8);
+    }
+}
+
+fn get32(b: ref Vec[u8], at: i64) -> i64 {
+    (b[at] as i64) | ((b[at + 1] as i64) << 8) | ((b[at + 2] as i64) << 16) | ((b[at + 3] as i64) << 24)
+}
+
+struct SyncStats { copies: i64, literal: i64, probes: i64, false_hits: i64 }
+
+fn new_stats() -> SyncStats {
+    SyncStats { copies: 0, literal: 0, probes: 0, false_hits: 0 }
+}
+
+fn flush(out: mut ref Vec[u8], lit: mut ref Vec[u8], st: mut ref SyncStats) {
+    if lit.len() > 0 {
+        out.push(OP_LIT);
+        put32(out, lit.len());
+        for x in lit.iter() {
+            out.push(x);
+        }
+        st.literal += lit.len();
+        lit.clear();
+    }
+}
+
+fn make_delta(src: ref Vec[u8], sig: ref Sig, st: mut ref SyncStats) -> Vec[u8] {
+    let mut table: Map[i64, Vec[i64]] = Map.new();
+    for k in 0..sig.weak.len() {
+        if sig.lens[k] == BLOCK {
+            table.entry(sig.weak[k]).or_insert(Vec.new()).push(k);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for c in "KDL1".bytes() {
+        out.push(c);
+    }
+    let mut lit: Vec[u8] = Vec.new();
+    let n = src.len();
+    let mut i: i64 = 0;
+    let mut a: i64 = 0;
+    let mut b: i64 = 0;
+    if n >= BLOCK {
+        let (a0, b0) = weak(src, 0, BLOCK);
+        a = a0;
+        b = b0;
+    }
+    while i + BLOCK <= n {
+        let mut found: i64 = -1;
+        if let Some(ks) = table.get(b * MOD + a) {
+            st.probes += 1;
+            let strong = md5(src[i..i + BLOCK]);
+            for k in ks.iter() {
+                if sig.strong[k] == strong {
+                    found = k;
+                    break;
+                }
+            }
+            if found < 0 {
+                st.false_hits += 1;
+            }
+        }
+        if found >= 0 {
+            flush(mut out, mut lit, st);
+            out.push(OP_COPY);
+            put32(mut out, found);
+            st.copies += 1;
+            i += BLOCK;
+            if i + BLOCK <= n {
+                let (a1, b1) = weak(src, i, BLOCK);
+                a = a1;
+                b = b1;
+            }
+            continue;
+        }
+        let x = src[i] as i64;
+        lit.push(src[i]);
+        if i + BLOCK < n {
+            let y = src[i + BLOCK] as i64;
+            a = modp(a - x + y);
+            b = modp(b - BLOCK * x + a);
+        }
+        i += 1;
+    }
+    // the tail may match a short last block
+    let rest = n - i;
+    let last = sig.lens.len() - 1;
+    if rest > 0 and last >= 0 and sig.lens[last] == rest and sig.strong[last] == md5(src[i..n]) {
+        flush(mut out, mut lit, st);
+        out.push(OP_COPY);
+        put32(mut out, last);
+        st.copies += 1;
+    } else {
+        for j in i..n {
+            lit.push(src[j]);
+        }
+    }
+    flush(mut out, mut lit, st);
+    out.push(OP_END);
+    for x in md5_raw(src[0..n]).iter() {
+        out.push(x);
+    }
+    out
+}
+
+fn apply_delta(old: ref Vec[u8], delta: ref Vec[u8]) -> Result[Vec[u8], String] {
+    if delta.len() < 4 or hex(delta[0..4]) != hex("KDL1".bytes()[0..4]) {
+        return Err("not a delta file".to_string());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut at: i64 = 4;
+    loop {
+        if at >= delta.len() {
+            return Err("truncated delta".to_string());
+        }
+        let op = delta[at];
+        at += 1;
+        if op == OP_END {
+            if at + 16 != delta.len() {
+                return Err("truncated delta".to_string());
+            }
+            let want = hex(delta[at..at + 16]);
+            let got = md5(out[0..out.len()]);
+            if got != want {
+                return Err(f"checksum mismatch: {got} != {want}");
+            }
+            return Ok(out);
+        }
+        if at + 4 > delta.len() {
+            return Err("truncated delta".to_string());
+        }
+        let v = get32(delta, at);
+        at += 4;
+        if op == OP_COPY {
+            if v * BLOCK >= old.len() {
+                return Err(f"copy of block {v} past the old file");
+            }
+            let end = if v * BLOCK + BLOCK < old.len() { v * BLOCK + BLOCK } else { old.len() };
+            for j in (v * BLOCK)..end {
+                out.push(old[j]);
+            }
+        } else if op == OP_LIT {
+            if at + v > delta.len() {
+                return Err("truncated delta".to_string());
+            }
+            for j in at..(at + v) {
+                out.push(delta[j]);
+            }
+            at += v;
+        } else {
+            return Err(f"bad op {op}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ files
+
+fn read_file(path: Str) -> Result[Vec[u8], IoError] {
+    let f = File.open(path)?;
+    let end = f.seek(SeekFrom.End, 0)?;
+    f.seek(SeekFrom.Start, 0)?;
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in 0..end {
+        buf.push(0u8);
+    }
+    let mut got = 0;
+    while got < buf.len() {
+        let n = f.read(mut buf[got..buf.len()])?;
+        if n == 0 {
+            break;
+        }
+        got += n;
+    }
+    Ok(buf)
+}
+
+fn write_file(path: Str, data: ref Vec[u8]) -> Result[(), IoError] {
+    let f = File.create(path)?;
+    let mut at = 0;
+    while at < data.len() {
+        at += f.write(data[at..data.len()])?;
+    }
+    f.sync_all()?;
+    Ok(())
+}
+
+fn read(path: Str) -> Vec[u8] {
+    match read_file(path) {
+        Ok(b) => b,
+        Err(e) => {
+            println(f"cannot read {path}: {e}");
+            Vec.new()
+        }
+    }
+}
+
+fn write(path: Str, data: ref Vec[u8]) {
+    if let Err(e) = write_file(path, data) {
+        println(f"cannot write {path}: {e}");
+    }
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        out.push(c);
+    }
+    out
+}
+
+fn sorted_dir(dir: Str) -> Vec[String] {
+    let mut names = match fs.read_dir(dir.to_string()) {
+        Ok(v) => v,
+        Err(_) => Vec.new(),
+    };
+    names.sort();
+    names
+}
+
+// ------------------------------------------------------------ the trees
+
+struct Rng { s: i64 }
+
+impl Rng {
+    fn next(mut ref self) -> i64 {
+        self.s = (self.s * 1103515245 + 12345) % 2147483648;
+        self.s >> 8
+    }
+
+    fn below(mut ref self, n: i64) -> i64 {
+        self.next() % n
+    }
+}
+
+fn prose(rng: mut ref Rng, paras: i64) -> String {
+    let words: Array[Str, 18] = ["the", "sync", "block", "rolling", "checksum", "file", "copy", "literal", "match",
+        "window", "server", "client", "delta", "patch", "byte", "hash", "remote", "local"];
+    let mut out = String.new();
+    for p in 0..paras {
+        if p > 0 {
+            out.push('\n');
+        }
+        let count = 40 + rng.below(30);
+        let mut text = String.new();
+        for w in 0..count {
+            if w > 0 {
+                text.push(' ');
+            }
+            text.push_str(words[rng.below(18)]);
+        }
+        // str.capitalize: the first letter up, the rest as they are (all lower)
+        let first = text.substring(0, 1).to_uppercase();
+        out.push_str(f"{p + 1}. {first}{text.substring(1)}.\n");
+    }
+    out
+}
+
+fn build_trees() {
+    let mut rng = Rng { s: 2026 };
+    for d in ["src", "dst", "deltas"] {
+        if let Err(e) = fs.create_dir_all(d.to_string()) {
+            println(f"cannot create {d}: {e}");
+        }
+    }
+    let notes = prose(mut rng, 12);
+    let mut data: Vec[u8] = Vec.new();
+    for _ in 0..9000 {
+        data.push(rng.below(256) as u8);
+    }
+    let config = "[server]\nport = 8080\nworkers = 4\n\n[sync]\nblock = 256\nverify = md5\n";
+    let mut log = String.new();
+    for i in 0..140 {
+        log.push_str(f"2026-10-15T10:{i / 60:02}:{i % 60:02}Z sync ok files={rng.below(90)}\n");
+    }
+    // the destination is an older copy: a paragraph added near the top,
+    // one edited in the middle, bytes changed and cut in the data file,
+    // the log a prefix of today's, and a file that has since been removed
+    let paras = notes.split("\n\n");
+    let mut old_paras: Vec[String] = Vec.new();
+    for j in 0..paras.len() {
+        if j == 1 {
+            continue;
+        }
+        if j == 6 {
+            old_paras.push(paras[j].replacen("block", "BLOCK", 2));
+        } else {
+            old_paras.push(paras[j].clone());
+        }
+    }
+    let old_notes = old_paras.join("\n\n");
+    let mut old_data: Vec[u8] = Vec.new();
+    for j in 0..data.len() {
+        if j >= 2000 and j < 2100 {
+            continue;
+        }
+        let x = data[j];
+        if j == 700 or j == 4100 or j == 8800 {
+            old_data.push(x ^ 0x5Au8);
+        } else {
+            old_data.push(x);
+        }
+    }
+    write("src/notes.txt", bytes_of(notes));
+    write("src/data.bin", data);
+    write("src/config.ini", bytes_of(config));
+    write("src/log.txt", bytes_of(log));
+    write("src/README", bytes_of("Files in this directory are synced from the build host.\n"));
+    write("dst/notes.txt", bytes_of(old_notes));
+    write("dst/data.bin", old_data);
+    write("dst/config.ini", bytes_of(config));
+    write("dst/log.txt", bytes_of(log.substring(0, log.len() * 3 / 5)));
+    write("dst/stale.tmp", bytes_of("left over from a crashed run\n"));
+}
+
+fn contains(names: ref Vec[String], name: Str) -> bool {
+    for n in names.iter() {
+        if n == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn sync(round: i64) {
+    println(f"== round {round}");
+    let names = sorted_dir("src");
+    let have = sorted_dir("dst");
+    let mut sent: i64 = 0;
+    let mut total: i64 = 0;
+    for name in names.iter() {
+        let src = read(f"src/{name}");
+        total += src.len();
+        let present = contains(have, name);
+        let old = if present { read(f"dst/{name}") } else { Vec.new() };
+        if present and md5(old[0..old.len()]) == md5(src[0..src.len()]) {
+            println(f"  {name}: up to date ({src.len()} bytes)");
+            continue;
+        }
+        let mut st = new_stats();
+        let sig = signature(old);
+        let delta = make_delta(src, sig, mut st);
+        write(f"deltas/{name}.delta", delta);
+        sent += delta.len();
+        match apply_delta(old, read(f"deltas/{name}.delta")) {
+            Ok(new) => {
+                write(f"dst/{name}.part", new);
+                if let Err(e) = fs.rename(f"dst/{name}.part", f"dst/{name}") {
+                    println(f"  {name}: cannot rename: {e}");
+                }
+            }
+            Err(e) => {
+                println(f"  {name}: delta refused: {e}");
+                continue;
+            }
+        }
+        let verb = if present { "updated" } else { "created" };
+        println(f"  {name}: {verb}, {old.len()} -> {src.len()} bytes; {sig.weak.len()} blocks signed, {st.copies} copied, {st.literal} literal bytes, {st.probes} probes ({st.false_hits} false), delta {delta.len()} bytes {md5(delta[0..delta.len()])}");
+    }
+    for name in have.iter() {
+        if not contains(names, name) {
+            match fs.remove_file(f"dst/{name}") {
+                Ok(_) => println(f"  {name}: deleted"),
+                Err(e) => println(f"  {name}: cannot delete: {e}"),
+            }
+        }
+    }
+    println(f"  sent {sent} of {total} bytes");
+}
+
+fn verify() {
+    let a = sorted_dir("src");
+    let b = sorted_dir("dst");
+    let mut ok = a.len() == b.len();
+    for name in a.iter() {
+        let s = read(f"src/{name}");
+        let h = md5(s[0..s.len()]);
+        let mut same = false;
+        if contains(b, name) {
+            let d = read(f"dst/{name}");
+            same = md5(d[0..d.len()]) == h;
+        }
+        ok = ok and same;
+        let mark = if same { "" } else { "  DIFFERS" };
+        println(f"  {h}  {name}{mark}");
+    }
+    let verdict = if ok { "match" } else { "DIFFER" };
+    println(f"  trees {verdict}");
+}
+
+fn damaged() {
+    println("== damaged deltas");
+    let full = read("dst/notes.txt");
+    let mut old: Vec[u8] = Vec.new();
+    for j in 0..3000 {
+        old.push(full[j]);
+    }
+    let mut st = new_stats();
+    let good = make_delta(read("src/notes.txt"), signature(old), mut st);
+    let mut flipped = good.clone();
+    flipped[20] = flipped[20] ^ 1u8;
+    let mut truncated = good.clone();
+    truncated.truncate(good.len() - 9);
+    let mut magic = good.clone();
+    magic[3] = b'2';
+    let mut past: Vec[u8] = bytes_of("KDL1");
+    past.push(OP_COPY);
+    put32(mut past, 999);
+    for j in 4..good.len() {
+        past.push(good[j]);
+    }
+    let labels: Array[Str, 4] = ["flipped literal byte", "truncated", "bad magic", "copy past the end"];
+    let cases = vec![flipped, truncated, magic, past];
+    for i in 0..4 {
+        write("deltas/bad.delta", cases[i]);
+        match apply_delta(old, read("deltas/bad.delta")) {
+            Ok(_) => println(f"  {labels[i]}: APPLIED"),
+            Err(e) => println(f"  {labels[i]}: refused, {e}"),
+        }
+    }
+    if let Err(e) = fs.remove_file("deltas/bad.delta".to_string()) {
+        println(f"cannot remove bad.delta: {e}");
+    }
+}
+
+fn main() {
+    build_trees();
+    let empty: Vec[u8] = Vec.new();
+    println(f"block size {BLOCK}; md5('') = {md5(empty[0..0])}");
+    sync(1);
+    println("== verify");
+    verify();
+    sync(2);
+    damaged();
+}

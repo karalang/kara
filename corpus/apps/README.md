@@ -161,6 +161,7 @@ service/log_shipper  Vector-style log shipper: checksum-fingerprinted checkpoint
 cli/btree_kv         page-based B+tree KV store: 256-byte pages, leaf chain, node splits, CRC-framed WAL with torn-tail recovery, shadow commits, invariant checks; db file byte-identical to the mirror
 cli/toml_check       TOML 1.0 parser and validator over real config files: all string/number/date forms, tomllib redefinition rules, 27 rejected documents; mirror cross-checked against tomllib
 cli/md_render        CommonMark Markdown-to-HTML renderer and docs-site build: nested tight/loose lists, delimiter-run emphasis, reference links, heading ids and TOC; matches markdown-it on all 45 inputs
+cli/delta_sync       rsync-style directory sync: rolling weak checksum + MD5 block signatures, binary COPY/LIT deltas with an end-to-end MD5, create/update/delete, damaged deltas refused
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

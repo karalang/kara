@@ -1,0 +1,10 @@
+source = "kara-katas/apps/cli/delta_sync/delta_sync.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:cli", "apps:real-io"]
+expected_from = "mirror"
+rules = []
+backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
+env = {}
+extracted_src = "d5f2e74b"
