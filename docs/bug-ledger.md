@@ -100,8 +100,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 262 |
 | false-positive | 204 |
 | other | 172 |
-| perf | 169 |
-| diagnostics | 162 |
+| perf | 170 |
+| diagnostics | 163 |
 | crash | 120 |
 | soundness | 108 |
 | use-after-free | 91 |
@@ -112,9 +112,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2912 |
 | interp | 935 |
-| typecheck | 442 |
+| typecheck | 443 |
 | other | 115 |
-| ownership | 103 |
+| ownership | 104 |
 | cli | 76 |
 | runtime | 74 |
 | parser | 67 |
@@ -217,6 +217,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-54 | 2026-10-15 | parser | low | An unsuffixed integer literal above `i64::MAX` is refused at PARSE even where the expected type is `u64` or `u128`: `let a: u64 = 0xFFFF_FFFF_FFFF_FFFF;` and `let b: u128 = 18446744073709551616;` fail with "integer literal ... is out of range for i64", although design.md says the type comes from inference and the range is checked against that type | — |
 | B-2026-10-15-55 | 2026-10-15 | codegen+runtime | medium | On the MIR compiled backend, `starts_with`, `contains`, `ends_with` and String `<` each call out to the runtime (`karac_mir_str_test`) where legacy inlines a length test and memcmp. Kata 677's bench makes 48.2M such calls, 45% of its instructions are their own cost (3.73G against legacy's 2.16G), and it runs at about 1.5 times legacy, the M2 bar | — |
 | B-2026-10-15-56 | 2026-10-15 | codegen+runtime | low | On the MIR compiled backend, the first allocation of a pushed `Vec` (`karac_mir_vec_reserve`) and every `Vec` clone (`karac_mir_vec_alloc`) are out-of-line runtime calls costing some 40 to 70 instructions each beyond the allocator, so kata 679's bench, which builds millions of two- to four-element `Vec[f64]`, runs 17.1G instructions against legacy's 12.9G: 1.5x legacy, at the M2 bar | — |
+| B-2026-10-15-57 | 2026-10-15 | ownership | medium | The MIR borrow checker's `origins_dataflow` grows faster than quadratically with the number of statements in one function: a function of N `s.push_str("<96 hex chars>");` statements takes 155 MB / 2.0 s at N=250, 386 MB / 3.4 s at N=500 and 2.15 GB / 12.8 s at N=1000 under `karac __mir-run` (debug karac), and an app embedding two SQLite files as hex (functions of about 2,800 and 900 such lines) reached 12 GB and was killed; `karac check` alone is 0.35 s, 1.06 s and 4.42 s at the same sizes, while `karac run --interp` takes 0.22 s / 94 MB at N=1000 | — |
+| B-2026-10-15-58 | 2026-10-15 | typecheck | low | `f64.from_bits(bits)` (the Rust spelling) is refused with `no associated function 'from_bits' on type 'f64'` and no hint that the library's spelling is `bits.bits_as_f64()` on an `i64`; neither `bits_as_f64` nor `to_bits` appears in design.md, so a binary-format reader has no documented way to decode an IEEE double | — |
 
 ### Relocated
 

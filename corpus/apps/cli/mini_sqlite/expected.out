@@ -1,0 +1,640 @@
+== data/shop.db
+page size 1024, 133 pages, UTF-8, auto-vacuum none
+schema version 9, user version 7, application id 1262571073, written by 3045001
+18 free pages
+-- schema
+table customers on customers, root 2: 'CREATE TABLE customers(id INTEGER PRIMAR' +186
+index sqlite_autoindex_customers_1 on customers, root 3: NULL
+table orders on orders, root 4: 'CREATE TABLE orders(id INTEGER PRIMARY K' +112
+index idx_orders_customer on orders, root 5: 'CREATE INDEX idx_orders_customer ON orde' +23
+table kv on kv, root 6: 'CREATE TABLE kv(key TEXT PRIMARY KEY, va' +18
+view big_spenders on big_spenders, root 0: 'CREATE VIEW big_spenders AS\n  SELECT cus' +90
+trigger orders_audit on orders, root 0: 'CREATE TRIGGER orders_audit AFTER DELETE' +97
+-- pages
+   1 internal sqlite_schema / cells 1, payload 0, unused 905, max 0
+   2 internal customers / cells 19, payload 0, unused 879, max 0
+   3 internal sqlite_autoindex_customers_1 / cells 2, payload 44, unused 954, max 22
+   4 internal orders / cells 33, payload 0, unused 753, max 0
+   5 internal idx_orders_customer / cells 23, payload 615, unused 236, max 27
+   6 internal kv / cells 3, payload 257, unused 733, max 225
+   7 leaf     sqlite_schema /000/ cells 4, payload 584, unused 414, max 257
+   8 overflow customers /000/008+000000 cells 0, payload 1020, unused 0, max 0
+   9 overflow customers /000/008+000001 cells 0, payload 1020, unused 0, max 0
+  10 overflow customers /000/008+000002 cells 0, payload 1020, unused 0, max 0
+  11 overflow customers /000/008+000003 cells 0, payload 897, unused 123, max 0
+  12 leaf     customers /000/ cells 9, payload 703, unused 272, max 4060
+  13 leaf     customers /001/ cells 8, payload 643, unused 341, max 121
+  14 free
+  15 free
+  16 free
+  17 leaf     customers /002/ cells 4, payload 283, unused 717, max 84
+  18 leaf     customers /003/ cells 7, payload 909, unused 74, max 3496
+  19 overflow customers /003/005+000000 cells 0, payload 1020, unused 0, max 0
+  20 overflow customers /003/005+000001 cells 0, payload 1020, unused 0, max 0
+  21 overflow customers /003/005+000002 cells 0, payload 1020, unused 0, max 0
+  22 leaf     customers /004/ cells 10, payload 805, unused 171, max 110
+  23 free
+  24 free
+  25 free
+  26 leaf     customers /005/ cells 6, payload 438, unused 554, max 98
+  27 leaf     sqlite_autoindex_customers_1 /000/ cells 42, payload 842, unused 48, max 26
+  28 leaf     sqlite_autoindex_customers_1 /001/ cells 36, payload 820, unused 88, max 26
+  29 overflow customers /006/000+000000 cells 0, payload 1020, unused 0, max 0
+  30 overflow customers /006/000+000001 cells 0, payload 1020, unused 0, max 0
+  31 leaf     customers /006/ cells 1, payload 950, unused 57, max 2990
+  32 leaf     customers /007/ cells 12, payload 918, unused 50, max 115
+  33 free
+  34 free
+  35 free
+  36 free
+  37 leaf     customers /008/ cells 5, payload 419, unused 577, max 106
+  38 overflow customers /009/000+000000 cells 0, payload 1020, unused 0, max 0
+  39 overflow customers /009/000+000001 cells 0, payload 1020, unused 0, max 0
+  40 overflow customers /009/000+000002 cells 0, payload 1020, unused 0, max 0
+  41 leaf     customers /009/ cells 4, payload 954, unused 41, max 3791
+  42 leaf     customers /00a/ cells 7, payload 568, unused 420, max 114
+  43 free
+  44 free
+  45 free
+  46 leaf     customers /00b/ cells 11, payload 947, unused 20, max 3233
+  47 overflow customers /00b/007+000000 cells 0, payload 1020, unused 0, max 0
+  48 overflow customers /00b/007+000001 cells 0, payload 1020, unused 0, max 0
+  49 overflow customers /00b/007+000002 cells 0, payload 1020, unused 0, max 0
+  50 leaf     sqlite_autoindex_customers_1 /002/ cells 37, payload 837, unused 68, max 25
+  51 leaf     customers /00c/ cells 5, payload 377, unused 619, max 98
+  52 leaf     orders /000/ cells 19, payload 793, unused 147, max 49
+  53 leaf     customers /00d/ cells 1, payload 66, unused 946, max 66
+  54 leaf     customers /00e/ cells 7, payload 533, unused 455, max 100
+  55 leaf     customers /00f/ cells 6, payload 474, unused 513, max 4063
+  56 overflow customers /00f/001+000000 cells 0, payload 1020, unused 0, max 0
+  57 overflow customers /00f/001+000001 cells 0, payload 1020, unused 0, max 0
+  58 overflow customers /00f/001+000002 cells 0, payload 1020, unused 0, max 0
+  59 overflow customers /00f/001+000003 cells 0, payload 900, unused 120, max 0
+  60 leaf     customers /010/ cells 4, payload 351, unused 649, max 100
+  61 free
+  62 free
+  63 free
+  64 leaf     customers /011/ cells 3, payload 230, unused 774, max 92
+  65 leaf     customers /012/ cells 4, payload 694, unused 301, max 3563
+  66 overflow customers /012/003+000000 cells 0, payload 1020, unused 0, max 0
+  67 overflow customers /012/003+000001 cells 0, payload 1020, unused 0, max 0
+  68 overflow customers /012/003+000002 cells 0, payload 1020, unused 0, max 0
+  69 leaf     customers /013/ cells 3, payload 238, unused 766, max 94
+  70 leaf     sqlite_schema /001/ cells 3, payload 409, unused 593, max 169
+  71 free
+  72 free
+  73 leaf     orders /001/ cells 19, payload 803, unused 137, max 50
+  74 leaf     idx_orders_customer /000/ cells 28, payload 750, unused 182, max 31
+  75 leaf     idx_orders_customer /001/ cells 27, payload 725, unused 210, max 27
+  76 leaf     orders /002/ cells 18, payload 744, unused 200, max 50
+  77 leaf     orders /003/ cells 18, payload 767, unused 177, max 49
+  78 leaf     idx_orders_customer /002/ cells 23, payload 618, unused 329, max 27
+  79 leaf     orders /004/ cells 19, payload 794, unused 146, max 50
+  80 leaf     idx_orders_customer /004/ cells 26, payload 697, unused 241, max 27
+  81 leaf     orders /005/ cells 18, payload 758, unused 184, max 51
+  82 leaf     idx_orders_customer /005/ cells 25, payload 671, unused 270, max 27
+  83 leaf     orders /006/ cells 18, payload 749, unused 177, max 49
+  84 leaf     orders /007/ cells 18, payload 759, unused 167, max 50
+  85 leaf     idx_orders_customer /007/ cells 26, payload 696, unused 242, max 27
+  86 leaf     orders /008/ cells 18, payload 760, unused 166, max 51
+  87 leaf     idx_orders_customer /008/ cells 22, payload 590, unused 360, max 27
+  88 leaf     orders /009/ cells 18, payload 757, unused 169, max 50
+  89 leaf     orders /00a/ cells 18, payload 740, unused 186, max 48
+  90 leaf     idx_orders_customer /009/ cells 26, payload 698, unused 240, max 27
+  91 leaf     orders /00b/ cells 18, payload 760, unused 166, max 51
+  92 leaf     orders /00c/ cells 18, payload 752, unused 174, max 50
+  93 leaf     idx_orders_customer /00c/ cells 29, payload 777, unused 152, max 27
+  94 leaf     orders /00d/ cells 18, payload 762, unused 164, max 50
+  95 leaf     idx_orders_customer /00d/ cells 27, payload 723, unused 212, max 27
+  96 leaf     orders /00e/ cells 18, payload 739, unused 187, max 51
+  97 leaf     orders /00f/ cells 18, payload 756, unused 170, max 50
+  98 leaf     idx_orders_customer /010/ cells 28, payload 752, unused 180, max 27
+  99 leaf     orders /010/ cells 18, payload 758, unused 168, max 50
+ 100 leaf     idx_orders_customer /011/ cells 26, payload 698, unused 240, max 27
+ 101 leaf     idx_orders_customer /014/ cells 27, payload 725, unused 210, max 27
+ 102 leaf     orders /011/ cells 18, payload 757, unused 169, max 49
+ 103 leaf     orders /012/ cells 18, payload 750, unused 176, max 50
+ 104 leaf     orders /013/ cells 18, payload 756, unused 170, max 51
+ 105 leaf     idx_orders_customer /00e/ cells 22, payload 590, unused 360, max 27
+ 106 leaf     orders /014/ cells 18, payload 758, unused 168, max 49
+ 107 leaf     orders /015/ cells 18, payload 755, unused 171, max 50
+ 108 leaf     idx_orders_customer /015/ cells 26, payload 697, unused 241, max 27
+ 109 leaf     orders /016/ cells 18, payload 746, unused 180, max 50
+ 110 leaf     orders /017/ cells 18, payload 761, unused 165, max 49
+ 111 leaf     idx_orders_customer /016/ cells 26, payload 697, unused 241, max 27
+ 112 leaf     idx_orders_customer /00a/ cells 27, payload 726, unused 209, max 27
+ 113 leaf     orders /018/ cells 18, payload 759, unused 167, max 50
+ 114 leaf     idx_orders_customer /012/ cells 23, payload 617, unused 330, max 27
+ 115 leaf     orders /019/ cells 18, payload 747, unused 179, max 51
+ 116 leaf     idx_orders_customer /006/ cells 25, payload 669, unused 272, max 27
+ 117 leaf     orders /01a/ cells 18, payload 752, unused 174, max 49
+ 118 leaf     orders /01b/ cells 18, payload 753, unused 173, max 50
+ 119 leaf     orders /01c/ cells 18, payload 756, unused 170, max 51
+ 120 leaf     orders /01d/ cells 18, payload 753, unused 173, max 50
+ 121 leaf     idx_orders_customer /017/ cells 20, payload 536, unused 420, max 27
+ 122 leaf     orders /01e/ cells 18, payload 740, unused 186, max 48
+ 123 leaf     idx_orders_customer /00f/ cells 17, payload 456, unused 509, max 27
+ 124 leaf     orders /01f/ cells 18, payload 763, unused 163, max 51
+ 125 leaf     idx_orders_customer /013/ cells 15, payload 401, unused 570, max 27
+ 126 leaf     idx_orders_customer /003/ cells 14, payload 375, unused 599, max 27
+ 127 leaf     idx_orders_customer /00b/ cells 23, payload 618, unused 329, max 27
+ 128 leaf     orders /020/ cells 18, payload 757, unused 169, max 50
+ 129 leaf     orders /021/ cells 4, payload 149, unused 843, max 40
+ 130 leaf     kv /000/ cells 52, payload 776, unused 84, max 22
+ 131 leaf     kv /001/ cells 43, payload 713, unused 174, max 20
+ 132 leaf     kv /002/ cells 48, payload 758, unused 114, max 22
+ 133 leaf     kv /003/ cells 34, payload 466, unused 448, max 19
+-- tables
+customers: 117 rows
+  1: 1, 'Grace Chen', 'grace.1@example.fr', 'IN', 4528.88, 'warehouse changed fragile order', 'basic', 0, -1.5
+  2: 2, 'Linus Rao', 'linus.2@example.gb', 'US', 4009.78, 'shipped order courier warehouse gift', 'basic', 0, -1.5
+  3: 3, 'Zoë Hopper', 'zoë.3@example.in', 'DK', 4052.82, 'returns express weekend naïve weekend we' +5, 'basic', 0, -1.5
+  4: 4, 'Jürgen Adeyemi', 'jürgen.4@example.jp', 'GB', 3092.15, NULL, 'basic', 0, -1.5
+  5: 5, 'Søren Haddad', 'søren.5@example.ng', 'NG', 4973.39, 'parcel fragile café shipped parcel wrap ' +14, 'basic', 0, -1.5
+  6: 6, 'Amélie Okafor', 'amélie.6@example.us', 'TR', 4949.33, 'tracking late loyal', 'basic', 0, -1.5
+  7: 7, 'Hiroshi Sharma', 'hiroshi.7@example.br', 'FR', 3225.69, 'parcel tracking courier returns', 'basic', 0, -1.5
+  8: 8, 'Mei Ferreira', 'mei.8@example.tr', 'JP', 468.85, NULL, 'basic', 0, -1.5
+  9: 9, 'Olu Müller', 'olu.9@example.dk', 'BR', -370.97, 'naïve order wrap changed address refund ' +3930, 'basic', 0, -1.5
+  10: 10, 'Priya García', 'priya.10@example.de', 'DE', 2533.07, 'express late discount invoice express wa' +16, 'gold', 30, -1.5
+  11: 11, 'Mateo Sato', 'mateo.11@example.fr', 'IN', NULL, 'fragile order gift courier customer addr' +13, 'basic', 0, -1.5
+  12: 12, 'Ines Kierkegaard', 'ines.12@example.gb', 'US', 3549.28, NULL, 'basic', 0, -1.5
+  13: 13, 'Kwame Silva', 'kwame.13@example.in', 'DK', 1e+100, 'shipped asked refund changed', 'basic', 0, -1.5
+  14: 14, 'Lena Yılmaz', 'lena.14@example.jp', 'GB', 2496.65, 'customer gift weekend parcel order', 'basic', 0, -1.5
+  15: 15, 'Arjun Poulain', 'arjun.15@example.ng', 'NG', 2940.64, 'changed parcel naïve fragile gift tracki' +2, 'basic', 0, -1.5
+  16: 16, 'Noor Mensah', 'noor.16@example.us', 'TR', 3204.79, NULL, 'basic', 0, -1.5
+  17: 17, 'Tomás Ng', NULL, 'FR', 2302.64, 'returns café refund late shipped discoun' +17, 'basic', 0, -1.5
+  18: 18, 'Yuki 東京', 'yuki.18@example.tr', 'JP', 3297.76, NULL, 'basic', 0, -1.5
+  19: 19, 'Elif Novak', 'elif.19@example.dk', 'BR', 3923.11, 'tracking courier café fragile', 'basic', 0, -1.5
+  20: 20, 'Ada Lovelace', 'ada.20@example.de', 'DE', 2620.73, NULL, 'gold', 60, -1.5
+  21: 21, 'Grace Chen', 'grace.21@example.fr', 'IN', 4671.74, 'wrap address address gift naïve order', 'basic', 0, -1.5
+  22: 22, 'Linus Rao', 'linus.22@example.gb', 'US', NULL, 'invoice loyal address café parcel discou' +8, 'basic', 0, -1.5
+  23: 23, 'Zoë Hopper', 'zoë.23@example.in', 'DK', 1797.22, 'address fragile naïve fragile gift expre' +16, 'basic', 0, -1.5
+  24: 24, 'Jürgen Adeyemi', 'jürgen.24@example.jp', 'GB', 2345.33, NULL, 'basic', 0, -1.5
+  25: 25, 'Søren Haddad', 'søren.25@example.ng', 'NG', 146.6, 'address parcel naïve asked', 'basic', NULL, 4.25
+  26: 26, 'Amélie Okafor', 'amélie.26@example.us', 'TR', -2.5e-08, 'discount discount parcel warehouse wrap', 'basic', 0, -1.5
+  27: 27, 'Hiroshi Sharma', 'hiroshi.27@example.br', 'FR', 1534.82, 'wrap returns loyal asked late express ex' +3362, 'basic', 0, -1.5
+  28: 28, 'Mei Ferreira', 'mei.28@example.tr', 'JP', 1030.59, NULL, 'basic', 0, -1.5
+  29: 29, 'Olu Müller', 'olu.29@example.dk', 'BR', 4526.1, 'loyal refund refund weekend late wrap co' +10, 'basic', 0, -1.5
+  30: 30, 'Priya García', 'priya.30@example.de', 'DE', 2470.31, 'courier parcel naïve', 'gold', 90, -1.5
+  31: 31, 'Mateo Sato', 'mateo.31@example.fr', 'IN', 527.16, 'fragile café parcel refund', 'basic', 0, -1.5
+  32: 32, 'Ines Kierkegaard', 'ines.32@example.gb', 'US', 2420.05, NULL, 'basic', 0, -1.5
+  33: 33, 'Kwame Silva', 'kwame.33@example.in', 'DK', NULL, 'fragile returns warehouse shipped late o' +4, 'basic', 0, -1.5
+  34: 34, 'Lena Yılmaz', NULL, 'GB', 3029.75, 'tracking wrap warehouse address tracking' +16, 'basic', 0, -1.5
+  35: 35, 'Arjun Poulain', 'arjun.35@example.ng', 'NG', 4273.85, 'fragile shipped customer courier changed' +19, 'basic', 0, -1.5
+  36: 36, 'Noor Mensah', 'noor.36@example.us', 'TR', 2909.9, NULL, 'basic', 0, -1.5
+  37: 37, 'Tomás Ng', 'tomás.37@example.br', 'FR', -420.94, 'courier fragile discount shipped', 'basic', 0, -1.5
+  38: 38, 'Yuki 東京', 'yuki.38@example.tr', 'JP', -389.49, 'address order changed warehouse wrap', 'basic', 0, -1.5
+  39: 39, 'Elif Novak', 'elif.39@example.dk', 'BR', 123456789.125, 'refund customer changed tracking wrap we' +5, 'basic', 0, -1.5
+  40: 40, 'Ada Lovelace', 'ada.40@example.de', 'DE', 1532.44, NULL, 'gold', 120, -1.5
+  41: 41, 'Grace Chen', 'grace.41@example.fr', 'IN', 499.07, 'wrap weekend late asked invoice late cou' +12, 'basic', 0, -1.5
+  42: 42, 'Linus Rao', 'linus.42@example.gb', 'US', -156.91, 'fragile weekend refund', 'basic', 0, -1.5
+  43: 43, 'Zoë Hopper', 'zoë.43@example.in', 'DK', 464.83, 'warehouse express shipped gift', 'basic', 0, -1.5
+  44: 44, 'Jürgen Adeyemi', 'jürgen.44@example.jp', 'GB', NULL, NULL, 'basic', 0, -1.5
+  45: 45, 'Søren Haddad', 'søren.45@example.ng', 'NG', 4146.2, 'loyal weekend returns shipped shipped na' +2869, 'basic', 0, -1.5
+  46: 46, 'Amélie Okafor', 'amélie.46@example.us', 'TR', 4816.37, 'order express late asked express discoun' +10, 'basic', 0, -1.5
+  47: 47, 'Hiroshi Sharma', 'hiroshi.47@example.br', 'FR', -8.55, 'address customer gift late warehouse war' +22, 'basic', 0, -1.5
+  48: 48, 'Mei Ferreira', 'mei.48@example.tr', 'JP', 968.35, NULL, 'basic', 0, -1.5
+  49: 49, 'Olu Müller', 'olu.49@example.dk', 'BR', 2085.04, 'changed order invoice naïve', 'basic', 0, -1.5
+  50: 50, 'Priya García', 'priya.50@example.de', 'DE', 699.12, 'café parcel express fragile discount', 'gold', NULL, 4.25
+  51: 51, 'Mateo Sato', NULL, 'IN', 4232.82, 'returns address changed weekend late ref' +3, 'basic', 0, -1.5
+  52: 52, 'Ines Kierkegaard', 'ines.52@example.gb', 'US', 3.0, NULL, 'basic', 0, -1.5
+  53: 53, 'Kwame Silva', 'kwame.53@example.in', 'DK', 1772.25, 'courier invoice tracking order weekend l' +14, 'basic', 0, -1.5
+  54: 54, 'Lena Yılmaz', 'lena.54@example.jp', 'GB', 1637.08, NULL, 'basic', 0, -1.5
+  55: 55, 'Arjun Poulain', 'arjun.55@example.ng', 'NG', NULL, 'naïve refund discount asked', 'basic', 0, -1.5
+  56: 56, 'Noor Mensah', 'noor.56@example.us', 'TR', 1464.31, NULL, 'basic', 0, -1.5
+  57: 57, 'Tomás Ng', 'tomás.57@example.br', 'FR', 4245.73, 'tracking order asked courier café return' +1, 'basic', 0, -1.5
+  58: 58, 'Yuki 東京', 'yuki.58@example.tr', 'JP', 4023.75, 'naïve express weekend changed address re' +10, 'basic', 0, -1.5
+  59: 59, 'Elif Novak', 'elif.59@example.dk', 'BR', -239.81, 'discount asked tracking order parcel fra' +20, 'basic', 0, -1.5
+  60: 60, 'Ada Lovelace', 'ada.60@example.de', 'DE', 2993.83, NULL, 'gold', 180, -1.5
+  61: 61, 'Grace Chen', 'grace.61@example.fr', 'IN', 1990.47, 'tracking parcel order gift', 'basic', 0, -1.5
+  62: 62, 'Linus Rao', 'linus.62@example.gb', 'US', 1999.58, 'fragile address asked tracking loyal', 'basic', 0, -1.5
+  63: 63, 'Zoë Hopper', 'zoë.63@example.in', 'DK', 3022.12, 'changed discount shipped changed trackin' +3655, 'basic', 0, -1.5
+  64: 64, 'Jürgen Adeyemi', 'jürgen.64@example.jp', 'GB', -141.35, NULL, 'basic', 0, -1.5
+  65: 65, 'Søren Haddad', 'søren.65@example.ng', 'NG', 0.1, 'loyal wrap naïve express naïve naïve cus' +13, 'basic', 0, -1.5
+  66: 66, 'Amélie Okafor', 'amélie.66@example.us', 'TR', NULL, 'returns refund asked', 'basic', 0, -1.5
+  67: 67, 'Hiroshi Sharma', 'hiroshi.67@example.br', 'FR', 1934.42, 'customer courier late refund', 'basic', 0, -1.5
+  68: 68, 'Mei Ferreira', NULL, 'JP', -130.73, NULL, 'basic', 0, -1.5
+  69: 69, 'Olu Müller', 'olu.69@example.dk', 'BR', 2718.91, 'returns naïve parcel café discount wareh' +4, 'basic', 0, -1.5
+  70: 70, 'Priya García', 'priya.70@example.de', 'DE', 3123.05, 'courier tracking loyal changed wrap ship' +8, 'gold', 210, -1.5
+  71: 71, 'Mateo Sato', 'mateo.71@example.fr', 'IN', 1616.44, 'weekend fragile shipped returns warehous' +23, 'basic', 0, -1.5
+  72: 72, 'Ines Kierkegaard', 'ines.72@example.gb', 'US', 4702.76, NULL, 'basic', 0, -1.5
+  73: 73, 'Kwame Silva', 'kwame.73@example.in', 'DK', 3401.45, 'address address invoice loyal', 'basic', 0, -1.5
+  74: 74, 'Lena Yılmaz', 'lena.74@example.jp', 'GB', 1146.36, 'wrap wrap customer refund café', 'basic', 0, -1.5
+  75: 75, 'Arjun Poulain', 'arjun.75@example.ng', 'NG', 3020.42, 'shipped asked asked order returns courie' +1, 'basic', NULL, 4.25
+  76: 76, 'Noor Mensah', 'noor.76@example.us', 'TR', -95.05, NULL, 'basic', 0, -1.5
+  77: 77, 'Tomás Ng', 'tomás.77@example.br', 'FR', NULL, 'fragile order address gift address custo' +17, 'basic', 0, -1.5
+  78: 78, 'Yuki 東京', 'yuki.78@example.tr', 'JP', 1e+100, 'address tracking customer', 'basic', 0, -1.5
+  79: 79, 'Elif Novak', 'elif.79@example.dk', 'BR', 879.77, 'parcel wrap gift late', 'basic', 0, -1.5
+  80: 80, 'Ada Lovelace', 'ada.80@example.de', 'DE', 3902.9, NULL, 'gold', 240, -1.5
+  81: 81, 'Grace Chen', 'grace.81@example.fr', 'IN', 942.05, 'warehouse refund loyal order express war' +3110, 'basic', 0, -1.5
+  82: 82, 'Linus Rao', 'linus.82@example.gb', 'US', 3822.7, 'invoice late late changed refund weekend' +5, 'basic', 0, -1.5
+  83: 83, 'Zoë Hopper', 'zoë.83@example.in', 'DK', 1168.18, 'weekend express weekend naïve invoice ch' +18, 'basic', 0, -1.5
+  84: 84, 'Jürgen Adeyemi', 'jürgen.84@example.jp', 'GB', 4487.61, NULL, 'basic', 0, -1.5
+  85: 85, 'Søren Haddad', NULL, 'NG', 4330.16, 'wrap refund address discount', 'basic', 0, -1.5
+  86: 86, 'Amélie Okafor', 'amélie.86@example.us', 'TR', 1854.61, 'weekend returns invoice fragile order', 'basic', 0, -1.5
+  87: 87, 'Hiroshi Sharma', 'hiroshi.87@example.br', 'FR', 2520.94, 'discount wrap gift shipped weekend expre' +2, 'basic', 0, -1.5
+  88: 88, 'Mei Ferreira', 'mei.88@example.tr', 'JP', NULL, NULL, 'basic', 0, -1.5
+  89: 89, 'Olu Müller', 'olu.89@example.dk', 'BR', 4462.31, 'address wrap discount café wrap gift shi' +12, 'basic', 0, -1.5
+  90: 90, 'Priya García', 'priya.90@example.de', 'DE', 1070.06, NULL, 'gold', 270, -1.5
+  91: 91, 'Mateo Sato', 'mateo.91@example.fr', 'IN', -2.5e-08, 'café courier tracking shipped', 'basic', 0, -1.5
+  92: 92, 'Ines Kierkegaard', 'ines.92@example.gb', 'US', 4229.19, NULL, 'basic', 0, -1.5
+  93: 93, 'Kwame Silva', 'kwame.93@example.in', 'DK', 4299.44, 'naïve order weekend order warehouse invo' +3, 'basic', 0, -1.5
+  94: 94, 'Lena Yılmaz', 'lena.94@example.jp', 'GB', 3133.68, 'parcel asked asked order address gift tr' +6, 'basic', 0, -1.5
+  95: 95, 'Arjun Poulain', 'arjun.95@example.ng', 'NG', 52.45, 'wrap parcel loyal café courier weekend l' +10, 'basic', 0, -1.5
+  96: 96, 'Noor Mensah', 'noor.96@example.us', 'TR', 2874.25, NULL, 'basic', 0, -1.5
+  97: 97, 'Tomás Ng', 'tomás.97@example.br', 'FR', 1479.01, 'invoice order address customer', 'basic', 0, -1.5
+  98: 98, 'Yuki 東京', 'yuki.98@example.tr', 'JP', 1534.22, 'courier customer changed changed address', 'basic', 0, -1.5
+  99: 99, 'Elif Novak', 'elif.99@example.dk', 'BR', NULL, 'fragile late order refund refund discoun' +3941, 'basic', 0, -1.5
+  100: 100, 'Ada Lovelace', 'ada.100@example.de', 'DE', 4383.94, NULL, 'gold', NULL, 4.25
+  101: 101, 'Grace Chen', 'grace.101@example.fr', 'IN', 1274.11, 'wrap discount changed invoice order disc' +17, 'basic', 0, -1.5
+  102: 102, 'Linus Rao', NULL, 'US', -261.79, 'wrap shipped order', 'basic', 0, -1.5
+  103: 103, 'Zoë Hopper', 'zoë.103@example.in', 'DK', 1558.05, 'parcel parcel refund changed', 'basic', 0, -1.5
+  104: 104, 'Jürgen Adeyemi', 'jürgen.104@example.jp', 'GB', 123456789.125, NULL, 'basic', 0, -1.5
+  105: 105, 'Søren Haddad', 'søren.105@example.ng', 'NG', 2559.25, 'fragile invoice tracking discount café c' +6, 'basic', 0, -1.5
+  106: 106, 'Amélie Okafor', 'amélie.106@example.us', 'TR', 1375.31, 'warehouse asked gift shipped naïve late ' +4, 'basic', 0, -1.5
+  107: 107, 'Hiroshi Sharma', 'hiroshi.107@example.br', 'FR', 4830.95, 'wrap late parcel late gift warehouse lat' +7, 'basic', 0, -1.5
+  108: 108, 'Mei Ferreira', 'mei.108@example.tr', 'JP', 4731.05, NULL, 'basic', 0, -1.5
+  109: 109, 'Olu Müller', 'olu.109@example.dk', 'BR', -178.07, 'address invoice naïve naïve', 'basic', 0, -1.5
+  110: 110, 'Priya García', 'priya.110@example.de', 'DE', NULL, 'wrap parcel customer order naïve', 'gold', 330, -1.5
+  114: 114, 'Lena Yılmaz', 'lena.114@example.jp', 'GB', 2551.69, 'fragile parcel naïve', 'basic', 0, -1.5
+  115: 115, 'Arjun Poulain', 'arjun.115@example.ng', 'NG', 1972.94, 'asked fragile café order', 'basic', 0, -1.5
+  116: 116, 'Noor Mensah', 'noor.116@example.us', 'TR', 918.6, NULL, 'basic', 0, -1.5
+  117: 117, 'Tomás Ng', 'tomás.117@example.br', 'FR', 3.0, 'late customer asked shipped gift weekend' +3433, 'basic', 0, -1.5
+  118: 118, 'Yuki 東京', 'yuki.118@example.tr', 'JP', 3938.81, 'express gift courier wrap customer late ' +7, 'basic', 0, -1.5
+  119: 119, 'Elif Novak', NULL, 'BR', 2402.85, 'fragile invoice customer address refund ' +18, 'basic', 0, -1.5
+  120: 120, 'Ada Lovelace', 'ada.120@example.de', 'DE', 535.0, NULL, 'gold', 360, -1.5
+orders: 601 rows
+  20: 20, 21, 24002, '2026-05-09T20:00:00Z', 'paid', x'2c5c8781cd80ed80'
+  40: 40, 41, 169569, '2026-09-17T16:00:00Z', 'paid', x'7810de14'
+  60: 60, 61, 215409, '2026-01-25T12:00:00Z', 'paid', NULL
+  100: 100, 101, 25606, '2026-09-13T04:00:00Z', NULL, x'b0b3f850'
+  120: 120, 1, 75356, '2026-01-21T00:00:00Z', 'paid', NULL
+  140: 140, 21, 82031, '2026-05-01T20:00:00Z', 'paid', x'2b52539ad41a9b21'
+  160: 160, 41, 249706, '2026-09-09T16:00:00Z', 'paid', x'ac035c67'
+  180: 180, 61, 0, '2026-01-17T12:00:00Z', 'paid', NULL
+  200: 200, 81, 167237, '2026-05-25T08:00:00Z', NULL, x'0a18efc315f68008'
+  240: 240, 1, 221819, '2026-01-13T00:00:00Z', 'paid', NULL
+  260: 260, 21, 69345, '2026-05-21T20:00:00Z', 'paid', x'ed12a48ff28ec520'
+  280: 280, 41, 163420, '2026-09-01T16:00:00Z', 'paid', x'b5b74cdd'
+  300: 300, 61, 47651, '2026-01-09T12:00:00Z', NULL, NULL
+  320: 320, 81, 10205, '2026-05-17T08:00:00Z', 'paid', x'0b4487c9af00e7a5'
+  340: 340, 101, 120491, '2026-09-25T04:00:00Z', 'paid', x'1e3a9f2e'
+  380: 380, 21, 70074, '2026-05-13T20:00:00Z', 'paid', x'2400591f4c4a281a'
+  400: 400, 41, 197905, '2026-09-21T16:00:00Z', NULL, x'91148a5f'
+  420: 420, 61, -1902, '2026-01-01T12:00:00Z', 'paid', NULL
+  440: 440, 81, 208805, '2026-05-09T08:00:00Z', 'paid', x'a83b82a117ec96c2'
+  460: 460, 101, 62025, '2026-09-17T04:00:00Z', 'paid', x'5a500a96'
+  480: 480, 1, 122527, '2026-01-25T00:00:00Z', 'paid', NULL
+  520: 520, 41, 114504, '2026-09-13T16:00:00Z', 'paid', x'8178766e'
+  540: 540, 61, 0, '2026-01-21T12:00:00Z', 'paid', NULL
+  560: 560, 81, 223215, '2026-05-01T08:00:00Z', 'paid', x'2d4d5fe36f413a4e'
+  580: 580, 101, 156457, '2026-09-09T04:00:00Z', 'paid', x'5b95444c'
+  600: 600, 1, 199576, '2026-01-17T00:00:00Z', NULL, NULL
+  620: 620, 21, 247626, '2026-05-25T20:00:00Z', 'paid', x'2befcd259ccc169c'
+  660: 660, 61, 118063, '2026-01-13T12:00:00Z', 'paid', NULL
+  680: 680, 81, 147174, '2026-05-21T08:00:00Z', 'paid', x'a58f9eae77dfc8b9'
+  700: 700, 101, 59709, '2026-09-01T04:00:00Z', NULL, x'4b1b6d8f'
+  1099511627776: 1099511627776, 5, 99, '2026-12-31T23:59:59Z', 'paid', x'00ff'
+kv: 180 rows
+  'cfg:000', 0
+  'cfg:004', NULL
+  'cfg:008', 'v8'
+  'cfg:012', 12000
+  'cfg:016', NULL
+  'cfg:020', 'v20'
+  'cfg:024', 24000
+  'cfg:028', NULL
+  'cfg:032', 'v32'
+  'cfg:036', 36000
+  'cfg:040', NULL
+  'cfg:044', 'v44'
+  'cfg:048', 48000
+  'cfg:052', NULL
+  'cfg:056', 'v56'
+  'cfg:060', 60000
+  'cfg:064', NULL
+  'cfg:068', 'v68'
+  'cfg:072', 72000
+  'cfg:076', NULL
+  'flag:001', 0.125
+  'flag:005', -5
+  'flag:009', x'09f6'
+  'flag:013', 1.625
+  'flag:017', -17
+  'flag:021', x'15ea'
+  'flag:025', 3.125
+  'flag:029', -29
+  'flag:033', x'21de'
+  'flag:037', 4.625
+  'flag:041', -41
+  'flag:045', x'2dd2'
+  'flag:049', 6.125
+  'flag:053', -53
+  'flag:057', x'39c6'
+  'flag:061', 7.625
+  'flag:065', -65
+  'flag:069', x'45ba'
+  'flag:073', 9.125
+  'flag:077', -77
+  'note:003', x'03fc'
+  'note:007', 0.875
+  'note:011', -11
+  'note:015', x'0ff0'
+  'note:019', 2.375
+  'note:023', 'refund courier gift parcel café asked sh' +166
+  'note:027', x'1be4'
+  'note:031', 3.875
+  'note:035', -35
+  'note:039', x'27d8'
+  'note:043', 5.375
+  'note:047', -47
+  'note:051', x'33cc'
+  'note:055', 6.875
+  'note:059', -59
+  'note:063', x'3fc0'
+  'note:067', 8.375
+  'note:071', -71
+  'note:075', x'4bb4'
+  'note:079', 9.875
+  'stat:002', 'v2'
+  'stat:006', 6000
+  'stat:010', NULL
+  'stat:014', 'v14'
+  'stat:018', 18000
+  'stat:022', NULL
+  'stat:026', 'v26'
+  'stat:030', 30000
+  'stat:034', NULL
+  'stat:038', 'v38'
+  'stat:042', 42000
+  'stat:046', NULL
+  'stat:050', 'v50'
+  'stat:054', 54000
+  'stat:058', NULL
+  'stat:062', 'v62'
+  'stat:066', 66000
+  'stat:070', NULL
+  'stat:074', 'v74'
+  'stat:078', 78000
+  100 deleted:* keys, values sum to 281479282631388, first 'deleted:10', 96195, last 'deleted:94', 110348
+-- indexes
+sqlite_autoindex_customers_1 (email): 117 entries
+  NULL, 17
+  NULL, 34
+  NULL, 51
+  ...
+  'zoë.43@example.in', 43
+  'zoë.63@example.in', 63
+  'zoë.83@example.in', 83
+idx_orders_customer (customer_id, placed): 601 entries
+  1, '2026-01-13T00:00:00Z', 240
+  1, '2026-01-17T00:00:00Z', 600
+  1, '2026-01-21T00:00:00Z', 120
+  ...
+  120, '2026-02-10T23:00:00Z', 89
+  120, '2026-02-14T23:00:00Z', 449
+  120, '2026-02-22T23:00:00Z', 329
+-- lookups
+email 'grace.1@example.fr': 1: 1, 'Grace Chen', 'grace.1@example.fr', 'IN', 4528.88, 'warehouse changed fragile order', 'basic', 0, -1.5
+email 'olu.9@example.dk': 9: 9, 'Olu Müller', 'olu.9@example.dk', 'BR', -370.97, 'naïve order wrap changed address refund ' +3930, 'basic', 0, -1.5
+email 'tomás.17@example.br': not found
+email 'priya.50@example.de': 50: 50, 'Priya García', 'priya.50@example.de', 'DE', 699.12, 'café parcel express fragile discount', 'gold', NULL, 4.25
+email 'mateo.111@example.fr': not found
+email 'ada.120@example.de': 120: 120, 'Ada Lovelace', 'ada.120@example.de', 'DE', 535.0, NULL, 'gold', 360, -1.5
+email 'nobody@example.com': not found
+email '': not found
+orders of 5: 7
+  364 2026-09-01T04:00:00Z 15593
+  244 2026-09-09T04:00:00Z 170782
+  604 2026-09-13T04:00:00Z 178659
+  124 2026-09-17T04:00:00Z 178619
+  484 2026-09-21T04:00:00Z 231969
+  4 2026-09-25T04:00:00Z 84950
+  1099511627776 2026-12-31T23:59:59Z 99
+orders of 31: 5
+  330 2026-07-07T06:00:00Z 47622
+  690 2026-07-11T06:00:00Z 125997
+  210 2026-07-15T06:00:00Z 147734
+  90 2026-07-23T06:00:00Z 0
+  450 2026-07-27T06:00:00Z 0
+orders of 64: 5
+  153 2026-10-02T15:00:00Z 128
+  513 2026-10-06T15:00:00Z 128
+  33 2026-10-10T15:00:00Z 142312
+  393 2026-10-14T15:00:00Z 202405
+  273 2026-10-22T15:00:00Z 53167
+orders of 119: 5
+  418 2026-03-03T22:00:00Z 49253
+  298 2026-03-11T22:00:00Z 146683
+  658 2026-03-15T22:00:00Z 144624
+  538 2026-03-23T22:00:00Z 140314
+  58 2026-03-27T22:00:00Z 204779
+orders of 121: 0
+orders rows 100 to 130: 26
+  100: 100, 101, 25606, '2026-09-13T04:00:00Z', NULL, x'b0b3f850'
+  102: 102, 43, 105030, '2026-07-11T18:00:00Z', 'refunded', NULL
+  103: 103, 74, 227904, '2026-12-24T01:00:00Z', 'pending', x'6b422c3bc68179'
+  104: 104, 105, 91522, '2026-05-09T08:00:00Z', 'cancelled', x'3d448a18d2e66592'
+  105: 105, 16, 200765, '2026-10-22T15:00:00Z', 'paid', NULL
+  106: 106, 47, 84308, '2026-03-07T22:00:00Z', 'shipped', x'a30a97bd05aa471d4387'
+  107: 107, 78, 234999, '2026-08-20T05:00:00Z', 'refunded', x'41ce20f1f8e2e4cb31b898'
+  109: 109, 20, 185496, '2026-06-18T19:00:00Z', 'cancelled', x'ac'
+  110: 110, 51, 37806, '2026-11-03T02:00:00Z', 'paid', x'50e6'
+  111: 111, 82, 169302, '2026-04-16T09:00:00Z', 'shipped', NULL
+  112: 112, 113, 150486, '2026-09-01T16:00:00Z', 'refunded', x'67cfb96b'
+  113: 113, 24, 121709, '2026-02-14T23:00:00Z', 'pending', x'89c3780615'
+  114: 114, 55, 30317, '2026-07-27T06:00:00Z', 'cancelled', NULL
+  116: 116, 117, 110700, '2026-05-25T20:00:00Z', 'shipped', x'cefcddc137379c06'
+  117: 117, 28, 140737488355328, '2026-10-10T03:00:00Z', 'refunded', NULL
+  118: 118, 59, 97280, '2026-03-23T10:00:00Z', 'pending', x'3df6d833d44bb2ae34ea'
+  119: 119, 90, 163860, '2026-08-08T17:00:00Z', 'cancelled', x'a0240aecf8b20591ce4806'
+  120: 120, 1, 75356, '2026-01-21T00:00:00Z', 'paid', NULL
+  121: 121, 32, 1308, '2026-06-06T07:00:00Z', 'shipped', x'c2'
+  123: 123, 94, 124005, '2026-04-04T21:00:00Z', 'pending', NULL
+  124: 124, 5, 178619, '2026-09-17T04:00:00Z', 'cancelled', x'f219aac2'
+  125: 125, 36, 70789, '2026-02-02T11:00:00Z', 'paid', x'13941bcd59'
+  126: 126, 67, 32768, '2026-07-15T18:00:00Z', 'shipped', NULL
+  127: 127, 98, 155045, '2026-12-28T01:00:00Z', 'refunded', x'968aedab851bff'
+  128: 128, 9, 184328, '2026-05-13T08:00:00Z', 'pending', x'415bc4a2ff344ca5'
+  130: 130, 71, 109602, '2026-03-11T22:00:00Z', 'paid', x'ca29ebb6537ef96f4001'
+orders rows 690 to 1099511627776: 11
+  690: 690, 31, 125997, '2026-07-11T06:00:00Z', 'paid', NULL
+  691: 691, 62, 189492, '2026-12-24T13:00:00Z', 'shipped', x'4c23d20a59fa03'
+  692: 692, 93, 201823, '2026-05-09T20:00:00Z', 'refunded', x'8f5d205fb9f8376c'
+  693: 693, 4, 128, '2026-10-22T03:00:00Z', 'pending', NULL
+  694: 694, 35, 156477, '2026-03-07T10:00:00Z', 'cancelled', x'899c213b045f675fecfb'
+  695: 695, 66, 239405, '2026-08-20T17:00:00Z', 'paid', x'606246320ea85e14728a03'
+  697: 697, 8, 102834, '2026-06-18T07:00:00Z', 'refunded', x'fc'
+  698: 698, 39, 16325, '2026-11-03T14:00:00Z', 'pending', x'b333'
+  699: 699, 70, 91112, '2026-04-16T21:00:00Z', 'cancelled', NULL
+  700: 700, 101, 59709, '2026-09-01T04:00:00Z', NULL, x'4b1b6d8f'
+  1099511627776: 1099511627776, 5, 99, '2026-12-31T23:59:59Z', 'paid', x'00ff'
+customers rows 109 to 115: 4
+  109: 109, 'Olu Müller', 'olu.109@example.dk', 'BR', -178.07, 'address invoice naïve naïve', 'basic', 0, -1.5
+  110: 110, 'Priya García', 'priya.110@example.de', 'DE', NULL, 'wrap parcel customer order naïve', 'gold', 330, -1.5
+  114: 114, 'Lena Yılmaz', 'lena.114@example.jp', 'GB', 2551.69, 'fragile parcel naïve', 'basic', 0, -1.5
+  115: 115, 'Arjun Poulain', 'arjun.115@example.ng', 'NG', 1972.94, 'asked fragile café order', 'basic', 0, -1.5
+-- orders by country
+BR 60 6787112
+DE 60 15039142396
+DK 50 6677013
+FR 60 6528115
+GB 60 6810895
+IN 55 6369807
+JP 53 6754291
+NG 61 15038613218
+TR 60 6485184
+US 54 6288516
+== data/notes16.db
+page size 512, 85 pages, UTF-16le, auto-vacuum full
+schema version 2, user version 0, application id 0, written by 3045001
+0 free pages
+-- schema
+table notes on notes, root 3: 'CREATE TABLE notes(id INTEGER PRIMARY KE' +36
+index idx_notes_title on notes, root 4: 'CREATE INDEX idx_notes_title ON notes(ti' +4
+-- pages
+   1 leaf     sqlite_schema / cells 2, payload 336, unused 58, max 190
+   2 ptrmap
+   3 internal notes / cells 22, payload 0, unused 346, max 0
+   4 internal idx_notes_title / cells 2, payload 62, unused 424, max 32
+   5 leaf     notes /013/ cells 2, payload 379, unused 111, max 520
+   6 overflow notes /000/001+000000 cells 0, payload 508, unused 0, max 0
+   7 overflow notes /001/000+000000 cells 0, payload 508, unused 0, max 0
+   8 leaf     notes /000/ cells 2, payload 392, unused 98, max 602
+   9 leaf     notes /001/ cells 1, payload 206, unused 289, max 714
+  10 overflow notes /002/000+000000 cells 0, payload 508, unused 0, max 0
+  11 leaf     notes /002/ cells 1, payload 418, unused 77, max 926
+  12 overflow notes /003/000+000000 cells 0, payload 508, unused 0, max 0
+  13 overflow notes /003/000+000001 cells 0, payload 508, unused 0, max 0
+  14 overflow notes /003/000+000002 cells 0, payload 508, unused 0, max 0
+  15 overflow notes /003/000+000003 cells 0, payload 508, unused 0, max 0
+  16 overflow notes /003/000+000004 cells 0, payload 508, unused 0, max 0
+  17 leaf     notes /003/ cells 1, payload 472, unused 23, max 3012
+  18 overflow notes /016/001+000001 cells 0, payload 508, unused 0, max 0
+  19 overflow notes /013/001+000000 cells 0, payload 481, unused 27, max 0
+  20 leaf     notes /004/ cells 1, payload 372, unused 123, max 1388
+  21 overflow notes /004/000+000000 cells 0, payload 508, unused 0, max 0
+  22 overflow notes /004/000+000001 cells 0, payload 508, unused 0, max 0
+  23 overflow notes /014/000+000000 cells 0, payload 508, unused 0, max 0
+  24 leaf     notes /005/ cells 1, payload 258, unused 241, max 258
+  25 leaf     notes /006/ cells 2, payload 482, unused 8, max 580
+  26 overflow notes /006/001+000000 cells 0, payload 508, unused 0, max 0
+  27 overflow notes /014/000+000001 cells 0, payload 508, unused 0, max 0
+  28 overflow notes /014/000+000002 cells 0, payload 508, unused 0, max 0
+  29 overflow notes /014/000+000003 cells 0, payload 508, unused 0, max 0
+  30 overflow notes /014/000+000004 cells 0, payload 508, unused 0, max 0
+  31 leaf     notes /014/ cells 1, payload 380, unused 115, max 2920
+  32 leaf     notes /007/ cells 2, payload 424, unused 62, max 1070
+  33 overflow notes /007/000+000000 cells 0, payload 508, unused 0, max 0
+  34 leaf     notes /015/ cells 1, payload 438, unused 57, max 946
+  35 overflow notes /007/001+000000 cells 0, payload 508, unused 0, max 0
+  36 overflow notes /007/001+000001 cells 0, payload 508, unused 0, max 0
+  37 overflow notes /008/000+000000 cells 0, payload 508, unused 0, max 0
+  38 overflow notes /008/000+000001 cells 0, payload 508, unused 0, max 0
+  39 leaf     notes /008/ cells 1, payload 196, unused 299, max 1212
+  40 overflow notes /009/000+000000 cells 0, payload 508, unused 0, max 0
+  41 overflow notes /009/000+000001 cells 0, payload 508, unused 0, max 0
+  42 leaf     notes /009/ cells 1, payload 358, unused 137, max 1374
+  43 leaf     idx_notes_title /000/ cells 12, payload 337, unused 131, max 36
+  44 leaf     idx_notes_title /001/ cells 8, payload 208, unused 272, max 32
+  45 leaf     notes /00a/ cells 3, payload 235, unused 242, max 3042
+  46 overflow notes /00a/000+000000 cells 0, payload 508, unused 0, max 0
+  47 overflow notes /00a/000+000001 cells 0, payload 508, unused 0, max 0
+  48 overflow notes /00a/000+000002 cells 0, payload 508, unused 0, max 0
+  49 overflow notes /00a/000+000003 cells 0, payload 508, unused 0, max 0
+  50 overflow notes /00a/000+000004 cells 0, payload 508, unused 0, max 0
+  51 overflow notes /00a/000+000005 cells 0, payload 463, unused 45, max 0
+  52 overflow notes /00a/001+000000 cells 0, payload 508, unused 0, max 0
+  53 overflow notes /00a/002+000000 cells 0, payload 508, unused 0, max 0
+  54 overflow notes /00b/000+000000 cells 0, payload 508, unused 0, max 0
+  55 leaf     notes /00b/ cells 1, payload 344, unused 151, max 852
+  56 overflow notes /015/000+000000 cells 0, payload 508, unused 0, max 0
+  57 overflow notes /016/000+000000 cells 0, payload 508, unused 0, max 0
+  58 overflow notes /00c/000+000000 cells 0, payload 508, unused 0, max 0
+  59 overflow notes /00c/000+000001 cells 0, payload 508, unused 0, max 0
+  60 leaf     notes /00c/ cells 1, payload 156, unused 339, max 1172
+  61 overflow notes /00d/000+000000 cells 0, payload 508, unused 0, max 0
+  62 overflow notes /00d/000+000001 cells 0, payload 508, unused 0, max 0
+  63 overflow notes /00d/000+000002 cells 0, payload 508, unused 0, max 0
+  64 overflow notes /00d/000+000003 cells 0, payload 508, unused 0, max 0
+  65 overflow notes /00d/000+000004 cells 0, payload 508, unused 0, max 0
+  66 leaf     notes /00d/ cells 1, payload 358, unused 137, max 2898
+  67 leaf     notes /00e/ cells 1, payload 198, unused 301, max 198
+  68 leaf     notes /00f/ cells 1, payload 358, unused 141, max 358
+  69 overflow notes /016/000+000001 cells 0, payload 508, unused 0, max 0
+  70 overflow notes /010/000+000000 cells 0, payload 508, unused 0, max 0
+  71 leaf     notes /010/ cells 1, payload 126, unused 369, max 634
+  72 overflow notes /011/000+000000 cells 0, payload 508, unused 0, max 0
+  73 leaf     notes /011/ cells 1, payload 378, unused 117, max 886
+  74 overflow notes /012/000+000000 cells 0, payload 508, unused 0, max 0
+  75 overflow notes /012/000+000001 cells 0, payload 508, unused 0, max 0
+  76 overflow notes /012/000+000002 cells 0, payload 508, unused 0, max 0
+  77 overflow notes /012/000+000003 cells 0, payload 508, unused 0, max 0
+  78 overflow notes /012/000+000004 cells 0, payload 508, unused 0, max 0
+  79 overflow notes /012/000+000005 cells 0, payload 479, unused 29, max 0
+  80 overflow notes /012/001+000000 cells 0, payload 508, unused 0, max 0
+  81 overflow notes /012/001+000001 cells 0, payload 508, unused 0, max 0
+  82 leaf     notes /012/ cells 3, payload 339, unused 142, max 3058
+  83 leaf     notes /016/ cells 2, payload 360, unused 126, max 1286
+  84 overflow notes /016/001+000000 cells 0, payload 508, unused 0, max 0
+  85 leaf     idx_notes_title /002/ cells 10, payload 266, unused 208, max 32
+-- pointer map
+  3 root 0 | 4 root 0 | 5 btree 3 | 6 overflow1 8 | 7 overflow1 9 | 8 btree 3
+  9 btree 3 | 10 overflow1 11 | 11 btree 3 | 12 overflow1 17 | 13 overflow2 12 | 14 overflow2 13
+  15 overflow2 14 | 16 overflow2 15 | 17 btree 3 | 18 overflow2 84 | 19 overflow1 5 | 20 btree 3
+  21 overflow1 20 | 22 overflow2 21 | 23 overflow1 31 | 24 btree 3 | 25 btree 3 | 26 overflow1 25
+  27 overflow2 23 | 28 overflow2 27 | 29 overflow2 28 | 30 overflow2 29 | 31 btree 3 | 32 btree 3
+  33 overflow1 32 | 34 btree 3 | 35 overflow1 32 | 36 overflow2 35 | 37 overflow1 39 | 38 overflow2 37
+  39 btree 3 | 40 overflow1 42 | 41 overflow2 40 | 42 btree 3 | 43 btree 4 | 44 btree 4
+  45 btree 3 | 46 overflow1 45 | 47 overflow2 46 | 48 overflow2 47 | 49 overflow2 48 | 50 overflow2 49
+  51 overflow2 50 | 52 overflow1 45 | 53 overflow1 45 | 54 overflow1 55 | 55 btree 3 | 56 overflow1 34
+  57 overflow1 83 | 58 overflow1 60 | 59 overflow2 58 | 60 btree 3 | 61 overflow1 66 | 62 overflow2 61
+  63 overflow2 62 | 64 overflow2 63 | 65 overflow2 64 | 66 btree 3 | 67 btree 3 | 68 btree 3
+  69 overflow2 57 | 70 overflow1 71 | 71 btree 3 | 72 overflow1 73 | 73 btree 3 | 74 overflow1 82
+  75 overflow2 74 | 76 overflow2 75 | 77 overflow2 76 | 78 overflow2 77 | 79 overflow2 78 | 80 overflow1 82
+  81 overflow2 80 | 82 btree 3 | 83 btree 3 | 84 overflow1 83 | 85 btree 4
+-- tables
+notes: 32 rows
+  1: 1, 'Café list 🍰 #1', 'shipped wrap courier café tracking asked' +75, 'courier,customer'
+  3: 3, '東京 trip #3', 'address fragile fragile fragile late exp' +237, 'loyal,asked'
+  4: 4, 'Ideas #4', 'weekend tracking naïve returns late week' +306, NULL
+  5: 5, 'Ünïcödé #5', 'tracking fragile asked invoice express t' +394, 'express,tracking'
+  6: 6, 'Bugs 🐛 #6', 'fragile tracking café naïve shipped aske' +1437, 'shipped,address'
+  8: 8, 'Привет #8', 'café parcel late address tracking return' +642, NULL
+  9: 9, 'naïve plan #9', 'express loyal loyal order parcel fragile' +55, 'discount,warehouse'
+  10: 10, 'Groceries #10', 'discount wrap order order order express ' +137, 'fragile,café'
+  11: 11, 'Café list 🍰 #11', 'fragile naïve shipped customer shipped c' +218, 'asked,fragile'
+  13: 13, '東京 trip #13', 'warehouse changed tracking returns custo' +372, 'café,tracking'
+  14: 14, 'Ideas #14', 'asked courier discount café invoice ship' +470, 'café,tracking'
+  15: 15, 'Ünïcödé #15', 'gift express discount tracking loyal inv' +539, 'returns,naïve'
+  16: 16, 'Bugs 🐛 #16', 'asked returns parcel café shipped weeken' +633, NULL
+  18: 18, 'Привет #18', 'weekend returns shipped order customer c' +1451, 'changed,customer'
+  19: 19, 'naïve plan #19', 'naïve courier shipped changed tracking w' +208, 'shipped,wrap'
+  20: 20, 'Groceries #20', 'fragile returns courier wrap fragile shi' +273, NULL
+  21: 21, 'Café list 🍰 #21', 'asked weekend fragile courier late expre' +351, 'tracking,changed'
+  23: 23, '東京 trip #23', 'wrap order returns naïve order refund re' +520, 'café,shipped'
+  24: 24, 'Ideas #24', 'wrap late warehouse invoice express frag' +1396, NULL
+  25: 25, 'Ünïcödé #25', 'invoice warehouse parcel café discount p' +33, 'gift,fragile'
+  26: 26, 'Bugs 🐛 #26', 'wrap late parcel express weekend asked a' +108, 'express,warehouse'
+  28: 28, 'Привет #28', 'gift express returns wrap refund warehou' +264, NULL
+  29: 29, 'naïve plan #29', 'address gift customer express shipped pa' +371, 'express,courier'
+  30: 30, 'Groceries #30', 'order café discount asked express weeken' +1457, 'courier,returns'
+  31: 31, 'Café list 🍰 #31', 'parcel wrap invoice asked courier asked ' +507, 'weekend,order'
+  33: 33, '東京 trip #33', 'weekend late café wrap wrap courier orde' +9, 'express,tracking'
+  34: 34, 'Ideas #34', 'tracking parcel tracking asked order fra' +102, 'discount,returns'
+  35: 35, 'Ünïcödé #35', 'warehouse loyal tracking address custome' +193, 'order,fragile'
+  36: 36, 'Bugs 🐛 #36', 'naïve warehouse address express customer' +1405, NULL
+  38: 38, 'Привет #38', 'loyal refund fragile weekend express cha' +408, 'loyal,parcel'
+  39: 39, 'naïve plan #39', 'changed discount returns express order t' +483, 'café,customer'
+  40: 40, 'Groceries #40', 'customer address returns late courier wa' +587, NULL
+-- indexes
+idx_notes_title (title): 32 entries
+  'Привет #18', 18
+  'Привет #28', 28
+  'Привет #38', 38
+  ...
+  'Ünïcödé #25', 25
+  'Ünïcödé #35', 35
+  'Ünïcödé #5', 5
+== data/bad.db
+error: file is not a database
