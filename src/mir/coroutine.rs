@@ -31,8 +31,160 @@ pub fn suspends_native(name: &str) -> bool {
     let base = ty.split('[').next().unwrap_or(ty);
     matches!(
         (base, method),
-        ("Receiver" | "Channel", "recv" | "recv_blocking") | ("TaskHandle", "join")
+        ("Receiver" | "Channel", "recv" | "recv_blocking")
+            | ("Sender" | "Channel", "send")
+            | ("TaskHandle", "join")
+            | ("TcpListener", "accept")
+            | ("TcpStream", "read" | "connect")
     )
+}
+
+/// The readiness native the transform asks before each suspending native:
+/// `__ready(const "<native>", args..)` is `true` when that call can
+/// complete now (B-2026-10-14-49).
+pub const READY: &str = "__ready";
+
+/// Puts a readiness loop before each suspending native of `body` other than
+/// `__yield_now`:
+///
+/// ```text
+/// chk:  r = __ready(const "<native>", args..) -> sw
+/// sw:   switchInt(copy r) -> [0: y, otherwise: call]
+/// y:    _ = __yield_now() -> chk
+/// call: dest = <native>(args..) -> next
+/// ```
+///
+/// so the task suspends only while the call cannot complete, and the
+/// executor can park it on what `__ready` saw. `__ready` takes the native's
+/// arguments as copies, or as shared borrows of the owned values the call
+/// itself consumes.
+fn insert_ready_loops(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
+    let unit = tys.unit();
+    let bool_t = tys.bool();
+    let str_t = tys.intern(TyKind::Str);
+    for i in 0..body.blocks.len() {
+        let t = &body.blocks[i].terminator;
+        let TerminatorKind::Call {
+            func,
+            args,
+            target: Some(_),
+            unwind,
+            ..
+        } = &t.kind
+        else {
+            continue;
+        };
+        let Some(callee) = direct_callee(func).map(str::to_string) else {
+            continue;
+        };
+        if callee == YIELD_NOW || !suspends_native(&callee) {
+            continue;
+        }
+        let (args, unwind, si) = (args.clone(), *unwind, t.source_info);
+        let new_local = |body: &mut Body, ty: Ty| {
+            body.locals.push(LocalDecl {
+                ty,
+                mutability: Mutability::Mut,
+                kind: LocalKind::Temp,
+                source_info: si,
+            });
+            Local(body.locals.len() as u32 - 1)
+        };
+        let r = new_local(body, bool_t);
+        let u = new_local(body, unit);
+        let mut stmts = Vec::new();
+        let mut ready_args = vec![Operand::Const(Const {
+            ty: str_t,
+            kind: ConstKind::Str(callee.clone()),
+        })];
+        for a in &args {
+            ready_args.push(match a {
+                Operand::Move(p) => {
+                    let pt = super::place_ty::place_ty(body, tys, p)?.ty;
+                    let by_copy = tys.is_copy(pt)
+                        || matches!(tys.kind(pt), TyKind::Ref(_) | TyKind::MutRef(_));
+                    if by_copy {
+                        Operand::Copy(p.clone())
+                    } else {
+                        let rt = new_local(body, tys.intern(TyKind::Ref(pt)));
+                        stmts.push(Statement {
+                            kind: StatementKind::Assign(
+                                Place::local(rt),
+                                Rvalue::Ref(BorrowKind::Shared, p.clone()),
+                            ),
+                            source_info: si,
+                        });
+                        Operand::Move(Place::local(rt))
+                    }
+                }
+                _ => a.clone(),
+            });
+        }
+        let base = body.blocks.len() as u32;
+        let (chk, sw, y, call) = (
+            BasicBlock(base),
+            BasicBlock(base + 1),
+            BasicBlock(base + 2),
+            BasicBlock(base + 3),
+        );
+        let native = |name: &str| {
+            Operand::Const(Const {
+                ty: unit,
+                kind: ConstKind::FnDef(InstanceId {
+                    def: DefId(0),
+                    args: vec![],
+                    name: name.to_string(),
+                }),
+            })
+        };
+        let term = |kind| Terminator {
+            kind,
+            source_info: si,
+        };
+        let orig = std::mem::replace(
+            &mut body.blocks[i].terminator,
+            term(TerminatorKind::Goto { target: chk }),
+        );
+        let block = |statements, kind| BasicBlockData {
+            statements,
+            terminator: term(kind),
+        };
+        body.blocks.push(block(
+            stmts,
+            TerminatorKind::Call {
+                func: native(READY),
+                args: ready_args,
+                destination: Place::local(r),
+                target: Some(sw),
+                unwind,
+            },
+        ));
+        body.blocks.push(block(
+            vec![],
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(r)),
+                targets: SwitchTargets {
+                    values: vec![(0, y)],
+                    otherwise: call,
+                },
+            },
+        ));
+        body.blocks.push(block(
+            vec![],
+            TerminatorKind::Call {
+                func: native(YIELD_NOW),
+                args: vec![],
+                destination: Place::local(u),
+                target: Some(chk),
+                unwind,
+            },
+        ));
+        body.blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: orig,
+        });
+    }
+    Ok(())
 }
 
 /// The callee a `Call` names directly, if it names one.
@@ -81,10 +233,197 @@ pub fn coroutines<'a>(bodies: impl IntoIterator<Item = &'a Body> + Clone) -> BTr
     set
 }
 
-/// A suspending native other than `__yield_now`: the frame suspends before
-/// the call, which runs when it is resumed.
-fn yields_before_call(callee: &str) -> bool {
-    callee != YIELD_NOW && suspends_native(callee)
+/// The native a spawn becomes when its closure runs as a task:
+/// `TaskGroup.spawn_frame(g, const "<C>#task#resume", move closure)`. The
+/// native starts a fresh frame of that resume's frame type, moves the
+/// closure into its field 1 (the wrapper's argument, `task_body`), and
+/// queues the task; the handle receives what the task returns.
+pub const SPAWN_FRAME: &str = "TaskGroup.spawn_frame";
+
+/// The task body that runs a spawned closure `C`: `C#task(env: own C) -> T`
+/// calls `C(&env)` and then drops `env`.
+pub fn task_name(closure_body: &str) -> String {
+    format!("{closure_body}#task")
+}
+
+/// The spawned closures of `bodies`, by their bodies' names: each
+/// `TaskGroup.spawn(g, move c)` whose `c` is made in the same body by a
+/// closure aggregate, with the block of the call and that closure's body.
+fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String)> {
+    // A closure's body takes its environment first, by reference; the
+    // environment's type tells a generic closure's instances apart.
+    let body_of = |def: DefId, env: Ty| {
+        bodies.iter().find(|b| {
+            b.instance.def == def
+                && b.arg_count >= 1
+                && matches!(tys.kind(b.local(Local(1)).ty), TyKind::Ref(t) if t == env)
+        })
+    };
+    let mut out = Vec::new();
+    for (bi, b) in bodies.iter().enumerate() {
+        let made: BTreeMap<Local, (DefId, Ty)> =
+            b.blocks
+                .iter()
+                .flat_map(|d| &d.statements)
+                .filter_map(|s| match &s.kind {
+                    StatementKind::Assign(
+                        p,
+                        Rvalue::Aggregate(AggregateKind::Closure { ty }, _),
+                    ) if p.projection.is_empty() => match tys.kind(*ty) {
+                        TyKind::Closure(def, _) => Some((p.local, (def, *ty))),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+        for (bb, callee) in calls(b) {
+            if callee != "TaskGroup.spawn" {
+                continue;
+            }
+            let TerminatorKind::Call { args, .. } = &b.block(bb).terminator.kind else {
+                continue;
+            };
+            let Some(Operand::Move(c)) = args.get(1) else {
+                continue;
+            };
+            let closure = c
+                .projection
+                .is_empty()
+                .then(|| made.get(&c.local))
+                .flatten()
+                .and_then(|&(d, env)| body_of(d, env));
+            if let Some(cb) = closure {
+                out.push((bi, bb, cb.instance.name.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// `C#task`, for the closure body `c` (see `task_name`).
+fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
+    let si = SourceInfo {
+        span: c.span,
+        scope: SourceScope(0),
+    };
+    let env_ref = c.local(Local(1)).ty;
+    let env = match tys.kind(env_ref) {
+        TyKind::Ref(t) => t,
+        _ => {
+            return Err(format!(
+                "{} does not take its closure by reference",
+                c.instance.name
+            ))
+        }
+    };
+    let decl = |ty, kind| LocalDecl {
+        ty,
+        mutability: Mutability::Mut,
+        kind,
+        source_info: si,
+    };
+    let term = |kind| Terminator {
+        kind,
+        source_info: si,
+    };
+    let unit = tys.unit();
+    Ok(Body {
+        instance: InstanceId {
+            def: DefId(0),
+            args: vec![],
+            name: task_name(&c.instance.name),
+        },
+        locals: vec![
+            decl(c.return_ty(), LocalKind::ReturnPlace),
+            decl(
+                env,
+                LocalKind::Arg {
+                    name: "env".into(),
+                    node: NodeId(0),
+                },
+            ),
+            decl(env_ref, LocalKind::Temp),
+        ],
+        arg_count: 1,
+        blocks: vec![
+            BasicBlockData {
+                statements: vec![Statement {
+                    kind: StatementKind::Assign(
+                        Place::local(Local(2)),
+                        Rvalue::Ref(BorrowKind::Shared, Place::local(Local(1))),
+                    ),
+                    source_info: si,
+                }],
+                terminator: term(TerminatorKind::Call {
+                    func: Operand::Const(Const {
+                        ty: unit,
+                        kind: ConstKind::FnDef(c.instance.clone()),
+                    }),
+                    args: vec![Operand::Move(Place::local(Local(2)))],
+                    destination: Place::local(Local::RETURN_PLACE),
+                    target: Some(BasicBlock(1)),
+                    unwind: UnwindAction::Abort,
+                }),
+            },
+            BasicBlockData {
+                statements: vec![],
+                terminator: term(TerminatorKind::Drop {
+                    place: Place::local(Local(1)),
+                    target: BasicBlock(2),
+                    unwind: UnwindAction::Abort,
+                }),
+            },
+            BasicBlockData {
+                statements: vec![],
+                terminator: term(TerminatorKind::Return),
+            },
+        ],
+        scopes: c.scopes.clone(),
+        phase: c.phase,
+        span: c.span,
+        par_regions: vec![],
+        suspends: false,
+        drop_flags: vec![],
+    })
+}
+
+/// Each spawn `spawns` found becomes `TaskGroup.spawn_frame` of its
+/// closure's task body; returns those task bodies, one per spawned closure.
+fn rewrite_spawns(bodies: &mut [Body], tys: &TyInterner) -> Result<Vec<Body>, String> {
+    let found = spawns(bodies, tys);
+    let mut tasks: BTreeMap<String, Body> = BTreeMap::new();
+    for (_, _, c) in &found {
+        if !tasks.contains_key(c) {
+            let cb = bodies
+                .iter()
+                .find(|b| &b.instance.name == c)
+                .ok_or_else(|| format!("no body for the spawned closure {c}"))?;
+            tasks.insert(c.clone(), task_body(cb, tys)?);
+        }
+    }
+    let str_t = tys.intern(TyKind::Str);
+    for (bi, bb, c) in found {
+        let t = &mut bodies[bi].blocks[bb.index()].terminator.kind;
+        let TerminatorKind::Call { func, args, .. } = t else {
+            unreachable!("spawns finds calls");
+        };
+        let Operand::Const(Const {
+            kind: ConstKind::FnDef(inst),
+            ..
+        }) = func
+        else {
+            unreachable!("spawns finds direct calls");
+        };
+        inst.name = SPAWN_FRAME.to_string();
+        args.insert(
+            1,
+            Operand::Const(Const {
+                ty: str_t,
+                kind: ConstKind::Str(resume_name(&task_name(&c))),
+            }),
+        );
+    }
+    Ok(tasks.into_values().collect())
 }
 
 /// A call that may suspend.
@@ -121,12 +460,12 @@ pub fn layout(body: &Body, coroutines: &BTreeSet<String>) -> CoroutineLayout {
     let mut points = Vec::new();
     let mut frame: BTreeSet<Local> = BTreeSet::new();
     for (bb, callee) in calls(body) {
-        if !coroutines.contains(callee) && !suspends_native(callee) {
+        // Every other suspending native sits behind a readiness loop
+        // (`insert_ready_loops`), whose `__yield_now` is where it suspends.
+        if !coroutines.contains(callee) && callee != YIELD_NOW {
             continue;
         }
         let TerminatorKind::Call {
-            func,
-            args,
             destination,
             target,
             ..
@@ -143,25 +482,6 @@ pub fn layout(body: &Body, coroutines: &BTreeSet<String>) -> CoroutineLayout {
             .copied()
             .filter(|&l| !(l == destination.local && destination.projection.is_empty()))
             .collect();
-        if yields_before_call(callee) {
-            // The call itself runs after the resume, so what it reads is
-            // held across too.
-            for o in std::iter::once(func).chain(args) {
-                if let Some(p) = o.place() {
-                    for l in std::iter::once(p.local).chain(p.projection.iter().filter_map(|e| {
-                        if let ProjElem::Index(i) = e {
-                            Some(*i)
-                        } else {
-                            None
-                        }
-                    })) {
-                        if !across.contains(&l) {
-                            across.push(l);
-                        }
-                    }
-                }
-            }
-        }
         across.sort();
         frame.extend(across.iter().copied());
         points.push(SuspensionPoint {
@@ -342,19 +662,47 @@ pub fn transform(
     bodies: &[Body],
     tys: &TyInterner,
 ) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
-    let set = coroutines(bodies);
+    // A spawned closure runs as a task: its task body is a task root, and
+    // a coroutine, whether or not the closure suspends.
+    let mut bodies: Vec<Body> = bodies.to_vec();
+    let tasks = rewrite_spawns(&mut bodies, tys)?;
+    let task_names: BTreeSet<String> = tasks.iter().map(|b| b.instance.name.clone()).collect();
+    bodies.extend(tasks);
+    let mut set = coroutines(&bodies);
+    set.extend(task_names.iter().cloned());
+    let bodies = bodies.as_slice();
     if let Some(cycle) = recursive_cycles(bodies, &set).first() {
         return Err(format!(
             "recursive coroutines are not supported yet: {}",
             cycle.join(", ")
         ));
     }
-    if let Some(name) = called_indirectly(bodies, &set, tys) {
+    // A spawned closure is made as a value, but its one caller is its task
+    // body.
+    let spawned: BTreeSet<String> = bodies
+        .iter()
+        .filter(|b| task_names.contains(&task_name(&b.instance.name)))
+        .map(|b| b.instance.name.clone())
+        .collect();
+    let direct: BTreeSet<String> = set.difference(&spawned).cloned().collect();
+    if let Some(name) = called_indirectly(bodies, &direct, tys) {
         return Err(format!(
             "{name} suspends and is used as a function value; calling a coroutine through a \
              function value is not supported yet"
         ));
     }
+    // The coroutines' suspending natives behind their readiness loops.
+    let bodies: Vec<Body> = bodies
+        .iter()
+        .map(|b| {
+            let mut b = b.clone();
+            if set.contains(&b.instance.name) {
+                insert_ready_loops(&mut b, tys)?;
+            }
+            Ok(b)
+        })
+        .collect::<Result<_, String>>()?;
+    let bodies = bodies.as_slice();
     let by_name: BTreeMap<&str, &Body> = bodies
         .iter()
         .filter(|b| set.contains(&b.instance.name))
@@ -740,45 +1088,26 @@ impl<'a> Resume<'a> {
                         |extra: &Vec<BasicBlockData>| BasicBlock(first_extra + extra.len() as u32);
                     match self.frames.get(callee) {
                         None => {
-                            // A suspending native is pending once. Then
-                            // `__yield_now` is `()`, and any other makes its
-                            // call.
+                            // `__yield_now` is pending once, then `()`. The
+                            // other suspending natives are behind readiness
+                            // loops, whose `__yield_now` this is.
+                            if callee != YIELD_NOW {
+                                return Err(format!("{callee} suspends without a readiness loop"));
+                            }
                             let unit = self.tys.unit();
                             let back = at(&extra);
-                            let resumed = if callee == YIELD_NOW {
-                                BasicBlockData {
-                                    statements: vec![self.assign(
-                                        dest,
-                                        Rvalue::Use(Operand::Const(Const {
-                                            ty: unit,
-                                            kind: ConstKind::Unit,
-                                        })),
-                                    )],
-                                    terminator: Terminator {
-                                        kind: TerminatorKind::Goto { target: b(*next) },
-                                        source_info: t.source_info,
-                                    },
-                                }
-                            } else {
-                                let TerminatorKind::Call { func, unwind, .. } = &t.kind else {
-                                    unreachable!("a suspension point is a call")
-                                };
-                                BasicBlockData {
-                                    statements: vec![],
-                                    terminator: Terminator {
-                                        kind: TerminatorKind::Call {
-                                            func: self.operand(func)?,
-                                            args: args
-                                                .iter()
-                                                .map(|a| self.operand(a))
-                                                .collect::<Result<_, _>>()?,
-                                            destination: dest,
-                                            target: Some(b(*next)),
-                                            unwind: *unwind,
-                                        },
-                                        source_info: t.source_info,
-                                    },
-                                }
+                            let resumed = BasicBlockData {
+                                statements: vec![self.assign(
+                                    dest,
+                                    Rvalue::Use(Operand::Const(Const {
+                                        ty: unit,
+                                        kind: ConstKind::Unit,
+                                    })),
+                                )],
+                                terminator: Terminator {
+                                    kind: TerminatorKind::Goto { target: b(*next) },
+                                    source_info: t.source_info,
+                                },
                             };
                             extra.push(resumed);
                             resumes.push((state as u128, back));
@@ -1082,12 +1411,12 @@ fn drop_frame(
         for effs in &stmt_effects[bi] {
             apply(&paths, &mut st, effs);
         }
-        // The call's moves have happened, unless it runs only when resumed;
-        // its destination is not written yet.
+        // The call's moves have happened; its destination is not written
+        // yet.
         let moved: Vec<Effect> = term_effects[bi]
             .iter()
             .copied()
-            .filter(|e| matches!(e, Effect::Uninit(_)) && !yields_before_call(&pt.callee))
+            .filter(|e| matches!(e, Effect::Uninit(_)))
             .collect();
         apply(&paths, &mut st, &moved);
         let mut out = Vec::new();
@@ -1729,11 +2058,11 @@ fn main() -> () {
         );
     }
 
-    /// A suspending native other than `__yield_now` yields before its call
-    /// and makes the call when resumed; a frame cancelled there still owns
-    /// what the call would have read.
+    /// A suspending native other than `__yield_now` sits behind a readiness
+    /// loop, which suspends at its `__yield_now` only while the call cannot
+    /// complete; a frame cancelled there still owns what the call reads.
     #[test]
-    fn a_suspending_native_yields_before_its_call() {
+    fn a_suspending_native_waits_in_a_readiness_loop() {
         use crate::mir::interp::{run, run_coroutines, run_coroutines_cancelled, Program};
         let src = "
 struct R: Drop { id: i64 }
@@ -1757,7 +2086,7 @@ fn main() -> () {
     let _3: i64;
     bb0: {
         _1 = R { const 5_i64 };
-        _3 = const 0_i64;
+        _3 = const 20_i64;
         _2 = sleep_ms(copy _3) -> bb1;
     }
     bb1: {
@@ -1774,15 +2103,23 @@ fn main() -> () {
 ";
         let m = parse_module(src).unwrap();
         let set = coroutines(&m.bodies);
-        let main = layout(m.body("main").unwrap(), &set);
-        // The argument `_3` is read by the call, after the resume.
+        // Not a suspension point by itself.
+        assert!(layout(m.body("main").unwrap(), &set).points.is_empty());
+        let mut looped = m.body("main").unwrap().clone();
+        insert_ready_loops(&mut looped, &m.tys).unwrap();
+        let main = layout(&looped, &set);
+        assert_eq!(main.points.len(), 1);
+        assert_eq!(main.points[0].callee, YIELD_NOW);
+        // The argument `_3` is read again by `__ready` and the call, after
+        // the resume.
         assert_eq!(main.points[0].across, [Local(1), Local(3)]);
         let prog = Program::from_module(&m);
         let sync = run(&prog, &m.tys, "main", vec![]);
         assert_eq!(sync.output, "woke5\ndrop5\n", "{:?}", sync.outcome);
         let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
         assert_eq!(tasks.output, sync.output, "{:?}", tasks.outcome);
-        assert_eq!(tasks.resumes, 1);
+        // The pause is not over at the first check.
+        assert!(tasks.resumes >= 1, "{}", tasks.resumes);
         let c = run_coroutines_cancelled(&prog, &m.tys, "main", vec![], 1);
         assert_eq!(c.output, "drop5\n", "{:?}", c.outcome);
     }

@@ -1296,6 +1296,11 @@ pub unsafe extern "C" fn karac_mir_limiter_try(id: i64, p: *const u8, n: usize) 
 /// no-op.
 #[no_mangle]
 pub extern "C" fn karac_mir_sleep_ms(ms: i64) {
+    // Under the task executor, the readiness loop before it already waited
+    // the pause out.
+    if crate::mir_task::take_slept() {
+        return;
+    }
     if ms > 0 {
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::sleep(std::time::Duration::from_millis(ms as u64));
@@ -2314,6 +2319,25 @@ pub unsafe extern "C" fn karac_mir_chan_send(h: *mut MirChan, v: *const u8) -> i
     // SAFETY: as above.
     s.queue.push_back(unsafe { bytes(v, c.size) }.into());
     0
+}
+
+/// Whether a `recv` (`send` 0) or a `send` on `h` can complete now: a
+/// value is queued or no sender is left, or there is room or no receiver
+/// is left (a `BoundedChannel` refuses at once when full, so its send is
+/// always ready).
+///
+/// # Safety
+/// `h` is a live channel.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_ready(h: *mut MirChan, send: u8) -> u8 {
+    // SAFETY: the caller's contract.
+    let c = unsafe { &*h };
+    let s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+    u8::from(if send == 0 {
+        !s.queue.is_empty() || s.senders == 0
+    } else {
+        c.bounded || c.cap == 0 || s.queue.len() < c.cap || s.receivers == 0
+    })
 }
 
 /// Moves the oldest value to `out`: 1 when there was one, else 0.

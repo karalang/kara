@@ -575,6 +575,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("dbg", "") => self.dbg(args),
             // One thread runs the program; a fence orders nothing.
             ("fence" | "compiler_fence", "") => Ok(()),
+            ("__ready", "") => self.ready_native(args, dest),
             ("sleep_ms", "") if args.len() == 1 => {
                 let ms = self.int_arg(&args[0])?;
                 self.rt("sleep_ms", &[ms.into()])

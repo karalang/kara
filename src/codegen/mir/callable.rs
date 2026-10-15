@@ -35,6 +35,9 @@ pub(super) enum Shim {
     /// `i32 (ptr ctx, ptr a, ptr b)` for a `sort_by` comparator of type
     /// `Ty`, or (`by_key`) the key order of a `sort_by_key` key function.
     SortBy { f: Ty, by_key: bool, el: Ty },
+    /// `i8 (ptr a, ptr b)`: the poll function of a task whose root is the
+    /// resume body `resume` (`task.rs`).
+    TaskPoll { resume: String, spawned: bool },
 }
 
 #[derive(Default)]
@@ -68,7 +71,7 @@ impl<'ctx> Cx<'ctx, '_> {
         !self.shims.todo.is_empty()
     }
 
-    fn shim_fn(&mut self, s: Shim) -> FunctionValue<'ctx> {
+    pub(super) fn shim_fn(&mut self, s: Shim) -> FunctionValue<'ctx> {
         if let Some(&f) = self.shims.fns.get(&s) {
             return f;
         }
@@ -96,6 +99,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.llcx
                     .i32_type()
                     .fn_type(&[p.into(), p.into(), p.into()], false),
+            ),
+            Shim::TaskPoll { resume, spawned } => (
+                format!("poll.{}{resume}", if *spawned { "" } else { "root." }),
+                self.llcx.i8_type().fn_type(&[p.into(), p.into()], false),
             ),
         };
         let f = self.module.add_function(&name, ty, Some(Linkage::Internal));
@@ -135,6 +142,9 @@ impl<'ctx> Cx<'ctx, '_> {
                     let (ctx, a, b) = (param(0)?, param(1)?, param(2)?);
                     let o = self.sort_by_order(fty, by_key, el, ctx, a, b)?;
                     self.builder.build_return(Some(&o)).map_err(e)?;
+                }
+                Shim::TaskPoll { resume, spawned } => {
+                    self.build_task_poll(f, &resume, spawned)?;
                 }
             }
         }

@@ -51,9 +51,10 @@ enum CellDrop {
     /// `karac_runtime_once_get` (null while unset), drops through its own
     /// glue, then `karac_runtime_once_free` frees the cell.
     Once,
-    /// A `TaskHandle`: a malloc'd block holding its task's result (null
-    /// once joined), which drops through its glue before the block is
-    /// freed.
+    /// A `TaskHandle`: a malloc'd block holding its task's state and result
+    /// (null once joined, `codegen/mir/task.rs`). A finished task's result
+    /// drops through its glue before the block is freed; a running one's
+    /// block is marked detached, for the task to free.
     Boxed,
     /// An `Arena`: its items drop through their glue, last pushed first,
     /// then `karac_mir_arena_free` frees it.
@@ -356,10 +357,41 @@ impl<'ctx> Cx<'ctx, '_> {
                     .and_then(|(_, args)| args.first().copied())
                     .ok_or("a TaskHandle has no result type")?;
                 self.if_then(some, |cx| {
+                    let state = cx.load_i64(h)?;
+                    let running = cx
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            state,
+                            cx.i64(super::task::RUNNING),
+                            "",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let f = cx.cur_fn()?;
+                    let (detach, done, end) = (
+                        cx.llcx.append_basic_block(f, "detach"),
+                        cx.llcx.append_basic_block(f, "done"),
+                        cx.llcx.append_basic_block(f, "dropped"),
+                    );
+                    cx.builder
+                        .build_conditional_branch(running, detach, done)
+                        .map_err(|e| e.to_string())?;
+                    cx.builder.position_at_end(detach);
+                    cx.store(h, cx.i64(super::task::DETACHED).into())?;
+                    cx.builder
+                        .build_unconditional_branch(end)
+                        .map_err(|e| e.to_string())?;
+                    cx.builder.position_at_end(done);
                     if cx.tys.needs_drop(held) {
-                        cx.call_glue(h, held)?;
+                        let at = cx.offset(h, cx.task_result_offset(held)?)?;
+                        cx.call_glue(at, held)?;
                     }
-                    cx.free(h)
+                    cx.free(h)?;
+                    cx.builder
+                        .build_unconditional_branch(end)
+                        .map_err(|e| e.to_string())?;
+                    cx.builder.position_at_end(end);
+                    Ok(())
                 })
             }
             CellDrop::Arena => {

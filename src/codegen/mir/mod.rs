@@ -41,6 +41,7 @@ mod num;
 mod pool;
 mod seq;
 mod table;
+mod task;
 mod tracing;
 mod vector;
 
@@ -518,10 +519,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
 
     /// A C `i32 main()` that runs the Kāra `main` and returns 0. A
     /// coroutine `main` is a task root: its frame lives in this function,
-    /// zeroed (state 0, before the first resume), and `main#resume` is
-    /// called until it returns `Ready`. A suspending native yields once and
-    /// makes its call when resumed, so resuming again at once is the whole
-    /// executor until the runtime parks tasks.
+    /// zeroed (state 0, before the first resume), and the runtime's task
+    /// executor resumes it, with the tasks it spawns, until all return.
     fn c_main(&mut self) -> R<()> {
         let resume = coroutine::resume_name("main");
         let bodies = &self.program.bodies;
@@ -567,32 +566,27 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             self.builder
                 .build_store(arg, frame)
                 .map_err(|e| e.to_string())?;
-            let poll = self.llcx.append_basic_block(f, "poll");
-            let ready = self.llcx.append_basic_block(f, "ready");
+            // The executor runs `main` as its root task, and every task
+            // spawned meanwhile, until all have returned.
+            let poll = self.task_poll(&resume, false);
+            let p = self.ptr_ty();
+            let run = self.extern_fn(
+                "karac_mir_task_run",
+                self.llcx
+                    .void_type()
+                    .fn_type(&[p.into(), p.into(), p.into()], false),
+            );
             self.builder
-                .build_unconditional_branch(poll)
+                .build_call(
+                    run,
+                    &[
+                        poll.as_global_value().as_pointer_value().into(),
+                        arg.into(),
+                        ret.into(),
+                    ],
+                    "",
+                )
                 .map_err(|e| e.to_string())?;
-            self.builder.position_at_end(poll);
-            self.builder
-                .build_call(kmain, &[ret.into(), arg.into()], "")
-                .map_err(|e| e.to_string())?;
-            // `Poll[T]` is `Ready(T) | Pending`: tag 0 is `Ready`.
-            let tag = layout::enum_tag(self.tys, ret_ty)
-                .ok_or_else(|| format!("{name} does not return a Poll"))?;
-            let tag_ty = self.int_ty(tag.size as u32 * 8);
-            let t = self
-                .builder
-                .build_load(tag_ty, ret, "tag")
-                .map_err(|e| e.to_string())?
-                .into_int_value();
-            let is_ready = self
-                .builder
-                .build_int_compare(IntPredicate::EQ, t, tag_ty.const_zero(), "")
-                .map_err(|e| e.to_string())?;
-            self.builder
-                .build_conditional_branch(is_ready, ready, poll)
-                .map_err(|e| e.to_string())?;
-            self.builder.position_at_end(ready);
         }
         // What `main` returned is dropped before the process exits; a
         // returned frame holds nothing.
@@ -729,7 +723,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     }
 
     /// An 8-aligned stack slot holding a `t`, at the builder's position.
-    fn c_main_slot(&self, t: Ty, name: &str) -> R<PointerValue<'ctx>> {
+    pub(super) fn c_main_slot(&self, t: Ty, name: &str) -> R<PointerValue<'ctx>> {
         let size = self.layout(t)?.size.max(1);
         let a = self
             .builder
@@ -790,8 +784,9 @@ fn main() -> () {
         a.load(Ordering::SeqCst)
     }
 
-    /// The C `main` of a coroutine `main` starts its frame zeroed and
-    /// resumes it until `Ready`; dropping a frame runs its `drop_frame`.
+    /// The C `main` of a coroutine `main` starts its frame zeroed and hands
+    /// the executor a poll function that resumes it until `Ready`; dropping
+    /// a frame runs its `drop_frame`.
     #[test]
     fn mir_llvm_c_main_drives_a_coroutine_main() {
         Target::initialize_native(&InitializationConfig::default()).unwrap();
@@ -863,6 +858,8 @@ fn main() -> () {
             }
         }
         cx.c_main().unwrap();
+        // The root task's poll function.
+        cx.finish_shims().unwrap();
         let body = &prog.bodies["main#resume"];
         let TyKind::MutRef(frame_ty) = m.tys.kind(body.locals[1].ty) else {
             panic!("main#resume does not take its frame");
@@ -887,6 +884,16 @@ fn main() -> () {
         }
         let f = cx.module.get_function("karac_mir_run_main").unwrap();
         engine.add_global_mapping(&f, run_main as *const () as usize);
+        // The executor, with only the root task: polled until it returns.
+        extern "C" fn task_run(
+            poll: extern "C" fn(*mut u8, *mut u8) -> u8,
+            a: *mut u8,
+            b: *mut u8,
+        ) {
+            while poll(a, b) == 0 {}
+        }
+        let f = cx.module.get_function("karac_mir_task_run").unwrap();
+        engine.add_global_mapping(&f, task_run as *const () as usize);
 
         // SAFETY: `main` is the module's `i32 main()`.
         let main: extern "C" fn() -> i32 =

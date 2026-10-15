@@ -122,6 +122,7 @@ pub mod map;
 pub mod mir;
 pub mod mir_io;
 pub mod mir_map;
+pub mod mir_task;
 pub mod mutex;
 pub mod once;
 // Arrow IPC FFI (`karac_arrow_*`) — opt-in `arrow` feature →
@@ -292,6 +293,12 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_sort_int,
         mir::karac_mir_deque_alloc,
         mir::karac_mir_fs,
+        mir_task::karac_mir_task_spawn,
+        mir_task::karac_mir_task_run,
+        mir_task::karac_mir_ready,
+        mir_task::karac_mir_ready_sleep,
+        mir_task::karac_mir_ready_fd,
+        mir::karac_mir_chan_ready,
         mir_io::karac_mir_file,
         mir_io::karac_mir_buf,
         mir_io::karac_mir_buf_free,

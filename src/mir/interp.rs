@@ -11051,37 +11051,26 @@ mod tests {
     use crate::mir::build::BodyBuilder;
     use crate::mir::ty::{AdtDef, VariantDef};
 
-    /// B-2026-10-14-49: `__ready` before a `sleep_ms`, as the coroutine
-    /// transform's readiness loop has it. Under the executor the task parks
-    /// on the deadline (resumed once for it, not polled), and the
-    /// `sleep_ms` after it does not pause again; run synchronously, every
-    /// call is ready.
+    /// B-2026-10-14-49: a `sleep_ms`, which the coroutine transform puts
+    /// behind a readiness loop (`__ready`, then `__yield_now`). Under the
+    /// executor the task parks on the deadline (resumed once for it, not
+    /// polled), and the `sleep_ms` after the loop does not pause again; run
+    /// synchronously, every call is ready.
     #[test]
     fn a_task_parks_on_a_sleep_deadline() {
         use crate::mir::interp::{run, run_coroutines, Program};
         let src = "
 fn main() -> () {
     let mut _0: ();
-    let mut _1: bool;
+    let _1: ();
     let _2: ();
-    let _3: ();
-    let _4: ();
     bb0: {
-        _1 = __ready(const \"sleep_ms\", const 200_i64) -> bb1;
+        _1 = sleep_ms(const 200_i64) -> bb1;
     }
     bb1: {
-        switchInt(copy _1) -> [0: bb2, otherwise: bb3];
+        _2 = println(const \"slept\") -> bb2;
     }
     bb2: {
-        _2 = __yield_now() -> bb0;
-    }
-    bb3: {
-        _3 = sleep_ms(const 200_i64) -> bb4;
-    }
-    bb4: {
-        _4 = println(const \"slept\") -> bb5;
-    }
-    bb5: {
         _0 = const ();
         return;
     }
@@ -11094,9 +11083,8 @@ fn main() -> () {
         let took = t0.elapsed();
         assert_eq!(tasks.output, "slept\n", "{:?}", tasks.outcome);
         assert_eq!(tasks.exit_code(), Some(0), "{:?}", tasks.outcome);
-        // Pending at the readiness loop's yield, then at the yield the
-        // transform puts before `sleep_ms`: two resumes, not a poll loop.
-        assert_eq!(tasks.resumes, 2);
+        // Pending once, at the readiness loop's yield: not a poll loop.
+        assert_eq!(tasks.resumes, 1);
         assert!(took >= std::time::Duration::from_millis(200), "{took:?}");
         assert!(
             took < std::time::Duration::from_millis(390),
