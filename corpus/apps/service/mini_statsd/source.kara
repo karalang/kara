@@ -1926,8 +1926,7 @@ struct Net {
     graphite_addr: String,
 }
 
-// The daemon's sockets on the ports its config names. (Port 0, letting
-// the OS choose, would print a BOUND_PORT line: B-2026-10-15-69.)
+// The daemon's sockets on the ports its config names, as statsd binds them.
 fn open_net(cfg: ref Vec[Field]) -> Result[Net, String] {
     let host = text_or(cfg, "address", "127.0.0.1");
     let udp_addr = f"{host}:{num_or(cfg, "port", 8125.0) as i64}";

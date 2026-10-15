@@ -60,3 +60,8 @@ After that, the output matched `expected.out` on `__mir-run`,
 `__mir-llvm-run` and `__mir-llvm-asan` on the first run.
 
 Written 2026-10-15 by the real-world apps thread; karac at 7cb1840d66.
+
+Reverted 2026-10-15, karac at eae83f9d88: B-2026-10-15-67 is fixed for
+32- and 64-bit rotates on every v2 surface, so `mini_hashsum.kara` is
+`mini_hashsum.orig.kara` again, with the natural `.rotate_left(n)` and
+`.rotate_right(n)` calls, and still matches on all four MIR surfaces.

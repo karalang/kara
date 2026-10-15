@@ -78,3 +78,9 @@ After that, the output matched `expected.out` on `__mir-run`,
 `__mir-llvm-run` and `__mir-llvm-asan` on the first run.
 
 Written 2026-10-15 by the real-world apps thread; karac at 7e52125b4c.
+
+Note 2026-10-15, karac at eae83f9d88: B-2026-10-15-69 is fixed, so
+binding port 0 no longer prints anything. The daemon still binds the
+ports its config names, since that is what the real statsd does and the
+config reload depends on it; the original's port-0 binding would only
+come back as a partial, mixed revert.
