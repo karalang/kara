@@ -52,3 +52,8 @@ Oracle: `inventory.py`, the same program. `expected.out` is its output.
 - `Result[(), StoreError>`, a typo.
 
 `inventory.orig.kara` is the first draft.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-19 is fixed, so
+the six `self.store.get(..)` / `remove(..)` calls pass the `String`
+without `.as_str()`. Each of these is the original line again, and the
+app still matches on all four MIR surfaces.

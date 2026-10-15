@@ -7,10 +7,6 @@
 //   u16 name length, name bytes, u32 size, u32 crc32, data bytes.
 //
 // Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-14-44  File.open / File.create take ref String, not Str, and
-//                    File.read / File.write count in usize, not i64
-//   B-2026-10-14-50  `c.take(n)?.iter()` parses as optional chaining, so the
-//                    `?` is parenthesized
 //   B-2026-10-14-51  `karac check` refuses `let s = self.bytes[a..b]` in
 //                    Cursor.take, so the view is returned without a binding
 
@@ -115,7 +111,7 @@ fn unpack(table: ref Vec[u32], bytes: own Vec[u8]) -> Result[Vec[Member], String
         let size = c.u32()? as i64;
         let want = c.u32()?;
         let mut data: Vec[u8] = Vec.new();
-        for b in (c.take(size)?).iter() {
+        for b in c.take(size)?.iter() {
             data.push(*b);
         }
         let got = crc32(table, data);
@@ -132,18 +128,18 @@ fn unpack(table: ref Vec[u32], bytes: own Vec[u8]) -> Result[Vec[Member], String
 }
 
 fn write_bytes(path: Str, bytes: Slice[u8]) -> Result[(), IoError] {
-    let f = File.create(path.to_string())?;
+    let f = File.create(path)?;
     let mut off = 0;
     while off < bytes.len() {
         let n = f.write(bytes[off..bytes.len()])?;
-        off += n as i64;
+        off += n;
     }
     f.sync_all()?;
     Ok(())
 }
 
 fn read_bytes(path: Str) -> Result[Vec[u8], IoError] {
-    let f = File.open(path.to_string())?;
+    let f = File.open(path)?;
     let size = f.seek(SeekFrom.End, 0)?;
     f.seek(SeekFrom.Start, 0)?;
     let mut buf: Vec[u8] = Vec.new();
@@ -156,7 +152,7 @@ fn read_bytes(path: Str) -> Result[Vec[u8], IoError] {
         if n == 0 {
             return Err(IoError.UnexpectedEof);
         }
-        got += n as i64;
+        got += n;
     }
     Ok(buf)
 }

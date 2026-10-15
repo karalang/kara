@@ -59,3 +59,11 @@ stopword set and an owned sender clone, joining handles, `SortedMap` /
 `filter_map` / `chain` / `collect` chains, `sort_by` with `cmp`.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-48 and
+B-2026-10-15-11 are fixed, so the channel is `channel(8)`, the group is
+`TaskGroup.new(limit: 3)`, `send`'s `Result` is matched and the results
+are collected with `rx.into_iter()`; B-2026-10-14-52 is fixed, so `main`
+walks `DOCS` itself. `save` is `fs.write(..).map_err(..)` again, which
+B-2026-10-15-5 (still open) used to refuse. Each of these is the
+original line again, and the app still matches on all four MIR surfaces.

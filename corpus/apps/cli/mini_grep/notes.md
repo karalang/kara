@@ -34,3 +34,8 @@ Compiler gaps, worked around and listed in the source header:
 - B-2026-10-12-7 and B-2026-10-14-44 as in the other apps.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
+`fs.write` takes the `Str` path and text. The `*lo..*hi` bounds stay:
+that was an author error, not a workaround. Each of these is the
+original line again, and the app still matches on all four MIR surfaces.

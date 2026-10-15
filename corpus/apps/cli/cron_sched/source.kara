@@ -13,8 +13,7 @@
 // once (not once per missed slot), records the result, and prints the next
 // fire times. A second start an hour later shows the state carried over.
 //
-// Workarounds: B-2026-10-15-22 (see `since` in start), B-2026-10-12-6
-// (parse returns Option), B-2026-10-12-7 (split is an eager Vec).
+// Workarounds: B-2026-10-12-6 (parse returns Option), B-2026-10-12-7 (split is an eager Vec).
 
 const CRONTAB: Str = "# m h dom mon dow  name  command
 */15 * * * *        tick     echo tick
@@ -353,9 +352,7 @@ fn start(jobs: ref Vec[Job], now: i64, first_start: i64) {
     println(f"== start at {stamp(now)}");
     let mut state = load_state();
     for j in jobs.iter() {
-        // Annotated: unannotated, `since` is a `ref i64` and the MIR built
-        // for `t = f` below is invalid (B-2026-10-15-22).
-        let since: i64 = state.get(j.name).unwrap_or(first_start);
+        let since = state.get(j.name).unwrap_or(first_start);
         let mut missed = 0;
         let mut last_slot = -1;
         let mut t = since;

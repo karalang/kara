@@ -62,3 +62,8 @@ returns destructured in `match`, `sort_by` with a closure over the query,
 `Option` fields matched with `Some(ref w)`.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-52 is fixed, so
+`is_keyword` walks `KEYWORDS` itself rather than a local copy. Each of
+these is the original line again, and the app still matches on all four
+MIR surfaces.

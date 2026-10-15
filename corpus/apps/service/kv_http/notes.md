@@ -37,3 +37,9 @@ and `karac build --mir` all print `expected.out` exactly (measured).
 
 The fixed port means two concurrent corpus runs on one host collide; the spec
 has no `local_addr` to read back a port-0 bind.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
+`TcpListener.bind` and `TcpStream.connect` take the `Str` address and
+`status` is a `Str` again. B-2026-10-12-23 is fixed too, so the note
+about `DeserializeError` is gone from the header. Each of these is the
+original line again, and the app still matches on all four MIR surfaces.

@@ -13,8 +13,6 @@
 // Workarounds for v2 gaps, each to revert once its row is fixed:
 //   B-2026-10-12-6   number parse returns Option, not Result
 //   B-2026-10-12-7   split() is an eager Vec[String]: bound before .iter()
-//   B-2026-10-14-44  TcpStream.connect / TcpListener.bind take String
-//   B-2026-10-14-58  handler and middleware slots say `with allocates(Heap)`
 //   B-2026-10-14-59  the auth closure's binding carries its full Fn type
 //   B-2026-10-14-60  field() calls find_field, an index loop over the Vec
 //   B-2026-10-14-61  middleware is called as middleware[i](r), not m(r)
@@ -327,7 +325,7 @@ struct Todo { id: i64, title: String, done: bool, tags: Vec[String] }
 
 struct State { todos: SortedMap[i64, Todo], next_id: i64, log: Vec[String] }
 
-struct Route { method: String, pattern: Vec[String], handler: Fn(mut ref State, ref HttpReq, ref Vec[String]) -> HttpResp with allocates(Heap) }
+struct Route { method: String, pattern: Vec[String], handler: Fn(mut ref State, ref HttpReq, ref Vec[String]) -> HttpResp }
 
 fn reason(status: i64) -> Str {
     match status {
@@ -677,7 +675,7 @@ fn read_all(conn: ref TcpStream) -> Result[String, String] {
     }
 }
 
-struct App { routes: Vec[Route], middleware: Vec[Fn(ref HttpReq) -> Option[HttpResp] with allocates(Heap)], next_request: i64 }
+struct App { routes: Vec[Route], middleware: Vec[Fn(ref HttpReq) -> Option[HttpResp]], next_request: i64 }
 
 fn serve_conn(srv: mut ref App, st: mut ref State, raw: Str) -> String {
     let reqs = match parse_requests(raw) {
@@ -745,7 +743,7 @@ fn print_responses(resp: Str) {
 
 fn session(listener: ref TcpListener, srv: mut ref App, st: mut ref State, label: Str, batch: Str) {
     println(f"== {label}");
-    let client = match TcpStream.connect(ADDR.to_string()) {
+    let client = match TcpStream.connect(ADDR) {
         Ok(c) => c,
         Err(_) => {
             println("connect failed");
@@ -780,7 +778,7 @@ fn session(listener: ref TcpListener, srv: mut ref App, st: mut ref State, label
 }
 
 fn main() {
-    let listener = match TcpListener.bind(ADDR.to_string()) {
+    let listener = match TcpListener.bind(ADDR) {
         Ok(l) => l,
         Err(_) => {
             println("bind failed");

@@ -42,3 +42,7 @@ The cron logic is a port. `expected.out` is its output.
   B-2026-10-12-7 (`split` is an eager `Vec[String]`).
 
 `cron_sched.orig.kara` is the first draft.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-22 is fixed, so
+`since` in `start` is no longer annotated. Each of these is the original
+line again, and the app still matches on all four MIR surfaces.

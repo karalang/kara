@@ -7,9 +7,6 @@
 // Workarounds for v2 gaps, each to revert once its row is fixed:
 //   B-2026-10-12-7   split() / lines() are eager Vec[String]: `.iter()`
 //                    before map / next
-//   B-2026-10-14-44  fs.write takes ref String, so a `Str` const is copied
-// Not worked around (no other spelling): B-2026-10-12-23, `karac check`
-// does not know DeserializeError.
 
 #[derive(Serialize, Deserialize)]
 struct TaskResult {
@@ -211,7 +208,7 @@ fn run_task(t: ref Task, input: own Option[String]) -> Result[TaskResult, String
 }
 
 fn main() {
-    match fs.write("tasks.txt", TASKS.to_string()) {
+    match fs.write("tasks.txt", TASKS) {
         Ok(_) => {}
         Err(e) => {
             println(f"write tasks: {show(e)}");

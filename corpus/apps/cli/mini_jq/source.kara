@@ -43,8 +43,7 @@
 //
 // Workarounds for compiler gaps, each marked where it is applied:
 // B-2026-10-15-37 (the syntax tree parameter is `tree`, not `ast`),
-// B-2026-10-15-32 (an error value matched through a `ref` binding),
-// B-2026-10-15-24 (a codepoint matched through a `ref` binding).
+// B-2026-10-15-32 (an error value matched through a `ref` binding).
 
 // ------------------------------------------------------------ bytes and strings
 
@@ -3666,10 +3665,7 @@ fn implode(v: ref J) -> Result[J, String] {
     };
     let mut bytes: Vec[u8] = Vec.new();
     for i in 0..items.len() {
-        // a `ref` binding: in `match items[i]`, `karac check` types `x` as
-        // a reference and the MIR front end as a value (B-2026-10-15-24)
-        let item = ref items[i];
-        match item {
+        match items[i] {
             J.Num(x, _) => push_utf8(mut bytes, *x as i64),
             _ => return Err("Unicode codepoint must be numeric".to_string()),
         }

@@ -12,10 +12,6 @@
 // children).
 //
 // Workarounds for compiler gaps (revert when the row is fixed):
-//   B-2026-10-15-3   a user variant named `Err` breaks `Result`'s in MIR:
-//                    the redirect kind is `ErrOut`
-//   B-2026-10-15-4   a closure using `self` in a method is not lowered:
-//                    argv is built with a loop
 //   B-2026-10-15-5   fs.write's Result[Unit, ..] is not Result[(), ..]:
 //                    the two writes are compared with .is_ok()
 //   B-2026-10-14-53  a String passed to fs.write counts as moved: p.clone()
@@ -61,7 +57,7 @@ struct Word { parts: Vec[Part] }
 
 enum Tok { W(Word), Op(String) }
 
-enum RedirKind { In, Out, Append, ErrOut }
+enum RedirKind { In, Out, Append, Err }
 
 struct Redirect { kind: RedirKind, target: Word }
 
@@ -239,7 +235,7 @@ fn parse(toks: own Vec[Tok]) -> Result[Vec[Chain], String] {
                     "<" => pending = Some(RedirKind.In),
                     ">" => pending = Some(RedirKind.Out),
                     ">>" => pending = Some(RedirKind.Append),
-                    "2>" => pending = Some(RedirKind.ErrOut),
+                    "2>" => pending = Some(RedirKind.Err),
                     "|" => {
                         if cur.words.is_empty() {
                             return Err("expected a command before '|'".to_string());
@@ -303,10 +299,7 @@ impl Shell {
 
     // Runs one simple command with `input` as its stdin.
     fn run_simple(mut ref self, cmd: ref Simple, input: own Option[String]) -> Ran {
-        let mut argv: Vec[String] = Vec.new();
-        for w in cmd.words.iter() {
-            argv.push(self.expand(w));
-        }
+        let argv: Vec[String] = cmd.words.iter().map(|w| self.expand(w)).collect();
         let mut stdin_text = input;
         let mut out_to: Option[(String, bool)] = None;
         let mut err_to: Option[String] = None;
@@ -319,7 +312,7 @@ impl Shell {
                 },
                 RedirKind.Out => out_to = Some((path, false)),
                 RedirKind.Append => out_to = Some((path, true)),
-                RedirKind.ErrOut => err_to = Some(path),
+                RedirKind.Err => err_to = Some(path),
             }
         }
         let (out, err, code) = self.exec(argv, stdin_text);

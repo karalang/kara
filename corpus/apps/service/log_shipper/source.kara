@@ -29,8 +29,6 @@
 //                    captures by reference on v2 (and check refuses it),
 //                    so add_host takes the host as an argument kept in
 //                    `Transform.arg` instead of capturing it
-//   B-2026-10-15-19  `parser.parse(line)` through the generic bound wants
-//                    a `Str`, so the call passes `line.as_str()`
 //   B-2026-10-15-23  check treats `find`'s argument as moved, so field_of
 //                    reads `key.len()` before the find
 
@@ -872,7 +870,7 @@ impl Shipper {
             if line.trim() == "" {
                 continue;
             }
-            let mut rec = match parser.parse(line.as_str()) {
+            let mut rec = match parser.parse(line) {
                 Ok(r) => r,
                 Err(e) => {
                     println(f"    {name}@{line_off}: {parser.name()} parse error: {e}");

@@ -81,3 +81,8 @@ While narrowing -27 I also found **B-2026-10-15-26 (new)**: calling
 struct field, so it does not hit this one.
 
 Written 2026-10-15 by the real-world apps thread; karac at fee58fc7e2.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-19 is fixed, so
+`parser.parse(line)` passes the `String` without `.as_str()`. Each of
+these is the original line again, and the app still matches on all four
+MIR surfaces.

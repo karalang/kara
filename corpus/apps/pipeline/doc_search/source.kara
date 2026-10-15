@@ -18,20 +18,11 @@
 // line and rebuilt from scratch.
 //
 // Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-14-48  no `channel(cap)`: the channel is `Channel.new()`
-//   B-2026-10-15-11  TaskGroup.new takes no limit; send returns (); the
-//                    receiver has no into_iter and recv no Option, so the
-//                    results are drained with try_recv (right only while
-//                    spawn is sequential, B-2026-10-14-49)
 //   B-2026-10-15-12  check holds an `any` closure's borrow of `d.name`
 //                    past the call: refresh tests with a loop
 //   B-2026-10-12-3   SortedMap has no get_mut: entry().or_insert()
-//   B-2026-10-15-5   fs.write's Result[Unit] is not Result[()]: save
-//                    matches on it
 //   B-2026-10-14-68  a Vec of string literals is Vec[String]: the query
 //                    lists are annotated Vec[Str]
-//   B-2026-10-14-52  iterating the const DOCS misreads it compiled: main
-//                    walks a local copy
 
 const INDEX: Str = "search.idx";
 
@@ -116,8 +107,8 @@ fn index_doc(name: own String, text: own String, stop: ref SortedSet[String]) ->
 // Indexes every (name, text) pair in its own task and returns the indexes
 // sorted by name, with how many terms the tasks indexed in total.
 fn index_all(jobs: own Vec[(String, String)], stop: ref SortedSet[String]) -> (Vec[DocIndex], i64) {
-    let (tx, rx): (Sender[DocIndex], Receiver[DocIndex]) = Channel.new();
-    let group = TaskGroup.new();
+    let (tx, rx): (Sender[DocIndex], Receiver[DocIndex]) = channel(8);
+    let group = TaskGroup.new(limit: 3);
     let mut handles: Vec[TaskHandle[i64]] = Vec.new();
     {
         // The last sender drops at the end of this block, which closes
@@ -128,8 +119,10 @@ fn index_all(jobs: own Vec[(String, String)], stop: ref SortedSet[String]) -> (V
             handles.push(group.spawn(|| {
                 let d = index_doc(name, text, stop);
                 let n = d.words;
-                t.send(d);
-                n
+                match t.send(d) {
+                    Ok(_) => n,
+                    Err(_) => 0,
+                }
             }));
         }
     }
@@ -137,13 +130,7 @@ fn index_all(jobs: own Vec[(String, String)], stop: ref SortedSet[String]) -> (V
     for h in handles.into_iter() {
         total += h.join();
     }
-    let mut docs: Vec[DocIndex] = Vec.new();
-    loop {
-        match rx.try_recv() {
-            Some(d) => docs.push(d),
-            None => break,
-        }
-    }
+    let mut docs: Vec[DocIndex] = rx.into_iter().collect();
     docs.sort_by(|a, b| a.name.cmp(b.name));
     (docs, total)
 }
@@ -159,10 +146,7 @@ fn save(docs: ref Vec[DocIndex]) -> Result[(), String] {
             out.push_str(f"{t} {nums.join(",")}\n");
         }
     }
-    match fs.write(INDEX, out) {
-        Ok(_) => Ok(()),
-        Err(_) => Err("cannot write search.idx".to_string()),
-    }
+    fs.write(INDEX, out).map_err(|_| "cannot write search.idx".to_string())
 }
 
 fn load() -> Result[Vec[DocIndex], String] {
@@ -527,8 +511,7 @@ fn main() {
     }
     let mut names: Vec[String] = Vec.new();
     let mut jobs: Vec[(String, String)] = Vec.new();
-    let sources = DOCS;
-    for (name, text) in sources.iter() {
+    for (name, text) in DOCS.iter() {
         match fs.write(name, text.to_string()) {
             Ok(_) => {}
             Err(_) => println(f"cannot write {name}"),

@@ -47,3 +47,9 @@ Compiler gaps, worked around and listed in the source header:
 - B-2026-10-12-6 and B-2026-10-14-44 as in the other apps.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-58 and
+B-2026-10-14-44 are fixed, so the handler and middleware slots are bare
+`Fn(..)` types again and `TcpStream.connect` / `TcpListener.bind` take
+the `Str` address. Each of these is the original line again, and the app
+still matches on all four MIR surfaces.

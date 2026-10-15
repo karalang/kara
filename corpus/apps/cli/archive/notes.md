@@ -29,3 +29,9 @@ Compiler gaps, worked around and listed in the source header:
   binding it.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 and
+B-2026-10-14-50 are fixed, so the paths are `Str` again, the read and
+write counts are no longer cast to `i64`, and `c.take(size)?.iter()` has
+no parentheses. Each of these is the original line again, and the app
+still matches on all four MIR surfaces.

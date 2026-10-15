@@ -86,3 +86,7 @@ Compiler gaps, worked around and cited in the source:
   `tree`, not `ast`.
 
 Written 2026-10-15 by the real-world apps thread; karac at 2cec444448.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-24 is fixed, so
+the codepoint is matched as `match items[i]` again. This is the original
+line again, and the app still matches on all four MIR surfaces.

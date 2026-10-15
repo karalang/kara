@@ -40,3 +40,10 @@ Compiler gaps, worked around and listed in the source header:
 - B-2026-10-14-51: check refuses binding `self.text[a..b]` in a method.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
+the `fs`, `File` and socket calls take the `Str` consts and
+`File.write`'s count is no longer cast. Two of the three B-2026-10-14-56
+sites match `self.items.get(..).unwrap().value` directly again; the
+third still binds the entry first. Each of these is the original line
+again, and the app still matches on all four MIR surfaces.

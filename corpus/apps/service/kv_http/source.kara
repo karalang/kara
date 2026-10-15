@@ -9,9 +9,6 @@
 //   B-2026-10-12-6   i64.parse returns Option, not Result[i64, ParseError]
 //   B-2026-10-12-7   split() is an eager Vec[String]: `.iter()` before map,
 //                    and a split piece is copied out with `.to_string()`
-//   B-2026-10-14-44  TcpListener.bind / TcpStream.connect take String, not Str
-// Not worked around (no other spelling): B-2026-10-12-23, `karac check`
-// does not know DeserializeError.
 
 #[derive(Serialize, Deserialize)]
 struct PutBody { value: String, tags: Vec[String] }
@@ -249,7 +246,7 @@ fn request(method: Str, path: Str, body: Option[String]) -> String {
 // prints each response's status line and body.
 fn exchange(listener: ref TcpListener, addr: Str, store: mut ref Store, label: Str, batch: Str) {
     println(f"== {label}");
-    let client = match TcpStream.connect(addr.to_string()) {
+    let client = match TcpStream.connect(addr) {
         Ok(c) => c,
         Err(_) => {
             println("connect failed");
@@ -304,7 +301,7 @@ fn print_responses(resp: Str) {
             }
         };
         let mut len = 0;
-        let mut status = String.new();
+        let mut status = "";
         for line in rest[0..head_end].split("\r\n") {
             if line.starts_with("HTTP/1.1 ") {
                 status = line.to_string();
@@ -329,7 +326,7 @@ fn put(key: Str, value: Str, tags: own Vec[String]) -> String {
 
 fn main() {
     let addr = "127.0.0.1:47731";
-    let listener = match TcpListener.bind(addr.to_string()) {
+    let listener = match TcpListener.bind(addr) {
         Ok(l) => l,
         Err(_) => {
             println("bind failed");

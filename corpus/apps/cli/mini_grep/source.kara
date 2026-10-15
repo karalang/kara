@@ -14,7 +14,6 @@
 //   B-2026-10-14-63  no Regex natives on v2: the engine is in the program
 //   B-2026-10-14-54  no directory listing: `find` through `sh`
 //   B-2026-10-12-7   split_whitespace() / lines() are eager Vec[String]
-//   B-2026-10-14-44  Command.arg and fs.write take String
 
 shared enum Node {
     Lit(char),
@@ -578,7 +577,7 @@ fn grep(args: ref Vec[String]) -> i64 {
 }
 
 fn write(path: Str, text: Str) {
-    match fs.write(path.to_string(), text.to_string()) {
+    match fs.write(path, text) {
         Ok(_) => {}
         Err(_) => println(f"write {path} failed"),
     }

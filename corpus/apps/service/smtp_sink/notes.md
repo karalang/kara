@@ -39,3 +39,8 @@ Compiler gaps, worked around and listed in the source header:
   `Command.arg` take `String`.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
+`TcpStream.connect` and `TcpListener.bind` take the `Str` address. Each
+of these is the original line again, and the app still matches on all
+four MIR surfaces.

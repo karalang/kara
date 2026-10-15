@@ -5,8 +5,6 @@
 // Workarounds for v2 gaps, each to revert once its row is fixed:
 //   B-2026-10-12-6   i64.parse returns Option, not Result[i64, ParseError]
 //   B-2026-10-12-7   lines() / split() are eager Vec[String]
-//   B-2026-10-14-44  File.open / File.create take ref String, not Str, and
-//                    File.read / File.write count in usize, not i64
 //   B-2026-10-14-45  BufReader is not implemented on v2: scan() reads the
 //                    whole segment with fs.read_to_string instead
 
@@ -35,7 +33,7 @@ fn segment_path(base: Str, n: i64) -> String {
 
 impl Rotator {
     fn open(base: Str, max_bytes: i64, keep: i64) -> Result[Rotator, IoError] {
-        let f = File.create(base.to_string())?;
+        let f = File.create(base)?;
         Ok(Rotator { base: base.to_string(), max_bytes: max_bytes, keep: keep, segment: 0, written: 0, file: f })
     }
 
@@ -64,7 +62,7 @@ impl Rotator {
         let mut s = line.to_string();
         s.push('\n');
         let n = self.file.write(s.bytes())?;
-        self.written += n as i64;
+        self.written += n;
         Ok(())
     }
 }
@@ -136,7 +134,7 @@ fn scan(path: Str, sum: mut ref Summary) -> Result[i64, IoError] {
 // The last line of a file, read by seeking back from the end in growing
 // steps until a newline before the final one is in view.
 fn tail_line(path: Str) -> Result[String, IoError] {
-    let f = File.open(path.to_string())?;
+    let f = File.open(path)?;
     let size = f.seek(SeekFrom.End, 0)?;
     let mut back = 16;
     loop {
@@ -148,7 +146,7 @@ fn tail_line(path: Str) -> Result[String, IoError] {
         while got < back {
             let n = f.read(mut buf[got..back])?;
             if n == 0 { return Err(IoError.UnexpectedEof); }
-            got += n as i64;
+            got += n;
         }
         let text = match String.from_utf8(buf) {
             Ok(t) => t,

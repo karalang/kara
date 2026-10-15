@@ -20,8 +20,6 @@
 //                    first (`let tok = ref self.toks[self.at]; match tok`)
 //   B-2026-10-15-8   a user `struct Unit` breaks fs.write's result on the
 //                    MIR interpreter: the group accumulator is `Pending`
-//   B-2026-10-14-52  iterating a const array misreads it compiled:
-//                    is_keyword walks a local copy of KEYWORDS
 //   B-2026-10-14-60  find_table returns a ref from an index loop
 //   B-2026-10-14-53  fs.write's path is reported moved: path.clone()
 //   B-2026-10-14-68  a literal next to a Str const in vec![] is a String:
@@ -255,8 +253,7 @@ const KEYWORDS: Array[Str, 22] = ["SELECT", "DISTINCT", "FROM", "JOIN", "LEFT", 
 
 fn is_keyword(w: Str) -> bool {
     let up = w.to_uppercase();
-    let keywords = KEYWORDS;
-    for k in keywords.iter() {
+    for k in KEYWORDS.iter() {
         if up == k {
             return true;
         }

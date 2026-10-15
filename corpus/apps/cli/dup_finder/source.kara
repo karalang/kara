@@ -8,9 +8,6 @@
 //   B-2026-10-14-54  the file system library has no directory listing,
 //                    create_dir or remove, so those go through `sh`
 //                    (`find`, `mkdir -p`, `rm --`)
-//   B-2026-10-14-44  fs.write / File.open / File.create take ref String, so
-//                    `Str` paths are copied; File.read / File.write count in
-//                    usize, so counts are cast to i64
 //   B-2026-10-12-3   SortedMap has no get_mut: contains_key, then index
 
 const CHUNK: i64 = 64;
@@ -78,17 +75,17 @@ fn sh(script: Str) -> Result[String, String] {
 }
 
 fn write_bytes(path: Str, bytes: Slice[u8]) -> Result[(), IoError] {
-    let f = File.create(path.to_string())?;
+    let f = File.create(path)?;
     let mut off = 0;
     while off < bytes.len() {
         let n = f.write(bytes[off..bytes.len()])?;
-        off += n as i64;
+        off += n;
     }
     Ok(())
 }
 
 fn read_bytes(path: Str) -> Result[Vec[u8], IoError] {
-    let f = File.open(path.to_string())?;
+    let f = File.open(path)?;
     let mut out: Vec[u8] = Vec.new();
     let mut buf: Vec[u8] = Vec.new();
     for _ in 0..CHUNK {
@@ -108,7 +105,7 @@ fn read_bytes(path: Str) -> Result[Vec[u8], IoError] {
 
 // Streams the file in CHUNK-byte reads: the size and hash, never the bytes.
 fn scan(path: Str) -> Result[FileInfo, IoError] {
-    let f = File.open(path.to_string())?;
+    let f = File.open(path)?;
     let mut buf: Vec[u8] = Vec.new();
     for _ in 0..CHUNK {
         buf.push(0u8);
@@ -123,7 +120,7 @@ fn scan(path: Str) -> Result[FileInfo, IoError] {
         for i in 0..n {
             h = (h ^ (buf[i] as u64)).wrapping_mul(1099511628211u64);
         }
-        size += n as i64;
+        size += n;
     }
     Ok(FileInfo { path: path.to_string(), size: size, hash: h })
 }
@@ -150,7 +147,7 @@ fn build_tree() -> Result[i64, String] {
     ];
     let mut files = 0;
     for (path, text) in texts.iter() {
-        match fs.write(path.to_string(), text.to_string()) {
+        match fs.write(path, text) {
             Ok(_) => files += 1,
             Err(e) => return Err(f"{path}: {show(e)}"),
         }

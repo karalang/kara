@@ -30,9 +30,7 @@
 // B-2026-10-15-31 (token fields read before the branches of `simple`),
 // B-2026-10-15-32 (a `ref` binding to match an owned Value and use it
 // again), B-2026-10-06-86 (`Place` is a struct, not an enum carrying
-// Values), B-2026-10-15-24 (iterator state read through `ref`),
-// B-2026-10-15-33 (methods called on a cloned table handle) and
-// B-2026-10-15-34 (`str_format`, not `format`).
+// Values) and B-2026-10-15-34 (`str_format`, not `format`).
 
 // ------------------------------------------------------------ lexer
 
@@ -2117,11 +2115,7 @@ impl State {
 
     fn register(mut ref self, t: ref LTable, name: Str, id: i64) {
         let f = self.builtin(name, id);
-        // A method call on a borrowed shared struct does not build on MIR
-        // (B-2026-10-15-33), so each such call goes through an owned
-        // handle: cloning a shared struct copies the pointer.
-        let h = t.clone();
-        h.set_str(name, f);
+        t.set_str(name, f);
     }
 }
 
@@ -2163,10 +2157,7 @@ fn tostring_raw(v: ref Value) -> String {
 fn metafield(v: ref Value, name: Str) -> Value {
     match v {
         Value.Tab(t) => match t.meta {
-            Some(m) => {
-                let h = m.clone();
-                h.get_str(name)
-            }
+            Some(m) => m.get_str(name),
             None => Value.Nil,
         },
         _ => Value.Nil,
@@ -2223,16 +2214,12 @@ fn index_value(ast: ref Ast, st: mut ref State, obj: own Value, key: ref Value, 
         let mut handler = Value.Nil;
         match c {
             Value.Tab(t) => {
-                let h = t.clone();
-                let v = h.get(key);
+                let v = t.get(key);
                 if not is_nil(v) {
                     return Ok(v);
                 }
-                handler = match h.meta {
-                    Some(m) => {
-                        let mh = m.clone();
-                        mh.get_str("__index")
-                    }
+                handler = match t.meta {
+                    Some(m) => m.get_str("__index"),
                     None => Value.Nil,
                 };
                 if is_nil(handler) {
@@ -2240,8 +2227,7 @@ fn index_value(ast: ref Ast, st: mut ref State, obj: own Value, key: ref Value, 
                 }
             }
             Value.Text(_) => {
-                let lib = st.strlib.clone();
-                return Ok(lib.get(key));
+                return Ok(st.strlib.get(key));
             }
             _ => {
                 return Err(st.rt_error(f"attempt to index a {type_name(c)} value{what}"));
@@ -2383,10 +2369,7 @@ fn eval(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Value, 
         Expr.Text(s) => Ok(Value.Text(s.clone())),
         Expr.Name(n) => match lookup(env, env.names.len(), n) {
             Some(c) => Ok(c.v.clone()),
-            None => {
-                let g = st.globals.clone();
-                Ok(g.get_str(n))
-            }
+            None => Ok(st.globals.get_str(n)),
         },
         Expr.Index(oe, ke) => {
             let ov = eval(ast, st, env, *oe)?;
@@ -2701,7 +2684,7 @@ fn unary(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, what: Str) -> R
     if op == "#" {
         return match a {
             Value.Text(s) => Ok(Value.Int(s.len())),
-            Value.Tab(t) => Ok(Value.Int(t.arr.len())),
+            Value.Tab(t) => Ok(Value.Int(t.len())),
             _ => Err(st.rt_error(f"attempt to get length of a {type_name(a)} value{what}")),
         };
     }
@@ -3155,25 +3138,6 @@ fn none() -> Vec[Value] {
 
 fn text_of_bytes(b: Slice[u8]) -> String {
     byte_str(b, 0, b.len())
-}
-
-// An iterator's saved state. Through a `ref` binding: matching
-// `f.state[i]` directly binds a Copy payload by value on MIR, so `*i`
-// fails there though `karac check` accepts it (B-2026-10-15-24).
-fn state_text(f: ref LFunc, i: i64) -> String {
-    let v = ref f.state[i];
-    match v {
-        Value.Text(t) => t.clone(),
-        _ => String.new(),
-    }
-}
-
-fn state_int(f: ref LFunc, i: i64, dflt: i64) -> i64 {
-    let v = ref f.state[i];
-    match v {
-        Value.Int(n) => *n,
-        _ => dflt,
-    }
 }
 
 fn call_builtin(ast: ref Ast, st: mut ref State, f: ref LFunc, args: own Vec[Value]) -> Result[Vec[Value], Value] {
@@ -3695,7 +3659,7 @@ fn gsub_value(ast: ref Ast, st: mut ref State, ms: ref MatchState, s: i64, e: i6
         Value.Text(t) => t.clone(),
         Value.Int(_) => number_text(v),
         Value.Num(_) => number_text(v),
-        _ => return Err(st.lib_error(f"invalid replacement value (a {type_name(v)})")),
+        other => return Err(st.lib_error(f"invalid replacement value (a {type_name(other)})")),
     };
     for x in piece.bytes().iter() {
         out.push(*x);
@@ -3712,10 +3676,22 @@ fn pattern_error(st: ref State, r: own Result[Vec[Value], String]) -> Result[Vec
 
 fn string_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[Value]) -> Result[Vec[Value], Value] {
     if id == B_GMATCH_ITER {
-        let s = state_text(f, 0);
-        let p = state_text(f, 1);
-        let pos = state_int(f, 2, 0);
-        let last = state_int(f, 3, -1);
+        let s = match f.state[0] {
+            Value.Text(t) => t.clone(),
+            _ => String.new(),
+        };
+        let p = match f.state[1] {
+            Value.Text(t) => t.clone(),
+            _ => String.new(),
+        };
+        let pos: i64 = match f.state[2] {
+            Value.Int(i) => *i,
+            _ => 0,
+        };
+        let last: i64 = match f.state[3] {
+            Value.Int(i) => *i,
+            _ => -1,
+        };
         let mut ms = new_match_state(s, p);
         let mut src = pos;
         while src <= ms.src.len() {
@@ -4139,7 +4115,10 @@ fn io_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[
         return Ok(one(lines_iter(st, content)));
     }
     if id == B_LINES_ITER {
-        let i = state_int(f, 0, 1);
+        let i: i64 = match f.state[0] {
+            Value.Int(i) => *i,
+            _ => 1,
+        };
         if i >= f.state.len() {
             return Ok(one(Value.Nil));
         }
@@ -4339,7 +4318,7 @@ fn run_file(path: Str) {
                 Value.Text(s) => s.clone(),
                 Value.Int(_) => number_text(e),
                 Value.Num(_) => number_text(e),
-                _ => f"(error object is a {type_name(e)} value)",
+                other => f"(error object is a {type_name(other)} value)",
             };
             println(f"lua: {msg}");
         }

@@ -32,3 +32,8 @@ Compiler gaps, worked around and listed in the source header:
   `fs.read_to_string`.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
+`File.open` and `File.create` take the `Str` path and the counts are no
+longer cast to `i64`. Each of these is the original line again, and the
+app still matches on all four MIR surfaces.

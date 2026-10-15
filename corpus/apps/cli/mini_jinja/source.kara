@@ -26,10 +26,8 @@
 // data, made by render.py.
 //
 // Workarounds for compiler gaps, each marked where it is applied:
-// B-2026-10-15-37 (the syntax tree parameter is `tree`, not `ast`),
-// B-2026-10-15-38 (numbers parsed from a local, not from `t.text`),
-// B-2026-10-15-20 (a filter or test name cloned into its node),
-// B-2026-10-15-40 (Python's None is `Val.Nil`).
+// B-2026-10-15-38 (numbers parsed from a local, not from `t.text`) and
+// B-2026-10-15-20 (a filter or test name cloned into its node).
 
 // ------------------------------------------------------------ bytes and strings
 
@@ -191,12 +189,9 @@ fn replace_all(s: Str, old: Str, new: Str) -> String {
 // A template value: the JSON types, Jinja's markup-safe strings, its
 // Undefined (carrying the message an access through it raises) and
 // macros. Lists and dicts have reference semantics, as in Python.
-//
-// Python's None is `Nil`: on MIR a variant named `None` captures the bare
-// `None` of every Option in the program (B-2026-10-15-40).
 #[derive(Clone)]
 enum Val {
-    Nil,
+    None,
     Bool(bool),
     Int(i64),
     Float(f64),
@@ -268,7 +263,7 @@ fn undef(msg: Str) -> Val {
 
 fn type_name(v: ref Val) -> String {
     let s = match v {
-        Val.Nil => "NoneType",
+        Val.None => "NoneType",
         Val.Bool(_) => "bool",
         Val.Int(_) => "int",
         Val.Float(_) => "float",
@@ -284,7 +279,7 @@ fn type_name(v: ref Val) -> String {
 
 fn truthy(v: ref Val) -> bool {
     match v {
-        Val.Nil => false,
+        Val.None => false,
         Val.Bool(b) => *b,
         Val.Int(i) => *i != 0,
         Val.Float(x) => *x != 0.0,
@@ -374,7 +369,7 @@ fn repr(v: ref Val) -> String {
 // Python's str()
 fn to_str(v: ref Val) -> String {
     match v {
-        Val.Nil => "None".to_string(),
+        Val.None => "None".to_string(),
         Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
         Val.Int(i) => f"{i}",
         Val.Float(x) => float_text(*x),
@@ -552,7 +547,7 @@ impl JsonParser {
             return Ok(Val.Bool(false));
         }
         if self.word("null") {
-            return Ok(Val.Nil);
+            return Ok(Val.None);
         }
         let st = self.p;
         let mut float = false;
@@ -1009,9 +1004,6 @@ struct MacroSrc { name: String, params: Vec[String], defaults: Vec[i64], body: i
 // A parsed template: its body, whether it autoescapes and its blocks.
 struct Tpl { name: String, root: i64, auto: bool, bnames: Vec[String], bbodies: Vec[i64] }
 
-// Functions take it as `tree`: `karac check` reads a method call on a
-// local named `ast` as a call into the comptime `ast` module
-// (B-2026-10-15-37).
 struct Ast {
     exprs: Vec[Expr],
     elines: Vec[i64],
@@ -1204,7 +1196,7 @@ impl Parser {
 
     // Nodes up to one of `ends` (a block_begin followed by one of those
     // names, left unconsumed) or the end of the template.
-    fn subparse(mut ref self, tree: mut ref Ast, ends: own Vec[String]) -> Result[i64, String] {
+    fn subparse(mut ref self, ast: mut ref Ast, ends: own Vec[String]) -> Result[i64, String] {
         let mut body: Vec[i64] = Vec.new();
         let has_ends = ends.len() > 0;
         if has_ends {
@@ -1219,14 +1211,14 @@ impl Parser {
             if k == K_DATA {
                 let s = self.toks[self.p].text.clone();
                 self.p += 1;
-                body.push(tree.add_node(Node.Data(s), line));
+                body.push(ast.add_node(Node.Data(s), line));
                 continue;
             }
             if k == K_VB {
                 self.p += 1;
-                let e = self.tuple(tree)?;
+                let e = self.tuple(ast)?;
                 self.expect_kind(K_VE, "end of print statement")?;
-                body.push(tree.add_node(Node.Print(e), line));
+                body.push(ast.add_node(Node.Print(e), line));
                 continue;
             }
             // a block begin
@@ -1234,7 +1226,7 @@ impl Parser {
             if has_ends and self.at_end_tag(ends) {
                 break;
             }
-            let nd = self.statement(tree)?;
+            let nd = self.statement(ast)?;
             if nd >= 0 {
                 body.push(nd);
             }
@@ -1242,14 +1234,14 @@ impl Parser {
         if has_ends {
             self.ends.pop();
         }
-        Ok(tree.add_body(body))
+        Ok(ast.add_body(body))
     }
 
     // A statement's body: the tag's end, the nodes, and at the end of
     // the template Jinja's "Unexpected end" error.
-    fn statements(mut ref self, tree: mut ref Ast, ends: own Vec[String]) -> Result[i64, String] {
+    fn statements(mut ref self, ast: mut ref Ast, ends: own Vec[String]) -> Result[i64, String] {
         self.expect_kind(K_BE, "end of statement block")?;
-        let body = self.subparse(tree, ends.clone())?;
+        let body = self.subparse(ast, ends.clone())?;
         if self.kind() == K_EOF {
             let mut stack = self.ends.clone();
             stack.push(ends);
@@ -1260,7 +1252,7 @@ impl Parser {
 
     // After a block_begin. Returns the node, or -1 for one that renders
     // nothing where it stands.
-    fn statement(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn statement(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         if self.kind() != K_NAME {
             return Err(self.fail_here("tag name expected"));
         }
@@ -1273,12 +1265,12 @@ impl Parser {
         }
         self.tags.push(tag.clone());
         self.p += 1;
-        let nd = self.statement_body(tree, tag, line)?;
+        let nd = self.statement_body(ast, tag, line)?;
         self.tags.pop();
         Ok(nd)
     }
 
-    fn statement_body(mut ref self, tree: mut ref Ast, tag: Str, line: i64) -> Result[i64, String] {
+    fn statement_body(mut ref self, ast: mut ref Ast, tag: Str, line: i64) -> Result[i64, String] {
         if tag == "for" {
             let mut targets: Vec[String] = Vec.new();
             targets.push(self.name()?);
@@ -1289,43 +1281,43 @@ impl Parser {
                 let d = describe(self.toks[self.p]);
                 return Err(self.fail_here(f"expected token 'in', got {str_repr(d)}"));
             }
-            let iter = self.or_expr(tree)?;
+            let iter = self.or_expr(ast)?;
             let mut cond: i64 = -1;
             if self.skip_name("if") {
-                cond = self.expression(tree)?;
+                cond = self.expression(ast)?;
             }
-            let body = self.statements(tree, vec!["endfor".to_string(), "else".to_string()])?;
+            let body = self.statements(ast, vec!["endfor".to_string(), "else".to_string()])?;
             let mut els: i64 = -1;
             let which = self.toks[self.p].text.clone();
             self.p += 1;
             if which == "else" {
-                els = self.statements(tree, vec!["endfor".to_string()])?;
+                els = self.statements(ast, vec!["endfor".to_string()])?;
                 self.p += 1;
             }
             self.expect_kind(K_BE, "end of statement block")?;
-            return Ok(tree.add_node(Node.For(targets, iter, cond, body, els), line));
+            return Ok(ast.add_node(Node.For(targets, iter, cond, body, els), line));
         }
         if tag == "if" {
             let mut conds: Vec[i64] = Vec.new();
             let mut bodies: Vec[i64] = Vec.new();
             let mut els: i64 = -1;
-            conds.push(self.tuple(tree)?);
+            conds.push(self.tuple(ast)?);
             loop {
-                bodies.push(self.statements(tree, vec!["elif".to_string(), "else".to_string(), "endif".to_string()])?);
+                bodies.push(self.statements(ast, vec!["elif".to_string(), "else".to_string(), "endif".to_string()])?);
                 let which = self.toks[self.p].text.clone();
                 self.p += 1;
                 if which == "elif" {
-                    conds.push(self.tuple(tree)?);
+                    conds.push(self.tuple(ast)?);
                     continue;
                 }
                 if which == "else" {
-                    els = self.statements(tree, vec!["endif".to_string()])?;
+                    els = self.statements(ast, vec!["endif".to_string()])?;
                     self.p += 1;
                 }
                 break;
             }
             self.expect_kind(K_BE, "end of statement block")?;
-            return Ok(tree.add_node(Node.If(conds, bodies, els), line));
+            return Ok(ast.add_node(Node.If(conds, bodies, els), line));
         }
         if tag == "set" {
             let name = self.name()?;
@@ -1334,9 +1326,9 @@ impl Parser {
                 attr = self.name()?;
             }
             self.expect_op("=")?;
-            let e = self.tuple(tree)?;
+            let e = self.tuple(ast)?;
             self.expect_kind(K_BE, "end of statement block")?;
-            return Ok(tree.add_node(Node.Set(name, attr, e), line));
+            return Ok(ast.add_node(Node.Set(name, attr, e), line));
         }
         if tag == "block" {
             let name = self.name()?;
@@ -1345,7 +1337,7 @@ impl Parser {
                     return Err(syntax_error(f"block {str_repr(name)} defined twice", line));
                 }
             }
-            let body = self.statements(tree, vec!["endblock".to_string()])?;
+            let body = self.statements(ast, vec!["endblock".to_string()])?;
             self.p += 1;
             if self.kind() == K_NAME {
                 self.p += 1;
@@ -1353,29 +1345,29 @@ impl Parser {
             self.expect_kind(K_BE, "end of statement block")?;
             self.bnames.push(name.clone());
             self.bbodies.push(body);
-            return Ok(tree.add_node(Node.Block(name), line));
+            return Ok(ast.add_node(Node.Block(name), line));
         }
         if tag == "extends" {
-            let e = self.expression(tree)?;
+            let e = self.expression(ast)?;
             self.expect_kind(K_BE, "end of statement block")?;
-            return Ok(tree.add_node(Node.Extends(e), line));
+            return Ok(ast.add_node(Node.Extends(e), line));
         }
         if tag == "include" {
-            let e = self.expression(tree)?;
+            let e = self.expression(ast)?;
             self.expect_kind(K_BE, "end of statement block")?;
-            return Ok(tree.add_node(Node.Include(e), line));
+            return Ok(ast.add_node(Node.Include(e), line));
         }
         if tag == "import" {
-            let e = self.expression(tree)?;
+            let e = self.expression(ast)?;
             if not self.skip_name("as") {
                 return Err(self.unexpected());
             }
             let alias = self.name()?;
             self.expect_kind(K_BE, "end of statement block")?;
-            return Ok(tree.add_node(Node.Import(e, alias), line));
+            return Ok(ast.add_node(Node.Import(e, alias), line));
         }
         if tag == "from" {
-            let e = self.expression(tree)?;
+            let e = self.expression(ast)?;
             if not self.skip_name("import") {
                 return Err(self.unexpected());
             }
@@ -1385,7 +1377,7 @@ impl Parser {
                 names.push(self.name()?);
             }
             self.expect_kind(K_BE, "end of statement block")?;
-            return Ok(tree.add_node(Node.FromImport(e, names), line));
+            return Ok(ast.add_node(Node.FromImport(e, names), line));
         }
         // macro
         let name = self.name()?;
@@ -1398,28 +1390,28 @@ impl Parser {
             }
             params.push(self.name()?);
             if self.skip_op("=") {
-                defaults.push(self.expression(tree)?);
+                defaults.push(self.expression(ast)?);
             } else {
                 defaults.push(-1);
             }
         }
         self.p += 1;
-        let body = self.statements(tree, vec!["endmacro".to_string()])?;
+        let body = self.statements(ast, vec!["endmacro".to_string()])?;
         self.p += 1;
         if self.kind() == K_NAME {
             self.p += 1;
         }
         self.expect_kind(K_BE, "end of statement block")?;
-        let m = tree.add_macro(MacroSrc { name: name, params: params, defaults: defaults, body: body });
-        Ok(tree.add_node(Node.MacroDef(m), line))
+        let m = ast.add_macro(MacroSrc { name: name, params: params, defaults: defaults, body: body });
+        Ok(ast.add_node(Node.MacroDef(m), line))
     }
 
     // ---- expressions, in Jinja's precedence order
 
     // Jinja's parse_tuple: one expression, or a tuple (a list here).
-    fn tuple(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn tuple(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let first = self.expression(tree)?;
+        let first = self.expression(ast)?;
         if not self.is_op(",") {
             return Ok(first);
         }
@@ -1429,57 +1421,57 @@ impl Parser {
             if self.kind() == K_VE or self.kind() == K_BE {
                 break;
             }
-            items.push(self.expression(tree)?);
+            items.push(self.expression(ast)?);
         }
-        Ok(tree.add_expr(Expr.ListLit(items), line))
+        Ok(ast.add_expr(Expr.ListLit(items), line))
     }
 
-    fn expression(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn expression(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let mut e = self.or_expr(tree)?;
+        let mut e = self.or_expr(ast)?;
         while self.skip_name("if") {
-            let test = self.or_expr(tree)?;
+            let test = self.or_expr(ast)?;
             let mut other: i64 = -1;
             if self.skip_name("else") {
-                other = self.expression(tree)?;
+                other = self.expression(ast)?;
             }
-            e = tree.add_expr(Expr.Cond(test, e, other), line);
+            e = ast.add_expr(Expr.Cond(test, e, other), line);
         }
         Ok(e)
     }
 
-    fn or_expr(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn or_expr(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let mut left = self.and_expr(tree)?;
+        let mut left = self.and_expr(ast)?;
         while self.skip_name("or") {
-            let right = self.and_expr(tree)?;
-            left = tree.add_expr(Expr.Or(left, right), line);
+            let right = self.and_expr(ast)?;
+            left = ast.add_expr(Expr.Or(left, right), line);
         }
         Ok(left)
     }
 
-    fn and_expr(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn and_expr(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let mut left = self.not_expr(tree)?;
+        let mut left = self.not_expr(ast)?;
         while self.skip_name("and") {
-            let right = self.not_expr(tree)?;
-            left = tree.add_expr(Expr.And(left, right), line);
+            let right = self.not_expr(ast)?;
+            left = ast.add_expr(Expr.And(left, right), line);
         }
         Ok(left)
     }
 
-    fn not_expr(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn not_expr(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
         if self.skip_name("not") {
-            let e = self.not_expr(tree)?;
-            return Ok(tree.add_expr(Expr.Not(e), line));
+            let e = self.not_expr(ast)?;
+            return Ok(ast.add_expr(Expr.Not(e), line));
         }
-        self.compare(tree)
+        self.compare(ast)
     }
 
-    fn compare(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn compare(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let first = self.math1(tree)?;
+        let first = self.math1(ast)?;
         let mut ops: Vec[String] = Vec.new();
         let mut rest: Vec[i64] = Vec.new();
         loop {
@@ -1488,15 +1480,15 @@ impl Parser {
             if k == K_OP and (t == "==" or t == "!=" or t == "<" or t == ">" or t == "<=" or t == ">=") {
                 self.p += 1;
                 ops.push(t);
-                rest.push(self.math1(tree)?);
+                rest.push(self.math1(ast)?);
             } else if k == K_NAME and t == "in" {
                 self.p += 1;
                 ops.push("in".to_string());
-                rest.push(self.math1(tree)?);
+                rest.push(self.math1(ast)?);
             } else if k == K_NAME and t == "not" and self.toks[self.p + 1].kind == K_NAME and self.toks[self.p + 1].text == "in" {
                 self.p += 2;
                 ops.push("notin".to_string());
-                rest.push(self.math1(tree)?);
+                rest.push(self.math1(ast)?);
             } else {
                 break;
             }
@@ -1504,76 +1496,76 @@ impl Parser {
         if ops.len() == 0 {
             return Ok(first);
         }
-        Ok(tree.add_expr(Expr.Cmp(first, ops, rest), line))
+        Ok(ast.add_expr(Expr.Cmp(first, ops, rest), line))
     }
 
-    fn math1(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn math1(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let mut left = self.concat(tree)?;
+        let mut left = self.concat(ast)?;
         while self.is_op("+") or self.is_op("-") {
             let op = self.toks[self.p].text.clone();
             self.p += 1;
-            let right = self.concat(tree)?;
-            left = tree.add_expr(Expr.Bin(op, left, right), line);
+            let right = self.concat(ast)?;
+            left = ast.add_expr(Expr.Bin(op, left, right), line);
         }
         Ok(left)
     }
 
-    fn concat(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn concat(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let first = self.math2(tree)?;
+        let first = self.math2(ast)?;
         if not self.is_op("~") {
             return Ok(first);
         }
         let mut args: Vec[i64] = Vec.new();
         args.push(first);
         while self.skip_op("~") {
-            args.push(self.math2(tree)?);
+            args.push(self.math2(ast)?);
         }
-        Ok(tree.add_expr(Expr.Concat(args), line))
+        Ok(ast.add_expr(Expr.Concat(args), line))
     }
 
-    fn math2(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn math2(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let mut left = self.pow(tree)?;
+        let mut left = self.pow(ast)?;
         while self.is_op("*") or self.is_op("/") or self.is_op("//") or self.is_op("%") {
             let op = self.toks[self.p].text.clone();
             self.p += 1;
-            let right = self.pow(tree)?;
-            left = tree.add_expr(Expr.Bin(op, left, right), line);
+            let right = self.pow(ast)?;
+            left = ast.add_expr(Expr.Bin(op, left, right), line);
         }
         Ok(left)
     }
 
-    fn pow(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn pow(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
-        let mut left = self.unary(tree, true)?;
+        let mut left = self.unary(ast, true)?;
         while self.skip_op("**") {
-            let right = self.unary(tree, true)?;
-            left = tree.add_expr(Expr.Bin("**".to_string(), left, right), line);
+            let right = self.unary(ast, true)?;
+            left = ast.add_expr(Expr.Bin("**".to_string(), left, right), line);
         }
         Ok(left)
     }
 
-    fn unary(mut ref self, tree: mut ref Ast, with_filter: bool) -> Result[i64, String] {
+    fn unary(mut ref self, ast: mut ref Ast, with_filter: bool) -> Result[i64, String] {
         let line = self.line();
         let mut e: i64 = -1;
         if self.skip_op("-") {
-            let inner = self.unary(tree, false)?;
-            e = tree.add_expr(Expr.Neg(inner), line);
+            let inner = self.unary(ast, false)?;
+            e = ast.add_expr(Expr.Neg(inner), line);
         } else if self.skip_op("+") {
-            e = self.unary(tree, false)?;
+            e = self.unary(ast, false)?;
         } else {
-            e = self.primary(tree)?;
+            e = self.primary(ast)?;
         }
-        e = self.postfix(tree, e)?;
+        e = self.postfix(ast, e)?;
         if with_filter {
-            e = self.filter_expr(tree, e)?;
+            e = self.filter_expr(ast, e)?;
         }
         Ok(e)
     }
 
-    fn primary(mut ref self, tree: mut ref Ast) -> Result[i64, String] {
+    fn primary(mut ref self, ast: mut ref Ast) -> Result[i64, String] {
         let line = self.line();
         let k = self.kind();
         let text = self.toks[self.p].text.clone();
@@ -1582,15 +1574,15 @@ impl Parser {
         if k == K_NAME {
             self.p += 1;
             if text == "true" or text == "True" {
-                return Ok(tree.add_expr(Expr.EBool(true), line));
+                return Ok(ast.add_expr(Expr.EBool(true), line));
             }
             if text == "false" or text == "False" {
-                return Ok(tree.add_expr(Expr.EBool(false), line));
+                return Ok(ast.add_expr(Expr.EBool(false), line));
             }
             if text == "none" or text == "None" {
-                return Ok(tree.add_expr(Expr.ENone, line));
+                return Ok(ast.add_expr(Expr.ENone, line));
             }
-            return Ok(tree.add_expr(Expr.Name(text), line));
+            return Ok(ast.add_expr(Expr.Name(text), line));
         }
         if k == K_STR {
             // adjacent strings are one
@@ -1600,18 +1592,18 @@ impl Parser {
                 s.push_str(self.toks[self.p].text);
                 self.p += 1;
             }
-            return Ok(tree.add_expr(Expr.EStr(s), line));
+            return Ok(ast.add_expr(Expr.EStr(s), line));
         }
         if k == K_INT {
             self.p += 1;
-            return Ok(tree.add_expr(Expr.EInt(ival), line));
+            return Ok(ast.add_expr(Expr.EInt(ival), line));
         }
         if k == K_FLOAT {
             self.p += 1;
-            return Ok(tree.add_expr(Expr.EFloat(fval), line));
+            return Ok(ast.add_expr(Expr.EFloat(fval), line));
         }
         if self.skip_op("(") {
-            let e = self.tuple(tree)?;
+            let e = self.tuple(ast)?;
             self.expect_op(")")?;
             return Ok(e);
         }
@@ -1624,15 +1616,15 @@ impl Parser {
                         break;
                     }
                 }
-                items.push(self.expression(tree)?);
+                items.push(self.expression(ast)?);
             }
             self.p += 1;
-            return Ok(tree.add_expr(Expr.ListLit(items), line));
+            return Ok(ast.add_expr(Expr.ListLit(items), line));
         }
         Err(self.unexpected())
     }
 
-    fn postfix(mut ref self, tree: mut ref Ast, e0: i64) -> Result[i64, String] {
+    fn postfix(mut ref self, ast: mut ref Ast, e0: i64) -> Result[i64, String] {
         let mut e = e0;
         loop {
             let line = self.line();
@@ -1640,43 +1632,43 @@ impl Parser {
                 if self.kind() == K_INT {
                     let i = self.toks[self.p].ival;
                     self.p += 1;
-                    let key = tree.add_expr(Expr.EInt(i), line);
-                    e = tree.add_expr(Expr.Item(e, key), line);
+                    let key = ast.add_expr(Expr.EInt(i), line);
+                    e = ast.add_expr(Expr.Item(e, key), line);
                     continue;
                 }
                 let n = self.name()?;
-                e = tree.add_expr(Expr.Attr(e, n), line);
+                e = ast.add_expr(Expr.Attr(e, n), line);
             } else if self.skip_op("[") {
                 let mut start: i64 = -1;
                 if not self.is_op(":") {
-                    start = self.expression(tree)?;
+                    start = self.expression(ast)?;
                 }
                 if self.skip_op(":") {
                     let mut stop: i64 = -1;
                     if not self.is_op("]") {
-                        stop = self.expression(tree)?;
+                        stop = self.expression(ast)?;
                     }
                     self.expect_op("]")?;
-                    e = tree.add_expr(Expr.Slice(e, start, stop), line);
+                    e = ast.add_expr(Expr.Slice(e, start, stop), line);
                 } else {
                     self.expect_op("]")?;
-                    e = tree.add_expr(Expr.Item(e, start), line);
+                    e = ast.add_expr(Expr.Item(e, start), line);
                 }
             } else if self.is_op("(") {
-                e = self.call(tree, e)?;
+                e = self.call(ast, e)?;
             } else {
                 return Ok(e);
             }
         }
     }
 
-    fn call(mut ref self, tree: mut ref Ast, f: i64) -> Result[i64, String] {
+    fn call(mut ref self, ast: mut ref Ast, f: i64) -> Result[i64, String] {
         let line = self.line();
-        let (args, kwn, kwv) = self.call_args(tree)?;
-        Ok(tree.add_expr(Expr.Call(f, args, kwn, kwv), line))
+        let (args, kwn, kwv) = self.call_args(ast)?;
+        Ok(ast.add_expr(Expr.Call(f, args, kwn, kwv), line))
     }
 
-    fn call_args(mut ref self, tree: mut ref Ast) -> Result[(Vec[i64], Vec[String], Vec[i64]), String] {
+    fn call_args(mut ref self, ast: mut ref Ast) -> Result[(Vec[i64], Vec[String], Vec[i64]), String] {
         self.expect_op("(")?;
         let mut args: Vec[i64] = Vec.new();
         let mut kwn: Vec[String] = Vec.new();
@@ -1691,19 +1683,19 @@ impl Parser {
             if self.kind() == K_NAME and self.toks[self.p + 1].kind == K_OP and self.toks[self.p + 1].text == "=" {
                 kwn.push(self.toks[self.p].text.clone());
                 self.p += 2;
-                kwv.push(self.expression(tree)?);
+                kwv.push(self.expression(ast)?);
             } else {
                 if kwn.len() > 0 {
                     return Err(self.fail_here("invalid syntax for function call expression"));
                 }
-                args.push(self.expression(tree)?);
+                args.push(self.expression(ast)?);
             }
         }
         self.p += 1;
         Ok((args, kwn, kwv))
     }
 
-    fn filter_expr(mut ref self, tree: mut ref Ast, e0: i64) -> Result[i64, String] {
+    fn filter_expr(mut ref self, ast: mut ref Ast, e0: i64) -> Result[i64, String] {
         let mut e = e0;
         loop {
             let line = self.line();
@@ -1717,14 +1709,14 @@ impl Parser {
                 let mut kwn: Vec[String] = Vec.new();
                 let mut kwv: Vec[i64] = Vec.new();
                 if self.is_op("(") {
-                    let (a, n, v) = self.call_args(tree)?;
+                    let (a, n, v) = self.call_args(ast)?;
                     args = a;
                     kwn = n;
                     kwv = v;
                 }
                 // a clone: `karac check` takes the read of `name` above as a use
                 // after this move on the next iteration (B-2026-10-15-20)
-                e = tree.add_expr(Expr.Filter(e, name.clone(), args, kwn, kwv), line);
+                e = ast.add_expr(Expr.Filter(e, name.clone(), args, kwn, kwv), line);
             } else if self.skip_name("is") {
                 let negated = self.skip_name("not");
                 let name = self.name()?;
@@ -1734,12 +1726,12 @@ impl Parser {
                 }
                 let mut args: Vec[i64] = Vec.new();
                 if self.is_op("(") {
-                    let (a, _, _) = self.call_args(tree)?;
+                    let (a, _, _) = self.call_args(ast)?;
                     args = a;
                 }
-                e = tree.add_expr(Expr.Test(e, name.clone(), negated, args), line);
+                e = ast.add_expr(Expr.Test(e, name.clone(), negated, args), line);
             } else if self.is_op("(") {
-                e = self.call(tree, e)?;
+                e = self.call(ast, e)?;
             } else {
                 return Ok(e);
             }
@@ -1748,15 +1740,15 @@ impl Parser {
 }
 
 // Parses a template into the arena and returns its index.
-fn parse_template(tree: mut ref Ast, name: Str, src: Str, auto: bool) -> Result[i64, String] {
+fn parse_template(ast: mut ref Ast, name: Str, src: Str, auto: bool) -> Result[i64, String] {
     let toks = lex(src)?;
     let mut ps = Parser { toks: toks, p: 0, ends: Vec.new(), tags: Vec.new(), bnames: Vec.new(), bbodies: Vec.new(), bad_name: String.new(), bad_line: 0 };
-    let root = ps.subparse(tree, Vec.new())?;
+    let root = ps.subparse(ast, Vec.new())?;
     if ps.bad_name != "" {
         return Err(f"TemplateAssertionError: {ps.bad_name} (line {ps.bad_line})");
     }
-    tree.tpls.push(Tpl { name: name.to_string(), root: root, auto: auto, bnames: ps.bnames.clone(), bbodies: ps.bbodies.clone() });
-    Ok(tree.tpls.len() - 1)
+    ast.tpls.push(Tpl { name: name.to_string(), root: root, auto: auto, bnames: ps.bnames.clone(), bbodies: ps.bbodies.clone() });
+    Ok(ast.tpls.len() - 1)
 }
 
 // ------------------------------------------------------------ numbers
@@ -2149,8 +2141,8 @@ fn val_eq(a: ref Val, b: ref Val) -> bool {
         return to_str(a) == to_str(b);
     }
     match a {
-        Val.Nil => match b {
-            Val.Nil => true,
+        Val.None => match b {
+            Val.None => true,
             _ => false,
         },
         Val.Undef(_) => is_undef(b),
@@ -2548,8 +2540,8 @@ fn new_state(scopes: own Vec[JDict], auto: bool) -> R {
     R { scopes: scopes, auto: auto, suppress: false, parent: -1, cn: Vec.new(), ct: Vec.new(), cb: Vec.new(), bnames: Vec.new(), bdepths: Vec.new() }
 }
 
-fn add_blocks(tree: ref Ast, r: mut ref R, tid: i64) {
-    let t = ref tree.tpls[tid];
+fn add_blocks(ast: ref Ast, r: mut ref R, tid: i64) {
+    let t = ref ast.tpls[tid];
     for i in 0..t.bnames.len() {
         r.cn.push(t.bnames[i].clone());
         r.ct.push(tid);
@@ -2587,9 +2579,9 @@ fn top_frame(r: ref R) -> JDict {
     r.scopes[r.scopes.len() - 1].clone()
 }
 
-fn load(tree: ref Ast, name: ref Val) -> Result[i64, String] {
+fn load(ast: ref Ast, name: ref Val) -> Result[i64, String] {
     let n = to_str(name);
-    let t = tree.find_tpl(n);
+    let t = ast.find_tpl(n);
     if t < 0 {
         return Err(f"TemplateNotFound: {n}");
     }
@@ -2598,17 +2590,17 @@ fn load(tree: ref Ast, name: ref Val) -> Result[i64, String] {
 
 // Renders block chain entry `idx` (its depth-th definition) into a
 // string, with the autoescaping of the template that defined it.
-fn render_block(tree: ref Ast, r: mut ref R, name: Str, depth: i64, idx: i64) -> Result[String, String] {
+fn render_block(ast: ref Ast, r: mut ref R, name: Str, depth: i64, idx: i64) -> Result[String, String] {
     let mut out = String.new();
     let saved_auto = r.auto;
     let saved_suppress = r.suppress;
-    r.auto = tree.tpls[r.ct[idx]].auto;
+    r.auto = ast.tpls[r.ct[idx]].auto;
     r.suppress = false;
     r.bnames.push(name.to_string());
     r.bdepths.push(depth);
     r.scopes.push(new_dict(false));
     let body = r.cb[idx];
-    let res = render_body(tree, r, body, mut out);
+    let res = render_body(ast, r, body, mut out);
     r.scopes.pop();
     r.bnames.pop();
     r.bdepths.pop();
@@ -2620,26 +2612,26 @@ fn render_block(tree: ref Ast, r: mut ref R, name: Str, depth: i64, idx: i64) ->
 
 // A template's top level in a fresh module frame, for import: what it
 // defines is the module; what it writes is dropped.
-fn module_of(tree: ref Ast, tid: i64) -> Result[JDict, String] {
+fn module_of(ast: ref Ast, tid: i64) -> Result[JDict, String] {
     let module = new_dict(false);
-    let mut r = new_state(vec![module.clone()], tree.tpls[tid].auto);
-    add_blocks(tree, mut r, tid);
+    let mut r = new_state(vec![module.clone()], ast.tpls[tid].auto);
+    add_blocks(ast, mut r, tid);
     let mut out = String.new();
-    render_body(tree, mut r, tree.tpls[tid].root, mut out)?;
+    render_body(ast, mut r, ast.tpls[tid].root, mut out)?;
     Ok(module)
 }
 
-fn render_body(tree: ref Ast, r: mut ref R, body: i64, out: mut ref String) -> Result[(), String] {
-    let n = tree.bodies[body].len();
+fn render_body(ast: ref Ast, r: mut ref R, body: i64, out: mut ref String) -> Result[(), String] {
+    let n = ast.bodies[body].len();
     for i in 0..n {
-        let nd = tree.bodies[body][i];
-        render_node(tree, r, nd, out)?;
+        let nd = ast.bodies[body][i];
+        render_node(ast, r, nd, out)?;
     }
     Ok(())
 }
 
-fn render_node(tree: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Result[(), String] {
-    let node = ref tree.nodes[nd];
+fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Result[(), String] {
+    let node = ref ast.nodes[nd];
     match node {
         Node.Data(s) => {
             if not r.suppress {
@@ -2648,7 +2640,7 @@ fn render_node(tree: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Res
         }
         Node.Print(e) => {
             if not r.suppress {
-                let v = eval(tree, r, *e)?;
+                let v = eval(ast, r, *e)?;
                 out.push_str(output_text(v, r.auto));
             }
         }
@@ -2656,24 +2648,24 @@ fn render_node(tree: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Res
             if r.suppress {
                 return Ok(());
             }
-            render_for(tree, r, targets, *iter, *cond, *body, *els, out)?;
+            render_for(ast, r, targets, *iter, *cond, *body, *els, out)?;
         }
         Node.If(conds, bodies, els) => {
             if r.suppress {
                 return Ok(());
             }
             for i in 0..conds.len() {
-                let c = eval(tree, r, conds[i])?;
+                let c = eval(ast, r, conds[i])?;
                 if truthy(c) {
-                    return render_body(tree, r, bodies[i], out);
+                    return render_body(ast, r, bodies[i], out);
                 }
             }
             if *els >= 0 {
-                render_body(tree, r, *els, out)?;
+                render_body(ast, r, *els, out)?;
             }
         }
         Node.Set(name, attr, e) => {
-            let v = eval(tree, r, *e)?;
+            let v = eval(ast, r, *e)?;
             if attr.len() == 0 {
                 dict_set(top_frame(r), name, v);
                 return Ok(());
@@ -2698,37 +2690,37 @@ fn render_node(tree: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Res
             }
             let idx = chain_entry(r, name, 0);
             if idx >= 0 {
-                let s = render_block(tree, r, name, 0, idx)?;
+                let s = render_block(ast, r, name, 0, idx)?;
                 out.push_str(s);
             }
         }
         Node.Extends(e) => {
-            let name = eval(tree, r, *e)?;
-            r.parent = load(tree, name)?;
+            let name = eval(ast, r, *e)?;
+            r.parent = load(ast, name)?;
             r.suppress = true;
         }
         Node.Include(e) => {
             if r.suppress {
                 return Ok(());
             }
-            let name = eval(tree, r, *e)?;
-            let tid = load(tree, name)?;
+            let name = eval(ast, r, *e)?;
+            let tid = load(ast, name)?;
             // the included template sees this context, and its own blocks
-            let mut inner = new_state(r.scopes.clone(), tree.tpls[tid].auto);
+            let mut inner = new_state(r.scopes.clone(), ast.tpls[tid].auto);
             inner.scopes.push(new_dict(false));
-            add_blocks(tree, mut inner, tid);
-            render_body(tree, mut inner, tree.tpls[tid].root, out)?;
+            add_blocks(ast, mut inner, tid);
+            render_body(ast, mut inner, ast.tpls[tid].root, out)?;
         }
         Node.Import(e, alias) => {
-            let name = eval(tree, r, *e)?;
-            let tid = load(tree, name)?;
-            let module = module_of(tree, tid)?;
+            let name = eval(ast, r, *e)?;
+            let tid = load(ast, name)?;
+            let module = module_of(ast, tid)?;
             dict_set(top_frame(r), alias, Val.Dict(module));
         }
         Node.FromImport(e, names) => {
-            let name = eval(tree, r, *e)?;
-            let tid = load(tree, name)?;
-            let module = module_of(tree, tid)?;
+            let name = eval(ast, r, *e)?;
+            let tid = load(ast, name)?;
+            let module = module_of(ast, tid)?;
             for i in 0..names.len() {
                 let v = match dict_get(module, names[i]) {
                     Some(v) => v,
@@ -2738,7 +2730,7 @@ fn render_node(tree: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Res
             }
         }
         Node.MacroDef(m) => {
-            let name = tree.macros[*m].name.clone();
+            let name = ast.macros[*m].name.clone();
             let mac = JMacro { name: name.clone(), def: *m, scopes: r.scopes.clone(), auto: r.auto };
             dict_set(top_frame(r), name, Val.Macro(mac));
         }
@@ -2762,8 +2754,8 @@ fn bind_targets(frame: ref JDict, targets: ref Vec[String], item: ref Val) -> Re
     Ok(())
 }
 
-fn render_for(tree: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, cond: i64, body: i64, els: i64, out: mut ref String) -> Result[(), String] {
-    let seq = eval(tree, r, iter)?;
+fn render_for(ast: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, cond: i64, body: i64, els: i64, out: mut ref String) -> Result[(), String] {
+    let seq = eval(ast, r, iter)?;
     let all = items_of(seq)?;
     // the `if` filter runs first, so `loop` counts what it keeps
     let mut items: Vec[Val] = Vec.new();
@@ -2775,7 +2767,7 @@ fn render_for(tree: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, 
         let frame = new_dict(false);
         bind_targets(frame, targets, all[i])?;
         r.scopes.push(frame);
-        let c = eval(tree, r, cond);
+        let c = eval(ast, r, cond);
         r.scopes.pop();
         if truthy(c?) {
             items.push(all[i].clone());
@@ -2784,7 +2776,7 @@ fn render_for(tree: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, 
     let n = items.len();
     if n == 0 {
         if els >= 0 {
-            render_body(tree, r, els, out)?;
+            render_body(ast, r, els, out)?;
         }
         return Ok(());
     }
@@ -2801,18 +2793,18 @@ fn render_for(tree: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, 
         dict_set(lp, "length", Val.Int(n));
         dict_set(frame, "loop", Val.Dict(lp));
         r.scopes.push(frame);
-        let res = render_body(tree, r, body, out);
+        let res = render_body(ast, r, body, out);
         r.scopes.pop();
         res?;
     }
     Ok(())
 }
 
-fn eval(tree: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
-    let line = tree.elines[e];
-    let x = ref tree.exprs[e];
+fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
+    let line = ast.elines[e];
+    let x = ref ast.exprs[e];
     match x {
-        Expr.ENone => Ok(Val.Nil),
+        Expr.ENone => Ok(Val.None),
         Expr.EBool(b) => Ok(Val.Bool(*b)),
         Expr.EInt(i) => Ok(Val.Int(*i)),
         Expr.EFloat(f) => Ok(Val.Float(*f)),
@@ -2822,34 +2814,34 @@ fn eval(tree: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             None => Ok(undef(f"{str_repr(n)} is undefined")),
         },
         Expr.Attr(obj, name) => {
-            let v = eval(tree, r, *obj)?;
+            let v = eval(ast, r, *obj)?;
             get_attr(v, name)
         }
         Expr.Item(obj, key) => {
-            let v = eval(tree, r, *obj)?;
-            let k = eval(tree, r, *key)?;
+            let v = eval(ast, r, *obj)?;
+            let k = eval(ast, r, *key)?;
             get_item(v, k)
         }
         Expr.Slice(obj, a, b) => {
-            let v = eval(tree, r, *obj)?;
-            let start = if *a >= 0 { eval(tree, r, *a)? } else { Val.Nil };
-            let stop = if *b >= 0 { eval(tree, r, *b)? } else { Val.Nil };
+            let v = eval(ast, r, *obj)?;
+            let start = if *a >= 0 { eval(ast, r, *a)? } else { Val.None };
+            let stop = if *b >= 0 { eval(ast, r, *b)? } else { Val.None };
             get_slice(v, start, stop)
         }
         Expr.ListLit(items) => {
             let mut vs: Vec[Val] = Vec.new();
             for i in 0..items.len() {
-                vs.push(eval(tree, r, items[i])?);
+                vs.push(eval(ast, r, items[i])?);
             }
             Ok(new_list(vs))
         }
         Expr.Bin(op, a, b) => {
-            let va = eval(tree, r, *a)?;
-            let vb = eval(tree, r, *b)?;
+            let va = eval(ast, r, *a)?;
+            let vb = eval(ast, r, *b)?;
             binop(op, va, vb)
         }
         Expr.Neg(a) => {
-            let v = eval(tree, r, *a)?;
+            let v = eval(ast, r, *a)?;
             if let Some(err) = undef_error(v) {
                 return Err(err);
             }
@@ -2861,37 +2853,37 @@ fn eval(tree: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             }
         }
         Expr.Not(a) => {
-            let v = eval(tree, r, *a)?;
+            let v = eval(ast, r, *a)?;
             Ok(Val.Bool(not truthy(v)))
         }
         Expr.And(a, b) => {
-            let v = eval(tree, r, *a)?;
+            let v = eval(ast, r, *a)?;
             if not truthy(v) {
                 return Ok(v);
             }
-            eval(tree, r, *b)
+            eval(ast, r, *b)
         }
         Expr.Or(a, b) => {
-            let v = eval(tree, r, *a)?;
+            let v = eval(ast, r, *a)?;
             if truthy(v) {
                 return Ok(v);
             }
-            eval(tree, r, *b)
+            eval(ast, r, *b)
         }
         Expr.Cond(test, yes, no) => {
-            let t = eval(tree, r, *test)?;
+            let t = eval(ast, r, *test)?;
             if truthy(t) {
-                return eval(tree, r, *yes);
+                return eval(ast, r, *yes);
             }
             if *no >= 0 {
-                return eval(tree, r, *no);
+                return eval(ast, r, *no);
             }
             Ok(undef(f"the inline if-expression on line {line} evaluated to false and no else section was defined."))
         }
         Expr.Cmp(first, ops, rest) => {
-            let mut left = eval(tree, r, *first)?;
+            let mut left = eval(ast, r, *first)?;
             for i in 0..ops.len() {
-                let right = eval(tree, r, rest[i])?;
+                let right = eval(ast, r, rest[i])?;
                 let op = ref ops[i];
                 let ok = if op == "==" {
                     val_eq(left, right)
@@ -2924,7 +2916,7 @@ fn eval(tree: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             let mut vs: Vec[Val] = Vec.new();
             let mut any_safe = false;
             for i in 0..args.len() {
-                let v = eval(tree, r, args[i])?;
+                let v = eval(ast, r, args[i])?;
                 if is_safe(v) {
                     any_safe = true;
                 }
@@ -2945,23 +2937,23 @@ fn eval(tree: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             Ok(Val.Str(s))
         }
         Expr.Filter(value, name, args, kwn, kwv) => {
-            let v = eval(tree, r, *value)?;
-            let (a, kv) = eval_args(tree, r, args, kwv)?;
-            apply_filter(tree, r, name, v, a, kwn, kv)
+            let v = eval(ast, r, *value)?;
+            let (a, kv) = eval_args(ast, r, args, kwv)?;
+            apply_filter(ast, r, name, v, a, kwn, kv)
         }
         Expr.Test(value, name, negated, args) => {
-            let v = eval(tree, r, *value)?;
+            let v = eval(ast, r, *value)?;
             let mut a: Vec[Val] = Vec.new();
             for i in 0..args.len() {
-                a.push(eval(tree, r, args[i])?);
+                a.push(eval(ast, r, args[i])?);
             }
             let res = apply_test(name, v, a)?;
             Ok(Val.Bool(res != *negated))
         }
         Expr.Call(f, args, kwn, kwv) => {
-            let (a, kv) = eval_args(tree, r, args, kwv)?;
+            let (a, kv) = eval_args(ast, r, args, kwv)?;
             // the globals: namespace() and super()
-            let fx = ref tree.exprs[*f];
+            let fx = ref ast.exprs[*f];
             if let Expr.Name(n) = fx {
                 if lookup(r, n).is_none() {
                     if n == "namespace" {
@@ -2972,13 +2964,13 @@ fn eval(tree: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
                         return Ok(Val.Dict(d));
                     }
                     if n == "super" {
-                        return call_super(tree, r);
+                        return call_super(ast, r);
                     }
                 }
             }
-            let callee = eval(tree, r, *f)?;
+            let callee = eval(ast, r, *f)?;
             match callee {
-                Val.Macro(m) => call_macro(tree, r, m, a, kwn, kv),
+                Val.Macro(m) => call_macro(ast, r, m, a, kwn, kv),
                 Val.Undef(msg) => Err(f"UndefinedError: {msg}"),
                 other => Err(f"TypeError: {str_repr(type_name(other))} object is not callable"),
             }
@@ -2986,19 +2978,19 @@ fn eval(tree: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
     }
 }
 
-fn eval_args(tree: ref Ast, r: mut ref R, args: ref Vec[i64], kwv: ref Vec[i64]) -> Result[(Vec[Val], Vec[Val]), String] {
+fn eval_args(ast: ref Ast, r: mut ref R, args: ref Vec[i64], kwv: ref Vec[i64]) -> Result[(Vec[Val], Vec[Val]), String] {
     let mut a: Vec[Val] = Vec.new();
     for i in 0..args.len() {
-        a.push(eval(tree, r, args[i])?);
+        a.push(eval(ast, r, args[i])?);
     }
     let mut kv: Vec[Val] = Vec.new();
     for i in 0..kwv.len() {
-        kv.push(eval(tree, r, kwv[i])?);
+        kv.push(eval(ast, r, kwv[i])?);
     }
     Ok((a, kv))
 }
 
-fn call_super(tree: ref Ast, r: mut ref R) -> Result[Val, String] {
+fn call_super(ast: ref Ast, r: mut ref R) -> Result[Val, String] {
     if r.bnames.len() == 0 {
         return Err("UndefinedError: 'super' is undefined".to_string());
     }
@@ -3008,15 +3000,15 @@ fn call_super(tree: ref Ast, r: mut ref R) -> Result[Val, String] {
     if idx < 0 {
         return Err(f"TemplateRuntimeError: no parent block called {str_repr(name)}.");
     }
-    let s = render_block(tree, r, name, depth, idx)?;
+    let s = render_block(ast, r, name, depth, idx)?;
     if r.auto {
         return Ok(Val.Safe(s));
     }
     Ok(Val.Str(s))
 }
 
-fn call_macro(tree: ref Ast, r: mut ref R, m: ref JMacro, args: ref Vec[Val], kwn: ref Vec[String], kwv: ref Vec[Val]) -> Result[Val, String] {
-    let src = ref tree.macros[m.def];
+fn call_macro(ast: ref Ast, r: mut ref R, m: ref JMacro, args: ref Vec[Val], kwn: ref Vec[String], kwv: ref Vec[Val]) -> Result[Val, String] {
+    let src = ref ast.macros[m.def];
     let np = src.params.len();
     if args.len() > np {
         return Err(f"TypeError: macro {str_repr(m.name)} takes not more than {np} argument(s)");
@@ -3049,14 +3041,14 @@ fn call_macro(tree: ref Ast, r: mut ref R, m: ref JMacro, args: ref Vec[Val], kw
             continue;
         }
         let v = if src.defaults[i] >= 0 {
-            eval(tree, mut inner, src.defaults[i])?
+            eval(ast, mut inner, src.defaults[i])?
         } else {
             undef(f"parameter {str_repr(src.params[i])} was not provided")
         };
         dict_set(frame, src.params[i], v);
     }
     let mut out = String.new();
-    render_body(tree, mut inner, src.body, mut out)?;
+    render_body(ast, mut inner, src.body, mut out)?;
     let _ = r.auto;
     if m.auto {
         return Ok(Val.Safe(out));
@@ -3065,16 +3057,16 @@ fn call_macro(tree: ref Ast, r: mut ref R, m: ref JMacro, args: ref Vec[Val], kw
 }
 
 // A template, through the templates it extends.
-fn render_root(tree: ref Ast, tid: i64, ctx: ref JDict) -> Result[String, String] {
-    let mut r = new_state(vec![ctx.clone(), new_dict(false)], tree.tpls[tid].auto);
+fn render_root(ast: ref Ast, tid: i64, ctx: ref JDict) -> Result[String, String] {
+    let mut r = new_state(vec![ctx.clone(), new_dict(false)], ast.tpls[tid].auto);
     let mut out = String.new();
     let mut cur = tid;
     loop {
-        add_blocks(tree, mut r, cur);
+        add_blocks(ast, mut r, cur);
         r.parent = -1;
         r.suppress = false;
-        r.auto = tree.tpls[cur].auto;
-        render_body(tree, mut r, tree.tpls[cur].root, mut out)?;
+        r.auto = ast.tpls[cur].auto;
+        render_body(ast, mut r, ast.tpls[cur].root, mut out)?;
         if r.parent < 0 {
             break;
         }
@@ -3252,7 +3244,7 @@ fn apply_test(name: Str, v: ref Val, args: ref Vec[Val]) -> Result[bool, String]
     }
     if name == "none" {
         return Ok(match v {
-            Val.Nil => true,
+            Val.None => true,
             _ => false,
         });
     }
@@ -3272,7 +3264,7 @@ fn apply_test(name: Str, v: ref Val, args: ref Vec[Val]) -> Result[bool, String]
     Ok(py_mod(i, 2) == 1)
 }
 
-fn filter_select(tree: ref Ast, r: mut ref R, v: ref Val, args: ref Vec[Val], keep: bool) -> Result[Val, String] {
+fn filter_select(ast: ref Ast, r: mut ref R, v: ref Val, args: ref Vec[Val], keep: bool) -> Result[Val, String] {
     let items = items_of(v)?;
     let attr = if args.len() > 0 { to_str(args[0]) } else { String.new() };
     let mut out: Vec[Val] = Vec.new();
@@ -3288,12 +3280,12 @@ fn filter_select(tree: ref Ast, r: mut ref R, v: ref Val, args: ref Vec[Val], ke
             out.push(items[i].clone());
         }
     }
-    let _ = tree.tpls.len();
+    let _ = ast.tpls.len();
     let _ = r.auto;
     Ok(new_list(out))
 }
 
-fn apply_filter(tree: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Vec[Val], kwn: ref Vec[String], kwv: own Vec[Val]) -> Result[Val, String] {
+fn apply_filter(ast: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Vec[Val], kwn: ref Vec[String], kwv: own Vec[Val]) -> Result[Val, String] {
     if name == "default" or name == "d" {
         let dflt = arg_or(args, kwn, kwv, 0, "default_value", Val.Str(String.new()));
         let boolean = truthy(arg_or(args, kwn, kwv, 1, "boolean", Val.Bool(false)));
@@ -3552,15 +3544,15 @@ fn apply_filter(tree: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Ve
             }
             let no_names: Vec[String] = Vec.new();
             let no_vals: Vec[Val] = Vec.new();
-            out.push(apply_filter(tree, r, fname, items[i].clone(), rest, no_names, no_vals)?);
+            out.push(apply_filter(ast, r, fname, items[i].clone(), rest, no_names, no_vals)?);
         }
         return Ok(new_list(out));
     }
     if name == "selectattr" {
-        return filter_select(tree, r, v, args, true);
+        return filter_select(ast, r, v, args, true);
     }
     if name == "rejectattr" {
-        return filter_select(tree, r, v, args, false);
+        return filter_select(ast, r, v, args, false);
     }
     if name == "first" or name == "last" {
         let items = items_of(v)?;
@@ -3922,7 +3914,7 @@ fn main() {
     fs.write("data/site.json".to_string(), site_json()).unwrap();
 
     // the loader: every template, parsed once; .html autoescapes
-    let mut tree = new_ast();
+    let mut ast = new_ast();
     for i in 0..6 {
         let src = match fs.read_to_string(f"templates/{names[i]}") {
             Ok(s) => s,
@@ -3931,7 +3923,7 @@ fn main() {
                 return;
             }
         };
-        if let Err(e) = parse_template(mut tree, names[i], src, ends_with(names[i], ".html")) {
+        if let Err(e) = parse_template(mut ast, names[i], src, ends_with(names[i], ".html")) {
             println(f"{names[i]}: {e}");
             return;
         }
@@ -3960,22 +3952,22 @@ fn main() {
     };
     let mut published: Vec[Val] = Vec.new();
     for i in 0..posts.len() {
-        let draft = get_attr(posts[i], "draft").unwrap_or(Val.Nil);
+        let draft = get_attr(posts[i], "draft").unwrap_or(Val.None);
         if not truthy(draft) {
             published.push(posts[i].clone());
         }
     }
 
-    emit("out/index.html", render_root(tree, tree.find_tpl("index.html"), data));
+    emit("out/index.html", render_root(ast, ast.find_tpl("index.html"), data));
     for i in 0..published.len() {
         let ctx = copy_dict(data);
         dict_set(ctx, "post", published[i].clone());
         dict_set(ctx, "posts", new_list(published.clone()));
         dict_set(ctx, "index", Val.Int(i));
-        let slug = to_str(get_attr(published[i], "slug").unwrap_or(Val.Nil));
-        emit(f"out/{slug}/index.html", render_root(tree, tree.find_tpl("post.html"), ctx));
+        let slug = to_str(get_attr(published[i], "slug").unwrap_or(Val.None));
+        emit(f"out/{slug}/index.html", render_root(ast, ast.find_tpl("post.html"), ctx));
     }
-    emit("out/digest.txt", render_root(tree, tree.find_tpl("digest.txt"), data));
+    emit("out/digest.txt", render_root(ast, ast.find_tpl("digest.txt"), data));
 
     // one-line templates, autoescaped as strings are
     println("== errors");
@@ -3998,9 +3990,9 @@ fn main() {
     dict_set(ctx, "x", Val.Dict(x));
     dict_set(ctx, "zero", Val.Int(0));
     for i in 0..10 {
-        match parse_template(mut tree, "<template>", cases[i], true) {
+        match parse_template(mut ast, "<template>", cases[i], true) {
             Err(e) => println(f"error: {e}"),
-            Ok(t) => match render_root(tree, t, ctx) {
+            Ok(t) => match render_root(ast, t, ctx) {
                 Ok(s) => println(f"ok: {s}"),
                 Err(e) => println(f"error: {e}"),
             },

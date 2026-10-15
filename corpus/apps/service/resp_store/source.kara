@@ -16,8 +16,6 @@
 //                    and the caller inserts it back
 //   B-2026-10-14-43  a string literal pattern cannot match a `Str`, so the
 //                    dispatch matches the uppercased String itself
-//   B-2026-10-14-44  fs / File / TcpStream / TcpListener take String, and
-//                    File.write counts in usize
 //   B-2026-10-14-51  `let rest = self.text[a..b]` in a method is refused by
 //                    check, so RespReader.line slices without binding
 //   B-2026-10-14-56  `match m.get(k).unwrap().value { .. }` is refused by
@@ -396,8 +394,7 @@ impl Store {
                 if not self.live(args[1]) {
                     return Reply.Int(0);
                 }
-                let it = self.items.get(args[1]).unwrap();
-                match it.value {
+                match self.items.get(args[1]).unwrap().value {
                     Value.List(q) => Reply.Int(q.len()),
                     Value.Text(_) => wrongtype(),
                 }
@@ -448,8 +445,7 @@ impl Store {
                 if not self.live(args[1]) {
                     return Reply.Simple("none".to_string());
                 }
-                let it = self.items.get(args[1]).unwrap();
-                match it.value {
+                match self.items.get(args[1]).unwrap().value {
                     Value.Text(_) => Reply.Simple("string".to_string()),
                     Value.List(_) => Reply.Simple("list".to_string()),
                 }
@@ -663,11 +659,11 @@ fn read_all(conn: ref TcpStream) -> Result[String, String] {
 }
 
 fn append_file(path: Str, text: Str) -> Result[(), IoError] {
-    let f = File.append(path.to_string())?;
+    let f = File.append(path)?;
     let bytes = text.bytes();
     let mut off = 0;
     while off < bytes.len() {
-        off += f.write(bytes[off..bytes.len()])? as i64;
+        off += f.write(bytes[off..bytes.len()])?;
     }
     f.sync_data()?;
     Ok(())
@@ -677,7 +673,7 @@ fn append_file(path: Str, text: Str) -> Result[(), IoError] {
 // answer, print each command and its reply, then flush the AOF.
 fn session(listener: ref TcpListener, store: mut ref Store, label: Str, cmds: ref Vec[Vec[String]], wire: Str) {
     println(f"== {label}");
-    let client = match TcpStream.connect(ADDR.to_string()) {
+    let client = match TcpStream.connect(ADDR) {
         Ok(c) => c,
         Err(_) => {
             println("connect failed");
@@ -738,7 +734,7 @@ fn session(listener: ref TcpListener, store: mut ref Store, label: Str, cmds: re
         }
         store.log = String.new();
     }
-    match fs.write(CLOCK.to_string(), f"{store.now}") {
+    match fs.write(CLOCK, f"{store.now}") {
         Ok(_) => {}
         Err(_) => println("clock write failed"),
     }
@@ -767,7 +763,7 @@ fn resp_session(listener: ref TcpListener, store: mut ref Store, label: Str, lin
 
 fn restart() -> Result[Store, String] {
     let mut s = Store.new();
-    let text = match fs.read_to_string(AOF.to_string()) {
+    let text = match fs.read_to_string(AOF) {
         Ok(t) => t,
         Err(_) => return Err("no aof".to_string()),
     };
@@ -783,7 +779,7 @@ fn restart() -> Result[Store, String] {
             None => break,
         }
     }
-    s.now = match fs.read_to_string(CLOCK.to_string()) {
+    s.now = match fs.read_to_string(CLOCK) {
         Ok(t) => to_int(t.trim()).unwrap_or(0),
         Err(_) => 0,
     };
@@ -792,7 +788,7 @@ fn restart() -> Result[Store, String] {
 }
 
 fn main() {
-    let listener = match TcpListener.bind(ADDR.to_string()) {
+    let listener = match TcpListener.bind(ADDR) {
         Ok(l) => l,
         Err(_) => {
             println("bind failed");
@@ -800,7 +796,7 @@ fn main() {
         }
     };
     let mut store = Store.new();
-    match fs.write(AOF.to_string(), "") {
+    match fs.write(AOF, "") {
         Ok(_) => {}
         Err(_) => println("aof reset failed"),
     }

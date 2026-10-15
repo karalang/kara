@@ -12,8 +12,6 @@
 // reopened from disk, its log is torn, and it is reopened again.
 //
 // Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-15-19  a String is not taken for a Str parameter through the
-//                    `S: Store` bound: every `self.store.get(x)` is `x.as_str()`
 //   B-2026-10-15-20  see `finish`: no conditional write before a move in a loop
 //   B-2026-10-12-3   no SortedMap.get_mut
 //   B-2026-10-12-6   i64.parse returns Option; B-2026-10-12-7 split/lines are Vec
@@ -320,7 +318,7 @@ impl[S: Store] Service[S] {
     fn quote(self, lines: ref Vec[Line]) -> Result[(Money, Money), String] {
         let mut subtotal = Money { cents: 0 };
         for l in lines.iter() {
-            match self.store.get(l.sku.as_str()) {
+            match self.store.get(l.sku) {
                 Some(i) => subtotal = subtotal + i.price.times(l.qty),
                 None => return Err(f"unknown sku {l.sku}"),
             }
@@ -335,7 +333,7 @@ impl[S: Store] Service[S] {
             return f"error order {id} exists";
         }
         for l in lines.iter() {
-            let avail = match self.store.get(l.sku.as_str()) {
+            let avail = match self.store.get(l.sku) {
                 Some(i) => i.available(),
                 None => return f"error unknown sku {l.sku}",
             };
@@ -351,7 +349,7 @@ impl[S: Store] Service[S] {
             Err(e) => return f"error {e}",
         };
         for l in lines.iter() {
-            let mut i = self.store.get(l.sku.as_str()).unwrap();
+            let mut i = self.store.get(l.sku).unwrap();
             i.reserved += l.qty;
             match self.store.put(i) {
                 Ok(_) => {}
@@ -374,7 +372,7 @@ impl[S: Store] Service[S] {
             None => return f"error no order {id}",
         };
         for (sku, qty) in lines.iter() {
-            let mut i = self.store.get(sku.as_str()).unwrap();
+            let mut i = self.store.get(sku).unwrap();
             i.reserved -= qty;
             // `if commit { i.on_hand -= qty; }` is refused (B-2026-10-15-20).
             i.on_hand -= if commit { qty } else { 0 };
@@ -429,8 +427,8 @@ impl[S: Store] Service[S] {
         } else if w[0] == "cancel" and w.len() == 2 {
             self.finish(w[1], false)
         } else if w[0] == "drop" and w.len() == 2 {
-            let ok = match self.store.get(w[1].as_str()) {
-                Some(i) => i.reserved == 0 and self.store.remove(w[1].as_str()),
+            let ok = match self.store.get(w[1]) {
+                Some(i) => i.reserved == 0 and self.store.remove(w[1]),
                 None => false,
             };
             if ok { f"ok dropped {w[1]}" } else { f"error cannot drop {w[1]}" }
@@ -446,7 +444,7 @@ impl[S: Store] Service[S] {
         let mut value = Money { cents: 0 };
         let mut avail: Vec[(i64, String)] = Vec.new();
         for sku in self.store.skus().iter() {
-            let i = self.store.get(sku.as_str()).unwrap();
+            let i = self.store.get(sku).unwrap();
             value = value + i.price.times(i.on_hand);
             out.push(f"{i.sku} {i.name} on_hand={i.on_hand} reserved={i.reserved} price={i.price}");
             avail.push((i.available(), i.sku.clone()));

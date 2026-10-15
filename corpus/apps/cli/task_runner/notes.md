@@ -30,3 +30,9 @@ Compiler gaps, worked around and listed in the source header:
 Not worked around: B-2026-10-12-23 (`karac check` does not know
 `DeserializeError`), so the entry FAILS (refused) on every mir backend. Without
 check all four mir surfaces print `expected.out` exactly (measured).
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
+`fs.write` takes the `TASKS` const without a copy. B-2026-10-12-23 is
+fixed too, so the note about `DeserializeError` is gone from the header.
+Each of these is the original line again, and the app still matches on
+all four MIR surfaces.

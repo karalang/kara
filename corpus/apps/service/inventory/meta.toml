@@ -7,4 +7,4 @@ expected_from = "mirror"
 rules = []
 backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
-extracted_src = "d5f83c18"
+extracted_src = "3afc76d7"

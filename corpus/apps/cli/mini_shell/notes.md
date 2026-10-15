@@ -45,3 +45,11 @@ Compiler gaps, worked around and listed in the source header:
   compiled), as in the other apps.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-3 and
+B-2026-10-15-4 are fixed, so the redirect kind is `Err` again and `argv`
+is built with `map(|w| self.expand(w))`. Each of these is the original
+line again, and the app still matches on all four MIR surfaces.
+`flush_lit` keeps `*lit = String.new()`: B-2026-10-14-36 is still open,
+and `lit.clear()` fails on the compiled surfaces with "native
+`String.clear` is not lowered yet".

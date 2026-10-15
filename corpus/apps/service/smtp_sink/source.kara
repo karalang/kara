@@ -21,7 +21,6 @@
 //                    is matched as a String
 //   B-2026-10-12-7   split / lines are eager Vec[String]: no collect, and
 //                    `ref lines[i]` where a Str would be Copy
-//   B-2026-10-14-44  TcpStream / TcpListener / Command.arg take String
 
 const ADDR: Str = "127.0.0.1:47734";
 const DOMAIN: Str = "example.test";
@@ -293,7 +292,7 @@ fn replies(text: Str) -> Vec[Vec[String]] {
 
 fn session(listener: ref TcpListener, srv: mut ref Smtp, label: Str, steps: ref Vec[Step]) {
     println(f"== {label}");
-    let client = match TcpStream.connect(ADDR.to_string()) {
+    let client = match TcpStream.connect(ADDR) {
         Ok(c) => c,
         Err(_) => {
             println("connect failed");
@@ -553,7 +552,7 @@ fn main() {
             return;
         }
     }
-    let listener = match TcpListener.bind(ADDR.to_string()) {
+    let listener = match TcpListener.bind(ADDR) {
         Ok(l) => l,
         Err(_) => {
             println("bind failed");

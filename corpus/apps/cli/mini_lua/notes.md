@@ -78,3 +78,13 @@ Compiler gaps, worked around and cited in the source:
   named `format`. The `string.format` implementation is `str_format`.
 
 Written 2026-10-15 by the real-world apps thread; karac at 2cec444448.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-33 and
+B-2026-10-15-24 are fixed, so methods are called on the borrowed table
+handles directly (`t.set_str(..)`, `m.get_str(..)`,
+`st.globals.get_str(..)`, `t.len()`) and the iterator state is matched
+as `match f.state[i]`, without the `state_text` / `state_int` helpers.
+Two error arms bind the value as `other` again. `text_of_bytes` keeps
+its `Slice[u8]` parameter: that was an author error. Each of these is
+the original line again, and the app still matches on all four MIR
+surfaces.

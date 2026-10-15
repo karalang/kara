@@ -32,3 +32,9 @@ Compiler gaps, worked around and listed in the source header:
   with `contains_key` and `groups[key].push(e)`.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
+the paths are `Str` again and the byte counts are no longer cast to
+`i64`. The `sh` script still goes to `Command.arg` as a `String`, which
+is the spec. Each of these is the original line again, and the app still
+matches on all four MIR surfaces.
