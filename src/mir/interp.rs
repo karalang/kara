@@ -2134,6 +2134,21 @@ impl<'a> Interp<'a> {
                         .collect(),
                     _ => args,
                 };
+                // A literal argument of `min`, `max` or `clamp` is the
+                // receiver's type, but past `i64::MAX` it arrives as an `i64`
+                // bit pattern (`a.max(18446744073709551615)` over a `u64` is
+                // `-1`), so it is read back at the receiver's width
+                // (B-2026-10-15-54).
+                let args = match int_width(ty_name) {
+                    Some((bits, signed)) if matches!(method, "min" | "max" | "clamp") => args
+                        .into_iter()
+                        .map(|a| match a {
+                            Value::Int(n) => Value::Int(at_width(n, bits, signed)),
+                            a => a,
+                        })
+                        .collect(),
+                    _ => args,
+                };
                 self.scalar_method(name, method, &args, ret)
             }
             (t, "to_f64" | "to_f32") if int_width(t).is_some() => match args.as_slice() {
@@ -6734,10 +6749,12 @@ impl<'a> Interp<'a> {
         } else {
             (0, (1i128 << bits) - 1)
         };
+        // Every argument is the receiver's type; a literal one past
+        // `i64::MAX` arrives as an `i64` bit pattern (B-2026-10-15-54).
         let ints: Vec<i128> = args
             .iter()
             .map(|a| match a {
-                Value::Int(n) => Ok(*n),
+                Value::Int(n) => Ok(at_width(*n, bits, signed)),
                 other => err(format!("{name} of {other:?}")),
             })
             .collect::<R<_>>()?;
@@ -11513,6 +11530,16 @@ fn from_bits(v: u128, it: IntTy) -> i128 {
 }
 
 /// The width and signedness of an integer type named `name`.
+/// `v`'s low `bits` bits, read as a signed or unsigned integer.
+fn at_width(v: i128, bits: u32, signed: bool) -> i128 {
+    let shift = 128 - bits;
+    if signed {
+        (v << shift) >> shift
+    } else {
+        ((v as u128) << shift >> shift) as i128
+    }
+}
+
 fn int_width(name: &str) -> Option<(u32, bool)> {
     Some(match name {
         "i8" => (8, true),

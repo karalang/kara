@@ -2548,3 +2548,34 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-15-54: unsuffixed literals past `i64::MAX` in `u64` and `u128`
+/// places, as values, operands, arguments, shifts and patterns, print the
+/// same on both backends.
+#[test]
+fn mir_unsuffixed_literals_past_i64_agree_on_both_backends() {
+    const SRC: &str = "fn f(x: u64) -> u64 { x }\n\
+        fn main() {\n    let a: u64 = 0xFFFF_FFFF_FFFF_FFFF;\n    \
+        let b: u128 = 18446744073709551616;\n    let c: u64 = 9223372036854775808;\n    \
+        println(f\"{a} {b} {c + 1} {a == 18446744073709551615} {f(18446744073709551614)}\");\n    \
+        let s: u128 = 1 << 64;\n    \
+        let m: u128 = (0xFFFF_FFFF_FFFF_FFFF << 64) | 0xFFFF_FFFF_FFFF_FFFF;\n    \
+        println(f\"{s} {m}\");\n    let x: u64 = 5;\n    \
+        println(f\"{x.max(18446744073709551615)} {x.clamp(9223372036854775808, 18446744073709551615)} {x.checked_add(18446744073709551610)}\");\n    \
+        let w: i128 = 170141183460469231731687303715884105727;\n    \
+        let v: Vec[u64] = vec![18446744073709551615, 1];\n    \
+        let k = match a { 9223372036854775808..=18446744073709551614 => \"upper\", 18446744073709551615 => \"max\", _ => \"lower\" };\n    \
+        println(f\"{w} {v[0]} {k}\");\n}\n";
+    let want =
+        "18446744073709551615 18446744073709551616 9223372036854775809 true 18446744073709551614\n\
+        18446744073709551616 340282366920938463463374607431768211455\n\
+        18446744073709551615 9223372036854775808 Some(18446744073709551615)\n\
+        170141183460469231731687303715884105727 18446744073709551615 max\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

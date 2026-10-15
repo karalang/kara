@@ -5595,6 +5595,7 @@ impl<'a> super::TypeChecker<'a> {
             // to u64::MAX, and `let x: i64 = 18446744073709551615u64` silently
             // bound -1 without it.
             Type::Int(IntSize::I64) => (i64::MIN as i128, i64::MAX as i128),
+            Type::Int(IntSize::I128) => (i128::MIN, i128::MAX),
             Type::UInt(UIntSize::U8) => (0, u8::MAX as i128),
             Type::UInt(UIntSize::U16) => (0, u16::MAX as i128),
             Type::UInt(UIntSize::U32) => (0, u32::MAX as i128),
@@ -5696,6 +5697,12 @@ impl<'a> super::TypeChecker<'a> {
         let Some((min, max)) = Self::int_literal_range(ty) else {
             return true;
         };
+        // B-2026-10-15-54: an integer type has judged this wide literal, so
+        // `check_wide_int_literals` must not judge it again as an `i64`.
+        if sfx.is_none() && i64::try_from(value).is_err() {
+            self.wide_int_literals_judged
+                .insert(crate::resolver::SpanKey::from_span(span));
+        }
         if value < min || value > max {
             let msg = if value < 0 && min == 0 {
                 format!(
@@ -5894,7 +5901,7 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    fn unsuffixed_int_literal_value(expr: &Expr) -> Option<i128> {
+    pub(super) fn unsuffixed_int_literal_value(expr: &Expr) -> Option<i128> {
         match &expr.kind {
             ExprKind::Integer(n, None) => Some(*n),
             ExprKind::Unary {
@@ -6352,6 +6359,12 @@ impl<'a> super::TypeChecker<'a> {
                         *sfx,
                     );
                 }
+                // B-2026-10-15-54: an unsuffixed literal past `i64` is judged
+                // against its expression's FINAL type, once `check_items` is
+                // done (`u64` and `u128` contexts admit it, `i64` does not).
+                if sfx.is_none() && i64::try_from(*n).is_err() {
+                    self.wide_int_literals.push((expr.span, *n));
+                }
                 ty
             }
             ExprKind::Float(_, sfx) => {
@@ -6554,6 +6567,17 @@ impl<'a> super::TypeChecker<'a> {
                 // positive operand). Pre-fix `-1u8` printed -1 under `karac
                 // run` and 255 under `karac build`.
                 let saved_neg_key = self.neg_validated_suffixed_literal;
+                // B-2026-10-15-54: the value of `-9223372036854775808` is the
+                // negation, so that is what is range-checked, at this span.
+                if let (UnaryOp::Neg, ExprKind::Integer(n, None)) = (op, &operand.kind) {
+                    if i64::try_from(*n).is_err() {
+                        self.wide_int_literals_judged
+                            .insert(crate::resolver::SpanKey::from_span(&operand.span));
+                        if i64::try_from(-*n).is_err() {
+                            self.wide_int_literals.push((expr.span, -*n));
+                        }
+                    }
+                }
                 if matches!(op, UnaryOp::Neg) {
                     if let ExprKind::Integer(n, Some(sfx)) = &operand.kind {
                         let ty = self.type_from_int_suffix(Some(*sfx), operand.span);

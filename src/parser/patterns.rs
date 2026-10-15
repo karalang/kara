@@ -870,6 +870,12 @@ impl super::Parser {
         if matches!(sfx, Some(IntSuffix::U128)) {
             return Some(m as i128);
         }
+        // Unsuffixed: the magnitude rides positively, as in expression
+        // position, and the scrutinee's type judges its range
+        // (B-2026-10-15-54).
+        if sfx.is_none() {
+            return i128::try_from(m).ok();
+        }
         None
     }
 

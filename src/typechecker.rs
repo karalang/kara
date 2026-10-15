@@ -2693,6 +2693,15 @@ pub struct TypeChecker<'a> {
     /// positive-operand check for that span (bare `128i8` is out of range,
     /// `-128i8` is not).
     pub(super) neg_validated_suffixed_literal: Option<(usize, usize)>,
+    /// Unsuffixed integer literals outside `i64` (B-2026-10-15-54). Such a
+    /// literal is legal only where its type ends up wider or unsigned, which
+    /// is known only once its expression's type is final, so `check` range-
+    /// checks each one against the type recorded at its span after
+    /// `check_items`.
+    pub(super) wide_int_literals: Vec<(Span, i128)>,
+    /// The spans of [`Self::wide_int_literals`] an integer context has
+    /// already range-checked.
+    pub(super) wide_int_literals_judged: FxHashSet<SpanKey>,
     /// Spans that already produced a `redundant_suffix` warning
     /// (B-2026-08-20-36). `infer_expr` is NOT memoized — bidirectional
     /// checking re-infers the same literal — so without this the same
@@ -3261,6 +3270,8 @@ impl<'a> TypeChecker<'a> {
             current_concrete_impl_target: None,
             in_defer: false,
             neg_validated_suffixed_literal: None,
+            wide_int_literals: Vec::new(),
+            wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             assoc_binding_typos_reported: rustc_hash::FxHashSet::default(),
             question_conversions: FxHashMap::default(),
@@ -3491,6 +3502,7 @@ impl<'a> TypeChecker<'a> {
         // row — from joining that class.
         self.reject_unqualifiable_impl_collisions();
         self.check_items();
+        self.check_wide_int_literals();
         self.finalize_typevar_pattern_bindings();
         self.finalize_pattern_binding_inner_types();
         self.finalize_closure_expr_types();
@@ -6479,6 +6491,22 @@ impl<'a> TypeChecker<'a> {
             }
         }
         (node_types, node_call_subs)
+    }
+
+    /// B-2026-10-15-54: an unsuffixed literal outside `i64` is legal only
+    /// where an integer context range-checked it (`let a: u64 = ...`, a `u64`
+    /// operand's peer, a `u128` argument). One no context reached has the
+    /// default type, `i64`, and is out of range for it.
+    fn check_wide_int_literals(&mut self) {
+        let pending = std::mem::take(&mut self.wide_int_literals);
+        for (span, value) in pending {
+            if self
+                .wide_int_literals_judged
+                .insert(SpanKey::from_span(&span))
+            {
+                self.check_int_literal_fits(value, &Type::Int(IntSize::I64), &span, None);
+            }
+        }
     }
 
     fn record_expr_type(&mut self, span: &Span, ty: &Type) {

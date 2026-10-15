@@ -2209,15 +2209,27 @@ fn the_u64_band_still_lexes_as_out_of_range() {
     );
 }
 
-/// An UNSUFFIXED magnitude past `u64::MAX` is still an error — nothing can
-/// represent it, since the default integer type is `i64` and the lexer cannot
-/// see a type annotation. Same rule the `u64` band already followed.
+/// An UNSUFFIXED magnitude past `i64::MAX` goes to the parser whole, as
+/// `IntegerOutOfRange` with no suffix: its type comes from inference, which
+/// may make it a `u64` or `u128` (B-2026-10-15-54). This test used to pin it
+/// as a lex error, on the premise that the lexer cannot see an annotation;
+/// the range is now checked where the annotation is seen. Only a magnitude
+/// no integer type holds is still a lex error.
 #[test]
-fn unsuffixed_128bit_magnitudes_still_error() {
+fn unsuffixed_128bit_magnitudes_reach_the_parser() {
     let toks = tokens_only("170141183460469231731687303715884105727");
     assert!(
+        matches!(
+            toks.first(),
+            Some(Token::IntegerOutOfRange(m, None)) if *m == i128::MAX as u128
+        ),
+        "an unsuffixed 128-bit magnitude must reach the parser, got {:?}",
+        toks.first()
+    );
+    let toks = tokens_only("340282366920938463463374607431768211456");
+    assert!(
         matches!(toks.first(), Some(Token::Error(_))),
-        "an unsuffixed 128-bit magnitude must not lex, got {:?}",
+        "a magnitude past u128::MAX must not lex, got {:?}",
         toks.first()
     );
 }

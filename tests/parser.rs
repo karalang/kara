@@ -16438,3 +16438,32 @@ fn an_empty_body_after_an_uppercase_name_in_a_condition_is_the_body() {
     assert!(matches!(&expr(1).kind, ExprKind::While { condition, .. } if is_eol(condition)));
     assert!(matches!(&expr(2).kind, ExprKind::StructLiteral { .. }));
 }
+
+/// B-2026-10-15-54: an unsuffixed literal past `i64::MAX` reaches the
+/// typechecker whole, since inference may make it a `u64` or `u128`. Only a
+/// magnitude past `i128::MAX` is refused here, and the advice names `u128`.
+#[test]
+fn test_unsuffixed_magnitude_past_i64_parses_whole() {
+    let prog = parse_ok("fn main() { let b: u128 = 18446744073709551616; }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected a function");
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+        panic!("expected a let");
+    };
+    assert!(
+        matches!(value.kind, ExprKind::Integer(n, None) if n == 1i128 << 64),
+        "got {:?}",
+        value.kind
+    );
+    let (_, errors) =
+        parse_with_errors("fn main() { let b: u128 = 340282366920938463463374607431768211455; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("out of range for i128")
+                && e.message
+                    .contains("340282366920938463463374607431768211455u128")),
+        "got {errors:?}"
+    );
+}

@@ -1112,6 +1112,22 @@ impl super::Parser {
                         kind: ExprKind::Integer((m as i64).into(), sfx),
                     });
                 }
+                // An UNSUFFIXED magnitude takes its type from inference, and
+                // the typechecker checks it against that type (design.md §3):
+                // `let a: u64 = 0xFFFF_FFFF_FFFF_FFFF` is a `u64`, and the
+                // same literal where nothing says otherwise is an `i64` it
+                // does not fit. It rides positively, as a 128-bit-suffixed
+                // one does, while it fits the `i128` carrier
+                // (B-2026-10-15-54).
+                if sfx.is_none() {
+                    if let Ok(v) = i128::try_from(m) {
+                        return Some(Expr {
+                            id: crate::ids::NodeId::DUMMY,
+                            span: self.span_from(&start),
+                            kind: ExprKind::Integer(v, None),
+                        });
+                    }
+                }
                 let span = self.span_from(&start);
                 // A 128-bit-suffixed magnitude that reached here is out of
                 // range for `i128`, not for `i64` — the generic message's
@@ -1126,12 +1142,25 @@ impl super::Parser {
                          negative bound, or use the `u128` suffix for a value in \
                          the upper half of u128"
                     )
+                } else if sfx.is_none() {
+                    // Past `i128::MAX`: only `u128` holds it, and only with
+                    // the suffix, since the carrier is signed.
+                    format!(
+                        "integer literal `{m}` is out of range for i128; add the \
+                         `u128` suffix (`{m}u128`) for a value in the upper half \
+                         of u128"
+                    )
                 } else {
+                    let unsigned = if m > u128::from(u64::MAX) {
+                        "u128"
+                    } else {
+                        "u64"
+                    };
                     format!(
                         "integer literal `{m}` is out of range for i64 \
                          (max 9223372036854775807); write `-9223372036854775808` \
-                         for the negative bound, or add an unsigned suffix \
-                         (`{m}u64`) for a value in the upper half of u64"
+                         for the negative bound, or use an unsigned suffix \
+                         (`{m}{unsigned}`) for a value in the upper half of {unsigned}"
                     )
                 };
                 self.error_at(&msg, span);

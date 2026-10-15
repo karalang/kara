@@ -53374,3 +53374,56 @@ fn main() {
         "{errs:?}"
     );
 }
+
+/// B-2026-10-15-54: an unsuffixed literal past `i64::MAX` takes its type from
+/// inference, as design.md § Literals says, and is range-checked against the
+/// type it ends up with. Where nothing gives it one it is an `i64`, and out of
+/// range.
+#[test]
+fn unsuffixed_literals_past_i64_take_their_type_from_inference() {
+    for src in [
+        "fn main() { let a: u64 = 0xFFFF_FFFF_FFFF_FFFF; let b: u128 = 18446744073709551616; }",
+        "fn main() { let w: i128 = 170141183460469231731687303715884105727; }",
+        "fn main() { let m = -9223372036854775808; }",
+        "fn f(x: u64) -> u64 { x }\nfn main() { let _ = f(18446744073709551615); }",
+        "fn main() { let a: u64 = 1; let _ = a == 18446744073709551615; let _ = a.max(18446744073709551615); }",
+        "fn main() { let m: u128 = (0xFFFF_FFFF_FFFF_FFFF << 64) | 0xFFFF_FFFF_FFFF_FFFF; }",
+        "fn main() { let a: u64 = 1; match a { 9223372036854775808..=18446744073709551615 => {}, _ => {} } }",
+    ] {
+        typecheck_ok(src);
+    }
+    for (src, want) in [
+        (
+            "fn main() { let c = 9223372036854775808; }",
+            "out of range for 'i64'",
+        ),
+        (
+            "fn main() { let n = -9223372036854775809; }",
+            "-9223372036854775809 out of range for 'i64'",
+        ),
+        (
+            "fn main() { let x: i64 = 1; let _ = x == 9223372036854775808; }",
+            "out of range for 'i64'",
+        ),
+        (
+            "fn main() { let e: u64 = 18446744073709551616; }",
+            "out of range for 'u64'",
+        ),
+        (
+            "fn main() { let v = [18446744073709551615, 1]; }",
+            "out of range for 'i64'",
+        ),
+        (
+            "fn main() { let a: i64 = 1; match a { 9223372036854775808 => {}, _ => {} } }",
+            "out of range for 'i64'",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+        assert!(
+            errors[0].message.contains(want),
+            "{src}: {}",
+            errors[0].message
+        );
+    }
+}

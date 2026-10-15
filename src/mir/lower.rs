@@ -35,17 +35,19 @@ use super::syntax::*;
 use super::ty::{AdtId, FloatTy, Ty, TyInterner};
 
 /// The value of an operator tree made only of unsuffixed integer literals,
-/// when every step is in range. A lone literal is not a tree.
-fn fold_int(e: &Expr) -> Option<i128> {
-    fn go(e: &Expr) -> Option<i128> {
+/// when every step is in range. A lone literal is not a tree. A shift amount
+/// must be below `bits`, the width of the type the tree takes: 64, or 128
+/// for an `i128` or `u128` tree (B-2026-10-15-54).
+fn fold_int(e: &Expr, bits: i128) -> Option<i128> {
+    fn go(e: &Expr, bits: i128) -> Option<i128> {
         match &e.kind {
             ExprKind::Integer(v, None) => Some(*v),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,
-            } => go(operand)?.checked_neg(),
+            } => go(operand, bits)?.checked_neg(),
             ExprKind::Binary { op, left, right } => {
-                let (a, b) = (go(left)?, go(right)?);
+                let (a, b) = (go(left, bits)?, go(right, bits)?);
                 match op {
                     AstBinOp::Add => a.checked_add(b),
                     AstBinOp::Sub => a.checked_sub(b),
@@ -53,8 +55,8 @@ fn fold_int(e: &Expr) -> Option<i128> {
                     AstBinOp::BitAnd => Some(a & b),
                     AstBinOp::BitOr => Some(a | b),
                     AstBinOp::BitXor => Some(a ^ b),
-                    AstBinOp::Shl if (0..64).contains(&b) => a.checked_shl(b as u32),
-                    AstBinOp::Shr if (0..64).contains(&b) => Some(a >> b),
+                    AstBinOp::Shl if (0..bits).contains(&b) => a.checked_shl(b as u32),
+                    AstBinOp::Shr if (0..bits).contains(&b) => Some(a >> b),
                     _ => None,
                 }
             }
@@ -62,8 +64,10 @@ fn fold_int(e: &Expr) -> Option<i128> {
         }
     }
     match &e.kind {
-        ExprKind::Binary { .. } => go(e),
-        ExprKind::Unary { operand, .. } if !matches!(operand.kind, ExprKind::Integer(..)) => go(e),
+        ExprKind::Binary { .. } => go(e, bits),
+        ExprKind::Unary { operand, .. } if !matches!(operand.kind, ExprKind::Integer(..)) => {
+            go(e, bits)
+        }
         _ => None,
     }
 }
@@ -2041,7 +2045,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 None => t,
             },
             ExprKind::Integer(_, None) | ExprKind::Float(_, None) => t,
-            _ if fold_int(e).is_some() => t,
+            _ if fold_int(e, 64).is_some() => t,
             _ => match self.expr_ty(e) {
                 Ok(at) if self.lossless(t, at) => at,
                 _ => t,
@@ -4638,11 +4642,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Operand::Const(c) => c,
                 _ => unreachable!(),
             })),
-            ExprKind::Binary { .. } | ExprKind::Unary { .. } if fold_int(e).is_some() => {
+            ExprKind::Binary { .. } | ExprKind::Unary { .. } if fold_int(e, 128).is_some() => {
                 // An operator tree of unsuffixed integer literals is one
                 // constant, so it takes its destination's type as a single
                 // literal does (`let n: i32 = -(2 * 3)`).
-                scalar(self, fold_int(e).unwrap_or(0) as u128)
+                let t = self.expr_ty(e)?;
+                let bits = match self.tys().tcx().kind(t) {
+                    HK::Int(IntSize::I128) | HK::UInt(UIntSize::U128) => 128,
+                    _ => 64,
+                };
+                match fold_int(e, bits) {
+                    Some(v) => scalar(self, v as u128),
+                    None => Ok(None),
+                }
             }
             ExprKind::Unary {
                 op: UnaryOp::Neg,

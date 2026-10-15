@@ -334,6 +334,14 @@ impl<'a> super::TypeChecker<'a> {
     /// it promotes to. The negated form records its operand as well, so the
     /// minus and the magnitude agree on the width the backends lower.
     pub(super) fn record_promoted_literal(&mut self, e: &Expr, ty: &Type) {
+        // B-2026-10-15-54: an integer literal past `i64` is legal beside a
+        // peer whose range holds it (`a == 18446744073709551615` over a
+        // `u64`), so the peer is what judges it.
+        if let Some(value) = Self::unsuffixed_int_literal_value(e) {
+            if i64::try_from(value).is_err() && matches!(ty, Type::Int(_) | Type::UInt(_)) {
+                self.check_int_literal_fits(value, ty, &e.span, None);
+            }
+        }
         self.record_expr_type(&e.span, ty);
         if let ExprKind::Unary { operand, .. } = &e.kind {
             self.record_expr_type(&operand.span, ty);

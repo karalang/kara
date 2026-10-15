@@ -552,6 +552,13 @@ impl<'a> Lexer<'a> {
     /// containing one lexes and parses and then reports that. That ordering is
     /// deliberate — the type must not become nameable before it works.
     fn int_128_token(text: &str, radix: u32, suffix: Option<IntSuffix>) -> Option<Token> {
+        // An unsuffixed one goes to the parser whole: its type comes from
+        // inference, which may make it a `u128` (B-2026-10-15-54).
+        if suffix.is_none() {
+            return u128::from_str_radix(text, radix)
+                .ok()
+                .map(|m| Token::IntegerOutOfRange(m, None));
+        }
         if !matches!(suffix, Some(IntSuffix::I128) | Some(IntSuffix::U128)) {
             return None;
         }
