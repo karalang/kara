@@ -2478,3 +2478,28 @@ fn main() {
         }
     }
 }
+
+/// `rotate_left` / `rotate_right` lower to LLVM's funnel shifts, the amount
+/// taken modulo the width, as Rust's (B-2026-10-15-67).
+#[test]
+fn mir_build_rotates_at_every_width() {
+    let src = r#"
+fn main() {
+    let a: u32 = 0x80000001u32;
+    let b: u64 = 0x0000000000000003u64;
+    println(f"{a.rotate_left(1)} {b.rotate_right(1)}");
+    println(f"{a.rotate_right(33)} {b.rotate_left(64)} {a.rotate_left(0)}");
+    let c: u8 = 0x81u8;
+    println(f"{c.rotate_left(1)} {c.rotate_right(9)}");
+}
+"#;
+    for opt in [0, 2] {
+        let Some(out) = build_and_run(src, opt) else {
+            return;
+        };
+        assert_eq!(
+            out, "3 9223372036854775809\n3221225472 3 2147483649\n3 192\n",
+            "at -O{opt}"
+        );
+    }
+}

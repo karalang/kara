@@ -842,6 +842,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 };
                 self.store_int_as(dest, v, false)?;
             }
+            // A funnel shift of `x` with itself: the amount is taken modulo
+            // the width, as Rust's `rotate_left` (B-2026-10-15-67).
+            ("rotate_left" | "rotate_right", [y]) => {
+                let n = self.operand_scalar(y)?.into_int_value();
+                let n = self
+                    .builder
+                    .build_int_cast_sign_flag(n, xt, false, "")
+                    .map_err(e)?;
+                let fsh = if method == "rotate_left" {
+                    "fshl"
+                } else {
+                    "fshr"
+                };
+                let v = self.int_intrinsic(fsh, &[x.into(), x.into(), n.into()], xt)?;
+                self.store_int_as(dest, v, false)?;
+            }
             ("is_power_of_two", []) => {
                 let b = &self.builder;
                 let z = xt.const_zero();
