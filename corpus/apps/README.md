@@ -176,6 +176,7 @@ cli/mini_pip            a pip resolver on a port of packaging 26.3 (versions, sp
 cli/mini_m4             a GNU m4 1.4.19 clone: rescanned macro expansion, quoting and comments, regex, eval and diversion builtins; output identical to GNU m4
 cli/mini_xml            XML parser, ElementPath queries and tostring, as Python's ElementTree
 cli/mini_csv            Python's csv module: reader and writer from _csv.c, DictReader/DictWriter, the Sniffer, and an order report
+cli/mini_ignore         which files git ignores: wildmatch.c and dir.c's .gitignore rules; output identical to git ls-files and check-ignore -v
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

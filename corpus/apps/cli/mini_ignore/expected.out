@@ -1,0 +1,252 @@
+== untracked
+.env.example
+.gitignore
+.vscode/extensions.json
+.vscode/settings.json
+Makefile
+README.md
+a/c
+abc.txt
+cache
+data-001.csv
+data-1.csv
+doc/api/v1/ref.md
+doc/guide.md
+foo/bar
+foo/one/two/bar
+important.log
+keep.o
+lib/cache.txt
+logs/.gitkeep
+main.c
+midd/le.txt
+old.bak
+packages/api/.gitignore
+packages/api/main.rs
+packages/api/server.log
+packages/legacy/.gitignore
+packages/legacy/new.txt
+packages/legacy/sub/also.orig
+packages/web/.gitignore
+packages/web/package.json
+packages/web/src/index.ts
+report10.txt
+reportx.txt
+src/.gitignore
+src/app.py
+src/app.pyc
+src/build/gen.c
+src/deep/y
+src/nested/local.cfg
+src/tmpfile
+src/y.tmp
+starX.txt
+trailing-space
+util.h
+== ignored
+!bang
+#notes.txt
+.DS_Store
+.env
+.env.local
+.idea/modules/app.iml
+.idea/workspace.xml
+.vscode/launch.json
+Old.bak
+a/b
+a/x/b/inner.txt
+a/x/y/b
+abc/x/y.txt
+build/out.bin
+build/sub/x.txt
+data-01.csv
+debug.log
+deep/x
+dist/app.js
+doc/api/v1/ref.pdf
+doc/manual.pdf
+foo/one/bar
+key.secret
+keys/prod.secret
+lib.a
+lib/cache/blob
+local-notes/todo.txt
+logs/README
+logs/old/2026-09.log
+logs/today.log
+main.c.swp
+main.o
+mid-and-middle.txt
+middle.txt
+node_modules/left-pad/index.js
+notes.txt~
+packages/api/target/release/api
+packages/legacy/old.bak
+packages/legacy/stuff.orig
+packages/web/dist/bundle.js
+packages/web/dist/keep.txt
+packages/web/node_modules/react/index.js
+packages/web/settings.local
+report1.txt
+space inside.txt
+src/Debug/trace.txt
+src/__pycache__/app.cpython-313.pyc
+src/debug/trace.txt
+src/deep/x
+src/local.cfg
+src/tmp/scratch.txt
+src/util.pyc
+src/x.gen.c
+star*.txt
+trailing-space 
+trailing-spaces
+x.tmp
+== check-ignore
+.gitignore:46:\!bang	!bang
+.gitignore:45:\#notes.txt	#notes.txt
+.gitignore:2:.DS_Store	.DS_Store
+.gitignore:28:.env	.env
+.gitignore:30:!.env.example	.env.example
+.gitignore:29:.env.*	.env.local
+::	.gitignore
+.gitignore:5:.idea/	.idea
+.gitignore:5:.idea/	.idea/modules
+.gitignore:5:.idea/	.idea/modules/app.iml
+.gitignore:5:.idea/	.idea/workspace.xml
+::	.vscode
+.gitignore:8:!.vscode/extensions.json	.vscode/extensions.json
+.gitignore:6:.vscode/*	.vscode/launch.json
+.gitignore:7:!.vscode/settings.json	.vscode/settings.json
+::	Makefile
+.gitignore:43:[[:upper:]]*.bak	Old.bak
+::	README.md
+::	a
+.gitignore:35:a/**/b	a/b
+::	a/c
+::	a/x
+.gitignore:35:a/**/b	a/x/b
+.gitignore:35:a/**/b	a/x/b/inner.txt
+::	a/x/y
+.gitignore:35:a/**/b	a/x/y/b
+::	abc
+::	abc.txt
+.gitignore:36:abc/**	abc/x
+.gitignore:36:abc/**	abc/x/y.txt
+.gitignore:11:/build/	build
+.gitignore:11:/build/	build/out.bin
+.gitignore:11:/build/	build/sub
+.gitignore:11:/build/	build/sub/x.txt
+::	cache
+::	data-001.csv
+.gitignore:41:data-[0-9][0-9].csv	data-01.csv
+::	data-1.csv
+.gitignore:22:*.log	debug.log
+::	deep
+.gitignore:37:**/deep/x	deep/x
+.gitignore:12:dist/	dist
+.gitignore:12:dist/	dist/app.js
+::	doc
+::	doc/api
+::	doc/api/v1
+::	doc/api/v1/ref.md
+.gitignore:33:doc/**/*.pdf	doc/api/v1/ref.pdf
+::	doc/guide.md
+.gitignore:33:doc/**/*.pdf	doc/manual.pdf
+::	foo
+::	foo/bar
+::	foo/one
+.gitignore:38:foo/*/bar	foo/one/bar
+::	foo/one/two
+::	foo/one/two/bar
+.gitignore:23:!important.log	important.log
+.gitignore:15:!keep.o	keep.o
+.git/info/exclude:4:*.secret	key.secret
+::	keys
+.git/info/exclude:4:*.secret	keys/prod.secret
+::	lib
+.gitignore:14:*.[oa]	lib.a
+.gitignore:19:cache/	lib/cache
+::	lib/cache.txt
+.gitignore:19:cache/	lib/cache/blob
+.git/info/exclude:3:local-notes/	local-notes
+.git/info/exclude:3:local-notes/	local-notes/todo.txt
+::	logs
+.gitignore:25:!logs/.gitkeep	logs/.gitkeep
+.gitignore:24:logs/**	logs/README
+.gitignore:24:logs/**	logs/old
+.gitignore:24:logs/**	logs/old/2026-09.log
+.gitignore:24:logs/**	logs/today.log
+::	main.c
+.gitignore:3:*.swp	main.c.swp
+.gitignore:14:*.[oa]	main.o
+.gitignore:44:mid**dle.txt	mid-and-middle.txt
+::	midd
+::	midd/le.txt
+.gitignore:44:mid**dle.txt	middle.txt
+.gitignore:18:node_modules/	node_modules
+.gitignore:18:node_modules/	node_modules/left-pad
+.gitignore:18:node_modules/	node_modules/left-pad/index.js
+.gitignore:4:*~	notes.txt~
+::	old.bak
+::	packages
+::	packages/api
+::	packages/api/.gitignore
+::	packages/api/main.rs
+packages/api/.gitignore:1:!*.log	packages/api/server.log
+.gitignore:13:target/	packages/api/target
+.gitignore:13:target/	packages/api/target/release
+.gitignore:13:target/	packages/api/target/release/api
+::	packages/legacy
+::	packages/legacy/.gitignore
+::	packages/legacy/new.txt
+packages/legacy/.gitignore:2:*.bak	packages/legacy/old.bak
+packages/legacy/.gitignore:3:*.orig	packages/legacy/stuff.orig
+::	packages/legacy/sub
+packages/legacy/.gitignore:4:!sub/also.orig	packages/legacy/sub/also.orig
+::	packages/web
+::	packages/web/.gitignore
+packages/web/.gitignore:1:dist	packages/web/dist
+packages/web/.gitignore:1:dist	packages/web/dist/bundle.js
+packages/web/.gitignore:1:dist	packages/web/dist/keep.txt
+.gitignore:18:node_modules/	packages/web/node_modules
+.gitignore:18:node_modules/	packages/web/node_modules/react
+.gitignore:18:node_modules/	packages/web/node_modules/react/index.js
+::	packages/web/package.json
+packages/web/.gitignore:3:*.local	packages/web/settings.local
+::	packages/web/src
+::	packages/web/src/index.ts
+.gitignore:42:report[!x].txt	report1.txt
+::	report10.txt
+::	reportx.txt
+.gitignore:50:space\ inside.txt	space inside.txt
+::	src
+::	src/.gitignore
+.gitignore:39:[Dd]ebug/	src/Debug
+.gitignore:39:[Dd]ebug/	src/Debug/trace.txt
+.gitignore:17:__pycache__/	src/__pycache__
+.gitignore:17:__pycache__/	src/__pycache__/app.cpython-313.pyc
+::	src/app.py
+src/.gitignore:2:!app.pyc	src/app.pyc
+::	src/build
+::	src/build/gen.c
+.gitignore:39:[Dd]ebug/	src/debug
+.gitignore:39:[Dd]ebug/	src/debug/trace.txt
+::	src/deep
+.gitignore:37:**/deep/x	src/deep/x
+::	src/deep/y
+src/.gitignore:4:/local.cfg	src/local.cfg
+::	src/nested
+::	src/nested/local.cfg
+.gitignore:34:**/tmp	src/tmp
+.gitignore:34:**/tmp	src/tmp/scratch.txt
+::	src/tmpfile
+.gitignore:16:*.py[cod]	src/util.pyc
+src/.gitignore:3:*.gen.c	src/x.gen.c
+::	src/y.tmp
+.gitignore:47:star\*.txt	star*.txt
+::	starX.txt
+::	trailing-space
+.gitignore:48:trailing-space\ 	trailing-space 
+.gitignore:49:trailing-spaces	trailing-spaces
+::	util.h
+.gitignore:40:/*.tmp	x.tmp

@@ -1,0 +1,1814 @@
+// mini_ignore: which files a repository ignores, as git decides it, for
+// the tools that walk a working tree (search tools, file watchers, build
+// systems, backup and sync tools):
+// - git's wildmatch, ported from wildmatch.c: `*`, `?`, `**` at a
+//   directory boundary and inside a name, character classes with ranges,
+//   negation and POSIX names, and backslash escapes;
+// - .gitignore parsing as dir.c does it: comments, escaped `#` and `!`,
+//   trailing spaces and escaped ones, CRLF lines, a last line with no
+//   newline, negation, directory-only patterns, and anchoring;
+// - the exclusion rules: the deepest .gitignore first, then
+//   .git/info/exclude, the last matching line in a file wins, and nothing
+//   under an excluded directory can be re-included.
+//
+// The run writes a monorepo's working tree into `data/repo` and prints what
+// `git ls-files --others` lists as untracked and as ignored, and what
+// `git check-ignore -v --non-matching` says about every path in it.
+//
+// expected.out is the output of oracle.py, which asks git 2.43 itself.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+// ------------------------------------------------------------ wildmatch
+
+const WM_MATCH: i64 = 0;
+const WM_NOMATCH: i64 = 1;
+const WM_ABORT_ALL: i64 = -1;
+const WM_ABORT_TO_STARSTAR: i64 = -2;
+
+// The byte at `i`, or 0 past the end, as the C code reads its NUL.
+fn at(b: ref Vec[u8], i: i64) -> u8 {
+    if i < b.len() { b[i] } else { 0 }
+}
+
+fn is_glob_special(c: u8) -> bool {
+    c == b'*' or c == b'?' or c == b'[' or c == b'\\'
+}
+
+fn in_class(name: Str, c: u8) -> Option[bool] {
+    let upper = c >= b'A' and c <= b'Z';
+    let lower = c >= b'a' and c <= b'z';
+    let digit = c >= b'0' and c <= b'9';
+    let space = c == b' ' or c == b'\t' or c == b'\n' or c == b'\r';
+    let print = c >= 32 and c < 127;
+    if name == "alnum" {
+        return Some(upper or lower or digit);
+    }
+    if name == "alpha" {
+        return Some(upper or lower);
+    }
+    if name == "blank" {
+        return Some(c == b' ' or c == b'\t');
+    }
+    if name == "cntrl" {
+        return Some(c < 32 or c == 127);
+    }
+    if name == "digit" {
+        return Some(digit);
+    }
+    if name == "graph" {
+        return Some(print and c != b' ');
+    }
+    if name == "lower" {
+        return Some(lower);
+    }
+    if name == "print" {
+        return Some(print);
+    }
+    if name == "punct" {
+        return Some(print and not (upper or lower or digit or c == b' '));
+    }
+    if name == "space" {
+        return Some(space);
+    }
+    if name == "upper" {
+        return Some(upper);
+    }
+    if name == "xdigit" {
+        return Some(digit or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F'));
+    }
+    None
+}
+
+fn has_slash_from(t: ref Vec[u8], from: i64) -> i64 {
+    for i in from..t.len() {
+        if t[i] == b'/' {
+            return i;
+        }
+    }
+    -1
+}
+
+// git's dowild: `pat` from `p0` against `text` from `t0`.
+fn dowild(pat: ref Vec[u8], p0: i64, text: ref Vec[u8], t0: i64, pathname: bool) -> i64 {
+    let mut p = p0;
+    let mut t = t0;
+    loop {
+        let mut p_ch = at(pat, p);
+        if p_ch == 0 {
+            break;
+        }
+        let mut t_ch = at(text, t);
+        if t_ch == 0 and p_ch != b'*' {
+            return WM_ABORT_ALL;
+        }
+        if p_ch == b'\\' {
+            // a literal match with the next character
+            p += 1;
+            p_ch = at(pat, p);
+            if t_ch != p_ch {
+                return WM_NOMATCH;
+            }
+        } else if p_ch == b'?' {
+            if pathname and t_ch == b'/' {
+                return WM_NOMATCH;
+            }
+        } else if p_ch == b'*' {
+            p += 1;
+            let mut match_slash = not pathname;
+            if at(pat, p) == b'*' {
+                let prev_p = p - 2;
+                p += 1;
+                while at(pat, p) == b'*' {
+                    p += 1;
+                }
+                let boundary_before = prev_p < p0 or pat[prev_p] == b'/';
+                let boundary_after = at(pat, p) == 0 or at(pat, p) == b'/' or (at(pat, p) == b'\\' and at(pat, p + 1) == b'/');
+                if boundary_before and boundary_after {
+                    // `**/` may match no directory at all
+                    if at(pat, p) == b'/' and dowild(pat, p + 1, text, t, pathname) == WM_MATCH {
+                        return WM_MATCH;
+                    }
+                    match_slash = true;
+                } else {
+                    match_slash = false;
+                }
+            }
+            if at(pat, p) == 0 {
+                // a trailing `**` matches everything, a trailing `*` only up to a slash
+                if not match_slash and has_slash_from(text, t) >= 0 {
+                    return WM_NOMATCH;
+                }
+                return WM_MATCH;
+            } else if not match_slash and at(pat, p) == b'/' {
+                // one `*` then a slash matches the rest of this directory name
+                let slash = has_slash_from(text, t);
+                if slash < 0 {
+                    return WM_NOMATCH;
+                }
+                t = slash + 1;
+                p += 1;
+                continue;
+            }
+            loop {
+                if t_ch == 0 {
+                    break;
+                }
+                let next = at(pat, p);
+                if not is_glob_special(next) {
+                    // skip ahead to the literal that follows the star
+                    loop {
+                        t_ch = at(text, t);
+                        if t_ch == 0 or not (match_slash or t_ch != b'/') {
+                            break;
+                        }
+                        if t_ch == next {
+                            break;
+                        }
+                        t += 1;
+                    }
+                    if t_ch != next {
+                        return if match_slash { WM_ABORT_ALL } else { WM_ABORT_TO_STARSTAR };
+                    }
+                }
+                let matched = dowild(pat, p, text, t, pathname);
+                if matched != WM_NOMATCH {
+                    if not match_slash or matched != WM_ABORT_TO_STARSTAR {
+                        return matched;
+                    }
+                } else if not match_slash and t_ch == b'/' {
+                    return WM_ABORT_TO_STARSTAR;
+                }
+                t += 1;
+                t_ch = at(text, t);
+            }
+            return WM_ABORT_ALL;
+        } else if p_ch == b'[' {
+            p += 1;
+            p_ch = at(pat, p);
+            if p_ch == b'^' {
+                p_ch = b'!';
+            }
+            let negated = p_ch == b'!';
+            if negated {
+                p += 1;
+                p_ch = at(pat, p);
+            }
+            let mut prev_ch: u8 = 0;
+            let mut matched = false;
+            loop {
+                if p_ch == 0 {
+                    return WM_ABORT_ALL;
+                }
+                if p_ch == b'\\' {
+                    p += 1;
+                    p_ch = at(pat, p);
+                    if p_ch == 0 {
+                        return WM_ABORT_ALL;
+                    }
+                    if t_ch == p_ch {
+                        matched = true;
+                    }
+                } else if p_ch == b'-' and prev_ch != 0 and at(pat, p + 1) != 0 and at(pat, p + 1) != b']' {
+                    p += 1;
+                    p_ch = at(pat, p);
+                    if p_ch == b'\\' {
+                        p += 1;
+                        p_ch = at(pat, p);
+                        if p_ch == 0 {
+                            return WM_ABORT_ALL;
+                        }
+                    }
+                    if t_ch <= p_ch and t_ch >= prev_ch {
+                        matched = true;
+                    }
+                    p_ch = 0;
+                } else if p_ch == b'[' and at(pat, p + 1) == b':' {
+                    p += 2;
+                    let s = p;
+                    while at(pat, p) != 0 and at(pat, p) != b']' {
+                        p += 1;
+                    }
+                    p_ch = at(pat, p);
+                    if p_ch == 0 {
+                        return WM_ABORT_ALL;
+                    }
+                    let len = p - s - 1;
+                    if len < 0 or pat[p - 1] != b':' {
+                        // no ":]", so the `[` is an ordinary member
+                        p = s - 2;
+                        p_ch = b'[';
+                        if t_ch == p_ch {
+                            matched = true;
+                        }
+                    } else {
+                        match in_class(byte_str(pat, s, s + len), t_ch) {
+                            Some(true) => matched = true,
+                            Some(false) => {}
+                            None => return WM_ABORT_ALL,
+                        }
+                        p_ch = 0;
+                    }
+                } else if t_ch == p_ch {
+                    matched = true;
+                }
+                prev_ch = p_ch;
+                p += 1;
+                p_ch = at(pat, p);
+                if p_ch == b']' {
+                    break;
+                }
+            }
+            if matched == negated or (pathname and t_ch == b'/') {
+                return WM_NOMATCH;
+            }
+        } else if t_ch != p_ch {
+            return WM_NOMATCH;
+        }
+        t += 1;
+        p += 1;
+    }
+    if at(text, t) != 0 { WM_NOMATCH } else { WM_MATCH }
+}
+
+fn wildmatch(pat: ref Vec[u8], text: Str, pathname: bool) -> bool {
+    dowild(pat, 0, to_bytes(text), 0, pathname) == WM_MATCH
+}
+
+// ------------------------------------------------------------ patterns
+
+#[derive(Clone)]
+struct Pattern {
+    // the pattern without its `!` and its trailing `/`
+    pat: Vec[u8],
+    negative: bool,
+    must_be_dir: bool,
+    // no slash in it: it matches a basename at any depth
+    no_dir: bool,
+    // the file it came from and its line, for check-ignore -v
+    src: String,
+    line: i64,
+    // the directory of that file, "" for the top, else "a/b/"
+    base: String,
+}
+
+impl Pattern {
+    fn shown(ref self) -> String {
+        let bang = if self.negative { "!" } else { "" };
+        let slash = if self.must_be_dir { "/" } else { "" };
+        f"{bang}{from_bytes(self.pat.clone())}{slash}"
+    }
+
+    fn matches(ref self, path: Str, is_dir: bool) -> bool {
+        if self.must_be_dir and not is_dir {
+            return false;
+        }
+        let pb = to_bytes(path);
+        if self.no_dir {
+            let mut st = pb.len();
+            while st > 0 and pb[st - 1] != b'/' {
+                st -= 1;
+            }
+            return wildmatch(self.pat, byte_str(pb, st, pb.len()), false);
+        }
+        // match_pathname: the pattern is relative to its file's directory
+        let mut pat = self.pat.clone();
+        if pat.len() > 0 and pat[0] == b'/' {
+            pat.remove(0);
+        }
+        let bb = to_bytes(self.base);
+        let baselen = if bb.len() > 0 { bb.len() - 1 } else { 0 };
+        if pb.len() < baselen + 1 {
+            return false;
+        }
+        if baselen > 0 and pb[baselen] != b'/' {
+            return false;
+        }
+        for k in 0..baselen {
+            if pb[k] != bb[k] {
+                return false;
+            }
+        }
+        let from = if baselen > 0 { baselen + 1 } else { 0 };
+        wildmatch(pat, byte_str(pb, from, pb.len()), true)
+    }
+}
+
+// dir.c's trim_trailing_spaces: unescaped spaces at the end go.
+fn trim_trailing_spaces(line: ref Vec[u8]) -> Vec[u8] {
+    let mut last_space: i64 = -1;
+    let mut i: i64 = 0;
+    while i < line.len() {
+        let c = line[i];
+        if c == b' ' {
+            if last_space < 0 {
+                last_space = i;
+            }
+        } else if c == b'\\' {
+            i += 1;
+            if i >= line.len() {
+                break;
+            }
+            last_space = -1;
+        } else {
+            last_space = -1;
+        }
+        i += 1;
+    }
+    let end = if last_space >= 0 { last_space } else { line.len() };
+    let mut out: Vec[u8] = Vec.new();
+    for k in 0..end {
+        out.push(line[k]);
+    }
+    out
+}
+
+// The patterns of one ignore file, as add_patterns_from_buffer reads them.
+fn parse_patterns(text: Str, src: Str, base: Str) -> Vec[Pattern] {
+    let mut b = to_bytes(text);
+    if b.len() > 0 and b[b.len() - 1] != b'\n' {
+        b.push(b'\n');
+    }
+    let mut out: Vec[Pattern] = Vec.new();
+    let mut lineno: i64 = 1;
+    let mut entry: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] != b'\n' {
+            continue;
+        }
+        if entry != i and b[entry] != b'#' {
+            let end = if i > entry and b[i - 1] == b'\r' { i - 1 } else { i };
+            let mut raw: Vec[u8] = Vec.new();
+            for k in entry..end {
+                raw.push(b[k]);
+            }
+            let mut p = trim_trailing_spaces(raw);
+            let mut negative = false;
+            if p.len() > 0 and p[0] == b'!' {
+                negative = true;
+                p.remove(0);
+            }
+            let mut must_be_dir = false;
+            if p.len() > 0 and p[p.len() - 1] == b'/' {
+                must_be_dir = true;
+                p.pop();
+            }
+            let mut no_dir = true;
+            for k in 0..p.len() {
+                if p[k] == b'/' {
+                    no_dir = false;
+                }
+            }
+            out.push(Pattern { pat: p, negative: negative, must_be_dir: must_be_dir, no_dir: no_dir, src: src.to_string(), line: lineno, base: base.to_string() });
+        }
+        lineno += 1;
+        entry = i + 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ the rules
+
+// The ignore files of a working tree: each directory's .gitignore, and
+// .git/info/exclude.
+struct Rules {
+    dirs: Vec[String],
+    lists: Vec[Vec[Pattern]],
+    exclude: Vec[Pattern],
+}
+
+// A pattern in a list, from the last line up: the last match wins.
+fn last_match(list: ref Vec[Pattern], path: Str, is_dir: bool) -> Option[Pattern] {
+    let mut i = list.len() - 1;
+    while i >= 0 {
+        if list[i].matches(path, is_dir) {
+            return Some(list[i].clone());
+        }
+        i -= 1;
+    }
+    None
+}
+
+impl Rules {
+    fn list_of(ref self, dir: Str) -> i64 {
+        for i in 0..self.dirs.len() {
+            if self.dirs[i] == dir {
+                return i;
+            }
+        }
+        -1
+    }
+
+    // last_matching_pattern_from_lists: the .gitignore files on the stack
+    // from the deepest up, then info/exclude.
+    fn from_lists(ref self, stack: ref Vec[i64], path: Str, is_dir: bool) -> Option[Pattern] {
+        let mut k = stack.len() - 1;
+        while k >= 0 {
+            if let Some(p) = last_match(self.lists[stack[k]], path, is_dir) {
+                return Some(p);
+            }
+            k -= 1;
+        }
+        last_match(self.exclude, path, is_dir)
+    }
+
+    // The pattern that decides `path`: that of an excluded directory above
+    // it if there is one (prep_exclude), else the path's own.
+    fn decide(ref self, path: Str, is_dir: bool) -> Option[Pattern] {
+        let parts = split_on(path, b'/');
+        let mut stack: Vec[i64] = Vec.new();
+        let top = self.list_of("");
+        if top >= 0 {
+            stack.push(top);
+        }
+        let mut dir = String.new();
+        for k in 0..parts.len() - 1 {
+            if k > 0 {
+                dir.push_str("/");
+            }
+            dir.push_str(parts[k]);
+            if let Some(p) = self.from_lists(stack, dir, true) {
+                if not p.negative {
+                    return Some(p);
+                }
+            }
+            let l = self.list_of(dir);
+            if l >= 0 {
+                stack.push(l);
+            }
+        }
+        self.from_lists(stack, path, is_dir)
+    }
+
+    fn ignored(ref self, path: Str, is_dir: bool) -> bool {
+        match self.decide(path, is_dir) {
+            Some(p) => not p.negative,
+            None => false,
+        }
+    }
+}
+
+// ------------------------------------------------------------ the files
+
+// data/exclude.txt
+fn file_0() -> String {
+    """
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+local-notes/
+*.secret
+
+"""
+}
+
+// data/repo/!bang
+fn file_1() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/#notes.txt
+fn file_2() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.DS_Store
+fn file_3() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.env
+fn file_4() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.env.example
+fn file_5() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.env.local
+fn file_6() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.gitignore
+fn file_7() -> String {
+    """
+# OS and editor files
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# build output
+/build/
+dist/
+target/
+*.[oa]
+!keep.o
+*.py[cod]
+__pycache__/
+node_modules/
+cache/
+
+# logs, but keep the important one and the logs directory itself
+*.log
+!important.log
+logs/**
+!logs/.gitkeep
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# patterns
+doc/**/*.pdf
+**/tmp
+a/**/b
+abc/**
+**/deep/x
+foo/*/bar
+[Dd]ebug/
+/*.tmp
+data-[0-9][0-9].csv
+report[!x].txt
+[[:upper:]]*.bak
+mid**dle.txt
+\\#notes.txt
+\\!bang
+star\\*.txt
+trailing-space\\ 
+trailing-spaces   
+space\\ inside.txt
+
+"""
+}
+
+// data/repo/.idea/modules/app.iml
+fn file_8() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.idea/workspace.xml
+fn file_9() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.vscode/extensions.json
+fn file_10() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.vscode/launch.json
+fn file_11() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/.vscode/settings.json
+fn file_12() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/Makefile
+fn file_13() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/Old.bak
+fn file_14() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/README.md
+fn file_15() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/a/b
+fn file_16() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/a/c
+fn file_17() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/a/x/b/inner.txt
+fn file_18() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/a/x/y/b
+fn file_19() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/abc.txt
+fn file_20() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/abc/x/y.txt
+fn file_21() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/build/out.bin
+fn file_22() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/build/sub/x.txt
+fn file_23() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/cache
+fn file_24() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/data-001.csv
+fn file_25() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/data-01.csv
+fn file_26() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/data-1.csv
+fn file_27() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/debug.log
+fn file_28() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/deep/x
+fn file_29() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/dist/app.js
+fn file_30() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/doc/api/v1/ref.md
+fn file_31() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/doc/api/v1/ref.pdf
+fn file_32() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/doc/guide.md
+fn file_33() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/doc/manual.pdf
+fn file_34() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/foo/bar
+fn file_35() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/foo/one/bar
+fn file_36() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/foo/one/two/bar
+fn file_37() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/important.log
+fn file_38() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/keep.o
+fn file_39() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/key.secret
+fn file_40() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/keys/prod.secret
+fn file_41() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/lib.a
+fn file_42() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/lib/cache.txt
+fn file_43() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/lib/cache/blob
+fn file_44() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/local-notes/todo.txt
+fn file_45() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/logs/.gitkeep
+fn file_46() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/logs/README
+fn file_47() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/logs/old/2026-09.log
+fn file_48() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/logs/today.log
+fn file_49() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/main.c
+fn file_50() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/main.c.swp
+fn file_51() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/main.o
+fn file_52() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/mid-and-middle.txt
+fn file_53() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/midd/le.txt
+fn file_54() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/middle.txt
+fn file_55() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/node_modules/left-pad/index.js
+fn file_56() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/notes.txt~
+fn file_57() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/old.bak
+fn file_58() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/api/.gitignore
+fn file_59() -> String {
+    """
+!*.log
+
+"""
+}
+
+// data/repo/packages/api/main.rs
+fn file_60() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/api/server.log
+fn file_61() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/api/target/release/api
+fn file_62() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/legacy/.gitignore
+fn file_63() -> String {
+    """
+# written on Windows\r
+*.bak\r
+*.orig\r
+!sub/also.orig
+"""
+}
+
+// data/repo/packages/legacy/new.txt
+fn file_64() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/legacy/old.bak
+fn file_65() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/legacy/stuff.orig
+fn file_66() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/legacy/sub/also.orig
+fn file_67() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/web/.gitignore
+fn file_68() -> String {
+    """
+dist
+!dist/keep.txt
+*.local
+
+"""
+}
+
+// data/repo/packages/web/dist/bundle.js
+fn file_69() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/web/dist/keep.txt
+fn file_70() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/web/node_modules/react/index.js
+fn file_71() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/web/package.json
+fn file_72() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/web/settings.local
+fn file_73() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/packages/web/src/index.ts
+fn file_74() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/report1.txt
+fn file_75() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/report10.txt
+fn file_76() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/reportx.txt
+fn file_77() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/space inside.txt
+fn file_78() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/.gitignore
+fn file_79() -> String {
+    """
+# python bytecode is ignored at the top, but this one is checked in
+!app.pyc
+*.gen.c
+/local.cfg
+
+"""
+}
+
+// data/repo/src/Debug/trace.txt
+fn file_80() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/__pycache__/app.cpython-313.pyc
+fn file_81() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/app.py
+fn file_82() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/app.pyc
+fn file_83() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/build/gen.c
+fn file_84() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/debug/trace.txt
+fn file_85() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/deep/x
+fn file_86() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/deep/y
+fn file_87() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/local.cfg
+fn file_88() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/nested/local.cfg
+fn file_89() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/tmp/scratch.txt
+fn file_90() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/tmpfile
+fn file_91() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/util.pyc
+fn file_92() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/x.gen.c
+fn file_93() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/src/y.tmp
+fn file_94() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/star*.txt
+fn file_95() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/starX.txt
+fn file_96() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/trailing-space
+fn file_97() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/trailing-space 
+fn file_98() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/trailing-spaces
+fn file_99() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/util.h
+fn file_100() -> String {
+    """
+x
+
+"""
+}
+
+// data/repo/x.tmp
+fn file_101() -> String {
+    """
+x
+
+"""
+}
+
+fn put(path: Str, text: String) -> Result[(), String] {
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn make_dir(path: Str) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(path.to_string()) {
+        return Err(f"cannot create {path}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    make_dir("data")?;
+    put("data/exclude.txt", file_0())?;
+    make_dir("data/repo")?;
+    put("data/repo/!bang", file_1())?;
+    put("data/repo/#notes.txt", file_2())?;
+    put("data/repo/.DS_Store", file_3())?;
+    put("data/repo/.env", file_4())?;
+    put("data/repo/.env.example", file_5())?;
+    put("data/repo/.env.local", file_6())?;
+    put("data/repo/.gitignore", file_7())?;
+    make_dir("data/repo/.idea/modules")?;
+    put("data/repo/.idea/modules/app.iml", file_8())?;
+    make_dir("data/repo/.idea")?;
+    put("data/repo/.idea/workspace.xml", file_9())?;
+    make_dir("data/repo/.vscode")?;
+    put("data/repo/.vscode/extensions.json", file_10())?;
+    put("data/repo/.vscode/launch.json", file_11())?;
+    put("data/repo/.vscode/settings.json", file_12())?;
+    put("data/repo/Makefile", file_13())?;
+    put("data/repo/Old.bak", file_14())?;
+    put("data/repo/README.md", file_15())?;
+    make_dir("data/repo/a")?;
+    put("data/repo/a/b", file_16())?;
+    put("data/repo/a/c", file_17())?;
+    make_dir("data/repo/a/x/b")?;
+    put("data/repo/a/x/b/inner.txt", file_18())?;
+    make_dir("data/repo/a/x/y")?;
+    put("data/repo/a/x/y/b", file_19())?;
+    put("data/repo/abc.txt", file_20())?;
+    make_dir("data/repo/abc/x")?;
+    put("data/repo/abc/x/y.txt", file_21())?;
+    make_dir("data/repo/build")?;
+    put("data/repo/build/out.bin", file_22())?;
+    make_dir("data/repo/build/sub")?;
+    put("data/repo/build/sub/x.txt", file_23())?;
+    put("data/repo/cache", file_24())?;
+    put("data/repo/data-001.csv", file_25())?;
+    put("data/repo/data-01.csv", file_26())?;
+    put("data/repo/data-1.csv", file_27())?;
+    put("data/repo/debug.log", file_28())?;
+    make_dir("data/repo/deep")?;
+    put("data/repo/deep/x", file_29())?;
+    make_dir("data/repo/dist")?;
+    put("data/repo/dist/app.js", file_30())?;
+    make_dir("data/repo/doc/api/v1")?;
+    put("data/repo/doc/api/v1/ref.md", file_31())?;
+    put("data/repo/doc/api/v1/ref.pdf", file_32())?;
+    make_dir("data/repo/doc")?;
+    put("data/repo/doc/guide.md", file_33())?;
+    put("data/repo/doc/manual.pdf", file_34())?;
+    make_dir("data/repo/foo")?;
+    put("data/repo/foo/bar", file_35())?;
+    make_dir("data/repo/foo/one")?;
+    put("data/repo/foo/one/bar", file_36())?;
+    make_dir("data/repo/foo/one/two")?;
+    put("data/repo/foo/one/two/bar", file_37())?;
+    put("data/repo/important.log", file_38())?;
+    put("data/repo/keep.o", file_39())?;
+    put("data/repo/key.secret", file_40())?;
+    make_dir("data/repo/keys")?;
+    put("data/repo/keys/prod.secret", file_41())?;
+    put("data/repo/lib.a", file_42())?;
+    make_dir("data/repo/lib")?;
+    put("data/repo/lib/cache.txt", file_43())?;
+    make_dir("data/repo/lib/cache")?;
+    put("data/repo/lib/cache/blob", file_44())?;
+    make_dir("data/repo/local-notes")?;
+    put("data/repo/local-notes/todo.txt", file_45())?;
+    make_dir("data/repo/logs")?;
+    put("data/repo/logs/.gitkeep", file_46())?;
+    put("data/repo/logs/README", file_47())?;
+    make_dir("data/repo/logs/old")?;
+    put("data/repo/logs/old/2026-09.log", file_48())?;
+    put("data/repo/logs/today.log", file_49())?;
+    put("data/repo/main.c", file_50())?;
+    put("data/repo/main.c.swp", file_51())?;
+    put("data/repo/main.o", file_52())?;
+    put("data/repo/mid-and-middle.txt", file_53())?;
+    make_dir("data/repo/midd")?;
+    put("data/repo/midd/le.txt", file_54())?;
+    put("data/repo/middle.txt", file_55())?;
+    make_dir("data/repo/node_modules/left-pad")?;
+    put("data/repo/node_modules/left-pad/index.js", file_56())?;
+    put("data/repo/notes.txt~", file_57())?;
+    put("data/repo/old.bak", file_58())?;
+    make_dir("data/repo/packages/api")?;
+    put("data/repo/packages/api/.gitignore", file_59())?;
+    put("data/repo/packages/api/main.rs", file_60())?;
+    put("data/repo/packages/api/server.log", file_61())?;
+    make_dir("data/repo/packages/api/target/release")?;
+    put("data/repo/packages/api/target/release/api", file_62())?;
+    make_dir("data/repo/packages/legacy")?;
+    put("data/repo/packages/legacy/.gitignore", file_63())?;
+    put("data/repo/packages/legacy/new.txt", file_64())?;
+    put("data/repo/packages/legacy/old.bak", file_65())?;
+    put("data/repo/packages/legacy/stuff.orig", file_66())?;
+    make_dir("data/repo/packages/legacy/sub")?;
+    put("data/repo/packages/legacy/sub/also.orig", file_67())?;
+    make_dir("data/repo/packages/web")?;
+    put("data/repo/packages/web/.gitignore", file_68())?;
+    make_dir("data/repo/packages/web/dist")?;
+    put("data/repo/packages/web/dist/bundle.js", file_69())?;
+    put("data/repo/packages/web/dist/keep.txt", file_70())?;
+    make_dir("data/repo/packages/web/node_modules/react")?;
+    put("data/repo/packages/web/node_modules/react/index.js", file_71())?;
+    put("data/repo/packages/web/package.json", file_72())?;
+    put("data/repo/packages/web/settings.local", file_73())?;
+    make_dir("data/repo/packages/web/src")?;
+    put("data/repo/packages/web/src/index.ts", file_74())?;
+    put("data/repo/report1.txt", file_75())?;
+    put("data/repo/report10.txt", file_76())?;
+    put("data/repo/reportx.txt", file_77())?;
+    put("data/repo/space inside.txt", file_78())?;
+    make_dir("data/repo/src")?;
+    put("data/repo/src/.gitignore", file_79())?;
+    make_dir("data/repo/src/Debug")?;
+    put("data/repo/src/Debug/trace.txt", file_80())?;
+    make_dir("data/repo/src/__pycache__")?;
+    put("data/repo/src/__pycache__/app.cpython-313.pyc", file_81())?;
+    put("data/repo/src/app.py", file_82())?;
+    put("data/repo/src/app.pyc", file_83())?;
+    make_dir("data/repo/src/build")?;
+    put("data/repo/src/build/gen.c", file_84())?;
+    make_dir("data/repo/src/debug")?;
+    put("data/repo/src/debug/trace.txt", file_85())?;
+    make_dir("data/repo/src/deep")?;
+    put("data/repo/src/deep/x", file_86())?;
+    put("data/repo/src/deep/y", file_87())?;
+    put("data/repo/src/local.cfg", file_88())?;
+    make_dir("data/repo/src/nested")?;
+    put("data/repo/src/nested/local.cfg", file_89())?;
+    make_dir("data/repo/src/tmp")?;
+    put("data/repo/src/tmp/scratch.txt", file_90())?;
+    put("data/repo/src/tmpfile", file_91())?;
+    put("data/repo/src/util.pyc", file_92())?;
+    put("data/repo/src/x.gen.c", file_93())?;
+    put("data/repo/src/y.tmp", file_94())?;
+    put("data/repo/star*.txt", file_95())?;
+    put("data/repo/starX.txt", file_96())?;
+    put("data/repo/trailing-space", file_97())?;
+    put("data/repo/trailing-space ", file_98())?;
+    put("data/repo/trailing-spaces", file_99())?;
+    put("data/repo/util.h", file_100())?;
+    put("data/repo/x.tmp", file_101())?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ the report
+
+const ROOT: Str = "data/repo";
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+// Every path under the working tree, files and directories, as
+// (path, is_dir), in directory order.
+fn walk(dir: Str, out: mut ref Vec[String], dirs: mut ref Vec[bool]) -> Result[(), String] {
+    let full = if dir.len() > 0 { f"{ROOT}/{dir}" } else { ROOT.to_string() };
+    let names = match fs.read_dir(full.clone()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list {full}: {e}"),
+    };
+    for i in 0..names.len() {
+        let rel = if dir.len() > 0 { f"{dir}/{names[i]}" } else { names[i].clone() };
+        if rel == ".git" {
+            continue;
+        }
+        let is_dir = match fs.metadata(f"{ROOT}/{rel}") {
+            Ok(m) => m.is_dir,
+            Err(e) => return Err(f"cannot stat {rel}: {e}"),
+        };
+        out.push(rel.clone());
+        dirs.push(is_dir);
+        if is_dir {
+            walk(rel, out, dirs)?;
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut paths: Vec[String] = Vec.new();
+    let mut is_dir: Vec[bool] = Vec.new();
+    walk("", mut paths, mut is_dir)?;
+    let mut rules = Rules { dirs: Vec.new(), lists: Vec.new(), exclude: Vec.new() };
+    rules.exclude = parse_patterns(read("data/exclude.txt")?, ".git/info/exclude", "");
+    for i in 0..paths.len() {
+        let pb = to_bytes(paths[i]);
+        let mut st = pb.len();
+        while st > 0 and pb[st - 1] != b'/' {
+            st -= 1;
+        }
+        if is_dir[i] or byte_str(pb, st, pb.len()) != ".gitignore" {
+            continue;
+        }
+        let dir = if st > 0 { byte_str(pb, 0, st - 1) } else { String.new() };
+        let base = if st > 0 { byte_str(pb, 0, st) } else { String.new() };
+        let text = read(f"{ROOT}/{paths[i]}")?;
+        rules.dirs.push(dir);
+        rules.lists.push(parse_patterns(text, paths[i], base));
+    }
+    // git lists paths sorted byte-wise on the whole path
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..paths.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 and paths[order[j - 1]] > paths[order[j]] {
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    println("== untracked");
+    for k in 0..order.len() {
+        let i = order[k];
+        if not is_dir[i] and not rules.ignored(paths[i], false) {
+            println(paths[i]);
+        }
+    }
+    println("== ignored");
+    for k in 0..order.len() {
+        let i = order[k];
+        if not is_dir[i] and rules.ignored(paths[i], false) {
+            println(paths[i]);
+        }
+    }
+    println("== check-ignore");
+    for k in 0..order.len() {
+        let i = order[k];
+        match rules.decide(paths[i], is_dir[i]) {
+            Some(p) => println(f"{p.src}:{p.line}:{p.shown()}\t{paths[i]}"),
+            None => println(f"::\t{paths[i]}"),
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_ignore: {e}");
+    }
+}
