@@ -31,3 +31,33 @@ pub fn read_dir(path: &str) -> io::Result<Vec<String>> {
     names.sort();
     Ok(names)
 }
+
+/// The `std::fs::OpenOptions` for `OpenOptions.open`'s bits (read 1, write
+/// 2, append 4, truncate 8, create 16, create_new 32), or `InvalidInput`
+/// for a combination that opens nothing: no access mode, `truncate` /
+/// `create` / `create_new` without `write` or `append`, or `create_new`
+/// with `truncate` (docs/library/io.md § Files, B-2026-10-15-28). The
+/// runtime's `karac_mir_file` checks the same.
+pub fn open_options(flags: i64) -> io::Result<std::fs::OpenOptions> {
+    let bit = |b: i64| flags & b != 0;
+    let (read, write, append) = (bit(1), bit(2), bit(4));
+    let (truncate, create, create_new) = (bit(8), bit(16), bit(32));
+    let writes = write || append;
+    if !(read || writes)
+        || ((truncate || create || create_new) && !writes)
+        || (create_new && truncate)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "these options open nothing",
+        ));
+    }
+    let mut o = std::fs::OpenOptions::new();
+    o.read(read)
+        .write(write)
+        .append(append)
+        .truncate(truncate)
+        .create(create)
+        .create_new(create_new);
+    Ok(o)
+}

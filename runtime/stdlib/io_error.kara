@@ -9,14 +9,22 @@
 // `fn main() -> Result[(), IoError]` (e.g. `examples/word_count.kara`)
 // satisfies the entry-point `E: Display` bound and the runtime can
 // print a returned `Err(e)` as `Error: {e}`.
+//
+// `InvalidInput` (an argument the operation refuses: a negative length,
+// a negative `SeekFrom.Start`, an `OpenOptions` combination that opens
+// nothing) and `Unsupported` (an operation this platform does not have)
+// joined at B-2026-10-15-28. Every backend builds a variant by NAME, so
+// the order here is the documented one, not a runtime code.
 
 #[derive(Display)]
 enum IoError {
     NotFound,
     PermissionDenied,
     AlreadyExists,
+    InvalidInput,
     UnexpectedEof,
     InvalidUtf8,
     Interrupted,
+    Unsupported,
     Other(String),
 }

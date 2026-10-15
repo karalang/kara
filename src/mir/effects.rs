@@ -843,13 +843,14 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         (
             "fs" | "FileSystem",
             "write" | "append" | "remove" | "create_dir" | "create_dir_all" | "remove_file"
-            | "remove_dir" | "remove_dir_all" | "rename",
+            | "remove_dir" | "remove_dir_all" | "rename" | "write_bytes",
         ) => {
             vec![(Writes, "FileSystem", None), (Blocks, "", None), HEAP]
         }
         (
             "fs" | "FileSystem",
-            "read_to_string" | "read" | "read_lines" | "exists" | "metadata" | "read_dir",
+            "read_to_string" | "read" | "read_lines" | "exists" | "metadata" | "read_dir"
+            | "read_bytes",
         ) => {
             vec![(Reads, "FileSystem", None), (Blocks, "", None), HEAP]
         }
@@ -864,6 +865,17 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // Seeking moves the open file's position, which every later read
         // or write on it observes.
         ("File", "seek") => vec![(Writes, "File", Some(0)), (Blocks, "", None)],
+        // The options are run-time values, so opening has both effects
+        // (B-2026-10-15-28).
+        ("OpenOptions", "open") => vec![
+            (Reads, "FileSystem", None),
+            (Writes, "FileSystem", None),
+            (Blocks, "", None),
+            HEAP,
+        ],
+        ("File", "set_len") => vec![(Writes, "File", Some(0)), (Blocks, "", None)],
+        // Building the options touches nothing.
+        ("File", "options") | ("OpenOptions", _) => vec![],
         ("Stdin", "read_line" | "read_to_string" | "lines") => {
             vec![(Reads, "Stdin", None), (Blocks, "", None), HEAP]
         }

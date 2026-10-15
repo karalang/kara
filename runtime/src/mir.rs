@@ -1384,16 +1384,17 @@ extern "C" {
 /// `read_to_string(path)` (1), `read_lines(path)` (2), `exists(path)` (3),
 /// `metadata(path)` (4), `read_dir(path)` (5), `create_dir` (6),
 /// `create_dir_all` (7), `remove_file` (8), `remove_dir` (9),
-/// `remove_dir_all` (10), `rename(path, text)` (11) and `copy(path, text)`
-/// (12), on the real file system (docs/library/io.md § Files). Returns -1
+/// `remove_dir_all` (10), `rename(path, text)` (11), `copy(path, text)`
+/// (12), `read_bytes(path)` (13) and `write_bytes(path, text)` (14), on the
+/// real file system (docs/library/io.md § Files). Returns -1
 /// on success, with the text read as a `String` (or the lines or entry
 /// names as a `Vec[String]`) at `out`, `copy`'s byte count at `value[0]`,
 /// or `metadata`'s size, is-file, is-dir and modification time (ms since
 /// the Unix epoch) at `value[0..4]`; `exists` returns 1 or 0. Otherwise the
-/// index of the failure's `IoError` variant (in declaration order:
-/// `NotFound`, `PermissionDenied`, `AlreadyExists`, `UnexpectedEof`,
-/// `InvalidUtf8`, `Interrupted`, `Other`), with `Other`'s message as a
-/// `String` at `out`. The interpreter's twin is src/mir/fs.rs.
+/// code of the failure's `IoError` variant (`NotFound`, `PermissionDenied`,
+/// `AlreadyExists`, `UnexpectedEof`, `InvalidUtf8`, `Interrupted`, `Other`,
+/// `InvalidInput`, `Unsupported`: codegen's `IO_ERRORS`), with `Other`'s
+/// message as a `String` at `out`. The interpreter's twin is src/mir/fs.rs.
 ///
 /// # Safety
 /// Each pointer is readable for its length; `out` is writable for a
@@ -1450,6 +1451,11 @@ pub unsafe extern "C" fn karac_mir_fs(
         9 => std::fs::remove_dir(&path),
         10 => std::fs::remove_dir_all(&path),
         11 => std::fs::rename(&path, to()),
+        // `read_bytes` / `write_bytes` (B-2026-10-15-28): the bytes as a
+        // `Vec[u8]`, which has a `String`'s layout.
+        // SAFETY: `out` is writable for a `Vec[u8]`.
+        13 => std::fs::read(&path).map(|b| unsafe { string_of(out, &b) }),
+        14 => std::fs::write(&path, text),
         // SAFETY: `value` is writable for an `i64`.
         _ => std::fs::copy(&path, to()).map(|n| unsafe { *value = n as i64 }),
     };
@@ -1464,6 +1470,8 @@ pub unsafe extern "C" fn karac_mir_fs(
         K::UnexpectedEof => 3,
         K::InvalidData => 4,
         K::Interrupted => 5,
+        K::InvalidInput => 7,
+        K::Unsupported => 8,
         _ => {
             // SAFETY: `out` is writable for a `String`.
             unsafe { string_of(out, e.to_string().as_bytes()) };

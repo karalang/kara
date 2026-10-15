@@ -1727,12 +1727,20 @@ impl<'a> EffectChecker<'a> {
                 "File.flush",
                 "File.sync_all",
                 "File.sync_data",
+                "File.set_len",
             ] {
                 let mut set = EffectSet::new();
                 set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
                 self.inferred_effects
                     .insert(self.interner.intern(fn_name), set);
             }
+            // `OpenOptions.open` reads or writes as its run-time options
+            // say, so it has both (B-2026-10-15-28).
+            let mut set = EffectSet::new();
+            set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span));
+            set.add(writes_fs.clone(), EffectOrigin::Direct(builtin_span));
+            self.inferred_effects
+                .insert(self.interner.intern("OpenOptions.open"), set);
             // Phase 8 `BufReader[R]` slice: the buffered read methods carry
             // `reads(FileSystem)` (the v1 concrete binding for `R = File`).
             // Constructors `BufReader.new` / `.with_capacity` wrap an

@@ -1599,7 +1599,35 @@ impl<'a> Interp<'a> {
             ("Channel" | "Sender" | "Receiver" | "BoundedChannel", _) => {
                 self.channel_method(name, base, method, args, arg_tys, ret)
             }
-            ("File", _) => self.file_method(name, method, args, arg_tys, ret),
+            ("File", m) if m != "options" => self.file_method(name, method, args, arg_tys, ret),
+            ("OpenOptions", "open") => self.file_method(name, "options_open", args, arg_tys, ret),
+            // `File.options()` and the builder (B-2026-10-15-28): the bits
+            // read 1, write 2, append 4, truncate 8, create 16, create_new 32.
+            ("File", "options") => Ok(Value::Agg(vec![Value::Int(0)])),
+            ("OpenOptions", _) => {
+                let bit = match method {
+                    "read" => 1,
+                    "write" => 2,
+                    "append" => 4,
+                    "truncate" => 8,
+                    "create" => 16,
+                    "create_new" => 32,
+                    _ => return err(format!("call of unknown function {name}")),
+                };
+                let (held, on) = match args.as_slice() {
+                    [Value::Ref(at), Value::Bool(on)] => (self.slot(at)?, *on),
+                    [v, Value::Bool(on)] => (v.clone(), *on),
+                    _ => return err(format!("{name}: wrong arguments")),
+                };
+                let Value::Agg(fields) = held else {
+                    return err(format!("{name} of {held:?}"));
+                };
+                let Some(Value::Int(flags)) = fields.first() else {
+                    return err(format!("{name} of options {fields:?}"));
+                };
+                let flags = if on { *flags | bit } else { *flags & !bit };
+                Ok(Value::Agg(vec![Value::Int(flags)]))
+            }
             ("BufReader" | "BufWriter" | "LinesIter", _) => {
                 self.buf_method(name, base, method, args, ret)
             }
@@ -3785,6 +3813,29 @@ impl<'a> Interp<'a> {
         ret: Ty,
     ) -> R<Value> {
         use std::io::{Read, Seek, Write};
+        // `File.options()...open(path)`: the options' bits, then the path
+        // (B-2026-10-15-28).
+        if let ("options_open", [opts, path]) = (method, args.as_slice()) {
+            let held = match opts {
+                Value::Ref(at) => self.slot(at)?,
+                other => other.clone(),
+            };
+            let Value::Agg(fields) = held else {
+                return err(format!("{name} of {held:?}"));
+            };
+            let Some(Value::Int(flags)) = fields.first() else {
+                return err(format!("{name} of options {fields:?}"));
+            };
+            let text = self.string_at(path)?;
+            return match crate::mir::fs::open_options(*flags as i64).and_then(|o| o.open(text)) {
+                Ok(f) => {
+                    self.files.push(Some(f));
+                    let file = Value::Agg(vec![Value::Int(self.files.len() as i128)]);
+                    self.variant_named(ret, None, "Ok", vec![file])
+                }
+                Err(e) => self.io_err(ret, e),
+            };
+        }
         if let ("open" | "create" | "append", [path]) = (method, args.as_slice()) {
             let text = self.string_at(path)?;
             // `append` is a method name the builder hands its argument to
@@ -3842,6 +3893,11 @@ impl<'a> Interp<'a> {
                 f.write(&bytes).map(|n| Value::Int(n as i128))
             }
             ("flush", []) => f.flush().map(|()| Value::Unit),
+            ("set_len", [Value::Int(n)]) if *n < 0 => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a negative file length",
+            )),
+            ("set_len", [Value::Int(n)]) => f.set_len(*n as u64).map(|()| Value::Unit),
             ("sync_all", []) => f.sync_all().map(|()| Value::Unit),
             ("sync_data", []) => f.sync_data().map(|()| Value::Unit),
             ("seek", [whence, Value::Int(off)]) => {
@@ -5381,6 +5437,40 @@ impl<'a> Interp<'a> {
     /// failure is an `Err(IoError)` with legacy's variant for its kind.
     fn fs_method(&mut self, method: &str, args: Vec<Value>, ret: Ty) -> R<Value> {
         let name = format!("FileSystem.{method}");
+        // The byte twins (B-2026-10-15-28): a `Vec[u8]` out, a `Slice[u8]`
+        // in.
+        if method == "read_bytes" || method == "write_bytes" {
+            let path = match args.first() {
+                Some(p) => self.string_at(p)?,
+                None => return err(format!("{name}: wrong arguments")),
+            };
+            let res = if method == "read_bytes" {
+                std::fs::read(&path).map(|bytes| {
+                    let elems = bytes
+                        .into_iter()
+                        .map(|b| Value::Int(i128::from(b)))
+                        .collect();
+                    self.alloc_box("Vec[u8]", Value::Agg(elems))
+                })
+            } else {
+                let Some(buf) = args.get(1) else {
+                    return err(format!("{name}: wrong arguments"));
+                };
+                let (base, lo, len) = self.view_of(buf)?;
+                let mut bytes = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    match self.slot(&base.child(lo + i))? {
+                        Value::Int(b) => bytes.push(b as u8),
+                        other => return err(format!("{name} of a byte holding {other:?}")),
+                    }
+                }
+                std::fs::write(&path, bytes).map(|()| Value::Unit)
+            };
+            return match res {
+                Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
+                Err(e) => self.io_err(ret, e),
+            };
+        }
         let paths = args
             .iter()
             .map(|a| self.string_at(a))
@@ -5450,9 +5540,11 @@ impl<'a> Interp<'a> {
             K::NotFound => ("NotFound", None),
             K::PermissionDenied => ("PermissionDenied", None),
             K::AlreadyExists => ("AlreadyExists", None),
+            K::InvalidInput => ("InvalidInput", None),
             K::UnexpectedEof => ("UnexpectedEof", None),
             K::InvalidData => ("InvalidUtf8", None),
             K::Interrupted => ("Interrupted", None),
+            K::Unsupported => ("Unsupported", None),
             _ => ("Other", Some(e.to_string())),
         };
         let fields = match msg {
@@ -10629,6 +10721,8 @@ const FS_METHODS: &[&str] = &[
     "remove_dir_all",
     "rename",
     "copy",
+    "read_bytes",
+    "write_bytes",
 ];
 
 const VEC_MORE_METHODS: &[&str] = &[

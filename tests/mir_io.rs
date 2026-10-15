@@ -84,6 +84,7 @@ const FILES: &str = r#"
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "not found".to_string(),
+        IoError.InvalidInput => "invalid input".to_string(),
         IoError.Other(m) => f"other {m}",
         _ => "some other error".to_string(),
     }
@@ -144,7 +145,7 @@ fn file_and_clock_natives_match_the_interpreter() {
     assert_eq!(
         interp,
         "wrote 3\nsynced\ndata synced\nappended 3\nflushed\ncontents 6 AB\nCD\npos 1\n\
-         read 3 66 10 67\nend 4\ncur 4\nother invalid seek to a negative position\n\
+         read 3 66 10 67\nend 4\ncur 4\ninvalid input\n\
          not found\nclock true\n"
     );
     if let Some(built) = built {
@@ -1032,6 +1033,77 @@ fn channel_and_task_group_natives_match_the_interpreter() {
     assert_eq!(
         interp,
         "sent 1\nfull 3\ngot 1\n2\nclosed\na\nb\nclosed x\n42\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
+/// `File.options()` and its builder, `set_len`, `fs.read_bytes` /
+/// `write_bytes` and the `InvalidInput` refusals (docs/library/io.md § Files,
+/// B-2026-10-15-28): a page rewritten in place, a file cut short, a lock
+/// file made with `create_new`, and the combinations that open nothing.
+const OPEN_OPTIONS: &str = r#"
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found",
+        IoError.AlreadyExists => "already exists",
+        IoError.InvalidInput => "invalid input",
+        IoError.Unsupported => "unsupported",
+        IoError.Other(m) => f"other {m}",
+        _ => "else",
+    }
+}
+fn main() {
+    let p = "DIR/db.bin".to_string();
+    let _ = fs.remove_file("DIR/lock");
+    let data: Vec[u8] = vec![1, 2, 3, 4, 5, 6, 7, 8];
+    match fs.write_bytes(p.clone(), data.as_slice()) { Ok(_) => println("wrote 8"), Err(e) => println(show(e)) }
+    match fs.read_bytes(p.clone()) { Ok(b) => println(f"read {b.len()} {b[0]} {b[7]}"), Err(e) => println(show(e)) }
+    match File.options().read(true).write(true).open(p.clone()) {
+        Ok(f) => {
+            let _ = f.seek(SeekFrom.Start, 2);
+            let patch: Vec[u8] = vec![30, 40];
+            let _ = f.write(patch.as_slice());
+            match f.set_len(6) { Ok(_) => println("cut to 6"), Err(e) => println(show(e)) }
+            match f.set_len(-1) { Ok(_) => println("negative ok?"), Err(e) => println(show(e)) }
+            match f.seek(SeekFrom.Start, -1) { Ok(_) => println("seek ok?"), Err(e) => println(show(e)) }
+        }
+        Err(e) => println(show(e)),
+    }
+    match fs.read_bytes(p.clone()) { Ok(b) => println(f"now {b.len()} {b[1]} {b[2]} {b[3]} {b[5]}"), Err(e) => println(show(e)) }
+    match File.options().read(true).write(true).open("DIR/nope.bin") { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().write(true).create_new(true).open(p.clone()) { Ok(_) => println("created?"), Err(e) => println(show(e)) }
+    match File.options().write(true).create_new(true).open("DIR/lock") { Ok(_) => println("lock made"), Err(e) => println(show(e)) }
+    match File.options().open(p.clone()) { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().read(true).truncate(true).open(p.clone()) { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().write(true).create_new(true).truncate(true).open(p.clone()) { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().read(true).append(true).open(p.clone()) {
+        Ok(f) => {
+            let tail: Vec[u8] = vec![9];
+            let _ = f.write(tail.as_slice());
+            let mut buf: Array[u8, 16] = [0; 16];
+            let _ = f.seek(SeekFrom.Start, 0);
+            match f.read(mut buf) { Ok(n) => println(f"appended, {n} bytes, last {buf[n - 1]}"), Err(e) => println(show(e)) }
+        }
+        Err(e) => println(show(e)),
+    }
+    match File.options().write(true).create(true).open(p.clone()) { Ok(_) => println("kept"), Err(e) => println(show(e)) }
+    match fs.metadata(p.clone()) { Ok(m) => println(f"len {m.len}"), Err(e) => println(show(e)) }
+    match fs.read_bytes("DIR/missing") { Ok(_) => println("read?"), Err(e) => println(show(e)) }
+}
+"#;
+
+#[test]
+fn open_options_set_len_and_bytes_match_the_interpreter() {
+    let dir = Scratch::new("options");
+    let src = OPEN_OPTIONS.replace("DIR", &dir.path().to_string_lossy());
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(
+        interp,
+        "wrote 8\nread 8 1 8\ncut to 6\ninvalid input\ninvalid input\nnow 6 2 30 40 6\n\
+         not found\nalready exists\nlock made\ninvalid input\ninvalid input\ninvalid input\n\
+         appended, 7 bytes, last 9\nkept\nlen 7\nnot found\n"
     );
     if let Some(built) = built {
         assert_eq!(built, interp);

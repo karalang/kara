@@ -660,9 +660,11 @@ fn test_var_error_not_unicode_maps_to_io_error_invalid_utf8() {
              IoError.NotFound => println(\"not_found\"),
              IoError.PermissionDenied => println(\"perm_denied\"),
              IoError.AlreadyExists => println(\"already_exists\"),
+             IoError.InvalidInput => println(\"invalid_input\"),
              IoError.UnexpectedEof => println(\"eof\"),
              IoError.InvalidUtf8 => println(\"invalid_utf8\"),
              IoError.Interrupted => println(\"interrupted\"),
+             IoError.Unsupported => println(\"unsupported\"),
              IoError.Other(_) => println(\"other\"),
          }
      }");

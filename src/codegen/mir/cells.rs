@@ -472,11 +472,15 @@ impl<'ctx> Cx<'ctx, '_> {
             "remove_dir_all" => 10,
             "rename" => 11,
             "copy" => 12,
+            "read_bytes" => 13,
+            "write_bytes" => 14,
             _ => return Ok(None),
         };
         let dty = self.place_type(dest)?;
         let (pp, pn) = self.str_parts(&args[0])?;
         let (tp, tn) = match args.get(1) {
+            // `write_bytes`' content is a `Slice[u8]` (B-2026-10-15-28).
+            Some(t) if op == 14 => self.view_of(t)?,
             Some(t) => self.str_parts(t)?,
             None => (self.ptr_ty().const_null(), self.i64(0)),
         };
@@ -530,7 +534,7 @@ impl<'ctx> Cx<'ctx, '_> {
             cx.store_tag(d, dty, ok)?;
             let at = cx.offset(d, ok_off)?;
             match op {
-                1 | 2 | 5 => cx.copy(at, out, okt)?,
+                1 | 2 | 5 | 13 => cx.copy(at, out, okt)?,
                 12 => {
                     let n = cx.load_i64(value)?;
                     cx.store(at, n.into())?;
@@ -556,16 +560,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             Ok(())
         })?;
-        let names = [
-            "NotFound",
-            "PermissionDenied",
-            "AlreadyExists",
-            "UnexpectedEof",
-            "InvalidUtf8",
-            "Interrupted",
-            "Other",
-        ];
-        for (k, name) in names.iter().enumerate() {
+        for (k, name) in super::io::IO_ERRORS.iter().enumerate() {
             let v = self.variant_of(et, name)?;
             let is = self
                 .builder

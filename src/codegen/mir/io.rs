@@ -22,7 +22,7 @@ fn e<T: ToString>(x: T) -> String {
 }
 
 /// The `IoError` variants by the runtime's code for them.
-const IO_ERRORS: [&str; 7] = [
+pub(super) const IO_ERRORS: [&str; 9] = [
     "NotFound",
     "PermissionDenied",
     "AlreadyExists",
@@ -30,6 +30,8 @@ const IO_ERRORS: [&str; 7] = [
     "InvalidUtf8",
     "Interrupted",
     "Other",
+    "InvalidInput",
+    "Unsupported",
 ];
 
 /// The `TcpError` variants by the runtime's code for them.
@@ -51,7 +53,10 @@ impl<'ctx> Cx<'ctx, '_> {
         dest: &Place,
     ) -> R<Option<()>> {
         match (base, method) {
+            ("File", "options") => self.options_native(method, args, dest),
             ("File", _) => self.file_native(method, args, dest),
+            ("OpenOptions", "open") => self.file_native("options_open", args, dest),
+            ("OpenOptions", _) => self.options_native(method, args, dest),
             ("BufReader" | "BufWriter" | "LinesIter", _) => {
                 self.buf_native(base, method, args, dest)
             }
@@ -82,6 +87,52 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// `File.options()` and the `OpenOptions` builder (B-2026-10-15-28),
+    /// inline: `OpenOptions { flags }` with the bits read 1, write 2,
+    /// append 4, truncate 8, create 16, create_new 32, as the interpreter
+    /// sets them.
+    fn options_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let bit: u64 = match method {
+            "options" => 0,
+            "read" => 1,
+            "write" => 2,
+            "append" => 4,
+            "truncate" => 8,
+            "create" => 16,
+            "create_new" => 32,
+            _ => return Ok(None),
+        };
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let d = self.offset(d, self.field_offset(dty, None, 0)?)?;
+        if bit == 0 {
+            self.store(d, self.i64(0).into())?;
+            return Ok(Some(()));
+        }
+        let (at, ot) = self.behind_refs(&args[0])?;
+        let at = self.offset(at, self.field_offset(ot, None, 0)?)?;
+        let flags = self.load_i64(at)?;
+        let bt = self.operand_type(&args[1])?;
+        let on = self.operand_ptr(&args[1])?;
+        let on = self.load(on, bt)?.into_int_value();
+        let i1 = self.llcx.bool_type();
+        let on = if on.get_type() == i1 {
+            on
+        } else {
+            self.builder
+                .build_int_compare(IntPredicate::NE, on, on.get_type().const_zero(), "")
+                .map_err(e)?
+        };
+        let set = self.builder.build_or(flags, self.i64(bit), "").map_err(e)?;
+        let clear = self
+            .builder
+            .build_and(flags, self.i64(!bit), "")
+            .map_err(e)?;
+        let v = self.builder.build_select(on, set, clear, "").map_err(e)?;
+        self.store(d, v)?;
+        Ok(Some(()))
+    }
+
     /// `File.open` / `create` / `append` and the handle methods, through
     /// `karac_mir_file(op, handle, ptr, len, n, value, msg)`.
     fn file_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
@@ -95,12 +146,22 @@ impl<'ctx> Cx<'ctx, '_> {
             "sync_all" => 6,
             "sync_data" => 7,
             "seek" => 8,
+            "set_len" => 9,
+            "options_open" => 10,
             _ => return Ok(None),
         };
         let null = self.ptr_ty().const_null();
         let (handle, ptr, len, n) = if op <= 2 {
             let (p, n) = self.str_parts(&args[0])?;
             (null, p, n, self.i64(0))
+        } else if op == 10 {
+            // `OpenOptions { flags }`, by value or behind a reference, then
+            // the path (B-2026-10-15-28).
+            let (at, ot) = self.behind_refs(&args[0])?;
+            let at = self.offset(at, self.field_offset(ot, None, 0)?)?;
+            let flags = self.load_i64(at)?;
+            let (p, n) = self.str_parts(&args[1])?;
+            (null, p, n, flags)
         } else {
             let (at, _) = self.behind_refs(&args[0])?;
             let handle = self.load_ptr(at)?;
@@ -127,6 +188,11 @@ impl<'ctx> Cx<'ctx, '_> {
                     let off = self.operand_ptr(&args[2])?;
                     let off = self.load_i64(off)?;
                     (handle, null, off, whence)
+                }
+                "set_len" => {
+                    let l = self.operand_ptr(&args[1])?;
+                    let l = self.load_i64(l)?;
+                    (handle, null, l, self.i64(0))
                 }
                 _ => (handle, null, self.i64(0), self.i64(0)),
             }

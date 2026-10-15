@@ -4817,6 +4817,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 field_word_offsets.insert((*v).to_string(), Vec::new());
                 field_drop_kinds.insert((*v).to_string(), Vec::new());
             }
+            // `InvalidInput` and `Unsupported` joined the enum after
+            // `Other` was fixed at 6 here and in `file.rs`'s codes
+            // (B-2026-10-15-28). This runtime never produces them (it
+            // reports both as `Other`), but a `match` naming them needs a
+            // tag.
+            for (v, tag) in [("InvalidInput", 7u64), ("Unsupported", 8u64)] {
+                tags.insert(v.to_string(), tag);
+                field_counts.insert(v.to_string(), 0usize);
+                field_word_offsets.insert(v.to_string(), Vec::new());
+                field_drop_kinds.insert(v.to_string(), Vec::new());
+            }
             tags.insert("Other".to_string(), 6u64);
             field_counts.insert("Other".to_string(), 1usize);
             field_word_offsets.insert("Other".to_string(), vec![(0, 3usize)]);

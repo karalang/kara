@@ -857,6 +857,11 @@ If either condition is absent, skip — the stdlib trait would be a bet on a sha
 - **Bytes-level stdin.** `stdin.read_line_bytes() -> Result[Vec[u8], IoError]`, which skips UTF-8 validation. The v1 stdin reads are text-only ([library/io.md](library/io.md)).
 - **Typed buffering traits.** `BufRead`-style traits that tell buffered and unbuffered readers apart in their types. v1 buffers by default (line-buffered stdin and stdout, block-buffered files) and provides `BufReader` and `BufWriter`.
 
+### Positional File I/O and Advisory Locking
+
+- **Positional reads and writes.** `f.read_at(buf, offset)` / `f.write_at(buf, offset)` (POSIX `pread` / `pwrite`) read or write at an offset without using the cursor. v1 rewrites a page in place with `seek` and then `read` / `write` on a file opened with `File.options().read(true).write(true)` ([library/io.md](library/io.md#files)). Two reasons to wait: a `File` has one owner, so nothing gains from reads that leave the cursor alone; and Windows' `seek_read` moves the cursor where `pread` does not, which needs a portability rule of its own.
+- **Advisory file locking.** `f.lock()` / `f.try_lock()` / `f.unlock()` (`flock`, `LockFileEx`), shared and exclusive. A write-ahead log or a lock file wants it. v1's `File.options().write(true).create_new(true)` makes a lock file that only one process can create, which is the portable half.
+
 ### Language-Integrated Query (SQL DSL) and ORM
 
 Whether Kāra grows a language-level query mechanism — either an embedded query syntax (LINQ / F# query expressions / sqlx-style compile-time-checked SQL strings) or a struct-to-table ORM framework (derive-macro-driven mapping, Diesel / SQLAlchemy / ActiveRecord shape).

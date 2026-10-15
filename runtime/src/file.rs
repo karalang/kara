@@ -81,6 +81,24 @@ pub struct KaracFile {
     inner: Mutex<std::fs::File>,
 }
 
+impl KaracFile {
+    /// A handle over `f`, for the MIR backends' `OpenOptions.open`.
+    pub(crate) fn new(f: std::fs::File) -> Self {
+        KaracFile {
+            inner: Mutex::new(f),
+        }
+    }
+
+    /// Runs `op` on the file, holding its lock.
+    pub(crate) fn with<T>(&self, op: impl FnOnce(&mut std::fs::File) -> T) -> T {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        op(&mut guard)
+    }
+}
+
 /// Unified result shape for every File operation. Codegen (slice F4)
 /// destructures this into the surface-level `Result[T, IoError]`
 /// — `value` carries the success payload (handle as `*mut KaracFile`
@@ -204,13 +222,22 @@ pub(crate) fn err(e: &std::io::Error) -> KaracIoResult {
             error_msg_len: 0,
         };
     }
+    // The MIR backends tell two kinds apart that this table folds into
+    // `Other` (B-2026-10-15-28): `_pad` names them for `mir_io::io_code`
+    // (1 `InvalidInput`, 2 `Unsupported`). The legacy backends never read
+    // it.
+    let sub = match e.kind() {
+        ErrorKind::InvalidInput => 1,
+        ErrorKind::Unsupported => 2,
+        _ => 0,
+    };
     let msg = e.to_string();
     let bytes = msg.as_bytes();
     if bytes.is_empty() {
         return KaracIoResult {
             value: 0,
             error_kind: 7,
-            _pad: 0,
+            _pad: sub,
             error_msg_ptr: ptr::null_mut(),
             error_msg_len: 0,
         };
@@ -227,7 +254,7 @@ pub(crate) fn err(e: &std::io::Error) -> KaracIoResult {
     KaracIoResult {
         value: 0,
         error_kind: 7,
-        _pad: 0,
+        _pad: sub,
         error_msg_ptr: buf,
         error_msg_len: bytes.len() as i64,
     }

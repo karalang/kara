@@ -63,6 +63,21 @@ unsafe fn io_code(r: &KaracIoResult, value: *mut i64, msg: *mut RawVec) -> i32 {
             unsafe { value.write(r.value) };
             -1
         }
+        7 if r._pad == 1 || r._pad == 2 => {
+            // `InvalidInput` / `Unsupported`, which `file::err` folds into
+            // `Other` for the legacy backends: no message.
+            let len = usize::try_from(r.error_msg_len).unwrap_or(0);
+            if !r.error_msg_ptr.is_null() && len > 0 {
+                // SAFETY: as for an `Other` message below.
+                unsafe {
+                    std::alloc::dealloc(
+                        r.error_msg_ptr,
+                        std::alloc::Layout::array::<u8>(len).expect("io error msg layout"),
+                    );
+                }
+            }
+            6 + r._pad
+        }
         7 => {
             let len = usize::try_from(r.error_msg_len).unwrap_or(0);
             if r.error_msg_ptr.is_null() || len == 0 {
@@ -98,12 +113,14 @@ fn blank() -> KaracIoResult {
 
 /// `File.open` / `create` / `append` (op 0-2, the path at `ptr[..len]`),
 /// `read` / `write` (3-4, the buffer at `ptr[..len]`), `flush`, `sync_all`,
-/// `sync_data` (5-7) and `seek` (8, `n` the whence and `len` the offset),
-/// on the handle `handle` for every op past `append`.
+/// `sync_data` (5-7), `seek` (8, `n` the whence and `len` the offset) and
+/// `set_len` (9, `len` the length), on the handle `handle` for every op
+/// past `append`; `OpenOptions.open` (10, `n` the options' bits, the path at
+/// `ptr[..len]`).
 ///
 /// # Safety
 /// `ptr` is valid for `len` bytes (written by `read`); `handle` is a live
-/// file handle for ops 3-8; `value` and `msg` as [`io_code`] has them.
+/// file handle for ops 3-9; `value` and `msg` as [`io_code`] has them.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_file(
     op: i32,
@@ -118,11 +135,41 @@ pub unsafe extern "C" fn karac_mir_file(
     let mut r = blank();
     if op == 8 && n == 0 && len < 0 {
         // `SeekFrom.Start` of a negative offset, refused before the OS
-        // sees it, with the interpreter's message rather than the
-        // platform's (`file.rs` hands it on as a huge unsigned position).
-        // SAFETY: the caller's contract.
-        unsafe { string_of(msg, b"invalid seek to a negative position") };
-        return 6;
+        // sees it, as the interpreter refuses it (`file.rs` hands it on
+        // as a huge unsigned position): `InvalidInput`.
+        return 7;
+    }
+    if op == 9 || op == 10 {
+        // `set_len` (B-2026-10-15-28): `len` the new length, which is
+        // `InvalidInput` when negative, on the file at `handle`.
+        // `OpenOptions.open`: `n` the options' bits, the path at
+        // `ptr[..len]`.
+        let res = if op == 9 {
+            if len < 0 {
+                return 7;
+            }
+            // SAFETY: the caller's contract: a live handle.
+            let file = unsafe { &*handle };
+            file.with(|f| f.set_len(len as u64)).map(|()| 0)
+        } else {
+            // SAFETY: the caller's contract.
+            let path = String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(ptr, usize::try_from(len).unwrap_or(0))
+            })
+            .into_owned();
+            open_options(n)
+                .and_then(|o| o.open(path))
+                .map(|f| Box::into_raw(Box::new(KaracFile::new(f))) as i64)
+        };
+        return match res {
+            Ok(v) => {
+                // SAFETY: the caller's contract.
+                unsafe { value.write(v) };
+                -1
+            }
+            // SAFETY: the caller's contract.
+            Err(e) => unsafe { io_error_code(&e, msg) },
+        };
     }
     // SAFETY: the caller's contract, which is each callee's.
     unsafe {
@@ -139,6 +186,33 @@ pub unsafe extern "C" fn karac_mir_file(
         }
         io_code(&r, value, msg)
     }
+}
+
+/// The `std::fs::OpenOptions` for `OpenOptions.open`'s bits, or
+/// `InvalidInput` for a combination that opens nothing. The interpreter's
+/// `mir::fs::open_options` is the same function (B-2026-10-15-28).
+fn open_options(flags: i64) -> std::io::Result<std::fs::OpenOptions> {
+    let bit = |b: i64| flags & b != 0;
+    let (read, write, append) = (bit(1), bit(2), bit(4));
+    let (truncate, create, create_new) = (bit(8), bit(16), bit(32));
+    let writes = write || append;
+    if !(read || writes)
+        || ((truncate || create || create_new) && !writes)
+        || (create_new && truncate)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "these options open nothing",
+        ));
+    }
+    let mut o = std::fs::OpenOptions::new();
+    o.read(read)
+        .write(write)
+        .append(append)
+        .truncate(truncate)
+        .create(create)
+        .create_new(create_new);
+    Ok(o)
 }
 
 /// A `BufReader` or `BufWriter` over the `File` its constructor took.
@@ -194,6 +268,8 @@ unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 {
         K::UnexpectedEof => 3,
         K::InvalidData => 4,
         K::Interrupted => 5,
+        K::InvalidInput => 7,
+        K::Unsupported => 8,
         _ => {
             // SAFETY: the caller's contract.
             unsafe { string_of(msg, e.to_string().as_bytes()) };

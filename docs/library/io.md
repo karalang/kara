@@ -52,7 +52,12 @@ fn fs.remove_dir(path: Str) -> Result[(), IoError] with writes(FileSystem) block
 fn fs.remove_dir_all(path: Str) -> Result[(), IoError] with writes(FileSystem) blocks
 fn fs.rename(from: Str, to: Str) -> Result[(), IoError] with writes(FileSystem) blocks
 fn fs.copy(from: Str, to: Str) -> Result[i64, IoError] with reads(FileSystem) writes(FileSystem) blocks
+
+fn fs.read_bytes(path: Str) -> Result[Vec[u8], IoError] with reads(FileSystem) blocks
+fn fs.write_bytes(path: Str, content: Slice[u8]) -> Result[(), IoError] with writes(FileSystem) blocks
 ```
+
+`read_bytes` and `write_bytes` are the byte forms of `read_to_string` and `write`: the whole file as bytes, with no UTF-8 check.
 
 `read_lines` splits on `\n` and drops a trailing `\r` from each line.
 
@@ -64,13 +69,13 @@ fn fs.copy(from: Str, to: Str) -> Result[i64, IoError] with reads(FileSystem) wr
 struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64 }
 ```
 
-`len` is the size in bytes and `modified_ms` the last modification time in milliseconds since the Unix epoch (negative before it). Fields will be added; build a `Metadata` only by calling `metadata`.
+`len` is the size in bytes and `modified_ms` the last modification time in milliseconds since the Unix epoch (negative before it). Fields will be added, so build a `Metadata` only by calling `metadata`, and read its fields by name rather than destructuring the whole struct.
 
 **`read_dir`** returns the names of the entries (not paths), without `.` and `..`, **sorted byte-wise on their UTF-8 names**, so a program lists a directory the same way on every OS. A name that is not valid UTF-8 makes the call fail with `InvalidUtf8`.
 
 `create_dir` fails with `AlreadyExists` if the path exists; `create_dir_all` creates the missing parents and succeeds if the directory is already there. `remove_dir` removes an empty directory only; `remove_dir_all` removes a directory and everything under it, without following symbolic links out of it.
 
-**`rename`** replaces `to` if it exists. On one file system it is atomic, which makes "write a temporary file, then rename it over the target" the way to update a file safely; it is not atomic across file systems, where it may fail. On Windows it fails if `to` is a directory, and replacing an existing file can fail while another process holds it open. `copy` copies a file's contents and permissions and returns the number of bytes copied.
+**`rename`** replaces `to` if it exists. On one file system it is atomic, which makes "write a temporary file, then rename it over the target" the way to update a file safely. Across file systems it fails with an `IoError` (`Other`). On Windows it fails if `to` is a directory, and replacing an existing file can fail while another process holds it open. `copy` copies a file's contents and permissions and returns the number of bytes copied.
 
 **Paths are borrowed.** Every function that takes a path or a name takes it as `Str`, and so do the `File` constructors. Opening a file reads the path and does not consume it, so the caller keeps its `String`.
 
@@ -81,18 +86,44 @@ struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64 }
 | `open` | `fn open(path: Str) -> Result[File, IoError] with reads(FileSystem) blocks` | Opens for reading |
 | `create` | `fn create(path: Str) -> Result[File, IoError] with writes(FileSystem) blocks` | Opens for writing, creating the file |
 | `append` | `fn append(path: Str) -> Result[File, IoError] with writes(FileSystem) blocks` | Opens for writing at the end |
+| `options` | `fn options() -> OpenOptions` | Options for `open`, with nothing set; see below |
 | `read` | `fn read(self, buf: mut Slice[u8]) -> Result[i64, IoError] with reads(self) blocks` | Reads into `buf`; returns the byte count |
 | `write` | `fn write(self, buf: Slice[u8]) -> Result[i64, IoError] with writes(self) blocks` | Returns the byte count written |
 | `flush` | `fn flush(self) -> Result[(), IoError] with writes(self) blocks` | Pushes buffered bytes to the OS |
 | `sync_all` | `fn sync_all(self) -> Result[(), IoError] with writes(self) blocks` | Flushes and makes contents and metadata durable |
 | `sync_data` | `fn sync_data(self) -> Result[(), IoError] with writes(self) blocks` | As `sync_all`, but may skip metadata |
 | `seek` | `fn seek(self, whence: SeekFrom, offset: i64) -> Result[i64, IoError] with reads(self) blocks` | Moves the cursor; returns the new position from the start. `f.seek(SeekFrom.Current, 0)` is the current position |
+| `set_len` | `fn set_len(self, len: i64) -> Result[(), IoError] with writes(self) blocks` | Cuts the file to `len` bytes, or extends it with zero bytes. The cursor does not move |
 
 ```kara
 enum SeekFrom { Start, Current, End }
 ```
 
-`Start` counts from byte 0 and rejects a negative offset; `Current` and `End` accept negative offsets, so `f.seek(SeekFrom.End, -4)` addresses the last four bytes. `flush` does not make data durable: it pushes userspace buffers to the OS, and only `sync_all` or `sync_data` survive a power failure.
+`Start` counts from byte 0 and rejects a negative offset with `InvalidInput`; `Current` and `End` accept negative offsets, so `f.seek(SeekFrom.End, -4)` addresses the last four bytes. `flush` does not make data durable: it pushes userspace buffers to the OS, and only `sync_all` or `sync_data` survive a power failure.
+
+`set_len` with a negative `len` is `InvalidInput`. A write past the end after `set_len` cuts the file fills the gap with zero bytes, as any write past the end does.
+
+**`OpenOptions`** (in `std.io`) is the general way to open a file. `File.options()` starts with nothing set; each method sets or clears one option and returns the options; `open` opens the file. Building the options touches no file, so only `open` has effects.
+
+| Method | Signature | Notes |
+|---|---|---|
+| `read` | `fn read(own self, on: bool) -> OpenOptions` | Open for reading |
+| `write` | `fn write(own self, on: bool) -> OpenOptions` | Open for writing |
+| `append` | `fn append(own self, on: bool) -> OpenOptions` | Write at the end of the file; implies `write` |
+| `truncate` | `fn truncate(own self, on: bool) -> OpenOptions` | Cut the file to length 0 on opening |
+| `create` | `fn create(own self, on: bool) -> OpenOptions` | Create the file if it is absent |
+| `create_new` | `fn create_new(own self, on: bool) -> OpenOptions` | Create the file; fail with `AlreadyExists` if it is there |
+| `open` | `fn open(self, path: Str) -> Result[File, IoError] with reads(FileSystem) writes(FileSystem) blocks` | Opens `path` with these options |
+
+`open` has both the reading and the writing effect, because which one it uses depends on options set at run time. A combination that opens nothing is `Err(InvalidInput)` from `open`, not a panic: no access mode (none of `read`, `write`, `append`); `truncate`, `create` or `create_new` without `write` or `append`; `create_new` with `truncate`; and `append` with `truncate`.
+
+The constructors above are shorthands:
+
+- `File.open(p)` is `File.options().read(true).open(p)`.
+- `File.create(p)` is `File.options().write(true).create(true).truncate(true).open(p)`.
+- `File.append(p)` is `File.options().append(true).create(true).open(p)`.
+
+A file updated in place opens with `File.options().read(true).write(true).open(p)`, so a mistyped path is `NotFound` rather than a new empty file; add `.create(true)` to create it when it is absent. A lock file is `File.options().write(true).create_new(true).open(p)`: only one opener can create it. Reads and writes at an offset that leave the cursor alone (`pread` / `pwrite`) and advisory locks are deferred ([deferred.md](../deferred.md#positional-file-io-and-advisory-locking)).
 
 **Buffered I/O** (in `std.io`). `BufReader[R]` and `BufWriter[W]` wrap an open `File` with an in-memory buffer, so that many small reads or writes cost few system calls. Construction touches no file, so the constructors have no effect.
 
@@ -123,9 +154,11 @@ enum IoError {
     NotFound,
     PermissionDenied,
     AlreadyExists,
+    InvalidInput,
     UnexpectedEof,
     InvalidUtf8,
     Interrupted,
+    Unsupported,
     Other(String),
 }
 
@@ -134,6 +167,8 @@ enum VarError {
     NotUnicode,
 }
 ```
+
+`InvalidInput` is an argument the operation refuses: a negative length or offset, or `OpenOptions` that open nothing. `Unsupported` is an operation this platform does not provide. `Other` carries the system's message for every other failure.
 
 Both are prelude types. `IoError` covers the standard streams and files; `VarError` covers environment-variable lookup ([time-random-env.md](time-random-env.md#env)). They are kept separate so that each has a tight set of variants: a handler for `env.var` does not have to consider `NotFound` or `PermissionDenied`. The two overlap on one point (`IoError.InvalidUtf8` and `VarError.NotUnicode` describe the same condition from different sources), and the library provides `impl From[VarError] for IoError` (`NotPresent` becomes `NotFound`, `NotUnicode` becomes `InvalidUtf8`), so a function that uses `?` on both can return `IoError` alone.
 

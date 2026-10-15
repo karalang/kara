@@ -146,6 +146,17 @@ impl FileSystem {
     fn copy(from: Str, to: Str) -> Result[i64, IoError] with reads(FileSystem) writes(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
+
+    // Byte twins of `read_to_string` / `write` (B-2026-10-15-28).
+    #[compiler_builtin]
+    fn read_bytes(path: Str) -> Result[Vec[u8], IoError] with reads(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn write_bytes(path: Str, content: Slice[u8]) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
 }
 
 // What `fs.metadata(path)` returns (it follows symbolic links): the size
@@ -224,6 +235,48 @@ impl File {
     // See the ledger row for that trade.
     #[compiler_builtin]
     fn seek(ref self, whence: own SeekFrom, offset: i64) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // B-2026-10-15-28. Truncates or zero-extends the file to `len` bytes
+    // without moving the cursor; a negative `len` is `InvalidInput`.
+    #[compiler_builtin]
+    fn set_len(ref self, len: i64) -> Result[(), IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // The general way to open a file: `File.options().read(true)
+    // .write(true).create(true).open(path)`. Building the options touches
+    // nothing.
+    #[compiler_builtin]
+    fn options() -> OpenOptions { OpenOptions { flags: 0 } }
+}
+
+// How `OpenOptions.open` opens a file (B-2026-10-15-28): one bit per
+// option, read 1, write 2, append 4, truncate 8, create 16, create_new 32.
+// Build one only with `File.options()`. Every method is a native of the
+// MIR backends; the builder's only set or clear a bit.
+struct OpenOptions { flags: i64 }
+
+impl OpenOptions {
+    #[compiler_builtin]
+    fn read(own self, on: bool) -> OpenOptions { self }
+
+    #[compiler_builtin]
+    fn write(own self, on: bool) -> OpenOptions { self }
+
+    #[compiler_builtin]
+    fn append(own self, on: bool) -> OpenOptions { self }
+
+    #[compiler_builtin]
+    fn truncate(own self, on: bool) -> OpenOptions { self }
+
+    #[compiler_builtin]
+    fn create(own self, on: bool) -> OpenOptions { self }
+
+    #[compiler_builtin]
+    fn create_new(own self, on: bool) -> OpenOptions { self }
+
+    // The effects are the union of reading and writing, because the
+    // options are run-time values.
+    #[compiler_builtin]
+    fn open(ref self, path: Str) -> Result[File, IoError] with reads(FileSystem) writes(FileSystem) { Err(IoError.Other("placeholder")) }
 }
 
 // B-2026-08-10-3. Payload-free by design: the offset rides `File.seek`'s

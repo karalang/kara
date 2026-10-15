@@ -14802,9 +14802,11 @@ fn test_io_error_variants_are_known() {
                  IoError.NotFound => \"not found\",
                  IoError.PermissionDenied => \"permission denied\",
                  IoError.AlreadyExists => \"already exists\",
+                 IoError.InvalidInput => \"invalid input\",
                  IoError.UnexpectedEof => \"unexpected eof\",
                  IoError.InvalidUtf8 => \"invalid utf-8\",
                  IoError.Interrupted => \"interrupted\",
+                 IoError.Unsupported => \"unsupported\",
                  IoError.Other(_) => \"other\",
              }
          }",

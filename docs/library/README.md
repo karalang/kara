@@ -64,7 +64,7 @@ Everything else is imported from a `std.*` module:
 | `std.sync` | `channel`, `Sender`, `Receiver`, `SendError`, `TaskGroup`, `TaskHandle`, `Mutex`, `MutexGuard`, `Atomic` |
 | `std.time` | `Clock`, `Instant`, `SystemTime`, `Duration`, `sleep` |
 | `std.random`, `std.uuid` | `next_u64`; `v4` |
-| `std.io` | `File`, `SeekFrom`, `BufReader`, `BufWriter` |
+| `std.io` | `File`, `OpenOptions`, `SeekFrom`, `BufReader`, `BufWriter` |
 | `std.net` | `TcpListener`, `TcpStream`, `TcpError` |
 | `std.hash` | `Hasher`, `BuildHasher`, `SipHash13BuildHasher`, `FxBuildHasher`, `StableHash` |
 | `std.iter` | `DoubleEndedIterator`, `Extend`, the adapter structs |
