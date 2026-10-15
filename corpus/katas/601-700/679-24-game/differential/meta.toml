@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/679-24-game/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:set"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "6ee4b10d1"
+extracted_src = "25b53518"
+model_rev = "583cfb0d"
+model_src = "25b53518"

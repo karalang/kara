@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/680-valid-palindrome-ii/bench/valid_palindrome_ii.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "6ee4b10d1"
+extracted_src = "0faca9a1"
+model_rev = "583cfb0d"
+model_src = "0faca9a1"

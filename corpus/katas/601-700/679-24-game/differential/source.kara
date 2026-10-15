@@ -1,0 +1,469 @@
+// LeetCode #679: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random hands.
+
+// ---- star arm ----------------------------------------------------------
+
+fn reach_star(values: Vec[f64]) -> bool {
+    let n = values.len();
+    if n == 1 {
+        return (values[0] - 24.0).abs() < 0.000001;
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            let a = values[i];
+            let b = values[j];
+            let mut rest: Vec[f64] = Vec.new();
+            for k in 0..n {
+                if k != i and k != j {
+                    rest.push(values[k]);
+                }
+            }
+            let mut results = vec![a + b, a - b, b - a, a * b];
+            if b != 0.0 {
+                results.push(a / b);
+            }
+            if a != 0.0 {
+                results.push(b / a);
+            }
+            for r in results {
+                let mut next = rest.clone();
+                next.push(r);
+                if reach_star(next) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn judge_point24_star(cards: Vec[i64]) -> bool {
+    let mut values: Vec[f64] = Vec.new();
+    for c in cards {
+        values.push(c as f64);
+    }
+    reach_star(values)
+}
+
+// ---- fractions arm -----------------------------------------------------
+
+fn gcd_fractions(a: i64, b: i64) -> i64 {
+    let mut x = a.abs();
+    let mut y = b.abs();
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn fraction_fractions(num: i64, den: i64) -> (i64, i64) {
+    let g = gcd_fractions(num, den);
+    if den < 0 {
+        (0 - num / g, 0 - den / g)
+    } else {
+        (num / g, den / g)
+    }
+}
+
+fn reach_fractions(values: Vec[(i64, i64)]) -> bool {
+    let n = values.len();
+    if n == 1 {
+        return values[0].0 == 24 * values[0].1;
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            let (an, ad) = values[i];
+            let (bn, bd) = values[j];
+            let mut rest: Vec[(i64, i64)] = Vec.new();
+            for k in 0..n {
+                if k != i and k != j {
+                    rest.push(values[k]);
+                }
+            }
+            let mut results = vec![
+                fraction_fractions(an * bd + bn * ad, ad * bd),
+                fraction_fractions(an * bd - bn * ad, ad * bd),
+                fraction_fractions(bn * ad - an * bd, ad * bd),
+                fraction_fractions(an * bn, ad * bd),
+            ];
+            if bn != 0 {
+                results.push(fraction_fractions(an * bd, ad * bn));
+            }
+            if an != 0 {
+                results.push(fraction_fractions(bn * ad, bd * an));
+            }
+            for r in results {
+                let mut next = rest.clone();
+                next.push(r);
+                if reach_fractions(next) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn judge_point24_fractions(cards: Vec[i64]) -> bool {
+    let mut values: Vec[(i64, i64)] = Vec.new();
+    for c in cards {
+        values.push((c, 1));
+    }
+    reach_fractions(values)
+}
+
+// ---- trees arm ---------------------------------------------------------
+
+fn gcd_trees(a: i64, b: i64) -> i64 {
+    let mut x = a.abs();
+    let mut y = b.abs();
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+// `x op y` as a fraction in lowest terms, op 0 to 3 for + - * /, or
+// None when it divides by 0.
+fn apply_trees(op: i64, x: Option[(i64, i64)], y: Option[(i64, i64)]) -> Option[(i64, i64)] {
+    let (xn, xd) = x?;
+    let (yn, yd) = y?;
+    let (num, den) = if op == 0 {
+        (xn * yd + yn * xd, xd * yd)
+    } else if op == 1 {
+        (xn * yd - yn * xd, xd * yd)
+    } else if op == 2 {
+        (xn * yn, xd * yd)
+    } else {
+        if yn == 0 {
+            return None;
+        }
+        (xn * yd, xd * yn)
+    };
+    let g = gcd_trees(num, den);
+    if den < 0 {
+        Some((0 - num / g, 0 - den / g))
+    } else {
+        Some((num / g, den / g))
+    }
+}
+
+fn judge_point24_trees(cards: Vec[i64]) -> bool {
+    for p in 0..24 {
+        // The p-th order of the four cards.
+        let mut left = cards.clone();
+        let mut order: Vec[Option[(i64, i64)]] = Vec.new();
+        let mut q = p;
+        for k in 0..4 {
+            let pick = q % (4 - k);
+            q /= 4 - k;
+            order.push(Some((left[pick], 1)));
+            left.remove(pick);
+        }
+        let (a, b, c, d) = (order[0], order[1], order[2], order[3]);
+        for ops in 0..64 {
+            let x = ops % 4;
+            let y = ops / 4 % 4;
+            let z = ops / 16;
+            let shapes = [
+                apply_trees(z, apply_trees(y, apply_trees(x, a, b), c), d),
+                apply_trees(z, apply_trees(y, a, apply_trees(x, b, c)), d),
+                apply_trees(z, apply_trees(x, a, b), apply_trees(y, c, d)),
+                apply_trees(z, a, apply_trees(y, apply_trees(x, b, c), d)),
+                apply_trees(z, a, apply_trees(y, b, apply_trees(x, c, d))),
+            ];
+            for s in shapes {
+                if s == Some((24, 1)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---- subsets arm -------------------------------------------------------
+
+fn gcd_subsets(a: i64, b: i64) -> i64 {
+    let mut x = a.abs();
+    let mut y = b.abs();
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn fraction_subsets(num: i64, den: i64) -> (i64, i64) {
+    let g = gcd_subsets(num, den);
+    if den < 0 {
+        (0 - num / g, 0 - den / g)
+    } else {
+        (num / g, den / g)
+    }
+}
+
+fn judge_point24_subsets(cards: Vec[i64]) -> bool {
+    let n = cards.len();
+    let full = (1 << n) - 1;
+    let mut values: Vec[Set[(i64, i64)]] = Vec.new();
+    for _ in 0..full + 1 {
+        values.push(Set.new());
+    }
+    for i in 0..n {
+        values[1 << i].insert((cards[i], 1));
+    }
+    for mask in 1..full + 1 {
+        // Each split once: the part holding the mask's lowest card.
+        let low = mask & (0 - mask);
+        let mut part = (mask - 1) & mask;
+        while part > 0 {
+            if part & low != 0 {
+                let other = mask ^ part;
+                let mut found: Vec[(i64, i64)] = Vec.new();
+                for (an, ad) in values[part].iter() {
+                    for (bn, bd) in values[other].iter() {
+                        found.push(fraction_subsets(an * bd + bn * ad, ad * bd));
+                        found.push(fraction_subsets(an * bd - bn * ad, ad * bd));
+                        found.push(fraction_subsets(bn * ad - an * bd, ad * bd));
+                        found.push(fraction_subsets(an * bn, ad * bd));
+                        if bn != 0 {
+                            found.push(fraction_subsets(an * bd, ad * bn));
+                        }
+                        if an != 0 {
+                            found.push(fraction_subsets(bn * ad, bd * an));
+                        }
+                    }
+                }
+                for f in found {
+                    values[mask].insert(f);
+                }
+            }
+            part = (part - 1) & mask;
+        }
+    }
+    values[full].contains((24, 1))
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, cards: Vec[i64]) -> bool {
+    if which == 0 {
+        judge_point24_star(cards)
+    } else if which == 1 {
+        judge_point24_fractions(cards)
+    } else if which == 2 {
+        judge_point24_trees(cards)
+    } else {
+        judge_point24_subsets(cards)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn divisor(a: i64, b: i64) -> i64 {
+    let mut x = a.abs();
+    let mut y = b.abs();
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn lowest(num: i64, den: i64) -> (i64, i64) {
+    let g = divisor(num, den);
+    if den < 0 {
+        (0 - num / g, 0 - den / g)
+    } else {
+        (num / g, den / g)
+    }
+}
+
+// Every value of an expression over `seq` in its order: each split into
+// a left and a right run, each value of the left joined with each of the
+// right by + - * /, a quotient by 0 left out.
+fn values_in_order(seq: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let n = seq.len();
+    if n == 1 {
+        return seq;
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for cut in 1..n {
+        let mut left: Vec[(i64, i64)] = Vec.new();
+        let mut right: Vec[(i64, i64)] = Vec.new();
+        for k in 0..n {
+            if k < cut {
+                left.push(seq[k]);
+            } else {
+                right.push(seq[k]);
+            }
+        }
+        let ls = values_in_order(left);
+        let rs = values_in_order(right);
+        for (xn, xd) in ls.iter() {
+            for (yn, yd) in rs.iter() {
+                out.push(lowest(xn * yd + yn * xd, xd * yd));
+                out.push(lowest(xn * yd - yn * xd, xd * yd));
+                out.push(lowest(xn * yn, xd * yd));
+                if yn != 0 {
+                    out.push(lowest(xn * yd, xd * yn));
+                }
+            }
+        }
+    }
+    out
+}
+
+// The definition: some order of the cards has an expression worth
+// exactly 24.
+fn definition(cards: Vec[i64]) -> bool {
+    let n = cards.len();
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                for l in 0..n {
+                    if i != j and i != k and i != l and j != k and j != l and k != l {
+                        let seq = vec![(cards[i], 1), (cards[j], 1), (cards[k], 1), (cards[l], 1)];
+                        for v in values_in_order(seq) {
+                            if v == (24, 1) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+// `x op y` for a witness, or None on a quotient by 0.
+fn join(op: i64, x: Option[(i64, i64)], y: Option[(i64, i64)]) -> Option[(i64, i64)] {
+    let (xn, xd) = x?;
+    let (yn, yd) = y?;
+    if op == 0 {
+        Some(lowest(xn * yd + yn * xd, xd * yd))
+    } else if op == 1 {
+        Some(lowest(xn * yd - yn * xd, xd * yd))
+    } else if op == 2 {
+        Some(lowest(xn * yn, xd * yd))
+    } else if yn == 0 {
+        None
+    } else {
+        Some(lowest(xn * yd, xd * yn))
+    }
+}
+
+fn main() {
+    // 600 random hands of four cards from 1 to 13, a full deck's values;
+    // then hands built to be solvable; then every hand from 1 to 9 for
+    // the published count.
+    let mut seed: i64 = 679;
+    let mut checks = 0;
+    let mut failures = vec![0; 4];
+    let cases = 600;
+    for _ in 0..cases {
+        let mut cards: Vec[i64] = Vec.new();
+        for _ in 0..4 {
+            cards.push(1 + next_random(mut seed) % 13);
+        }
+        let want = definition(cards.clone());
+        let mut moved = cards.clone();
+        for i in 0..4 {
+            let j = i + next_random(mut seed) % (4 - i);
+            moved.swap(i, j);
+        }
+        for which in 0..4 {
+            let got = answer(which, cards.clone());
+            // P1: the definition's answer. P2: the same in another order.
+            let ok = [got == want, answer(which, moved.clone()) == got];
+            for p in 0..2 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    // P3: 200 hands built from a witness, a random expression in one of
+    // the five shapes, over random cards, that is worth exactly 24; every
+    // arm must find them solvable.
+    let witnesses = 200;
+    let mut tries = 0;
+    for _ in 0..witnesses {
+        let mut cards: Vec[i64] = Vec.new();
+        let mut found = false;
+        while not found {
+            tries += 1;
+            cards = Vec.new();
+            for _ in 0..4 {
+                cards.push(1 + next_random(mut seed) % 13);
+            }
+            let a = Some((cards[0], 1));
+            let b = Some((cards[1], 1));
+            let c = Some((cards[2], 1));
+            let d = Some((cards[3], 1));
+            let x = next_random(mut seed) % 4;
+            let y = next_random(mut seed) % 4;
+            let z = next_random(mut seed) % 4;
+            let shape = next_random(mut seed) % 5;
+            let w = if shape == 0 {
+                join(z, join(y, join(x, a, b), c), d)
+            } else if shape == 1 {
+                join(z, join(y, a, join(x, b, c)), d)
+            } else if shape == 2 {
+                join(z, join(x, a, b), join(y, c, d))
+            } else if shape == 3 {
+                join(z, a, join(y, join(x, b, c), d))
+            } else {
+                join(z, a, join(y, b, join(x, c, d)))
+            };
+            found = w == Some((24, 1));
+        }
+        for which in 0..4 {
+            checks += 1;
+            if not answer(which, cards.clone()) {
+                failures[2] += 1;
+            }
+        }
+    }
+    // P4: 404 of the 495 hands from 1 to 9 are solvable, the published
+    // count, for each arm.
+    for which in 0..4 {
+        let mut solvable = 0;
+        for a in 1..10 {
+            for b in a..10 {
+                for c in b..10 {
+                    for d in c..10 {
+                        if answer(which, vec![a, b, c, d]) {
+                            solvable += 1;
+                        }
+                    }
+                }
+            }
+        }
+        checks += 1;
+        if solvable != 404 {
+            failures[3] += 1;
+        }
+    }
+    let mut bad = 0;
+    for p in 0..4 {
+        bad += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{cases} random hands and {witnesses} with a witness ({tries} tries), 4 arms, {checks} checks, {bad} failures");
+}

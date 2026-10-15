@@ -1,0 +1,83 @@
+// LeetCode #680: Valid Palindrome II -- two pointers. Bench.
+//
+// 300 strings of about 20,000 letters, each a palindrome with none, one
+// or two letters inserted, are built once; then 100 rounds check every
+// one of them, in an order that changes each round.
+
+fn is_palindrome(b: Slice[u8], lo: i64, hi: i64) -> bool {
+    let mut i = lo;
+    let mut j = hi;
+    while i < j {
+        if b[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    true
+}
+
+fn valid_palindrome(s: String) -> bool {
+    let b = s.bytes();
+    let mut i = 0;
+    let mut j = s.len() - 1;
+    while i < j {
+        if b[i] != b[j] {
+            return is_palindrome(b, i + 1, j) or is_palindrome(b, i, j - 1);
+        }
+        i += 1;
+        j -= 1;
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(d: i64) -> char {
+    (97 + d) as u8 as char
+}
+
+fn main() {
+    let count = 300;
+    let len = 20000;
+    let rounds = 100;
+    let widths = [2, 3, 26];
+    let mut seed = 680;
+    let mut strings: Vec[String] = Vec.new();
+    for k in 0..count {
+        let width = widths[k % 3];
+        let extra = k / 3 % 3;
+        let mut cs: Vec[char] = Vec.new();
+        for _ in 0..len / 2 {
+            cs.push(letter(next_random(mut seed) % width));
+        }
+        let mut i = len / 2 - 1;
+        while i >= 0 {
+            cs.push(cs[i]);
+            i -= 1;
+        }
+        for _ in 0..extra {
+            let at = next_random(mut seed) % (cs.len() + 1);
+            cs.insert(at, letter(next_random(mut seed) % width));
+        }
+        let s: String = cs.iter().collect();
+        strings.push(s);
+    }
+    let mut valid = 0;
+    let mut sum = 0;
+    for r in 0..rounds {
+        for k in 0..count {
+            let at = (k * 7 + r) % count;
+            if valid_palindrome(strings[at]) {
+                valid += 1;
+                sum = (sum * 31 + at + 1) % 1000000007;
+            } else {
+                sum = (sum * 31 + 7) % 1000000007;
+            }
+        }
+    }
+    println(f"{count * rounds} strings checked: {valid} valid, checksum {sum}");
+}

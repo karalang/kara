@@ -1,0 +1,74 @@
+// Benchmark for #679: the ★ arm, pairs combined in floating point.
+//
+// Any expression over the cards ends with one operation joining two
+// smaller expressions, so repeatedly take two of the values left,
+// replace them with their sum, difference either way, product or
+// quotient either way, and recurse on the shorter list. One value left
+// is a result; it counts as 24 when within 1e-6, since real division
+// leaves fractions such as 8 / 3 inexact. With 4 cards that is at most
+// 6 * 6 * 3 * 6 * 6 = 3888 results.
+
+fn reach(values: Vec[f64]) -> bool {
+    let n = values.len();
+    if n == 1 {
+        return (values[0] - 24.0).abs() < 0.000001;
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            let a = values[i];
+            let b = values[j];
+            let mut rest: Vec[f64] = Vec.new();
+            for k in 0..n {
+                if k != i and k != j {
+                    rest.push(values[k]);
+                }
+            }
+            let mut results = vec![a + b, a - b, b - a, a * b];
+            if b != 0.0 {
+                results.push(a / b);
+            }
+            if a != 0.0 {
+                results.push(b / a);
+            }
+            for r in results {
+                let mut next = rest.clone();
+                next.push(r);
+                if reach(next) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn judge_point24(cards: Vec[i64]) -> bool {
+    let mut values: Vec[f64] = Vec.new();
+    for c in cards {
+        values.push(c as f64);
+    }
+    reach(values)
+}
+
+fn main() {
+    // Every ordered hand of four cards from 1 to 13, 28,561 of them;
+    // the solvable ones are counted and each answer goes into a checksum.
+    let mut solvable = 0;
+    let mut sum = 0;
+    for a in 1..14 {
+        for b in 1..14 {
+            for c in 1..14 {
+                for d in 1..14 {
+                    let code = a * 1000 + b * 100 + c * 10 + d;
+                    if judge_point24(vec![a, b, c, d]) {
+                        solvable += 1;
+                        sum = (sum * 31 + code) % 1000000007;
+                    } else {
+                        sum = (sum * 31 + 7) % 1000000007;
+                    }
+                }
+            }
+        }
+    }
+    println(f"28561 hands: {solvable} solvable, checksum {sum}");
+}

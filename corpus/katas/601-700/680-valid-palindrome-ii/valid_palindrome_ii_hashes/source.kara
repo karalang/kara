@@ -1,0 +1,205 @@
+// LeetCode #680: Valid Palindrome II -- hashes of every deletion.
+//
+// Try leaving out each position in turn, and none. Polynomial hashes of
+// the string's prefixes and of its reverse's prefixes give, in O(1),
+// the hash of the string with one position left out and the hash of
+// that string reversed. When the two agree the candidate is checked
+// byte by byte, so a hash collision costs time but never an answer.
+// O(n) time and space, unless hashes collide.
+
+fn modulus() -> i64 {
+    1000000007
+}
+
+// The hash of `h[a..b]`, from `h[k]`, the hash of the first k bytes.
+fn part(h: ref Vec[i64], pw: ref Vec[i64], a: i64, b: i64) -> i64 {
+    let p = modulus();
+    ((h[b] - h[a] * pw[b - a] % p) % p + p) % p
+}
+
+// Whether the bytes with position `skip` left out read the same both
+// ways; `skip` may be `n`, leaving nothing out.
+fn palindrome_without(b: Slice[u8], n: i64, skip: i64) -> bool {
+    let mut i = 0;
+    let mut j = n - 1;
+    loop {
+        if i == skip {
+            i += 1;
+        }
+        if j == skip {
+            j -= 1;
+        }
+        if i >= j {
+            return true;
+        }
+        if b[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+}
+
+fn valid_palindrome(s: String) -> bool {
+    let p = modulus();
+    let base = 131;
+    let b = s.bytes();
+    let n = s.len();
+    let mut pw: Vec[i64] = vec![1; n + 1];
+    let mut fwd: Vec[i64] = vec![0; n + 1];
+    let mut bwd: Vec[i64] = vec![0; n + 1];
+    for k in 0..n {
+        pw[k + 1] = pw[k] * base % p;
+        fwd[k + 1] = (fwd[k] * base + b[k] as i64) % p;
+        bwd[k + 1] = (bwd[k] * base + b[n - 1 - k] as i64) % p;
+    }
+    if fwd[n] == bwd[n] and palindrome_without(b, n, n) {
+        return true;
+    }
+    for k in 0..n {
+        // The string without position k, and that string reversed: the
+        // reverse's first n - 1 - k bytes, then its last k.
+        let there = (part(fwd, pw, 0, k) * pw[n - 1 - k]
+            + part(fwd, pw, k + 1, n)) % p;
+        let back = (part(bwd, pw, 0, n - 1 - k) * pw[k]
+            + part(bwd, pw, n - k, n)) % p;
+        if there == back and palindrome_without(b, n, k) {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(d: i64) -> char {
+    (97 + d) as u8 as char
+}
+
+fn reversed(s: String) -> String {
+    s.chars().rev().collect()
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {valid_palindrome(s)}");
+}
+
+// The `i`-th of the 3^n strings of length n over `abc`, the last
+// letter varying fastest.
+fn nth_string(i: i64, n: i64) -> String {
+    let mut s = String.new();
+    let mut p = 1;
+    for _ in 1..n {
+        p *= 3;
+    }
+    for _ in 0..n {
+        s.push(letter(i / p % 3));
+        p /= 3;
+    }
+    s
+}
+
+// A random palindrome of length `n` over the first `width` letters,
+// with `extra` random letters inserted at random places.
+fn near_palindrome(seed: mut ref i64, n: i64, width: i64, extra: i64) -> String {
+    let mut half: Vec[char] = Vec.new();
+    for _ in 0..n / 2 {
+        half.push(letter(next_random(seed) % width));
+    }
+    let mut cs: Vec[char] = Vec.new();
+    for c in half.iter() {
+        cs.push(*c);
+    }
+    if n % 2 == 1 {
+        cs.push(letter(next_random(seed) % width));
+    }
+    let mut k = half.len() - 1;
+    while k >= 0 {
+        cs.push(half[k]);
+        k -= 1;
+    }
+    for _ in 0..extra {
+        let at = next_random(seed) % (cs.len() + 1);
+        cs.insert(at, letter(next_random(seed) % width));
+    }
+    cs.iter().collect()
+}
+
+fn main() {
+    show("aba");
+    show("abca");
+    show("abc");
+    show("a");
+    show("ab");
+    show("deeee");
+    show("cbbcc");
+    show("abcda");
+    show("tebbem");
+    show("abccbxa");
+    show("eeccccbebaeeabebccceea");
+    show("ebcbbececabbacecbbcbe");
+    show("aguokepatgbnvfqmgmlcupuufxoohdfpgjdmysgvhmvffcnqxjjxqncffvmhvgsymdjgpfdhooxfuupuculmgmqfvnbgtapekouga");
+
+    // Every string over `abc` of each length from 1 to 9.
+    let mut counts = String.new();
+    let mut total = 0;
+    let mut size = 3;
+    for n in 1..10 {
+        let mut valid = 0;
+        for i in 0..size {
+            if valid_palindrome(nth_string(i, n)) {
+                valid += 1;
+            }
+        }
+        counts.push_str(f" {valid}");
+        total += size;
+        size *= 3;
+    }
+    println(f"strings over abc of length 1 to 9 ({total}), valid by length:{counts}");
+
+    // Long strings: palindromes with no, one and two letters inserted.
+    let mut seed = 680;
+    let mut long = String.new();
+    for extra in 0..3 {
+        for width in [2, 26] {
+            let s = near_palindrome(mut seed, 100000, width, extra);
+            long.push_str(f" {valid_palindrome(s)}");
+        }
+    }
+    println(f"100000 letters, 0, 1, 2 inserted, over 2 and 26 letters:{long}");
+
+    // Random strings, near palindromes among them, and their reverses.
+    let mut checksum = 0;
+    let mut valid = 0;
+    let mut agree = 0;
+    let cases = 3000;
+    for c in 0..cases {
+        let n = 1 + next_random(mut seed) % 40;
+        let width = 1 + next_random(mut seed) % 4;
+        let extra = next_random(mut seed) % 3;
+        let s = if c % 2 == 0 {
+            near_palindrome(mut seed, n, width, extra)
+        } else {
+            let mut t = String.new();
+            for _ in 0..n {
+                t.push(letter(next_random(mut seed) % width));
+            }
+            t
+        };
+        let ok = valid_palindrome(s);
+        if ok {
+            valid += 1;
+            checksum = (checksum * 31 + c + 1) % 1000000007;
+        }
+        if valid_palindrome(reversed(s)) == ok {
+            agree += 1;
+        }
+    }
+    println(f"{valid} of {cases} random strings valid, checksum {checksum}");
+    println(f"{agree} of {cases} answer the same reversed");
+}

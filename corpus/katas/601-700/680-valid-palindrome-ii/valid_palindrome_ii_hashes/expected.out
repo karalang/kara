@@ -1,0 +1,17 @@
+"aba" -> true
+"abca" -> true
+"abc" -> false
+"a" -> true
+"ab" -> true
+"deeee" -> true
+"cbbcc" -> true
+"abcda" -> false
+"tebbem" -> false
+"abccbxa" -> true
+"eeccccbebaeeabebccceea" -> false
+"ebcbbececabbacecbbcbe" -> true
+"aguokepatgbnvfqmgmlcupuufxoohdfpgjdmysgvhmvffcnqxjjxqncffvmhvgsymdjgpfdhooxfuupuculmgmqfvnbgtapekouga" -> true
+strings over abc of length 1 to 9 (29523), valid by length: 3 9 21 57 99 273 405 1137 1539
+100000 letters, 0, 1, 2 inserted, over 2 and 26 letters: true true true true false false
+1772 of 3000 random strings valid, checksum 619391481
+3000 of 3000 answer the same reversed

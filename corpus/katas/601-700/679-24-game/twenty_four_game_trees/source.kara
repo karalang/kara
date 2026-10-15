@@ -1,0 +1,157 @@
+// LeetCode #679: 24 Game -- every expression written out.
+//
+// An expression over four cards is an order of the cards, an operator
+// in each of the three gaps, and one of the five ways to bracket four
+// operands: ((a b) c) d, (a (b c)) d, (a b) (c d), a ((b c) d) and
+// a (b (c d)). Try all 24 * 64 * 5 = 7680, evaluating in exact
+// fractions; an expression that divides by 0 is skipped.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a.abs();
+    let mut y = b.abs();
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+// `x op y` as a fraction in lowest terms, op 0 to 3 for + - * /, or
+// None when it divides by 0.
+fn apply(op: i64, x: Option[(i64, i64)], y: Option[(i64, i64)]) -> Option[(i64, i64)] {
+    let (xn, xd) = x?;
+    let (yn, yd) = y?;
+    let (num, den) = if op == 0 {
+        (xn * yd + yn * xd, xd * yd)
+    } else if op == 1 {
+        (xn * yd - yn * xd, xd * yd)
+    } else if op == 2 {
+        (xn * yn, xd * yd)
+    } else {
+        if yn == 0 {
+            return None;
+        }
+        (xn * yd, xd * yn)
+    };
+    let g = gcd(num, den);
+    if den < 0 {
+        Some((0 - num / g, 0 - den / g))
+    } else {
+        Some((num / g, den / g))
+    }
+}
+
+fn judge_point24(cards: Vec[i64]) -> bool {
+    for p in 0..24 {
+        // The p-th order of the four cards.
+        let mut left = cards.clone();
+        let mut order: Vec[Option[(i64, i64)]] = Vec.new();
+        let mut q = p;
+        for k in 0..4 {
+            let pick = q % (4 - k);
+            q /= 4 - k;
+            order.push(Some((left[pick], 1)));
+            left.remove(pick);
+        }
+        let (a, b, c, d) = (order[0], order[1], order[2], order[3]);
+        for ops in 0..64 {
+            let x = ops % 4;
+            let y = ops / 4 % 4;
+            let z = ops / 16;
+            let shapes = [
+                apply(z, apply(y, apply(x, a, b), c), d),
+                apply(z, apply(y, a, apply(x, b, c)), d),
+                apply(z, apply(x, a, b), apply(y, c, d)),
+                apply(z, a, apply(y, apply(x, b, c), d)),
+                apply(z, a, apply(y, b, apply(x, c, d))),
+            ];
+            for s in shapes {
+                if s == Some((24, 1)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(cards: Vec[i64]) {
+    let ok = judge_point24(cards.clone());
+    println(f"{cards} -> {ok}");
+}
+
+fn main() {
+    // The LeetCode examples, then corners: hands that need a fraction on
+    // the way (8 / (3 - 8 / 3), 5 * (5 - 1 / 5)), a division that must
+    // come last, all one card, and hands with no answer.
+    show(vec![4, 1, 8, 7]);
+    show(vec![1, 2, 1, 2]);
+    show(vec![3, 3, 8, 8]);
+    show(vec![1, 5, 5, 5]);
+    show(vec![1, 3, 4, 6]);
+    show(vec![1, 4, 5, 6]);
+    show(vec![6, 6, 6, 6]);
+    show(vec![1, 1, 1, 1]);
+    show(vec![9, 9, 9, 9]);
+    show(vec![1, 1, 1, 8]);
+    show(vec![1, 1, 2, 6]);
+    show(vec![3, 3, 7, 7]);
+    // Every hand of four cards from 1 to 9, as a multiset: how many have
+    // an answer, the solvable ones by their smallest card, and a checksum
+    // over them in order.
+    let mut solvable = 0;
+    let mut hands = 0;
+    let mut by_low = vec![0; 10];
+    let mut sum = 0;
+    for a in 1..10 {
+        for b in a..10 {
+            for c in b..10 {
+                for d in c..10 {
+                    hands += 1;
+                    let ok = judge_point24(vec![a, b, c, d]);
+                    let code = a * 1000 + b * 100 + c * 10 + d;
+                    if ok {
+                        solvable += 1;
+                        by_low[a] += 1;
+                        sum = (sum * 31 + code) % 1000000007;
+                    } else {
+                        sum = (sum * 31 + 7) % 1000000007;
+                    }
+                }
+            }
+        }
+    }
+    let mut lows: Vec[String] = Vec.new();
+    for a in 1..10 {
+        lows.push(f"{by_low[a]}");
+    }
+    println(f"{solvable} of {hands} hands solvable; by smallest card: {lows.join(" ")}");
+    println(f"checksum {sum}");
+    // The same hands in every order of their cards give the same answer.
+    let mut agree = 0;
+    let orders = [[0, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2], [2, 0, 3, 1]];
+    for a in 1..10 {
+        for b in a..10 {
+            for c in b..10 {
+                for d in c..10 {
+                    let hand = [a, b, c, d];
+                    let want = judge_point24(vec![a, b, c, d]);
+                    let mut all = true;
+                    for o in orders {
+                        let got = judge_point24(vec![hand[o[0]], hand[o[1]], hand[o[2]], hand[o[3]]]);
+                        if got != want {
+                            all = false;
+                        }
+                    }
+                    if all {
+                        agree += 1;
+                    }
+                }
+            }
+        }
+    }
+    println(f"{agree} of {hands} hands agree in four orders");
+}
