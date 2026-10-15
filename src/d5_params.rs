@@ -178,6 +178,21 @@ struct FnTypeParams<'a> {
 
 impl crate::span_visitor::MutVisitor for FnTypeParams<'_> {
     fn span(&mut self, _: &mut crate::token::Span) {}
+    /// A closure's annotated bare parameter borrows as a function's does:
+    /// `|w: Vec[i64]|` reads `|w: ref Vec[i64]|`, and only `|w: own T|`
+    /// owns (design.md § Function values, "Parameter modes").
+    fn expr(&mut self, e: &mut Expr) {
+        let ExprKind::Closure { params, .. } = &mut e.kind else {
+            return;
+        };
+        for p in params {
+            if let Some(t) = &mut p.ty {
+                if !p.is_own && borrows(t, self.copy) {
+                    wrap_ref(t);
+                }
+            }
+        }
+    }
     fn type_expr(&mut self, t: &mut TypeExpr) {
         let TypeKind::FnType {
             params, own_params, ..

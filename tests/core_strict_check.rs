@@ -2599,8 +2599,9 @@ fn main() {
 }
 
 /// §3.1 makes a block's tail a move, so a closure body written as a block
-/// moves what its `match` arm bound. That binding is the closure's own, not
-/// a capture, so the closure stays callable more than once.
+/// moves what its `match` arm bound. That binding is the closure's own
+/// (its `own` parameter's), not a capture, so the closure stays callable more
+/// than once.
 #[test]
 fn a_closure_moving_its_own_match_binding_is_not_once_callable() {
     accepted(
@@ -2608,7 +2609,7 @@ fn a_closure_moving_its_own_match_binding_is_not_once_callable() {
         r#"
 enum Ho { Full(String), Empty }
 fn main() {
-    let f = |q: Ho| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } };
+    let f = |q: own Ho| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } };
     let a = f(Ho.Full("x".to_string()));
     let b = f(Ho.Empty);
     println(f"{a} {b}");
@@ -3982,7 +3983,8 @@ fn an_owned_local_lent_into_a_ref_slot_is_not_moved() {
 /// B-2026-10-14-23: a closure that lends a capture to a closure-valued
 /// local's `ref` parameter only reads it, as it would through a `fn` with
 /// the same signature, so it can run any number of times. A capture handed
-/// to a by-value parameter of that local is still consumed.
+/// to an `own` parameter of that local is still consumed (a bare closure
+/// parameter borrows, as a bare `fn` parameter does).
 #[test]
 fn a_capture_lent_through_a_closure_local_is_read() {
     accepted(
@@ -4005,7 +4007,7 @@ fn a_capture_lent_through_a_closure_local_is_read() {
          }\n\
          fn main() {\n\
              let tree = vec![0, 0];\n\
-             let eat = |a: ref Vec[i64], b: Vec[i64]| a[0] + b.len();\n\
+             let eat = |a: ref Vec[i64], b: own Vec[i64]| a[0] + b.len();\n\
              println(f\"{twice(|n| eat(n, tree))}\");\n\
          }\n",
     );
@@ -4638,6 +4640,28 @@ fn main() {
     u = since;
     u += 1;
     println(f"{u} {look(m, "a", 0)} {look(m, "b", 10)}");
+}
+"#,
+    );
+}
+
+/// A closure's annotated bare parameter borrows: the argument is not moved
+/// (the mode half of B-2026-10-15-25).
+#[test]
+fn check_a_closure_bare_annotated_parameter_borrows() {
+    accepted(
+        "closure-bare-param",
+        r#"
+fn main() {
+    let u: Vec[i64] = vec![1, 2, 3];
+    let g = |w: Vec[i64]| w.len();
+    println(f"{g(u)}");
+    println(f"{u.len()}");
+    let h = |w: own Vec[i64]| w.len();
+    println(f"{h(u)}");
+    let s = "ab".to_string();
+    let k = |x: String, n: i64| x.len() as i64 + n;
+    println(f"{k(s, 1)} {s}");
 }
 "#,
     );

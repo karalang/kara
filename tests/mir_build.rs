@@ -2423,3 +2423,31 @@ fn main() {
     .expect("refused");
     assert!(err.contains("found 'Range'"), "{err}");
 }
+
+/// A closure's annotated bare parameter borrows, as a function's does, and
+/// only `|w: own T|` owns (design.md § Function values, "Parameter modes";
+/// the mode half of B-2026-10-15-25).
+#[test]
+fn mir_a_closure_bare_annotated_parameter_borrows() {
+    let src = r#"
+fn main() {
+    let u: Vec[i64] = vec![1, 2, 3];
+    let g = |w: Vec[i64]| w.len();
+    println(f"{g(u)}");
+    println(f"{u.len()}");
+    let h = |w: own Vec[i64]| w.len();
+    println(f"{h(u)}");
+    let s = "ab".to_string();
+    let k = |x: String, n: i64| x.len() as i64 + n;
+    println(f"{k(s, 1)} {s}");
+}
+"#;
+    let want = "3\n3\n3\n3 ab\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
