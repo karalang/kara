@@ -2708,6 +2708,18 @@ pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i64 {
 #[cfg(windows)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { tcp_bind(addr_ptr, addr_len, true) }
+}
+
+/// Windows mirror of the unix [`tcp_bind`]: `BOUND_PORT=<port>` only when
+/// `announce` is set (B-2026-10-15-69).
+///
+/// # Safety
+///
+/// As [`karac_runtime_tcp_bind`].
+#[cfg(windows)]
+pub(crate) unsafe fn tcp_bind(addr_ptr: *const u8, addr_len: i64, announce: bool) -> i64 {
     unsafe {
         use socket2::{Domain, Socket, Type};
         use std::os::windows::io::IntoRawSocket;
@@ -2740,7 +2752,7 @@ pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i
             return net_construct_error_code(&e) as i64;
         }
         let listener: std::net::TcpListener = socket.into();
-        if addr_str.rsplit(':').next() == Some("0") {
+        if announce && addr_str.rsplit(':').next() == Some("0") {
             if let Ok(local) = listener.local_addr() {
                 println!("BOUND_PORT={}", local.port());
                 use std::io::Write;
