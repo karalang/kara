@@ -1,0 +1,245 @@
+// runtime/stdlib/source/regex.kara
+//
+// `std.regex` on the v2 pipeline (B-2026-10-14-63), as docs/library/regex.md
+// describes it. The MIR pipeline appends this file to a program that names
+// `Regex` (`BAKED_SOURCES` in src/mir/lower.rs), and `karac check` reads it
+// for such a program. The legacy pipeline keeps runtime/stdlib/regex.kara.
+//
+// The methods are Kāra over the `RegexEngine` natives, which are the
+// `regex` crate on both backends: the interpreter calls it directly
+// (`regex_method` in src/mir/interp.rs) and the compiled backend through
+// `karac_regex_mir` (runtime/src/mir_regex.rs, in the opt-in regex
+// archive). The engine compiles each pattern once per process and keeps it,
+// so a `Regex` is a plain value: its pattern and its group names.
+
+// Why `Regex.compile` refused a pattern: the engine's message, which shows
+// where in the pattern the error is.
+struct RegexError {
+    message: String,
+}
+
+// A match: its text and its byte offsets in the searched string, so that
+// `s[m.start..m.end]` is `m.text`.
+struct Match {
+    text: String,
+    start: i64,
+    end: i64,
+}
+
+// A compiled pattern. It is immutable, so one `Regex` can be shared by
+// `ref` across `par` branches and tasks.
+struct Regex {
+    pattern: String,
+    // One per group, group 0 (the whole match) first; "" for a group with
+    // no name.
+    names: Vec[String],
+}
+
+// The groups of one match.
+struct Captures {
+    // The whole match, and where it starts in the searched string.
+    text: String,
+    base: i64,
+    // A start and an end for each group; -1 for a group that did not take
+    // part in the match.
+    slots: Vec[i64],
+    names: Vec[String],
+}
+
+// The engine natives. Not part of the documented surface.
+struct RegexEngine { }
+
+impl RegexEngine {
+    // "" when `pattern` compiles, else the engine's message.
+    #[compiler_builtin]
+    fn check(pattern: Str) -> String { String.new() }
+
+    // How many groups `pattern` has, group 0 included.
+    #[compiler_builtin]
+    fn groups(pattern: Str) -> i64 { 0 }
+
+    // The name of group `i`, or "" when it has none.
+    #[compiler_builtin]
+    fn group_name(pattern: Str, i: i64) -> String { String.new() }
+
+    // Finds the first match starting at byte `at` or later and writes the
+    // offsets of the first `slots.len() / 2` groups into `slots`. An empty
+    // match that ends where the previous match ended (`last_end`) is
+    // skipped, as the crate's own iterators skip it, so a loop that starts
+    // each search where the last match ended visits the matches
+    // `find_iter` does. False when there is none.
+    #[compiler_builtin]
+    fn find_from(pattern: Str, s: Str, at: i64, last_end: i64, slots: mut Slice[i64]) -> bool { false }
+
+    // `s` with the first `limit` matches (all of them for 0) replaced by
+    // `rep`, its `$1`, `${name}` and `$$` expanded.
+    #[compiler_builtin]
+    fn replace(pattern: Str, s: Str, rep: Str, limit: i64) -> String { String.new() }
+
+    // `s` with every regex metacharacter escaped.
+    #[compiler_builtin]
+    fn escape(s: Str) -> String { String.new() }
+
+    // Room for the offsets of `groups` groups.
+    fn slots(groups: i64) -> Vec[i64] {
+        let mut v: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < 2 * groups {
+            v.push(-1);
+            i += 1;
+        }
+        v
+    }
+
+    fn captures_of(s: Str, slots: own Vec[i64], names: ref Vec[String]) -> Captures {
+        let base = slots[0];
+        let end = slots[1];
+        Captures { text: s[base..end].to_string(), base: base, slots: slots, names: names.clone() }
+    }
+}
+
+impl Regex {
+    // Compiles `pattern`, or says why it is not a pattern. Compiling is
+    // not free: compile once, outside loops.
+    fn compile(pattern: Str) -> Result[Regex, RegexError] {
+        let message = RegexEngine.check(pattern);
+        if not message.is_empty() {
+            return Err(RegexError { message: message });
+        }
+        let n = RegexEngine.groups(pattern);
+        let mut names: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            names.push(RegexEngine.group_name(pattern, i));
+            i += 1;
+        }
+        Ok(Regex { pattern: pattern.to_string(), names: names })
+    }
+
+    // `s` with every metacharacter escaped, so that it matches itself.
+    fn escape(s: Str) -> String {
+        RegexEngine.escape(s)
+    }
+
+    fn is_match(ref self, s: Str) -> bool {
+        let mut slots = RegexEngine.slots(1);
+        RegexEngine.find_from(self.pattern.as_str(), s, 0, -1, mut slots)
+    }
+
+    // The leftmost match.
+    fn find(ref self, s: Str) -> Option[Match] {
+        let mut slots = RegexEngine.slots(1);
+        if RegexEngine.find_from(self.pattern.as_str(), s, 0, -1, mut slots) {
+            let start = slots[0];
+            let end = slots[1];
+            Some(Match { text: s[start..end].to_string(), start: start, end: end })
+        } else {
+            None
+        }
+    }
+
+    // Every match, left to right, none overlapping.
+    fn find_all(ref self, s: Str) -> Vec[Match] {
+        let mut out: Vec[Match] = Vec.new();
+        let mut slots = RegexEngine.slots(1);
+        let mut at = 0;
+        let mut last = -1;
+        while RegexEngine.find_from(self.pattern.as_str(), s, at, last, mut slots) {
+            let start = slots[0];
+            let end = slots[1];
+            out.push(Match { text: s[start..end].to_string(), start: start, end: end });
+            at = end;
+            last = end;
+        }
+        out
+    }
+
+    // `s` with its first match replaced by `rep`.
+    fn replace(ref self, s: Str, rep: Str) -> String {
+        RegexEngine.replace(self.pattern.as_str(), s, rep, 1)
+    }
+
+    // `s` with every match replaced by `rep`.
+    fn replace_all(ref self, s: Str, rep: Str) -> String {
+        RegexEngine.replace(self.pattern.as_str(), s, rep, 0)
+    }
+
+    // The pieces of `s` between matches.
+    fn split(ref self, s: Str) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut slots = RegexEngine.slots(1);
+        let mut at = 0;
+        let mut last = -1;
+        let mut piece = 0;
+        while RegexEngine.find_from(self.pattern.as_str(), s, at, last, mut slots) {
+            out.push(s[piece..slots[0]].to_string());
+            piece = slots[1];
+            at = slots[1];
+            last = slots[1];
+        }
+        out.push(s[piece..s.len()].to_string());
+        out
+    }
+
+    // The groups of the leftmost match.
+    fn captures(ref self, s: Str) -> Option[Captures] {
+        let mut slots = RegexEngine.slots(self.names.len());
+        if RegexEngine.find_from(self.pattern.as_str(), s, 0, -1, mut slots) {
+            Some(RegexEngine.captures_of(s, slots, self.names))
+        } else {
+            None
+        }
+    }
+
+    // The groups of every match, left to right.
+    fn captures_all(ref self, s: Str) -> Vec[Captures] {
+        let mut out: Vec[Captures] = Vec.new();
+        let mut slots = RegexEngine.slots(self.names.len());
+        let mut at = 0;
+        let mut last = -1;
+        while RegexEngine.find_from(self.pattern.as_str(), s, at, last, mut slots) {
+            at = slots[1];
+            last = slots[1];
+            out.push(RegexEngine.captures_of(s, slots.clone(), self.names));
+        }
+        out
+    }
+}
+
+impl Captures {
+    // Group `i`, 0 being the whole match; `None` when the group did not
+    // take part in the match or there is no group `i`.
+    fn get(ref self, i: i64) -> Option[Match] {
+        if i < 0 or i >= self.names.len() {
+            return None;
+        }
+        let start = self.slots[2 * i];
+        let end = self.slots[2 * i + 1];
+        if start < 0 {
+            return None;
+        }
+        Some(Match {
+            text: self.text[(start - self.base)..(end - self.base)].to_string(),
+            start: start,
+            end: end,
+        })
+    }
+
+    // The group named `n`; `None` when it did not take part or there is no
+    // such group.
+    fn name(ref self, n: Str) -> Option[Match] {
+        let mut i = 0;
+        while i < self.names.len() {
+            if not self.names[i].is_empty() and self.names[i] == n {
+                return self.get(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    // How many groups, group 0 included.
+    fn len(ref self) -> i64 {
+        self.names.len()
+    }
+}

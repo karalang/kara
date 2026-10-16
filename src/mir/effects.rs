@@ -888,7 +888,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         }
         // Pure libraries over values: they allocate, and a bad index or
         // argument panics. Parsing command-line arguments reads them.
-        ("Regex" | "Match" | "Json" | "Arg" | "Stats", _) => vec![HEAP, PANICS],
+        ("Regex" | "RegexEngine" | "Match" | "Json" | "Arg" | "Stats", _) => vec![HEAP, PANICS],
         ("Parser", "parse") => vec![(Reads, "Env", None), HEAP, PANICS],
         ("Parser", _) => vec![HEAP, PANICS],
         ("format_spec", "") => vec![HEAP],

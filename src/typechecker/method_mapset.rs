@@ -132,9 +132,17 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `Regex` method dispatch.
-        if let Type::Named { name, .. } = obj_ty_for_named {
-            if name == "Regex" {
+        // `Regex` method dispatch. A program the v2 pipeline appends
+        // `std.regex` to (runtime/stdlib/source/regex.kara, B-2026-10-14-63)
+        // has the whole surface in the impl table, `captures` among it, and
+        // dispatches there like any library type.
+        if let Type::Named { name, args: targs } = obj_ty_for_named {
+            if name == "Regex"
+                && self
+                    .env
+                    .find_methods_with_args(name, targs, "captures")
+                    .is_empty()
+            {
                 return Some(self.infer_regex_method(method, args, span));
             }
         }

@@ -14529,6 +14529,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &["TcpListener", "TcpStream", "UdpSocket"],
     ),
     (
+        // The v2 `std.regex` (B-2026-10-14-63); legacy keeps
+        // runtime/stdlib/regex.kara.
+        REGEX_SOURCE,
+        &["Regex"],
+        &["Regex"],
+    ),
+    (
         include_str!("../../runtime/stdlib/tracing.kara"),
         &["Log", "Span", "Exporter", "with_span"],
         &[],
@@ -14570,6 +14577,9 @@ const PROCESS_SOURCE: &str = include_str!("../../runtime/stdlib/source/process.k
 // A program's own `Child` or `Stdio` is not a use (`names_baked`).
 const PROCESS_WORDS: &[&str] = &["Command", "Child", "Stdio", "ExitStatus"];
 
+/// The v2 `std.regex`.
+const REGEX_SOURCE: &str = include_str!("../../runtime/stdlib/source/regex.kara");
+
 /// The v2 `std.net`, and the words that make a program one of its users.
 const NET_SOURCE: &str = include_str!("../../runtime/stdlib/source/net.kara");
 const NET_WORDS: &[&str] = &[
@@ -14580,14 +14590,15 @@ const NET_WORDS: &[&str] = &[
     "UdpSocket",
 ];
 
-/// Whether `src` uses `std.process` or `std.net` as the v2 pipeline appends
-/// them, so that `karac check` reads the library the build runs: the v2
-/// surfaces (`Stdio.piped()`, `UdpSocket`) differ from the baked legacy
-/// ones the checker otherwise registers (B-2026-10-15-6, B-2026-10-15-18).
+/// Whether `src` uses `std.process`, `std.net` or `std.regex` as the v2
+/// pipeline appends them, so that `karac check` reads the library the build
+/// runs: the v2 surfaces (`Stdio.piped()`, `UdpSocket`, `Captures`) differ
+/// from the baked legacy ones the checker otherwise registers
+/// (B-2026-10-15-6, B-2026-10-15-18, B-2026-10-14-63).
 pub fn uses_v2_library_module(src: &str) -> bool {
     BAKED_SOURCES
         .iter()
-        .filter(|(text, _, _)| [PROCESS_SOURCE, NET_SOURCE].contains(text))
+        .filter(|(text, _, _)| [PROCESS_SOURCE, NET_SOURCE, REGEX_SOURCE].contains(text))
         .any(|(text, words, owners)| {
             names_baked(src, words) && !defines_a_baked_type(src, text, owners)
         })

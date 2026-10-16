@@ -75,6 +75,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
                 self.http_native(base, method, args, dest)
             }
+            ("RegexEngine", _) => self.regex_native(method, args, dest),
             ("Server", "serve") => self.serve_native(args, dest).map(Some),
             ("Request", _) => self.request_native(method, args, dest),
             ("Clock", "now" | "monotonic_ns" | "wall_ns") => {
@@ -1440,6 +1441,77 @@ impl<'ctx> Cx<'ctx, '_> {
             cx.store_tag(d, dty, some)?;
             cx.copy(cx.offset(d, off)?, out, string)
         })?;
+        Ok(Some(()))
+    }
+
+    /// `std.regex`'s engine natives (runtime/stdlib/source/regex.kara,
+    /// B-2026-10-14-63) through `karac_regex_mir(op, pat, pat_len, s, s_len,
+    /// rep, rep_len, a, b, slots, n, out)`, which lives in the opt-in regex
+    /// archive; the interpreter's `regex_method` makes the same calls.
+    fn regex_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let op: u64 = match method {
+            "check" => 0,
+            "groups" => 1,
+            "group_name" => 2,
+            "find_from" => 3,
+            "replace" => 4,
+            "escape" => 5,
+            _ => return Ok(None),
+        };
+        let null = self.ptr_ty().const_null();
+        let zero = self.i64(0);
+        let (pat, pat_len) = self.str_parts(&args[0])?;
+        let (mut s, mut s_len, mut rep, mut rep_len) = (null, zero, null, zero);
+        let (mut a, mut b, mut slots, mut n) = (zero, zero, null, zero);
+        match op {
+            2 => a = self.operand_scalar(&args[1])?.into_int_value(),
+            3 => {
+                (s, s_len) = self.str_parts(&args[1])?;
+                a = self.operand_scalar(&args[2])?.into_int_value();
+                b = self.operand_scalar(&args[3])?.into_int_value();
+                (slots, n) = self.view_of(&args[4])?;
+            }
+            4 => {
+                (s, s_len) = self.str_parts(&args[1])?;
+                (rep, rep_len) = self.str_parts(&args[2])?;
+                a = self.operand_scalar(&args[3])?.into_int_value();
+            }
+            _ => {}
+        }
+        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        let out = self.temp(string, "regex.out")?;
+        let i32t = self.llcx.i32_type();
+        let v = self.rt_named(
+            "karac_regex_mir",
+            &[
+                i32t.const_int(op, false).into(),
+                pat.into(),
+                pat_len.into(),
+                s.into(),
+                s_len.into(),
+                rep.into(),
+                rep_len.into(),
+                a.into(),
+                b.into(),
+                slots.into(),
+                n.into(),
+                out.into(),
+            ],
+            64,
+        )?;
+        self.drop_moved(args)?;
+        let d = self.place_ptr(dest)?;
+        match op {
+            1 => self.store(d, v.into())?,
+            3 => {
+                let found = self
+                    .builder
+                    .build_int_truncate(v, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                self.store(d, found.into())?;
+            }
+            _ => self.copy(d, out, string)?,
+        }
         Ok(Some(()))
     }
 

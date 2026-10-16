@@ -136,6 +136,9 @@ pub mod hashing;
 // Regex FFI (`karac_regex_*`) — opt-in `regex` feature → `libkarac_runtime_regex.a`.
 #[cfg(feature = "regex")]
 pub mod regex;
+// The MIR backend's `std.regex` engine (`karac_regex_mir`), same feature.
+#[cfg(feature = "regex")]
+pub mod mir_regex;
 // Unicode normalization FFI (`karac_unicode_*`) — opt-in `unicode` feature →
 // `libkarac_runtime_unicode.a`.
 #[cfg(feature = "net")]
@@ -449,6 +452,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         regex::karac_regex_find,
         regex::karac_regex_find_all,
         regex::karac_regex_replace_all,
+        mir_regex::karac_regex_mir,
     );
     // Unicode normalization FFI (`runtime/src/unicode.rs`, opt-in `unicode`
     // feature) — same keep-list class as the regex surface above. AOT links

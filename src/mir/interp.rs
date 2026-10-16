@@ -593,6 +593,7 @@ fn run_with(
         bufs: Vec::new(),
         procs: Procs::default(),
         sockets: Sockets::default(),
+        regexes: std::collections::HashMap::new(),
         pools: Vec::new(),
         semaphores: Vec::new(),
         limiters: Vec::new(),
@@ -900,6 +901,9 @@ struct Interp<'a> {
     /// The `std.process` handles: `Stdio`s, children and their pipes.
     procs: Procs,
     sockets: Sockets,
+    /// The compiled patterns behind `RegexEngine`, by pattern
+    /// (B-2026-10-14-63): each is compiled once per run.
+    regexes: std::collections::HashMap<String, Option<regex::Regex>>,
     /// The `Pool[T]`s, by handle - 1. A pool lives until exit, as legacy's
     /// does: `Pool` values are handles, and copies share it.
     pools: Vec<PoolEntry>,
@@ -1659,6 +1663,7 @@ impl<'a> Interp<'a> {
             ("TcpListener" | "TcpStream" | "UdpSocket", _) => {
                 self.tcp_method(name, base, method, args, arg_tys, ret)
             }
+            ("RegexEngine", _) => self.regex_method(name, method, args, arg_tys),
             ("Server", "serve") | ("Request", _) => {
                 self.http_server_method(name, base, method, args, arg_tys, ret)
             }
@@ -5300,6 +5305,91 @@ impl<'a> Interp<'a> {
             }
         }
         Ok(bytes)
+    }
+
+    /// The `std.regex` engine natives (runtime/stdlib/source/regex.kara,
+    /// B-2026-10-14-63), the `regex` crate as runtime/src/mir_regex.rs
+    /// calls it for the compiled backend; the two are kept line for line.
+    fn regex_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+    ) -> R<Value> {
+        let text = |me: &mut Self, i: usize| -> R<String> {
+            match args.get(i) {
+                Some(v) => me.spent_string(v, arg_tys.get(i)),
+                None => err(format!("{name} takes {} arguments", i + 1)),
+            }
+        };
+        let int = |i: usize| -> R<i64> {
+            match args.get(i) {
+                Some(Value::Int(n)) => Ok(*n as i64),
+                other => err(format!("{name}: argument {i} is {other:?}")),
+            }
+        };
+        if method == "escape" {
+            let s = text(self, 0)?;
+            return Ok(self.alloc_box("String", Value::Str(regex::escape(&s))));
+        }
+        let pattern = text(self, 0)?;
+        if method == "check" {
+            let message = match regex::Regex::new(&pattern) {
+                Ok(_) => String::new(),
+                Err(e) => e.to_string(),
+            };
+            return Ok(self.alloc_box("String", Value::Str(message)));
+        }
+        let re = self
+            .regexes
+            .entry(pattern.clone())
+            .or_insert_with(|| regex::Regex::new(&pattern).ok())
+            .clone();
+        match method {
+            "groups" => Ok(Value::Int(re.map_or(0, |r| r.captures_len() as i128))),
+            "group_name" => {
+                let i = int(1)?;
+                let n = re
+                    .and_then(|r| {
+                        r.capture_names()
+                            .nth(i as usize)
+                            .flatten()
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
+                Ok(self.alloc_box("String", Value::Str(n)))
+            }
+            "find_from" => {
+                let s = text(self, 1)?;
+                let (at, last_end) = (int(2)?, int(3)?);
+                let Some(buf) = args.get(4) else {
+                    return err(format!("{name} takes its slots"));
+                };
+                let (place, lo, len) = self.view_of(buf)?;
+                let found = re.and_then(|r| regex_find_from(&r, &s, at, last_end, len as usize));
+                let Some(slots) = found else {
+                    return Ok(Value::Bool(false));
+                };
+                for (i, v) in slots.into_iter().enumerate() {
+                    *self.slot_mut(&place.child(lo + i as u64))? = Value::Int(i128::from(v));
+                }
+                Ok(Value::Bool(true))
+            }
+            "replace" => {
+                let s = text(self, 1)?;
+                let rep = text(self, 2)?;
+                let limit = int(3)?;
+                let out = match re {
+                    Some(r) => r
+                        .replacen(&s, limit.max(0) as usize, rep.as_str())
+                        .into_owned(),
+                    None => s,
+                };
+                Ok(self.alloc_box("String", Value::Str(out)))
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
     }
 
     /// The text of the string argument `v` of type `ty`, which a native
@@ -12723,5 +12813,48 @@ fn main() {
             "{:?}",
             r.outcome
         );
+    }
+}
+
+/// `RegexEngine.find_from`: the first match at byte `at` or later, as the
+/// offsets of the first `n / 2` groups (-1 for a group that did not take
+/// part). An empty match ending at `last_end` is skipped and the search
+/// moves on one character, as the crate's iterators skip it
+/// (B-2026-10-14-63). runtime/src/mir_regex.rs has the same function.
+fn regex_find_from(
+    re: &regex::Regex,
+    s: &str,
+    at: i64,
+    last_end: i64,
+    n: usize,
+) -> Option<Vec<i64>> {
+    let mut at = at;
+    loop {
+        if at < 0 || at as usize > s.len() || !s.is_char_boundary(at as usize) {
+            return None;
+        }
+        let from = at as usize;
+        let mut slots = vec![-1i64; n];
+        let (start, end) = if n <= 2 {
+            let m = re.find_at(s, from)?;
+            (m.start(), m.end())
+        } else {
+            let caps = re.captures_at(s, from)?;
+            for (g, slot) in slots.chunks_mut(2).enumerate() {
+                if let (Some(m), [a, b]) = (caps.get(g), slot) {
+                    (*a, *b) = (m.start() as i64, m.end() as i64);
+                }
+            }
+            let m = caps.get(0)?;
+            (m.start(), m.end())
+        };
+        if start == end && end as i64 == last_end {
+            at += s[from..].chars().next().map_or(1, char::len_utf8) as i64;
+            continue;
+        }
+        if n >= 2 {
+            (slots[0], slots[1]) = (start as i64, end as i64);
+        }
+        return Some(slots);
     }
 }

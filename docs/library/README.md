@@ -9,6 +9,7 @@ This directory specifies the standard library's public API: its types, functions
 | [iterators.md](iterators.md) | Iterator adaptors and terminal methods, `FromIterator` |
 | [strings.md](strings.md) | `String` and `Str` methods, normalization, UTF-8 conversion, `CStr` and `CString` |
 | [io.md](io.md) | Standard streams, files, buffered I/O, TCP, process exit |
+| [regex.md](regex.md) | Regular expressions: `Regex`, `Match`, `Captures` |
 | [concurrency.md](concurrency.md) | Channels, `TaskGroup`, `Mutex`, atomics |
 | [time-random-env.md](time-random-env.md) | `Clock`, `RandomSource` and `Env` APIs |
 | [log.md](log.md) | Structured logging (`std.log`) |
@@ -69,7 +70,8 @@ Everything else is imported from a `std.*` module:
 | `std.hash` | `Hasher`, `BuildHasher`, `SipHash13BuildHasher`, `FxBuildHasher`, `StableHash` |
 | `std.iter` | `DoubleEndedIterator`, `Extend`, the adapter structs |
 | `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |
+| `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
 | `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Backend`, `Record`, `json_backend`, `text_backend` |
 | `std.secret` | `Secret`, `ConstantTimeEq`, `Zeroize` |
 
-Domain names (an HTTP `Response`, a parser's `Parser` and `Span`, regex and JSON types) live under `std.*` as well and are never in the prelude. A local binding may shadow any prelude name; a lint flags the likely-unintended cases.
+Domain names (an HTTP `Response`, a parser's `Parser` and `Span`, JSON types) live under `std.*` as well and are never in the prelude. A local binding may shadow any prelude name; a lint flags the likely-unintended cases.
