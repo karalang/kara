@@ -18,7 +18,7 @@ match Regex.compile("(?P<key>\\w+)=(?P<value>\\d+)") {
 
 ## Syntax
 
-The pattern syntax is RE2's, as the Rust `regex` crate implements it. There are no backreferences and no lookaround, which is what lets every search run in time linear in the length of the pattern and the text: a pattern from an untrusted source cannot make a search take exponential time.
+The pattern syntax is RE2's, as the Rust `regex` crate implements it. There are no backreferences and no lookaround, which is what bounds every search by the size of the pattern times the length of the text: a pattern from an untrusted source cannot make a search take exponential time.
 
 Matching is Unicode-aware by default. `.` matches one character, not one byte, and `\d`, `\w` and `\s` are Unicode classes: `\d` matches any Unicode decimal digit, including non-ASCII ones. Write `[0-9]` (or `(?-u:\d)`) to match ASCII digits only. Flags are set inside the pattern: `(?i)` for case-insensitive, `(?m)` for `^` and `$` at line ends, `(?s)` for `.` matching a newline, `(?x)` for whitespace and comments.
 
@@ -81,7 +81,7 @@ struct RegexError {
 
 ## Effects
 
-None. Every method is pure: it reads its arguments and allocates the values it returns.
+Every method has `allocates(Heap)`, and nothing else. Compiling builds the pattern's program, a search uses scratch memory, and results are new values. No method reads or writes a resource or blocks, and none panics on any input: a bad pattern is an `Err`, and a group that is missing or did not take part is `None`. **Divergence:** the implementation also infers `panics` for these methods today (`src/mir/effects.rs`), which is wider than this.
 
 ## Not in v1
 
