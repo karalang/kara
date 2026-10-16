@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::check_a_serde_program_reads_the_library"
+dedup_of = ["tests/mir_serde.rs::an_internally_tagged_tuple_variant_is_a_compile_error"]
+expect = "error:E_COMPTIME"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "3385ce51b"
+extracted_src = "9328ac9c"
+model_rev = "583cfb0d"
+model_src = "9328ac9c"

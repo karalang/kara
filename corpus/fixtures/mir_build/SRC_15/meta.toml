@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::SRC"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "3385ce51b"
+extracted_src = "9ef71c39"
+model_rev = "583cfb0d"
+model_src = "9ef71c39"

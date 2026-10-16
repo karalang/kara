@@ -1,0 +1,9 @@
+
+fn main() {
+    let a: u32 = 0x80000001u32;
+    let b: u64 = 0x0000000000000003u64;
+    println(f"{a.rotate_left(1)} {b.rotate_right(1)}");
+    println(f"{a.rotate_right(33)} {b.rotate_left(64)} {a.rotate_left(0)}");
+    let c: u8 = 0x81u8;
+    println(f"{c.rotate_left(1)} {c.rotate_right(9)}");
+}

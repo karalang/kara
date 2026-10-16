@@ -1,0 +1,11 @@
+fn main() {
+    let s = String.default();
+    let x = i64.default();
+    let b = bool.default();
+    let v: Vec[i64] = Vec.default();
+    let m: Map[i64, i64] = Map.default();
+    let o: Option[i64] = Option.default();
+    let mut w: Vec[Vec[i64]] = vec![vec![1, 2], vec![3]];
+    let t = take(mut w[0]);
+    println(f"[{s}] {x} {b} {v.len()} {m.len()} {o.is_none()} {t.len()}");
+}

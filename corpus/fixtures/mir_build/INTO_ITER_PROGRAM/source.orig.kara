@@ -1,0 +1,42 @@
+
+struct D { n: i64 }
+impl Drop for D {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn first_big(v: Vec[D]) -> i64 {
+    for d in v.into_iter() {
+        if d.n > 1 { return d.n; }
+    }
+    -1
+}
+fn first_own(v: own Vec[D]) -> i64 {
+    for d in v.into_iter() {
+        if d.n > 1 { return d.n; }
+    }
+    -1
+}
+fn main() {
+    let mut v: Vec[D] = Vec.new();
+    for i in 0..5 { v.push(D { n: i }); }
+    for d in v.into_iter() {
+        println(f"got {d.n}");
+        if d.n == 2 { break; }
+    }
+    let mut w: Vec[D] = Vec.new();
+    for i in 0..4 { w.push(D { n: 10 + i }); }
+    for (i, d) in w.into_iter().enumerate() {
+        if i == 1 { continue; }
+        println(f"at {i} {d.n}");
+    }
+    let mut u: Vec[D] = Vec.new();
+    for i in 0..4 { u.push(D { n: i }); }
+    println(f"fb {first_big(u)}");
+    let mut o: Vec[D] = Vec.new();
+    for i in 0..4 { o.push(D { n: 20 + i }); }
+    println(f"fo {first_own(o)}");
+    let mut big: Vec[Vec[i64]] = Vec.new();
+    for i in 0..1000 { big.push(vec![i, i]); }
+    let mut s = 0;
+    for x in big.into_iter() { s = s + x[0] + x[1]; }
+    println(f"sum {s}");
+}

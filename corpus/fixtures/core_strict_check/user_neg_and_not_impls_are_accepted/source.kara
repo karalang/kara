@@ -1,0 +1,44 @@
+
+#[derive(Copy, Clone)]
+struct V2 {
+    x: i64,
+    y: i64,
+}
+
+impl Neg for V2 {
+    type Output = V2;
+    fn neg(own self) -> Self.Output {
+        V2 { x: -self.x, y: -self.y }
+    }
+}
+
+struct Mask {
+    bits: i64,
+    name: String,
+}
+
+impl Not for Mask {
+    fn not(self) -> Mask {
+        Mask { bits: ~self.bits, name: self.name.clone() }
+    }
+}
+
+struct Tag {
+    s: String,
+}
+
+impl Neg for Tag {
+    fn neg(own self) -> Tag {
+        Tag { s: self.s + "!" }
+    }
+}
+
+fn main() {
+    let a = V2 { x: 1, y: -2 };
+    let b = -a;
+    let m = Mask { bits: 5, name: "m" };
+    let n = ~m;
+    let t = Tag { s: "hi" };
+    let u = -t;
+    println(f"{b.x} {b.y} {a.x} {n.bits} {m.name} {u.s}");
+}

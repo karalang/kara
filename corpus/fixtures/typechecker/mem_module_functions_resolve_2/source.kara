@@ -1,0 +1,6 @@
+struct Mem { n: i64 }
+impl Mem { fn take(mut ref self, k: i64) -> i64 { self.n -= k; self.n } }
+fn main() {
+    let mut mem = Mem { n: 10 };
+    println(f"{mem.take(3)}");
+}

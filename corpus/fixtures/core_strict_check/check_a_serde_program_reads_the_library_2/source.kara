@@ -1,0 +1,5 @@
+
+#[derive(Serialize)]
+#[serde(tag: "type")]
+enum Bad { A(i64) }
+fn main() { println(Json.serialize(Bad.A(1))); }

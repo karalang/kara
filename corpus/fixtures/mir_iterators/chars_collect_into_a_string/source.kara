@@ -1,0 +1,8 @@
+
+fn main() {
+    let text = String.from("héllo");
+    let s: String = text.chars().collect();
+    let v: Vec[char] = text.chars().collect();
+    let t: String = "abc".chars().collect();
+    println(f"{s} {v.len()} {t}");
+}

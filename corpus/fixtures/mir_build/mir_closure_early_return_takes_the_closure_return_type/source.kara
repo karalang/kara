@@ -1,0 +1,9 @@
+
+fn main() {
+    let lim = 3;
+    let f = |n: i64| { if n < 0 { return None; } if n > lim { Some(f"big {n}") } else { None } };
+    let h = |n: i64| { if n < 0 { return Some("neg".to_string()); } None };
+    println(f"{f(5).unwrap()} {f(-1).is_none()} {h(-2).unwrap()} {h(1).is_none()}");
+    let g = |n: i64| { if n == 0 { return Err("zero".to_string()); } Ok(10 / n) };
+    println(f"{g(2).unwrap()} {g(0).is_err()}");
+}

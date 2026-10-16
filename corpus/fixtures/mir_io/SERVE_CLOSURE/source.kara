@@ -1,0 +1,11 @@
+
+fn main() {
+    let greeting = "hello".to_string();
+    let r = Server.serve("127.0.0.1:0".to_string(), |req| {
+        Response { status: 200, body: f"{greeting} {req.path()}" }
+    });
+    match r {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}

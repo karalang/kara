@@ -1,0 +1,17 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(String.from("a"), 1);
+    m.insert(String.from("b"), 2);
+    match (m.get("a"), m.get("b")) {
+        (Some(i), Some(j)) => println(f"{*i + *j}"),
+        _ => println("none"),
+    }
+    match (m.get("a"), m.get("q")) {
+        (Some(i), None) | (None, Some(i)) => println(f"{*i}"),
+        _ => println("both or none"),
+    }
+    match ((m.get("b"), 1), 2) {
+        ((Some(i), k), l) => println(f"{*i + k + l}"),
+        _ => println("none"),
+    }
+}

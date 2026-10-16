@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::borrow_returns_of_a_ref_place_are_accepted"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["ref-return"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "d9140ccd"
+model_rev = "583cfb0d"
+model_src = "d9140ccd"

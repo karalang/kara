@@ -1,0 +1,7 @@
+
+#[derive(Default)]
+struct Good { items: Vec[i64], names: Map[String, i64], best: Option[String], pair: (i64, String) }
+fn main() {
+    let g = Good.default();
+    println(f"{g.items.len()} {g.names.len()} {g.best.is_none()} {g.pair.0}");
+}

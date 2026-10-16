@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::check_variant_constructed_through_a_type_alias"
+dedup_of = ["tests/mir_build.rs::mir_variant_constructed_through_a_type_alias"]
+expect = "error:E0207"
+exit = 1
+tags = []
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-not-refused:E0207"
+classified_with = "3385ce51b"
+extracted_src = "f861a74f"
+model_rev = "583cfb0d"
+model_src = "f861a74f"

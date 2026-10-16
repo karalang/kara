@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::mir_function_value_stored_by_push_is_callable"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "lib:map"]
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3385ce51b"
+extracted_src = "eb07a862"
+model_rev = "583cfb0d"
+model_src = "eb07a862"

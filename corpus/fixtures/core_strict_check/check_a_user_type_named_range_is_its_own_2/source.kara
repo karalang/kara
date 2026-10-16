@@ -1,0 +1,7 @@
+
+struct Range { lo: i64, hi: i64 }
+fn main() {
+    let r = Range { lo: 1, hi: 3 };
+    let bad: i64 = r;
+    for i in 0..2 { println(f"{i}"); }
+}

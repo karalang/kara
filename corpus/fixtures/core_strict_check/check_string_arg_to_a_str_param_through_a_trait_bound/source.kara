@@ -1,0 +1,16 @@
+
+trait Store {
+    fn get(self, key: Str) -> Option[i64];
+}
+struct Mem { n: i64 }
+impl Store for Mem {
+    fn get(self, key: Str) -> Option[i64] { if key == "a" { Some(self.n) } else { None } }
+}
+fn look[S: Store](s: ref S, k: ref String) -> i64 {
+    s.get(k).unwrap_or(0)
+}
+fn main() {
+    let m = Mem { n: 7 };
+    let k = "a".to_string();
+    println(f"{m.get(k)} {look(m, k)}");
+}

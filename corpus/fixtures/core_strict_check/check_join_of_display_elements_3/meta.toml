@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::check_join_of_display_elements"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "3385ce51b"
+extracted_src = "1f130589"
+model_rev = "583cfb0d"
+model_src = "1f130589"

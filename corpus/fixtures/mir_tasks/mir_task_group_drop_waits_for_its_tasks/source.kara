@@ -1,0 +1,10 @@
+
+fn main() {
+    {
+        let group = TaskGroup.new();
+        let _h = group.spawn(|| { sleep_ms(100); println("slow task done"); 1 });
+        group.spawn(|| { println("quick task done"); 2 });
+        println("scope ends");
+    }
+    println("after the group");
+}

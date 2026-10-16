@@ -1,0 +1,17 @@
+source = "tests/mir_tasks.rs::mir_task_group_drop_waits_for_its_tasks"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "par", "post-m1:par"]
+class = "e"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "84a84f4f"
+model_rev = "583cfb0d"
+model_src = "84a84f4f"

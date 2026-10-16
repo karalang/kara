@@ -1,0 +1,30 @@
+got 0
+got 1
+got 2
+drop 0
+drop 1
+drop 2
+drop 3
+drop 4
+at 0 10
+at 2 12
+at 3 13
+drop 10
+drop 11
+drop 12
+drop 13
+drop 0
+drop 1
+drop 2
+drop 3
+fb 2
+drop 0
+drop 1
+drop 2
+drop 3
+fo 20
+drop 20
+drop 21
+drop 22
+drop 23
+sum 999000

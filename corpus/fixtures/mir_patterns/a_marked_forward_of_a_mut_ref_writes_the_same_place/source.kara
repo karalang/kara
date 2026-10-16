@@ -1,0 +1,47 @@
+
+struct Session {
+    scores: Vec[i64],
+}
+
+struct Node {
+    n: i64,
+    kids: Map[i64, Node],
+}
+
+fn sort_in_place(xs: mut Slice[i64]) {
+    xs.sort();
+}
+
+fn bump(n: mut ref i64) {
+    n += 1;
+}
+
+fn twice(n: mut ref i64) {
+    bump(mut n);
+    bump(n);
+}
+
+fn refresh(s: mut ref Session) {
+    sort_in_place(mut s.scores);
+}
+
+fn grow(node: mut ref Node, depth: i64) {
+    if depth == 0 {
+        return;
+    }
+    node.n += 1;
+    let child = node.kids.entry(depth).or_insert(Node { n: 0, kids: Map.new() });
+    grow(mut child, depth - 1);
+}
+
+fn main() {
+    let mut s = Session { scores: vec![3, 1, 2] };
+    refresh(mut s);
+    let mut k = 1;
+    twice(mut k);
+    let mut root = Node { n: 0, kids: Map.new() };
+    grow(mut root, 3);
+    let mut v = vec![1, 2];
+    bump(mut v[0]);
+    println(f"{s.scores} {k} {root.n} {root.kids.len()} {v}");
+}

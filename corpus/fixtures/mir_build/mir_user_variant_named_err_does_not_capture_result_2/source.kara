@@ -1,0 +1,12 @@
+
+enum Level { Err, Ok }
+fn f(n: i64) -> Result[i64, String] {
+    if n < 0 { return Err("neg".to_string()); }
+    Ok(n * 2)
+}
+fn main() {
+    let l = Level.Ok;
+    match l { Level.Err => println("lerr"), Level.Ok => println("lok") }
+    match f(2) { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match f(-1) { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+}

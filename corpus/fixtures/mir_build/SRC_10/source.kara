@@ -1,0 +1,7 @@
+fn main() {
+    let v: Vec[i64] = vec![3, 1, 2, 3];
+    let d: VecDeque[i64] = v.iter().map(|x| x * 2).collect();
+    let words: Vec[String] = vec!["b".to_string(), "a".to_string()];
+    let ds: VecDeque[String] = words.iter().map(|w| w.to_uppercase()).collect();
+    println(f"{d.len()} {d.front()} {d.back()} {ds.front()} {ds.back()}");
+}

@@ -1,0 +1,13 @@
+
+struct P { x: i64 }
+impl Display for P {
+    fn to_string(ref self) -> String { f"<{self.x}>" }
+}
+fn main() {
+    let f: Vec[f64] = vec![1.5, 2.0];
+    let c: Vec[char] = vec!['a', 'b'];
+    let b: Vec[bool] = vec![true, false];
+    let p = vec![P { x: 1 }, P { x: 2 }];
+    let e: Vec[i64] = Vec.new();
+    println(f"{f.join(";")}|{c.concat()}|{b.join(" ")}|{p.join(", ")}|{e.join(",")}|");
+}

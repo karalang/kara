@@ -1,0 +1,24 @@
+
+fn main() {
+    let a = 2.5;
+    let b = 1.0;
+    match a.partial_cmp(b) {
+        Some(Ordering.Greater) => println("greater"),
+        Some(_) => println("other"),
+        None => println("unordered"),
+    }
+    let nan = 0.0 / 0.0;
+    match nan.partial_cmp(1.0) {
+        Some(_) => println("ordered"),
+        None => println("unordered"),
+    }
+    match b.partial_cmp(b) {
+        Some(Ordering.Equal) => println("equal"),
+        _ => println("other"),
+    }
+    let mut v = [2.5, 1.0, 3.0, -4.0];
+    v.sort_by(|p, q| p.partial_cmp(q).unwrap());
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
+    let x: f32 = 1.5f32;
+    println(f"{x.partial_cmp(2.0f32) == Some(Ordering.Less)}");
+}

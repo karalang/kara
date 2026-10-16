@@ -1,0 +1,12 @@
+fn main() {
+    let parts: Vec[String] = vec![String.from("a"), String.from("b"), String.from("c")];
+    let rest = parts[1..].join("/");
+    println(f"{rest}");
+    println(parts.as_slice().join(", "));
+    println(parts[1..].concat());
+    let sep = String.from("-");
+    println(parts[..2].join(sep.as_str()));
+    println(parts.join("|"));
+    let empty: Vec[String] = Vec.new();
+    println(f"[{empty[..].join(",")}]");
+}

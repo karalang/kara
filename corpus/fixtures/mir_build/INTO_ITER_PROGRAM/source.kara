@@ -1,10 +1,11 @@
 
+#[derive(Clone)]
 struct D { n: i64 }
 impl Drop for D {
     fn drop(mut ref self) { println(f"drop {self.n}"); }
 }
 fn first_big(v: Vec[D]) -> i64 {
-    for d in v.into_iter() {
+    for d in v.clone().into_iter() {
         if d.n > 1 { return d.n; }
     }
     -1

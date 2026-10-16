@@ -1,0 +1,16 @@
+
+enum Block { Heading(i64), Rule }
+struct Heading { level: i64 }
+enum Shape { Circle(Circle), Dot }
+struct Circle { r: i64 }
+fn main() {
+    let h = Heading { level: 3 };
+    match Block.Heading(2) {
+        Block.Heading(n) => println(f"{n} {h.level}"),
+        Block.Rule => println("rule"),
+    }
+    match Shape.Circle(Circle { r: 4 }) {
+        Shape.Circle(c) => println(c.r),
+        Shape.Dot => println("dot"),
+    }
+}

@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::mir_methods_on_a_borrowed_shared_handle"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3385ce51b"
+extracted_src = "855bf0d7"
+model_rev = "583cfb0d"
+model_src = "855bf0d7"

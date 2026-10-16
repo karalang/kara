@@ -1,0 +1,17 @@
+source = "tests/mir_io.rs::OPEN_OPTIONS"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["io:fs"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "cfe69bea"
+model_rev = "583cfb0d"
+model_src = "cfe69bea"

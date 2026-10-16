@@ -1,0 +1,9 @@
+
+fn row(name: Str, n: i64) -> String { f"[{name:<6}|{name:>5}|{name:^7}|{n:>4}]" }
+fn main() {
+    let c: Str = "abc";
+    println(f"[{c:<6}]");
+    let s = "hello".to_string();
+    println(row(s, 7));
+    println(row("ab", 12));
+}

@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut pq: PriorityQueue[i64] = PriorityQueue.new();
+    pq.push(5);
+    pq.push(1);
+    pq.push(4);
+    let top = *pq.peek().unwrap();
+    match pq.peek() { Some(x) => println(f"{*x} {top}"), None => {} }
+    let mut names: PriorityQueue[String] = PriorityQueue.max_first();
+    names.push("bo".to_string());
+    names.push("zed".to_string());
+    match names.peek() { Some(n) => println(f"{n} {n.len()}"), None => {} }
+    println(f"{pq.len()} {names.len()}");
+    let e: PriorityQueue[i64] = PriorityQueue.new();
+    println(f"{e.peek().is_none()}");
+}

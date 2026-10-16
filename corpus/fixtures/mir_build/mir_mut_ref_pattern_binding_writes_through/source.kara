@@ -1,0 +1,20 @@
+
+struct P { n: i64 }
+enum E { A(P), B }
+fn main() {
+    let mut ps = vec![P { n: 1 }, P { n: 2 }];
+    match ps[1] {
+        mut ref p => { p.n += 5; }
+    }
+    println(f"{ps[1].n}");
+    let mut es = vec![E.A(P { n: 3 }), E.B];
+    match es[0] {
+        E.A(mut ref p) => { p.n *= 10; }
+        E.B => {}
+    }
+    if let E.A(mut ref p) = es[0] { p.n += 1; }
+    match es[0] { E.A(p) => println(f"{p.n}"), E.B => println("b") }
+    let mut q = P { n: 4 };
+    match q { mut ref r => { r.n = 9; } }
+    println(f"{q.n}");
+}

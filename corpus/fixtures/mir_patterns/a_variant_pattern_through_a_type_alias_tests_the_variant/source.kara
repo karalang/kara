@@ -1,0 +1,15 @@
+
+enum NetE { A, B(i32) }
+type OldE = NetE;
+fn main() {
+    let v: NetE = NetE.B(7);
+    match v {
+        OldE.A => println("a"),
+        OldE.B(n) => println(f"b {n}"),
+    }
+    let w: OldE = NetE.A;
+    match w {
+        OldE.B(n) => println(f"b {n}"),
+        OldE.A => println("a"),
+    }
+}

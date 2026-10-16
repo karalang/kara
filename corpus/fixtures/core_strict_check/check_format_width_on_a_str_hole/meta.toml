@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::check_format_width_on_a_str_hole"
+dedup_of = ["tests/mir_build.rs::mir_format_width_on_a_str_hole"]
+expect = "error:codegen"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3385ce51b"
+extracted_src = "9562b6c0"
+model_rev = "583cfb0d"
+model_src = "9562b6c0"

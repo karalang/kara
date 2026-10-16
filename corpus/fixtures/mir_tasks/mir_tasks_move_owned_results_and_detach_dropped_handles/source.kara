@@ -1,0 +1,15 @@
+
+struct Noisy { id: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+fn make(i: i64) -> Noisy { sleep_ms(100); Noisy { id: i } }
+fn name(i: i64) -> String { sleep_ms(10); f"task-{i}" }
+fn main() {
+    let group = TaskGroup.new();
+    let a = group.spawn(|| name(1));
+    let detached = group.spawn(|| make(7));
+    let b = group.spawn(|| name(2));
+    println(a.join());
+    println(b.join());
+}

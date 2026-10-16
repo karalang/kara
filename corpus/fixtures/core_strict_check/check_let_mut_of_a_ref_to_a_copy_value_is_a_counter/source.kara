@@ -1,0 +1,20 @@
+
+fn look(m: ref SortedMap[String, i64], k: Str, dflt: i64) -> i64 {
+    let since = m.get(k).unwrap_or(dflt);
+    let mut t = since;
+    t = t + 1;
+    t += 2;
+    t
+}
+fn main() {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    m.insert("a".to_string(), 5);
+    let since = m.get("a").unwrap_or(9);
+    let mut t = since;
+    t = t + 1;
+    println(f"{t} {since}");
+    let mut u = m.get("a").unwrap_or(9);
+    u = since;
+    u += 1;
+    println(f"{u} {look(m, "a", 0)} {look(m, "b", 10)}");
+}

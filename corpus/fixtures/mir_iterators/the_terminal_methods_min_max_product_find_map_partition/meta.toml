@@ -1,0 +1,15 @@
+source = "tests/mir_iterators.rs::the_terminal_methods_min_max_product_find_map_partition"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "io:fs"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "check-refuses:E0200"
+classified_with = "3385ce51b"
+extracted_src = "06f61f88"
+model_rev = "583cfb0d"
+model_src = "06f61f88"

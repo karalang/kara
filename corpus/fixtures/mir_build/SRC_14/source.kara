@@ -1,0 +1,9 @@
+fn main() {
+    let words: Vec[String] = vec!["ab".to_string(), "cd".to_string()];
+    let r: Vec[Vec[char]] = words.iter().map(|w| w.chars().rev().collect()).collect();
+    println(f"{r}");
+    let s: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();
+    println(f"{s}");
+    let t: Vec[String] = words.iter().map(|w| { let n = w.len(); w.chars().take(n - 1).collect() }).collect();
+    println(f"{t}");
+}

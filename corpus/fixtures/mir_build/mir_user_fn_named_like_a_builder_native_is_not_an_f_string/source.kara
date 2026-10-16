@@ -1,0 +1,12 @@
+
+fn format(n: i64) -> String {
+    let s = f"<{n}>";
+    s
+}
+fn format_spec(a: ref String, b: i64) -> String { f"{a}/{b:>4}" }
+fn panic_message(n: i64) -> i64 { n * 2 }
+fn main() {
+    let names = vec!["x".to_string()];
+    println(format(3));
+    println(f"scripts/{names[0]}.lua {format_spec(names[0], 2)} {panic_message(4)}");
+}

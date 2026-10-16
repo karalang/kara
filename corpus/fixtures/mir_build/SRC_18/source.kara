@@ -1,0 +1,13 @@
+struct Node { val: i64, children: Vec[Node] }
+fn mk(v: i64) -> Node { Node { val: v, children: vec![Node { val: v + 1, children: Vec.new() }] } }
+fn main() {
+    let t = mk(1);
+    let u = mk(10);
+    let mut v: Vec[ref Node] = Vec.new();
+    v.push(t);
+    v.push(t);
+    v.push(u);
+    let mut total = 0;
+    for n in v.iter() { total += n.val + n.children.len(); }
+    println(f"{v.len()} {total} {t.val} {t.children[0].val}");
+}

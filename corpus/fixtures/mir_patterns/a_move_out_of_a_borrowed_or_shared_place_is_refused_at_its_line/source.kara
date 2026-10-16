@@ -1,0 +1,10 @@
+shared struct Inner { word: String }
+impl Inner { fn get(ref self) -> String { self.word.clone() } }
+fn give(i: ref Inner) -> String { let w = i.word.clone(); w }
+shared struct S { v: i64, t: String }
+fn main() {
+    let a = Inner { word: "hi" };
+    let s = S { v: 1, t: "t" };
+    let j = |q: S| q.t.clone();
+    println(f"{a.get()} {give(a)} {j(s)}");
+}

@@ -1,0 +1,42 @@
+
+struct P { name: String, age: i64 }
+
+fn main() {
+    let ps: Vec[P] = vec![
+        P { name: "ann".to_string(), age: 30 },
+        P { name: "bob".to_string(), age: 25 },
+        P { name: "cat".to_string(), age: 30 },
+        P { name: "dan".to_string(), age: 25 },
+    ];
+    let young = ps.iter().min_by_key(|p| p.age);
+    let old = ps.iter().max_by_key(|p| p.age);
+    match (young, old) {
+        (Some(y), Some(o)) => println(f"{y.name} {o.name}"),
+        _ => println("none"),
+    }
+    let by = ps.iter().max_by(|a, b| a.age.cmp(b.age));
+    let lo = ps.iter().min_by(|a, b| a.age.cmp(b.age));
+    match (lo, by) {
+        (Some(l), Some(b)) => println(f"{l.name} {b.name}"),
+        _ => println("none"),
+    }
+    let words: Vec[String] = vec!["pear".to_string(), "apple".to_string(), "fig".to_string()];
+    match (words.iter().min(), words.iter().max()) {
+        (Some(a), Some(b)) => println(f"{a} {b}"),
+        _ => println("none"),
+    }
+    let (short, long): (Vec[String], Vec[String]) = words.iter().cloned().partition(|w| w.len() < 4);
+    println(f"{short.len()} {long.len()} {short[0]} {long[1]}");
+    let fs: Vec[f64] = vec![1.5, 2.0, 4.0];
+    let p: f64 = fs.iter().product();
+    let empty: Vec[i64] = Vec.new();
+    let e: i64 = empty.iter().product();
+    let m = empty.iter().max();
+    println(f"{p} {e} {m.is_none()}");
+    let mut seen = 0;
+    let hit = (1..100).find_map(|i| {
+        seen += 1;
+        if i * i > 50 { Some(i * 10) } else { None }
+    });
+    println(f"{hit ?? 0} {seen}");
+}

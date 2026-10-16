@@ -1,0 +1,17 @@
+source = "tests/mir_tasks.rs::mir_tasks_report_a_deadlock"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "par", "post-m1:par"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "c96d8eef"
+model_rev = "583cfb0d"
+model_src = "c96d8eef"

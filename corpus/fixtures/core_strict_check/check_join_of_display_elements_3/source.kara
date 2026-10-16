@@ -1,0 +1,6 @@
+
+struct Q { x: i64 }
+fn main() {
+    let q = vec![Q { x: 1 }];
+    println(q.join(","));
+}

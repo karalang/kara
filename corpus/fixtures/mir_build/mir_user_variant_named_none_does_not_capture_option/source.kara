@@ -1,0 +1,22 @@
+
+enum V { None, Int(i64) }
+fn half(x: i64) -> Option[i64] {
+    if x % 2 == 0 {
+        return Some(x / 2);
+    }
+    None
+}
+fn main() {
+    let v = V.Int(3);
+    match v {
+        V.None => println("none"),
+        V.Int(i) => println(f"int {i}"),
+    }
+    let w = V.None;
+    match w {
+        V.None => println("none"),
+        V.Int(i) => println(f"int {i}"),
+    }
+    let o: Option[i64] = None;
+    println(f"{half(4).unwrap_or(-1)} {half(3).unwrap_or(-1)} {o.is_none()}");
+}

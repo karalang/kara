@@ -1,0 +1,13 @@
+
+fn main() {
+    let w = "a 3 b".split_whitespace();
+    let amount: Fn(i64) -> Result[i64, String] = |i: i64| {
+        if w.len() <= i {
+            return Err("missing".to_string());
+        }
+        Ok(w[i].len() as i64)
+    };
+    let r = match w[0].clone() { "a" => amount(1), "b" => amount(2), _ => Ok(0) };
+    println(f"{r.unwrap()}");
+    println(f"{amount(9).is_err()}");
+}

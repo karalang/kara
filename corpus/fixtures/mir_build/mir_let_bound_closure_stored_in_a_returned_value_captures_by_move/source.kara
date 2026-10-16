@@ -1,0 +1,24 @@
+
+struct T { f: Fn(i64) -> String with allocates(Heap) }
+fn make(host: own String) -> Vec[T] {
+    let mut v: Vec[T] = Vec.new();
+    let f: Fn(i64) -> String with allocates(Heap) = |n| f"{host}-{n}";
+    v.push(T { f: f });
+    v
+}
+fn one(host: own String) -> T {
+    let g = |n: i64| f"{host}:{n}";
+    T { f: g }
+}
+fn local_only(host: own String) -> i64 {
+    let h = |n: i64| host.len() as i64 + n;
+    let r = h(1);
+    r + host.len() as i64
+}
+fn main() {
+    let v = make("web-1".to_string());
+    println((v[0].f)(7));
+    let t = one("db".to_string());
+    println((t.f)(3));
+    println(f"{local_only("abc".to_string())}");
+}

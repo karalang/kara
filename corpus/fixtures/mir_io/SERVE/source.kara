@@ -1,0 +1,32 @@
+
+struct Response { status: i64, body: String, headers: Vec[(String, String)] }
+
+fn handle(req: Request) -> Response {
+    let mut out = f"{req.method()} {req.path()} [{req.body()}]";
+    for (k, v) in req.query() {
+        out = out + f" {k}={v}";
+    }
+    match req.header("x-a".to_string()) {
+        Some(v) => { out = out + f" x-a:{v}"; }
+        None => { out = out + " no x-a"; }
+    }
+    let mut hosts = 0;
+    for (k, _) in req.headers() {
+        if k.to_lowercase() == "host" {
+            hosts = hosts + 1;
+        }
+    }
+    out = out + f" hosts={hosts}";
+    let mut headers: Vec[(String, String)] = Vec.new();
+    headers.push(("X-Trace-Id".to_string(), "abc-123".to_string()));
+    headers.push(("Content-Type".to_string(), "text/plain".to_string()));
+    let status = if req.path() == "/missing" { 404 } else { 200 };
+    Response { status: status, body: out, headers: headers }
+}
+
+fn main() {
+    match Server.serve("127.0.0.1:0".to_string(), handle) {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}

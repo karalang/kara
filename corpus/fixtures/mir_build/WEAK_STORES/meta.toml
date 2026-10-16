@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::WEAK_STORES"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "c303dd7b"
+model_rev = "583cfb0d"
+model_src = "c303dd7b"

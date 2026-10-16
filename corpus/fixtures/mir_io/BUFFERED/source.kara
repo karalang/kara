@@ -1,0 +1,79 @@
+fn count(path: Str) -> Result[i64, IoError] {
+    let mut n = 0;
+    for line in BufReader.new(File.open(path)?).lines() {
+        let l = line?;
+        if l == "stop" { break; }
+        n += l.len() as i64;
+    }
+    Ok(n)
+}
+fn main() {
+    let t = "DIR/t.txt";
+    match fs.write(t, "a\nb\r\nc") { Ok(_) => {}, Err(_) => println("w") }
+    match File.open(t) {
+        Ok(f) => {
+            let r = BufReader.with_capacity(f, 2);
+            let mut s = String.new();
+            let n: i64 = r.read_line(mut s).unwrap_or(-1);
+            println(f"{n} [{s.trim()}]");
+            for line in r.lines() {
+                match line { Ok(l) => println(f"<{l}>"), Err(_) => println("e") }
+            }
+        }
+        Err(_) => println("open"),
+    }
+    let u = "DIR/u.txt";
+    match File.create(u) {
+        Ok(f) => {
+            let w = BufWriter.with_capacity(f, 4);
+            match w.write_all("hi\n".bytes()) { Ok(_) => {}, Err(_) => println("e") }
+            let n: i64 = w.write("there\n".bytes()).unwrap_or(-1);
+            println(f"wrote {n}");
+            match w.flush() { Ok(_) => {}, Err(_) => println("e") }
+            let _ = w.write_all("tail\n".bytes());
+        }
+        Err(_) => println("create"),
+    }
+    print(fs.read_to_string(u).unwrap_or(String.new()));
+    match File.open(u) {
+        Ok(f) => {
+            let r = BufReader.new(f);
+            let mut buf: Vec[u8] = vec![0; 3];
+            let n = r.read(mut buf).unwrap_or(-1);
+            println(f"read {n} {buf[0]}");
+            r.consume(1);
+            let mut rest = String.new();
+            let k = r.read_to_string(mut rest).unwrap_or(-1);
+            print(f"{k} [{rest}]\n");
+        }
+        Err(_) => println("open2"),
+    }
+    let v = "DIR/v.txt";
+    match fs.write(v, "ab\ncde\nstop\nzzzz\n") { Ok(_) => {}, Err(_) => println("w") }
+    println(f"{count(v).unwrap_or(-1)}");
+    match count("DIR/missing.txt") {
+        Ok(_) => println("?"),
+        Err(IoError.NotFound) => println("notfound"),
+        Err(_) => println("other"),
+    }
+    let b = "DIR/bad.txt";
+    match File.create(b) {
+        Ok(f) => {
+            let w = BufWriter.new(f);
+            let _ = w.write_all(vec![104u8, 255u8, 10u8, 105u8].as_slice());
+        }
+        Err(_) => println("c"),
+    }
+    match File.open(b) {
+        Ok(f) => {
+            for line in BufReader.new(f).lines() {
+                match line {
+                    Ok(l) => println(f"ok {l}"),
+                    Err(IoError.InvalidUtf8) => println("utf8"),
+                    Err(_) => println("err"),
+                }
+            }
+        }
+        Err(_) => println("o"),
+    }
+}

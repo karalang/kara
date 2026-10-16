@@ -1,0 +1,21 @@
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    #[serde(rename: "server_name")]
+    name: String,
+    #[serde(default: 8080)]
+    port: i64,
+    shapes: Vec[Shape],
+}
+#[derive(Serialize, Deserialize)]
+enum Shape { Dot, Circle(i64), Named { label: String } }
+fn main() {
+    let c = Config { name: "a".to_string(), port: 1, shapes: vec![Shape.Dot, Shape.Circle(2)] };
+    let s = Json.serialize(c);
+    println(s);
+    let back: Result[Config, DeserializeError] = Json.deserialize(s);
+    match back {
+        Ok(c) => println(c.port),
+        Err(e) => println(e.message),
+    }
+}

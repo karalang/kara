@@ -1,0 +1,20 @@
+
+struct A { ok: bool, s: String }
+
+fn mk(n: i64) -> A { A { ok: n > 1, s: "x".to_string() } }
+
+fn main() {
+    if mk(2).ok {
+        println("yes");
+    }
+    if mk(0).ok {
+        println("no");
+    } else {
+        println("else");
+    }
+    let mut i = 0;
+    while mk(3 - i).ok {
+        i += 1;
+    }
+    println(f"end {i}");
+}

@@ -1,0 +1,64 @@
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.InvalidInput => "invalid input".to_string(),
+        IoError.InvalidUtf8 => "invalid utf8".to_string(),
+        IoError.Other(m) => f"other {m}",
+        _ => "some other error".to_string(),
+    }
+}
+
+fn main() {
+    let _ = FileSystem.remove_file("DIR/out.txt");
+    let f = File.create("DIR/out.txt").unwrap();
+    let st = Command.new("printf").args(["%s-%s", "x", "y"]).stdout(Stdio.from_file(f)).status().unwrap();
+    println(f"redirect {st.success()} {FileSystem.read_to_string("DIR/out.txt").unwrap()}");
+    let g = File.open("DIR/out.txt").unwrap();
+    let o = Command.new("cat").stdin(Stdio.from_file(g)).output().unwrap();
+    println(f"from file [{String.from_utf8(o.stdout).unwrap()}]");
+    let mut a = Command.new("printf").arg("abc").stdout(Stdio.piped()).spawn().unwrap();
+    let b = Command.new("cat").stdin(Stdio.from_stdout(a.stdout().unwrap())).stdout(Stdio.piped());
+    let first = b.output().unwrap();
+    println(f"first [{String.from_utf8(first.stdout).unwrap()}]");
+    match b.output() { Ok(_) => println("reused"), Err(e) => println(show(e)) }
+    let st = a.wait().unwrap();
+    let again = a.wait().unwrap();
+    println(f"wait twice {st.code().unwrap()} {again.code().unwrap()}");
+    match a.try_wait() { Ok(Some(s)) => println(f"try after {s.success()}"), Ok(None) => println("none"), Err(e) => println(show(e)) }
+    let c = Command.new("printf").arg("0123456789").stdout(Stdio.piped()).spawn().unwrap();
+    let r = c.stdout().unwrap();
+    let mut buf: Vec[u8] = vec![0, 0, 0, 0];
+    let mut total = 0;
+    loop {
+        let n = r.read(mut buf).unwrap();
+        if n == 0 { break; }
+        total = total + n;
+    }
+    println(f"read loop {total}");
+    c.wait().unwrap();
+    let d = Command.new("printf").arg("\\377\\376").stdout(Stdio.piped()).stderr(Stdio.piped()).spawn().unwrap();
+    let mut s = String.from("keep");
+    match d.stdout().unwrap().read_to_string(s) { Ok(_) => println("utf8?"), Err(e) => println(f"{show(e)} [{s}]") }
+    let mut bytes: Vec[u8] = Vec.new();
+    let n = d.stderr().unwrap().read_to_end(bytes).unwrap();
+    println(f"stderr bytes {n} {bytes.len()}");
+    d.wait().unwrap();
+    let e = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
+    {
+        let w = e.stdin().unwrap();
+        let n = w.write("hello".bytes()).unwrap();
+        w.flush().unwrap();
+        println(f"wrote {n}");
+    }
+    let out = e.wait_with_output().unwrap();
+    println(f"dropped stdin [{String.from_utf8(out.stdout).unwrap()}] {out.status.success()}");
+    let h = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.null()).spawn().unwrap();
+    println(f"wait closes stdin {h.wait().unwrap().success()}");
+    let o = Command.new("sh").arg("-c").arg("echo \"[$KEEP][$GONE]\"").env("KEEP", "k").env("GONE", "g").env_remove("GONE").stdin(Stdio.null()).output().unwrap();
+    println(f"env {String.from_utf8(o.stdout).unwrap().trim()}");
+    let k = Command.new("true").spawn().unwrap();
+    println(f"id positive {k.id() > 0}");
+    let unused = Stdio.piped();
+    match Command.new("true").current_dir("/nonexistent/dir").spawn() { Ok(_) => println("?"), Err(e) => println(show(e)) }
+}

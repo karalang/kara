@@ -1,0 +1,16 @@
+shared struct Node { val: i64 }
+struct Plain { val: i64 }
+fn fill(depths: mut ref Vec[i64], n: Node) { depths[n.val] = 7; }
+fn main() {
+    let n = Node { val: 2 };
+    let mut v = vec![0; 4];
+    v[n.val] = 5;
+    fill(mut v, n);
+    let p = Plain { val: 1 };
+    v[p.val] = 9;
+    let i = n.val;
+    v[i] += 1;
+    let mut grid = vec![vec![0; 3]; 3];
+    grid[n.val][p.val] = 4;
+    println(f"{v} {grid[2]}");
+}

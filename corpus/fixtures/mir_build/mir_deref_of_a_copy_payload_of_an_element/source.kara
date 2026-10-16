@@ -1,0 +1,25 @@
+
+enum J { I(i64), S(String) }
+struct H { vals: Vec[J] }
+impl H {
+    fn first(ref self) -> Option[i64] {
+        match self.vals[0] { J.I(n) => Some(*n), _ => None }
+    }
+}
+fn first_int(vals: ref Vec[J]) -> Option[i64] {
+    match vals[0] {
+        J.I(n) => Some(*n),
+        _ => None,
+    }
+}
+fn plain(vals: ref Vec[J]) -> i64 {
+    match vals[0] { J.I(n) => n + 1, _ => 0 }
+}
+fn main() {
+    let mut v: Vec[J] = Vec.new();
+    v.push(J.I(7));
+    v.push(J.S("s".to_string()));
+    println(f"{first_int(v).unwrap_or(0)} {plain(v)}");
+    let h = H { vals: v };
+    println(f"{h.first().unwrap_or(0)}");
+}

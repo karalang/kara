@@ -1,0 +1,17 @@
+source = "tests/mir_io.rs::BUFFERED"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["io:fs"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "3385ce51b"
+extracted_src = "560f4f30"
+model_rev = "583cfb0d"
+model_src = "bd747f3e"

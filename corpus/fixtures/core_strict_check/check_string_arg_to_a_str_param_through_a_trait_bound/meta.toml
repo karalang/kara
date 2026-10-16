@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::check_string_arg_to_a_str_param_through_a_trait_bound"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "839eb79d"
+model_rev = "583cfb0d"
+model_src = "839eb79d"

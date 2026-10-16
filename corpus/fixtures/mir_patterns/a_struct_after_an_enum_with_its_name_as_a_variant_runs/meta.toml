@@ -1,0 +1,17 @@
+source = "tests/mir_patterns.rs::a_struct_after_an_enum_with_its_name_as_a_variant_runs"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "a"
+classified_with = "3385ce51b"
+extracted_src = "3f9b0ba7"
+model_exit = 0
+model_rev = "583cfb0d"
+model_src = "3f9b0ba7"
+model_verdict = "SAME"

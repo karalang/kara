@@ -1,0 +1,15 @@
+source = "tests/mir_iterators.rs::max_of_a_vec_iterator_is_a_view_and_a_range_has_min"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "check-refuses:E0209"
+classified_with = "3385ce51b"
+extracted_src = "36fe0b3d"
+model_rev = "583cfb0d"
+model_src = "36fe0b3d"

@@ -1,0 +1,9 @@
+fn take(s: own String) -> i64 { s.len() }
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert(String.from("a"), String.from("xy"));
+    match (m.get("a"), 1) {
+        (Some(a), _) => println(f"{take(a)}"),
+        _ => println("none"),
+    }
+}

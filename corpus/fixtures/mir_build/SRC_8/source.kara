@@ -1,0 +1,13 @@
+fn main() {
+    let days: Vec[char] = vec!['a', 'b', ','];
+    let mut s = String.new();
+    for c in days.iter() {
+        s.push(c);
+    }
+    println(s);
+    let t = "x,y,ab";
+    let owned = String.from("ba,c");
+    for c in days.iter() {
+        println(f"{t.find(c)} {t.split(c).len()} {owned.find(c)} {owned.split(c).len()}");
+    }
+}

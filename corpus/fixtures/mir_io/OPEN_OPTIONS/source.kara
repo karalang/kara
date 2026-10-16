@@ -1,0 +1,49 @@
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found",
+        IoError.AlreadyExists => "already exists",
+        IoError.InvalidInput => "invalid input",
+        IoError.Unsupported => "unsupported",
+        IoError.Other(m) => f"other {m}",
+        _ => "else",
+    }
+}
+fn main() {
+    let p = "DIR/db.bin".to_string();
+    let _ = fs.remove_file("DIR/lock");
+    let data: Vec[u8] = vec![1, 2, 3, 4, 5, 6, 7, 8];
+    match fs.write_bytes(p.clone(), data.as_slice()) { Ok(_) => println("wrote 8"), Err(e) => println(show(e)) }
+    match fs.read_bytes(p.clone()) { Ok(b) => println(f"read {b.len()} {b[0]} {b[7]}"), Err(e) => println(show(e)) }
+    match File.options().read(true).write(true).open(p.clone()) {
+        Ok(f) => {
+            let _ = f.seek(SeekFrom.Start, 2);
+            let patch: Vec[u8] = vec![30, 40];
+            let _ = f.write(patch.as_slice());
+            match f.set_len(6) { Ok(_) => println("cut to 6"), Err(e) => println(show(e)) }
+            match f.set_len(-1) { Ok(_) => println("negative ok?"), Err(e) => println(show(e)) }
+            match f.seek(SeekFrom.Start, -1) { Ok(_) => println("seek ok?"), Err(e) => println(show(e)) }
+        }
+        Err(e) => println(show(e)),
+    }
+    match fs.read_bytes(p.clone()) { Ok(b) => println(f"now {b.len()} {b[1]} {b[2]} {b[3]} {b[5]}"), Err(e) => println(show(e)) }
+    match File.options().read(true).write(true).open("DIR/nope.bin") { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().write(true).create_new(true).open(p.clone()) { Ok(_) => println("created?"), Err(e) => println(show(e)) }
+    match File.options().write(true).create_new(true).open("DIR/lock") { Ok(_) => println("lock made"), Err(e) => println(show(e)) }
+    match File.options().open(p.clone()) { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().read(true).truncate(true).open(p.clone()) { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().write(true).create_new(true).truncate(true).open(p.clone()) { Ok(_) => println("opened?"), Err(e) => println(show(e)) }
+    match File.options().read(true).append(true).open(p.clone()) {
+        Ok(f) => {
+            let tail: Vec[u8] = vec![9];
+            let _ = f.write(tail.as_slice());
+            let mut buf: Array[u8, 16] = [0; 16];
+            let _ = f.seek(SeekFrom.Start, 0);
+            match f.read(mut buf) { Ok(n) => println(f"appended, {n} bytes, last {buf[n - 1]}"), Err(e) => println(show(e)) }
+        }
+        Err(e) => println(show(e)),
+    }
+    match File.options().write(true).create(true).open(p.clone()) { Ok(_) => println("kept"), Err(e) => println(show(e)) }
+    match fs.metadata(p.clone()) { Ok(m) => println(f"len {m.len}"), Err(e) => println(show(e)) }
+    match fs.read_bytes("DIR/missing") { Ok(_) => println("read?"), Err(e) => println(show(e)) }
+}

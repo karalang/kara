@@ -1,0 +1,23 @@
+
+struct Loud { id: i64 }
+impl Drop for Loud {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+struct Pool { n: Vec[i64], l: Loud }
+struct File { name: String, l: Loud }
+struct W { p: Pool, f: File }
+struct Mutex { required: bool, l: Loud }
+struct Atomic { l: Loud }
+struct OnceLock { l: Loud }
+struct Arena { l: Loud }
+fn main() {
+    let m = Mutex { required: true, l: Loud { id: 4 } };
+    println(f"{m.required}");
+    let a = Atomic { l: Loud { id: 5 } };
+    let o = OnceLock { l: Loud { id: 6 } };
+    let r = Arena { l: Loud { id: 7 } };
+    let w = W { p: Pool { n: vec![1, 2], l: Loud { id: 1 } }, f: File { name: "x".to_string(), l: Loud { id: 2 } } };
+    println(f"{w.p.n.len()} {w.f.name}");
+    let v = vec![Pool { n: vec![3], l: Loud { id: 3 } }];
+    println(f"{v[0].n[0]}");
+}

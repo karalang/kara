@@ -1,0 +1,50 @@
+
+enum Val { Int(i64), Nil }
+shared struct T {
+    id: i64,
+    mut arr: Vec[i64],
+}
+impl T {
+    fn noop(ref self, v: i64) {
+        let _ = v;
+    }
+    fn size(ref self) -> i64 {
+        self.arr.len()
+    }
+    fn put(ref self, v: own Val) -> bool {
+        match v {
+            Val.Int(n) => { self.arr.push(n); true }
+            Val.Nil => false,
+        }
+    }
+    fn get(ref self, k: ref Val) -> Val {
+        match k {
+            Val.Int(i) => if *i < self.arr.len() { Val.Int(self.arr[*i]) } else { Val.Nil },
+            Val.Nil => Val.Nil,
+        }
+    }
+}
+enum E { A(T), B }
+fn f(t: ref T) -> i64 {
+    t.noop(5);
+    let n = t.size();
+    t.put(Val.Int(9));
+    let ok = t.put(Val.Nil);
+    match t.get(Val.Int(0)) {
+        Val.Int(x) => println(f"got {x} {ok}"),
+        Val.Nil => println("nil"),
+    }
+    n + t.size()
+}
+fn g(er: ref E) {
+    match er {
+        E.A(h) => { h.put(Val.Int(2)); println(f"h {h.size()}"); }
+        E.B => {}
+    }
+}
+fn main() {
+    let t = T { id: 1, arr: Vec.new() };
+    println(f"{f(t)}");
+    let e = E.A(t);
+    g(e);
+}

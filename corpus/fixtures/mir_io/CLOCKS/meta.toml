@@ -1,0 +1,17 @@
+source = "tests/mir_io.rs::CLOCKS"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "04101ed5"
+model_rev = "583cfb0d"
+model_src = "04101ed5"

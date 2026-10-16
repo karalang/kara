@@ -1,0 +1,20 @@
+
+struct A { xs: Vec[i64] }
+impl A {
+    fn add(mut ref self, x: i64) -> i64 {
+        self.xs.push(x);
+        self.xs.len()
+    }
+}
+fn f(ast: mut ref A) -> i64 {
+    ast.add(3)
+}
+fn g(compiler: ref A) -> i64 {
+    compiler.xs.len()
+}
+fn main() {
+    let mut a = A { xs: Vec.new() };
+    println(f"{f(mut a)}");
+    let ast = 5;
+    println(f"{ast} {g(a)}");
+}

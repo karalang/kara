@@ -1,0 +1,17 @@
+source = "tests/mir_io.rs::user_types_named_like_library_handles_drop_as_their_own"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["drop", "io:fs"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "3385ce51b"
+extracted_src = "ee8f0851"
+model_rev = "583cfb0d"
+model_src = "ee8f0851"

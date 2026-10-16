@@ -1,0 +1,19 @@
+
+trait Store {
+    fn get(self, key: Str) -> Option[i64];
+}
+struct Mem { n: i64 }
+impl Store for Mem {
+    fn get(self, key: Str) -> Option[i64] { if key == "a" { Some(self.n) } else { None } }
+}
+struct Line { sku: String }
+struct Service[S: Store] { store: S }
+impl[S: Store] Service[S] {
+    fn price(self, l: ref Line) -> i64 { self.store.get(l.sku).unwrap_or(-1) }
+}
+fn main() {
+    let s = Service { store: Mem { n: 7 } };
+    let a = Line { sku: "a".to_string() };
+    let b = Line { sku: "b".to_string() };
+    println(f"{s.price(a)} {s.price(b)}");
+}

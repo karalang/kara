@@ -1,0 +1,12 @@
+
+fn main() {
+    let u: Vec[i64] = vec![1, 2, 3];
+    let g = |w: Vec[i64]| w.len();
+    println(f"{g(u)}");
+    println(f"{u.len()}");
+    let h = |w: own Vec[i64]| w.len();
+    println(f"{h(u)}");
+    let s = "ab".to_string();
+    let k = |x: String, n: i64| x.len() as i64 + n;
+    println(f"{k(s, 1)} {s}");
+}

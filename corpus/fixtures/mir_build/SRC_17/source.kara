@@ -1,0 +1,12 @@
+fn main() {
+    let c = 5;
+    let mut best = 0;
+    if let Some(below) = None {
+        best = c + below;
+    }
+    let o = if let Some(b) = None { c + b } else { 1 };
+    while let Some(b) = None {
+        best = c + b;
+    }
+    println(f"{best} {o}");
+}

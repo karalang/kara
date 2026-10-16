@@ -1,0 +1,17 @@
+source = "tests/mir_tasks.rs::mir_tasks_serve_clients_spawned_after_the_server"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "par", "post-m1:par", "post-m1:net"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "3385ce51b"
+extracted_src = "9abc80f3"
+model_rev = "583cfb0d"
+model_src = "9abc80f3"

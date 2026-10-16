@@ -1,0 +1,10 @@
+
+struct User { name: String, age: i64 }
+fn bad(n: i64) -> ref String { let s = f"x{n}"; ref s }
+fn bad2(u: own User) -> ref String { ref u.name }
+fn bad3(u: User) -> ref String { let v = User { name: "q", age: 1 }; let r = ref v.name; r }
+fn main() {
+    let u = User { name: "ada", age: 36 };
+    println(bad(1));
+    println(bad2(u));
+}

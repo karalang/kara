@@ -1,0 +1,11 @@
+
+fn main() {
+    let v: Vec[Str] = vec!["ab", "cde"];
+    for c in v.iter() {
+        println(f"[{c:<6}][{c:>6}][{c:^7}]");
+    }
+    let owned: Vec[String] = vec!["xy".to_string()];
+    for o in owned.iter() {
+        println(f"[{o:<4}]");
+    }
+}

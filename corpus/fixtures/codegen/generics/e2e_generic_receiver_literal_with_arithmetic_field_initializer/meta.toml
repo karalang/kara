@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "expected.out at the spec form of floats (core-types.md § Printing), was assert e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "d411d92f3"
+classified_with = "3385ce51b"
 model_rev = "583cfb0d"
 model_src = "d69dea83"

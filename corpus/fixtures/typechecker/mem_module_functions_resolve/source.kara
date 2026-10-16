@@ -1,0 +1,8 @@
+fn main() {
+    let mut a: Vec[i64] = vec![1];
+    let mut b: Vec[i64] = vec![2, 3];
+    mem.swap(mut a, mut b);
+    let old = mem.replace(mut a, vec![9]);
+    let gone = mem.take(mut b);
+    println(f"{a.len()} {b.len()} {old.len()} {gone.len()}");
+}

@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "a format! template; the test fills in its holes"
 bucket = "d"
-classified_with = "5a266e1a1"
+classified_with = "3385ce51b"
 extracted_src = "9a79c6ed"

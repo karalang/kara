@@ -1,0 +1,8 @@
+
+fn main() {
+    let (tx, rx) = Channel.new();
+    let group = TaskGroup.new();
+    let h = group.spawn(|| { let v: i64 = rx.recv().unwrap(); v });
+    println(f"{h.join()}");
+    tx.send(1).unwrap();
+}

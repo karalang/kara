@@ -1,0 +1,12 @@
+
+enum RedirKind { In, Out, Append, Err }
+fn tk(s: Str) -> Result[i64, String] {
+    if s.is_empty() { return Err("empty".to_string()); }
+    Ok(2)
+}
+fn main() {
+    let k = RedirKind.In;
+    match k { RedirKind.Err => println("e"), _ => println("other") }
+    match tk("ab") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match tk("") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+}

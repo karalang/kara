@@ -1,0 +1,11 @@
+fn f(s: Str) -> i64 { s.len() }
+fn g() -> Str { "abc" }
+fn kind(c: char) -> Str { if c.is_ascii_digit() { "digit" } else { "other" } }
+fn main() {
+    let x: Str = "abc";
+    let v: Vec[Str] = vec!["ab", "c"];
+    let t: (Str, i64) = ("ab", 1);
+    let mut y: Str = "a";
+    y = "bc";
+    println(f"{f(x)} {v.len()} {t.1} {g()} {y} {kind('7')}");
+}

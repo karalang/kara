@@ -1,0 +1,13 @@
+example 1: true
+example 2: false
+no points: true
+one point: true
+a point on the line with its pair: true
+duplicates on one side: true
+half-integer line: true
+same xs, wrong ys: false
+column of points on the line: true
+one stray point: false
+negative coordinates: true
+large coordinates: true
+2000 random sets: 789 reflect, checksum 984383435

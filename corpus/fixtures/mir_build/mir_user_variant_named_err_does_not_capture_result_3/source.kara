@@ -1,0 +1,15 @@
+
+enum RedirKind { In, Out, Append, Err }
+enum Opt { None, Some(i64) }
+fn tk(s: Str) -> Result[i64, String] {
+    if s.is_empty() { return Err("empty".to_string()); }
+    Ok(2)
+}
+fn g(b: bool) -> Option[i64] { if b { Some(3) } else { None } }
+fn main() {
+    match tk("ab") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match tk("") { Ok(t) => println(f"{t}"), Err(e) => println(e) }
+    match g(false) { Some(x) => println(f"{x}"), None => println("none") }
+    let r: Result[i64, String] = Err("x".to_string());
+    if let Err(e) = r { println(e); }
+}

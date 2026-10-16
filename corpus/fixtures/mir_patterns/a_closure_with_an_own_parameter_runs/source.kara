@@ -1,0 +1,9 @@
+
+fn main() {
+    let f: Fn(own Vec[i64]) -> i64 = |v: own Vec[i64]| v.len();
+    let v: Vec[i64] = Vec.new();
+    println(f(v));
+    let g = |w: own Vec[i64], k: i64| w.len() + k;
+    let u: Vec[i64] = vec![1];
+    println(g(u, 10));
+}

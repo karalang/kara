@@ -1,0 +1,13 @@
+
+fn main() {
+    let group = TaskGroup.new(limit: 2);
+    let mut hs: Vec[TaskHandle[i64]] = Vec.new();
+    for i in 0..4 {
+        hs.push(group.spawn(|| { sleep_ms(300); i }));
+    }
+    let mut total = 0;
+    for h in hs.into_iter() {
+        total = total + h.join();
+    }
+    println(f"{total}");
+}

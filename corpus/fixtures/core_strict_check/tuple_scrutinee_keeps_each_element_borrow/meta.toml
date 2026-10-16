@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::tuple_scrutinee_keeps_each_element_borrow"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "3de4568b"
+model_rev = "583cfb0d"
+model_src = "3de4568b"

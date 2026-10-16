@@ -1,0 +1,9 @@
+fn square(x: i64) -> i64 { x * x }
+fn main() {
+    let mut t = 0;
+    for i in 0..3 {
+        t += square(i);
+    }
+    println(f"{t}");
+    println(f"{square(3037000500)}");
+}

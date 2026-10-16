@@ -1,0 +1,13 @@
+
+fn flip(v: mut ref Vec[i64]) {
+    let (_, right) = v.split_at_mut(1);
+    right.reverse();
+}
+
+fn main() {
+    let mut v = vec![1, 2, 3, 4];
+    flip(mut v);
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
+    let (a, b) = v.split_at(3);
+    println(f"{a.len()} {a[2]} {b.len()} {b[0]}");
+}

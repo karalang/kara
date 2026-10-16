@@ -1,0 +1,17 @@
+source = "tests/typechecker.rs::test_derive_default_container_field_accepted"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3385ce51b"
+extracted_src = "a0ba50ee"
+model_rev = "583cfb0d"
+model_src = "a0ba50ee"

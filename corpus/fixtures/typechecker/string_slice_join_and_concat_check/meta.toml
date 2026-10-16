@@ -1,0 +1,17 @@
+source = "tests/typechecker.rs::string_slice_join_and_concat_check"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "3385ce51b"
+extracted_src = "290a1b6f"
+model_rev = "583cfb0d"
+model_src = "290a1b6f"

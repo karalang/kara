@@ -1,0 +1,20 @@
+
+struct Peekable { n: i64 }
+enum Token { Letter(u8), IterMap(i64) }
+fn serde_next(n: i64) -> i64 { n + 1 }
+fn main() {
+    let s = Peekable { n: 4 };
+    let t = Token.IterMap(serde_next(2));
+    match t {
+        Token.IterMap(n) => println(f"map {n}"),
+        Token.Letter(c) => println(f"letter {c}"),
+    }
+    let v = vec![1, 2, 3];
+    let mut it = v.iter().peekable();
+    match it.peek() {
+        Some(x) => println(f"{x} {s.n}"),
+        None => println("none"),
+    }
+    let d: Vec[i64] = v.iter().map(|x| x * s.n).collect();
+    println(f"{d}");
+}

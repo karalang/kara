@@ -1,0 +1,54 @@
+
+fn main() {
+    let c = Client.new();
+    let base = "http://127.0.0.1:PORT";
+    match c.get(f"{base}/hello") {
+        Ok(r) => {
+            println(f"get {r.status()} [{r.body()}] {r.bytes().len()} bytes");
+            match r.header("X-KARA".to_string()) {
+                Some(v) => println(f"header {v}"),
+                None => println("no header"),
+            }
+            match r.header("x-absent".to_string()) {
+                Some(v) => println(f"absent {v}"),
+                None => println("no absent header"),
+            }
+            for (k, v) in r.headers() {
+                if k.to_lowercase() == "x-kara" {
+                    println(f"listed {v}");
+                }
+            }
+        }
+        Err(e) => println(f"get failed: {e.message()}"),
+    }
+    match c.post(f"{base}/echo", "posted body".to_string()) {
+        Ok(r) => println(f"post {r.status()} [{r.body()}]"),
+        Err(e) => println(f"post failed: {e.message()}"),
+    }
+    let req = c.request("PUT".to_string(), f"{base}/echo")
+        .header("X-Echo".to_string(), "from builder".to_string())
+        .body("built body".to_string())
+        .timeout(5000);
+    match req.send() {
+        Ok(r) => {
+            println(f"send {r.status()} [{r.body()}]");
+            match r.header("x-echo".to_string()) {
+                Some(v) => println(f"echoed {v}"),
+                None => println("no echo"),
+            }
+        }
+        Err(e) => println(f"send failed: {e.message()}"),
+    }
+    match c.get(f"{base}/missing") {
+        Ok(r) => println(f"missing {r.status()}"),
+        Err(e) => println(f"missing: {e.message()}"),
+    }
+    match c.get(f"{base}/empty") {
+        Ok(r) => println(f"empty {r.status()} [{r.body()}]"),
+        Err(e) => println(f"empty failed: {e.message()}"),
+    }
+    match c.get("http://127.0.0.1:1/") {
+        Ok(r) => println(f"refused? {r.status()}"),
+        Err(e) => println(f"refused: {e.message()}"),
+    }
+}

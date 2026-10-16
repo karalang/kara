@@ -1,0 +1,44 @@
+
+fn serve(listener: TcpListener, n: i64) -> i64 {
+    let mut total = 0;
+    let mut k = 0;
+    while k < n {
+        match listener.accept() {
+            Ok(conn) => {
+                println("accepted");
+                let mut buf: Array[u8, 16] = [0u8; 16];
+                match conn.read(mut buf) {
+                    Ok(m) => total += m,
+                    Err(_) => println("read failed"),
+                }
+            }
+            Err(_) => println("accept failed"),
+        }
+        k += 1;
+    }
+    total
+}
+fn client(msg: Str) {
+    sleep_ms(50);
+    match TcpStream.connect("127.0.0.1:47631".to_string()) {
+        Ok(c) => {
+            sleep_ms(50);
+            match c.write_all(msg.to_string().bytes()) { Ok(_) => println("client sent"), Err(_) => println("send failed") }
+        }
+        Err(_) => println("connect failed"),
+    }
+}
+fn main() {
+    match TcpListener.bind("127.0.0.1:47631".to_string()) {
+        Ok(listener) => {
+            let group = TaskGroup.new();
+            let server = group.spawn(|| serve(listener, 2));
+            let a = group.spawn(|| client("abc"));
+            let b = group.spawn(|| client("de"));
+            a.join();
+            b.join();
+            println(f"server read {server.join()} bytes");
+        }
+        Err(_) => println("bind failed"),
+    }
+}

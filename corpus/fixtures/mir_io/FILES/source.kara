@@ -2,6 +2,7 @@
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "not found".to_string(),
+        IoError.InvalidInput => "invalid input".to_string(),
         IoError.Other(m) => f"other {m}",
         _ => "some other error".to_string(),
     }

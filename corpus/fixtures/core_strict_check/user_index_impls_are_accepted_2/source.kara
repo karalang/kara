@@ -1,0 +1,11 @@
+struct Names { all: Vec[String] }
+impl Index[i64] for Names {
+    type Output = String;
+    fn index(self, i: i64) -> ref String { ref self.all[i] }
+}
+fn main() {
+    let mut n = Names { all: vec!["ada".to_string()] };
+    let s = n[0];
+    n[0] = "x".to_string();
+    println(s);
+}

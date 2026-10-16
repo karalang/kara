@@ -1,0 +1,16 @@
+
+fn main() {
+    let (tx, rx) = channel(1);
+    let group = TaskGroup.new();
+    group.spawn(|| {
+        let tx = tx;
+        for i in 0..3 {
+            tx.send(i).unwrap();
+            println(f"sent {i}");
+        }
+    });
+    for v in rx.into_iter() {
+        println(f"got {v}");
+    }
+    println("closed");
+}

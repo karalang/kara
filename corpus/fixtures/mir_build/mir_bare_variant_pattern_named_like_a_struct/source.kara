@@ -1,0 +1,29 @@
+
+enum Block { Heading(i64), Rule, Para { text: String } }
+struct Heading { level: i64 }
+struct Para { text: String }
+fn show(b: Block) -> String {
+    match b {
+        Heading(n) => f"h{n}",
+        Para { text } => f"p:{text}",
+        Rule => "rule",
+    }
+}
+fn lvl(h: Heading) -> i64 {
+    match h {
+        Heading { level } => level,
+    }
+}
+fn txt(p: ref Para) -> String {
+    let Para { text } = p;
+    text.clone()
+}
+fn main() {
+    println(show(Block.Heading(2)));
+    println(show(Block.Para { text: "x".to_string() }));
+    println(show(Block.Rule));
+    println(f"{lvl(Heading { level: 3 })}");
+    println(txt(Para { text: "y".to_string() }));
+    let b = Block.Heading(4);
+    if let Heading(k) = b { println(f"k{k}"); }
+}

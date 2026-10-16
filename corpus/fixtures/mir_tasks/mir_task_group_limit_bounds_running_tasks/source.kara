@@ -1,0 +1,9 @@
+
+fn work(name: Str) -> i64 { println(f"{name} start"); sleep_ms(150); println(f"{name} end"); 1 }
+fn main() {
+    let group = TaskGroup.new(limit: 1);
+    let a = group.spawn(|| work("a"));
+    let b = group.spawn(|| work("b"));
+    let c = group.spawn(|| work("c"));
+    println(f"{a.join() + b.join() + c.join()}");
+}

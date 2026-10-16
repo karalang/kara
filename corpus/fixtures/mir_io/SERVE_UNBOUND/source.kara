@@ -1,0 +1,11 @@
+
+fn handle(req: Request) -> Response {
+    Response { status: 200, body: req.path() }
+}
+
+fn main() {
+    match Server.serve("999.0.0.1:0".to_string(), handle) {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}

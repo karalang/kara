@@ -1,0 +1,18 @@
+fn dist(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)
+}
+fn mid(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    ((a.0 + b.0) / 2, (a.1 + b.1) / 2)
+}
+fn square(x: i64) -> i64 { x * x }
+fn main() {
+    let ps: Vec[(i64, i64)] = vec![(0, 0), (3, 4), (-6, 8)];
+    let mut total = 0;
+    for i in 0..ps.len() {
+        for j in 0..ps.len() {
+            total += dist(ps[i], ps[j]);
+        }
+    }
+    let m = mid(ps[1], ps[2]);
+    println(f"{total} {m.0} {m.1} {square(-7)}");
+}

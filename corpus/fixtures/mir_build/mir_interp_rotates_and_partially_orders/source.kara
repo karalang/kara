@@ -1,0 +1,18 @@
+
+fn main() {
+    let d: i32 = -2;
+    let e: u128 = 1u128;
+    let c: u8 = 0x81u8;
+    println(f"{d.rotate_left(1)} {d.rotate_right(1)} {e.rotate_right(1)} {c.rotate_left(64)}");
+    match 2.5.partial_cmp(1.0) {
+        Some(Ordering.Greater) => println("greater"),
+        Some(_) => println("other"),
+        None => println("unordered"),
+    }
+    let n = 0.0 / 0.0;
+    println(f"{n.partial_cmp(1.0).is_none()}");
+    let mut v = [2.5, 1.0, 3.0];
+    v.sort_by(|p, q| p.partial_cmp(q).unwrap());
+    let x: f32 = 1.5;
+    println(f"{v[0]} {v[1]} {v[2]} {x.partial_cmp(1.5) == Some(Ordering.Equal)}");
+}

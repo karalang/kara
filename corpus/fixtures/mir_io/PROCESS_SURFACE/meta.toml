@@ -1,0 +1,17 @@
+source = "tests/mir_io.rs::PROCESS_SURFACE"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["par", "post-m1:par", "post-m1:process", "io:fs", "io:stdin"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:exit"
+classified_with = "3385ce51b"
+extracted_src = "a7fe87ad"
+model_rev = "583cfb0d"
+model_src = "a7fe87ad"

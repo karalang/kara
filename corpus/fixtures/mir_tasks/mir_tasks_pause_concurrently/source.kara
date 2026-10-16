@@ -1,0 +1,9 @@
+
+fn work(n: i64) -> i64 { sleep_ms(500); n }
+fn main() {
+    let group = TaskGroup.new();
+    let a = group.spawn(|| work(1));
+    let b = group.spawn(|| work(2));
+    let c = group.spawn(|| work(3));
+    println(f"{a.join() + b.join() + c.join()}");
+}

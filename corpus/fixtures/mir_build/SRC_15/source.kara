@@ -1,0 +1,8 @@
+fn main() {
+    let s = "abc".to_string();
+    let t: (Vec[char], i64) = (s.chars().collect(), 1);
+    let mut pairs: Vec[(Vec[char], i64)] = Vec.new();
+    pairs.push((s.chars().collect(), 2));
+    let u: (String, i64) = (s.chars().rev().collect(), 3);
+    println(f"{t.0.len()} {pairs[0].0.len()} {pairs[0].1} {u.0} {u.1}");
+}

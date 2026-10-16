@@ -1,0 +1,12 @@
+
+fn main() {
+    let s: Str = "a";
+    let mut v: Vec[Str] = Vec.new();
+    v.push(s); v.push(s);
+    println(v.join(" "));
+    println(v[0..2].join(" "));
+    let n: Vec[i64] = vec![1, 2];
+    println(n.join(","));
+    let w = vec!["x".to_string(), "y".to_string()];
+    println(f"{w.join("-")} {w[0..2].join("+")} {w.concat()}");
+}

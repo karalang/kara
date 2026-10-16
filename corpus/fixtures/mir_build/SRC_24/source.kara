@@ -1,0 +1,15 @@
+
+const AA: Array[i64, 3] = [1, 2, 3];
+const PS: Array[(Str, i64), 2] = [("a", 1), ("b", 2)];
+
+fn main() {
+    let mut s = 0;
+    for x in AA.iter() {
+        s += *x;
+    }
+    println(f"{s}");
+    println(AA.iter().count());
+    for (k, v) in PS.iter() {
+        println(f"{k}={v}");
+    }
+}

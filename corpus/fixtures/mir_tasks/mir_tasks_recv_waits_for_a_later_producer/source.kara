@@ -1,0 +1,15 @@
+
+fn produce(tx: Sender[i64], n: i64) { let mut i = 0; while i < n { tx.send(i).unwrap(); println(f"sent {i}"); i += 1; } }
+fn main() {
+    let (tx, rx) = Channel.new();
+    let group = TaskGroup.new();
+    let total = group.spawn(|| {
+        let mut s = 0;
+        let mut k = 0;
+        while k < 3 { let v = rx.recv().unwrap(); println(f"got {v}"); s += v; k += 1; }
+        s
+    });
+    let p = group.spawn(|| produce(tx, 3));
+    p.join();
+    println(f"total {total.join()}");
+}

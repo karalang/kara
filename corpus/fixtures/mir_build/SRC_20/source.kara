@@ -1,0 +1,15 @@
+
+fn mk() -> Array[i64, 3] { return [10, 20, 30]; }
+
+fn main() {
+    let m = mk();
+    println(m.iter().count());
+    let s: i64 = m.iter().sum();
+    println(s);
+    println(mk().iter().count());
+    let t: i64 = mk().iter().map(|x| x * 2).sum();
+    println(t);
+    for x in mk().iter() {
+        println(x);
+    }
+}

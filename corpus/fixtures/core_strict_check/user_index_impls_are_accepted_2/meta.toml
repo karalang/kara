@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::user_index_impls_are_accepted"
+dedup_of = []
+expect = "error:E0285"
+exit = 1
+tags = ["ref-return"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "3385ce51b"
+extracted_src = "db98a49f"
+model_rev = "583cfb0d"
+model_src = "db98a49f"
