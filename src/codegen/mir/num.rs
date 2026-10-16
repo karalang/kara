@@ -810,6 +810,34 @@ impl<'ctx> Cx<'ctx, '_> {
             self.store_int_as(dest, v, false)?;
             return Ok(Some(()));
         }
+        // At every width, 128 bits included (B-2026-10-15-74).
+        if let ("rotate_left" | "rotate_right" | "partial_cmp", [_, y]) = (method, args) {
+            let x = self.operand_scalar(&args[0])?.into_int_value();
+            let xt = x.get_type();
+            if method == "partial_cmp" {
+                let xty = self.operand_type(&args[0])?;
+                let Some(y) = self.int_peer(x, xty, y)? else {
+                    return Ok(None);
+                };
+                self.int_partial_cmp(x, y, it.signed(), dest)?;
+                return Ok(Some(()));
+            }
+            // A funnel shift of `x` with itself: the amount is taken modulo
+            // the width, as Rust's `rotate_left` (B-2026-10-15-67).
+            let n = self.operand_scalar(y)?.into_int_value();
+            let n = self
+                .builder
+                .build_int_cast_sign_flag(n, xt, false, "")
+                .map_err(e)?;
+            let fsh = if method == "rotate_left" {
+                "fshl"
+            } else {
+                "fshr"
+            };
+            let v = self.int_intrinsic(fsh, &[x.into(), x.into(), n.into()], xt)?;
+            self.store_int_as(dest, v, false)?;
+            return Ok(Some(()));
+        }
         if it.bits() > 64 {
             return Ok(None);
         }
@@ -840,22 +868,6 @@ impl<'ctx> Cx<'ctx, '_> {
                         self.builder.build_int_sub(w, n, "").map_err(e)?
                     }
                 };
-                self.store_int_as(dest, v, false)?;
-            }
-            // A funnel shift of `x` with itself: the amount is taken modulo
-            // the width, as Rust's `rotate_left` (B-2026-10-15-67).
-            ("rotate_left" | "rotate_right", [y]) => {
-                let n = self.operand_scalar(y)?.into_int_value();
-                let n = self
-                    .builder
-                    .build_int_cast_sign_flag(n, xt, false, "")
-                    .map_err(e)?;
-                let fsh = if method == "rotate_left" {
-                    "fshl"
-                } else {
-                    "fshr"
-                };
-                let v = self.int_intrinsic(fsh, &[x.into(), x.into(), n.into()], xt)?;
                 self.store_int_as(dest, v, false)?;
             }
             ("is_power_of_two", []) => {
@@ -1089,6 +1101,38 @@ impl<'ctx> Cx<'ctx, '_> {
             ),
             _ => None,
         })
+    }
+
+    /// An integer's `partial_cmp`: always `Some` of the `Ordering`.
+    fn int_partial_cmp(
+        &mut self,
+        x: IntValue<'ctx>,
+        y: IntValue<'ctx>,
+        signed: bool,
+        dest: &Place,
+    ) -> R<()> {
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let (some, _) = self.option_variants(dty)?;
+        let ot = self
+            .tys
+            .field_ty(dty, Some(some), 0)
+            .ok_or("an option without a payload")?;
+        let (lt, gt) = if signed {
+            (IntPredicate::SLT, IntPredicate::SGT)
+        } else {
+            (IntPredicate::ULT, IntPredicate::UGT)
+        };
+        let b = &self.builder;
+        let i32t = self.llcx.i32_type();
+        let l = b.build_int_compare(lt, x, y, "").map_err(e)?;
+        let g = b.build_int_compare(gt, x, y, "").map_err(e)?;
+        let l = b.build_int_z_extend(l, i32t, "").map_err(e)?;
+        let g = b.build_int_z_extend(g, i32t, "").map_err(e)?;
+        let o = b.build_int_sub(g, l, "").map_err(e)?;
+        self.store_tag(d, dty, some)?;
+        let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+        self.store_ordering(q, ot, o)
     }
 
     /// `x.partial_cmp(y)`: `Some` of the `Ordering`, or `None` when either

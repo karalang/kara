@@ -2665,7 +2665,8 @@ fn mir_borrowck_scales_to_long_functions() {
 
 /// The MIR interpreter rotates signed and 128-bit integers too, and
 /// `partial_cmp` orders floats, with `None` for NaN (B-2026-10-15-67,
-/// B-2026-10-15-68). The compiled backends do not lower these yet.
+/// B-2026-10-15-68), and so does the compiled backend, integer
+/// `partial_cmp` included (B-2026-10-15-74).
 #[test]
 fn mir_interp_rotates_and_partially_orders() {
     let src = r#"
@@ -2685,14 +2686,21 @@ fn main() {
     v.sort_by(|p, q| p.partial_cmp(q).unwrap());
     let x: f32 = 1.5;
     println(f"{v[0]} {v[1]} {v[2]} {x.partial_cmp(1.5) == Some(Ordering.Equal)}");
+    let i: i64 = -3;
+    let u: u64 = 18446744073709551615u64;
+    let w: i128 = -1i128;
+    println(f"{i.partial_cmp(2) == Some(Ordering.Less)} {u.partial_cmp(1u64) == Some(Ordering.Greater)} {w.rotate_left(7)} {e.rotate_left(130)}");
 }
 "#;
+    let want = "-3 2147483647 170141183460469231731687303715884105728 129\ngreater\ntrue\n\
+                1.0 2.5 3.0 true\ntrue true -1 4\n";
     let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
-    assert_eq!(
-        interp.output,
-        "-3 2147483647 170141183460469231731687303715884105728 129\ngreater\ntrue\n\
-         1.0 2.5 3.0 true\n"
-    );
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
 }
 
 /// A variant constructed through a type alias is the target's variant:
