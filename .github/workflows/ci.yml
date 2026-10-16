@@ -582,17 +582,18 @@ jobs:
         # after a regression has already landed. The four are appended below,
         # unfiltered, and the guard fails the build if a fifth ever appears.
         #
-        # The MIR backend's four llvm-gated files are the sixth pocket
+        # The MIR backend's llvm-gated files are the sixth pocket
         # (2026-10-12): mir_asan (the ASan/LSan lane's instrument checks; it
         # skips without an ASan-capable cc), mir_build (`karac build --mir`),
-        # mir_io (I/O on the compiled MIR backend) and mir_tasks (TaskGroup
-        # scheduling, 2026-10-15).
+        # mir_io (I/O on the compiled MIR backend), mir_tasks (TaskGroup
+        # scheduling, 2026-10-15) and mir_regex (std.regex on both v2
+        # backends, against the regex archive built above, 2026-10-16).
         #
         # `--no-fail-fast` (2026-10-12): cargo stops at the first failing test
         # binary, and `cli` sorts before most of this list, so a week of the
         # plume pair timing out in `cli` meant `codegen`, `interpreter` and
         # every later target here never ran on CI.
-        run: cargo test --features llvm --no-fail-fast --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli --test example_packages --test safety_design --test safety_design_loop --test scaffold --test stdlib_span_table_isolation --test mir_asan --test mir_build --test mir_io --test mir_tasks
+        run: cargo test --features llvm --no-fail-fast --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli --test example_packages --test safety_design --test safety_design_loop --test scaffold --test stdlib_span_table_isolation --test mir_asan --test mir_build --test mir_io --test mir_tasks --test mir_regex
 
       # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
       # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and

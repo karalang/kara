@@ -24791,7 +24791,12 @@ fn bindings_ignored_on_non_wasm_target() {
         .args(["build", path.to_str().unwrap(), "--bindings=browser"])
         .current_dir(&tmp)
         .env_remove("KARAC_RUNTIME")
-        .output()
+        // 60 s rather than 15: on the WASM E2E runner this native build shares
+        // the box with the suite's wasm builds and has tripped the 15 s
+        // watchdog repeatedly (CI_RED_LOG, 10-02 to 10-16), each time green on
+        // a re-run. The last kill caught karac inside its `nm` symbol scan.
+        // A real hang still fails, just later.
+        .output_within(std::time::Duration::from_secs(60))
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success()
