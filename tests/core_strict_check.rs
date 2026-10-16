@@ -4926,3 +4926,67 @@ fn main() {
         "unary '*' requires",
     );
 }
+
+#[test]
+fn check_write_through_a_read_only_slice() {
+    // B-2026-10-15-61: `bytes()`, an unmarked range subscript and a
+    // `Slice[T]` parameter are read-only views; writing an element needs a
+    // `mut Slice[T]`. Both backends used to write into the source's buffer.
+    let expect = "read-only `Slice`, a view of another value's elements";
+    rejected(
+        "slice-write-bytes",
+        r#"
+fn main() {
+    let b = String.from("hello");
+    let mut t = b.bytes();
+    t[4] = 97;
+    println(f"{b} {String.from_utf8(t).unwrap()}");
+}
+"#,
+        expect,
+    );
+    rejected(
+        "slice-write-range",
+        r#"
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let mut s = v[0..2];
+    s[1] += 4;
+    println(f"{v}");
+}
+"#,
+        expect,
+    );
+    rejected(
+        "slice-write-param",
+        r#"
+struct P { x: i64 }
+fn set(ps: Slice[P]) {
+    ps[0].x = 5;
+}
+fn main() {
+    let mut ps: Vec[P] = vec![P { x: 1 }];
+    set(ps[0..1]);
+    println(f"{ps[0].x}");
+}
+"#,
+        expect,
+    );
+    accepted(
+        "slice-write-mut",
+        r#"
+fn bump(s: mut Slice[i64]) {
+    s[0] += 9;
+}
+fn main() {
+    let mut v: Vec[i64] = vec![1, 2, 3];
+    bump(mut v[1..3]);
+    let b = String.from("hello");
+    let mut t = b.bytes().to_vec();
+    t[4] = 97;
+    let w = v[0..2];
+    println(f"{v} {w[1]} {b} {String.from_utf8(t).unwrap()}");
+}
+"#,
+    );
+}

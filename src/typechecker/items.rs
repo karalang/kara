@@ -4612,6 +4612,83 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// B-2026-10-15-61 — an element of a read-only `Slice[T]` is not a
+    /// writable place. `s.bytes()`, an unmarked range subscript `v[a..b]` and
+    /// a `Slice[T]` parameter are views of another value's elements, and
+    /// docs/library/collections.md says writing through a slice needs a
+    /// `mut Slice[T]`. The in-place methods (`sort`, `swap`, `fill`) already
+    /// asked; `t[i] = x` did not, so it wrote into the source's own buffer,
+    /// a `String` literal's text included.
+    ///
+    /// Runs after the target was inferred, so each projection's type is
+    /// recorded. A range subscript makes a fresh view of its object, so it
+    /// passes the question on to that object; a handle (`shared`, `Rc`,
+    /// `Arc`) or a reference decides for itself and other checks own it.
+    fn check_read_only_slice_write(&mut self, target: &Expr) {
+        let mut cur = target;
+        loop {
+            let object = match &cur.kind {
+                ExprKind::Index { object, index } => {
+                    if !matches!(index.kind, ExprKind::Range { .. }) {
+                        let ty = self
+                            .expr_types
+                            .get(&SpanKey::from_span(&object.span))
+                            .cloned();
+                        match ty {
+                            Some(Type::Slice { mutable: false, .. }) => {
+                                if !matches!(&object.kind, ExprKind::Index { index, .. }
+                                    if matches!(index.kind, ExprKind::Range { .. }))
+                                {
+                                    let what = match &object.kind {
+                                        ExprKind::Identifier(n) => format!("`{n}`"),
+                                        _ => "this value".to_string(),
+                                    };
+                                    self.type_error(
+                                        format!(
+                                            "cannot assign through {what}: it is a read-only \
+                                             `Slice`, a view of another value's elements, and \
+                                             writing through a slice needs a `mut Slice[T]` \
+                                             (docs/library/collections.md). Copy it with \
+                                             `.to_vec()` to get a `Vec` of your own"
+                                        ),
+                                        target.span,
+                                        TypeErrorKind::TypeMismatch,
+                                    );
+                                    return;
+                                }
+                            }
+                            Some(Type::Slice { mutable: true, .. })
+                            | Some(Type::Ref(_))
+                            | Some(Type::MutRef(_))
+                            | Some(Type::Shared(_))
+                            | Some(Type::Rc(_))
+                            | Some(Type::Arc(_)) => return,
+                            _ => {}
+                        }
+                    }
+                    object
+                }
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    let handle = match self.expr_types.get(&SpanKey::from_span(&object.span)) {
+                        Some(Type::Shared(_) | Type::Rc(_) | Type::Arc(_)) => true,
+                        Some(Type::Named { name, .. }) => self
+                            .env
+                            .structs
+                            .get(name)
+                            .is_some_and(|s| s.is_shared || s.is_par),
+                        _ => false,
+                    };
+                    if handle {
+                        return;
+                    }
+                    object
+                }
+                _ => return,
+            };
+            cur = object;
+        }
+    }
+
     /// B-2026-10-04-61 — the left side of `=` or `op=` must be a PLACE: a
     /// binding, `self`, a field, an index, a tuple element or a `*`
     /// dereference, the shapes the interpreter's `assign_to_place` writes
@@ -8058,6 +8135,7 @@ impl<'a> super::TypeChecker<'a> {
                 let target_ty = self.infer_expr(target);
                 self.assigning_lhs = saved;
                 self.check_assignment_target_is_place(target, Some(value));
+                self.check_read_only_slice_write(target);
                 // B-2026-09-23-11 — the RHS is walked twice, once by the
                 // value-position checks above and once here against the
                 // target's type, so a fault INSIDE it (`s = s + y` with
@@ -8117,6 +8195,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 self.check_assignment_target_is_place(target, None);
+                self.check_read_only_slice_write(target);
             }
             // Handled by the early return above; kept for exhaustiveness.
             StmtKind::Expr(_) => {}
