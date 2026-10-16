@@ -102,16 +102,22 @@ fn insert_ready_loops(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
             ready_args.push(match a {
                 Operand::Move(p) => {
                     let pt = super::place_ty::place_ty(body, tys, p)?.ty;
-                    let by_copy = tys.is_copy(pt)
-                        || matches!(tys.kind(pt), TyKind::Ref(_) | TyKind::MutRef(_));
-                    if by_copy {
+                    if tys.is_copy(pt) || matches!(tys.kind(pt), TyKind::Ref(_)) {
                         Operand::Copy(p.clone())
                     } else {
-                        let rt = new_local(body, tys.intern(TyKind::Ref(pt)));
+                        // A `mut ref` is not Copy: `__ready` gets a shared
+                        // reborrow of its target, and anything else a shared
+                        // borrow of the argument, so the call still moves it
+                        // (B-2026-10-15-75).
+                        let (target, rt) = match tys.kind(pt) {
+                            TyKind::MutRef(t) => (p.project(ProjElem::Deref), t),
+                            _ => (p.clone(), pt),
+                        };
+                        let rt = new_local(body, tys.intern(TyKind::Ref(rt)));
                         stmts.push(Statement {
                             kind: StatementKind::Assign(
                                 Place::local(rt),
-                                Rvalue::Ref(BorrowKind::Shared, p.clone()),
+                                Rvalue::Ref(BorrowKind::Shared, target),
                             ),
                             source_info: si,
                         });

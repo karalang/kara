@@ -235,7 +235,9 @@ fn main() {
 }
 
 /// The spec's accept loop: a server task waiting in `accept` and `read`
-/// lets the client tasks that connect to it run.
+/// lets the client tasks that connect to it run, on the interpreter too:
+/// the `mut buf` the server reads into is reborrowed for `__ready`, not
+/// copied out of the frame (B-2026-10-15-75).
 #[test]
 fn mir_tasks_serve_clients_spawned_after_the_server() {
     let src = r#"
@@ -283,9 +285,7 @@ fn main() {
     }
 }
 "#;
-    let Some(out) = stdout_of("accept", src) else {
-        return;
-    };
+    let out = stdout_on_both("accept", src);
     let count = |l: &str| out.lines().filter(|x| *x == l).count();
     assert_eq!((count("accepted"), count("client sent")), (2, 2), "{out}");
     assert!(
