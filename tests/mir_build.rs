@@ -2826,3 +2826,33 @@ fn main() {
         }
     }
 }
+
+/// `*x` on the items of `zip` and `chain` over `.iter()` (B-2026-10-15-1).
+#[test]
+fn mir_zip_and_chain_items_deref() {
+    let src = r#"
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    a.len() == b.len() and a.iter().zip(b.iter()).all(|(x, y)| *x == *y)
+}
+fn main() {
+    let a: Vec[i64] = vec![1, 2, 3];
+    let b: Vec[i64] = vec![1, 2, 4];
+    let mut d = 0;
+    for (x, y) in a.iter().zip(b.iter()) { d += *y - *x; }
+    for p in a.iter().zip(b.iter()) { d += *p.1 - *p.0; }
+    let mut s = 0;
+    for x in a.iter().chain(b.iter()) { s += *x; }
+    let c: Vec[i64] = vec![4, 5, 6];
+    for (x, y) in a.iter().zip(c.into_iter()) { s += *x + y; }
+    println(f"{same(a, b)} {d} {s}");
+}
+"#;
+    let want = "false 2 34\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

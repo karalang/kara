@@ -4886,3 +4886,43 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn check_zip_and_chain_items_are_lent() {
+    // B-2026-10-15-1: the items of `a.iter().zip(b.iter())` and
+    // `a.iter().chain(b.iter())` are views, as `enumerate`'s are; in a zip
+    // with an owning side, only the lent half is.
+    accepted(
+        "zip-chain-lent",
+        r#"
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    a.len() == b.len() and a.iter().zip(b.iter()).all(|(x, y)| *x == *y)
+}
+fn main() {
+    let a: Vec[i64] = vec![1, 2, 3];
+    let b: Vec[i64] = vec![1, 2, 4];
+    let mut d = 0;
+    for (x, y) in a.iter().zip(b.iter()) { d += *y - *x; }
+    for p in a.iter().zip(b.iter()) { d += *p.1 - *p.0; }
+    let mut s = 0;
+    for x in a.iter().chain(b.iter()) { s += *x; }
+    let c: Vec[i64] = vec![4, 5, 6];
+    for (x, y) in a.iter().zip(c.into_iter()) { s += *x + y; }
+    println(f"{same(a, b)} {d} {s}");
+}
+"#,
+    );
+    rejected(
+        "zip-owned-half",
+        r#"
+fn main() {
+    let a: Vec[i64] = vec![1, 2, 3];
+    let b: Vec[i64] = vec![4, 5, 6];
+    let mut d = 0;
+    for (x, y) in a.iter().zip(b.into_iter()) { d += x + *y; }
+    println(f"{d}");
+}
+"#,
+        "unary '*' requires",
+    );
+}

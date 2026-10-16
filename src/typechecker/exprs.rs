@@ -7667,6 +7667,22 @@ impl<'a> super::TypeChecker<'a> {
                     for n in pattern.binding_names() {
                         self.local_scope.mark_view(&n);
                     }
+                } else if self.cli_lint_overrides.strict_core {
+                    // A zip with one lending side (`a.iter().zip(b.into_iter())`):
+                    // the bindings of the lent half are views (B-2026-10-15-1).
+                    if let (PatternKind::Tuple(subs), super::CoreLent::Tuple(lent)) =
+                        (&pattern.kind, Self::core_lent_items(iterable))
+                    {
+                        if subs.len() == lent.len() {
+                            for (sub, l) in subs.iter().zip(lent.iter()) {
+                                if matches!(l, super::CoreLent::Yes(_)) {
+                                    for n in sub.binding_names() {
+                                        self.local_scope.mark_view(&n);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 // On the MIR pipeline a bare `for` over a collection binds a
                 // `Copy` item (or part of one) by value; it is still a view

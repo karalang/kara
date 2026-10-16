@@ -6017,11 +6017,25 @@ impl<'a> super::TypeChecker<'a> {
     /// unchanged, such as `enumerate` or `rev`), so a `for` over it binds refs.
     pub(super) fn core_iter_yields_refs(iterable: &Expr) -> bool {
         let mut e = iterable;
-        while let ExprKind::MethodCall { object, method, .. } = &e.kind {
+        while let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        {
             match method.as_str() {
                 "iter" | "iter_mut" | "keys" | "values" | "values_mut" => return true,
                 "enumerate" | "rev" | "skip" | "take" | "step_by" | "filter" | "peekable"
-                | "skip_while" | "take_while" => e = object,
+                | "skip_while" | "take_while" | "chain" => e = object,
+                // Both halves of a zip are lent when both iterators lend
+                // their items (B-2026-10-15-1).
+                "zip" => {
+                    return Self::core_iter_yields_refs(object)
+                        && args
+                            .first()
+                            .is_some_and(|a| Self::core_iter_yields_refs(&a.value));
+                }
                 _ => return false,
             }
         }
