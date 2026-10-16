@@ -11921,6 +11921,49 @@ fn total_form(v: Value) -> Value {
     }
 }
 
+/// `RegexEngine.find_from`: the first match at byte `at` or later, as the
+/// offsets of the first `n / 2` groups (-1 for a group that did not take
+/// part). An empty match ending at `last_end` is skipped and the search
+/// moves on one character, as the crate's iterators skip it
+/// (B-2026-10-14-63). runtime/src/mir_regex.rs has the same function.
+fn regex_find_from(
+    re: &regex::Regex,
+    s: &str,
+    at: i64,
+    last_end: i64,
+    n: usize,
+) -> Option<Vec<i64>> {
+    let mut at = at;
+    loop {
+        if at < 0 || at as usize > s.len() || !s.is_char_boundary(at as usize) {
+            return None;
+        }
+        let from = at as usize;
+        let mut slots = vec![-1i64; n];
+        let (start, end) = if n <= 2 {
+            let m = re.find_at(s, from)?;
+            (m.start(), m.end())
+        } else {
+            let caps = re.captures_at(s, from)?;
+            for (g, slot) in slots.chunks_mut(2).enumerate() {
+                if let (Some(m), [a, b]) = (caps.get(g), slot) {
+                    (*a, *b) = (m.start() as i64, m.end() as i64);
+                }
+            }
+            let m = caps.get(0)?;
+            (m.start(), m.end())
+        };
+        if start == end && end as i64 == last_end {
+            at += s[from..].chars().next().map_or(1, char::len_utf8) as i64;
+            continue;
+        }
+        if n >= 2 {
+            (slots[0], slots[1]) = (start as i64, end as i64);
+        }
+        return Some(slots);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12813,48 +12856,5 @@ fn main() {
             "{:?}",
             r.outcome
         );
-    }
-}
-
-/// `RegexEngine.find_from`: the first match at byte `at` or later, as the
-/// offsets of the first `n / 2` groups (-1 for a group that did not take
-/// part). An empty match ending at `last_end` is skipped and the search
-/// moves on one character, as the crate's iterators skip it
-/// (B-2026-10-14-63). runtime/src/mir_regex.rs has the same function.
-fn regex_find_from(
-    re: &regex::Regex,
-    s: &str,
-    at: i64,
-    last_end: i64,
-    n: usize,
-) -> Option<Vec<i64>> {
-    let mut at = at;
-    loop {
-        if at < 0 || at as usize > s.len() || !s.is_char_boundary(at as usize) {
-            return None;
-        }
-        let from = at as usize;
-        let mut slots = vec![-1i64; n];
-        let (start, end) = if n <= 2 {
-            let m = re.find_at(s, from)?;
-            (m.start(), m.end())
-        } else {
-            let caps = re.captures_at(s, from)?;
-            for (g, slot) in slots.chunks_mut(2).enumerate() {
-                if let (Some(m), [a, b]) = (caps.get(g), slot) {
-                    (*a, *b) = (m.start() as i64, m.end() as i64);
-                }
-            }
-            let m = caps.get(0)?;
-            (m.start(), m.end())
-        };
-        if start == end && end as i64 == last_end {
-            at += s[from..].chars().next().map_or(1, char::len_utf8) as i64;
-            continue;
-        }
-        if n >= 2 {
-            (slots[0], slots[1]) = (start as i64, end as i64);
-        }
-        return Some(slots);
     }
 }
