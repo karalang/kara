@@ -2603,15 +2603,12 @@ fn mir_unsuffixed_i128_min_takes_its_type_from_inference() {
             assert_eq!(out, want, "at -O{opt}");
         }
     }
-    let err = karac::mir::lower::run_source(
+    let Err(err) = karac::mir::lower::run_source(
         "fn main() {\n    let w = -170141183460469231731687303715884105728;\n    println(f\"{w}\");\n}\n",
-    )
-    .err()
-    .expect("an untyped i128::MIN is out of range for i64");
-    assert!(
-        format!("{err:?}").contains("out of range for 'i64'"),
-        "{err:?}"
-    );
+    ) else {
+        panic!("an untyped i128::MIN is out of range for i64");
+    };
+    assert!(err.contains("out of range for 'i64'"), "{err}");
 }
 
 /// A string literal is a `Str` wherever a `Str` is expected, including a
