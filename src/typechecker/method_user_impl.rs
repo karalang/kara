@@ -27,6 +27,11 @@ use crate::typechecker::type_to_concrete_or_param_name;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
+/// `Slice[T]` methods an `Array[T, N]` receiver reaches through a read-only
+/// view (B-2026-10-15-60). Its own read arm already covers `len`, `get`,
+/// `first`, `last`, `contains` and the iterator sources.
+const ARRAY_SLICE_READ_METHODS: &[&str] = &["to_vec", "binary_search", "windows", "chunks"];
+
 impl<'a> super::TypeChecker<'a> {
     /// Dispatch a method call to a user `impl` block.
     ///
@@ -520,6 +525,19 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         return Type::Error;
                     }
+                } else if matches!(receiver_for_lookup, Type::Array { .. })
+                    && !self.array_user_impl_declares(method)
+                    && ARRAY_SLICE_READ_METHODS.contains(&method)
+                {
+                    // design.md § Method resolution: an `Array[T, N]`
+                    // receiver also finds `Slice[T]`'s methods, after its
+                    // own. The read-only ones type as on a `Slice[T]` view
+                    // (`MAGIC.to_vec()`, B-2026-10-15-60).
+                    let element = match &receiver_for_lookup {
+                        Type::Array { element, .. } => (**element).clone(),
+                        _ => unreachable!(),
+                    };
+                    return self.infer_slice_method(&element, false, object, method, args, span);
                 } else if matches!(receiver_for_lookup, Type::Array { .. })
                     && !self.array_user_impl_declares(method)
                 {

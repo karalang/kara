@@ -5101,3 +5101,19 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn check_array_reaches_slice_read_methods() {
+    // B-2026-10-15-60: `a.to_vec()` on an `Array[T, N]` was refused with
+    // "no method 'to_vec' on type 'Array'".
+    accepted(
+        "array-to-vec",
+        r#"
+const MAGIC: Array[i64, 3] = [1, 2, 3];
+fn main() {
+    let a: Array[i64, 3] = [4, 5, 6];
+    println(f"{a.to_vec().len()} {MAGIC.to_vec() == vec![1, 2, 3]}");
+}
+"#,
+    );
+}

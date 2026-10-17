@@ -1677,8 +1677,9 @@ impl<'a> Interp<'a> {
                 }
                 Ok(self.alloc_box(ty_name, Value::Agg(elems.clone())))
             }
-            ("Slice" | "Vec", "to_vec") => {
-                // A new Vec of clones of the receiver's elements.
+            ("Slice" | "Vec" | "Array", "to_vec") => {
+                // A new Vec of clones of the receiver's elements. An array
+                // reaches it as a `Slice[T]` does (B-2026-10-15-60).
                 let [view] = args.as_slice() else {
                     return err(format!("{name} takes a receiver"));
                 };
@@ -1725,7 +1726,7 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Unit)
             }
-            ("Vec" | "Slice", "binary_search") => {
+            ("Vec" | "Slice" | "Array", "binary_search") => {
                 // Rust's binary search over the elements' key forms, as
                 // legacy runs it: the index of an equal element, if found.
                 let [view, x] = args.as_slice() else {

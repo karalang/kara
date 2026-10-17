@@ -13837,9 +13837,11 @@ fn test_absent_fixed_array_methods_rejected_with_iter_hint() {
     // B-2026-07-17-19: methods the backends don't run on a fixed array
     // (`to_vec`/`rev`/typos) are rejected, not silently typed Error; a direct
     // iterator adaptor gets the actionable `.iter()` hint (arrays are iterable).
+    // `to_vec` left this list with B-2026-10-15-60: an array reaches
+    // `Slice[T]`'s read methods (design.md § Method resolution), and both v2
+    // backends run it.
     for prog in [
         "fn main() { let a: Array[i64, 3] = [1, 2, 3]; a.some_typo(); }",
-        "fn main() { let a: Array[i64, 3] = [1, 2, 3]; let _ = a.to_vec(); }",
         "fn main() { let a: Array[i64, 3] = [1, 2, 3]; let _ = a.rev(); }",
     ] {
         let errors = typecheck_errors(prog);

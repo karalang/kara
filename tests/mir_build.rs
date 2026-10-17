@@ -2960,3 +2960,33 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_array_reaches_slice_read_methods() {
+    // B-2026-10-15-60: an `Array[T, N]` receiver also finds `Slice[T]`'s
+    // methods (design.md § Method resolution): `to_vec`, `binary_search`,
+    // `windows` and `chunks` on a local array and on a `const` one.
+    let src = r#"
+const MAGIC: Array[i64, 3] = [1, 2, 3];
+fn main() {
+    let a: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let v = a.to_vec();
+    let header: Vec[i64] = vec![1, 2, 3];
+    println(f"{v.len()} {header == MAGIC.to_vec()} {a.binary_search(4)}");
+    let s: Array[String, 2] = ["x".to_string(), "y".to_string()];
+    let t = s.to_vec();
+    println(f"{t} {s[1]}");
+    for w in a.windows(2) { print(f"{w[0] + w[1]} "); }
+    for c in a.chunks(2) { print(f"{c.len()} "); }
+    println("");
+}
+"#;
+    let want = "5 true Some(3)\n[x, y] y\n3 5 7 9 2 2 1 \n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
