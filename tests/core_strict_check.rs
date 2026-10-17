@@ -5035,3 +5035,42 @@ fn main() { println(f"{g(1)}"); }
         "integer literal 300 out of range for 'u8'",
     );
 }
+
+#[test]
+fn check_arithmetic_literal_must_fit_its_peer() {
+    // B-2026-10-17-1: an unsuffixed literal beside `+ - * / %` takes its
+    // peer's type and must fit it; `300 + y` over `y: u8` wrapped to 45.
+    rejected(
+        "arith-literal-add",
+        r#"
+fn h(y: u8) -> u8 {
+    300 + y
+}
+fn main() { println(f"{h(1)}"); }
+"#,
+        "integer literal 300 out of range for 'u8'",
+    );
+    rejected(
+        "arith-literal-mul",
+        r#"
+fn k(y: u8) -> u8 {
+    y * 1000
+}
+fn main() { println(f"{k(1)}"); }
+"#,
+        "integer literal 1000 out of range for 'u8'",
+    );
+    accepted(
+        "arith-literal-fits",
+        r#"
+fn h(y: u8) -> u8 {
+    255 - y
+}
+fn main() {
+    let c: u8 = 7;
+    let big = c < 300;
+    println(f"{h(1)} {c * 30} {big}");
+}
+"#,
+    );
+}

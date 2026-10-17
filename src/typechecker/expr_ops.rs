@@ -330,6 +330,20 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-10-17-1 — a literal promoted beside an arithmetic operator
+    /// must fit its peer's type: `300 + y` with `y: u8` is an error, not a
+    /// `u8` 300 that wraps to 44. (A comparison is left alone: `c < 300`
+    /// over `c: u8` is a meaningful test.) A negated literal is range-checked
+    /// before it is promoted at all, and one past `i64` by
+    /// `record_promoted_literal`.
+    fn check_promoted_arith_literal(&mut self, e: &Expr, ty: &Type) {
+        if let ExprKind::Integer(n, None) = &e.kind {
+            if matches!(ty, Type::Int(_) | Type::UInt(_)) && i64::try_from(*n).is_ok() {
+                self.check_int_literal_fits(*n, ty, &e.span, None);
+            }
+        }
+    }
+
     /// Record a literal [`Self::unsuffixed_num_literal`] accepted at the type
     /// it promotes to. The negated form records its operand as well, so the
     /// minus and the magnitude agree on the width the backends lower.
@@ -3081,6 +3095,10 @@ impl<'a> super::TypeChecker<'a> {
         // After promotion these hold the effective operand types seen by the
         // match arms below. Initialised to the inferred types; overwritten when
         // promotion fires.
+        let is_arith_op = matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        );
         let (eff_left_ty, eff_right_ty) = if is_promotable_op {
             // B-2026-09-29-94: `-1` is a literal too (`Neg(Integer)`), so it
             // promotes exactly as `1` does.
@@ -3094,6 +3112,9 @@ impl<'a> super::TypeChecker<'a> {
                     !(right_lit == Some(true) && matches!(left_ty, Type::Int(_) | Type::UInt(_)));
                 if can_promote {
                     self.record_promoted_literal(right, &left_ty);
+                    if is_arith_op {
+                        self.check_promoted_arith_literal(right, &left_ty);
+                    }
                     (left_ty.clone(), left_ty.clone())
                 } else {
                     (left_ty.clone(), right_ty.clone())
@@ -3103,6 +3124,9 @@ impl<'a> super::TypeChecker<'a> {
                     !(left_lit == Some(true) && matches!(right_ty, Type::Int(_) | Type::UInt(_)));
                 if can_promote {
                     self.record_promoted_literal(left, &right_ty);
+                    if is_arith_op {
+                        self.check_promoted_arith_literal(left, &right_ty);
+                    }
                     (right_ty.clone(), right_ty.clone())
                 } else {
                     (left_ty.clone(), right_ty.clone())
