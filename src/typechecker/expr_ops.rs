@@ -3115,6 +3115,31 @@ impl<'a> super::TypeChecker<'a> {
         };
         let left_ty = eff_left_ty;
         let right_ty = eff_right_ty;
+        // B-2026-10-15-51: beside `& | ^`, an operand built only from
+        // unsuffixed integer literals (`0xC0`, `1 << 8`) takes the other
+        // operand's integer type, each leaf range-checked at it: `0xC0 | c`
+        // with `c: u8` is a `u8`. When both sides are such trees there is no
+        // typed peer, and the context types the whole tree (B-2026-10-06-88).
+        let (left_ty, right_ty) = if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor) {
+            let is_int = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_));
+            let left_tree = Self::is_int_literal_operator_tree(left);
+            let right_tree = Self::is_int_literal_operator_tree(right);
+            if right_tree && !left_tree && is_int(&left_ty) && left_ty != right_ty {
+                if !self.promote_int_literal_operator_tree(right, &left_ty) {
+                    return Type::Error;
+                }
+                (left_ty.clone(), left_ty)
+            } else if left_tree && !right_tree && is_int(&right_ty) && left_ty != right_ty {
+                if !self.promote_int_literal_operator_tree(left, &right_ty) {
+                    return Type::Error;
+                }
+                (right_ty.clone(), right_ty)
+            } else {
+                (left_ty, right_ty)
+            }
+        } else {
+            (left_ty, right_ty)
+        };
 
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -3600,7 +3625,27 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
-                if !types_compatible(&left_ty, &right_ty) {
+                // B-2026-10-15-53: `& | ^` take two operands of ONE integer
+                // type, as the arithmetic operators do; any literal operand
+                // was promoted to its peer above. `types_compatible` admits
+                // any two integer types, so `u128 & i64` passed here and
+                // the MIR validator refused the program at run.
+                if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+                    && matches!(left_ty, Type::Int(_) | Type::UInt(_))
+                    && matches!(right_ty, Type::Int(_) | Type::UInt(_))
+                    && left_ty != right_ty
+                {
+                    self.type_error(
+                        format!(
+                            "cannot mix integer types '{}' and '{}' in a bitwise operation \
+                             — they must match; cast one operand explicitly with `as`",
+                            type_display(&left_ty),
+                            type_display(&right_ty)
+                        ),
+                        right.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                } else if !types_compatible(&left_ty, &right_ty) {
                     self.type_error(
                         format!(
                             "expected '{}', found '{}'",

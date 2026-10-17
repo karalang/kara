@@ -4990,3 +4990,48 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn check_unsuffixed_literal_beside_bitwise_and_in_branches() {
+    // B-2026-10-15-51 / -52 / -53: a literal takes its peer's integer type
+    // beside `& | ^` and in an `if` or `match` branch; two different integer
+    // types under `& | ^` are refused as under `+`.
+    accepted(
+        "literal-peer-type",
+        r#"
+fn f(c: bool, y: u128) -> u128 {
+    let x = if c { 0 } else { y };
+    let w = match y { 0 => 1, _ => x };
+    w
+}
+fn main() {
+    let c: u8 = 20;
+    let d: u8 = 0xC0 ^ c;
+    let x: u8 = 0x80 | (c & 0x3F);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(0xC0 | (c >> 6));
+    println(f"{d} {x} {out[0]} {f(true, 5)}");
+}
+"#,
+    );
+    rejected(
+        "bitwise-mixed-types",
+        r#"
+fn f(a: u128, b: i64) -> u128 {
+    a & b
+}
+fn main() { println(f"{f(12, 4)}"); }
+"#,
+        "cannot mix integer types 'u128' and 'i64' in a bitwise operation",
+    );
+    rejected(
+        "bitwise-literal-out-of-range",
+        r#"
+fn g(y: u8) -> u8 {
+    300 | y
+}
+fn main() { println(f"{g(1)}"); }
+"#,
+        "integer literal 300 out of range for 'u8'",
+    );
+}

@@ -2864,3 +2864,54 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_unsuffixed_literal_takes_its_peers_integer_type() {
+    // B-2026-10-15-51 / -52: an unsuffixed literal on the left of `& | ^`,
+    // or in the first branch of an `if` or `match`, takes the other
+    // operand's or branch's type rather than defaulting to `i64`.
+    let src = r#"
+fn enc(c: u8) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    out.push(0xC0 | (c >> 6));
+    out.push(0x80 | (c & 0x3F));
+    out
+}
+fn f(c: bool, y: u128) -> u128 {
+    let x = if c { 0 } else { y };
+    x
+}
+fn g(c: bool, y: u8) -> u8 {
+    let x = if c { y } else { 7 };
+    let z = if c { 1 } else if y > 3 { 2 } else { y };
+    x + z
+}
+fn m(k: i64, y: u128) -> u128 {
+    let x = match k { 0 => 0, 1 => { 3 } _ => y };
+    x
+}
+fn h(y: u16) -> u16 {
+    y | (1 << 8) | (3 & 1)
+}
+fn top() -> u128 {
+    (0xFFFF_FFFF_FFFF_FFFF << 64) | 0xFFFF_FFFF_FFFF_FFFF
+}
+fn main() {
+    let c: u8 = 20;
+    let d: u8 = 0xC0 ^ c;
+    let x: u8 = 0x80 | (c & 0x3F);
+    let e = enc(233);
+    println(f"{d} {x} {e[0]} {e[1]}");
+    println(f"{f(true, 5)} {f(false, 5)} {g(true, 9)} {g(false, 9)} {m(0, 5)} {m(1, 5)} {m(2, 5)}");
+    println(f"{h(1)} {top()}");
+}
+"#;
+    let want = "212 148 195 169\n0 5 10 9 0 3 5\n257 340282366920938463463374607431768211455\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

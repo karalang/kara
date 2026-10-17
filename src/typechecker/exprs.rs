@@ -3704,6 +3704,22 @@ impl<'a> super::TypeChecker<'a> {
         self.retype_partial_node(e.id, ty);
     }
 
+    /// B-2026-10-15-52 — the unsuffixed numeric literal `e` (a branch's
+    /// value, or a block holding only that) ends with, when the sibling
+    /// branch's concrete numeric type `peer` can hold it: a float literal
+    /// never becomes an integer.
+    pub(super) fn literal_taking_branch_type<'e>(e: &'e Expr, peer: &Type) -> Option<&'e Expr> {
+        let e = match &e.kind {
+            ExprKind::Block(b) if b.stmts.is_empty() => b.final_expr.as_deref()?,
+            _ => e,
+        };
+        let fits = match Self::unsuffixed_num_literal(e, peer)? {
+            true => matches!(peer, Type::Float(_)),
+            false => matches!(peer, Type::Int(_) | Type::UInt(_) | Type::Float(_)),
+        };
+        fits.then_some(e)
+    }
+
     /// Two closure return types that agree once each fills in what the other
     /// leaves open: `Option[T]` of a bare `None` with `Option[String]`,
     /// `Result[i64, E]` with `Result[T, String]`. `None` when they differ,
@@ -5807,7 +5823,7 @@ impl<'a> super::TypeChecker<'a> {
         Some(ty)
     }
 
-    fn is_int_literal_operator_tree(e: &Expr) -> bool {
+    pub(super) fn is_int_literal_operator_tree(e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Integer(_, None) => true,
             ExprKind::Unary {
@@ -5836,7 +5852,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Record every leaf literal and operator node of an
     /// [`Self::is_int_literal_operator_tree`] at `ty`, range-checking each
     /// leaf. A shift's right side keeps the type synthesis gave it.
-    fn promote_int_literal_operator_tree(&mut self, e: &Expr, ty: &Type) -> bool {
+    pub(super) fn promote_int_literal_operator_tree(&mut self, e: &Expr, ty: &Type) -> bool {
         match &e.kind {
             ExprKind::Integer(n, None) => {
                 if !self.check_int_literal_fits(*n, ty, &e.span, None) {
@@ -7501,6 +7517,29 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     if else_ty == Type::Never {
                         return then_ty;
+                    }
+                    // B-2026-10-15-52: an unsuffixed literal tail takes the
+                    // other branch's numeric type, whichever branch it is in:
+                    // `if c { 0 } else { y }` with `y: u128` is a `u128`.
+                    if then_ty != else_ty {
+                        let then_lit = then_block.stmts.is_empty().then_some(()).and_then(|_| {
+                            Self::literal_taking_branch_type(
+                                then_block.final_expr.as_deref()?,
+                                &else_ty,
+                            )
+                        });
+                        if let Some(t) = then_lit {
+                            self.record_promoted_literal(t, &else_ty);
+                            self.record_expr_type(&then_block.span, &else_ty);
+                            return else_ty;
+                        }
+                        if let Some(t) = Self::literal_taking_branch_type(else_expr, &then_ty) {
+                            self.record_promoted_literal(t, &then_ty);
+                            if !std::ptr::eq(t, else_expr.as_ref()) {
+                                self.record_expr_type(&else_expr.span, &then_ty);
+                            }
+                            return then_ty;
+                        }
                     }
                     match self.join_branch_types(&then_ty, &else_ty) {
                         Some(joined) => joined,

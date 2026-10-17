@@ -3381,11 +3381,13 @@ fn e2e_float_to_bits_codegen() {
                  let b32: i64 = (1.5_f64).to_bits32();\n\
                  println(b32.bits_as_f32());\n\
                  let mut acc: i64 = 0i64;\n\
-                 acc = acc ^ (2.0_f64).to_bits();\n\
-                 acc = acc ^ (3.0_f64).to_bits();\n\
+                 acc = acc ^ ((2.0_f64).to_bits() as i64);\n\
+                 acc = acc ^ ((3.0_f64).to_bits() as i64);\n\
                  println(acc);\n\
              }",
     ) {
+        // B-2026-10-15-53: `acc ^ x.to_bits()` mixed `i64` with `u64`, which
+        // `& | ^` now refuse as `+` does, so the program casts.
         // B-2026-08-11-20: the `-0.0` line read `-9223372036854775808`
         // until this row. `to_bits` is declared `-> u64`, and the
         // interpreter has always printed the unsigned `9223372036854775808`

@@ -744,6 +744,28 @@ impl<'a> super::TypeChecker<'a> {
         // homogeneous match keeps its previous result type. On the first
         // incompatible arm, emit a single `BranchTypeMismatch` and stop
         // widening (the running `result_ty` is the recovery type).
+        // B-2026-10-15-52: an arm that is an unsuffixed literal takes the
+        // numeric type of the first arm that is not one, whichever comes
+        // first: `match k { 0 => 0, _ => y }` with `y: u128` is a `u128`.
+        let peer = arms.iter().zip(&arm_types).find_map(|(arm, t)| {
+            (matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+                && Self::literal_taking_branch_type(&arm.body, t).is_none())
+            .then(|| t.clone())
+        });
+        if let Some(peer) = peer {
+            for (arm, t) in arms.iter().zip(arm_types.iter_mut()) {
+                if *t == peer {
+                    continue;
+                }
+                if let Some(lit) = Self::literal_taking_branch_type(&arm.body, &peer) {
+                    self.record_promoted_literal(lit, &peer);
+                    if !std::ptr::eq(lit, &arm.body) {
+                        self.record_expr_type(&arm.body.span, &peer);
+                    }
+                    *t = peer.clone();
+                }
+            }
+        }
         let mut result_ty = arm_types
             .iter()
             .find(|t| **t != Type::Never)
