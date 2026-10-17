@@ -2554,16 +2554,20 @@ impl super::Parser {
             return self.parse_struct_literal_body(vec![name], &start);
         }
 
+        // The four `Name[...]` forms below take a TYPE head. A Const-class
+        // name (`NAMES`, all capitals) is never a type, so `NAMES[i].len()`
+        // and `NAMES[i as i64].to_string()` index the constant
+        // (B-2026-10-06-107).
+        let type_head = starts_upper(&name)
+            && crate::lexer::classify_ident(&name) != crate::lexer::IdentClass::Const;
+
         // Concrete-type UFCS: `TypeName[Type, ...].method(...)`. When an
         // uppercase identifier is followed by `[…]` and immediately by
         // `.identifier(`, the `[…]` carries generic type arguments rather
         // than a collection literal. Emit `Path { segments, generic_args }`
         // so the postfix `.method(...)` chain produces a `MethodCall` whose
         // object resolves through `find_method_with_args`.
-        if starts_upper(&name)
-            && self.check(&Token::LeftBracket)
-            && self.lookahead_concrete_type_ufcs()
-        {
+        if type_head && self.check(&Token::LeftBracket) && self.lookahead_concrete_type_ufcs() {
             // Reuse the same routing as `parse_generic_type_args` so the
             // UFCS path accepts mixed type / const args (const generics
             // slice 1b — call-site const-arg binding).
@@ -2584,10 +2588,7 @@ impl super::Parser {
         // args attached, so every downstream phase that matches
         // `Path { segments, .. }` keeps working unchanged and only the
         // typechecker has to read the args.
-        if starts_upper(&name)
-            && self.check(&Token::LeftBracket)
-            && self.lookahead_generic_variant_const()
-        {
+        if type_head && self.check(&Token::LeftBracket) && self.lookahead_generic_variant_const() {
             let args = self.parse_generic_type_args()?;
             self.expect(&Token::Dot)?;
             let variant = self.expect_identifier()?;
@@ -2606,7 +2607,7 @@ impl super::Parser {
         // same two-segment `StructLiteral` path the unqualified `Enum.Variant
         // { … }` form produces, with the args attached — so the typechecker's
         // existing `path[len - 2]` enum-variant dispatch serves it unchanged.
-        if starts_upper(&name)
+        if type_head
             && self.check(&Token::LeftBracket)
             && self.lookahead_generic_variant_struct_literal()
         {
@@ -2620,10 +2621,7 @@ impl super::Parser {
         // intercepted BEFORE the postfix `[` index loop, exactly like the UFCS
         // form above — otherwise the bracket is consumed as a subscript and the
         // brace opens a block. B-2026-08-24-3.
-        if starts_upper(&name)
-            && self.check(&Token::LeftBracket)
-            && self.lookahead_generic_struct_literal()
-        {
+        if type_head && self.check(&Token::LeftBracket) && self.lookahead_generic_struct_literal() {
             let args = self.parse_generic_type_args()?;
             return self.parse_struct_literal_body_generic(vec![name], Some(args), &start);
         }

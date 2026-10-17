@@ -2990,3 +2990,32 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_method_on_a_const_element_at_a_computed_index() {
+    // B-2026-10-06-107: `NM[i].len()` on a `const` was parsed as the
+    // type-qualified call `Type[Args].method()`, and `NAMES[k as i64]` was a
+    // parse error. A Const-class name is never a type, so it indexes.
+    let src = r#"
+const NM: Array[String, 2] = ["ab", "cde"];
+const NUMS: Array[i64, 2] = [-3, 4];
+const NAMES: Array[Str, 2] = ["x", "yz"];
+fn main() {
+    let i = 1;
+    let k: i32 = 0;
+    println(f"{NM[i].clone()} {NM[i + 0].len()} {NM[i].len()} {NM[1].clone()}");
+    println(f"{NUMS[i - 1].abs()} {NUMS[i] + 1}");
+    println(f"{NAMES[k as i64].to_string()} {NAMES[i].len()}");
+    let v: Vec[i64] = Vec[i64].new();
+    println(f"{v.len()}");
+}
+"#;
+    let want = "cde 3 3 cde\n3 5\nx 2\n0\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
