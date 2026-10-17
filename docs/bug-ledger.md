@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 733 |
+| miscompile | 734 |
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2920 |
 | interp | 940 |
-| typecheck | 446 |
+| typecheck | 447 |
 | other | 115 |
 | ownership | 106 |
 | cli | 76 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -198,19 +198,16 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-38 | 2026-10-15 | ownership | low | `karac check` takes `f64.parse(t.text)` (and `i64.parse(t.text)`) as a MOVE of the field `t.text`, so a later `out.push(t)` is refused with "value 't.text' moved here, used again here"; the same call on a local String (`f64.parse(text)` then `T { text: text, .. }`) is accepted, the spec gives `parse(s: Str)` a borrowed parameter, and all four running surfaces run the program | — |
 | B-2026-10-15-44 | 2026-10-15 | interp+codegen | low | std.process on v2: a child's pipes cannot be wrapped in a BufReader / BufWriter (no read_line or lines over ChildStdout) | — |
 | B-2026-10-15-45 | 2026-10-15 | typecheck | medium | karac check in library mode accepts a call to a method that does not exist on a #[derive(Serialize)] struct; the build then fails | — |
-| B-2026-10-15-51 | 2026-10-15 | typecheck | low | An unsuffixed integer literal on the LEFT of `&`, `|` or `^` is typed `i64` even when the other operand is `u8`: `0xC0 | c` and `let x: u8 = 0x80 | (c & 0x3F)` are refused with "implicit coercion from 'i64' to 'u8' would narrow", while `c | 0xC0`, `1 + c` and `200 - c` pass | — |
-| B-2026-10-15-52 | 2026-10-15 | typecheck | low | An `if` expression takes its type from an unsuffixed integer literal in its FIRST branch: `let x = if c { 0 } else { y }` with `y: u128` (or `u8`) types `x` as `i64` and is refused where `x` is used as the other type ("implicit coercion from 'i64' to 'u128' would narrow"), while `if c { y } else { 0 }` passes | — |
-| B-2026-10-15-53 | 2026-10-15 | typecheck | medium | `karac check` accepts `&`, `|` and `^` between two DIFFERENT integer types, such as `a & b` with `a: u128` and `b: i64`, which it refuses for `+`; every v2 surface then stops with "invalid MIR: binary operands of different types u128 and i64" | — |
 | B-2026-10-15-55 | 2026-10-15 | codegen+runtime | medium | On the MIR compiled backend, `starts_with`, `contains`, `ends_with` and String `<` each call out to the runtime (`karac_mir_str_test`) where legacy inlines a length test and memcmp. Kata 677's bench makes 48.2M such calls, 45% of its instructions are their own cost (3.73G against legacy's 2.16G), and it runs at about 1.5 times legacy, the M2 bar | — |
 | B-2026-10-15-56 | 2026-10-15 | codegen+runtime | low | On the MIR compiled backend, the first allocation of a pushed `Vec` (`karac_mir_vec_reserve`) and every `Vec` clone (`karac_mir_vec_alloc`) are out-of-line runtime calls costing some 40 to 70 instructions each beyond the allocator, so kata 679's bench, which builds millions of two- to four-element `Vec[f64]`, runs 17.1G instructions against legacy's 12.9G: 1.5x legacy, at the M2 bar | — |
 | B-2026-10-15-58 | 2026-10-15 | typecheck | low | `f64.from_bits(bits)` (the Rust spelling) is refused with `no associated function 'from_bits' on type 'f64'` and no hint that the library's spelling is `bits.bits_as_f64()` on an `i64`; neither `bits_as_f64` nor `to_bits` appears in design.md, so a binary-format reader has no documented way to decode an IEEE double | — |
 | B-2026-10-15-59 | 2026-10-15 | runtime | medium | The fs library cannot create a symbolic link, see one, or read or set a file's permissions or modification time, so an archive extractor (unzip, tar), an installer or a sync tool cannot restore what the archive records | — |
 | B-2026-10-15-60 | 2026-10-15 | typecheck | low | `karac check` refuses `.to_vec()` on an `Array[T, N]` (`no method 'to_vec' on type 'Array'`), though design.md § Method resolution says an `Array[T, N]` receiver also finds `Slice[T]`'s methods; `a.contains(x)` already resolves that way and `a.as_slice().to_vec()` works. | — |
-| B-2026-10-15-61 | 2026-10-15 | typecheck+codegen | high | `karac check` accepts writing through a read-only `Slice`: `let mut t = s.bytes(); t[i] = x;` and `let mut w = v[0..2]; w[0] = x;` both pass, though `bytes()` and a range subscript give `Slice[T]` and collections.md says writing needs a `mut Slice[T]`. Both backends then write into the source, the String's or the Vec's own buffer, even when it is not `mut`; for `bytes()` the MIR compiled backend writes into the String (a literal's too: `let s = "hello"` then prints `aello`) while `__mir-run` writes into a snapshot copy, so run and build differ | — |
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
 | B-2026-10-15-76 | 2026-10-15 | typecheck+interp+codegen | medium | The arithmetic operator traits have no associated `Output`: runtime/stdlib/sub.kara declares `fn sub(own self, rhs: own Self) -> Self` (add, mul and div likewise), so `impl Sub for Instant { type Output = Duration; .. }` from design.md § Operator Traits cannot be written and `later - earlier` cannot yield a `Duration` | — |
+| B-2026-10-17-1 | 2026-10-17 | typecheck | medium | An unsuffixed integer literal beside an arithmetic operator is promoted to its narrow peer's type WITHOUT a range check, so `300 + y` and `y * 1000` with `y: u8` pass `karac check` and both MIR backends print the wrapped value (45 and 232 for `y = 1`) | — |
 
 ### Relocated
 
@@ -4105,8 +4102,12 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-48 | interp+codegen | medium | A user struct named like a library type with a special drop (`Mutex`, `Atomic`, `OnceLock`, `Arena`, `Pool`, `File`) gets that type's drop on both MI… | cba3787150 |
 | B-2026-10-15-49 | interp+codegen | high | A VARIANT PATTERN SPELLED THROUGH A TYPE ALIAS MATCHES EVERY VALUE ON v2: with `enum NetE { A, B(i32) } type OldE = NetE;`, `match v { OldE.A => ..,… | 44cca1211f |
 | B-2026-10-15-50 | typecheck | medium | Constructing a variant through a type alias (`type OldE = NetE; Err(OldE.B(7))`) passes `karac check` but fails every backend: "a type that failed to… | 1637be882b |
+| B-2026-10-15-51 | typecheck | low | An unsuffixed integer literal on the LEFT of `&`, `\|` or `^` is typed `i64` even when the other operand is `u8`: `0xC0 \| c` and `let x: u8 = 0x80 \| (… | cd6d6ad2c3 |
+| B-2026-10-15-52 | typecheck | low | An `if` expression takes its type from an unsuffixed integer literal in its FIRST branch: `let x = if c { 0 } else { y }` with `y: u128` (or `u8`) ty… | cd6d6ad2c3 |
+| B-2026-10-15-53 | typecheck | medium | `karac check` accepts `&`, `\|` and `^` between two DIFFERENT integer types, such as `a & b` with `a: u128` and `b: i64`, which it refuses for `+`; ev… | cd6d6ad2c3 |
 | B-2026-10-15-54 | parser | low | An unsuffixed integer literal above `i64::MAX` is refused at PARSE even where the expected type is `u64` or `u128`: `let a: u64 = 0xFFFF_FFFF_FFFF_FF… | ce68ce663a |
 | B-2026-10-15-57 | ownership | medium | The MIR borrow checker's `origins_dataflow` grows faster than quadratically with the number of statements in one function: a function of N `s.push_st… | cdaabcaf05 |
+| B-2026-10-15-61 | typecheck+codegen | high | `karac check` accepts writing through a read-only `Slice`: `let mut t = s.bytes(); t[i] = x;` and `let mut w = v[0..2]; w[0] = x;` both pass, though… | 3fdba2c2ec |
 | B-2026-10-15-67 | interp+codegen | medium | `u32.rotate_left` / `u64.rotate_right` (and the other rotate widths) pass `karac check` but neither v2 backend has them: `__mir-run` stops with `call… | 96564a9f3b |
 | B-2026-10-15-68 | interp+codegen | medium | `f64.partial_cmp` passes `karac check` but neither v2 backend has it: `__mir-run` stops with `call of unknown function f64.partial_cmp` and `__mir-ll… | f7c4d03bd9 |
 | B-2026-10-15-69 | interp+codegen | medium | On every v2 surface, `TcpListener.bind("127.0.0.1:0")` prints `BOUND_PORT=<n>` to the program's own stdout, a legacy test-harness convention that doc… | 96564a9f3b |
