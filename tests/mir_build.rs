@@ -2915,3 +2915,48 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_string_literal_patterns_on_a_str_scrutinee() {
+    // B-2026-10-14-43: a string literal pattern takes the `Str` type of its
+    // scrutinee, as a string literal expression does where a `Str` is
+    // expected.
+    let src = r#"
+fn size(name: String) -> i64 {
+    match name.as_str() {
+        "Year" => 4,
+        "Month" => 7,
+        _ => 19,
+    }
+}
+fn size2(name: Str) -> i64 {
+    match name {
+        "Year" => 4,
+        "Month" => 7,
+        _ => 19,
+    }
+}
+fn kind(v: Vec[String], i: i64) -> String {
+    let r = match v[i].as_str() {
+        "a" | "b" => "early",
+        "z" => "late",
+        _ => "other",
+    };
+    r.to_string()
+}
+fn main() {
+    println(f"{size(String.from("Year"))} {size(String.from("Month"))} {size(String.from("Day"))}");
+    println(f"{size2("Year")} {size2("Month")} {size2("Day")}");
+    let v: Vec[String] = vec![String.from("a"), String.from("z"), String.from("q")];
+    println(f"{kind(v, 0)} {kind(v, 1)} {kind(v, 2)}");
+}
+"#;
+    let want = "4 7 19\n4 7 19\nearly late other\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

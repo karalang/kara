@@ -5074,3 +5074,30 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn check_string_literal_patterns_on_a_str_scrutinee() {
+    // B-2026-10-14-43: `match s.as_str() { "Year" => .. }` and a match on a
+    // `Str` parameter were refused with "expected 'StringSlice', found
+    // 'String'" at each literal arm.
+    accepted(
+        "str-literal-pattern",
+        r#"
+fn size(name: String) -> i64 {
+    match name.as_str() {
+        "Year" => 4,
+        _ => 19,
+    }
+}
+fn oid_name(oid: Str) -> String {
+    match oid {
+        "2.5.4.6" => "C".to_string(),
+        _ => "?".to_string(),
+    }
+}
+fn main() {
+    println(f"{size(String.from("Year"))} {oid_name("2.5.4.6")}");
+}
+"#,
+    );
+}
