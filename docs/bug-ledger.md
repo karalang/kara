@@ -207,7 +207,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
 | B-2026-10-15-76 | 2026-10-15 | typecheck+interp+codegen | medium | The arithmetic operator traits have no associated `Output`: runtime/stdlib/sub.kara declares `fn sub(own self, rhs: own Self) -> Self` (add, mul and div likewise), so `impl Sub for Instant { type Output = Duration; .. }` from design.md § Operator Traits cannot be written and `later - earlier` cannot yield a `Duration` | — |
-| B-2026-10-17-1 | 2026-10-17 | typecheck | medium | An unsuffixed integer literal beside an arithmetic operator is promoted to its narrow peer's type WITHOUT a range check, so `300 + y` and `y * 1000` with `y: u8` pass `karac check` and both MIR backends print the wrapped value (45 and 232 for `y = 1`) | — |
 
 ### Relocated
 
@@ -4114,6 +4113,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-73 | parser | low | An unsuffixed `i128::MIN`, `-170141183460469231731687303715884105728`, is refused at parse with advice to add a `u128` suffix, although `let w: i128… | 6ab90a56b2 |
 | B-2026-10-15-74 | codegen | low | `u128.rotate_left` / `rotate_right` (and `i128`) are not lowered on the compiled v2 backends: `__mir-llvm-run` stops with ``native `u128.rotate_right… | a7b4e322d3 |
 | B-2026-10-15-75 | codegen | low | Under `KARAC_MIR_COROUTINES=1`, a task body that passes `mut buf` to a suspending call (`conn.read(mut buf)`) gets a coroutine resume function whose… | 26fef25bc8 |
+| B-2026-10-17-1 | typecheck | medium | An unsuffixed integer literal beside an arithmetic operator is promoted to its narrow peer's type WITHOUT a range check, so `300 + y` and `y * 1000`… | ea28ab5c28 |
 
 </details>
 
