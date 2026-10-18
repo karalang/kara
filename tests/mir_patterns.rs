@@ -429,3 +429,40 @@ fn main() {
         "1 3 7 2\n",
     );
 }
+
+/// A value enum carries another value enum as a payload, a unit-only one
+/// or one with a heap payload, and patterns reach into it
+/// (B-2026-10-06-86).
+#[test]
+fn a_value_enum_carries_value_enum_payloads() {
+    assert_runs(
+        r#"
+enum Kind { Round, Square, Curly }
+enum Tok { Open(Kind), Close(Kind) }
+enum V { Nil, Int(i64), Text(String) }
+enum Place { Global(String), Field(V, V, String) }
+fn kind_of(t: ref Tok) -> i64 {
+    match t {
+        Tok.Open(Kind.Round) | Tok.Close(Kind.Round) => 1,
+        Tok.Open(Kind.Square) | Tok.Close(Kind.Square) => 2,
+        _ => 3,
+    }
+}
+fn main() {
+    let ts = vec![Tok.Open(Kind.Square), Tok.Close(Kind.Curly), Tok.Open(Kind.Round)];
+    let mut s = 0;
+    for t in ts.iter() { s = s * 10 + kind_of(t); }
+    println(f"{s}");
+    let ps = vec![Place.Field(V.Text("k".to_string()), V.Int(4), "f".to_string()), Place.Global("g".to_string())];
+    for p in ps.iter() {
+        match p {
+            Place.Field(V.Text(a), V.Int(b), c) => println(f"{a} {b} {c}"),
+            Place.Field(_, _, c) => println(f"other {c}"),
+            Place.Global(n) => println(n),
+        }
+    }
+}
+"#,
+        "231\nk 4 f\ng\n",
+    );
+}
