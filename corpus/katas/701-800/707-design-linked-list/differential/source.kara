@@ -1,0 +1,556 @@
+// LeetCode #707: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random calls.
+
+// ---- star arm -------------------------------------------------------
+
+shared struct LNode {
+    mut val: i64,
+    mut next: Option[LNode],
+}
+
+struct ListLinked {
+    head: LNode,
+    mut size: i64,
+}
+
+impl ListLinked {
+    fn new() -> ListLinked {
+        ListLinked { head: LNode { val: 0, next: None }, size: 0 }
+    }
+
+    // The node before position `index`: the sentinel for 0.
+    fn before(self, index: i64) -> LNode {
+        let mut at = self.head;
+        for _ in 0..index {
+            at = at.next.unwrap();
+        }
+        at
+    }
+
+    fn get(self, index: i64) -> i64 {
+        if index < 0 or index >= self.size {
+            return -1;
+        }
+        self.before(index).next.unwrap().val
+    }
+
+    fn add_at_head(mut ref self, val: i64) {
+        self.add_at_index(0, val);
+    }
+
+    fn add_at_tail(mut ref self, val: i64) {
+        self.add_at_index(self.size, val);
+    }
+
+    fn add_at_index(mut ref self, index: i64, val: i64) {
+        if index < 0 or index > self.size {
+            return;
+        }
+        let prev = self.before(index);
+        prev.next = Some(LNode { val: val, next: prev.next });
+        self.size += 1;
+    }
+
+    fn delete_at_index(mut ref self, index: i64) {
+        if index < 0 or index >= self.size {
+            return;
+        }
+        let prev = self.before(index);
+        prev.next = prev.next.unwrap().next;
+        self.size -= 1;
+    }
+}
+
+// ---- arena arm ------------------------------------------------------
+
+struct ListArena {
+    mut vals: Vec[i64],
+    mut prev: Vec[i64],
+    mut next: Vec[i64],
+    mut free: Vec[i64],
+    mut size: i64,
+}
+
+// The two sentinels' slots.
+const FRONT: i64 = 0;
+const BACK: i64 = 1;
+
+impl ListArena {
+    fn new() -> ListArena {
+        ListArena { vals: [0, 0], prev: [-1, FRONT], next: [BACK, -1], free: Vec.new(), size: 0 }
+    }
+
+    // The slot of the node at position `index`, from 0 to `size`, where
+    // `size` is the back sentinel.
+    fn slot(self, index: i64) -> i64 {
+        if 2 * index <= self.size {
+            let mut at = self.next[FRONT];
+            for _ in 0..index {
+                at = self.next[at];
+            }
+            at
+        } else {
+            let mut at = BACK;
+            for _ in 0..self.size - index {
+                at = self.prev[at];
+            }
+            at
+        }
+    }
+
+    fn get(self, index: i64) -> i64 {
+        if index < 0 or index >= self.size {
+            return -1;
+        }
+        self.vals[self.slot(index)]
+    }
+
+    fn add_at_head(mut ref self, val: i64) {
+        self.add_at_index(0, val);
+    }
+
+    fn add_at_tail(mut ref self, val: i64) {
+        self.add_at_index(self.size, val);
+    }
+
+    fn add_at_index(mut ref self, index: i64, val: i64) {
+        if index < 0 or index > self.size {
+            return;
+        }
+        let after = self.slot(index);
+        let before = self.prev[after];
+        let s = match self.free.pop() {
+            Some(s) => {
+                self.vals[s] = val;
+                s
+            }
+            None => {
+                self.vals.push(val);
+                self.prev.push(0);
+                self.next.push(0);
+                self.vals.len() - 1
+            }
+        };
+        self.prev[s] = before;
+        self.next[s] = after;
+        self.next[before] = s;
+        self.prev[after] = s;
+        self.size += 1;
+    }
+
+    fn delete_at_index(mut ref self, index: i64) {
+        if index < 0 or index >= self.size {
+            return;
+        }
+        let s = self.slot(index);
+        let before = self.prev[s];
+        let after = self.next[s];
+        self.next[before] = after;
+        self.prev[after] = before;
+        self.free.push(s);
+        self.size -= 1;
+    }
+}
+
+// ---- vec arm --------------------------------------------------------
+
+struct ListVec {
+    mut vals: Vec[i64],
+}
+
+impl ListVec {
+    fn new() -> ListVec {
+        ListVec { vals: Vec.new() }
+    }
+
+    fn get(self, index: i64) -> i64 {
+        if index < 0 or index >= self.vals.len() {
+            return -1;
+        }
+        self.vals[index]
+    }
+
+    fn add_at_head(mut ref self, val: i64) {
+        self.vals.insert(0, val);
+    }
+
+    fn add_at_tail(mut ref self, val: i64) {
+        self.vals.push(val);
+    }
+
+    fn add_at_index(mut ref self, index: i64, val: i64) {
+        if index >= 0 and index <= self.vals.len() {
+            self.vals.insert(index, val);
+        }
+    }
+
+    fn delete_at_index(mut ref self, index: i64) {
+        if index >= 0 and index < self.vals.len() {
+            self.vals.remove(index);
+        }
+    }
+}
+
+// ---- persistent arm -------------------------------------------------
+
+shared enum Cells {
+    Nil,
+    Cons(i64, Cells),
+}
+
+fn cells_nth(list: Cells, index: i64) -> i64 {
+    match list {
+        Cells.Nil => -1,
+        Cells.Cons(v, rest) => if index == 0 { *v } else { cells_nth(*rest, index - 1) },
+    }
+}
+
+fn cells_inserted(list: Cells, index: i64, val: i64) -> Cells {
+    if index == 0 {
+        return Cells.Cons(val, list);
+    }
+    match list {
+        Cells.Nil => Cells.Nil,
+        Cells.Cons(v, rest) => Cells.Cons(*v, cells_inserted(*rest, index - 1, val)),
+    }
+}
+
+fn cells_deleted(list: Cells, index: i64) -> Cells {
+    match list {
+        Cells.Nil => Cells.Nil,
+        Cells.Cons(v, rest) => if index == 0 { *rest } else { Cells.Cons(*v, cells_deleted(*rest, index - 1)) },
+    }
+}
+
+struct ListPersistent {
+    mut items: Cells,
+    mut size: i64,
+}
+
+impl ListPersistent {
+    fn new() -> ListPersistent {
+        ListPersistent { items: Cells.Nil, size: 0 }
+    }
+
+    fn get(self, index: i64) -> i64 {
+        if index < 0 or index >= self.size {
+            return -1;
+        }
+        cells_nth(self.items, index)
+    }
+
+    fn add_at_head(mut ref self, val: i64) {
+        self.add_at_index(0, val);
+    }
+
+    fn add_at_tail(mut ref self, val: i64) {
+        self.add_at_index(self.size, val);
+    }
+
+    fn add_at_index(mut ref self, index: i64, val: i64) {
+        if index < 0 or index > self.size {
+            return;
+        }
+        self.items = cells_inserted(self.items, index, val);
+        self.size += 1;
+    }
+
+    fn delete_at_index(mut ref self, index: i64) {
+        if index < 0 or index >= self.size {
+            return;
+        }
+        self.items = cells_deleted(self.items, index);
+        self.size -= 1;
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The calls in order, 0 `get`, 1 `add_at_head`, 2 `add_at_tail`, 3
+// `add_at_index` and 4 `delete_at_index`: what `get` returned, -2 for
+// the others, and the list read back with `get` until it gives -1.
+fn run(which: i64, ops: Vec[i64], indexes: Vec[i64], vals: Vec[i64]) -> (Vec[i64], Vec[i64]) {
+    let mut out: Vec[i64] = Vec.new();
+    let mut contents: Vec[i64] = Vec.new();
+    if which == 0 {
+        let mut list = ListLinked.new();
+        for i in 0..ops.len() {
+            let op = ops[i];
+            if op == 0 {
+                out.push(list.get(indexes[i]));
+                continue;
+            }
+            if op == 1 {
+                list.add_at_head(vals[i]);
+            } else if op == 2 {
+                list.add_at_tail(vals[i]);
+            } else if op == 3 {
+                list.add_at_index(indexes[i], vals[i]);
+            } else {
+                list.delete_at_index(indexes[i]);
+            }
+            out.push(-2);
+        }
+        loop {
+            let v = list.get(contents.len());
+            if v < 0 {
+                break;
+            }
+            contents.push(v);
+        }
+    } else if which == 1 {
+        let mut list = ListArena.new();
+        for i in 0..ops.len() {
+            let op = ops[i];
+            if op == 0 {
+                out.push(list.get(indexes[i]));
+                continue;
+            }
+            if op == 1 {
+                list.add_at_head(vals[i]);
+            } else if op == 2 {
+                list.add_at_tail(vals[i]);
+            } else if op == 3 {
+                list.add_at_index(indexes[i], vals[i]);
+            } else {
+                list.delete_at_index(indexes[i]);
+            }
+            out.push(-2);
+        }
+        loop {
+            let v = list.get(contents.len());
+            if v < 0 {
+                break;
+            }
+            contents.push(v);
+        }
+    } else if which == 2 {
+        let mut list = ListVec.new();
+        for i in 0..ops.len() {
+            let op = ops[i];
+            if op == 0 {
+                out.push(list.get(indexes[i]));
+                continue;
+            }
+            if op == 1 {
+                list.add_at_head(vals[i]);
+            } else if op == 2 {
+                list.add_at_tail(vals[i]);
+            } else if op == 3 {
+                list.add_at_index(indexes[i], vals[i]);
+            } else {
+                list.delete_at_index(indexes[i]);
+            }
+            out.push(-2);
+        }
+        loop {
+            let v = list.get(contents.len());
+            if v < 0 {
+                break;
+            }
+            contents.push(v);
+        }
+    } else {
+        let mut list = ListPersistent.new();
+        for i in 0..ops.len() {
+            let op = ops[i];
+            if op == 0 {
+                out.push(list.get(indexes[i]));
+                continue;
+            }
+            if op == 1 {
+                list.add_at_head(vals[i]);
+            } else if op == 2 {
+                list.add_at_tail(vals[i]);
+            } else if op == 3 {
+                list.add_at_index(indexes[i], vals[i]);
+            } else {
+                list.delete_at_index(indexes[i]);
+            }
+            out.push(-2);
+        }
+        loop {
+            let v = list.get(contents.len());
+            if v < 0 {
+                break;
+            }
+            contents.push(v);
+        }
+    }
+    (out, contents)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: the list as a `Vec` built afresh for every call that
+// changes it, from the values before the position, the new value and
+// the values after it; a call at a position outside the list leaves it
+// as it was. Also whether each call changed the list.
+fn definition(ops: Vec[i64], indexes: Vec[i64], vals: Vec[i64]) -> (Vec[i64], Vec[i64], Vec[bool]) {
+    let mut list: Vec[i64] = Vec.new();
+    let mut out: Vec[i64] = Vec.new();
+    let mut changed: Vec[bool] = Vec.new();
+    for i in 0..ops.len() {
+        let op = ops[i];
+        let size = list.len();
+        let at = if op == 1 { 0 } else if op == 2 { size } else { indexes[i] };
+        if op == 0 {
+            out.push(if at < size { list[at] } else { -1 });
+            changed.push(false);
+            continue;
+        }
+        out.push(-2);
+        let fits = if op == 4 { at < size } else { at <= size };
+        changed.push(fits);
+        if not fits {
+            continue;
+        }
+        let mut next: Vec[i64] = Vec.new();
+        for j in 0..at {
+            next.push(list[j]);
+        }
+        if op != 4 {
+            next.push(vals[i]);
+        }
+        let from = if op == 4 { at + 1 } else { at };
+        for j in from..size {
+            next.push(list[j]);
+        }
+        list = next;
+    }
+    (out, list, changed)
+}
+
+fn main() {
+    let mut seed = 7070;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut reads = 0;
+    let cases = 2000;
+    for _ in 0..cases {
+        // 1 to 60 calls, a fifth of each kind, values from 0 to 1,000 and
+        // indexes from 0 to three past the size the list would have.
+        let n = 1 + next_random(mut seed) % 60;
+        let mut ops: Vec[i64] = Vec.new();
+        let mut indexes: Vec[i64] = Vec.new();
+        let mut vals: Vec[i64] = Vec.new();
+        let mut size = 0;
+        for _ in 0..n {
+            let op = next_random(mut seed) % 5;
+            let index = next_random(mut seed) % (size + 4);
+            ops.push(op);
+            indexes.push(index);
+            vals.push(next_random(mut seed) % 1001);
+            if op == 1 or op == 2 or (op == 3 and index <= size) {
+                size += 1;
+            } else if op == 4 and index < size {
+                size -= 1;
+            }
+        }
+        let (want, want_list, changed) = definition(ops, indexes, vals);
+        for a in want.iter() {
+            if *a >= 0 {
+                reads += 1;
+            }
+        }
+        // The values replaced by 1,000 - v.
+        let mut flipped: Vec[i64] = Vec.new();
+        for v in vals.iter() {
+            flipped.push(1000 - *v);
+        }
+        // The calls without the ones that changed nothing but `get`.
+        let mut kept_ops: Vec[i64] = Vec.new();
+        let mut kept_indexes: Vec[i64] = Vec.new();
+        let mut kept_vals: Vec[i64] = Vec.new();
+        let mut kept_want: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if ops[i] == 0 or changed[i] {
+                kept_ops.push(ops[i]);
+                kept_indexes.push(indexes[i]);
+                kept_vals.push(vals[i]);
+                kept_want.push(want[i]);
+            }
+        }
+        // The calls, then `get(0)` and `delete_at_index(0)` until empty,
+        // and one more `get(0)`.
+        let mut drain_ops = ops.clone();
+        let mut drain_indexes = indexes.clone();
+        let mut drain_vals = vals.clone();
+        for _ in 0..want_list.len() {
+            drain_ops.push(0);
+            drain_ops.push(4);
+            drain_indexes.push(0);
+            drain_indexes.push(0);
+            drain_vals.push(0);
+            drain_vals.push(0);
+        }
+        drain_ops.push(0);
+        drain_indexes.push(0);
+        drain_vals.push(0);
+        for which in 0..arms {
+            let (got, list) = run(which, ops, indexes, vals);
+            // P1: the definition's answers and list.
+            checks += 1;
+            if got != want or list != want_list {
+                fails[0] += 1;
+            }
+            // P2: every value v replaced by 1,000 - v, every value read
+            // back and every value left the same way.
+            checks += 1;
+            let (back, back_list) = run(which, ops, indexes, flipped);
+            let mut off = back_list.len() != list.len();
+            for i in 0..n {
+                let expect = if got[i] >= 0 { 1000 - got[i] } else { got[i] };
+                if back[i] != expect {
+                    off = true;
+                }
+            }
+            if not off {
+                for i in 0..list.len() {
+                    if back_list[i] != 1000 - list[i] {
+                        off = true;
+                    }
+                }
+            }
+            if off {
+                fails[1] += 1;
+            }
+            // P3: the calls at positions outside the list left out, the
+            // same answers and list.
+            checks += 1;
+            let (kept, kept_list) = run(which, kept_ops, kept_indexes, kept_vals);
+            if kept != kept_want or kept_list != list {
+                fails[2] += 1;
+            }
+            // P4: emptied from the front, the list's values in order, then
+            // -1, and nothing left.
+            checks += 1;
+            let (drained, rest) = run(which, drain_ops, drain_indexes, drain_vals);
+            let mut off = list.len() != want_list.len() or not rest.is_empty() or drained[drained.len() - 1] != -1;
+            if not off {
+                for k in 0..list.len() {
+                    if drained[n + 2 * k] != list[k] {
+                        off = true;
+                    }
+                }
+            }
+            if off {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} sequences ({reads} reads found), {arms} arms, {checks} checks, {total} failures");
+}

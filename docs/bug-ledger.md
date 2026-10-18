@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 276 |
 | codegen-gap | 270 |
 | false-positive | 220 |
-| other | 173 |
+| other | 174 |
 | perf | 172 |
 | diagnostics | 165 |
 | crash | 122 |
@@ -115,8 +115,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 458 |
 | other | 115 |
 | ownership | 111 |
-| runtime | 76 |
-| cli | 76 |
+| runtime | 77 |
+| cli | 77 |
 | parser | 69 |
 | autopar | 59 |
 | resolver | 42 |
@@ -215,6 +215,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-28 | 2026-10-18 | ownership | low | `karac fix` rewrites `Some(h) => h.text.push_str(w)` (a match on an owned Option in a loop) to `Some(ref h)`, which check then refuses because the arm writes through `h`; the fix should write `mut ref h` | — |
 | B-2026-10-18-29 | 2026-10-18 | codegen | medium | `karac __mir-llvm-asan` build time grows with the square of a function's length: a 2231-statement table function takes 168 s against 16 s on mir-llvm, past the corpus's 60 s limit | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
+| B-2026-10-18-31 | 2026-10-18 | runtime+cli | high | The v2 ASan lane (`karac __mir-llvm-asan`) cannot see a leak: `karac_mir_run_main` runs `main` on `big_stack`, an mmap'd stack it switches to by hand, and LeakSanitizer reports nothing allocated there, so every 'no leak' verdict from the lane since 8969be0434 (2026-10-13) is vacuous | — |
 
 ### Relocated
 

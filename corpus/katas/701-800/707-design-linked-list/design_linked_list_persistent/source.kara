@@ -1,0 +1,227 @@
+// LeetCode #707: Design Linked List -- an immutable list, rebuilt.
+//
+// The list is a `shared enum`, `Nil` or a value in front of the rest,
+// and is never changed in place: inserting or deleting at a position
+// builds new cells for the part before it and shares the part after
+// it with the old list, which the counts free once nothing holds it.
+// O(index) per call, written as recursion on the position.
+
+shared enum List {
+    Nil,
+    Cons(i64, List),
+}
+
+fn nth(list: List, index: i64) -> i64 {
+    match list {
+        List.Nil => -1,
+        List.Cons(v, rest) => if index == 0 { *v } else { nth(*rest, index - 1) },
+    }
+}
+
+fn inserted(list: List, index: i64, val: i64) -> List {
+    if index == 0 {
+        return List.Cons(val, list);
+    }
+    match list {
+        List.Nil => List.Nil,
+        List.Cons(v, rest) => List.Cons(*v, inserted(*rest, index - 1, val)),
+    }
+}
+
+fn deleted(list: List, index: i64) -> List {
+    match list {
+        List.Nil => List.Nil,
+        List.Cons(v, rest) => if index == 0 { *rest } else { List.Cons(*v, deleted(*rest, index - 1)) },
+    }
+}
+
+struct MyLinkedList {
+    mut items: List,
+    mut size: i64,
+}
+
+impl MyLinkedList {
+    fn new() -> MyLinkedList {
+        MyLinkedList { items: List.Nil, size: 0 }
+    }
+
+    fn get(self, index: i64) -> i64 {
+        if index < 0 or index >= self.size {
+            return -1;
+        }
+        nth(self.items, index)
+    }
+
+    fn add_at_head(mut ref self, val: i64) {
+        self.add_at_index(0, val);
+    }
+
+    fn add_at_tail(mut ref self, val: i64) {
+        self.add_at_index(self.size, val);
+    }
+
+    fn add_at_index(mut ref self, index: i64, val: i64) {
+        if index < 0 or index > self.size {
+            return;
+        }
+        self.items = inserted(self.items, index, val);
+        self.size += 1;
+    }
+
+    fn delete_at_index(mut ref self, index: i64) {
+        if index < 0 or index >= self.size {
+            return;
+        }
+        self.items = deleted(self.items, index);
+        self.size -= 1;
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The calls `ops` names in order: 0 `get(index)`, 1 `add_at_head(val)`,
+// 2 `add_at_tail(val)`, 3 `add_at_index(index, val)` and 4
+// `delete_at_index(index)`. What each returns, `None` for all but
+// `get`, and the list read back with `get` from 0 until it gives -1.
+fn run(ops: Vec[i64], indexes: Vec[i64], vals: Vec[i64]) -> (Vec[Option[i64]], Vec[i64]) {
+    let mut list = MyLinkedList.new();
+    let mut out: Vec[Option[i64]] = Vec.new();
+    for i in 0..ops.len() {
+        let op = ops[i];
+        if op == 0 {
+            out.push(Some(list.get(indexes[i])));
+            continue;
+        }
+        if op == 1 {
+            list.add_at_head(vals[i]);
+        } else if op == 2 {
+            list.add_at_tail(vals[i]);
+        } else if op == 3 {
+            list.add_at_index(indexes[i], vals[i]);
+        } else {
+            list.delete_at_index(indexes[i]);
+        }
+        out.push(None);
+    }
+    let mut contents: Vec[i64] = Vec.new();
+    loop {
+        let v = list.get(contents.len());
+        if v < 0 {
+            break;
+        }
+        contents.push(v);
+    }
+    (out, contents)
+}
+
+fn show(ops: Vec[i64], indexes: Vec[i64], vals: Vec[i64]) {
+    let mut calls: Vec[String] = Vec.new();
+    for i in 0..ops.len() {
+        let op = ops[i];
+        if op == 0 {
+            calls.push(f"get({indexes[i]})");
+        } else if op == 1 {
+            calls.push(f"addAtHead({vals[i]})");
+        } else if op == 2 {
+            calls.push(f"addAtTail({vals[i]})");
+        } else if op == 3 {
+            calls.push(f"addAtIndex({indexes[i]}, {vals[i]})");
+        } else {
+            calls.push(f"deleteAtIndex({indexes[i]})");
+        }
+    }
+    let (answers, contents) = run(ops, indexes, vals);
+    let mut shown: Vec[String] = Vec.new();
+    for a in answers.iter() {
+        match a {
+            Some(v) => shown.push(f"{v}"),
+            None => shown.push("null"),
+        }
+    }
+    println(f"{calls.join(", ")}: [{shown.join(", ")}], list {contents}");
+}
+
+// `n` random calls: a fifth of each kind, values from 0 to 1,000, and
+// indexes from 0 to two past the size the list would have, so some
+// fall outside it.
+fn random_calls(n: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64], Vec[i64]) {
+    let mut ops: Vec[i64] = Vec.new();
+    let mut indexes: Vec[i64] = Vec.new();
+    let mut vals: Vec[i64] = Vec.new();
+    let mut size = 0;
+    for _ in 0..n {
+        let op = next_random(mut seed) % 5;
+        let index = next_random(mut seed) % (size + 3);
+        ops.push(op);
+        indexes.push(index);
+        vals.push(next_random(mut seed) % 1001);
+        if op == 1 or op == 2 or (op == 3 and index <= size) {
+            size += 1;
+        } else if op == 4 and index < size {
+            size -= 1;
+        }
+    }
+    (ops, indexes, vals)
+}
+
+fn checksum(answers: Vec[Option[i64]], contents: Vec[i64]) -> i64 {
+    let mut sum = 0;
+    for a in answers.iter() {
+        let v = match a {
+            Some(x) => *x + 2,
+            None => 1,
+        };
+        sum = (sum * 31 + v) % 1000000007;
+    }
+    for v in contents.iter() {
+        sum = (sum * 31 + *v) % 1000000007;
+    }
+    sum
+}
+
+fn main() {
+    // The LeetCode example.
+    show([1, 2, 3, 0, 4, 0], [0, 0, 1, 1, 1, 1], [1, 3, 2, 0, 0, 0]);
+    // Calls on an empty list; an index one past the end, which appends,
+    // and two past it, which does nothing; deleting the first and the
+    // last.
+    show([0, 4, 3, 3, 0], [0, 0, 1, 0, 0], [0, 0, 5, 7, 0]);
+    show([2, 2, 3, 3, 0, 4, 4, 0], [0, 0, 2, 4, 2, 2, 0, 0], [1, 2, 3, 4, 0, 0, 0, 0]);
+    // The problem's most, 2,000 calls, twice; then 1,000 values added
+    // at the tail and every other one deleted from the front.
+    let mut seed: i64 = 707;
+    for _ in 0..2 {
+        let (ops, indexes, vals) = random_calls(2000, mut seed);
+        let (answers, contents) = run(ops, indexes, vals);
+        println(f"2000 calls: {contents.len()} values left, checksum {checksum(answers, contents)}");
+    }
+    let mut ops: Vec[i64] = Vec.new();
+    let mut indexes: Vec[i64] = Vec.new();
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 0..1000 {
+        ops.push(2);
+        indexes.push(0);
+        vals.push(v);
+    }
+    for k in 0..500 {
+        ops.push(4);
+        indexes.push(k);
+        vals.push(0);
+    }
+    let (answers, contents) = run(ops, indexes, vals);
+    println(f"1000 added, every other deleted: {contents.len()} left, first {contents[0]}, last {contents[contents.len() - 1]}, checksum {checksum(answers, contents)}");
+    // 300 random sequences of 1 to 100 calls.
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 100;
+        let (ops, indexes, vals) = random_calls(n, mut seed);
+        let (answers, contents) = run(ops, indexes, vals);
+        sum = (sum * 31 + checksum(answers, contents)) % 1000000007;
+    }
+    println(f"300 random sequences: checksum {sum}");
+}

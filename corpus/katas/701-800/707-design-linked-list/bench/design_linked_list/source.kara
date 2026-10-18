@@ -1,0 +1,101 @@
+// LeetCode #707: Design Linked List -- singly linked, with a sentinel.
+//
+// Nodes are `shared` so a cursor can hold one while the list does too.
+// A sentinel node sits before the first, so every insert and delete
+// happens after some node: walk to the node before the position, then
+// link a new node in after it or link past the one after it. The size
+// is kept to reject positions past the end. O(index) per call.
+
+shared struct Node {
+    mut val: i64,
+    mut next: Option[Node],
+}
+
+struct MyLinkedList {
+    head: Node,
+    mut size: i64,
+}
+
+impl MyLinkedList {
+    fn new() -> MyLinkedList {
+        MyLinkedList { head: Node { val: 0, next: None }, size: 0 }
+    }
+
+    // The node before position `index`: the sentinel for 0.
+    fn before(self, index: i64) -> Node {
+        let mut at = self.head;
+        for _ in 0..index {
+            at = at.next.unwrap();
+        }
+        at
+    }
+
+    fn get(self, index: i64) -> i64 {
+        if index < 0 or index >= self.size {
+            return -1;
+        }
+        self.before(index).next.unwrap().val
+    }
+
+    fn add_at_head(mut ref self, val: i64) {
+        self.add_at_index(0, val);
+    }
+
+    fn add_at_tail(mut ref self, val: i64) {
+        self.add_at_index(self.size, val);
+    }
+
+    fn add_at_index(mut ref self, index: i64, val: i64) {
+        if index < 0 or index > self.size {
+            return;
+        }
+        let prev = self.before(index);
+        prev.next = Some(Node { val: val, next: prev.next });
+        self.size += 1;
+    }
+
+    fn delete_at_index(mut ref self, index: i64) {
+        if index < 0 or index >= self.size {
+            return;
+        }
+        let prev = self.before(index);
+        prev.next = prev.next.unwrap().next;
+        self.size -= 1;
+    }
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 707;
+    let mut values = 0;
+    let mut checksum = 0;
+    for _ in 0..5 {
+        for _ in 0..10 {
+            let mut list = MyLinkedList.new();
+            for _ in 0..6000 {
+                let op = next_random(mut seed) % 5;
+                let index = next_random(mut seed) % (list.size + 3);
+                let val = next_random(mut seed) % 1001;
+                if op == 0 {
+                    checksum = (checksum * 31 + list.get(index) + 2) % 1000000007;
+                } else if op == 1 {
+                    list.add_at_head(val);
+                } else if op == 2 {
+                    list.add_at_tail(val);
+                } else if op == 3 {
+                    list.add_at_index(index, val);
+                } else {
+                    list.delete_at_index(index);
+                }
+            }
+            values += list.size;
+        }
+    }
+    println(f"5 rounds of 10 lists of 6000 calls: {values} values left, checksum {checksum}");
+}
