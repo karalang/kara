@@ -1,0 +1,1344 @@
+// mini_json: Python 3.13's json module (loads and dumps) over real
+// documents. It reads the job list from data/jobs.tsv and, for each job,
+// loads a file and prints the value's repr, dumps it back out with the
+// given options, decodes a JSON Lines log line by line, or checks that a
+// dump loads back to the same text. Malformed files print the error that
+// json.loads raises, with its line, column and character position.
+//
+// Text is handled as code points, as Python's str is: positions in error
+// messages count characters, not bytes, and a string may hold a lone
+// surrogate from a \uXXXX escape. Integers keep their digits, so a value
+// past 64 bits loads and dumps unchanged, up to Python's 4300-digit limit.
+// Objects keep their keys in order; a repeated key keeps its first place
+// and takes its last value, as dict() does.
+
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(Vec[i64]),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+struct Member {
+    key: Vec[i64],
+    val: J,
+}
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+// ------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_surrogate(cp: i64) -> bool {
+    cp >= 0xD800 and cp <= 0xDFFF
+}
+
+fn hex4(cp: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = 12;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.encode("utf-8"): a lone surrogate cannot be encoded, and the error
+// names the first run of them by position.
+fn to_utf8(s: ref Vec[i64]) -> Result[String, Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        if is_surrogate(c) {
+            let mut j = i;
+            while j < s.len() and is_surrogate(s[j]) {
+                j += 1;
+            }
+            let reason = "surrogates not allowed";
+            if j - i == 1 {
+                return Err(exc("UnicodeEncodeError", f"'utf-8' codec can't encode character '\\u{hex4(c)}' in position {i}: {reason}"));
+            }
+            return Err(exc("UnicodeEncodeError", f"'utf-8' codec can't encode characters in position {i}-{j - 1}: {reason}"));
+        }
+        push_utf8(mut out, c);
+        i += 1;
+    }
+    Ok(String.from_utf8(out).unwrap())
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i] as u8);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn cmp_cps(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    a.len() - b.len()
+}
+
+// ---------------------------------------------------------- decoding
+
+// The C scanner in Modules/_json.c, over code points.
+struct Scanner {
+    s: Vec[i64],
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    // JSONDecodeError's message: the line and column are counted from the
+    // newlines before the position.
+    fn fail(ref self, msg: Str, pos: i64) -> Exc {
+        let mut line = 1;
+        let mut last = -1;
+        let mut i = 0;
+        while i < pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+            i += 1;
+        }
+        exc("JSONDecodeError", f"{msg}: line {line} column {pos - last} (char {pos})")
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), Exc] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(text), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(0.0 / 0.0), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?, then int() or float()
+    // of the text. Anything else at a value's place is "Expecting value".
+    fn match_number(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok((J.Float(x), idx)),
+                Err(_) => Err(exc("ValueError", f"could not convert string to float: '{text}'")),
+            };
+        }
+        let digits = if self.s[start] == 45 { idx - start - 1 } else { idx - start };
+        if digits > 4300 {
+            return Err(exc("ValueError", f"Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let d = hex_value(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            k += 1;
+        }
+        Some(v)
+    }
+
+    // scanstring: `start` is just past the opening quote.
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), Exc] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                // A high surrogate followed by an escaped low one is a pair;
+                // followed by anything else it stays on its own.
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                put_member(mut members, key, val);
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+// dict(pairs): a key seen again keeps its place and takes the new value.
+fn put_member(members: mut ref Vec[Member], key: own Vec[i64], val: own J) {
+    let mut j = 0;
+    while j < members.len() {
+        if cmp_cps(members[j].key, key) == 0 {
+            members[j].val = val;
+            return;
+        }
+        j += 1;
+    }
+    members.push(Member { key: key, val: val });
+}
+
+// json.loads on a str.
+fn loads(text: ref Vec[i64]) -> Result[J, Exc] {
+    let sc = Scanner { s: text.clone() };
+    if sc.at(0) == 0xFEFF {
+        return Err(sc.fail("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
+    }
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+// ---------------------------------------------------------- encoding
+
+struct Opts {
+    has_indent: bool,
+    indent: String,
+    item_sep: String,
+    key_sep: String,
+    sort_keys: bool,
+    ensure_ascii: bool,
+    allow_nan: bool,
+}
+
+fn default_opts() -> Opts {
+    Opts {
+        has_indent: false,
+        indent: String.new(),
+        item_sep: ", ".to_string(),
+        key_sep: ": ".to_string(),
+        sort_keys: false,
+        ensure_ascii: true,
+        allow_nan: true,
+    }
+}
+
+// The job's keyword arguments: indent=N or indent=t (a tab), compact=1
+// (separators (",", ":")), and the boolean flags.
+fn parse_opts(fields: ref Vec[String], first: i64) -> Opts {
+    let mut o = default_opts();
+    let mut compact = false;
+    let mut i = first;
+    while i < fields.len() {
+        let parts: Vec[String] = fields[i].split("=").map(|p| p.to_string()).collect();
+        let on = parts[1] == "1";
+        if parts[0] == "indent" {
+            o.has_indent = true;
+            if parts[1] == "t" {
+                o.indent = "\t".to_string();
+            } else {
+                let n = i64.parse(parts[1].clone()).unwrap_or(0);
+                o.indent = " ".repeat(n);
+            }
+        } else if parts[0] == "compact" {
+            compact = on;
+        } else if parts[0] == "sort_keys" {
+            o.sort_keys = on;
+        } else if parts[0] == "ensure_ascii" {
+            o.ensure_ascii = on;
+        } else if parts[0] == "allow_nan" {
+            o.allow_nan = on;
+        }
+        i += 1;
+    }
+    if compact {
+        o.item_sep = ",".to_string();
+        o.key_sep = ":".to_string();
+    } else if o.has_indent {
+        o.item_sep = ",".to_string();
+    }
+    o
+}
+
+fn push_u_escape(out: mut ref Vec[i64], cp: i64) {
+    push_ascii(mut out, "\\u");
+    push_ascii(mut out, hex4(cp));
+}
+
+// encode_basestring / encode_basestring_ascii.
+fn encode_str(o: ref Opts, s: ref Vec[i64], out: mut ref Vec[i64]) {
+    out.push(34);
+    for c in s {
+        if c == 34 {
+            push_ascii(mut out, "\\\"");
+        } else if c == 92 {
+            push_ascii(mut out, "\\\\");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 8 {
+            push_ascii(mut out, "\\b");
+        } else if c == 12 {
+            push_ascii(mut out, "\\f");
+        } else if c < 0x20 {
+            push_u_escape(mut out, c);
+        } else if not o.ensure_ascii or c <= 0x7E {
+            out.push(c);
+        } else if c >= 0x10000 {
+            let n = c - 0x10000;
+            push_u_escape(mut out, 0xD800 | ((n >> 10) & 0x3FF));
+            push_u_escape(mut out, 0xDC00 | (n & 0x3FF));
+        } else {
+            push_u_escape(mut out, c);
+        }
+    }
+    out.push(34);
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn float_json(o: ref Opts, x: f64) -> Result[String, Exc] {
+    let finite = x == x and x != 1.0 / 0.0 and x != -1.0 / 0.0;
+    if finite {
+        return Ok(f"{x}");
+    }
+    if not o.allow_nan {
+        return Err(exc("ValueError", f"Out of range float values are not JSON compliant: {float_repr(x)}"));
+    }
+    if x != x {
+        Ok("NaN".to_string())
+    } else if x > 0.0 {
+        Ok("Infinity".to_string())
+    } else {
+        Ok("-Infinity".to_string())
+    }
+}
+
+fn newline_indent(o: ref Opts, level: i64, out: mut ref Vec[i64]) {
+    out.push(10);
+    let mut k = 0;
+    while k < level {
+        push_ascii(mut out, o.indent);
+        k += 1;
+    }
+}
+
+// The order dumps writes an object's members in: as stored, or sorted by
+// key with sort_keys.
+fn member_order(o: ref Opts, members: ref Vec[Member]) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < members.len() {
+        order.push(i);
+        i += 1;
+    }
+    if o.sort_keys {
+        let mut k = 1;
+        while k < order.len() {
+            let cur = order[k];
+            let mut j = k;
+            while j > 0 and cmp_cps(members[order[j - 1]].key, members[cur].key) > 0 {
+                order[j] = order[j - 1];
+                j -= 1;
+            }
+            order[j] = cur;
+            k += 1;
+        }
+    }
+    order
+}
+
+// _iterencode: the separators and indentation of json.dumps.
+fn encode(o: ref Opts, v: ref J, level: i64, out: mut ref Vec[i64]) -> Result[(), Exc] {
+    match v {
+        J.Null => push_ascii(mut out, "null"),
+        J.Bool(b) => push_ascii(mut out, if b { "true" } else { "false" }),
+        J.Int(digits) => push_ascii(mut out, digits),
+        J.Float(x) => {
+            let text = float_json(o, x)?;
+            push_ascii(mut out, text);
+        }
+        J.Str(s) => encode_str(o, s, mut out),
+        J.Arr(items) => {
+            if items.len() == 0 {
+                push_ascii(mut out, "[]");
+                return Ok(());
+            }
+            out.push(91);
+            let inner = level + 1;
+            if o.has_indent {
+                newline_indent(o, inner, mut out);
+            }
+            let mut i = 0;
+            while i < items.len() {
+                if i > 0 {
+                    push_ascii(mut out, o.item_sep);
+                    if o.has_indent {
+                        newline_indent(o, inner, mut out);
+                    }
+                }
+                encode(o, items[i], inner, mut out)?;
+                i += 1;
+            }
+            if o.has_indent {
+                newline_indent(o, level, mut out);
+            }
+            out.push(93);
+        }
+        J.Obj(members) => {
+            if members.len() == 0 {
+                push_ascii(mut out, "{}");
+                return Ok(());
+            }
+            out.push(123);
+            let inner = level + 1;
+            if o.has_indent {
+                newline_indent(o, inner, mut out);
+            }
+            let order = member_order(o, members);
+            let mut i = 0;
+            while i < order.len() {
+                if i > 0 {
+                    push_ascii(mut out, o.item_sep);
+                    if o.has_indent {
+                        newline_indent(o, inner, mut out);
+                    }
+                }
+                let m = ref members[order[i]];
+                encode_str(o, m.key, mut out);
+                push_ascii(mut out, o.key_sep);
+                encode(o, m.val, inner, mut out)?;
+                i += 1;
+            }
+            if o.has_indent {
+                newline_indent(o, level, mut out);
+            }
+            out.push(125);
+        }
+    }
+    Ok(())
+}
+
+fn dumps(o: ref Opts, v: ref J) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    encode(o, v, 0, mut out)?;
+    Ok(out)
+}
+
+// -------------------------------------------------------------- repr
+
+// str.isprintable for the characters outside ASCII: the controls, the
+// format characters, the separators other than space, surrogates and the
+// private use areas are not printable. (Unassigned code points are not
+// printable either; this table does not list them.)
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x8E2 or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c == 0x110BD or c == 0x110CD {
+        return false;
+    }
+    if (c >= 0x1BCA0 and c <= 0x1BCA3) or (c >= 0x1D173 and c <= 0x1D17A) or c == 0xE0001 {
+        return false;
+    }
+    if (c >= 0xE0020 and c <= 0xE007F) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr(v: ref J, out: mut ref Vec[i64]) {
+    match v {
+        J.Null => push_ascii(mut out, "None"),
+        J.Bool(b) => push_ascii(mut out, if b { "True" } else { "False" }),
+        J.Int(digits) => push_ascii(mut out, digits),
+        J.Float(x) => push_ascii(mut out, float_repr(x)),
+        J.Str(s) => str_repr(s, mut out),
+        J.Arr(items) => {
+            out.push(91);
+            let mut i = 0;
+            while i < items.len() {
+                if i > 0 {
+                    push_ascii(mut out, ", ");
+                }
+                repr(items[i], mut out);
+                i += 1;
+            }
+            out.push(93);
+        }
+        J.Obj(members) => {
+            out.push(123);
+            let mut i = 0;
+            while i < members.len() {
+                if i > 0 {
+                    push_ascii(mut out, ", ");
+                }
+                str_repr(members[i].key, mut out);
+                push_ascii(mut out, ": ");
+                repr(members[i].val, mut out);
+                i += 1;
+            }
+            out.push(125);
+        }
+    }
+}
+
+// --------------------------------------------------------------- jobs
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn read_text(name: ref String) -> Result[Vec[i64], Exc] {
+    match fs.read_to_string(f"data/{name}") {
+        Ok(t) => Ok(codepoints(t.bytes())),
+        Err(e) => Err(exc("FileNotFoundError", f"{e}")),
+    }
+}
+
+fn is_blank(line: ref Vec[i64]) -> bool {
+    for c in line {
+        if c != 32 and c != 9 and c != 10 and c != 13 and c != 11 and c != 12 {
+            return false;
+        }
+    }
+    true
+}
+
+fn split_lines(text: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut lines: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in text {
+        if c == 10 {
+            lines.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    lines.push(cur);
+    lines
+}
+
+// One line of a JSON Lines file: its dump, or the error loading it.
+fn jsonl_line(o: ref Opts, line: ref Vec[i64]) -> Result[String, Exc] {
+    let v = loads(line)?;
+    let text = dumps(o, v)?;
+    to_utf8(text)
+}
+
+fn roundtrip(v: ref J) -> Result[String, Exc] {
+    let plain = default_opts();
+    let a = dumps(plain, v)?;
+    let b = dumps(plain, loads(a)?)?;
+    let mut pretty = default_opts();
+    pretty.has_indent = true;
+    pretty.indent = "   ".to_string();
+    pretty.item_sep = ",".to_string();
+    pretty.sort_keys = true;
+    pretty.ensure_ascii = false;
+    let c = dumps(pretty, v)?;
+    let d = dumps(pretty, loads(c)?)?;
+    let same_a = py_bool(cmp_cps(a, b) == 0);
+    let same_c = py_bool(cmp_cps(c, d) == 0);
+    Ok(f"  compact {a.len()} chars, same again {same_a}; pretty {c.len()} chars, same again {same_c}\n")
+}
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), Exc] {
+    let text = read_text(f[1])?;
+    let o = parse_opts(f, 2);
+    if f[0] == "jsonl" {
+        let lines = split_lines(text);
+        let mut n = 0;
+        while n < lines.len() {
+            if not is_blank(lines[n]) {
+                match jsonl_line(o, lines[n]) {
+                    Ok(s) => out.push_str(f"  {n + 1}: {s}\n"),
+                    Err(e) => out.push_str(f"  {n + 1}: {e.kind}: {e.msg}\n"),
+                }
+            }
+            n += 1;
+        }
+        return Ok(());
+    }
+    let value = loads(text)?;
+    if f[0] == "load" {
+        let mut r: Vec[i64] = Vec.new();
+        repr(value, mut r);
+        let s = to_utf8(r)?;
+        out.push_str(f"  {s}\n");
+    } else if f[0] == "dump" {
+        let s = to_utf8(dumps(o, value)?)?;
+        for line in s.split("\n") {
+            out.push_str(f"  |{line}\n");
+        }
+    } else if f[0] == "roundtrip" {
+        out.push_str(roundtrip(value)?);
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------- files
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    for job in jobs.lines() {
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
+        println(f"== {f.join(" | ")}");
+        let mut out = String.new();
+        match run(f, mut out) {
+            Ok(()) => print(out),
+            Err(e) => {
+                print(out);
+                println(f"  {e.kind}: {e.msg}");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------- data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"ts\":\"2024-03-09T17:42:05.123Z\",\"method\":\"GET\",\"path\":\"/menu\",\"status\":200,\"bytes\":5120,\"ms\":12.5,\"ua\":\"curl/8.5.0\"}\n");
+    t.push_str("{\"ts\":\"2024-03-09T17:42:06.004Z\",\"method\":\"POST\",\"path\":\"/orders\",\"status\":201,\"bytes\":312,\"ms\":48.25,\"ua\":\"Mozilla/5.0\",\"user\":{\"id\":7,\"name\":\"Zoë\"}}\n");
+    t.push_str("{\"ts\":\"2024-03-09T17:42:07.500Z\",\"method\":\"GET\",\"path\":\"/orders/9\",\"status\":404,\"bytes\":0,\"ms\":3,\"ua\":null}\n");
+    t.push_str("  {\"ts\":\"2024-03-09T17:42:08.000Z\", \"method\":\"DELETE\", \"path\":\"/orders/7\", \"status\":204, \"bytes\":0, \"ms\":7.0}  \n");
+    t.push_str("{\"ts\":\"2024-03-09T17:42:09.010Z\",\"method\":\"GET\",\"path\":\"/search?q=cr%C3%A8me\",\"status\":200,\"bytes\":2048,\"ms\":101.0,\"tags\":[\"slow\"]}\n");
+    t.push_str("{\"ts\":\"2024-03-09T17:42:10.000Z\",\"method\":\"GET\",\"path\":\"/menu\",\"status\":500,\"bytes\":91,\"ms\":250.75,\"error\":\"upstream timed out (110: Connection timed out)\"}\n");
+    t.push_str("{\"ts\":\"2024-03-09T17:42:11.000Z\",\"method\":\"GET\",\"path\":\"/menu\",\"status\":200,\"bytes\":5120,\"ms\":11.0,}\n");
+    t.push_str("\n");
+    t.push_str("{\"ts\":\"2024-03-09T17:42:12.000Z\",\"method\":\"PUT\",\"path\":\"/menu/3\",\"status\":200,\"bytes\":77,\"ms\":1.0e1}\n");
+    t.push_str("[1, 2, 3]\n");
+    t.push_str("{\"ts\":\"2024-03-09T17:42:13.000Z\" \"method\":\"GET\"}\n");
+    v.push(DataFile { path: "access.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"tab\\q\"");
+    v.push(DataFile { path: "bad/bad-escape.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"\\ud83d\\uZZZZ\"");
+    v.push(DataFile { path: "bad/bad-low-surrogate.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"\\u12\"");
+    v.push(DataFile { path: "bad/bad-u-escape.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"\\u12zz\"");
+    v.push(DataFile { path: "bad/bad-u-escape2.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("efbbbf7b2261223a20317d");
+    v.push(DataFile { path: "bad/bom.json".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\": 1 // why not\n");
+    t.push_str("}");
+    v.push(DataFile { path: "bad/comment.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("7b226e616d65223a20226361660165227d");
+    v.push(DataFile { path: "bad/control-char.json".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" 1,\n");
+    t.push_str("  2,,\n");
+    t.push_str("]");
+    v.push(DataFile { path: "bad/double-comma.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "bad/empty.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\": 1} {\"b\": 2}");
+    v.push(DataFile { path: "bad/extra-data.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0x1F");
+    v.push(DataFile { path: "bad/hex.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999]");
+    v.push(DataFile { path: "bad/huge-int.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(".5");
+    v.push(DataFile { path: "bad/leading-dot.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[01]");
+    v.push(DataFile { path: "bad/leading-zero.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("-");
+    v.push(DataFile { path: "bad/lone-minus.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\" 1}");
+    v.push(DataFile { path: "bad/missing-colon.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1 2]");
+    v.push(DataFile { path: "bad/missing-comma.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\":}");
+    v.push(DataFile { path: "bad/missing-value.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"users\": [\n");
+    t.push_str("    {\"name\": \"ana\"},\n");
+    t.push_str("    {\"name\": \"bo\" \"x\"}\n");
+    t.push_str("  ]\n");
+    t.push_str("}");
+    v.push(DataFile { path: "bad/multiline-error.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[nan]");
+    v.push(DataFile { path: "bad/nan-lower.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1,");
+    v.push(DataFile { path: "bad/open-array.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{");
+    v.push(DataFile { path: "bad/open-brace.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[");
+    v.push(DataFile { path: "bad/open-bracket.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\"");
+    v.push(DataFile { path: "bad/open-key.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\":1");
+    v.push(DataFile { path: "bad/open-value.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("+1");
+    v.push(DataFile { path: "bad/plus-sign.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[\"one\n");
+    t.push_str("two\"]");
+    v.push(DataFile { path: "bad/raw-newline.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{'a': 1}");
+    v.push(DataFile { path: "bad/single-quotes.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("   \n");
+    t.push_str("  ");
+    v.push(DataFile { path: "bad/spaces.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1, 2, 3,]");
+    v.push(DataFile { path: "bad/trailing-comma-array.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"a\": 1,\n");
+    t.push_str("  \"b\": 2,\n");
+    t.push_str("}");
+    v.push(DataFile { path: "bad/trailing-comma-object.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1.");
+    v.push(DataFile { path: "bad/trailing-dot.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[tru]");
+    v.push(DataFile { path: "bad/truncated-true.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"日本\": \"東京\", \"x\": ]}");
+    v.push(DataFile { path: "bad/unicode-before-error.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{a: 1}");
+    v.push(DataFile { path: "bad/unquoted-key.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"name\": \"caf");
+    v.push(DataFile { path: "bad/unterminated-string.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"type\":\"FeatureCollection\",\"features\":[\n");
+    t.push_str("{\"type\":\"Feature\",\"id\":1,\"geometry\":{\"type\":\"Point\",\"coordinates\":[-122.4194,37.7749]},\"properties\":{\"name\":\"San Francisco\",\"population\":808437,\"area_km2\":121.4,\"capital\":false}},\n");
+    t.push_str("{\"type\":\"Feature\",\"id\":2,\"geometry\":{\"type\":\"Point\",\"coordinates\":[139.6917,35.6895]},\"properties\":{\"name\":\"東京\",\"population\":13960000,\"area_km2\":2194.07,\"capital\":true}},\n");
+    t.push_str("{\"type\":\"Feature\",\"id\":3,\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[2.3522,48.8566],[2.2945,48.8584],[2.3376,48.8606]]},\"properties\":{\"name\":\"Paris walk\",\"length_m\":5.2e3,\"tags\":[\"museum\",\"river\"]}},\n");
+    t.push_str("{\"type\":\"Feature\",\"id\":4,\"geometry\":{\"type\":\"Polygon\",\"coordinates\":[[[0,0],[0,1E-7],[1.0E-7,1e-7],[1e-07,0],[0,0]]]},\"properties\":{\"name\":\"tiny square\",\"area_km2\":1.0e-14}},\n");
+    t.push_str("{\"type\":\"Feature\",\"id\":5,\"geometry\":null,\"properties\":{\"name\":\"Null Island\",\"elevation\":-0.0,\"note\":\"0.1 + 0.2 = 0.30000000000000004\"}}\n");
+    t.push_str("],\"bbox\":[-180.0,-90.0,180.0,90.0]}\n");
+    v.push(DataFile { path: "cities.geojson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"service\": \"billing\",\n");
+    t.push_str("  \"port\": 8443,\n");
+    t.push_str("  \"port\": 9443,\n");
+    t.push_str("  \"limits\": {\"max_body\": 1048576, \"timeout_s\": 2.5, \"retries\": 3},\n");
+    t.push_str("  \"ids\": [0, -0, 9223372036854775807, -9223372036854775808, 18446744073709551616, 123456789012345678901234567890],\n");
+    t.push_str("  \"floats\": [1.0, 1.5e300, 1e400, -1e400, 1e-400, 5e-324, 2.2250738585072014e-308, 0.1, 100.0, 1e16, 1e15, 12345.6789e-3, -0.0, 3.14159265358979323846],\n");
+    t.push_str("  \"special\": [NaN, Infinity, -Infinity],\n");
+    t.push_str("  \"deep\": {\"a\": {\"b\": {\"c\": {\"d\": {\"e\": [[[[[\"bottom\"]]]]]}}}}},\n");
+    t.push_str("  \"empty\": {\"s\": \"\", \"a\": [], \"o\": {}},\n");
+    t.push_str("  \"dupes\": {\"k\": 1, \"j\": 2, \"k\": 3},\n");
+    t.push_str("  \"escapes\": \"quote \\\" backslash \\\\ slash \\/ tab \\t newline \\n cr \\r ff \\f bs \\b nul \\u0000 end\",\n");
+    t.push_str("  \"astral\": \"\\ud834\\udd1e music, \\uD83D\\uDE00 grin, raw 🎉 party\",\n");
+    t.push_str("  \"lone\": [\"\\ud800\", \"\\udfff\", \"a\\ud83db\", \"\\ude00\\ud83d\"],\n");
+    t.push_str("  \"unicode_keys\": {\"ключ\": \"значение\", \"مفتاح\": \"قيمة\", \"🔑\": \"🚪\"}\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "config.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("\t\"apiVersion\": \"apps/v1\",\n");
+    t.push_str("\t\"kind\": \"Deployment\",\n");
+    t.push_str("\t\"metadata\": {\n");
+    t.push_str("\t\t\"name\": \"cafe-api\",\n");
+    t.push_str("\t\t\"namespace\": \"prod\",\n");
+    t.push_str("\t\t\"labels\": {\"app\": \"cafe-api\", \"tier\": \"backend\"},\n");
+    t.push_str("\t\t\"annotations\": {\"deployment.kubernetes.io/revision\": \"12\"}\n");
+    t.push_str("\t},\n");
+    t.push_str("\t\"spec\": {\n");
+    t.push_str("\t\t\"replicas\": 3,\n");
+    t.push_str("\t\t\"revisionHistoryLimit\": 10,\n");
+    t.push_str("\t\t\"selector\": {\"matchLabels\": {\"app\": \"cafe-api\"}},\n");
+    t.push_str("\t\t\"strategy\": {\"type\": \"RollingUpdate\", \"rollingUpdate\": {\"maxSurge\": \"25%\", \"maxUnavailable\": 0}},\n");
+    t.push_str("\t\t\"template\": {\n");
+    t.push_str("\t\t\t\"metadata\": {\"labels\": {\"app\": \"cafe-api\"}},\n");
+    t.push_str("\t\t\t\"spec\": {\n");
+    t.push_str("\t\t\t\t\"containers\": [\n");
+    t.push_str("\t\t\t\t\t{\n");
+    t.push_str("\t\t\t\t\t\t\"name\": \"api\",\n");
+    t.push_str("\t\t\t\t\t\t\"image\": \"registry.example.com/cafe-api:2.4.1\",\n");
+    t.push_str("\t\t\t\t\t\t\"ports\": [{\"containerPort\": 8080, \"protocol\": \"TCP\"}],\n");
+    t.push_str("\t\t\t\t\t\t\"env\": [\n");
+    t.push_str("\t\t\t\t\t\t\t{\"name\": \"DATABASE_URL\", \"valueFrom\": {\"secretKeyRef\": {\"name\": \"db\", \"key\": \"url\"}}},\n");
+    t.push_str("\t\t\t\t\t\t\t{\"name\": \"LOG_LEVEL\", \"value\": \"info\"}\n");
+    t.push_str("\t\t\t\t\t\t],\n");
+    t.push_str("\t\t\t\t\t\t\"resources\": {\"limits\": {\"cpu\": \"500m\", \"memory\": \"256Mi\"}, \"requests\": {\"cpu\": \"100m\", \"memory\": \"128Mi\"}},\n");
+    t.push_str("\t\t\t\t\t\t\"readinessProbe\": {\"httpGet\": {\"path\": \"/healthz\", \"port\": 8080}, \"initialDelaySeconds\": 5, \"periodSeconds\": 10},\n");
+    t.push_str("\t\t\t\t\t\t\"securityContext\": {\"runAsNonRoot\": true, \"readOnlyRootFilesystem\": true, \"allowPrivilegeEscalation\": false}\n");
+    t.push_str("\t\t\t\t\t}\n");
+    t.push_str("\t\t\t\t],\n");
+    t.push_str("\t\t\t\t\"terminationGracePeriodSeconds\": 30,\n");
+    t.push_str("\t\t\t\t\"nodeSelector\": {}\n");
+    t.push_str("\t\t\t}\n");
+    t.push_str("\t\t}\n");
+    t.push_str("\t},\n");
+    t.push_str("\t\"status\": {}\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "deployment.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str("  {\"id\": 1001, \"number\": 42, \"title\": \"Crash when menu has \\u00e9 or \\ud83d\\ude80 in it\", \"state\": \"open\", \"labels\": [{\"name\": \"bug\", \"color\": \"d73a4a\"}, {\"name\": \"unicode\", \"color\": \"0e8a16\"}], \"user\": {\"login\": \"ana\", \"site_admin\": false}, \"comments\": 3, \"body\": \"Steps:\\r\\n1. Add \\\"Crème brûlée\\\"\\n2. Save\\n\\nExpected: <b>saved</b>\\tActual: \\\\crash\\\\\", \"reactions\": {\"+1\": 4, \"-1\": 0, \"heart\": 1}, \"closed_at\": null, \"score\": 0.8754},\n");
+    t.push_str("  {\"id\": 1002, \"number\": 43, \"title\": \"Zero\\u200bwidth space and NBSP\\u00a0in names\", \"state\": \"closed\", \"labels\": [], \"user\": {\"login\": \"bo\\u00f8\", \"site_admin\": true}, \"comments\": 0, \"body\": \"Line separator \\u2028 and BOM \\ufeff and bell \\u0007 and DEL \\u007f.\", \"reactions\": {}, \"closed_at\": \"2024-03-09T17:42:05Z\", \"score\": 1}\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "issues.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("load\tpackage.json\n");
+    t.push_str("dump\tpackage.json\n");
+    t.push_str("load\tcities.geojson\n");
+    t.push_str("dump\tcities.geojson\n");
+    t.push_str("load\tdeployment.json\n");
+    t.push_str("dump\tdeployment.json\n");
+    t.push_str("load\tissues.json\n");
+    t.push_str("dump\tissues.json\n");
+    t.push_str("load\tconfig.json\n");
+    t.push_str("dump\tconfig.json\n");
+    t.push_str("load\tok/scalar.json\n");
+    t.push_str("dump\tok/scalar.json\n");
+    t.push_str("load\tok/number.json\n");
+    t.push_str("dump\tok/number.json\n");
+    t.push_str("load\tok/null.json\n");
+    t.push_str("dump\tok/null.json\n");
+    t.push_str("dump\tpackage.json\tindent=2\n");
+    t.push_str("dump\tdeployment.json\tindent=2\n");
+    t.push_str("dump\tcities.geojson\tindent=2\n");
+    t.push_str("dump\tissues.json\tindent=4\tensure_ascii=0\n");
+    t.push_str("dump\tissues.json\tindent=t\tsort_keys=1\n");
+    t.push_str("dump\tconfig.json\tindent=0\n");
+    t.push_str("dump\tconfig.json\tindent=2\tsort_keys=1\tensure_ascii=0\n");
+    t.push_str("dump\tconfig.json\tcompact=1\n");
+    t.push_str("dump\tconfig.json\tallow_nan=0\n");
+    t.push_str("dump\tcities.geojson\tcompact=1\tsort_keys=1\n");
+    t.push_str("dump\tcities.geojson\tallow_nan=0\tindent=1\n");
+    t.push_str("dump\tdeployment.json\tcompact=1\tindent=2\n");
+    t.push_str("dump\tok/scalar.json\tindent=2\n");
+    t.push_str("dump\tok/big-but-legal.json\tcompact=1\n");
+    t.push_str("jsonl\taccess.jsonl\n");
+    t.push_str("jsonl\taccess.jsonl\tsort_keys=1\tensure_ascii=0\n");
+    t.push_str("roundtrip\tconfig.json\n");
+    t.push_str("roundtrip\tissues.json\n");
+    t.push_str("roundtrip\tcities.geojson\n");
+    t.push_str("load\tbad/empty.json\n");
+    t.push_str("load\tbad/spaces.json\n");
+    t.push_str("load\tbad/trailing-comma-array.json\n");
+    t.push_str("load\tbad/trailing-comma-object.json\n");
+    t.push_str("load\tbad/double-comma.json\n");
+    t.push_str("load\tbad/missing-colon.json\n");
+    t.push_str("load\tbad/single-quotes.json\n");
+    t.push_str("load\tbad/unquoted-key.json\n");
+    t.push_str("load\tbad/missing-comma.json\n");
+    t.push_str("load\tbad/unterminated-string.json\n");
+    t.push_str("load\tbad/control-char.json\n");
+    t.push_str("load\tbad/raw-newline.json\n");
+    t.push_str("load\tbad/bad-escape.json\n");
+    t.push_str("load\tbad/bad-u-escape.json\n");
+    t.push_str("load\tbad/bad-u-escape2.json\n");
+    t.push_str("load\tbad/bad-low-surrogate.json\n");
+    t.push_str("load\tbad/leading-zero.json\n");
+    t.push_str("load\tbad/trailing-dot.json\n");
+    t.push_str("load\tbad/leading-dot.json\n");
+    t.push_str("load\tbad/lone-minus.json\n");
+    t.push_str("load\tbad/plus-sign.json\n");
+    t.push_str("load\tbad/hex.json\n");
+    t.push_str("load\tbad/extra-data.json\n");
+    t.push_str("load\tbad/truncated-true.json\n");
+    t.push_str("load\tbad/missing-value.json\n");
+    t.push_str("load\tbad/open-brace.json\n");
+    t.push_str("load\tbad/open-bracket.json\n");
+    t.push_str("load\tbad/open-key.json\n");
+    t.push_str("load\tbad/open-value.json\n");
+    t.push_str("load\tbad/open-array.json\n");
+    t.push_str("load\tbad/comment.json\n");
+    t.push_str("load\tbad/nan-lower.json\n");
+    t.push_str("load\tbad/bom.json\n");
+    t.push_str("load\tbad/huge-int.json\n");
+    t.push_str("load\tbad/multiline-error.json\n");
+    t.push_str("load\tbad/unicode-before-error.json\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[7777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777]");
+    v.push(DataFile { path: "ok/big-but-legal.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("null");
+    v.push(DataFile { path: "ok/null.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("-12.5e+2");
+    v.push(DataFile { path: "ok/number.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(" \"just a string\" ");
+    v.push(DataFile { path: "ok/scalar.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"@example/cafe-notes\",\n");
+    t.push_str("  \"version\": \"2.4.1\",\n");
+    t.push_str("  \"description\": \"Notes for café owners \\u2014 menus, stock, shifts\",\n");
+    t.push_str("  \"keywords\": [\"notes\", \"café\", \"pos\"],\n");
+    t.push_str("  \"author\": {\"name\": \"José Álvarez\", \"email\": \"jose@example.com\", \"url\": \"https:\\/\\/example.com\\/~jose\"},\n");
+    t.push_str("  \"license\": \"MIT\",\n");
+    t.push_str("  \"main\": \"dist/index.js\",\n");
+    t.push_str("  \"type\": \"module\",\n");
+    t.push_str("  \"engines\": {\"node\": \">=18.0.0\"},\n");
+    t.push_str("  \"scripts\": {\n");
+    t.push_str("    \"build\": \"tsc -p tsconfig.json\",\n");
+    t.push_str("    \"test\": \"vitest run --coverage\",\n");
+    t.push_str("    \"lint\": \"eslint \\\"src/**/*.{ts,tsx}\\\"\",\n");
+    t.push_str("    \"prepublishOnly\": \"npm run build && npm test\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"dependencies\": {\"date-fns\": \"^3.6.0\", \"zod\": \"~3.23.8\"},\n");
+    t.push_str("  \"devDependencies\": {\"typescript\": \"5.5.4\", \"vitest\": \"^2.0.5\", \"eslint\": \"^9.9.0\"},\n");
+    t.push_str("  \"private\": false,\n");
+    t.push_str("  \"publishConfig\": null,\n");
+    t.push_str("  \"files\": [],\n");
+    t.push_str("  \"workspaces\": {}\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "package.json".to_string(), hex: false, body: t });
+}

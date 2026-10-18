@@ -1,0 +1,791 @@
+== load | package.json
+  {'name': '@example/cafe-notes', 'version': '2.4.1', 'description': 'Notes for café owners — menus, stock, shifts', 'keywords': ['notes', 'café', 'pos'], 'author': {'name': 'José Álvarez', 'email': 'jose@example.com', 'url': 'https://example.com/~jose'}, 'license': 'MIT', 'main': 'dist/index.js', 'type': 'module', 'engines': {'node': '>=18.0.0'}, 'scripts': {'build': 'tsc -p tsconfig.json', 'test': 'vitest run --coverage', 'lint': 'eslint "src/**/*.{ts,tsx}"', 'prepublishOnly': 'npm run build && npm test'}, 'dependencies': {'date-fns': '^3.6.0', 'zod': '~3.23.8'}, 'devDependencies': {'typescript': '5.5.4', 'vitest': '^2.0.5', 'eslint': '^9.9.0'}, 'private': False, 'publishConfig': None, 'files': [], 'workspaces': {}}
+== dump | package.json
+  |{"name": "@example/cafe-notes", "version": "2.4.1", "description": "Notes for caf\u00e9 owners \u2014 menus, stock, shifts", "keywords": ["notes", "caf\u00e9", "pos"], "author": {"name": "Jos\u00e9 \u00c1lvarez", "email": "jose@example.com", "url": "https://example.com/~jose"}, "license": "MIT", "main": "dist/index.js", "type": "module", "engines": {"node": ">=18.0.0"}, "scripts": {"build": "tsc -p tsconfig.json", "test": "vitest run --coverage", "lint": "eslint \"src/**/*.{ts,tsx}\"", "prepublishOnly": "npm run build && npm test"}, "dependencies": {"date-fns": "^3.6.0", "zod": "~3.23.8"}, "devDependencies": {"typescript": "5.5.4", "vitest": "^2.0.5", "eslint": "^9.9.0"}, "private": false, "publishConfig": null, "files": [], "workspaces": {}}
+== load | cities.geojson
+  {'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'id': 1, 'geometry': {'type': 'Point', 'coordinates': [-122.4194, 37.7749]}, 'properties': {'name': 'San Francisco', 'population': 808437, 'area_km2': 121.4, 'capital': False}}, {'type': 'Feature', 'id': 2, 'geometry': {'type': 'Point', 'coordinates': [139.6917, 35.6895]}, 'properties': {'name': '東京', 'population': 13960000, 'area_km2': 2194.07, 'capital': True}}, {'type': 'Feature', 'id': 3, 'geometry': {'type': 'LineString', 'coordinates': [[2.3522, 48.8566], [2.2945, 48.8584], [2.3376, 48.8606]]}, 'properties': {'name': 'Paris walk', 'length_m': 5200.0, 'tags': ['museum', 'river']}}, {'type': 'Feature', 'id': 4, 'geometry': {'type': 'Polygon', 'coordinates': [[[0, 0], [0, 1e-07], [1e-07, 1e-07], [1e-07, 0], [0, 0]]]}, 'properties': {'name': 'tiny square', 'area_km2': 1e-14}}, {'type': 'Feature', 'id': 5, 'geometry': None, 'properties': {'name': 'Null Island', 'elevation': -0.0, 'note': '0.1 + 0.2 = 0.30000000000000004'}}], 'bbox': [-180.0, -90.0, 180.0, 90.0]}
+== dump | cities.geojson
+  |{"type": "FeatureCollection", "features": [{"type": "Feature", "id": 1, "geometry": {"type": "Point", "coordinates": [-122.4194, 37.7749]}, "properties": {"name": "San Francisco", "population": 808437, "area_km2": 121.4, "capital": false}}, {"type": "Feature", "id": 2, "geometry": {"type": "Point", "coordinates": [139.6917, 35.6895]}, "properties": {"name": "\u6771\u4eac", "population": 13960000, "area_km2": 2194.07, "capital": true}}, {"type": "Feature", "id": 3, "geometry": {"type": "LineString", "coordinates": [[2.3522, 48.8566], [2.2945, 48.8584], [2.3376, 48.8606]]}, "properties": {"name": "Paris walk", "length_m": 5200.0, "tags": ["museum", "river"]}}, {"type": "Feature", "id": 4, "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1e-07], [1e-07, 1e-07], [1e-07, 0], [0, 0]]]}, "properties": {"name": "tiny square", "area_km2": 1e-14}}, {"type": "Feature", "id": 5, "geometry": null, "properties": {"name": "Null Island", "elevation": -0.0, "note": "0.1 + 0.2 = 0.30000000000000004"}}], "bbox": [-180.0, -90.0, 180.0, 90.0]}
+== load | deployment.json
+  {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'name': 'cafe-api', 'namespace': 'prod', 'labels': {'app': 'cafe-api', 'tier': 'backend'}, 'annotations': {'deployment.kubernetes.io/revision': '12'}}, 'spec': {'replicas': 3, 'revisionHistoryLimit': 10, 'selector': {'matchLabels': {'app': 'cafe-api'}}, 'strategy': {'type': 'RollingUpdate', 'rollingUpdate': {'maxSurge': '25%', 'maxUnavailable': 0}}, 'template': {'metadata': {'labels': {'app': 'cafe-api'}}, 'spec': {'containers': [{'name': 'api', 'image': 'registry.example.com/cafe-api:2.4.1', 'ports': [{'containerPort': 8080, 'protocol': 'TCP'}], 'env': [{'name': 'DATABASE_URL', 'valueFrom': {'secretKeyRef': {'name': 'db', 'key': 'url'}}}, {'name': 'LOG_LEVEL', 'value': 'info'}], 'resources': {'limits': {'cpu': '500m', 'memory': '256Mi'}, 'requests': {'cpu': '100m', 'memory': '128Mi'}}, 'readinessProbe': {'httpGet': {'path': '/healthz', 'port': 8080}, 'initialDelaySeconds': 5, 'periodSeconds': 10}, 'securityContext': {'runAsNonRoot': True, 'readOnlyRootFilesystem': True, 'allowPrivilegeEscalation': False}}], 'terminationGracePeriodSeconds': 30, 'nodeSelector': {}}}}, 'status': {}}
+== dump | deployment.json
+  |{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "cafe-api", "namespace": "prod", "labels": {"app": "cafe-api", "tier": "backend"}, "annotations": {"deployment.kubernetes.io/revision": "12"}}, "spec": {"replicas": 3, "revisionHistoryLimit": 10, "selector": {"matchLabels": {"app": "cafe-api"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "cafe-api"}}, "spec": {"containers": [{"name": "api", "image": "registry.example.com/cafe-api:2.4.1", "ports": [{"containerPort": 8080, "protocol": "TCP"}], "env": [{"name": "DATABASE_URL", "valueFrom": {"secretKeyRef": {"name": "db", "key": "url"}}}, {"name": "LOG_LEVEL", "value": "info"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": "100m", "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "initialDelaySeconds": 5, "periodSeconds": 10}, "securityContext": {"runAsNonRoot": true, "readOnlyRootFilesystem": true, "allowPrivilegeEscalation": false}}], "terminationGracePeriodSeconds": 30, "nodeSelector": {}}}}, "status": {}}
+== load | issues.json
+  [{'id': 1001, 'number': 42, 'title': 'Crash when menu has é or 🚀 in it', 'state': 'open', 'labels': [{'name': 'bug', 'color': 'd73a4a'}, {'name': 'unicode', 'color': '0e8a16'}], 'user': {'login': 'ana', 'site_admin': False}, 'comments': 3, 'body': 'Steps:\r\n1. Add "Crème brûlée"\n2. Save\n\nExpected: <b>saved</b>\tActual: \\crash\\', 'reactions': {'+1': 4, '-1': 0, 'heart': 1}, 'closed_at': None, 'score': 0.8754}, {'id': 1002, 'number': 43, 'title': 'Zero\u200bwidth space and NBSP\xa0in names', 'state': 'closed', 'labels': [], 'user': {'login': 'boø', 'site_admin': True}, 'comments': 0, 'body': 'Line separator \u2028 and BOM \ufeff and bell \x07 and DEL \x7f.', 'reactions': {}, 'closed_at': '2024-03-09T17:42:05Z', 'score': 1}]
+== dump | issues.json
+  |[{"id": 1001, "number": 42, "title": "Crash when menu has \u00e9 or \ud83d\ude80 in it", "state": "open", "labels": [{"name": "bug", "color": "d73a4a"}, {"name": "unicode", "color": "0e8a16"}], "user": {"login": "ana", "site_admin": false}, "comments": 3, "body": "Steps:\r\n1. Add \"Cr\u00e8me br\u00fbl\u00e9e\"\n2. Save\n\nExpected: <b>saved</b>\tActual: \\crash\\", "reactions": {"+1": 4, "-1": 0, "heart": 1}, "closed_at": null, "score": 0.8754}, {"id": 1002, "number": 43, "title": "Zero\u200bwidth space and NBSP\u00a0in names", "state": "closed", "labels": [], "user": {"login": "bo\u00f8", "site_admin": true}, "comments": 0, "body": "Line separator \u2028 and BOM \ufeff and bell \u0007 and DEL \u007f.", "reactions": {}, "closed_at": "2024-03-09T17:42:05Z", "score": 1}]
+== load | config.json
+  {'service': 'billing', 'port': 9443, 'limits': {'max_body': 1048576, 'timeout_s': 2.5, 'retries': 3}, 'ids': [0, 0, 9223372036854775807, -9223372036854775808, 18446744073709551616, 123456789012345678901234567890], 'floats': [1.0, 1.5e+300, inf, -inf, 0.0, 5e-324, 2.2250738585072014e-308, 0.1, 100.0, 1e+16, 1000000000000000.0, 12.3456789, -0.0, 3.141592653589793], 'special': [nan, inf, -inf], 'deep': {'a': {'b': {'c': {'d': {'e': [[[[['bottom']]]]]}}}}}, 'empty': {'s': '', 'a': [], 'o': {}}, 'dupes': {'k': 3, 'j': 2}, 'escapes': 'quote " backslash \\ slash / tab \t newline \n cr \r ff \x0c bs \x08 nul \x00 end', 'astral': '𝄞 music, 😀 grin, raw 🎉 party', 'lone': ['\ud800', '\udfff', 'a\ud83db', '\ude00\ud83d'], 'unicode_keys': {'ключ': 'значение', 'مفتاح': 'قيمة', '🔑': '🚪'}}
+== dump | config.json
+  |{"service": "billing", "port": 9443, "limits": {"max_body": 1048576, "timeout_s": 2.5, "retries": 3}, "ids": [0, 0, 9223372036854775807, -9223372036854775808, 18446744073709551616, 123456789012345678901234567890], "floats": [1.0, 1.5e+300, Infinity, -Infinity, 0.0, 5e-324, 2.2250738585072014e-308, 0.1, 100.0, 1e+16, 1000000000000000.0, 12.3456789, -0.0, 3.141592653589793], "special": [NaN, Infinity, -Infinity], "deep": {"a": {"b": {"c": {"d": {"e": [[[[["bottom"]]]]]}}}}}, "empty": {"s": "", "a": [], "o": {}}, "dupes": {"k": 3, "j": 2}, "escapes": "quote \" backslash \\ slash / tab \t newline \n cr \r ff \f bs \b nul \u0000 end", "astral": "\ud834\udd1e music, \ud83d\ude00 grin, raw \ud83c\udf89 party", "lone": ["\ud800", "\udfff", "a\ud83db", "\ude00\ud83d"], "unicode_keys": {"\u043a\u043b\u044e\u0447": "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435", "\u0645\u0641\u062a\u0627\u062d": "\u0642\u064a\u0645\u0629", "\ud83d\udd11": "\ud83d\udeaa"}}
+== load | ok/scalar.json
+  'just a string'
+== dump | ok/scalar.json
+  |"just a string"
+== load | ok/number.json
+  -1250.0
+== dump | ok/number.json
+  |-1250.0
+== load | ok/null.json
+  None
+== dump | ok/null.json
+  |null
+== dump | package.json | indent=2
+  |{
+  |  "name": "@example/cafe-notes",
+  |  "version": "2.4.1",
+  |  "description": "Notes for caf\u00e9 owners \u2014 menus, stock, shifts",
+  |  "keywords": [
+  |    "notes",
+  |    "caf\u00e9",
+  |    "pos"
+  |  ],
+  |  "author": {
+  |    "name": "Jos\u00e9 \u00c1lvarez",
+  |    "email": "jose@example.com",
+  |    "url": "https://example.com/~jose"
+  |  },
+  |  "license": "MIT",
+  |  "main": "dist/index.js",
+  |  "type": "module",
+  |  "engines": {
+  |    "node": ">=18.0.0"
+  |  },
+  |  "scripts": {
+  |    "build": "tsc -p tsconfig.json",
+  |    "test": "vitest run --coverage",
+  |    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+  |    "prepublishOnly": "npm run build && npm test"
+  |  },
+  |  "dependencies": {
+  |    "date-fns": "^3.6.0",
+  |    "zod": "~3.23.8"
+  |  },
+  |  "devDependencies": {
+  |    "typescript": "5.5.4",
+  |    "vitest": "^2.0.5",
+  |    "eslint": "^9.9.0"
+  |  },
+  |  "private": false,
+  |  "publishConfig": null,
+  |  "files": [],
+  |  "workspaces": {}
+  |}
+== dump | deployment.json | indent=2
+  |{
+  |  "apiVersion": "apps/v1",
+  |  "kind": "Deployment",
+  |  "metadata": {
+  |    "name": "cafe-api",
+  |    "namespace": "prod",
+  |    "labels": {
+  |      "app": "cafe-api",
+  |      "tier": "backend"
+  |    },
+  |    "annotations": {
+  |      "deployment.kubernetes.io/revision": "12"
+  |    }
+  |  },
+  |  "spec": {
+  |    "replicas": 3,
+  |    "revisionHistoryLimit": 10,
+  |    "selector": {
+  |      "matchLabels": {
+  |        "app": "cafe-api"
+  |      }
+  |    },
+  |    "strategy": {
+  |      "type": "RollingUpdate",
+  |      "rollingUpdate": {
+  |        "maxSurge": "25%",
+  |        "maxUnavailable": 0
+  |      }
+  |    },
+  |    "template": {
+  |      "metadata": {
+  |        "labels": {
+  |          "app": "cafe-api"
+  |        }
+  |      },
+  |      "spec": {
+  |        "containers": [
+  |          {
+  |            "name": "api",
+  |            "image": "registry.example.com/cafe-api:2.4.1",
+  |            "ports": [
+  |              {
+  |                "containerPort": 8080,
+  |                "protocol": "TCP"
+  |              }
+  |            ],
+  |            "env": [
+  |              {
+  |                "name": "DATABASE_URL",
+  |                "valueFrom": {
+  |                  "secretKeyRef": {
+  |                    "name": "db",
+  |                    "key": "url"
+  |                  }
+  |                }
+  |              },
+  |              {
+  |                "name": "LOG_LEVEL",
+  |                "value": "info"
+  |              }
+  |            ],
+  |            "resources": {
+  |              "limits": {
+  |                "cpu": "500m",
+  |                "memory": "256Mi"
+  |              },
+  |              "requests": {
+  |                "cpu": "100m",
+  |                "memory": "128Mi"
+  |              }
+  |            },
+  |            "readinessProbe": {
+  |              "httpGet": {
+  |                "path": "/healthz",
+  |                "port": 8080
+  |              },
+  |              "initialDelaySeconds": 5,
+  |              "periodSeconds": 10
+  |            },
+  |            "securityContext": {
+  |              "runAsNonRoot": true,
+  |              "readOnlyRootFilesystem": true,
+  |              "allowPrivilegeEscalation": false
+  |            }
+  |          }
+  |        ],
+  |        "terminationGracePeriodSeconds": 30,
+  |        "nodeSelector": {}
+  |      }
+  |    }
+  |  },
+  |  "status": {}
+  |}
+== dump | cities.geojson | indent=2
+  |{
+  |  "type": "FeatureCollection",
+  |  "features": [
+  |    {
+  |      "type": "Feature",
+  |      "id": 1,
+  |      "geometry": {
+  |        "type": "Point",
+  |        "coordinates": [
+  |          -122.4194,
+  |          37.7749
+  |        ]
+  |      },
+  |      "properties": {
+  |        "name": "San Francisco",
+  |        "population": 808437,
+  |        "area_km2": 121.4,
+  |        "capital": false
+  |      }
+  |    },
+  |    {
+  |      "type": "Feature",
+  |      "id": 2,
+  |      "geometry": {
+  |        "type": "Point",
+  |        "coordinates": [
+  |          139.6917,
+  |          35.6895
+  |        ]
+  |      },
+  |      "properties": {
+  |        "name": "\u6771\u4eac",
+  |        "population": 13960000,
+  |        "area_km2": 2194.07,
+  |        "capital": true
+  |      }
+  |    },
+  |    {
+  |      "type": "Feature",
+  |      "id": 3,
+  |      "geometry": {
+  |        "type": "LineString",
+  |        "coordinates": [
+  |          [
+  |            2.3522,
+  |            48.8566
+  |          ],
+  |          [
+  |            2.2945,
+  |            48.8584
+  |          ],
+  |          [
+  |            2.3376,
+  |            48.8606
+  |          ]
+  |        ]
+  |      },
+  |      "properties": {
+  |        "name": "Paris walk",
+  |        "length_m": 5200.0,
+  |        "tags": [
+  |          "museum",
+  |          "river"
+  |        ]
+  |      }
+  |    },
+  |    {
+  |      "type": "Feature",
+  |      "id": 4,
+  |      "geometry": {
+  |        "type": "Polygon",
+  |        "coordinates": [
+  |          [
+  |            [
+  |              0,
+  |              0
+  |            ],
+  |            [
+  |              0,
+  |              1e-07
+  |            ],
+  |            [
+  |              1e-07,
+  |              1e-07
+  |            ],
+  |            [
+  |              1e-07,
+  |              0
+  |            ],
+  |            [
+  |              0,
+  |              0
+  |            ]
+  |          ]
+  |        ]
+  |      },
+  |      "properties": {
+  |        "name": "tiny square",
+  |        "area_km2": 1e-14
+  |      }
+  |    },
+  |    {
+  |      "type": "Feature",
+  |      "id": 5,
+  |      "geometry": null,
+  |      "properties": {
+  |        "name": "Null Island",
+  |        "elevation": -0.0,
+  |        "note": "0.1 + 0.2 = 0.30000000000000004"
+  |      }
+  |    }
+  |  ],
+  |  "bbox": [
+  |    -180.0,
+  |    -90.0,
+  |    180.0,
+  |    90.0
+  |  ]
+  |}
+== dump | issues.json | indent=4 | ensure_ascii=0
+  |[
+  |    {
+  |        "id": 1001,
+  |        "number": 42,
+  |        "title": "Crash when menu has é or 🚀 in it",
+  |        "state": "open",
+  |        "labels": [
+  |            {
+  |                "name": "bug",
+  |                "color": "d73a4a"
+  |            },
+  |            {
+  |                "name": "unicode",
+  |                "color": "0e8a16"
+  |            }
+  |        ],
+  |        "user": {
+  |            "login": "ana",
+  |            "site_admin": false
+  |        },
+  |        "comments": 3,
+  |        "body": "Steps:\r\n1. Add \"Crème brûlée\"\n2. Save\n\nExpected: <b>saved</b>\tActual: \\crash\\",
+  |        "reactions": {
+  |            "+1": 4,
+  |            "-1": 0,
+  |            "heart": 1
+  |        },
+  |        "closed_at": null,
+  |        "score": 0.8754
+  |    },
+  |    {
+  |        "id": 1002,
+  |        "number": 43,
+  |        "title": "Zero​width space and NBSP in names",
+  |        "state": "closed",
+  |        "labels": [],
+  |        "user": {
+  |            "login": "boø",
+  |            "site_admin": true
+  |        },
+  |        "comments": 0,
+  |        "body": "Line separator   and BOM ﻿ and bell \u0007 and DEL .",
+  |        "reactions": {},
+  |        "closed_at": "2024-03-09T17:42:05Z",
+  |        "score": 1
+  |    }
+  |]
+== dump | issues.json | indent=t | sort_keys=1
+  |[
+  |	{
+  |		"body": "Steps:\r\n1. Add \"Cr\u00e8me br\u00fbl\u00e9e\"\n2. Save\n\nExpected: <b>saved</b>\tActual: \\crash\\",
+  |		"closed_at": null,
+  |		"comments": 3,
+  |		"id": 1001,
+  |		"labels": [
+  |			{
+  |				"color": "d73a4a",
+  |				"name": "bug"
+  |			},
+  |			{
+  |				"color": "0e8a16",
+  |				"name": "unicode"
+  |			}
+  |		],
+  |		"number": 42,
+  |		"reactions": {
+  |			"+1": 4,
+  |			"-1": 0,
+  |			"heart": 1
+  |		},
+  |		"score": 0.8754,
+  |		"state": "open",
+  |		"title": "Crash when menu has \u00e9 or \ud83d\ude80 in it",
+  |		"user": {
+  |			"login": "ana",
+  |			"site_admin": false
+  |		}
+  |	},
+  |	{
+  |		"body": "Line separator \u2028 and BOM \ufeff and bell \u0007 and DEL \u007f.",
+  |		"closed_at": "2024-03-09T17:42:05Z",
+  |		"comments": 0,
+  |		"id": 1002,
+  |		"labels": [],
+  |		"number": 43,
+  |		"reactions": {},
+  |		"score": 1,
+  |		"state": "closed",
+  |		"title": "Zero\u200bwidth space and NBSP\u00a0in names",
+  |		"user": {
+  |			"login": "bo\u00f8",
+  |			"site_admin": true
+  |		}
+  |	}
+  |]
+== dump | config.json | indent=0
+  |{
+  |"service": "billing",
+  |"port": 9443,
+  |"limits": {
+  |"max_body": 1048576,
+  |"timeout_s": 2.5,
+  |"retries": 3
+  |},
+  |"ids": [
+  |0,
+  |0,
+  |9223372036854775807,
+  |-9223372036854775808,
+  |18446744073709551616,
+  |123456789012345678901234567890
+  |],
+  |"floats": [
+  |1.0,
+  |1.5e+300,
+  |Infinity,
+  |-Infinity,
+  |0.0,
+  |5e-324,
+  |2.2250738585072014e-308,
+  |0.1,
+  |100.0,
+  |1e+16,
+  |1000000000000000.0,
+  |12.3456789,
+  |-0.0,
+  |3.141592653589793
+  |],
+  |"special": [
+  |NaN,
+  |Infinity,
+  |-Infinity
+  |],
+  |"deep": {
+  |"a": {
+  |"b": {
+  |"c": {
+  |"d": {
+  |"e": [
+  |[
+  |[
+  |[
+  |[
+  |"bottom"
+  |]
+  |]
+  |]
+  |]
+  |]
+  |}
+  |}
+  |}
+  |}
+  |},
+  |"empty": {
+  |"s": "",
+  |"a": [],
+  |"o": {}
+  |},
+  |"dupes": {
+  |"k": 3,
+  |"j": 2
+  |},
+  |"escapes": "quote \" backslash \\ slash / tab \t newline \n cr \r ff \f bs \b nul \u0000 end",
+  |"astral": "\ud834\udd1e music, \ud83d\ude00 grin, raw \ud83c\udf89 party",
+  |"lone": [
+  |"\ud800",
+  |"\udfff",
+  |"a\ud83db",
+  |"\ude00\ud83d"
+  |],
+  |"unicode_keys": {
+  |"\u043a\u043b\u044e\u0447": "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+  |"\u0645\u0641\u062a\u0627\u062d": "\u0642\u064a\u0645\u0629",
+  |"\ud83d\udd11": "\ud83d\udeaa"
+  |}
+  |}
+== dump | config.json | indent=2 | sort_keys=1 | ensure_ascii=0
+  UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1031: surrogates not allowed
+== dump | config.json | compact=1
+  |{"service":"billing","port":9443,"limits":{"max_body":1048576,"timeout_s":2.5,"retries":3},"ids":[0,0,9223372036854775807,-9223372036854775808,18446744073709551616,123456789012345678901234567890],"floats":[1.0,1.5e+300,Infinity,-Infinity,0.0,5e-324,2.2250738585072014e-308,0.1,100.0,1e+16,1000000000000000.0,12.3456789,-0.0,3.141592653589793],"special":[NaN,Infinity,-Infinity],"deep":{"a":{"b":{"c":{"d":{"e":[[[[["bottom"]]]]]}}}}},"empty":{"s":"","a":[],"o":{}},"dupes":{"k":3,"j":2},"escapes":"quote \" backslash \\ slash / tab \t newline \n cr \r ff \f bs \b nul \u0000 end","astral":"\ud834\udd1e music, \ud83d\ude00 grin, raw \ud83c\udf89 party","lone":["\ud800","\udfff","a\ud83db","\ude00\ud83d"],"unicode_keys":{"\u043a\u043b\u044e\u0447":"\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435","\u0645\u0641\u062a\u0627\u062d":"\u0642\u064a\u0645\u0629","\ud83d\udd11":"\ud83d\udeaa"}}
+== dump | config.json | allow_nan=0
+  ValueError: Out of range float values are not JSON compliant: inf
+== dump | cities.geojson | compact=1 | sort_keys=1
+  |{"bbox":[-180.0,-90.0,180.0,90.0],"features":[{"geometry":{"coordinates":[-122.4194,37.7749],"type":"Point"},"id":1,"properties":{"area_km2":121.4,"capital":false,"name":"San Francisco","population":808437},"type":"Feature"},{"geometry":{"coordinates":[139.6917,35.6895],"type":"Point"},"id":2,"properties":{"area_km2":2194.07,"capital":true,"name":"\u6771\u4eac","population":13960000},"type":"Feature"},{"geometry":{"coordinates":[[2.3522,48.8566],[2.2945,48.8584],[2.3376,48.8606]],"type":"LineString"},"id":3,"properties":{"length_m":5200.0,"name":"Paris walk","tags":["museum","river"]},"type":"Feature"},{"geometry":{"coordinates":[[[0,0],[0,1e-07],[1e-07,1e-07],[1e-07,0],[0,0]]],"type":"Polygon"},"id":4,"properties":{"area_km2":1e-14,"name":"tiny square"},"type":"Feature"},{"geometry":null,"id":5,"properties":{"elevation":-0.0,"name":"Null Island","note":"0.1 + 0.2 = 0.30000000000000004"},"type":"Feature"}],"type":"FeatureCollection"}
+== dump | cities.geojson | allow_nan=0 | indent=1
+  |{
+  | "type": "FeatureCollection",
+  | "features": [
+  |  {
+  |   "type": "Feature",
+  |   "id": 1,
+  |   "geometry": {
+  |    "type": "Point",
+  |    "coordinates": [
+  |     -122.4194,
+  |     37.7749
+  |    ]
+  |   },
+  |   "properties": {
+  |    "name": "San Francisco",
+  |    "population": 808437,
+  |    "area_km2": 121.4,
+  |    "capital": false
+  |   }
+  |  },
+  |  {
+  |   "type": "Feature",
+  |   "id": 2,
+  |   "geometry": {
+  |    "type": "Point",
+  |    "coordinates": [
+  |     139.6917,
+  |     35.6895
+  |    ]
+  |   },
+  |   "properties": {
+  |    "name": "\u6771\u4eac",
+  |    "population": 13960000,
+  |    "area_km2": 2194.07,
+  |    "capital": true
+  |   }
+  |  },
+  |  {
+  |   "type": "Feature",
+  |   "id": 3,
+  |   "geometry": {
+  |    "type": "LineString",
+  |    "coordinates": [
+  |     [
+  |      2.3522,
+  |      48.8566
+  |     ],
+  |     [
+  |      2.2945,
+  |      48.8584
+  |     ],
+  |     [
+  |      2.3376,
+  |      48.8606
+  |     ]
+  |    ]
+  |   },
+  |   "properties": {
+  |    "name": "Paris walk",
+  |    "length_m": 5200.0,
+  |    "tags": [
+  |     "museum",
+  |     "river"
+  |    ]
+  |   }
+  |  },
+  |  {
+  |   "type": "Feature",
+  |   "id": 4,
+  |   "geometry": {
+  |    "type": "Polygon",
+  |    "coordinates": [
+  |     [
+  |      [
+  |       0,
+  |       0
+  |      ],
+  |      [
+  |       0,
+  |       1e-07
+  |      ],
+  |      [
+  |       1e-07,
+  |       1e-07
+  |      ],
+  |      [
+  |       1e-07,
+  |       0
+  |      ],
+  |      [
+  |       0,
+  |       0
+  |      ]
+  |     ]
+  |    ]
+  |   },
+  |   "properties": {
+  |    "name": "tiny square",
+  |    "area_km2": 1e-14
+  |   }
+  |  },
+  |  {
+  |   "type": "Feature",
+  |   "id": 5,
+  |   "geometry": null,
+  |   "properties": {
+  |    "name": "Null Island",
+  |    "elevation": -0.0,
+  |    "note": "0.1 + 0.2 = 0.30000000000000004"
+  |   }
+  |  }
+  | ],
+  | "bbox": [
+  |  -180.0,
+  |  -90.0,
+  |  180.0,
+  |  90.0
+  | ]
+  |}
+== dump | deployment.json | compact=1 | indent=2
+  |{
+  |  "apiVersion":"apps/v1",
+  |  "kind":"Deployment",
+  |  "metadata":{
+  |    "name":"cafe-api",
+  |    "namespace":"prod",
+  |    "labels":{
+  |      "app":"cafe-api",
+  |      "tier":"backend"
+  |    },
+  |    "annotations":{
+  |      "deployment.kubernetes.io/revision":"12"
+  |    }
+  |  },
+  |  "spec":{
+  |    "replicas":3,
+  |    "revisionHistoryLimit":10,
+  |    "selector":{
+  |      "matchLabels":{
+  |        "app":"cafe-api"
+  |      }
+  |    },
+  |    "strategy":{
+  |      "type":"RollingUpdate",
+  |      "rollingUpdate":{
+  |        "maxSurge":"25%",
+  |        "maxUnavailable":0
+  |      }
+  |    },
+  |    "template":{
+  |      "metadata":{
+  |        "labels":{
+  |          "app":"cafe-api"
+  |        }
+  |      },
+  |      "spec":{
+  |        "containers":[
+  |          {
+  |            "name":"api",
+  |            "image":"registry.example.com/cafe-api:2.4.1",
+  |            "ports":[
+  |              {
+  |                "containerPort":8080,
+  |                "protocol":"TCP"
+  |              }
+  |            ],
+  |            "env":[
+  |              {
+  |                "name":"DATABASE_URL",
+  |                "valueFrom":{
+  |                  "secretKeyRef":{
+  |                    "name":"db",
+  |                    "key":"url"
+  |                  }
+  |                }
+  |              },
+  |              {
+  |                "name":"LOG_LEVEL",
+  |                "value":"info"
+  |              }
+  |            ],
+  |            "resources":{
+  |              "limits":{
+  |                "cpu":"500m",
+  |                "memory":"256Mi"
+  |              },
+  |              "requests":{
+  |                "cpu":"100m",
+  |                "memory":"128Mi"
+  |              }
+  |            },
+  |            "readinessProbe":{
+  |              "httpGet":{
+  |                "path":"/healthz",
+  |                "port":8080
+  |              },
+  |              "initialDelaySeconds":5,
+  |              "periodSeconds":10
+  |            },
+  |            "securityContext":{
+  |              "runAsNonRoot":true,
+  |              "readOnlyRootFilesystem":true,
+  |              "allowPrivilegeEscalation":false
+  |            }
+  |          }
+  |        ],
+  |        "terminationGracePeriodSeconds":30,
+  |        "nodeSelector":{}
+  |      }
+  |    }
+  |  },
+  |  "status":{}
+  |}
+== dump | ok/scalar.json | indent=2
+  |"just a string"
+== dump | ok/big-but-legal.json | compact=1
+  |[7777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777]
+== jsonl | access.jsonl
+  1: {"ts": "2024-03-09T17:42:05.123Z", "method": "GET", "path": "/menu", "status": 200, "bytes": 5120, "ms": 12.5, "ua": "curl/8.5.0"}
+  2: {"ts": "2024-03-09T17:42:06.004Z", "method": "POST", "path": "/orders", "status": 201, "bytes": 312, "ms": 48.25, "ua": "Mozilla/5.0", "user": {"id": 7, "name": "Zo\u00eb"}}
+  3: {"ts": "2024-03-09T17:42:07.500Z", "method": "GET", "path": "/orders/9", "status": 404, "bytes": 0, "ms": 3, "ua": null}
+  4: {"ts": "2024-03-09T17:42:08.000Z", "method": "DELETE", "path": "/orders/7", "status": 204, "bytes": 0, "ms": 7.0}
+  5: {"ts": "2024-03-09T17:42:09.010Z", "method": "GET", "path": "/search?q=cr%C3%A8me", "status": 200, "bytes": 2048, "ms": 101.0, "tags": ["slow"]}
+  6: {"ts": "2024-03-09T17:42:10.000Z", "method": "GET", "path": "/menu", "status": 500, "bytes": 91, "ms": 250.75, "error": "upstream timed out (110: Connection timed out)"}
+  7: JSONDecodeError: Illegal trailing comma before end of object: line 1 column 99 (char 98)
+  9: {"ts": "2024-03-09T17:42:12.000Z", "method": "PUT", "path": "/menu/3", "status": 200, "bytes": 77, "ms": 10.0}
+  10: [1, 2, 3]
+  11: JSONDecodeError: Expecting ',' delimiter: line 1 column 34 (char 33)
+== jsonl | access.jsonl | sort_keys=1 | ensure_ascii=0
+  1: {"bytes": 5120, "method": "GET", "ms": 12.5, "path": "/menu", "status": 200, "ts": "2024-03-09T17:42:05.123Z", "ua": "curl/8.5.0"}
+  2: {"bytes": 312, "method": "POST", "ms": 48.25, "path": "/orders", "status": 201, "ts": "2024-03-09T17:42:06.004Z", "ua": "Mozilla/5.0", "user": {"id": 7, "name": "Zoë"}}
+  3: {"bytes": 0, "method": "GET", "ms": 3, "path": "/orders/9", "status": 404, "ts": "2024-03-09T17:42:07.500Z", "ua": null}
+  4: {"bytes": 0, "method": "DELETE", "ms": 7.0, "path": "/orders/7", "status": 204, "ts": "2024-03-09T17:42:08.000Z"}
+  5: {"bytes": 2048, "method": "GET", "ms": 101.0, "path": "/search?q=cr%C3%A8me", "status": 200, "tags": ["slow"], "ts": "2024-03-09T17:42:09.010Z"}
+  6: {"bytes": 91, "error": "upstream timed out (110: Connection timed out)", "method": "GET", "ms": 250.75, "path": "/menu", "status": 500, "ts": "2024-03-09T17:42:10.000Z"}
+  7: JSONDecodeError: Illegal trailing comma before end of object: line 1 column 99 (char 98)
+  9: {"bytes": 77, "method": "PUT", "ms": 10.0, "path": "/menu/3", "status": 200, "ts": "2024-03-09T17:42:12.000Z"}
+  10: [1, 2, 3]
+  11: JSONDecodeError: Expecting ',' delimiter: line 1 column 34 (char 33)
+== roundtrip | config.json
+  compact 962 chars, same again True; pretty 1466 chars, same again True
+== roundtrip | issues.json
+  compact 781 chars, same again True; pretty 1053 chars, same again True
+== roundtrip | cities.geojson
+  compact 1050 chars, same again True; pretty 2518 chars, same again True
+== load | bad/empty.json
+  JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+== load | bad/spaces.json
+  JSONDecodeError: Expecting value: line 2 column 3 (char 6)
+== load | bad/trailing-comma-array.json
+  JSONDecodeError: Illegal trailing comma before end of array: line 1 column 9 (char 8)
+== load | bad/trailing-comma-object.json
+  JSONDecodeError: Illegal trailing comma before end of object: line 3 column 9 (char 20)
+== load | bad/double-comma.json
+  JSONDecodeError: Expecting value: line 3 column 5 (char 10)
+== load | bad/missing-colon.json
+  JSONDecodeError: Expecting ':' delimiter: line 1 column 6 (char 5)
+== load | bad/single-quotes.json
+  JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+== load | bad/unquoted-key.json
+  JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+== load | bad/missing-comma.json
+  JSONDecodeError: Expecting ',' delimiter: line 1 column 4 (char 3)
+== load | bad/unterminated-string.json
+  JSONDecodeError: Unterminated string starting at: line 1 column 10 (char 9)
+== load | bad/control-char.json
+  JSONDecodeError: Invalid control character at: line 1 column 14 (char 13)
+== load | bad/raw-newline.json
+  JSONDecodeError: Invalid control character at: line 1 column 6 (char 5)
+== load | bad/bad-escape.json
+  JSONDecodeError: Invalid \escape: line 1 column 5 (char 4)
+== load | bad/bad-u-escape.json
+  JSONDecodeError: Invalid \uXXXX escape: line 1 column 3 (char 2)
+== load | bad/bad-u-escape2.json
+  JSONDecodeError: Invalid \uXXXX escape: line 1 column 3 (char 2)
+== load | bad/bad-low-surrogate.json
+  JSONDecodeError: Invalid \uXXXX escape: line 1 column 9 (char 8)
+== load | bad/leading-zero.json
+  JSONDecodeError: Expecting ',' delimiter: line 1 column 3 (char 2)
+== load | bad/trailing-dot.json
+  JSONDecodeError: Extra data: line 1 column 2 (char 1)
+== load | bad/leading-dot.json
+  JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+== load | bad/lone-minus.json
+  JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+== load | bad/plus-sign.json
+  JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+== load | bad/hex.json
+  JSONDecodeError: Extra data: line 1 column 2 (char 1)
+== load | bad/extra-data.json
+  JSONDecodeError: Extra data: line 1 column 10 (char 9)
+== load | bad/truncated-true.json
+  JSONDecodeError: Expecting value: line 1 column 2 (char 1)
+== load | bad/missing-value.json
+  JSONDecodeError: Expecting value: line 1 column 6 (char 5)
+== load | bad/open-brace.json
+  JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+== load | bad/open-bracket.json
+  JSONDecodeError: Expecting value: line 1 column 2 (char 1)
+== load | bad/open-key.json
+  JSONDecodeError: Expecting ':' delimiter: line 1 column 5 (char 4)
+== load | bad/open-value.json
+  JSONDecodeError: Expecting ',' delimiter: line 1 column 7 (char 6)
+== load | bad/open-array.json
+  JSONDecodeError: Expecting value: line 1 column 4 (char 3)
+== load | bad/comment.json
+  JSONDecodeError: Expecting ',' delimiter: line 1 column 9 (char 8)
+== load | bad/nan-lower.json
+  JSONDecodeError: Expecting value: line 1 column 2 (char 1)
+== load | bad/bom.json
+  JSONDecodeError: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)
+== load | bad/huge-int.json
+  ValueError: Exceeds the limit (4300 digits) for integer string conversion: value has 5000 digits; use sys.set_int_max_str_digits() to increase the limit
+== load | bad/multiline-error.json
+  JSONDecodeError: Expecting ',' delimiter: line 4 column 19 (char 54)
+== load | bad/unicode-before-error.json
+  JSONDecodeError: Expecting value: line 1 column 19 (char 18)
