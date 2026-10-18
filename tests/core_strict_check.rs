@@ -6795,4 +6795,39 @@ fn app_rows_of_2026_10_15() {
          }\n",
         "moved",
     );
+    // B-2026-10-15-16: a `let` that keeps `unwrap_or(String.new())` or a
+    // `??` with an f-string default borrows a temporary; the empty `String`
+    // is fixed to the static `""`. Used within the statement it is fine.
+    let get_or = |default: &str, keep: bool| {
+        let read = format!("m.get(\"a\").unwrap_or({default})");
+        let body = if keep {
+            format!("let v = {read};\n    println(f\"{{v}}\");")
+        } else {
+            format!("println(f\"{{{read}.len()}}\");")
+        };
+        format!(
+            "fn main() {{\n    let mut m: SortedMap[String, String] = SortedMap.new();\n    \
+             m.insert(\"a\".to_string(), \"1\".to_string());\n    {body}\n}}\n"
+        )
+    };
+    rejected_then_fixed_by(
+        "unwrap-or-string-new-kept",
+        &get_or("String.new()", true),
+        "a reference to a temporary outlives its statement",
+        "unwrap_or(\"\")",
+    );
+    accepted(
+        "unwrap-or-string-new-in-statement",
+        &get_or("String.new()", false),
+    );
+    accepted("unwrap-or-literal-kept", &get_or("\"\"", true));
+    rejected(
+        "coalesce-fstring-kept",
+        "fn main() {\n\
+             let mut m: SortedMap[String, String] = SortedMap.new();\n\
+             let v = m.get(\"a\") ?? f\"{1}\";\n\
+             println(f\"{v}\");\n\
+         }\n",
+        "a reference to a temporary outlives its statement",
+    );
 }

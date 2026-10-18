@@ -7096,7 +7096,21 @@ impl<'a> super::TypeChecker<'a> {
         match &e.kind {
             // §5.4: a `ref self` method's result borrows `self` only, and a
             // by-value generic one (`unwrap`) carries its receiver's origins.
-            ExprKind::MethodCall { object, method, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                // `o.unwrap_or(d)` on an `Option[ref T]` may yield `d`, so it
+                // carries `d`'s origins too: `String.new()` there is a
+                // temporary, while a literal is static (§5.1;
+                // B-2026-10-15-16).
+                if method == "unwrap_or" && args.len() == 1 {
+                    if let Some(t) = self.core_default_temp_origin(&args[0].value) {
+                        return Some(t);
+                    }
+                }
                 // A map `Entry` is itself a view of its map (its by-value
                 // `or_insert` hands out a reference into the map, not into
                 // the entry), so it carries its own origins on.
@@ -7192,8 +7206,35 @@ impl<'a> super::TypeChecker<'a> {
                     None
                 }
             }),
+            // `a ?? d`, as `a.unwrap_or(d)`.
+            ExprKind::NilCoalesce { left, right } => self
+                .core_default_temp_origin(right)
+                .or_else(|| self.core_view_temp_origin(left)),
             _ => None,
         }
+    }
+
+    /// The temporary the default of `unwrap_or` / `??` makes a view of, if
+    /// any: a literal there is static, a view carries its own origins, and
+    /// anything else that owns its value (`String.new()`, an f-string) is a
+    /// temporary (§5.1).
+    fn core_default_temp_origin(&self, d: &Expr) -> Option<Span> {
+        let literal = matches!(
+            d.kind,
+            ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::CharLit(_)
+                | ExprKind::ByteLit(_)
+                | ExprKind::StringLit(_)
+                | ExprKind::Bool(_)
+        );
+        if literal {
+            return None;
+        }
+        if self.core_node_is_view(d) == Some(true) {
+            return self.core_view_temp_origin(d);
+        }
+        self.core_expr_is_temp(d).then_some(d.span)
     }
 
     /// v2 core §5.5: whether `e` produces a temporary that owns its value
@@ -7985,15 +8026,27 @@ impl<'a> super::TypeChecker<'a> {
                 // v2 core §5.5: a `let` that keeps a reference to a temporary.
                 if self.cli_lint_overrides.strict_core && self.core_is_view(&expected_ty) {
                     if let Some(temp) = self.core_view_temp_origin(value) {
-                        self.type_error(
-                            "a reference to a temporary outlives its statement \
+                        let message = "a reference to a temporary outlives its statement \
                              (core-semantics.md §5.5): the value this `let` keeps \
                              borrows from a temporary that is dropped at the `;`. Bind \
                              the temporary to a variable first"
-                                .to_string(),
-                            temp,
-                            TypeErrorKind::TypeMismatch,
-                        );
+                            .to_string();
+                        match string_new_default(value).filter(|s| s.offset == temp.offset) {
+                            // B-2026-10-15-16: `unwrap_or(String.new())` is the
+                            // `unwrap_or_default` reflex; `""` is static.
+                            Some(whole) => self.type_error_with_fix_it(
+                                message
+                                    + ", or write `\"\"` for the empty default, which \
+                                       is static (§5.1)",
+                                temp,
+                                TypeErrorKind::TypeMismatch,
+                                FixIt {
+                                    span: whole,
+                                    replacement: "\"\"".to_string(),
+                                },
+                            ),
+                            None => self.type_error(message, temp, TypeErrorKind::TypeMismatch),
+                        }
                     }
                 }
                 // B-2026-09-01-4 — its sibling one level up: the same read
@@ -8889,5 +8942,43 @@ fn collect_bare_empty_literals(expr: &Expr, out: &mut Vec<Span>) {
         // to their own bindings. Missing one costs a `None` — the pre-fix
         // diagnostic — never a wrong caret.
         _ => {}
+    }
+}
+
+/// The whole `String.new()` that is the default of `o.unwrap_or(..)` or
+/// `o ?? ..`, as a span to replace.
+fn string_new_default(value: &Expr) -> Option<Span> {
+    let d = match &value.kind {
+        ExprKind::MethodCall { method, args, .. } if method == "unwrap_or" && args.len() == 1 => {
+            &args[0].value
+        }
+        ExprKind::NilCoalesce { right, .. } => right,
+        _ => return None,
+    };
+    match &d.kind {
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            args_close_span,
+            ..
+        } if method == "new"
+            && args.is_empty()
+            && matches!(&object.kind, ExprKind::Identifier(n) if n == "String")
+            && args_close_span.offset > d.span.offset =>
+        {
+            Some(Span {
+                length: args_close_span.offset + 1 - d.span.offset,
+                ..d.span
+            })
+        }
+        ExprKind::Call { callee, args }
+            if args.is_empty()
+                && matches!(&callee.kind, ExprKind::Path { segments, .. }
+                    if segments.len() == 2 && segments[0] == "String" && segments[1] == "new") =>
+        {
+            Some(d.span)
+        }
+        _ => None,
     }
 }
