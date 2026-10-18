@@ -58,3 +58,7 @@ Written 2026-10-18 by the real-world apps thread; karac at a73d3c10ad.
 ## Library migration, 2026-10-18
 
 Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).
+
+## Back to the original, 2026-10-18
+
+B-2026-10-18-33 is fixed, so `bytes_repr` writes `char.try_from(x)` again. It matches expected.out on all four MIR backends (karac at 8d7a5ebf82).

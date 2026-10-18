@@ -77,3 +77,7 @@ Written 2026-10-18 by the real-world apps thread; karac at ab69f69327.
 ## Library migration, 2026-10-18
 
 Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits, with one more by hand: The LRU job's keys collect into `Vec[String]` (the `Lru[String, String]` takes `ref String`), and `word_list` binds its collected `Vec[String]` before `return Ok(..)`, because a `collect()` inside `Ok(..)` does not lower on MIR (B-2026-10-18-37). The app matches expected.out on all four MIR backends again (karac at a4b0967495).
+
+## Back to the original, 2026-10-18
+
+B-2026-10-18-17, -18, -3, B-2026-10-15-20 and B-2026-10-18-37 are fixed, so the workarounds are gone: `*self` on the `ref self` receiver, `Counter.new()` and `Dict.new()` without a written type, the key moved in each branch of `Counter.signed`, and `collect()` inside `Ok(..)`. The edits left against `mini_collections.orig.kara` are author errors and the library migration. It matches expected.out on all four MIR backends (karac at 8d7a5ebf82).

@@ -1,0 +1,1275 @@
+== {"kind": "parse", "s": "Thu Sep 25 10:36:28 BRST 2003"}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+warning: tzname BRST identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+== {"kind": "parse", "s": "Thu Sep 25 2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "Sep 25 2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "Thu Sep 25 10:36:28 2003"}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+== {"kind": "parse", "s": "Thu Sep 10:36:28"}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+== {"kind": "parse", "s": "Thu 10:36:28"}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+== {"kind": "parse", "s": "Sep 10:36:28"}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+== {"kind": "parse", "s": "10:36:28"}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+== {"kind": "parse", "s": "10:36"}
+datetime.datetime(2003, 9, 25, 10, 36)
+== {"kind": "parse", "s": "Sep 2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "Sep"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "10h36m28.5s"}
+datetime.datetime(2003, 9, 25, 10, 36, 28, 500000)
+== {"kind": "parse", "s": "10h36m28s"}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+== {"kind": "parse", "s": "10h36m"}
+datetime.datetime(2003, 9, 25, 10, 36)
+== {"kind": "parse", "s": "10h"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10 h 36"}
+datetime.datetime(2003, 9, 25, 10, 36)
+== {"kind": "parse", "s": "10 h 36.5"}
+datetime.datetime(2003, 9, 25, 10, 36, 30)
+== {"kind": "parse", "s": "36 m 5"}
+datetime.datetime(2003, 9, 25, 0, 36, 5)
+== {"kind": "parse", "s": "36 m 5 s"}
+datetime.datetime(2003, 9, 25, 0, 36, 5)
+== {"kind": "parse", "s": "36 m 05"}
+datetime.datetime(2003, 9, 25, 0, 36, 5)
+== {"kind": "parse", "s": "36 m 05 s"}
+datetime.datetime(2003, 9, 25, 0, 36, 5)
+== {"kind": "parse", "s": "10h am"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10h pm"}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "10am"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10pm"}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "10:00 am"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 pm"}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "10:00am"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00pm"}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "10:00a.m"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00p.m"}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "10:00a.m."}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00p.m."}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "Wed"}
+datetime.datetime(2003, 10, 1, 0, 0)
+== {"kind": "parse", "s": "Wednesday"}
+datetime.datetime(2003, 10, 1, 0, 0)
+== {"kind": "parse", "s": "October"}
+datetime.datetime(2003, 10, 25, 0, 0)
+== {"kind": "parse", "s": "31-Dec-00"}
+datetime.datetime(2000, 12, 31, 0, 0)
+== {"kind": "parse", "s": "0:01:02"}
+datetime.datetime(2003, 9, 25, 0, 1, 2)
+== {"kind": "parse", "s": "12h 01m02s am"}
+datetime.datetime(2003, 9, 25, 0, 1, 2)
+== {"kind": "parse", "s": "0:01:02 on July 4, 1976"}
+datetime.datetime(1976, 7, 4, 0, 1, 2)
+== {"kind": "parse", "s": "1976-07-04T00:01:02Z"}
+datetime.datetime(1976, 7, 4, 0, 1, 2, tzinfo=tzlocal())
+== {"kind": "parse", "s": "July 4, 1976 12:01:02 am"}
+datetime.datetime(1976, 7, 4, 0, 1, 2)
+== {"kind": "parse", "s": "Mon Jan  2 04:24:27 1995"}
+datetime.datetime(1995, 1, 2, 4, 24, 27)
+== {"kind": "parse", "s": "04.04.95 00:22"}
+datetime.datetime(1995, 4, 4, 0, 22)
+== {"kind": "parse", "s": "Jan 1 1999 11:23:34.578"}
+datetime.datetime(1999, 1, 1, 11, 23, 34, 578000)
+== {"kind": "parse", "s": "950404 122212"}
+datetime.datetime(1995, 4, 4, 12, 22, 12)
+== {"kind": "parse", "s": "3rd of May 2001"}
+datetime.datetime(2001, 5, 3, 0, 0)
+== {"kind": "parse", "s": "5th of March 2001"}
+datetime.datetime(2001, 3, 5, 0, 0)
+== {"kind": "parse", "s": "1st of May 2003"}
+datetime.datetime(2003, 5, 1, 0, 0)
+== {"kind": "parse", "s": "0099-01-01T00:00:00"}
+datetime.datetime(99, 1, 1, 0, 0)
+== {"kind": "parse", "s": "0031-01-01T00:00:00"}
+datetime.datetime(31, 1, 1, 0, 0)
+== {"kind": "parse", "s": "20080227T21:26:01.123456789"}
+datetime.datetime(2008, 2, 27, 21, 26, 1, 123456)
+== {"kind": "parse", "s": "13NOV2017"}
+datetime.datetime(2017, 11, 13, 0, 0)
+== {"kind": "parse", "s": "0003-03-04"}
+datetime.datetime(3, 3, 4, 0, 0)
+== {"kind": "parse", "s": "December.0031.30"}
+datetime.datetime(31, 12, 30, 0, 0)
+== {"kind": "parse", "s": "090107"}
+datetime.datetime(2007, 9, 1, 0, 0)
+== {"kind": "parse", "s": "2015-15-May"}
+datetime.datetime(2015, 5, 15, 0, 0)
+== {"kind": "parse", "s": "Thu, 25 Sep 2003 10:49:41 -0300"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzoffset(None, -10800))
+== {"kind": "parse", "s": "2003-09-25T10:49:41.5-03:00"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 500000, tzinfo=tzoffset(None, -10800))
+== {"kind": "parse", "s": "2003-09-25T10:49:41"}
+datetime.datetime(2003, 9, 25, 10, 49, 41)
+== {"kind": "parse", "s": "2003-09-25T10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "2003-09-25T10"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "2003-09-25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "20030925T104941.5-0300"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 500000, tzinfo=tzoffset(None, -10800))
+== {"kind": "parse", "s": "20030925T104941-0300"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzoffset(None, -10800))
+== {"kind": "parse", "s": "20030925T104941"}
+datetime.datetime(2003, 9, 25, 10, 49, 41)
+== {"kind": "parse", "s": "20030925T1049"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "20030925T10"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "20030925"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "2003-09-25 10:49:41,502"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 502000)
+== {"kind": "parse", "s": "199709020908"}
+datetime.datetime(1997, 9, 2, 9, 8)
+== {"kind": "parse", "s": "19970902090807"}
+datetime.datetime(1997, 9, 2, 9, 8, 7)
+== {"kind": "parse", "s": "09-25-2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "25-09-2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "10-09-2003"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "10-09-03"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "2003.09.25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "09.25.2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "25.09.2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "10.09.2003"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "10.09.03"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "2003/09/25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "09/25/2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "25/09/2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "10/09/2003"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "10/09/03"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "2003 09 25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "09 25 2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "25 09 2003"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "10 09 2003"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "10 09 03"}
+datetime.datetime(2003, 10, 9, 0, 0)
+== {"kind": "parse", "s": "25 09 03"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "03 25 Sep"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "25 03 Sep"}
+datetime.datetime(2025, 9, 3, 0, 0)
+== {"kind": "parse", "s": "  July   4 ,  1976   12:01:02   am  "}
+datetime.datetime(1976, 7, 4, 0, 1, 2)
+== {"kind": "parse", "s": "Wed, July 10, '96"}
+datetime.datetime(1996, 7, 10, 0, 0)
+== {"kind": "parse", "s": "1996.July.10 AD 12:08 PM"}
+datetime.datetime(1996, 7, 10, 12, 8)
+== {"kind": "parse", "s": "July 4, 1976"}
+datetime.datetime(1976, 7, 4, 0, 0)
+== {"kind": "parse", "s": "7 4 1976"}
+datetime.datetime(1976, 7, 4, 0, 0)
+== {"kind": "parse", "s": "4 jul 1976"}
+datetime.datetime(1976, 7, 4, 0, 0)
+== {"kind": "parse", "s": "4 Jul 1976"}
+datetime.datetime(1976, 7, 4, 0, 0)
+== {"kind": "parse", "s": "7-4-76"}
+datetime.datetime(1976, 7, 4, 0, 0)
+== {"kind": "parse", "s": "19760704"}
+datetime.datetime(1976, 7, 4, 0, 0)
+== {"kind": "parse", "s": "Tue Apr 4 00:22:12 PDT 1995"}
+datetime.datetime(1995, 4, 4, 0, 22, 12)
+warning: tzname PDT identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+== {"kind": "parse", "s": "12:08 PM"}
+datetime.datetime(2003, 9, 25, 12, 8)
+== {"kind": "parse", "s": "01h02m03"}
+datetime.datetime(2003, 9, 25, 1, 2, 3)
+== {"kind": "parse", "s": "01h02"}
+datetime.datetime(2003, 9, 25, 1, 2)
+== {"kind": "parse", "s": "01h02s"}
+datetime.datetime(2003, 9, 25, 1, 0, 2)
+== {"kind": "parse", "s": "01m02"}
+datetime.datetime(2003, 9, 25, 0, 1, 2)
+== {"kind": "parse", "s": "01m02h"}
+datetime.datetime(2003, 9, 25, 2, 1)
+== {"kind": "parse", "s": "2004 10 Apr 11h30m"}
+datetime.datetime(2004, 4, 10, 11, 30)
+== {"kind": "parse", "s": "Sep 03"}
+datetime.datetime(2003, 9, 3, 0, 0)
+== {"kind": "parse", "s": "Sep of 03"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "Feb 30, 2007"}
+ParserError: day is out of range for month: Feb 30, 2007
+== {"kind": "parse", "s": "Jan 31"}
+datetime.datetime(2003, 1, 31, 0, 0)
+== {"kind": "parse", "s": "Feb 2008"}
+datetime.datetime(2008, 2, 25, 0, 0)
+== {"kind": "parse", "s": "2016-12-21 04.2h"}
+datetime.datetime(2016, 12, 21, 4, 12)
+== {"kind": "parse", "s": "2016-12-21 04.25h"}
+datetime.datetime(2016, 12, 21, 4, 15)
+== {"kind": "parse", "s": "2016-12-21 04.5m"}
+datetime.datetime(2016, 12, 21, 0, 4, 30)
+== {"kind": "parse", "s": "1/2/3"}
+datetime.datetime(2003, 1, 2, 0, 0)
+== {"kind": "parse", "s": "2018-06-29 1.5"}
+ParserError: Unknown string format: 2018-06-29 1.5
+== {"kind": "parse", "s": "1.5"}
+datetime.datetime(2003, 9, 1, 0, 0)
+== {"kind": "parse", "s": "4.30.21.447"}
+ParserError: Unknown string format: 4.30.21.447
+== {"kind": "parse", "s": "Sep.20.2009"}
+datetime.datetime(2009, 9, 20, 0, 0)
+== {"kind": "parse", "s": "Sep 20.2009"}
+datetime.datetime(2003, 9, 20, 0, 0)
+== {"kind": "parse", "s": "2009.Sep.20"}
+datetime.datetime(2009, 9, 20, 0, 0)
+== {"kind": "parse", "s": "12.Sep.2009"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "12-Sep-2009"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "Sep-12-2009"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "Sep/12/2009"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "2009-Sep-12"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "12 sept 2009"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "September 12 2009"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "Sept. 12, 2009"}
+datetime.datetime(2009, 9, 12, 0, 0)
+== {"kind": "parse", "s": "10:00 +0530"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset(None, 19800))
+== {"kind": "parse", "s": "10:00 +05:30"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset(None, 19800))
+== {"kind": "parse", "s": "10:00 -5"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset(None, -18000))
+== {"kind": "parse", "s": "10:00 +12"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset(None, 43200))
+== {"kind": "parse", "s": "10:00 UTC"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzlocal())
+== {"kind": "parse", "s": "10:00 GMT"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzutc())
+== {"kind": "parse", "s": "10:00 Z"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzlocal())
+== {"kind": "parse", "s": "10:00 z"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzlocal())
+== {"kind": "parse", "s": "10:00 GMT+3"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset(None, -10800))
+== {"kind": "parse", "s": "10:00 UTC-0530"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset(None, 19800))
+== {"kind": "parse", "s": "10:00 EST"}
+datetime.datetime(2003, 9, 25, 10, 0)
+warning: tzname EST identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+== {"kind": "parse", "s": "10:00 EST+5"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('EST', -18000))
+== {"kind": "parse", "s": "10:00 BRST"}
+datetime.datetime(2003, 9, 25, 10, 0)
+warning: tzname BRST identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+== {"kind": "parse", "s": "10:00 ABCDEF"}
+ParserError: Unknown string format: 10:00 ABCDEF
+== {"kind": "parse", "s": "10:00 abc"}
+ParserError: Unknown string format: 10:00 abc
+== {"kind": "parse", "s": "2003 09 25 10:49 +0300 (MSK)"}
+datetime.datetime(2003, 9, 25, 10, 49, tzinfo=tzoffset('MSK', 10800))
+== {"kind": "parse", "s": "2003-09-25 10:49 -0300 (BRT)"}
+datetime.datetime(2003, 9, 25, 10, 49, tzinfo=tzoffset('BRT', -10800))
+== {"kind": "parse", "s": "Thu, 25 Sep 2003 10:49:41 +0000 (UTC)"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzlocal())
+== {"kind": "parse", "s": "10:00 +00:00"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzlocal())
+== {"kind": "parse", "s": "10:00 -00:00"}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzlocal())
+== {"kind": "parse", "s": "Sun, 06 Nov 1994 08:49:37 GMT"}
+datetime.datetime(1994, 11, 6, 8, 49, 37, tzinfo=tzutc())
+== {"kind": "parse", "s": "Sunday, 06-Nov-94 08:49:37 GMT"}
+datetime.datetime(1994, 11, 6, 8, 49, 37, tzinfo=tzutc())
+== {"kind": "parse", "s": "Sun Nov  6 08:49:37 1994"}
+datetime.datetime(1994, 11, 6, 8, 49, 37)
+== {"kind": "parse", "s": "2024-02-29"}
+datetime.datetime(2024, 2, 29, 0, 0)
+== {"kind": "parse", "s": "2023-02-29"}
+ParserError: day is out of range for month: 2023-02-29
+== {"kind": "parse", "s": "2024-13-01"}
+ParserError: month must be in 1..12: 2024-13-01
+== {"kind": "parse", "s": "2024-04-31"}
+ParserError: day is out of range for month: 2024-04-31
+== {"kind": "parse", "s": "24:00"}
+ParserError: hour must be in 0..23: 24:00
+== {"kind": "parse", "s": "25:00"}
+ParserError: hour must be in 0..23: 25:00
+== {"kind": "parse", "s": "10:60"}
+ParserError: minute must be in 0..59: 10:60
+== {"kind": "parse", "s": "10:30:60"}
+ParserError: second must be in 0..59: 10:30:60
+== {"kind": "parse", "s": "13 pm"}
+datetime.datetime(2003, 9, 25, 13, 0)
+== {"kind": "parse", "s": "0 am"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "12 am"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "12 pm"}
+datetime.datetime(2003, 9, 25, 12, 0)
+== {"kind": "parse", "s": "10 am pm"}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "am"}
+ParserError: Unknown string format: am
+== {"kind": "parse", "s": "pm 10"}
+ParserError: Unknown string format: pm 10
+== {"kind": "parse", "s": "10 a"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10 p"}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": "10 p.m."}
+datetime.datetime(2003, 9, 25, 22, 0)
+== {"kind": "parse", "s": ""}
+ParserError: String does not contain a date: 
+== {"kind": "parse", "s": "   "}
+ParserError: String does not contain a date:    
+== {"kind": "parse", "s": "today"}
+ParserError: Unknown string format: today
+== {"kind": "parse", "s": "nan"}
+ParserError: Unknown string format: nan
+== {"kind": "parse", "s": "inf"}
+ParserError: Unknown string format: inf
+== {"kind": "parse", "s": "Infinity"}
+ParserError: Unknown string format: Infinity
+== {"kind": "parse", "s": "1e5"}
+ParserError: Unknown string format: 1e5
+== {"kind": "parse", "s": "UTC"}
+ParserError: Unknown string format: UTC
+== {"kind": "parse", "s": "-"}
+ParserError: String does not contain a date: -
+== {"kind": "parse", "s": "foo bar"}
+ParserError: Unknown string format: foo bar
+== {"kind": "parse", "s": "Mon Tue"}
+datetime.datetime(2003, 9, 30, 0, 0)
+== {"kind": "parse", "s": "Monday 2003-09-22"}
+datetime.datetime(2003, 9, 22, 0, 0)
+== {"kind": "parse", "s": "Friday 2003-09"}
+datetime.datetime(2003, 9, 26, 0, 0)
+== {"kind": "parse", "s": "Sat"}
+datetime.datetime(2003, 9, 27, 0, 0)
+== {"kind": "parse", "s": "Mar 3rd"}
+datetime.datetime(2003, 3, 3, 0, 0)
+== {"kind": "parse", "s": "2003-09-25 Sep"}
+ParserError: Unknown string format: 2003-09-25 Sep
+== {"kind": "parse", "s": "Sep Oct"}
+ParserError: Unknown string format: Sep Oct
+== {"kind": "parse", "s": "1 2 3 4"}
+ParserError: Unknown string format: 1 2 3 4
+== {"kind": "parse", "s": "99999"}
+ParserError: year 99999 is out of range: 99999
+== {"kind": "parse", "s": "123456789"}
+ParserError: year 123456789 is out of range: 123456789
+== {"kind": "parse", "s": "2003-9-5"}
+datetime.datetime(2003, 9, 5, 0, 0)
+== {"kind": "parse", "s": "5-9-2003"}
+datetime.datetime(2003, 5, 9, 0, 0)
+== {"kind": "parse", "s": "1 Jan"}
+datetime.datetime(2003, 1, 1, 0, 0)
+== {"kind": "parse", "s": "Jan 1"}
+datetime.datetime(2003, 1, 1, 0, 0)
+== {"kind": "parse", "s": "Jan 2003 1"}
+datetime.datetime(2003, 1, 1, 0, 0)
+== {"kind": "parse", "s": "2003 Jan 1"}
+datetime.datetime(2003, 1, 1, 0, 0)
+== {"kind": "parse", "s": "1999-12-31 23:59:59.999999"}
+datetime.datetime(1999, 12, 31, 23, 59, 59, 999999)
+== {"kind": "parse", "s": "1999-12-31 23:59:59.9999999"}
+datetime.datetime(1999, 12, 31, 23, 59, 59, 999999)
+== {"kind": "parse", "s": "10:30:15.5"}
+datetime.datetime(2003, 9, 25, 10, 30, 15, 500000)
+== {"kind": "parse", "s": "10:30.5"}
+datetime.datetime(2003, 9, 25, 10, 30, 30)
+== {"kind": "parse", "s": "10.5:30"}
+datetime.datetime(2003, 9, 25, 10, 30)
+== {"kind": "parse", "s": "1030"}
+datetime.datetime(1030, 9, 25, 0, 0)
+== {"kind": "parse", "s": "103015"}
+datetime.datetime(2015, 10, 30, 0, 0)
+== {"kind": "parse", "s": "103015.25"}
+datetime.datetime(2003, 9, 25, 10, 30, 15, 250000)
+== {"kind": "parse", "s": "2003-09-25 1030"}
+datetime.datetime(2003, 9, 25, 10, 30)
+== {"kind": "parse", "s": "2003-09-25 10"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "2003-09-25 1"}
+ParserError: Unknown string format: 2003-09-25 1
+== {"kind": "parse", "s": "Sep 25 10"}
+datetime.datetime(2010, 9, 25, 0, 0)
+== {"kind": "parse", "s": "Sep 25 1030"}
+datetime.datetime(1030, 9, 25, 0, 0)
+== {"kind": "parse", "s": "2003-09-25 T 10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "2003/9/25 at 10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "on 2003/9/25 and 10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "10:49 of 2003/9/25"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "12,5"}
+datetime.datetime(2003, 9, 12, 0, 0)
+== {"kind": "parse", "s": "2003,09,25"}
+ParserError: bad month number 25; must be 1-12: 2003,09,25
+== {"kind": "parse", "s": "2003;09;25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "2003'09'25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "2003_09_25"}
+ParserError: Unknown string format: 2003_09_25
+== {"kind": "parse", "s": "2003-09-25\t10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "2003-09-25 10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "2003-09-25\u000010:49"}
+ParserError: Unknown string format: 2003-09-25 10:49
+== {"kind": "parse", "s": "mardi 2003"}
+ParserError: Unknown string format: mardi 2003
+== {"kind": "parse", "s": "Février 2003"}
+ParserError: Unknown string format: Février 2003
+== {"kind": "parse", "s": "25 Sep 2003 10:49:41.500 +0100"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 500000, tzinfo=tzoffset(None, 3600))
+== {"kind": "parse", "s": "2003-W39"}
+ParserError: Unknown string format: 2003-W39
+== {"kind": "parse", "s": "20030925T104941Z"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzlocal())
+== {"kind": "parse", "s": "T10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "parse", "s": "@1064486981"}
+ParserError: Unknown string format: @1064486981
+== {"kind": "parse", "s": "25/12/2003 noon"}
+ParserError: Unknown string format: 25/12/2003 noon
+== {"kind": "parse", "s": "Q3 2003"}
+ParserError: Unknown string format: Q3 2003
+== {"kind": "parse", "s": "01/05/09", "dayfirst": true}
+datetime.datetime(2009, 5, 1, 0, 0)
+== {"kind": "parse", "s": "01/05/09", "yearfirst": true}
+datetime.datetime(2001, 5, 9, 0, 0)
+== {"kind": "parse", "s": "01/05/09", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2001, 9, 5, 0, 0)
+== {"kind": "parse", "s": "1/5/09", "dayfirst": true}
+datetime.datetime(2009, 5, 1, 0, 0)
+== {"kind": "parse", "s": "1/5/09", "yearfirst": true}
+datetime.datetime(2001, 5, 9, 0, 0)
+== {"kind": "parse", "s": "1/5/09", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2001, 9, 5, 0, 0)
+== {"kind": "parse", "s": "05/01/2009", "dayfirst": true}
+datetime.datetime(2009, 1, 5, 0, 0)
+== {"kind": "parse", "s": "05/01/2009", "yearfirst": true}
+datetime.datetime(2009, 5, 1, 0, 0)
+== {"kind": "parse", "s": "05/01/2009", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2009, 1, 5, 0, 0)
+== {"kind": "parse", "s": "2009/01/05", "dayfirst": true}
+datetime.datetime(2009, 5, 1, 0, 0)
+== {"kind": "parse", "s": "2009/01/05", "yearfirst": true}
+datetime.datetime(2009, 1, 5, 0, 0)
+== {"kind": "parse", "s": "2009/01/05", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2009, 5, 1, 0, 0)
+== {"kind": "parse", "s": "09/01/05", "dayfirst": true}
+datetime.datetime(2005, 1, 9, 0, 0)
+== {"kind": "parse", "s": "09/01/05", "yearfirst": true}
+datetime.datetime(2009, 1, 5, 0, 0)
+== {"kind": "parse", "s": "09/01/05", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2009, 5, 1, 0, 0)
+== {"kind": "parse", "s": "13/01/05", "dayfirst": true}
+datetime.datetime(2005, 1, 13, 0, 0)
+== {"kind": "parse", "s": "13/01/05", "yearfirst": true}
+datetime.datetime(2013, 1, 5, 0, 0)
+== {"kind": "parse", "s": "13/01/05", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2013, 5, 1, 0, 0)
+== {"kind": "parse", "s": "01/13/05", "dayfirst": true}
+datetime.datetime(2005, 1, 13, 0, 0)
+== {"kind": "parse", "s": "01/13/05", "yearfirst": true}
+datetime.datetime(2005, 1, 13, 0, 0)
+== {"kind": "parse", "s": "01/13/05", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2005, 1, 13, 0, 0)
+== {"kind": "parse", "s": "32/01/05", "dayfirst": true}
+datetime.datetime(2032, 5, 1, 0, 0)
+== {"kind": "parse", "s": "32/01/05", "yearfirst": true}
+datetime.datetime(2032, 1, 5, 0, 0)
+== {"kind": "parse", "s": "32/01/05", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2032, 5, 1, 0, 0)
+== {"kind": "parse", "s": "01/32/05", "dayfirst": true}
+ParserError: day is out of range for month: 01/32/05
+== {"kind": "parse", "s": "01/32/05", "yearfirst": true}
+ParserError: day is out of range for month: 01/32/05
+== {"kind": "parse", "s": "01/32/05", "dayfirst": true, "yearfirst": true}
+ParserError: day is out of range for month: 01/32/05
+== {"kind": "parse", "s": "2003-09-25", "dayfirst": true}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "2003-09-25", "yearfirst": true}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "2003-09-25", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "25-09-03", "dayfirst": true}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "25-09-03", "yearfirst": true}
+datetime.datetime(2025, 9, 3, 0, 0)
+== {"kind": "parse", "s": "25-09-03", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2025, 3, 9, 0, 0)
+== {"kind": "parse", "s": "10.09.03", "dayfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "10.09.03", "yearfirst": true}
+datetime.datetime(2010, 9, 3, 0, 0)
+== {"kind": "parse", "s": "10.09.03", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2010, 3, 9, 0, 0)
+== {"kind": "parse", "s": "10 09 03", "dayfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "10 09 03", "yearfirst": true}
+datetime.datetime(2010, 9, 3, 0, 0)
+== {"kind": "parse", "s": "10 09 03", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2010, 3, 9, 0, 0)
+== {"kind": "parse", "s": "Sep 10 03", "dayfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "Sep 10 03", "yearfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "Sep 10 03", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "10 Sep 03", "dayfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "10 Sep 03", "yearfirst": true}
+datetime.datetime(2010, 9, 3, 0, 0)
+== {"kind": "parse", "s": "10 Sep 03", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2010, 9, 3, 0, 0)
+== {"kind": "parse", "s": "03 Sep 10", "dayfirst": true}
+datetime.datetime(2010, 9, 3, 0, 0)
+== {"kind": "parse", "s": "03 Sep 10", "yearfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "03 Sep 10", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "03 10 Sep", "dayfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "03 10 Sep", "yearfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "03 10 Sep", "dayfirst": true, "yearfirst": true}
+datetime.datetime(2003, 9, 10, 0, 0)
+== {"kind": "parse", "s": "99 1 2", "dayfirst": true}
+datetime.datetime(1999, 2, 1, 0, 0)
+== {"kind": "parse", "s": "99 1 2", "yearfirst": true}
+datetime.datetime(1999, 1, 2, 0, 0)
+== {"kind": "parse", "s": "99 1 2", "dayfirst": true, "yearfirst": true}
+datetime.datetime(1999, 2, 1, 0, 0)
+== {"kind": "parse", "s": "1 99 2", "dayfirst": true}
+ParserError: day is out of range for month: 1 99 2
+== {"kind": "parse", "s": "1 99 2", "yearfirst": true}
+ParserError: day is out of range for month: 1 99 2
+== {"kind": "parse", "s": "1 99 2", "dayfirst": true, "yearfirst": true}
+ParserError: day is out of range for month: 1 99 2
+== {"kind": "parse", "s": "1 2 99", "dayfirst": true}
+datetime.datetime(1999, 2, 1, 0, 0)
+== {"kind": "parse", "s": "1 2 99", "yearfirst": true}
+datetime.datetime(1999, 1, 2, 0, 0)
+== {"kind": "parse", "s": "1 2 99", "dayfirst": true, "yearfirst": true}
+datetime.datetime(1999, 2, 1, 0, 0)
+== {"kind": "parse", "s": "Today is January 1, 2047 at 8:21:00AM", "fuzzy": true}
+datetime.datetime(2047, 1, 1, 8, 21)
+== {"kind": "parse", "s": "Today is January 1, 2047 at 8:21:00AM", "fuzzy_with_tokens": true}
+(datetime.datetime(2047, 1, 1, 8, 21), ('Today is ', ' ', ' ', 'at '))
+== {"kind": "parse", "s": "I have a meeting on March 1, 1974", "fuzzy": true}
+datetime.datetime(1974, 3, 1, 0, 0)
+== {"kind": "parse", "s": "I have a meeting on March 1, 1974", "fuzzy_with_tokens": true}
+(datetime.datetime(1974, 3, 1, 0, 0), ('I have a meeting on ', ' ', ' '))
+== {"kind": "parse", "s": "On June 8th, 2020, I am going to be the first man on Mars", "fuzzy": true}
+datetime.datetime(2020, 6, 8, 0, 0)
+== {"kind": "parse", "s": "On June 8th, 2020, I am going to be the first man on Mars", "fuzzy_with_tokens": true}
+(datetime.datetime(2020, 6, 8, 0, 0), ('On ', ' ', ', ', ' I am going to be the first man on Mars'))
+== {"kind": "parse", "s": "Meet me at the AM/PM on Sunset at 3:00 AM on December 3rd, 2003", "fuzzy": true}
+datetime.datetime(2003, 12, 3, 3, 0)
+== {"kind": "parse", "s": "Meet me at the AM/PM on Sunset at 3:00 AM on December 3rd, 2003", "fuzzy_with_tokens": true}
+(datetime.datetime(2003, 12, 3, 3, 0), ('Meet me at the AM/PM on Sunset at ', ' ', ' on ', ' ', ', '))
+== {"kind": "parse", "s": "Meet me at 3:00 AM on December 3rd, 2003 at the AM/PM on Sunset", "fuzzy": true}
+datetime.datetime(2003, 12, 3, 3, 0)
+== {"kind": "parse", "s": "Meet me at 3:00 AM on December 3rd, 2003 at the AM/PM on Sunset", "fuzzy_with_tokens": true}
+(datetime.datetime(2003, 12, 3, 3, 0), ('Meet me at ', ' ', ' on ', ' ', ', ', 'at the AM/PM on Sunset'))
+== {"kind": "parse", "s": "Jan 29, 1945 14:45 AM I going to see you there?", "fuzzy": true}
+datetime.datetime(1945, 1, 29, 14, 45)
+warning: tzname I identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+== {"kind": "parse", "s": "Jan 29, 1945 14:45 AM I going to see you there?", "fuzzy_with_tokens": true}
+(datetime.datetime(1945, 1, 29, 14, 45), (' ', ' ', ' AM ', ' going to see you there?'))
+warning: tzname I identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+== {"kind": "parse", "s": "2017-07-17 06:15:", "fuzzy": true}
+datetime.datetime(2017, 7, 17, 6, 15)
+== {"kind": "parse", "s": "2017-07-17 06:15:", "fuzzy_with_tokens": true}
+(datetime.datetime(2017, 7, 17, 6, 15), (' ', ':'))
+== {"kind": "parse", "s": "I'm a am string", "fuzzy": true}
+ParserError: String does not contain a date: I'm a am string
+== {"kind": "parse", "s": "I'm a am string", "fuzzy_with_tokens": true}
+ParserError: String does not contain a date: I'm a am string
+== {"kind": "parse", "s": "deploy started 2024-03-09 22:15:01 by alice", "fuzzy": true}
+datetime.datetime(2024, 3, 9, 22, 15, 1)
+== {"kind": "parse", "s": "deploy started 2024-03-09 22:15:01 by alice", "fuzzy_with_tokens": true}
+(datetime.datetime(2024, 3, 9, 22, 15, 1), ('deploy started ', ' ', ' by alice'))
+== {"kind": "parse", "s": "Order #4471 shipped on 3/14/2024, ETA 5 days", "fuzzy": true}
+ParserError: Unknown string format: Order #4471 shipped on 3/14/2024, ETA 5 days
+== {"kind": "parse", "s": "Order #4471 shipped on 3/14/2024, ETA 5 days", "fuzzy_with_tokens": true}
+ParserError: Unknown string format: Order #4471 shipped on 3/14/2024, ETA 5 days
+== {"kind": "parse", "s": "backup at 02:00 UTC finished", "fuzzy": true}
+datetime.datetime(2003, 9, 25, 2, 0, tzinfo=tzlocal())
+== {"kind": "parse", "s": "backup at 02:00 UTC finished", "fuzzy_with_tokens": true}
+(datetime.datetime(2003, 9, 25, 2, 0, tzinfo=tzlocal()), ('backup at ', ' ', ' finished'))
+== {"kind": "parse", "s": "a b c", "fuzzy": true}
+ParserError: String does not contain a date: a b c
+== {"kind": "parse", "s": "a b c", "fuzzy_with_tokens": true}
+ParserError: String does not contain a date: a b c
+== {"kind": "parse", "s": "the 25 of Sep", "fuzzy": true}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "parse", "s": "the 25 of Sep", "fuzzy_with_tokens": true}
+(datetime.datetime(2003, 9, 25, 0, 0), ('the ', 'of '))
+== {"kind": "parse", "s": "a 10 am", "fuzzy": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "a 10 am", "fuzzy_with_tokens": true}
+(datetime.datetime(2003, 9, 25, 10, 0), ('a ',))
+== {"kind": "parse", "s": "build 1234 took 15m", "fuzzy": true}
+datetime.datetime(1234, 9, 25, 0, 15)
+== {"kind": "parse", "s": "build 1234 took 15m", "fuzzy_with_tokens": true}
+(datetime.datetime(1234, 9, 25, 0, 15), ('build ', 'took '))
+== {"kind": "parse", "s": "2003-09-25 ... done at 10:49pm", "fuzzy": true}
+datetime.datetime(2003, 9, 25, 22, 49)
+== {"kind": "parse", "s": "2003-09-25 ... done at 10:49pm", "fuzzy_with_tokens": true}
+(datetime.datetime(2003, 9, 25, 22, 49), (' ... done at ',))
+== {"kind": "parse", "s": "Version 2.9.0 released", "fuzzy": true}
+datetime.datetime(2000, 2, 9, 0, 0)
+== {"kind": "parse", "s": "Version 2.9.0 released", "fuzzy_with_tokens": true}
+(datetime.datetime(2000, 2, 9, 0, 0), ('Version ', ' released'))
+== {"kind": "parse", "s": "Release 2024.03.09 (codename x)", "fuzzy": true}
+datetime.datetime(2024, 3, 9, 0, 0)
+== {"kind": "parse", "s": "Release 2024.03.09 (codename x)", "fuzzy_with_tokens": true}
+(datetime.datetime(2024, 3, 9, 0, 0), ('Release ', ' (codename x)'))
+== {"kind": "parse", "s": "", "fuzzy": true}
+ParserError: String does not contain a date: 
+== {"kind": "parse", "s": "", "fuzzy_with_tokens": true}
+ParserError: String does not contain a date: 
+== {"kind": "parse", "s": "RUN 18h 30m and done", "fuzzy": true}
+datetime.datetime(2003, 9, 25, 18, 30)
+== {"kind": "parse", "s": "RUN 18h 30m and done", "fuzzy_with_tokens": true}
+(datetime.datetime(2003, 9, 25, 18, 30), ('RUN ', ' ', ' and done'))
+== {"kind": "parse", "s": "temp was 21.5 at noon on 2003-09-25", "fuzzy": true}
+ParserError: Unknown string format: temp was 21.5 at noon on 2003-09-25
+== {"kind": "parse", "s": "temp was 21.5 at noon on 2003-09-25", "fuzzy_with_tokens": true}
+ParserError: Unknown string format: temp was 21.5 at noon on 2003-09-25
+== {"kind": "parse", "s": "Thu Sep 25 10:36:28 BRST 2003", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 36, 28, tzinfo=tzoffset('BRST', -7200))
+== {"kind": "parse", "s": "Thu Sep 25 10:36:28 BRST 2003", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 36, 28)
+== {"kind": "parse", "s": "2012-01-19 17:21:00 BRST", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2012, 1, 19, 17, 21, tzinfo=tzoffset('BRST', -7200))
+== {"kind": "parse", "s": "2012-01-19 17:21:00 BRST", "ignoretz": true}
+datetime.datetime(2012, 1, 19, 17, 21)
+== {"kind": "parse", "s": "10:00 EST", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('EST', -18000))
+== {"kind": "parse", "s": "10:00 EST", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 CST", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('CST', -21600))
+== {"kind": "parse", "s": "10:00 CST", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "Tue Apr 4 00:22:12 PDT 1995", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(1995, 4, 4, 0, 22, 12, tzinfo=tzoffset('PDT', -25200))
+== {"kind": "parse", "s": "Tue Apr 4 00:22:12 PDT 1995", "ignoretz": true}
+datetime.datetime(1995, 4, 4, 0, 22, 12)
+== {"kind": "parse", "s": "10:00 IST", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('IST', 19800))
+== {"kind": "parse", "s": "10:00 IST", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 JST", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('JST', 32400))
+== {"kind": "parse", "s": "10:00 JST", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 NOTZ", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 NOTZ", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 UTC", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('UTC', 0))
+== {"kind": "parse", "s": "10:00 UTC", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 GMT", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzutc())
+== {"kind": "parse", "s": "10:00 GMT", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 XYZ", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0)
+warning: tzname XYZ identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.
+== {"kind": "parse", "s": "10:00 XYZ", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 EST+5", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('EST', -18000))
+== {"kind": "parse", "s": "10:00 EST+5", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 -0500 (EST)", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('EST', -18000))
+== {"kind": "parse", "s": "10:00 -0500 (EST)", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 +0100 (CET)", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('CET', 3600))
+== {"kind": "parse", "s": "10:00 +0100 (CET)", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 +0100 (JST)", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('JST', 32400))
+== {"kind": "parse", "s": "10:00 +0100 (JST)", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00 Z", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0, tzinfo=tzoffset('UTC', 0))
+== {"kind": "parse", "s": "10:00 Z", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00", "tzinfos": {"BRST": -7200, "EST": -18000, "CST": -21600, "PDT": -25200, "IST": 19800, "JST": 32400, "NOTZ": null, "UTC": 0}}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:00", "ignoretz": true}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "parse", "s": "10:36", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2003, 1, 31, 10, 36)
+== {"kind": "parse", "s": "10:36", "default": "2004-02-29T13:14:15.5"}
+datetime.datetime(2004, 2, 29, 10, 36, 15, 500000)
+== {"kind": "parse", "s": "10:36", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2003, 12, 31, 10, 36, 59)
+== {"kind": "parse", "s": "Sep 31", "default": "2003-01-31T00:00:00"}
+ParserError: day is out of range for month: Sep 31
+== {"kind": "parse", "s": "Sep 31", "default": "2004-02-29T13:14:15.5"}
+ParserError: day is out of range for month: Sep 31
+== {"kind": "parse", "s": "Sep 31", "default": "2003-12-31T23:59:59"}
+ParserError: day is out of range for month: Sep 31
+== {"kind": "parse", "s": "Feb", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2003, 2, 28, 0, 0)
+== {"kind": "parse", "s": "Feb", "default": "2004-02-29T13:14:15.5"}
+datetime.datetime(2004, 2, 29, 13, 14, 15, 500000)
+== {"kind": "parse", "s": "Feb", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2003, 2, 28, 23, 59, 59)
+== {"kind": "parse", "s": "Thursday", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2003, 2, 6, 0, 0)
+== {"kind": "parse", "s": "Thursday", "default": "2004-02-29T13:14:15.5"}
+datetime.datetime(2004, 3, 4, 13, 14, 15, 500000)
+== {"kind": "parse", "s": "Thursday", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2004, 1, 1, 23, 59, 59)
+== {"kind": "parse", "s": "Mon", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2003, 2, 3, 0, 0)
+== {"kind": "parse", "s": "Mon", "default": "2004-02-29T13:14:15.5"}
+datetime.datetime(2004, 3, 1, 13, 14, 15, 500000)
+== {"kind": "parse", "s": "Mon", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2004, 1, 5, 23, 59, 59)
+== {"kind": "parse", "s": "2004", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2004, 1, 31, 0, 0)
+== {"kind": "parse", "s": "2004", "default": "2004-02-29T13:14:15.5"}
+datetime.datetime(2004, 2, 29, 13, 14, 15, 500000)
+== {"kind": "parse", "s": "2004", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2004, 12, 31, 23, 59, 59)
+== {"kind": "parse", "s": "Feb 2004", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2004, 2, 29, 0, 0)
+== {"kind": "parse", "s": "Feb 2004", "default": "2004-02-29T13:14:15.5"}
+datetime.datetime(2004, 2, 29, 13, 14, 15, 500000)
+== {"kind": "parse", "s": "Feb 2004", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2004, 2, 29, 23, 59, 59)
+== {"kind": "parse", "s": "31", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2003, 1, 31, 0, 0)
+== {"kind": "parse", "s": "31", "default": "2004-02-29T13:14:15.5"}
+ParserError: day is out of range for month: 31
+== {"kind": "parse", "s": "31", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2003, 12, 31, 23, 59, 59)
+== {"kind": "parse", "s": "29", "default": "2003-01-31T00:00:00"}
+datetime.datetime(2003, 1, 29, 0, 0)
+== {"kind": "parse", "s": "29", "default": "2004-02-29T13:14:15.5"}
+datetime.datetime(2004, 2, 29, 13, 14, 15, 500000)
+== {"kind": "parse", "s": "29", "default": "2003-12-31T23:59:59"}
+datetime.datetime(2003, 12, 29, 23, 59, 59)
+== {"kind": "iso", "s": "2003"}
+datetime.datetime(2003, 1, 1, 0, 0)
+== {"kind": "iso", "s": "2003-09"}
+datetime.datetime(2003, 9, 1, 0, 0)
+== {"kind": "iso", "s": "200309"}
+ValueError: Invalid ordinal day
+== {"kind": "iso", "s": "2003-09-25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "20030925"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2003-W39"}
+datetime.datetime(2003, 9, 22, 0, 0)
+== {"kind": "iso", "s": "2003W39"}
+datetime.datetime(2003, 9, 22, 0, 0)
+== {"kind": "iso", "s": "2003-W39-4"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2003W394"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2003-W39W"}
+ValueError: Inconsistent use of dash separator
+== {"kind": "iso", "s": "2003-268"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2003268"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2004-366"}
+datetime.datetime(2004, 12, 31, 0, 0)
+== {"kind": "iso", "s": "2003-366"}
+ValueError: Invalid ordinal day 366 for year 2003
+== {"kind": "iso", "s": "2003-000"}
+ValueError: Invalid ordinal day 0 for year 2003
+== {"kind": "iso", "s": "2003-09-25T10"}
+datetime.datetime(2003, 9, 25, 10, 0)
+== {"kind": "iso", "s": "2003-09-25T10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "iso", "s": "2003-09-25T1049"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "iso", "s": "2003-09-25T10:49:41"}
+datetime.datetime(2003, 9, 25, 10, 49, 41)
+== {"kind": "iso", "s": "2003-09-25T104941"}
+datetime.datetime(2003, 9, 25, 10, 49, 41)
+== {"kind": "iso", "s": "2003-09-25T10:49:41.5"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 500000)
+== {"kind": "iso", "s": "2003-09-25T10:49:41,5"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 500000)
+== {"kind": "iso", "s": "2003-09-25T10:49:41.123456789"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 123456)
+== {"kind": "iso", "s": "2003-09-25T10:49:41Z"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzutc())
+== {"kind": "iso", "s": "2003-09-25T10:49:41z"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzutc())
+== {"kind": "iso", "s": "2003-09-25T10:49:41+03:00"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzoffset(None, 10800))
+== {"kind": "iso", "s": "2003-09-25T10:49:41-0300"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzoffset(None, -10800))
+== {"kind": "iso", "s": "2003-09-25T10:49:41+03"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzoffset(None, 10800))
+== {"kind": "iso", "s": "2003-09-25T10:49:41+00:00"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzutc())
+== {"kind": "iso", "s": "2003-09-25T10:49:41-00"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzutc())
+== {"kind": "iso", "s": "2003-09-25T10:49:41+3"}
+ValueError: Time zone offset must be 1, 3, 5 or 6 characters
+== {"kind": "iso", "s": "2003-09-25T10:49:41+24:00"}
+ValueError: Invalid hours in time zone offset
+== {"kind": "iso", "s": "2003-09-25T10:49:41+05:60"}
+ValueError: Invalid minutes in time zone offset
+== {"kind": "iso", "s": "2003-09-25T10:49:41 03:00"}
+ValueError: Unused components in ISO string
+== {"kind": "iso", "s": "2003-09-25T24:00"}
+datetime.datetime(2003, 9, 26, 0, 0)
+== {"kind": "iso", "s": "2003-09-25T24:00:00.0"}
+datetime.datetime(2003, 9, 26, 0, 0)
+== {"kind": "iso", "s": "2003-09-25T24:30"}
+ValueError: Hour may only be 24 at 24:00:00.000
+== {"kind": "iso", "s": "2003-12-31T24:00:00"}
+datetime.datetime(2004, 1, 1, 0, 0)
+== {"kind": "iso", "s": "9999-12-31T24:00"}
+OverflowError: date value out of range
+== {"kind": "iso", "s": "2003-09-25 10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "iso", "s": "2003-09-25X10:49"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "iso", "s": "2003-09-25T"}
+ValueError: ISO time too short
+== {"kind": "iso", "s": "2003-09-25T1"}
+ValueError: ISO time too short
+== {"kind": "iso", "s": "2003-09-25T10:4941"}
+ValueError: Inconsistent use of colon separator
+== {"kind": "iso", "s": "2003-09-25T1049:41"}
+ValueError: invalid literal for int() with base 10: b':4'
+== {"kind": "iso", "s": "2003-0925"}
+ValueError: ISO time too short
+== {"kind": "iso", "s": "200309-25"}
+ValueError: ISO time too short
+== {"kind": "iso", "s": "2003-09T10:49"}
+ValueError: invalid literal for int() with base 10: b'09T'
+== {"kind": "iso", "s": "2003-13-01"}
+ValueError: month must be in 1..12
+== {"kind": "iso", "s": "2003-02-29"}
+ValueError: day is out of range for month
+== {"kind": "iso", "s": "2004-02-29"}
+datetime.datetime(2004, 2, 29, 0, 0)
+== {"kind": "iso", "s": "0000-01-01"}
+ValueError: year 0 is out of range
+== {"kind": "iso", "s": "0001-01-01"}
+datetime.datetime(1, 1, 1, 0, 0)
+== {"kind": "iso", "s": "20"}
+ValueError: ISO string too short
+== {"kind": "iso", "s": "2003-9-25"}
+ValueError: invalid literal for int() with base 10: b'9-2'
+== {"kind": "iso", "s": "2003-09-5"}
+ValueError: invalid literal for int() with base 10: b'09-'
+== {"kind": "iso", "s": "abcd"}
+ValueError: invalid literal for int() with base 10: b'abcd'
+== {"kind": "iso", "s": "2003-09-25T10:49:41."}
+ValueError: Unused components in ISO string
+== {"kind": "iso", "s": "2003-09-25T10:49:41.Z"}
+ValueError: Unused components in ISO string
+== {"kind": "iso", "s": "2003-09-25T10:49:41.5+03:00"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 500000, tzinfo=tzoffset(None, 10800))
+== {"kind": "iso", "s": "2003-W00"}
+ValueError: Invalid week: 0
+== {"kind": "iso", "s": "2003-W54"}
+ValueError: Invalid week: 54
+== {"kind": "iso", "s": "2003-W53-1"}
+datetime.datetime(2003, 12, 29, 0, 0)
+== {"kind": "iso", "s": "2004-W53-7"}
+datetime.datetime(2005, 1, 2, 0, 0)
+== {"kind": "iso", "s": "2003-W39-0"}
+ValueError: Invalid weekday: 0
+== {"kind": "iso", "s": "2003-W39-8"}
+ValueError: Invalid weekday: 8
+== {"kind": "iso", "s": "2003-W1"}
+datetime.datetime(2002, 12, 30, 0, 0)
+== {"kind": "iso", "s": "1_003-09-25"}
+ValueError: invalid literal for int() with base 10: b'3-0'
+== {"kind": "iso", "s": " 003-09-25"}
+datetime.datetime(3, 9, 25, 0, 0)
+== {"kind": "iso", "s": "+003-09-25"}
+datetime.datetime(3, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2003-+9-25"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2003-09-25T10:+9"}
+datetime.datetime(2003, 9, 25, 10, 9)
+== {"kind": "iso", "s": "2003-09-25T10:49:41+0530"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzoffset(None, 19800))
+== {"kind": "iso", "s": "2003-09-25T10:49:41-23:59"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, tzinfo=tzoffset(None, -86340))
+== {"kind": "iso", "s": "2003-09-25T10:49:41Zx"}
+ValueError: Time zone offset must be 1, 3, 5 or 6 characters
+== {"kind": "iso", "s": "2003-09-25Té"}
+ValueError: ISO-8601 strings should contain only ASCII characters
+== {"kind": "iso", "s": "2003-09-25T10:49:41.5Z"}
+datetime.datetime(2003, 9, 25, 10, 49, 41, 500000, tzinfo=tzutc())
+== {"kind": "iso", "s": "2003-09-25T10:49:41+05:30:00"}
+ValueError: Time zone offset must be 1, 3, 5 or 6 characters
+== {"kind": "iso", "s": "2003-09-25T10:49", "sep": "T"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "iso", "s": "2003-09-25 10:49", "sep": "T"}
+ValueError: String contains unknown ISO components
+== {"kind": "iso", "s": "2003-09-25 10:49", "sep": " "}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "iso", "s": "2003-09-25_10:49", "sep": "_"}
+datetime.datetime(2003, 9, 25, 10, 49)
+== {"kind": "iso", "s": "2003-09-25T10:49", "sep": "TT"}
+ValueError: Separator must be a single, non-numeric ASCII character
+== {"kind": "iso", "s": "2003-09-25T10:49", "sep": "5"}
+ValueError: Separator must be a single, non-numeric ASCII character
+== {"kind": "iso", "s": "2003-09-25", "sep": "T"}
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "iso", "s": "2003-09-25é10:49", "sep": "é"}
+ValueError: Separator must be a single, non-numeric ASCII character
+== {"kind": "diff", "a": "2003-09-25", "b": "2003-09-25"}
+relativedelta()
+== {"kind": "diff", "a": "2003-10-25", "b": "2003-09-25"}
+relativedelta(months=+1)
+== {"kind": "diff", "a": "2003-09-25", "b": "2003-10-25"}
+relativedelta(months=-1)
+== {"kind": "diff", "a": "2004-02-29", "b": "2003-02-28"}
+relativedelta(years=+1, days=+1)
+== {"kind": "diff", "a": "2003-03-31", "b": "2003-02-28"}
+relativedelta(months=+1, days=+3)
+== {"kind": "diff", "a": "2003-02-28", "b": "2003-01-31"}
+relativedelta(months=+1)
+== {"kind": "diff", "a": "2003-01-31", "b": "2003-02-28"}
+relativedelta(days=-28)
+== {"kind": "diff", "a": "2024-03-31 10:00", "b": "2024-02-29 11:30"}
+relativedelta(months=+1, days=+1, hours=+22, minutes=+30)
+== {"kind": "diff", "a": "2026-10-18", "b": "1976-07-04"}
+relativedelta(years=+50, months=+3, days=+14)
+== {"kind": "diff", "a": "1976-07-04 00:01:02", "b": "2026-10-18 12:00"}
+relativedelta(years=-50, months=-3, days=-14, hours=-11, minutes=-58, seconds=-58)
+== {"kind": "diff", "a": "2003-09-25 10:49:41.5", "b": "2003-09-25 10:49:40.75"}
+relativedelta(microseconds=+750000)
+== {"kind": "diff", "a": "2000-01-01", "b": "1999-12-31 23:59:59"}
+relativedelta(seconds=+1)
+== {"kind": "diff", "a": "2003-09-25", "b": "2003-09-24 00:00:01"}
+relativedelta(hours=+23, minutes=+59, seconds=+59)
+== {"kind": "diff", "a": "2010-08-31", "b": "2010-02-28"}
+relativedelta(months=+6, days=+3)
+== {"kind": "diff", "a": "2012-02-29", "b": "2008-02-29"}
+relativedelta(years=+4)
+== {"kind": "diff", "a": "2013-02-28", "b": "2012-02-29"}
+relativedelta(years=+1)
+== {"kind": "diff", "a": "1999-12-31 23:00", "b": "2000-01-01 01:00"}
+relativedelta(hours=-2)
+== {"kind": "diff", "a": "9999-12-31", "b": "0001-01-01"}
+relativedelta(years=+9998, months=+11, days=+30)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"months": 1}}
+relativedelta(months=+1)
+datetime.datetime(2003, 10, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"months": 1}, "sub": true}
+relativedelta(months=+1)
+datetime.datetime(2003, 8, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-01-31", "rd": {"months": 1}}
+relativedelta(months=+1)
+datetime.datetime(2003, 2, 28, 0, 0)
+== {"kind": "shift", "dt": "2003-01-31", "rd": {"months": 1}, "sub": true}
+relativedelta(months=+1)
+datetime.datetime(2002, 12, 31, 0, 0)
+== {"kind": "shift", "dt": "2004-01-31", "rd": {"months": 1}}
+relativedelta(months=+1)
+datetime.datetime(2004, 2, 29, 0, 0)
+== {"kind": "shift", "dt": "2004-01-31", "rd": {"months": 1}, "sub": true}
+relativedelta(months=+1)
+datetime.datetime(2003, 12, 31, 0, 0)
+== {"kind": "shift", "dt": "2003-01-31", "rd": {"months": -2}}
+relativedelta(months=-2)
+datetime.datetime(2002, 11, 30, 0, 0)
+== {"kind": "shift", "dt": "2003-01-31", "rd": {"months": -2}, "sub": true}
+relativedelta(months=-2)
+datetime.datetime(2003, 3, 31, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"years": 1, "months": 13, "days": 40}}
+relativedelta(years=+2, months=+1, days=+40)
+datetime.datetime(2005, 12, 4, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"years": 1, "months": 13, "days": 40}, "sub": true}
+relativedelta(years=+2, months=+1, days=+40)
+datetime.datetime(2001, 7, 16, 0, 0)
+== {"kind": "shift", "dt": "2004-02-29", "rd": {"years": 1}}
+relativedelta(years=+1)
+datetime.datetime(2005, 2, 28, 0, 0)
+== {"kind": "shift", "dt": "2004-02-29", "rd": {"years": 1}, "sub": true}
+relativedelta(years=+1)
+datetime.datetime(2003, 2, 28, 0, 0)
+== {"kind": "shift", "dt": "2004-02-29", "rd": {"years": 4}}
+relativedelta(years=+4)
+datetime.datetime(2008, 2, 29, 0, 0)
+== {"kind": "shift", "dt": "2004-02-29", "rd": {"years": 4}, "sub": true}
+relativedelta(years=+4)
+datetime.datetime(2000, 2, 29, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [0, null]}}
+relativedelta(weekday=MO)
+datetime.datetime(2003, 9, 29, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [0, null]}, "sub": true}
+relativedelta(weekday=MO)
+datetime.datetime(2003, 9, 29, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [3, null]}}
+relativedelta(weekday=TH)
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [3, null]}, "sub": true}
+relativedelta(weekday=TH)
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [4, 2]}}
+relativedelta(weekday=FR(+2))
+datetime.datetime(2003, 10, 3, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [4, 2]}, "sub": true}
+relativedelta(weekday=FR(+2))
+datetime.datetime(2003, 10, 3, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [4, -1]}}
+relativedelta(weekday=FR(-1))
+datetime.datetime(2003, 9, 19, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [4, -1]}, "sub": true}
+relativedelta(weekday=FR(-1))
+datetime.datetime(2003, 9, 19, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [3, -2]}}
+relativedelta(weekday=TH(-2))
+datetime.datetime(2003, 9, 18, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weekday": [3, -2]}, "sub": true}
+relativedelta(weekday=TH(-2))
+datetime.datetime(2003, 9, 18, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"day": 31, "weekday": [4, -1]}}
+relativedelta(day=31, weekday=FR(-1))
+datetime.datetime(2003, 9, 26, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"day": 31, "weekday": [4, -1]}, "sub": true}
+relativedelta(day=31, weekday=FR(-1))
+datetime.datetime(2003, 9, 26, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"month": 2, "day": 31}}
+relativedelta(month=2, day=31)
+datetime.datetime(2003, 2, 28, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"month": 2, "day": 31}, "sub": true}
+relativedelta(month=2, day=31)
+datetime.datetime(2003, 2, 28, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"yearday": 260}}
+relativedelta(leapdays=-1, month=9, day=17)
+datetime.datetime(2003, 9, 17, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"yearday": 260}, "sub": true}
+relativedelta(leapdays=-1, month=9, day=17)
+datetime.datetime(2003, 9, 17, 0, 0)
+== {"kind": "shift", "dt": "2004-09-25", "rd": {"yearday": 260}}
+relativedelta(leapdays=-1, month=9, day=17)
+datetime.datetime(2004, 9, 16, 0, 0)
+== {"kind": "shift", "dt": "2004-09-25", "rd": {"yearday": 260}, "sub": true}
+relativedelta(leapdays=-1, month=9, day=17)
+datetime.datetime(2004, 9, 16, 0, 0)
+== {"kind": "shift", "dt": "2004-09-25", "rd": {"nlyearday": 260}}
+relativedelta(month=9, day=17)
+datetime.datetime(2004, 9, 17, 0, 0)
+== {"kind": "shift", "dt": "2004-09-25", "rd": {"nlyearday": 260}, "sub": true}
+relativedelta(month=9, day=17)
+datetime.datetime(2004, 9, 17, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"yearday": 60}}
+relativedelta(leapdays=-1, month=3, day=1)
+datetime.datetime(2003, 3, 1, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"yearday": 60}, "sub": true}
+relativedelta(leapdays=-1, month=3, day=1)
+datetime.datetime(2003, 3, 1, 0, 0)
+== {"kind": "shift", "dt": "2004-09-25", "rd": {"yearday": 60}}
+relativedelta(leapdays=-1, month=3, day=1)
+datetime.datetime(2004, 2, 29, 0, 0)
+== {"kind": "shift", "dt": "2004-09-25", "rd": {"yearday": 60}, "sub": true}
+relativedelta(leapdays=-1, month=3, day=1)
+datetime.datetime(2004, 2, 29, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"yearday": 367}}
+ValueError: invalid year day (367)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"yearday": 367}, "sub": true}
+ValueError: invalid year day (367)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"leapdays": 1, "years": 1}}
+relativedelta(years=+1, leapdays=+1)
+datetime.datetime(2004, 9, 26, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"leapdays": 1, "years": 1}, "sub": true}
+relativedelta(years=+1, leapdays=+1)
+datetime.datetime(2002, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25 10:49:41", "rd": {"hours": 25, "minutes": 61, "seconds": 3661}}
+relativedelta(days=+1, hours=+3, minutes=+2, seconds=+1)
+datetime.datetime(2003, 9, 26, 13, 51, 42)
+== {"kind": "shift", "dt": "2003-09-25 10:49:41", "rd": {"hours": 25, "minutes": 61, "seconds": 3661}, "sub": true}
+relativedelta(days=+1, hours=+3, minutes=+2, seconds=+1)
+datetime.datetime(2003, 9, 24, 7, 47, 40)
+== {"kind": "shift", "dt": "2003-09-25 10:49:41", "rd": {"microseconds": -2500000}}
+relativedelta(seconds=-2, microseconds=-500000)
+datetime.datetime(2003, 9, 25, 10, 49, 38, 500000)
+== {"kind": "shift", "dt": "2003-09-25 10:49:41", "rd": {"microseconds": -2500000}, "sub": true}
+relativedelta(seconds=-2, microseconds=-500000)
+datetime.datetime(2003, 9, 25, 10, 49, 43, 500000)
+== {"kind": "shift", "dt": "2003-09-25 10:49:41", "rd": {"hour": 0, "minute": 0, "second": 0}}
+relativedelta(hour=0, minute=0, second=0)
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25 10:49:41", "rd": {"hour": 0, "minute": 0, "second": 0}, "sub": true}
+relativedelta(hour=0, minute=0, second=0)
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"hours": 1}}
+relativedelta(hours=+1)
+datetime.datetime(2003, 9, 25, 1, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"hours": 1}, "sub": true}
+relativedelta(hours=+1)
+datetime.datetime(2003, 9, 24, 23, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weeks": 3, "days": -1}}
+relativedelta(days=+20)
+datetime.datetime(2003, 10, 15, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"weeks": 3, "days": -1}, "sub": true}
+relativedelta(days=+20)
+datetime.datetime(2003, 9, 5, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"days": 1234567}}
+relativedelta(days=+1.23457e+06)
+datetime.datetime(5383, 11, 11, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"days": 1234567}, "sub": true}
+relativedelta(days=+1.23457e+06)
+OverflowError: date value out of range
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"seconds": 34560000}}
+relativedelta(days=+400)
+datetime.datetime(2004, 10, 29, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"seconds": 34560000}, "sub": true}
+relativedelta(days=+400)
+datetime.datetime(2002, 8, 21, 0, 0)
+== {"kind": "shift", "dt": "9999-12-31", "rd": {"days": 1}}
+relativedelta(days=+1)
+OverflowError: date value out of range
+== {"kind": "shift", "dt": "9999-12-31", "rd": {"days": 1}, "sub": true}
+relativedelta(days=+1)
+datetime.datetime(9999, 12, 30, 0, 0)
+== {"kind": "shift", "dt": "0001-01-01", "rd": {"days": -1}}
+relativedelta(days=-1)
+OverflowError: date value out of range
+== {"kind": "shift", "dt": "0001-01-01", "rd": {"days": -1}, "sub": true}
+relativedelta(days=-1)
+datetime.datetime(1, 1, 2, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"year": 10000}}
+relativedelta(year=10000)
+ValueError: year 10000 is out of range
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"year": 10000}, "sub": true}
+relativedelta(year=10000)
+ValueError: year 10000 is out of range
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"year": 1, "month": 1, "day": 1}}
+relativedelta(year=1, month=1, day=1)
+datetime.datetime(1, 1, 1, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"year": 1, "month": 1, "day": 1}, "sub": true}
+relativedelta(year=1, month=1, day=1)
+datetime.datetime(1, 1, 1, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"months": 12}}
+relativedelta(years=+1)
+datetime.datetime(2004, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"months": 12}, "sub": true}
+relativedelta(years=+1)
+datetime.datetime(2002, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"months": -25}}
+relativedelta(years=-2, months=-1)
+datetime.datetime(2001, 8, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {"months": -25}, "sub": true}
+relativedelta(years=-2, months=-1)
+datetime.datetime(2005, 10, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {}}
+relativedelta()
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "shift", "dt": "2003-09-25", "rd": {}, "sub": true}
+relativedelta()
+datetime.datetime(2003, 9, 25, 0, 0)
+== {"kind": "file", "name": "app.log", "mode": "logs"}
+line 3 skipped: ParserError: Unknown string format: 09/Mar/2024:22:14:59 +0100
+line 7 skipped: ParserError: year 1710022560 is out of range: 1710022560
+line 10 skipped: ParserError: hour must be in 0..23: 2024-03-09 25:61
+line 11 skipped: ParserError: Unknown string format: March 9th 2024 at 10:15pm (UTC)
+line 13 skipped: ParserError: Unknown string format: 2024-W10-6
+2024-03-09T16:45:00Z  india    regional ok (line 14)
+2024-03-09T16:45:30Z  worker   job 4472 failed (line 5)
+2024-03-09T21:14:59.999000Z  db       checkpoint (line 12)
+2024-03-09T21:15:02Z  billing  invoice run (line 6)
+2024-03-09T21:15:30Z  worker   picked up job 4471 (line 4)
+2024-03-09T21:15:45Z  mail     queue flushed (line 9)
+2024-03-09T22:15:01.234000Z  api      deploy started (line 1)
+2024-03-09T22:16:40Z  cron     nightly job queued (line 2)
+2024-03-10T00:15:01Z  api      replica up (line 8)
+== {"kind": "file", "name": "mail.txt", "mode": "mail"}
+2003-09-25T10:49:41-03:00 Thu offset=-10800 utc=2003-09-25T13:49:41
+2003-07-01T10:52:37+02:00 Tue offset=7200 utc=2003-07-01T08:52:37
+1997-11-21T09:55:06-06:00 Fri offset=-21600 utc=1997-11-21T15:55:06
+1969-02-13T23:32:54-03:30 Thu offset=-12600 utc=1969-02-14T03:02:54
+1997-11-24T14:22:01-08:00 Mon offset=-28800 utc=1997-11-24T22:22:01
+1997-11-21T09:55:06+00:00 Fri offset=0 utc=1997-11-21T09:55:06
+1997-11-21T09:55:06 Fri offset=none utc=1997-11-21T09:55:06
+1996-07-17T02:23:25-07:00 Wed offset=-25200 utc=1996-07-17T09:23:25
+2020-02-29T12:00:00+00:00 Sat offset=0 utc=2020-02-29T12:00:00
+ParserError: day is out of range for month: Sun, 30 Feb 2020 12:00:00 +0000
+2016-01-01T00:00:00+14:00 Fri offset=50400 utc=2015-12-31T10:00:00
+2006-01-02T15:04:05 Mon offset=none utc=2006-01-02T15:04:05
+1970-01-01T00:00:00+00:00 Thu offset=0 utc=1970-01-01T00:00:00
+2019-03-05T08:30:00 Tue offset=none utc=2019-03-05T08:30:00
+== {"kind": "file", "name": "people.csv", "mode": "ages"}
+Ada: 210 years 10 months 8 days, next 2026-12-10, relativedelta(years=+210, months=+10, days=+8)
+Grace: 119 years 10 months 9 days, next 2026-12-09, relativedelta(years=+119, months=+10, days=+9)
+Alan: 114 years 3 months 25 days, next 2027-06-23, relativedelta(years=+114, months=+3, days=+25)
+Linus: 56 years 9 months 20 days, next 2026-12-28, relativedelta(years=+56, months=+9, days=+20)
+leap kid: 22 years 7 months 19 days, next 2027-02-28, relativedelta(years=+22, months=+7, days=+19)
+newborn: 0 years 0 months 17 days, next 2027-10-01, relativedelta(days=+17)
+future: 0 years -2 months -14 days, next 2028-01-01, relativedelta(months=-2, days=-14)
+noon baby: 26 years 9 months 16 days, next 2027-01-01, relativedelta(years=+26, months=+9, days=+16, hours=+12)
+== {"kind": "file", "name": "subs.csv", "mode": "renew"}
+acme (monthly from 2024-01-31T00:00:00): 2024-02-29T00:00:00, 2024-03-31T00:00:00, 2024-04-30T00:00:00, 2024-05-31T00:00:00, 2024-06-30T00:00:00, 2024-07-31T00:00:00
+globex (yearly from 2024-02-29T00:00:00): 2025-02-28T00:00:00, 2026-02-28T00:00:00, 2027-02-28T00:00:00
+initech (quarterly from 2023-08-31T00:00:00): 2023-11-30T00:00:00, 2024-02-29T00:00:00, 2024-05-31T00:00:00, 2024-08-31T00:00:00
+umbrella (monthly from 2024-03-15T09:30:00): 2024-04-15T09:30:00, 2024-05-15T09:30:00, 2024-06-15T09:30:00, 2024-07-15T09:30:00, 2024-08-15T09:30:00, 2024-09-15T09:30:00
+hooli (weekly from 2024-05-31T00:00:00): 2024-06-07T00:00:00, 2024-06-14T00:00:00, 2024-06-21T00:00:00, 2024-06-28T00:00:00
+== {"kind": "file", "name": "notes.txt", "mode": "notes"}
+(datetime.datetime(2003, 9, 30, 9, 30), ('standup moved to ', ' '))
+ParserError: Unknown string format: release candidate due 2024-04-02, final on April 9th
+(datetime.datetime(2003, 3, 14, 15, 0), ('call with vendor at ', ' ', ' about the ', ' ', 'outage'))
+ParserError: String does not contain a date: nothing here
+(datetime.datetime(2003, 9, 25, 12, 30), ('lunch ',))
+(datetime.datetime(2024, 1, 26, 0, 0), ('report for Q', 'by '))
+(datetime.datetime(2024, 4, 5, 16, 0, tzinfo=tzoffset(None, 7200)), ('retro on ', ' at ', ' '))
+(datetime.datetime(1999, 9, 25, 0, 0), ('the year ', 'was fine'))

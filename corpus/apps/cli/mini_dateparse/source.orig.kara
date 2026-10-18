@@ -1,0 +1,3373 @@
+// mini_dateparse: dateutil 2.9.0's date parsing, the code under countless
+// scripts that read a date a person or another program wrote. Three parts
+// are ported from dateutil/parser/_parser.py, isoparser.py and
+// relativedelta.py:
+// - parse(): the fuzzy, forgiving parser, with dayfirst, yearfirst, fuzzy,
+//   fuzzy_with_tokens, ignoretz, default and tzinfos;
+// - isoparse(): the strict ISO-8601 parser, with its error messages;
+// - relativedelta: the difference of two datetimes, and a datetime moved by
+//   years, months, weeks, days, a weekday or absolute fields.
+// Python's datetime is ported alongside, as far as these need it: its
+// range checks, its arithmetic and its repr() and isoformat().
+//
+// The run writes the files of the data section into data/ and runs every
+// job of data/jobs.jsonl. dateutil reads two things from the machine, the
+// local zone and the current year; here they are UTC and 2026.
+
+// ------------------------------------------------------------ characters
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    if a >= b {
+        return Vec.new();
+    }
+    v[a..b].to_vec()
+}
+
+
+fn width(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(' ');
+    }
+    s
+}
+
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// str.isspace, which str.strip, str.split and float() use.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(v, lo, hi))
+}
+
+
+fn ascii_lower(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(char.try_from(c as i64 + 32).unwrap_or(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < n {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) {
+        return false;
+    }
+    true
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let single = s.contains("'");
+    let double = s.contains("\"");
+    let q = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if printable(o) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+// s.encode("unicode_escape").decode()
+// ------------------------------------------------------------ JSON
+
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[JValue]),
+    Obj(Vec[(String, JValue)]),
+}
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[JValue, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut m: Vec[(String, JValue)] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(JValue.Obj(m));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(f"expected ':' at {self.at}");
+                }
+                let v = self.value()?;
+                m.push((k, v));
+                self.ws();
+                if self.eat("}") {
+                    return Ok(JValue.Obj(m));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(JValue.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(JValue.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(JValue.Str(self.string()?));
+        }
+        if self.eat("true") {
+            return Ok(JValue.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(JValue.Bool(false));
+        }
+        if self.eat("null") {
+            return Ok(JValue.Null);
+        }
+        self.number()
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.b[self.at];
+            self.at += 1;
+            let d = if c >= b'0' and c <= b'9' {
+                c - b'0'
+            } else if c >= b'a' and c <= b'f' {
+                c - b'a' + 10
+            } else {
+                c - b'A' + 10
+            };
+            v = v * 16 + d as u32;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.eat("\"") {
+            return Err(f"expected string at {self.at}");
+        }
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.at >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.b[self.at];
+            self.at += 1;
+            if e == b'n' {
+                out.push(10);
+            } else if e == b't' {
+                out.push(9);
+            } else if e == b'r' {
+                out.push(13);
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(String.from_utf8(out).unwrap_or("?".to_string()))
+    }
+
+    fn number(mut ref self) -> Result[JValue, String] {
+        let start = self.at;
+        let mut float = false;
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c >= b'0' and c <= b'9' {
+                self.at += 1;
+            } else if c == b'-' or c == b'+' {
+                self.at += 1;
+            } else if c == b'.' or c == b'e' or c == b'E' {
+                float = true;
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        let t = String.from_utf8(self.b[start..self.at].to_vec()).unwrap_or(String.new());
+        if t.is_empty() {
+            return Err(f"bad value at {start}");
+        }
+        if float {
+            return match f64.parse(t) {
+                Ok(f) => Ok(JValue.Float(f)),
+                Err(_) => Err(f"bad number {t}"),
+            };
+        }
+        match i64.parse(t) {
+            Ok(i) => Ok(JValue.Int(i)),
+            Err(_) => Err(f"bad number {t}"),
+        }
+    }
+}
+
+fn parse_json(t: ref String) -> Result[JValue, String] {
+    let mut r = JsonReader { b: t.bytes().to_vec(), at: 0 };
+    r.value()
+}
+
+fn get(o: ref JValue, key: Str) -> Option[JValue] {
+    if let JValue.Obj(items) = o {
+        for (k, v) in items.iter() {
+            if k == key {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+
+// ------------------------------------------------------------ Python's int() and float()
+
+// The digits of s[lo..hi] with Python's underscores: each '_' sits between
+// two digits. None if anything else is there.
+fn digits_with_underscores(v: ref Vec[char], lo: i64, hi: i64) -> Option[String] {
+    let mut out = String.new();
+    for k in lo..hi {
+        let c = v[k];
+        if is_digit(c) {
+            out.push(c);
+        } else if c == '_' and k > lo and k + 1 < hi and is_digit(v[k - 1]) and is_digit(v[k + 1]) {
+            continue;
+        } else {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+// int(s) for a str (Unicode whitespace stripped) or, with `ascii`, for the
+// bytes isoparse works on. None where int() raises. Values past i64 are
+// out of scope: the jobs never write one.
+fn py_int(s: ref String, ascii: bool) -> Option[i64] {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and (if ascii { ascii_space(v[lo]) } else { py_space(v[lo]) }) {
+        lo += 1;
+    }
+    while hi > lo and (if ascii { ascii_space(v[hi - 1]) } else { py_space(v[hi - 1]) }) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (v[lo] == '+' or v[lo] == '-') {
+        neg = v[lo] == '-';
+        lo += 1;
+    }
+    if lo >= hi {
+        return None;
+    }
+    let d = digits_with_underscores(v, lo, hi)?;
+    if d.is_empty() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    for c in d.chars() {
+        n = n * 10 + (c as i64 - 48);
+    }
+    if neg { Some(0 - n) } else { Some(n) }
+}
+
+fn ascii_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}'
+}
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its type's name and its str().
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: ref String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg.clone() }
+}
+
+fn value_error(msg: ref String) -> PyErr {
+    py_err("ValueError", msg)
+}
+
+fn overflow() -> PyErr {
+    py_err("OverflowError", "date value out of range".to_string())
+}
+
+fn err_text(e: ref PyErr) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------ integers
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn py_mod(a: i64, b: i64) -> i64 {
+    a - floor_div(a, b) * b
+}
+
+fn abs(a: i64) -> i64 {
+    if a < 0 { 0 - a } else { a }
+}
+
+fn pad(n: i64, w: i64) -> String {
+    let mut s = f"{abs(n)}";
+    while s.len() < w {
+        s = "0".to_string() + s;
+    }
+    if n < 0 { "-".to_string() + s } else { s }
+}
+
+// ------------------------------------------------------------ calendar
+
+const DAYS_IN_MONTH: Array[i64, 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAYS_BEFORE_MONTH: Array[i64, 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const DAY_ABBR: Array[Str, 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MAX_ORDINAL: i64 = 3652059;
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 and is_leap(y) { 29 } else { DAYS_IN_MONTH[m] }
+}
+
+// calendar.monthrange(y, m)[1]
+fn monthrange(y: i64, m: i64) -> Result[i64, PyErr] {
+    if m < 1 or m > 12 {
+        return Err(py_err("IllegalMonthError", f"bad month number {m}; must be 1-12"));
+    }
+    Ok(days_in_month(y, m))
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let p = y - 1;
+    p * 365 + floor_div(p, 4) - floor_div(p, 100) + floor_div(p, 400)
+}
+
+// date.toordinal(): 0001-01-01 is day 1.
+fn to_ordinal(y: i64, m: i64, d: i64) -> i64 {
+    let mut n = days_before_year(y) + DAYS_BEFORE_MONTH[m] + d;
+    if m > 2 and is_leap(y) {
+        n += 1;
+    }
+    n
+}
+
+// date.fromordinal(n), as CPython's ord_to_ymd computes it.
+fn from_ordinal(ord: i64) -> (i64, i64, i64) {
+    let mut n = ord - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    let year = n400 * 400 + n100 * 100 + n4 * 4 + n1 + 1;
+    if n1 == 4 or n100 == 4 {
+        return (year - 1, 12, 31);
+    }
+    let leap = n1 == 3 and (n4 != 24 or n100 == 3);
+    let mut month = (n + 50) / 32;
+    let mut before = DAYS_BEFORE_MONTH[month];
+    if month > 2 and leap {
+        before += 1;
+    }
+    if before > n {
+        month -= 1;
+        before -= days_in_month(year, month);
+    }
+    (year, month, n - before + 1)
+}
+
+// ------------------------------------------------------------ tzinfo
+
+// The tzinfo objects dateutil makes: tz.UTC, tz.tzlocal() (the machine's
+// zone, UTC here) and tz.tzoffset(name, seconds).
+#[derive(Clone)]
+enum Tz {
+    Naive,
+    Utc,
+    Local,
+    Offset(Option[String], i64),
+}
+
+fn utcoffset(t: ref Tz) -> Option[i64] {
+    match t {
+        Tz.Naive => None,
+        Tz.Utc => Some(0),
+        Tz.Local => Some(0),
+        Tz.Offset(_, s) => Some(*s),
+    }
+}
+
+fn tz_repr(t: ref Tz) -> String {
+    match t {
+        Tz.Naive => "None".to_string(),
+        Tz.Utc => "tzutc()".to_string(),
+        Tz.Local => "tzlocal()".to_string(),
+        Tz.Offset(name, s) => {
+            let n = match name {
+                Some(x) => repr_str(x),
+                None => "None".to_string(),
+            };
+            f"tzoffset({n}, {s})"
+        }
+    }
+}
+
+// ------------------------------------------------------------ datetime
+
+#[derive(Clone)]
+struct DateTime {
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    us: i64,
+    tz: Tz,
+}
+
+// datetime(...)'s range checks, in CPython's order.
+fn check_fields(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64, us: i64) -> Result[(), PyErr] {
+    if y < 1 or y > 9999 {
+        return Err(value_error(f"year {y} is out of range"));
+    }
+    if mo < 1 or mo > 12 {
+        return Err(value_error("month must be in 1..12".to_string()));
+    }
+    if d < 1 or d > days_in_month(y, mo) {
+        return Err(value_error("day is out of range for month".to_string()));
+    }
+    if h < 0 or h > 23 {
+        return Err(value_error("hour must be in 0..23".to_string()));
+    }
+    if mi < 0 or mi > 59 {
+        return Err(value_error("minute must be in 0..59".to_string()));
+    }
+    if s < 0 or s > 59 {
+        return Err(value_error("second must be in 0..59".to_string()));
+    }
+    if us < 0 or us > 999999 {
+        return Err(value_error("microsecond must be in 0..999999".to_string()));
+    }
+    Ok(())
+}
+
+fn make_dt(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64, us: i64, tz: own Tz) -> Result[DateTime, PyErr] {
+    check_fields(y, mo, d, h, mi, s, us)?;
+    Ok(DateTime { year: y, month: mo, day: d, hour: h, minute: mi, second: s, us: us, tz: tz })
+}
+
+fn date_only(y: i64, mo: i64, d: i64) -> Result[DateTime, PyErr] {
+    make_dt(y, mo, d, 0, 0, 0, 0, Tz.Naive)
+}
+
+fn ordinal(dt: ref DateTime) -> i64 {
+    to_ordinal(dt.year, dt.month, dt.day)
+}
+
+// date.weekday(): Monday is 0.
+fn weekday(dt: ref DateTime) -> i64 {
+    py_mod(ordinal(dt) + 6, 7)
+}
+
+// dt + timedelta(days, seconds, microseconds), keeping the tzinfo.
+fn add_delta(dt: ref DateTime, days: i64, secs: i64, us: i64) -> Result[DateTime, PyErr] {
+    let mut u = dt.us + us;
+    let mut s = dt.hour * 3600 + dt.minute * 60 + dt.second + secs + floor_div(u, 1000000);
+    u = py_mod(u, 1000000);
+    let ord = ordinal(dt) + days + floor_div(s, 86400);
+    s = py_mod(s, 86400);
+    if ord < 1 or ord > MAX_ORDINAL {
+        return Err(overflow());
+    }
+    let (y, m, d) = from_ordinal(ord);
+    Ok(DateTime { year: y, month: m, day: d, hour: s / 3600, minute: s / 60 % 60, second: s % 60, us: u, tz: dt.tz.clone() })
+}
+
+// The instant as (seconds, microseconds) from 0001-01-01, with a naive
+// datetime read as UTC.
+fn instant(dt: ref DateTime) -> (i64, i64) {
+    let off = utcoffset(dt.tz).unwrap_or(0);
+    (ordinal(dt) * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second - off, dt.us)
+}
+
+fn compare(a: ref DateTime, b: ref DateTime) -> i64 {
+    let (sa, ua) = instant(a);
+    let (sb, ub) = instant(b);
+    if sa != sb {
+        return if sa < sb { -1 } else { 1 };
+    }
+    if ua != ub {
+        return if ua < ub { -1 } else { 1 };
+    }
+    0
+}
+
+// a - b, as timedelta's (days, seconds, microseconds).
+fn sub_dt(a: ref DateTime, b: ref DateTime) -> (i64, i64, i64) {
+    let (sa, ua) = instant(a);
+    let (sb, ub) = instant(b);
+    let mut u = ua - ub;
+    let s = sa - sb + floor_div(u, 1000000);
+    u = py_mod(u, 1000000);
+    (floor_div(s, 86400), py_mod(s, 86400), u)
+}
+
+// datetime.__repr__
+fn dt_repr(dt: ref DateTime) -> String {
+    let mut s = f"datetime.datetime({dt.year}, {dt.month}, {dt.day}, {dt.hour}, {dt.minute}";
+    if dt.second != 0 or dt.us != 0 {
+        s.push_str(f", {dt.second}");
+    }
+    if dt.us != 0 {
+        s.push_str(f", {dt.us}");
+    }
+    match dt.tz {
+        Tz.Naive => {}
+        _ => s.push_str(", tzinfo=".to_string() + tz_repr(dt.tz)),
+    }
+    s.push_str(")");
+    s
+}
+
+fn date_iso(dt: ref DateTime) -> String {
+    f"{pad(dt.year, 4)}-{pad(dt.month, 2)}-{pad(dt.day, 2)}"
+}
+
+// datetime.isoformat()
+fn dt_iso(dt: ref DateTime) -> String {
+    let mut s = date_iso(dt) + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2);
+    if dt.us != 0 {
+        s.push_str(".".to_string() + pad(dt.us, 6));
+    }
+    if let Some(off) = utcoffset(dt.tz) {
+        let sign = if off < 0 { "-" } else { "+" };
+        let a = abs(off);
+        s.push_str(sign.to_string() + pad(a / 3600, 2) + ":" + pad(a / 60 % 60, 2));
+        if a % 60 != 0 {
+            s.push_str(":".to_string() + pad(a % 60, 2));
+        }
+    }
+    s
+}
+
+fn without_tz(dt: ref DateTime) -> DateTime {
+    let mut d = dt.clone();
+    d.tz = Tz.Naive;
+    d
+}
+
+// dt.replace(tzinfo=None) - dt.utcoffset(), or dt itself when naive.
+fn utc_naive(dt: ref DateTime) -> DateTime {
+    match utcoffset(dt.tz) {
+        None => dt.clone(),
+        Some(off) => add_delta(without_tz(dt), 0, 0 - off, 0).unwrap_or(without_tz(dt)),
+    }
+}
+
+// ------------------------------------------------------------ the lexer
+
+// _timelex: letters, digits, single other characters and runs of
+// whitespace (one ' ' token), with dots read in context: "Sep.20.2009" is
+// split up, "4:30:21.447" keeps its decimal point.
+
+// str.isalpha. Digits are ASCII: the jobs write no other kind.
+fn is_word(c: char) -> bool {
+    c.is_alphabetic()
+}
+
+fn is_num(c: char) -> bool {
+    is_digit(c)
+}
+
+struct Lexer {
+    v: Vec[char],
+    at: i64,
+    back: Option[char],
+    stack: Vec[String],
+    eof: bool,
+}
+
+impl Lexer {
+    fn next_char(mut ref self) -> Option[char] {
+        if let Some(c) = self.back {
+            self.back = None;
+            return Some(c);
+        }
+        while self.at < self.v.len() {
+            let c = self.v[self.at];
+            self.at += 1;
+            if c != '\u{0}' {
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    fn token(mut ref self) -> Option[String] {
+        if not self.stack.is_empty() {
+            return Some(self.stack.remove(0));
+        }
+        let mut seen_letters = false;
+        let mut token = String.new();
+        let mut have = false;
+        // 0: none, 1: 'a', 2: '0', 3: 'a.', 4: '0.'
+        let mut state = 0;
+        while not self.eof {
+            let c = match self.next_char() {
+                Some(c) => c,
+                None => {
+                    self.eof = true;
+                    break;
+                }
+            };
+            let last = token.chars().last().unwrap_or(' ');
+            if state == 0 {
+                token = c.to_string();
+                have = true;
+                if is_word(c) {
+                    state = 1;
+                } else if is_num(c) {
+                    state = 2;
+                } else if py_space(c) {
+                    token = " ".to_string();
+                    break;
+                } else {
+                    break;
+                }
+            } else if state == 1 {
+                seen_letters = true;
+                if is_word(c) {
+                    token.push(c);
+                } else if c == '.' {
+                    token.push(c);
+                    state = 3;
+                } else {
+                    self.back = Some(c);
+                    break;
+                }
+            } else if state == 2 {
+                if is_num(c) {
+                    token.push(c);
+                } else if c == '.' or (c == ',' and width(token) >= 2) {
+                    token.push(c);
+                    state = 4;
+                } else {
+                    self.back = Some(c);
+                    break;
+                }
+            } else if state == 3 {
+                seen_letters = true;
+                if c == '.' or is_word(c) {
+                    token.push(c);
+                } else if is_num(c) and last == '.' {
+                    token.push(c);
+                    state = 4;
+                } else {
+                    self.back = Some(c);
+                    break;
+                }
+            } else {
+                if c == '.' or is_num(c) {
+                    token.push(c);
+                } else if is_word(c) and last == '.' {
+                    token.push(c);
+                    state = 3;
+                } else {
+                    self.back = Some(c);
+                    break;
+                }
+            }
+        }
+        if not have {
+            return None;
+        }
+        let dots = token.chars().filter(|c| *c == '.').count();
+        let last = token.chars().last().unwrap_or(' ');
+        if (state == 3 or state == 4) and (seen_letters or dots > 1 or last == '.' or last == ',') {
+            // re.split("([.,])", token), empty pieces dropped
+            let mut pieces: Vec[String] = Vec.new();
+            let mut cur = String.new();
+            for c in token.chars() {
+                if c == '.' or c == ',' {
+                    pieces.push(cur);
+                    pieces.push(c.to_string());
+                    cur = String.new();
+                } else {
+                    cur.push(c);
+                }
+            }
+            pieces.push(cur);
+            token = pieces[0].clone();
+            for k in 1..pieces.len() {
+                if not pieces[k].is_empty() {
+                    self.stack.push(pieces[k].clone());
+                }
+            }
+        }
+        if state == 4 and not token.contains(".") {
+            token = token.replace(",", ".");
+        }
+        Some(token)
+    }
+}
+
+fn timelex(s: ref String) -> Vec[String] {
+    let mut lx = Lexer { v: chars(s), at: 0, back: None, stack: Vec.new(), eof: false };
+    let mut out: Vec[String] = Vec.new();
+    loop {
+        match lx.token() {
+            Some(t) => out.push(t),
+            None => break,
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ parserinfo
+
+const JUMP: Array[Str, 18] = [" ", ".", ",", ";", "-", "/", "'", "at", "on", "and", "ad", "m", "t", "of", "st", "nd", "rd", "th"];
+const WEEKDAYS: Array[Str, 14] = ["mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday", "sun", "sunday"];
+const MONTHS: Array[Str, 25] = ["jan", "january", "feb", "february", "mar", "march", "apr", "april", "may", "may", "jun", "june", "jul", "july", "aug", "august", "sep", "sept", "september", "oct", "october", "nov", "november", "dec", "december"];
+const MONTH_OF: Array[i64, 25] = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 9, 10, 10, 11, 11, 12, 12];
+const HMS: Array[Str, 9] = ["h", "hour", "hours", "m", "minute", "minutes", "s", "second", "seconds"];
+const UTCZONE: Array[Str, 4] = ["UTC", "GMT", "Z", "z"];
+const THIS_YEAR: i64 = 2026;
+const CENTURY: i64 = 2000;
+
+fn jump(name: ref String) -> bool {
+    let n = name.to_lowercase();
+    JUMP.iter().any(|j| *j == n)
+}
+
+fn weekday_of(name: ref String) -> Option[i64] {
+    let n = name.to_lowercase();
+    for k in 0..WEEKDAYS.len() {
+        if WEEKDAYS[k] == n {
+            return Some(k / 2);
+        }
+    }
+    None
+}
+
+fn month_of(name: ref String) -> Option[i64] {
+    let n = name.to_lowercase();
+    for k in 0..MONTHS.len() {
+        if MONTHS[k] == n {
+            return Some(MONTH_OF[k]);
+        }
+    }
+    None
+}
+
+fn hms_of(name: ref String) -> Option[i64] {
+    let n = name.to_lowercase();
+    for k in 0..HMS.len() {
+        if HMS[k] == n {
+            return Some(k / 3);
+        }
+    }
+    None
+}
+
+fn ampm_of(name: ref String) -> Option[i64] {
+    let n = name.to_lowercase();
+    if n == "am" or n == "a" {
+        Some(0)
+    } else if n == "pm" or n == "p" {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn pertain(name: ref String) -> bool {
+    name.to_lowercase() == "of"
+}
+
+fn utczone(name: ref String) -> bool {
+    let n = name.to_lowercase();
+    n == "utc" or n == "gmt" or n == "z"
+}
+
+// parserinfo.tzoffset: it looks the name up among the LOWER-CASED UTC
+// names, so only "z" gives 0.
+fn tzoffset_of(name: ref String) -> Option[i64] {
+    if name == "utc" or name == "gmt" or name == "z" {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+fn convertyear(year: i64, century_specified: bool) -> i64 {
+    let mut y = year;
+    if y < 100 and not century_specified {
+        y += CENTURY;
+        if y >= THIS_YEAR + 50 {
+            y -= 100;
+        } else if y < THIS_YEAR - 50 {
+            y += 100;
+        }
+    }
+    y
+}
+
+// ------------------------------------------------------------ numbers
+
+// A numeric token as the Decimal dateutil makes of it: digits, and maybe a
+// point and more digits.
+#[derive(Clone)]
+struct Dec {
+    ip: i64,
+    frac: String,
+}
+
+fn all_digits(s: ref String) -> bool {
+    not s.is_empty() and s.chars().all(|c| is_digit(c))
+}
+
+fn to_dec(s: ref String) -> Option[Dec] {
+    let parts: Vec[String] = s.split(".").map(|p| p.to_string()).collect();
+    if parts.len() > 2 or not all_digits(parts[0]) {
+        return None;
+    }
+    if parts.len() == 2 and not all_digits(parts[1]) {
+        return None;
+    }
+    let ip = py_int(parts[0], false)?;
+    let frac = if parts.len() == 2 { parts[1].clone() } else { String.new() };
+    Some(Dec { ip: ip, frac: frac })
+}
+
+// float(token) works: a number, or a word float() reads.
+fn float_ok(s: ref String) -> bool {
+    let n = s.to_lowercase();
+    to_dec(s).is_some() or n == "nan" or n == "inf" or n == "infinity"
+}
+
+fn has_frac(d: ref Dec) -> bool {
+    d.frac.chars().any(|c| c != '0')
+}
+
+// int(60 * (value % 1)), from the first 17 fraction digits.
+fn sixty_frac(d: ref Dec) -> i64 {
+    let mut digits = d.frac.clone();
+    if width(digits) > 17 {
+        digits = text(slice(chars(digits), 0, 17));
+    }
+    let mut num: i64 = 0;
+    let mut den: i64 = 1;
+    for c in digits.chars() {
+        num = num * 10 + (c as i64 - 48);
+        den *= 10;
+    }
+    60 * num / den
+}
+
+// value <= n
+fn dec_le(d: ref Dec, n: i64) -> bool {
+    d.ip < n or (d.ip == n and not has_frac(d))
+}
+
+// value > n
+fn dec_gt(d: ref Dec, n: i64) -> bool {
+    d.ip > n or (d.ip == n and has_frac(d))
+}
+
+fn str_isdigit(s: ref String) -> bool {
+    all_digits(s)
+}
+
+fn int_of(s: ref String) -> Result[i64, String] {
+    match py_int(s, false) {
+        Some(n) => Ok(n),
+        None => Err(f"invalid literal for int(): {s}"),
+    }
+}
+
+fn sub(s: ref String, lo: i64, hi: i64) -> String {
+    text(slice(chars(s), lo, hi))
+}
+
+fn tail(s: ref String, lo: i64) -> String {
+    sub(s, lo, width(s))
+}
+
+fn tok(l: ref Vec[String], i: i64) -> Result[String, String] {
+    if i < l.len() { Ok(l[i].clone()) } else { Err("list index out of range".to_string()) }
+}
+
+// ------------------------------------------------------------ _ymd
+
+struct Ymd {
+    vals: Vec[i64],
+    century: bool,
+    d: i64,
+    m: i64,
+    y: i64,
+}
+
+impl Ymd {
+    fn push(mut ref self, n: i64, label: char) -> Result[(), String] {
+        self.vals.push(n);
+        let at = self.vals.len() - 1;
+        if label == 'M' {
+            if self.m >= 0 {
+                return Err("Month is already set".to_string());
+            }
+            self.m = at;
+        } else if label == 'D' {
+            if self.d >= 0 {
+                return Err("Day is already set".to_string());
+            }
+            self.d = at;
+        } else if label == 'Y' {
+            if self.y >= 0 {
+                return Err("Year is already set".to_string());
+            }
+            self.y = at;
+        }
+        Ok(())
+    }
+
+    fn append_str(mut ref self, val: ref String, label: char) -> Result[(), String] {
+        let mut l = label;
+        if str_isdigit(val) and width(val) > 2 {
+            self.century = true;
+            if l != ' ' and l != 'Y' {
+                return Err("label".to_string());
+            }
+            l = 'Y';
+        }
+        let n = int_of(val)?;
+        self.push(n, l)
+    }
+
+    fn append_int(mut ref self, n: i64, label: char) -> Result[(), String] {
+        let mut l = label;
+        if n > 100 {
+            self.century = true;
+            if l != ' ' and l != 'Y' {
+                return Err("label".to_string());
+            }
+            l = 'Y';
+        }
+        self.push(n, l)
+    }
+
+    fn append_dec(mut ref self, v: ref Dec) -> Result[(), String] {
+        let mut l = ' ';
+        if dec_gt(v, 100) {
+            self.century = true;
+            l = 'Y';
+        }
+        self.push(v.ip, l)
+    }
+
+    fn could_be_day(ref self, v: ref Dec) -> bool {
+        if self.d >= 0 {
+            return false;
+        }
+        let top = if self.m < 0 {
+            31
+        } else if self.y < 0 {
+            days_in_month(2000, self.vals[self.m])
+        } else {
+            days_in_month(self.vals[self.y], self.vals[self.m])
+        };
+        v.ip >= 1 and dec_le(v, top)
+    }
+
+    fn resolve(ref self, yearfirst: bool, dayfirst: bool) -> Result[(Option[i64], Option[i64], Option[i64]), String] {
+        let n = self.vals.len();
+        let mut known = 0;
+        if self.y >= 0 {
+            known += 1;
+        }
+        if self.m >= 0 {
+            known += 1;
+        }
+        if self.d >= 0 {
+            known += 1;
+        }
+        if (n == known and known > 0) or (n == 3 and known == 2) {
+            let mut yi = self.y;
+            let mut mi = self.m;
+            let mut di = self.d;
+            if n == 3 and known == 2 {
+                let mut missing = 0;
+                for x in 0..3 {
+                    if x != yi and x != mi and x != di {
+                        missing = x;
+                    }
+                }
+                if yi < 0 {
+                    yi = missing;
+                } else if mi < 0 {
+                    mi = missing;
+                } else {
+                    di = missing;
+                }
+            }
+            let pick = |k: i64| if k >= 0 { Some(self.vals[k]) } else { None };
+            return Ok((pick(yi), pick(mi), pick(di)));
+        }
+        let v = self.vals.clone();
+        let mut year: Option[i64] = None;
+        let mut month: Option[i64] = None;
+        let mut day: Option[i64] = None;
+        let ms = self.m;
+        if n > 3 {
+            return Err("More than three YMD values".to_string());
+        } else if n == 1 or (ms >= 0 and n == 2) {
+            let mut other = v[0];
+            if ms >= 0 {
+                month = Some(v[ms]);
+                let k = if ms - 1 < 0 { ms - 1 + n } else { ms - 1 };
+                other = v[k];
+            }
+            if n > 1 or ms < 0 {
+                if other > 31 {
+                    year = Some(other);
+                } else {
+                    day = Some(other);
+                }
+            }
+        } else if n == 2 {
+            if v[0] > 31 {
+                year = Some(v[0]);
+                month = Some(v[1]);
+            } else if v[1] > 31 {
+                month = Some(v[0]);
+                year = Some(v[1]);
+            } else if dayfirst and v[1] <= 12 {
+                day = Some(v[0]);
+                month = Some(v[1]);
+            } else {
+                month = Some(v[0]);
+                day = Some(v[1]);
+            }
+        } else if n == 3 {
+            let (a, b, c) = (v[0], v[1], v[2]);
+            if ms == 0 {
+                if b > 31 {
+                    month = Some(a);
+                    year = Some(b);
+                    day = Some(c);
+                } else {
+                    month = Some(a);
+                    day = Some(b);
+                    year = Some(c);
+                }
+            } else if ms == 1 {
+                if a > 31 or (yearfirst and c <= 31) {
+                    year = Some(a);
+                    month = Some(b);
+                    day = Some(c);
+                } else {
+                    day = Some(a);
+                    month = Some(b);
+                    year = Some(c);
+                }
+            } else if ms == 2 {
+                if b > 31 {
+                    day = Some(a);
+                    year = Some(b);
+                    month = Some(c);
+                } else {
+                    year = Some(a);
+                    day = Some(b);
+                    month = Some(c);
+                }
+            } else {
+                if a > 31 or self.y == 0 or (yearfirst and b <= 12 and c <= 31) {
+                    if dayfirst and c <= 12 {
+                        year = Some(a);
+                        day = Some(b);
+                        month = Some(c);
+                    } else {
+                        year = Some(a);
+                        month = Some(b);
+                        day = Some(c);
+                    }
+                } else if a > 12 or (dayfirst and b <= 12) {
+                    day = Some(a);
+                    month = Some(b);
+                    year = Some(c);
+                } else {
+                    month = Some(a);
+                    day = Some(b);
+                    year = Some(c);
+                }
+            }
+        }
+        Ok((year, month, day))
+    }
+}
+
+// ------------------------------------------------------------ the parser
+
+#[derive(Clone)]
+struct Res {
+    year: Option[i64],
+    month: Option[i64],
+    day: Option[i64],
+    weekday: Option[i64],
+    hour: Option[i64],
+    minute: Option[i64],
+    second: Option[i64],
+    us: Option[i64],
+    tzname: Option[String],
+    tzoffset: Option[i64],
+    ampm: Option[i64],
+    century: bool,
+}
+
+fn new_res() -> Res {
+    Res { year: None, month: None, day: None, weekday: None, hour: None, minute: None, second: None, us: None, tzname: None, tzoffset: None, ampm: None, century: false }
+}
+
+// len(res): the fields that are set.
+fn res_len(r: ref Res) -> i64 {
+    let mut n = 0;
+    for x in [r.year, r.month, r.day, r.weekday, r.hour, r.minute, r.second, r.us, r.tzoffset, r.ampm] {
+        if x.is_some() {
+            n += 1;
+        }
+    }
+    if r.tzname.is_some() {
+        n += 1;
+    }
+    n
+}
+
+struct Opts {
+    dayfirst: bool,
+    yearfirst: bool,
+    fuzzy: bool,
+    with_tokens: bool,
+    ignoretz: bool,
+    default: DateTime,
+    tzinfos: Vec[(String, Option[i64])],
+}
+
+fn adjust_ampm(hour: i64, ampm: i64) -> i64 {
+    if hour < 12 and ampm == 1 {
+        hour + 12
+    } else if hour == 12 and ampm == 0 {
+        0
+    } else {
+        hour
+    }
+}
+
+fn ampm_valid(hour: Option[i64], ampm: Option[i64], fuzzy: bool) -> Result[bool, String] {
+    let mut ok = true;
+    if fuzzy and ampm.is_some() {
+        ok = false;
+    }
+    match hour {
+        None => {
+            if fuzzy {
+                ok = false;
+            } else {
+                return Err("No hour specified with AM or PM flag.".to_string());
+            }
+        }
+        Some(h) => {
+            if h < 0 or h > 12 {
+                if fuzzy {
+                    ok = false;
+                } else {
+                    return Err("Invalid hour specified for 12-hour clock.".to_string());
+                }
+            }
+        }
+    }
+    Ok(ok)
+}
+
+fn could_be_tzname(r: ref Res, offset_set: bool, token: ref String) -> bool {
+    r.hour.is_some() and r.tzname.is_none() and not offset_set and width(token) <= 5
+        and (token.chars().all(|c| c >= 'A' and c <= 'Z') or UTCZONE.iter().any(|z| *z == token))
+}
+
+fn parse_min_sec(v: ref Dec) -> (i64, Option[i64]) {
+    let second = if has_frac(v) { Some(sixty_frac(v)) } else { None };
+    (v.ip, second)
+}
+
+// I[.F] seconds into (seconds, microseconds)
+fn parsems(s: ref String) -> Result[(i64, i64), String] {
+    if not s.contains(".") {
+        return Ok((int_of(s)?, 0));
+    }
+    let parts: Vec[String] = s.split(".").map(|p| p.to_string()).collect();
+    if parts.len() != 2 {
+        return Err("too many values to unpack".to_string());
+    }
+    let mut f = parts[1].clone();
+    while width(f) < 6 {
+        f.push('0');
+    }
+    Ok((int_of(parts[0])?, int_of(sub(f, 0, 6))?))
+}
+
+fn find_hms_idx(idx: i64, l: ref Vec[String], allow_jump: bool) -> Option[i64] {
+    let n = l.len();
+    if idx + 1 < n and hms_of(l[idx + 1]).is_some() {
+        Some(idx + 1)
+    } else if allow_jump and idx + 2 < n and l[idx + 1] == " " and hms_of(l[idx + 2]).is_some() {
+        Some(idx + 2)
+    } else if idx > 0 and hms_of(l[idx - 1]).is_some() {
+        Some(idx - 1)
+    } else if 1 < idx and idx == n - 1 and l[idx - 1] == " " and hms_of(l[idx - 2]).is_some() {
+        Some(idx - 2)
+    } else {
+        None
+    }
+}
+
+fn assign_hms(r: mut ref Res, value_repr: ref String, hms: i64) -> Result[(), String] {
+    let v = match to_dec(value_repr) {
+        Some(v) => v,
+        None => return Err("bad number".to_string()),
+    };
+    if hms == 0 {
+        r.hour = Some(v.ip);
+        if has_frac(v) {
+            r.minute = Some(sixty_frac(v));
+        }
+    } else if hms == 1 {
+        let (m, s) = parse_min_sec(v);
+        r.minute = Some(m);
+        r.second = s;
+    } else if hms == 2 {
+        let (s, us) = parsems(value_repr)?;
+        r.second = Some(s);
+        r.us = Some(us);
+    }
+    Ok(())
+}
+
+fn parse_numeric_token(l: ref Vec[String], at: i64, ymd: mut ref Ymd, r: mut ref Res, fuzzy: bool) -> Result[i64, String] {
+    let mut idx = at;
+    let s = l[idx].clone();
+    let value = match to_dec(s) {
+        Some(v) => v,
+        None => return Err("Unknown numeric token".to_string()),
+    };
+    let len_li = width(s);
+    let len_l = l.len();
+    if ymd.vals.len() == 3 and (len_li == 2 or len_li == 4) and r.hour.is_none()
+        and (idx + 1 >= len_l or (l[idx + 1] != ":" and hms_of(l[idx + 1]).is_none())) {
+        r.hour = Some(int_of(sub(s, 0, 2))?);
+        if len_li == 4 {
+            r.minute = Some(int_of(tail(s, 2))?);
+        }
+    } else if len_li == 6 or (len_li > 6 and s.find(".") == Some(6)) {
+        if ymd.vals.is_empty() and not s.contains(".") {
+            ymd.append_str(sub(s, 0, 2), ' ')?;
+            ymd.append_str(sub(s, 2, 4), ' ')?;
+            ymd.append_str(tail(s, 4), ' ')?;
+        } else {
+            r.hour = Some(int_of(sub(s, 0, 2))?);
+            r.minute = Some(int_of(sub(s, 2, 4))?);
+            let (sec, us) = parsems(tail(s, 4))?;
+            r.second = Some(sec);
+            r.us = Some(us);
+        }
+    } else if len_li == 8 or len_li == 12 or len_li == 14 {
+        ymd.append_str(sub(s, 0, 4), 'Y')?;
+        ymd.append_str(sub(s, 4, 6), ' ')?;
+        ymd.append_str(sub(s, 6, 8), ' ')?;
+        if len_li > 8 {
+            r.hour = Some(int_of(sub(s, 8, 10))?);
+            r.minute = Some(int_of(sub(s, 10, 12))?);
+            if len_li > 12 {
+                r.second = Some(int_of(tail(s, 12))?);
+            }
+        }
+    } else if let Some(hms_idx) = find_hms_idx(idx, l, true) {
+        let hms = if hms_idx > idx {
+            idx = hms_idx;
+            hms_of(l[hms_idx]).unwrap_or(0)
+        } else {
+            hms_of(l[hms_idx]).unwrap_or(0) + 1
+        };
+        assign_hms(mut r, s, hms)?;
+    } else if idx + 2 < len_l and l[idx + 1] == ":" {
+        r.hour = Some(value.ip);
+        let v2 = match to_dec(l[idx + 2]) {
+            Some(v) => v,
+            None => return Err("Could not convert to decimal".to_string()),
+        };
+        let (m, sec) = parse_min_sec(v2);
+        r.minute = Some(m);
+        r.second = sec;
+        if idx + 4 < len_l and l[idx + 3] == ":" {
+            let (sec2, us) = parsems(l[idx + 4])?;
+            r.second = Some(sec2);
+            r.us = Some(us);
+            idx += 2;
+        }
+        idx += 2;
+    } else if idx + 1 < len_l and (l[idx + 1] == "-" or l[idx + 1] == "/" or l[idx + 1] == ".") {
+        let sep = l[idx + 1].clone();
+        ymd.append_str(s, ' ')?;
+        if idx + 2 < len_l and not jump(l[idx + 2]) {
+            if str_isdigit(l[idx + 2]) {
+                ymd.append_str(l[idx + 2], ' ')?;
+            } else {
+                match month_of(l[idx + 2]) {
+                    Some(m) => ymd.append_int(m, 'M')?,
+                    None => return Err("not a month".to_string()),
+                }
+            }
+            if idx + 3 < len_l and l[idx + 3] == sep {
+                let t4 = tok(l, idx + 4)?;
+                match month_of(t4) {
+                    Some(m) => ymd.append_int(m, 'M')?,
+                    None => ymd.append_str(t4, ' ')?,
+                }
+                idx += 2;
+            }
+            idx += 1;
+        }
+        idx += 1;
+    } else if idx + 1 >= len_l or jump(l[idx + 1]) {
+        if idx + 2 < len_l and ampm_of(l[idx + 2]).is_some() {
+            r.hour = Some(adjust_ampm(value.ip, ampm_of(l[idx + 2]).unwrap_or(0)));
+            idx += 1;
+        } else {
+            ymd.append_dec(value)?;
+        }
+        idx += 1;
+    } else if ampm_of(l[idx + 1]).is_some() and value.ip < 24 {
+        r.hour = Some(adjust_ampm(value.ip, ampm_of(l[idx + 1]).unwrap_or(0)));
+        idx += 1;
+    } else if ymd.could_be_day(value) {
+        ymd.append_dec(value)?;
+    } else if not fuzzy {
+        return Err("no meaning".to_string());
+    }
+    Ok(idx)
+}
+
+// parser._parse up to validate(): the fields found, and the indexes of the
+// tokens a fuzzy parse skipped.
+fn parse_tokens(l: mut ref Vec[String], o: ref Opts) -> Result[(Res, Vec[i64]), String] {
+    let fuzzy = o.fuzzy or o.with_tokens;
+    let mut r = new_res();
+    let mut skipped: Vec[i64] = Vec.new();
+    let mut ymd = Ymd { vals: Vec.new(), century: false, d: -1, m: -1, y: -1 };
+    let len_l = l.len();
+    let mut i = 0;
+    while i < len_l {
+        let t = l[i].clone();
+        if float_ok(t) {
+            i = parse_numeric_token(l, i, mut ymd, mut r, fuzzy)?;
+        } else if let Some(w) = weekday_of(t) {
+            r.weekday = Some(w);
+        } else if let Some(m) = month_of(t) {
+            ymd.append_int(m, 'M')?;
+            if i + 1 < len_l {
+                if l[i + 1] == "-" or l[i + 1] == "/" {
+                    let sep = l[i + 1].clone();
+                    ymd.append_str(tok(l, i + 2)?, ' ')?;
+                    if i + 3 < len_l and l[i + 3] == sep {
+                        ymd.append_str(tok(l, i + 4)?, ' ')?;
+                        i += 2;
+                    }
+                    i += 2;
+                } else if i + 4 < len_l and l[i + 1] == " " and l[i + 3] == " " and pertain(l[i + 2]) {
+                    if str_isdigit(l[i + 4]) {
+                        let y = convertyear(int_of(l[i + 4])?, false);
+                        ymd.append_str(f"{y}", 'Y')?;
+                    }
+                    i += 4;
+                }
+            }
+        } else if let Some(a) = ampm_of(t) {
+            if ampm_valid(r.hour, r.ampm, fuzzy)? {
+                r.hour = Some(adjust_ampm(r.hour.unwrap_or(0), a));
+                r.ampm = Some(a);
+            } else if fuzzy {
+                skipped.push(i);
+            }
+        } else if could_be_tzname(r, r.tzoffset.is_some(), t) {
+            r.tzoffset = tzoffset_of(t);
+            r.tzname = Some(t.clone());
+            if i + 1 < len_l and (l[i + 1] == "+" or l[i + 1] == "-") {
+                l[i + 1] = if l[i + 1] == "+" { "-".to_string() } else { "+".to_string() };
+                r.tzoffset = None;
+                if utczone(t) {
+                    r.tzname = None;
+                }
+            }
+        } else if r.hour.is_some() and (t == "+" or t == "-") {
+            let signal = if t == "+" { 1 } else { -1 };
+            let next = tok(l, i + 1)?;
+            let len_li = width(next);
+            let mut h = 0;
+            let mut m = 0;
+            if len_li == 4 {
+                h = int_of(sub(next, 0, 2))?;
+                m = int_of(tail(next, 2))?;
+            } else if i + 2 < len_l and l[i + 2] == ":" {
+                h = int_of(next)?;
+                m = int_of(tok(l, i + 3)?)?;
+                i += 2;
+            } else if len_li <= 2 {
+                h = int_of(sub(next, 0, 2))?;
+            } else {
+                return Err("bad offset".to_string());
+            }
+            r.tzoffset = Some(signal * (h * 3600 + m * 60));
+            if i + 5 < len_l and jump(l[i + 2]) and l[i + 3] == "(" and l[i + 5] == ")" and width(l[i + 4]) >= 3
+                and could_be_tzname(r, false, l[i + 4]) {
+                r.tzname = Some(l[i + 4].clone());
+                i += 4;
+            }
+            i += 1;
+        } else if not (jump(t) or fuzzy) {
+            return Err("unknown token".to_string());
+        } else {
+            skipped.push(i);
+        }
+        i += 1;
+    }
+    let (y, m, d) = ymd.resolve(o.yearfirst, o.dayfirst)?;
+    r.century = ymd.century;
+    r.year = y;
+    r.month = m;
+    r.day = d;
+    // parserinfo.validate
+    if let Some(y) = r.year {
+        r.year = Some(convertyear(y, r.century));
+    }
+    let named = r.tzname.is_some();
+    let zname = r.tzname == Some("Z".to_string()) or r.tzname == Some("z".to_string());
+    if (r.tzoffset == Some(0) and not named) or zname {
+        r.tzname = Some("UTC".to_string());
+        r.tzoffset = Some(0);
+    } else if r.tzoffset != Some(0) and named and utczone(r.tzname.clone().unwrap_or(String.new())) {
+        r.tzoffset = Some(0);
+    }
+    Ok((r, skipped))
+}
+
+fn recombine_skipped(l: ref Vec[String], idxs: ref Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..idxs.len() {
+        let idx = idxs[k];
+        if k > 0 and idx - 1 == idxs[k - 1] {
+            let n = out.len() - 1;
+            out[n] = out[n].clone() + l[idx];
+        } else {
+            out.push(l[idx].clone());
+        }
+    }
+    out
+}
+
+fn build_naive(r: ref Res, d: ref DateTime) -> Result[DateTime, PyErr] {
+    let y = r.year.unwrap_or(d.year);
+    let mo = r.month.unwrap_or(d.month);
+    let mut day = d.day;
+    match r.day {
+        Some(x) => day = x,
+        None => {
+            let dim = monthrange(y, mo)?;
+            if day > dim {
+                day = dim;
+            }
+        }
+    }
+    let naive = make_dt(y, mo, day, r.hour.unwrap_or(d.hour), r.minute.unwrap_or(d.minute), r.second.unwrap_or(d.second), r.us.unwrap_or(d.us), d.tz.clone())?;
+    if let Some(w) = r.weekday {
+        if r.day.unwrap_or(0) == 0 {
+            let mut rd = zero_rd();
+            rd.weekday = Some((w, None));
+            return rd_add(rd, naive);
+        }
+    }
+    Ok(naive)
+}
+
+// The tzinfo parse() attaches, and the warning it gives for a name it does
+// not know.
+fn build_tz(r: ref Res, o: ref Opts) -> (Tz, Option[String]) {
+    if let Some(name) = r.tzname.clone() {
+        for (k, v) in o.tzinfos.iter() {
+            if *k == name {
+                return match v {
+                    Some(s) => (Tz.Offset(Some(name.clone()), *s), None),
+                    None => (Tz.Naive, None),
+                };
+            }
+        }
+        if name == "UTC" {
+            return (Tz.Local, None);
+        }
+    }
+    match r.tzoffset {
+        Some(0) => (Tz.Utc, None),
+        Some(off) => (Tz.Offset(r.tzname.clone(), off), None),
+        None => match r.tzname.clone() {
+            None => (Tz.Naive, None),
+            Some(n) => (Tz.Naive, Some(f"tzname {n} identified but not understood.  Pass `tzinfos` argument in order to correctly return a timezone-aware datetime.  In a future version, this will raise an exception.")),
+        },
+    }
+}
+
+struct Parsed {
+    dt: DateTime,
+    skipped: Vec[String],
+    warnings: Vec[String],
+}
+
+// dateutil.parser.parse
+fn dparse(s: ref String, o: ref Opts) -> Result[Parsed, PyErr] {
+    let mut l = timelex(s);
+    let (r, idxs) = match parse_tokens(mut l, o) {
+        Ok(x) => x,
+        Err(_) => return Err(py_err("ParserError", f"Unknown string format: {s}")),
+    };
+    if res_len(r) == 0 {
+        return Err(py_err("ParserError", f"String does not contain a date: {s}"));
+    }
+    let mut dt = match build_naive(r, o.default) {
+        Ok(d) => d,
+        Err(e) => {
+            if e.kind == "OverflowError" {
+                return Err(e);
+            }
+            return Err(py_err("ParserError", f"{e.msg}: {s}"));
+        }
+    };
+    let mut warnings: Vec[String] = Vec.new();
+    if not o.ignoretz {
+        let (tz, w) = build_tz(r, o);
+        dt.tz = tz;
+        if let Some(w) = w {
+            warnings.push(w);
+        }
+    }
+    Ok(Parsed { dt: dt, skipped: recombine_skipped(l, idxs), warnings: warnings })
+}
+
+// repr() of what parse() returns: the datetime, or with fuzzy_with_tokens
+// the tuple of it and the skipped text.
+fn parsed_repr(p: ref Parsed, with_tokens: bool) -> String {
+    if not with_tokens {
+        return dt_repr(p.dt);
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for t in p.skipped.iter() {
+        parts.push(repr_str(t));
+    }
+    let toks = if parts.len() == 1 { f"({parts[0]},)" } else { "(".to_string() + parts.join(", ") + ")" };
+    "(".to_string() + dt_repr(p.dt) + ", " + toks + ")"
+}
+
+// ------------------------------------------------------------ relativedelta
+
+const WEEKDAY_NAMES: Array[Str, 7] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+const YDAY_IDX: Array[i64, 12] = [31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 366];
+
+#[derive(Clone)]
+struct RelDelta {
+    years: i64,
+    months: i64,
+    days: i64,
+    leapdays: i64,
+    hours: i64,
+    minutes: i64,
+    seconds: i64,
+    microseconds: i64,
+    year: Option[i64],
+    month: Option[i64],
+    day: Option[i64],
+    weekday: Option[(i64, Option[i64])],
+    hour: Option[i64],
+    minute: Option[i64],
+    second: Option[i64],
+    microsecond: Option[i64],
+}
+
+fn zero_rd() -> RelDelta {
+    RelDelta { years: 0, months: 0, days: 0, leapdays: 0, hours: 0, minutes: 0, seconds: 0, microseconds: 0, year: None, month: None, day: None, weekday: None, hour: None, minute: None, second: None, microsecond: None }
+}
+
+fn sign(x: i64) -> i64 {
+    if x < 0 { -1 } else { 1 }
+}
+
+// relativedelta._fix: carry each unit into the next, keeping the sign.
+fn rd_fix(rd: mut ref RelDelta) {
+    if abs(rd.microseconds) > 999999 {
+        let s = sign(rd.microseconds);
+        let v = rd.microseconds * s;
+        rd.microseconds = v % 1000000 * s;
+        rd.seconds += v / 1000000 * s;
+    }
+    if abs(rd.seconds) > 59 {
+        let s = sign(rd.seconds);
+        let v = rd.seconds * s;
+        rd.seconds = v % 60 * s;
+        rd.minutes += v / 60 * s;
+    }
+    if abs(rd.minutes) > 59 {
+        let s = sign(rd.minutes);
+        let v = rd.minutes * s;
+        rd.minutes = v % 60 * s;
+        rd.hours += v / 60 * s;
+    }
+    if abs(rd.hours) > 23 {
+        let s = sign(rd.hours);
+        let v = rd.hours * s;
+        rd.hours = v % 24 * s;
+        rd.days += v / 24 * s;
+    }
+    if abs(rd.months) > 11 {
+        let s = sign(rd.months);
+        let v = rd.months * s;
+        rd.months = v % 12 * s;
+        rd.years += v / 12 * s;
+    }
+}
+
+fn set_months(rd: mut ref RelDelta, months: i64) {
+    rd.months = months;
+    if abs(months) > 11 {
+        let s = sign(months);
+        let v = months * s;
+        rd.months = v % 12 * s;
+        rd.years = v / 12 * s;
+    } else {
+        rd.years = 0;
+    }
+}
+
+// The keyword arguments of relativedelta(...), as a job gives them.
+struct RdArgs {
+    rd: RelDelta,
+    weeks: i64,
+    yearday: i64,
+    nlyearday: i64,
+}
+
+// relativedelta(years=..., ...)
+fn rd_new(a: own RdArgs) -> Result[RelDelta, PyErr] {
+    let mut rd = a.rd;
+    rd.days += a.weeks * 7;
+    let mut yday = 0;
+    if a.nlyearday != 0 {
+        yday = a.nlyearday;
+    } else if a.yearday != 0 {
+        yday = a.yearday;
+        if a.yearday > 59 {
+            rd.leapdays = -1;
+        }
+    }
+    if yday != 0 {
+        let mut found = false;
+        for idx in 0..12 {
+            if yday <= YDAY_IDX[idx] {
+                rd.month = Some(idx + 1);
+                rd.day = Some(if idx == 0 { yday } else { yday - YDAY_IDX[idx - 1] });
+                found = true;
+                break;
+            }
+        }
+        if not found {
+            return Err(value_error(f"invalid year day ({yday})"));
+        }
+    }
+    rd_fix(mut rd);
+    Ok(rd)
+}
+
+fn nonzero(x: Option[i64]) -> Option[i64] {
+    match x {
+        Some(0) => None,
+        other => other,
+    }
+}
+
+// datetime + relativedelta
+fn rd_add(rd: ref RelDelta, dt: ref DateTime) -> Result[DateTime, PyErr] {
+    let mut year = nonzero(rd.year).unwrap_or(dt.year) + rd.years;
+    let mut month = nonzero(rd.month).unwrap_or(dt.month);
+    if rd.months != 0 {
+        month += rd.months;
+        if month > 12 {
+            year += 1;
+            month -= 12;
+        } else if month < 1 {
+            year -= 1;
+            month += 12;
+        }
+    }
+    let dim = monthrange(year, month)?;
+    let mut day = nonzero(rd.day).unwrap_or(dt.day);
+    if dim < day {
+        day = dim;
+    }
+    let mut days = rd.days;
+    if rd.leapdays != 0 and month > 2 and is_leap(year) {
+        days += rd.leapdays;
+    }
+    let base = make_dt(year, month, day, rd.hour.unwrap_or(dt.hour), rd.minute.unwrap_or(dt.minute), rd.second.unwrap_or(dt.second), rd.microsecond.unwrap_or(dt.us), dt.tz.clone())?;
+    let mut ret = add_delta(base, days, rd.hours * 3600 + rd.minutes * 60 + rd.seconds, rd.microseconds)?;
+    if let Some((wd, n)) = rd.weekday {
+        let nth = n.unwrap_or(1);
+        let mut jump = (abs(nth) - 1) * 7;
+        if nth > 0 {
+            jump += py_mod(7 - weekday(ret) + wd, 7);
+        } else {
+            jump += py_mod(weekday(ret) - wd, 7);
+            jump = 0 - jump;
+        }
+        ret = add_delta(ret, jump, 0, 0)?;
+    }
+    Ok(ret)
+}
+
+// -relativedelta
+fn rd_neg(rd: ref RelDelta) -> RelDelta {
+    let mut n = rd.clone();
+    n.years = 0 - rd.years;
+    n.months = 0 - rd.months;
+    n.days = 0 - rd.days;
+    n.hours = 0 - rd.hours;
+    n.minutes = 0 - rd.minutes;
+    n.seconds = 0 - rd.seconds;
+    n.microseconds = 0 - rd.microseconds;
+    rd_fix(mut n);
+    n
+}
+
+// relativedelta(dt1, dt2)
+fn rd_between(dt1: ref DateTime, dt2: ref DateTime) -> Result[RelDelta, PyErr] {
+    let mut rd = zero_rd();
+    let mut months = (dt1.year - dt2.year) * 12 + (dt1.month - dt2.month);
+    set_months(mut rd, months);
+    let mut dtm = rd_add(rd, dt2)?;
+    let later = compare(dt1, dt2) < 0;
+    let inc = if later { 1 } else { -1 };
+    loop {
+        let c = compare(dt1, dtm);
+        let go_on = if later { c > 0 } else { c < 0 };
+        if not go_on {
+            break;
+        }
+        months += inc;
+        set_months(mut rd, months);
+        dtm = rd_add(rd, dt2)?;
+    }
+    let (d, s, u) = sub_dt(dt1, dtm);
+    rd.seconds = s + d * 86400;
+    rd.microseconds = u;
+    rd_fix(mut rd);
+    Ok(rd)
+}
+
+// format(n, "+g") for an int: six significant digits, half to even, and
+// scientific notation from 1e+06 on.
+fn g_plus(n: i64) -> String {
+    let sgn = if n < 0 { "-" } else { "+" };
+    let mut digits: Vec[i64] = f"{abs(n)}".chars().map(|c| c as i64 - 48).collect();
+    let mut exp = digits.len() - 1;
+    if digits.len() > 6 {
+        let keep: Vec[i64] = digits[0..6].to_vec();
+        let rest: Vec[i64] = digits[6..digits.len()].to_vec();
+        let mut up = false;
+        if rest[0] > 5 {
+            up = true;
+        } else if rest[0] == 5 {
+            let more = rest[1..rest.len()].iter().any(|d| *d != 0);
+            up = more or keep[5] % 2 == 1;
+        }
+        digits = keep;
+        if up {
+            let mut k = 5;
+            loop {
+                digits[k] += 1;
+                if digits[k] < 10 {
+                    break;
+                }
+                digits[k] = 0;
+                if k == 0 {
+                    digits.insert(0, 1);
+                    digits.pop();
+                    exp += 1;
+                    break;
+                }
+                k -= 1;
+            }
+        }
+    }
+    if exp < 6 {
+        return sgn.to_string() + f"{abs(n)}";
+    }
+    while digits.len() > 1 and digits[digits.len() - 1] == 0 {
+        digits.pop();
+    }
+    let mut m = f"{digits[0]}";
+    if digits.len() > 1 {
+        m.push('.');
+        for k in 1..digits.len() {
+            m.push_str(f"{digits[k]}");
+        }
+    }
+    sgn.to_string() + m + "e+" + pad(exp, 2)
+}
+
+fn weekday_repr(w: ref (i64, Option[i64])) -> String {
+    let (d, n) = *w;
+    let name = WEEKDAY_NAMES[d].to_string();
+    match n {
+        None => name,
+        Some(0) => name,
+        Some(k) => {
+            let s = if k < 0 { f"{k}" } else { f"+{k}" };
+            name + "(" + s + ")"
+        }
+    }
+}
+
+// relativedelta.__repr__
+fn rd_repr(rd: ref RelDelta) -> String {
+    let mut l: Vec[String] = Vec.new();
+    let rel = [("years", rd.years), ("months", rd.months), ("days", rd.days), ("leapdays", rd.leapdays), ("hours", rd.hours), ("minutes", rd.minutes), ("seconds", rd.seconds), ("microseconds", rd.microseconds)];
+    for (name, v) in rel {
+        if v != 0 {
+            l.push(name.to_string() + "=" + g_plus(v));
+        }
+    }
+    let abs_fields = [("year", rd.year), ("month", rd.month), ("day", rd.day)];
+    for (name, v) in abs_fields {
+        if let Some(x) = v {
+            l.push(f"{name}={x}");
+        }
+    }
+    if let Some(w) = rd.weekday {
+        l.push("weekday=".to_string() + weekday_repr(w));
+    }
+    let time_fields = [("hour", rd.hour), ("minute", rd.minute), ("second", rd.second), ("microsecond", rd.microsecond)];
+    for (name, v) in time_fields {
+        if let Some(x) = v {
+            l.push(f"{name}={x}");
+        }
+    }
+    "relativedelta(".to_string() + l.join(", ") + ")"
+}
+
+// ------------------------------------------------------------ isoparse
+
+// repr() of a bytes value; isoparse works on the string's ASCII bytes.
+fn bytes_repr(v: ref Vec[char]) -> String {
+    let s = text(v);
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = "b".to_string();
+    out.push(q);
+    for c in v.iter() {
+        let o = *c as i64;
+        if *c == q or *c == '\\' {
+            out.push('\\');
+            out.push(*c);
+        } else if *c == '\t' {
+            out.push_str("\\t");
+        } else if *c == '\n' {
+            out.push_str("\\n");
+        } else if *c == '\r' {
+            out.push_str("\\r");
+        } else if o < 0x20 or o >= 0x7F {
+            out.push_str("\\x".to_string() + hex_digits(o, 2));
+        } else {
+            out.push(*c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+// int(bytes)
+fn bint(v: ref Vec[char], lo: i64, hi: i64) -> Result[i64, PyErr] {
+    let part = slice(v, lo, hi);
+    match py_int(text(part), true) {
+        Some(n) => Ok(n),
+        None => Err(value_error(f"invalid literal for int() with base 10: {bytes_repr(part)}")),
+    }
+}
+
+fn at(v: ref Vec[char], k: i64) -> char {
+    if k >= 0 and k < v.len() { v[k] } else { '\u{0}' }
+}
+
+struct IsoParser {
+    sep: Option[char],
+}
+
+fn iso_parser(sep: Option[String]) -> Result[IsoParser, PyErr] {
+    match sep {
+        None => Ok(IsoParser { sep: None }),
+        Some(s) => {
+            let v = chars(s);
+            if v.len() != 1 or v[0] as i64 >= 128 or is_digit(v[0]) {
+                return Err(value_error("Separator must be a single, non-numeric ASCII character".to_string()));
+            }
+            Ok(IsoParser { sep: Some(v[0]) })
+        }
+    }
+}
+
+fn date_common(v: ref Vec[char]) -> Result[(Vec[i64], i64), PyErr] {
+    let n = v.len();
+    let mut c: Vec[i64] = vec![1, 1, 1];
+    if n < 4 {
+        return Err(value_error("ISO string too short".to_string()));
+    }
+    c[0] = bint(v, 0, 4)?;
+    let mut pos = 4;
+    if pos >= n {
+        return Ok((c, pos));
+    }
+    let has_sep = at(v, pos) == '-';
+    if has_sep {
+        pos += 1;
+    }
+    if n - pos < 2 {
+        return Err(value_error("Invalid common month".to_string()));
+    }
+    c[1] = bint(v, pos, pos + 2)?;
+    pos += 2;
+    if pos >= n {
+        if has_sep {
+            return Ok((c, pos));
+        }
+        return Err(value_error("Invalid ISO format".to_string()));
+    }
+    if has_sep {
+        if at(v, pos) != '-' {
+            return Err(value_error("Invalid separator in ISO string".to_string()));
+        }
+        pos += 1;
+    }
+    if n - pos < 2 {
+        return Err(value_error("Invalid common day".to_string()));
+    }
+    c[2] = bint(v, pos, pos + 2)?;
+    Ok((c, pos + 2))
+}
+
+fn date_parts(y: i64, m: i64, d: i64) -> Vec[i64] {
+    vec![y, m, d]
+}
+
+fn weekdate(year: i64, week: i64, day: i64) -> Result[DateTime, PyErr] {
+    if not (0 < week and week < 54) {
+        return Err(value_error(f"Invalid week: {week}"));
+    }
+    if not (0 < day and day < 8) {
+        return Err(value_error(f"Invalid weekday: {day}"));
+    }
+    let jan_4 = date_only(year, 1, 4)?;
+    let week_1 = add_delta(jan_4, 0 - weekday(jan_4), 0, 0)?;
+    add_delta(week_1, (week - 1) * 7 + (day - 1), 0, 0)
+}
+
+fn date_uncommon(v: ref Vec[char]) -> Result[(Vec[i64], i64), PyErr] {
+    if v.len() < 4 {
+        return Err(value_error("ISO string too short".to_string()));
+    }
+    let year = bint(v, 0, 4)?;
+    let has_sep = at(v, 4) == '-';
+    let mut pos = if has_sep { 5 } else { 4 };
+    let base = if at(v, pos) == 'W' {
+        pos += 1;
+        let weekno = bint(v, pos, pos + 2)?;
+        pos += 2;
+        let mut dayno = 1;
+        if v.len() > pos {
+            if (at(v, pos) == '-') != has_sep {
+                return Err(value_error("Inconsistent use of dash separator".to_string()));
+            }
+            if has_sep {
+                pos += 1;
+            }
+            dayno = bint(v, pos, pos + 1)?;
+            pos += 1;
+        }
+        weekdate(year, weekno, dayno)?
+    } else {
+        if v.len() - pos < 3 {
+            return Err(value_error("Invalid ordinal day".to_string()));
+        }
+        let ordinal_day = bint(v, pos, pos + 3)?;
+        pos += 3;
+        let top = if is_leap(year) { 366 } else { 365 };
+        if ordinal_day < 1 or ordinal_day > top {
+            return Err(value_error(f"Invalid ordinal day {ordinal_day} for year {year}"));
+        }
+        let jan_1 = date_only(year, 1, 1)?;
+        add_delta(jan_1, ordinal_day - 1, 0, 0)?
+    };
+    Ok((date_parts(base.year, base.month, base.day), pos))
+}
+
+fn iso_date(v: ref Vec[char]) -> Result[(Vec[i64], i64), PyErr] {
+    match date_common(v) {
+        Ok(x) => Ok(x),
+        Err(_) => date_uncommon(v),
+    }
+}
+
+fn iso_tz(v: ref Vec[char]) -> Result[Tz, PyErr] {
+    if v.len() == 1 and (v[0] == 'Z' or v[0] == 'z') {
+        return Ok(Tz.Utc);
+    }
+    let n = v.len();
+    if n != 3 and n != 5 and n != 6 {
+        return Err(value_error("Time zone offset must be 1, 3, 5 or 6 characters".to_string()));
+    }
+    let mult = if v[0] == '-' {
+        -1
+    } else if v[0] == '+' {
+        1
+    } else {
+        return Err(value_error("Time zone offset requires sign".to_string()));
+    };
+    let hours = bint(v, 1, 3)?;
+    let minutes = if n == 3 { 0 } else { bint(v, if at(v, 3) == ':' { 4 } else { 3 }, n)? };
+    if hours == 0 and minutes == 0 {
+        return Ok(Tz.Utc);
+    }
+    if minutes > 59 {
+        return Err(value_error("Invalid minutes in time zone offset".to_string()));
+    }
+    if hours > 23 {
+        return Err(value_error("Invalid hours in time zone offset".to_string()));
+    }
+    Ok(Tz.Offset(None, mult * (hours * 60 + minutes) * 60))
+}
+
+fn iso_time(v: ref Vec[char]) -> Result[(Vec[i64], Tz), PyErr] {
+    let n = v.len();
+    let mut c: Vec[i64] = vec![0, 0, 0, 0];
+    let mut tz = Tz.Naive;
+    let mut pos = 0;
+    let mut comp = -1;
+    if n < 2 {
+        return Err(value_error("ISO time too short".to_string()));
+    }
+    let mut has_sep = false;
+    while pos < n and comp < 5 {
+        comp += 1;
+        let ch = v[pos];
+        if ch == '-' or ch == '+' or ch == 'Z' or ch == 'z' {
+            tz = iso_tz(slice(v, pos, n))?;
+            pos = n;
+            break;
+        }
+        if comp == 1 and ch == ':' {
+            has_sep = true;
+            pos += 1;
+        } else if comp == 2 and has_sep {
+            if ch != ':' {
+                return Err(value_error("Inconsistent use of colon separator".to_string()));
+            }
+            pos += 1;
+        }
+        if comp < 3 {
+            c[comp] = bint(v, pos, pos + 2)?;
+            pos += 2;
+        }
+        if comp == 3 {
+            // [.,]([0-9]+)
+            if pos < n and (v[pos] == '.' or v[pos] == ',') {
+                let mut e = pos + 1;
+                while e < n and is_digit(v[e]) {
+                    e += 1;
+                }
+                if e > pos + 1 {
+                    let take = if e - pos - 1 > 6 { 6 } else { e - pos - 1 };
+                    let mut us = bint(v, pos + 1, pos + 1 + take)?;
+                    for _ in take..6 {
+                        us *= 10;
+                    }
+                    c[3] = us;
+                    pos = e;
+                }
+            }
+        }
+    }
+    if pos < n {
+        return Err(value_error("Unused components in ISO string".to_string()));
+    }
+    if c[0] == 24 and (c[1] != 0 or c[2] != 0 or c[3] != 0) {
+        return Err(value_error("Hour may only be 24 at 24:00:00.000".to_string()));
+    }
+    Ok((c, tz))
+}
+
+// isoparser(sep).isoparse(s)
+fn isoparse(p: ref IsoParser, s: ref String) -> Result[DateTime, PyErr] {
+    let v = chars(s);
+    if v.iter().any(|c| *c as i64 >= 128) {
+        return Err(value_error("ISO-8601 strings should contain only ASCII characters".to_string()));
+    }
+    let (d, pos) = iso_date(v)?;
+    let mut t: Vec[i64] = vec![0, 0, 0, 0];
+    let mut tz = Tz.Naive;
+    let mut has_time = false;
+    if v.len() > pos {
+        let ok = match p.sep {
+            None => true,
+            Some(c) => at(v, pos) == c,
+        };
+        if not ok {
+            return Err(value_error("String contains unknown ISO components".to_string()));
+        }
+        let (tt, z) = iso_time(slice(v, pos + 1, v.len()))?;
+        t = tt;
+        tz = z;
+        has_time = true;
+    }
+    if has_time and t[0] == 24 {
+        let dt = make_dt(d[0], d[1], d[2], 0, t[1], t[2], t[3], tz)?;
+        return add_delta(dt, 1, 0, 0);
+    }
+    make_dt(d[0], d[1], d[2], t[0], t[1], t[2], t[3], tz)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn get_str(o: ref JValue, key: Str) -> Option[String] {
+    match get(o, key) {
+        Some(JValue.Str(s)) => Some(s),
+        _ => None,
+    }
+}
+
+fn get_bool(o: ref JValue, key: Str) -> bool {
+    match get(o, key) {
+        Some(JValue.Bool(b)) => b,
+        _ => false,
+    }
+}
+
+fn get_int(o: ref JValue, key: Str) -> Option[i64] {
+    match get(o, key) {
+        Some(JValue.Int(n)) => Some(n),
+        _ => None,
+    }
+}
+
+fn base_default() -> DateTime {
+    DateTime { year: 2003, month: 9, day: 25, hour: 0, minute: 0, second: 0, us: 0, tz: Tz.Naive }
+}
+
+fn plain_opts() -> Opts {
+    Opts { dayfirst: false, yearfirst: false, fuzzy: false, with_tokens: false, ignoretz: false, default: base_default(), tzinfos: Vec.new() }
+}
+
+fn log_tzinfos() -> Vec[(String, Option[i64])] {
+    vec![("BRST".to_string(), Some(-7200)), ("EST".to_string(), Some(-18000)), ("IST".to_string(), Some(19800))]
+}
+
+fn parse_plain(s: ref String) -> Result[DateTime, PyErr] {
+    let p = dparse(s, plain_opts())?;
+    Ok(p.dt)
+}
+
+fn run_parse(j: ref JValue) -> String {
+    let s = get_str(j, "s").unwrap_or(String.new());
+    let mut o = plain_opts();
+    o.dayfirst = get_bool(j, "dayfirst");
+    o.yearfirst = get_bool(j, "yearfirst");
+    o.fuzzy = get_bool(j, "fuzzy");
+    o.with_tokens = get_bool(j, "fuzzy_with_tokens");
+    o.ignoretz = get_bool(j, "ignoretz");
+    if let Some(d) = get_str(j, "default") {
+        match isoparse(IsoParser { sep: None }, d) {
+            Ok(dt) => o.default = dt,
+            Err(e) => return err_text(e) + "\n",
+        }
+    }
+    if let Some(JValue.Obj(items)) = get(j, "tzinfos") {
+        for (k, v) in items.iter() {
+            let off = match v {
+                JValue.Int(n) => Some(*n),
+                _ => None,
+            };
+            o.tzinfos.push((k.clone(), off));
+        }
+    }
+    let mut out = match dparse(s, o) {
+        Ok(p) => {
+            let mut t = parsed_repr(p, o.with_tokens) + "\n";
+            for w in p.warnings.iter() {
+                t.push_str("warning: ".to_string() + w + "\n");
+            }
+            t
+        }
+        Err(e) => err_text(e) + "\n",
+    };
+    out
+}
+
+fn run_iso(j: ref JValue) -> String {
+    let s = get_str(j, "s").unwrap_or(String.new());
+    let r = match iso_parser(get_str(j, "sep")) {
+        Ok(p) => isoparse(p, s),
+        Err(e) => Err(e),
+    };
+    match r {
+        Ok(dt) => dt_repr(dt) + "\n",
+        Err(e) => err_text(e) + "\n",
+    }
+}
+
+fn run_diff(j: ref JValue) -> String {
+    let a = get_str(j, "a").unwrap_or(String.new());
+    let b = get_str(j, "b").unwrap_or(String.new());
+    let r = match (parse_plain(a), parse_plain(b)) {
+        (Ok(x), Ok(y)) => rd_between(x, y),
+        (Err(e), _) => Err(e),
+        (_, Err(e)) => Err(e),
+    };
+    match r {
+        Ok(rd) => rd_repr(rd) + "\n",
+        Err(e) => err_text(e) + "\n",
+    }
+}
+
+fn rd_from_json(o: ref JValue) -> Result[RelDelta, PyErr] {
+    let mut rd = zero_rd();
+    rd.years = get_int(o, "years").unwrap_or(0);
+    rd.months = get_int(o, "months").unwrap_or(0);
+    rd.days = get_int(o, "days").unwrap_or(0);
+    rd.leapdays = get_int(o, "leapdays").unwrap_or(0);
+    rd.hours = get_int(o, "hours").unwrap_or(0);
+    rd.minutes = get_int(o, "minutes").unwrap_or(0);
+    rd.seconds = get_int(o, "seconds").unwrap_or(0);
+    rd.microseconds = get_int(o, "microseconds").unwrap_or(0);
+    rd.year = get_int(o, "year");
+    rd.month = get_int(o, "month");
+    rd.day = get_int(o, "day");
+    rd.hour = get_int(o, "hour");
+    rd.minute = get_int(o, "minute");
+    rd.second = get_int(o, "second");
+    rd.microsecond = get_int(o, "microsecond");
+    if let Some(JValue.List(w)) = get(o, "weekday") {
+        let d = match w[0] {
+            JValue.Int(n) => n,
+            _ => 0,
+        };
+        let n = match w[1] {
+            JValue.Int(k) => Some(k),
+            _ => None,
+        };
+        rd.weekday = Some((d, n));
+    }
+    let args = RdArgs { rd: rd, weeks: get_int(o, "weeks").unwrap_or(0), yearday: get_int(o, "yearday").unwrap_or(0), nlyearday: get_int(o, "nlyearday").unwrap_or(0) };
+    rd_new(args)
+}
+
+fn run_shift(j: ref JValue) -> String {
+    let spec = get(j, "rd").unwrap_or(JValue.Obj(Vec.new()));
+    let rd = match rd_from_json(spec) {
+        Ok(r) => r,
+        Err(e) => return err_text(e) + "\n",
+    };
+    let mut out = rd_repr(rd) + "\n";
+    let dt = match parse_plain(get_str(j, "dt").unwrap_or(String.new())) {
+        Ok(d) => d,
+        Err(e) => return out + err_text(e) + "\n",
+    };
+    let step = if get_bool(j, "sub") { rd_neg(rd) } else { rd.clone() };
+    match rd_add(step, dt) {
+        Ok(r) => out.push_str(dt_repr(r) + "\n"),
+        Err(e) => out.push_str(err_text(e) + "\n"),
+    }
+    out
+}
+
+fn ljust(s: ref String, w: i64) -> String {
+    let mut out = s.clone();
+    while width(out) < w {
+        out.push(' ');
+    }
+    out
+}
+
+fn file_lines(name: ref String) -> Result[Vec[String], String] {
+    let t = match fs.read_to_string(f"data/files/{name}") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {name}: {e}"),
+    };
+    let mut lines: Vec[String] = t.split("\n").map(|p| p.to_string()).collect();
+    lines.pop();
+    Ok(lines)
+}
+
+struct LogLine {
+    at: (i64, i64),
+    n: i64,
+    when: String,
+    src: String,
+    msg: String,
+}
+
+fn run_logs(lines: ref Vec[String]) -> String {
+    let mut out = String.new();
+    let mut good: Vec[LogLine] = Vec.new();
+    let mut o = plain_opts();
+    o.tzinfos = log_tzinfos();
+    for k in 0..lines.len() {
+        let n = k + 1;
+        let f: Vec[String] = lines[k].split(" | ").map(|p| p.to_string()).collect();
+        let p = match dparse(f[0], o) {
+            Ok(p) => p,
+            Err(e) => {
+                out.push_str(f"line {n} skipped: {err_text(e)}\n");
+                continue;
+            }
+        };
+        for w in p.warnings.iter() {
+            out.push_str(f"line {n}: {w}\n");
+        }
+        let u = utc_naive(p.dt);
+        good.push(LogLine { at: instant(u), n: n, when: dt_iso(u), src: f[1].clone(), msg: f[2].clone() });
+    }
+    good.sort_by(|a, b| {
+        let (sa, ua) = a.at;
+        let (sb, ub) = b.at;
+        if sa != sb {
+            if sa < sb { Ordering.Less } else { Ordering.Greater }
+        } else if ua != ub {
+            if ua < ub { Ordering.Less } else { Ordering.Greater }
+        } else if a.n < b.n {
+            Ordering.Less
+        } else if a.n > b.n {
+            Ordering.Greater
+        } else {
+            Ordering.Equal
+        }
+    });
+    for g in good.iter() {
+        out.push_str(f"{g.when}Z  {ljust(g.src, 8)} {g.msg} (line {g.n})\n");
+    }
+    out
+}
+
+fn run_mail(lines: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for line in lines.iter() {
+        let v = tail(line, 6);
+        match parse_plain(v) {
+            Ok(dt) => {
+                let off = match utcoffset(dt.tz) {
+                    Some(s) => f"{s}",
+                    None => "none".to_string(),
+                };
+                out.push_str(f"{dt_iso(dt)} {DAY_ABBR[weekday(dt)]} offset={off} utc={dt_iso(utc_naive(dt))}\n");
+            }
+            Err(e) => out.push_str(err_text(e) + "\n"),
+        }
+    }
+    out
+}
+
+fn today() -> DateTime {
+    DateTime { year: 2026, month: 10, day: 18, hour: 0, minute: 0, second: 0, us: 0, tz: Tz.Naive }
+}
+
+fn years_rd(n: i64) -> RelDelta {
+    let mut rd = zero_rd();
+    rd.years = n;
+    rd
+}
+
+fn age_line(born: ref String) -> Result[String, PyErr] {
+    let b = parse_plain(born)?;
+    let rd = rd_between(today(), b)?;
+    let next = rd_add(years_rd(rd.years + 1), b)?;
+    Ok(f"{rd.years} years {rd.months} months {rd.days} days, next {date_iso(next)}, {rd_repr(rd)}")
+}
+
+fn run_ages(lines: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for k in 1..lines.len() {
+        let f: Vec[String] = lines[k].split(",").map(|p| p.to_string()).collect();
+        match age_line(f[1]) {
+            Ok(t) => out.push_str(f"{f[0]}: {t}\n"),
+            Err(e) => out.push_str(f"{f[0]}: {err_text(e)}\n"),
+        }
+    }
+    out
+}
+
+fn run_renew(lines: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for k in 1..lines.len() {
+        let f: Vec[String] = lines[k].split(",").map(|p| p.to_string()).collect();
+        let s = match parse_plain(f[1]) {
+            Ok(d) => d,
+            Err(e) => {
+                out.push_str(err_text(e) + "\n");
+                continue;
+            }
+        };
+        let plan = f[2].clone();
+        let mut steps: Vec[RelDelta] = Vec.new();
+        let count = if plan == "monthly" { 6 } else if plan == "yearly" { 3 } else { 4 };
+        for n in 1..count + 1 {
+            let mut rd = zero_rd();
+            if plan == "monthly" {
+                rd.months = n;
+            } else if plan == "yearly" {
+                rd.years = n;
+            } else if plan == "quarterly" {
+                rd.months = 3 * n;
+            } else {
+                rd.days = 7 * n;
+            }
+            rd_fix(mut rd);
+            steps.push(rd);
+        }
+        let mut dates: Vec[String] = Vec.new();
+        for rd in steps.iter() {
+            match rd_add(rd, s) {
+                Ok(d) => dates.push(dt_iso(d)),
+                Err(e) => dates.push(err_text(e)),
+            }
+        }
+        out.push_str(f"{f[0]} ({plan} from {dt_iso(s)}): {dates.join(", ")}\n");
+    }
+    out
+}
+
+fn run_notes(lines: ref Vec[String]) -> String {
+    let mut out = String.new();
+    let mut o = plain_opts();
+    o.with_tokens = true;
+    for line in lines.iter() {
+        match dparse(line, o) {
+            Ok(p) => out.push_str(parsed_repr(p, true) + "\n"),
+            Err(e) => out.push_str(err_text(e) + "\n"),
+        }
+    }
+    out
+}
+
+fn run_file(j: ref JValue) -> String {
+    let name = get_str(j, "name").unwrap_or(String.new());
+    let mode = get_str(j, "mode").unwrap_or(String.new());
+    let lines = match file_lines(name) {
+        Ok(l) => l,
+        Err(e) => return e + "\n",
+    };
+    if mode == "logs" {
+        run_logs(lines)
+    } else if mode == "mail" {
+        run_mail(lines)
+    } else if mode == "ages" {
+        run_ages(lines)
+    } else if mode == "renew" {
+        run_renew(lines)
+    } else {
+        run_notes(lines)
+    }
+}
+
+fn run_job(line: ref String) -> String {
+    let j = match parse_json(line) {
+        Ok(j) => j,
+        Err(e) => return f"bad job: {e}\n",
+    };
+    let kind = get_str(j, "kind").unwrap_or(String.new());
+    if kind == "parse" {
+        run_parse(j)
+    } else if kind == "iso" {
+        run_iso(j)
+    } else if kind == "diff" {
+        run_diff(j)
+    } else if kind == "shift" {
+        run_shift(j)
+    } else {
+        run_file(j)
+    }
+}
+
+// ------------------------------------------------------------ main
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/files".to_string()) {
+        return Err(f"cannot create data/files: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.jsonl".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.jsonl: {e}");
+            return;
+        }
+    };
+    for line in jobs.split("\n") {
+        if line.is_empty() {
+            continue;
+        }
+        print(f"== {line}\n");
+        print(run_job(line.to_string()));
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("2024-03-09 22:15:01,234 | api | deploy started\n");
+    t.push_str("Sat Mar  9 22:16:40 2024 | cron | nightly job queued\n");
+    t.push_str("09/Mar/2024:22:14:59 +0100 | nginx | GET /health 200\n");
+    t.push_str("2024-03-09T21:15:30Z | worker | picked up job 4471\n");
+    t.push_str("2024-03-09T22:15:30+05:30 | worker | job 4472 failed\n");
+    t.push_str("Mar 9 2024 4:15:02 PM EST | billing | invoice run\n");
+    t.push_str("1710022560 | legacy | epoch line\n");
+    t.push_str("2024-03-09 22:15:01 BRST | api | replica up\n");
+    t.push_str("Sat, 09 Mar 2024 21:15:45 GMT | mail | queue flushed\n");
+    t.push_str("2024-03-09 25:61 | api | broken clock\n");
+    t.push_str("March 9th 2024 at 10:15pm (UTC) | api | rollout 50%\n");
+    t.push_str("20240309T211459.999 | db | checkpoint\n");
+    t.push_str("2024-W10-6 | iso | week date line\n");
+    t.push_str("2024/03/09 22:15 IST | india | regional ok\n");
+    v.push(DataFile { path: "files/app.log".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("Date: Thu, 25 Sep 2003 10:49:41 -0300\n");
+    t.push_str("Date: Tue, 1 Jul 2003 10:52:37 +0200\n");
+    t.push_str("Date: Fri, 21 Nov 1997 09:55:06 -0600\n");
+    t.push_str("Date: Thu, 13 Feb 1969 23:32:54 -0330\n");
+    t.push_str("Date: Mon, 24 Nov 1997 14:22:01 -0800 (PST)\n");
+    t.push_str("Date: Fri, 21 Nov 97 09:55:06 GMT\n");
+    t.push_str("Date: 21 Nov 1997 09:55:06 UT\n");
+    t.push_str("Date: Wed, 17 Jul 1996 02:23:25 -0700 (PDT)\n");
+    t.push_str("Date: Sat, 29 Feb 2020 12:00:00 +0000\n");
+    t.push_str("Date: Sun, 30 Feb 2020 12:00:00 +0000\n");
+    t.push_str("Date: 1 Jan 2016 00:00:00 +1400\n");
+    t.push_str("Date: Mon, 2 Jan 2006 15:04:05 MST\n");
+    t.push_str("Date: Thu, 01 Jan 1970 00:00:00 -0000\n");
+    t.push_str("Date: Tuesday, 5 March 2019 at 08:30\n");
+    v.push(DataFile { path: "files/mail.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("standup moved to Tuesday 9:30am\n");
+    t.push_str("release candidate due 2024-04-02, final on April 9th\n");
+    t.push_str("call with vendor at 3pm EST about the March 14 outage\n");
+    t.push_str("nothing here\n");
+    t.push_str("lunch 12:30\n");
+    t.push_str("report for Q1 2024 by Friday\n");
+    t.push_str("retro on 04/05/2024 at 16:00 +0200\n");
+    t.push_str("the year 1999 was fine\n");
+    v.push(DataFile { path: "files/notes.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name,born\n");
+    t.push_str("Ada,1815-12-10\n");
+    t.push_str("Grace,1906-12-09\n");
+    t.push_str("Alan,1912-06-23\n");
+    t.push_str("Linus,1969-12-28\n");
+    t.push_str("leap kid,2004-02-29\n");
+    t.push_str("newborn,2026-10-01\n");
+    t.push_str("future,2027-01-01\n");
+    t.push_str("noon baby,2000-01-01 12:00\n");
+    v.push(DataFile { path: "files/people.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("customer,start,plan\n");
+    t.push_str("acme,2024-01-31,monthly\n");
+    t.push_str("globex,2024-02-29,yearly\n");
+    t.push_str("initech,2023-08-31,quarterly\n");
+    t.push_str("umbrella,2024-03-15 09:30,monthly\n");
+    t.push_str("hooli,2024-05-31,weekly\n");
+    v.push(DataFile { path: "files/subs.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu Sep 25 10:36:28 BRST 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu Sep 25 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 25 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu Sep 25 10:36:28 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu Sep 10:36:28\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu 10:36:28\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 10:36:28\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:36:28\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:36\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10h36m28.5s\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10h36m28s\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10h36m\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10h\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 h 36\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 h 36.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"36 m 5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"36 m 5 s\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"36 m 05\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"36 m 05 s\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10h am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10h pm\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10pm\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 pm\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00pm\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00a.m\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00p.m\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00a.m.\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00p.m.\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Wed\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Wednesday\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"October\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"31-Dec-00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"0:01:02\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12h 01m02s am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"0:01:02 on July 4, 1976\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1976-07-04T00:01:02Z\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"July 4, 1976 12:01:02 am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Mon Jan  2 04:24:27 1995\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"04.04.95 00:22\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Jan 1 1999 11:23:34.578\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"950404 122212\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"3rd of May 2001\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"5th of March 2001\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1st of May 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"0099-01-01T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"0031-01-01T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20080227T21:26:01.123456789\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"13NOV2017\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"0003-03-04\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"December.0031.30\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"090107\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2015-15-May\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu, 25 Sep 2003 10:49:41 -0300\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25T10:49:41.5-03:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25T10:49:41\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25T10:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25T10\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20030925T104941.5-0300\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20030925T104941-0300\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20030925T104941\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20030925T1049\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20030925T10\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20030925\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 10:49:41,502\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"199709020908\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"19970902090807\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"09-25-2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25-09-2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10-09-2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10-09-03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003.09.25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"09.25.2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25.09.2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10.09.2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10.09.03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003/09/25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"09/25/2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25/09/2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10/09/2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10/09/03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003 09 25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"09 25 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25 09 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 09 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 09 03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25 09 03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"03 25 Sep\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25 03 Sep\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"  July   4 ,  1976   12:01:02   am  \"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Wed, July 10, '96\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1996.July.10 AD 12:08 PM\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"July 4, 1976\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"7 4 1976\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"4 jul 1976\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"4 Jul 1976\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"7-4-76\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"19760704\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Tue Apr 4 00:22:12 PDT 1995\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12:08 PM\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01h02m03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01h02\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01h02s\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01m02\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01m02h\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2004 10 Apr 11h30m\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep of 03\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb 30, 2007\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Jan 31\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb 2008\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2016-12-21 04.2h\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2016-12-21 04.25h\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2016-12-21 04.5m\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1/2/3\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2018-06-29 1.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"4.30.21.447\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep.20.2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 20.2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2009.Sep.20\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12.Sep.2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12-Sep-2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep-12-2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep/12/2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2009-Sep-12\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12 sept 2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"September 12 2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sept. 12, 2009\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +0530\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +05:30\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 -5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +12\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 UTC\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 GMT\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 Z\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 z\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 GMT+3\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 UTC-0530\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 EST\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 EST+5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 BRST\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 ABCDEF\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 abc\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003 09 25 10:49 +0300 (MSK)\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 10:49 -0300 (BRT)\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu, 25 Sep 2003 10:49:41 +0000 (UTC)\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 -00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sun, 06 Nov 1994 08:49:37 GMT\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sunday, 06-Nov-94 08:49:37 GMT\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sun Nov  6 08:49:37 1994\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2024-02-29\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2023-02-29\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2024-13-01\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2024-04-31\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"24:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:60\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:30:60\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"13 pm\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"0 am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12 am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12 pm\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 am pm\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"am\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"pm 10\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 a\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 p\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 p.m.\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"   \"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"today\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"nan\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"inf\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Infinity\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1e5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"UTC\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"-\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"foo bar\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Mon Tue\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Monday 2003-09-22\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Friday 2003-09\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sat\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Mar 3rd\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 Sep\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep Oct\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 2 3 4\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"99999\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"123456789\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-9-5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"5-9-2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 Jan\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Jan 1\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Jan 2003 1\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003 Jan 1\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1999-12-31 23:59:59.999999\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1999-12-31 23:59:59.9999999\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:30:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:30.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10.5:30\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1030\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"103015\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"103015.25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 1030\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 10\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 1\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 25 10\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 25 1030\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 T 10:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003/9/25 at 10:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"on 2003/9/25 and 10:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:49 of 2003/9/25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"12,5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003,09,25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003;09;25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003'09'25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003_09_25\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25\\t10:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 10:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25\\u000010:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"mardi 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Février 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25 Sep 2003 10:49:41.500 +0100\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-W39\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"20030925T104941Z\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"T10:49\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"@1064486981\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25/12/2003 noon\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Q3 2003\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/05/09\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/05/09\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/05/09\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1/5/09\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1/5/09\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1/5/09\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"05/01/2009\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"05/01/2009\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"05/01/2009\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2009/01/05\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2009/01/05\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2009/01/05\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"09/01/05\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"09/01/05\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"09/01/05\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"13/01/05\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"13/01/05\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"13/01/05\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/13/05\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/13/05\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/13/05\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"32/01/05\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"32/01/05\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"32/01/05\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/32/05\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/32/05\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"01/32/05\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25-09-03\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25-09-03\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"25-09-03\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10.09.03\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10.09.03\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10.09.03\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 09 03\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 09 03\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 09 03\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 10 03\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 10 03\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 10 03\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 Sep 03\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 Sep 03\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10 Sep 03\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"03 Sep 10\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"03 Sep 10\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"03 Sep 10\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"03 10 Sep\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"03 10 Sep\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"03 10 Sep\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"99 1 2\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"99 1 2\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"99 1 2\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 99 2\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 99 2\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 99 2\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 2 99\", \"dayfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 2 99\", \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"1 2 99\", \"dayfirst\": true, \"yearfirst\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Today is January 1, 2047 at 8:21:00AM\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Today is January 1, 2047 at 8:21:00AM\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"I have a meeting on March 1, 1974\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"I have a meeting on March 1, 1974\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"On June 8th, 2020, I am going to be the first man on Mars\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"On June 8th, 2020, I am going to be the first man on Mars\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Meet me at the AM/PM on Sunset at 3:00 AM on December 3rd, 2003\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Meet me at the AM/PM on Sunset at 3:00 AM on December 3rd, 2003\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Meet me at 3:00 AM on December 3rd, 2003 at the AM/PM on Sunset\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Meet me at 3:00 AM on December 3rd, 2003 at the AM/PM on Sunset\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Jan 29, 1945 14:45 AM I going to see you there?\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Jan 29, 1945 14:45 AM I going to see you there?\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2017-07-17 06:15:\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2017-07-17 06:15:\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"I'm a am string\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"I'm a am string\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"deploy started 2024-03-09 22:15:01 by alice\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"deploy started 2024-03-09 22:15:01 by alice\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Order #4471 shipped on 3/14/2024, ETA 5 days\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Order #4471 shipped on 3/14/2024, ETA 5 days\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"backup at 02:00 UTC finished\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"backup at 02:00 UTC finished\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"a b c\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"a b c\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"the 25 of Sep\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"the 25 of Sep\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"a 10 am\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"a 10 am\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"build 1234 took 15m\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"build 1234 took 15m\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 ... done at 10:49pm\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2003-09-25 ... done at 10:49pm\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Version 2.9.0 released\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Version 2.9.0 released\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Release 2024.03.09 (codename x)\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Release 2024.03.09 (codename x)\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"RUN 18h 30m and done\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"RUN 18h 30m and done\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"temp was 21.5 at noon on 2003-09-25\", \"fuzzy\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"temp was 21.5 at noon on 2003-09-25\", \"fuzzy_with_tokens\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu Sep 25 10:36:28 BRST 2003\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thu Sep 25 10:36:28 BRST 2003\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2012-01-19 17:21:00 BRST\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2012-01-19 17:21:00 BRST\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 EST\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 EST\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 CST\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 CST\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Tue Apr 4 00:22:12 PDT 1995\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Tue Apr 4 00:22:12 PDT 1995\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 IST\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 IST\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 JST\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 JST\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 NOTZ\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 NOTZ\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 UTC\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 UTC\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 GMT\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 GMT\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 XYZ\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 XYZ\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 EST+5\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 EST+5\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 -0500 (EST)\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 -0500 (EST)\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +0100 (CET)\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +0100 (CET)\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +0100 (JST)\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 +0100 (JST)\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 Z\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00 Z\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00\", \"tzinfos\": {\"BRST\": -7200, \"EST\": -18000, \"CST\": -21600, \"PDT\": -25200, \"IST\": 19800, \"JST\": 32400, \"NOTZ\": null, \"UTC\": 0}}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:00\", \"ignoretz\": true}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:36\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:36\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"10:36\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 31\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 31\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Sep 31\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thursday\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thursday\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Thursday\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Mon\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Mon\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Mon\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2004\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2004\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"2004\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb 2004\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb 2004\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"Feb 2004\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"31\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"31\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"31\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"29\", \"default\": \"2003-01-31T00:00:00\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"29\", \"default\": \"2004-02-29T13:14:15.5\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"s\": \"29\", \"default\": \"2003-12-31T23:59:59\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"200309\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"20030925\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W39\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003W39\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W39-4\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003W394\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W39W\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-268\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003268\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2004-366\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-366\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-000\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T1049\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T104941\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41.5\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41,5\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41.123456789\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41Z\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41z\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+03:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41-0300\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+03\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+00:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41-00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+3\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+24:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+05:60\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41 03:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T24:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T24:00:00.0\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T24:30\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-12-31T24:00:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"9999-12-31T24:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25 10:49\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25X10:49\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T1\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:4941\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T1049:41\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-0925\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"200309-25\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09T10:49\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-13-01\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-02-29\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2004-02-29\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"0000-01-01\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"0001-01-01\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"20\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-9-25\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-5\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"abcd\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41.\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41.Z\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41.5+03:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W54\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W53-1\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2004-W53-7\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W39-0\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W39-8\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-W1\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"1_003-09-25\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \" 003-09-25\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"+003-09-25\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-+9-25\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:+9\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+0530\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41-23:59\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41Zx\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25Té\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41.5Z\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49:41+05:30:00\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49\", \"sep\": \"T\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25 10:49\", \"sep\": \"T\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25 10:49\", \"sep\": \" \"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25_10:49\", \"sep\": \"_\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49\", \"sep\": \"TT\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25T10:49\", \"sep\": \"5\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25\", \"sep\": \"T\"}\n");
+    t.push_str("{\"kind\": \"iso\", \"s\": \"2003-09-25é10:49\", \"sep\": \"é\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-09-25\", \"b\": \"2003-09-25\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-10-25\", \"b\": \"2003-09-25\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-09-25\", \"b\": \"2003-10-25\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2004-02-29\", \"b\": \"2003-02-28\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-03-31\", \"b\": \"2003-02-28\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-02-28\", \"b\": \"2003-01-31\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-01-31\", \"b\": \"2003-02-28\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2024-03-31 10:00\", \"b\": \"2024-02-29 11:30\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2026-10-18\", \"b\": \"1976-07-04\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"1976-07-04 00:01:02\", \"b\": \"2026-10-18 12:00\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-09-25 10:49:41.5\", \"b\": \"2003-09-25 10:49:40.75\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2000-01-01\", \"b\": \"1999-12-31 23:59:59\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2003-09-25\", \"b\": \"2003-09-24 00:00:01\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2010-08-31\", \"b\": \"2010-02-28\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2012-02-29\", \"b\": \"2008-02-29\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"2013-02-28\", \"b\": \"2012-02-29\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"1999-12-31 23:00\", \"b\": \"2000-01-01 01:00\"}\n");
+    t.push_str("{\"kind\": \"diff\", \"a\": \"9999-12-31\", \"b\": \"0001-01-01\"}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"months\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"months\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-01-31\", \"rd\": {\"months\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-01-31\", \"rd\": {\"months\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-01-31\", \"rd\": {\"months\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-01-31\", \"rd\": {\"months\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-01-31\", \"rd\": {\"months\": -2}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-01-31\", \"rd\": {\"months\": -2}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"years\": 1, \"months\": 13, \"days\": 40}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"years\": 1, \"months\": 13, \"days\": 40}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-02-29\", \"rd\": {\"years\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-02-29\", \"rd\": {\"years\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-02-29\", \"rd\": {\"years\": 4}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-02-29\", \"rd\": {\"years\": 4}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [0, null]}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [0, null]}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [3, null]}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [3, null]}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [4, 2]}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [4, 2]}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [4, -1]}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [4, -1]}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [3, -2]}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weekday\": [3, -2]}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"day\": 31, \"weekday\": [4, -1]}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"day\": 31, \"weekday\": [4, -1]}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"month\": 2, \"day\": 31}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"month\": 2, \"day\": 31}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"yearday\": 260}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"yearday\": 260}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-09-25\", \"rd\": {\"yearday\": 260}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-09-25\", \"rd\": {\"yearday\": 260}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-09-25\", \"rd\": {\"nlyearday\": 260}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-09-25\", \"rd\": {\"nlyearday\": 260}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"yearday\": 60}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"yearday\": 60}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-09-25\", \"rd\": {\"yearday\": 60}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2004-09-25\", \"rd\": {\"yearday\": 60}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"yearday\": 367}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"yearday\": 367}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"leapdays\": 1, \"years\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"leapdays\": 1, \"years\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25 10:49:41\", \"rd\": {\"hours\": 25, \"minutes\": 61, \"seconds\": 3661}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25 10:49:41\", \"rd\": {\"hours\": 25, \"minutes\": 61, \"seconds\": 3661}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25 10:49:41\", \"rd\": {\"microseconds\": -2500000}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25 10:49:41\", \"rd\": {\"microseconds\": -2500000}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25 10:49:41\", \"rd\": {\"hour\": 0, \"minute\": 0, \"second\": 0}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25 10:49:41\", \"rd\": {\"hour\": 0, \"minute\": 0, \"second\": 0}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"hours\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"hours\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weeks\": 3, \"days\": -1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"weeks\": 3, \"days\": -1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"days\": 1234567}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"days\": 1234567}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"seconds\": 34560000}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"seconds\": 34560000}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"9999-12-31\", \"rd\": {\"days\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"9999-12-31\", \"rd\": {\"days\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"0001-01-01\", \"rd\": {\"days\": -1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"0001-01-01\", \"rd\": {\"days\": -1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"year\": 10000}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"year\": 10000}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"year\": 1, \"month\": 1, \"day\": 1}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"year\": 1, \"month\": 1, \"day\": 1}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"months\": 12}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"months\": 12}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"months\": -25}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {\"months\": -25}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {}}\n");
+    t.push_str("{\"kind\": \"shift\", \"dt\": \"2003-09-25\", \"rd\": {}, \"sub\": true}\n");
+    t.push_str("{\"kind\": \"file\", \"name\": \"app.log\", \"mode\": \"logs\"}\n");
+    t.push_str("{\"kind\": \"file\", \"name\": \"mail.txt\", \"mode\": \"mail\"}\n");
+    t.push_str("{\"kind\": \"file\", \"name\": \"people.csv\", \"mode\": \"ages\"}\n");
+    t.push_str("{\"kind\": \"file\", \"name\": \"subs.csv\", \"mode\": \"renew\"}\n");
+    t.push_str("{\"kind\": \"file\", \"name\": \"notes.txt\", \"mode\": \"notes\"}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), body: t });
+}

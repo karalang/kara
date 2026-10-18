@@ -72,3 +72,7 @@ encoding the binary files made from the text files. `gen_kara.py` prints
 the Kāra data section (everything after the last comment line ending in
 `data` in `mini_protobuf.kara`) from the same files, binary files as hex
 and the rest as text.
+
+## Back to the original, 2026-10-18
+
+B-2026-10-18-45 is fixed, so the schema struct is named `Field` again, in both `mini_protobuf.kara` and `mini_protobuf.orig.kara`. It matches expected.out on all four MIR backends (karac at 8d7a5ebf82).
