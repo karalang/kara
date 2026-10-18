@@ -43,17 +43,17 @@ fn q_front(q: ref Queue) -> i64 {
 }
 
 fn stack_push(q: mut ref Queue, x: i64) {
-    q_enqueue(q, x);
+    q_enqueue(mut q, x);
     let mut rotations = q_size(q) - 1;      // bring x to the front
     while rotations > 0 {
-        let front = q_dequeue(q);
-        q_enqueue(q, front);
+        let front = q_dequeue(mut q);
+        q_enqueue(mut q, front);
         rotations = rotations - 1;
     }
 }
 
 fn stack_pop(q: mut ref Queue) -> i64 {
-    return q_dequeue(q);
+    return q_dequeue(mut q);
 }
 
 fn stack_top(q: ref Queue) -> i64 {

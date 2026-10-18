@@ -240,7 +240,7 @@ fn explore(bytes: Slice[u8], pos: i64, nums: mut ref Vec[Vec[i64]]) -> bool {
     for len in 1..(n - pos + 1) {
         if not no_leading_zero(bytes, pos, pos + len) { break; }
         nums.push(digits_of(bytes, pos, pos + len));
-        if explore(bytes, pos + len, nums) { return true; }
+        if explore(bytes, pos + len, mut nums) { return true; }
         nums.pop();
     }
     return false;

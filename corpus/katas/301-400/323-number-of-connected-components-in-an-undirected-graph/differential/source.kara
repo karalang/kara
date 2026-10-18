@@ -272,7 +272,7 @@ fn shuffled(edges: ref Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut out = edges.clone();
     let mut i = out.len() - 1;
     while i > 0 {
-        let j = next(seed) % (i + 1);
+        let j = next(mut seed) % (i + 1);
         out.swap(i, j);
         i -= 1;
     }
@@ -287,7 +287,7 @@ fn relabelled(n: i64, edges: ref Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64
     }
     let mut i = n - 1;
     while i > 0 {
-        let j = next(seed) % (i + 1);
+        let j = next(mut seed) % (i + 1);
         perm.swap(i, j);
         i -= 1;
     }
@@ -347,8 +347,8 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_edges(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut edges: Vec[(i64, i64)] = Vec.new();
     for i in 0..m {
-        let a = next(seed) % n;
-        let b = next(seed) % n;
+        let a = next(mut seed) % n;
+        let b = next(mut seed) % n;
         edges.push((a, b));
     }
     return edges;
@@ -371,64 +371,64 @@ fn check(n: i64, edges: ref Vec[(i64, i64)], other_n: i64, other: ref Vec[(i64, 
     tally.cases += 1;
     let ans = count_star(n, edges);
 
-    if count_dfs(n, edges) != ans { fail(tally, 1); }
-    if count_bfs(n, edges) != ans { fail(tally, 2); }
-    if count_labels(n, edges) != ans { fail(tally, 3); }
+    if count_dfs(n, edges) != ans { fail(mut tally, 1); }
+    if count_bfs(n, edges) != ans { fail(mut tally, 2); }
+    if count_labels(n, edges) != ans { fail(mut tally, 3); }
     if n <= CLOSURE_MAX {
         tally.closure_cases += 1;
-        if components_closure(n, edges) != ans { fail(tally, 4); }
+        if components_closure(n, edges) != ans { fail(mut tally, 4); }
     }
 
     // P5: each edge can merge at most two components into one.
     let mut floor = n - edges.len();
     if n > 0 and floor < 1 { floor = 1; }
     if n == 0 { floor = 0; }
-    if ans < floor or ans > n { fail(tally, 5); }
+    if ans < floor or ans > n { fail(mut tally, 5); }
 
     // P6: the order of the edge list does not matter.
-    if count_star(n, reversed(edges)) != ans { fail(tally, 6); }
-    if count_star(n, shuffled(edges, seed)) != ans { fail(tally, 6); }
+    if count_star(n, reversed(edges)) != ans { fail(mut tally, 6); }
+    if count_star(n, shuffled(edges, mut seed)) != ans { fail(mut tally, 6); }
 
     // P7: an undirected edge has no direction.
-    if count_star(n, flipped(edges)) != ans { fail(tally, 7); }
+    if count_star(n, flipped(edges)) != ans { fail(mut tally, 7); }
 
     // P8: the names of the nodes do not matter.
-    if count_star(n, relabelled(n, edges, seed)) != ans { fail(tally, 8); }
+    if count_star(n, relabelled(n, edges, mut seed)) != ans { fail(mut tally, 8); }
 
     // P9: repeated edges and self-loops change nothing.
-    if count_star(n, padded(n, edges)) != ans { fail(tally, 9); }
+    if count_star(n, padded(n, edges)) != ans { fail(mut tally, 9); }
 
     // P10: adding an edge lowers the count by at most one; removing one
     // raises it by at most one.
     if n > 0 {
-        let a = next(seed) % n;
-        let b = next(seed) % n;
+        let a = next(mut seed) % n;
+        let b = next(mut seed) % n;
         let mut plus = edges.clone();
         plus.push((a, b));
         let after = count_star(n, plus);
-        if after != ans and after != ans - 1 { fail(tally, 10); }
+        if after != ans and after != ans - 1 { fail(mut tally, 10); }
         // And it lowers the count exactly when a and b were apart, which the
         // closure can say independently on the small cases.
         if n <= CLOSURE_MAX {
             let mut probe = edges.clone();
             probe.push((a, b));
             let apart = components_closure(n, probe) < components_closure(n, edges);
-            if apart != (after == ans - 1) { fail(tally, 10); }
+            if apart != (after == ans - 1) { fail(mut tally, 10); }
         }
     }
     if edges.len() > 0 {
         tally.edge_cases += 1;
-        let k = next(seed) % edges.len();
+        let k = next(mut seed) % edges.len();
         let after = count_star(n, without(edges, k));
-        if after != ans and after != ans + 1 { fail(tally, 10); }
+        if after != ans and after != ans + 1 { fail(mut tally, 10); }
     }
 
     // P11: counts add over a disjoint union.
     let joined = disjoint_union(n, edges, other);
-    if count_star(n + other_n, joined) != ans + count_star(other_n, other) { fail(tally, 11); }
+    if count_star(n + other_n, joined) != ans + count_star(other_n, other) { fail(mut tally, 11); }
 
     // P12: a hub joined to every node leaves one component.
-    if count_star(n + 1, with_hub(n, edges)) != 1 { fail(tally, 12); }
+    if count_star(n + 1, with_hub(n, edges)) != 1 { fail(mut tally, 12); }
 
     // P13: n - answer edges suffice to connect each component. Keep an edge
     // only when it lowers the count of the edges kept so far: the kept edges
@@ -444,7 +444,7 @@ fn check(n: i64, edges: ref Vec[(i64, i64)], other_n: i64, other: ref Vec[(i64, 
             have = c;
         }
     }
-    if kept.len() != n - ans or have != ans { fail(tally, 13); }
+    if kept.len() != n - ans or have != ans { fail(mut tally, 13); }
 }
 
 // -------------------------------------------------------------- main ---

@@ -30,12 +30,12 @@ fn parse_star(b: Slice[u8], i: mut ref i64) -> TreeNode {
     let node = TreeNode { val: sign * val, left: None, right: None };
     if *i < b.len() and b[*i] == b'(' {
         *i += 1;
-        node.left = Some(parse_star(b, i));
+        node.left = Some(parse_star(b, mut i));
         *i += 1;
     }
     if *i < b.len() and b[*i] == b'(' {
         *i += 1;
-        node.right = Some(parse_star(b, i));
+        node.right = Some(parse_star(b, mut i));
         *i += 1;
     }
     node
@@ -190,12 +190,12 @@ fn next_random(seed: mut ref i64) -> i64 {
 // A value: three times in four from -1000 to 1000, else from -10^7 to
 // 10^7.
 fn random_value(seed: mut ref i64) -> i64 {
-    if next_random(seed) % 4 == 0 {
-        let high = next_random(seed);
-        let low = next_random(seed);
+    if next_random(mut seed) % 4 == 0 {
+        let high = next_random(mut seed);
+        let low = next_random(mut seed);
         (high * 32768 + low) % 20000001 - 10000000
     } else {
-        next_random(seed) % 2001 - 1000
+        next_random(mut seed) % 2001 - 1000
     }
 }
 
@@ -204,17 +204,17 @@ fn random_tree(seed: mut ref i64, n: i64) -> Option[TreeNode] {
     if n == 0 {
         return None;
     }
-    let val = random_value(seed);
+    let val = random_value(mut seed);
     let rest = n - 1;
     let left = if rest == 0 {
         0
-    } else if next_random(seed) % 3 == 0 {
+    } else if next_random(mut seed) % 3 == 0 {
         rest
     } else {
-        1 + next_random(seed) % rest
+        1 + next_random(mut seed) % rest
     };
-    let l = random_tree(seed, left);
-    let r = random_tree(seed, rest - left);
+    let l = random_tree(mut seed, left);
+    let r = random_tree(mut seed, rest - left);
     Some(TreeNode { val: val, left: l, right: r })
 }
 
@@ -225,12 +225,12 @@ fn render(node: Option[TreeNode], out: mut ref String) {
     out.push_str(f"{n.val}");
     if n.left.is_some() {
         out.push('(');
-        render(n.left, out);
+        render(n.left, mut out);
         out.push(')');
     }
     if n.right.is_some() {
         out.push('(');
-        render(n.right, out);
+        render(n.right, mut out);
         out.push(')');
     }
 }

@@ -139,7 +139,7 @@ fn step(seed: mut ref i64) -> i64 {
 fn shuffle(people: Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut out = people.clone();
     for i in (1..out.len()).rev() {
-        let j = step(seed) % (i + 1);
+        let j = step(mut seed) % (i + 1);
         out.swap(i, j);
     }
     out

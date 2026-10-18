@@ -31,7 +31,7 @@ fn longest_from(matrix: ref Vec[Vec[i64]], memo: mut ref Vec[Vec[i64]], r: i64, 
         let nr = r + dr;
         let nc = c + dc;
         if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] > here {
-            let len = 1 + longest_from(matrix, memo, nr, nc);
+            let len = 1 + longest_from(matrix, mut memo, nr, nc);
             if len > best {
                 best = len;
             }
@@ -300,25 +300,25 @@ fn check(m: Vec[Vec[i64]], t: mut ref Tally) {
     let c = by_sorted(m);
     let d = brute(m);
     if a != b or a != c or a != d {
-        fail(t, "P1", m);
+        fail(mut t, "P1", m);
     }
     if a < 1 or a > rows * cols {
-        fail(t, "P2", m);
+        fail(mut t, "P2", m);
     }
     if by_dfs(transpose(m)) != a {
-        fail(t, "P3", m);
+        fail(mut t, "P3", m);
     }
     if by_topo(mirror(m)) != a {
-        fail(t, "P4", m);
+        fail(mut t, "P4", m);
     }
     if by_sorted(mapped(m, -1, 0)) != a {
-        fail(t, "P5", m);
+        fail(mut t, "P5", m);
     }
     if by_dfs(mapped(m, 1, 1000)) != a {
-        fail(t, "P6", m);
+        fail(mut t, "P6", m);
     }
     if not witness_holds(m, a) {
-        fail(t, "P7", m);
+        fail(mut t, "P7", m);
     }
 }
 

@@ -26,12 +26,12 @@ fn skip_empty(v: mut ref Vector2D) {
 }
 
 fn v_has_next(v: mut ref Vector2D) -> bool {
-    skip_empty(v);
+    skip_empty(mut v);
     return v.row < v.data.len();
 }
 
 fn v_next(v: mut ref Vector2D) -> i64 {
-    skip_empty(v);
+    skip_empty(mut v);
     if v.row >= v.data.len() {
         return -1;
     }

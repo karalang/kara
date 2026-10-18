@@ -17,7 +17,7 @@ impl E {
     fn iflet(own self) -> i64 { if let E.A(ref r) = self { return eat(r.clone()); } return 0; }
     fn opt(own self) -> Option[R] { match self { E.A(ref r) => { return Some(r.clone()); } E.B => { return None; } } }
     fn cid(own self) -> i64 { match self { E.A(ref r) => { let q = id(r.clone()); return q.id; } E.B => { return 0; } } }
-    fn ckeep(own self, v: mut ref Vec[R]) -> i64 { match self { E.A(ref r) => { keep(v, r.clone()); return 1; } E.B => { return 0; } } }
+    fn ckeep(own self, v: mut ref Vec[R]) -> i64 { match self { E.A(ref r) => { keep(mut v, r.clone()); return 1; } E.B => { return 0; } } }
 }
 fn main() {
     println("call");  { let a: E = E.A(mk(1)); println(f"  x{a.call()}") }

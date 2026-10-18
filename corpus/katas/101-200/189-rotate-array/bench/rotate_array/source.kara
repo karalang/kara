@@ -27,9 +27,9 @@ fn rotate(a: mut ref Vec[i64], k: i64) {
         return;
     }
     let kk = k % n; // k may exceed n
-    reverse_range(a, 0, n - 1);
-    reverse_range(a, 0, kk - 1);
-    reverse_range(a, kk, n - 1);
+    reverse_range(mut a, 0, n - 1);
+    reverse_range(mut a, 0, kk - 1);
+    reverse_range(mut a, kk, n - 1);
 }
 
 fn checksum(a: ref Vec[i64], n: i64) -> i64 {

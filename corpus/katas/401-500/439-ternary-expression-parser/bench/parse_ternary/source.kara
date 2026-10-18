@@ -32,16 +32,16 @@ fn next_random(seed: mut ref i64) -> i64 {
 // split of the n - 1 below the root between its two branches.
 fn random_expression(seed: mut ref i64, n: i64, out: mut ref String) {
     if n == 0 {
-        let r = next_random(seed) % 12;
+        let r = next_random(mut seed) % 12;
         out.push(if r < 10 { (b'0' + r as u8) as char } else if r == 10 { 'T' } else { 'F' });
         return;
     }
-    out.push(if next_random(seed) % 2 == 0 { 'T' } else { 'F' });
+    out.push(if next_random(mut seed) % 2 == 0 { 'T' } else { 'F' });
     out.push('?');
-    let left = next_random(seed) % n;
-    random_expression(seed, left, out);
+    let left = next_random(mut seed) % n;
+    random_expression(mut seed, left, mut out);
     out.push(':');
-    random_expression(seed, n - 1 - left, out);
+    random_expression(mut seed, n - 1 - left, mut out);
 }
 
 fn main() {

@@ -17,8 +17,8 @@ fn height(node: Option[TreeNode], best: mut ref i64) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let l = height(n.left, best);
-            let r = height(n.right, best);
+            let l = height(n.left, mut best);
+            let r = height(n.right, mut best);
             if l + r > *best {
                 *best = l + r;
             }

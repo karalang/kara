@@ -75,12 +75,12 @@ fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
 // walks down from the root, going left with chance lean / 100, and takes
 // the first empty place it meets.
 fn random_tree(size: i64, most: i64, lean: i64, seed: mut ref i64) -> TreeNode {
-    let root = leaf(next_random(seed) % (most + 1));
+    let root = leaf(next_random(mut seed) % (most + 1));
     for _ in 1..size {
-        let c = leaf(next_random(seed) % (most + 1));
+        let c = leaf(next_random(mut seed) % (most + 1));
         let mut node = root;
         loop {
-            if next_random(seed) % 100 < lean {
+            if next_random(mut seed) % 100 < lean {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -114,8 +114,8 @@ fn copy_tree(node: Option[TreeNode]) -> Option[TreeNode] {
 fn all_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
     if let Some(n) = node {
         out.push(n);
-        all_nodes(n.left, out);
-        all_nodes(n.right, out);
+        all_nodes(n.left, mut out);
+        all_nodes(n.right, mut out);
     }
 }
 

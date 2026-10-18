@@ -33,8 +33,8 @@ fn ser(node: Option[TreeNode], acc: mut ref i64) {
         None => { acc = (acc * 131 + 1) % 1000000007; }
         Some(n) => {
             acc = (acc * 131 + (n.val + 2)) % 1000000007;
-            ser(n.left, acc);
-            ser(n.right, acc);
+            ser(n.left, mut acc);
+            ser(n.right, mut acc);
         }
     }
 }
@@ -45,10 +45,10 @@ fn bst_insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
     }
 }
 fn preorder_of(node: Option[TreeNode], out: mut ref Vec[i64]) {
-    match node { None => {} Some(n) => { out.push(n.val); preorder_of(n.left, out); preorder_of(n.right, out); } }
+    match node { None => {} Some(n) => { out.push(n.val); preorder_of(n.left, mut out); preorder_of(n.right, mut out); } }
 }
 fn inorder_of(node: Option[TreeNode], out: mut ref Vec[i64]) {
-    match node { None => {} Some(n) => { inorder_of(n.left, out); out.push(n.val); inorder_of(n.right, out); } }
+    match node { None => {} Some(n) => { inorder_of(n.left, mut out); out.push(n.val); inorder_of(n.right, mut out); } }
 }
 fn main() {
     let base = [8,4,12,2,6,10,14,1,3,5,7,9,11,13,15];

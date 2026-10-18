@@ -282,20 +282,20 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
     let mut word = String.new();
     for _ in 0..len {
-        word.push((97 + next_random(seed) % letters) as u8 as char);
+        word.push((97 + next_random(mut seed) % letters) as u8 as char);
     }
     word
 }
 
 fn random_words(seed: mut ref i64, count: i64, longest: i64) -> Vec[String] {
-    let letters = 1 + next_random(seed) % 3;
+    let letters = 1 + next_random(mut seed) % 3;
     let mut seen: Set[String] = Set.new();
     let mut words: Vec[String] = Vec.new();
     for _ in 0..count * 4 {
         if words.len() == count {
             break;
         }
-        let word = random_word(seed, 2 + next_random(seed) % (longest - 1), letters);
+        let word = random_word(mut seed, 2 + next_random(mut seed) % (longest - 1), letters);
         if not seen.contains(word) {
             seen.insert(word.clone());
             words.push(word);

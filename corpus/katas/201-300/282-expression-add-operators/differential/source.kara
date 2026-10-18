@@ -73,12 +73,12 @@ fn search(num: ref String, target: i64, pos: i64, expr: own String, cur: i64, la
         }
         if pos == 0 {
             // first operand — no operator in front of it
-            search(num, target, end, piece, n, n, out);
+            search(num, target, end, piece, n, n, mut out);
         } else {
-            search(num, target, end, expr + "+" + piece.clone(), cur + n, n, out);
-            search(num, target, end, expr + "-" + piece, cur - n, 0 - n, out);
+            search(num, target, end, expr + "+" + piece.clone(), cur + n, n, mut out);
+            search(num, target, end, expr + "-" + piece, cur - n, 0 - n, mut out);
             // `*` binds to the previous term: undo it, re-add it multiplied
-            search(num, target, end, expr + "*" + piece, cur - last + last * n, last * n, out);
+            search(num, target, end, expr + "*" + piece, cur - last + last * n, last * n, mut out);
         }
         end = end + 1;
     }

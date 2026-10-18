@@ -115,7 +115,7 @@ fn dfs(
             while i < plist.len() {
                 let p = ref plist[i];
                 path.push(p.clone());
-                dfs(p, begin, preds, path, count, digest);
+                dfs(p, begin, preds, mut path, mut count, mut digest);
                 path.pop();
                 i = i + 1;
             }

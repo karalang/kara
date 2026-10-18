@@ -17,8 +17,8 @@ fn subtree_sum(node: Option[TreeNode], total: mut ref i64) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let l = subtree_sum(n.left, total);
-            let r = subtree_sum(n.right, total);
+            let l = subtree_sum(n.left, mut total);
+            let r = subtree_sum(n.right, mut total);
             *total += (l - r).abs();
             n.val + l + r
         }
@@ -107,12 +107,12 @@ fn random_tree(size: i64, lean: i64, spread: i64, seed: mut ref i64) -> Option[T
     if size == 0 {
         return None;
     }
-    let root = TreeNode { val: next_random(seed) % (2 * spread + 1) - spread, left: None, right: None };
+    let root = TreeNode { val: next_random(mut seed) % (2 * spread + 1) - spread, left: None, right: None };
     for _ in 1..size {
-        let c = TreeNode { val: next_random(seed) % (2 * spread + 1) - spread, left: None, right: None };
+        let c = TreeNode { val: next_random(mut seed) % (2 * spread + 1) - spread, left: None, right: None };
         let mut node = root;
         loop {
-            if next_random(seed) % 100 < lean {
+            if next_random(mut seed) % 100 < lean {
                 match node.left {
                     Some(l) => node = l,
                     None => {

@@ -11,7 +11,7 @@ impl O {
     fn first(ref self) -> i64 { rd(self.a[1]) }
     fn grow(mut ref self) { bump(mut self.a[0]); }
 }
-fn through(a: mut ref Array[String, 2]) { bump(a[1]); }
+fn through(a: mut ref Array[String, 2]) { bump(mut a[1]); }
 fn peek(a: ref Array[String, 2]) -> i64 { rd(a[1]) }
 fn main() {
     let a: Array[String, 2] = [mk("a", 1), mk("b", 1)];

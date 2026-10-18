@@ -55,8 +55,8 @@ fn visit(t: Option[TreeNode], has_parent: bool, parent_val: i64, arriving: i64, 
             if run > best {
                 best = run;
             }
-            visit(n.left, true, n.val, run, best);
-            visit(n.right, true, n.val, run, best);
+            visit(n.left, true, n.val, run, mut best);
+            visit(n.right, true, n.val, run, mut best);
         }
     }
 }

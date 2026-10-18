@@ -31,7 +31,7 @@ fn write_counts(node: ref Node, out: mut ref String) {
     }
     out.push_str(f"{node.val} {node.children.len()}");
     for child in node.children {
-        write_counts(child, out);
+        write_counts(child, mut out);
     }
 }
 
@@ -50,7 +50,7 @@ fn read_counts(words: ref Vec[String], at: mut ref i64) -> Node {
     *at += 2;
     let mut children: Vec[Node] = Vec.new();
     for _ in 0..count {
-        children.push(read_counts(words, at));
+        children.push(read_counts(words, mut at));
     }
     Node { val: val, children: children }
 }
@@ -74,7 +74,7 @@ fn write_brackets(node: ref Node, out: mut ref String) {
             if i > 0 {
                 out.push(' ');
             }
-            write_brackets(node.children[i], out);
+            write_brackets(node.children[i], mut out);
         }
         out.push(']');
     }
@@ -99,7 +99,7 @@ fn read_brackets(bytes: Slice[u8], at: mut ref i64) -> Node {
     if *at < bytes.len() and bytes[*at] == b'[' {
         *at += 1;
         loop {
-            children.push(read_brackets(bytes, at));
+            children.push(read_brackets(bytes, mut at));
             // A space means another child follows; otherwise this is `]`.
             let sep = bytes[*at];
             *at += 1;
@@ -128,7 +128,7 @@ fn write_markers(node: ref Node, out: mut ref String) {
     }
     out.push_str(f"{node.val}");
     for child in node.children {
-        write_markers(child, out);
+        write_markers(child, mut out);
     }
     out.push_str(" #");
 }
@@ -147,7 +147,7 @@ fn read_markers(words: ref Vec[String], at: mut ref i64) -> Node {
     *at += 1;
     let mut children: Vec[Node] = Vec.new();
     while words[*at] != "#" {
-        children.push(read_markers(words, at));
+        children.push(read_markers(words, mut at));
     }
     *at += 1;
     Node { val: val, children: children }
@@ -170,7 +170,7 @@ fn flatten_levels(node: ref Node, vals: mut ref Vec[i64], kids: mut ref Vec[Vec[
     vals.push(node.val);
     kids.push(Vec.new());
     for child in node.children {
-        let k = flatten_levels(child, vals, kids);
+        let k = flatten_levels(child, mut vals, mut kids);
         kids[me].push(k);
     }
     me
@@ -286,7 +286,7 @@ fn draw(node: ref Node, out: mut ref String) {
             if i > 0 {
                 out.push(' ');
             }
-            draw(node.children[i], out);
+            draw(node.children[i], mut out);
         }
         out.push(')');
     }
@@ -313,12 +313,12 @@ fn random_tree(n: i64, top: i64, seed: mut ref i64) -> Option[Node] {
     }
     let mut vals: Vec[i64] = Vec.new();
     let mut kids: Vec[Vec[i64]] = Vec.new();
-    let reach = 1 + step(seed) % n;
+    let reach = 1 + step(mut seed) % n;
     for i in 0..n {
-        vals.push(step(seed) % top);
+        vals.push(step(mut seed) % top);
         kids.push(Vec.new());
         if i > 0 {
-            let back = 1 + step(seed) % min(i, reach);
+            let back = 1 + step(mut seed) % min(i, reach);
             kids[i - back].push(i);
         }
     }

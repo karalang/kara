@@ -33,7 +33,7 @@ fn place_star(sticks: Vec[i64], i: i64, sides: mut ref Vec[i64], side: i64) -> b
             continue;
         }
         sides[s] += sticks[i];
-        if place_star(sticks, i + 1, sides, side) {
+        if place_star(sticks, i + 1, mut sides, side) {
             return true;
         }
         sides[s] -= sticks[i];
@@ -114,7 +114,7 @@ fn search_sides(sticks: Vec[i64], used: i64, filled: i64, side: i64, dead: mut r
         }
         if filled + sticks[i] <= side {
             let next = (filled + sticks[i]) % side;
-            if search_sides(sticks, used | (1 << i), next, side, dead) {
+            if search_sides(sticks, used | (1 << i), next, side, mut dead) {
                 return true;
             }
         }
@@ -241,7 +241,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn square_sticks(seed: mut ref i64, n: i64) -> Vec[i64] {
     let mut count = vec![1; 4];
     for _ in 4..n {
-        count[next_random(seed) % 4] += 1;
+        count[next_random(mut seed) % 4] += 1;
     }
     let mut most = 0;
     for c in count {
@@ -249,14 +249,14 @@ fn square_sticks(seed: mut ref i64, n: i64) -> Vec[i64] {
             most = c;
         }
     }
-    let side = most + next_random(seed) % 8;
+    let side = most + next_random(mut seed) % 8;
     let mut sticks: Vec[i64] = Vec.new();
     for s in 0..4 {
         let c = count[s];
         let mut cut = vec![false; side];
         let mut made = 1;
         while made < c {
-            let p = 1 + next_random(seed) % (side - 1);
+            let p = 1 + next_random(mut seed) % (side - 1);
             if not cut[p] {
                 cut[p] = true;
                 made += 1;
@@ -271,13 +271,13 @@ fn square_sticks(seed: mut ref i64, n: i64) -> Vec[i64] {
         }
         sticks.push(side - last);
     }
-    shuffle(seed, mut sticks);
+    shuffle(mut seed, mut sticks);
     sticks
 }
 
 fn shuffle(seed: mut ref i64, sticks: mut ref Vec[i64]) {
     for i in (1..sticks.len()).rev() {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         sticks.swap(i, j);
     }
 }
@@ -285,19 +285,19 @@ fn shuffle(seed: mut ref i64, sticks: mut ref Vec[i64]) {
 // 1 to 8 sticks: a square, a square with one unit moved between two
 // sticks, or random lengths from 1 to 6.
 fn random_case(seed: mut ref i64) -> Vec[i64] {
-    let n = 1 + next_random(seed) % 8;
-    let kind = next_random(seed) % 3;
+    let n = 1 + next_random(mut seed) % 8;
+    let kind = next_random(mut seed) % 3;
     if kind == 2 or n < 4 {
         let mut sticks: Vec[i64] = Vec.new();
         for _ in 0..n {
-            sticks.push(1 + next_random(seed) % 6);
+            sticks.push(1 + next_random(mut seed) % 6);
         }
         return sticks;
     }
-    let mut sticks = square_sticks(seed, n);
+    let mut sticks = square_sticks(mut seed, n);
     if kind == 1 {
-        let from = next_random(seed) % n;
-        let to = next_random(seed) % n;
+        let from = next_random(mut seed) % n;
+        let to = next_random(mut seed) % n;
         if sticks[from] > 1 and from != to {
             sticks[from] -= 1;
             sticks[to] += 1;

@@ -139,7 +139,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn digits(len: i64, seed: mut ref i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     for i in 0..len {
-        v.push(next(seed) % 10);
+        v.push(next(mut seed) % 10);
     }
     return v;
 }

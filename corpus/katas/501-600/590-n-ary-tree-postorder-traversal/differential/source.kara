@@ -12,7 +12,7 @@ struct Node {
 
 fn walk_star(node: Node, out: mut ref Vec[i64]) {
     for child in node.children {
-        walk_star(child, out);
+        walk_star(child, mut out);
     }
     out.push(node.val);
 }

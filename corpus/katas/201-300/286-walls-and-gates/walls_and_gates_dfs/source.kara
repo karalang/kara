@@ -52,10 +52,10 @@ fn flood(g: mut ref Vec[i64], r: i64, c: i64, cell: i64, d: i64, relaxations: mu
 
     let row = cell / c;
     let col = cell % c;
-    if row > 0 { flood(g, r, c, cell - c, d + 1, relaxations); }
-    if row < r - 1 { flood(g, r, c, cell + c, d + 1, relaxations); }
-    if col > 0 { flood(g, r, c, cell - 1, d + 1, relaxations); }
-    if col < c - 1 { flood(g, r, c, cell + 1, d + 1, relaxations); }
+    if row > 0 { flood(mut g, r, c, cell - c, d + 1, mut relaxations); }
+    if row < r - 1 { flood(mut g, r, c, cell + c, d + 1, mut relaxations); }
+    if col > 0 { flood(mut g, r, c, cell - 1, d + 1, mut relaxations); }
+    if col < c - 1 { flood(mut g, r, c, cell + 1, d + 1, mut relaxations); }
 }
 
 fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64) {
@@ -68,10 +68,10 @@ fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64
             // since 0 < 1.
             let row = i / c;
             let col = i % c;
-            if row > 0 { flood(g, r, c, i - c, 1, relaxations); }
-            if row < r - 1 { flood(g, r, c, i + c, 1, relaxations); }
-            if col > 0 { flood(g, r, c, i - 1, 1, relaxations); }
-            if col < c - 1 { flood(g, r, c, i + 1, 1, relaxations); }
+            if row > 0 { flood(mut g, r, c, i - c, 1, mut relaxations); }
+            if row < r - 1 { flood(mut g, r, c, i + c, 1, mut relaxations); }
+            if col > 0 { flood(mut g, r, c, i - 1, 1, mut relaxations); }
+            if col < c - 1 { flood(mut g, r, c, i + 1, 1, mut relaxations); }
         }
         i = i + 1;
     }

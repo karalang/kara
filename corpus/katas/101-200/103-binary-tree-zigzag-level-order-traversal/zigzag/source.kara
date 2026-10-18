@@ -36,8 +36,8 @@ fn dfs(node: Option[TreeNode], depth: i64, rows: mut ref Vec[Vec[i64]]) {
                 rows.push(Vec.new());
             }
             rows[depth].push(n.val);
-            dfs(n.left, depth + 1, rows);
-            dfs(n.right, depth + 1, rows);
+            dfs(n.left, depth + 1, mut rows);
+            dfs(n.right, depth + 1, mut rows);
         }
     }
 }

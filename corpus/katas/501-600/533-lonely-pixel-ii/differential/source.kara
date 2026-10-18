@@ -235,20 +235,20 @@ fn definition(picture: Vec[Vec[char]], target: i64) -> i64 {
 fn random_picture(seed: mut ref i64, n: i64, target: i64, planted: i64, extra: i64, percent: i64) -> Vec[Vec[char]] {
     let mut picture: Vec[Vec[char]] = Vec.new();
     for _ in 0..planted {
-        let blacks = if next_random(seed) % 4 == 0 { target - 1 } else { target };
+        let blacks = if next_random(mut seed) % 4 == 0 { target - 1 } else { target };
         let mut cols: Vec[i64] = (0..n).collect();
         let mut row = vec!['W'; n];
         for i in 0..blacks {
-            let j = i + next_random(seed) % (n - i);
+            let j = i + next_random(mut seed) % (n - i);
             cols.swap(i, j);
             row[cols[i]] = 'B';
         }
-        let copies = if next_random(seed) % 4 == 0 { target + 1 } else { target };
+        let copies = if next_random(mut seed) % 4 == 0 { target + 1 } else { target };
         for _ in 0..copies {
             let mut copy = row.clone();
-            if blacks > 0 and blacks < n and next_random(seed) % 3 == 0 {
+            if blacks > 0 and blacks < n and next_random(mut seed) % 3 == 0 {
                 // Move the first black pixel to a white column.
-                let to = blacks + next_random(seed) % (n - blacks);
+                let to = blacks + next_random(mut seed) % (n - blacks);
                 copy[cols[0]] = 'W';
                 copy[cols[to]] = 'B';
             }
@@ -258,12 +258,12 @@ fn random_picture(seed: mut ref i64, n: i64, target: i64, planted: i64, extra: i
     for _ in 0..extra {
         let mut row: Vec[char] = Vec.new();
         for _ in 0..n {
-            row.push(if next_random(seed) % 100 < percent { 'B' } else { 'W' });
+            row.push(if next_random(mut seed) % 100 < percent { 'B' } else { 'W' });
         }
         picture.push(row);
     }
     for i in (1..picture.len()).rev() {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         picture.swap(i, j);
     }
     picture

@@ -11,7 +11,7 @@ struct Node {
 
 fn walk(node: Node, out: mut ref Vec[i64]) {
     for child in node.children {
-        walk(child, out);
+        walk(child, mut out);
     }
     out.push(node.val);
 }

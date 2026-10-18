@@ -26,7 +26,7 @@ fn file_by_height(t: ref Tree, out: mut ref Vec[Vec[i64]]) -> i64 {
     match t {
         Empty => -1,
         Node(v, left, right) => {
-            let h = 1 + file_by_height(left, out).max(file_by_height(right, out));
+            let h = 1 + file_by_height(left, mut out).max(file_by_height(right, mut out));
             if h == out.len() {
                 out.push(Vec.new());
             }

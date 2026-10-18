@@ -44,7 +44,7 @@ fn backtrack(s: ref Vec[u8], n: i64, start: i64, part: i64, path: own String,
             } else {
                 f"{path}.{seg}"
             };
-            backtrack(s, n, start + len, part + 1, newpath, out);
+            backtrack(s, n, start + len, part + 1, newpath, mut out);
         }
         len = len + 1;
     }

@@ -256,10 +256,10 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn random_weights(seed: mut ref i64, most: i64, heaviest: i64) -> Vec[i64] {
-    let n = 1 + next_random(seed) % most;
+    let n = 1 + next_random(mut seed) % most;
     let mut w: Vec[i64] = Vec.new();
     for _ in 0..n {
-        w.push(1 + next_random(seed) % heaviest);
+        w.push(1 + next_random(mut seed) % heaviest);
     }
     w
 }

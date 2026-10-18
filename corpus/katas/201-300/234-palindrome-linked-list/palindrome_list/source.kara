@@ -54,7 +54,7 @@ fn is_palindrome(nodes: mut ref Vec[Node], head: i64) -> bool {
     }
 
     // Reverse the second half (everything after `slow`) and compare.
-    let second = reverse(nodes, nodes[slow].next);
+    let second = reverse(mut nodes, nodes[slow].next);
     let mut p1 = head;
     let mut p2 = second;
     while p2 != -1 {

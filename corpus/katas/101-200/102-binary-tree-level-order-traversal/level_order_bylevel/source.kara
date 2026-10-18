@@ -50,8 +50,8 @@ fn collect_level(node: Option[TreeNode], target: i64, cur_depth: i64, row: mut r
             if cur_depth == target {
                 row.push(n.val);
             } else {
-                collect_level(n.left, target, cur_depth + 1, row);
-                collect_level(n.right, target, cur_depth + 1, row);
+                collect_level(n.left, target, cur_depth + 1, mut row);
+                collect_level(n.right, target, cur_depth + 1, mut row);
             }
         }
     }

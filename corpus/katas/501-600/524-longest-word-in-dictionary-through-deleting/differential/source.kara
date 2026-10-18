@@ -188,7 +188,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
     let mut word = String.new();
     for _ in 0..len {
-        word.push((97 + next_random(seed) % letters) as u8 as char);
+        word.push((97 + next_random(mut seed) % letters) as u8 as char);
     }
     word
 }
@@ -196,7 +196,7 @@ fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
 fn random_subsequence(seed: mut ref i64, s: Str, keep: i64) -> String {
     let mut word = String.new();
     for c in s.chars() {
-        if next_random(seed) % keep == 0 {
+        if next_random(mut seed) % keep == 0 {
             word.push(c);
         }
     }
@@ -209,15 +209,15 @@ fn random_subsequence(seed: mut ref i64, s: Str, keep: i64) -> String {
 // `s` of 1 to `most` letters from 1 to 3 letters, and 1 to `words`
 // words of 1 to 6 letters, a third of them taken from `s`.
 fn random_case(seed: mut ref i64, most: i64, words: i64) -> (String, Vec[String]) {
-    let letters = 1 + next_random(seed) % 3;
-    let s = random_word(seed, 1 + next_random(seed) % most, letters);
+    let letters = 1 + next_random(mut seed) % 3;
+    let s = random_word(mut seed, 1 + next_random(mut seed) % most, letters);
     let mut dictionary: Vec[String] = Vec.new();
-    let count = 1 + next_random(seed) % words;
+    let count = 1 + next_random(mut seed) % words;
     for _ in 0..count {
-        if next_random(seed) % 3 == 0 {
-            dictionary.push(random_subsequence(seed, s, 1 + next_random(seed) % 3));
+        if next_random(mut seed) % 3 == 0 {
+            dictionary.push(random_subsequence(mut seed, s, 1 + next_random(mut seed) % 3));
         } else {
-            dictionary.push(random_word(seed, 1 + next_random(seed) % 6, letters));
+            dictionary.push(random_word(mut seed, 1 + next_random(mut seed) % 6, letters));
         }
     }
     (s, dictionary)

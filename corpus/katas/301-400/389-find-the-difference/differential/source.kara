@@ -102,11 +102,11 @@ fn text(letters: ref Vec[char]) -> String {
 // `letters` with `c` put at a random place, then shuffled.
 fn grown(seed: mut ref i64, letters: ref Vec[char], c: char) -> Vec[char] {
     let mut v = letters.clone();
-    let at = step(seed) % (v.len() + 1);
+    let at = step(mut seed) % (v.len() + 1);
     v.insert(at, c);
     let mut i = v.len() - 1;
     while i > 0 {
-        let j = step(seed) % (i + 1);
+        let j = step(mut seed) % (i + 1);
         v.swap(i, j);
         i -= 1;
     }

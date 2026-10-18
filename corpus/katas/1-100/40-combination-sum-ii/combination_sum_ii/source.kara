@@ -58,7 +58,7 @@ fn backtrack(
         }
         path.push(c);
         // Recurse at i+1 — each element is used at most once.
-        backtrack(candidates, i + 1, remaining - c, path, out);
+        backtrack(candidates, i + 1, remaining - c, mut path, mut out);
         path.pop();
         i = i + 1;
     }

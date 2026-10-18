@@ -8,7 +8,7 @@ fn fw2(h: own Option[S]) { fw(h) }
 fn fc(h: own Option[S], c: bool) { if c { eat2(h) } else { match h { Option.Some(s) => println(f"m{s.id}"), Option.None => println("n") } } println("afc") }
 fn rec(h: own Option[S], n: i64) { if n > 0 { rec(h, n - 1) } else { eat2(h) } }
 fn reb(h: own Option[S]) { let m = h; eat2(m); println("arb") }
-fn fp(h: own Option[S], v: mut ref Vec[S]) { eatp(h, v); println("afp") }
+fn fp(h: own Option[S], v: mut ref Vec[S]) { eatp(h, mut v); println("afp") }
 fn main() {
     fw(Option.Some(mks(1)));
     let o = Option.Some(mks(2));

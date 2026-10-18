@@ -137,7 +137,7 @@ fn random_value(seed: mut ref i64, depth: i64) -> String {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(random_value(seed, depth - 1));
+        out.push_str(random_value(mut seed, depth - 1));
     }
     out.push(']');
     out

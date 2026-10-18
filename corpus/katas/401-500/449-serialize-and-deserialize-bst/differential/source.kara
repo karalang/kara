@@ -26,8 +26,8 @@ fn write_preorder_preorder(node: Option[TreeNode], out: mut ref String) {
             out.push(',');
         }
         out.push_str(f"{n.val}");
-        write_preorder_preorder(n.left, out);
-        write_preorder_preorder(n.right, out);
+        write_preorder_preorder(n.left, mut out);
+        write_preorder_preorder(n.right, mut out);
     }
 }
 
@@ -45,8 +45,8 @@ fn build_preorder(values: Vec[i64], at: mut ref i64, low: i64, high: i64) -> Opt
     }
     let v = values[*at];
     *at += 1;
-    let left = build_preorder(values, at, low, v - 1);
-    let right = build_preorder(values, at, v + 1, high);
+    let left = build_preorder(values, mut at, low, v - 1);
+    let right = build_preorder(values, mut at, v + 1, high);
     Some(TreeNode { val: v, left: left, right: right })
 }
 
@@ -65,8 +65,8 @@ fn deserialize_preorder(data: Str) -> Option[TreeNode] {
 
 fn write_postorder_postorder(node: Option[TreeNode], out: mut ref String) {
     if let Some(n) = node {
-        write_postorder_postorder(n.left, out);
-        write_postorder_postorder(n.right, out);
+        write_postorder_postorder(n.left, mut out);
+        write_postorder_postorder(n.right, mut out);
         if out.len() > 0 {
             out.push(',');
         }
@@ -88,8 +88,8 @@ fn build_postorder(values: Vec[i64], at: mut ref i64, low: i64, high: i64) -> Op
     }
     let v = values[*at];
     *at -= 1;
-    let right = build_postorder(values, at, v + 1, high);
-    let left = build_postorder(values, at, low, v - 1);
+    let right = build_postorder(values, mut at, v + 1, high);
+    let left = build_postorder(values, mut at, low, v - 1);
     Some(TreeNode { val: v, left: left, right: right })
 }
 
@@ -112,8 +112,8 @@ fn write_preorder_insert(node: Option[TreeNode], out: mut ref String) {
             out.push(',');
         }
         out.push_str(f"{n.val}");
-        write_preorder_insert(n.left, out);
-        write_preorder_insert(n.right, out);
+        write_preorder_insert(n.left, mut out);
+        write_preorder_insert(n.right, mut out);
     }
 }
 
@@ -162,8 +162,8 @@ const OFFSET: u32 = 256;
 fn write_preorder_compact(node: Option[TreeNode], out: mut ref String) {
     if let Some(n) = node {
         out.push(char.try_from(n.val as u32 + OFFSET).expect("a value from 0 to 10,000"));
-        write_preorder_compact(n.left, out);
-        write_preorder_compact(n.right, out);
+        write_preorder_compact(n.left, mut out);
+        write_preorder_compact(n.right, mut out);
     }
 }
 
@@ -268,16 +268,16 @@ fn same(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
 
 fn inorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
     if let Some(n) = node {
-        inorder(n.left, out);
+        inorder(n.left, mut out);
         out.push(n.val);
-        inorder(n.right, out);
+        inorder(n.right, mut out);
     }
 }
 
 fn shuffle(values: mut ref Vec[i64], seed: mut ref i64) {
     let n = values.len();
     for i in 0..n {
-        let j = i + next_random(seed) % (n - i);
+        let j = i + next_random(mut seed) % (n - i);
         values.swap(i, j);
     }
 }

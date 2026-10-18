@@ -27,8 +27,8 @@ fn walk(node: Option[TreeNode], target: i64, path: mut ref Vec[i64]) -> i64 {
                 }
                 i -= 1;
             }
-            found += walk(t.left, target, path);
-            found += walk(t.right, target, path);
+            found += walk(t.left, target, mut path);
+            found += walk(t.right, target, mut path);
             path.pop();
             found
         }

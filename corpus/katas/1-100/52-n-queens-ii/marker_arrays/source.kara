@@ -44,7 +44,7 @@ fn count(
             cols[c] = true;
             diag1[d1] = true;
             diag2[d2] = true;
-            count(n, row + 1, cols, diag1, diag2, total);
+            count(n, row + 1, mut cols, mut diag1, mut diag2, mut total);
             cols[c] = false;            // undo all three markers on the way back up
             diag1[d1] = false;
             diag2[d2] = false;

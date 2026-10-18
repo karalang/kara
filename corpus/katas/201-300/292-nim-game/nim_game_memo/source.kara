@@ -37,7 +37,7 @@ fn solve(n: i64, memo: mut ref Vec[i64]) -> bool {
     let mut take = 1;
     while take <= 3 {
         if n - take >= 0 {
-            if not solve(n - take, memo) {
+            if not solve(n - take, mut memo) {
                 w = true;
             }
         }

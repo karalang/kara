@@ -27,7 +27,7 @@ fn survey(robot: mut ref Robot, row: i64, col: i64, facing: i64, open: mut ref S
     for _ in 0..4 {
         let next = (row + step_row(d), col + step_col(d));
         if not open.contains(next) and robot.forward() {
-            survey(robot, next.0, next.1, d, open);
+            survey(mut robot, next.0, next.1, d, mut open);
             robot.turn_left();
             robot.turn_left();
             robot.forward();
@@ -70,7 +70,7 @@ fn path(from: (i64, i64), to: (i64, i64), open: Set[(i64, i64)]) -> Vec[i64] {
 
 fn clean_room(robot: mut ref Robot) {
     let mut open: Set[(i64, i64)] = Set.new();
-    survey(robot, 0, 0, 0, mut open);
+    survey(mut robot, 0, 0, 0, mut open);
     let mut cells: Vec[(i64, i64)] = Vec.new();
     for cell in open.iter() {
         cells.push(*cell);

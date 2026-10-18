@@ -96,7 +96,7 @@ fn has_next_eager(p: ref EagerP) -> bool {
 fn next_eager(p: mut ref EagerP) -> i64 {
     let v = p.slot;
     if src_has_next(p.src) {
-        p.slot = src_next(p.src);
+        p.slot = src_next(mut p.src);
     } else {
         p.full = false;
     }
@@ -119,7 +119,7 @@ fn make_peeking_lazy(data: ref Vec[i64]) -> LazyP {
 
 fn peek_lazy(p: mut ref LazyP) -> i64 {
     if not p.full {
-        p.slot = src_next(p.src);
+        p.slot = src_next(mut p.src);
         p.full = true;
     }
     return p.slot;
@@ -135,7 +135,7 @@ fn next_lazy(p: mut ref LazyP) -> i64 {
         p.full = false;
         return p.slot;
     }
-    return src_next(p.src);
+    return src_next(mut p.src);
 }
 
 struct MatP {

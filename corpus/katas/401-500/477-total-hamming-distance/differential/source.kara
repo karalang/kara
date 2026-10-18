@@ -126,10 +126,10 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn random_list(seed: mut ref i64) -> Vec[i64] {
-    let span = if next_random(seed) % 3 == 0 { 16 } else { 1000000001 };
+    let span = if next_random(mut seed) % 3 == 0 { 16 } else { 1000000001 };
     let mut nums: Vec[i64] = Vec.new();
-    for _ in 0..1 + next_random(seed) % 12 {
-        nums.push((next_random(seed) * 32768 + next_random(seed)) % span);
+    for _ in 0..1 + next_random(mut seed) % 12 {
+        nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % span);
     }
     nums
 }

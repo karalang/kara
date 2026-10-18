@@ -37,8 +37,8 @@ fn write_tree_text(node: Option[TreeNode], out: mut ref String) {
         Some(n) => {
             out.push('^');
             out.push_str(f"{n.val}");
-            write_tree_text(n.left, out);
-            write_tree_text(n.right, out);
+            write_tree_text(n.left, mut out);
+            write_tree_text(n.right, mut out);
         }
     }
 }
@@ -78,7 +78,7 @@ fn search_hash(node: Option[TreeNode], sub_root: Option[TreeNode], want: i64, fo
     match node {
         None => 7,
         Some(n) => {
-            let h = mix_hash(n.val, search_hash(n.left, sub_root, want, found), search_hash(n.right, sub_root, want, found));
+            let h = mix_hash(n.val, search_hash(n.left, sub_root, want, mut found), search_hash(n.right, sub_root, want, mut found));
             if h == want and not *found and same_tree_hash(node, sub_root) {
                 *found = true;
             }
@@ -153,8 +153,8 @@ fn shape(node: Option[TreeNode]) -> String {
 fn every_shape(node: Option[TreeNode], out: mut ref Vec[String]) {
     if let Some(n) = node {
         out.push(shape(node));
-        every_shape(n.left, out);
-        every_shape(n.right, out);
+        every_shape(n.left, mut out);
+        every_shape(n.right, mut out);
     }
 }
 
@@ -189,12 +189,12 @@ fn leaf(v: i64) -> TreeNode {
 }
 
 fn random_tree(size: i64, most: i64, seed: mut ref i64) -> TreeNode {
-    let root = leaf(next_random(seed) % (most + 1));
+    let root = leaf(next_random(mut seed) % (most + 1));
     for _ in 1..size {
-        let c = leaf(next_random(seed) % (most + 1));
+        let c = leaf(next_random(mut seed) % (most + 1));
         let mut node = root;
         loop {
-            if next_random(seed) % 2 == 0 {
+            if next_random(mut seed) % 2 == 0 {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -244,8 +244,8 @@ fn widened(node: Option[TreeNode]) -> Option[TreeNode] {
 fn all_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
     if let Some(n) = node {
         out.push(n);
-        all_nodes(n.left, out);
-        all_nodes(n.right, out);
+        all_nodes(n.left, mut out);
+        all_nodes(n.right, mut out);
     }
 }
 

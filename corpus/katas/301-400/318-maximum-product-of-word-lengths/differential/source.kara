@@ -189,10 +189,10 @@ fn next(seed: mut ref i64) -> i64 {
 fn make_words(n: i64, lmax: i64, alpha: i64, seed: mut ref i64) -> Vec[String] {
     let mut out: Vec[String] = Vec.new();
     for _ in 0..n {
-        let len = next(seed) % lmax + 1;
+        let len = next(mut seed) % lmax + 1;
         let mut w = String.new();
         for _ in 0..len {
-            let c = next(seed) % alpha;
+            let c = next(mut seed) % alpha;
             w.push((b'a' + (c as u8)) as char);
         }
         out.push(w);
@@ -219,7 +219,7 @@ fn shuffled(words: ref Vec[String], seed: mut ref i64) -> Vec[String] {
     if n < 2 { return out; }
     let mut i = n - 1;
     while i > 0 {
-        let j = next(seed) % (i + 1);
+        let j = next(mut seed) % (i + 1);
         out.swap(i, j);
         i -= 1;
     }
@@ -234,7 +234,7 @@ fn relabelled(words: ref Vec[String], seed: mut ref i64) -> Vec[String] {
     for k in 0..26 { perm.push(k); }
     let mut i = 25;
     while i > 0 {
-        let j = next(seed) % (i + 1);
+        let j = next(mut seed) % (i + 1);
         perm.swap(i, j);
         i -= 1;
     }

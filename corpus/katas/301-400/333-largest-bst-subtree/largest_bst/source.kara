@@ -40,7 +40,7 @@ fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
     let mut lo = val;
     let mut hi = val;
     if left != -1 {
-        let l = visit(nodes, left, best);
+        let l = visit(nodes, left, mut best);
         if l.bst and l.hi < val {
             size += l.size;
             lo = l.lo;
@@ -49,7 +49,7 @@ fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
         }
     }
     if right != -1 {
-        let r = visit(nodes, right, best);
+        let r = visit(nodes, right, mut best);
         if r.bst and r.lo > val {
             size += r.size;
             hi = r.hi;
@@ -137,12 +137,12 @@ fn insert(nodes: mut ref Vec[Node], v: i64) {
 fn random_tree(seed: mut ref i64, n: i64, range: i64, damage: i64) -> Vec[Node] {
     let mut nodes: Vec[Node] = Vec.new();
     for _ in 0..n {
-        let v = (next(seed) * 32768 + next(seed)) % range;
+        let v = (next(mut seed) * 32768 + next(mut seed)) % range;
         insert(mut nodes, v);
     }
     for _ in 0..damage {
-        let at = next(seed) % n;
-        nodes[at].val = (next(seed) * 32768 + next(seed)) % range;
+        let at = next(mut seed) % n;
+        nodes[at].val = (next(mut seed) * 32768 + next(mut seed)) % range;
     }
     return nodes;
 }

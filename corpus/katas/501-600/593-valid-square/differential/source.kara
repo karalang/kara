@@ -161,29 +161,29 @@ fn reordered(p: Vec[Vec[i64]], order: Vec[i64]) -> Vec[Vec[i64]] {
 // is now and then a rectangle, a rhombus or a square (kind 3); in a
 // random order.
 fn case_points(seed: mut ref i64) -> Vec[Vec[i64]] {
-    let kind = step(seed) % 4;
-    let x = step(seed) % 201 - 100;
-    let y = step(seed) % 201 - 100;
+    let kind = step(mut seed) % 4;
+    let x = step(mut seed) % 201 - 100;
+    let y = step(mut seed) % 201 - 100;
     let mut p: Vec[Vec[i64]] = Vec.new();
     if kind == 2 {
         for _ in 0..4 {
-            p.push(vec![step(seed) % 5 - 2, step(seed) % 5 - 2]);
+            p.push(vec![step(mut seed) % 5 - 2, step(mut seed) % 5 - 2]);
         }
     } else if kind == 3 {
-        let (ux, uy) = (step(seed) % 7 - 3, step(seed) % 7 - 3);
-        let (wx, wy) = (step(seed) % 7 - 3, step(seed) % 7 - 3);
+        let (ux, uy) = (step(mut seed) % 7 - 3, step(mut seed) % 7 - 3);
+        let (wx, wy) = (step(mut seed) % 7 - 3, step(mut seed) % 7 - 3);
         p = vec![vec![x, y], vec![x + ux, y + uy], vec![x + ux + wx, y + uy + wy], vec![x + wx, y + wy]];
     } else {
-        let (dx, dy) = (step(seed) % 21 - 10, step(seed) % 21 - 10);
+        let (dx, dy) = (step(mut seed) % 21 - 10, step(mut seed) % 21 - 10);
         p = vec![vec![x, y], vec![x + dx, y + dy], vec![x + dx - dy, y + dy + dx], vec![x - dy, y + dx]];
         if kind == 1 {
-            let k = step(seed) % 4;
-            let c = step(seed) % 2;
-            p[k][c] += if step(seed) % 2 == 0 { 1 } else { -1 };
+            let k = step(mut seed) % 4;
+            let c = step(mut seed) % 2;
+            p[k][c] += if step(mut seed) % 2 == 0 { 1 } else { -1 };
         }
     }
     for k in 0..3 {
-        let j = k + step(seed) % (4 - k);
+        let j = k + step(mut seed) % (4 - k);
         p.swap(k, j);
     }
     p

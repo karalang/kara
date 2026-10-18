@@ -3,7 +3,7 @@ struct Pair { a: i64, b: i64 }
 fn set_to(n: mut ref i64, v: i64) -> i64 { *n = v; v }
 fn mutate(p: mut ref Pair) -> i64 {
     match p {
-        Pair { a, b } => set_to(a, 100) + set_to(b, 200),
+        Pair { a, b } => set_to(mut a, 100) + set_to(mut b, 200),
     }
 }
 fn main() {

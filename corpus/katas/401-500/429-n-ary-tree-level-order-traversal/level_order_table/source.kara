@@ -16,7 +16,7 @@ fn number(node: ref Node, vals: mut ref Vec[i64], kids: mut ref Vec[Vec[i64]]) -
     vals.push(node.val);
     kids.push(Vec.new());
     for child in node.children {
-        let k = number(child, vals, kids);
+        let k = number(child, mut vals, mut kids);
         kids[me].push(k);
     }
     me
@@ -101,12 +101,12 @@ fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
     }
     let mut vals: Vec[i64] = Vec.new();
     let mut kids: Vec[Vec[i64]] = Vec.new();
-    let reach = 1 + step(seed) % n;
+    let reach = 1 + step(mut seed) % n;
     for i in 0..n {
-        vals.push(step(seed) % 10001);
+        vals.push(step(mut seed) % 10001);
         kids.push(Vec.new());
         if i > 0 {
-            let back = 1 + step(seed) % min(i, reach);
+            let back = 1 + step(mut seed) % min(i, reach);
             kids[i - back].push(i);
         }
     }

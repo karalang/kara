@@ -36,7 +36,7 @@ fn most_memo(c: i64, w: i64, flights: Vec[Vec[i64]], days: Vec[Vec[i64]], memo: 
     let mut result = 0;
     for d in 0..flights.len() {
         if d == c or flights[c][d] == 1 {
-            result = result.max(days[d][w] + most_memo(d, w + 1, flights, days, memo));
+            result = result.max(days[d][w] + most_memo(d, w + 1, flights, days, mut memo));
         }
     }
     memo.insert((c, w), result);

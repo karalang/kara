@@ -136,14 +136,14 @@ fn code(c: char) -> i64 {
 
 // 1 to max_len letters; each follows the last with probability 1 - 1/breaks.
 fn random_string(max_len: i64, seed: mut ref i64) -> String {
-    let n = 1 + next_random(seed) % max_len;
-    let breaks = [2, 4, 16][next_random(seed) % 3];
+    let n = 1 + next_random(mut seed) % max_len;
+    let breaks = [2, 4, 16][next_random(mut seed) % 3];
     let mut s = String.new();
-    let mut last = next_random(seed) % 26;
+    let mut last = next_random(mut seed) % 26;
     s.push(letter(last));
     for _ in 1..n {
-        if next_random(seed) % breaks == 0 {
-            last = next_random(seed) % 26;
+        if next_random(mut seed) % breaks == 0 {
+            last = next_random(mut seed) % 26;
         } else {
             last = (last + 1) % 26;
         }

@@ -160,7 +160,7 @@ fn brute(nums: Vec[i64]) -> i64 {
 fn random_nums(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..n {
-        let r = next_random(seed) * 65536 + next_random(seed);
+        let r = next_random(mut seed) * 65536 + next_random(mut seed);
         nums.push(r % spread - spread / 2);
     }
     nums

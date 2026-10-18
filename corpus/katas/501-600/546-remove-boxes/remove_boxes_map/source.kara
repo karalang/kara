@@ -13,10 +13,10 @@ fn best(boxes: Vec[i64], l: i64, r: i64, k: i64, memo: mut ref Map[(i64, i64, i6
     if let Some(v) = memo.get((l, r, k)) {
         return *v;
     }
-    let mut most = (k + 1) * (k + 1) + best(boxes, l + 1, r, 0, memo);
+    let mut most = (k + 1) * (k + 1) + best(boxes, l + 1, r, 0, mut memo);
     for m in l + 1..r + 1 {
         if boxes[m] == boxes[l] {
-            most = most.max(best(boxes, l + 1, m - 1, 0, memo) + best(boxes, m, r, k + 1, memo));
+            most = most.max(best(boxes, l + 1, m - 1, 0, mut memo) + best(boxes, m, r, k + 1, mut memo));
         }
     }
     memo.insert((l, r, k), most);

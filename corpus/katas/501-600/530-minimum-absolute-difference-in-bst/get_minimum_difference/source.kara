@@ -22,12 +22,12 @@ fn visit(node: Option[TreeNode], walk: mut ref Walk) {
     let Some(n) = node else {
         return;
     };
-    visit(n.left, walk);
+    visit(n.left, mut walk);
     if let Some(p) = walk.prev {
         walk.best = walk.best.min(n.val - p);
     }
     walk.prev = Some(n.val);
-    visit(n.right, walk);
+    visit(n.right, mut walk);
 }
 
 fn get_minimum_difference(root: Option[TreeNode]) -> i64 {
@@ -56,7 +56,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
         let v = values[i];
         let mut node = root;
         loop {
-            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+            if v < node.val or (v == node.val and next_random(mut seed) % 2 == 0) {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -79,7 +79,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
 }
 
 fn show(name: Str, values: Vec[i64], seed: mut ref i64) {
-    let root = build(values, seed);
+    let root = build(values, mut seed);
     println(f"{name}: {values} -> {get_minimum_difference(root)}");
 }
 

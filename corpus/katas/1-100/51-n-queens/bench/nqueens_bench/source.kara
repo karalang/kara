@@ -41,8 +41,8 @@ fn count(
                 diag1 | bit_d1,
                 diag2 | bit_d2,
                 partial + c * (row + 1),
-                acc,
-                sink,
+                mut acc,
+                mut sink,
             );
         }
         c = c + 1;

@@ -36,7 +36,7 @@ fn lead_memo(nums: Vec[i64], i: i64, j: i64, memo: mut ref Vec[Option[i64]]) -> 
     if let Some(known) = memo[key] {
         return known;
     }
-    let best = (nums[i] - lead_memo(nums, i + 1, j, memo)).max(nums[j] - lead_memo(nums, i, j - 1, memo));
+    let best = (nums[i] - lead_memo(nums, i + 1, j, mut memo)).max(nums[j] - lead_memo(nums, i, j - 1, mut memo));
     memo[key] = Some(best);
     best
 }

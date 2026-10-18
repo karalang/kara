@@ -101,30 +101,30 @@ fn fail(failures: mut ref i64, what: String) {
 fn check(n: i64, big: ref Vec[i64], failures: mut ref i64) -> i64 {
     let a = count_bits_star(n);
     if not same(a, count_bits_lowbit(n)) or not same(a, count_bits_builtin(n)) or not same(a, count_bits_kernighan(n)) {
-        fail(failures, f"P1 arms disagree at n = {n}");
+        fail(mut failures, f"P1 arms disagree at n = {n}");
     }
     if not same(a, oracle(n)) {
-        fail(failures, f"P2 oracle at n = {n}");
+        fail(mut failures, f"P2 oracle at n = {n}");
     }
     if a.len() != n + 1 {
-        fail(failures, f"P3 length at n = {n}");
+        fail(mut failures, f"P3 length at n = {n}");
     }
     let mut total = 0;
     for i in 0..a.len() {
         if a[i] < 0 or a[i] > 63 {
-            fail(failures, f"P3 range at n = {n}, i = {i}");
+            fail(mut failures, f"P3 range at n = {n}, i = {i}");
         }
         if i < big.len() and a[i] != big[i] {
-            fail(failures, f"P4 prefix at n = {n}, i = {i}");
+            fail(mut failures, f"P4 prefix at n = {n}, i = {i}");
         }
         total += a[i];
     }
     for i in 0..a.len() {
         if 2 * i < a.len() and a[2 * i] != a[i] {
-            fail(failures, f"P5 even at n = {n}, i = {i}");
+            fail(mut failures, f"P5 even at n = {n}, i = {i}");
         }
         if 2 * i + 1 < a.len() and a[2 * i + 1] != a[i] + 1 {
-            fail(failures, f"P5 odd at n = {n}, i = {i}");
+            fail(mut failures, f"P5 odd at n = {n}, i = {i}");
         }
     }
     return total;

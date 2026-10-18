@@ -55,7 +55,7 @@ fn random_text(length: i64, letters: i64, seed: mut ref i64) -> String {
     let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
     let mut s = String.new();
     for _ in 0..length {
-        s.push(alphabet[step(seed) % letters]);
+        s.push(alphabet[step(mut seed) % letters]);
     }
     s
 }

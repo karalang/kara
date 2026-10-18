@@ -49,7 +49,7 @@ fn backtrack(
             // `path` is left untouched for the next loop iteration.
             let mut next = path.clone();
             next.push(c);
-            backtrack(candidates, i, remaining - c, next, out);
+            backtrack(candidates, i, remaining - c, next, mut out);
         }
         i = i + 1;
     }

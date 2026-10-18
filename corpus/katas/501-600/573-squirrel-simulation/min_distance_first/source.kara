@@ -35,7 +35,7 @@ fn show(name: Str, height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], 
 }
 
 fn random_cell(height: i64, width: i64, seed: mut ref i64) -> Vec[i64] {
-    vec![next_random(seed) % height, next_random(seed) % width]
+    vec![next_random(mut seed) % height, next_random(mut seed) % width]
 }
 
 fn main() {

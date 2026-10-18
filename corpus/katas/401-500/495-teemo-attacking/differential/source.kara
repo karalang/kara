@@ -85,10 +85,10 @@ fn reference(time_series: Vec[i64], duration: i64) -> i64 {
 
 fn random_series(seed: mut ref i64, size: i64, gap: i64) -> Vec[i64] {
     let mut series: Vec[i64] = Vec.new();
-    let mut t = next_random(seed) % 5;
+    let mut t = next_random(mut seed) % 5;
     for _ in 0..size {
         series.push(t);
-        t += next_random(seed) % (gap + 1);
+        t += next_random(mut seed) % (gap + 1);
     }
     series
 }

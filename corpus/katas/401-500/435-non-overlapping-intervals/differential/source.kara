@@ -134,12 +134,12 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn random_intervals(seed: mut ref i64) -> Vec[(i64, i64)] {
-    let n = next_random(seed) % 41;
-    let longest = [3, 10, 30][next_random(seed) % 3];
+    let n = next_random(mut seed) % 41;
+    let longest = [3, 10, 30][next_random(mut seed) % 3];
     let mut out: Vec[(i64, i64)] = Vec.new();
     for _ in 0..n {
-        let start = next_random(seed) % 100 - 50;
-        out.push((start, start + 1 + next_random(seed) % longest));
+        let start = next_random(mut seed) % 100 - 50;
+        out.push((start, start + 1 + next_random(mut seed) % longest));
     }
     out
 }

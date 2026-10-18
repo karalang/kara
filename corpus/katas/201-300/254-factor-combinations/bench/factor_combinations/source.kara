@@ -30,7 +30,7 @@ fn helper(remaining: i64, start: i64, path: mut ref Vec[i64], out: mut ref Vec[V
             combo.push(remaining / i);
             out.push(combo);
             path.push(i);
-            helper(remaining / i, i, path, out);
+            helper(remaining / i, i, mut path, mut out);
             let _ = path.pop();
         }
         i = i + 1;

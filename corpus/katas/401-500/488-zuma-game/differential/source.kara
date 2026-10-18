@@ -185,7 +185,7 @@ fn fewest_memo(board: Vec[char], hand: Vec[char], memo: mut ref Map[String, i64]
             let mut inserted = board.clone();
             inserted.insert(i, c);
             let after = collapse_memo(inserted, i);
-            let more = fewest_memo(after, rest, memo);
+            let more = fewest_memo(after, rest, mut memo);
             if more + 1 < best {
                 best = more + 1;
             }
@@ -349,7 +349,7 @@ fn search_counts(board: Vec[char], counts: mut ref Vec[i64], memo: mut ref Map[S
             let mut inserted = board.clone();
             inserted.insert(i, c);
             counts[ci] -= 1;
-            let more = search_counts(shrink_counts(inserted), counts, memo);
+            let more = search_counts(shrink_counts(inserted), mut counts, mut memo);
             counts[ci] += 1;
             if more + 1 < best {
                 best = more + 1;
@@ -443,7 +443,7 @@ fn brute(board: String, hand: String, memo: mut ref Map[String, i64]) -> i64 {
             for k in 0..after.len() {
                 next.push(after[k]);
             }
-            let more = brute(next, rest, memo);
+            let more = brute(next, rest, mut memo);
             if more + 1 < best {
                 best = more + 1;
             }

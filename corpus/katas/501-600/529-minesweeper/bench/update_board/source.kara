@@ -35,7 +35,7 @@ fn reveal(board: mut ref Vec[Vec[char]], r: i64, c: i64) {
         for dc in -1..=1 {
             let (y, x) = (r + dr, c + dc);
             if y >= 0 and y < board.len() and x >= 0 and x < board[0].len() {
-                reveal(board, y, x);
+                reveal(mut board, y, x);
             }
         }
     }

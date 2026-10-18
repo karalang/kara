@@ -33,7 +33,7 @@ fn extend(rows: mut ref Vec[String], length: i64, sorted: ref Vec[String], found
     let mut i = lower_bound(sorted, prefix);
     while i < sorted.len() and sorted[i].starts_with(prefix) {
         rows.push(sorted[i].clone());
-        extend(rows, length, sorted, found);
+        extend(mut rows, length, sorted, mut found);
         rows.pop();
         i += 1;
     }

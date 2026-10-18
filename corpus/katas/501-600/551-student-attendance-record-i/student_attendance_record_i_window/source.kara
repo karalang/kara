@@ -31,7 +31,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_record(n: i64, a: i64, l: i64, seed: mut ref i64) -> String {
     let mut s = String.new();
     for _ in 0..n {
-        let r = next_random(seed) % 100;
+        let r = next_random(mut seed) % 100;
         if r < a {
             s.push('A');
         } else if r < a + l {

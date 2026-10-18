@@ -21,7 +21,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 fn random_number(seed: mut ref i64) -> i64 {
     let spread = 1000000000;
-    ((next_random(seed) * 32768 + next_random(seed)) * 32768 + next_random(seed)) % (2 * spread + 1) - spread
+    ((next_random(mut seed) * 32768 + next_random(mut seed)) * 32768 + next_random(mut seed)) % (2 * spread + 1) - spread
 }
 
 fn main() {

@@ -8,7 +8,7 @@ impl H {
     fn put(mut ref self, t: own S, c: bool) { if c { skeep(t, mut self.xs) } }
     fn opt(mut ref self, t: own Option[S], c: bool) { if c { okeep(t, mut self.ys) } }
 }
-fn two(t: own Option[S], v: mut ref Vec[Option[S]], w: mut ref Vec[Option[S]], c: bool) { if c { okeep(t, v) } else { okeep(t, w) } }
+fn two(t: own Option[S], v: mut ref Vec[Option[S]], w: mut ref Vec[Option[S]], c: bool) { if c { okeep(t, mut v) } else { okeep(t, mut w) } }
 fn main() {
     let mut h = H { xs: Vec.new(), ys: Vec.new() };
     h.put(mks(1), false);

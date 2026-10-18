@@ -37,14 +37,14 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_url(seed: mut ref i64, most: i64) -> String {
     let marks = "/-_.?=&";
     let mut url = "https://".to_string();
-    let host = 3 + next_random(seed) % 8;
+    let host = 3 + next_random(mut seed) % 8;
     for _ in 0..host {
-        url.push((b'a' + (next_random(seed) % 26) as u8) as char);
+        url.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
     }
     url.push_str(".com/");
-    let path = next_random(seed) % (most + 1);
+    let path = next_random(mut seed) % (most + 1);
     for _ in 0..path {
-        let k = next_random(seed) % 69;
+        let k = next_random(mut seed) % 69;
         if k < 26 {
             url.push((b'a' + k as u8) as char);
         } else if k < 52 {
@@ -95,7 +95,7 @@ fn run(urls: Vec[String], seed: mut ref i64) -> String {
     let n = urls.len();
     let mut order: Vec[i64] = (0..n).collect();
     for i in (1..n).rev() {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         order.swap(i, j);
     }
     let mut right = 0;

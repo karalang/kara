@@ -76,7 +76,7 @@ fn visit(prefix: i64, n: i64, left: mut ref i64) -> Option[i64] {
         if child > n {
             break;
         }
-        if let Some(found) = visit(child, n, left) {
+        if let Some(found) = visit(child, n, mut left) {
             return Some(found);
         }
     }

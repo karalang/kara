@@ -14,9 +14,9 @@ fn count(coins: Vec[i64], i: i64, a: i64, memo: mut ref Map[(i64, i64), i64]) ->
     if let Some(v) = memo.get((i, a)) {
         return *v;
     }
-    let mut ways = count(coins, i + 1, a, memo);
+    let mut ways = count(coins, i + 1, a, mut memo);
     if coins[i] <= a {
-        ways += count(coins, i, a - coins[i], memo);
+        ways += count(coins, i, a - coins[i], mut memo);
     }
     memo.insert((i, a), ways);
     ways

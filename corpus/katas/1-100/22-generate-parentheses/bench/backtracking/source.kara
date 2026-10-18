@@ -22,10 +22,10 @@ fn backtrack(cur: own String, open: i64, close: i64, n: i64, out: mut ref Vec[St
         return;
     }
     if open < n {
-        backtrack(f"{cur}(", open + 1, close, n, out);
+        backtrack(f"{cur}(", open + 1, close, n, mut out);
     }
     if close < open {
-        backtrack(f"{cur})", open, close + 1, n, out);
+        backtrack(f"{cur})", open, close + 1, n, mut out);
     }
 }
 

@@ -20,8 +20,8 @@ fn write_preorder(node: Option[TreeNode], out: mut ref String) {
             out.push(',');
         }
         out.push_str(f"{n.val}");
-        write_preorder(n.left, out);
-        write_preorder(n.right, out);
+        write_preorder(n.left, mut out);
+        write_preorder(n.right, mut out);
     }
 }
 
@@ -39,8 +39,8 @@ fn build(values: Vec[i64], at: mut ref i64, low: i64, high: i64) -> Option[TreeN
     }
     let v = values[*at];
     *at += 1;
-    let left = build(values, at, low, v - 1);
-    let right = build(values, at, v + 1, high);
+    let left = build(values, mut at, low, v - 1);
+    let right = build(values, mut at, v + 1, high);
     Some(TreeNode { val: v, left: left, right: right })
 }
 
@@ -105,8 +105,8 @@ fn height(node: Option[TreeNode]) -> i64 {
 fn visit(node: Option[TreeNode], out: mut ref Vec[i64]) {
     if let Some(n) = node {
         out.push(n.val);
-        visit(n.left, out);
-        visit(n.right, out);
+        visit(n.left, mut out);
+        visit(n.right, mut out);
     }
 }
 

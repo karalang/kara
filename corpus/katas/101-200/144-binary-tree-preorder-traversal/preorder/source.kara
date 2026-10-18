@@ -43,8 +43,8 @@ fn preorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
         None => {}
         Some(n) => {
             out.push(n.val);
-            preorder(n.left, out);
-            preorder(n.right, out);
+            preorder(n.left, mut out);
+            preorder(n.right, mut out);
         }
     }
 }

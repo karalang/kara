@@ -21,13 +21,13 @@ fn run(node: TreeNode, step: i64, out: mut ref Vec[i64]) -> i64 {
     out.push(1);
     let mut length = 1;
     if let Some(l) = node.left {
-        let below = run(l, step, out);
+        let below = run(l, step, mut out);
         if l.val == node.val + step {
             length = below + 1;
         }
     }
     if let Some(r) = node.right {
-        let below = run(r, step, out);
+        let below = run(r, step, mut out);
         if r.val == node.val + step {
             length = length.max(below + 1);
         }
@@ -95,12 +95,12 @@ fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
 // walks down from the root, going left or right with even chance, and
 // takes the first empty place it meets.
 fn random_tree(size: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
-    let root = leaf(next_random(seed) % spread);
+    let root = leaf(next_random(mut seed) % spread);
     for _ in 1..size {
-        let c = leaf(next_random(seed) % spread);
+        let c = leaf(next_random(mut seed) % spread);
         let mut node = root;
         loop {
-            if next_random(seed) % 2 == 0 {
+            if next_random(mut seed) % 2 == 0 {
                 match node.left {
                     Some(l) => node = l,
                     None => {

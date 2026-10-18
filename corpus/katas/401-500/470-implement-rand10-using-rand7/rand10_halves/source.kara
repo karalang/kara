@@ -25,8 +25,8 @@ fn rand5(rng: mut ref Rand7) -> i64 {
 }
 
 fn rand10(rng: mut ref Rand7) -> i64 {
-    let half = rand2(rng);
-    half * 5 + rand5(rng)
+    let half = rand2(mut rng);
+    half * 5 + rand5(mut rng)
 }
 
 // ---- test harness ---------------------------------------------------------
@@ -89,7 +89,7 @@ fn explore(script: mut ref Vec[i64], depth: i64, masses: mut ref Vec[i64]) -> bo
     }
     for d in 1..8 {
         script.push(d);
-        let ok = explore(script, depth, masses);
+        let ok = explore(mut script, depth, mut masses);
         script.pop();
         if not ok {
             return false;

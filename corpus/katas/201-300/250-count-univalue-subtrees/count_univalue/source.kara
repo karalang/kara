@@ -66,8 +66,8 @@ fn is_uni(nodes: ref Vec[Node], node: i64, total: mut ref i64) -> bool {
     // subtree away the moment the left one failed — and with it every uni-value
     // subtree the right side contains. See the README: that is the trap this
     // problem is built around, and `[5,1,5,5,5,null,5]` catches it.
-    let left_uni = is_uni(nodes, left, total);
-    let right_uni = is_uni(nodes, right, total);
+    let left_uni = is_uni(nodes, left, mut total);
+    let right_uni = is_uni(nodes, right, mut total);
 
     let mut ok = left_uni and right_uni;
     if left != -1 and nodes[left].val != nodes[node].val {

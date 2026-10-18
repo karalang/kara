@@ -18,7 +18,7 @@ fn from(k: i64, j: i64, nums: Vec[i64], positions: Map[i64, Vec[i64]], memo: mut
     if let Some(ls) = positions.get(wanted) {
         for l in ls {
             if l > j {
-                ways += 1 + from(j, l, nums, positions, memo);
+                ways += 1 + from(j, l, nums, positions, mut memo);
             }
         }
     }

@@ -3,7 +3,7 @@ struct Bag { n: i64 }
 fn set_to(n: mut ref i64, v: i64) -> i64 { *n = v; v }
 fn mutate(b: mut ref Bag) -> i64 {
     match b {
-        Bag { n } => set_to(n, 99),
+        Bag { n } => set_to(mut n, 99),
     }
 }
 fn main() {

@@ -4,9 +4,9 @@ fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } 
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn skeep(t: own S, v: mut ref Vec[S]) { v.push(t) }
-fn csf(t: own S, v: mut ref Vec[S], c: bool) { if c { skeep(t, v) } }
+fn csf(t: own S, v: mut ref Vec[S], c: bool) { if c { skeep(t, mut v) } }
 fn rkeep(t: own R, v: mut ref Vec[R]) { v.push(t) }
-fn crf(t: own R, v: mut ref Vec[R], k: i64) { match k { 1 => rkeep(t, v), _ => println("no") } }
+fn crf(t: own R, v: mut ref Vec[R], k: i64) { match k { 1 => rkeep(t, mut v), _ => println("no") } }
 fn main() {
     let mut u: Vec[S] = Vec.new();
     csf(mks(1), mut u, false);

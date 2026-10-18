@@ -76,18 +76,18 @@ fn v_next(v: mut ref Vector2D) -> i64 {
 fn drain(v: mut ref Vector2D) -> String {
     let mut out: String = "";
     let mut first = true;
-    while v_has_next(v) {
-        if not v_has_next(v) {
+    while v_has_next(mut v) {
+        if not v_has_next(mut v) {
             return "IDEMPOTENCE BROKEN";
         }
-        let x = v_next(v);
+        let x = v_next(mut v);
         if not first {
             out.push_str(" ");
         }
         out.push_str(f"{x}");
         first = false;
     }
-    if v_has_next(v) {
+    if v_has_next(mut v) {
         return "EXHAUSTION BROKEN";
     }
     if out.len() == 0 {

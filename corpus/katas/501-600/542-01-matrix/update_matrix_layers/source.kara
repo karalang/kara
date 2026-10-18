@@ -49,12 +49,12 @@ fn random_grid(m: i64, n: i64, ones: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
     for _ in 0..m {
         let mut row: Vec[i64] = Vec.new();
         for _ in 0..n {
-            row.push(if next_random(seed) % 100 < ones { 1 } else { 0 });
+            row.push(if next_random(mut seed) % 100 < ones { 1 } else { 0 });
         }
         g.push(row);
     }
-    let r = next_random(seed) % m;
-    let c = next_random(seed) % n;
+    let r = next_random(mut seed) % m;
+    let c = next_random(mut seed) % n;
     g[r][c] = 0;
     g
 }

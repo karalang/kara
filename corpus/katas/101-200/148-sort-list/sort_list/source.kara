@@ -67,10 +67,10 @@ fn merge(nodes: mut ref Vec[Node], a: i64, b: i64) -> i64 {
 fn sort_chain(nodes: mut ref Vec[Node], head: i64) -> i64 {
     if head == -1 { return -1; }
     if next_idx(nodes, head) == -1 { return head; }
-    let mid: i64 = split_mid(nodes, head);
-    let left: i64 = sort_chain(nodes, head);
-    let right: i64 = sort_chain(nodes, mid);
-    return merge(nodes, left, right);
+    let mid: i64 = split_mid(mut nodes, head);
+    let left: i64 = sort_chain(mut nodes, head);
+    let right: i64 = sort_chain(mut nodes, mid);
+    return merge(mut nodes, left, right);
 }
 
 fn sort_list(vals: Vec[i64]) -> Vec[i64] {

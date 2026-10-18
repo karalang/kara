@@ -71,7 +71,7 @@ fn parse(bytes: Slice[u8], at: mut ref i64) -> Option[Node] {
         let node = Node { val: val, prev: None, next: None, child: None };
         if *at < bytes.len() and bytes[*at] == b'(' {
             *at += 1;
-            node.child = parse(bytes, at);
+            node.child = parse(bytes, mut at);
             *at += 1;
         }
         match last {
@@ -166,7 +166,7 @@ fn step(seed: mut ref i64) -> i64 {
 // given a child list with probability 1 in 4 while depth allows.
 fn random_text(budget: mut ref i64, depth: i64, next_val: mut ref i64, seed: mut ref i64) -> String {
     let mut out = String.new();
-    let length = 1 + step(seed) % 5;
+    let length = 1 + step(mut seed) % 5;
     for i in 0..length {
         if *budget == 0 {
             break;
@@ -177,9 +177,9 @@ fn random_text(budget: mut ref i64, depth: i64, next_val: mut ref i64, seed: mut
         }
         out.push_str(f"{*next_val}");
         *next_val += 1;
-        if depth < 6 and *budget > 0 and step(seed) % 4 == 0 {
+        if depth < 6 and *budget > 0 and step(mut seed) % 4 == 0 {
             out.push('(');
-            out.push_str(random_text(budget, depth + 1, next_val, seed));
+            out.push_str(random_text(mut budget, depth + 1, mut next_val, mut seed));
             out.push(')');
         }
     }

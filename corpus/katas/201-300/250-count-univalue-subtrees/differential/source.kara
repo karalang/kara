@@ -63,8 +63,8 @@ fn is_uni(nodes: ref Vec[Node], node: i64, total: mut ref i64) -> bool {
     }
     let left = nodes[node].left;
     let right = nodes[node].right;
-    let left_uni = is_uni(nodes, left, total);
-    let right_uni = is_uni(nodes, right, total);
+    let left_uni = is_uni(nodes, left, mut total);
+    let right_uni = is_uni(nodes, right, mut total);
     let mut ok = left_uni and right_uni;
     if left != -1 and nodes[left].val != nodes[node].val {
         ok = false;

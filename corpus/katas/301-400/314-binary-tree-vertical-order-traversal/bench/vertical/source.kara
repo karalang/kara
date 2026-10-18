@@ -43,8 +43,8 @@ fn grow(n: i64, seed: mut ref i64) -> Option[TreeNode] {
     seed = lcg(seed);
     let left_n = if n <= 1 { 0 } else { seed % n };
     let right_n = n - 1 - left_n;
-    let l = grow(left_n, seed);
-    let r = grow(right_n, seed);
+    let l = grow(left_n, mut seed);
+    let r = grow(right_n, mut seed);
     return Some(TreeNode { val: v, left: l, right: r });
 }
 
@@ -54,8 +54,8 @@ fn extent(t: Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
         Some(n) => {
             if col < lo { lo = col; }
             if col > hi { hi = col; }
-            extent(n.left, col - 1, lo, hi);
-            extent(n.right, col + 1, lo, hi);
+            extent(n.left, col - 1, mut lo, mut hi);
+            extent(n.right, col + 1, mut lo, mut hi);
         }
     }
 }

@@ -25,7 +25,7 @@ fn extend_star(nums: Vec[i64], from: i64, current: mut ref Vec[i64], out: mut re
         if current.len() == 0 or nums[i] >= current[current.len() - 1] {
             tried.insert(nums[i]);
             current.push(nums[i]);
-            extend_star(nums, i + 1, current, out);
+            extend_star(nums, i + 1, mut current, mut out);
             current.pop();
         }
     }
@@ -152,10 +152,10 @@ fn pick(nums: Vec[i64], i: i64, current: mut ref Vec[i64], all: mut ref Vec[Vec[
         }
         return;
     }
-    pick(nums, i + 1, current, all);
+    pick(nums, i + 1, mut current, mut all);
     if current.len() == 0 or nums[i] >= current[current.len() - 1] {
         current.push(nums[i]);
-        pick(nums, i + 1, current, all);
+        pick(nums, i + 1, mut current, mut all);
         current.pop();
     }
 }

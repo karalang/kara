@@ -36,7 +36,7 @@ fn dfs(node: Node, visited: mut ref Map[i64, Node]) -> Node {
             let copy = Node { val: node.val, neighbors: Vec.new() };
             let _ = visited.insert(node.val, copy);
             for nb in node.neighbors.iter() {
-                let cloned_nb = dfs(nb, visited);
+                let cloned_nb = dfs(nb, mut visited);
                 copy.neighbors.push(cloned_nb);
             }
             copy

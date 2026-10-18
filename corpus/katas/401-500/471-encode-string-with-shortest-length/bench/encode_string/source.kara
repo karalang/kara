@@ -58,16 +58,16 @@ fn next_random(seed: mut ref i64) -> i64 {
 // copies of a smaller such string.
 fn random_string(seed: mut ref i64, letters: i64, depth: i64) -> String {
     let mut s = String.new();
-    let pieces = 1 + next_random(seed) % 4;
+    let pieces = 1 + next_random(mut seed) % 4;
     for _ in 0..pieces {
-        if depth > 0 and next_random(seed) % 2 == 0 {
-            let unit = random_string(seed, letters, depth - 1);
-            let copies = 2 + next_random(seed) % 11;
+        if depth > 0 and next_random(mut seed) % 2 == 0 {
+            let unit = random_string(mut seed, letters, depth - 1);
+            let copies = 2 + next_random(mut seed) % 11;
             for _ in 0..copies {
                 s.push_str(unit.as_str());
             }
         } else {
-            s.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+            s.push(char.try_from(97 + (next_random(mut seed) % letters) as u32).unwrap());
         }
     }
     s

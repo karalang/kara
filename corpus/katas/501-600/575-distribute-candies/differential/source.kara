@@ -82,7 +82,7 @@ fn best_pick(candies: ref Vec[i64], start: i64, left: i64, picked: mut ref Vec[i
     let mut best = 0;
     for i in start..candies.len() {
         picked.push(candies[i]);
-        best = best.max(best_pick(candies, i + 1, left - 1, picked));
+        best = best.max(best_pick(candies, i + 1, left - 1, mut picked));
         picked.pop();
     }
     best

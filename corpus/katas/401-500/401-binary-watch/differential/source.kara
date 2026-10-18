@@ -42,9 +42,9 @@ fn pick(next: i64, left: i64, hour: i64, minute: i64, found: mut ref Vec[(i64, i
     }
     for led in next..10 {
         if led < 4 {
-            pick(led + 1, left - 1, hour + (1 << led), minute, found);
+            pick(led + 1, left - 1, hour + (1 << led), minute, mut found);
         } else {
-            pick(led + 1, left - 1, hour, minute + (1 << (led - 4)), found);
+            pick(led + 1, left - 1, hour, minute + (1 << (led - 4)), mut found);
         }
     }
 }

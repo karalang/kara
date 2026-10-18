@@ -49,16 +49,16 @@ fn tile(x1: i64, y1: i64, x2: i64, y2: i64, pieces: i64, seed: mut ref i64, out:
         out.push(vec![x1, y1, x2, y2]);
         return;
     }
-    let left = 1 + step(seed) % (pieces - 1);
-    let across = if w < 2 { false } else if h < 2 { true } else { step(seed) % 2 == 0 };
+    let left = 1 + step(mut seed) % (pieces - 1);
+    let across = if w < 2 { false } else if h < 2 { true } else { step(mut seed) % 2 == 0 };
     if across {
-        let cut = x1 + 1 + step(seed) % (w - 1);
-        tile(x1, y1, cut, y2, left, seed, out);
-        tile(cut, y1, x2, y2, pieces - left, seed, out);
+        let cut = x1 + 1 + step(mut seed) % (w - 1);
+        tile(x1, y1, cut, y2, left, mut seed, mut out);
+        tile(cut, y1, x2, y2, pieces - left, mut seed, mut out);
     } else {
-        let cut = y1 + 1 + step(seed) % (h - 1);
-        tile(x1, y1, x2, cut, left, seed, out);
-        tile(x1, cut, x2, y2, pieces - left, seed, out);
+        let cut = y1 + 1 + step(mut seed) % (h - 1);
+        tile(x1, y1, x2, cut, left, mut seed, mut out);
+        tile(x1, cut, x2, y2, pieces - left, mut seed, mut out);
     }
 }
 

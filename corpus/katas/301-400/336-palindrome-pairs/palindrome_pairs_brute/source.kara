@@ -67,10 +67,10 @@ fn random_words(seed: mut ref i64, count: i64, letters: i64, lo: i64, hi: i64) -
     let mut seen: Set[String] = Set.new();
     let mut out: Vec[String] = Vec.new();
     while out.len() < count {
-        let len = lo + next(seed) % (hi - lo + 1);
+        let len = lo + next(mut seed) % (hi - lo + 1);
         let mut w = String.new();
         for _ in 0..len {
-            w.push(alphabet[next(seed) % letters] as char);
+            w.push(alphabet[next(mut seed) % letters] as char);
         }
         if not seen.contains(w) {
             seen.insert(w.clone());

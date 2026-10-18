@@ -169,7 +169,7 @@ fn shuffled_order(n: i64, seed: mut ref i64) -> Vec[i64] {
     if len < 2 { return o; }
     let mut i = len - 1;
     while i > 0 {
-        let j = next(seed) % (i + 1);
+        let j = next(mut seed) % (i + 1);
         o.swap(i, j);
         i -= 1;
     }

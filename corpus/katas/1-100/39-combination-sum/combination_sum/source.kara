@@ -53,7 +53,7 @@ fn backtrack(
         if c <= remaining {
             path.push(c);
             // Recurse at `i`, NOT i+1 — candidates may be reused.
-            backtrack(candidates, i, remaining - c, path, out);
+            backtrack(candidates, i, remaining - c, mut path, mut out);
             path.pop();
         }
         i = i + 1;

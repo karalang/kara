@@ -5,7 +5,7 @@ fn gr(x: mut ref Result[R, i64]) -> i64 { x = Err(7); 1 }
 fn gn(x: mut ref Option[R]) -> i64 { x = None; 2 }
 fn g2(x: mut ref Option[R]) -> i64 { x = Some(mk(50, f"p")); x = Some(mk(51, f"q")); 3 }
 fn inner(x: mut ref Option[R]) -> i64 { x = Some(mk(60, f"i")); 4 }
-fn outer(x: mut ref Option[R]) -> i64 { inner(x) }
+fn outer(x: mut ref Option[R]) -> i64 { inner(mut x) }
 fn gk(x: mut ref Option[R]) -> i64 { let n = match x { Some(r) => r.id, None => 0 }; x = Some(mk(n + 100, f"k")); 5 }
 fn main() {
     let mut a: Result[R, i64] = Ok(mk(1, f"a")); println(f"n{gr(mut a)}"); println("a1");

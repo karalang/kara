@@ -91,7 +91,7 @@ fn can_win_memo(s: ref String, memo: mut ref Map[String, bool], calls: mut ref i
     let states = next_states(s);
     let mut i = 0;
     while i < states.len() {
-        if not can_win_memo(states[i], memo, calls) {
+        if not can_win_memo(states[i], mut memo, mut calls) {
             let _ = memo.insert(s.clone(), true);
             return true;
         }
@@ -103,7 +103,7 @@ fn can_win_memo(s: ref String, memo: mut ref Map[String, bool], calls: mut ref i
 
 fn arm_memo(s: ref String, calls: mut ref i64) -> bool {
     let mut memo: Map[String, bool] = Map.new();
-    return can_win_memo(s, mut memo, calls);
+    return can_win_memo(s, mut memo, mut calls);
 }
 
 // ---- arm B: the same search with no memo ----------------------------------
@@ -113,7 +113,7 @@ fn can_win_naive(s: ref String, calls: mut ref i64) -> bool {
     let states = next_states(s);
     let mut i = 0;
     while i < states.len() {
-        if not can_win_naive(states[i], calls) { return true; }
+        if not can_win_naive(states[i], mut calls) { return true; }
         i = i + 1;
     }
     return false;

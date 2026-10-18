@@ -13,12 +13,12 @@ fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
     }
 }
 fn collect(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
-    match node { None => {} Some(n) => { collect(n.left, out); out.push(n); collect(n.right, out); } }
+    match node { None => {} Some(n) => { collect(n.left, mut out); out.push(n); collect(n.right, mut out); } }
 }
 fn sum_inorder(node: Option[TreeNode], acc: mut ref i64) -> Option[TreeNode] {
     match node {
         None => {}
-        Some(n) => { sum_inorder(n.left, acc); acc = (acc * 131 + n.val) % 1000000007; sum_inorder(n.right, acc); }
+        Some(n) => { sum_inorder(n.left, mut acc); acc = (acc * 131 + n.val) % 1000000007; sum_inorder(n.right, mut acc); }
     }
     node
 }

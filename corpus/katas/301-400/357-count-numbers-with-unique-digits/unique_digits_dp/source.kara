@@ -19,9 +19,9 @@ fn ways(pos: i64, n: i64, base: i64, used: i64, started: bool, memo: mut ref Map
     let mut total = 0;
     for d in 0..base {
         if not started and d == 0 {
-            total += ways(pos + 1, n, base, used, false, memo);
+            total += ways(pos + 1, n, base, used, false, mut memo);
         } else if used & (1 << d) == 0 {
-            total += ways(pos + 1, n, base, used | (1 << d), true, memo);
+            total += ways(pos + 1, n, base, used | (1 << d), true, mut memo);
         }
     }
     memo.insert(key, total);

@@ -24,7 +24,7 @@ fn visit(node: Option[TreeNode], walk: mut ref Walk) {
     let Some(n) = node else {
         return;
     };
-    visit(n.left, walk);
+    visit(n.left, mut walk);
     if walk.run > 0 and n.val == walk.prev {
         walk.run += 1;
     } else {
@@ -38,7 +38,7 @@ fn visit(node: Option[TreeNode], walk: mut ref Walk) {
     } else if walk.run == walk.best {
         walk.modes.push(n.val);
     }
-    visit(n.right, walk);
+    visit(n.right, mut walk);
 }
 
 fn find_mode(root: Option[TreeNode]) -> Vec[i64] {
@@ -67,7 +67,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
         let v = values[i];
         let mut node = root;
         loop {
-            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+            if v < node.val or (v == node.val and next_random(mut seed) % 2 == 0) {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -90,7 +90,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
 }
 
 fn show(name: Str, values: Vec[i64], seed: mut ref i64) {
-    let root = build(values, seed);
+    let root = build(values, mut seed);
     println(f"{name}: {values} -> {find_mode(root)}");
 }
 

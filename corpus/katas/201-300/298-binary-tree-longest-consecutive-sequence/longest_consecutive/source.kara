@@ -70,8 +70,8 @@ fn down(t: Option[TreeNode], best: mut ref i64) -> i64 {
             return 0;
         }
         Some(n) => {
-            let l = down(n.left, best);
-            let r = down(n.right, best);
+            let l = down(n.left, mut best);
+            let r = down(n.right, mut best);
 
             let mut run = 1;
             match n.left {

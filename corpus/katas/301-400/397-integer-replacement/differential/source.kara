@@ -34,9 +34,9 @@ fn memo_replace(v: i64, memo: mut ref Map[i64, i64]) -> i64 {
         return *known;
     }
     let r = if v % 2 == 0 {
-        1 + memo_replace(v / 2, memo)
+        1 + memo_replace(v / 2, mut memo)
     } else {
-        2 + memo_replace((v - 1) / 2, memo).min(memo_replace((v + 1) / 2, memo))
+        2 + memo_replace((v - 1) / 2, mut memo).min(memo_replace((v + 1) / 2, mut memo))
     };
     memo.insert(v, r);
     r
@@ -128,7 +128,7 @@ fn step(seed: mut ref i64) -> i64 {
 }
 
 fn random_value(seed: mut ref i64, limit: i64) -> i64 {
-    1 + (step(seed) * 32768 + step(seed)) % limit
+    1 + (step(mut seed) * 32768 + step(mut seed)) % limit
 }
 
 // failures[0] counts every failure, failures[p] those of property Pp.

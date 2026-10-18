@@ -22,7 +22,7 @@ fn rest(r: Slice[u8], k: Slice[u8], i: i64, p: i64, memo: mut ref Map[(i64, i64)
     while r[(p - left + n) % n] != k[i] {
         left += 1;
     }
-    let best = (right + rest(r, k, i + 1, (p + right) % n, memo)).min(left + rest(r, k, i + 1, (p - left + n) % n, memo));
+    let best = (right + rest(r, k, i + 1, (p + right) % n, mut memo)).min(left + rest(r, k, i + 1, (p - left + n) % n, mut memo));
     memo.insert((i, p), best);
     best
 }

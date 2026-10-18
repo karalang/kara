@@ -35,7 +35,7 @@ fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
     let mut lo = val;
     let mut hi = val;
     if left != -1 {
-        let l = visit(nodes, left, best);
+        let l = visit(nodes, left, mut best);
         if l.bst and l.hi < val {
             size += l.size;
             lo = l.lo;
@@ -44,7 +44,7 @@ fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
         }
     }
     if right != -1 {
-        let r = visit(nodes, right, best);
+        let r = visit(nodes, right, mut best);
         if r.bst and r.lo > val {
             size += r.size;
             hi = r.hi;
@@ -73,8 +73,8 @@ fn next(seed: mut ref i64) -> i64 {
 }
 
 fn wide(seed: mut ref i64) -> i64 {
-    let hi = next(seed);
-    return hi * 32768 + next(seed);
+    let hi = next(mut seed);
+    return hi * 32768 + next(mut seed);
 }
 
 fn insert(nodes: mut ref Vec[Node], v: i64) {

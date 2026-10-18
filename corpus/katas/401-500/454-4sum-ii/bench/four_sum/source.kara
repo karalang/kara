@@ -27,7 +27,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn random_value(seed: mut ref i64) -> i64 {
-    (next_random(seed) * 65536 + next_random(seed)) % 100001 - 50000
+    (next_random(mut seed) * 65536 + next_random(mut seed)) % 100001 - 50000
 }
 
 fn main() {

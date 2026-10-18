@@ -42,7 +42,7 @@ fn walk(bs: ref Vec[u8], n: i64, i: i64, run: i64, path: own String,
     }
 
     // Branch 1: count letter `i` — the pending run grows, the string does not.
-    walk(bs, n, i + 1, run + 1, path.clone(), out);
+    walk(bs, n, i + 1, run + 1, path.clone(), mut out);
 
     // Branch 2: keep letter `i` — flush the run, then append the letter.
     let mut kept = path;
@@ -50,7 +50,7 @@ fn walk(bs: ref Vec[u8], n: i64, i: i64, run: i64, path: own String,
         kept.push_str(run.to_string());
     }
     kept.push(bs[i] as char);
-    walk(bs, n, i + 1, 0, kept, out);
+    walk(bs, n, i + 1, 0, kept, mut out);
 }
 
 fn to_bytes(word: ref String) -> Vec[u8] {

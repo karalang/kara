@@ -19,7 +19,7 @@ fn write(node: ref Node, out: mut ref String) {
             if i > 0 {
                 out.push(' ');
             }
-            write(node.children[i], out);
+            write(node.children[i], mut out);
         }
         out.push(']');
     }
@@ -44,7 +44,7 @@ fn read(bytes: Slice[u8], at: mut ref i64) -> Node {
     if *at < bytes.len() and bytes[*at] == b'[' {
         *at += 1;
         loop {
-            children.push(read(bytes, at));
+            children.push(read(bytes, mut at));
             // A space means another child follows; otherwise this is `]`.
             let sep = bytes[*at];
             *at += 1;
@@ -93,7 +93,7 @@ fn draw(node: ref Node, out: mut ref String) {
             if i > 0 {
                 out.push(' ');
             }
-            draw(node.children[i], out);
+            draw(node.children[i], mut out);
         }
         out.push(')');
     }
@@ -131,12 +131,12 @@ fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
     let mut vals: Vec[i64] = Vec.new();
     let mut kids: Vec[Vec[i64]] = Vec.new();
     // Wide or deep: the parent is drawn from the last `reach` nodes.
-    let reach = 1 + step(seed) % n;
+    let reach = 1 + step(mut seed) % n;
     for i in 0..n {
-        vals.push(step(seed) % 10001);
+        vals.push(step(mut seed) % 10001);
         kids.push(Vec.new());
         if i > 0 {
-            let back = 1 + step(seed) % min(i, reach);
+            let back = 1 + step(mut seed) % min(i, reach);
             kids[i - back].push(i);
         }
     }

@@ -72,9 +72,9 @@ fn fmt(nums: mut Slice[i64], len: i64) -> String {
 fn report(nums: mut Slice[i64], len: i64) {
     // nums is an in-scope mut Slice — forwards to fmt/next_permutation without
     // a call-site marker (design.md Feature 4 Part 1½, Rule 2).
-    let before = fmt(nums, len);
-    next_permutation(nums, len);
-    println(f"{before} -> {fmt(nums, len)}");
+    let before = fmt(mut nums, len);
+    next_permutation(mut nums, len);
+    println(f"{before} -> {fmt(mut nums, len)}");
 }
 
 fn main() {

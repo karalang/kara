@@ -20,8 +20,8 @@ fn leaves(node: Option[TreeNode], out: mut ref Vec[i64]) {
         if is_leaf(n) {
             out.push(n.val);
         } else {
-            leaves(n.left, out);
-            leaves(n.right, out);
+            leaves(n.left, mut out);
+            leaves(n.right, mut out);
         }
     }
 }

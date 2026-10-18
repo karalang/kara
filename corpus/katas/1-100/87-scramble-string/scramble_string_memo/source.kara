@@ -62,13 +62,13 @@ fn scramble(s1: ref Vec[u8], i1: i64, s2: ref Vec[u8], i2: i64, len: i64,
     // Fan out over split points, each with and without the swap.
     let mut split = 1;
     while split < len {
-        if scramble(s1, i1, s2, i2, split, memo, n)
-            and scramble(s1, i1 + split, s2, i2 + split, len - split, memo, n) {
+        if scramble(s1, i1, s2, i2, split, mut memo, n)
+            and scramble(s1, i1 + split, s2, i2 + split, len - split, mut memo, n) {
             memo[key] = 1;
             return true;
         }
-        if scramble(s1, i1, s2, i2 + len - split, split, memo, n)
-            and scramble(s1, i1 + split, s2, i2, len - split, memo, n) {
+        if scramble(s1, i1, s2, i2 + len - split, split, mut memo, n)
+            and scramble(s1, i1 + split, s2, i2, len - split, mut memo, n) {
             memo[key] = 1;
             return true;
         }

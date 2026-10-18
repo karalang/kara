@@ -50,7 +50,7 @@ fn memo_count(nums: ref Vec[i64], t: i64, memo: mut ref Vec[Option[i64]]) -> i64
     let mut total = 0;
     for x in nums.iter() {
         if x <= t {
-            total += memo_count(nums, t - x, memo);
+            total += memo_count(nums, t - x, mut memo);
         }
     }
     memo[t] = Some(total);

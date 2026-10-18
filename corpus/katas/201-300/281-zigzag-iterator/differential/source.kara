@@ -78,7 +78,7 @@ fn next(z: mut ref Zigzag) -> i64 {
     z.cursor[t] = z.cursor[t] + 1;
     z.remaining = z.remaining - 1;
     z.turn = (t + 1) % z.lists.len();
-    settle(z);
+    settle(mut z);
     return v;
 }
 

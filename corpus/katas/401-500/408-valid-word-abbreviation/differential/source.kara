@@ -196,12 +196,12 @@ fn pieces(word: Vec[u8], seed: mut ref i64) -> Vec[(u8, i64)] {
     let mut i = 0;
     let mut number = false;
     while i < word.len() {
-        if number or step(seed) % 2 == 0 {
+        if number or step(mut seed) % 2 == 0 {
             out.push((word[i], 0));
             i += 1;
             number = false;
         } else {
-            let run = 1 + step(seed) % (word.len() - i);
+            let run = 1 + step(mut seed) % (word.len() - i);
             out.push((0, run));
             i += run;
             number = true;

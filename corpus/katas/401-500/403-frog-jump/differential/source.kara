@@ -48,7 +48,7 @@ fn reach_memo(stones: Vec[i64], index: Map[i64, i64], at: i64, k: i64, dead: mut
     for size in k - 1..k + 2 {
         if size > 0 {
             if let Some(next) = index.get(stones[at] + size) {
-                if reach_memo(stones, index, *next, size, dead) {
+                if reach_memo(stones, index, *next, size, mut dead) {
                     return true;
                 }
             }
@@ -141,7 +141,7 @@ fn river(n: i64, widest: i64, seed: mut ref i64) -> Vec[i64] {
     let mut stones = vec![0, 1];
     while stones.len() < n {
         let last = stones[stones.len() - 1];
-        stones.push(last + 1 + step(seed) % widest);
+        stones.push(last + 1 + step(mut seed) % widest);
     }
     stones
 }
@@ -155,7 +155,7 @@ fn add_stones(stones: Vec[i64], count: i64, seed: mut ref i64) -> Vec[i64] {
         on[*s] = true;
     }
     for _ in 0..count {
-        on[step(seed) % (last + 1)] = true;
+        on[step(mut seed) % (last + 1)] = true;
     }
     let mut out: Vec[i64] = Vec.new();
     for p in 0..last + 1 {

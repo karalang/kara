@@ -67,8 +67,8 @@ fn a_down(t: Option[TreeNode], best: mut ref i64) -> i64 {
             return 0;
         }
         Some(n) => {
-            let l = a_down(n.left, best);
-            let r = a_down(n.right, best);
+            let l = a_down(n.left, mut best);
+            let r = a_down(n.right, mut best);
             let mut run = 1;
             match n.left {
                 None => { }
@@ -103,8 +103,8 @@ fn b_visit(t: Option[TreeNode], has_parent: bool, parent_val: i64, arriving: i64
             let mut run = 1;
             if has_parent and n.val == parent_val + 1 { run = arriving + 1; }
             if run > best { best = run; }
-            b_visit(n.left, true, n.val, run, best);
-            b_visit(n.right, true, n.val, run, best);
+            b_visit(n.left, true, n.val, run, mut best);
+            b_visit(n.right, true, n.val, run, mut best);
         }
     }
 }
@@ -155,8 +155,8 @@ fn collect_paths(t: Option[TreeNode], path: mut ref Vec[i64], out: mut ref Vec[V
             if has_l == false and has_r == false {
                 out.push(path.clone());
             } else {
-                collect_paths(n.left, path, out);
-                collect_paths(n.right, path, out);
+                collect_paths(n.left, mut path, mut out);
+                collect_paths(n.right, mut path, mut out);
             }
             let _ = path.pop();
         }
@@ -250,8 +250,8 @@ fn grow(n: i64, spread: i64, base: i64, seed: mut ref i64) -> Option[TreeNode] {
     let delta = seed % spread - 1;
 
     let v = base + delta;
-    let l = grow(left_size, spread, v, seed);
-    let r = grow(right_size, spread, v, seed);
+    let l = grow(left_size, spread, v, mut seed);
+    let r = grow(right_size, spread, v, mut seed);
     return Some(TreeNode { val: v, left: l, right: r });
 }
 

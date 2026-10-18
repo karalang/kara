@@ -20,7 +20,7 @@ fn extend(rows: mut ref Vec[String], length: i64, by_prefix: ref Map[String, Vec
         Some(candidates) => {
             for i in candidates {
                 rows.push(words[i].clone());
-                extend(rows, length, by_prefix, words, found);
+                extend(mut rows, length, by_prefix, words, mut found);
                 rows.pop();
             }
         }
@@ -58,7 +58,7 @@ fn step(seed: mut ref i64) -> i64 {
 fn random_word(seed: mut ref i64) -> String {
     let mut word = String.new();
     for _ in 0..4 {
-        word.push(char.try_from((97 + step(seed) % 16) as u32).unwrap());
+        word.push(char.try_from((97 + step(mut seed) % 16) as u32).unwrap());
     }
     word
 }

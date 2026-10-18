@@ -61,7 +61,7 @@ fn walk(bs: ref Vec[u8], n: i64, p: i64, path: String, out: mut ref Vec[String])
                 // The letter after the run MUST be kept, or the two runs
                 // would merge and this abbreviation would be produced twice.
                 with_run.push(bs[a + len] as char);
-                walk(bs, n, a + len + 1, with_run, out);
+                walk(bs, n, a + len + 1, with_run, mut out);
             }
             len = len + 1;
         }

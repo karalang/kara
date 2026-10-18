@@ -11,7 +11,7 @@ fn subtree_sum(node: Option[TreeNode], counts: mut ref Map[i64, i64]) -> i64 {
     let Some(n) = node else {
         return 0;
     };
-    let sum = n.val + subtree_sum(n.left, counts) + subtree_sum(n.right, counts);
+    let sum = n.val + subtree_sum(n.left, mut counts) + subtree_sum(n.right, mut counts);
     *counts.entry(sum).or_insert(0) += 1;
     sum
 }
@@ -47,9 +47,9 @@ fn build(values: Vec[i64], lo: i64, hi: i64, seed: mut ref i64) -> Option[TreeNo
     if lo >= hi {
         return None;
     }
-    let mid = lo + next_random(seed) % (hi - lo);
-    let left = build(values, lo, mid, seed);
-    let right = build(values, mid + 1, hi, seed);
+    let mid = lo + next_random(mut seed) % (hi - lo);
+    let left = build(values, lo, mid, mut seed);
+    let right = build(values, mid + 1, hi, mut seed);
     Some(TreeNode { val: values[mid], left: left, right: right })
 }
 

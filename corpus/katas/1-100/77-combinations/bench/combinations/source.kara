@@ -22,7 +22,7 @@ fn enumerate(n: i64, k: i64, start: i64, path: mut ref Vec[i64], acc: i64) -> i6
     let mut i = start;
     while i <= limit {
         path.push(i);
-        a = enumerate(n, k, i + 1, path, a);
+        a = enumerate(n, k, i + 1, mut path, a);
         path.pop();
         i = i + 1;
     }

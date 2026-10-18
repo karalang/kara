@@ -114,10 +114,10 @@ fn next_random(seed: mut ref i64) -> i64 {
 // A part from -100 to 100, or one time in four from -10^4 to 10^4, as
 // the products of two numbers in range are.
 fn random_part(seed: mut ref i64) -> i64 {
-    if next_random(seed) % 4 == 0 {
-        next_random(seed) % 20001 - 10000
+    if next_random(mut seed) % 4 == 0 {
+        next_random(mut seed) % 20001 - 10000
     } else {
-        next_random(seed) % 201 - 100
+        next_random(mut seed) % 201 - 100
     }
 }
 

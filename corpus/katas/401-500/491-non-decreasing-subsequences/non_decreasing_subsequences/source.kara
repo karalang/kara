@@ -18,7 +18,7 @@ fn extend(nums: Vec[i64], from: i64, current: mut ref Vec[i64], out: mut ref Vec
         if current.len() == 0 or nums[i] >= current[current.len() - 1] {
             tried.insert(nums[i]);
             current.push(nums[i]);
-            extend(nums, i + 1, current, out);
+            extend(nums, i + 1, mut current, mut out);
             current.pop();
         }
     }

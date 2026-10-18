@@ -36,10 +36,10 @@ fn polygon(n: i64, dent: bool, seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut x = -(n * 2);
     for _ in 0..n {
         points.push((x, x * x));
-        x += 1 + next_random(seed) % 3;
+        x += 1 + next_random(mut seed) % 3;
     }
     if dent {
-        let i = 1 + next_random(seed) % (n - 2);
+        let i = 1 + next_random(mut seed) % (n - 2);
         let (xa, _) = points[i - 1];
         let (xb, yb) = points[i];
         let (xc, _) = points[i + 1];

@@ -11,29 +11,29 @@ fn ssort(xs: mut Slice[u8]) { xs.sort(); }
 fn main() {
     let mut a: Vec[i64] = Vec.new();
     a.push(3i64); a.push(1i64); a.push(2i64); a.push(5i64);
-    msort(a.as_slice_mut());
+    msort(mut a.as_slice_mut());
     println(f"01 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
-    mrev(a.as_slice_mut());
+    mrev(mut a.as_slice_mut());
     println(f"02 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
-    mkey(a.as_slice_mut());
+    mkey(mut a.as_slice_mut());
     println(f"03 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
-    mswap(a.as_slice_mut());
+    mswap(mut a.as_slice_mut());
     println(f"04 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
-    mby(a.as_slice_mut());
+    mby(mut a.as_slice_mut());
     println(f"05 {a[0i64]} {a[1i64]} {a[2i64]} {a[3i64]}");
 
     let mut b: Vec[i64] = Vec.new();
     b.push(9i64); b.push(8i64); b.push(3i64); b.push(1i64); b.push(2i64);
     let mut bs = b.as_slice_mut();
     let h = bs.split_at_mut(2i64);
-    msort(h.1);
+    msort(mut h.1);
     println(f"06 {b[0i64]} {b[1i64]} {b[2i64]} {b[3i64]} {b[4i64]}");
 
     let mut u: Vec[u8] = Vec.new();
     u.push(3u8); u.push(1u8); u.push(2u8);
-    ssort(u.as_slice_mut());
+    ssort(mut u.as_slice_mut());
     println(f"07 {u[0i64]} {u[1i64]} {u[2i64]}");
-    sfill(u.as_slice_mut());
+    sfill(mut u.as_slice_mut());
     println(f"08 {u[0i64]} {u[1i64]} {u[2i64]}");
 
     let mut v: Vec[i64] = Vec.new();
@@ -58,8 +58,8 @@ fn main() {
 
     let mut m: Vec[i64] = Vec.new();
     m.push(1i64); m.push(2i64); m.push(3i64);
-    mswap(m.as_slice_mut());
+    mswap(mut m.as_slice_mut());
     println(f"15 {m[0i64]} {m[1i64]} {m[2i64]}");
-    mfill(m.as_slice_mut());
+    mfill(mut m.as_slice_mut());
     println(f"16 {m[0i64]} {m[1i64]} {m[2i64]}");
 }

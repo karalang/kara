@@ -15,7 +15,7 @@ fn reach(stones: Vec[i64], index: Map[i64, i64], at: i64, k: i64, dead: mut ref 
     for size in k - 1..k + 2 {
         if size > 0 {
             if let Some(next) = index.get(stones[at] + size) {
-                if reach(stones, index, *next, size, dead) {
+                if reach(stones, index, *next, size, mut dead) {
                     return true;
                 }
             }

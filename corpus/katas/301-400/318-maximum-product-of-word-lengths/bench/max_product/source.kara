@@ -33,11 +33,11 @@ fn next(seed: mut ref i64) -> i64 {
 // window of WINDOW consecutive letters starting at a random base.
 fn write_word(letters: mut ref Vec[i64], lens: mut ref Vec[i64], w: i64,
               seed: mut ref i64) {
-    let len = next(seed) % LMAX + 1;
-    let base = next(seed) % (26 - WINDOW + 1);
+    let len = next(mut seed) % LMAX + 1;
+    let base = next(mut seed) % (26 - WINDOW + 1);
     lens[w] = len;
     for k in 0..len {
-        letters[w * LMAX + k] = base + next(seed) % WINDOW;
+        letters[w * LMAX + k] = base + next(mut seed) % WINDOW;
     }
 }
 

@@ -636,9 +636,9 @@ fn read_sub_rows(f: ref File, m: ref SubMeta, plane: i64, row0: i64, nrows: i64,
         // request are the same request.
         let mut p = plane;
         if m.spp == 1 { p = 0; }
-        return read_tiff_rows_at(f, m, p, row0, nrows, dst, dst_base);
+        return read_tiff_rows_at(f, m, p, row0, nrows, mut dst, dst_base);
     }
-    read_rows_at(f, m.data_off, row0, nrows, m.width, m.bzero, m.bscale, dst, dst_base)
+    read_rows_at(f, m.data_off, row0, nrows, m.width, m.bzero, m.bscale, mut dst, dst_base)
 }
 
 /// True if `path` is a `.cstack` container, by its magic rather than its name.

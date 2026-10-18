@@ -136,10 +136,10 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 // `n` bits, each a 1 with chance one in 1 to 4.
 fn random_bits(seed: mut ref i64, n: i64) -> Vec[i64] {
-    let q = 1 + next_random(seed) % 4;
+    let q = 1 + next_random(mut seed) % 4;
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..n {
-        nums.push(if next_random(seed) % q == 0 { 1 } else { 0 });
+        nums.push(if next_random(mut seed) % q == 0 { 1 } else { 0 });
     }
     nums
 }

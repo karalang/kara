@@ -38,8 +38,8 @@ fn dfs(node: Option[TreeNode], target: i64, path: mut ref Vec[i64], out: mut ref
                     out.push(copy);
                 }
             } else {
-                dfs(n.left, rem, path, out);
-                dfs(n.right, rem, path, out);
+                dfs(n.left, rem, mut path, mut out);
+                dfs(n.right, rem, mut path, mut out);
             }
             // Backtrack: drop this node's value before returning to the parent.
             match path.pop() {

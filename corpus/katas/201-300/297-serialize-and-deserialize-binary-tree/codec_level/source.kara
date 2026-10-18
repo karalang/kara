@@ -146,8 +146,8 @@ fn fingerprint_into(t: Option[TreeNode], out: mut ref Vec[String]) {
         None => { out.push("#"); }
         Some(n) => {
             out.push(n.val.to_string());
-            fingerprint_into(n.left, out);
-            fingerprint_into(n.right, out);
+            fingerprint_into(n.left, mut out);
+            fingerprint_into(n.right, mut out);
         }
     }
 }

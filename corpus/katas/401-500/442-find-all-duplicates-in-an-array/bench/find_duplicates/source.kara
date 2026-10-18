@@ -23,7 +23,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn random_index(seed: mut ref i64, below: i64) -> i64 {
-    (next_random(seed) * 32768 + next_random(seed)) % below
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % below
 }
 
 fn main() {

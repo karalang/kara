@@ -277,7 +277,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 fn pick(alphabet: Str, seed: mut ref i64) -> char {
     let letters: Vec[char] = alphabet.chars().collect();
-    letters[next_random(seed) % letters.len()]
+    letters[next_random(mut seed) % letters.len()]
 }
 
 // The parts of a valid address: four numbers up to 255 when `ipv4` (a
@@ -287,18 +287,18 @@ fn valid_parts(ipv4: bool, seed: mut ref i64) -> Vec[String] {
     let mut parts: Vec[String] = Vec.new();
     if ipv4 {
         for _ in 0..4 {
-            let value = if next_random(seed) % 4 == 0 {
-                [0, 9, 10, 99, 100, 199, 200, 249, 250, 255][next_random(seed) % 10]
+            let value = if next_random(mut seed) % 4 == 0 {
+                [0, 9, 10, 99, 100, 199, 200, 249, 250, 255][next_random(mut seed) % 10]
             } else {
-                next_random(seed) % 256
+                next_random(mut seed) % 256
             };
             parts.push(f"{value}");
         }
     } else {
         for _ in 0..8 {
             let mut group = String.new();
-            for _ in 0..1 + next_random(seed) % 4 {
-                group.push(pick("0123456789abcdefABCDEF", seed));
+            for _ in 0..1 + next_random(mut seed) % 4 {
+                group.push(pick("0123456789abcdefABCDEF", mut seed));
             }
             parts.push(group);
         }
@@ -322,13 +322,13 @@ fn join(parts: ref Vec[String], separator: char) -> String {
 // number above 255 or an empty group, a letter out of place, or one
 // separator of the other kind.
 fn known_query(seed: mut ref i64) -> (String, String) {
-    let ipv4 = next_random(seed) % 2 == 0;
+    let ipv4 = next_random(mut seed) % 2 == 0;
     let separator = if ipv4 { '.' } else { ':' };
-    let mut parts = valid_parts(ipv4, seed);
-    let fault = next_random(seed) % 10;
-    let at = next_random(seed) % parts.len();
+    let mut parts = valid_parts(ipv4, mut seed);
+    let fault = next_random(mut seed) % 10;
+    let at = next_random(mut seed) % parts.len();
     if fault == 5 {
-        if next_random(seed) % 2 == 0 {
+        if next_random(mut seed) % 2 == 0 {
             parts.pop();
         } else {
             let extra = parts[at].clone();
@@ -340,25 +340,25 @@ fn known_query(seed: mut ref i64) -> (String, String) {
         } else {
             let mut group = String.new();
             for _ in 0..5 {
-                group.push(pick("0123456789abcdefABCDEF", seed));
+                group.push(pick("0123456789abcdefABCDEF", mut seed));
             }
             parts[at] = group;
         }
     } else if fault == 7 {
         if ipv4 {
-            let value = if next_random(seed) % 2 == 0 { 256 + next_random(seed) % 4 } else { 256 + next_random(seed) % 744 };
+            let value = if next_random(mut seed) % 2 == 0 { 256 + next_random(mut seed) % 4 } else { 256 + next_random(mut seed) % 744 };
             parts[at] = f"{value}";
         } else {
             parts[at] = String.new();
         }
     } else if fault == 8 {
-        let letter = if ipv4 { pick("aeFx", seed) } else { pick("gGxz", seed) };
+        let letter = if ipv4 { pick("aeFx", mut seed) } else { pick("gGxz", mut seed) };
         parts[at].push(letter);
     }
     let mut query = join(parts, separator);
     if fault == 9 {
         let other = if ipv4 { ':' } else { '.' };
-        query = edit_separator(query, next_random(seed) % (parts.len() - 1), other);
+        query = edit_separator(query, next_random(mut seed) % (parts.len() - 1), other);
     }
     let expected = if fault < 5 {
         if ipv4 { "IPv4" } else { "IPv6" }
@@ -371,8 +371,8 @@ fn known_query(seed: mut ref i64) -> (String, String) {
 // A jumble of the characters an address uses.
 fn jumble(seed: mut ref i64) -> String {
     let mut s = String.new();
-    for _ in 0..1 + next_random(seed) % 40 {
-        s.push(pick("0123456789abcdefABCDEFgG.:", seed));
+    for _ in 0..1 + next_random(mut seed) % 40 {
+        s.push(pick("0123456789abcdefABCDEFgG.:", mut seed));
     }
     s
 }

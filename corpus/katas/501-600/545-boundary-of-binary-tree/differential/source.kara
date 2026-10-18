@@ -24,8 +24,8 @@ fn leaves_star(node: Option[TreeNode], out: mut ref Vec[i64]) {
         if is_leaf_star(n) {
             out.push(n.val);
         } else {
-            leaves_star(n.left, out);
-            leaves_star(n.right, out);
+            leaves_star(n.left, mut out);
+            leaves_star(n.right, mut out);
         }
     }
 }
@@ -72,8 +72,8 @@ fn walk_flags(node: Option[TreeNode], on_left: bool, on_right: bool, out: mut re
         if on_left or leaf {
             out.push(n.val);
         }
-        walk_flags(n.left, on_left, on_right and n.right.is_none(), out);
-        walk_flags(n.right, on_left and n.left.is_none(), on_right, out);
+        walk_flags(n.left, on_left, on_right and n.right.is_none(), mut out);
+        walk_flags(n.right, on_left and n.left.is_none(), on_right, mut out);
         if on_right and not on_left and not leaf {
             out.push(n.val);
         }
@@ -222,7 +222,7 @@ fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
         let c = leaf(v);
         let mut node = root;
         loop {
-            if next_random(seed) % 100 < lean {
+            if next_random(mut seed) % 100 < lean {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -260,8 +260,8 @@ fn survey(node: Option[TreeNode], depth: i64, depths: mut ref Vec[i64], is_leaf:
             is_leaf[n.val] = true;
             leaves.push(n.val);
         }
-        survey(n.left, depth + 1, depths, is_leaf, leaves);
-        survey(n.right, depth + 1, depths, is_leaf, leaves);
+        survey(n.left, depth + 1, mut depths, mut is_leaf, mut leaves);
+        survey(n.right, depth + 1, mut depths, mut is_leaf, mut leaves);
     }
 }
 

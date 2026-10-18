@@ -50,7 +50,7 @@ fn place(
             queens.push(c);
             // Masks passed by value with this column's bits OR'd in — the parent's copies
             // stay as they were, so there is nothing to clear on return.
-            place(n, row + 1, cols | bit_c, diag1 | bit_d1, diag2 | bit_d2, queens, out);
+            place(n, row + 1, cols | bit_c, diag1 | bit_d1, diag2 | bit_d2, mut queens, mut out);
             queens.pop();
         }
         c = c + 1;

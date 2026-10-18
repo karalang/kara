@@ -36,7 +36,7 @@ fn find_celebrity(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
     while st.len() > 1 {
         let a = st.pop().unwrap();
         let b = st.pop().unwrap();
-        if knows(m, a, b, calls) {
+        if knows(m, a, b, mut calls) {
             st.push(b);        // a knows someone, so a is out
         } else {
             st.push(a);        // b is not known by a, so b is out
@@ -47,10 +47,10 @@ fn find_celebrity(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
     let mut j = 0;
     while j < n {
         if j != cand {
-            if knows(m, cand, j, calls) {
+            if knows(m, cand, j, mut calls) {
                 return -1;
             }
-            if not knows(m, j, cand, calls) {
+            if not knows(m, j, cand, mut calls) {
                 return -1;
             }
         }

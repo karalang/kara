@@ -56,7 +56,7 @@ fn place(
             diag1[d1] = true;
             diag2[d2] = true;
             queens.push(c);
-            place(n, row + 1, cols, diag1, diag2, queens, out);
+            place(n, row + 1, mut cols, mut diag1, mut diag2, mut queens, mut out);
             queens.pop();             // undo the choice: path entry + all three markers
             cols[c] = false;
             diag1[d1] = false;

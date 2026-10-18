@@ -53,20 +53,20 @@ fn search(num: ref String, target: i64, pos: i64, expr: own String, cur: i64, la
             k = k + 1;
         }
         if pos == 0 {
-            search(num, target, end, piece, n, n, found, hash);
+            search(num, target, end, piece, n, n, mut found, mut hash);
         } else {
             let mut ep = expr.clone();
             ep.push_str("+");
             ep.push_str(piece);
-            search(num, target, end, ep, cur + n, n, found, hash);
+            search(num, target, end, ep, cur + n, n, mut found, mut hash);
             let mut em = expr.clone();
             em.push_str("-");
             em.push_str(piece);
-            search(num, target, end, em, cur - n, 0 - n, found, hash);
+            search(num, target, end, em, cur - n, 0 - n, mut found, mut hash);
             let mut et = expr.clone();
             et.push_str("*");
             et.push_str(piece);
-            search(num, target, end, et, cur - last + last * n, last * n, found, hash);
+            search(num, target, end, et, cur - last + last * n, last * n, mut found, mut hash);
         }
         end = end + 1;
     }

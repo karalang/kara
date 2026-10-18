@@ -42,19 +42,19 @@ fn power(k: i64) -> i64 {
 }
 
 fn value(seed: mut ref i64) -> i64 {
-    let kind = next(seed) % 3;
+    let kind = next(mut seed) % 3;
     if kind == 0 {
-        return power(next(seed) % 20);
+        return power(next(mut seed) % 20);
     }
     if kind == 1 {
-        let p = power(next(seed) % 20);
-        if next(seed) % 2 == 0 {
+        let p = power(next(mut seed) % 20);
+        if next(mut seed) % 2 == 0 {
             return p + 1;
         }
         return p - 1;
     }
-    let hi = next(seed) * 32768 + next(seed);
-    return hi * 4 + next(seed) % 4 + I32_MIN;
+    let hi = next(mut seed) * 32768 + next(mut seed);
+    return hi * 4 + next(mut seed) % 4 + I32_MIN;
 }
 
 fn main() {

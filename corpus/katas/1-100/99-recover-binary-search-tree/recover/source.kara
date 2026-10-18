@@ -38,9 +38,9 @@ fn inorder_collect(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
     match node {
         None => {}
         Some(n) => {
-            inorder_collect(n.left, out);
+            inorder_collect(n.left, mut out);
             out.push(n);
-            inorder_collect(n.right, out);
+            inorder_collect(n.right, mut out);
         }
     }
 }
@@ -89,8 +89,8 @@ fn serialize(node: Option[TreeNode], out: mut ref String) {
         }
         Some(n) => {
             out.push_str(f"{n.val},");
-            serialize(n.left, out);
-            serialize(n.right, out);
+            serialize(n.left, mut out);
+            serialize(n.right, mut out);
         }
     }
 }

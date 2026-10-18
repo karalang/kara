@@ -42,13 +42,13 @@ fn next(seed: mut ref i64) -> i64 {
 }
 
 fn build(seed: mut ref i64, depth: i64) -> Vec[Nested] {
-    let n = next(seed) % 13;
+    let n = next(mut seed) % 13;
     let mut out: Vec[Nested] = Vec.new();
     for _ in 0..n {
-        if depth < 14 and next(seed) % 3 == 0 {
-            out.push(Nested.List(build(seed, depth + 1)));
+        if depth < 14 and next(mut seed) % 3 == 0 {
+            out.push(Nested.List(build(mut seed, depth + 1)));
         } else {
-            out.push(Nested.Int(next(seed) % 201 - 100));
+            out.push(Nested.Int(next(mut seed) % 201 - 100));
         }
     }
     out

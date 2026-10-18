@@ -63,7 +63,7 @@ fn first_missing_positive(nums: mut Slice[i64], n: i64) -> i64 {
 // ---- test harness ---------------------------------------------------------
 
 fn report(nums: mut Slice[i64], n: i64) {
-    let ans = first_missing_positive(nums, n);
+    let ans = first_missing_positive(mut nums, n);
     println(f"{ans}");
 }
 

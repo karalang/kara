@@ -166,10 +166,10 @@ fn check_answer(d: ref Vec[i64], failures: mut ref i64) -> bool {
     let want = oracle(d);
     let a = sc_main(d);
     if sc_phases(d) != a or sc_window(d) != a or sc_stream(d) != a {
-        fail(failures, "P1 arms disagree", d);
+        fail(mut failures, "P1 arms disagree", d);
     }
     if a != want {
-        fail(failures, "P2 oracle", d);
+        fail(mut failures, "P2 oracle", d);
     }
     return want;
 }
@@ -207,18 +207,18 @@ fn check_properties(d: ref Vec[i64], failures: mut ref i64) {
     // without changing whether the path meets itself.
     let r = reversed(d);
     if sc_main(r) != a or sc_phases(r) != a or sc_window(r) != a or sc_stream(r) != a {
-        fail(failures, "P3 reversal", d);
+        fail(mut failures, "P3 reversal", d);
     }
     // P4: scaling every move by the same factor keeps the answer.
     let s = scaled(d, 3);
     if sc_main(s) != a or sc_phases(s) != a or sc_window(s) != a or sc_stream(s) != a {
-        fail(failures, "P4 scaling", d);
+        fail(mut failures, "P4 scaling", d);
     }
     // P5: a path that crosses still crosses with one more move.
     let mut longer = d.clone();
     longer.push(1);
     if a and not (sc_main(longer) and sc_phases(longer) and sc_window(longer) and sc_stream(longer)) {
-        fail(failures, "P5 extension", d);
+        fail(mut failures, "P5 extension", d);
     }
     // P6: the shortest prefix that crosses ends at the oracle's first
     // crossing move.
@@ -231,7 +231,7 @@ fn check_properties(d: ref Vec[i64], failures: mut ref i64) {
         }
     }
     if shortest != first {
-        fail(failures, "P6 first crossing", d);
+        fail(mut failures, "P6 first crossing", d);
     }
     // P7: adding 2000 * i to move i makes every move longer than the one
     // two before it (moves are at most 1000), an outward spiral, which
@@ -241,7 +241,7 @@ fn check_properties(d: ref Vec[i64], failures: mut ref i64) {
         grown.push(d[i] + 2000 * i);
     }
     if sc_main(grown) or sc_phases(grown) or sc_window(grown) or sc_stream(grown) {
-        fail(failures, "P7 outward spiral", d);
+        fail(mut failures, "P7 outward spiral", d);
     }
     // P8: moves of 200 - 2i, less one where move i was odd, make every move shorter
     // than the one two before it, an inward spiral from the first move,
@@ -251,7 +251,7 @@ fn check_properties(d: ref Vec[i64], failures: mut ref i64) {
         inward.push(200 - 2 * i - d[i] % 2);
     }
     if sc_main(inward) or sc_phases(inward) or sc_window(inward) or sc_stream(inward) or oracle(inward) {
-        fail(failures, "P8 inward spiral", d);
+        fail(mut failures, "P8 inward spiral", d);
     }
 }
 

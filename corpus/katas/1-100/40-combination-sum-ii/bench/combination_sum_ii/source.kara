@@ -38,7 +38,7 @@ fn backtrack(
             continue;
         }
         path.push(c);
-        backtrack(candidates, i + 1, remaining - c, path, out);
+        backtrack(candidates, i + 1, remaining - c, mut path, mut out);
         path.pop();
         i = i + 1;
     }

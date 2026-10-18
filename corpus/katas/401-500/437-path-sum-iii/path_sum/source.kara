@@ -21,8 +21,8 @@ fn count_from(node: Option[TreeNode], prefix: i64, target: i64, seen: mut ref Ma
             let sum = prefix + t.val;
             let mut found = seen.get(sum - target) ?? 0;
             *seen.entry(sum).or_insert(0) += 1;
-            found += count_from(t.left, sum, target, seen);
-            found += count_from(t.right, sum, target, seen);
+            found += count_from(t.left, sum, target, mut seen);
+            found += count_from(t.right, sum, target, mut seen);
             *seen.entry(sum).or_insert(0) -= 1;
             found
         }

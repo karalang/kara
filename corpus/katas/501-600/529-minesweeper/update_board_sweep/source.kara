@@ -94,7 +94,7 @@ fn random_board(seed: mut ref i64, m: i64, n: i64, percent: i64) -> Vec[Vec[char
     for _ in 0..m {
         let mut row: Vec[char] = Vec.new();
         for _ in 0..n {
-            row.push(if next_random(seed) % 100 < percent { 'M' } else { 'E' });
+            row.push(if next_random(mut seed) % 100 < percent { 'M' } else { 'E' });
         }
         board.push(row);
     }
@@ -114,7 +114,7 @@ fn random_unrevealed(seed: mut ref i64, board: Vec[Vec[char]]) -> (i64, i64) {
     if open.is_empty() {
         return (-1, -1);
     }
-    open[next_random(seed) % open.len()]
+    open[next_random(mut seed) % open.len()]
 }
 
 fn main() {

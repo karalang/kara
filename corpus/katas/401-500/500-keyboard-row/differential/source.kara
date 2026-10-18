@@ -148,25 +148,25 @@ fn reference(words: Vec[String]) -> Vec[String] {
 
 fn random_words(seed: mut ref i64, most: i64) -> Vec[String] {
     let rows = vec!["qwertyuiop", "asdfghjkl", "zxcvbnm", "abcdefghijklmnopqrstuvwxyz"];
-    let size = 1 + next_random(seed) % most;
+    let size = 1 + next_random(mut seed) % most;
     let mut words: Vec[String] = Vec.new();
     for _ in 0..size {
-        let pool = if next_random(seed) % 3 == 0 { 3 } else { next_random(seed) % 3 };
+        let pool = if next_random(mut seed) % 3 == 0 { 3 } else { next_random(mut seed) % 3 };
         let chars: Vec[char] = rows[pool].chars().collect();
-        let length = 1 + next_random(seed) % 8;
+        let length = 1 + next_random(mut seed) % 8;
         let mut word = String.new();
         for _ in 0..length {
-            let ch = chars[next_random(seed) % chars.len()];
-            if next_random(seed) % 4 == 0 {
+            let ch = chars[next_random(mut seed) % chars.len()];
+            if next_random(mut seed) % 4 == 0 {
                 word.push(ch.to_ascii_uppercase());
             } else {
                 word.push(ch);
             }
         }
         // Now and then one letter from anywhere at a random place.
-        if next_random(seed) % 4 == 0 {
-            let at = next_random(seed) % (word.len() + 1);
-            let extra = rows[3].char_at(next_random(seed) % 26).unwrap();
+        if next_random(mut seed) % 4 == 0 {
+            let at = next_random(mut seed) % (word.len() + 1);
+            let extra = rows[3].char_at(next_random(mut seed) % 26).unwrap();
             let mut changed = String.new();
             let mut k = 0;
             for ch in word.chars() {

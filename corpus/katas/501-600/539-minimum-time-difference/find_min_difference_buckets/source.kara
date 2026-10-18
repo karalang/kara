@@ -66,7 +66,7 @@ fn spread(name: Str, step: i64, seed: mut ref i64) {
         minute += step;
     }
     for i in (1..times.len()).rev() {
-        let j = (next_random(seed) * 32768 + next_random(seed)) % (i + 1);
+        let j = (next_random(mut seed) * 32768 + next_random(mut seed)) % (i + 1);
         times.swap(i, j);
     }
     show(name, times);

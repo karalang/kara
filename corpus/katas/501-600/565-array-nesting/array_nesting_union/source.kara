@@ -52,7 +52,7 @@ fn permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
     let mut nums: Vec[i64] = (0..n).collect();
     let mut i = n - 1;
     while i > 0 {
-        let j = step(seed) % (i + 1);
+        let j = step(mut seed) % (i + 1);
         nums.swap(i, j);
         i -= 1;
     }

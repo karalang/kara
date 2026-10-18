@@ -9,7 +9,7 @@ fn best_pair(p: mut ref Vec[i64], lo: i64, hi: i64, k: i64, scratch: mut ref Vec
         return i64.MIN;
     }
     let mid = (lo + hi) / 2;
-    let mut best = best_pair(p, lo, mid, k, scratch).max(best_pair(p, mid, hi, k, scratch));
+    let mut best = best_pair(mut p, lo, mid, k, mut scratch).max(best_pair(mut p, mid, hi, k, mut scratch));
     let mut j = mid;
     for i in lo..mid {
         while j < hi and p[j] <= p[i] + k {

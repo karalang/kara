@@ -57,7 +57,7 @@ fn random_row(width: i64, widest: i64, seed: mut ref i64) -> Vec[i64] {
     let mut row: Vec[i64] = Vec.new();
     let mut left = width;
     while left > 0 {
-        let w = 1 + next_random(seed) % widest;
+        let w = 1 + next_random(mut seed) % widest;
         let w = if w > left { left } else { w };
         row.push(w);
         left -= w;

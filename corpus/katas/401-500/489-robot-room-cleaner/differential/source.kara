@@ -36,7 +36,7 @@ fn explore_star(robot: mut ref Robot, row: i64, col: i64, facing: i64, visited: 
     for _ in 0..4 {
         let next = (row + step_row_star(d), col + step_col_star(d));
         if not visited.contains(next) and robot.forward() {
-            explore_star(robot, next.0, next.1, d, visited);
+            explore_star(mut robot, next.0, next.1, d, mut visited);
             robot.turn_right();
             robot.turn_right();
             robot.forward();
@@ -50,7 +50,7 @@ fn explore_star(robot: mut ref Robot, row: i64, col: i64, facing: i64, visited: 
 
 fn clean_room_star(robot: mut ref Robot) {
     let mut visited: Set[(i64, i64)] = Set.new();
-    explore_star(robot, 0, 0, 0, mut visited);
+    explore_star(mut robot, 0, 0, 0, mut visited);
 }
 
 // ---- stack: robot_room_cleaner_stack.kara
@@ -181,7 +181,7 @@ fn clean_room_frontier(robot: mut ref Robot) {
     robot.clean();
     while let Some(dirs) = route_frontier(at, open, wall) {
         for d in dirs {
-            turn_to_frontier(robot, mut facing, d);
+            turn_to_frontier(mut robot, mut facing, d);
             robot.forward();
             at = (at.0 + step_row_frontier(d), at.1 + step_col_frontier(d));
         }
@@ -190,11 +190,11 @@ fn clean_room_frontier(robot: mut ref Robot) {
             if open.contains(next) or wall.contains(next) {
                 continue;
             }
-            turn_to_frontier(robot, mut facing, d);
+            turn_to_frontier(mut robot, mut facing, d);
             if robot.forward() {
                 open.insert(next);
                 robot.clean();
-                turn_to_frontier(robot, mut facing, (d + 2) % 4);
+                turn_to_frontier(mut robot, mut facing, (d + 2) % 4);
                 robot.forward();
             } else {
                 wall.insert(next);
@@ -227,7 +227,7 @@ fn survey_survey(robot: mut ref Robot, row: i64, col: i64, facing: i64, open: mu
     for _ in 0..4 {
         let next = (row + step_row_survey(d), col + step_col_survey(d));
         if not open.contains(next) and robot.forward() {
-            survey_survey(robot, next.0, next.1, d, open);
+            survey_survey(mut robot, next.0, next.1, d, mut open);
             robot.turn_left();
             robot.turn_left();
             robot.forward();
@@ -269,7 +269,7 @@ fn path_survey(from: (i64, i64), to: (i64, i64), open: Set[(i64, i64)]) -> Vec[i
 
 fn clean_room_survey(robot: mut ref Robot) {
     let mut open: Set[(i64, i64)] = Set.new();
-    survey_survey(robot, 0, 0, 0, mut open);
+    survey_survey(mut robot, 0, 0, 0, mut open);
     let mut cells: Vec[(i64, i64)] = Vec.new();
     for cell in open.iter() {
         cells.push(*cell);
@@ -398,10 +398,10 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 fn clean_with(which: i64, robot: mut ref Robot) {
     match which {
-        0 => clean_room_star(robot),
-        1 => clean_room_stack(robot),
-        2 => clean_room_frontier(robot),
-        _ => clean_room_survey(robot),
+        0 => clean_room_star(mut robot),
+        1 => clean_room_stack(mut robot),
+        2 => clean_room_frontier(mut robot),
+        _ => clean_room_survey(mut robot),
     }
 }
 

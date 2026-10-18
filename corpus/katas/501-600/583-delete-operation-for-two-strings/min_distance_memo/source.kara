@@ -17,9 +17,9 @@ fn deletions(a: ref Vec[char], b: ref Vec[char], i: i64, j: i64, memo: mut ref M
         return *known;
     }
     let best = if a[i] == b[j] {
-        deletions(a, b, i + 1, j + 1, memo)
+        deletions(a, b, i + 1, j + 1, mut memo)
     } else {
-        1 + deletions(a, b, i + 1, j, memo).min(deletions(a, b, i, j + 1, memo))
+        1 + deletions(a, b, i + 1, j, mut memo).min(deletions(a, b, i, j + 1, mut memo))
     };
     memo.insert((i, j), best);
     best
@@ -43,7 +43,7 @@ fn word(len: i64, letters: i64, seed: mut ref i64) -> String {
     let alphabet = "abcdefghijklmnopqrstuvwxyz";
     let mut s = String.new();
     for _ in 0..len {
-        let k = step(seed) % letters;
+        let k = step(mut seed) % letters;
         s.push_str(alphabet[k..k + 1]);
     }
     s

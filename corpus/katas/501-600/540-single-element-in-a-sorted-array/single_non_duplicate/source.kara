@@ -45,7 +45,7 @@ fn array(pairs: i64, single: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
     let mut left = top + 1;
     let mut v = 0;
     while need > 0 {
-        if (next_random(seed) * 32768 + next_random(seed)) % left < need {
+        if (next_random(mut seed) * 32768 + next_random(mut seed)) % left < need {
             values.push(v);
             need -= 1;
         }

@@ -120,13 +120,13 @@ fn step(seed: mut ref i64) -> i64 {
 }
 
 fn letter(seed: mut ref i64) -> char {
-    (step(seed) % 3 + 97) as u8 as char
+    (step(mut seed) % 3 + 97) as u8 as char
 }
 
 // `text` with `c` put in at a random place.
 fn put_in(text: Str, c: char, seed: mut ref i64) -> String {
     let chars: Vec[char] = text.chars().collect();
-    let at = step(seed) % (chars.len() + 1);
+    let at = step(mut seed) % (chars.len() + 1);
     let mut out = String.new();
     for i in 0..chars.len() + 1 {
         if i == at {

@@ -156,9 +156,9 @@ fn brute(points: Vec[(i64, i64)]) -> i64 {
 fn random_points(n: i64, span: i64, width: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut points: Vec[(i64, i64)] = Vec.new();
     for _ in 0..n {
-        let r = (next_random(seed) * 65536 + next_random(seed)) * 2 + next_random(seed) % 2;
+        let r = (next_random(mut seed) * 65536 + next_random(mut seed)) * 2 + next_random(mut seed) % 2;
         let start = r % span - span / 2;
-        let w = (next_random(seed) * 65536 + next_random(seed)) % width;
+        let w = (next_random(mut seed) * 65536 + next_random(mut seed)) % width;
         points.push((start, (start + w).min(2147483647)));
     }
     points

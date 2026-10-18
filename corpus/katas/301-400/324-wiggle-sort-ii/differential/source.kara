@@ -83,7 +83,7 @@ fn select(a: mut ref Vec[i64], k: i64) -> i64 {
 
 fn ws_select(nums: mut ref Vec[i64]) {
     let n = nums.len();
-    let median = select(nums, n / 2);
+    let median = select(mut nums, n / 2);
     let m = n | 1;
     let mut left = 0;
     let mut i = 0;
@@ -184,7 +184,7 @@ fn extend(vals: ref Vec[i64], left: mut ref Vec[i64], pos: i64, n: i64, prev: i6
         let fits = pos == 0 or (pos % 2 == 1 and v > prev) or (pos % 2 == 0 and v < prev);
         if fits {
             left[j] -= 1;
-            let found = extend(vals, left, pos + 1, n, v);
+            let found = extend(vals, mut left, pos + 1, n, v);
             left[j] += 1;
             if found {
                 return true;
@@ -219,7 +219,7 @@ fn shuffled(a: ref Vec[i64], seed: mut ref i64) -> Vec[i64] {
     let mut b = a.clone();
     let mut i = b.len() - 1;
     while i > 0 {
-        let j = next(seed) % (i + 1);
+        let j = next(mut seed) % (i + 1);
         b.swap(i, j);
         i -= 1;
     }
@@ -230,12 +230,12 @@ fn wiggle_input(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
     let mut a: Vec[i64] = Vec.new();
     for i in 0..n {
         if i % 2 == 0 {
-            a.push(next(seed) % k);
+            a.push(next(mut seed) % k);
         } else {
-            a.push(k + next(seed) % k);
+            a.push(k + next(mut seed) % k);
         }
     }
-    return shuffled(a, seed);
+    return shuffled(a, mut seed);
 }
 
 struct Tally {

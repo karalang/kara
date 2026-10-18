@@ -14,9 +14,9 @@ fn replace(v: i64, memo: mut ref Map[i64, i64]) -> i64 {
         return *known;
     }
     let r = if v % 2 == 0 {
-        1 + replace(v / 2, memo)
+        1 + replace(v / 2, mut memo)
     } else {
-        2 + replace((v - 1) / 2, memo).min(replace((v + 1) / 2, memo))
+        2 + replace((v - 1) / 2, mut memo).min(replace((v + 1) / 2, mut memo))
     };
     memo.insert(v, r);
     r

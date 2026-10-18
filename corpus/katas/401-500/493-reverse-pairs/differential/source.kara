@@ -15,7 +15,7 @@ fn sort_count_star(nums: mut ref Vec[i64], low: i64, high: i64) -> i64 {
         return 0;
     }
     let mid = (low + high) / 2;
-    let mut count = sort_count_star(nums, low, mid) + sort_count_star(nums, mid, high);
+    let mut count = sort_count_star(mut nums, low, mid) + sort_count_star(mut nums, mid, high);
     let mut j = mid;
     for i in low..mid {
         while j < high and nums[i] > 2 * nums[j] {
@@ -170,9 +170,9 @@ fn reference(nums: Vec[i64]) -> i64 {
 
 fn random_number(seed: mut ref i64, spread: i64) -> i64 {
     if spread == 0 {
-        next_random(seed) * 131072 + next_random(seed) * 4 - 2147483648
+        next_random(mut seed) * 131072 + next_random(mut seed) * 4 - 2147483648
     } else {
-        next_random(seed) % (2 * spread + 1) - spread
+        next_random(mut seed) % (2 * spread + 1) - spread
     }
 }
 

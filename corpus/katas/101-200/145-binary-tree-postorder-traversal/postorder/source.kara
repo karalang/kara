@@ -42,8 +42,8 @@ fn postorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
     match node {
         None => {}
         Some(n) => {
-            postorder(n.left, out);
-            postorder(n.right, out);
+            postorder(n.left, mut out);
+            postorder(n.right, mut out);
             out.push(n.val);
         }
     }

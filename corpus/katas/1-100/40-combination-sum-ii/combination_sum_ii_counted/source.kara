@@ -54,7 +54,7 @@ fn dfs(
             path.push(v);
             t = t + 1;
         }
-        dfs(vals, cnts, idx + 1, remaining - k * v, path, out);
+        dfs(vals, cnts, idx + 1, remaining - k * v, mut path, mut out);
         t = 0;
         while t < k {
             path.pop();

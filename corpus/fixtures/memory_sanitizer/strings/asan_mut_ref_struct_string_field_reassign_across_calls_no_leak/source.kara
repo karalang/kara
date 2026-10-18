@@ -16,7 +16,7 @@ fn consume(s: mut ref S, n: i64) -> String {
     let mut t = 0i64;
     while t < n {
         if s.bp >= s.buf.len() {
-            s.buf = read4(s);
+            s.buf = read4(mut s);
             s.bp = 0i64;
             if s.buf.len() == 0i64 { return r; }
         }

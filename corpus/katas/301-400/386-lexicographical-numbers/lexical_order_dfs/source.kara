@@ -13,7 +13,7 @@ fn visit(x: i64, n: i64, out: mut ref Vec[i64]) {
         if child > n {
             return;
         }
-        visit(child, n, out);
+        visit(child, n, mut out);
     }
 }
 

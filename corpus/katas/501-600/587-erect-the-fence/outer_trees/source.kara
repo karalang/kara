@@ -46,8 +46,8 @@ fn forest(count: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut taken = vec![false; size * size];
     let mut trees: Vec[(i64, i64)] = Vec.new();
     while trees.len() < count {
-        let x = step(seed) % size;
-        let y = step(seed) % size;
+        let x = step(mut seed) % size;
+        let y = step(mut seed) % size;
         if not taken[x * size + y] {
             taken[x * size + y] = true;
             trees.push((x, y));

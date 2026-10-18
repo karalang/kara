@@ -11,7 +11,7 @@ fn wins_from(used: i64, left: i64, m: i64, memo: mut ref Vec[i64]) -> bool {
     let mut result = false;
     for n in 1..m + 1 {
         let bit = 1 << (n - 1);
-        if used & bit == 0 and (n >= left or not wins_from(used | bit, left - n, m, memo)) {
+        if used & bit == 0 and (n >= left or not wins_from(used | bit, left - n, m, mut memo)) {
             result = true;
             break;
         }

@@ -212,9 +212,9 @@ fn same(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
 
 fn walk(node: Option[TreeNode], out: mut ref Vec[i64]) {
     if let Some(n) = node {
-        walk(n.left, out);
+        walk(n.left, mut out);
         out.push(n.val);
-        walk(n.right, out);
+        walk(n.right, mut out);
     }
 }
 
@@ -230,15 +230,15 @@ fn leaves(node: Option[TreeNode], out: mut ref Vec[i64]) {
         if n.left.is_none() and n.right.is_none() {
             out.push(n.val);
         }
-        leaves(n.left, out);
-        leaves(n.right, out);
+        leaves(n.left, mut out);
+        leaves(n.right, mut out);
     }
 }
 
 fn shuffle(values: mut ref Vec[i64], seed: mut ref i64) {
     let n = values.len();
     for i in 0..n {
-        let j = i + next_random(seed) % (n - i);
+        let j = i + next_random(mut seed) % (n - i);
         values.swap(i, j);
     }
 }

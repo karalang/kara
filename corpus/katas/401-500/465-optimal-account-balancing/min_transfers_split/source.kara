@@ -48,7 +48,7 @@ fn most_groups(left: i64, debts: Vec[i64], memo: mut ref Vec[i64]) -> i64 {
             }
         }
         if total == 0 {
-            best = best.max(1 + most_groups(left ^ group, debts, memo));
+            best = best.max(1 + most_groups(left ^ group, debts, mut memo));
         }
         if sub == 0 {
             break;

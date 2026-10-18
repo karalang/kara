@@ -92,13 +92,13 @@ fn shuffle_inside_out(original: ref Vec[i64], r: mut ref Rng) -> Vec[i64] {
 
 fn shuffle(arm: i64, original: ref Vec[i64], r: mut ref Rng) -> Vec[i64] {
     if arm == 0 {
-        shuffle_fy(original, r)
+        shuffle_fy(original, mut r)
     } else if arm == 1 {
-        shuffle_sort(original, r)
+        shuffle_sort(original, mut r)
     } else if arm == 2 {
-        shuffle_draw(original, r)
+        shuffle_draw(original, mut r)
     } else {
-        shuffle_inside_out(original, r)
+        shuffle_inside_out(original, mut r)
     }
 }
 

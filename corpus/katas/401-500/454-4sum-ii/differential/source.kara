@@ -164,7 +164,7 @@ fn brute(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64], nums4: Vec[i64]) -> 
 fn random_nums(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..n {
-        let r = next_random(seed) * 65536 + next_random(seed);
+        let r = next_random(mut seed) * 65536 + next_random(mut seed);
         nums.push(r % spread - spread / 2);
     }
     nums
@@ -173,7 +173,7 @@ fn random_nums(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
 fn shuffled(nums: Vec[i64], seed: mut ref i64) -> Vec[i64] {
     let mut out = nums.clone();
     for i in 0..out.len() {
-        out.swap(i, i + next_random(seed) % (out.len() - i));
+        out.swap(i, i + next_random(mut seed) % (out.len() - i));
     }
     out
 }

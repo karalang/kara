@@ -14,8 +14,8 @@ fn solve(memo: mut ref Vec[Vec[i64]], i: i64, j: i64) -> i64 {
     }
     let mut best = i64.MAX;
     for k in i..j + 1 {
-        let left = solve(memo, i, k - 1);
-        let right = solve(memo, k + 1, j);
+        let left = solve(mut memo, i, k - 1);
+        let right = solve(mut memo, k + 1, j);
         best = best.min(k + left.max(right));
     }
     memo[i][j] = best;

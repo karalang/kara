@@ -26,9 +26,9 @@ fn inorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
     match node {
         None => {}
         Some(n) => {
-            inorder(n.left, out);      // forward the existing mut ref (no marker)
+            inorder(n.left, mut out);      // forward the existing mut ref (no marker)
             out.push(n.val);
-            inorder(n.right, out);
+            inorder(n.right, mut out);
         }
     }
 }

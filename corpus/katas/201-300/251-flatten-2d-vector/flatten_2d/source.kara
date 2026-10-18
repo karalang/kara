@@ -39,12 +39,12 @@ fn skip_empty(v: mut ref Vector2D) {
 }
 
 fn v_has_next(v: mut ref Vector2D) -> bool {
-    skip_empty(v);
+    skip_empty(mut v);
     return v.row < v.data.len();
 }
 
 fn v_next(v: mut ref Vector2D) -> i64 {
-    skip_empty(v);
+    skip_empty(mut v);
     if v.row >= v.data.len() {
         return -1; // exhausted; LeetCode guarantees callers check has_next
     }
@@ -58,18 +58,18 @@ fn v_next(v: mut ref Vector2D) -> i64 {
 fn drain(v: mut ref Vector2D) -> String {
     let mut out: String = "";
     let mut first = true;
-    while v_has_next(v) {
-        if not v_has_next(v) {
+    while v_has_next(mut v) {
+        if not v_has_next(mut v) {
             return "IDEMPOTENCE BROKEN";
         }
-        let x = v_next(v);
+        let x = v_next(mut v);
         if not first {
             out.push_str(" ");
         }
         out.push_str(f"{x}");
         first = false;
     }
-    if v_has_next(v) {
+    if v_has_next(mut v) {
         return "EXHAUSTION BROKEN";
     }
     if out.len() == 0 {

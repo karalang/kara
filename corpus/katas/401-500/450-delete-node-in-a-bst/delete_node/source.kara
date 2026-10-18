@@ -82,9 +82,9 @@ fn tree_of(values: Vec[i64]) -> Option[TreeNode] {
 
 fn walk(node: Option[TreeNode], out: mut ref Vec[i64]) {
     if let Some(n) = node {
-        walk(n.left, out);
+        walk(n.left, mut out);
         out.push(n.val);
-        walk(n.right, out);
+        walk(n.right, mut out);
     }
 }
 

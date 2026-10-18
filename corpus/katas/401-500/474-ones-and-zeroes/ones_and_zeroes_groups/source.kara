@@ -53,14 +53,14 @@ fn next_random(seed: mut ref i64) -> i64 {
 // 1 to 20 strings of 1 to 8 binary digits, each leaning to zeros, to
 // ones, or neither; m and n from 0 to 12.
 fn random_strs(seed: mut ref i64) -> Vec[String] {
-    let count = 1 + next_random(seed) % 20;
+    let count = 1 + next_random(mut seed) % 20;
     let mut strs: Vec[String] = Vec.new();
     for _ in 0..count {
-        let size = 1 + next_random(seed) % 8;
-        let lean = next_random(seed) % 3;
+        let size = 1 + next_random(mut seed) % 8;
+        let lean = next_random(mut seed) % 3;
         let mut s = String.new();
         for _ in 0..size {
-            let r = next_random(seed) % 4;
+            let r = next_random(mut seed) % 4;
             let zero = if lean == 0 { r != 0 } else if lean == 1 { r == 0 } else { r < 2 };
             s.push(if zero { '0' } else { '1' });
         }

@@ -114,7 +114,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn leaf(seed: mut ref i64) -> char {
-    let r = next_random(seed) % 12;
+    let r = next_random(mut seed) % 12;
     if r < 10 { (b'0' + r as u8) as char } else if r == 10 { 'T' } else { 'F' }
 }
 
@@ -123,12 +123,12 @@ fn leaf(seed: mut ref i64) -> char {
 // place of the leaf that value comes from.
 fn random_case(seed: mut ref i64, depth: i64) -> (String, String, char, i64) {
     if depth == 0 {
-        let c = leaf(seed);
+        let c = leaf(mut seed);
         return (f"{c}", f"{c}", c, 0);
     }
-    let yes_t = next_random(seed) % 2 == 0;
-    let (yes, yes_mirror, yes_value, yes_at) = random_case(seed, if next_random(seed) % 3 == 0 { 0 } else { depth - 1 });
-    let (no, no_mirror, no_value, no_at) = random_case(seed, if next_random(seed) % 3 == 0 { 0 } else { depth - 1 });
+    let yes_t = next_random(mut seed) % 2 == 0;
+    let (yes, yes_mirror, yes_value, yes_at) = random_case(mut seed, if next_random(mut seed) % 3 == 0 { 0 } else { depth - 1 });
+    let (no, no_mirror, no_value, no_at) = random_case(mut seed, if next_random(mut seed) % 3 == 0 { 0 } else { depth - 1 });
     if yes_t {
         (f"T?{yes}:{no}", f"F?{no_mirror}:{yes_mirror}", yes_value, 2 + yes_at)
     } else {

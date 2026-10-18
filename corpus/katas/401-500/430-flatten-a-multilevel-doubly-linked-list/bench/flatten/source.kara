@@ -72,9 +72,9 @@ fn make_level(length: i64, budget: mut ref i64, depth: i64, next_val: mut ref i6
         *budget -= 1;
         let node = Node { val: *next_val, prev: None, next: None, child: None };
         *next_val += 1;
-        if depth < 6 and *budget > 0 and step(seed) % 4 == 0 {
-            let child_length = 1 + step(seed) % 8;
-            node.child = make_level(child_length, budget, depth + 1, next_val, seed);
+        if depth < 6 and *budget > 0 and step(mut seed) % 4 == 0 {
+            let child_length = 1 + step(mut seed) % 8;
+            node.child = make_level(child_length, mut budget, depth + 1, mut next_val, mut seed);
         }
         match last {
             Some(l) => {

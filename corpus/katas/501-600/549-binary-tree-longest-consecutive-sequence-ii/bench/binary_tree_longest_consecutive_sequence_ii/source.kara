@@ -17,7 +17,7 @@ fn walk(node: TreeNode, best: mut ref i64) -> (i64, i64) {
     let mut rise = 1;
     let mut fall = 1;
     if let Some(l) = node.left {
-        let (r1, f1) = walk(l, best);
+        let (r1, f1) = walk(l, mut best);
         if l.val == node.val + 1 {
             rise = r1 + 1;
         } else if l.val == node.val - 1 {
@@ -25,7 +25,7 @@ fn walk(node: TreeNode, best: mut ref i64) -> (i64, i64) {
         }
     }
     if let Some(r) = node.right {
-        let (r2, f2) = walk(r, best);
+        let (r2, f2) = walk(r, mut best);
         if r.val == node.val + 1 {
             rise = rise.max(r2 + 1);
         } else if r.val == node.val - 1 {

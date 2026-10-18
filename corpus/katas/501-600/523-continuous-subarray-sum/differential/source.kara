@@ -131,7 +131,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_nums(seed: mut ref i64, n: i64, most: i64) -> Vec[i64] {
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..n {
-        nums.push(next_random(seed) % (most + 1));
+        nums.push(next_random(mut seed) % (most + 1));
     }
     nums
 }

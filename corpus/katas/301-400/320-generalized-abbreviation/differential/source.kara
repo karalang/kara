@@ -84,11 +84,11 @@ fn back_walk(bs: ref Vec[u8], n: i64, i: i64, run: i64, path: own String,
         out.push(leaf);
         return;
     }
-    back_walk(bs, n, i + 1, run + 1, path.clone(), out);
+    back_walk(bs, n, i + 1, run + 1, path.clone(), mut out);
     let mut kept = path;
     if run > 0 { kept.push_str(run.to_string()); }
     kept.push(bs[i] as char);
-    back_walk(bs, n, i + 1, 0, kept, out);
+    back_walk(bs, n, i + 1, 0, kept, mut out);
 }
 
 fn abbrev_back(word: ref String) -> Vec[String] {
@@ -149,7 +149,7 @@ fn runs_walk(bs: ref Vec[u8], n: i64, p: i64, path: String, out: mut ref Vec[Str
                 out.push(with_run);
             } else {
                 with_run.push(bs[a + len] as char);
-                runs_walk(bs, n, a + len + 1, with_run, out);
+                runs_walk(bs, n, a + len + 1, with_run, mut out);
             }
             len = len + 1;
         }
@@ -447,7 +447,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn grow_word(n: i64, k: i64, seed: mut ref i64) -> String {
     let mut out = String.new();
     for i in 0..n {
-        let r = next(seed);
+        let r = next(mut seed);
         out.push((((r % k) as u8) + b'a') as char);
     }
     return out;

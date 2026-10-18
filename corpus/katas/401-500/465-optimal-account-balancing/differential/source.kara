@@ -28,7 +28,7 @@ fn fewest_from_back(debts: mut ref Vec[i64], start: i64) -> i64 {
     for j in first + 1..debts.len() {
         if debts[j] * debts[first] < 0 {
             debts[j] += debts[first];
-            let count = 1 + fewest_from_back(debts, first + 1);
+            let count = 1 + fewest_from_back(mut debts, first + 1);
             debts[j] -= debts[first];
             if best < 0 or count < best {
                 best = count;
@@ -141,7 +141,7 @@ fn most_groups_split(left: i64, debts: Vec[i64], memo: mut ref Vec[i64]) -> i64 
             }
         }
         if total == 0 {
-            best = best.max(1 + most_groups_split(left ^ group, debts, memo));
+            best = best.max(1 + most_groups_split(left ^ group, debts, mut memo));
         }
         if sub == 0 {
             break;
@@ -237,9 +237,9 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_ledger(n: i64, people: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64, i64)] {
     let mut transactions: Vec[(i64, i64, i64)] = Vec.new();
     for _ in 0..n {
-        let from = next_random(seed) % people;
-        let to = (from + 1 + next_random(seed) % (people - 1)) % people;
-        transactions.push((from, to, 1 + next_random(seed) % size));
+        let from = next_random(mut seed) % people;
+        let to = (from + 1 + next_random(mut seed) % (people - 1)) % people;
+        transactions.push((from, to, 1 + next_random(mut seed) % size));
     }
     transactions
 }
@@ -264,7 +264,7 @@ fn most_blocks(debts: Vec[i64], i: i64, blocks: mut ref Vec[i64]) -> i64 {
         } else {
             blocks[b] += debts[i];
         }
-        best = best.max(most_blocks(debts, i + 1, blocks));
+        best = best.max(most_blocks(debts, i + 1, mut blocks));
         if b == open {
             blocks.pop();
         } else {

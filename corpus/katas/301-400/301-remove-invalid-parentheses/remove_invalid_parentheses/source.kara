@@ -124,9 +124,9 @@ fn walk(
 
     // Branch 1 — spend a unit of budget on this character.
     if c == b'(' and lrem > 0 {
-        walk(bytes, i + 1, open, lrem - 1, rrem, cur, seen, out);
+        walk(bytes, i + 1, open, lrem - 1, rrem, cur, mut seen, mut out);
     } else if c == b')' and rrem > 0 {
-        walk(bytes, i + 1, open, lrem, rrem - 1, cur, seen, out);
+        walk(bytes, i + 1, open, lrem, rrem - 1, cur, mut seen, mut out);
     }
 
     // Branch 2 — keep it. A ')' may only be kept against an open '(' ; that
@@ -134,13 +134,13 @@ fn walk(
     let mut next = cur.to_string();
     next.push(c as char);
     if c == b'(' {
-        walk(bytes, i + 1, open + 1, lrem, rrem, next, seen, out);
+        walk(bytes, i + 1, open + 1, lrem, rrem, next, mut seen, mut out);
     } else if c == b')' {
         if open > 0 {
-            walk(bytes, i + 1, open - 1, lrem, rrem, next, seen, out);
+            walk(bytes, i + 1, open - 1, lrem, rrem, next, mut seen, mut out);
         }
     } else {
-        walk(bytes, i + 1, open, lrem, rrem, next, seen, out);
+        walk(bytes, i + 1, open, lrem, rrem, next, mut seen, mut out);
     }
 }
 

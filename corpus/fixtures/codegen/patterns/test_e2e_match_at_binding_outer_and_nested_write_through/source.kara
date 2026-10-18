@@ -5,9 +5,9 @@ fn set_a(p: mut ref Pair, v: i64) -> i64 { p.a = v; v }
 fn mutate(p: mut ref Pair) -> i64 {
     match p {
         whole @ Pair { a, b } => {
-            let _ = set_to(a, 5);
-            let _ = set_to(b, 9);
-            set_a(whole, 7)
+            let _ = set_to(mut a, 5);
+            let _ = set_to(mut b, 9);
+            set_a(mut whole, 7)
         }
     }
 }

@@ -17,7 +17,7 @@ fn visit(node: ref Node, depth: i64, levels: mut ref Vec[Vec[i64]]) {
     }
     levels[depth].push(node.val);
     for child in node.children {
-        visit(child, depth + 1, levels);
+        visit(child, depth + 1, mut levels);
     }
 }
 
@@ -80,12 +80,12 @@ fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
     }
     let mut vals: Vec[i64] = Vec.new();
     let mut kids: Vec[Vec[i64]] = Vec.new();
-    let reach = 1 + step(seed) % n;
+    let reach = 1 + step(mut seed) % n;
     for i in 0..n {
-        vals.push(step(seed) % 10001);
+        vals.push(step(mut seed) % 10001);
         kids.push(Vec.new());
         if i > 0 {
-            let back = 1 + step(seed) % min(i, reach);
+            let back = 1 + step(mut seed) % min(i, reach);
             kids[i - back].push(i);
         }
     }

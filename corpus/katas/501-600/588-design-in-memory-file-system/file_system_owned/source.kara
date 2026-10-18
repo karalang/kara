@@ -153,9 +153,9 @@ fn script(count: i64, letters: i64, depth: i64, seed: mut ref i64) -> Vec[Op] {
     let mut made: Vec[String] = vec!["/".to_string()];
     let mut commands: Vec[Op] = Vec.new();
     while commands.len() < count {
-        let roll = step(seed) % 10;
+        let roll = step(mut seed) % 10;
         if roll < 4 {
-            let path = made[step(seed) % made.len()].clone();
+            let path = made[step(mut seed) % made.len()].clone();
             if roll < 2 or not files.contains(path) {
                 commands.push(Op.Ls(path));
             } else {
@@ -164,12 +164,12 @@ fn script(count: i64, letters: i64, depth: i64, seed: mut ref i64) -> Vec[Op] {
             continue;
         }
         let is_file = roll >= 7;
-        let length = 1 + step(seed) % depth;
+        let length = 1 + step(mut seed) % depth;
         let mut steps: Vec[String] = Vec.new();
         let mut path = String.new();
         let mut ok = true;
         for i in 0..length {
-            let k = step(seed) % letters;
+            let k = step(mut seed) % letters;
             path.push_str("/");
             path.push_str(alphabet[k..k + 1]);
             let last = i == length - 1;
@@ -186,8 +186,8 @@ fn script(count: i64, letters: i64, depth: i64, seed: mut ref i64) -> Vec[Op] {
         }
         if is_file {
             let mut content = String.new();
-            for _ in 0..1 + step(seed) % 3 {
-                let k = step(seed) % letters;
+            for _ in 0..1 + step(mut seed) % 3 {
+                let k = step(mut seed) % letters;
                 content.push_str(alphabet[k..k + 1]);
             }
             commands.push(Op.Add(path.clone(), content));

@@ -277,13 +277,13 @@ fn fair(counts: Vec[i64], weights: Vec[i64], total: i64, n: i64) -> bool {
 // 1 to `most` rectangles side by side from `x0`, each up to `side` wide
 // and tall, at heights within 10 of `y0`.
 fn random_rects(seed: mut ref i64, most: i64, side: i64, x0: i64, y0: i64) -> Vec[Vec[i64]] {
-    let count = 1 + next_random(seed) % most;
+    let count = 1 + next_random(mut seed) % most;
     let mut rects: Vec[Vec[i64]] = Vec.new();
     for i in 0..count {
-        let x = x0 + i * (side + 5) + next_random(seed) % 3;
-        let y = y0 + next_random(seed) % 21 - 10;
-        let w = 1 + next_random(seed) % side;
-        let h = 1 + next_random(seed) % side;
+        let x = x0 + i * (side + 5) + next_random(mut seed) % 3;
+        let y = y0 + next_random(mut seed) % 21 - 10;
+        let w = 1 + next_random(mut seed) % side;
+        let h = 1 + next_random(mut seed) % side;
         rects.push(vec![x, y, x + w - 1, y + h - 1]);
     }
     rects

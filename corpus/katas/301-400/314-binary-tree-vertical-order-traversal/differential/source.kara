@@ -122,8 +122,8 @@ fn extent(t: Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
         Some(n) => {
             if col < lo { lo = col; }
             if col > hi { hi = col; }
-            extent(n.left, col - 1, lo, hi);
-            extent(n.right, col + 1, lo, hi);
+            extent(n.left, col - 1, mut lo, mut hi);
+            extent(n.right, col + 1, mut lo, mut hi);
         }
     }
 }
@@ -164,8 +164,8 @@ fn walk(t: Option[TreeNode], col: i64, row: i64, tagged: mut ref Vec[(i64, i64, 
         None => {}
         Some(n) => {
             tagged.push((col, row, tagged.len(), n.val));
-            walk(n.left, col - 1, row + 1, tagged);
-            walk(n.right, col + 1, row + 1, tagged);
+            walk(n.left, col - 1, row + 1, mut tagged);
+            walk(n.right, col + 1, row + 1, mut tagged);
         }
     }
 }
@@ -244,8 +244,8 @@ fn grow(n: i64, seed: mut ref i64, counter: mut ref i64, labelled: bool) -> Opti
     seed = lcg(seed);
     let left_n = if n <= 1 { 0 } else { seed % n };
     let right_n = n - 1 - left_n;
-    let l = grow(left_n, seed, counter, labelled);
-    let r = grow(right_n, seed, counter, labelled);
+    let l = grow(left_n, mut seed, mut counter, labelled);
+    let r = grow(right_n, mut seed, mut counter, labelled);
     return node(v, l, r);
 }
 
@@ -266,8 +266,8 @@ fn annotate(t: Option[TreeNode], col: i64, row: i64, pos: mut ref i64,
             let here: i64 = pos;
             table.insert(n.val, (col, row, here));
             pos = pos + 1;
-            annotate(n.left, col - 1, row + 1, pos, table);
-            annotate(n.right, col + 1, row + 1, pos, table);
+            annotate(n.left, col - 1, row + 1, mut pos, mut table);
+            annotate(n.right, col + 1, row + 1, mut pos, mut table);
         }
     }
 }
@@ -276,9 +276,9 @@ fn values_into(t: Option[TreeNode], out: mut ref Vec[i64]) {
     match t {
         None => {}
         Some(n) => {
-            values_into(n.left, out);
+            values_into(n.left, mut out);
             out.push(n.val);
-            values_into(n.right, out);
+            values_into(n.right, mut out);
         }
     }
 }
@@ -395,8 +395,8 @@ fn perfect(depth: i64, counter: mut ref i64) -> Option[TreeNode] {
     if depth <= 0 { return None; }
     counter = counter + 1;
     let v = counter;
-    let l = perfect(depth - 1, counter);
-    let r = perfect(depth - 1, counter);
+    let l = perfect(depth - 1, mut counter);
+    let r = perfect(depth - 1, mut counter);
     return node(v, l, r);
 }
 

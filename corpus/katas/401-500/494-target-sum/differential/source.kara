@@ -81,7 +81,7 @@ fn count_memo_memo(nums: Vec[i64], i: i64, sum: i64, target: i64, memo: mut ref 
     if let Some(known) = memo.get((i, sum)) {
         return known;
     }
-    let ways = count_memo_memo(nums, i + 1, sum + nums[i], target, memo) + count_memo_memo(nums, i + 1, sum - nums[i], target, memo);
+    let ways = count_memo_memo(nums, i + 1, sum + nums[i], target, mut memo) + count_memo_memo(nums, i + 1, sum - nums[i], target, mut memo);
     memo.insert((i, sum), ways);
     ways
 }

@@ -43,7 +43,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
     let mut word = String.new();
     for _ in 0..len {
-        word.push((97 + next_random(seed) % letters) as u8 as char);
+        word.push((97 + next_random(mut seed) % letters) as u8 as char);
     }
     word
 }
@@ -57,7 +57,7 @@ fn random_words(seed: mut ref i64, count: i64, shortest: i64, longest: i64, lett
         if words.len() == count {
             break;
         }
-        let word = random_word(seed, shortest + next_random(seed) % (longest - shortest + 1), letters);
+        let word = random_word(mut seed, shortest + next_random(mut seed) % (longest - shortest + 1), letters);
         if not seen.contains(word) {
             seen.insert(word.clone());
             words.push(word);

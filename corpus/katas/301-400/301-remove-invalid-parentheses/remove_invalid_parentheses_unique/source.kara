@@ -117,7 +117,7 @@ fn repair(s: ref String, last_i: i64, last_j: i64, open: u8, close: u8, out: mut
             while j <= i {
                 if bytes[j] == close and (j == last_j or bytes[j - 1] != close) {
                     let cand = drop_at(s, j);
-                    repair(cand, i, j, open, close, out);
+                    repair(cand, i, j, open, close, mut out);
                 }
                 j = j + 1;
             }
@@ -129,7 +129,7 @@ fn repair(s: ref String, last_i: i64, last_j: i64, open: u8, close: u8, out: mut
     // No unmatchable `close` remains. Flip the string and hunt the other kind.
     let rev = reverse_string(s);
     if open == b'(' {
-        repair(rev, 0, 0, b')', b'(', out);
+        repair(rev, 0, 0, b')', b'(', mut out);
     } else {
         // Reversed twice — back in the original orientation, and valid.
         out.push(rev);

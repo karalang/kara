@@ -35,7 +35,7 @@ fn extend(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[bool]) -> i64
         }
         let mid = passed_over(key, next);
         if mid == 0 or visited[mid] {
-            total += extend(next, len + 1, m, n, visited);
+            total += extend(next, len + 1, m, n, mut visited);
         }
     }
     visited[key] = false;

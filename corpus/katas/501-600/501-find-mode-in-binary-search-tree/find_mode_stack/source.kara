@@ -65,7 +65,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
         let v = values[i];
         let mut node = root;
         loop {
-            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+            if v < node.val or (v == node.val and next_random(mut seed) % 2 == 0) {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -88,7 +88,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
 }
 
 fn show(name: Str, values: Vec[i64], seed: mut ref i64) {
-    let root = build(values, seed);
+    let root = build(values, mut seed);
     println(f"{name}: {values} -> {find_mode(root)}");
 }
 

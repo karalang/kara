@@ -55,10 +55,10 @@ fn bfs_tables(grid: ref Vec[i64], rows: i64, cols: i64,
                     let r = cell / cols;
                     let c = cell % cols;
                     let d = dist[cell] + 1;
-                    if r > 0 { step(grid, cell - cols, d, mut dist, total, reach, mut q); }
-                    if r < rows - 1 { step(grid, cell + cols, d, mut dist, total, reach, mut q); }
-                    if c > 0 { step(grid, cell - 1, d, mut dist, total, reach, mut q); }
-                    if c < cols - 1 { step(grid, cell + 1, d, mut dist, total, reach, mut q); }
+                    if r > 0 { step(grid, cell - cols, d, mut dist, mut total, mut reach, mut q); }
+                    if r < rows - 1 { step(grid, cell + cols, d, mut dist, mut total, mut reach, mut q); }
+                    if c > 0 { step(grid, cell - 1, d, mut dist, mut total, mut reach, mut q); }
+                    if c < cols - 1 { step(grid, cell + 1, d, mut dist, mut total, mut reach, mut q); }
                 }
             }
         }
@@ -359,12 +359,12 @@ fn make_grid(rows: i64, cols: i64, pct: i64, nb: i64, seed: mut ref i64) -> Vec[
     let n = rows * cols;
     let mut g: Vec[i64] = Vec.new();
     for i in 0..n {
-        if next(seed) % 100 < pct { g.push(2); } else { g.push(0); }
+        if next(mut seed) % 100 < pct { g.push(2); } else { g.push(0); }
     }
     let mut placed = 0;
     let mut tries = 0;
     while placed < nb and tries < 8 * n {
-        let p = next(seed) % n;
+        let p = next(mut seed) % n;
         tries += 1;
         if g[p] != 1 { g[p] = 1; placed += 1; }
     }

@@ -17,7 +17,7 @@ fn chain_from(a: ref Vec[i64], at: i64, memo: mut ref Map[i64, (i64, i64)]) -> i
     let mut next = 0;
     for k in at + 1..a.len() {
         if a[k] % x == 0 {
-            let rest = chain_from(a, k, memo);
+            let rest = chain_from(a, k, mut memo);
             if rest + 1 > len {
                 len = rest + 1;
                 next = a[k];

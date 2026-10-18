@@ -103,7 +103,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn shuffle(values: mut ref Vec[i64], seed: mut ref i64) {
     let n = values.len();
     for i in 0..n {
-        let j = i + next_random(seed) % (n - i);
+        let j = i + next_random(mut seed) % (n - i);
         values.swap(i, j);
     }
 }

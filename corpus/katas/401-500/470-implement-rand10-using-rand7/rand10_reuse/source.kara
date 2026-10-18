@@ -85,7 +85,7 @@ fn explore(script: mut ref Vec[i64], depth: i64, masses: mut ref Vec[i64]) -> bo
     }
     for d in 1..8 {
         script.push(d);
-        let ok = explore(script, depth, masses);
+        let ok = explore(mut script, depth, mut masses);
         script.pop();
         if not ok {
             return false;

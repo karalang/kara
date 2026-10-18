@@ -54,7 +54,7 @@ fn next(rng: mut ref Rng) -> i64 {
 }
 
 fn below(rng: mut ref Rng, n: i64) -> i64 {
-    return next(rng) % n;
+    return next(mut rng) % n;
 }
 
 // One grid. `shape` picks the wall/gate mix:
@@ -70,7 +70,7 @@ fn make_grid(rng: mut ref Rng, r: i64, c: i64, shape: i64) -> Vec[i64] {
     let mut g: Vec[i64] = [];
     let mut i = 0;
     while i < r * c {
-        let roll = below(rng, 100);
+        let roll = below(mut rng, 100);
         if roll < wall_pct { g.push(-1); }
         else if roll < wall_pct + gate_pct { g.push(0); }
         else { g.push(inf()); }
@@ -98,10 +98,10 @@ fn bfs(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
                 let row = cell / c;
                 let col = cell % c;
                 let d = g[cell] + 1;
-                if row > 0 { bfs_relax(g, cell - c, d, mut q, mut relax); }
-                if row < r - 1 { bfs_relax(g, cell + c, d, mut q, mut relax); }
-                if col > 0 { bfs_relax(g, cell - 1, d, mut q, mut relax); }
-                if col < c - 1 { bfs_relax(g, cell + 1, d, mut q, mut relax); }
+                if row > 0 { bfs_relax(mut g, cell - c, d, mut q, mut relax); }
+                if row < r - 1 { bfs_relax(mut g, cell + c, d, mut q, mut relax); }
+                if col > 0 { bfs_relax(mut g, cell - 1, d, mut q, mut relax); }
+                if col < c - 1 { bfs_relax(mut g, cell + 1, d, mut q, mut relax); }
             }
         }
     }
@@ -203,10 +203,10 @@ fn flood(g: mut ref Vec[i64], r: i64, c: i64, cell: i64, d: i64, relax: mut ref 
 
     let row = cell / c;
     let col = cell % c;
-    if row > 0 { flood(g, r, c, cell - c, d + 1, relax); }
-    if row < r - 1 { flood(g, r, c, cell + c, d + 1, relax); }
-    if col > 0 { flood(g, r, c, cell - 1, d + 1, relax); }
-    if col < c - 1 { flood(g, r, c, cell + 1, d + 1, relax); }
+    if row > 0 { flood(mut g, r, c, cell - c, d + 1, mut relax); }
+    if row < r - 1 { flood(mut g, r, c, cell + c, d + 1, mut relax); }
+    if col > 0 { flood(mut g, r, c, cell - 1, d + 1, mut relax); }
+    if col < c - 1 { flood(mut g, r, c, cell + 1, d + 1, mut relax); }
 }
 
 fn dfs(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
@@ -216,10 +216,10 @@ fn dfs(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
         if g[i] == 0 {
             let row = i / c;
             let col = i % c;
-            if row > 0 { flood(g, r, c, i - c, 1, mut relax); }
-            if row < r - 1 { flood(g, r, c, i + c, 1, mut relax); }
-            if col > 0 { flood(g, r, c, i - 1, 1, mut relax); }
-            if col < c - 1 { flood(g, r, c, i + 1, 1, mut relax); }
+            if row > 0 { flood(mut g, r, c, i - c, 1, mut relax); }
+            if row < r - 1 { flood(mut g, r, c, i + c, 1, mut relax); }
+            if col > 0 { flood(mut g, r, c, i - 1, 1, mut relax); }
+            if col < c - 1 { flood(mut g, r, c, i + 1, 1, mut relax); }
         }
         i = i + 1;
     }

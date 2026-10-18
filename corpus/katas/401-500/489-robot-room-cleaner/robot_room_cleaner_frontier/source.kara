@@ -81,7 +81,7 @@ fn clean_room(robot: mut ref Robot) {
     robot.clean();
     while let Some(dirs) = route(at, open, wall) {
         for d in dirs {
-            turn_to(robot, mut facing, d);
+            turn_to(mut robot, mut facing, d);
             robot.forward();
             at = (at.0 + step_row(d), at.1 + step_col(d));
         }
@@ -90,11 +90,11 @@ fn clean_room(robot: mut ref Robot) {
             if open.contains(next) or wall.contains(next) {
                 continue;
             }
-            turn_to(robot, mut facing, d);
+            turn_to(mut robot, mut facing, d);
             if robot.forward() {
                 open.insert(next);
                 robot.clean();
-                turn_to(robot, mut facing, (d + 2) % 4);
+                turn_to(mut robot, mut facing, (d + 2) % 4);
                 robot.forward();
             } else {
                 wall.insert(next);

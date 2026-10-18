@@ -27,10 +27,10 @@ fn dfs(board: mut ref Vec[Vec[u8]], word: ref Vec[u8], r: i64, c: i64, k: i64,
     // Mark this cell used (0 is not a printable board letter), recurse, restore.
     let saved = board[r][c];
     board[r][c] = 0u8;
-    let found = dfs(board, word, r + 1, c, k + 1, rows, cols)
-        or dfs(board, word, r - 1, c, k + 1, rows, cols)
-        or dfs(board, word, r, c + 1, k + 1, rows, cols)
-        or dfs(board, word, r, c - 1, k + 1, rows, cols);
+    let found = dfs(mut board, word, r + 1, c, k + 1, rows, cols)
+        or dfs(mut board, word, r - 1, c, k + 1, rows, cols)
+        or dfs(mut board, word, r, c + 1, k + 1, rows, cols)
+        or dfs(mut board, word, r, c - 1, k + 1, rows, cols);
     board[r][c] = saved;
     found
 }
@@ -49,7 +49,7 @@ fn exists(board: mut ref Vec[Vec[u8]], word: ref Vec[u8]) -> bool {
     while r < rows {
         let mut c = 0;
         while c < cols {
-            if dfs(board, word, r, c, 0, rows, cols) {
+            if dfs(mut board, word, r, c, 0, rows, cols) {
                 return true;
             }
             c = c + 1;

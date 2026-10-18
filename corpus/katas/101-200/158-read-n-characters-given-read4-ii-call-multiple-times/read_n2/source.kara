@@ -34,7 +34,7 @@ fn read(rd: mut ref Reader, n: i64) -> String {
     let mut total = 0;
     while total < n {
         if rd.buf_pos >= rd.buf.len() {
-            rd.buf = read4(rd);
+            rd.buf = read4(mut rd);
             rd.buf_pos = 0;
             if rd.buf.len() == 0 {
                 return result;

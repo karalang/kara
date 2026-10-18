@@ -264,15 +264,15 @@ fn next_random(seed: mut ref i64) -> i64 {
 // prefixes.
 fn random_url(seed: mut ref i64, most: i64) -> String {
     let mut url = "https://".to_string();
-    let host = 1 + next_random(seed) % 4;
+    let host = 1 + next_random(mut seed) % 4;
     for _ in 0..host {
-        url.push((b'a' + (next_random(seed) % 26) as u8) as char);
+        url.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
     }
     url.push_str(".com/");
     let marks = "abAB0/";
-    let path = next_random(seed) % (most + 1);
+    let path = next_random(mut seed) % (most + 1);
     for _ in 0..path {
-        url.push(marks.bytes()[next_random(seed) % 6] as char);
+        url.push(marks.bytes()[next_random(mut seed) % 6] as char);
     }
     url
 }

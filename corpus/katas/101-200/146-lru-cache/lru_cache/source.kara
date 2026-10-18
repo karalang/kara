@@ -36,8 +36,8 @@ fn push_front(pool: mut ref Vec[DNode], i: i64) {
 }
 
 fn move_front(pool: mut ref Vec[DNode], i: i64) {
-    unlink(pool, i);
-    push_front(pool, i);
+    unlink(mut pool, i);
+    push_front(mut pool, i);
 }
 
 fn main() {

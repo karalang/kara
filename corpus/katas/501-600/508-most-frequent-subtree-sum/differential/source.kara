@@ -16,7 +16,7 @@ fn subtree_sum_star(node: Option[TreeNode], counts: mut ref Map[i64, i64]) -> i6
     let Some(n) = node else {
         return 0;
     };
-    let sum = n.val + subtree_sum_star(n.left, counts) + subtree_sum_star(n.right, counts);
+    let sum = n.val + subtree_sum_star(n.left, mut counts) + subtree_sum_star(n.right, mut counts);
     *counts.entry(sum).or_insert(0) += 1;
     sum
 }
@@ -45,7 +45,7 @@ fn collect_sorted(node: Option[TreeNode], sums: mut ref Vec[i64]) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let sum = n.val + collect_sorted(n.left, sums) + collect_sorted(n.right, sums);
+            let sum = n.val + collect_sorted(n.left, mut sums) + collect_sorted(n.right, mut sums);
             sums.push(sum);
             sum
         }
@@ -166,12 +166,12 @@ fn next_random(seed: mut ref i64) -> i64 {
 // A random tree of size nodes with values from -half to half, each new
 // node hung at the first empty place of a random walk down from the root.
 fn grow(size: i64, half: i64, seed: mut ref i64) -> Option[TreeNode] {
-    let root = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+    let root = TreeNode { val: next_random(mut seed) % (2 * half + 1) - half, left: None, right: None };
     for _ in 1..size {
-        let leaf = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+        let leaf = TreeNode { val: next_random(mut seed) % (2 * half + 1) - half, left: None, right: None };
         let mut node = root;
         loop {
-            if next_random(seed) % 2 == 0 {
+            if next_random(mut seed) % 2 == 0 {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -224,8 +224,8 @@ fn arm(which: i64, root: Option[TreeNode]) -> Vec[i64] {
 fn nodes_of(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
     if let Some(n) = node {
         out.push(n);
-        nodes_of(n.left, out);
-        nodes_of(n.right, out);
+        nodes_of(n.left, mut out);
+        nodes_of(n.right, mut out);
     }
 }
 

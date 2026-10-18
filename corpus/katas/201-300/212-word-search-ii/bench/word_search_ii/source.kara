@@ -32,10 +32,10 @@ fn dfs(
         cnt = cnt + nxt;                             // + collected-word identity
     }
     board[r * size + c] = -1;                     // mark visited
-    if r > 0 { cnt = cnt + dfs(board, children, is_end, alpha, size, r - 1, c, nxt); }
-    if r + 1 < size { cnt = cnt + dfs(board, children, is_end, alpha, size, r + 1, c, nxt); }
-    if c > 0 { cnt = cnt + dfs(board, children, is_end, alpha, size, r, c - 1, nxt); }
-    if c + 1 < size { cnt = cnt + dfs(board, children, is_end, alpha, size, r, c + 1, nxt); }
+    if r > 0 { cnt = cnt + dfs(mut board, children, mut is_end, alpha, size, r - 1, c, nxt); }
+    if r + 1 < size { cnt = cnt + dfs(mut board, children, mut is_end, alpha, size, r + 1, c, nxt); }
+    if c > 0 { cnt = cnt + dfs(mut board, children, mut is_end, alpha, size, r, c - 1, nxt); }
+    if c + 1 < size { cnt = cnt + dfs(mut board, children, mut is_end, alpha, size, r, c + 1, nxt); }
     board[r * size + c] = cell;                      // restore
     return cnt;
 }

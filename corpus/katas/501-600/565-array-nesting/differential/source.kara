@@ -141,7 +141,7 @@ fn permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
     let mut nums: Vec[i64] = (0..n).collect();
     let mut i = n - 1;
     while i > 0 {
-        let j = step(seed) % (i + 1);
+        let j = step(mut seed) % (i + 1);
         nums.swap(i, j);
         i -= 1;
     }
@@ -151,23 +151,23 @@ fn permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
 // A permutation of 1 to 30 elements: random, made of cycles of random
 // lengths laid out in order, or the identity with a few swaps, in turn.
 fn random_case(t: i64, seed: mut ref i64) -> Vec[i64] {
-    let n = 1 + step(seed) % 30;
+    let n = 1 + step(mut seed) % 30;
     if t % 3 == 0 {
-        return permutation(n, seed);
+        return permutation(n, mut seed);
     }
     let mut nums: Vec[i64] = (0..n).collect();
     if t % 3 == 1 {
         let mut start = 0;
         while start < n {
-            let length = (1 + step(seed) % 8).min(n - start);
+            let length = (1 + step(mut seed) % 8).min(n - start);
             for j in 0..length {
                 nums[start + j] = start + (j + 1) % length;
             }
             start += length;
         }
     } else {
-        for _ in 0..step(seed) % 4 {
-            nums.swap(step(seed) % n, step(seed) % n);
+        for _ in 0..step(mut seed) % 4 {
+            nums.swap(step(mut seed) % n, step(mut seed) % n);
         }
     }
     nums

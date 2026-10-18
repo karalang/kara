@@ -244,13 +244,13 @@ fn check(values: Vec[i64], t: mut ref Tally) {
     let d = by_vec(values);
 
     if a != b or a != c or a != d {
-        fail(t, "P1", values);
+        fail(mut t, "P1", values);
     }
     if a.len() != n {
-        fail(t, "P2", values);
+        fail(mut t, "P2", values);
     }
     if sorted(a) != sorted(values) {
-        fail(t, "P3", values);
+        fail(mut t, "P3", values);
     }
     let mut placed = a.len() == n;
     if placed {
@@ -262,10 +262,10 @@ fn check(values: Vec[i64], t: mut ref Tally) {
         }
     }
     if not placed {
-        fail(t, "P4", values);
+        fail(mut t, "P4", values);
     }
     if values_of(list) != values {
-        fail(t, "P5", values);
+        fail(mut t, "P5", values);
     }
 
     // P6, at every even split point.
@@ -298,7 +298,7 @@ fn check(values: Vec[i64], t: mut ref Tally) {
             want.push(fr[i]);
         }
         if want != a {
-            fail(t, f"P6 at {m}", values);
+            fail(mut t, f"P6 at {m}", values);
         }
         m += 2;
     }

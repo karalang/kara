@@ -135,12 +135,12 @@ fn insert(nodes: mut ref Vec[Node], v: i64) {
 fn random_tree(seed: mut ref i64, n: i64, range: i64, damage: i64) -> Vec[Node] {
     let mut nodes: Vec[Node] = Vec.new();
     for _ in 0..n {
-        let v = (next(seed) * 32768 + next(seed)) % range;
+        let v = (next(mut seed) * 32768 + next(mut seed)) % range;
         insert(mut nodes, v);
     }
     for _ in 0..damage {
-        let at = next(seed) % n;
-        nodes[at].val = (next(seed) * 32768 + next(seed)) % range;
+        let at = next(mut seed) % n;
+        nodes[at].val = (next(mut seed) * 32768 + next(mut seed)) % range;
     }
     return nodes;
 }

@@ -194,12 +194,12 @@ fn write_json(v: ref JsonValue, out: mut ref String) {
         JsonValue.Null => out.push_str("null"),
         JsonValue.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         JsonValue.Num(text) => out.push_str(text),
-        JsonValue.Str(s) => write_string(s, out),
+        JsonValue.Str(s) => write_string(s, mut out),
         JsonValue.Arr(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 { out.push(','); }
-                write_json(item, out);
+                write_json(item, mut out);
             }
             out.push(']');
         }
@@ -209,9 +209,9 @@ fn write_json(v: ref JsonValue, out: mut ref String) {
             for (k, item) in fields {
                 if not first { out.push(','); }
                 first = false;
-                write_string(k, out);
+                write_string(k, mut out);
                 out.push(':');
-                write_json(item, out);
+                write_json(item, mut out);
             }
             out.push('}');
         }

@@ -25,7 +25,7 @@ fn extend(rows: mut ref Vec[i64], length: i64, children: ref Vec[i64], below: re
     }
     for i in below[node] {
         rows.push(i);
-        extend(rows, length, children, below, words, found);
+        extend(mut rows, length, children, below, words, mut found);
         rows.pop();
     }
 }

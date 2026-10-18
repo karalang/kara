@@ -25,7 +25,7 @@ fn longest_from(matrix: ref Vec[Vec[i64]], memo: mut ref Vec[Vec[i64]], r: i64, 
         let nr = r + dr;
         let nc = c + dc;
         if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] > here {
-            let len = 1 + longest_from(matrix, memo, nr, nc);
+            let len = 1 + longest_from(matrix, mut memo, nr, nc);
             if len > best {
                 best = len;
             }

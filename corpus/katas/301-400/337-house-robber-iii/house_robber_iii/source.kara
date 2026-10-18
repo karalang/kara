@@ -88,13 +88,13 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_tree(seed: mut ref i64, n: i64, most: i64) -> Vec[Node] {
     let mut nodes: Vec[Node] = Vec.new();
     for i in 0..n {
-        nodes.push(Node { val: next(seed) % (most + 1), left: -1, right: -1 });
+        nodes.push(Node { val: next(mut seed) % (most + 1), left: -1, right: -1 });
         if i == 0 {
             continue;
         }
         let mut cur = 0;
         while true {
-            if next(seed) % 2 == 0 {
+            if next(mut seed) % 2 == 0 {
                 if nodes[cur].left == -1 {
                     nodes[cur].left = i;
                     break;

@@ -98,7 +98,7 @@ fn search(d: i64, letters: mut ref Vec[i64], need: ref Vec[Vec[i64]], last: ref 
                 ok = false;
             }
         }
-        if ok and search(d + 1, letters, need, last, count) {
+        if ok and search(d + 1, mut letters, need, last, mut count) {
             count[d] = times;
             return true;
         }
@@ -238,7 +238,7 @@ fn scramble(digits: ref Vec[i64], names: ref Vec[String], seed: mut ref i64) -> 
         }
     }
     for i in 0..pool.len() {
-        let j = i + step(seed) % (pool.len() - i);
+        let j = i + step(mut seed) % (pool.len() - i);
         let keep = pool[i];
         pool[i] = pool[j];
         pool[j] = keep;

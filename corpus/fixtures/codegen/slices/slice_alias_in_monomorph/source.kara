@@ -7,6 +7,6 @@ fn saxpy[T](y: mut Slice[T], x: Slice[T]) {
 fn main() {
     let mut a = [1, 2, 3];
     let b = [4, 5, 6];
-    saxpy(a.as_slice_mut(), b.as_slice());
+    saxpy(mut a.as_slice_mut(), b.as_slice());
     print(0);
 }

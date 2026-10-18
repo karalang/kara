@@ -203,7 +203,7 @@ fn agreed(t: mut ref Tally, s: ref String, k: i64) -> i64 {
     let got = all_arms(s, k);
     for g in got.iter() {
         if g != got[0] {
-            fail(t, f"P1 arms disagree on \"{s}\" k={k}: {got}");
+            fail(mut t, f"P1 arms disagree on \"{s}\" k={k}: {got}");
             return -1;
         }
     }
@@ -242,35 +242,35 @@ fn renamed(s: ref String) -> String {
 }
 
 fn check_case(t: mut ref Tally, s: ref String, k: i64) -> i64 {
-    let w = agreed(t, s, k);
+    let w = agreed(mut t, s, k);
     if w < 0 {
         return 0;
     }
     let want = oracle(s, k);
     if w != want {
-        fail(t, f"P2 \"{s}\" k={k}: arms {w}, oracle {want}");
+        fail(mut t, f"P2 \"{s}\" k={k}: arms {w}, oracle {want}");
     }
     let n = s.chars().count();
     if k == 0 and w != 0 {
-        fail(t, f"P3 \"{s}\" k=0 gave {w}");
+        fail(mut t, f"P3 \"{s}\" k=0 gave {w}");
     }
     if k >= kinds_in(s) and w != n {
-        fail(t, f"P3 \"{s}\" k={k} gave {w}, length {n}");
+        fail(mut t, f"P3 \"{s}\" k={k} gave {w}, length {n}");
     }
-    let w1 = agreed(t, s, k + 1);
+    let w1 = agreed(mut t, s, k + 1);
     if w1 >= 0 and w1 < w {
-        fail(t, f"P4 \"{s}\" k={k}: {w}, k+1: {w1}");
+        fail(mut t, f"P4 \"{s}\" k={k}: {w}, k+1: {w1}");
     }
     if w > n or w < n.min(k) {
-        fail(t, f"P5 \"{s}\" k={k}: {w}");
+        fail(mut t, f"P5 \"{s}\" k={k}: {w}");
     }
     let r = reversed(s);
-    if agreed(t, r, k) != w {
-        fail(t, f"P6 \"{s}\" k={k}");
+    if agreed(mut t, r, k) != w {
+        fail(mut t, f"P6 \"{s}\" k={k}");
     }
     let m = renamed(s);
-    if agreed(t, m, k) != w {
-        fail(t, f"P7 \"{s}\" k={k}");
+    if agreed(mut t, m, k) != w {
+        fail(mut t, f"P7 \"{s}\" k={k}");
     }
     return w;
 }

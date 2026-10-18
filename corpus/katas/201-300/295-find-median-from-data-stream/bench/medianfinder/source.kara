@@ -57,7 +57,7 @@ fn heap_push(h: mut ref Heap, v: i64) {
     while climbing and i > 0 {
         let parent = (i - 1) / 2;
         if outranks(h, h.data[i], h.data[parent]) {
-            heap_swap(h, i, parent);
+            heap_swap(mut h, i, parent);
             i = parent;
         } else {
             climbing = false;
@@ -87,7 +87,7 @@ fn heap_pop(h: mut ref Heap) -> i64 {
                     if best == i {
                         sinking = false;
                     } else {
-                        heap_swap(h, i, best);
+                        heap_swap(mut h, i, best);
                         i = best;
                     }
                 }
@@ -108,12 +108,12 @@ fn mf_new() -> MedianFinder {
 }
 
 fn mf_add(m: mut ref MedianFinder, v: i64) {
-    heap_push(m.lo, v);
-    let moved = heap_pop(m.lo);
-    heap_push(m.hi, moved);
+    heap_push(mut m.lo, v);
+    let moved = heap_pop(mut m.lo);
+    heap_push(mut m.hi, moved);
     if heap_len(m.hi) > heap_len(m.lo) {
-        let back = heap_pop(m.hi);
-        heap_push(m.lo, back);
+        let back = heap_pop(mut m.hi);
+        heap_push(mut m.lo, back);
     }
 }
 

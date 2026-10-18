@@ -68,7 +68,7 @@ fn fold(node: Node, count: mut ref i64, checksum: mut ref i64) {
     *count += 1;
     *checksum = (*checksum * 31 + node.val) % 1000000007;
     for child in node.children {
-        fold(child, count, checksum);
+        fold(child, mut count, mut checksum);
     }
 }
 

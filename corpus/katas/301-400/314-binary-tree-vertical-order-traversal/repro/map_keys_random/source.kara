@@ -43,8 +43,8 @@ fn grow(n: i64, seed: mut ref i64, counter: mut ref i64, labelled: bool) -> Opti
     seed = lcg(seed);
     let left_n = if n <= 1 { 0 } else { seed % n };
     let right_n = n - 1 - left_n;
-    let l = grow(left_n, seed, counter, labelled);
-    let r = grow(right_n, seed, counter, labelled);
+    let l = grow(left_n, mut seed, mut counter, labelled);
+    let r = grow(right_n, mut seed, mut counter, labelled);
     return node(v, l, r);
 }
 

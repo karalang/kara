@@ -69,9 +69,9 @@ fn fmt(nums: mut Slice[i64], len: i64) -> String {
 }
 
 fn report(nums: mut Slice[i64], len: i64) {
-    let before = fmt(nums, len);
-    next_permutation(nums, len);
-    println(f"{before} -> {fmt(nums, len)}");
+    let before = fmt(mut nums, len);
+    next_permutation(mut nums, len);
+    println(f"{before} -> {fmt(mut nums, len)}");
 }
 
 fn main() {

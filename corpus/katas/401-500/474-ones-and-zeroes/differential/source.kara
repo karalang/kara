@@ -77,9 +77,9 @@ fn most_from_memo(counts: Counts_memo, k: i64, z: i64, o: i64, memo: mut ref Map
     if let Some(known) = memo.get((k, z, o)) {
         return known;
     }
-    let mut best = most_from_memo(counts, k + 1, z, o, memo);
+    let mut best = most_from_memo(counts, k + 1, z, o, mut memo);
     if counts.zeros[k] <= z and counts.ones[k] <= o {
-        let take = 1 + most_from_memo(counts, k + 1, z - counts.zeros[k], o - counts.ones[k], memo);
+        let take = 1 + most_from_memo(counts, k + 1, z - counts.zeros[k], o - counts.ones[k], mut memo);
         if take > best {
             best = take;
         }
@@ -187,11 +187,11 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn random_string(seed: mut ref i64) -> String {
-    let size = 1 + next_random(seed) % 6;
-    let lean = next_random(seed) % 3;
+    let size = 1 + next_random(mut seed) % 6;
+    let lean = next_random(mut seed) % 3;
     let mut s = String.new();
     for _ in 0..size {
-        let r = next_random(seed) % 4;
+        let r = next_random(mut seed) % 4;
         let zero = if lean == 0 { r != 0 } else if lean == 1 { r == 0 } else { r < 2 };
         s.push(if zero { '0' } else { '1' });
     }

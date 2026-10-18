@@ -83,7 +83,7 @@ fn explore(bytes: Slice[u8], pos: i64, nums: mut ref Vec[Vec[i64]]) -> bool {
         // fails for this `len` it fails for every longer one.
         if not no_leading_zero(bytes, pos, pos + len) { break; }
         nums.push(digits_of(bytes, pos, pos + len));
-        if explore(bytes, pos + len, nums) { return true; }
+        if explore(bytes, pos + len, mut nums) { return true; }
         nums.pop();
     }
     return false;

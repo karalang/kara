@@ -23,7 +23,7 @@ fn explore(maze: Vec[Vec[i64]], r: i64, c: i64, d: i64, best: mut ref Vec[Vec[i6
             steps += 1;
         }
         if steps > 0 {
-            explore(maze, nr, nc, d + steps, best);
+            explore(maze, nr, nc, d + steps, mut best);
         }
     }
 }

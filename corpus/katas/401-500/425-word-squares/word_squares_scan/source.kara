@@ -26,7 +26,7 @@ fn extend(rows: mut ref Vec[i64], length: i64, words: ref Vec[String], found: mu
         }
         if fits {
             rows.push(w);
-            extend(rows, length, words, found);
+            extend(mut rows, length, words, mut found);
             rows.pop();
         }
     }

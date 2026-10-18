@@ -9,7 +9,7 @@ fn make() -> Vec[String] {
 fn rec(depth: i64, s: own String, out: mut ref Vec[String]) {
     if depth > 0 {
         let d = make();              // local Vec, dies when this frame ends
-        rec(depth - 1, d[0].clone(), out);
+        rec(depth - 1, d[0].clone(), mut out);
     }
     out.push(s);                     // deferred use, after the descent
 }

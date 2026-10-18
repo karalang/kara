@@ -19,10 +19,10 @@ fn dfs(board: ref Vec[Vec[u8]], visited: mut ref Vec[Vec[bool]], word: ref Vec[u
         return false;
     }
     visited[r][c] = true;
-    let found = dfs(board, visited, word, r + 1, c, k + 1, rows, cols)
-        or dfs(board, visited, word, r - 1, c, k + 1, rows, cols)
-        or dfs(board, visited, word, r, c + 1, k + 1, rows, cols)
-        or dfs(board, visited, word, r, c - 1, k + 1, rows, cols);
+    let found = dfs(board, mut visited, word, r + 1, c, k + 1, rows, cols)
+        or dfs(board, mut visited, word, r - 1, c, k + 1, rows, cols)
+        or dfs(board, mut visited, word, r, c + 1, k + 1, rows, cols)
+        or dfs(board, mut visited, word, r, c - 1, k + 1, rows, cols);
     visited[r][c] = false;
     found
 }

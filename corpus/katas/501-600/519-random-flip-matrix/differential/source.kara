@@ -277,8 +277,8 @@ fn fair(counts: Vec[i64], n: i64) -> bool {
 // A grid of 1 to 3 rows holding `low` to `high` cells, as (m, n).
 fn small_grid(seed: mut ref i64, low: i64, high: i64) -> (i64, i64) {
     loop {
-        let m = 1 + next_random(seed) % 3;
-        let n = 1 + next_random(seed) % high;
+        let m = 1 + next_random(mut seed) % 3;
+        let n = 1 + next_random(mut seed) % high;
         if m * n >= low and m * n <= high {
             return (m, n);
         }

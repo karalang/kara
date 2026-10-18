@@ -28,7 +28,7 @@ fn parse_value_descent(b: Slice[u8], pos: mut ref i64) -> NestedInteger {
             return NestedInteger.List(items);
         }
         loop {
-            items.push(parse_value_descent(b, pos));
+            items.push(parse_value_descent(b, mut pos));
             if b[*pos] == b',' {
                 *pos += 1;
             } else {
@@ -254,20 +254,20 @@ fn next(seed: mut ref i64, n: i64) -> i64 {
 }
 
 fn random_value(seed: mut ref i64, depth: i64) -> Built {
-    if depth == 0 or next(seed, 10) < 4 {
-        let kind = next(seed, 5);
+    if depth == 0 or next(mut seed, 10) < 4 {
+        let kind = next(mut seed, 5);
         let v = if kind == 0 {
             0
         } else if kind == 1 {
-            next(seed, 19) - 9
+            next(mut seed, 19) - 9
         } else if kind == 2 {
-            if next(seed, 2) == 0 { 1000000 } else { -1000000 }
+            if next(mut seed, 2) == 0 { 1000000 } else { -1000000 }
         } else {
-            next(seed, 2000001) - 1000000
+            next(mut seed, 2000001) - 1000000
         };
         return Built { text: f"{v}", depth: 0, count: 1, sum: v };
     }
-    let n = next(seed, 5);
+    let n = next(mut seed, 5);
     let mut text = String.from("[");
     let mut d = 0;
     let mut count = 0;
@@ -276,7 +276,7 @@ fn random_value(seed: mut ref i64, depth: i64) -> Built {
         if i > 0 {
             text.push(',');
         }
-        let item = random_value(seed, depth - 1);
+        let item = random_value(mut seed, depth - 1);
         text.push_str(item.text);
         if item.depth > d {
             d = item.depth;

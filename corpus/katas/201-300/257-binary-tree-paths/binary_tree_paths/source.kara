@@ -80,14 +80,14 @@ fn walk(nodes: ref Vec[Node], node: i64, prefix: ref String, out: mut ref Vec[St
         next.push_str(prefix);
         next.push_str("->");
         next.push_str(f"{nodes[left].val}");
-        walk(nodes, left, next, out);
+        walk(nodes, left, next, mut out);
     }
     if right != -1 {
         let mut next: String = "";
         next.push_str(prefix);
         next.push_str("->");
         next.push_str(f"{nodes[right].val}");
-        walk(nodes, right, next, out);
+        walk(nodes, right, next, mut out);
     }
 }
 

@@ -196,8 +196,8 @@ fn brute(nums: Vec[i64]) -> bool {
 fn random_steps(n: i64, size: i64, backward: i64, seed: mut ref i64) -> Vec[i64] {
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..n {
-        let step = 1 + next_random(seed) % size;
-        if backward > 0 and next_random(seed) % backward == 0 {
+        let step = 1 + next_random(mut seed) % size;
+        if backward > 0 and next_random(mut seed) % backward == 0 {
             nums.push(-step);
         } else {
             nums.push(step);

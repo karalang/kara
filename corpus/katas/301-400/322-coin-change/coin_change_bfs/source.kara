@@ -72,7 +72,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     while v.len() < count {
-        let c = next(seed) % top + 1;
+        let c = next(mut seed) % top + 1;
         if not v.contains(c) {
             v.push(c);
         }

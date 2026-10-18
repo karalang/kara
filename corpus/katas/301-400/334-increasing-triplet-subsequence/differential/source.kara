@@ -153,23 +153,23 @@ fn next(seed: mut ref i64) -> i64 {
 }
 
 fn properties(nums: ref Vec[i64], failures: mut ref i64) {
-    let ans = agreed(nums, failures);
-    check(ans == brute(nums), "P2", nums, failures);
+    let ans = agreed(nums, mut failures);
+    check(ans == brute(nums), "P2", nums, mut failures);
     let four = has_increasing(nums, 4);
     let two = has_increasing(nums, 2);
-    check((not four or ans) and (not ans or two), "P3", nums, failures);
+    check((not four or ans) and (not ans or two), "P3", nums, mut failures);
     let mut rev: Vec[i64] = Vec.new();
     let mut i = nums.len() - 1;
     while i >= 0 {
         rev.push(0 - nums[i]);
         i -= 1;
     }
-    check(agreed(rev, failures) == ans, "P4", nums, failures);
+    check(agreed(rev, mut failures) == ans, "P4", nums, mut failures);
     let mut prefix: Vec[i64] = Vec.new();
     for k in 0..(nums.len() / 2) {
         prefix.push(nums[k]);
     }
-    check(not agreed(prefix, failures) or ans, "P5", nums, failures);
+    check(not agreed(prefix, mut failures) or ans, "P5", nums, mut failures);
     if two {
         let mut top = nums[0];
         for x in nums.iter() {
@@ -179,13 +179,13 @@ fn properties(nums: ref Vec[i64], failures: mut ref i64) {
         }
         let mut grown = nums.clone();
         grown.push(top + 1);
-        check(agreed(grown, failures), "P6", nums, failures);
+        check(agreed(grown, mut failures), "P6", nums, mut failures);
     }
     let mut scaled: Vec[i64] = Vec.new();
     for x in nums.iter() {
         scaled.push(3 * x + 7);
     }
-    check(agreed(scaled, failures) == ans, "P7", nums, failures);
+    check(agreed(scaled, mut failures) == ans, "P7", nums, mut failures);
     let mut sorted = nums.clone();
     sorted.sort();
     let mut uniq: Vec[i64] = Vec.new();
@@ -194,7 +194,7 @@ fn properties(nums: ref Vec[i64], failures: mut ref i64) {
             uniq.push(x);
         }
     }
-    check(agreed(uniq, failures) == (uniq.len() >= 3), "P8", nums, failures);
+    check(agreed(uniq, mut failures) == (uniq.len() >= 3), "P8", nums, mut failures);
 }
 
 fn main() {

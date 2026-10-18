@@ -264,7 +264,7 @@ fn draw(node: Node, out: mut ref String) {
             if i > 0 {
                 out.push(' ');
             }
-            draw(node.children[i], out);
+            draw(node.children[i], mut out);
         }
         out.push(')');
     }
@@ -282,9 +282,9 @@ fn bdraw(root: Option[TreeNode], out: mut ref String) {
             out.push_str(f"{t.val}");
             if t.left.is_some() or t.right.is_some() {
                 out.push('(');
-                bdraw(t.left, out);
+                bdraw(t.left, mut out);
                 out.push(',');
-                bdraw(t.right, out);
+                bdraw(t.right, mut out);
                 out.push(')');
             }
         }
@@ -299,7 +299,7 @@ fn census(root: Option[TreeNode], values: mut ref Vec[i64]) -> i64 {
             if t.val >= 0 {
                 values.push(t.val);
             }
-            1 + census(t.left, values) + census(t.right, values)
+            1 + census(t.left, mut values) + census(t.right, mut values)
         }
         None => 0,
     }
@@ -321,12 +321,12 @@ struct Table {
 fn random_table(n: i64, top: i64, seed: mut ref i64) -> Table {
     let mut vals: Vec[i64] = Vec.new();
     let mut kids: Vec[Vec[i64]] = Vec.new();
-    let reach = 1 + step(seed) % max(n, 1);
+    let reach = 1 + step(mut seed) % max(n, 1);
     for i in 0..n {
-        vals.push(step(seed) % top);
+        vals.push(step(mut seed) % top);
         kids.push(Vec.new());
         if i > 0 {
-            let back = 1 + step(seed) % min(i, reach);
+            let back = 1 + step(mut seed) % min(i, reach);
             kids[i - back].push(i);
         }
     }
@@ -372,13 +372,13 @@ fn lcrs_text(i: i64, mirrored: bool, table: Table, first: Vec[i64], sib: Vec[i64
     if first[i] >= 0 or sib[i] >= 0 {
         out.push('(');
         if mirrored {
-            lcrs_text(sib[i], mirrored, table, first, sib, out);
+            lcrs_text(sib[i], mirrored, table, first, sib, mut out);
             out.push(',');
-            lcrs_text(first[i], mirrored, table, first, sib, out);
+            lcrs_text(first[i], mirrored, table, first, sib, mut out);
         } else {
-            lcrs_text(first[i], mirrored, table, first, sib, out);
+            lcrs_text(first[i], mirrored, table, first, sib, mut out);
             out.push(',');
-            lcrs_text(sib[i], mirrored, table, first, sib, out);
+            lcrs_text(sib[i], mirrored, table, first, sib, mut out);
         }
         out.push(')');
     }
@@ -391,7 +391,7 @@ fn spine_text(i: i64, table: Table, out: mut ref String) {
         out.push('(');
         for j in 0..ks.len() {
             out.push_str("-1(");
-            spine_text(ks[j], table, out);
+            spine_text(ks[j], table, mut out);
             out.push(',');
         }
         out.push('-');

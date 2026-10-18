@@ -30,7 +30,7 @@ fn visit(
         let used = match cursor.get(airport) { Some(u) => u, None => 0 };
         if used >= dests.len() { break; }
         let _ = cursor.insert(airport.clone(), used + 1);
-        visit(adj, cursor, dests[used].clone(), route);
+        visit(mut adj, mut cursor, dests[used].clone(), mut route);
     }
     route.push(airport);
 }

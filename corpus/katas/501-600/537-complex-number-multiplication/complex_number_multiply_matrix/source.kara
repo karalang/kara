@@ -35,8 +35,8 @@ fn next_random(seed: mut ref i64) -> i64 {
 // A number written as the problem writes it, with both parts from -100
 // to 100.
 fn random_number(seed: mut ref i64) -> String {
-    let re = next_random(seed) % 201 - 100;
-    let im = next_random(seed) % 201 - 100;
+    let re = next_random(mut seed) % 201 - 100;
+    let im = next_random(mut seed) % 201 - 100;
     f"{re}+{im}i"
 }
 

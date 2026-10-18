@@ -86,10 +86,10 @@ fn dfs(
     }
 
     board[r][c] = '#';                       // mark visited
-    if r > 0 { dfs(board, r - 1, c, rows, cols, nodes, nxt, path, results); }
-    if r + 1 < rows { dfs(board, r + 1, c, rows, cols, nodes, nxt, path, results); }
-    if c > 0 { dfs(board, r, c - 1, rows, cols, nodes, nxt, path, results); }
-    if c + 1 < cols { dfs(board, r, c + 1, rows, cols, nodes, nxt, path, results); }
+    if r > 0 { dfs(mut board, r - 1, c, rows, cols, mut nodes, nxt, mut path, mut results); }
+    if r + 1 < rows { dfs(mut board, r + 1, c, rows, cols, mut nodes, nxt, mut path, mut results); }
+    if c > 0 { dfs(mut board, r, c - 1, rows, cols, mut nodes, nxt, mut path, mut results); }
+    if c + 1 < cols { dfs(mut board, r, c + 1, rows, cols, mut nodes, nxt, mut path, mut results); }
     board[r][c] = ch;                        // restore
 
     let _ = path.pop();
@@ -129,7 +129,7 @@ fn find_words(board: mut ref Vec[Vec[char]], words: ref Vec[String]) -> Vec[Stri
     while r < rows {
         let mut c = 0;
         while c < cols {
-            dfs(board, r, c, rows, cols, mut nodes, 0, mut path, mut results);
+            dfs(mut board, r, c, rows, cols, mut nodes, 0, mut path, mut results);
             c = c + 1;
         }
         r = r + 1;
@@ -139,7 +139,7 @@ fn find_words(board: mut ref Vec[Vec[char]], words: ref Vec[String]) -> Vec[Stri
 }
 
 fn report(board: mut ref Vec[Vec[char]], words: ref Vec[String]) {
-    let res = find_words(board, words);
+    let res = find_words(mut board, words);
     if res.len() == 0 {
         println("[]");
         return;

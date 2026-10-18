@@ -33,7 +33,7 @@ fn build_tree(postorder: ref Vec[i64], inorder: ref Vec[i64]) -> Option[TreeNode
 fn ser(node: Option[TreeNode], acc: mut ref i64) {
     match node {
         None => { acc = (acc * 131 + 1) % 1000000007; }
-        Some(n) => { acc = (acc * 131 + (n.val + 2)) % 1000000007; ser(n.left, acc); ser(n.right, acc); }
+        Some(n) => { acc = (acc * 131 + (n.val + 2)) % 1000000007; ser(n.left, mut acc); ser(n.right, mut acc); }
     }
 }
 fn bst_insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
@@ -43,10 +43,10 @@ fn bst_insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
     }
 }
 fn inorder_of(node: Option[TreeNode], out: mut ref Vec[i64]) {
-    match node { None => {} Some(n) => { inorder_of(n.left, out); out.push(n.val); inorder_of(n.right, out); } }
+    match node { None => {} Some(n) => { inorder_of(n.left, mut out); out.push(n.val); inorder_of(n.right, mut out); } }
 }
 fn postorder_of(node: Option[TreeNode], out: mut ref Vec[i64]) {
-    match node { None => {} Some(n) => { postorder_of(n.left, out); postorder_of(n.right, out); out.push(n.val); } }
+    match node { None => {} Some(n) => { postorder_of(n.left, mut out); postorder_of(n.right, mut out); out.push(n.val); } }
 }
 fn bst_insert_all(nums: Vec[i64]) -> Option[TreeNode] {
     let mut root: Option[TreeNode] = None; let mut i = 0;

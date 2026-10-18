@@ -197,7 +197,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
     let mut word = String.new();
     for _ in 0..len {
-        word.push((97 + next_random(seed) % letters) as u8 as char);
+        word.push((97 + next_random(mut seed) % letters) as u8 as char);
     }
     word
 }
@@ -207,11 +207,11 @@ fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
 fn random_list(seed: mut ref i64, n: i64, most: i64, letters: i64) -> Vec[String] {
     let mut strs: Vec[String] = Vec.new();
     for k in 0..n {
-        if k > 0 and next_random(seed) % 3 == 0 {
-            let from = next_random(seed) % k;
+        if k > 0 and next_random(mut seed) % 3 == 0 {
+            let from = next_random(mut seed) % k;
             strs.push(strs[from].clone());
         } else {
-            strs.push(random_word(seed, 1 + next_random(seed) % most, letters));
+            strs.push(random_word(mut seed, 1 + next_random(mut seed) % most, letters));
         }
     }
     strs

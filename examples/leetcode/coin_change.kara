@@ -25,7 +25,7 @@ fn dp(amount: i64, coins: ref Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
 
     let mut best = -1i64;
     for coin in coins.iter() {
-        let sub = dp(amount - coin, coins, memo);
+        let sub = dp(amount - coin, coins, mut memo);
         if sub != -1 {
             let candidate = sub + 1;
             if best == -1 or candidate < best {

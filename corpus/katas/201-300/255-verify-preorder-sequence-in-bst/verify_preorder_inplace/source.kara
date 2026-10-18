@@ -38,7 +38,7 @@ fn verify_preorder(preorder: mut Slice[i64]) -> bool {
 }
 
 fn report(preorder: mut Slice[i64], label: ref String) {
-    let ok = verify_preorder(preorder);
+    let ok = verify_preorder(mut preorder);
     println(f"{label} -> {ok}");
 }
 

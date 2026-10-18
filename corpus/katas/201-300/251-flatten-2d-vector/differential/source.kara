@@ -69,12 +69,12 @@ fn c_skip(v: mut ref Cursor) {
 }
 
 fn c_has_next(v: mut ref Cursor) -> bool {
-    c_skip(v);
+    c_skip(mut v);
     return v.row < v.data.len();
 }
 
 fn c_next(v: mut ref Cursor) -> i64 {
-    c_skip(v);
+    c_skip(mut v);
     if v.row >= v.data.len() {
         return -1;
     }

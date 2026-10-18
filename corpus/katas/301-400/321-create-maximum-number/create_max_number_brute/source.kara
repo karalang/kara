@@ -35,12 +35,12 @@ fn interleave(a: ref Vec[i64], i: i64, b: ref Vec[i64], j: i64,
     }
     if i < a.len() {
         cur.push(a[i]);
-        interleave(a, i + 1, b, j, cur, best, have);
+        interleave(a, i + 1, b, j, mut cur, mut best, mut have);
         cur.pop();
     }
     if j < b.len() {
         cur.push(b[j]);
-        interleave(a, i, b, j + 1, cur, best, have);
+        interleave(a, i, b, j + 1, mut cur, mut best, mut have);
         cur.pop();
     }
 }
@@ -56,7 +56,7 @@ fn subsequences(nums: ref Vec[i64], from: i64, want: i64, cur: mut ref Vec[i64],
     let mut p = from;
     while p < nums.len() {
         cur.push(nums[p]);
-        subsequences(nums, p + 1, want - 1, cur, out);
+        subsequences(nums, p + 1, want - 1, mut cur, mut out);
         cur.pop();
         p = p + 1;
     }
@@ -107,7 +107,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn digits(len: i64, seed: mut ref i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     for i in 0..len {
-        v.push(next(seed) % 10);
+        v.push(next(mut seed) % 10);
     }
     return v;
 }

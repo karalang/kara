@@ -20,12 +20,12 @@ fn reverse_range(s: mut Slice[char], lo: i64, hi: i64) {
     let t = s[lo];
     s[lo] = s[hi];
     s[hi] = t;
-    reverse_range(s, lo + 1, hi - 1);
+    reverse_range(mut s, lo + 1, hi - 1);
 }
 
 fn reverse_string(s: mut Slice[char]) {
     let n = s.len();
-    reverse_range(s, 0, n - 1);
+    reverse_range(mut s, 0, n - 1);
 }
 
 fn show(s: ref Vec[char]) -> String {

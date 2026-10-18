@@ -14,10 +14,10 @@ shared struct TreeNode {
 
 fn visit(node: Option[TreeNode], total: mut ref i64) {
     if let Some(n) = node {
-        visit(n.right, total);
+        visit(n.right, mut total);
         *total += n.val;
         n.val = *total;
-        visit(n.left, total);
+        visit(n.left, mut total);
     }
 }
 

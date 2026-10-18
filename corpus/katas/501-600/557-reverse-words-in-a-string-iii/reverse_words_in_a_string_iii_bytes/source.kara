@@ -44,9 +44,9 @@ fn random_text(words: i64, longest: i64, seed: mut ref i64) -> String {
         if k > 0 {
             s.push(' ');
         }
-        let length = 1 + next_random(seed) % longest;
+        let length = 1 + next_random(mut seed) % longest;
         for _ in 0..length {
-            s.push((b'!' + (next_random(seed) % 94) as u8) as char);
+            s.push((b'!' + (next_random(mut seed) % 94) as u8) as char);
         }
     }
     s

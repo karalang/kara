@@ -28,7 +28,7 @@ fn read(rd: mut ref Reader, n: i64) -> String {
     let mut total = 0;
     let mut done = false;
     while total < n and not done {
-        let chunk = read4(rd);
+        let chunk = read4(mut rd);
         let clen = chunk.len();
         if clen == 0 {
             done = true;

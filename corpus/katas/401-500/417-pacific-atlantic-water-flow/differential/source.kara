@@ -73,16 +73,16 @@ fn visit(heights: Vec[Vec[i64]], r: i64, c: i64, seen: mut ref Vec[Vec[bool]]) {
     let rows = heights.len();
     let cols = heights[0].len();
     if r > 0 and not seen[r - 1][c] and heights[r - 1][c] >= heights[r][c] {
-        visit(heights, r - 1, c, seen);
+        visit(heights, r - 1, c, mut seen);
     }
     if r + 1 < rows and not seen[r + 1][c] and heights[r + 1][c] >= heights[r][c] {
-        visit(heights, r + 1, c, seen);
+        visit(heights, r + 1, c, mut seen);
     }
     if c > 0 and not seen[r][c - 1] and heights[r][c - 1] >= heights[r][c] {
-        visit(heights, r, c - 1, seen);
+        visit(heights, r, c - 1, mut seen);
     }
     if c + 1 < cols and not seen[r][c + 1] and heights[r][c + 1] >= heights[r][c] {
-        visit(heights, r, c + 1, seen);
+        visit(heights, r, c + 1, mut seen);
     }
 }
 

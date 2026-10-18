@@ -23,14 +23,14 @@ fn reverse_range(a: mut ref Vec[i64], lo: i64, hi: i64) {
 
 fn reverse_words(a: mut ref Vec[i64], n: i64) {
     if n > 0 {
-        reverse_range(a, 0, n - 1);
+        reverse_range(mut a, 0, n - 1);
     }
     let mut start = 0;
     let mut i = 0;
     while i <= n {
         if i == n or a[i] == 32 {
             if i > start {
-                reverse_range(a, start, i - 1);
+                reverse_range(mut a, start, i - 1);
             }
             start = i + 1;
         }

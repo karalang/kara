@@ -73,7 +73,7 @@ fn search(board: Vec[char], counts: mut ref Vec[i64], memo: mut ref Map[String, 
             let mut inserted = board.clone();
             inserted.insert(i, c);
             counts[ci] -= 1;
-            let more = search(shrink(inserted), counts, memo);
+            let more = search(shrink(inserted), mut counts, mut memo);
             counts[ci] += 1;
             if more + 1 < best {
                 best = more + 1;

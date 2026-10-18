@@ -53,8 +53,8 @@ fn best(
     // The two colours that are not `c`, without branching on which they are.
     let a = (c + 1) % 3;
     let b = (c + 2) % 3;
-    let sub_a = best(costs, i + 1, a, memo, seen);
-    let sub_b = best(costs, i + 1, b, memo, seen);
+    let sub_a = best(costs, i + 1, a, mut memo, mut seen);
+    let sub_b = best(costs, i + 1, b, mut memo, mut seen);
     let total = cost_of(costs, i, c) + min2(sub_a, sub_b);
     memo[key] = total;
     seen[key] = true;

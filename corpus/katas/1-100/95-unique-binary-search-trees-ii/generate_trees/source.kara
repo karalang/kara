@@ -61,8 +61,8 @@ fn serialize(node: Option[TreeNode], out: mut ref String) {
         }
         Some(n) => {
             out.push_str(f"{n.val},");
-            serialize(n.left, out);
-            serialize(n.right, out);
+            serialize(n.left, mut out);
+            serialize(n.right, mut out);
         }
     }
 }

@@ -61,11 +61,11 @@ fn search(num: ref String, target: i64, pos: i64, expr: own String, cur: i64, la
             k = k + 1;
         }
         if pos == 0 {
-            search(num, target, end, piece, n, n, found, hash);
+            search(num, target, end, piece, n, n, mut found, mut hash);
         } else {
-            search(num, target, end, expr.clone() + "+" + piece.clone(), cur + n, n, found, hash);
-            search(num, target, end, expr.clone() + "-" + piece.clone(), cur - n, 0 - n, found, hash);
-            search(num, target, end, expr + "*" + piece, cur - last + last * n, last * n, found, hash);
+            search(num, target, end, expr.clone() + "+" + piece.clone(), cur + n, n, mut found, mut hash);
+            search(num, target, end, expr.clone() + "-" + piece.clone(), cur - n, 0 - n, mut found, mut hash);
+            search(num, target, end, expr + "*" + piece, cur - last + last * n, last * n, mut found, mut hash);
         }
         end = end + 1;
     }

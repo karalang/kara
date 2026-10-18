@@ -44,10 +44,10 @@ fn tree(seed: mut ref i64, n: i64, out: mut ref Vec[String]) {
         out.push("#");
         return;
     }
-    out.push((next(seed) % 100).to_string());
-    let left = next(seed) % n;
-    tree(seed, left, out);
-    tree(seed, n - 1 - left, out);
+    out.push((next(mut seed) % 100).to_string());
+    let left = next(mut seed) % n;
+    tree(mut seed, left, mut out);
+    tree(mut seed, n - 1 - left, mut out);
 }
 
 fn main() {

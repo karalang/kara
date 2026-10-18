@@ -282,7 +282,7 @@ fn grow(n: i64, k: i64, seed: mut ref i64, drift: bool) -> String {
     let mut out = String.new();
     let mut cur = k - 1;
     for i in 0..n {
-        let r = next(seed);
+        let r = next(mut seed);
         let mut c = r % k;
         if drift {
             // step down with probability 3/4, else jump anywhere

@@ -58,7 +58,7 @@ fn steps_memo(r: Slice[u8], k: Slice[u8], i: i64, p: i64, memo: mut ref Vec[Vec[
     for q in 0..n {
         if r[q] == k[i] {
             let d = (p - q).abs();
-            best = best.min(d.min(n - d) + steps_memo(r, k, i + 1, q, memo));
+            best = best.min(d.min(n - d) + steps_memo(r, k, i + 1, q, mut memo));
         }
     }
     memo[i][p] = best;
@@ -118,7 +118,7 @@ fn rest_nearest(r: Slice[u8], k: Slice[u8], i: i64, p: i64, memo: mut ref Map[(i
     while r[(p - left + n) % n] != k[i] {
         left += 1;
     }
-    let best = (right + rest_nearest(r, k, i + 1, (p + right) % n, memo)).min(left + rest_nearest(r, k, i + 1, (p - left + n) % n, memo));
+    let best = (right + rest_nearest(r, k, i + 1, (p + right) % n, mut memo)).min(left + rest_nearest(r, k, i + 1, (p - left + n) % n, mut memo));
     memo.insert((i, p), best);
     best
 }

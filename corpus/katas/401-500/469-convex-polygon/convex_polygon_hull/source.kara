@@ -72,8 +72,8 @@ fn random_convex(edges: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut sx = 0;
     let mut sy = 0;
     while vectors.len() < edges - 1 {
-        let x = next_random(seed) % (2 * size + 1) - size;
-        let y = next_random(seed) % (2 * size + 1) - size;
+        let x = next_random(mut seed) % (2 * size + 1) - size;
+        let y = next_random(mut seed) % (2 * size + 1) - size;
         if x != 0 or y != 0 {
             vectors.push((x, y));
             sx += x;
@@ -92,8 +92,8 @@ fn random_convex(edges: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
         }
     }
     let mut points: Vec[(i64, i64)] = Vec.new();
-    let mut x = next_random(seed) % 100;
-    let mut y = next_random(seed) % 100;
+    let mut x = next_random(mut seed) % 100;
+    let mut y = next_random(mut seed) % 100;
     for (dx, dy) in vectors {
         points.push((2 * x, 2 * y));
         x += dx;
@@ -141,12 +141,12 @@ fn dented(points: Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
     }
     cx = cx / n;
     cy = cy / n;
-    let at = next_random(seed) % n;
+    let at = next_random(mut seed) % n;
     let (x1, y1) = points[at];
     let (x2, y2) = points[(at + 1) % n];
     let mx = (x1 + x2) / 2;
     let my = (y1 + y2) / 2;
-    let depth = 2 + next_random(seed) % 4;
+    let depth = 2 + next_random(mut seed) % 4;
     let mut dent = (mx + (cx - mx) / depth, my + (cy - my) / depth);
     if not inside(points, dent) {
         dent = (mx, my);

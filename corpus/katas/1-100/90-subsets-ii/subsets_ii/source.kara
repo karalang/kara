@@ -41,7 +41,7 @@ fn backtrack(nums: ref Vec[i64], start: i64, path: mut ref Vec[i64],
         // Skip a duplicate value unless it is the first choice at this level.
         if i == start or nums[i] != nums[i - 1] {
             path.push(nums[i]);
-            backtrack(nums, i + 1, path, out);
+            backtrack(nums, i + 1, mut path, mut out);
             path.pop();
         }
         i = i + 1;

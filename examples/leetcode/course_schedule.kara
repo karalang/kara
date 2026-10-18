@@ -54,7 +54,7 @@ fn has_cycle(
         match state.get(neighbor) {
             Some(VisitState.Visiting)   => return true,   // back edge — cycle found
             Some(VisitState.Unvisited)  => {
-                if has_cycle(neighbor, graph, state) {
+                if has_cycle(neighbor, graph, mut state) {
                     return true;
                 }
             }

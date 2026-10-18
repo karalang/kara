@@ -38,7 +38,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_word(len: i64, letters: i64, seed: mut ref i64) -> String {
     let mut word = String.new();
     for _ in 0..len {
-        word.push(char.try_from(97 + next_random(seed) % letters).unwrap());
+        word.push(char.try_from(97 + next_random(mut seed) % letters).unwrap());
     }
     word
 }

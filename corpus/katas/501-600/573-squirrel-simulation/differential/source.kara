@@ -105,7 +105,7 @@ fn every_order(height: i64, width: i64, tree: Vec[i64], at: Vec[i64], nuts: Vec[
     for i in 0..nuts.len() {
         if not used[i] {
             used[i] = true;
-            let walk = steps(height, width, at, nuts[i]) + steps(height, width, nuts[i], tree) + every_order(height, width, tree, tree, nuts, used, left - 1);
+            let walk = steps(height, width, at, nuts[i]) + steps(height, width, nuts[i], tree) + every_order(height, width, tree, tree, nuts, mut used, left - 1);
             used[i] = false;
             if best < 0 or walk < best {
                 best = walk;

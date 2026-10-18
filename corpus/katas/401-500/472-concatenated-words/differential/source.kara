@@ -92,7 +92,7 @@ fn finish_trie(trie: Trie_trie, word: Vec[u8], start: i64, dead: mut ref Vec[boo
                 if start > 0 {
                     return true;
                 }
-            } else if finish_trie(trie, word, at, dead) {
+            } else if finish_trie(trie, word, at, mut dead) {
                 return true;
             }
         }
@@ -157,7 +157,7 @@ fn made_of_words_suffix(rest: String, all: Set[String], memo: mut ref Map[String
     let mut answer = all.contains(rest);
     let mut cut = 1;
     while not answer and cut < n {
-        if all.contains(rest[..cut]) and made_of_words_suffix(rest[cut..].to_string(), all, memo) {
+        if all.contains(rest[..cut]) and made_of_words_suffix(rest[cut..].to_string(), all, mut memo) {
             answer = true;
         }
         cut += 1;
@@ -236,9 +236,9 @@ fn random_words(seed: mut ref i64, letters: i64, base: i64, joined: i64) -> Vec[
     while words.len() < base and tries < 100 {
         tries += 1;
         let mut w = String.new();
-        let size = 1 + next_random(seed) % 4;
+        let size = 1 + next_random(mut seed) % 4;
         for _ in 0..size {
-            w.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+            w.push(char.try_from(97 + (next_random(mut seed) % letters) as u32).unwrap());
         }
         if not seen.contains(w) {
             seen.insert(w.clone());
@@ -246,13 +246,13 @@ fn random_words(seed: mut ref i64, letters: i64, base: i64, joined: i64) -> Vec[
         }
     }
     for _ in 0..joined {
-        let parts = 2 + next_random(seed) % 3;
+        let parts = 2 + next_random(mut seed) % 3;
         let mut w = String.new();
         for _ in 0..parts {
-            w.push_str(words[next_random(seed) % words.len()].as_str());
+            w.push_str(words[next_random(mut seed) % words.len()].as_str());
         }
-        if next_random(seed) % 4 == 0 {
-            w.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        if next_random(mut seed) % 4 == 0 {
+            w.push(char.try_from(97 + (next_random(mut seed) % letters) as u32).unwrap());
         }
         if w.len() <= 30 and not seen.contains(w) {
             seen.insert(w.clone());

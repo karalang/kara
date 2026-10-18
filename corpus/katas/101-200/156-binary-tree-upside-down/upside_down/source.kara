@@ -50,9 +50,9 @@ fn flip(nodes: mut ref Vec[Node], root: i64) -> i64 {
     let mut prev_right = -1;
     while cur != -1 {
         let next = left_idx(nodes, cur);
-        set_left(nodes, cur, prev_right);
+        set_left(mut nodes, cur, prev_right);
         prev_right = right_idx(nodes, cur);
-        set_right(nodes, cur, prev);
+        set_right(mut nodes, cur, prev);
         prev = cur;
         cur = next;
     }
@@ -66,8 +66,8 @@ fn serialize(nodes: ref Vec[Node], root: i64, out: mut ref String) {
     }
     out.push_str(nodes[root].val.to_string());
     out.push_str(" ");
-    serialize(nodes, left_idx(nodes, root), out);
-    serialize(nodes, right_idx(nodes, root), out);
+    serialize(nodes, left_idx(nodes, root), mut out);
+    serialize(nodes, right_idx(nodes, root), mut out);
 }
 
 fn main() {

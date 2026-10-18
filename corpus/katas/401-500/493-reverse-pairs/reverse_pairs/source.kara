@@ -10,7 +10,7 @@ fn sort_count(nums: mut ref Vec[i64], low: i64, high: i64) -> i64 {
         return 0;
     }
     let mid = (low + high) / 2;
-    let mut count = sort_count(nums, low, mid) + sort_count(nums, mid, high);
+    let mut count = sort_count(mut nums, low, mid) + sort_count(mut nums, mid, high);
     let mut j = mid;
     for i in low..mid {
         while j < high and nums[i] > 2 * nums[j] {

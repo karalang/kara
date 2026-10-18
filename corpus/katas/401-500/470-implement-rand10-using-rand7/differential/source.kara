@@ -60,7 +60,7 @@ fn rand10_bits(rng: mut ref Rand7) -> i64 {
     loop {
         let mut v = 0;
         for _ in 0..4 {
-            v = v * 2 + fair_bit_bits(rng);
+            v = v * 2 + fair_bit_bits(mut rng);
         }
         if v < 10 {
             return v + 1;
@@ -89,8 +89,8 @@ fn rand5_halves(rng: mut ref Rand7) -> i64 {
 }
 
 fn rand10_halves(rng: mut ref Rand7) -> i64 {
-    let half = rand2_halves(rng);
-    half * 5 + rand5_halves(rng)
+    let half = rand2_halves(mut rng);
+    half * 5 + rand5_halves(mut rng)
 }
 
 // ---- harness
@@ -131,13 +131,13 @@ impl Rand7 {
 
 fn rand10(arm: i64, rng: mut ref Rand7) -> i64 {
     if arm == 0 {
-        rand10_reject(rng)
+        rand10_reject(mut rng)
     } else if arm == 1 {
-        rand10_reuse(rng)
+        rand10_reuse(mut rng)
     } else if arm == 2 {
-        rand10_bits(rng)
+        rand10_bits(mut rng)
     } else {
-        rand10_halves(rng)
+        rand10_halves(mut rng)
     }
 }
 
@@ -156,7 +156,7 @@ fn explore(arm: i64, script: mut ref Vec[i64], depth: i64, tally: mut ref Vec[Ve
     }
     for d in 1..8 {
         script.push(d);
-        explore(arm, script, depth, tally);
+        explore(arm, mut script, depth, mut tally);
         script.pop();
     }
 }

@@ -72,17 +72,17 @@ fn step(seed: mut ref i64) -> i64 {
 fn snippet(depth: i64, seed: mut ref i64) -> String {
     let names: Vec[Str] = vec!["A", "XY", "ABCDEFGHI", "CODE"];
     let texts: Vec[Str] = vec!["x", " ", ">", "]]>", "!", "[", "y", "/", "...", "<![CDATA[<A>]]>"];
-    let name = names[step(seed) % names.len()];
+    let name = names[step(mut seed) % names.len()];
     let mut out = f"<{name}>";
-    let parts = step(seed) % 7;
+    let parts = step(mut seed) % 7;
     for _ in 0..parts {
-        if step(seed) % 10 < 4 and depth > 0 {
-            out.push_str(snippet(depth - 1, seed));
+        if step(mut seed) % 10 < 4 and depth > 0 {
+            out.push_str(snippet(depth - 1, mut seed));
         } else {
-            out.push_str(texts[step(seed) % texts.len()]);
+            out.push_str(texts[step(mut seed) % texts.len()]);
         }
     }
-    if step(seed) % 40 == 0 {
+    if step(mut seed) % 40 == 0 {
         out.push_str("</B>");
     } else {
         out.push_str(f"</{name}>");

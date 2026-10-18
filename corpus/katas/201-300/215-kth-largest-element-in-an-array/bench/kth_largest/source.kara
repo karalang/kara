@@ -26,10 +26,10 @@ fn partition(a: mut ref Vec[i64], lo: i64, hi: i64) -> i64 {
 
 fn quickselect(a: mut ref Vec[i64], lo: i64, hi: i64, target: i64) -> i64 {
     if lo == hi { return a[lo]; }
-    let p = partition(a, lo, hi);
+    let p = partition(mut a, lo, hi);
     if p == target { return a[p]; }
-    if target < p { return quickselect(a, lo, p - 1, target); }
-    return quickselect(a, p + 1, hi, target);
+    if target < p { return quickselect(mut a, lo, p - 1, target); }
+    return quickselect(mut a, p + 1, hi, target);
 }
 
 fn main() {

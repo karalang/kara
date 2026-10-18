@@ -99,7 +99,7 @@ fn some_cover(nums: ref Vec[i64], n: i64, left: i64, lo: i64, chosen: mut ref Ve
     }
     for p in lo..n + 1 {
         chosen.push(p);
-        let found = some_cover(nums, n, left - 1, p, chosen);
+        let found = some_cover(nums, n, left - 1, p, mut chosen);
         chosen.pop();
         if found {
             return true;
@@ -116,7 +116,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_sorted(seed: mut ref i64, len: i64, max: i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     for _ in 0..len {
-        v.push(next(seed) % max + 1);
+        v.push(next(mut seed) % max + 1);
     }
     v.sort();
     return v;

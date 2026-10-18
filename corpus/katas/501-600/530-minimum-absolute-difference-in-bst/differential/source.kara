@@ -24,12 +24,12 @@ fn visit_star(node: Option[TreeNode], walk: mut ref WalkStar) {
     let Some(n) = node else {
         return;
     };
-    visit_star(n.left, walk);
+    visit_star(n.left, mut walk);
     if let Some(p) = walk.prev {
         walk.best = walk.best.min(n.val - p);
     }
     walk.prev = Some(n.val);
-    visit_star(n.right, walk);
+    visit_star(n.right, mut walk);
 }
 
 fn get_minimum_difference_star(root: Option[TreeNode]) -> i64 {
@@ -142,7 +142,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
         let v = values[i];
         let mut node = root;
         loop {
-            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+            if v < node.val or (v == node.val and next_random(mut seed) % 2 == 0) {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -188,8 +188,8 @@ fn shape(node: Option[TreeNode], out: mut ref Vec[i64], budget: mut ref i64) {
         Some(n) => {
             *budget -= 1;
             out.push(n.val);
-            shape(n.left, out, budget);
-            shape(n.right, out, budget);
+            shape(n.left, mut out, mut budget);
+            shape(n.right, mut out, mut budget);
         }
         None => out.push(-1),
     }

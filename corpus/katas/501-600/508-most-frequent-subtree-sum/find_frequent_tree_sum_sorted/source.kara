@@ -16,7 +16,7 @@ fn collect(node: Option[TreeNode], sums: mut ref Vec[i64]) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let sum = n.val + collect(n.left, sums) + collect(n.right, sums);
+            let sum = n.val + collect(n.left, mut sums) + collect(n.right, mut sums);
             sums.push(sum);
             sum
         }
@@ -88,12 +88,12 @@ fn from_level_order(items: Vec[Option[i64]]) -> Option[TreeNode] {
 // node walks down from the root, left or right by a coin flip, to the
 // first empty place.
 fn grow(size: i64, half: i64, seed: mut ref i64) -> Option[TreeNode] {
-    let root = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+    let root = TreeNode { val: next_random(mut seed) % (2 * half + 1) - half, left: None, right: None };
     for _ in 1..size {
-        let leaf = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+        let leaf = TreeNode { val: next_random(mut seed) % (2 * half + 1) - half, left: None, right: None };
         let mut node = root;
         loop {
-            if next_random(seed) % 2 == 0 {
+            if next_random(mut seed) % 2 == 0 {
                 match node.left {
                     Some(l) => node = l,
                     None => {

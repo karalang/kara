@@ -18,7 +18,7 @@ fn rand10(rng: mut ref Rand7) -> i64 {
     loop {
         let mut v = 0;
         for _ in 0..4 {
-            v = v * 2 + fair_bit(rng);
+            v = v * 2 + fair_bit(mut rng);
         }
         if v < 10 {
             return v + 1;
@@ -86,7 +86,7 @@ fn explore(script: mut ref Vec[i64], depth: i64, masses: mut ref Vec[i64]) -> bo
     }
     for d in 1..8 {
         script.push(d);
-        let ok = explore(script, depth, masses);
+        let ok = explore(mut script, depth, mut masses);
         script.pop();
         if not ok {
             return false;

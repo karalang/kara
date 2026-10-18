@@ -141,10 +141,10 @@ fn gallop_arm(n: i64, game: mut ref Game) -> i64 {
 
 fn answer(arm: i64, n: i64, game: mut ref Game) -> i64 {
     match arm {
-        0 => binary_arm(n, game),
-        1 => ternary_arm(n, game),
-        2 => bits_arm(n, game),
-        _ => gallop_arm(n, game),
+        0 => binary_arm(n, mut game),
+        1 => ternary_arm(n, mut game),
+        2 => bits_arm(n, mut game),
+        _ => gallop_arm(n, mut game),
     }
 }
 

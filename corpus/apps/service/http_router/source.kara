@@ -123,7 +123,7 @@ impl Router {
 
     fn call_at(ref self, index: i64, ctx: own RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
         let route = ref self.routes[index];
-        (route.handler)(ctx, store)
+        (route.handler)(ctx, mut store)
     }
 
     fn lookup(ref self, method: Method, path: ref String) -> RouteResult {

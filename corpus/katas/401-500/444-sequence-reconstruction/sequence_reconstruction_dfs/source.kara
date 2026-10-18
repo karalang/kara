@@ -16,7 +16,7 @@ fn visit(v: i64, next: Vec[Vec[i64]], state: mut ref Vec[i64], finished: mut ref
         if state[w] == 1 {
             return false;
         }
-        if state[w] == 0 and not visit(w, next, state, finished) {
+        if state[w] == 0 and not visit(w, next, mut state, mut finished) {
             return false;
         }
     }

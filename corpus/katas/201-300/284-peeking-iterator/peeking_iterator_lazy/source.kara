@@ -55,7 +55,7 @@ fn make_peeking(data: own Vec[i64]) -> Peeking {
 
 fn peek(p: mut ref Peeking) -> i64 {
     if not p.full {
-        p.slot = src_next(p.src);
+        p.slot = src_next(mut p.src);
         p.full = true;
     }
     return p.slot;
@@ -71,7 +71,7 @@ fn next(p: mut ref Peeking) -> i64 {
         p.full = false;
         return p.slot;
     }
-    return src_next(p.src);
+    return src_next(mut p.src);
 }
 
 fn show(v: ref Vec[i64]) -> String {

@@ -35,7 +35,7 @@ fn visit(u: i64, adj: ref Vec[Vec[bool]], state: mut ref Vec[i64],
                 ok = false;                // came back on ourselves
             } else {
                 if state[v] == 0 {
-                    visit(v, adj, state, order, ok);
+                    visit(v, adj, mut state, mut order, mut ok);
                 }
             }
         }

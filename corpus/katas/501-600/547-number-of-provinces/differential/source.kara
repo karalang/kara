@@ -18,7 +18,7 @@ fn visit_star(is_connected: Vec[Vec[i64]], city: i64, seen: mut ref Vec[bool]) {
     seen[city] = true;
     for other in 0..is_connected.len() {
         if is_connected[city][other] == 1 and not seen[other] {
-            visit_star(is_connected, other, seen);
+            visit_star(is_connected, other, mut seen);
         }
     }
 }

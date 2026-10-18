@@ -63,11 +63,11 @@ fn random_island(rows: i64, cols: i64, steps: i64, seed: mut ref i64) -> Vec[Vec
     for _ in 0..rows {
         grid.push(vec![0; cols]);
     }
-    let mut i = next_random(seed) % rows;
-    let mut j = next_random(seed) % cols;
+    let mut i = next_random(mut seed) % rows;
+    let mut j = next_random(mut seed) % cols;
     grid[i][j] = 1;
     for _ in 0..steps {
-        let d = next_random(seed) % 4;
+        let d = next_random(mut seed) % 4;
         if d == 0 and i > 0 {
             i -= 1;
         } else if d == 1 and i + 1 < rows {

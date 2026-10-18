@@ -33,7 +33,7 @@ fn fewest(coins: ref Vec[i64], a: i64, memo: mut ref Map[i64, Option[i64]]) -> O
         if c > a {
             continue;
         }
-        match fewest(coins, a - c, memo) {
+        match fewest(coins, a - c, mut memo) {
             Some(n) => {
                 best = match best {
                     Some(b) if b <= n + 1 => Some(b),
@@ -79,7 +79,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     while v.len() < count {
-        let c = next(seed) % top + 1;
+        let c = next(mut seed) % top + 1;
         if not v.contains(c) {
             v.push(c);
         }

@@ -51,10 +51,10 @@ fn merge(val: ref Vec[i64], nxt: mut ref Vec[i64], a: i64, b: i64) -> i64 {
 fn sort_chain(val: ref Vec[i64], nxt: mut ref Vec[i64], head: i64) -> i64 {
     if head == -1 { return -1; }
     if nxt[head] == -1 { return head; }
-    let mid = split_mid(nxt, head);
-    let left = sort_chain(val, nxt, head);
-    let right = sort_chain(val, nxt, mid);
-    return merge(val, nxt, left, right);
+    let mid = split_mid(mut nxt, head);
+    let left = sort_chain(val, mut nxt, head);
+    let right = sort_chain(val, mut nxt, mid);
+    return merge(val, mut nxt, left, right);
 }
 
 fn main() {

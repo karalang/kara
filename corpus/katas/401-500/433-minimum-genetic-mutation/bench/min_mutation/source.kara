@@ -45,8 +45,8 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn mutate(gene: Str, seed: mut ref i64) -> String {
-    let at = next_random(seed) % 8;
-    let shift = 1 + next_random(seed) % 3;
+    let at = next_random(mut seed) % 8;
+    let shift = 1 + next_random(mut seed) % 3;
     let mut out = String.new();
     let mut i = 0;
     for c in gene.chars() {

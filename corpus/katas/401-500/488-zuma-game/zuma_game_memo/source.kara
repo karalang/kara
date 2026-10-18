@@ -83,7 +83,7 @@ fn fewest(board: Vec[char], hand: Vec[char], memo: mut ref Map[String, i64]) -> 
             let mut inserted = board.clone();
             inserted.insert(i, c);
             let after = collapse(inserted, i);
-            let more = fewest(after, rest, memo);
+            let more = fewest(after, rest, mut memo);
             if more + 1 < best {
                 best = more + 1;
             }

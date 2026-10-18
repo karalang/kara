@@ -36,7 +36,7 @@ fn strip(t: ref Tree, leaves: mut ref Vec[i64]) -> Tree {
                 leaves.push(v);
                 Tree.Empty
             } else {
-                Tree.Node(v, strip(left, leaves), strip(right, leaves))
+                Tree.Node(v, strip(left, mut leaves), strip(right, mut leaves))
             }
         }
     }

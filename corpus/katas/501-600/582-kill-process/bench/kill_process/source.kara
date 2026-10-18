@@ -33,8 +33,8 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn wide(seed: mut ref i64) -> i64 {
-    let high = next_random(seed) * 32768;
-    high + next_random(seed)
+    let high = next_random(mut seed) * 32768;
+    high + next_random(mut seed)
 }
 
 fn main() {

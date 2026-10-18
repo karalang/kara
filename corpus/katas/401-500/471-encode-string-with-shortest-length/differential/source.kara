@@ -63,15 +63,15 @@ fn solve_memo(s: String, i: i64, j: i64, memo: mut ref Map[(i64, i64), String]) 
     let mut shortest = s[i..j].to_string();
     for d in 1..len {
         if len % d == 0 and s[i + d..j] == s[i..j - d] {
-            let packed = f"{len / d}[{solve_memo(s, i, i + d, memo)}]";
+            let packed = f"{len / d}[{solve_memo(s, i, i + d, mut memo)}]";
             if packed.len() < shortest.len() {
                 shortest = packed;
             }
         }
     }
     for k in i + 1..j {
-        let left = solve_memo(s, i, k, memo);
-        let right = solve_memo(s, k, j, memo);
+        let left = solve_memo(s, i, k, mut memo);
+        let right = solve_memo(s, k, j, mut memo);
         if left.len() + right.len() < shortest.len() {
             shortest = f"{left}{right}";
         }
@@ -104,12 +104,12 @@ fn build_lengths(cs: Vec[char], how: Vec[Vec[i64]], i: i64, j: i64, out: mut ref
             out.push(cs[x]);
         }
     } else if h > 0 {
-        build_lengths(cs, how, i, h - 1, out);
-        build_lengths(cs, how, h, j, out);
+        build_lengths(cs, how, i, h - 1, mut out);
+        build_lengths(cs, how, h, j, mut out);
     } else {
         let p = -h;
         out.push_str(f"{(j - i + 1) / p}[");
-        build_lengths(cs, how, i, i + p - 1, out);
+        build_lengths(cs, how, i, i + p - 1, mut out);
         out.push(']');
     }
 }
@@ -233,7 +233,7 @@ fn expand(cs: Vec[char], pos: mut ref i64) -> Option[String] {
                 return None;
             }
             *pos += 1;
-            let inner = expand(cs, pos)?;
+            let inner = expand(cs, mut pos)?;
             if *pos >= cs.len() {
                 return None;
             }
@@ -273,14 +273,14 @@ fn reference(t: String, memo: mut ref Map[String, i64]) -> i64 {
     let mut best = n;
     for d in 1..n {
         if n % d == 0 and t[..d].repeat(n / d) == t {
-            let packed = (n / d).to_string().len() + 2 + reference(t[..d].to_string(), memo);
+            let packed = (n / d).to_string().len() + 2 + reference(t[..d].to_string(), mut memo);
             if packed < best {
                 best = packed;
             }
         }
     }
     for k in 1..n {
-        let parts = reference(t[..k].to_string(), memo) + reference(t[k..].to_string(), memo);
+        let parts = reference(t[..k].to_string(), mut memo) + reference(t[k..].to_string(), mut memo);
         if parts < best {
             best = parts;
         }
@@ -296,16 +296,16 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 fn random_string(seed: mut ref i64, letters: i64, depth: i64) -> String {
     let mut s = String.new();
-    let pieces = 1 + next_random(seed) % 4;
+    let pieces = 1 + next_random(mut seed) % 4;
     for _ in 0..pieces {
-        if depth > 0 and next_random(seed) % 2 == 0 {
-            let unit = random_string(seed, letters, depth - 1);
-            let copies = 2 + next_random(seed) % 11;
+        if depth > 0 and next_random(mut seed) % 2 == 0 {
+            let unit = random_string(mut seed, letters, depth - 1);
+            let copies = 2 + next_random(mut seed) % 11;
             for _ in 0..copies {
                 s.push_str(unit.as_str());
             }
         } else {
-            s.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+            s.push(char.try_from(97 + (next_random(mut seed) % letters) as u32).unwrap());
         }
     }
     s

@@ -62,7 +62,7 @@ fn search_dfs(maze: Vec[Vec[i64]], row: i64, col: i64, destination: Vec[i64], se
             r += dr;
             c += dc;
         }
-        if not seen.contains((r, c)) and search_dfs(maze, r, c, destination, seen) {
+        if not seen.contains((r, c)) and search_dfs(maze, r, c, destination, mut seen) {
             return true;
         }
     }

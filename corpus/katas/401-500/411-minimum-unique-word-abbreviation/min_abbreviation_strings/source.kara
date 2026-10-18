@@ -15,12 +15,12 @@ fn generate(t: Slice[u8], i: i64, current: own String, after_run: bool, out: mut
     }
     let mut kept = current.clone();
     kept.push(t[i] as char);
-    generate(t, i + 1, kept, false, out);
+    generate(t, i + 1, kept, false, mut out);
     if not after_run {
         for run in 1..t.len() - i + 1 {
             let mut skipped = current.clone();
             skipped.push_str(f"{run}");
-            generate(t, i + run, skipped, true, out);
+            generate(t, i + run, skipped, true, mut out);
         }
     }
 }

@@ -46,7 +46,7 @@ fn random_case(n: i64, k: i64, density: i64, most: i64, seed: mut ref i64) -> (V
     for i in 0..n {
         let mut row = vec![0; n];
         for j in 0..n {
-            if i != j and step(seed) % 100 < density {
+            if i != j and step(mut seed) % 100 < density {
                 row[j] = 1;
             }
         }
@@ -56,7 +56,7 @@ fn random_case(n: i64, k: i64, density: i64, most: i64, seed: mut ref i64) -> (V
     for _ in 0..n {
         let mut row = vec![0; k];
         for w in 0..k {
-            row[w] = step(seed) % (most + 1);
+            row[w] = step(mut seed) % (most + 1);
         }
         days.push(row);
     }

@@ -38,7 +38,7 @@ fn dfs(nums: mut ref Vec[i64], start: i64, out: mut ref Vec[Vec[i64]]) {
             seen.insert(nums[i]);
             // Swap `i` into position `start` (parallel assignment — true swap, no temp).
             nums[start], nums[i] = nums[i], nums[start];
-            dfs(nums, start + 1, out);
+            dfs(mut nums, start + 1, mut out);
             // Swap back — restore the array for the next sibling.
             nums[start], nums[i] = nums[i], nums[start];
         }

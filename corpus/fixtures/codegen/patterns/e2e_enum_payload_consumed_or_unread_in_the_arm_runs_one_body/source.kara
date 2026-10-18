@@ -16,7 +16,7 @@ fn e_unread(b: own E) -> i64 { match b { E.A(r) => { 5 }, E.B(k) => { k } } }
 fn e_read(b: own E) -> i64 { match b { E.A(r) => { r.id }, E.B(k) => { k } } }
 fn e_ret(b: own E) -> R { match b { E.A(r) => { r }, E.B(k) => { mk(k) } } }
 fn e_fwd(b: own E) -> R { match b { E.A(r) => { wrap(r) }, E.B(k) => { mk(k) } } }
-fn e_stash(b: own E, v: mut ref Vec[R]) -> i64 { match b { E.A(r) => { stash(r, v); 1 }, E.B(k) => { k } } }
+fn e_stash(b: own E, v: mut ref Vec[R]) -> i64 { match b { E.A(r) => { stash(r, mut v); 1 }, E.B(k) => { k } } }
 fn e_push(b: own E, v: mut ref Vec[R]) -> i64 { match b { E.A(r) => { v.push(r); 1 }, E.B(k) => { k } } }
 fn e_call_stmt(b: own E) -> i64 { match b { E.A(r) => { let d: i64 = consume(r); d + 1 }, E.B(k) => { k } } }
 fn o_call(b: own O) -> i64 { match b { O.S(r) => { consume(r) }, O.N => { 0 } } }

@@ -95,7 +95,7 @@ fn visit(v: i64, next: Vec[Vec[i64]], state: mut ref Vec[i64], finished: mut ref
         if state[w] == 1 {
             return false;
         }
-        if state[w] == 0 and not visit(w, next, state, finished) {
+        if state[w] == 0 and not visit(w, next, mut state, mut finished) {
             return false;
         }
     }
@@ -192,7 +192,7 @@ fn shuffled(n: i64, seed: mut ref i64) -> Vec[i64] {
     }
     let mut i = n - 1;
     while i > 0 {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         values.swap(i, j);
         i -= 1;
     }
@@ -228,7 +228,7 @@ fn count_orders(prefix: mut ref Vec[i64], used: mut ref Vec[bool], n: i64, seque
         if not used[v] {
             used[v] = true;
             prefix.push(v);
-            count_orders(prefix, used, n, sequences, found);
+            count_orders(mut prefix, mut used, n, sequences, mut found);
             prefix.pop();
             used[v] = false;
         }

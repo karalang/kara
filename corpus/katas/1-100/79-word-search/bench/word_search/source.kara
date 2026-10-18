@@ -23,10 +23,10 @@ fn walk(board: mut ref Vec[Vec[u8]], r: i64, c: i64, depth: i64, rows: i64, cols
     }
     let saved = board[r][c];
     board[r][c] = 0u8;
-    a = walk(board, r + 1, c, depth - 1, rows, cols, a);
-    a = walk(board, r - 1, c, depth - 1, rows, cols, a);
-    a = walk(board, r, c + 1, depth - 1, rows, cols, a);
-    a = walk(board, r, c - 1, depth - 1, rows, cols, a);
+    a = walk(mut board, r + 1, c, depth - 1, rows, cols, a);
+    a = walk(mut board, r - 1, c, depth - 1, rows, cols, a);
+    a = walk(mut board, r, c + 1, depth - 1, rows, cols, a);
+    a = walk(mut board, r, c - 1, depth - 1, rows, cols, a);
     board[r][c] = saved;
     a
 }
@@ -38,7 +38,7 @@ fn search_all(board: mut ref Vec[Vec[u8]], depth: i64, rows: i64, cols: i64,
     while r < rows {
         let mut c = 0;
         while c < cols {
-            a = walk(board, r, c, depth, rows, cols, a);
+            a = walk(mut board, r, c, depth, rows, cols, a);
             c = c + 1;
         }
         r = r + 1;

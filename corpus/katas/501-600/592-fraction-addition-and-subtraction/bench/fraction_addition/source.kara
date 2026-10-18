@@ -65,13 +65,13 @@ fn coprime(a: i64, b: i64) -> bool {
 fn expression(count: i64, seed: mut ref i64) -> String {
     let mut out = String.new();
     for k in 0..count {
-        let mut a = 1 + step(seed) % 10;
-        let mut b = 1 + step(seed) % 10;
+        let mut a = 1 + step(mut seed) % 10;
+        let mut b = 1 + step(mut seed) % 10;
         while not coprime(a, b) {
-            a = 1 + step(seed) % 10;
-            b = 1 + step(seed) % 10;
+            a = 1 + step(mut seed) % 10;
+            b = 1 + step(mut seed) % 10;
         }
-        if step(seed) % 2 == 0 {
+        if step(mut seed) % 2 == 0 {
             out.push('-');
         } else if k > 0 {
             out.push('+');

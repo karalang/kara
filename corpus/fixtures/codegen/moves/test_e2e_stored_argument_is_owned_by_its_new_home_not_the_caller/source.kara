@@ -23,7 +23,7 @@ impl BoxS { fn add(mut ref self, s: own S) { self.xs.push(s); } }
 
 fn take(b: mut ref Box2, r: own R) { b.xs.push(r); }
 fn inner_push(b: mut ref Box2, r: own R) { b.xs.push(r); }
-fn outer_push(b: mut ref Box2, r: own R) { inner_push(b, r); }
+fn outer_push(b: mut ref Box2, r: own R) { inner_push(mut b, r); }
 fn pushv(v: mut ref Vec[R], r: own R) { v.push(r); }
 fn stashg[T](v: mut ref Vec[T], x: own T) { v.push(x); }
 fn takes(b: mut ref BoxS, s: own S) { b.xs.push(s); }

@@ -4,7 +4,7 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 fn wrap(x: own R) -> R { return x }
 fn stash(x: own R, v: mut ref Vec[R]) { v.push(x) }
 fn t_fwd(t: own (R, i64)) -> R { match t { (r, k) => { wrap(r) } } }
-fn t_stash(t: own (R, i64), v: mut ref Vec[R]) -> i64 { match t { (r, k) => { stash(r, v); k } } }
+fn t_stash(t: own (R, i64), v: mut ref Vec[R]) -> i64 { match t { (r, k) => { stash(r, mut v); k } } }
 fn main() {
     { let a: R = t_fwd((mk(4), 0)); println(f"r{a.id}"); println("four") }
     { let mut v: Vec[R] = []; let d: i64 = t_stash((mk(6), 0), mut v); println(f"r{d} n{v.len()}"); println("six") }

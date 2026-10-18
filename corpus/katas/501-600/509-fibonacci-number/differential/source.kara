@@ -28,7 +28,7 @@ fn fib_from_memo(n: i64, known: mut ref Vec[Option[i64]]) -> i64 {
     if let Some(v) = known[n] {
         return v;
     }
-    let v = if n < 2 { n } else { fib_from_memo(n - 1, known) + fib_from_memo(n - 2, known) };
+    let v = if n < 2 { n } else { fib_from_memo(n - 1, mut known) + fib_from_memo(n - 2, mut known) };
     known[n] = Some(v);
     v
 }

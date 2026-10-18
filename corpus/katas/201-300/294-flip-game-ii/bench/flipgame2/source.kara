@@ -66,7 +66,7 @@ fn can_win(s: ref String, memo: mut ref Map[String, bool]) -> bool {
     let states = next_states(s);
     let mut i = 0;
     while i < states.len() {
-        if not can_win(states[i], memo) {
+        if not can_win(states[i], mut memo) {
             let _ = memo.insert(s.clone(), true);
             return true;
         }

@@ -88,7 +88,7 @@ fn draw(node: ref Node, out: mut ref String) {
             if i > 0 {
                 out.push(' ');
             }
-            draw(node.children[i], out);
+            draw(node.children[i], mut out);
         }
         out.push(')');
     }
@@ -107,9 +107,9 @@ fn bdraw(root: Option[TreeNode], out: mut ref String) {
             out.push_str(f"{t.val}");
             if t.left.is_some() or t.right.is_some() {
                 out.push('(');
-                bdraw(t.left, out);
+                bdraw(t.left, mut out);
                 out.push(',');
-                bdraw(t.right, out);
+                bdraw(t.right, mut out);
                 out.push(')');
             }
         }
@@ -152,12 +152,12 @@ fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
     let mut vals: Vec[i64] = Vec.new();
     let mut kids: Vec[Vec[i64]] = Vec.new();
     // Wide or deep: the parent is drawn from the last `reach` nodes.
-    let reach = 1 + step(seed) % n;
+    let reach = 1 + step(mut seed) % n;
     for i in 0..n {
-        vals.push(step(seed) % 10001);
+        vals.push(step(mut seed) % 10001);
         kids.push(Vec.new());
         if i > 0 {
-            let back = 1 + step(seed) % min(i, reach);
+            let back = 1 + step(mut seed) % min(i, reach);
             kids[i - back].push(i);
         }
     }

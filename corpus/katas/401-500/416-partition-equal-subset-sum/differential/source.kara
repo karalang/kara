@@ -83,7 +83,7 @@ fn can(nums: Vec[i64], i: i64, left: i64, memo: mut ref Vec[i64]) -> bool {
     if memo[key] != 0 {
         return memo[key] == 1;
     }
-    let found = (nums[i] <= left and can(nums, i + 1, left - nums[i], memo)) or can(nums, i + 1, left, memo);
+    let found = (nums[i] <= left and can(nums, i + 1, left - nums[i], mut memo)) or can(nums, i + 1, left, mut memo);
     memo[key] = if found { 1 } else { 2 };
     found
 }

@@ -152,12 +152,12 @@ fn laws(arm: i64, n: i64, checks: mut ref i64, failures: mut ref Vec[i64]) {
     let m = n / 2;
     *checks += 2;
     if n % 2 == 1 {
-        report(2, arm, n, f, last(arm, n - 1), failures);
+        report(2, arm, n, f, last(arm, n - 1), mut failures);
     } else {
-        report(3, arm, n, f, 2 * (m + 1 - last(arm, m)), failures);
+        report(3, arm, n, f, 2 * (m + 1 - last(arm, m)), mut failures);
     }
     let ok = if f % 2 == 0 and f >= 2 and f <= n { 1 } else { 0 };
-    report(4, arm, n, ok, 1, failures);
+    report(4, arm, n, ok, 1, mut failures);
 }
 
 fn main() {

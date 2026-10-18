@@ -60,7 +60,7 @@ fn repair(
                         }
                         k = k + 1;
                     }
-                    repair(scratch, depth + 1, len - 1, i, j, open, close, results, checksum);
+                    repair(mut scratch, depth + 1, len - 1, i, j, open, close, mut results, mut checksum);
                 }
                 j = j + 1;
             }
@@ -76,7 +76,7 @@ fn repair(
     }
 
     if open == b'(' {
-        repair(scratch, depth + 1, len, 0, 0, b')', b'(', results, checksum);
+        repair(mut scratch, depth + 1, len, 0, 0, b')', b'(', mut results, mut checksum);
     } else {
         let mut h = 0;
         let mut t = 0;

@@ -43,9 +43,9 @@ fn build(values: Vec[i64], lo: i64, hi: i64, seed: mut ref i64) -> Option[TreeNo
     if lo >= hi {
         return None;
     }
-    let mid = lo + next_random(seed) % (hi - lo);
-    let left = build(values, lo, mid, seed);
-    let right = build(values, mid + 1, hi, seed);
+    let mid = lo + next_random(mut seed) % (hi - lo);
+    let left = build(values, lo, mid, mut seed);
+    let right = build(values, mid + 1, hi, mut seed);
     Some(TreeNode { val: values[mid], left: left, right: right })
 }
 

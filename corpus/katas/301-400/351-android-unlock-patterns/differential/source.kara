@@ -48,7 +48,7 @@ fn table_count_from(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[boo
     for next in 1..10 {
         let mid = skip[key * 10 + next];
         if not visited[next] and (mid == 0 or visited[mid]) {
-            total += table_count_from(next, len + 1, m, n, visited, skip);
+            total += table_count_from(next, len + 1, m, n, mut visited, skip);
         }
     }
     visited[key] = false;
@@ -93,7 +93,7 @@ fn geometry_extend(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[bool
         }
         let mid = geometry_passed_over(key, next);
         if mid == 0 or visited[mid] {
-            total += geometry_extend(next, len + 1, m, n, visited);
+            total += geometry_extend(next, len + 1, m, n, mut visited);
         }
     }
     visited[key] = false;
@@ -234,7 +234,7 @@ fn oracle_walk(start: i64, key: i64, len: i64, visited: mut ref Vec[bool], count
     visited[key] = true;
     for next in 1..10 {
         if not visited[next] and oracle_allows(key, next, visited) {
-            oracle_walk(start, next, len + 1, visited, counts);
+            oracle_walk(start, next, len + 1, mut visited, mut counts);
         }
     }
     visited[key] = false;

@@ -38,7 +38,7 @@ fn build_all(lo: i64, hi: i64) -> Vec[Option[TreeNode]] {
 }
 
 fn serialize(node: Option[TreeNode], out: mut ref String) {
-    match node { None => { out.push_str("#,"); } Some(n) => { out.push_str(f"{n.val},"); serialize(n.left, out); serialize(n.right, out); } }
+    match node { None => { out.push_str("#,"); } Some(n) => { out.push_str(f"{n.val},"); serialize(n.left, mut out); serialize(n.right, mut out); } }
 }
 
 fn main() {

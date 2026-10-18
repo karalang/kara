@@ -226,10 +226,10 @@ fn to_digits(list: Option[ListNode]) -> Vec[i64] {
 // A random number of 1 to 40 digits (1 to 100 one time in ten), most
 // significant first, each digit a 9 half the time; no leading zero.
 fn random_digits(seed: mut ref i64) -> Vec[i64] {
-    let length = 1 + next_random(seed) % if next_random(seed) % 10 == 0 { 100 } else { 40 };
+    let length = 1 + next_random(mut seed) % if next_random(mut seed) % 10 == 0 { 100 } else { 40 };
     let mut digits: Vec[i64] = Vec.new();
     for i in 0..length {
-        let mut d = if next_random(seed) % 2 == 0 { 9 } else { next_random(seed) % 10 };
+        let mut d = if next_random(mut seed) % 2 == 0 { 9 } else { next_random(mut seed) % 10 };
         if i == 0 and length > 1 and d == 0 {
             d = 1;
         }

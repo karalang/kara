@@ -45,7 +45,7 @@ fn find_celebrity(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
     let mut cand = 0;
     let mut i = 1;
     while i < n {
-        if knows(m, cand, i, calls) {
+        if knows(m, cand, i, mut calls) {
             cand = i;
         }
         i = i + 1;
@@ -55,10 +55,10 @@ fn find_celebrity(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
     let mut j = 0;
     while j < n {
         if j != cand {
-            if knows(m, cand, j, calls) {
+            if knows(m, cand, j, mut calls) {
                 return -1;
             }
-            if not knows(m, j, cand, calls) {
+            if not knows(m, j, cand, mut calls) {
                 return -1;
             }
         }

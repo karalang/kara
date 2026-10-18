@@ -14,7 +14,7 @@ fn permute(perm: mut ref Vec[i64], i: i64) -> i64 {
         perm.swap(i, j);
         let pos = i + 1;
         if perm[i] % pos == 0 or pos % perm[i] == 0 {
-            count += permute(perm, i + 1);
+            count += permute(mut perm, i + 1);
         }
         perm.swap(i, j);
     }

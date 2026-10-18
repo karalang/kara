@@ -30,7 +30,7 @@ fn count_from(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[bool], sk
     for next in 1..10 {
         let mid = skip[key * 10 + next];
         if not visited[next] and (mid == 0 or visited[mid]) {
-            total += count_from(next, len + 1, m, n, visited, skip);
+            total += count_from(next, len + 1, m, n, mut visited, skip);
         }
     }
     visited[key] = false;

@@ -277,10 +277,10 @@ fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
     let got = palindrome_pairs_main(words);
     // P1: the arms agree. P2: they equal the oracle.
     if palindrome_pairs_brute(words) != got or palindrome_pairs_trie(words) != got or palindrome_pairs_lengths(words) != got {
-        fail(failures, "P1 arms disagree", words);
+        fail(mut failures, "P1 arms disagree", words);
     }
     if got != want {
-        fail(failures, "P2 oracle", words);
+        fail(mut failures, "P2 oracle", words);
     }
     let n = words.len();
     // P3: listing the words backwards maps (i, j) to (n-1-i, n-1-j).
@@ -296,7 +296,7 @@ fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
         mapped.push((n - 1 - i, n - 1 - j));
     }
     if palindrome_pairs_main(backwards) != sorted(mapped) {
-        fail(failures, "P3 list reversed", words);
+        fail(mut failures, "P3 list reversed", words);
     }
     // P4: reversing every word swaps each pair, since the reverse of a + b
     // is reverse(b) + reverse(a).
@@ -310,7 +310,7 @@ fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
         swapped.push((j, i));
     }
     if palindrome_pairs_main(flipped) != sorted(swapped) {
-        fail(failures, "P4 words reversed", words);
+        fail(mut failures, "P4 words reversed", words);
     }
     // P5: the pairs are strictly increasing (so distinct) and never pair a
     // word with itself.
@@ -318,7 +318,7 @@ fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
     for p in got.iter() {
         let (i, j) = p;
         if i == j or (i, j) <= last {
-            fail(failures, "P5 pairs not distinct", words);
+            fail(mut failures, "P5 pairs not distinct", words);
         }
         last = (i, j);
     }
@@ -338,7 +338,7 @@ fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
         renamed.push(r);
     }
     if palindrome_pairs_main(renamed) != got {
-        fail(failures, "P6 letters renamed", words);
+        fail(mut failures, "P6 letters renamed", words);
     }
     // P7: the empty word pairs both ways with exactly the non-empty
     // palindromes.
@@ -360,7 +360,7 @@ fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
             }
         }
         if with_empty != 2 * palindromes {
-            fail(failures, "P7 empty word", words);
+            fail(mut failures, "P7 empty word", words);
         }
     }
     // P8: appending the reverse of the first word, when it is new, adds
@@ -389,7 +389,7 @@ fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
                 }
             }
             if not (has_after and has_before) {
-                fail(failures, "P8 reverse appended", words);
+                fail(mut failures, "P8 reverse appended", words);
             }
         }
     }

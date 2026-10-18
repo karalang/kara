@@ -17,10 +17,10 @@
 
 fn visit_star(node: Option[TreeNode], total: mut ref i64) {
     if let Some(n) = node {
-        visit_star(n.right, total);
+        visit_star(n.right, mut total);
         *total += n.val;
         n.val = *total;
-        visit_star(n.left, total);
+        visit_star(n.left, mut total);
     }
 }
 
@@ -94,9 +94,9 @@ fn convert_bst_morris(root: Option[TreeNode]) -> Option[TreeNode] {
 
 fn in_order_suffix(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
     if let Some(n) = node {
-        in_order_suffix(n.left, out);
+        in_order_suffix(n.left, mut out);
         out.push(n);
-        in_order_suffix(n.right, out);
+        in_order_suffix(n.right, mut out);
     }
 }
 
@@ -191,8 +191,8 @@ fn pre_order(node: Option[TreeNode], vals: mut ref Vec[i64], kids: mut ref Vec[i
             k += 2;
         }
         kids.push(k);
-        pre_order(n.left, vals, kids, budget);
-        pre_order(n.right, vals, kids, budget);
+        pre_order(n.left, mut vals, mut kids, mut budget);
+        pre_order(n.right, mut vals, mut kids, mut budget);
     }
 }
 
@@ -203,9 +203,9 @@ fn in_order_values(node: Option[TreeNode], out: mut ref Vec[i64], budget: mut re
             return;
         }
         *budget -= 1;
-        in_order_values(n.left, out, budget);
+        in_order_values(n.left, mut out, mut budget);
         out.push(n.val);
-        in_order_values(n.right, out, budget);
+        in_order_values(n.right, mut out, mut budget);
     }
 }
 

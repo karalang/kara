@@ -32,7 +32,7 @@ fn explore(robot: mut ref Robot, row: i64, col: i64, facing: i64, visited: mut r
     for _ in 0..4 {
         let next = (row + step_row(d), col + step_col(d));
         if not visited.contains(next) and robot.forward() {
-            explore(robot, next.0, next.1, d, visited);
+            explore(mut robot, next.0, next.1, d, mut visited);
             robot.turn_right();
             robot.turn_right();
             robot.forward();
@@ -46,7 +46,7 @@ fn explore(robot: mut ref Robot, row: i64, col: i64, facing: i64, visited: mut r
 
 fn clean_room(robot: mut ref Robot) {
     let mut visited: Set[(i64, i64)] = Set.new();
-    explore(robot, 0, 0, 0, mut visited);
+    explore(mut robot, 0, 0, 0, mut visited);
 }
 
 // ---- benchmark ------------------------------------------------------------

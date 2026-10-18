@@ -35,7 +35,7 @@ fn refill(q: mut ref MyQueue) {
 }
 
 fn q_pop(q: mut ref MyQueue) -> i64 {
-    refill(q);
+    refill(mut q);
     return match q.outbox.pop() {
         Some(x) => x,
         None => -1,
@@ -43,7 +43,7 @@ fn q_pop(q: mut ref MyQueue) -> i64 {
 }
 
 fn q_peek(q: mut ref MyQueue) -> i64 {
-    refill(q);
+    refill(mut q);
     return q.outbox[q.outbox.len() - 1];
 }
 

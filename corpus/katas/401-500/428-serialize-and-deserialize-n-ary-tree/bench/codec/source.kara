@@ -12,7 +12,7 @@ fn write(node: ref Node, out: mut ref String) {
     }
     out.push_str(f"{node.val} {node.children.len()}");
     for child in node.children {
-        write(child, out);
+        write(child, mut out);
     }
 }
 
@@ -31,7 +31,7 @@ fn read(words: ref Vec[String], at: mut ref i64) -> Node {
     *at += 2;
     let mut children: Vec[Node] = Vec.new();
     for _ in 0..count {
-        children.push(read(words, at));
+        children.push(read(words, mut at));
     }
     Node { val: val, children: children }
 }

@@ -187,7 +187,7 @@ fn listing(seed: mut ref i64, entries: i64) -> Built {
     let mut open = 0;
     let mut depth = 0;
     for k in 0..entries {
-        let r = step(seed) % 100;
+        let r = step(mut seed) % 100;
         if r < 35 {
             depth = open;
         } else if r >= 70 {
@@ -197,8 +197,8 @@ fn listing(seed: mut ref i64, entries: i64) -> Built {
         if depth > open {
             depth = open;
         }
-        let name_len = step(seed) % 12 + 1;
-        let file = step(seed) % 3 == 0;
+        let name_len = step(mut seed) % 12 + 1;
+        let file = step(mut seed) % 3 == 0;
         if k > 0 {
             out.push('\n');
         }
@@ -206,7 +206,7 @@ fn listing(seed: mut ref i64, entries: i64) -> Built {
             out.push('\t');
         }
         for _ in 0..name_len {
-            out.push((step(seed) % 26 + 97) as u8 as char);
+            out.push((step(mut seed) % 26 + 97) as u8 as char);
         }
         prefix.truncate(depth + 1);
         if file {

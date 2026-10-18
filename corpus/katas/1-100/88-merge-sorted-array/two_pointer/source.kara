@@ -25,7 +25,7 @@ fn merge(nums1: mut Slice[i64], m: i64, nums2: Slice[i64], n: i64) {
 }
 
 fn report(nums1: mut Slice[i64], m: i64, nums2: Slice[i64], n: i64) {
-    merge(nums1, m, nums2, n);
+    merge(mut nums1, m, nums2, n);
     let total = m + n;
     for i in 0..total {
         println(nums1[i]);

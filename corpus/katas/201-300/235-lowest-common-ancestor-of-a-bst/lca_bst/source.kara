@@ -26,10 +26,10 @@ fn insert(nodes: mut ref Vec[Node], root: i64, v: i64) -> i64 {
         return idx;
     }
     if v < nodes[root].val {
-        let l = insert(nodes, nodes[root].left, v);
+        let l = insert(mut nodes, nodes[root].left, v);
         nodes[root].left = l;
     } else {
-        let r = insert(nodes, nodes[root].right, v);
+        let r = insert(mut nodes, nodes[root].right, v);
         nodes[root].right = r;
     }
     return root;

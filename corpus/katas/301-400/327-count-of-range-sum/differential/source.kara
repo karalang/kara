@@ -23,7 +23,7 @@ fn count_and_sort(p: mut ref Vec[i64], tmp: mut ref Vec[i64], lo: i64, hi: i64, 
         return 0;
     }
     let mid = lo + (hi - lo) / 2;
-    let mut count = count_and_sort(p, tmp, lo, mid, lower, upper) + count_and_sort(p, tmp, mid, hi, lower, upper);
+    let mut count = count_and_sort(mut p, mut tmp, lo, mid, lower, upper) + count_and_sort(mut p, mut tmp, mid, hi, lower, upper);
 
     // Count the cross pairs: for each a in [lo, mid), the b in [mid, hi)
     // with p[a] + lower <= p[b] <= p[a] + upper.
@@ -184,7 +184,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_input(n: i64, r: i64, seed: mut ref i64) -> Vec[i64] {
     let mut a: Vec[i64] = Vec.new();
     for _ in 0..n {
-        a.push(next(seed) % (2 * r + 1) - r);
+        a.push(next(mut seed) % (2 * r + 1) - r);
     }
     return a;
 }
@@ -223,29 +223,29 @@ fn check(nums: ref Vec[i64], lower: i64, upper: i64, t: mut ref Tally) {
     t.rounds += 1;
     t.total += d;
     if a != d or b != d or c != d {
-        fail(t, f"P1 {nums} [{lower}, {upper}]: merge {a} bit {b} sorted {c} brute {d}");
+        fail(mut t, f"P1 {nums} [{lower}, {upper}]: merge {a} bit {b} sorted {c} brute {d}");
     }
     let all = n * (n + 1) / 2;
     if d < 0 or d > all {
-        fail(t, f"P2 {nums} [{lower}, {upper}]: {d} of {all}");
+        fail(mut t, f"P2 {nums} [{lower}, {upper}]: {d} of {all}");
     }
     if by_merge(nums, lower - 1, upper + 1) < d {
-        fail(t, f"P3 {nums} [{lower}, {upper}]");
+        fail(mut t, f"P3 {nums} [{lower}, {upper}]");
     }
     if by_merge(nums, -1000000000000000, 1000000000000000) != all {
-        fail(t, f"P4 {nums}");
+        fail(mut t, f"P4 {nums}");
     }
     if lower < upper {
         let m = lower + (upper - lower) / 2;
         if by_bit(nums, lower, m) + by_bit(nums, m + 1, upper) != d {
-            fail(t, f"P5 {nums} [{lower}, {upper}] at {m}");
+            fail(mut t, f"P5 {nums} [{lower}, {upper}] at {m}");
         }
     }
     if by_merge(negated(nums), -upper, -lower) != d {
-        fail(t, f"P6 {nums} [{lower}, {upper}]");
+        fail(mut t, f"P6 {nums} [{lower}, {upper}]");
     }
     if by_sorted(reversed(nums), lower, upper) != d {
-        fail(t, f"P7 {nums} [{lower}, {upper}]");
+        fail(mut t, f"P7 {nums} [{lower}, {upper}]");
     }
 }
 

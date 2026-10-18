@@ -44,7 +44,7 @@ fn go(
     let r = pos / 9;
     let c = pos % 9;
     if board[r][c] != 0 {
-        return go(board, rows, cols, boxes, pos + 1);
+        return go(mut board, mut rows, mut cols, mut boxes, pos + 1);
     }
     let b = box_index(r, c);
     let used = rows[r] | cols[c] | boxes[b];
@@ -56,7 +56,7 @@ fn go(
             rows[r] = rows[r] | bit;
             cols[c] = cols[c] | bit;
             boxes[b] = boxes[b] | bit;
-            if go(board, rows, cols, boxes, pos + 1) {
+            if go(mut board, mut rows, mut cols, mut boxes, pos + 1) {
                 return true;
             }
             board[r][c] = 0;            // undo the placement
@@ -97,7 +97,7 @@ fn solve(board: mut ref Vec[Vec[i64]]) -> bool {
         }
         r = r + 1;
     }
-    go(board, mut rows, mut cols, mut boxes, 0)
+    go(mut board, mut rows, mut cols, mut boxes, 0)
 }
 
 // Render a board as nine slash-separated rows of nine digits — the oracle's format.

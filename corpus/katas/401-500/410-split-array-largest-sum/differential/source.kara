@@ -93,7 +93,7 @@ fn least(prefix: Vec[i64], start: i64, pieces: i64, memo: mut ref Vec[i64]) -> i
         if first >= best {
             break;
         }
-        let rest = least(prefix, end, pieces - 1, memo);
+        let rest = least(prefix, end, pieces - 1, mut memo);
         let worst = if first > rest { first } else { rest };
         if worst < best {
             best = worst;

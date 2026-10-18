@@ -21,7 +21,7 @@ fn place_star(n: i64, pos: i64, used: mut ref Vec[bool]) -> i64 {
     for x in 1..=n {
         if not used[x] and (x % pos == 0 or pos % x == 0) {
             used[x] = true;
-            count += place_star(n, pos + 1, used);
+            count += place_star(n, pos + 1, mut used);
             used[x] = false;
         }
     }
@@ -43,7 +43,7 @@ fn place_backwards(pos: i64, used: mut ref Vec[bool]) -> i64 {
     for x in 1..used.len() {
         if not used[x] and (x % pos == 0 or pos % x == 0) {
             used[x] = true;
-            count += place_backwards(pos - 1, used);
+            count += place_backwards(pos - 1, mut used);
             used[x] = false;
         }
     }
@@ -93,7 +93,7 @@ fn permute_swaps(perm: mut ref Vec[i64], i: i64) -> i64 {
         perm.swap(i, j);
         let pos = i + 1;
         if perm[i] % pos == 0 or pos % perm[i] == 0 {
-            count += permute_swaps(perm, i + 1);
+            count += permute_swaps(mut perm, i + 1);
         }
         perm.swap(i, j);
     }

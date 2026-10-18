@@ -33,8 +33,8 @@ fn memo_solve(memo: mut ref Vec[Vec[i64]], i: i64, j: i64) -> i64 {
     }
     let mut best = i64.MAX;
     for k in i..j + 1 {
-        let left = memo_solve(memo, i, k - 1);
-        let right = memo_solve(memo, k + 1, j);
+        let left = memo_solve(mut memo, i, k - 1);
+        let right = memo_solve(mut memo, k + 1, j);
         best = best.min(k + left.max(right));
     }
     memo[i][j] = best;
@@ -127,7 +127,7 @@ fn minimax(lo: i64, hi: i64, seen: mut ref Map[i64, i64]) -> i64 {
     }
     let mut best = i64.MAX;
     for k in lo..hi + 1 {
-        best = best.min(k + minimax(lo, k - 1, seen).max(minimax(k + 1, hi, seen)));
+        best = best.min(k + minimax(lo, k - 1, mut seen).max(minimax(k + 1, hi, mut seen)));
     }
     seen.insert(key, best);
     best
@@ -137,7 +137,7 @@ fn oracle(n: i64, seen: mut ref Map[i64, i64]) -> i64 {
     if n <= 10 {
         brute(1, n)
     } else {
-        minimax(1, n, seen)
+        minimax(1, n, mut seen)
     }
 }
 

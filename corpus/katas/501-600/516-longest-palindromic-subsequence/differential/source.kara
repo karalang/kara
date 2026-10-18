@@ -45,9 +45,9 @@ fn longest_memo(b: Slice[u8], i: i64, j: i64, memo: mut ref Vec[Vec[Option[i64]]
         return v;
     }
     let v = if b[i] == b[j] {
-        longest_memo(b, i + 1, j - 1, memo) + 2
+        longest_memo(b, i + 1, j - 1, mut memo) + 2
     } else {
-        longest_memo(b, i + 1, j, memo).max(longest_memo(b, i, j - 1, memo))
+        longest_memo(b, i + 1, j, mut memo).max(longest_memo(b, i, j - 1, mut memo))
     };
     memo[i][j] = Some(v);
     v

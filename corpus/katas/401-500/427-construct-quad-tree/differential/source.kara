@@ -214,7 +214,7 @@ fn serialize(root: Quad) -> String {
 
 fn random_grid(n: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
     let mut block = 1;
-    let mut j = step(seed) % 6;
+    let mut j = step(mut seed) % 6;
     while j > 0 and block < n {
         block *= 2;
         j -= 1;
@@ -225,7 +225,7 @@ fn random_grid(n: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
     }
     for br in 0..n / block {
         for bc in 0..n / block {
-            let v = step(seed) % 2;
+            let v = step(mut seed) % 2;
             for r in 0..block {
                 for c in 0..block {
                     grid[br * block + r][bc * block + c] = v;
@@ -233,10 +233,10 @@ fn random_grid(n: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
             }
         }
     }
-    let flips = step(seed) % 4;
+    let flips = step(mut seed) % 4;
     for _ in 0..flips {
-        let r = step(seed) % n;
-        let c = step(seed) % n;
+        let r = step(mut seed) % n;
+        let c = step(mut seed) % n;
         grid[r][c] = 1 - grid[r][c];
     }
     grid
@@ -264,10 +264,10 @@ fn paint(q: Quad, row: i64, col: i64, size: i64, grid: ref Vec[Vec[i64]], painte
                 return false;
             }
             let half = size / 2;
-            let ok_a = paint(a, row, col, half, grid, painted);
-            let ok_b = paint(b, row, col + half, half, grid, painted);
-            let ok_c = paint(c, row + half, col, half, grid, painted);
-            let ok_d = paint(d, row + half, col + half, half, grid, painted);
+            let ok_a = paint(a, row, col, half, grid, mut painted);
+            let ok_b = paint(b, row, col + half, half, grid, mut painted);
+            let ok_c = paint(c, row + half, col, half, grid, mut painted);
+            let ok_d = paint(d, row + half, col + half, half, grid, mut painted);
             ok_a and ok_b and ok_c and ok_d
         }
     }

@@ -114,7 +114,7 @@ fn fewest_memo(coins: ref Vec[i64], a: i64, memo: mut ref Map[i64, Option[i64]])
         if c > a {
             continue;
         }
-        match fewest_memo(coins, a - c, memo) {
+        match fewest_memo(coins, a - c, mut memo) {
             Some(n) => {
                 best = match best {
                     Some(b) if b <= n + 1 => Some(b),
@@ -146,7 +146,7 @@ fn search_brute(coins: ref Vec[i64], i: i64, rem: i64, used: i64, best: mut ref 
     let c = coins[i];
     let mut k = 0;
     while k * c <= rem {
-        search_brute(coins, i + 1, rem - k * c, used + k, best);
+        search_brute(coins, i + 1, rem - k * c, used + k, mut best);
         k = k + 1;
     }
 }
@@ -228,7 +228,7 @@ fn sampled(coins: ref Vec[i64], target: i64, seed: mut ref i64) -> i64 {
         if fits.is_empty() {
             return -1;
         }
-        rem = rem - fits[next(seed) % fits.len()];
+        rem = rem - fits[next(mut seed) % fits.len()];
         used = used + 1;
     }
     return used;
@@ -316,7 +316,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     while v.len() < count {
-        let c = next(seed) % top + 1;
+        let c = next(mut seed) % top + 1;
         if not v.contains(c) {
             v.push(c);
         }
@@ -349,40 +349,40 @@ fn check(coins: ref Vec[i64], target: i64, seed: mut ref i64, tally: mut ref Tal
     tally.cases += 1;
     let ans = change_star(coins, target);
 
-    if change_bfs(coins, target) != ans { fail(tally, 1); }
-    if change_memo(coins, target) != ans { fail(tally, 2); }
+    if change_bfs(coins, target) != ans { fail(mut tally, 1); }
+    if change_memo(coins, target) != ans { fail(mut tally, 2); }
     if brute_leaves(coins, target, BRUTE_LEAVES) <= BRUTE_LEAVES {
         tally.brute_cases += 1;
-        if change_brute(coins, target) != ans { fail(tally, 3); }
+        if change_brute(coins, target) != ans { fail(mut tally, 3); }
     }
 
     // P4: -1 exactly when nothing makes the target.
-    if (ans < 0) != not reachable(coins, target) { fail(tally, 4); }
+    if (ans < 0) != not reachable(coins, target) { fail(mut tally, 4); }
     if ans >= 0 { tally.reachable_cases += 1; }
 
     // P5: a multiset of exactly `ans` coins builds the target.
     if ans >= 0 {
         let bag = witness(coins, target);
-        if bag.len() != ans or not builds(bag, coins, target) { fail(tally, 5); }
+        if bag.len() != ans or not builds(bag, coins, target) { fail(mut tally, 5); }
     }
 
     // P6: nothing sampled from the statement's own space is cheaper.
     for s in 0..SAMPLES {
-        let used = sampled(coins, target, seed);
+        let used = sampled(coins, target, mut seed);
         tally.samples += 1;
         if used >= 0 {
             tally.hits += 1;
-            if ans < 0 or used < ans { fail(tally, 6); }
+            if ans < 0 or used < ans { fail(mut tally, 6); }
         }
     }
 
     // P7: the order of the coins is irrelevant.
-    if change_star(reversed(coins), target) != ans { fail(tally, 7); }
-    if change_star(rotated(coins, 1 + next(seed) % coins.len()), target) != ans { fail(tally, 7); }
+    if change_star(reversed(coins), target) != ans { fail(mut tally, 7); }
+    if change_star(rotated(coins, 1 + next(mut seed) % coins.len()), target) != ans { fail(mut tally, 7); }
 
     // P8: one more denomination can only help.
-    let extra = 1 + next(seed) % (largest(coins) + 3);
-    if worse(change_star(with_coin(coins, extra), target), ans) { fail(tally, 8); }
+    let extra = 1 + next(mut seed) % (largest(coins) + 3);
+    if worse(change_star(with_coin(coins, extra), target), ans) { fail(mut tally, 8); }
 
     // P9: the recurrence holds at every amount up to the target (capped so the
     // medium tier stays affordable under the interpreter).
@@ -395,39 +395,39 @@ fn check(coins: ref Vec[i64], target: i64, seed: mut ref i64, tally: mut ref Tal
             let c = coins[i];
             if c <= a {
                 let before = change_star(coins, a - c);
-                if before >= 0 and worse(here, before + 1) { fail(tally, 9); }
+                if before >= 0 and worse(here, before + 1) { fail(mut tally, 9); }
                 if before >= 0 and here == before + 1 { tight = true; }
             }
         }
-        if here > 0 and not tight { fail(tally, 9); }
+        if here > 0 and not tight { fail(mut tally, 9); }
     }
 
     // P10: making x + y never costs more than making each separately.
     for s in 0..PAIRS {
-        let x = next(seed) % (target + 1);
-        let y = next(seed) % (target + 1);
+        let x = next(mut seed) % (target + 1);
+        let y = next(mut seed) % (target + 1);
         let fx = change_star(coins, x);
         let fy = change_star(coins, y);
-        if fx >= 0 and fy >= 0 and worse(change_star(coins, x + y), fx + fy) { fail(tally, 10); }
+        if fx >= 0 and fy >= 0 and worse(change_star(coins, x + y), fx + fy) { fail(mut tally, 10); }
     }
 
     // P11: scale everything by s; off-multiples become unreachable.
-    let s = 2 + next(seed) % 3;
-    if change_star(scaled(coins, s), target * s) != ans { fail(tally, 11); }
-    if change_star(scaled(coins, s), target * s + 1) != -1 { fail(tally, 11); }
+    let s = 2 + next(mut seed) % 3;
+    if change_star(scaled(coins, s), target * s) != ans { fail(mut tally, 11); }
+    if change_star(scaled(coins, s), target * s + 1) != -1 { fail(mut tally, 11); }
 
     // P12: every coin is between the smallest and the largest.
     if ans >= 0 {
         let hi = largest(coins);
-        if ans < (target + hi - 1) / hi or ans > target / smallest(coins) { fail(tally, 12); }
+        if ans < (target + hi - 1) / hi or ans > target / smallest(coins) { fail(mut tally, 12); }
     }
 
     // P13: greedy, when it finishes, is never cheaper.
     let g = greedy(coins, target);
-    if g >= 0 and (ans < 0 or g < ans) { fail(tally, 13); }
+    if g >= 0 and (ans < 0 or g < ans) { fail(mut tally, 13); }
 
     // P14: the target as a coin of its own.
-    if target > 0 and change_star(with_coin(coins, target), target) != 1 { fail(tally, 14); }
+    if target > 0 and change_star(with_coin(coins, target), target) != 1 { fail(mut tally, 14); }
 }
 
 // -------------------------------------------------------------- main ---

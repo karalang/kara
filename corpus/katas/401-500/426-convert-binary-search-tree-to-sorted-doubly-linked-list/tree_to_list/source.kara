@@ -17,7 +17,7 @@ shared struct Node {
 fn link(node: Option[Node], first: mut ref Option[Node], last: mut ref Option[Node]) {
     match node {
         Some(n) => {
-            link(n.left, first, last);
+            link(n.left, mut first, mut last);
             match *last {
                 Some(prev) => {
                     prev.right = Some(n);
@@ -28,7 +28,7 @@ fn link(node: Option[Node], first: mut ref Option[Node], last: mut ref Option[No
                 }
             }
             *last = Some(n);
-            link(n.right, first, last);
+            link(n.right, mut first, mut last);
         }
         None => {}
     }

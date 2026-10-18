@@ -20,7 +20,7 @@ fn value(i: i64, memo: mut ref Vec[Option[i64]]) -> i64 {
     }
     let mut v = i;
     for j in 1..i {
-        let p = j * value(i - j, memo);
+        let p = j * value(i - j, mut memo);
         if p > v {
             v = p;
         }

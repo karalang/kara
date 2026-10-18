@@ -31,7 +31,7 @@ fn visit(
         if used >= dests.len() { break; }
         let _ = cursor.insert(airport.clone(), used + 1);
         let next = dests[used].clone();
-        visit(adj, cursor, next, route);
+        visit(mut adj, mut cursor, next, mut route);
     }
     route.push(airport);
 }

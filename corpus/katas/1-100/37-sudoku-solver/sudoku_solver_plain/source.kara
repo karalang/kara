@@ -52,13 +52,13 @@ fn go(board: mut ref Vec[Vec[i64]], pos: i64) -> bool {
     let r = pos / 9;
     let c = pos % 9;
     if board[r][c] != 0 {
-        return go(board, pos + 1);
+        return go(mut board, pos + 1);
     }
     let mut d = 1;
     while d <= 9 {
         if is_safe(board, r, c, d) {
             board[r][c] = d;
-            if go(board, pos + 1) {
+            if go(mut board, pos + 1) {
                 return true;
             }
             board[r][c] = 0;            // undo and try the next digit
@@ -69,7 +69,7 @@ fn go(board: mut ref Vec[Vec[i64]], pos: i64) -> bool {
 }
 
 fn solve(board: mut ref Vec[Vec[i64]]) -> bool {
-    go(board, 0)
+    go(mut board, 0)
 }
 
 // Render a board as nine slash-separated rows of nine digits — the oracle's format.

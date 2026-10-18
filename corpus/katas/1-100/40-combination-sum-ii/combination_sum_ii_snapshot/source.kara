@@ -45,7 +45,7 @@ fn backtrack(
         // Fresh child path = parent's snapshot + this choice; recurse at i+1.
         let mut next = path.clone();
         next.push(c);
-        backtrack(candidates, i + 1, remaining - c, next, out);
+        backtrack(candidates, i + 1, remaining - c, next, mut out);
         i = i + 1;
     }
 }

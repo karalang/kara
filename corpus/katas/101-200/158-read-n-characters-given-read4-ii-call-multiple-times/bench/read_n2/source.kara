@@ -39,7 +39,7 @@ fn read(src: ref Vec[i64], rd: mut ref Reader, want: i64) -> i64 {
     let mut eof = false;
     while total < want and not eof {
         if rd.buf_pos >= rd.buf_len {
-            let cnt = read4(src, rd);
+            let cnt = read4(src, mut rd);
             if cnt == 0 {
                 eof = true;
             }

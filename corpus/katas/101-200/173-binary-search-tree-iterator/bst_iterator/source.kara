@@ -30,11 +30,11 @@ fn insert(nodes: mut ref Vec[Node], root: i64, val: i64) -> i64 {
     }
     if val < nodes[root].val {
         let li = nodes[root].left;
-        let l = insert(nodes, li, val);
+        let l = insert(mut nodes, li, val);
         nodes[root].left = l;
     } else {
         let ri = nodes[root].right;
-        let r = insert(nodes, ri, val);
+        let r = insert(mut nodes, ri, val);
         nodes[root].right = r;
     }
     return root;
@@ -64,7 +64,7 @@ fn next(it: mut ref BstIterator, nodes: ref Vec[Node]) -> i64 {
     let _ = it.stack.pop();
     let res = nodes[top].val;
     let r = nodes[top].right;
-    push_left(it, nodes, r); // `it` is already a mut ref — forward without re-marking
+    push_left(mut it, nodes, r); // `it` is already a mut ref — forward without re-marking
     return res;
 }
 

@@ -74,8 +74,8 @@ fn next(seed: mut ref i64) -> i64 {
 
 // A draw in 0..bound from two LCG steps (one step only reaches 32767).
 fn draw(seed: mut ref i64, bound: i64) -> i64 {
-    let hi = next(seed);
-    let lo = next(seed);
+    let hi = next(mut seed);
+    let lo = next(mut seed);
     return (hi * 32768 + lo) % bound;
 }
 

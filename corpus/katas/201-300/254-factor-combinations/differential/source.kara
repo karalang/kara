@@ -31,7 +31,7 @@ fn helper_a(remaining: i64, start: i64, path: mut ref Vec[i64], out: mut ref Vec
             combo.push(remaining / i);
             out.push(combo);
             path.push(i);
-            helper_a(remaining / i, i, path, out);
+            helper_a(remaining / i, i, mut path, mut out);
             let _ = path.pop();
         }
         i = i + 1;
@@ -53,7 +53,7 @@ fn helper_b(remaining: i64, start: i64, path: mut ref Vec[i64], out: mut ref Vec
     while i * i <= remaining {
         if remaining % i == 0 {
             path.push(i);
-            helper_b(remaining / i, i, path, out);
+            helper_b(remaining / i, i, mut path, mut out);
             let _ = path.pop();
         }
         i = i + 1;

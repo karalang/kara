@@ -82,7 +82,7 @@ fn has_next(p: ref Peeking) -> bool {
 fn next(p: mut ref Peeking) -> i64 {
     let v = p.slot;
     if src_has_next(p.src) {
-        p.slot = src_next(p.src);
+        p.slot = src_next(mut p.src);
     } else {
         p.full = false;
     }

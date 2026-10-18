@@ -16,9 +16,9 @@ fn longest(b: Slice[u8], i: i64, j: i64, memo: mut ref Vec[Vec[Option[i64]]]) ->
         return v;
     }
     let v = if b[i] == b[j] {
-        longest(b, i + 1, j - 1, memo) + 2
+        longest(b, i + 1, j - 1, mut memo) + 2
     } else {
-        longest(b, i + 1, j, memo).max(longest(b, i, j - 1, memo))
+        longest(b, i + 1, j, mut memo).max(longest(b, i, j - 1, mut memo))
     };
     memo[i][j] = Some(v);
     v

@@ -26,12 +26,12 @@ fn best(nodes: ref Vec[Node], node: i64, memo: mut ref Map[i64, i64]) -> i64 {
     let right = nodes[node].right;
     let mut robbed = nodes[node].val;
     if left != -1 {
-        robbed += best(nodes, nodes[left].left, memo) + best(nodes, nodes[left].right, memo);
+        robbed += best(nodes, nodes[left].left, mut memo) + best(nodes, nodes[left].right, mut memo);
     }
     if right != -1 {
-        robbed += best(nodes, nodes[right].left, memo) + best(nodes, nodes[right].right, memo);
+        robbed += best(nodes, nodes[right].left, mut memo) + best(nodes, nodes[right].right, mut memo);
     }
-    let skipped = best(nodes, left, memo) + best(nodes, right, memo);
+    let skipped = best(nodes, left, mut memo) + best(nodes, right, mut memo);
     let answer = robbed.max(skipped);
     memo.insert(node, answer);
     return answer;
@@ -90,13 +90,13 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_tree(seed: mut ref i64, n: i64, most: i64) -> Vec[Node] {
     let mut nodes: Vec[Node] = Vec.new();
     for i in 0..n {
-        nodes.push(Node { val: next(seed) % (most + 1), left: -1, right: -1 });
+        nodes.push(Node { val: next(mut seed) % (most + 1), left: -1, right: -1 });
         if i == 0 {
             continue;
         }
         let mut cur = 0;
         while true {
-            if next(seed) % 2 == 0 {
+            if next(mut seed) % 2 == 0 {
                 if nodes[cur].left == -1 {
                     nodes[cur].left = i;
                     break;

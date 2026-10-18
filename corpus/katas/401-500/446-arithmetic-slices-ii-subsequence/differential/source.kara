@@ -122,7 +122,7 @@ fn from(k: i64, j: i64, nums: Vec[i64], positions: Map[i64, Vec[i64]], memo: mut
     if let Some(ls) = positions.get(wanted) {
         for l in ls {
             if l > j {
-                ways += 1 + from(j, l, nums, positions, memo);
+                ways += 1 + from(j, l, nums, positions, mut memo);
             }
         }
     }
@@ -166,11 +166,11 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn random_array(seed: mut ref i64, longest: i64, spreads: Vec[i64]) -> Vec[i64] {
-    let n = 1 + next_random(seed) % longest;
-    let spread = spreads[next_random(seed) % spreads.len()];
+    let n = 1 + next_random(mut seed) % longest;
+    let spread = spreads[next_random(mut seed) % spreads.len()];
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..n {
-        nums.push(next_random(seed) % spread - spread / 2);
+        nums.push(next_random(mut seed) % spread - spread / 2);
     }
     nums
 }

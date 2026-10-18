@@ -49,7 +49,7 @@ fn dfs(
         if cnts[i] > 0 {
             cnts[i] = cnts[i] - 1;
             path.push(vals[i]);
-            dfs(vals, cnts, depth + 1, n, path, out);
+            dfs(vals, mut cnts, depth + 1, n, mut path, mut out);
             path.pop();
             cnts[i] = cnts[i] + 1;
         }

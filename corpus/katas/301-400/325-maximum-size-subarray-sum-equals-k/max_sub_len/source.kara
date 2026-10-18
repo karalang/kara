@@ -61,7 +61,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_input(n: i64, r: i64, seed: mut ref i64) -> Vec[i64] {
     let mut a: Vec[i64] = Vec.new();
     for _ in 0..n {
-        a.push(next(seed) % (2 * r + 1) - r);
+        a.push(next(mut seed) % (2 * r + 1) - r);
     }
     return a;
 }

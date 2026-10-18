@@ -41,7 +41,7 @@ fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
     let mut lo = val;
     let mut hi = val;
     if left != -1 {
-        let l = visit(nodes, left, best);
+        let l = visit(nodes, left, mut best);
         if l.bst and l.hi < val {
             size += l.size;
             lo = l.lo;
@@ -50,7 +50,7 @@ fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
         }
     }
     if right != -1 {
-        let r = visit(nodes, right, best);
+        let r = visit(nodes, right, mut best);
         if r.bst and r.lo > val {
             size += r.size;
             hi = r.hi;
@@ -83,8 +83,8 @@ fn visit_linked(node: Option[TreeNode], best: mut ref i64) -> (i64, i64, i64) {
     match node {
         None => (0, 0, 0),
         Some(n) => {
-            let (ls, llo, lhi) = visit_linked(n.left, best);
-            let (rs, rlo, rhi) = visit_linked(n.right, best);
+            let (ls, llo, lhi) = visit_linked(n.left, mut best);
+            let (rs, rlo, rhi) = visit_linked(n.right, mut best);
             if ls < 0 or rs < 0 or (ls > 0 and lhi >= n.val) or (rs > 0 and rlo <= n.val) {
                 return (-1, 0, 0);
             }
@@ -238,9 +238,9 @@ fn inorder(nodes: ref Vec[Node], node: i64, out: mut ref Vec[i64]) {
     if node == -1 {
         return;
     }
-    inorder(nodes, nodes[node].left, out);
+    inorder(nodes, nodes[node].left, mut out);
     out.push(nodes[node].val);
-    inorder(nodes, nodes[node].right, out);
+    inorder(nodes, nodes[node].right, mut out);
 }
 
 // The oracle: try every subtree, and call it a BST when its in-order walk is
@@ -270,8 +270,8 @@ fn copy_into(nodes: ref Vec[Node], node: i64, out: mut ref Vec[Node]) -> i64 {
     }
     out.push(Node { val: nodes[node].val, left: -1, right: -1 });
     let id = out.len() - 1;
-    let l = copy_into(nodes, nodes[node].left, out);
-    let r = copy_into(nodes, nodes[node].right, out);
+    let l = copy_into(nodes, nodes[node].left, mut out);
+    let r = copy_into(nodes, nodes[node].right, mut out);
     out[id].left = l;
     out[id].right = r;
     return id;
@@ -329,27 +329,27 @@ fn describe(nodes: ref Vec[Node]) -> String {
 
 fn properties(nodes: ref Vec[Node], unique_bst: bool, failures: mut ref i64) {
     let what = describe(nodes);
-    let ans = agreed(nodes, what.clone(), failures);
+    let ans = agreed(nodes, what.clone(), mut failures);
     let n = nodes.len();
-    check(ans == brute(nodes), "P2", what, failures);
+    check(ans == brute(nodes), "P2", what, mut failures);
     if unique_bst {
-        check(ans == n, "P3", what, failures);
+        check(ans == n, "P3", what, mut failures);
     }
     if n > 0 {
-        check(ans >= 1 and ans <= n, "P4", what, failures);
+        check(ans >= 1 and ans <= n, "P4", what, mut failures);
         let l = nodes[0].left;
         let r = nodes[0].right;
         if l != -1 {
-            check(ans >= agreed(subtree(nodes, l), what.clone(), failures), "P5", what, failures);
+            check(ans >= agreed(subtree(nodes, l), what.clone(), mut failures), "P5", what, mut failures);
         }
         if r != -1 {
-            check(ans >= agreed(subtree(nodes, r), what.clone(), failures), "P5", what, failures);
+            check(ans >= agreed(subtree(nodes, r), what.clone(), mut failures), "P5", what, mut failures);
         }
-        check(agreed(mirrored_negated(nodes), what.clone(), failures) == ans, "P6", what, failures);
-        check(agreed(shifted(nodes, 1000), what.clone(), failures) == ans, "P7", what, failures);
-        let grown = agreed(under_new_root(nodes), what.clone(), failures);
+        check(agreed(mirrored_negated(nodes), what.clone(), mut failures) == ans, "P6", what, mut failures);
+        check(agreed(shifted(nodes, 1000), what.clone(), mut failures) == ans, "P7", what, mut failures);
+        let grown = agreed(under_new_root(nodes), what.clone(), mut failures);
         let expect = if ans == n { n + 1 } else { ans };
-        check(grown == expect, "P8", what, failures);
+        check(grown == expect, "P8", what, mut failures);
     }
 }
 
@@ -419,12 +419,12 @@ fn insert(nodes: mut ref Vec[Node], v: i64) {
 fn random_shape(seed: mut ref i64, n: i64, range: i64) -> Vec[Node] {
     let mut nodes: Vec[Node] = Vec.new();
     for i in 0..n {
-        nodes.push(Node { val: next(seed) % range, left: -1, right: -1 });
+        nodes.push(Node { val: next(mut seed) % range, left: -1, right: -1 });
         if i > 0 {
             let mut placed = false;
             while not placed {
-                let at = next(seed) % i;
-                if next(seed) % 2 == 0 {
+                let at = next(mut seed) % i;
+                if next(mut seed) % 2 == 0 {
                     if nodes[at].left == -1 {
                         nodes[at].left = i;
                         placed = true;

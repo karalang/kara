@@ -30,7 +30,7 @@ fn kill_all_dfs(p: i64, children: ref Map[i64, Vec[i64]], killed: mut ref Vec[i6
     killed.push(p);
     if let Some(kids) = children.get(p) {
         for k in kids.iter() {
-            kill_all_dfs(*k, children, killed);
+            kill_all_dfs(*k, children, mut killed);
         }
     }
 }

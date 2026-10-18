@@ -107,14 +107,14 @@ fn walk_str(nodes: ref Vec[Node], node: i64, prefix: ref String, out: mut ref Ve
         next.push_str(prefix);
         next.push_str("->");
         next.push_str(f"{nodes[left].val}");
-        walk_str(nodes, left, next, out);
+        walk_str(nodes, left, next, mut out);
     }
     if right != -1 {
         let mut next: String = "";
         next.push_str(prefix);
         next.push_str("->");
         next.push_str(f"{nodes[right].val}");
-        walk_str(nodes, right, next, out);
+        walk_str(nodes, right, next, mut out);
     }
 }
 
@@ -148,10 +148,10 @@ fn walk_join(nodes: ref Vec[Node], node: i64, path: mut ref Vec[i64], out: mut r
         out.push(s);
     } else {
         if left != -1 {
-            walk_join(nodes, left, path, out);
+            walk_join(nodes, left, mut path, mut out);
         }
         if right != -1 {
-            walk_join(nodes, right, path, out);
+            walk_join(nodes, right, mut path, mut out);
         }
     }
     let _ = path.pop();

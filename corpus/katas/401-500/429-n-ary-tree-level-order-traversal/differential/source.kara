@@ -53,7 +53,7 @@ fn visit_depth(node: ref Node, depth: i64, levels: mut ref Vec[Vec[i64]]) {
     }
     levels[depth].push(node.val);
     for child in node.children {
-        visit_depth(child, depth + 1, levels);
+        visit_depth(child, depth + 1, mut levels);
     }
 }
 
@@ -95,7 +95,7 @@ fn number_table(node: ref Node, vals: mut ref Vec[i64], kids: mut ref Vec[Vec[i6
     vals.push(node.val);
     kids.push(Vec.new());
     for child in node.children {
-        let k = number_table(child, vals, kids);
+        let k = number_table(child, mut vals, mut kids);
         kids[me].push(k);
     }
     me
@@ -169,7 +169,7 @@ fn reference(i: i64, depth: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]], ro
     }
     rows[depth].push(vals[i]);
     for k in kids[i] {
-        reference(k, depth + 1, vals, kids, rows);
+        reference(k, depth + 1, vals, kids, mut rows);
     }
 }
 

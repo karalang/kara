@@ -8,13 +8,13 @@ fn stash(x: own R, v: mut ref Vec[R]) { v.push(x) }
 fn wrapw(x: own R) -> W { return W { r: x, n: 1 } }
 fn t_fwd_let(t: own (R, i64)) -> R { let (r, k) = t; wrap(r) }
 fn t_fwd_let_ret(t: own (R, i64)) -> R { let (r, k) = t; return wrap(r); }
-fn t_stash_let(t: own (R, i64), v: mut ref Vec[R]) -> i64 { let (r, k) = t; stash(r, v); k }
+fn t_stash_let(t: own (R, i64), v: mut ref Vec[R]) -> i64 { let (r, k) = t; stash(r, mut v); k }
 fn t_consume_let(t: own (R, i64)) -> i64 { let (r, k) = t; consume(r) }
 fn t_fwdw_let(t: own (R, i64)) -> W { let (r, k) = t; wrapw(r) }
 fn s_fwd_let(w: own W) -> R { let W { r, n } = w; wrap(r) }
-fn s_stash_let(w: own W, v: mut ref Vec[R]) -> i64 { let W { r, n } = w; stash(r, v); n }
-fn b_stash(x: own R, v: mut ref Vec[R]) { stash(x, v) }
-fn b_stash_ret(x: own R, v: mut ref Vec[R]) -> i64 { stash(x, v); 7 }
+fn s_stash_let(w: own W, v: mut ref Vec[R]) -> i64 { let W { r, n } = w; stash(r, mut v); n }
+fn b_stash(x: own R, v: mut ref Vec[R]) { stash(x, mut v) }
+fn b_stash_ret(x: own R, v: mut ref Vec[R]) -> i64 { stash(x, mut v); 7 }
 fn b_fwd(x: own R) -> R { wrap(x) }
 fn b_consume(x: own R) -> i64 { consume(x) }
 fn main() {

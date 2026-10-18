@@ -47,8 +47,8 @@ fn random_points(seed: mut ref i64, n: i64, spread: i64) -> Vec[(i64, i64)] {
     let mut seen: Set[(i64, i64)] = Set.new();
     let mut points: Vec[(i64, i64)] = Vec.new();
     while points.len() < n {
-        let x = next_random(seed) % spread - spread / 2;
-        let y = next_random(seed) % spread - spread / 2;
+        let x = next_random(mut seed) % spread - spread / 2;
+        let y = next_random(mut seed) % spread - spread / 2;
         if seen.insert((x, y)) {
             points.push((x, y));
         }

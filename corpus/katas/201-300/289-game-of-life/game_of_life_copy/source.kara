@@ -98,7 +98,7 @@ fn report(label: String, board: mut ref Vec[Vec[i64]], steps: i64) {
     println(f"{label}:");
     let mut k = 0;
     while k < steps {
-        step(board);
+        step(mut board);
         k = k + 1;
     }
     print(render(board));

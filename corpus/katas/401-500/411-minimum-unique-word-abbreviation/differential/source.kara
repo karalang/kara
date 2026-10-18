@@ -110,10 +110,10 @@ fn explore(s: mut ref Search, i: i64, mask: i64, length: i64, after_run: bool) {
         s.best_mask = mask;
         return;
     }
-    explore(s, i + 1, mask | (1 << i), length + 1, false);
+    explore(mut s, i + 1, mask | (1 << i), length + 1, false);
     if not after_run {
         for run in 1..s.m - i + 1 {
-            explore(s, i + run, mask, length + 1, true);
+            explore(mut s, i + run, mask, length + 1, true);
         }
     }
 }
@@ -204,12 +204,12 @@ fn generate(t: Slice[u8], i: i64, current: own String, after_run: bool, out: mut
     }
     let mut kept = current.clone();
     kept.push(t[i] as char);
-    generate(t, i + 1, kept, false, out);
+    generate(t, i + 1, kept, false, mut out);
     if not after_run {
         for run in 1..t.len() - i + 1 {
             let mut skipped = current.clone();
             skipped.push_str(f"{run}");
-            generate(t, i + run, skipped, true, out);
+            generate(t, i + run, skipped, true, mut out);
         }
     }
 }
@@ -378,7 +378,7 @@ fn brute(target: Str, dictionary: Vec[String]) -> i64 {
 fn word(len: i64, letters: i64, seed: mut ref i64) -> String {
     let mut w = String.new();
     for _ in 0..len {
-        w.push((97 + step(seed) % letters) as u8 as char);
+        w.push((97 + step(mut seed) % letters) as u8 as char);
     }
     w
 }

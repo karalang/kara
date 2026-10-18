@@ -42,7 +42,7 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_sorted(seed: mut ref i64, len: i64, max: i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     for _ in 0..len {
-        v.push(next(seed) % max + 1);
+        v.push(next(mut seed) % max + 1);
     }
     v.sort();
     return v;

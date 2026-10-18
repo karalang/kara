@@ -65,8 +65,8 @@ fn visit_depth(node: Option[TreeNode], depth: i64, best: mut ref DeepestDepth) {
         best.depth = depth;
         best.val = n.val;
     }
-    visit_depth(n.left, depth + 1, best);
-    visit_depth(n.right, depth + 1, best);
+    visit_depth(n.left, depth + 1, mut best);
+    visit_depth(n.right, depth + 1, mut best);
 }
 
 fn find_bottom_left_value_depth(root: TreeNode) -> i64 {
@@ -107,12 +107,12 @@ fn next_random(seed: mut ref i64) -> i64 {
 }
 
 fn grow(size: i64, half: i64, seed: mut ref i64) -> TreeNode {
-    let root = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+    let root = TreeNode { val: next_random(mut seed) % (2 * half + 1) - half, left: None, right: None };
     for _ in 1..size {
-        let leaf = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+        let leaf = TreeNode { val: next_random(mut seed) % (2 * half + 1) - half, left: None, right: None };
         let mut node = root;
         loop {
-            if next_random(seed) % 2 == 0 {
+            if next_random(mut seed) % 2 == 0 {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -164,8 +164,8 @@ fn arm(which: i64, root: TreeNode) -> i64 {
 fn levels(node: Option[TreeNode], depth: i64, out: mut ref Vec[(i64, i64)]) {
     if let Some(n) = node {
         out.push((depth, n.val));
-        levels(n.left, depth + 1, out);
-        levels(n.right, depth + 1, out);
+        levels(n.left, depth + 1, mut out);
+        levels(n.right, depth + 1, mut out);
     }
 }
 

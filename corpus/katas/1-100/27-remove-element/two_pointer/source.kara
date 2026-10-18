@@ -26,7 +26,7 @@ fn remove_element(nums: mut Slice[i64], len: i64, val: i64) -> i64 {
 fn report(nums: mut Slice[i64], len: i64, val: i64) {
     // nums is already an in-scope mut Slice — forwards without a marker
     // (design.md Feature 4 Part 1½, Rule 2).
-    let k = remove_element(nums, len, val);
+    let k = remove_element(mut nums, len, val);
     println(f"k = {k}");
     for i in 0..k {
         println(nums[i]);

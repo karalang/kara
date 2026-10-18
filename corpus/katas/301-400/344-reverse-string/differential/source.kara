@@ -54,12 +54,12 @@ fn rec_range(s: mut Slice[char], lo: i64, hi: i64) {
     let t = s[lo];
     s[lo] = s[hi];
     s[hi] = t;
-    rec_range(s, lo + 1, hi - 1);
+    rec_range(mut s, lo + 1, hi - 1);
 }
 
 fn by_rec(s: mut Slice[char]) {
     let n = s.len();
-    rec_range(s, 0, n - 1);
+    rec_range(mut s, 0, n - 1);
 }
 
 fn by_tuple(s: mut Slice[char]) {

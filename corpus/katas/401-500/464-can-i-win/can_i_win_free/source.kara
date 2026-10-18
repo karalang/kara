@@ -17,7 +17,7 @@ fn wins_from(free: Vec[i64], left: i64, memo: mut ref Map[Vec[i64], bool]) -> bo
         }
         let mut rest = free.clone();
         rest.remove(i);
-        if not wins_from(rest, left - n, memo) {
+        if not wins_from(rest, left - n, mut memo) {
             result = true;
             break;
         }

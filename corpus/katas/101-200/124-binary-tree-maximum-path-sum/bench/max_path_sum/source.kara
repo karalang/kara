@@ -16,8 +16,8 @@ fn max_gain(node: Option[TreeNode], best: mut ref i64) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let lg = max_gain(n.left, best);
-            let rg = max_gain(n.right, best);
+            let lg = max_gain(n.left, mut best);
+            let rg = max_gain(n.right, mut best);
             let left_gain = if lg > 0 { lg } else { 0 };
             let right_gain = if rg > 0 { rg } else { 0 };
             let through = n.val + left_gain + right_gain;

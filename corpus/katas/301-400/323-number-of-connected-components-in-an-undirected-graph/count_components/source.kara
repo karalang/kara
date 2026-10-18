@@ -103,8 +103,8 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_edges(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
     let mut edges: Vec[(i64, i64)] = Vec.new();
     for i in 0..m {
-        let a = next(seed) % n;
-        let b = next(seed) % n;
+        let a = next(mut seed) % n;
+        let b = next(mut seed) % n;
         edges.push((a, b));
     }
     return edges;

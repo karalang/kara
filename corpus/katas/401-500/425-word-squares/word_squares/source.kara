@@ -20,7 +20,7 @@ fn extend(rows: mut ref Vec[String], length: i64, by_prefix: ref Map[String, Vec
         Some(candidates) => {
             for i in candidates {
                 rows.push(words[i].clone());
-                extend(rows, length, by_prefix, words, found);
+                extend(mut rows, length, by_prefix, words, mut found);
                 rows.pop();
             }
         }

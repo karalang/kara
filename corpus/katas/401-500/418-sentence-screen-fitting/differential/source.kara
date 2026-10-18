@@ -163,7 +163,7 @@ fn step(seed: mut ref i64) -> i64 {
 fn word(length: i64, seed: mut ref i64) -> String {
     let mut w = String.new();
     for _ in 0..length {
-        w.push(char.try_from((97 + step(seed) % 26) as u32).unwrap());
+        w.push(char.try_from((97 + step(mut seed) % 26) as u32).unwrap());
     }
     w
 }

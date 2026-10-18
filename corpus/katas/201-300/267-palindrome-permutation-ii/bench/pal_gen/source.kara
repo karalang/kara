@@ -59,7 +59,7 @@ fn build(counts: mut ref Vec[i64], half: mut ref Vec[i64], half_len: i64,
         if counts[c] > 0 {
             counts[c] = counts[c] - 1;
             half.push(c);
-            build(counts, half, half_len, middle, buf, acc);
+            build(mut counts, mut half, half_len, middle, mut buf, mut acc);
             half.pop();
             counts[c] = counts[c] + 1;
         }

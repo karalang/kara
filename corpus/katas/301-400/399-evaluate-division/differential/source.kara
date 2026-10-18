@@ -18,7 +18,7 @@ fn find_uf(parent: mut ref Vec[i64], weight: mut ref Vec[f64], i: i64) -> i64 {
     if p == i {
         return i;
     }
-    let root = find_uf(parent, weight, p);
+    let root = find_uf(mut parent, mut weight, p);
     weight[i] = weight[i] * weight[p];
     parent[i] = root;
     root
@@ -73,7 +73,7 @@ fn walk_dfs(graph: Map[String, Vec[(String, f64)]], at: String, goal: String, pr
     seen.insert(at.clone());
     for (next, w) in graph[at].iter() {
         if not seen.contains(next) {
-            let r = walk_dfs(graph, next, goal, product * *w, seen);
+            let r = walk_dfs(graph, next, goal, product * *w, mut seen);
             if r >= 0.0 {
                 return r;
             }

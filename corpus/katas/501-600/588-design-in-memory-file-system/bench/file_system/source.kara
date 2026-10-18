@@ -88,7 +88,7 @@ fn dir_path(depth: i64, seed: mut ref i64) -> String {
     let alphabet = "abcde";
     let mut path = String.new();
     for _ in 0..depth {
-        let k = next_random(seed) % 5;
+        let k = next_random(mut seed) % 5;
         path.push_str("/");
         path.push_str(alphabet[k..k + 1]);
     }
@@ -104,21 +104,21 @@ fn script(seed: mut ref i64) -> Vec[Op] {
     let mut files: Vec[String] = Vec.new();
     let mut ops: Vec[Op] = Vec.new();
     while ops.len() < 300 {
-        let roll = next_random(seed) % 10;
+        let roll = next_random(mut seed) % 10;
         if roll < 3 {
-            ops.push(Op.Ls(made[next_random(seed) % made.len()].clone()));
+            ops.push(Op.Ls(made[next_random(mut seed) % made.len()].clone()));
         } else if roll < 4 and not files.is_empty() {
-            ops.push(Op.Read(files[next_random(seed) % files.len()].clone()));
+            ops.push(Op.Read(files[next_random(mut seed) % files.len()].clone()));
         } else if roll < 7 {
-            let path = dir_path(1 + next_random(seed) % 4, seed);
+            let path = dir_path(1 + next_random(mut seed) % 4, mut seed);
             made.push(path.clone());
             ops.push(Op.Mkdir(path));
         } else {
-            let k = next_random(seed) % 5;
-            let path = f"{dir_path(next_random(seed) % 4, seed)}/{names[k..k + 1]}";
+            let k = next_random(mut seed) % 5;
+            let path = f"{dir_path(next_random(mut seed) % 4, mut seed)}/{names[k..k + 1]}";
             let mut content = String.new();
-            for _ in 0..1 + next_random(seed) % 5 {
-                let c = next_random(seed) % 5;
+            for _ in 0..1 + next_random(mut seed) % 5 {
+                let c = next_random(mut seed) % 5;
                 content.push_str(names[c..c + 1]);
             }
             made.push(path.clone());

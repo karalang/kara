@@ -30,7 +30,7 @@ fn place(sticks: Vec[i64], i: i64, sides: mut ref Vec[i64], side: i64) -> bool {
             continue;
         }
         sides[s] += sticks[i];
-        if place(sticks, i + 1, sides, side) {
+        if place(sticks, i + 1, mut sides, side) {
             return true;
         }
         sides[s] -= sticks[i];

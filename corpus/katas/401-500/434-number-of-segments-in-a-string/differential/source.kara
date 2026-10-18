@@ -112,14 +112,14 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 fn random_text(seed: mut ref i64) -> String {
     let symbols = "abcXYZ019!@#,.:-'_+=".bytes();
-    let length = next_random(seed) % 81;
-    let density = [2, 3, 8][next_random(seed) % 3];
+    let length = next_random(mut seed) % 81;
+    let density = [2, 3, 8][next_random(mut seed) % 3];
     let mut s = String.new();
     for _ in 0..length {
-        if next_random(seed) % density == 0 {
+        if next_random(mut seed) % density == 0 {
             s.push(' ');
         } else {
-            s.push(symbols[next_random(seed) % symbols.len()] as char);
+            s.push(symbols[next_random(mut seed) % symbols.len()] as char);
         }
     }
     s

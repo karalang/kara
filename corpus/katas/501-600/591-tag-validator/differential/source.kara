@@ -357,25 +357,25 @@ fn definition(code: Str) -> bool {
 fn snippet(depth: i64, seed: mut ref i64) -> String {
     let names: Vec[Str] = vec!["A", "XY", "Y", "ABCDEFGHI", "ABCDEFGHIJ", "x", "", "A1"];
     let texts: Vec[Str] = vec!["x", "Y", ">", "]]>", "<", "!", "/", "<X", "</", "]"];
-    let name = names[if step(seed) % 3 == 0 { step(seed) % names.len() } else { step(seed) % 3 }];
+    let name = names[if step(mut seed) % 3 == 0 { step(mut seed) % names.len() } else { step(mut seed) % 3 }];
     let mut out = f"<{name}>";
-    let parts = step(seed) % 4;
+    let parts = step(mut seed) % 4;
     for _ in 0..parts {
-        let roll = step(seed) % 10;
+        let roll = step(mut seed) % 10;
         if roll < 3 and depth > 0 {
-            out.push_str(snippet(depth - 1, seed));
+            out.push_str(snippet(depth - 1, mut seed));
         } else if roll < 5 {
-            let inside = texts[step(seed) % texts.len()];
-            if step(seed) % 8 == 0 {
+            let inside = texts[step(mut seed) % texts.len()];
+            if step(mut seed) % 8 == 0 {
                 out.push_str(f"<![CDATA[{inside}");
             } else {
                 out.push_str(f"<![CDATA[{inside}]]>");
             }
         } else {
-            out.push_str(texts[step(seed) % texts.len()]);
+            out.push_str(texts[step(mut seed) % texts.len()]);
         }
     }
-    let end = step(seed) % 12;
+    let end = step(mut seed) % 12;
     if end == 0 {
         out.push_str("</Y>");
     } else if end > 1 {

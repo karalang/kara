@@ -30,8 +30,8 @@ fn count_from(node: Option[TreeNode], prefix: i64, target: i64, seen: mut ref Ma
             let sum = prefix + t.val;
             let mut found = seen.get(sum - target) ?? 0;
             *seen.entry(sum).or_insert(0) += 1;
-            found += count_from(t.left, sum, target, seen);
-            found += count_from(t.right, sum, target, seen);
+            found += count_from(t.left, sum, target, mut seen);
+            found += count_from(t.right, sum, target, mut seen);
             *seen.entry(sum).or_insert(0) -= 1;
             found
         }
@@ -81,8 +81,8 @@ fn walk(node: Option[TreeNode], target: i64, path: mut ref Vec[i64]) -> i64 {
                 }
                 i -= 1;
             }
-            found += walk(t.left, target, path);
-            found += walk(t.right, target, path);
+            found += walk(t.left, target, mut path);
+            found += walk(t.right, target, mut path);
             path.pop();
             found
         }
@@ -220,16 +220,16 @@ fn next_random(seed: mut ref i64) -> i64 {
 // A level order of up to 50 nodes, with values in [-spread, spread]
 // and a missing slot one time in 2, 4 or 8.
 fn random_vals(seed: mut ref i64) -> Vec[i64] {
-    let n = next_random(seed) % 51;
-    let spread = [1, 3, 10][next_random(seed) % 3];
-    let gaps = [2, 4, 8][next_random(seed) % 3];
+    let n = next_random(mut seed) % 51;
+    let spread = [1, 3, 10][next_random(mut seed) % 3];
+    let gaps = [2, 4, 8][next_random(mut seed) % 3];
     let mut vals: Vec[i64] = Vec.new();
     let mut placed = 0;
     while placed < n {
-        if vals.len() > 0 and next_random(seed) % gaps == 0 {
+        if vals.len() > 0 and next_random(mut seed) % gaps == 0 {
             vals.push(NULL);
         } else {
-            vals.push(next_random(seed) % (2 * spread + 1) - spread);
+            vals.push(next_random(mut seed) % (2 * spread + 1) - spread);
             placed += 1;
         }
     }

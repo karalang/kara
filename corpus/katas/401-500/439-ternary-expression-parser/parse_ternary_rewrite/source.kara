@@ -39,17 +39,17 @@ fn next_random(seed: mut ref i64) -> i64 {
 // with chance 1 in 3, so the trees are ragged.
 fn random_expression(seed: mut ref i64, depth: i64, out: mut ref String) -> u8 {
     if depth == 0 {
-        let r = next_random(seed) % 12;
+        let r = next_random(mut seed) % 12;
         let leaf = if r < 10 { b'0' + r as u8 } else if r == 10 { b'T' } else { b'F' };
         out.push(leaf as char);
         return leaf;
     }
-    let condition = if next_random(seed) % 2 == 0 { b'T' } else { b'F' };
+    let condition = if next_random(mut seed) % 2 == 0 { b'T' } else { b'F' };
     out.push(condition as char);
     out.push('?');
-    let yes = random_expression(seed, if next_random(seed) % 3 == 0 { 0 } else { depth - 1 }, out);
+    let yes = random_expression(mut seed, if next_random(mut seed) % 3 == 0 { 0 } else { depth - 1 }, mut out);
     out.push(':');
-    let no = random_expression(seed, if next_random(seed) % 3 == 0 { 0 } else { depth - 1 }, out);
+    let no = random_expression(mut seed, if next_random(mut seed) % 3 == 0 { 0 } else { depth - 1 }, mut out);
     if condition == b'T' { yes } else { no }
 }
 

@@ -10,7 +10,7 @@ impl H {
     fn m_two(ref self, t: own (R, R)) -> R { match t { (a, b) => { b } } }
 }
 fn t_fwd(t: own (R, i64)) -> R { match t { (r, k) => { wrap(r) } } }
-fn t_stash(t: own (R, i64), v: mut ref Vec[R]) -> i64 { match t { (r, k) => { stash(r, v); k } } }
+fn t_stash(t: own (R, i64), v: mut ref Vec[R]) -> i64 { match t { (r, k) => { stash(r, mut v); k } } }
 fn t_push(t: own (R, i64), v: mut ref Vec[R]) -> i64 { match t { (r, k) => { v.push(r); k } } }
 fn t_assign(t: own (R, i64)) -> R { let mut out: R = mk(50); match t { (r, k) => { out = r; } } out }
 fn t_two_push(t: own (R, R), v: mut ref Vec[R]) -> i64 { match t { (a, b) => { v.push(a); consume(b) } } }

@@ -315,7 +315,7 @@ fn ser_into(v: ref Json, out: mut ref String) {
             out.push_str(n);
         }
         Str(s) => {
-            escape_into(s, out);
+            escape_into(s, mut out);
         }
         Arr(items) => {
             out.push('[');
@@ -324,7 +324,7 @@ fn ser_into(v: ref Json, out: mut ref String) {
                 if not first {
                     out.push(',');
                 }
-                ser_into(it, out);
+                ser_into(it, mut out);
                 first = false;
             }
             out.push(']');
@@ -336,9 +336,9 @@ fn ser_into(v: ref Json, out: mut ref String) {
                 if not first {
                     out.push(',');
                 }
-                escape_into(e.key, out);
+                escape_into(e.key, mut out);
                 out.push(':');
-                ser_into(e.val, out);
+                ser_into(e.val, mut out);
                 first = false;
             }
             out.push('}');

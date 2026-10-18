@@ -482,8 +482,8 @@ fn push_op(ops: mut ref Vec[i64], counts: mut ref Map[i64, i64], op: i64, key: i
 }
 
 fn queries(ops: mut ref Vec[i64], counts: mut ref Map[i64, i64], prop: i64) {
-    push_op(ops, counts, 2, 0, prop);
-    push_op(ops, counts, 3, 0, prop);
+    push_op(mut ops, mut counts, 2, 0, prop);
+    push_op(mut ops, mut counts, 3, 0, prop);
 }
 
 fn next_random(seed: mut ref i64) -> i64 {
@@ -496,11 +496,11 @@ fn script(seed: mut ref i64) -> Vec[i64] {
     let mut ops: Vec[i64] = Vec.new();
     let mut counts: Map[i64, i64] = Map.new();
     // P1, P2: random operations on 1 to 8 keys.
-    let keys = 1 + next_random(seed) % 8;
-    let length = next_random(seed) % 60;
+    let keys = 1 + next_random(mut seed) % 8;
+    let length = next_random(mut seed) % 60;
     for _ in 0..length {
-        let roll = next_random(seed) % 20;
-        let key = next_random(seed) % keys;
+        let roll = next_random(mut seed) % 20;
+        let key = next_random(mut seed) % keys;
         if roll < 3 {
             push_op(mut ops, mut counts, 2, 0, 1);
         } else if roll < 6 {
@@ -513,7 +513,7 @@ fn script(seed: mut ref i64) -> Vec[i64] {
     }
     // P5: a present key raised past every count, then lowered back.
     if counts.len() > 0 {
-        let k = present_key(counts, next_random(seed) % keys);
+        let k = present_key(counts, next_random(mut seed) % keys);
         let d = extreme(counts, true) - counts[k] + 1;
         for _ in 0..d {
             push_op(mut ops, mut counts, 0, k, 5);
@@ -535,7 +535,7 @@ fn script(seed: mut ref i64) -> Vec[i64] {
         queries(mut ops, mut counts, 3);
     }
     // P4: a staircase, key 100 + i raised to i + 1, then each lowered once.
-    let m = 1 + next_random(seed) % 6;
+    let m = 1 + next_random(mut seed) % 6;
     for round in 0..m {
         for i in round..m {
             push_op(mut ops, mut counts, 0, 100 + i, 4);

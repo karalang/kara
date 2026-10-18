@@ -18,8 +18,8 @@ fn subtree_sum(node: Option[TreeNode], total: mut ref i64) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let l = subtree_sum(n.left, total);
-            let r = subtree_sum(n.right, total);
+            let l = subtree_sum(n.left, mut total);
+            let r = subtree_sum(n.right, mut total);
             *total += (l - r).abs();
             n.val + l + r
         }

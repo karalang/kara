@@ -27,7 +27,7 @@ fn backtrack(nums: ref Vec[i64], start: i64, path: mut ref Vec[i64], out: mut re
     let mut i = start;
     while i < n {
         path.push(nums[i]);
-        backtrack(nums, i + 1, path, out);
+        backtrack(nums, i + 1, mut path, mut out);
         path.pop();
         i = i + 1;
     }

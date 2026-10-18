@@ -106,8 +106,8 @@ fn next(seed: mut ref i64) -> i64 {
 
 // A 32-bit value from two 15-bit draws and a sign-ish third.
 fn random_i32(seed: mut ref i64) -> i64 {
-    let hi = next(seed) % 65536;
-    let lo = next(seed) % 65536;
+    let hi = next(mut seed) % 65536;
+    let lo = next(mut seed) % 65536;
     return hi * 65536 + lo + I32_MIN;
 }
 

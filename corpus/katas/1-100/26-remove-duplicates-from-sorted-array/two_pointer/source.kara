@@ -28,7 +28,7 @@ fn remove_duplicates(nums: mut Slice[i64], len: i64) -> i64 {
 fn report(nums: mut Slice[i64], len: i64) {
     // nums is already an in-scope mut Slice — forwards without a marker
     // (design.md Feature 4 Part 1½, Rule 2).
-    let k = remove_duplicates(nums, len);
+    let k = remove_duplicates(mut nums, len);
     println(f"k = {k}");
     for i in 0..k {
         println(nums[i]);

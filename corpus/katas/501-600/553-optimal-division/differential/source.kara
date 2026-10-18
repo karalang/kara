@@ -104,8 +104,8 @@ fn best_memo(nums: Vec[i64], i: i64, j: i64, want_high: bool, memo: mut ref Map[
     let mut out: (f64, String) = (0.0, String.new());
     let mut first = true;
     for k in i..j {
-        let (lv, lt) = best_memo(nums, i, k, want_high, memo);
-        let (rv, rt) = best_memo(nums, k + 1, j, not want_high, memo);
+        let (lv, lt) = best_memo(nums, i, k, want_high, mut memo);
+        let (rv, rt) = best_memo(nums, k + 1, j, not want_high, mut memo);
         let v = lv / rv;
         let better = if want_high { v > out.0 } else { v < out.0 };
         if first or better {
@@ -182,10 +182,10 @@ fn definition(nums: Vec[i64]) -> (i64, i64) {
 // An expression of numbers, `/` and brackets, read left to right; its
 // value as a fraction, or (0, 0) if it does not read.
 fn parse(text: Vec[u8], at: mut ref i64) -> (i64, i64) {
-    let mut value = term(text, at);
+    let mut value = term(text, mut at);
     while *at < text.len() and text[*at] == b'/' {
         *at += 1;
-        let t = term(text, at);
+        let t = term(text, mut at);
         if value.1 == 0 or t.1 == 0 {
             return (0, 0);
         }
@@ -197,7 +197,7 @@ fn parse(text: Vec[u8], at: mut ref i64) -> (i64, i64) {
 fn term(text: Vec[u8], at: mut ref i64) -> (i64, i64) {
     if *at < text.len() and text[*at] == b'(' {
         *at += 1;
-        let v = parse(text, at);
+        let v = parse(text, mut at);
         if *at >= text.len() or text[*at] != b')' {
             return (0, 0);
         }

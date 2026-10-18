@@ -278,12 +278,12 @@ fn interleave(a: ref Vec[i64], i: i64, b: ref Vec[i64], j: i64,
     }
     if i < a.len() {
         cur.push(a[i]);
-        interleave(a, i + 1, b, j, cur, best, have);
+        interleave(a, i + 1, b, j, mut cur, mut best, mut have);
         cur.pop();
     }
     if j < b.len() {
         cur.push(b[j]);
-        interleave(a, i, b, j + 1, cur, best, have);
+        interleave(a, i, b, j + 1, mut cur, mut best, mut have);
         cur.pop();
     }
 }
@@ -299,7 +299,7 @@ fn subsequences(nums: ref Vec[i64], from: i64, want: i64, cur: mut ref Vec[i64],
     let mut p = from;
     while p < nums.len() {
         cur.push(nums[p]);
-        subsequences(nums, p + 1, want - 1, cur, out);
+        subsequences(nums, p + 1, want - 1, mut cur, mut out);
         cur.pop();
         p = p + 1;
     }
@@ -392,7 +392,7 @@ fn pick(nums: ref Vec[i64], want: i64, seed: mut ref i64) -> Vec[i64] {
     let mut need = want;
     let mut left = nums.len();
     for p in 0..nums.len() {
-        if need > 0 and next(seed) % left < need {
+        if need > 0 and next(mut seed) % left < need {
             out.push(nums[p]);
             need = need - 1;
         }
@@ -408,16 +408,16 @@ fn competitor(a: ref Vec[i64], b: ref Vec[i64], k: i64, seed: mut ref i64) -> Ve
     if lo < 0 { lo = 0; }
     let mut hi = k;
     if hi > a.len() { hi = a.len(); }
-    let i = lo + next(seed) % (hi - lo + 1);
-    let left = pick(a, i, seed);
-    let right = pick(b, k - i, seed);
+    let i = lo + next(mut seed) % (hi - lo + 1);
+    let left = pick(a, i, mut seed);
+    let right = pick(b, k - i, mut seed);
     let mut out: Vec[i64] = Vec.new();
     let mut x = 0;
     let mut y = 0;
     while x < left.len() or y < right.len() {
         let rl = left.len() - x;
         let rr = right.len() - y;
-        if next(seed) % (rl + rr) < rl {
+        if next(mut seed) % (rl + rr) < rl {
             out.push(left[x]);
             x = x + 1;
         } else {
@@ -484,7 +484,7 @@ fn next(seed: mut ref i64) -> i64 {
 
 fn draw(len: i64, radix: i64, seed: mut ref i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
-    for x in 0..len { v.push(next(seed) % radix); }
+    for x in 0..len { v.push(next(mut seed) % radix); }
     return v;
 }
 
@@ -509,66 +509,66 @@ fn check(a: ref Vec[i64], b: ref Vec[i64], k: i64, with_brute: bool,
     let n = b.len();
     let ans = max_star(a, b, k);
 
-    if not same(max_dp(a, b, k), ans) { fail(tally, 1); }
-    if not same(max_frontier(a, b, k), ans) { fail(tally, 2); }
+    if not same(max_dp(a, b, k), ans) { fail(mut tally, 1); }
+    if not same(max_frontier(a, b, k), ans) { fail(mut tally, 2); }
     if with_brute {
         tally.brute_cases += 1;
-        if not same(max_brute(a, b, k), ans) { fail(tally, 3); }
+        if not same(max_brute(a, b, k), ans) { fail(mut tally, 3); }
     }
 
     // P4: k digits, each a digit.
-    if ans.len() != k { fail(tally, 4); }
+    if ans.len() != k { fail(mut tally, 4); }
     for x in 0..ans.len() {
-        if ans[x] < 0 or ans[x] > 9 { fail(tally, 4); }
+        if ans[x] < 0 or ans[x] > 9 { fail(mut tally, 4); }
     }
 
     // P5: legally built.
-    if not realizable(ans, a, b) { fail(tally, 5); }
+    if not realizable(ans, a, b) { fail(mut tally, 5); }
 
     // P6: nothing sampled from the statement's own space beats it.
     for s in 0..SAMPLES {
-        let rival = competitor(a, b, k, seed);
+        let rival = competitor(a, b, k, mut seed);
         tally.samples += 1;
-        if lex_greater(rival, ans) { fail(tally, 6); }
+        if lex_greater(rival, ans) { fail(mut tally, 6); }
     }
 
     // P7: the arrays are interchangeable.
-    if not same(max_star(b, a, k), ans) { fail(tally, 7); }
+    if not same(max_star(b, a, k), ans) { fail(mut tally, 7); }
 
     // P8: one more digit on either side can only help.
-    let extra = next(seed) % 10;
+    let extra = next(mut seed) % 10;
     let mut ds: Vec[i64] = [0, 9, extra];
     for x in 0..ds.len() {
-        if lex_greater(ans, max_star(appended(a, ds[x]), b, k)) { fail(tally, 8); }
-        if lex_greater(ans, max_star(a, appended(b, ds[x]), k)) { fail(tally, 8); }
+        if lex_greater(ans, max_star(appended(a, ds[x]), b, k)) { fail(mut tally, 8); }
+        if lex_greater(ans, max_star(a, appended(b, ds[x]), k)) { fail(mut tally, 8); }
     }
 
     // P9: the lead digit is the best lead there is.
-    if k > 0 and ans[0] != best_lead(a, b, k) { fail(tally, 9); }
+    if k > 0 and ans[0] != best_lead(a, b, k) { fail(mut tally, 9); }
 
     // P10: taking everything uses everything.
     if k == m + n {
         let mut both = a.clone();
         for x in 0..b.len() { both.push(b[x]); }
-        if not same(census(ans), census(both)) { fail(tally, 10); }
+        if not same(census(ans), census(both)) { fail(mut tally, 10); }
     }
 
     // P11: an order-preserving relabel commutes with the answer.
     if fits_relabel(a) and fits_relabel(b) {
         tally.relabels += 1;
-        if not same(max_star(relabel(a), relabel(b), k), relabel(ans)) { fail(tally, 11); }
+        if not same(max_star(relabel(a), relabel(b), k), relabel(ans)) { fail(mut tally, 11); }
     }
 
     // P12: the answer is its own answer.
     let empty: Vec[i64] = Vec.new();
-    if not same(max_star(ans, empty, k), ans) { fail(tally, 12); }
+    if not same(max_star(ans, empty, k), ans) { fail(mut tally, 12); }
 
     // P13: every one-digit deletion of the (k + 1)-answer is a legal k-digit
     // sequence, so none of them may beat the k-answer.
     if k < m + n {
         let up = max_star(a, b, k + 1);
         for x in 0..up.len() {
-            if lex_greater(without(up, x), ans) { fail(tally, 13); }
+            if lex_greater(without(up, x), ans) { fail(mut tally, 13); }
         }
     }
 }

@@ -18,7 +18,7 @@ fn count_and_sort(p: mut ref Vec[i64], tmp: mut ref Vec[i64], lo: i64, hi: i64, 
         return 0;
     }
     let mid = lo + (hi - lo) / 2;
-    let mut count = count_and_sort(p, tmp, lo, mid, lower, upper) + count_and_sort(p, tmp, mid, hi, lower, upper);
+    let mut count = count_and_sort(mut p, mut tmp, lo, mid, lower, upper) + count_and_sort(mut p, mut tmp, mid, hi, lower, upper);
 
     let mut start = mid;
     let mut end = mid;

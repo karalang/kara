@@ -6,7 +6,7 @@ fn keep(x: own R, v: mut ref Vec[R]) -> i64 { let n = x.id; v.push(x); return n;
 fn geat[T](x: own T) -> i64 { return 3; }
 fn two(a: own R, b: own R) -> i64 { return a.id + b.id; }
 fn p1(r: own R, f: bool) -> R { if f { return r } return R { name: eatn(r), id: 90 } }
-fn p2(r: own R, f: bool, v: mut ref Vec[R]) -> R { if f { return r } return R { name: f"z", id: keep(r, v) } }
+fn p2(r: own R, f: bool, v: mut ref Vec[R]) -> R { if f { return r } return R { name: f"z", id: keep(r, mut v) } }
 fn p3(r: own R, f: bool) -> R { if f { return r } return R { name: f"z", id: geat(r) } }
 fn p5(r: own R, f: bool) -> R { if f { return r } return R { name: f"z", id: two(r, R { name: f"t", id: 1 }) } }
 fn p6(r: own R, f: bool) -> R { match f { true => { return r; } false => { return R { name: f"z", id: eat(r) + 1 }; } } }

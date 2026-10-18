@@ -32,7 +32,7 @@ fn backtrack(
         if not used[i] {
             used[i] = true;
             path.push(nums[i]);
-            backtrack(nums, used, path, out);
+            backtrack(nums, mut used, mut path, mut out);
             path.pop();
             used[i] = false;
         }

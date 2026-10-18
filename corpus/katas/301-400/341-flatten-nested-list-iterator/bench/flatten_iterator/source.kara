@@ -61,15 +61,15 @@ fn next(state: mut ref i64) -> i64 {
 }
 
 fn gen_member(state: mut ref i64, depth: i64, max_depth: i64) -> Nested {
-    if depth < max_depth and next(state) % 3 == 0 {
-        let count = next(state) % 5;
+    if depth < max_depth and next(mut state) % 3 == 0 {
+        let count = next(mut state) % 5;
         let mut items: Vec[Nested] = Vec.new();
         for _ in 0..count {
-            items.push(gen_member(state, depth + 1, max_depth));
+            items.push(gen_member(mut state, depth + 1, max_depth));
         }
         return List(items);
     }
-    return Int(next(state) % 201 - 100);
+    return Int(next(mut state) % 201 - 100);
 }
 
 fn gen_list(seed: i64, top: i64, max_depth: i64) -> Vec[Nested] {

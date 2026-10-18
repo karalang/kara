@@ -55,9 +55,9 @@ fn next_random(seed: mut ref i64) -> i64 {
 // copies of others.
 fn random_case(seed: mut ref i64, n: i64) -> Vec[i64] {
     let mut nums: Vec[i64] = Vec.new();
-    if next_random(seed) % 2 == 0 {
+    if next_random(mut seed) % 2 == 0 {
         for _ in 0..n {
-            nums.push(1 + next_random(seed) % n);
+            nums.push(1 + next_random(mut seed) % n);
         }
         return nums;
     }
@@ -65,12 +65,12 @@ fn random_case(seed: mut ref i64, n: i64) -> Vec[i64] {
         nums.push(x);
     }
     for i in 0..n {
-        let j = i + next_random(seed) % (n - i);
+        let j = i + next_random(mut seed) % (n - i);
         nums.swap(i, j);
     }
-    for _ in 0..next_random(seed) % (n / 4 + 1) {
-        let to = next_random(seed) % n;
-        nums[to] = nums[next_random(seed) % n];
+    for _ in 0..next_random(mut seed) % (n / 4 + 1) {
+        let to = next_random(mut seed) % n;
+        nums[to] = nums[next_random(mut seed) % n];
     }
     nums
 }

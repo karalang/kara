@@ -62,10 +62,10 @@ fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64
                 let col = cell % c;
                 let d = g[cell] + 1;
 
-                if row > 0 { relax(g, cell - c, d, mut q, relaxations); }
-                if row < r - 1 { relax(g, cell + c, d, mut q, relaxations); }
-                if col > 0 { relax(g, cell - 1, d, mut q, relaxations); }
-                if col < c - 1 { relax(g, cell + 1, d, mut q, relaxations); }
+                if row > 0 { relax(mut g, cell - c, d, mut q, mut relaxations); }
+                if row < r - 1 { relax(mut g, cell + c, d, mut q, mut relaxations); }
+                if col > 0 { relax(mut g, cell - 1, d, mut q, mut relaxations); }
+                if col < c - 1 { relax(mut g, cell + 1, d, mut q, mut relaxations); }
             }
         }
     }

@@ -137,7 +137,7 @@ fn best_from(k: i64, money: i64, profits: Vec[i64], capital: Vec[i64], done: mut
     for i in 0..profits.len() {
         if not done[i] and capital[i] <= money {
             done[i] = true;
-            let got = best_from(k - 1, money + profits[i], profits, capital, done);
+            let got = best_from(k - 1, money + profits[i], profits, capital, mut done);
             done[i] = false;
             if got > best {
                 best = got;

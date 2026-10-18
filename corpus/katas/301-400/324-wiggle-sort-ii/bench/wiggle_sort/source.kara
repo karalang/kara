@@ -67,7 +67,7 @@ fn select(a: mut ref Vec[i64], k: i64) -> i64 {
 
 fn wiggle_sort(nums: mut ref Vec[i64]) {
     let n = nums.len();
-    let median = select(nums, n / 2);
+    let median = select(mut nums, n / 2);
     let m = n | 1;
     let mut left = 0;
     let mut i = 0;
@@ -94,8 +94,8 @@ fn next(seed: mut ref i64) -> i64 {
 
 // A draw in 0..bound from two LCG steps (one step only reaches 32767).
 fn draw(seed: mut ref i64, bound: i64) -> i64 {
-    let hi = next(seed);
-    let lo = next(seed);
+    let hi = next(mut seed);
+    let lo = next(mut seed);
     return (hi * 32768 + lo) % bound;
 }
 
@@ -103,14 +103,14 @@ fn refill(nums: mut ref Vec[i64], k: i64, seed: mut ref i64) {
     let n = nums.len();
     for i in 0..n {
         if i % 2 == 0 {
-            nums[i] = draw(seed, k);
+            nums[i] = draw(mut seed, k);
         } else {
-            nums[i] = k + draw(seed, k);
+            nums[i] = k + draw(mut seed, k);
         }
     }
     let mut i = n - 1;
     while i > 0 {
-        let j = draw(seed, i + 1);
+        let j = draw(mut seed, i + 1);
         nums.swap(i, j);
         i -= 1;
     }

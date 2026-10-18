@@ -56,7 +56,7 @@ fn show(strs: Vec[String]) {
 fn word(length: i64, letters: i64, seed: mut ref i64) -> String {
     let mut s = String.new();
     for _ in 0..length {
-        s.push((b'a' + (next_random(seed) % letters) as u8) as char);
+        s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
     }
     s
 }

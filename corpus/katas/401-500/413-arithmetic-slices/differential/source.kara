@@ -75,7 +75,7 @@ fn ending(nums: Vec[i64], i: i64, table: mut ref Vec[i64]) -> i64 {
         return table[i];
     }
     let count = if nums[i] - nums[i - 1] == nums[i - 1] - nums[i - 2] {
-        ending(nums, i - 1, table) + 1
+        ending(nums, i - 1, mut table) + 1
     } else {
         0
     };

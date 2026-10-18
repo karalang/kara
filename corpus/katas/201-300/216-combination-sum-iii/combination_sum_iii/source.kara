@@ -42,7 +42,7 @@ fn backtrack(
     while d <= 9 {
         if d > remaining { return; }        // ascending digits: no later d fits
         path.push(d);
-        backtrack(d + 1, k - 1, remaining - d, path, results);
+        backtrack(d + 1, k - 1, remaining - d, mut path, mut results);
         let _ = path.pop();
         d = d + 1;
     }

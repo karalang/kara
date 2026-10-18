@@ -44,8 +44,8 @@ fn next(seed: mut ref i64) -> i64 {
 }
 
 fn wide(seed: mut ref i64) -> i64 {
-    let hi = next(seed);
-    return hi * 32768 + next(seed);
+    let hi = next(mut seed);
+    return hi * 32768 + next(mut seed);
 }
 
 fn main() {

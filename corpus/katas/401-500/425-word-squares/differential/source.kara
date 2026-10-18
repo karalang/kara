@@ -31,7 +31,7 @@ fn extend_prefix(rows: mut ref Vec[String], length: i64, by_prefix: ref Map[Stri
         Some(candidates) => {
             for i in candidates {
                 rows.push(words[i].clone());
-                extend_prefix(rows, length, by_prefix, words, found);
+                extend_prefix(mut rows, length, by_prefix, words, mut found);
                 rows.pop();
             }
         }
@@ -80,7 +80,7 @@ fn extend_trie(rows: mut ref Vec[i64], length: i64, children: ref Vec[i64], belo
     }
     for i in below[node] {
         rows.push(i);
-        extend_trie(rows, length, children, below, words, found);
+        extend_trie(mut rows, length, children, below, words, mut found);
         rows.pop();
     }
 }
@@ -134,7 +134,7 @@ fn extend_scan(rows: mut ref Vec[i64], length: i64, words: ref Vec[String], foun
         }
         if fits {
             rows.push(w);
-            extend_scan(rows, length, words, found);
+            extend_scan(mut rows, length, words, mut found);
             rows.pop();
         }
     }
@@ -177,7 +177,7 @@ fn extend_sorted(rows: mut ref Vec[String], length: i64, sorted: ref Vec[String]
     let mut i = lower_bound(sorted, prefix);
     while i < sorted.len() and sorted[i].starts_with(prefix) {
         rows.push(sorted[i].clone());
-        extend_sorted(rows, length, sorted, found);
+        extend_sorted(mut rows, length, sorted, mut found);
         rows.pop();
         i += 1;
     }

@@ -188,7 +188,7 @@ fn chain_from(envs: ref Vec[(i64, i64)], i: i64, memo: mut ref Vec[i64]) -> i64 
     for j in 0..envs.len() {
         let (wj, hj) = envs[j];
         if wj < wi and hj < hi {
-            let inner = chain_from(envs, j, memo);
+            let inner = chain_from(envs, j, mut memo);
             if inner + 1 > best {
                 best = inner + 1;
             }

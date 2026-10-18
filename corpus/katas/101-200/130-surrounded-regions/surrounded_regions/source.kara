@@ -43,7 +43,7 @@ fn solve(board: mut ref Vec[Vec[i64]], rows: i64, cols: i64) {
         while c < cols {
             let on_border = r == 0 or r == rows - 1 or c == 0 or c == cols - 1;
             if on_border and board[r][c] == 1 {
-                flood(board, rows, cols, r, c);
+                flood(mut board, rows, cols, r, c);
             }
             c = c + 1;
         }

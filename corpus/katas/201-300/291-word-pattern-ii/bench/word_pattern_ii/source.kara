@@ -29,7 +29,7 @@ fn matches(
             let blen = bound.len();
             if si + blen > sb.len() { return false; }
             if s[si..si + blen] != bound { return false; }
-            matches(p, pi + 1, s, si + blen, map, used)
+            matches(p, pi + 1, s, si + blen, mut map, mut used)
         }
         None => {
             let mut end = si + 1;
@@ -38,7 +38,7 @@ fn matches(
                 if not used.contains(cand) {
                     let _ = map.insert(key.clone(), cand.clone());
                     used.insert(cand.clone());
-                    if matches(p, pi + 1, s, end, map, used) { return true; }
+                    if matches(p, pi + 1, s, end, mut map, mut used) { return true; }
                     let _ = map.remove(key.clone());
                     used.remove(cand);
                 }

@@ -68,11 +68,11 @@ fn random_picture(seed: mut ref i64, n: i64, target: i64, planted: i64, extra: i
         let mut cols: Vec[i64] = (0..n).collect();
         let mut row = vec!['W'; n];
         for i in 0..target {
-            let j = i + next_random(seed) % (n - i);
+            let j = i + next_random(mut seed) % (n - i);
             cols.swap(i, j);
             row[cols[i]] = 'B';
         }
-        let copies = if next_random(seed) % 4 == 0 { target + 1 } else { target };
+        let copies = if next_random(mut seed) % 4 == 0 { target + 1 } else { target };
         for _ in 0..copies {
             picture.push(row.clone());
         }
@@ -80,12 +80,12 @@ fn random_picture(seed: mut ref i64, n: i64, target: i64, planted: i64, extra: i
     for _ in 0..extra {
         let mut row: Vec[char] = Vec.new();
         for _ in 0..n {
-            row.push(if next_random(seed) % 100 < percent { 'B' } else { 'W' });
+            row.push(if next_random(mut seed) % 100 < percent { 'B' } else { 'W' });
         }
         picture.push(row);
     }
     for i in (1..picture.len()).rev() {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         picture.swap(i, j);
     }
     picture

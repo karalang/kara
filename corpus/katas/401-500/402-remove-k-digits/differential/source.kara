@@ -153,10 +153,10 @@ fn step(seed: mut ref i64) -> i64 {
 // digits never fall.
 fn number(n: i64, rising: bool, seed: mut ref i64) -> String {
     let mut num = String.new();
-    let mut d = 1 + step(seed) % 9;
+    let mut d = 1 + step(mut seed) % 9;
     for i in 0..n {
         if i > 0 {
-            d = if rising { d + step(seed) % (10 - d) } else { step(seed) % 10 };
+            d = if rising { d + step(mut seed) % (10 - d) } else { step(mut seed) % 10 };
         }
         num.push((48 + d) as u8 as char);
     }

@@ -18,8 +18,8 @@ fn visit(node: Option[TreeNode], depth: i64, largest: mut ref Vec[i64]) {
         } else if n.val > largest[depth] {
             largest[depth] = n.val;
         }
-        visit(n.left, depth + 1, largest);
-        visit(n.right, depth + 1, largest);
+        visit(n.left, depth + 1, mut largest);
+        visit(n.right, depth + 1, mut largest);
     }
 }
 
@@ -70,9 +70,9 @@ fn from_level_order(items: Vec[Option[i64]]) -> Option[TreeNode] {
 // when half is 0.
 fn draw(half: i64, seed: mut ref i64) -> i64 {
     if half == 0 {
-        next_random(seed) * 65536 + next_random(seed) * 2 + next_random(seed) % 2 - 2147483648
+        next_random(mut seed) * 65536 + next_random(mut seed) * 2 + next_random(mut seed) % 2 - 2147483648
     } else {
-        next_random(seed) % (2 * half + 1) - half
+        next_random(mut seed) % (2 * half + 1) - half
     }
 }
 
@@ -82,12 +82,12 @@ fn grow(size: i64, half: i64, seed: mut ref i64) -> Option[TreeNode] {
     if size == 0 {
         return None;
     }
-    let root = TreeNode { val: draw(half, seed), left: None, right: None };
+    let root = TreeNode { val: draw(half, mut seed), left: None, right: None };
     for _ in 1..size {
-        let leaf = TreeNode { val: draw(half, seed), left: None, right: None };
+        let leaf = TreeNode { val: draw(half, mut seed), left: None, right: None };
         let mut node = root;
         loop {
-            if next_random(seed) % 2 == 0 {
+            if next_random(mut seed) % 2 == 0 {
                 match node.left {
                     Some(l) => node = l,
                     None => {

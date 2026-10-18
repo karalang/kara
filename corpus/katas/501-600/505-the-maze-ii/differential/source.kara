@@ -145,7 +145,7 @@ fn explore_dfs(maze: Vec[Vec[i64]], r: i64, c: i64, d: i64, best: mut ref Vec[Ve
             steps += 1;
         }
         if steps > 0 {
-            explore_dfs(maze, nr, nc, d + steps, best);
+            explore_dfs(maze, nr, nc, d + steps, mut best);
         }
     }
 }

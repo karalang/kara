@@ -67,8 +67,8 @@ fn ser_into(t: Option[TreeNode], out: mut ref Vec[String]) {
         }
         Some(n) => {
             out.push(n.val.to_string());
-            ser_into(n.left, out);
-            ser_into(n.right, out);
+            ser_into(n.left, mut out);
+            ser_into(n.right, mut out);
         }
     }
 }
@@ -96,8 +96,8 @@ fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
         Some(x) => x,
         None => 0,
     };
-    let l = de_at(tokens, i);
-    let r = de_at(tokens, i);
+    let l = de_at(tokens, mut i);
+    let r = de_at(tokens, mut i);
     return node(v, l, r);
 }
 

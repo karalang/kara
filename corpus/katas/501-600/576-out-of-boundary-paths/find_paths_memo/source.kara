@@ -15,10 +15,10 @@ fn paths_from(m: i64, n: i64, r: i64, c: i64, left: i64, memo: mut ref Map[(i64,
     if let Some(known) = memo.get((r, c, left)) {
         return *known;
     }
-    let total = (paths_from(m, n, r - 1, c, left - 1, memo)
-        + paths_from(m, n, r + 1, c, left - 1, memo)
-        + paths_from(m, n, r, c - 1, left - 1, memo)
-        + paths_from(m, n, r, c + 1, left - 1, memo)) % 1000000007;
+    let total = (paths_from(m, n, r - 1, c, left - 1, mut memo)
+        + paths_from(m, n, r + 1, c, left - 1, mut memo)
+        + paths_from(m, n, r, c - 1, left - 1, mut memo)
+        + paths_from(m, n, r, c + 1, left - 1, mut memo)) % 1000000007;
     memo.insert((r, c, left), total);
     total
 }

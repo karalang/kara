@@ -40,14 +40,14 @@ fn solve_scan(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
     let mut cand = 0;
     let mut i = 1;
     while i < n {
-        if knows(m, cand, i, calls) { cand = i; }
+        if knows(m, cand, i, mut calls) { cand = i; }
         i = i + 1;
     }
     let mut j = 0;
     while j < n {
         if j != cand {
-            if knows(m, cand, j, calls) { return -1; }
-            if not knows(m, j, cand, calls) { return -1; }
+            if knows(m, cand, j, mut calls) { return -1; }
+            if not knows(m, j, cand, mut calls) { return -1; }
         }
         j = j + 1;
     }
@@ -61,14 +61,14 @@ fn solve_stack(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
     while st.len() > 1 {
         let a = st.pop().unwrap();
         let b = st.pop().unwrap();
-        if knows(m, a, b, calls) { st.push(b); } else { st.push(a); }
+        if knows(m, a, b, mut calls) { st.push(b); } else { st.push(a); }
     }
     let cand = st[0];
     let mut j = 0;
     while j < n {
         if j != cand {
-            if knows(m, cand, j, calls) { return -1; }
-            if not knows(m, j, cand, calls) { return -1; }
+            if knows(m, cand, j, mut calls) { return -1; }
+            if not knows(m, j, cand, mut calls) { return -1; }
         }
         j = j + 1;
     }
@@ -82,8 +82,8 @@ fn solve_brute(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
         let mut j = 0;
         while j < n {
             if i != j {
-                if knows(m, i, j, calls) { ok = false; }
-                if not knows(m, j, i, calls) { ok = false; }
+                if knows(m, i, j, mut calls) { ok = false; }
+                if not knows(m, j, i, mut calls) { ok = false; }
             }
             j = j + 1;
         }

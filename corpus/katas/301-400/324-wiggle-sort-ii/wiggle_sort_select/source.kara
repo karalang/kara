@@ -69,7 +69,7 @@ fn median3(x: i64, y: i64, z: i64) -> i64 {
 
 fn wiggle_sort(nums: mut ref Vec[i64]) {
     let n = nums.len();
-    let median = select(nums, n / 2);
+    let median = select(mut nums, n / 2);
     let m = n | 1;
     let mut left = 0;
     let mut i = 0;
@@ -157,15 +157,15 @@ fn wiggle_input(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
     let mut a: Vec[i64] = Vec.new();
     for i in 0..n {
         if i % 2 == 0 {
-            a.push(next(seed) % k);
+            a.push(next(mut seed) % k);
         } else {
-            a.push(k + next(seed) % k);
+            a.push(k + next(mut seed) % k);
         }
     }
     // Fisher-Yates.
     let mut i = n - 1;
     while i > 0 {
-        let j = next(seed) % (i + 1);
+        let j = next(mut seed) % (i + 1);
         a.swap(i, j);
         i -= 1;
     }

@@ -25,8 +25,8 @@ fn visit(node: Option[TreeNode], depth: i64, best: mut ref Deepest) {
         best.depth = depth;
         best.val = n.val;
     }
-    visit(n.left, depth + 1, best);
-    visit(n.right, depth + 1, best);
+    visit(n.left, depth + 1, mut best);
+    visit(n.right, depth + 1, mut best);
 }
 
 fn find_bottom_left_value(root: TreeNode) -> i64 {
@@ -73,21 +73,21 @@ fn from_level_order(items: Vec[Option[i64]]) -> TreeNode {
 // when half is 0.
 fn draw(half: i64, seed: mut ref i64) -> i64 {
     if half == 0 {
-        next_random(seed) * 65536 + next_random(seed) * 2 + next_random(seed) % 2 - 2147483648
+        next_random(mut seed) * 65536 + next_random(mut seed) * 2 + next_random(mut seed) % 2 - 2147483648
     } else {
-        next_random(seed) % (2 * half + 1) - half
+        next_random(mut seed) % (2 * half + 1) - half
     }
 }
 
 // A random tree of size nodes: each new node walks down from the root,
 // left or right by a coin flip, to the first empty place.
 fn grow(size: i64, half: i64, seed: mut ref i64) -> TreeNode {
-    let root = TreeNode { val: draw(half, seed), left: None, right: None };
+    let root = TreeNode { val: draw(half, mut seed), left: None, right: None };
     for _ in 1..size {
-        let leaf = TreeNode { val: draw(half, seed), left: None, right: None };
+        let leaf = TreeNode { val: draw(half, mut seed), left: None, right: None };
         let mut node = root;
         loop {
-            if next_random(seed) % 2 == 0 {
+            if next_random(mut seed) % 2 == 0 {
                 match node.left {
                     Some(l) => node = l,
                     None => {

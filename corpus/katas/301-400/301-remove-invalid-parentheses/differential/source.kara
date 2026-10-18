@@ -195,20 +195,20 @@ fn walk_a(
     }
     let c = bytes[i];
     if c == b'(' and lrem > 0 {
-        walk_a(bytes, i + 1, open, lrem - 1, rrem, cur, seen, out);
+        walk_a(bytes, i + 1, open, lrem - 1, rrem, cur, mut seen, mut out);
     } else if c == b')' and rrem > 0 {
-        walk_a(bytes, i + 1, open, lrem, rrem - 1, cur, seen, out);
+        walk_a(bytes, i + 1, open, lrem, rrem - 1, cur, mut seen, mut out);
     }
     let mut next = cur.to_string();
     next.push(c as char);
     if c == b'(' {
-        walk_a(bytes, i + 1, open + 1, lrem, rrem, next, seen, out);
+        walk_a(bytes, i + 1, open + 1, lrem, rrem, next, mut seen, mut out);
     } else if c == b')' {
         if open > 0 {
-            walk_a(bytes, i + 1, open - 1, lrem, rrem, next, seen, out);
+            walk_a(bytes, i + 1, open - 1, lrem, rrem, next, mut seen, mut out);
         }
     } else {
-        walk_a(bytes, i + 1, open, lrem, rrem, next, seen, out);
+        walk_a(bytes, i + 1, open, lrem, rrem, next, mut seen, mut out);
     }
 }
 
@@ -293,7 +293,7 @@ fn repair_c(s: ref String, last_i: i64, last_j: i64, open: u8, close: u8, out: m
             while j <= i {
                 if bytes[j] == close and (j == last_j or bytes[j - 1] != close) {
                     let cand = drop_at(s, j);
-                    repair_c(cand, i, j, open, close, out);
+                    repair_c(cand, i, j, open, close, mut out);
                 }
                 j = j + 1;
             }
@@ -303,7 +303,7 @@ fn repair_c(s: ref String, last_i: i64, last_j: i64, open: u8, close: u8, out: m
     }
     let rev = reverse_string(s);
     if open == b'(' {
-        repair_c(rev, 0, 0, b')', b'(', out);
+        repair_c(rev, 0, 0, b')', b'(', mut out);
     } else {
         out.push(rev);
     }

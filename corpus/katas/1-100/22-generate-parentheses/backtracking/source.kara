@@ -50,11 +50,11 @@ fn backtrack(cur: own String, open: i64, close: i64, n: i64, out: mut ref Vec[St
     }
     if open < n {
         // Opener budget remains — extend with '('.
-        backtrack(f"{cur}(", open + 1, close, n, out);
+        backtrack(f"{cur}(", open + 1, close, n, mut out);
     }
     if close < open {
         // An unmatched opener exists — extend with ')'.
-        backtrack(f"{cur})", open, close + 1, n, out);
+        backtrack(f"{cur})", open, close + 1, n, mut out);
     }
 }
 

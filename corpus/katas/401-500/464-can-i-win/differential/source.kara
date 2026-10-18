@@ -20,7 +20,7 @@ fn from_map(used: i64, left: i64, m: i64, memo: mut ref Map[i64, bool]) -> bool 
     let mut result = false;
     for n in 1..m + 1 {
         let bit = 1 << (n - 1);
-        if used & bit == 0 and (n >= left or not from_map(used | bit, left - n, m, memo)) {
+        if used & bit == 0 and (n >= left or not from_map(used | bit, left - n, m, mut memo)) {
             result = true;
             break;
         }
@@ -49,7 +49,7 @@ fn from_array(used: i64, left: i64, m: i64, memo: mut ref Vec[i64]) -> bool {
     let mut result = false;
     for n in 1..m + 1 {
         let bit = 1 << (n - 1);
-        if used & bit == 0 and (n >= left or not from_array(used | bit, left - n, m, memo)) {
+        if used & bit == 0 and (n >= left or not from_array(used | bit, left - n, m, mut memo)) {
             result = true;
             break;
         }
@@ -120,7 +120,7 @@ fn from_free(free: Vec[i64], left: i64, memo: mut ref Map[Vec[i64], bool]) -> bo
         }
         let mut rest = free.clone();
         rest.remove(i);
-        if not from_free(rest, left - n, memo) {
+        if not from_free(rest, left - n, mut memo) {
             result = true;
             break;
         }

@@ -36,9 +36,9 @@ fn step(seed: mut ref i64) -> i64 {
 }
 
 fn random31(seed: mut ref i64) -> i64 {
-    let high = step(seed);
-    let low = step(seed);
-    let bit = step(seed) % 2;
+    let high = step(mut seed);
+    let low = step(mut seed);
+    let bit = step(mut seed) % 2;
     high * 65536 + low * 2 + bit
 }
 

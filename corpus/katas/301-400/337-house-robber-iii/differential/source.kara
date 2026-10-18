@@ -93,12 +93,12 @@ fn best_memo(nodes: ref Vec[Node], node: i64, memo: mut ref Map[i64, i64]) -> i6
     let right = nodes[node].right;
     let mut robbed = nodes[node].val;
     if left != -1 {
-        robbed += best_memo(nodes, nodes[left].left, memo) + best_memo(nodes, nodes[left].right, memo);
+        robbed += best_memo(nodes, nodes[left].left, mut memo) + best_memo(nodes, nodes[left].right, mut memo);
     }
     if right != -1 {
-        robbed += best_memo(nodes, nodes[right].left, memo) + best_memo(nodes, nodes[right].right, memo);
+        robbed += best_memo(nodes, nodes[right].left, mut memo) + best_memo(nodes, nodes[right].right, mut memo);
     }
-    let skipped = best_memo(nodes, left, memo) + best_memo(nodes, right, memo);
+    let skipped = best_memo(nodes, left, mut memo) + best_memo(nodes, right, mut memo);
     let answer = robbed.max(skipped);
     memo.insert(node, answer);
     return answer;
@@ -316,13 +316,13 @@ fn next(seed: mut ref i64) -> i64 {
 fn random_tree(seed: mut ref i64, n: i64, most: i64) -> Vec[Node] {
     let mut nodes: Vec[Node] = Vec.new();
     for i in 0..n {
-        nodes.push(Node { val: next(seed) % (most + 1), left: -1, right: -1 });
+        nodes.push(Node { val: next(mut seed) % (most + 1), left: -1, right: -1 });
         if i == 0 {
             continue;
         }
         let mut cur = 0;
         while true {
-            if next(seed) % 2 == 0 {
+            if next(mut seed) % 2 == 0 {
                 if nodes[cur].left == -1 {
                     nodes[cur].left = i;
                     break;
@@ -355,10 +355,10 @@ fn fail(failures: mut ref i64, what: String, nodes: ref Vec[Node]) {
 fn check(nodes: ref Vec[Node], use_oracle: bool, failures: mut ref i64) -> i64 {
     let a = rob_star(nodes);
     if rob_shared(nodes) != a or rob_memo(nodes) != a or rob_iter(nodes) != a {
-        fail(failures, "P1 arms disagree", nodes);
+        fail(mut failures, "P1 arms disagree", nodes);
     }
     if use_oracle and oracle(nodes) != a {
-        fail(failures, "P2 oracle", nodes);
+        fail(mut failures, "P2 oracle", nodes);
     }
     let mut most = 0;
     let mut total = 0;
@@ -367,26 +367,26 @@ fn check(nodes: ref Vec[Node], use_oracle: bool, failures: mut ref i64) -> i64 {
         total += x.val;
     }
     if a < most or a > total {
-        fail(failures, "P3 bounds", nodes);
+        fail(mut failures, "P3 bounds", nodes);
     }
     if rob_star(mirror(nodes)) != a {
-        fail(failures, "P4 mirror", nodes);
+        fail(mut failures, "P4 mirror", nodes);
     }
     if rob_star(doubled(nodes)) != 2 * a {
-        fail(failures, "P5 doubled", nodes);
+        fail(mut failures, "P5 doubled", nodes);
     }
     let (even, odd) = level_sums(nodes);
     if a < even or a < odd {
-        fail(failures, "P6 levels", nodes);
+        fail(mut failures, "P6 levels", nodes);
     }
     if rob_star(under(nodes, 0)) != a {
-        fail(failures, "P7 empty root", nodes);
+        fail(mut failures, "P7 empty root", nodes);
     }
     if nodes.len() > 0 {
         let big = total + 1;
         let want = big + rob_star(subtree(nodes, nodes[0].left)) + rob_star(subtree(nodes, nodes[0].right));
         if rob_star(under(nodes, big)) != want {
-            fail(failures, "P8 rich root", nodes);
+            fail(mut failures, "P8 rich root", nodes);
         }
     }
     return a;

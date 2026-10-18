@@ -24,7 +24,7 @@ shared struct Node {
 fn link_recursive(node: Option[Node], first: mut ref Option[Node], last: mut ref Option[Node]) {
     match node {
         Some(n) => {
-            link_recursive(n.left, first, last);
+            link_recursive(n.left, mut first, mut last);
             match *last {
                 Some(prev) => {
                     prev.right = Some(n);
@@ -35,7 +35,7 @@ fn link_recursive(node: Option[Node], first: mut ref Option[Node], last: mut ref
                 }
             }
             *last = Some(n);
-            link_recursive(n.right, first, last);
+            link_recursive(n.right, mut first, mut last);
         }
         None => {}
     }

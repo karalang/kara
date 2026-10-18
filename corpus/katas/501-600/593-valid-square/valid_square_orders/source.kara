@@ -47,18 +47,18 @@ fn show(p1: Vec[i64], p2: Vec[i64], p3: Vec[i64], p4: Vec[i64]) {
 // moved by 1 (one in three); or four points from -3 to 3, which often
 // repeat (the rest).
 fn random_points(seed: mut ref i64) -> Vec[Vec[i64]] {
-    let kind = step(seed) % 3;
+    let kind = step(mut seed) % 3;
     let mut points: Vec[Vec[i64]] = Vec.new();
     if kind == 2 {
         for _ in 0..4 {
-            points.push(vec![step(seed) % 7 - 3, step(seed) % 7 - 3]);
+            points.push(vec![step(mut seed) % 7 - 3, step(mut seed) % 7 - 3]);
         }
         return points;
     }
-    let x = step(seed) % 2001 - 1000;
-    let y = step(seed) % 2001 - 1000;
-    let mut dx = step(seed) % 41 - 20;
-    let dy = step(seed) % 41 - 20;
+    let x = step(mut seed) % 2001 - 1000;
+    let y = step(mut seed) % 2001 - 1000;
+    let mut dx = step(mut seed) % 41 - 20;
+    let dy = step(mut seed) % 41 - 20;
     if dx == 0 and dy == 0 {
         dx = 1;
     }
@@ -67,13 +67,13 @@ fn random_points(seed: mut ref i64) -> Vec[Vec[i64]] {
     points.push(vec![x + dx - dy, y + dy + dx]);
     points.push(vec![x - dy, y + dx]);
     if kind == 1 {
-        let k = step(seed) % 4;
-        let c = step(seed) % 2;
-        points[k][c] += if step(seed) % 2 == 0 { 1 } else { -1 };
+        let k = step(mut seed) % 4;
+        let c = step(mut seed) % 2;
+        points[k][c] += if step(mut seed) % 2 == 0 { 1 } else { -1 };
     }
     // A random order.
     for k in 0..3 {
-        let j = k + step(seed) % (4 - k);
+        let j = k + step(mut seed) % (4 - k);
         points.swap(k, j);
     }
     points

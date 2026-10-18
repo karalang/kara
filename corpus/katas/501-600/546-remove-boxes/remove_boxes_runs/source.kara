@@ -17,10 +17,10 @@ fn best(colour: Vec[i64], count: Vec[i64], l: i64, r: i64, extra: i64, n: i64, m
         return memo[key];
     }
     let c = count[l] + extra;
-    let mut most = c * c + best(colour, count, l + 1, r, 0, n, memo);
+    let mut most = c * c + best(colour, count, l + 1, r, 0, n, mut memo);
     for m in l + 1..r + 1 {
         if colour[m] == colour[l] {
-            most = most.max(best(colour, count, l + 1, m - 1, 0, n, memo) + best(colour, count, m, r, c, n, memo));
+            most = most.max(best(colour, count, l + 1, m - 1, 0, n, mut memo) + best(colour, count, m, r, c, n, mut memo));
         }
     }
     memo[key] = most;

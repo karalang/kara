@@ -62,10 +62,10 @@ fn show(n: Str) {
 // A random number of 1 to 18 digits: plain, a palindrome, or a power of
 // ten moved by up to 3, in turn.
 fn random_number(t: i64, seed: mut ref i64) -> String {
-    let length = 1 + step(seed) % 18;
-    let mut digits: Vec[i64] = vec![1 + step(seed) % 9];
+    let length = 1 + step(mut seed) % 18;
+    let mut digits: Vec[i64] = vec![1 + step(mut seed) % 9];
     for _ in 1..length {
-        digits.push(step(seed) % 10);
+        digits.push(step(mut seed) % 10);
     }
     if t % 3 == 1 {
         for i in 0..length / 2 {
@@ -77,7 +77,7 @@ fn random_number(t: i64, seed: mut ref i64) -> String {
         value = value * 10 + d;
     }
     if t % 3 == 2 {
-        value = 10.pow((length - 1) as u32) + step(seed) % 7 - 3;
+        value = 10.pow((length - 1) as u32) + step(mut seed) % 7 - 3;
         if value < 1 {
             value = 1;
         }

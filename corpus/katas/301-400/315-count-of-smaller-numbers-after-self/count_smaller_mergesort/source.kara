@@ -16,8 +16,8 @@
 fn sort_count(idx: mut ref Vec[i64], lo: i64, hi: i64, nums: ref Vec[i64], counts: mut ref Vec[i64]) {
     if hi - lo <= 1 { return; }
     let mid = (lo + hi) / 2;
-    sort_count(idx, lo, mid, nums, counts);
-    sort_count(idx, mid, hi, nums, counts);
+    sort_count(mut idx, lo, mid, nums, mut counts);
+    sort_count(mut idx, mid, hi, nums, mut counts);
     let mut merged: Vec[i64] = Vec.new();
     let mut a = lo;
     let mut b = mid;

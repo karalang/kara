@@ -65,8 +65,8 @@ fn step(seed: mut ref i64) -> i64 {
 
 // A value across the i32 range, from two steps of the LCG.
 fn value(seed: mut ref i64) -> i64 {
-    let high = step(seed);
-    let low = step(seed);
+    let high = step(mut seed);
+    let low = step(mut seed);
     high * 131072 + low * 4 - 2147483648
 }
 

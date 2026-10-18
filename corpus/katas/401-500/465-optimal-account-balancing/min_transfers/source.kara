@@ -19,7 +19,7 @@ fn fewest_from(debts: mut ref Vec[i64], start: i64) -> i64 {
     for j in first + 1..debts.len() {
         if debts[j] * debts[first] < 0 {
             debts[j] += debts[first];
-            let count = 1 + fewest_from(debts, first + 1);
+            let count = 1 + fewest_from(mut debts, first + 1);
             debts[j] -= debts[first];
             if best < 0 or count < best {
                 best = count;

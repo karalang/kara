@@ -25,7 +25,7 @@ fn visit_star(node: Option[TreeNode], walk: mut ref WalkStar) {
     let Some(n) = node else {
         return;
     };
-    visit_star(n.left, walk);
+    visit_star(n.left, mut walk);
     if walk.run > 0 and n.val == walk.prev {
         walk.run += 1;
     } else {
@@ -39,7 +39,7 @@ fn visit_star(node: Option[TreeNode], walk: mut ref WalkStar) {
     } else if walk.run == walk.best {
         walk.modes.push(n.val);
     }
-    visit_star(n.right, walk);
+    visit_star(n.right, mut walk);
 }
 
 fn find_mode_star(root: Option[TreeNode]) -> Vec[i64] {
@@ -55,8 +55,8 @@ fn count_map(node: Option[TreeNode], counts: mut ref Map[i64, i64]) {
         return;
     };
     *counts.entry(n.val).or_insert(0) += 1;
-    count_map(n.left, counts);
-    count_map(n.right, counts);
+    count_map(n.left, mut counts);
+    count_map(n.right, mut counts);
 }
 
 fn find_mode_map(root: Option[TreeNode]) -> Vec[i64] {
@@ -176,7 +176,7 @@ fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
         let v = values[i];
         let mut node = root;
         loop {
-            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+            if v < node.val or (v == node.val and next_random(mut seed) % 2 == 0) {
                 match node.left {
                     Some(l) => node = l,
                     None => {
@@ -214,8 +214,8 @@ fn shape(node: Option[TreeNode], out: mut ref Vec[i64]) {
         None => out.push(-1000000),
         Some(n) => {
             out.push(n.val);
-            shape(n.left, out);
-            shape(n.right, out);
+            shape(n.left, mut out);
+            shape(n.right, mut out);
         }
     }
 }

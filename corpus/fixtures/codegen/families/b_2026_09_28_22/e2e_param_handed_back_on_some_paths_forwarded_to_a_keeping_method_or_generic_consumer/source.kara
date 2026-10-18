@@ -14,7 +14,7 @@ impl K {
 struct V { v: Vec[S] }
 impl V { fn put(mut ref self, s: own S) { self.v.push(s) } }
 fn gid[T](t: own T) -> T { return t }
-fn pk(s: own S, k: bool, v: mut ref Vec[S]) -> S { if k { return s } gkeep(s, v); return mks(0) }
+fn pk(s: own S, k: bool, v: mut ref Vec[S]) -> S { if k { return s } gkeep(s, mut v); return mks(0) }
 fn pv(s: own S, k: bool, w: mut ref V) -> S { if k { return s } w.put(s); return mks(0) }
 fn pb(s: own S, k: bool, q: K) -> S { if k { return s } let t = q.back(s); println(f"t{t.id}"); return mks(0) }
 fn pr(s: own S, k: bool) -> S { if k { return s } let t = gid(s); println(f"t{t.id}"); return mks(0) }

@@ -133,7 +133,7 @@ fn search(counts: mut ref Vec[i64], last: mut ref Vec[i64], pos: i64, n: i64, k:
         let before = last[c];
         counts[c] -= 1;
         last[c] = pos;
-        let found = search(counts, last, pos + 1, n, k);
+        let found = search(mut counts, mut last, pos + 1, n, k);
         counts[c] += 1;
         last[c] = before;
         if found {

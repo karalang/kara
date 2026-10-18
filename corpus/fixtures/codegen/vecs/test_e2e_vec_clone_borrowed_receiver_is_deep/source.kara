@@ -7,11 +7,11 @@ fn snap_ref(path: ref Vec[i64]) -> Vec[i64] {
 }
 fn rec(depth: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
     if depth == 0i64 {
-        snap_mut(path, out);
+        snap_mut(mut path, mut out);
         return;
     }
     path.push(depth);
-    rec(depth - 1i64, path, out);
+    rec(depth - 1i64, mut path, mut out);
     path.pop();
 }
 fn main() {

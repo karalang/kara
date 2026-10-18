@@ -75,7 +75,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 
 fn pick(alphabet: Str, seed: mut ref i64) -> char {
     let letters: Vec[char] = alphabet.chars().collect();
-    letters[next_random(seed) % letters.len()]
+    letters[next_random(mut seed) % letters.len()]
 }
 
 // An IPv4 or IPv6 address, half the time with one fault: a part too many
@@ -83,34 +83,34 @@ fn pick(alphabet: Str, seed: mut ref i64) -> char {
 // an empty part or a letter out of place. Or now and then a jumble of
 // the characters an address uses.
 fn random_query(seed: mut ref i64) -> String {
-    let kind = next_random(seed) % 5;
-    let fault = next_random(seed) % 8;
+    let kind = next_random(mut seed) % 5;
+    let fault = next_random(mut seed) % 8;
     let mut s = String.new();
     if kind < 2 {
-        let parts = if fault == 4 { [3, 5][next_random(seed) % 2] } else { 4 };
-        let at = next_random(seed) % parts;
+        let parts = if fault == 4 { [3, 5][next_random(mut seed) % 2] } else { 4 };
+        let at = next_random(mut seed) % parts;
         for p in 0..parts {
             if p > 0 {
                 s.push('.');
             }
-            let mut value = next_random(seed) % 256;
+            let mut value = next_random(mut seed) % 256;
             if p == at and fault == 5 {
                 s.push('0');
             }
             if p == at and fault == 6 {
-                value = 256 + next_random(seed) % 744;
+                value = 256 + next_random(mut seed) % 744;
             }
             if p == at and fault == 7 {
-                if next_random(seed) % 2 == 0 {
-                    s.push(pick("aeFx", seed));
+                if next_random(mut seed) % 2 == 0 {
+                    s.push(pick("aeFx", mut seed));
                 }
                 continue;
             }
             s.push_str(f"{value}");
         }
     } else if kind < 4 {
-        let groups = if fault == 4 { [7, 9][next_random(seed) % 2] } else { 8 };
-        let at = next_random(seed) % groups;
+        let groups = if fault == 4 { [7, 9][next_random(mut seed) % 2] } else { 8 };
+        let at = next_random(mut seed) % groups;
         for g in 0..groups {
             if g > 0 {
                 s.push(':');
@@ -118,20 +118,20 @@ fn random_query(seed: mut ref i64) -> String {
             if g == at and fault == 6 {
                 continue;
             }
-            let length = if g == at and fault == 5 { 5 } else { 1 + next_random(seed) % 4 };
-            let bad = if g == at and fault == 7 { next_random(seed) % length } else { -1 };
+            let length = if g == at and fault == 5 { 5 } else { 1 + next_random(mut seed) % 4 };
+            let bad = if g == at and fault == 7 { next_random(mut seed) % length } else { -1 };
             for i in 0..length {
                 if i == bad {
-                    s.push(pick("gGxz", seed));
+                    s.push(pick("gGxz", mut seed));
                 } else {
-                    s.push(pick("0123456789abcdefABCDEF", seed));
+                    s.push(pick("0123456789abcdefABCDEF", mut seed));
                 }
             }
         }
     } else {
-        let length = 1 + next_random(seed) % 15;
+        let length = 1 + next_random(mut seed) % 15;
         for _ in 0..length {
-            s.push(pick("0123456789aF.:g", seed));
+            s.push(pick("0123456789aF.:g", mut seed));
         }
     }
     s

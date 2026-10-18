@@ -12,7 +12,7 @@ fn place(pos: i64, used: mut ref Vec[bool]) -> i64 {
     for x in 1..used.len() {
         if not used[x] and (x % pos == 0 or pos % x == 0) {
             used[x] = true;
-            count += place(pos - 1, used);
+            count += place(pos - 1, mut used);
             used[x] = false;
         }
     }

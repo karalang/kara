@@ -91,7 +91,7 @@ fn gather(list: ref Vec[Nested], depth: i64, totals: mut ref Totals) {
                 totals.by_depth += v * depth;
                 totals.deepest = totals.deepest.max(depth);
             }
-            List(inner) => { gather(inner, depth + 1, totals); }
+            List(inner) => { gather(inner, depth + 1, mut totals); }
         }
     }
 }
@@ -108,7 +108,7 @@ fn parse_item(bytes: Slice[u8], at: mut ref i64) -> Nested {
         at = at + 1;
         let mut items: Vec[Nested] = Vec.new();
         while bytes[at] != b']' {
-            items.push(parse_item(bytes, at));
+            items.push(parse_item(bytes, mut at));
             if bytes[at] == b',' {
                 at = at + 1;
             }
@@ -148,16 +148,16 @@ fn next(seed: mut ref i64) -> i64 {
 // A random nested list, up to six levels deep, written out as text.
 fn random_list(seed: mut ref i64, depth: i64, out: mut ref String) {
     out.push_str("[");
-    let n = next(seed) % 5;
-    let span = if next(seed) % 2 == 0 { 3 } else { 100 };
+    let n = next(mut seed) % 5;
+    let span = if next(mut seed) % 2 == 0 { 3 } else { 100 };
     for i in 0..n {
         if i > 0 {
             out.push_str(",");
         }
-        if depth < 6 and next(seed) % 3 == 0 {
-            random_list(seed, depth + 1, out);
+        if depth < 6 and next(mut seed) % 3 == 0 {
+            random_list(mut seed, depth + 1, mut out);
         } else {
-            out.push_str(f"{next(seed) % (2 * span + 1) - span}");
+            out.push_str(f"{next(mut seed) % (2 * span + 1) - span}");
         }
     }
     out.push_str("]");
@@ -169,7 +169,7 @@ fn flatten(list: ref Vec[Nested], depth: i64, out: mut ref Vec[(i64, i64)]) {
     for item in list.iter() {
         match item {
             Int(v) => { out.push((v, depth)); }
-            List(inner) => { flatten(inner, depth + 1, out); }
+            List(inner) => { flatten(inner, depth + 1, mut out); }
         }
     }
 }

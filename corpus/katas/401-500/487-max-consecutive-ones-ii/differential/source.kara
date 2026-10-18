@@ -140,7 +140,7 @@ fn brute(nums: Vec[i64]) -> i64 {
 fn random_array(seed: mut ref i64, size: i64, odds: i64) -> Vec[i64] {
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..size {
-        if next_random(seed) % 16 < odds {
+        if next_random(mut seed) % 16 < odds {
             nums.push(1);
         } else {
             nums.push(0);

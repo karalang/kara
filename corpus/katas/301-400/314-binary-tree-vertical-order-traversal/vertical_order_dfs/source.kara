@@ -33,8 +33,8 @@ fn walk(t: Option[TreeNode], col: i64, row: i64, tagged: mut ref Vec[(i64, i64, 
         None => {}
         Some(n) => {
             tagged.push((col, row, tagged.len(), n.val));
-            walk(n.left, col - 1, row + 1, tagged);
-            walk(n.right, col + 1, row + 1, tagged);
+            walk(n.left, col - 1, row + 1, mut tagged);
+            walk(n.right, col + 1, row + 1, mut tagged);
         }
     }
 }

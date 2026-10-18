@@ -94,7 +94,7 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_string(n: i64, letters: i64, seed: mut ref i64) -> String {
     let mut s = String.new();
     for _ in 0..n {
-        s.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        s.push(char.try_from(97 + (next_random(mut seed) % letters) as u32).unwrap());
     }
     s
 }

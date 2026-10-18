@@ -157,22 +157,22 @@ fn step(seed: mut ref i64) -> i64 {
 }
 
 fn value(seed: mut ref i64) -> i64 {
-    step(seed) % 201 - 100
+    step(mut seed) % 201 - 100
 }
 
 // A random tree of n nodes, each hung on a random free child slot of an
 // earlier one.
 fn random_tree(n: i64, seed: mut ref i64) -> Vec[Node] {
     let mut nodes: Vec[Node] = Vec.new();
-    nodes.push(Node { val: value(seed), left: -1, right: -1 });
+    nodes.push(Node { val: value(mut seed), left: -1, right: -1 });
     for i in 1..n {
-        let mut p = step(seed) % i;
-        let mut side = 1 + step(seed) % 2;
+        let mut p = step(mut seed) % i;
+        let mut side = 1 + step(mut seed) % 2;
         while (side == 1 and nodes[p].left != -1) or (side == 2 and nodes[p].right != -1) {
-            p = step(seed) % i;
-            side = 1 + step(seed) % 2;
+            p = step(mut seed) % i;
+            side = 1 + step(mut seed) % 2;
         }
-        nodes.push(Node { val: value(seed), left: -1, right: -1 });
+        nodes.push(Node { val: value(mut seed), left: -1, right: -1 });
         if side == 1 {
             nodes[p].left = i;
         } else {

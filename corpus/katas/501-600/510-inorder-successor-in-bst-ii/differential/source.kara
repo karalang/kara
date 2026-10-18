@@ -174,8 +174,8 @@ fn shape(node: Option[Node], out: mut ref Vec[i64]) {
         Some(n) => {
             out.push(n.val);
             out.push(value(n.parent));
-            shape(n.left, out);
-            shape(n.right, out);
+            shape(n.left, mut out);
+            shape(n.right, mut out);
         }
     }
 }

@@ -20,7 +20,7 @@ fn next_digit(levels: mut ref Vec[Level], at: i64) -> i64 {
         levels.push(Level { digit: 2, left: 1 });
     }
     if levels[at].left == 0 {
-        let length = next_digit(levels, at + 1);
+        let length = next_digit(mut levels, at + 1);
         levels[at].digit = 3 - levels[at].digit;
         levels[at].left = length;
     }

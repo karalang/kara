@@ -36,8 +36,8 @@ fn extent(t: Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
         Some(n) => {
             if col < lo { lo = col; }
             if col > hi { hi = col; }
-            extent(n.left, col - 1, lo, hi);
-            extent(n.right, col + 1, lo, hi);
+            extent(n.left, col - 1, mut lo, mut hi);
+            extent(n.right, col + 1, mut lo, mut hi);
         }
     }
 }
