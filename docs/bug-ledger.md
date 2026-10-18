@@ -212,7 +212,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-27 | 2026-10-18 | typecheck | medium | check refuses `Some(ref t) => title = Some(f"{t}{s}")`, an assignment to the matched place whose only use of `t` is in the value being stored; mir-interp and mir-llvm run it | — |
 | B-2026-10-18-28 | 2026-10-18 | ownership | low | `karac fix` rewrites `Some(h) => h.text.push_str(w)` (a match on an owned Option in a loop) to `Some(ref h)`, which check then refuses because the arm writes through `h`; the fix should write `mut ref h` | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
-| B-2026-10-18-31 | 2026-10-18 | runtime+cli | high | The v2 ASan lane (`karac __mir-llvm-asan`) cannot see a leak: `karac_mir_run_main` runs `main` on `big_stack`, an mmap'd stack it switches to by hand, and LeakSanitizer reports nothing allocated there, so every 'no leak' verdict from the lane since 8969be0434 (2026-10-13) is vacuous | — |
 
 ### Relocated
 
@@ -4145,6 +4144,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-18-24 | interp+codegen | high | On the MIR compiled backends a bare `None` passed for an `Option[T]` parameter, where `T` is fixed by another argument, is lowered with the wrong typ… | fa73802a05 |
 | B-2026-10-18-25 | parser | medium | design.md's remedy for postfix on a block-like expression in statement position does not parse: `(if c { a } else { b }).len()` as a function's tail,… | 500dff0834 |
 | B-2026-10-18-29 | codegen | medium | `karac __mir-llvm-asan` build time grows with the square of a function's length: a 2231-statement table function takes 168 s against 16 s on mir-llvm… | 24740acba2 |
+| B-2026-10-18-31 | runtime+cli | high | The v2 ASan lane (`karac __mir-llvm-asan`) cannot see a leak: `karac_mir_run_main` runs `main` on `big_stack`, an mmap'd stack it switches to by hand… | 3c8e763161 |
 
 </details>
 
