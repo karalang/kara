@@ -1,0 +1,813 @@
+// mini_fail2ban: the intrusion-prevention daemon that watches server
+// logs and bans the addresses that keep failing to log in, as fail2ban
+// does it:
+// - jail.local, with [DEFAULT] settings each jail overrides, and jails
+//   that are disabled, name a missing filter, or name a missing log;
+// - filter.d/*.conf, with [INCLUDES] before = common.conf, `%(name)s`
+//   interpolation, multiline failregex, ignoreregex, and the <HOST> tag;
+// - the date detector for syslog and nginx timestamps, which takes the
+//   time off the front of each line before the filters see it;
+// - the ban logic: failures inside findtime, maxretry, bans that expire,
+//   bantime.increment doubling up to bantime.maxtime, "already banned",
+//   and ignoreip with CIDR ranges;
+// - `fail2ban-client status` for each jail, and the iptables/ip6tables
+//   actions written to data/action/ and read back.
+//
+// The run writes the config and the logs into data/ first. expected.out
+// is the output of oracle.py, the same jails run in Python with `re`.
+
+// ------------------------------------------------------------ time
+
+const YEAR: i64 = 2026;
+const HOST: Str = "(?P<host>(?:\\d{1,3}\\.){3}\\d{1,3}|[0-9a-fA-F]*:[0-9a-fA-F:]+)";
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn stamp(t: i64) -> String {
+    let (y, m, d) = civil_from_days(t / 86400);
+    let s = t % 86400;
+    f"{y}-{pad2(m)}-{pad2(d)} {pad2(s / 3600)}:{pad2(s / 60 % 60)}:{pad2(s % 60)}"
+}
+
+fn epoch(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> i64 {
+    days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s
+}
+
+// ------------------------------------------------------------ the date detector
+
+struct DateDetector {
+    syslog: Regex,
+    nginx: Regex,
+}
+
+fn month_number(name: Str) -> i64 {
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    for i in 0..12 {
+        if months[i] == name {
+            return i + 1;
+        }
+    }
+    0
+}
+
+fn group_int(c: ref Captures, i: i64) -> i64 {
+    match c.get(i) {
+        Some(m) => m.text.parse[i64]().unwrap_or(0),
+        None => 0,
+    }
+}
+
+impl DateDetector {
+    fn new() -> Result[DateDetector, RegexError] {
+        let syslog = Regex.compile("^([A-Z][a-z]{2}) +(\\d{1,2}) (\\d{2}):(\\d{2}):(\\d{2}) ")?;
+        let nginx = Regex.compile("^(\\d{4})/(\\d{2})/(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) ")?;
+        Ok(DateDetector { syslog: syslog, nginx: nginx })
+    }
+
+    // The time of a line and the rest of it, after the timestamp.
+    fn detect(self, line: Str) -> Option[(i64, String)] {
+        if let Some(c) = self.syslog.captures(line) {
+            let mo = match c.get(1) {
+                Some(m) => month_number(m.text.as_str()),
+                None => 0,
+            };
+            if mo > 0 {
+                let t = epoch(YEAR, mo, group_int(c, 2), group_int(c, 3), group_int(c, 4), group_int(c, 5));
+                let end = c.get(0).unwrap().end;
+                return Some((t, line[end..].to_string()));
+            }
+        }
+        if let Some(c) = self.nginx.captures(line) {
+            let t = epoch(group_int(c, 1), group_int(c, 2), group_int(c, 3), group_int(c, 4), group_int(c, 5), group_int(c, 6));
+            let end = c.get(0).unwrap().end;
+            return Some((t, line[end..].to_string()));
+        }
+        None
+    }
+}
+
+// ------------------------------------------------------------ config files
+
+struct Section {
+    name: String,
+    keys: Vec[String],
+    values: Vec[String],
+}
+
+impl Section {
+    fn get(self, key: Str) -> Option[String] {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == key {
+                return Some(self.values[i].clone());
+            }
+        }
+        None
+    }
+
+    fn set(mut self, key: String, value: String) {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == key {
+                self.values[i] = value;
+                return;
+            }
+        }
+        self.keys.push(key);
+        self.values.push(value);
+    }
+}
+
+struct Conf {
+    sections: Vec[Section],
+}
+
+impl Conf {
+    fn find(self, name: Str) -> Option[i64] {
+        for i in 0..self.sections.len() {
+            if self.sections[i].name == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn get(self, section: Str, key: Str) -> Option[String] {
+        match self.find(section) {
+            Some(i) => self.sections[i].get(key),
+            None => None,
+        }
+    }
+}
+
+fn is_blank(c: u8) -> bool {
+    c == b' ' or c == b'\t'
+}
+
+// Sections of key = value, in order. An indented line continues the
+// value above it; `#` and `;` start comment lines.
+fn read_conf(text: Str) -> Conf {
+    let mut sections: Vec[Section] = Vec.new();
+    let mut cur: i64 = -1;
+    let mut key: Option[String] = None;
+    for raw in text.split("\n") {
+        let stripped = raw.trim().to_string();
+        if stripped.is_empty() or stripped.starts_with("#") or stripped.starts_with(";") {
+            key = None;
+            continue;
+        }
+        if is_blank(raw.as_bytes()[0]) and cur >= 0 {
+            if let Some(k) = key.clone() {
+                let old = sections[cur].get(k.as_str()).unwrap_or(String.new());
+                sections[cur].set(k, f"{old}\n{stripped}");
+                continue;
+            }
+        }
+        if stripped.starts_with("[") and stripped.ends_with("]") {
+            let name = stripped[1..stripped.len() - 1].trim().to_string();
+            let mut found = -1;
+            for i in 0..sections.len() {
+                if sections[i].name == name {
+                    found = i;
+                }
+            }
+            if found < 0 {
+                sections.push(Section { name: name, keys: Vec.new(), values: Vec.new() });
+                found = sections.len() - 1;
+            }
+            cur = found;
+            key = None;
+            continue;
+        }
+        match stripped.find("=") {
+            Some(i) if cur >= 0 => {
+                let k = stripped[..i].trim().to_lowercase();
+                let v = stripped[i + 1..].trim().to_string();
+                sections[cur].set(k.clone(), v);
+                key = Some(k);
+            }
+            _ => {
+                key = None;
+            }
+        }
+    }
+    Conf { sections: sections }
+}
+
+// `%(name)s` references, replaced from `defs` until none is left.
+fn interpolate(value: Str, defs: ref Section, re: ref Regex, depth: i64) -> Result[String, String] {
+    if depth > 10 {
+        return Err("interpolation too deep".to_string());
+    }
+    let mut out = String.new();
+    let mut pos = 0;
+    for c in re.captures_all(value) {
+        let whole = c.get(0).unwrap();
+        out.push_str(value[pos..whole.start]);
+        let name = c.get(1).unwrap().text;
+        match defs.get(name.as_str()) {
+            Some(v) => out.push_str(interpolate(v.as_str(), defs, re, depth + 1)?.as_str()),
+            None => out.push_str(whole.text.as_str()),
+        }
+        pos = whole.end;
+    }
+    out.push_str(value[pos..]);
+    Ok(out)
+}
+
+struct Filter {
+    fail: Vec[String],
+    ignore: Vec[String],
+}
+
+fn read_file(path: Str) -> Option[String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Some(t),
+        Err(_) => None,
+    }
+}
+
+fn load_filter(name: Str) -> Result[Option[Filter], String] {
+    let text = match read_file(f"data/filter.d/{name}.conf".as_str()) {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    let conf = read_conf(text.as_str());
+    let mut defs = Section { name: "defs".to_string(), keys: Vec.new(), values: Vec.new() };
+    if let Some(before) = conf.get("INCLUDES", "before") {
+        let inc_text = read_file(f"data/filter.d/{before}".as_str()).unwrap_or(String.new());
+        let inc = read_conf(inc_text.as_str());
+        if let Some(i) = inc.find("DEFAULT") {
+            for j in 0..inc.sections[i].keys.len() {
+                defs.set(inc.sections[i].keys[j].clone(), inc.sections[i].values[j].clone());
+            }
+        }
+    }
+    if let Some(i) = conf.find("Definition") {
+        for j in 0..conf.sections[i].keys.len() {
+            defs.set(conf.sections[i].keys[j].clone(), conf.sections[i].values[j].clone());
+        }
+    }
+    let re = match Regex.compile("%\\((\\w+)\\)s") {
+        Ok(r) => r,
+        Err(e) => return Err(e.message),
+    };
+    let mut fail: Vec[String] = Vec.new();
+    for l in defs.get("failregex").unwrap_or(String.new()).split("\n") {
+        if !l.is_empty() {
+            fail.push(interpolate(l.as_str(), defs, re, 0)?.replace("<HOST>", HOST));
+        }
+    }
+    let mut ignore: Vec[String] = Vec.new();
+    for l in defs.get("ignoreregex").unwrap_or(String.new()).split("\n") {
+        if !l.is_empty() {
+            ignore.push(interpolate(l.as_str(), defs, re, 0)?);
+        }
+    }
+    Ok(Some(Filter { fail: fail, ignore: ignore }))
+}
+
+// ------------------------------------------------------------ addresses
+
+fn parse_v4(s: Str) -> Option[i64] {
+    let parts = s.split(".");
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut n: i64 = 0;
+    for p in parts {
+        if p.is_empty() or !p.bytes().all(|b| b >= b'0' and b <= b'9') {
+            return None;
+        }
+        let v = p.parse[i64]()?;
+        if v > 255 {
+            return None;
+        }
+        n = n * 256 + v;
+    }
+    Some(n)
+}
+
+fn in_network(ip: Str, net: Str, bits: i64) -> bool {
+    match (parse_v4(ip), parse_v4(net)) {
+        (Some(a), Some(b)) => {
+            let mask = ((1 << 32) - 1) ^ ((1 << (32 - bits)) - 1);
+            (a & mask) == (b & mask)
+        }
+        _ => false,
+    }
+}
+
+fn ignored(ip: Str, ignores: ref Vec[String]) -> bool {
+    for item in ignores {
+        match item.find("/") {
+            Some(i) => {
+                let bits = item[i + 1..].parse[i64]().unwrap_or(32);
+                if in_network(ip, item[..i], bits) {
+                    return true;
+                }
+            }
+            None => {
+                if item == ip {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ data files (gen_kara.py)
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("# Jails for web1: ban after repeated failures, longer each time.\n");
+    s.push_str("[DEFAULT]\n");
+    s.push_str("bantime  = 600\n");
+    s.push_str("findtime = 600\n");
+    s.push_str("maxretry = 5\n");
+    s.push_str("ignoreip = 127.0.0.1/8 10.0.0.0/8 192.168.1.50\n");
+    s.push_str("bantime.increment = true\n");
+    s.push_str("bantime.maxtime = 3600\n");
+    s.push_str("\n");
+    s.push_str("[sshd]\n");
+    s.push_str("enabled  = true\n");
+    s.push_str("filter   = sshd\n");
+    s.push_str("logpath  = data/log/auth.log\n");
+    s.push_str("maxretry = 3\n");
+    s.push_str("\n");
+    s.push_str("[nginx-http-auth]\n");
+    s.push_str("enabled  = true\n");
+    s.push_str("filter   = nginx-http-auth\n");
+    s.push_str("logpath  = data/log/nginx/error.log\n");
+    s.push_str("findtime = 120\n");
+    s.push_str("\n");
+    s.push_str("[postfix-sasl]\n");
+    s.push_str("enabled  = true\n");
+    s.push_str("filter   = postfix-sasl\n");
+    s.push_str("logpath  = data/log/mail.log\n");
+    s.push_str("bantime  = 1800\n");
+    s.push_str("; the relay network sends from here, so 127.0.0.1 is not ignored\n");
+    s.push_str("ignoreip = 198.51.100.0/24\n");
+    s.push_str("\n");
+    s.push_str("[apache-auth]\n");
+    s.push_str("enabled = false\n");
+    s.push_str("filter  = apache-auth\n");
+    s.push_str("logpath = data/log/apache/error.log\n");
+    s.push_str("\n");
+    s.push_str("[dovecot]\n");
+    s.push_str("enabled = true\n");
+    s.push_str("filter  = dovecot\n");
+    s.push_str("logpath = data/log/mail.log\n");
+    s.push_str("\n");
+    s.push_str("[vsftpd]\n");
+    s.push_str("enabled = true\n");
+    s.push_str("filter  = vsftpd\n");
+    s.push_str("logpath = data/log/vsftpd.log\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("# Shared by the filters that read syslog lines.\n");
+    s.push_str("[DEFAULT]\n");
+    s.push_str("_daemon = \\S*\n");
+    s.push_str("__hostname = \\S+\n");
+    s.push_str("__pid_re = (?:\\[\\d+\\])\n");
+    s.push_str("__daemon_re = %(_daemon)s%(__pid_re)s?:\n");
+    s.push_str("__prefix_line = %(__hostname)s %(__daemon_re)s\\s+\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("[INCLUDES]\n");
+    s.push_str("before = common.conf\n");
+    s.push_str("\n");
+    s.push_str("[Definition]\n");
+    s.push_str("_daemon = sshd\n");
+    s.push_str("failregex = ^%(__prefix_line)sFailed (?:password|publickey) for (?:invalid user )?\\S+ from <HOST> port \\d+\n");
+    s.push_str("            ^%(__prefix_line)sInvalid user \\S+ from <HOST> port \\d+$\n");
+    s.push_str("            ^%(__prefix_line)sConnection closed by authenticating user \\S+ <HOST> port \\d+ \\[preauth\\]$\n");
+    s.push_str("ignoreregex = for backup from\n");
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("# Basic-auth failures in nginx's error log.\n");
+    s.push_str("[Definition]\n");
+    s.push_str("failregex = ^\\[error\\] \\d+#\\d+: \\*\\d+ user \"[^\"]*\":? (?:password mismatch|was not found in \"[^\"]*\"), client: <HOST>, server: \\S*, request: \"[^\"]*\", host: \"[^\"]*\"(?:, referrer: \"[^\"]*\")?$\n");
+    s.push_str("ignoreregex =\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("[INCLUDES]\n");
+    s.push_str("before = common.conf\n");
+    s.push_str("\n");
+    s.push_str("[Definition]\n");
+    s.push_str("_daemon = postfix/(?:submission/)?smtp[ds]\n");
+    s.push_str("failregex = ^%(__prefix_line)swarning: [-._\\w]+\\[<HOST>\\]: SASL (?:LOGIN|PLAIN|(?:CRAM|DIGEST)-MD5) authentication failed(?:: [ A-Za-z0-9+/]*={0,2})?\\s*$\n");
+    s
+}
+
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("[INCLUDES]\n");
+    s.push_str("before = common.conf\n");
+    s.push_str("\n");
+    s.push_str("[Definition]\n");
+    s.push_str("_daemon = vsftpd\n");
+    s.push_str("failregex = ^%(__prefix_line)s.*FAIL LOGIN: Client \"<HOST>\"$\n");
+    s
+}
+
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("Oct 17 03:00:01 web1 sshd[2201]: Accepted publickey for deploy from 10.0.4.12 port 51022 ssh2: ED25519 SHA256:k3J9\n");
+    s.push_str("Oct 17 03:00:15 web1 sshd[2210]: Failed password for root from 203.0.113.7 port 52144 ssh2\n");
+    s.push_str("Oct 17 03:00:21 web1 sshd[2210]: Failed password for root from 203.0.113.7 port 52144 ssh2\n");
+    s.push_str("Oct 17 03:00:40 web1 sshd[2214]: Invalid user admin from 198.51.100.23 port 40022\n");
+    s.push_str("Oct 17 03:00:41 web1 sshd[2214]: Failed password for invalid user admin from 198.51.100.23 port 40022 ssh2\n");
+    s.push_str("Oct 17 03:01:02 web1 sshd[2210]: Failed password for root from 203.0.113.7 port 52150 ssh2\n");
+    s.push_str("Oct 17 03:01:30 web1 sshd[2219]: Failed password for root from 203.0.113.7 port 52160 ssh2\n");
+    s.push_str("Oct 17 03:02:00 web1 CRON[2230]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)\n");
+    s.push_str("Oct 17 03:02:11 web1 sshd[2240]: Failed password for backup from 192.0.2.88 port 33010 ssh2\n");
+    s.push_str("Oct 17 03:02:30 web1 sshd[2241]: Failed password for root from 10.0.4.99 port 33012 ssh2\n");
+    s.push_str("Oct 17 03:03:05 web1 sshd[2250]: Connection closed by authenticating user git 2001:db8::5 port 41000 [preauth]\n");
+    s.push_str("Oct 17 03:03:06 web1 sshd[2251]: Connection closed by authenticating user git 2001:db8::5 port 41002 [preauth]\n");
+    s.push_str("Oct 17 03:03:08 web1 sshd[2252]: Invalid user oracle from 2001:db8::5 port 41004\n");
+    s.push_str("-- MARK -- the rotation left a line with no timestamp\n");
+    s.push_str("Oct 17 03:05:00 web1 sshd[2260]: Failed publickey for deploy from 198.51.100.23 port 40100 ssh2\n");
+    s.push_str("Oct 17 03:11:30 web1 sshd[2270]: Failed password for root from 203.0.113.7 port 52300 ssh2\n");
+    s.push_str("Oct 17 03:12:00 web1 sshd[2271]: Failed password for root from 203.0.113.7 port 52302 ssh2\n");
+    s.push_str("Oct 17 03:12:30 web1 sshd[2272]: Failed password for root from 203.0.113.7 port 52304 ssh2\n");
+    s.push_str("Oct 17 03:13:10 web1 sshd[2280]: Failed password for invalid user test from 192.0.2.140 port 6000 ssh2\n");
+    s.push_str("Oct 17 03:30:00 web1 sshd[2290]: Failed password for invalid user test from 192.0.2.140 port 6002 ssh2\n");
+    s.push_str("Oct 17 03:30:05 web1 sshd[2291]: Received disconnect from 192.0.2.140 port 6002:11: Bye Bye [preauth]\n");
+    s.push_str("Oct 17 03:45:00 web1 sshd[2300]: Failed password for root from 203.0.113.7 port 52400 ssh2\n");
+    s.push_str("Oct 17 03:45:01 web1 sshd[2301]: Failed password for root from 203.0.113.7 port 52402 ssh2\n");
+    s.push_str("Oct 17 03:45:02 web1 sshd[2302]: Failed password for root from 203.0.113.7 port 52404 ssh2\n");
+    s.push_str("Oct 17 03:46:00 web1 sshd[2310]: Failed password for root from 203.0.113.7 port 52410 ssh2\n");
+    s
+}
+
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("2026/10/17 04:00:00 [notice] 812#812: signal process started\n");
+    s.push_str("2026/10/17 04:00:10 [error] 812#812: *41 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"GET /admin/ HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:00:20 [error] 812#812: *42 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"GET /admin/ HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:00:30 [error] 812#812: *43 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"GET /admin/ HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:00:40 [error] 812#812: *44 user \"root\": password mismatch, client: 203.0.113.50, server: example.com, request: \"GET /admin/ HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:01:05 [error] 812#812: *45 user \"jsmith\" was not found in \"/etc/nginx/.htpasswd\", client: 198.51.100.7, server: example.com, request: \"GET /reports/ HTTP/2.0\", host: \"example.com\", referrer: \"https://example.com/\"\n");
+    s.push_str("2026/10/17 04:01:30 [error] 812#812: *46 user \"ops\": password mismatch, client: 192.168.1.50, server: example.com, request: \"GET /admin/ HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:01:31 [error] 812#812: *47 user \"ops\": password mismatch, client: 192.168.1.51, server: example.com, request: \"GET /admin/ HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:02:50 [error] 812#812: *48 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"POST /admin/login HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:03:00 [error] 812#812: *49 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"POST /admin/login HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:03:01 [error] 812#812: *50 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"POST /admin/login HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:03:02 [error] 812#812: *51 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"POST /admin/login HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:03:03 [error] 812#812: *52 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"POST /admin/login HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:04:00 [error] 812#812: *53 user \"guest\": password mismatch, client: 2001:db8:4::9, server: example.com, request: \"GET / HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:04:01 [error] 812#812: *54 user \"guest\": password mismatch, client: 2001:db8:4::9, server: example.com, request: \"GET / HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:04:02 [error] 812#812: *55 user \"guest\": password mismatch, client: 2001:db8:4::9, server: example.com, request: \"GET / HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:04:03 [error] 812#812: *56 user \"guest\": password mismatch, client: 2001:db8:4::9, server: example.com, request: \"GET / HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:04:04 [error] 812#812: *57 user \"guest\": password mismatch, client: 2001:db8:4::9, server: example.com, request: \"GET / HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:05:00 [error] 812#812: *58 open() \"/var/www/html/favicon.ico\" failed (2: No such file or directory), client: 198.51.100.7, server: example.com, request: \"GET /favicon.ico HTTP/1.1\", host: \"example.com\"\n");
+    s.push_str("2026/10/17 04:14:00 [error] 812#812: *59 user \"admin\": password mismatch, client: 203.0.113.50, server: example.com, request: \"GET /admin/ HTTP/1.1\", host: \"example.com\"\n");
+    s
+}
+
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("Oct 17 05:00:00 mx1 postfix/smtpd[3001]: connect from unknown[192.0.2.200]\n");
+    s.push_str("Oct 17 05:00:01 mx1 postfix/smtpd[3001]: warning: unknown[192.0.2.200]: SASL LOGIN authentication failed: UGFzc3dvcmQ6\n");
+    s.push_str("Oct 17 05:00:03 mx1 postfix/smtpd[3001]: warning: unknown[192.0.2.200]: SASL LOGIN authentication failed: UGFzc3dvcmQ6\n");
+    s.push_str("Oct 17 05:00:05 mx1 postfix/smtpd[3001]: warning: unknown[192.0.2.200]: SASL LOGIN authentication failed: UGFzc3dvcmQ6\n");
+    s.push_str("Oct 17 05:00:07 mx1 postfix/smtpd[3001]: warning: unknown[192.0.2.200]: SASL PLAIN authentication failed:\n");
+    s.push_str("Oct 17 05:00:09 mx1 postfix/smtpd[3001]: warning: unknown[192.0.2.200]: SASL PLAIN authentication failed: \n");
+    s.push_str("Oct 17 05:00:12 mx1 postfix/smtpd[3001]: warning: unknown[192.0.2.200]: SASL LOGIN authentication failed: UGFzc3dvcmQ6\n");
+    s.push_str("Oct 17 05:01:00 mx1 postfix/submission/smtpd[3010]: warning: mail.example.net[198.51.100.77]: SASL PLAIN authentication failed: \n");
+    s.push_str("Oct 17 05:01:30 mx1 postfix/smtps/smtpd[3020]: warning: unknown[192.0.2.201]: SASL LOGIN authentication failed: UGFzc3dvcmQ6\n");
+    s.push_str("Oct 17 05:02:00 mx1 postfix/smtpd[3030]: warning: localhost[127.0.0.1]: SASL CRAM-MD5 authentication failed: PDE3ODkzLjE=\n");
+    s.push_str("Oct 17 05:02:30 mx1 postfix/smtpd[3001]: disconnect from unknown[192.0.2.200] ehlo=1 auth=0/6 commands=1/7\n");
+    s.push_str("Oct 17 05:40:00 mx1 postfix/smtpd[3040]: warning: unknown[192.0.2.200]: SASL LOGIN authentication failed: UGFzc3dvcmQ6\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("jail.local".to_string(), file_0()));
+    v.push(("filter.d/common.conf".to_string(), file_1()));
+    v.push(("filter.d/sshd.conf".to_string(), file_2()));
+    v.push(("filter.d/nginx-http-auth.conf".to_string(), file_3()));
+    v.push(("filter.d/postfix-sasl.conf".to_string(), file_4()));
+    v.push(("filter.d/vsftpd.conf".to_string(), file_5()));
+    v.push(("log/auth.log".to_string(), file_6()));
+    v.push(("log/nginx/error.log".to_string(), file_7()));
+    v.push(("log/mail.log".to_string(), file_8()));
+    v
+}
+
+// ------------------------------------------------------------ jails
+
+struct Ban {
+    ip: String,
+    end: i64,
+}
+
+fn log(t: i64, who: String, jail: Str, msg: String) {
+    println(f"{stamp(t)} {who:<17}[{jail}] {msg}");
+}
+
+fn setting(cfg: ref Section, key: Str, default: i64) -> i64 {
+    match cfg.get(key) {
+        Some(v) => v.parse[i64]().unwrap_or(default),
+        None => default,
+    }
+}
+
+fn first_host(res: ref Vec[Regex], rest: Str) -> Option[String] {
+    for r in res {
+        if let Some(c) = r.captures(rest) {
+            if let Some(m) = c.name("host") {
+                return Some(m.text);
+            }
+        }
+    }
+    None
+}
+
+fn run_jail(name: Str, cfg: ref Section, filter: ref Filter, dates: ref DateDetector) -> Result[Vec[Ban], String] {
+    let maxretry = setting(cfg, "maxretry", 5);
+    let findtime = setting(cfg, "findtime", 600);
+    let bantime = setting(cfg, "bantime", 600);
+    let increment = cfg.get("bantime.increment").unwrap_or("false".to_string()) == "true";
+    let maxtime = setting(cfg, "bantime.maxtime", 0);
+    let ignores = cfg.get("ignoreip").unwrap_or(String.new()).split_whitespace();
+    let inc = if increment { f" (increment, max {maxtime}s)" } else { String.new() };
+    println(f"Jail '{name}': {filter.fail.len()} failregex, {filter.ignore.len()} ignoreregex, maxretry {maxretry}, findtime {findtime}s, bantime {bantime}s{inc}");
+    let mut fres: Vec[Regex] = Vec.new();
+    for r in filter.fail {
+        println(f"  failregex: {r}");
+        match Regex.compile(r.as_str()) {
+            Ok(re) => fres.push(re),
+            Err(e) => return Err(e.message),
+        }
+    }
+    let mut ires: Vec[Regex] = Vec.new();
+    for r in filter.ignore {
+        println(f"  ignoreregex: {r}");
+        match Regex.compile(r.as_str()) {
+            Ok(re) => ires.push(re),
+            Err(e) => return Err(e.message),
+        }
+    }
+    let logpath = cfg.get("logpath").unwrap_or(String.new());
+    let text = read_file(logpath.as_str()).unwrap_or(String.new());
+
+    // Failure times per address, in the order the addresses first failed.
+    let mut hosts: Vec[String] = Vec.new();
+    let mut failures: Vec[Vec[i64]] = Vec.new();
+    let mut bans: Vec[Ban] = Vec.new();
+    let mut bancount: Map[String, i64] = Map.new();
+    let mut total_failed = 0;
+    let mut total_banned = 0;
+    let mut lines = 0;
+    let mut nodate = 0;
+    let mut ign_count = 0;
+    for line in text.split("\n") {
+        if line.is_empty() {
+            continue;
+        }
+        lines += 1;
+        let (t, rest) = match dates.detect(line.as_str()) {
+            Some(d) => d,
+            None => {
+                nodate += 1;
+                continue;
+            }
+        };
+        // Bans that ran out before this line, earliest first.
+        loop {
+            let mut due: i64 = -1;
+            for i in 0..bans.len() {
+                if bans[i].end <= t {
+                    if due < 0 or bans[i].end < bans[due].end or (bans[i].end == bans[due].end and bans[i].ip < bans[due].ip) {
+                        due = i;
+                    }
+                }
+            }
+            if due < 0 {
+                break;
+            }
+            let b = bans.remove(due);
+            log(b.end, "fail2ban.actions".to_string(), name, f"Unban {b.ip}");
+        }
+        let host = match first_host(fres, rest.as_str()) {
+            Some(h) => h,
+            None => continue,
+        };
+        if ires.iter().any(|r| r.is_match(rest.as_str())) {
+            ign_count += 1;
+            continue;
+        }
+        if ignored(host.as_str(), ignores) {
+            log(t, "fail2ban.filter".to_string(), name, f"Ignore {host} by ip");
+            continue;
+        }
+        log(t, "fail2ban.filter".to_string(), name, f"Found {host}");
+        total_failed += 1;
+        if bans.iter().any(|b| b.ip == host) {
+            log(t, "fail2ban.actions".to_string(), name, f"{host} already banned");
+            continue;
+        }
+        let mut slot: i64 = -1;
+        for i in 0..hosts.len() {
+            if hosts[i] == host {
+                slot = i;
+            }
+        }
+        if slot < 0 {
+            hosts.push(host.clone());
+            failures.push(Vec.new());
+            slot = hosts.len() - 1;
+        }
+        let mut kept: Vec[i64] = Vec.new();
+        for x in failures[slot] {
+            if x > t - findtime {
+                kept.push(*x);
+            }
+        }
+        kept.push(t);
+        let count = kept.len();
+        failures[slot] = kept;
+        if count >= maxretry {
+            let n = bancount.get(host).unwrap_or(0) + 1;
+            bancount.insert(host.clone(), n);
+            let mut dur = bantime;
+            if increment {
+                let shift = if n - 1 < 20 { n - 1 } else { 20 };
+                dur = bantime * (1 << shift);
+                if dur > maxtime {
+                    dur = maxtime;
+                }
+            }
+            failures[slot] = Vec.new();
+            total_banned += 1;
+            log(t, "fail2ban.actions".to_string(), name, f"Ban {host} for {dur}s (ban {n})");
+            bans.push(Ban { ip: host, end: t + dur });
+        }
+    }
+    let mut failed_now = 0;
+    for f in failures {
+        if !f.is_empty() {
+            failed_now += 1;
+        }
+    }
+    let mut list = String.new();
+    for i in 0..bans.len() {
+        if i > 0 {
+            list.push_str(" ");
+        }
+        list.push_str(bans[i].ip.as_str());
+    }
+    println(f"Status for the jail: {name}");
+    println("|- Filter");
+    println(f"|  |- Currently failed:\t{failed_now}");
+    println(f"|  |- Total failed:\t{total_failed}");
+    println(f"|  `- File list:\t{logpath}");
+    println("`- Actions");
+    println(f"   |- Currently banned:\t{bans.len()}");
+    println(f"   |- Total banned:\t{total_banned}");
+    println(f"   `- Banned IP list:\t{list}");
+    println(f"Lines: {lines} read, {nodate} without a date, {ign_count} ignored by ignoreregex");
+    Ok(bans)
+}
+
+// ------------------------------------------------------------ the data
+
+fn write_data() -> Result[(), String] {
+    for (name, text) in data_files() {
+        let path = f"data/{name}";
+        let dir = match path.rfind("/") {
+            Some(i) => path[..i].to_string(),
+            None => "data".to_string(),
+        };
+        if let Err(e) = fs.create_dir_all(dir) {
+            return Err(f"{e}");
+        }
+        if let Err(e) = fs.write(path, text) {
+            return Err(f"{e}");
+        }
+    }
+    Ok(())
+}
+
+struct Active {
+    name: String,
+    bans: Vec[Ban],
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let dates = match DateDetector.new() {
+        Ok(d) => d,
+        Err(e) => return Err(e.message),
+    };
+    let jails = read_conf(read_file("data/jail.local").unwrap_or(String.new()).as_str());
+    let defaults = match jails.find("DEFAULT") {
+        Some(i) => jails.sections[i].clone(),
+        None => Section { name: "DEFAULT".to_string(), keys: Vec.new(), values: Vec.new() },
+    };
+    let mut active: Vec[Active] = Vec.new();
+    for sec in jails.sections {
+        if sec.name == "DEFAULT" {
+            continue;
+        }
+        let mut cfg = defaults.clone();
+        for j in 0..sec.keys.len() {
+            cfg.set(sec.keys[j].clone(), sec.values[j].clone());
+        }
+        if cfg.get("enabled").unwrap_or("false".to_string()) != "true" {
+            println(f"Jail '{sec.name}' is disabled");
+            continue;
+        }
+        let filter_name = cfg.get("filter").unwrap_or(String.new());
+        let filter = match load_filter(filter_name.as_str())? {
+            Some(f) => f,
+            None => {
+                println(f"ERROR Found no accessible config files for 'filter.d/{filter_name}' under data/filter.d");
+                continue;
+            }
+        };
+        if read_file(cfg.get("logpath").unwrap_or(String.new()).as_str()).is_none() {
+            println(f"ERROR Failed during configuration: Have not found any log file for {sec.name} jail");
+            continue;
+        }
+        let bans = run_jail(sec.name.as_str(), cfg, filter, dates)?;
+        active.push(Active { name: sec.name.clone(), bans: bans });
+        println("");
+    }
+    if let Err(e) = fs.create_dir_all("data/action".to_string()) {
+        return Err(f"{e}");
+    }
+    for a in active {
+        let mut out = String.new();
+        for b in a.bans {
+            let tool = if b.ip.contains(":") { "ip6tables" } else { "iptables" };
+            out.push_str(f"{tool} -I f2b-{a.name} 1 -s {b.ip} -j REJECT --reject-with icmp-port-unreachable\n");
+        }
+        if let Err(e) = fs.write(f"data/action/{a.name}.sh", out) {
+            return Err(f"{e}");
+        }
+    }
+    for a in active {
+        let path = f"data/action/{a.name}.sh";
+        let text = read_file(path.as_str()).unwrap_or(String.new());
+        let rules = text.bytes().filter(|b| *b == b'\n').count();
+        println(f"{path}: {rules} rule(s), {text.len()} bytes");
+        for l in text.split("\n") {
+            if !l.is_empty() {
+                println(f"  {l}");
+            }
+        }
+    }
+    println("Shutdown");
+    for a in active {
+        for b in a.bans {
+            println(f"fail2ban.actions [{a.name}] Unban {b.ip} (stop)");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(f"error: {e}");
+    }
+}

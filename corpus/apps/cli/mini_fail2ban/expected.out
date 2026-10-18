@@ -1,0 +1,115 @@
+Jail 'sshd': 3 failregex, 1 ignoreregex, maxretry 3, findtime 600s, bantime 600s (increment, max 3600s)
+  failregex: ^\S+ sshd(?:\[\d+\])?:\s+Failed (?:password|publickey) for (?:invalid user )?\S+ from (?P<host>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]*:[0-9a-fA-F:]+) port \d+
+  failregex: ^\S+ sshd(?:\[\d+\])?:\s+Invalid user \S+ from (?P<host>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]*:[0-9a-fA-F:]+) port \d+$
+  failregex: ^\S+ sshd(?:\[\d+\])?:\s+Connection closed by authenticating user \S+ (?P<host>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]*:[0-9a-fA-F:]+) port \d+ \[preauth\]$
+  ignoreregex: for backup from
+2026-10-17 03:00:15 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:00:21 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:00:40 fail2ban.filter  [sshd] Found 198.51.100.23
+2026-10-17 03:00:41 fail2ban.filter  [sshd] Found 198.51.100.23
+2026-10-17 03:01:02 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:01:02 fail2ban.actions [sshd] Ban 203.0.113.7 for 600s (ban 1)
+2026-10-17 03:01:30 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:01:30 fail2ban.actions [sshd] 203.0.113.7 already banned
+2026-10-17 03:02:30 fail2ban.filter  [sshd] Ignore 10.0.4.99 by ip
+2026-10-17 03:03:05 fail2ban.filter  [sshd] Found 2001:db8::5
+2026-10-17 03:03:06 fail2ban.filter  [sshd] Found 2001:db8::5
+2026-10-17 03:03:08 fail2ban.filter  [sshd] Found 2001:db8::5
+2026-10-17 03:03:08 fail2ban.actions [sshd] Ban 2001:db8::5 for 600s (ban 1)
+2026-10-17 03:05:00 fail2ban.filter  [sshd] Found 198.51.100.23
+2026-10-17 03:05:00 fail2ban.actions [sshd] Ban 198.51.100.23 for 600s (ban 1)
+2026-10-17 03:11:02 fail2ban.actions [sshd] Unban 203.0.113.7
+2026-10-17 03:11:30 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:12:00 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:12:30 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:12:30 fail2ban.actions [sshd] Ban 203.0.113.7 for 1200s (ban 2)
+2026-10-17 03:13:08 fail2ban.actions [sshd] Unban 2001:db8::5
+2026-10-17 03:13:10 fail2ban.filter  [sshd] Found 192.0.2.140
+2026-10-17 03:15:00 fail2ban.actions [sshd] Unban 198.51.100.23
+2026-10-17 03:30:00 fail2ban.filter  [sshd] Found 192.0.2.140
+2026-10-17 03:32:30 fail2ban.actions [sshd] Unban 203.0.113.7
+2026-10-17 03:45:00 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:45:01 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:45:02 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:45:02 fail2ban.actions [sshd] Ban 203.0.113.7 for 2400s (ban 3)
+2026-10-17 03:46:00 fail2ban.filter  [sshd] Found 203.0.113.7
+2026-10-17 03:46:00 fail2ban.actions [sshd] 203.0.113.7 already banned
+Status for the jail: sshd
+|- Filter
+|  |- Currently failed:	1
+|  |- Total failed:	19
+|  `- File list:	data/log/auth.log
+`- Actions
+   |- Currently banned:	1
+   |- Total banned:	5
+   `- Banned IP list:	203.0.113.7
+Lines: 25 read, 1 without a date, 1 ignored by ignoreregex
+
+Jail 'nginx-http-auth': 1 failregex, 0 ignoreregex, maxretry 5, findtime 120s, bantime 600s (increment, max 3600s)
+  failregex: ^\[error\] \d+#\d+: \*\d+ user "[^"]*":? (?:password mismatch|was not found in "[^"]*"), client: (?P<host>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]*:[0-9a-fA-F:]+), server: \S*, request: "[^"]*", host: "[^"]*"(?:, referrer: "[^"]*")?$
+2026-10-17 04:00:10 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:00:20 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:00:30 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:00:40 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:01:05 fail2ban.filter  [nginx-http-auth] Found 198.51.100.7
+2026-10-17 04:01:30 fail2ban.filter  [nginx-http-auth] Ignore 192.168.1.50 by ip
+2026-10-17 04:01:31 fail2ban.filter  [nginx-http-auth] Found 192.168.1.51
+2026-10-17 04:02:50 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:03:00 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:03:01 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:03:02 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:03:03 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+2026-10-17 04:03:03 fail2ban.actions [nginx-http-auth] Ban 203.0.113.50 for 600s (ban 1)
+2026-10-17 04:04:00 fail2ban.filter  [nginx-http-auth] Found 2001:db8:4::9
+2026-10-17 04:04:01 fail2ban.filter  [nginx-http-auth] Found 2001:db8:4::9
+2026-10-17 04:04:02 fail2ban.filter  [nginx-http-auth] Found 2001:db8:4::9
+2026-10-17 04:04:03 fail2ban.filter  [nginx-http-auth] Found 2001:db8:4::9
+2026-10-17 04:04:04 fail2ban.filter  [nginx-http-auth] Found 2001:db8:4::9
+2026-10-17 04:04:04 fail2ban.actions [nginx-http-auth] Ban 2001:db8:4::9 for 600s (ban 1)
+2026-10-17 04:13:03 fail2ban.actions [nginx-http-auth] Unban 203.0.113.50
+2026-10-17 04:14:00 fail2ban.filter  [nginx-http-auth] Found 203.0.113.50
+Status for the jail: nginx-http-auth
+|- Filter
+|  |- Currently failed:	3
+|  |- Total failed:	17
+|  `- File list:	data/log/nginx/error.log
+`- Actions
+   |- Currently banned:	1
+   |- Total banned:	2
+   `- Banned IP list:	2001:db8:4::9
+Lines: 20 read, 0 without a date, 0 ignored by ignoreregex
+
+Jail 'postfix-sasl': 1 failregex, 0 ignoreregex, maxretry 5, findtime 600s, bantime 1800s (increment, max 3600s)
+  failregex: ^\S+ postfix/(?:submission/)?smtp[ds](?:\[\d+\])?:\s+warning: [-._\w]+\[(?P<host>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]*:[0-9a-fA-F:]+)\]: SASL (?:LOGIN|PLAIN|(?:CRAM|DIGEST)-MD5) authentication failed(?:: [ A-Za-z0-9+/]*={0,2})?\s*$
+2026-10-17 05:00:01 fail2ban.filter  [postfix-sasl] Found 192.0.2.200
+2026-10-17 05:00:03 fail2ban.filter  [postfix-sasl] Found 192.0.2.200
+2026-10-17 05:00:05 fail2ban.filter  [postfix-sasl] Found 192.0.2.200
+2026-10-17 05:00:09 fail2ban.filter  [postfix-sasl] Found 192.0.2.200
+2026-10-17 05:00:12 fail2ban.filter  [postfix-sasl] Found 192.0.2.200
+2026-10-17 05:00:12 fail2ban.actions [postfix-sasl] Ban 192.0.2.200 for 1800s (ban 1)
+2026-10-17 05:01:00 fail2ban.filter  [postfix-sasl] Ignore 198.51.100.77 by ip
+2026-10-17 05:02:00 fail2ban.filter  [postfix-sasl] Found 127.0.0.1
+2026-10-17 05:30:12 fail2ban.actions [postfix-sasl] Unban 192.0.2.200
+2026-10-17 05:40:00 fail2ban.filter  [postfix-sasl] Found 192.0.2.200
+Status for the jail: postfix-sasl
+|- Filter
+|  |- Currently failed:	2
+|  |- Total failed:	7
+|  `- File list:	data/log/mail.log
+`- Actions
+   |- Currently banned:	0
+   |- Total banned:	1
+   `- Banned IP list:	
+Lines: 12 read, 0 without a date, 0 ignored by ignoreregex
+
+Jail 'apache-auth' is disabled
+ERROR Found no accessible config files for 'filter.d/dovecot' under data/filter.d
+ERROR Failed during configuration: Have not found any log file for vsftpd jail
+data/action/sshd.sh: 1 rule(s), 84 bytes
+  iptables -I f2b-sshd 1 -s 203.0.113.7 -j REJECT --reject-with icmp-port-unreachable
+data/action/nginx-http-auth.sh: 1 rule(s), 98 bytes
+  ip6tables -I f2b-nginx-http-auth 1 -s 2001:db8:4::9 -j REJECT --reject-with icmp-port-unreachable
+data/action/postfix-sasl.sh: 0 rule(s), 0 bytes
+Shutdown
+fail2ban.actions [sshd] Unban 203.0.113.7 (stop)
+fail2ban.actions [nginx-http-auth] Unban 2001:db8:4::9 (stop)
