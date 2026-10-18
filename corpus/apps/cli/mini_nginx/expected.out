@@ -1,0 +1,220 @@
+nginx: [emerg] unexpected "}" in data/broken1.conf:5
+nginx: configuration file data/broken1.conf test failed
+nginx: [emerg] unknown directive "lisen" in data/broken2.conf:3
+nginx: configuration file data/broken2.conf test failed
+nginx: [emerg] unexpected end of file, expecting "}" in data/broken3.conf:6
+nginx: configuration file data/broken3.conf test failed
+nginx: the configuration file data/nginx.conf syntax is ok
+nginx: configuration file data/nginx.conf test is successful
+5 servers, 16 locations, 1 upstreams, 11 types
+
+GET 80 example.com /
+  server: example.com (listen 80)
+  location: /
+  try_files: /
+  index: /index.html
+  location: /
+  try_files: /index.html
+  200 text/html 17 bytes data/www/example/index.html
+GET 80 www.example.com /about
+  server: example.com (listen 80)
+  location: /
+  try_files: /about/
+  index: /about/index.html
+  location: /
+  try_files: /about/index.html
+  200 text/html 37 bytes data/www/example/about/index.html
+GET 80 example.com /about/
+  server: example.com (listen 80)
+  location: /
+  try_files: /about/
+  index: /about/index.html
+  location: /
+  try_files: /about/index.html
+  200 text/html 37 bytes data/www/example/about/index.html
+GET 80 example.com /old-about?x=1
+  server: example.com (listen 80)
+  rewrite: http://example.com/about/?x=1 (permanent)
+  301 Location: http://example.com/about/?x=1
+GET 80 example.com /blog/2026/10/hello-world?ref=feed
+  server: example.com (listen 80)
+  rewrite: /posts/2026-10-hello-world.html?ref=feed (last)
+  location: ~ ^/posts/
+  try_files: /posts/2026-10-hello-world.html
+  200 text/html 33 bytes data/www/example/posts/2026-10-hello-world.html
+GET 80 example.com /blog/2026/11/not-written
+  server: example.com (listen 80)
+  rewrite: /posts/2026-11-not-written.html (last)
+  location: ~ ^/posts/
+  internal redirect: /posts/missing.html
+  location: ~ ^/posts/
+  try_files: /posts/missing.html
+  200 text/html 26 bytes data/www/example/posts/missing.html
+GET 80 example.com /healthz
+  server: example.com (listen 80)
+  location: = /healthz
+  200 "ok\n"
+GET 80 example.com /static/site.css
+  server: example.com (listen 80)
+  location: ^~ /static/
+  200 text/css 20 bytes data/www/assets/static/site.css
+  header: Cache-Control: max-age=86400
+GET 80 example.com /static/logo.png
+  server: example.com (listen 80)
+  location: ^~ /static/
+  200 image/png 21 bytes data/www/assets/static/logo.png
+  header: Cache-Control: max-age=86400
+GET 80 example.com /img/cat.jpg
+  server: example.com (listen 80)
+  location: ~* \.(png|jpe?g|gif|ico)$
+  200 image/jpeg 9 bytes data/www/assets/img/cat.jpg
+  header: Cache-Control: max-age=3600
+GET 80 example.com /img/dog.gif
+  server: example.com (listen 80)
+  location: ~* \.(png|jpe?g|gif|ico)$
+  404 "open() \"data/www/assets/img/dog.gif\" failed"
+GET 80 example.com /api/orders?page=2
+  server: example.com (listen 80)
+  location: /api/
+  200 "proxied to http://10.0.0.11:8080/api/orders?page=2"
+GET 80 example.com /api/users/7
+  server: example.com (listen 80)
+  location: /api/
+  200 "proxied to http://10.0.0.12:8080/api/users/7"
+GET 80 example.com /api/
+  server: example.com (listen 80)
+  location: /api/
+  200 "proxied to http://10.0.0.13:8080/api/"
+GET 80 example.com /.env
+  server: example.com (listen 80)
+  location: ~ /\.
+  403 Forbidden
+GET 80 example.com /static/../.git/config
+  server: example.com (listen 80)
+  normalized: /.git/config
+  location: ~ /\.
+  403 Forbidden
+GET 80 example.com /../../etc/passwd
+  server: example.com (listen 80)
+  400 Bad Request
+GET 80 example.com //app//main.js
+  server: example.com (listen 80)
+  normalized: /app/main.js
+  location: /app/
+  try_files: /app/main.js
+  200 application/javascript 20 bytes data/www/example/app/main.js
+GET 80 example.com /app/settings/profile
+  server: example.com (listen 80)
+  location: /app/
+  internal redirect: /app/index.html
+  location: /app/
+  try_files: /app/index.html
+  200 text/html 57 bytes data/www/example/app/index.html
+GET 80 example.com /downloads/report.pdf
+  server: example.com (listen 80)
+  location: /downloads/
+  200 application/pdf 26 bytes data/www/files/report.pdf
+GET 80 example.com /downloads/notes%20v2.txt
+  server: example.com (listen 80)
+  normalized: /downloads/notes v2.txt
+  location: /downloads/
+  200 text/plain 13 bytes data/www/files/notes v2.txt
+GET 80 example.com /downloads/
+  server: example.com (listen 80)
+  location: /downloads/
+  403 "directory index of \"data/www/files/\" is forbidden"
+GET 80 example.com /docs
+  server: example.com (listen 80)
+  location: /
+  try_files: /docs/
+  403 "directory index of \"data/www/example/docs/\" is forbidden"
+GET 80 example.com /docs/
+  server: example.com (listen 80)
+  location: /
+  try_files: /docs/
+  403 "directory index of \"data/www/example/docs/\" is forbidden"
+GET 80 example.com /go/docs.example.com/start?lang=en
+  server: example.com (listen 80)
+  location: /go/
+  rewrite: https://docs.example.com/start?lang=en (redirect)
+  302 Location: https://docs.example.com/start?lang=en
+GET 80 example.com /search?q=nginx
+  server: example.com (listen 80)
+  rewrite: /find?engine=local&q=nginx (continue)
+  location: /find
+  200 "search: engine=local&q=nginx\n"
+GET 80 example.com /loop
+  server: example.com (listen 80)
+  location: /loop
+  rewrite: /loop2 (last)
+  location: /loop2
+  rewrite: /loop (last)
+  location: /loop
+  rewrite: /loop2 (last)
+  location: /loop2
+  rewrite: /loop (last)
+  location: /loop
+  rewrite: /loop2 (last)
+  location: /loop2
+  rewrite: /loop (last)
+  location: /loop
+  rewrite: /loop2 (last)
+  location: /loop2
+  rewrite: /loop (last)
+  location: /loop
+  rewrite: /loop2 (last)
+  location: /loop2
+  rewrite: /loop (last)
+  location: /loop
+  rewrite: /loop2 (last)
+  500 "rewrite or internal redirection cycle"
+GET 80 example.com /admin/users?sort=name
+  server: example.com (listen 80)
+  location: /admin
+  301 Location: https://example.com/admin/users?sort=name
+GET 80 example.com /legacy/site.css
+  server: example.com (listen 80)
+  location: /legacy/
+  rewrite: /static/site.css (break)
+  200 text/css 20 bytes data/www/assets/static/site.css
+GET 80 EXAMPLE.COM:80 /HEALTHZ
+  server: example.com (listen 80)
+  location: /
+  try_files: =404
+  404 Not Found
+GET 80 shop.example.org /cart?id=5
+  server: *.example.org (listen 80)
+  302 Location: https://example.com/cart?id=5
+GET 80 deep.shop.example.org /
+  server: *.example.org (listen 80)
+  302 Location: https://example.com/
+GET 80 mail.example.net /inbox
+  server: mail.* (listen 80)
+  200 "webmail is down for maintenance\n"
+GET 80 unknown.test /
+  server: _ (listen 80)
+  444 (connection closed)
+GET 8080 alice.users.example.net /
+  server: ~^(?<user>[a-z0-9]+)\.users\.example\.net$ (listen 8080)
+  location: /
+  try_files: /
+  index: /index.html
+  location: /
+  try_files: /index.html
+  200 text/html 22 bytes data/www/users/alice/index.html
+GET 8080 alice.users.example.net /notes.txt
+  server: ~^(?<user>[a-z0-9]+)\.users\.example\.net$ (listen 8080)
+  location: /
+  try_files: /notes.txt
+  200 text/plain 9 bytes data/www/users/alice/notes.txt
+GET 8080 bob.users.example.net /
+  server: ~^(?<user>[a-z0-9]+)\.users\.example\.net$ (listen 8080)
+  location: /
+  try_files: /
+  403 "directory index of \"data/www/users/bob/\" is forbidden"
+GET 8080 nobody.example.net /
+  server: ~^(?<user>[a-z0-9]+)\.users\.example\.net$ (listen 8080)
+  location: /
+  try_files: /
+  403 "directory index of \"data/www/users//\" is forbidden"
+upstream api_backend: 3 request(s) over 3 peers

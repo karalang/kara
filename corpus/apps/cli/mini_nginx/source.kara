@@ -1,0 +1,1443 @@
+// mini_nginx: how nginx reads its configuration and routes a request,
+// from `nginx -t` to the response:
+// - the config parser: tokens, quoted strings with escapes, comments,
+//   blocks, `include`, unknown directives, and nginx's [emerg] messages
+//   with file and line for three broken files;
+// - server selection by Host: exact names, `*.` and `.*` wildcards
+//   (longest wins), regex names with named captures, default_server;
+// - URI normalization: %XX decoding, merged slashes, `.` and `..`, and
+//   400 for a path that climbs above the root;
+// - location selection: `=`, the longest prefix, `^~`, then `~` and `~*`
+//   regexes in order, with their captures;
+// - the rewrite module: server and location `rewrite` with last, break,
+//   redirect and permanent, argument merging, `return`, and the
+//   ten-change limit that stops a rewrite cycle with a 500;
+// - content: `try_files` with `=code` and internal redirects, `index`,
+//   `root` and `alias` over a real document tree, 301 for a directory,
+//   403 for a directory with no index, MIME types from mime.types,
+//   `add_header`, and `proxy_pass` round-robin over an upstream.
+//
+// The run writes the configs and the document roots into data/ first.
+// expected.out is the output of oracle.py, the same routing in Python.
+
+const MAX_URI_CHANGES: i64 = 10;
+
+// ------------------------------------------------------------ bytes
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_word_byte(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or (c >= b'0' and c <= b'9') or c == b'_'
+}
+
+fn hex_value(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else if c >= b'A' and c <= b'F' {
+        (c - b'A') as i64 + 10
+    } else {
+        -1
+    }
+}
+
+fn reason(status: i64) -> String {
+    match status {
+        200 => "OK".to_string(),
+        301 => "Moved Permanently".to_string(),
+        302 => "Found".to_string(),
+        400 => "Bad Request".to_string(),
+        403 => "Forbidden".to_string(),
+        404 => "Not Found".to_string(),
+        500 => "Internal Server Error".to_string(),
+        _ => String.new(),
+    }
+}
+
+fn known_directive(name: Str) -> bool {
+    let known = ["worker_processes", "events", "worker_connections", "http", "include",
+        "default_type", "upstream", "server", "listen", "server_name", "root",
+        "index", "rewrite", "location", "return", "try_files", "add_header",
+        "proxy_pass", "alias", "types"];
+    for k in known {
+        if k == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn show(s: Str) -> String {
+    s.replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\"")
+}
+
+// ------------------------------------------------------------ the parser
+
+enum Tok {
+    Word(String),
+    Semi,
+    Open,
+    Close,
+}
+
+struct Token {
+    tok: Tok,
+    line: i64,
+}
+
+fn tok_text(t: ref Tok) -> String {
+    match t {
+        Tok.Word(w) => w.clone(),
+        Tok.Semi => ";".to_string(),
+        Tok.Open => "{".to_string(),
+        Tok.Close => "}".to_string(),
+    }
+}
+
+// The tokens of a file and the line its end is on.
+fn tokenize(text: Str, path: Str) -> Result[(Vec[Token], i64), String] {
+    let b = text.bytes().to_vec();
+    let n = b.len();
+    let mut toks: Vec[Token] = Vec.new();
+    let mut i = 0;
+    let mut line = 1;
+    while i < n {
+        let c = b[i];
+        if c == b'\n' {
+            line += 1;
+            i += 1;
+        } else if c == b' ' or c == b'\t' or c == b'\r' {
+            i += 1;
+        } else if c == b'#' {
+            while i < n and b[i] != b'\n' {
+                i += 1;
+            }
+        } else if c == b';' {
+            toks.push(Token { tok: Tok.Semi, line: line });
+            i += 1;
+        } else if c == b'{' {
+            toks.push(Token { tok: Tok.Open, line: line });
+            i += 1;
+        } else if c == b'}' {
+            toks.push(Token { tok: Tok.Close, line: line });
+            i += 1;
+        } else if c == b'"' or c == b'\'' {
+            let q = c;
+            let start = line;
+            let mut out: Vec[u8] = Vec.new();
+            i += 1;
+            loop {
+                if i >= n {
+                    let qs = if q == b'"' { "\"" } else { "'" };
+                    return Err(f"unexpected end of file, expecting {qs} in {path}:{line}");
+                }
+                let d = b[i];
+                if d == b'\\' and i + 1 < n {
+                    let e = b[i + 1];
+                    if e == b'n' {
+                        out.push(b'\n');
+                    } else if e == b't' {
+                        out.push(b'\t');
+                    } else if e == b'r' {
+                        out.push(b'\r');
+                    } else if e == b'"' or e == b'\'' or e == b'\\' {
+                        out.push(e);
+                    } else {
+                        out.push(b'\\');
+                        out.push(e);
+                    }
+                    i += 2;
+                    continue;
+                }
+                if d == q {
+                    i += 1;
+                    break;
+                }
+                if d == b'\n' {
+                    line += 1;
+                }
+                out.push(d);
+                i += 1;
+            }
+            toks.push(Token { tok: Tok.Word(String.from_utf8(out).unwrap_or("?".to_string())), line: start });
+        } else {
+            let from = i;
+            while i < n and b[i] != b' ' and b[i] != b'\t' and b[i] != b'\r' and b[i] != b'\n' and b[i] != b';' and b[i] != b'{' and b[i] != b'}' {
+                i += 1;
+            }
+            toks.push(Token { tok: Tok.Word(byte_str(b, from, i)), line: line });
+        }
+    }
+    Ok((toks, line))
+}
+
+#[derive(Clone)]
+struct Directive {
+    name: String,
+    args: Vec[String],
+    line: i64,
+    block: Vec[Directive],
+}
+
+struct Parser {
+    toks: Vec[Token],
+    pos: i64,
+    path: String,
+    eof_line: i64,
+    base_dir: String,
+}
+
+impl Parser {
+    fn block(mut ref self, top: bool, in_types: bool) -> Result[Vec[Directive], String] {
+        let mut out: Vec[Directive] = Vec.new();
+        loop {
+            if self.pos >= self.toks.len() {
+                if top {
+                    return Ok(out);
+                }
+                return Err(f"unexpected end of file, expecting \"}}\" in {self.path}:{self.eof_line}");
+            }
+            let line = self.toks[self.pos].line;
+            let name = match self.toks[self.pos].tok {
+                Tok.Word(w) => w.clone(),
+                Tok.Close => {
+                    if top {
+                        return Err(f"unexpected \"}}\" in {self.path}:{line}");
+                    }
+                    self.pos += 1;
+                    return Ok(out);
+                }
+                Tok.Semi => return Err(f"unexpected \";\" in {self.path}:{line}"),
+                Tok.Open => return Err(f"unexpected \"{{\" in {self.path}:{line}"),
+            };
+            let mut args: Vec[String] = Vec.new();
+            self.pos += 1;
+            let mut opens = false;
+            loop {
+                if self.pos >= self.toks.len() {
+                    return Err(f"unexpected end of file, expecting \";\" or \"}}\" in {self.path}:{self.eof_line}");
+                }
+                let l = self.toks[self.pos].line;
+                match self.toks[self.pos].tok {
+                    Tok.Word(w) => {
+                        args.push(w.clone());
+                        self.pos += 1;
+                    }
+                    Tok.Close => return Err(f"unexpected \"}}\" in {self.path}:{l}"),
+                    Tok.Open => {
+                        opens = true;
+                        break;
+                    }
+                    Tok.Semi => break,
+                }
+            }
+            if not in_types and not known_directive(name.as_str()) {
+                return Err(f"unknown directive \"{name}\" in {self.path}:{line}");
+            }
+            self.pos += 1;
+            if opens {
+                let inner = self.block(false, name == "types")?;
+                out.push(Directive { name: name, args: args, line: line, block: inner });
+            } else if name == "include" and not in_types {
+                let inc = load(f"{self.base_dir}/{args[0]}".as_str())?;
+                for d in inc.into_iter() {
+                    out.push(d);
+                }
+            } else {
+                out.push(Directive { name: name, args: args, line: line, block: Vec.new() });
+            }
+        }
+    }
+}
+
+fn dirname(path: Str) -> String {
+    let b = path.bytes();
+    let mut i = b.len() - 1;
+    while i > 0 and b[i] != b'/' {
+        i -= 1;
+    }
+    path[..i].to_string()
+}
+
+fn load(path: Str) -> Result[Vec[Directive], String] {
+    let text = match fs.read_to_string(path.to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"open() \"{path}\" failed ({e})"),
+    };
+    let (toks, eof_line) = tokenize(text.as_str(), path)?;
+    let mut p = Parser { toks: toks, pos: 0, path: path.to_string(), eof_line: eof_line, base_dir: dirname(path) };
+    p.block(true, false)
+}
+
+// ------------------------------------------------------------ the model
+
+struct Location {
+    modifier: String,
+    pattern: String,
+    body: Vec[Directive],
+    regex: Option[Regex],
+}
+
+impl Location {
+    fn new(d: ref Directive) -> Result[Location, String] {
+        let (modifier, pattern) = if d.args.len() == 2 {
+            (d.args[0].clone(), d.args[1].clone())
+        } else {
+            (String.new(), d.args[0].clone())
+        };
+        let regex = if modifier == "~" {
+            Some(compile(pattern.as_str())?)
+        } else if modifier == "~*" {
+            Some(compile(f"(?i){pattern}".as_str())?)
+        } else {
+            None
+        };
+        Ok(Location { modifier: modifier, pattern: pattern, body: d.block.clone(), regex: regex })
+    }
+
+    fn label(self) -> String {
+        if self.modifier.is_empty() { self.pattern.clone() } else { f"{self.modifier} {self.pattern}" }
+    }
+
+    fn first(self, name: Str) -> Option[Directive] {
+        for d in self.body {
+            if d.name == name {
+                return Some(d.clone());
+            }
+        }
+        None
+    }
+}
+
+fn compile(pattern: Str) -> Result[Regex, String] {
+    match Regex.compile(pattern) {
+        Ok(r) => Ok(r),
+        Err(e) => Err(e.message),
+    }
+}
+
+struct Server {
+    listen: i64,
+    default: bool,
+    names: Vec[String],
+    root: Option[String],
+    index: Vec[String],
+    rewrites: Vec[Directive],
+    locations: Vec[Location],
+}
+
+impl Server {
+    fn new(d: ref Directive) -> Result[Server, String] {
+        let mut s = Server {
+            listen: 80,
+            default: false,
+            names: Vec.new(),
+            root: None,
+            index: vec!["index.html".to_string()],
+            rewrites: Vec.new(),
+            locations: Vec.new(),
+        };
+        for c in d.block {
+            if c.name == "listen" {
+                s.listen = i64.parse(c.args[0]).unwrap_or(80);
+                for a in c.args[1..] {
+                    if a == "default_server" {
+                        s.default = true;
+                    }
+                }
+            } else if c.name == "server_name" {
+                s.names = c.args.clone();
+            } else if c.name == "root" {
+                s.root = Some(c.args[0].clone());
+            } else if c.name == "index" {
+                s.index = c.args.clone();
+            } else if c.name == "rewrite" or c.name == "return" {
+                s.rewrites.push(c.clone());
+            } else if c.name == "location" {
+                s.locations.push(Location.new(c)?);
+            }
+        }
+        Ok(s)
+    }
+
+    fn label(self) -> String {
+        if self.names.is_empty() { "\"\"".to_string() } else { self.names[0].clone() }
+    }
+}
+
+// ------------------------------------------------------------ requests
+
+// The decoded, merged and resolved path, or None above the root.
+fn normalize(uri: Str) -> Option[String] {
+    let raw = uri.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' and i + 2 < raw.len() + 0 and hex_value(raw[i + 1]) >= 0 and hex_value(raw[i + 2]) >= 0 {
+            out.push((hex_value(raw[i + 1]) * 16 + hex_value(raw[i + 2])) as u8);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    let decoded = String.from_utf8(out).unwrap_or("?".to_string());
+    let segs = decoded.split("/");
+    let mut parts: Vec[String] = Vec.new();
+    for s in segs[1..] {
+        if s.is_empty() or s == "." {
+            continue;
+        }
+        if s == ".." {
+            if parts.is_empty() {
+                return None;
+            }
+            parts.pop();
+            continue;
+        }
+        parts.push(s.clone());
+    }
+    let mut path = "/".to_string();
+    path.push_str(parts.join("/").as_str());
+    let last = segs[segs.len() - 1].clone();
+    if (last.is_empty() or last == "." or last == "..") and path != "/" {
+        path.push_str("/");
+    }
+    Some(path)
+}
+
+// The names of a pattern's named groups, `(?<n>` or `(?P<n>`.
+fn group_names(pattern: Str) -> Vec[String] {
+    let b = pattern.bytes().to_vec();
+    let mut names: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i + 3 < b.len() {
+        if b[i] == b'(' and b[i + 1] == b'?' {
+            let mut j = i + 2;
+            if b[j] == b'P' {
+                j += 1;
+            }
+            if j < b.len() and b[j] == b'<' and j + 1 < b.len() and b[j + 1] != b'=' and b[j + 1] != b'!' {
+                let from = j + 1;
+                let mut k = from;
+                while k < b.len() and b[k] != b'>' {
+                    k += 1;
+                }
+                names.push(byte_str(b, from, k));
+                i = k;
+                continue;
+            }
+        }
+        if b[i] == b'\\' {
+            i += 1;
+        }
+        i += 1;
+    }
+    names
+}
+
+struct Req {
+    port: i64,
+    host: String,
+    raw_uri: String,
+    args: String,
+    request_uri: String,
+    uri: String,
+    caps: Vec[String],
+    named: Vec[(String, String)],
+    lines: Vec[String],
+}
+
+impl Req {
+    fn new(port: i64, host: Str, target: Str) -> Req {
+        let lower = host.to_lowercase();
+        let h = match lower.find(":") {
+            Some(i) => lower[..i].to_string(),
+            None => lower.clone(),
+        };
+        let (raw_uri, args) = match target.find("?") {
+            Some(q) => (target[..q].to_string(), target[q + 1..].to_string()),
+            None => (target.to_string(), String.new()),
+        };
+        Req {
+            port: port,
+            host: h,
+            raw_uri: raw_uri,
+            args: args,
+            request_uri: target.to_string(),
+            uri: String.new(),
+            caps: Vec.new(),
+            named: Vec.new(),
+            lines: Vec.new(),
+        }
+    }
+
+    fn var(self, name: Str) -> String {
+        if name.len() == 1 and name.bytes()[0] >= b'0' and name.bytes()[0] <= b'9' {
+            let i = (name.bytes()[0] - b'0') as i64;
+            return if i < self.caps.len() { self.caps[i].clone() } else { String.new() };
+        }
+        if name == "uri" {
+            return self.uri.clone();
+        }
+        if name == "args" {
+            return self.args.clone();
+        }
+        if name == "host" {
+            return self.host.clone();
+        }
+        if name == "request_uri" {
+            return self.request_uri.clone();
+        }
+        if name == "scheme" {
+            return "http".to_string();
+        }
+        if name == "server_port" {
+            return f"{self.port}";
+        }
+        for (k, v) in self.named {
+            if k == name {
+                return v.clone();
+            }
+        }
+        String.new()
+    }
+
+    // `$name`, `${name}` and `$1`..`$9` replaced by their values.
+    fn expand(self, s: Str) -> String {
+        let b = s.bytes().to_vec();
+        let mut out = String.new();
+        let mut i = 0;
+        let mut plain = 0;
+        while i < b.len() {
+            if b[i] == b'$' and i + 1 < b.len() {
+                if b[i + 1] == b'{' {
+                    let mut j = i + 2;
+                    while j < b.len() and b[j] != b'}' {
+                        j += 1;
+                    }
+                    out.push_str(byte_str(b, plain, i).as_str());
+                    out.push_str(self.var(byte_str(b, i + 2, j).as_str()).as_str());
+                    i = j + 1;
+                    plain = i;
+                    continue;
+                }
+                let mut j = i + 1;
+                if b[j] >= b'0' and b[j] <= b'9' {
+                    j += 1;
+                } else {
+                    while j < b.len() and is_word_byte(b[j]) {
+                        j += 1;
+                    }
+                }
+                if j > i + 1 {
+                    out.push_str(byte_str(b, plain, i).as_str());
+                    out.push_str(self.var(byte_str(b, i + 1, j).as_str()).as_str());
+                    i = j;
+                    plain = i;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out.push_str(byte_str(b, plain, b.len()).as_str());
+        out
+    }
+
+    fn set_caps(mut ref self, c: ref Captures, pattern: Str) {
+        self.caps = Vec.new();
+        for i in 0..c.len() {
+            match c.get(i) {
+                Some(m) => self.caps.push(m.text),
+                None => self.caps.push(String.new()),
+            }
+        }
+        for n in group_names(pattern) {
+            if let Some(m) = c.name(n.as_str()) {
+                let mut found = false;
+                for i in 0..self.named.len() {
+                    if self.named[i].0 == n {
+                        self.named[i].1 = m.text.clone();
+                        found = true;
+                    }
+                }
+                if not found {
+                    self.named.push((n.clone(), m.text));
+                }
+            }
+        }
+    }
+
+    fn location_url(self, target: Str) -> String {
+        if target.starts_with("http://") or target.starts_with("https://") {
+            return target.to_string();
+        }
+        let port = if self.port == 80 { String.new() } else { f":{self.port}" };
+        f"http://{self.host}{port}{target}"
+    }
+}
+
+fn pick_server(servers: ref Vec[Server], port: i64, req: mut ref Req) -> Option[i64] {
+    let host = req.host.clone();
+    for i in 0..servers.len() {
+        if servers[i].listen == port {
+            for n in servers[i].names {
+                if n == host {
+                    return Some(i);
+                }
+            }
+        }
+    }
+    let mut best: i64 = -1;
+    let mut best_len = 0;
+    for i in 0..servers.len() {
+        if servers[i].listen == port {
+            for n in servers[i].names {
+                if n.starts_with("*.") and host.ends_with(n[1..]) and (best < 0 or n.len() > best_len) {
+                    best = i;
+                    best_len = n.len();
+                }
+            }
+        }
+    }
+    if best >= 0 {
+        return Some(best);
+    }
+    for i in 0..servers.len() {
+        if servers[i].listen == port {
+            for n in servers[i].names {
+                if n.ends_with(".*") and host.starts_with(n[..n.len() - 1]) and (best < 0 or n.len() > best_len) {
+                    best = i;
+                    best_len = n.len();
+                }
+            }
+        }
+    }
+    if best >= 0 {
+        return Some(best);
+    }
+    for i in 0..servers.len() {
+        if servers[i].listen == port {
+            for n in servers[i].names {
+                if n.starts_with("~") {
+                    if let Ok(re) = Regex.compile(n[1..]) {
+                        if let Some(c) = re.captures(host.as_str()) {
+                            req.set_caps(c, n[1..]);
+                            return Some(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut first: i64 = -1;
+    for i in 0..servers.len() {
+        if servers[i].listen == port {
+            if servers[i].default {
+                return Some(i);
+            }
+            if first < 0 {
+                first = i;
+            }
+        }
+    }
+    if first >= 0 { Some(first) } else { None }
+}
+
+fn find_location(srv: ref Server, req: mut ref Req) -> Option[i64] {
+    for i in 0..srv.locations.len() {
+        if srv.locations[i].modifier == "=" and srv.locations[i].pattern == req.uri {
+            return Some(i);
+        }
+    }
+    let mut best: i64 = -1;
+    for i in 0..srv.locations.len() {
+        let loc = ref srv.locations[i];
+        if (loc.modifier.is_empty() or loc.modifier == "^~") and req.uri.starts_with(loc.pattern.as_str()) {
+            if best < 0 or loc.pattern.len() > srv.locations[best].pattern.len() {
+                best = i;
+            }
+        }
+    }
+    if best >= 0 and srv.locations[best].modifier == "^~" {
+        return Some(best);
+    }
+    for i in 0..srv.locations.len() {
+        if let Some(re) = srv.locations[i].regex {
+            if let Some(c) = re.captures(req.uri.as_str()) {
+                req.set_caps(c, srv.locations[i].pattern.as_str());
+                return Some(i);
+            }
+        }
+    }
+    if best >= 0 { Some(best) } else { None }
+}
+
+// ------------------------------------------------------------ handling
+
+struct Done {
+    status: i64,
+    text: Option[String],
+    location: Option[String],
+    path: Option[String],
+}
+
+fn done(status: i64) -> Done {
+    Done { status: status, text: None, location: None, path: None }
+}
+
+fn done_text(status: i64, text: own String) -> Done {
+    Done { status: status, text: Some(text), location: None, path: None }
+}
+
+fn done_redirect(status: i64, url: own String) -> Done {
+    Done { status: status, text: None, location: Some(url), path: None }
+}
+
+// "last", "break" or "" when the directives run out; Err for a return
+// or a redirect.
+fn run_rewrites(directives: ref Vec[Directive], req: mut ref Req) -> Result[String, Done] {
+    for d in directives {
+        if d.name == "return" {
+            let code = i64.parse(d.args[0]).unwrap_or(500);
+            if code == 301 or code == 302 or code == 303 or code == 307 or code == 308 {
+                let url = req.expand(d.args[1].as_str());
+                return Err(done_redirect(code, req.location_url(url.as_str())));
+            }
+            if d.args.len() > 1 {
+                return Err(done_text(code, req.expand(d.args[1].as_str())));
+            }
+            return Err(done(code));
+        }
+        if d.name != "rewrite" {
+            continue;
+        }
+        let re = match Regex.compile(d.args[0].as_str()) {
+            Ok(r) => r,
+            Err(e) => return Err(done_text(500, e.message)),
+        };
+        let c = match re.captures(req.uri.as_str()) {
+            Some(c) => c,
+            None => continue,
+        };
+        req.set_caps(c, d.args[0].as_str());
+        let mut repl = req.expand(d.args[1].as_str());
+        let flag = if d.args.len() > 2 { d.args[2].clone() } else { String.new() };
+        if let Some(q) = repl.find("?") {
+            let new_args = repl[q + 1..].to_string();
+            repl = repl[..q].to_string();
+            if new_args.ends_with("?") {
+                req.args = new_args[..new_args.len() - 1].to_string();
+            } else if not new_args.is_empty() and not req.args.is_empty() {
+                req.args = f"{new_args}&{req.args}";
+            } else if not new_args.is_empty() {
+                req.args = new_args;
+            }
+        }
+        let query = if req.args.is_empty() { String.new() } else { f"?{req.args}" };
+        let redirect = repl.starts_with("http://") or repl.starts_with("https://");
+        if redirect or flag == "redirect" or flag == "permanent" {
+            let url = f"{req.location_url(repl.as_str())}{query}";
+            let shown = if flag.is_empty() { "redirect".to_string() } else { flag.clone() };
+            req.lines.push(f"rewrite: {url} ({shown})");
+            let code = if flag == "permanent" { 301 } else { 302 };
+            return Err(done_redirect(code, url));
+        }
+        req.uri = repl.clone();
+        let shown = if flag.is_empty() { "continue".to_string() } else { flag.clone() };
+        req.lines.push(f"rewrite: {repl}{query} ({shown})");
+        if flag == "last" or flag == "break" {
+            return Ok(flag);
+        }
+    }
+    Ok(String.new())
+}
+
+fn path_for(srv: ref Server, loc: ref Location, req: ref Req, uri: Str) -> String {
+    if let Some(a) = loc.first("alias") {
+        let base = req.expand(a.args[0].as_str());
+        return f"{base}{uri[loc.pattern.len()..]}";
+    }
+    let base = match loc.first("root") {
+        Some(r) => r.args[0].clone(),
+        None => srv.root.clone().unwrap_or("html".to_string()),
+    };
+    f"{req.expand(base.as_str())}{uri}"
+}
+
+fn is_file(path: Str) -> bool {
+    match fs.metadata(path.to_string()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    }
+}
+
+fn is_dir(path: Str) -> bool {
+    match fs.metadata(path.to_string()) {
+        Ok(m) => m.is_dir,
+        Err(_) => false,
+    }
+}
+
+struct Upstream {
+    name: String,
+    peers: Vec[String],
+    used: i64,
+}
+
+fn cycle() -> Done {
+    done_text(500, "rewrite or internal redirection cycle".to_string())
+}
+
+fn handle(srv: ref Server, req: mut ref Req, upstreams: mut ref Vec[Upstream]) -> Done {
+    let mut changes = 0;
+    let mut server_phase = true;
+    loop {
+        if server_phase {
+            if let Err(d) = run_rewrites(srv.rewrites, req) {
+                return d;
+            }
+        }
+        server_phase = false;
+        let li = match find_location(srv, req) {
+            Some(i) => i,
+            None => return done(404),
+        };
+        let loc = ref srv.locations[li];
+        req.lines.push(f"location: {loc.label()}");
+        let flag = match run_rewrites(loc.body, req) {
+            Ok(f) => f,
+            Err(d) => return d,
+        };
+        if flag == "last" {
+            changes += 1;
+            if changes > MAX_URI_CHANGES {
+                return cycle();
+            }
+            continue;
+        }
+        if let Some(pp) = loc.first("proxy_pass") {
+            let target = pp.args[0].clone();
+            let name = match target.find("://") {
+                Some(i) => target[i + 3..].to_string(),
+                None => target.clone(),
+            };
+            let query = if req.args.is_empty() { String.new() } else { f"?{req.args}" };
+            for u in upstreams.iter_mut() {
+                if u.name == name {
+                    let peer = u.peers[u.used % u.peers.len()].clone();
+                    u.used += 1;
+                    return done_text(200, f"proxied to http://{peer}{req.uri}{query}");
+                }
+            }
+            return done_text(200, f"proxied to http://{name}{req.uri}{query}");
+        }
+        let mut uri = req.uri.clone();
+        if let Some(tf) = loc.first("try_files") {
+            let mut hit: Option[String] = None;
+            for a in tf.args[..tf.args.len() - 1] {
+                let cand = req.expand(a.as_str());
+                let p = path_for(srv, loc, req, cand.as_str());
+                let found = if cand.ends_with("/") { is_dir(p.as_str()) } else { is_file(p.as_str()) };
+                if found {
+                    hit = Some(cand);
+                    break;
+                }
+            }
+            match hit {
+                Some(h) => {
+                    req.lines.push(f"try_files: {h}");
+                    uri = h;
+                }
+                None => {
+                    let last = tf.args[tf.args.len() - 1].clone();
+                    if last.starts_with("=") {
+                        req.lines.push(f"try_files: {last}");
+                        return done(i64.parse(last[1..]).unwrap_or(404));
+                    }
+                    let mut target = req.expand(last.as_str());
+                    req.lines.push(f"internal redirect: {target}");
+                    if let Some(q) = target.find("?") {
+                        req.args = target[q + 1..].to_string();
+                        target = target[..q].to_string();
+                    }
+                    req.uri = target;
+                    changes += 1;
+                    if changes > MAX_URI_CHANGES {
+                        return cycle();
+                    }
+                    server_phase = true;
+                    continue;
+                }
+            }
+        }
+        let path = path_for(srv, loc, req, uri.as_str());
+        if uri.ends_with("/") {
+            let mut indexed = false;
+            for name in srv.index {
+                if is_file(f"{path}{name}".as_str()) {
+                    req.lines.push(f"index: {uri}{name}");
+                    req.uri = f"{uri}{name}";
+                    changes += 1;
+                    indexed = true;
+                    break;
+                }
+            }
+            if not indexed {
+                if is_dir(path.as_str()) {
+                    return done_text(403, f"directory index of \"{path}\" is forbidden");
+                }
+                return done(404);
+            }
+            server_phase = true;
+            continue;
+        }
+        if is_file(path.as_str()) {
+            return Done { status: 200, text: None, location: None, path: Some(path) };
+        }
+        if is_dir(path.as_str()) {
+            return done_redirect(301, req.location_url(f"{uri}/".as_str()));
+        }
+        return done_text(404, f"open() \"{path}\" failed");
+    }
+}
+
+struct Site {
+    servers: Vec[Server],
+    upstreams: Vec[Upstream],
+    types: Vec[(String, String)],
+    default_type: String,
+}
+
+fn mime(site: ref Site, path: Str) -> String {
+    let b = path.bytes();
+    let mut slash = 0;
+    let mut dot: i64 = -1;
+    for i in 0..b.len() {
+        if b[i] == b'/' {
+            slash = i + 1;
+            dot = -1;
+        } else if b[i] == b'.' {
+            dot = i;
+        }
+    }
+    if dot < 0 or dot < slash {
+        return site.default_type.clone();
+    }
+    let ext = path[dot + 1..].to_lowercase();
+    for (e, t) in site.types {
+        if e == ext {
+            return t.clone();
+        }
+    }
+    site.default_type.clone()
+}
+
+fn serve(site: mut ref Site, port: i64, host: Str, target: Str) {
+    println(f"GET {port} {host} {target}");
+    let mut req = Req.new(port, host, target);
+    let si = match pick_server(site.servers, port, mut req) {
+        Some(i) => i,
+        None => {
+            println(f"  no server listens on {port}");
+            return;
+        }
+    };
+    let srv = ref site.servers[si];
+    println(f"  server: {srv.label()} (listen {srv.listen})");
+    let d = match normalize(req.raw_uri.as_str()) {
+        None => done(400),
+        Some(n) => {
+            if n != req.raw_uri {
+                println(f"  normalized: {n}");
+            }
+            req.uri = n;
+            handle(srv, mut req, site.upstreams)
+        }
+    };
+    let mut last_loc = String.new();
+    for l in req.lines {
+        println(f"  {l}");
+        if l.starts_with("location: ") {
+            last_loc = l["location: ".len()..].to_string();
+        }
+    }
+    let mut out = f"  {d.status}";
+    if d.status == 444 {
+        out.push_str(" (connection closed)");
+    } else if let Some(p) = d.path {
+        let size = match fs.metadata(p.clone()) {
+            Ok(m) => m.len,
+            Err(_) => 0,
+        };
+        out.push_str(f" {mime(site, p.as_str())} {size} bytes {p}");
+    } else if let Some(l) = d.location {
+        out.push_str(f" Location: {l}");
+    } else if let Some(t) = d.text {
+        out.push_str(f" \"{show(t.as_str())}\"");
+    } else {
+        out.push_str(f" {reason(d.status)}");
+    }
+    println(out);
+    let header_codes = [200, 201, 204, 206, 301, 302, 303, 304, 307, 308];
+    if header_codes.contains(d.status) and not last_loc.is_empty() {
+        for loc in srv.locations {
+            if loc.label() == last_loc {
+                for h in loc.body {
+                    if h.name == "add_header" {
+                        println(f"  header: {h.args[0]}: {h.args[1]}");
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+fn check(path: Str) -> Option[Vec[Directive]] {
+    match load(path) {
+        Ok(tree) => {
+            println(f"nginx: the configuration file {path} syntax is ok");
+            println(f"nginx: configuration file {path} test is successful");
+            Some(tree)
+        }
+        Err(e) => {
+            println(f"nginx: [emerg] {e}");
+            println(f"nginx: configuration file {path} test failed");
+            None
+        }
+    }
+}
+
+// ------------------------------------------------------------ data files (gen_kara.py)
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("# web1: two sites, an API, per-user pages and a catch-all.\n");
+    s.push_str("worker_processes 2;\n");
+    s.push_str("\n");
+    s.push_str("events {\n");
+    s.push_str("    worker_connections 1024;\n");
+    s.push_str("}\n");
+    s.push_str("\n");
+    s.push_str("http {\n");
+    s.push_str("    include mime.types;\n");
+    s.push_str("    default_type application/octet-stream;\n");
+    s.push_str("\n");
+    s.push_str("    upstream api_backend {\n");
+    s.push_str("        server 10.0.0.11:8080;\n");
+    s.push_str("        server 10.0.0.12:8080;\n");
+    s.push_str("        server 10.0.0.13:8080;\n");
+    s.push_str("    }\n");
+    s.push_str("\n");
+    s.push_str("    # Requests for a name no server claims are dropped.\n");
+    s.push_str("    server {\n");
+    s.push_str("        listen 80 default_server;\n");
+    s.push_str("        server_name _;\n");
+    s.push_str("        return 444;\n");
+    s.push_str("    }\n");
+    s.push_str("\n");
+    s.push_str("    server {\n");
+    s.push_str("        listen 80;\n");
+    s.push_str("        server_name example.com www.example.com;\n");
+    s.push_str("        root data/www/example;\n");
+    s.push_str("        index index.html index.htm;\n");
+    s.push_str("\n");
+    s.push_str("        rewrite \"^/blog/(\\d{4})/(\\d{2})/([a-z0-9-]+)$\" /posts/$1-$2-$3.html last;\n");
+    s.push_str("        rewrite ^/old-about$ /about/ permanent;\n");
+    s.push_str("        rewrite ^/search$ /find?engine=local;\n");
+    s.push_str("\n");
+    s.push_str("        location = /healthz {\n");
+    s.push_str("            return 200 \"ok\\n\";\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location / {\n");
+    s.push_str("            try_files $uri $uri/ =404;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location ^~ /static/ {\n");
+    s.push_str("            root data/www/assets;\n");
+    s.push_str("            add_header Cache-Control \"max-age=86400\";\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location ~* \\.(png|jpe?g|gif|ico)$ {\n");
+    s.push_str("            root data/www/assets;\n");
+    s.push_str("            add_header Cache-Control \"max-age=3600\";\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location ~ ^/posts/ {\n");
+    s.push_str("            try_files $uri /posts/missing.html;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /api/ {\n");
+    s.push_str("            proxy_pass http://api_backend;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location ~ /\\. {\n");
+    s.push_str("            return 403;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /downloads/ {\n");
+    s.push_str("            alias data/www/files/;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /go/ {\n");
+    s.push_str("            rewrite ^/go/(.*)$ https://$1 redirect;\n");
+    s.push_str("            return 404;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /find {\n");
+    s.push_str("            return 200 \"search: $args\\n\";\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /loop {\n");
+    s.push_str("            rewrite ^ /loop2 last;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /loop2 {\n");
+    s.push_str("            rewrite ^ /loop last;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /app/ {\n");
+    s.push_str("            try_files $uri /app/index.html;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /admin {\n");
+    s.push_str("            return 301 https://$host$request_uri;\n");
+    s.push_str("        }\n");
+    s.push_str("\n");
+    s.push_str("        location /legacy/ {\n");
+    s.push_str("            rewrite ^/legacy/(.*)$ /static/$1 break;\n");
+    s.push_str("            root data/www/assets;\n");
+    s.push_str("        }\n");
+    s.push_str("    }\n");
+    s.push_str("\n");
+    s.push_str("    server {\n");
+    s.push_str("        listen 80;\n");
+    s.push_str("        server_name *.example.org;\n");
+    s.push_str("        return 302 https://example.com$request_uri;\n");
+    s.push_str("    }\n");
+    s.push_str("\n");
+    s.push_str("    server {\n");
+    s.push_str("        listen 80;\n");
+    s.push_str("        server_name mail.*;\n");
+    s.push_str("        return 200 \"webmail is down for maintenance\\n\";\n");
+    s.push_str("    }\n");
+    s.push_str("\n");
+    s.push_str("    server {\n");
+    s.push_str("        listen 8080;\n");
+    s.push_str("        server_name ~^(?<user>[a-z0-9]+)\\.users\\.example\\.net$;\n");
+    s.push_str("        root data/www/users/$user;\n");
+    s.push_str("\n");
+    s.push_str("        location / {\n");
+    s.push_str("            try_files $uri $uri/index.html =404;\n");
+    s.push_str("        }\n");
+    s.push_str("    }\n");
+    s.push_str("}\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("types {\n");
+    s.push_str("    text/html                html htm;\n");
+    s.push_str("    text/css                 css;\n");
+    s.push_str("    text/plain               txt;\n");
+    s.push_str("    application/javascript   js;\n");
+    s.push_str("    application/json         json;\n");
+    s.push_str("    application/pdf          pdf;\n");
+    s.push_str("    image/png                png;\n");
+    s.push_str("    image/jpeg               jpeg jpg;\n");
+    s.push_str("    image/x-icon             ico;\n");
+    s.push_str("}\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("http {\n");
+    s.push_str("    server {\n");
+    s.push_str("        listen 80;\n");
+    s.push_str("        server_name broken.example.com\n");
+    s.push_str("    }\n");
+    s.push_str("}\n");
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("http {\n");
+    s.push_str("    server {\n");
+    s.push_str("        lisen 80;\n");
+    s.push_str("    }\n");
+    s.push_str("}\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("http {\n");
+    s.push_str("    server {\n");
+    s.push_str("        listen 80;\n");
+    s.push_str("        location / {\n");
+    s.push_str("            root data/www;\n");
+    s
+}
+
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("# method port host target\n");
+    s.push_str("GET 80 example.com /\n");
+    s.push_str("GET 80 www.example.com /about\n");
+    s.push_str("GET 80 example.com /about/\n");
+    s.push_str("GET 80 example.com /old-about?x=1\n");
+    s.push_str("GET 80 example.com /blog/2026/10/hello-world?ref=feed\n");
+    s.push_str("GET 80 example.com /blog/2026/11/not-written\n");
+    s.push_str("GET 80 example.com /healthz\n");
+    s.push_str("GET 80 example.com /static/site.css\n");
+    s.push_str("GET 80 example.com /static/logo.png\n");
+    s.push_str("GET 80 example.com /img/cat.jpg\n");
+    s.push_str("GET 80 example.com /img/dog.gif\n");
+    s.push_str("GET 80 example.com /api/orders?page=2\n");
+    s.push_str("GET 80 example.com /api/users/7\n");
+    s.push_str("GET 80 example.com /api/\n");
+    s.push_str("GET 80 example.com /.env\n");
+    s.push_str("GET 80 example.com /static/../.git/config\n");
+    s.push_str("GET 80 example.com /../../etc/passwd\n");
+    s.push_str("GET 80 example.com //app//main.js\n");
+    s.push_str("GET 80 example.com /app/settings/profile\n");
+    s.push_str("GET 80 example.com /downloads/report.pdf\n");
+    s.push_str("GET 80 example.com /downloads/notes%20v2.txt\n");
+    s.push_str("GET 80 example.com /downloads/\n");
+    s.push_str("GET 80 example.com /docs\n");
+    s.push_str("GET 80 example.com /docs/\n");
+    s.push_str("GET 80 example.com /go/docs.example.com/start?lang=en\n");
+    s.push_str("GET 80 example.com /search?q=nginx\n");
+    s.push_str("GET 80 example.com /loop\n");
+    s.push_str("GET 80 example.com /admin/users?sort=name\n");
+    s.push_str("GET 80 example.com /legacy/site.css\n");
+    s.push_str("GET 80 EXAMPLE.COM:80 /HEALTHZ\n");
+    s.push_str("GET 80 shop.example.org /cart?id=5\n");
+    s.push_str("GET 80 deep.shop.example.org /\n");
+    s.push_str("GET 80 mail.example.net /inbox\n");
+    s.push_str("GET 80 unknown.test /\n");
+    s.push_str("GET 8080 alice.users.example.net /\n");
+    s.push_str("GET 8080 alice.users.example.net /notes.txt\n");
+    s.push_str("GET 8080 bob.users.example.net /\n");
+    s.push_str("GET 8080 nobody.example.net /\n");
+    s
+}
+
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("<h1>Example</h1>\n");
+    s
+}
+
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("<h1>About us</h1>\n");
+    s.push_str("<p>Since 2009.</p>\n");
+    s
+}
+
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("<article>Hello, world.</article>\n");
+    s
+}
+
+fn file_9() -> String {
+    let mut s = String.new();
+    s.push_str("<p>That post is gone.</p>\n");
+    s
+}
+
+fn file_10() -> String {
+    let mut s = String.new();
+    s.push_str("<div id=\"app\"></div><script src=\"/app/main.js\"></script>\n");
+    s
+}
+
+fn file_11() -> String {
+    let mut s = String.new();
+    s.push_str("console.log('app');\n");
+    s
+}
+
+fn file_12() -> String {
+    let mut s = String.new();
+    s.push_str("DB_PASSWORD=hunter2\n");
+    s
+}
+
+fn file_13() -> String {
+    let mut s = String.new();
+    s.push_str("[core]\n");
+    s.push_str("	bare = false\n");
+    s
+}
+
+fn file_14() -> String {
+    let mut s = String.new();
+    s.push_str("Read the guide.\n");
+    s
+}
+
+fn file_15() -> String {
+    let mut s = String.new();
+    s.push_str("body { margin: 0; }\n");
+    s
+}
+
+fn file_16() -> String {
+    let mut s = String.new();
+    s.push_str("PNG-BYTES-0123456789\n");
+    s
+}
+
+fn file_17() -> String {
+    let mut s = String.new();
+    s.push_str("JPEG-CAT\n");
+    s
+}
+
+fn file_18() -> String {
+    let mut s = String.new();
+    s.push_str("%PDF-1.7 quarterly report\n");
+    s
+}
+
+fn file_19() -> String {
+    let mut s = String.new();
+    s.push_str("second draft\n");
+    s
+}
+
+fn file_20() -> String {
+    let mut s = String.new();
+    s.push_str("<h1>Alice's page</h1>\n");
+    s
+}
+
+fn file_21() -> String {
+    let mut s = String.new();
+    s.push_str("buy milk\n");
+    s
+}
+
+fn file_22() -> String {
+    let mut s = String.new();
+    s.push_str("JPEG-BOB\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("nginx.conf".to_string(), file_0()));
+    v.push(("mime.types".to_string(), file_1()));
+    v.push(("broken1.conf".to_string(), file_2()));
+    v.push(("broken2.conf".to_string(), file_3()));
+    v.push(("broken3.conf".to_string(), file_4()));
+    v.push(("requests.txt".to_string(), file_5()));
+    v.push(("www/example/index.html".to_string(), file_6()));
+    v.push(("www/example/about/index.html".to_string(), file_7()));
+    v.push(("www/example/posts/2026-10-hello-world.html".to_string(), file_8()));
+    v.push(("www/example/posts/missing.html".to_string(), file_9()));
+    v.push(("www/example/app/index.html".to_string(), file_10()));
+    v.push(("www/example/app/main.js".to_string(), file_11()));
+    v.push(("www/example/.env".to_string(), file_12()));
+    v.push(("www/example/.git/config".to_string(), file_13()));
+    v.push(("www/example/docs/guide.txt".to_string(), file_14()));
+    v.push(("www/assets/static/site.css".to_string(), file_15()));
+    v.push(("www/assets/static/logo.png".to_string(), file_16()));
+    v.push(("www/assets/img/cat.jpg".to_string(), file_17()));
+    v.push(("www/files/report.pdf".to_string(), file_18()));
+    v.push(("www/files/notes v2.txt".to_string(), file_19()));
+    v.push(("www/users/alice/index.html".to_string(), file_20()));
+    v.push(("www/users/alice/notes.txt".to_string(), file_21()));
+    v.push(("www/users/bob/photo.jpg".to_string(), file_22()));
+    v
+}
+
+fn write_data() -> Result[(), String] {
+    for (name, text) in data_files() {
+        let path = f"data/{name}";
+        if let Err(e) = fs.create_dir_all(dirname(path.as_str())) {
+            return Err(f"{e}");
+        }
+        if let Err(e) = fs.write(path, text) {
+            return Err(f"{e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    for b in ["data/broken1.conf", "data/broken2.conf", "data/broken3.conf"] {
+        let _ = check(b);
+    }
+    let tree = match check("data/nginx.conf") {
+        Some(t) => t,
+        None => return Err("nginx.conf did not load".to_string()),
+    };
+    let mut site = Site { servers: Vec.new(), upstreams: Vec.new(), types: Vec.new(), default_type: "text/plain".to_string() };
+    for top in tree {
+        if top.name != "http" {
+            continue;
+        }
+        for d in top.block {
+            if d.name == "types" {
+                for t in d.block {
+                    for ext in t.args {
+                        site.types.push((ext.clone(), t.name.clone()));
+                    }
+                }
+            } else if d.name == "default_type" {
+                site.default_type = d.args[0].clone();
+            } else if d.name == "upstream" {
+                let mut peers: Vec[String] = Vec.new();
+                for s in d.block {
+                    if s.name == "server" {
+                        peers.push(s.args[0].clone());
+                    }
+                }
+                site.upstreams.push(Upstream { name: d.args[0].clone(), peers: peers, used: 0 });
+            } else if d.name == "server" {
+                site.servers.push(Server.new(d)?);
+            }
+        }
+    }
+    let mut nloc = 0;
+    for s in site.servers {
+        nloc += s.locations.len();
+    }
+    println(f"{site.servers.len()} servers, {nloc} locations, {site.upstreams.len()} upstreams, {site.types.len()} types");
+    println("");
+    let requests = fs.read_to_string("data/requests.txt".to_string()).unwrap_or(String.new());
+    for line in requests.split("\n") {
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        let f = line.split(" ");
+        serve(mut site, i64.parse(f[1]).unwrap_or(80), f[2].as_str(), f[3].as_str());
+    }
+    for u in site.upstreams {
+        println(f"upstream {u.name}: {u.used} request(s) over {u.peers.len()} peers");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(f"error: {e}");
+    }
+}
