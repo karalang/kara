@@ -1395,6 +1395,13 @@ pub(crate) fn is_copy_type_in_scope(
                     .iter()
                     .all(|a| is_copy_type_in_scope(a, tc, copy_params));
             }
+            // B-2026-10-12-14 — `Str` (lowered as `StringSlice`) is a
+            // pointer and a length that borrows like a `ref`; design.md
+            // § Strings makes it `Copy`, as the typechecker's
+            // `is_copy_type_during_check` already does.
+            if name == "StringSlice" && args.is_empty() {
+                return true;
+            }
             if let Some(info) = tc.struct_info.get(name) {
                 info.derived_traits.contains("Copy")
             } else if let Some(info) = tc.enum_info.get(name) {

@@ -5513,3 +5513,27 @@ fn map_keys_and_values_are_lent_iterators() {
         "m.keys().cloned().collect()",
     );
 }
+
+#[test]
+fn a_str_is_copy() {
+    // B-2026-10-12-14: design.md § Strings makes `Str` `Copy`, so a `Str`
+    // parameter used twice, a rebind of a `Str`, and a read of a `Vec[Str]`
+    // element are all copies, not moves.
+    accepted(
+        "str-is-copy",
+        "fn twice(s: Str) -> i64 {\n\
+             let a = String.from(s);\n\
+             let b = String.from(s);\n\
+             a.len() + b.len()\n\
+         }\n\
+         fn main() {\n\
+             let text = String.from(\"ab,cd\");\n\
+             let x: Str = text[0..2];\n\
+             let y = x;\n\
+             println(f\"{twice(text)} {x} {y}\");\n\
+             let v: Vec[Str] = vec![\"p\", \"q\"];\n\
+             let first = v[0];\n\
+             println(f\"{first} {v.len()}\");\n\
+         }\n",
+    );
+}
