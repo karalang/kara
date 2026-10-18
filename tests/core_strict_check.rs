@@ -8471,3 +8471,128 @@ fn nil_coalesce_literal_fallback_of_a_str_option() {
         "[]\n",
     );
 }
+
+/// B-2026-10-14-55: an unknown method on an ambient resource is an error,
+/// whether the resource is named by its module (`stdout`) or its type
+/// (`Clock`); a known one checks.
+#[test]
+fn an_unknown_method_on_a_resource_is_an_error() {
+    rejected(
+        "resource-type-unknown-method",
+        r#"fn main() {
+    let r = Clock.bogus_op();
+    stdout.bogus_op();
+    println("ran");
+}
+"#,
+        "no method 'bogus_op' on resource 'Clock'",
+    );
+    rejected(
+        "resource-module-unknown-method",
+        r#"fn main() {
+    let r = Clock.bogus_op();
+    stdout.bogus_op();
+    println("ran");
+}
+"#,
+        "no method 'bogus_op' on 'Stdout' (the `stdout` resource)",
+    );
+    accepted_and_runs(
+        "resource-type-known-methods",
+        r#"fn main() {
+    let t = Clock.now();
+    let w = Clock.wall_ns();
+    println("ran");
+}
+"#,
+        "ran\n",
+    );
+}
+
+/// B-2026-10-14-62: a stored `Fn` is move-only, so it is not copied out of a
+/// borrowed element; `(r.h)(..)` calls it in place.
+#[test]
+fn a_stored_fn_is_not_copied_out_of_a_borrow() {
+    rejected(
+        "stored-fn-out-of-borrow",
+        r#"fn dbl(x: i64) -> i64 { x * 2 }
+fn inc(x: i64) -> i64 { x + 1 }
+struct R { h: Fn(i64) -> i64 }
+fn main() {
+    let rs = vec![R { h: dbl }, R { h: inc }];
+    let mut t = 0;
+    for r in rs.iter() {
+        let h = r.h;
+        t += h(1000);
+    }
+    println(f"{t}");
+}
+"#,
+        "cannot move a non-`Copy` value out of a borrowed place",
+    );
+    accepted_and_runs(
+        "stored-fn-called-in-place",
+        r#"fn dbl(x: i64) -> i64 { x * 2 }
+fn inc(x: i64) -> i64 { x + 1 }
+struct R { h: Fn(i64) -> i64 }
+fn main() {
+    let rs = vec![R { h: dbl }, R { h: inc }];
+    let mut t = 0;
+    for r in rs.iter() {
+        t += (r.h)(1000);
+    }
+    println(f"{t}");
+}
+"#,
+        "3001\n",
+    );
+}
+
+/// B-2026-10-15-38: `f64.parse(t.text)` borrows the field, as it does a
+/// local `String`.
+#[test]
+fn parse_of_a_field_borrows_it() {
+    accepted_and_runs(
+        "parse-field-borrows",
+        r#"struct T { text: String, f: f64 }
+fn main() {
+    let mut out: Vec[T] = Vec.new();
+    let mut t = T { text: "1.5".to_string(), f: 0.0 };
+    t.f = f64.parse(t.text).unwrap_or(0.0);
+    out.push(t);
+    let text = "2.5".to_string();
+    let g = f64.parse(text).unwrap_or(0.0);
+    out.push(T { text: text, f: g });
+    println(f"{out[0].f} {out[1].f} {out[1].text}");
+}
+"#,
+        "1.5 2.5 2.5\n",
+    );
+}
+
+/// B-2026-10-18-16: `PriorityQueue.pop();` discards the removed element,
+/// like `Vec.pop();`, so the implicit `Option` must_use does not fire.
+#[test]
+fn priority_queue_pop_discard_is_not_must_use() {
+    let (dir, path) = fixture(
+        "pq-pop-discard",
+        r#"fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(3);
+    q.push(1);
+    q.pop();
+    let mut v: Vec[i64] = vec![1, 2];
+    v.pop();
+    println(f"{q.len()} {v.len()}");
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "check must pass: {err}");
+    assert!(
+        !err.contains("must_use"),
+        "no must_use warning expected: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1433,6 +1433,30 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Error;
                 }
             }
+            // B-2026-10-14-55: the library declares every method an ambient
+            // resource has, so any other name is a typo, as it is through the
+            // lowercase module (`clock.bogus()`).
+            if self.library_methods_from_source
+                && crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&type_name.as_str())
+                && self.local_scope.lookup(type_name).is_none()
+            {
+                let known = self.env.impls.iter().any(|imp| {
+                    imp.target_type == *type_name
+                        && imp.target_args.is_empty()
+                        && imp.methods.contains_key(member)
+                }) || self
+                    .env
+                    .functions
+                    .contains_key(&format!("{type_name}.{member}"));
+                if !known {
+                    self.type_error(
+                        format!("no method '{member}' on resource '{type_name}'"),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    return Type::Error;
+                }
+            }
             if self.is_known_type_name(type_name)
                 && !crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&type_name.as_str())
                 // A comptime-derived type's associated fns (e.g. a derived
