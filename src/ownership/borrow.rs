@@ -128,6 +128,14 @@ impl<'a> super::OwnershipChecker<'a> {
         if crate::ownership::is_gpu_readonly_buffer_call(method_call) {
             return true;
         }
+        if let Some(b) = crate::ownership::string_receiver_arg_is_borrow(
+            self.typecheck_result,
+            &self.method_param_modes,
+            method_call,
+            arg_index,
+        ) {
+            return b;
+        }
         // Trust the span-resolved modes whenever they actually carry an entry
         // for THIS arg position. In a method chain the parser aliases every
         // call's span to the receiver's, so `method_callee_types` collides and

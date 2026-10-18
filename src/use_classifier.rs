@@ -1830,6 +1830,16 @@ impl<'a> UseClassifier<'a> {
         if crate::ownership::is_gpu_readonly_buffer_call(method_call) {
             return true;
         }
+        // A built-in `String` method reads its arguments, as the ownership
+        // twin decides (B-2026-10-15-23).
+        if let Some(b) = crate::ownership::string_receiver_arg_is_borrow(
+            self.tc,
+            self.method_param_modes,
+            method_call,
+            arg_index,
+        ) {
+            return b;
+        }
         // Trust the span-resolved modes whenever they carry an entry for THIS
         // arg position; only when the entry is missing (the chained-call span
         // collision resolved the inner call to a sibling with fewer params —

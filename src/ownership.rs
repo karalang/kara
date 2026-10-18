@@ -175,6 +175,46 @@ pub(crate) fn ambient_arg_is_borrow(
     Some(matches!(mode, OwnershipMode::Ref | OwnershipMode::MutRef))
 }
 
+/// Whether argument `arg_index` of a method called on a `String` or `Str`
+/// receiver is a borrow, decided by the receiver's type rather than the
+/// method's name: the `String` declaration when there is one, and otherwise,
+/// for the built-ins the standard library does not declare (`replacen`), a
+/// read, since every argument of one is a needle, a replacement or a count.
+/// The name lookup it replaces found an unrelated owned `find` (`Regex.find`,
+/// `Iterator.find`) for a `Str` receiver, or no entry at all, and made the
+/// argument a move (B-2026-10-15-23). `None` for any other receiver, and for
+/// a method the `Str` view declares itself (its own key decides).
+pub(crate) fn string_receiver_arg_is_borrow(
+    tc: &crate::typechecker::TypeCheckResult,
+    method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
+    method_call: &Expr,
+    arg_index: usize,
+) -> Option<bool> {
+    let ExprKind::MethodCall { object, method, .. } = &method_call.kind else {
+        return None;
+    };
+    let (ty, _) = tc.node_types.get(&object.id)?;
+    let ty = match ty {
+        Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+        t => t,
+    };
+    let view = matches!(ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+    if !view && !matches!(ty, Type::Str) {
+        return None;
+    }
+    if view && method_param_modes.contains_key(&format!("StringSlice.{method}")) {
+        return None;
+    }
+    if let Some(modes) = method_param_modes.get(&format!("String.{method}")) {
+        return modes
+            .get(arg_index)
+            .map(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef));
+    }
+    crate::typechecker::STRING_BUILTIN_METHODS
+        .contains(&method.as_str())
+        .then_some(true)
+}
+
 pub(crate) fn arg_is_borrow_by_method_name(
     method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
     method: &str,

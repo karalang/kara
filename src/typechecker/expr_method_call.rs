@@ -118,7 +118,7 @@ pub(super) const MAP_BUILTIN_METHODS: &[&str] = &[
     "values",
 ];
 
-pub(super) const STRING_BUILTIN_METHODS: &[&str] = &[
+pub(crate) const STRING_BUILTIN_METHODS: &[&str] = &[
     "as_str",
     "bytes",
     "char_at",

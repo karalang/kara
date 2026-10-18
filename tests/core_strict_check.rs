@@ -6768,4 +6768,31 @@ fn app_rows_of_2026_10_15() {
         &body(true, "println(f\"{i.n}\");"),
         "moved into a container",
     );
+    // B-2026-10-15-23: the arguments of `find` on a `Str` and of `replacen`
+    // are read; a `String` method declared to own its argument still moves.
+    accepted(
+        "string-builtin-args-are-read",
+        "fn f(line: Str) -> i64 {\n\
+             let op = \"+=\";\n\
+             let k = line.find(op);\n\
+             op.len() + k.unwrap_or(0)\n\
+         }\n\
+         fn main() {\n\
+             let s = \"x\".to_string();\n\
+             let a = \"%.o\".replacen(\"%\", s, 1);\n\
+             let b = \"%.c\".replacen(\"%\", s, 1);\n\
+             println(f\"{f(\"a+=b\")} {a} {b} {s}\");\n\
+         }\n",
+    );
+    rejected(
+        "string-method-owning-its-arg",
+        "impl String { fn eat(ref self, x: own String) -> i64 { x.len() } }\n\
+         fn main() {\n\
+             let s = \"x\".to_string();\n\
+             let a = \"ab\".to_string();\n\
+             let n = a.eat(s);\n\
+             println(f\"{n} {s}\");\n\
+         }\n",
+        "moved",
+    );
 }

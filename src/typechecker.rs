@@ -57,6 +57,7 @@ pub mod env;
 mod env_build;
 mod expr_call;
 mod expr_method_call;
+pub(crate) use expr_method_call::STRING_BUILTIN_METHODS;
 mod expr_method_tensor;
 mod expr_ops;
 mod exprs;
