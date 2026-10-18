@@ -42,7 +42,7 @@ fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String], rot: i64) -> Vec
         i = i + 1;
     }
 
-    let keys: Vec[String] = adj.keys();
+    let keys: Vec[String] = adj.keys().cloned().collect();
     let mut k = 0;
     while k < keys.len() {
         adj[keys[k]].sort();

@@ -5466,3 +5466,50 @@ fn a_conditional_impl_bound_is_checked_at_a_generic_call() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+#[test]
+fn map_keys_and_values_are_lent_iterators() {
+    // B-2026-10-13-1: docs/library gives `keys` / `values` as iterators of
+    // borrowed items, so `next`, `count`, `max` and `rev` (on a `SortedMap`)
+    // apply and nothing is copied.
+    let src = "fn main() {\n\
+         \x20   let mut m: Map[i64, i64] = Map.new();\n\
+         \x20   m.insert(5, 50);\n\
+         \x20   m.insert(7, 70);\n\
+         \x20   let mut s: SortedMap[i64, String] = SortedMap.new();\n\
+         \x20   s.insert(3, \"c\".to_string());\n\
+         \x20   s.insert(1, \"a\".to_string());\n\
+         \x20   let Some(first) = s.keys().next() else { return; };\n\
+         \x20   let best = *m.values().max().unwrap();\n\
+         \x20   let mut n = 0;\n\
+         \x20   for k in m.keys() { n += *k; }\n\
+         \x20   let last = s.values().rev().next().unwrap();\n\
+         \x20   println(f\"{*first} {best} {n} {m.keys().count()} {last}\");\n\
+         }\n";
+    let (dir, path) = fixture("map-keys-iter", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "1 70 12 2 c\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    // Where a `Vec` is wanted, the fix collects the borrowed items.
+    rejected_then_fixed_by(
+        "map-keys-into-vec",
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m.insert(\"a\", 1);\n\
+             let ks: Vec[String] = m.keys();\n\
+             println(ks.len());\n\
+         }\n",
+        "an iterator: collect its items",
+        "m.keys().cloned().collect()",
+    );
+}

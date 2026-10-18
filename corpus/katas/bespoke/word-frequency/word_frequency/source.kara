@@ -47,7 +47,7 @@ fn main() {
     //    (The binding is annotated `Vec[String]` so codegen's `.sort()` sees
     //    the String element type — inferring it from `keys()` is a separate
     //    type-inference follow-up.)
-    let mut keys: Vec[String] = freq.keys();
+    let mut keys: Vec[String] = freq.keys().cloned().collect();
     keys.sort();
     println("-- frequency (ascending) --");
     let mut best_word = "";

@@ -11,7 +11,7 @@ fn main() {
     for w in words {
         *m.entry(w.clone()).or_insert(0) += 1;
     }
-    let mut ks: Vec[String] = m.keys();
+    let mut ks: Vec[String] = m.keys().cloned().collect();
     ks.sort();
     for k in ks {
         println(f"{k}={m.get_or(k.clone(), 0)}");

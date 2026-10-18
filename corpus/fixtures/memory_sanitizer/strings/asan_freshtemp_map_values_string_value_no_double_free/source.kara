@@ -8,7 +8,7 @@ fn vmap() -> Map[i64, String] {
 fn main() {
     let mut i = 0;
     while i < 3 {
-        let vs: Vec[String] = vmap().values();
+        let vs: Vec[String] = vmap().values().cloned().collect();
         println(vs.len());
         i = i + 1;
     };

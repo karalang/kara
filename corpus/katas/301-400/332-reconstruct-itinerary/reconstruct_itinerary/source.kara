@@ -37,7 +37,7 @@ fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String]) -> Vec[String] {
 
     // Sorted destinations ⇒ the greedy walk yields the lexicographically
     // smallest itinerary.
-    let keys: Vec[String] = adj.keys();
+    let keys: Vec[String] = adj.keys().cloned().collect();
     let mut k = 0;
     while k < keys.len() {
         adj[keys[k]].sort();

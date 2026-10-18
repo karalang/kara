@@ -9,7 +9,7 @@ fn twin() -> i64 {
 fn colliding() -> String {
     let mut cols: Map[i64, i64] = Map.new();
     for i in 0..12 { cols.insert((i * 37) % 97 - 50, i); }
-    let k = cols.keys();
+    let k: Vec[i64] = cols.keys().cloned().collect();
     let mut s = "".to_string();
     for i in 0..k.len() { s = s + k[i].to_string() + ","; }
     return s;
@@ -17,7 +17,7 @@ fn colliding() -> String {
 fn clean() -> String {
     let mut zzz: Map[i64, i64] = Map.new();
     for i in 0..12 { zzz.insert((i * 37) % 97 - 50, i); }
-    let k = zzz.keys();
+    let k: Vec[i64] = zzz.keys().cloned().collect();
     let mut s = "".to_string();
     for i in 0..k.len() { s = s + k[i].to_string() + ","; }
     return s;

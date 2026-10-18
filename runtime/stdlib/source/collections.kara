@@ -309,6 +309,58 @@ impl[K, V] Map[K, V] {
     fn iter(ref self) -> MapIter[K, V] {
         MapIter { m: self, front: 0, back: self.len() }
     }
+
+    /// The keys, in the map's iteration order, each borrowed.
+    fn keys(ref self) -> MapKeys[K, V] {
+        MapKeys { m: self, front: 0, back: self.len() }
+    }
+
+    /// The values, in the map's iteration order, each borrowed.
+    fn values(ref self) -> MapValues[K, V] {
+        MapValues { m: self, front: 0, back: self.len() }
+    }
+}
+
+/// The keys of a map, in the map's iteration order, each borrowed.
+struct MapKeys[K, V] {
+    m: ref Map[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for MapKeys[K, V] {
+    type Item = ref K;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        let (k, _) = self.m.entry_at(i);
+        Some(k)
+    }
+}
+
+/// The values of a map, in the map's iteration order, each borrowed.
+struct MapValues[K, V] {
+    m: ref Map[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for MapValues[K, V] {
+    type Item = ref V;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        let (_, v) = self.m.entry_at(i);
+        Some(v)
+    }
 }
 
 /// The entries of a sorted map, in ascending key order: each key and value
@@ -348,6 +400,80 @@ impl[K, V] SortedMap[K, V] {
     /// The entries, in ascending key order, each key and value borrowed.
     fn iter(ref self) -> SortedMapIter[K, V] {
         SortedMapIter { m: self, front: 0, back: self.len() }
+    }
+
+    /// The keys, ascending, each borrowed.
+    fn keys(ref self) -> SortedMapKeys[K, V] {
+        SortedMapKeys { m: self, front: 0, back: self.len() }
+    }
+
+    /// The values, in key order, each borrowed.
+    fn values(ref self) -> SortedMapValues[K, V] {
+        SortedMapValues { m: self, front: 0, back: self.len() }
+    }
+}
+
+/// The keys of a sorted map, ascending, each borrowed.
+struct SortedMapKeys[K, V] {
+    m: ref SortedMap[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for SortedMapKeys[K, V] {
+    type Item = ref K;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        let (k, _) = self.m.entry_at(i);
+        Some(k)
+    }
+}
+
+impl[K, V] DoubleEndedIterator for SortedMapKeys[K, V] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        let (k, _) = self.m.entry_at(self.back);
+        Some(k)
+    }
+}
+
+/// The values of a sorted map, in key order, each borrowed.
+struct SortedMapValues[K, V] {
+    m: ref SortedMap[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for SortedMapValues[K, V] {
+    type Item = ref V;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        let (_, v) = self.m.entry_at(i);
+        Some(v)
+    }
+}
+
+impl[K, V] DoubleEndedIterator for SortedMapValues[K, V] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        let (_, v) = self.m.entry_at(self.back);
+        Some(v)
     }
 }
 

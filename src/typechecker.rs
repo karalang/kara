@@ -5743,6 +5743,44 @@ impl<'a> TypeChecker<'a> {
         true
     }
 
+    /// `.collect()` or `.cloned().collect()` when `found` is a library
+    /// iterator whose items are `expected`'s `Vec` element, or borrow it.
+    fn collect_fix_for(&self, expected: &Type, found: &Type) -> Option<&'static str> {
+        if !self.library_methods_from_source {
+            return None;
+        }
+        let (
+            Type::Named {
+                name: vec,
+                args: elem,
+            },
+            Type::Named { name, args },
+        ) = (expected, found)
+        else {
+            return None;
+        };
+        if vec != "Vec" || elem.len() != 1 || name == "Vec" {
+            return None;
+        }
+        let item = self.resolve_assoc_projections(&Type::AssocProjection {
+            param: name.clone(),
+            assoc: "Item".to_string(),
+            args: Vec::new(),
+            receiver_args: args.clone(),
+        });
+        let elem = inference::resolve_type_var_top(&elem[0], &self.env.substitutions);
+        match inference::resolve_type_var_top(&item, &self.env.substitutions) {
+            Type::AssocProjection { .. } => None,
+            Type::Ref(t)
+                if inference::resolve_type_var_top(&t, &self.env.substitutions) == elem =>
+            {
+                Some(".cloned().collect()")
+            }
+            t if t == elem => Some(".collect()"),
+            _ => None,
+        }
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // design.md § String literals: a literal is a `Str` wherever a `Str`
         // is expected, including the slots whose check infers the argument
@@ -6146,6 +6184,36 @@ impl<'a> TypeChecker<'a> {
                     return false;
                 }
             }
+        }
+        // An iterator where a `Vec` of its items is wanted (`let ks: Vec[K] =
+        // m.keys()`, docs/library: `keys` lends each key): collect it,
+        // cloning each borrowed item.
+        if let Some(fix) = self.collect_fix_for(expected, found) {
+            let message = format!(
+                "expected '{}', found '{}', an iterator: collect its items into a \
+                 `Vec` with `{fix}`",
+                type_display(expected),
+                type_display(found),
+            );
+            self.errors.push(TypeError {
+                message,
+                span,
+                kind: TypeErrorKind::TypeMismatch,
+                lint_name: None,
+                fix_it: Some(FixIt {
+                    span: Span {
+                        line: span.line,
+                        column: span.column,
+                        offset: span.offset + span.length,
+                        length: 0,
+                    },
+                    replacement: fix.to_string(),
+                }),
+                class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                expected: Some(type_display(expected)),
+                got: Some(type_display(found)),
+            });
+            return false;
         }
         // design.md §5: `s[a..b]` is a `Str` view. Where an owned `String`
         // is wanted, `.to_string()` takes the copy the view's slice used to

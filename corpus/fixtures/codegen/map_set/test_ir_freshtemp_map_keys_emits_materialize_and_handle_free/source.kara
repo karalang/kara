@@ -6,6 +6,6 @@ fn make_map() -> Map[i64, i64] {
 }
 
 fn main() {
-    let ks: Vec[i64] = make_map().keys();
+    let ks: Vec[i64] = make_map().keys().cloned().collect();
     println(ks.len());
 }

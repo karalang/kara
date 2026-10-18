@@ -558,9 +558,9 @@ fn main() {
     m.insert(7, "x");
     show(m);
     println(f"{m.get(7)} {m.get(2)} {m.contains_key(4)} {m.contains_key(5)}");
-    let ks = m.keys();
+    let ks: Vec[i64] = m.keys().cloned().collect();
     println(f"{ks}");
-    let vs = m.values();
+    let vs: Vec[String] = m.values().cloned().collect();
     println(f"{vs}");
     println(f"{m}");
     let c = m.clone();

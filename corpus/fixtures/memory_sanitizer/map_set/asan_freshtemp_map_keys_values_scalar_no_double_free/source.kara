@@ -8,7 +8,7 @@ fn make_map() -> Map[i64, i64] {
 fn main() {
     let mut i = 0;
     while i < 3 {
-        let ks: Vec[i64] = make_map().keys();
+        let ks: Vec[i64] = make_map().keys().cloned().collect();
         println(ks.len());
         let mut s = 0;
         for v in make_map().values() { s = s + v; }

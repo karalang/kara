@@ -4,7 +4,7 @@ fn main() {
     m.insert(10_i64, 1_i64);
     m.insert(20_i64, 2_i64);
     m.insert(30_i64, 3_i64);
-    let ks: Vec[i64] = m.keys();
+    let ks: Vec[i64] = m.keys().cloned().collect();
     println(ks.len());
     let mut sum: i64 = 0;
     for k in ks {

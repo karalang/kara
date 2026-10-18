@@ -214,7 +214,7 @@ fn solve_d(root: Option[TreeNode]) -> Vec[Vec[i64]] {
             }
         }
     }
-    let mut keys: Vec[i64] = cols.keys();
+    let mut keys: Vec[i64] = cols.keys().cloned().collect();
     keys.sort();
     let mut out: Vec[Vec[i64]] = Vec.new();
     for i in 0..keys.len() {
