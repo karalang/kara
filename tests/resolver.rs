@@ -6446,3 +6446,42 @@ fn a_wildcard_does_not_silence_a_standalone_scripts_undefined_names() {
             .collect::<Vec<_>>(),
     );
 }
+
+/// B-2026-10-12-18 — `abs(a)`, a method spelled as another language calls it,
+/// was answered with "did you mean 'a'?" and a machine-applicable edit, which
+/// `karac fix` turned into `a(a)`. The callee is now reported as the method
+/// call it should be, and a callee rename onto a local value is suggested but
+/// never auto-applied.
+#[test]
+fn a_method_spelled_as_a_function_is_reported_as_the_method_call() {
+    let errors = resolve_errors(
+        "fn gcd(a: i64, b: i64) -> i64 { if b == 0 { abs(a) } else { gcd(b, a % b) } }\n\
+         fn main() { println(f\"{gcd(-12, 18)}\"); }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'abs'"))
+        .expect("the undefined callee must be reported");
+    assert!(
+        err.message.contains("`a.abs()`"),
+        "the message must name the method call: {}",
+        err.message
+    );
+    assert!(err.replacement.is_none(), "no edit: `a(a)` calls an i64");
+
+    // A typo of a local in callee position keeps the suggestion, not the edit.
+    let errors = resolve_errors("fn main() { let total = 2; let n = totl(3); println(f\"{n}\"); }");
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'totl'"))
+        .expect("the typo must be reported");
+    assert!(
+        err.message.contains("did you mean 'total'"),
+        "{}",
+        err.message
+    );
+    assert!(
+        err.replacement.is_none(),
+        "a local is a value the resolver cannot prove callable"
+    );
+}

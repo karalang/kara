@@ -467,7 +467,7 @@ impl<'a> super::Resolver<'a> {
                             // only when the call fits the candidate. The bare
                             // identifier walk below has no call context and
                             // cannot make that check.
-                            self.error_undefined_name_in_call(name, callee.span, args.len());
+                            self.error_undefined_name_in_call(name, callee.span, args);
                             handled = true;
                         }
                     }

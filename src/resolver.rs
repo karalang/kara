@@ -1571,7 +1571,40 @@ impl<'a> Resolver<'a> {
     /// becomes a machine-applicable edit. B-2026-08-18-47 — see
     /// [`Self::call_arity_allows_rename`] for why the edit-distance threshold
     /// itself is deliberately left alone.
-    pub(crate) fn error_undefined_name_in_call(&mut self, name: &str, span: Span, argc: usize) {
+    pub(crate) fn error_undefined_name_in_call(
+        &mut self,
+        name: &str,
+        span: Span,
+        args: &[CallArg],
+    ) {
+        let argc = args.len();
+        // B-2026-10-12-18: `abs(a)` written as another language spells it.
+        // `abs` is a method of the argument, so say so instead of offering
+        // whatever name happens to be close (`a`, the argument itself).
+        if let Some(first) = args.first() {
+            if METHOD_SPELLED_AS_FUNCTION.contains(&name)
+                && !self.report_ambiguous_wildcard(name, span)
+                && !self.wildcard_hides_unresolved_names()
+            {
+                let recv = match &first.value.kind {
+                    ExprKind::Identifier(n) => n.clone(),
+                    _ => "x".to_string(),
+                };
+                let rest = if argc > 1 { "..." } else { "" };
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "undefined name '{name}': `{name}` is a method, called on its \
+                         first argument, as `{recv}.{name}({rest})`"
+                    ),
+                    span,
+                    kind: ResolveErrorKind::UndefinedName,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+                return;
+            }
+        }
         let before = self.errors.len();
         self.error_undefined_name(name, span);
         // Re-gate whatever the shared emitter produced. Done here rather than
@@ -1763,6 +1796,13 @@ impl<'a> Resolver<'a> {
         let Some(sym) = self.table.lookup(candidate) else {
             return true;
         };
+        // B-2026-10-12-18: a local or parameter is a value, and renaming a
+        // callee onto one (`abs(a)` to `a(a)`) calls an `i64`. A local that
+        // holds a closure can be called, but the resolver cannot tell which
+        // locals do, so it suggests the name and leaves the edit to a person.
+        if matches!(sym.kind, SymbolKind::Variable { .. }) {
+            return false;
+        }
         let SymbolKind::Function { param_names } = &sym.kind else {
             return true;
         };
@@ -2006,3 +2046,37 @@ fn infer_stub_arg_type(expr: &Expr) -> Option<String> {
     };
     Some(ty.to_string())
 }
+
+/// Methods that writers coming from C, Python or Go call as free functions
+/// (`abs(x)`, `len(v)`, `sqrt(x)`). An undefined callee of one of these names
+/// is reported as the method call it should be (B-2026-10-12-18).
+const METHOD_SPELLED_AS_FUNCTION: &[&str] = &[
+    "abs",
+    "signum",
+    "sqrt",
+    "cbrt",
+    "floor",
+    "ceil",
+    "round",
+    "trunc",
+    "pow",
+    "powi",
+    "powf",
+    "exp",
+    "ln",
+    "log2",
+    "log10",
+    "sin",
+    "cos",
+    "tan",
+    "len",
+    "is_empty",
+    "to_string",
+    "to_uppercase",
+    "to_lowercase",
+    "trim",
+    "reverse",
+    "sort",
+    "contains",
+    "clamp",
+];
