@@ -191,7 +191,9 @@ fn fix_inside_an_fstring_interpolation_edits_only_the_marker() {
     ));
     std::fs::create_dir_all(&tmp).unwrap();
 
-    // Unlabeled argument, and the labeled form the `mut_marker_span` field
+    // The marker is illegal at `f`'s read-only `Slice` (a forwarded
+    // `mut Slice` may carry one since B-2026-10-14-25). Unlabeled argument,
+    // and the labeled form the `mut_marker_span` field
     // exists for (`CallArg::span` starts at the LABEL, so the edit cannot be
     // derived from it without deleting the label too). `f` takes a read-only
     // `Slice`, so the marker is the illegal one ("`mut` marker is not legal
