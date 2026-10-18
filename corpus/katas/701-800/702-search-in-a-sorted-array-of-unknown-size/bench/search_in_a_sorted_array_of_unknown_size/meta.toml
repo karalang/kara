@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/702-search-in-a-sorted-array-of-unknown-size/bench/search_in_a_sorted_array_of_unknown_size.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "98f0a2252"
+extracted_src = "ab0a480f"
+model_rev = "583cfb0d"
+model_src = "ab0a480f"

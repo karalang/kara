@@ -1,0 +1,219 @@
+// LeetCode #701: Insert into a Binary Search Tree -- recursion.
+//
+// A value that is not in a binary search tree has one place where a
+// search for it falls off the tree: the empty side of some node. Hang a
+// new leaf there. Recursively, an empty tree becomes the leaf, and
+// otherwise the value goes into the side one comparison picks, whose
+// answer replaces that side. O(height) time and stack.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert_into_bst(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: val, left: None, right: None }),
+        Some(n) => {
+            if val < n.val {
+                n.left = insert_into_bst(n.left, val);
+            } else {
+                n.right = insert_into_bst(n.right, val);
+            }
+            Some(n)
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A binary search tree from inserting `values` in order; a value already
+// there is skipped.
+fn bst(values: Vec[i64]) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = leaf(values[0]);
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut at = root;
+        let mut placed = false;
+        while not placed {
+            if v < at.val {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else if v > at.val {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else {
+                placed = true;
+            }
+        }
+    }
+    Some(root)
+}
+
+// 1 to `n`, each the right child of the one before.
+fn chain(n: i64) -> Option[TreeNode] {
+    let root = leaf(1);
+    let mut at = root;
+    for v in 2..n + 1 {
+        let next = leaf(v);
+        at.right = Some(next);
+        at = next;
+    }
+    Some(root)
+}
+
+// 0 to n - 1 in a random order.
+fn shuffled(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(i);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        let t = v[i];
+        v[i] = v[j];
+        v[j] = t;
+    }
+    v
+}
+
+// LeetCode's level order, `null` for a missing child, trailing ones
+// dropped.
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        match at {
+            None => parts.push("null"),
+            Some(n) => {
+                parts.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// Nodes, height and a checksum of the values in preorder; `none` for an
+// empty tree.
+fn stats(root: Option[TreeNode]) -> String {
+    let mut count = 0;
+    let mut height = 0;
+    let mut sum = 0;
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 1));
+    }
+    while let Some(top) = stack.pop() {
+        let (n, depth) = top;
+        count += 1;
+        height = height.max(depth);
+        sum = (sum * 31 + n.val) % 1000000007;
+        if let Some(r) = n.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = n.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    if count == 0 {
+        return "none";
+    }
+    f"size {count}, height {height}, checksum {sum}"
+}
+
+fn show(values: Vec[i64], val: i64) {
+    let tree = bst(values);
+    let before = level_order(tree);
+    println(f"{before} insert {val}: {level_order(insert_into_bst(tree, val))}");
+}
+
+fn main() {
+    // The LeetCode examples (the third is the first with trailing nulls
+    // written out), and an empty tree.
+    show(vec![4, 2, 7, 1, 3], 5);
+    show(vec![40, 20, 60, 10, 30, 50, 70], 25);
+    show(Vec.new(), 5);
+    // One node, either side; a tree of nine, below the smallest and above
+    // the largest, and under nodes at depths two to four, either side.
+    show(vec![5], 3);
+    show(vec![5], 8);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 0);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 15);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 2);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 5);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 9);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 12);
+    // The problem's largest, 10,000 nodes: the even numbers below 20,000
+    // inserted in a random order, then 50 odd values inserted one after
+    // another, each into the answer of the one before.
+    let mut seed: i64 = 701;
+    let mut evens: Vec[i64] = Vec.new();
+    for v in shuffled(10000, mut seed).iter() {
+        evens.push(2 * *v);
+    }
+    let mut tree = bst(evens);
+    println(f"random 10000: {stats(tree)}");
+    for k in 0..50 {
+        tree = insert_into_bst(tree, k * 7919 % 10000 * 2 + 1);
+    }
+    println(f"  after 50 inserts: {stats(tree)}");
+    // A chain of 3,000, given a new leaf past its far end and then a new
+    // left child of its root.
+    let mut line = chain(3000);
+    line = insert_into_bst(line, 3001);
+    println(f"chain 3000 insert 3001: {stats(line)}");
+    line = insert_into_bst(line, 0);
+    println(f"  then insert 0: {stats(line)}");
+    // 1,000 random trees of up to 20 values from -50 to 49, each given
+    // one value from -52 to 51 that is not in it, into a checksum.
+    let mut sum = 0;
+    let mut sizes = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 21;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 100 - 50);
+        }
+        let mut val = next_random(mut seed) % 104 - 52;
+        while values.contains(val) {
+            val = next_random(mut seed) % 104 - 52;
+        }
+        let s = level_order(insert_into_bst(bst(values), val));
+        sizes += s.len();
+        for b in s.bytes().iter() {
+            sum = (sum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"1000 random trees: checksum {sum} over {sizes} bytes");
+}

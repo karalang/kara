@@ -1,0 +1,255 @@
+// LeetCode #702: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random arrays.
+
+struct ArrayReader {
+    secret: Vec[i64],
+    mut reads: i64,
+}
+
+impl ArrayReader {
+    // The value at `index`, or 2^31 - 1 past either end; every call is
+    // counted.
+    fn get(mut ref self, index: i64) -> i64 {
+        self.reads += 1;
+        if index < 0 or index >= self.secret.len() {
+            return 2147483647;
+        }
+        self.secret[index]
+    }
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn search_star(reader: mut ref ArrayReader, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 1;
+    while reader.get(hi) < target {
+        lo = hi;
+        hi *= 2;
+    }
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let v = reader.get(mid);
+        if v == target {
+            return mid;
+        }
+        if v < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    -1
+}
+
+// ---- scan arm ----------------------------------------------------------
+
+fn search_scan(reader: mut ref ArrayReader, target: i64) -> i64 {
+    let mut i = 0;
+    loop {
+        let v = reader.get(i);
+        if v == target {
+            return i;
+        }
+        if v > target {
+            return -1;
+        }
+        i += 1;
+    }
+}
+
+// ---- length arm --------------------------------------------------------
+
+fn search_length(reader: mut ref ArrayReader, target: i64) -> i64 {
+    let past = 2147483647;
+    let mut hi = 1;
+    while reader.get(hi) != past {
+        hi *= 2;
+    }
+    // The first index that reads past the end lies in (hi / 2, hi].
+    let mut lo = hi / 2;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if reader.get(mid) == past {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let n = lo;
+    let mut left = 0;
+    let mut right = n - 1;
+    while left <= right {
+        let mid = left + (right - left) / 2;
+        let v = reader.get(mid);
+        if v == target {
+            return mid;
+        }
+        if v < target {
+            left = mid + 1;
+        } else {
+            right = mid - 1;
+        }
+    }
+    -1
+}
+
+// ---- lifting arm -------------------------------------------------------
+
+fn search_lifting(reader: mut ref ArrayReader, target: i64) -> i64 {
+    let mut below = -1;
+    let mut step = 8192;
+    while step > 0 {
+        if reader.get(below + step) < target {
+            below += step;
+        }
+        step /= 2;
+    }
+    if reader.get(below + 1) == target {
+        return below + 1;
+    }
+    -1
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, reader: mut ref ArrayReader, target: i64) -> i64 {
+    if which == 0 {
+        search_star(reader, target)
+    } else if which == 1 {
+        search_scan(reader, target)
+    } else if which == 2 {
+        search_length(reader, target)
+    } else {
+        search_lifting(reader, target)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The answer and the number of reads it took, on a reader of its own.
+fn run(which: i64, secret: own Vec[i64], target: i64) -> (i64, i64) {
+    let mut reader = ArrayReader { secret: secret, reads: 0 };
+    let at = answer(which, mut reader, target);
+    (at, reader.reads)
+}
+
+// The number of binary digits of n, for n >= 1.
+fn bits(n: i64) -> i64 {
+    let mut b = 0;
+    let mut m = n;
+    while m > 0 {
+        b += 1;
+        m /= 2;
+    }
+    b
+}
+
+// The most reads each arm may take: the scan reads up to the target or
+// the first value past it, the doubling arm doubles and halves once
+// each, the length arm doubles and halves twice, and the bit arm always
+// takes 15.
+fn read_bound(which: i64, n: i64, secret: Vec[i64], target: i64) -> i64 {
+    if which == 0 {
+        2 * bits(n) + 2
+    } else if which == 1 {
+        let mut k = 0;
+        while k < n and secret[k] < target {
+            k += 1;
+        }
+        k + 1
+    } else if which == 2 {
+        3 * bits(n) + 1
+    } else {
+        15
+    }
+}
+
+// The definition: the index whose value is `target`, found by looking
+// at every value without using the order or the reader.
+fn definition(secret: Vec[i64], target: i64) -> i64 {
+    for i in 0..secret.len() {
+        if secret[i] == target {
+            return i;
+        }
+    }
+    -1
+}
+
+fn main() {
+    let mut seed = 7020;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut hits = 0;
+    let cases = 3000;
+    for c in 0..cases {
+        // 1 to 40 values, or up to 2,000 for one case in ten, increasing
+        // from -60 by 1 to a random 1 to 4; the target from -62 to the
+        // largest + 2, half the time one of the values.
+        let mut n = 1 + next_random(mut seed) % 40;
+        if c % 10 == 0 {
+            n = 1 + next_random(mut seed) % 2000;
+        }
+        let gap = 1 + next_random(mut seed) % 4;
+        let mut secret: Vec[i64] = Vec.new();
+        let mut v = -60;
+        for _ in 0..n {
+            secret.push(v);
+            v += 1 + next_random(mut seed) % gap;
+        }
+        let top = secret[n - 1];
+        let mut target = next_random(mut seed) % (top + 65) - 62;
+        if next_random(mut seed) % 2 == 0 {
+            target = secret[next_random(mut seed) % n];
+        }
+        let want = definition(secret, target);
+        if want >= 0 {
+            hits += 1;
+        }
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut flipped: Vec[i64] = Vec.new();
+        for i in 0..n {
+            shifted.push(secret[i] + 5000);
+            flipped.push(-secret[n - 1 - i]);
+        }
+        let mirrored = if want < 0 { -1 } else { n - 1 - want };
+        for which in 0..arms {
+            let (got, reads) = run(which, secret.clone(), target);
+            // P1: the definition's index.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every value and the target 5,000 higher, the same index.
+            checks += 1;
+            if run(which, shifted.clone(), target + 5000).0 != got {
+                fails[1] += 1;
+            }
+            // P3: the values negated and reversed and the target negated,
+            // the index counted from the other end.
+            checks += 1;
+            if run(which, flipped.clone(), -target).0 != mirrored {
+                fails[2] += 1;
+            }
+            // P4: no more reads than the arm's bound.
+            checks += 1;
+            if reads > read_bound(which, n, secret, target) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} arrays ({hits} with the target), {arms} arms, {checks} checks, {total} failures");
+}

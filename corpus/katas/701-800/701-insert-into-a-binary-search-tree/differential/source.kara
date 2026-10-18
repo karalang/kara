@@ -1,0 +1,364 @@
+// LeetCode #701: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn insert_star(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: val, left: None, right: None }),
+        Some(n) => {
+            if val < n.val {
+                n.left = insert_star(n.left, val);
+            } else {
+                n.right = insert_star(n.right, val);
+            }
+            Some(n)
+        }
+    }
+}
+
+// ---- loop arm ----------------------------------------------------------
+
+fn insert_loop(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: val, left: None, right: None };
+    let mut at = match root {
+        None => return Some(fresh),
+        Some(r) => r,
+    };
+    loop {
+        if val < at.val {
+            match at.left {
+                Some(l) => at = l,
+                None => {
+                    at.left = Some(fresh);
+                    return root;
+                }
+            }
+        } else {
+            match at.right {
+                Some(r) => at = r,
+                None => {
+                    at.right = Some(fresh);
+                    return root;
+                }
+            }
+        }
+    }
+}
+
+// ---- path arm ----------------------------------------------------------
+
+fn insert_path(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: val, left: None, right: None }),
+        Some(n) => {
+            if val < n.val {
+                Some(TreeNode { val: n.val, left: insert_path(n.left, val), right: n.right })
+            } else {
+                Some(TreeNode { val: n.val, left: n.left, right: insert_path(n.right, val) })
+            }
+        }
+    }
+}
+
+// ---- preorder arm ------------------------------------------------------
+
+fn insert_preorder(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    let mut order: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        order.push(n.val);
+        if let Some(r) = n.right {
+            stack.push(r);
+        }
+        if let Some(l) = n.left {
+            stack.push(l);
+        }
+    }
+    order.push(val);
+    let top = TreeNode { val: order[0], left: None, right: None };
+    for i in 1..order.len() {
+        let v = order[i];
+        let mut at = top;
+        loop {
+            if v < at.val {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(top)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    if which == 0 {
+        insert_star(root, val)
+    } else if which == 1 {
+        insert_loop(root, val)
+    } else if which == 2 {
+        insert_path(root, val)
+    } else {
+        insert_preorder(root, val)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A binary search tree from inserting `values` in order; a value already
+// there is skipped.
+fn bst(values: Vec[i64]) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = leaf(values[0]);
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut at = root;
+        let mut placed = false;
+        while not placed {
+            if v < at.val {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else if v > at.val {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else {
+                placed = true;
+            }
+        }
+    }
+    Some(root)
+}
+
+// LeetCode's level order, `null` for a missing child, trailing ones
+// dropped.
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        match at {
+            None => parts.push("null"),
+            Some(n) => {
+                parts.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// The level order of the tree mirrored left to right with every value
+// negated, which is the tree built from the negated values.
+fn mirrored_order(root: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        match at {
+            None => parts.push("null"),
+            Some(n) => {
+                parts.push(f"{-n.val}");
+                queue.push(n.right);
+                queue.push(n.left);
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// The level order with the node holding `skip` read as missing, and so
+// its subtree too.
+fn order_without(root: Option[TreeNode], skip: i64) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        match at {
+            None => parts.push("null"),
+            Some(n) => {
+                if n.val == skip {
+                    parts.push("null");
+                } else {
+                    parts.push(f"{n.val}");
+                    queue.push(n.left);
+                    queue.push(n.right);
+                }
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// The values in order, left subtree before node before right subtree.
+fn in_order(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    let mut at = root;
+    loop {
+        while let Some(n) = at {
+            stack.push(n);
+            at = n.left;
+        }
+        match stack.pop() {
+            None => return out,
+            Some(n) => {
+                out.push(n.val);
+                at = n.right;
+            }
+        }
+    }
+}
+
+// The definition: the tree that inserting `values` one by one builds,
+// written by partition instead of by walking down: the first value is
+// the root, the later smaller values in their order build its left
+// subtree, the later larger ones its right, and a repeat is dropped.
+fn definition(values: Vec[i64]) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let first = values[0];
+    let mut smaller: Vec[i64] = Vec.new();
+    let mut larger: Vec[i64] = Vec.new();
+    for i in 1..values.len() {
+        let v = values[i];
+        if v < first {
+            smaller.push(v);
+        } else if v > first {
+            larger.push(v);
+        }
+    }
+    Some(TreeNode { val: first, left: definition(smaller), right: definition(larger) })
+}
+
+fn main() {
+    let mut seed = 7010;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 3000;
+    let mut empty = 0;
+    for _ in 0..cases {
+        // Up to 25 values from 0 to a random 1 to 50, repeats skipped, and
+        // a value from -2 to the top + 1 that is not among them.
+        let n = next_random(mut seed) % 26;
+        let top = 1 + next_random(mut seed) % 50;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % top);
+        }
+        let mut val = next_random(mut seed) % (top + 4) - 2;
+        while values.contains(val) {
+            val = next_random(mut seed) % (top + 4) - 2;
+        }
+        if n == 0 {
+            empty += 1;
+        }
+        let mut negated: Vec[i64] = Vec.new();
+        for v in values.iter() {
+            negated.push(-*v);
+        }
+        let mut grown = values.clone();
+        grown.push(val);
+        let want = level_order(definition(grown));
+        let mut sorted = in_order(bst(values.clone()));
+        let mut at = 0;
+        while at < sorted.len() and sorted[at] < val {
+            at += 1;
+        }
+        sorted.insert(at, val);
+        let before = level_order(bst(values.clone()));
+        for which in 0..arms {
+            let got = answer(which, bst(values.clone()), val);
+            // P1: the definition's tree.
+            checks += 1;
+            if level_order(got) != want {
+                fails[0] += 1;
+            }
+            // P2: read in order, the old values and `val`, sorted.
+            checks += 1;
+            if in_order(got) != sorted {
+                fails[1] += 1;
+            }
+            // P3: `val` is a leaf, and without it the tree is the old one.
+            checks += 1;
+            if order_without(got, val) != before {
+                fails[2] += 1;
+            }
+            // P4: the negated values given -val build the answer mirrored
+            // and negated.
+            checks += 1;
+            if level_order(answer(which, bst(negated.clone()), -val)) != mirrored_order(got) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} trees ({empty} empty), {arms} arms, {checks} checks, {total} failures");
+}

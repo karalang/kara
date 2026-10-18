@@ -1,0 +1,14 @@
+[-1, 0, 3, 5, 9, 12] target 9: 4
+[-1, 0, 3, 5, 9, 12] target 2: -1
+[-1, 0, 3, 5, 9, 12] target -1: 0
+[-1, 0, 3, 5, 9, 12] target 12: 5
+[-1, 0, 3, 5, 9, 12] target -10000: -1
+[-1, 0, 3, 5, 9, 12] target 10000: -1
+[-1, 0, 3, 5, 9, 12] target 4: -1
+[5] target 5: 0
+[5] target 4: -1
+[5] target 6: -1
+[-10000, 10000] target 10000: 1
+10000 values, 2858 targets: 1429 found, checksum 504609086
+10000 values, last and past it: 9999 -1
+1000 random arrays: 507 found, checksum 330820154

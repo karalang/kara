@@ -1,0 +1,124 @@
+// LeetCode #702: Search in a Sorted Array of Unknown Size -- a scan.
+//
+// Read from the front while the values are below `target`; the read
+// past the end stops it too, since 2^31 - 1 is larger than any target.
+// The first value not below `target` is it or proves it absent. O(k)
+// reads for a target at k.
+
+struct ArrayReader {
+    secret: Vec[i64],
+    mut reads: i64,
+}
+
+impl ArrayReader {
+    // The value at `index`, or 2^31 - 1 past either end; every call is
+    // counted.
+    fn get(mut ref self, index: i64) -> i64 {
+        self.reads += 1;
+        if index < 0 or index >= self.secret.len() {
+            return 2147483647;
+        }
+        self.secret[index]
+    }
+}
+
+fn search(reader: mut ref ArrayReader, target: i64) -> i64 {
+    let mut i = 0;
+    loop {
+        let v = reader.get(i);
+        if v == target {
+            return i;
+        }
+        if v > target {
+            return -1;
+        }
+        i += 1;
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn find(secret: own Vec[i64], target: i64) -> i64 {
+    let mut reader = ArrayReader { secret: secret, reads: 0 };
+    search(mut reader, target)
+}
+
+fn show(secret: own Vec[i64], target: i64) {
+    let shown = f"{secret}";
+    println(f"{shown} target {target}: {find(secret, target)}");
+}
+
+// Increasing values from about `low` to at most 10,000, each 1 to `gap`
+// above the one before, `n` of them at most.
+fn random_sorted(n: i64, low: i64, gap: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut v = low;
+    while out.len() < n and v <= 10000 {
+        out.push(v);
+        v += 1 + next_random(mut seed) % gap;
+    }
+    out
+}
+
+fn main() {
+    // The two LeetCode examples; then the first and last values, one
+    // below and above them all, and one between two values.
+    show(vec![-1, 0, 3, 5, 9, 12], 9);
+    show(vec![-1, 0, 3, 5, 9, 12], 2);
+    show(vec![-1, 0, 3, 5, 9, 12], -1);
+    show(vec![-1, 0, 3, 5, 9, 12], 12);
+    show(vec![-1, 0, 3, 5, 9, 12], -10000);
+    show(vec![-1, 0, 3, 5, 9, 12], 10000);
+    show(vec![-1, 0, 3, 5, 9, 12], 4);
+    // One value: it, below it and above it; two values.
+    show(vec![5], 5);
+    show(vec![5], 4);
+    show(vec![5], 6);
+    show(vec![-10000, 10000], 10000);
+    // The problem's largest, 10,000 values -10,000, -9,998 ... 9,998,
+    // searched for every seventh number from -10,000 up, half of them
+    // there, and for its last value and one past it.
+    let mut big: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        big.push(-10000 + 2 * i);
+    }
+    let mut reader = ArrayReader { secret: big, reads: 0 };
+    let mut found = 0;
+    let mut sum = 0;
+    for k in 0..2858 {
+        let at = search(mut reader, -10000 + 7 * k);
+        if at >= 0 {
+            found += 1;
+        }
+        sum = (sum * 31 + at + 1) % 1000000007;
+    }
+    println(f"10000 values, 2858 targets: {found} found, checksum {sum}");
+    println(f"10000 values, last and past it: {search(mut reader, 9998)} {search(mut reader, 10000)}");
+    // 1,000 random arrays of 1 to 300 values from a random start, each
+    // 1 to a random 1 to 60 above the last, each searched for a random
+    // target, half of the time one of its values.
+    let mut seed: i64 = 702;
+    let mut found = 0;
+    let mut sum = 0;
+    for _ in 0..1000 {
+        let n = 1 + next_random(mut seed) % 300;
+        let low = next_random(mut seed) % 20001 - 10000;
+        let gap = 1 + next_random(mut seed) % 60;
+        let secret = random_sorted(n, low, gap, mut seed);
+        let mut target = next_random(mut seed) % 20001 - 10000;
+        if next_random(mut seed) % 2 == 0 {
+            target = secret[next_random(mut seed) % secret.len()];
+        }
+        let at = find(secret, target);
+        if at >= 0 {
+            found += 1;
+        }
+        sum = (sum * 31 + at + 1) % 1000000007;
+    }
+    println(f"1000 random arrays: {found} found, checksum {sum}");
+}

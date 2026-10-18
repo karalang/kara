@@ -1,0 +1,85 @@
+// LeetCode #702: Search in a Sorted Array of Unknown Size -- bench
+// program for the doubling arm.
+//
+// 100 arrays of 10,000 increasing values from -10,000, each 1 or 2 above
+// the one before, are built once; then in each of 5 rounds every array
+// is searched for every even number from -10,000 to 10,000 with the
+// doubling arm, and the indices found and the reads made go into the
+// totals.
+
+struct ArrayReader {
+    secret: Vec[i64],
+    mut reads: i64,
+}
+
+impl ArrayReader {
+    fn get(mut ref self, index: i64) -> i64 {
+        self.reads += 1;
+        if index < 0 or index >= self.secret.len() {
+            return 2147483647;
+        }
+        self.secret[index]
+    }
+}
+
+fn search(reader: mut ref ArrayReader, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 1;
+    while reader.get(hi) < target {
+        lo = hi;
+        hi *= 2;
+    }
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let v = reader.get(mid);
+        if v == target {
+            return mid;
+        }
+        if v < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 702;
+    let mut readers: Vec[ArrayReader] = Vec.new();
+    for _ in 0..100 {
+        let mut secret: Vec[i64] = Vec.new();
+        let mut v = -10000;
+        for _ in 0..10000 {
+            secret.push(v);
+            v += 1 + next_random(mut seed) % 2;
+        }
+        readers.push(ArrayReader { secret: secret, reads: 0 });
+    }
+    let rounds = 5;
+    let mut found = 0;
+    let mut checksum = 0;
+    for _ in 0..rounds {
+        for r in 0..readers.len() {
+            let mut target = -10000;
+            while target <= 10000 {
+                let at = search(mut readers[r], target);
+                if at >= 0 {
+                    found += 1;
+                    checksum = (checksum * 31 + at) % 1000000007;
+                }
+                target += 2;
+            }
+        }
+    }
+    let mut reads = 0;
+    for reader in readers.iter() {
+        reads += reader.reads;
+    }
+    println(f"{rounds} rounds of 100 arrays of 10000: {found} found, {reads} reads, checksum {checksum}");
+}
