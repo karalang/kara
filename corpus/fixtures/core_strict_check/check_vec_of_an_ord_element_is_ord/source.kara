@@ -1,0 +1,42 @@
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct S { v: Vec[i64], n: i64 }
+fn part2() {
+    let a = S { v: vec![1, 2], n: 9 };
+    let b = S { v: vec![1, 3], n: 0 };
+    println(f"{a < b}");
+    let x: Vec[i64] = vec![2];
+    let y: Vec[i64] = vec![1, 5];
+    match x.cmp(y) {
+        Ordering.Less => println("less"),
+        Ordering.Equal => println("eq"),
+        Ordering.Greater => println("greater"),
+    }
+    let mut ss: Vec[S] = vec![b, a];
+    ss.sort();
+    println(f"{ss[0].n}");
+}
+fn main() {
+    let a: Vec[i64] = vec![1, 2];
+    let b: Vec[i64] = vec![1, 3];
+    let p: Vec[i64] = vec![1];
+    println(f"{a < b} {b < a} {p < a} {a <= a} {a > p} {a >= b}");
+    let mut s: SortedSet[Vec[i64]] = SortedSet.new();
+    s.insert(b.clone());
+    s.insert(a.clone());
+    s.insert(p.clone());
+    s.insert(a.clone());
+    for k in s.iter() { print(f"{k} "); }
+    println("");
+    let mut g: SortedMap[Vec[String], i64] = SortedMap.new();
+    g.insert(vec!["b".to_string()], 2);
+    g.insert(vec!["a".to_string(), "z".to_string()], 1);
+    g.insert(vec!["a".to_string()], 0);
+    for (k, v) in g.iter() { print(f"{k}={v} "); }
+    println("");
+    let v: Vec[Vec[i64]] = vec![vec![2], vec![1, 9], vec![3, 0, 0], vec![]];
+    println(f"{v.iter().max().unwrap()} {v.iter().min().unwrap()}");
+    let w: Vec[Vec[Vec[i64]]] = vec![vec![vec![1]], vec![vec![0, 5]]];
+    println(f"{w[0] > w[1]}");
+    part2();
+}

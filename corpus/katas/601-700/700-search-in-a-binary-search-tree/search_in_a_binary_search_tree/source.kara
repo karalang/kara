@@ -1,0 +1,224 @@
+// LeetCode #700: Search in a Binary Search Tree -- recursion.
+//
+// In a binary search tree every value in a node's left subtree is
+// smaller than its own and every value in its right subtree larger, so
+// one comparison says which side `val` can be on. Recurse into that side
+// until the node holding `val` is found, or the side is empty. O(height)
+// time and stack.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn search_bst(root: Option[TreeNode], val: i64) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(n) => {
+            if val == n.val {
+                Some(n)
+            } else if val < n.val {
+                search_bst(n.left, val)
+            } else {
+                search_bst(n.right, val)
+            }
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A binary search tree from inserting `values` in order; a value already
+// there is skipped.
+fn bst(values: Vec[i64]) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = leaf(values[0]);
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut at = root;
+        let mut placed = false;
+        while not placed {
+            if v < at.val {
+                match at.left {
+                    Some(l) => at = l,
+                    None => {
+                        at.left = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else if v > at.val {
+                match at.right {
+                    Some(r) => at = r,
+                    None => {
+                        at.right = Some(leaf(v));
+                        placed = true;
+                    }
+                }
+            } else {
+                placed = true;
+            }
+        }
+    }
+    Some(root)
+}
+
+// 1 to `n`, each the right child of the one before.
+fn chain(n: i64) -> Option[TreeNode] {
+    let root = leaf(1);
+    let mut at = root;
+    for v in 2..n + 1 {
+        let next = leaf(v);
+        at.right = Some(next);
+        at = next;
+    }
+    Some(root)
+}
+
+// 0 to n - 1 in a random order.
+fn shuffled(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(i);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        let t = v[i];
+        v[i] = v[j];
+        v[j] = t;
+    }
+    v
+}
+
+// LeetCode's level order, `null` for a missing child, trailing ones
+// dropped.
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let at = queue[head];
+        head += 1;
+        match at {
+            None => parts.push("null"),
+            Some(n) => {
+                parts.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// Nodes, height and a checksum of the values in preorder; `none` for an
+// empty tree.
+fn stats(root: Option[TreeNode]) -> String {
+    let mut count = 0;
+    let mut height = 0;
+    let mut sum = 0;
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 1));
+    }
+    while let Some(top) = stack.pop() {
+        let (n, depth) = top;
+        count += 1;
+        height = height.max(depth);
+        sum = (sum * 31 + n.val) % 1000000007;
+        if let Some(r) = n.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = n.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    if count == 0 {
+        return "none";
+    }
+    f"size {count}, height {height}, checksum {sum}"
+}
+
+fn show(values: Vec[i64], val: i64) {
+    let tree = bst(values);
+    println(f"{level_order(tree)} search {val}: {level_order(search_bst(tree, val))}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![4, 2, 7, 1, 3], 2);
+    show(vec![4, 2, 7, 1, 3], 5);
+    // One node, found and not; the root; a leaf; below the smallest and
+    // above the largest; inner nodes at depth two and three.
+    show(vec![5], 5);
+    show(vec![5], 4);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 8);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 13);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 0);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 15);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 6);
+    show(vec![8, 3, 10, 1, 6, 14, 4, 7, 13], 14);
+    // The problem's largest, 5,000 nodes: 0 to 4,999 inserted in a
+    // random order and searched for 400 values, about half of them
+    // there; then a chain of 5,000 searched at its far end, its root and
+    // past its end.
+    let mut seed: i64 = 700;
+    let tree = bst(shuffled(5000, mut seed));
+    println(f"random 5000: {stats(tree)}");
+    let mut found = 0;
+    let mut sizes = 0;
+    let mut sum = 0;
+    for k in 0..400 {
+        let val = k * 4999 % 10000;
+        match search_bst(tree, val) {
+            None => {}
+            Some(n) => {
+                found += 1;
+                let s = stats(Some(n));
+                for b in s.bytes().iter() {
+                    sum = (sum * 31 + b as i64) % 1000000007;
+                }
+                sizes += s.len();
+            }
+        }
+    }
+    println(f"  400 searches: {found} found, checksum {sum} over {sizes} bytes");
+    let line = chain(5000);
+    println(f"chain 5000 search 5000: {stats(search_bst(line, 5000))}");
+    println(f"chain 5000 search 1: {stats(search_bst(line, 1))}");
+    println(f"chain 5000 search 5001: {stats(search_bst(line, 5001))}");
+    // 1,000 random trees of up to 20 values from 0 to 39, each searched
+    // for a random value from -2 to 41, into a checksum.
+    let mut sum = 0;
+    let mut hits = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 21;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 40);
+        }
+        let val = next_random(mut seed) % 44 - 2;
+        let s = level_order(search_bst(bst(values), val));
+        if s != "[]" {
+            hits += 1;
+        }
+        for b in s.bytes().iter() {
+            sum = (sum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"1000 random trees: {hits} searches found, checksum {sum}");
+}

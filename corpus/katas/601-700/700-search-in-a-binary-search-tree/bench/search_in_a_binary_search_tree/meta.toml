@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/700-search-in-a-binary-search-tree/bench/search_in_a_binary_search_tree.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "f5c72b653"
+extracted_src = "cb2b716e"
+model_rev = "583cfb0d"
+model_src = "cb2b716e"

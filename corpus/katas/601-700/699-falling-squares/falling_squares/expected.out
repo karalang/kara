@@ -1,0 +1,8 @@
+example 1: [2, 5, 5]
+example 2: [100, 100]
+one: [7]
+touching: [2, 2, 2, 2]
+stacked: [3, 6, 9, 12]
+bridge: [2, 5, 25, 26, 26, 26]
+stair of 1000: last 100000000, row of 1000: last 1000000
+40 random problems: heights sum to 22575123, checksum 950098743

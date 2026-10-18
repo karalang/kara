@@ -1,0 +1,21 @@
+
+struct Env { to: Vec[String] }
+struct S { env: Env }
+impl S {
+    fn add(mut ref self, a: Str) -> i64 {
+        self.env.to.push(a.to_string());
+        self.env.to.len()
+    }
+}
+struct Node { kind: i64, kids: Vec[i64] }
+struct Arena { nodes: Vec[Node] }
+struct V { a: Arena }
+fn kind_of(v: ref V, i: usize) -> i64 {
+    v.a.nodes[i].kind + v.a.nodes[i].kids.len() as i64
+}
+fn main() {
+    let mut s = S { env: Env { to: Vec.new() } };
+    println(f"{s.add("x")} {s.add("y")}");
+    let v = V { a: Arena { nodes: vec![Node { kind: 7, kids: vec![1, 2] }] } };
+    println(f"{kind_of(v, 0)}");
+}

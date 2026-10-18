@@ -1,0 +1,276 @@
+// LeetCode #699: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random problems.
+
+// ---- star arm ----------------------------------------------------------
+
+fn falling_squares_star(positions: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut tops: Vec[i64] = Vec.new();
+    let mut answer: Vec[i64] = Vec.new();
+    let mut highest = 0;
+    for i in 0..positions.len() {
+        let (left, side) = positions[i];
+        let mut base = 0;
+        for j in 0..i {
+            let (other, other_side) = positions[j];
+            if left < other + other_side and other < left + side {
+                base = base.max(tops[j]);
+            }
+        }
+        let top = base + side;
+        tops.push(top);
+        highest = highest.max(top);
+        answer.push(highest);
+    }
+    answer
+}
+
+// ---- cells arm ---------------------------------------------------------
+
+fn falling_squares_cells(positions: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut edges: Vec[i64] = Vec.new();
+    for (left, side) in positions.iter() {
+        edges.push(*left);
+        edges.push(*left + *side);
+    }
+    edges.sort();
+    edges.dedup();
+    let mut heights: Vec[i64] = vec![0; edges.len()];
+    let mut answer: Vec[i64] = Vec.new();
+    let mut highest = 0;
+    for (left, side) in positions.iter() {
+        let from = edges.binary_search(*left).unwrap();
+        let to = edges.binary_search(*left + *side).unwrap();
+        let mut base = 0;
+        for c in from..to {
+            base = base.max(heights[c]);
+        }
+        let top = base + *side;
+        for c in from..to {
+            heights[c] = top;
+        }
+        highest = highest.max(top);
+        answer.push(highest);
+    }
+    answer
+}
+
+// ---- tree arm ----------------------------------------------------------
+
+struct Tree {
+    best: Vec[i64],
+    pending: Vec[i64],
+}
+
+impl Tree {
+    fn push_down(mut ref self, node: i64) {
+        let p = self.pending[node];
+        if p >= 0 {
+            for child in [2 * node, 2 * node + 1] {
+                self.best[child] = p;
+                self.pending[child] = p;
+            }
+            self.pending[node] = -1;
+        }
+    }
+
+    // The highest cell in [from, to); the node covers [lo, hi).
+    fn query(mut ref self, node: i64, lo: i64, hi: i64, from: i64, to: i64) -> i64 {
+        if to <= lo or hi <= from {
+            return 0;
+        }
+        if from <= lo and hi <= to {
+            return self.best[node];
+        }
+        self.push_down(node);
+        let mid = (lo + hi) / 2;
+        self.query(2 * node, lo, mid, from, to).max(self.query(2 * node + 1, mid, hi, from, to))
+    }
+
+    // Every cell in [from, to) set to h.
+    fn set(mut ref self, node: i64, lo: i64, hi: i64, from: i64, to: i64, h: i64) {
+        if to <= lo or hi <= from {
+            return;
+        }
+        if from <= lo and hi <= to {
+            self.best[node] = h;
+            self.pending[node] = h;
+            return;
+        }
+        self.push_down(node);
+        let mid = (lo + hi) / 2;
+        self.set(2 * node, lo, mid, from, to, h);
+        self.set(2 * node + 1, mid, hi, from, to, h);
+        self.best[node] = self.best[2 * node].max(self.best[2 * node + 1]);
+    }
+}
+
+fn falling_squares_tree(positions: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut edges: Vec[i64] = Vec.new();
+    for (left, side) in positions.iter() {
+        edges.push(*left);
+        edges.push(*left + *side);
+    }
+    edges.sort();
+    edges.dedup();
+    let cells = edges.len();
+    let mut tree = Tree { best: vec![0; 4 * cells], pending: vec![-1; 4 * cells] };
+    let mut answer: Vec[i64] = Vec.new();
+    for (left, side) in positions.iter() {
+        let from = edges.binary_search(*left).unwrap();
+        let to = edges.binary_search(*left + *side).unwrap();
+        let top = tree.query(1, 0, cells, from, to) + *side;
+        tree.set(1, 0, cells, from, to, top);
+        answer.push(tree.best[1]);
+    }
+    answer
+}
+
+// ---- intervals arm -----------------------------------------------------
+
+// A key at x, holding the height of the stretch x was in.
+fn cut_intervals(ground: mut ref SortedMap[i64, i64], x: i64) {
+    let h = match ground.floor(x) {
+        Some((_, h)) => *h,
+        None => 0,
+    };
+    ground.insert(x, h);
+}
+
+fn falling_squares_intervals(positions: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut ground: SortedMap[i64, i64] = SortedMap.new();
+    ground.insert(0, 0);
+    let mut answer: Vec[i64] = Vec.new();
+    let mut highest = 0;
+    for (left, side) in positions.iter() {
+        let right = *left + *side;
+        cut_intervals(mut ground, right);
+        cut_intervals(mut ground, *left);
+        let mut base = 0;
+        let mut inside: Vec[i64] = Vec.new();
+        for (x, h) in ground.range(*left, right) {
+            base = base.max(*h);
+            inside.push(*x);
+        }
+        for x in inside.iter() {
+            ground.remove(*x);
+        }
+        let top = base + *side;
+        ground.insert(*left, top);
+        highest = highest.max(top);
+        answer.push(highest);
+    }
+    answer
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, positions: Vec[(i64, i64)]) -> Vec[i64] {
+    if which == 0 {
+        falling_squares_star(positions)
+    } else if which == 1 {
+        falling_squares_cells(positions)
+    } else if which == 2 {
+        falling_squares_tree(positions)
+    } else {
+        falling_squares_intervals(positions)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: the ground as columns of width one. A square on
+// [left, left + side) covers columns left to left + side - 1, lands on
+// the highest of them and raises them all to its top; the answer after
+// each drop is the highest column.
+fn definition(positions: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut columns: Vec[i64] = vec![0; 64];
+    let mut answer: Vec[i64] = Vec.new();
+    for (left, side) in positions.iter() {
+        let mut base = 0;
+        for x in *left..*left + *side {
+            base = base.max(columns[x]);
+        }
+        for x in *left..*left + *side {
+            columns[x] = base + *side;
+        }
+        let mut highest = 0;
+        for h in columns.iter() {
+            highest = highest.max(*h);
+        }
+        answer.push(highest);
+    }
+    answer
+}
+
+fn main() {
+    let mut seed = 6990;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 12 squares with sides 1 to 6, their left edges in 1 to 30,
+        // or in a narrower stretch so they pile up.
+        let n = 1 + next_random(mut seed) % 12;
+        let spread = 1 + next_random(mut seed) % 30;
+        let mut positions: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            positions.push((1 + next_random(mut seed) % spread, 1 + next_random(mut seed) % 6));
+        }
+        // Every square moved 1,000 to the right; the picture mirrored, so
+        // a square on [l, l + s) goes to [60 - l - s, 60 - l); every
+        // coordinate and side times three.
+        let mut shifted: Vec[(i64, i64)] = Vec.new();
+        let mut mirrored: Vec[(i64, i64)] = Vec.new();
+        let mut scaled: Vec[(i64, i64)] = Vec.new();
+        for (left, side) in positions.iter() {
+            shifted.push((*left + 1000, *side));
+            mirrored.push((60 - *left - *side, *side));
+            scaled.push((3 * *left, 3 * *side));
+        }
+        let want = definition(positions);
+        for which in 0..arms {
+            let got = answer(which, positions);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: moved to the right, the same answer.
+            checks += 1;
+            if answer(which, shifted) != got {
+                fails[1] += 1;
+            }
+            // P3: mirrored, the same answer.
+            checks += 1;
+            if answer(which, mirrored) != got {
+                fails[2] += 1;
+            }
+            // P4: three times as large, three times every answer.
+            checks += 1;
+            let big = answer(which, scaled);
+            let mut tripled = true;
+            for i in 0..got.len() {
+                if big[i] != 3 * got[i] {
+                    tripled = false;
+                }
+            }
+            if big.len() != got.len() or not tripled {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} problems, {arms} arms, {checks} checks, {total} failures");
+}

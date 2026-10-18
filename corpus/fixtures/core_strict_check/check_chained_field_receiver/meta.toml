@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::check_chained_field_receiver"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "f5c72b653"
+extracted_src = "d9a6b073"
+model_rev = "583cfb0d"
+model_src = "d9a6b073"
