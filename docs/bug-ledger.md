@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 276 |
 | codegen-gap | 267 |
-| false-positive | 212 |
+| false-positive | 213 |
 | other | 173 |
 | perf | 171 |
 | diagnostics | 164 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2926 |
 | interp | 943 |
-| typecheck | 452 |
+| typecheck | 453 |
 | other | 115 |
 | ownership | 110 |
 | runtime | 76 |
@@ -210,6 +210,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-13 | 2026-10-18 | interp+codegen | high | A match whose arms are `Some(n) => *n` and `None => b.get(k).unwrap_or(0)` keeps the second arm a `ref i64` on the MIR surfaces: `karac check` passes, `__mir-run` stops with "Sub on Ref(Addr ..) and Int(1)" when the result is used, and `__mir-llvm-run` prints an address (94122422154631) instead of 1; annotating the binding `: i64` does not help | — |
 | B-2026-10-18-14 | 2026-10-18 | ownership | low | A range view in a `for` header, `for x in v[1..].iter() { .. }`, stays borrowed after the loop ends, so `karac check` refuses a later `v.push(..)` or `v.remove(..)` with "cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"; `for x in v.iter()` passes and every MIR surface runs both | — |
 | B-2026-10-18-15 | 2026-10-18 | typecheck | medium | `#[derive(PartialEq, Eq, PartialOrd, Ord)]` on a generic struct, `struct Dec[K] { k: K, order: i64 }`, gives no `Ord` impl, even for a concrete `Dec[String]`: `karac check` refuses `Dec[String]` for a `T: Ord` bound, `<` and `Vec.sort()`, though design.md § Derive says a derived impl is bounded by what its fields need; writing the four impls by hand with `impl[K: Ord]` works | — |
+| B-2026-10-18-16 | 2026-10-18 | typecheck | low | `warning[must_use]` fires on `q.pop();` for a `PriorityQueue`, though its `Option` result is the removed element, the same displaced-value shape as `Vec.pop` and `VecDeque.pop_front`, which design.md § must_use exempts; the exemption's list names the standard containers one by one and does not name `PriorityQueue` | — |
 
 ### Relocated
 
