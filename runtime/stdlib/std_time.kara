@@ -1,0 +1,30 @@
+// `std.time`: `Duration` and `sleep` (docs/library/time-random-env.md;
+// B-2026-10-15-10). `Clock` and `sleep_ms` are globals of the library.
+
+/// A span of time, held in nanoseconds.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Duration {
+    ns: i64,
+}
+
+impl Duration {
+    /// `ms` milliseconds.
+    pub fn ms(ms: i64) -> Duration {
+        Duration { ns: ms * 1000000 }
+    }
+
+    /// `secs` seconds.
+    pub fn secs(secs: i64) -> Duration {
+        Duration { ns: secs * 1000000000 }
+    }
+
+    /// The whole milliseconds in this span.
+    pub fn as_ms(self) -> i64 {
+        self.ns / 1000000
+    }
+}
+
+/// Parks the calling task for `d`.
+pub fn sleep(d: Duration) with reads(Clock) blocks suspends {
+    sleep_ms(d.as_ms());
+}

@@ -1770,9 +1770,6 @@ impl<'a> super::Resolver<'a> {
                 return;
             }
         }
-        if crate::prelude::is_importable_stdlib_module(&imp.path) {
-            return;
-        }
         // A library module whose items are globals (B-2026-10-14-48): the
         // items that resolve were dropped before resolution, so each one
         // left is unknown, specified but unimplemented, or renamed.
@@ -1793,6 +1790,9 @@ impl<'a> super::Resolver<'a> {
                     });
                 }
             }
+            return;
+        }
+        if crate::prelude::is_importable_stdlib_module(&imp.path) {
             return;
         }
         // `import std.sync;` names a module of globals: there is no module

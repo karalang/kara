@@ -7328,3 +7328,19 @@ fn main() {
 "#,
     );
 }
+
+/// B-2026-10-15-10: `std.time` splices its Kāra items beside its globals, and
+/// still reports an unknown item and one that is specified but missing.
+#[test]
+fn std_time_reports_unknown_and_missing_items() {
+    rejected(
+        "std-time-items",
+        "import std.time.{Duration, Bogus};\nfn main() { println(f\"{Duration.ms(2).as_ms()}\"); }\n",
+        "`std.time` has no item `Bogus`",
+    );
+    rejected(
+        "std-time-instant",
+        "import std.time.{Instant};\nfn main() { }\n",
+        "`std.time.Instant` is in the library spec (docs/library) but not implemented yet",
+    );
+}

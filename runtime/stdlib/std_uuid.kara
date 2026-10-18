@@ -1,0 +1,36 @@
+// `std.uuid`: random (version 4) UUIDs (docs/library/time-random-env.md;
+// B-2026-10-15-10).
+
+/// The low `digits` hex digits of `v`, most significant first, onto `out`.
+fn uuid_hex(out: mut ref String, v: u64, digits: i64) {
+    let hex = "0123456789abcdef";
+    let mut i = digits - 1;
+    while i >= 0 {
+        let n = ((v >> (i * 4) as u64) & 15u64) as i64;
+        out.push_str(hex.slice(n, n + 1));
+        i = i - 1;
+    }
+}
+
+/// A random UUID (RFC 9562 version 4) in its 36-character text form,
+/// lowercase: `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`, `y` one of `8`, `9`,
+/// `a`, `b`.
+pub fn v4() -> String with reads(RandomSource) {
+    let a = RandomSource.next_u64();
+    let b = RandomSource.next_u64();
+    // The version in the top four bits of the third group, the variant
+    // (binary 10) in the top two of the fourth.
+    let hi = (a & 0xffffffffffff0fffu64) | 0x4000u64;
+    let lo = (b & 0x3fffffffffffffffu64) | 0x8000000000000000u64;
+    let mut out = String.with_capacity(36);
+    uuid_hex(mut out, hi >> 32u64, 8);
+    out.push_str("-");
+    uuid_hex(mut out, (hi >> 16u64) & 0xffffu64, 4);
+    out.push_str("-");
+    uuid_hex(mut out, hi & 0xffffu64, 4);
+    out.push_str("-");
+    uuid_hex(mut out, lo >> 48u64, 4);
+    out.push_str("-");
+    uuid_hex(mut out, lo & 0xffffffffffffu64, 12);
+    out
+}

@@ -1220,6 +1220,20 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "encoding"],
         include_str!("../runtime/stdlib/std_encoding.kara"),
     ),
+    // `std.time` is also a module of globals (`Clock`, `sleep_ms`); its
+    // Kāra items are spliced beside them.
+    (
+        &["std", "time"],
+        include_str!("../runtime/stdlib/std_time.kara"),
+    ),
+    (
+        &["std", "random"],
+        include_str!("../runtime/stdlib/std_random.kara"),
+    ),
+    (
+        &["std", "uuid"],
+        include_str!("../runtime/stdlib/std_uuid.kara"),
+    ),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -1827,10 +1841,8 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
     (
         &["std", "time"],
         &["Clock", "sleep_ms"],
-        &["Instant", "SystemTime", "Duration", "sleep"],
+        &["Instant", "SystemTime"],
     ),
-    (&["std", "random"], &[], &["next_u64"]),
-    (&["std", "uuid"], &[], &["v4"]),
     (
         &["std", "io"],
         &[
@@ -1960,14 +1972,19 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
     for item in &mut program.items {
         let Item::Import(imp) = item else { continue };
         if let Some((have, _)) = library_global_module(&imp.path) {
-            if imp.is_wildcard {
+            let gated = is_gated_stdlib_module(&imp.path);
+            if imp.is_wildcard && !gated {
                 imp.items.clear();
                 imp.is_wildcard = false;
             } else {
                 imp.items
                     .retain(|ii| ii.alias.is_some() || !have.contains(&ii.name.as_str()));
             }
-            continue;
+            // A module of globals with Kāra items as well (`std.time`) splices
+            // those below.
+            if !gated {
+                continue;
+            }
         }
         // `import std.path.*;` names every public item of the module.
         if imp.is_wildcard {

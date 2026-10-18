@@ -12,7 +12,7 @@ In `std.time`:
 |---|---|---|
 | `Clock.now()` | `reads(Clock)` | An `Instant`: a reading of the monotonic clock |
 | `SystemTime.now()` | `reads(Clock)` | A `SystemTime`: the current wall-clock time |
-| `sleep(d: Duration)` | `blocks`, `reads(Clock)` | Nothing; parks the calling thread for `d` |
+| `sleep(d: Duration)` | `blocks`, `suspends`, `reads(Clock)` | Nothing; parks the calling task for `d`. In a task it suspends, so its thread runs other tasks meanwhile |
 
 All time sources are one resource, `Clock`: wall and monotonic time differ in the API, not in conflict analysis, and two calls that both read `Clock` do not conflict.
 
@@ -53,7 +53,7 @@ fn timed(work: Fn()) -> Duration {
 | Function | Effects | Returns |
 |---|---|---|
 | `std.random.next_u64()` | `reads(RandomSource)` | 64 random bits |
-| `std.uuid.v4()` | `reads(RandomSource)` | A random (version 4) UUID |
+| `std.uuid.v4()` | `reads(RandomSource)` | A random (version 4) UUID, as a `String` in its 36-character lowercase form (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`) |
 
 Cryptographic nonces also read `RandomSource`. A pseudo-random generator seeded from a constant is not `reads(RandomSource)`: it is deterministic, and its state is an ordinary value passed as an argument.
 
