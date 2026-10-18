@@ -748,7 +748,7 @@ struct StrSplit {
 impl Iterator for StrSplit {
     type Item = Str;
 
-    fn next(mut ref self) -> Option[Str] {
+    fn next(mut ref self) -> Option[Self.Item] {
         if self.done {
             return None;
         }
@@ -789,7 +789,7 @@ struct StrLines {
 impl Iterator for StrLines {
     type Item = Str;
 
-    fn next(mut ref self) -> Option[Str] {
+    fn next(mut ref self) -> Option[Self.Item] {
         let n = self.s.len();
         if self.pos >= n {
             return None;
@@ -823,7 +823,7 @@ struct StrWords {
 impl Iterator for StrWords {
     type Item = Str;
 
-    fn next(mut ref self) -> Option[Str] {
+    fn next(mut ref self) -> Option[Self.Item] {
         let n = self.s.len();
         while self.pos < n {
             let c = self.s.char_at_byte(self.pos);
