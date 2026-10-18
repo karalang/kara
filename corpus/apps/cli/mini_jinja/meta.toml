@@ -7,6 +7,7 @@ class = "e"
 expected_from = "oracle"
 rules = []
 backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
+leaks = "shared-cycle"
 env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
