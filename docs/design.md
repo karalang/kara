@@ -1144,6 +1144,8 @@ So: round toward zero; if the result is outside the target's range, saturate to 
 
 **Printing.** A float prints as the shortest decimal that reads back as the same value, always with a `.` or an exponent, so `1.0` never prints as `1`. `to_string()`, `println` and f-string interpolation all use this rendering; the exponent and special-value rules are in [library/core-types.md](library/core-types.md#printing).
 
+**Bit patterns.** `x.to_bits()` is the IEEE 754 bit pattern of `x` as an `f64`, a `u64`; `x.to_bits32()` is the pattern of `x` rounded to `f32`, a `u32`. The inverses are integer methods: `bits.bits_as_f64()` reads a 64-bit integer's bits as an `f64`, and `bits.bits_as_f32()` reads a 32-bit integer's bits as an `f32`. They are how a binary format's floats are encoded and decoded. Rust's spelling, `f64.from_bits(bits)`, is an error whose fix writes `bits.bits_as_f64()`.
+
 **`F32` and `F64`: total-order floats.** The standard library provides `F32` and `F64` for contexts that need `Eq`, `Ord` or `Hash`. They store the same bits as `f32` and `f64` and order them by the IEEE 754 **totalOrder** predicate, with NaN normalized on the way in:
 
 - **Ordering:** `-Infinity < ... < -0.0 < 0.0 < ... < +Infinity < NaN`. `-0.0` and `0.0` are **distinct, adjacent** values here: the wrapper compares bit patterns, not IEEE values, so `-0.0 == 0.0` is `false` (on `f64` it is `true`).

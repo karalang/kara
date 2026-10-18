@@ -7333,3 +7333,15 @@ fn a_closure_that_gives_away_a_bare_param_is_refused_at_the_closure() {
         "fn main() {\n    let a = |e: String| e.len();\n    let b = |e: String| { let e = e.clone(); (1, e) };\n    let c = |e: own String| (1, e);\n    println(f\"{a(\"x\".to_string())} {b(\"y\".to_string()).1} {c(\"z\".to_string()).1}\");\n}\n",
     );
 }
+
+/// B-2026-10-15-58: Rust's `f64.from_bits(bits)` names the library's
+/// `bits.bits_as_f64()`, and `karac fix` writes it.
+#[test]
+fn f64_from_bits_names_bits_as_f64() {
+    rejected_then_fixed_by(
+        "f64-from-bits",
+        "fn main() {\n    let bits: u64 = 4591870180066957722;\n    let x = f64.from_bits(bits + 0);\n    println(f\"{x}\");\n}\n",
+        "the integer method `bits.bits_as_f64()`",
+        "(bits + 0).bits_as_f64()",
+    );
+}

@@ -34,8 +34,8 @@ use crate::token::Span;
 
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::substitute_type_params;
-use super::types::{type_display, IntSize, SubstValue, Type, UIntSize};
-use super::TypeErrorKind;
+use super::types::{type_display, FloatSize, IntSize, SubstValue, Type, UIntSize};
+use super::{FixIt, TypeErrorKind};
 use std::collections::HashMap;
 
 impl<'a> super::TypeChecker<'a> {
@@ -560,6 +560,42 @@ impl<'a> super::TypeChecker<'a> {
                     // bare "no associated function" read as if the operation
                     // did not exist, and `char.try_from` is not something a
                     // reader finds by guessing.
+                    // B-2026-10-15-58: Rust's `f64.from_bits(bits)` is the
+                    // integer method `bits.bits_as_f64()` here, the inverse
+                    // of `x.to_bits()`; the rewrite is the fix.
+                    if matches!(type_name.as_str(), "f64" | "f32")
+                        && method == "from_bits"
+                        && args.len() == 1
+                    {
+                        let to = format!("bits_as_{type_name}");
+                        let arg = &args[0].value;
+                        let rendered = crate::formatter::render_expr(arg);
+                        let receiver = match arg.kind {
+                            ExprKind::Identifier(_)
+                            | ExprKind::Call { .. }
+                            | ExprKind::MethodCall { .. }
+                            | ExprKind::FieldAccess { .. } => rendered,
+                            _ => format!("({rendered})"),
+                        };
+                        self.type_error_with_fix_it(
+                            format!(
+                                "no associated function 'from_bits' on type '{type_name}': an \
+                                 integer's bits are reinterpreted as a float with the integer \
+                                 method `bits.{to}()`, the inverse of `x.to_bits()`"
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                            FixIt {
+                                span: *span,
+                                replacement: format!("{receiver}.{to}()"),
+                            },
+                        );
+                        return Some(if type_name == "f64" {
+                            Type::Float(FloatSize::F64)
+                        } else {
+                            Type::Float(FloatSize::F32)
+                        });
+                    }
                     let is_int = type_name.starts_with('i') || type_name.starts_with('u');
                     let hint = match (type_name.as_str(), method) {
                         (_, "max_value") if is_int => format!("; write `{type_name}.MAX`"),
