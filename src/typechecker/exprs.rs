@@ -3412,6 +3412,13 @@ impl<'a> super::TypeChecker<'a> {
                         &mut self.env.const_substitutions,
                     );
                 }
+                // A named function whose parameter borrows (`fn text(e: E)`,
+                // a `ref E`) passed for an `own E` slot fails the whole-type
+                // unify at that parameter, which left its return unread:
+                // `.map_err(text)` never solved `F` (B-2026-10-18-26).
+                if self.library_methods_from_source {
+                    self.unify_fn_value_parts(sub_param_ty, arg_ty);
+                }
                 // A function value for a parameter with a function-trait
                 // bound (`f: F` where `F: Fn(i64) -> U`) also solves the
                 // parameters only its bound mentions: `app(double, 4)` fixes
@@ -4382,6 +4389,47 @@ impl<'a> super::TypeChecker<'a> {
         if super::inference::find_unbound_type_param(arg_ty, &in_scope).is_some() {
             self.node_type_slots.push((arg.id, slot.clone()));
         }
+    }
+
+    /// Unify a function value's parameters (a borrow read as the value it
+    /// lends) and return with a function-typed slot's, part by part.
+    fn unify_fn_value_parts(&mut self, slot: &Type, arg: &Type) {
+        let fn_parts = |t: &Type| match t {
+            Type::Function {
+                params,
+                return_type,
+            }
+            | Type::OnceFunction {
+                params,
+                return_type,
+            } => Some((params.clone(), (**return_type).clone())),
+            _ => None,
+        };
+        let (Some((sp, sr)), Some((ap, ar))) = (fn_parts(slot), fn_parts(arg)) else {
+            return;
+        };
+        if sp.len() != ap.len() {
+            return;
+        }
+        for (s, a) in sp.iter().zip(&ap) {
+            let a = match (s, a) {
+                (Type::Ref(_) | Type::MutRef(_), _) => a,
+                (_, Type::Ref(inner) | Type::MutRef(inner)) => inner.as_ref(),
+                _ => a,
+            };
+            unify_types(
+                s,
+                a,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
+        }
+        unify_types(
+            &sr,
+            &ar,
+            &mut self.env.substitutions,
+            &mut self.env.const_substitutions,
+        );
     }
 
     /// A bare unit variant of a generic enum whose parameters nothing has

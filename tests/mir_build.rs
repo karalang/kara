@@ -4219,3 +4219,76 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_named_fn_with_a_borrowed_param_solves_the_slots_return() {
+    // B-2026-10-18-26: `check(n).map_err(text)?` with `fn text(e: E)` (a
+    // borrowed parameter) for `map_err[F]`'s `OnceFn(own E) -> F` failed the
+    // function type's unify at the parameter and never read the return, so
+    // `F` stayed unsolved: "'?' cannot propagate error 'F' as 'String'".
+    let src = r#"
+enum E {
+    Bad(i64),
+}
+
+fn check(n: i64) -> Result[i64, E] {
+    if n < 0 { Err(E.Bad(n)) } else { Ok(n * 2) }
+}
+
+fn text(e: E) -> String {
+    match e {
+        E.Bad(n) => f"bad {n}",
+    }
+}
+
+fn run(n: i64) -> Result[i64, String] {
+    let v = check(n).map_err(text)?;
+    Ok(v + 1)
+}
+
+fn main0() {
+    match run(4) {
+        Ok(v) => println(f"{v}"),
+        Err(e) => println(e),
+    }
+    match run(-1) {
+        Ok(v) => println(f"{v}"),
+        Err(e) => println(e),
+    }
+}
+
+fn len_of(s: String) -> i64 { s.len() }
+fn shout(s: String) -> String { s.to_uppercase() }
+fn twice(n: i64) -> i64 { n * 2 }
+fn parse(s: String) -> Result[i64, String] {
+    let n = s.len();
+    if n > 3 { Err(f"long {s}") } else { Ok(n) }
+}
+fn main1() {
+    let o: Option[String] = Some("abc".to_string());
+    let n = o.clone().map(len_of);
+    let u = o.map(shout);
+    let r: Result[i64, String] = Ok(4);
+    let t = r.map(twice);
+    let p = parse("hello".to_string()).map_err(shout);
+    println(f"{n.unwrap()} {u.unwrap()} {t.unwrap()}");
+    match p {
+        Ok(v) => println(f"{v}"),
+        Err(e) => println(e),
+    }
+}
+
+fn main() {
+    main0();
+    main1();
+}
+"#;
+    let want = "9\nbad -1\n3 ABC 8\nLONG HELLO\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
