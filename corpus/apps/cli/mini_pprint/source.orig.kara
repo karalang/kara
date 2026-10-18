@@ -1,0 +1,1393 @@
+// mini_pprint: Python 3.13's pprint (PrettyPrinter, pformat, saferepr,
+// isreadable, isrecursive), ported from Lib/pprint.py, over values read by
+// a port of ast.literal_eval's grammar: ints, bools, None, str and bytes
+// literals, lists, tuples, dicts and sets.
+
+// ---------------------------------------------------------------- chars
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(' ');
+        k += 1;
+    }
+    s
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn hex_value(c: char) -> i64 {
+    if is_digit(c) {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex2(n: i64) -> String {
+    let digits = to_chars("0123456789abcdef");
+    let mut s = String.new();
+    s.push(digits[n / 16]);
+    s.push(digits[n % 16]);
+    s
+}
+
+fn hex4(n: i64) -> String {
+    f"{hex2(n / 256)}{hex2(n % 256)}"
+}
+
+// str.isspace, which is what \s matches in a str pattern.
+fn is_space(c: char) -> bool {
+    let o = c as i64;
+    (o >= 9 and o <= 13) or (o >= 0x1c and o <= 0x20) or o == 0x85 or o == 0xa0 or o == 0x1680
+        or (o >= 0x2000 and o <= 0x200a) or o == 0x2028 or o == 0x2029 or o == 0x202f or o == 0x205f or o == 0x3000
+}
+
+// The line boundaries of str.splitlines.
+fn is_line_break(c: char) -> bool {
+    let o = c as i64;
+    (o >= 10 and o <= 13) or (o >= 0x1c and o <= 0x1e) or o == 0x85 or o == 0x2028 or o == 0x2029
+}
+
+// str.splitlines(keepends=True).
+fn splitlines_keep(s: ref String) -> Vec[String] {
+    let cs = to_chars(s);
+    let mut lines: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut k = 0;
+    while k < cs.len() {
+        if is_line_break(cs[k]) {
+            let mut end = k + 1;
+            if cs[k] == '\r' and end < cs.len() and cs[end] == '\n' {
+                end += 1;
+            }
+            lines.push(text(cs, start, end));
+            start = end;
+            k = end;
+        } else {
+            k += 1;
+        }
+    }
+    if start < cs.len() {
+        lines.push(text(cs, start, cs.len()));
+    }
+    lines
+}
+
+// re.findall(r'\S*\s*', line) without its final empty match.
+fn word_parts(line: ref String) -> Vec[String] {
+    let cs = to_chars(line);
+    let mut parts: Vec[String] = Vec.new();
+    let mut k = 0;
+    while k < cs.len() {
+        let start = k;
+        while k < cs.len() and not is_space(cs[k]) {
+            k += 1;
+        }
+        while k < cs.len() and is_space(cs[k]) {
+            k += 1;
+        }
+        parts.push(text(cs, start, k));
+    }
+    parts
+}
+
+// ---------------------------------------------------------------- values
+
+#[derive(Clone)]
+enum Value {
+    Int(i64),
+    Bool(bool),
+    NoneV,
+    Str(String),
+    Bytes(Vec[i64]),
+    List(Vec[Value]),
+    Tuple(Vec[Value]),
+    Dict(Vec[(Value, Value)]),
+    Set(Vec[Value]),
+}
+
+fn rank(v: ref Value) -> i64 {
+    match v {
+        Value.Int(_) => 0,
+        Value.Bool(_) => 0,
+        Value.NoneV => 1,
+        Value.Str(_) => 2,
+        Value.Bytes(_) => 3,
+        Value.Tuple(_) => 4,
+        _ => 5,
+    }
+}
+
+fn number(v: ref Value) -> i64 {
+    match v {
+        Value.Int(n) => n,
+        Value.Bool(b) => if b { 1 } else { 0 },
+        _ => 0,
+    }
+}
+
+// The order sorted() gives these values (ints and bools compare as
+// numbers); values Python cannot compare are grouped by kind.
+fn cmp_value(a: ref Value, b: ref Value) -> Ordering {
+    let ra = rank(a);
+    let rb = rank(b);
+    if ra != rb {
+        return ra.cmp(rb);
+    }
+    match (a, b) {
+        (Value.Str(x), Value.Str(y)) => x.cmp(y),
+        (Value.Bytes(x), Value.Bytes(y)) => {
+            let mut k = 0;
+            while k < x.len() and k < y.len() {
+                if x[k] != y[k] {
+                    return x[k].cmp(y[k]);
+                }
+                k += 1;
+            }
+            x.len().cmp(y.len())
+        }
+        (Value.Tuple(x), Value.Tuple(y)) => {
+            let mut k = 0;
+            while k < x.len() and k < y.len() {
+                let c = cmp_value(x[k], y[k]);
+                if c != Ordering.Equal {
+                    return c;
+                }
+                k += 1;
+            }
+            x.len().cmp(y.len())
+        }
+        _ => number(a).cmp(number(b)),
+    }
+}
+
+fn str_repr(s: ref String) -> String {
+    let mut single = false;
+    let mut double = false;
+    for c in s.chars() {
+        if c == '\'' {
+            single = true;
+        } else if c == '"' {
+            double = true;
+        }
+    }
+    let quote = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if o < 32 or (o >= 0x7f and o <= 0xa0) or o == 0xad {
+            out.push_str("\\x");
+            out.push_str(hex2(o));
+        } else if o >= 0xd800 and o <= 0xdfff {
+            out.push_str("\\u");
+            out.push_str(hex4(o));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn bytes_repr(b: ref Vec[i64]) -> String {
+    let mut single = false;
+    let mut double = false;
+    for x in b.iter() {
+        if x == 39 {
+            single = true;
+        } else if x == 34 {
+            double = true;
+        }
+    }
+    let quote = if single and not double { 34 } else { 39 };
+    let mut out = "b".to_string();
+    out.push(char.try_from(quote).unwrap());
+    for x in b.iter() {
+        if x == quote or x == 92 {
+            out.push('\\');
+            out.push(char.try_from(x).unwrap());
+        } else if x == 9 {
+            out.push_str("\\t");
+        } else if x == 10 {
+            out.push_str("\\n");
+        } else if x == 13 {
+            out.push_str("\\r");
+        } else if x < 32 or x >= 127 {
+            out.push_str("\\x");
+            out.push_str(hex2(x));
+        } else {
+            out.push(char.try_from(x).unwrap());
+        }
+    }
+    out.push(char.try_from(quote).unwrap());
+    out
+}
+
+fn join_reprs(items: ref Vec[Value]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in items.iter() {
+        parts.push(repr(x));
+    }
+    parts.join(", ")
+}
+
+// Plain repr(), as the builtin types write themselves.
+fn repr(v: ref Value) -> String {
+    match v {
+        Value.Int(n) => n.to_string(),
+        Value.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        Value.NoneV => "None".to_string(),
+        Value.Str(s) => str_repr(s),
+        Value.Bytes(b) => bytes_repr(b),
+        Value.List(items) => f"[{join_reprs(items)}]",
+        Value.Tuple(items) => {
+            if items.len() == 1 {
+                f"({join_reprs(items)},)"
+            } else {
+                f"({join_reprs(items)})"
+            }
+        }
+        Value.Dict(pairs) => {
+            let mut parts: Vec[String] = Vec.new();
+            for (k, x) in pairs.iter() {
+                parts.push(f"{repr(k)}: {repr(x)}");
+            }
+            "{" + parts.join(", ") + "}"
+        }
+        Value.Set(items) => {
+            if items.len() == 0 {
+                "set()".to_string()
+            } else {
+                "{" + join_reprs(items) + "}"
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- ast.literal_eval
+
+struct Parser {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl Parser {
+    fn new(src: ref String) -> Parser {
+        Parser { cs: to_chars(src), pos: 0 }
+    }
+
+    // Skips whitespace, newlines and comments.
+    fn skip(mut ref self) {
+        while self.pos < self.cs.len() {
+            let c = self.cs[self.pos];
+            if c == ' ' or c == '\t' or c == '\n' or c == '\r' {
+                self.pos += 1;
+            } else if c == '#' {
+                while self.pos < self.cs.len() and self.cs[self.pos] != '\n' {
+                    self.pos += 1;
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn peek(mut ref self) -> char {
+        self.skip();
+        if self.pos < self.cs.len() {
+            self.cs[self.pos]
+        } else {
+            '\u{0}'
+        }
+    }
+
+    fn expect(mut ref self, c: char) -> Result[(), String] {
+        if self.peek() != c {
+            return Err(f"expected '{c}' at offset {self.pos}");
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    fn at_word(ref self, w: ref String) -> bool {
+        let ws = to_chars(w);
+        let mut k = 0;
+        while k < ws.len() {
+            if self.pos + k >= self.cs.len() or self.cs[self.pos + k] != ws[k] {
+                return false;
+            }
+            k += 1;
+        }
+        let after = self.pos + ws.len();
+        after >= self.cs.len() or not (is_digit(self.cs[after]) or self.cs[after] == '_' or (self.cs[after] >= 'a' and self.cs[after] <= 'z') or (self.cs[after] >= 'A' and self.cs[after] <= 'Z'))
+    }
+
+    fn parse_all(mut ref self) -> Result[Value, String] {
+        let v = self.value()?;
+        if self.peek() != '\u{0}' {
+            return Err(f"trailing text at offset {self.pos}");
+        }
+        Ok(v)
+    }
+
+    fn value(mut ref self) -> Result[Value, String] {
+        let c = self.peek();
+        if c == '[' {
+            self.pos += 1;
+            let items = self.items(']')?;
+            return Ok(Value.List(items));
+        }
+        if c == '(' {
+            self.pos += 1;
+            if self.peek() == ')' {
+                self.pos += 1;
+                return Ok(Value.Tuple(Vec.new()));
+            }
+            let first = self.value()?;
+            if self.peek() == ')' {
+                self.pos += 1;
+                return Ok(first);
+            }
+            self.expect(',')?;
+            let mut items = vec![first];
+            let rest = self.items(')')?;
+            for x in rest.iter() {
+                items.push(x.clone());
+            }
+            return Ok(Value.Tuple(items));
+        }
+        if c == '{' {
+            self.pos += 1;
+            return self.dict_or_set();
+        }
+        if c == '-' {
+            self.pos += 1;
+            return match self.value()? {
+                Value.Int(n) => Ok(Value.Int(-n)),
+                _ => Err("'-' before a non-number".to_string()),
+            };
+        }
+        if is_digit(c) {
+            return self.number();
+        }
+        if c == '\'' or c == '"' or ((c == 'b' or c == 'B') and self.pos + 1 < self.cs.len() and (self.cs[self.pos + 1] == '\'' or self.cs[self.pos + 1] == '"')) {
+            return self.strings();
+        }
+        if self.at_word("True") {
+            self.pos += 4;
+            return Ok(Value.Bool(true));
+        }
+        if self.at_word("False") {
+            self.pos += 5;
+            return Ok(Value.Bool(false));
+        }
+        if self.at_word("None") {
+            self.pos += 4;
+            return Ok(Value.NoneV);
+        }
+        if self.at_word("set") {
+            self.pos += 3;
+            self.expect('(')?;
+            self.expect(')')?;
+            return Ok(Value.Set(Vec.new()));
+        }
+        Err(f"malformed node or string at offset {self.pos}")
+    }
+
+    // Comma-separated values up to close, with an optional trailing comma.
+    fn items(mut ref self, close: char) -> Result[Vec[Value], String] {
+        let mut items: Vec[Value] = Vec.new();
+        while self.peek() != close {
+            items.push(self.value()?);
+            if self.peek() == ',' {
+                self.pos += 1;
+            } else if self.peek() != close {
+                return Err(f"expected ',' or '{close}' at offset {self.pos}");
+            }
+        }
+        self.pos += 1;
+        Ok(items)
+    }
+
+    fn dict_or_set(mut ref self) -> Result[Value, String] {
+        if self.peek() == '}' {
+            self.pos += 1;
+            return Ok(Value.Dict(Vec.new()));
+        }
+        let first = self.value()?;
+        if self.peek() == ':' {
+            self.pos += 1;
+            let mut pairs: Vec[(Value, Value)] = Vec.new();
+            let v = self.value()?;
+            pairs.push((first, v));
+            while self.peek() == ',' {
+                self.pos += 1;
+                if self.peek() == '}' {
+                    break;
+                }
+                let k = self.value()?;
+                self.expect(':')?;
+                let x = self.value()?;
+                pairs.push((k, x));
+            }
+            self.expect('}')?;
+            return Ok(Value.Dict(pairs));
+        }
+        let mut items = vec![first];
+        while self.peek() == ',' {
+            self.pos += 1;
+            if self.peek() == '}' {
+                break;
+            }
+            items.push(self.value()?);
+        }
+        self.expect('}')?;
+        // A set's members, unique and in order.
+        items.sort_by(|a, b| cmp_value(a, b));
+        let mut unique: Vec[Value] = Vec.new();
+        for x in items.iter() {
+            if unique.len() == 0 or cmp_value(unique[unique.len() - 1], x) != Ordering.Equal {
+                unique.push(x.clone());
+            }
+        }
+        Ok(Value.Set(unique))
+    }
+
+    fn number(mut ref self) -> Result[Value, String] {
+        let mut base = 10;
+        if self.cs[self.pos] == '0' and self.pos + 1 < self.cs.len() and (self.cs[self.pos + 1] == 'x' or self.cs[self.pos + 1] == 'X') {
+            base = 16;
+            self.pos += 2;
+        }
+        let mut n = 0;
+        let mut digits = 0;
+        while self.pos < self.cs.len() {
+            let c = self.cs[self.pos];
+            if c == '_' {
+                self.pos += 1;
+            } else {
+                let d = hex_value(c);
+                if d < 0 or d >= base {
+                    break;
+                }
+                n = n * base + d;
+                digits += 1;
+                self.pos += 1;
+            }
+        }
+        if digits == 0 {
+            return Err(f"bad number at offset {self.pos}");
+        }
+        Ok(Value.Int(n))
+    }
+
+    // One or more adjacent string literals, all str or all bytes.
+    fn strings(mut ref self) -> Result[Value, String] {
+        let mut is_bytes = false;
+        let mut s = String.new();
+        let mut b: Vec[i64] = Vec.new();
+        let mut count = 0;
+        loop {
+            let c = self.peek();
+            let lit_bytes = c == 'b' or c == 'B';
+            if not (c == '\'' or c == '"' or (lit_bytes and self.pos + 1 < self.cs.len() and (self.cs[self.pos + 1] == '\'' or self.cs[self.pos + 1] == '"'))) {
+                break;
+            }
+            if count > 0 and lit_bytes != is_bytes {
+                return Err("cannot mix bytes and nonbytes literals".to_string());
+            }
+            is_bytes = lit_bytes;
+            if lit_bytes {
+                self.pos += 1;
+            }
+            let quote = self.cs[self.pos];
+            self.pos += 1;
+            let mut closed = false;
+            while self.pos < self.cs.len() and not closed {
+                let ch = self.cs[self.pos];
+                self.pos += 1;
+                if ch == quote {
+                    closed = true;
+                } else if ch == '\\' {
+                    let code = self.escape(lit_bytes)?;
+                    if lit_bytes {
+                        b.push(code);
+                    } else {
+                        s.push(char.try_from(code).unwrap());
+                    }
+                } else if lit_bytes {
+                    b.push(ch as i64);
+                } else {
+                    s.push(ch);
+                }
+            }
+            if not closed {
+                return Err("unterminated string literal".to_string());
+            }
+            count += 1;
+        }
+        if is_bytes {
+            Ok(Value.Bytes(b))
+        } else {
+            Ok(Value.Str(s))
+        }
+    }
+
+    // The code point (or byte) of the escape after a backslash.
+    fn escape(mut ref self, bytes: bool) -> Result[i64, String] {
+        if self.pos >= self.cs.len() {
+            return Err("unterminated escape".to_string());
+        }
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == 'n' {
+            return Ok(10);
+        }
+        if c == 't' {
+            return Ok(9);
+        }
+        if c == 'r' {
+            return Ok(13);
+        }
+        if c == '0' {
+            return Ok(0);
+        }
+        if c == 'x' or (not bytes and c == 'u') {
+            let width = if c == 'x' { 2 } else { 4 };
+            let mut n = 0;
+            let mut k = 0;
+            while k < width {
+                if self.pos >= self.cs.len() or hex_value(self.cs[self.pos]) < 0 {
+                    return Err(f"truncated \\{c} escape");
+                }
+                n = n * 16 + hex_value(self.cs[self.pos]);
+                self.pos += 1;
+                k += 1;
+            }
+            return Ok(n);
+        }
+        Ok(c as i64)
+    }
+}
+
+// ---------------------------------------------------------------- PrettyPrinter
+
+struct Printer {
+    indent: i64,
+    width: i64,
+    // 0 for no depth limit
+    depth: i64,
+    compact: bool,
+    sort_dicts: bool,
+    underscore_numbers: bool,
+}
+
+fn underscored(n: i64) -> String {
+    let digits = to_chars((if n < 0 { -n } else { n }).to_string());
+    let mut s = if n < 0 { "-".to_string() } else { String.new() };
+    let mut k = 0;
+    while k < digits.len() {
+        if k > 0 and (digits.len() - k) % 3 == 0 {
+            s.push('_');
+        }
+        s.push(digits[k]);
+        k += 1;
+    }
+    s
+}
+
+impl Printer {
+    // depth is None in Python when not given; here 0 stands for that.
+    fn new(indent: i64, width: i64, depth: Option[i64], compact: bool, sort_dicts: bool, underscore_numbers: bool) -> Result[Printer, String] {
+        if indent < 0 {
+            return Err("indent must be >= 0".to_string());
+        }
+        let limit = depth.unwrap_or(0);
+        if depth.is_some() and limit <= 0 {
+            return Err("depth must be > 0".to_string());
+        }
+        if width == 0 {
+            return Err("width must be != 0".to_string());
+        }
+        Ok(Printer { indent: indent, width: width, depth: limit, compact: compact, sort_dicts: sort_dicts, underscore_numbers: underscore_numbers })
+    }
+
+    fn sorted_items(ref self, pairs: ref Vec[(Value, Value)]) -> Vec[(Value, Value)] {
+        let mut items = pairs.clone();
+        if self.sort_dicts {
+            items.sort_by(|a, b| {
+                let c = cmp_value(a.0, b.0);
+                if c != Ordering.Equal { c } else { cmp_value(a.1, b.1) }
+            });
+        }
+        items
+    }
+
+    // _safe_repr: (repr, readable). maxlevels 0 means no limit.
+    fn safe_repr(ref self, obj: ref Value, maxlevels: i64, level: i64) -> (String, bool) {
+        match obj {
+            Value.Int(n) => {
+                if self.underscore_numbers {
+                    (underscored(n), true)
+                } else {
+                    (n.to_string(), true)
+                }
+            }
+            Value.Dict(pairs) => {
+                if pairs.len() == 0 {
+                    return ("{}".to_string(), true);
+                }
+                if maxlevels > 0 and level >= maxlevels {
+                    return ("{...}".to_string(), false);
+                }
+                let mut readable = true;
+                let mut parts: Vec[String] = Vec.new();
+                for (k, x) in self.sorted_items(pairs).iter() {
+                    let (krepr, kreadable) = self.safe_repr(k, maxlevels, level + 1);
+                    let (vrepr, vreadable) = self.safe_repr(x, maxlevels, level + 1);
+                    parts.push(f"{krepr}: {vrepr}");
+                    readable = readable and kreadable and vreadable;
+                }
+                ("{" + parts.join(", ") + "}", readable)
+            }
+            Value.List(items) => self.safe_seq(items, "[", "]", maxlevels, level),
+            Value.Tuple(items) => {
+                if items.len() == 1 {
+                    self.safe_seq(items, "(", ",)", maxlevels, level)
+                } else {
+                    self.safe_seq(items, "(", ")", maxlevels, level)
+                }
+            }
+            _ => (repr(obj), true),
+        }
+    }
+
+    fn safe_seq(ref self, items: ref Vec[Value], open: ref String, close: ref String, maxlevels: i64, level: i64) -> (String, bool) {
+        if items.len() == 0 {
+            return (f"{open}{close}", true);
+        }
+        if maxlevels > 0 and level >= maxlevels {
+            return (f"{open}...{close}", false);
+        }
+        let mut readable = true;
+        let mut parts: Vec[String] = Vec.new();
+        for x in items.iter() {
+            let (r, ok) = self.safe_repr(x, maxlevels, level + 1);
+            parts.push(r);
+            if not ok {
+                readable = false;
+            }
+        }
+        (f"{open}{parts.join(", ")}{close}", readable)
+    }
+
+    fn repr_at(ref self, obj: ref Value, level: i64) -> String {
+        let (r, _) = self.safe_repr(obj, self.depth, level);
+        r
+    }
+
+    fn pformat(ref self, obj: ref Value) -> String {
+        let mut out = String.new();
+        self.format(obj, mut out, 0, 0, 0);
+        out
+    }
+
+    // _format.
+    fn format(ref self, obj: ref Value, out: mut ref String, indent: i64, allowance: i64, level: i64) {
+        let rep = self.repr_at(obj, level);
+        let max_width = self.width - indent - allowance;
+        if char_count(rep) > max_width {
+            match obj {
+                Value.Dict(pairs) => {
+                    self.pprint_dict(pairs, out, indent, allowance, level + 1);
+                    return;
+                }
+                Value.List(items) => {
+                    out.push('[');
+                    self.format_items(items, out, indent, allowance + 1, level + 1);
+                    out.push(']');
+                    return;
+                }
+                Value.Tuple(items) => {
+                    let endchar = if items.len() == 1 { ",)" } else { ")" };
+                    out.push('(');
+                    self.format_items(items, out, indent, allowance + char_count(endchar), level + 1);
+                    out.push_str(endchar);
+                    return;
+                }
+                Value.Set(items) => {
+                    if items.len() == 0 {
+                        out.push_str(rep);
+                        return;
+                    }
+                    out.push('{');
+                    self.format_items(items, out, indent, allowance + 1, level + 1);
+                    out.push('}');
+                    return;
+                }
+                Value.Str(s) => {
+                    self.pprint_str(s, out, indent, allowance, level + 1);
+                    return;
+                }
+                Value.Bytes(b) => {
+                    self.pprint_bytes(b, out, indent, allowance, level + 1);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        out.push_str(rep);
+    }
+
+    fn pprint_dict(ref self, pairs: ref Vec[(Value, Value)], out: mut ref String, indent: i64, allowance: i64, level: i64) {
+        out.push('{');
+        if self.indent > 1 {
+            out.push_str(spaces(self.indent - 1));
+        }
+        if pairs.len() > 0 {
+            let items = self.sorted_items(pairs);
+            self.format_dict_items(items, out, indent, allowance + 1, level);
+        }
+        out.push('}');
+    }
+
+    fn format_dict_items(ref self, items: ref Vec[(Value, Value)], out: mut ref String, indent: i64, allowance: i64, level: i64) {
+        let indent = indent + self.indent;
+        let delimnl = f",\n{spaces(indent)}";
+        let last_index = items.len() - 1;
+        let mut i = 0;
+        for (key, ent) in items.iter() {
+            let last = i == last_index;
+            let rep = self.repr_at(key, level);
+            out.push_str(rep);
+            out.push_str(": ");
+            self.format(ent, out, indent + char_count(rep) + 2, if last { allowance } else { 1 }, level);
+            if not last {
+                out.push_str(delimnl);
+            }
+            i += 1;
+        }
+    }
+
+    fn format_items(ref self, items: ref Vec[Value], out: mut ref String, indent: i64, allowance: i64, level: i64) {
+        let indent = indent + self.indent;
+        if self.indent > 1 {
+            out.push_str(spaces(self.indent - 1));
+        }
+        let delimnl = f",\n{spaces(indent)}";
+        let mut delim = String.new();
+        let mut max_width = self.width - indent + 1;
+        let mut width = max_width;
+        let mut k = 0;
+        while k < items.len() {
+            let ent = items[k].clone();
+            let last = k == items.len() - 1;
+            k += 1;
+            if last {
+                max_width -= allowance;
+                width -= allowance;
+            }
+            if self.compact {
+                let rep = self.repr_at(ent, level);
+                let w = char_count(rep) + 2;
+                if width < w {
+                    width = max_width;
+                    if not delim.is_empty() {
+                        delim = delimnl.clone();
+                    }
+                }
+                if width >= w {
+                    width -= w;
+                    out.push_str(delim);
+                    delim = ", ".to_string();
+                    out.push_str(rep);
+                    continue;
+                }
+            }
+            out.push_str(delim);
+            delim = delimnl.clone();
+            self.format(ent, out, indent, if last { allowance } else { 1 }, level);
+        }
+    }
+
+    fn pprint_str(ref self, s: ref String, out: mut ref String, indent: i64, allowance: i64, level: i64) {
+        if s.is_empty() {
+            out.push_str(str_repr(s));
+            return;
+        }
+        let mut indent = indent;
+        let mut allowance = allowance;
+        let lines = splitlines_keep(s);
+        if level == 1 {
+            indent += 1;
+            allowance += 1;
+        }
+        let max_width = self.width - indent;
+        let mut max_width1 = max_width;
+        let mut chunks: Vec[String] = Vec.new();
+        let mut rep = String.new();
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i].clone();
+            rep = str_repr(line);
+            let last_line = i == lines.len() - 1;
+            if last_line {
+                max_width1 -= allowance;
+            }
+            if char_count(rep) <= max_width1 {
+                chunks.push(rep.clone());
+            } else {
+                let parts = word_parts(line);
+                let mut max_width2 = max_width;
+                let mut current = String.new();
+                let mut j = 0;
+                while j < parts.len() {
+                    let part = parts[j].clone();
+                    let candidate = f"{current}{part}";
+                    if j == parts.len() - 1 and last_line {
+                        max_width2 -= allowance;
+                    }
+                    if char_count(str_repr(candidate)) > max_width2 {
+                        if not current.is_empty() {
+                            chunks.push(str_repr(current));
+                        }
+                        current = part;
+                    } else {
+                        current = candidate;
+                    }
+                    j += 1;
+                }
+                if not current.is_empty() {
+                    chunks.push(str_repr(current));
+                }
+            }
+            i += 1;
+        }
+        if chunks.len() == 1 {
+            out.push_str(rep);
+            return;
+        }
+        if level == 1 {
+            out.push('(');
+        }
+        let mut k = 0;
+        while k < chunks.len() {
+            if k > 0 {
+                out.push('\n');
+                out.push_str(spaces(indent));
+            }
+            out.push_str(chunks[k]);
+            k += 1;
+        }
+        if level == 1 {
+            out.push(')');
+        }
+    }
+
+    fn pprint_bytes(ref self, b: ref Vec[i64], out: mut ref String, indent: i64, allowance: i64, level: i64) {
+        if b.len() <= 4 {
+            out.push_str(bytes_repr(b));
+            return;
+        }
+        let mut indent = indent;
+        let mut allowance = allowance;
+        let parens = level == 1;
+        if parens {
+            indent += 1;
+            allowance += 1;
+            out.push('(');
+        }
+        let mut delim = String.new();
+        for rep in wrap_bytes_repr(b, self.width - indent, allowance).iter() {
+            out.push_str(delim);
+            out.push_str(rep);
+            if delim.is_empty() {
+                delim = f"\n{spaces(indent)}";
+            }
+        }
+        if parens {
+            out.push(')');
+        }
+    }
+}
+
+fn slice_bytes(b: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut k = lo;
+    while k < hi and k < b.len() {
+        v.push(b[k]);
+        k += 1;
+    }
+    v
+}
+
+// _wrap_bytes_repr: the bytes in 4-byte steps, as reprs that fit width.
+fn wrap_bytes_repr(b: ref Vec[i64], width: i64, allowance: i64) -> Vec[String] {
+    let mut reps: Vec[String] = Vec.new();
+    let mut width = width;
+    let mut current: Vec[i64] = Vec.new();
+    let last = b.len() / 4 * 4;
+    let mut i = 0;
+    while i < b.len() {
+        let part = slice_bytes(b, i, i + 4);
+        let mut candidate = current.clone();
+        for x in part.iter() {
+            candidate.push(x);
+        }
+        if i == last {
+            width -= allowance;
+        }
+        if char_count(bytes_repr(candidate)) > width {
+            if current.len() > 0 {
+                reps.push(bytes_repr(current));
+            }
+            current = part;
+        } else {
+            current = candidate;
+        }
+        i += 4;
+    }
+    if current.len() > 0 {
+        reps.push(bytes_repr(current));
+    }
+    reps
+}
+
+// ---------------------------------------------------------------- jobs
+
+fn source(arg: ref String) -> Result[String, String] {
+    if arg.starts_with("@") {
+        let path = f"data/{text(to_chars(arg), 1, char_count(arg))}";
+        return match fs.read_to_string(path.clone()) {
+            Ok(t) => Ok(t),
+            Err(e) => Err(f"cannot read {path}: {e}"),
+        };
+    }
+    Ok(arg.clone())
+}
+
+fn parse_int(x: ref String) -> Result[i64, String] {
+    match i64.parse(x.clone()) {
+        Some(n) => Ok(n),
+        None => Err(f"not an integer: {x}"),
+    }
+}
+
+fn printer(fields: ref Vec[String]) -> Result[Result[Printer, String], String] {
+    let mut indent = 1;
+    let mut width = 80;
+    let mut depth: Option[i64] = None;
+    let mut compact = false;
+    let mut sort_dicts = true;
+    let mut underscore_numbers = false;
+    let mut k = 2;
+    while k < fields.len() {
+        let kv = fields[k].split("=");
+        let key = kv[0].clone();
+        let v = kv[1].clone();
+        if key == "indent" {
+            indent = parse_int(v)?;
+        } else if key == "width" {
+            width = parse_int(v)?;
+        } else if key == "depth" {
+            depth = Some(parse_int(v)?);
+        } else if key == "compact" {
+            compact = v == "1";
+        } else if key == "sort_dicts" {
+            sort_dicts = v == "1";
+        } else if key == "underscore_numbers" {
+            underscore_numbers = v == "1";
+        } else {
+            return Err(f"unknown option {key}");
+        }
+        k += 1;
+    }
+    Ok(Printer.new(indent, width, depth, compact, sort_dicts, underscore_numbers))
+}
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let src = source(f[1])?;
+    let mut parser = Parser.new(src);
+    let obj = parser.parse_all()?;
+    let p = match printer(f)? {
+        Ok(p) => p,
+        Err(e) => {
+            out.push_str(f"  ValueError: {e}\n");
+            return Ok(());
+        }
+    };
+    let kind = f[0].clone();
+    if kind == "pformat" {
+        for line in p.pformat(obj).split("\n") {
+            out.push_str(f"  |{line}\n");
+        }
+    } else if kind == "saferepr" {
+        let plain = Printer { indent: 1, width: 80, depth: 0, compact: false, sort_dicts: true, underscore_numbers: false };
+        let (r, _) = plain.safe_repr(obj, 0, 0);
+        out.push_str(f"  {r}\n");
+    } else if kind == "readable" {
+        // isreadable and isrecursive pass no depth limit to _safe_repr.
+        let (_, readable) = p.safe_repr(obj, 0, 0);
+        let word = if readable { "True" } else { "False" };
+        out.push_str(f"  readable {word} recursive False\n");
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+fn main() {
+    for (path, contents) in data_files() {
+        let parts = path.split("/");
+        let mut dir = "data".to_string();
+        let mut k = 0;
+        while k + 1 < parts.len() {
+            dir = f"{dir}/{parts[k]}";
+            k += 1;
+        }
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            eprintln(f"cannot create {dir}: {e}");
+            return;
+        }
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    for job in jobs.lines() {
+        let f = job.split("\t");
+        println(f"== {f.join(" | ")}");
+        let mut out = String.new();
+        match run(f, mut out) {
+            Ok(()) => print(out),
+            Err(e) => {
+                print(out);
+                println(f"  error: {e}");
+            }
+        }
+    }
+}
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("# checkout service, as loaded from three YAML layers\n");
+    t.push_str("{\n");
+    t.push_str("    'service': 'checkout',\n");
+    t.push_str("    'version': 3,\n");
+    t.push_str("    'replicas': 4,\n");
+    t.push_str("    'enabled': True,\n");
+    t.push_str("    'fallback': None,\n");
+    t.push_str("    'ports': [8080, 8443, 9090],\n");
+    t.push_str("    'limits': {'cpu_millis': 1500, 'memory_bytes': 2147483648, 'open_files': 65536},\n");
+    t.push_str("    'env': {'LOG_LEVEL': 'info', 'REGION': 'eu-central-1', 'DB_URL': 'postgres://checkout@db1.internal:5432/orders'},\n");
+    t.push_str("    'features': ('beta-cart', 'new-payments', 'gift-cards'),\n");
+    t.push_str("    'owners': [\n");
+    t.push_str("        {'name': 'Ada Lovelace', 'email': 'ada@example.com', 'oncall': True},\n");
+    t.push_str("        {'name': 'Grace Hopper', 'email': 'grace@example.com', 'oncall': False},\n");
+    t.push_str("    ],\n");
+    t.push_str("    'retry': {'attempts': 5, 'backoff_ms': [100, 200, 400, 800, 1600], 'jitter': False},\n");
+    t.push_str("    'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above eight without asking the payments team first, because their rate limiter is per pod.',\n");
+    t.push_str("    'motd': 'Welcome to checkout.\\nDeploys freeze on Fridays.\\n',\n");
+    t.push_str("    'empty_list': [],\n");
+    t.push_str("    'empty_dict': {},\n");
+    t.push_str("    'empty_tuple': (),\n");
+    t.push_str("    'single': ('only',),\n");
+    t.push_str("    'zones': {3, 1, 2},\n");
+    t.push_str("    'signature': b'\\x89PNG\\r\\n\\x1a\\n\\x00\\x00\\x00\\rIHDR\\x00\\x00\\x01\\x00',\n");
+    t.push_str("    'tiny': b'ok',\n");
+    t.push_str("    'quote': \"it's\",\n");
+    t.push_str("    'unicode': 'Zürich → Köln 🚆',\n");
+    t.push_str("    'negative': -1234567,\n");
+    t.push_str("}\n");
+    v.push(("config.py".to_string(), t));
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("    'name': 'storefront',\n");
+    t.push_str("    'lockfileVersion': 3,\n");
+    t.push_str("    'packages': {\n");
+    t.push_str("        'node_modules/express': {'version': '4.19.2', 'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz', 'dependencies': {'accepts': '~1.3.8', 'body-parser': '1.20.2', 'cookie': '0.6.0'}},\n");
+    t.push_str("        'node_modules/accepts': {'version': '1.3.8', 'dependencies': {'mime-types': '~2.1.34', 'negotiator': '0.6.3'}},\n");
+    t.push_str("        'node_modules/cookie': {'version': '0.6.0', 'engines': {'node': '>= 0.6'}},\n");
+    t.push_str("        'node_modules/negotiator': {'version': '0.6.3', 'dev': True},\n");
+    t.push_str("    },\n");
+    t.push_str("}\n");
+    v.push(("lock.py".to_string(), t));
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str("    [1, 0, 0, 0, 12, -3, 7, 100, 1000, 10000, 100000, 1000000],\n");
+    t.push_str("    [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],\n");
+    t.push_str("    [0, 0, 1, 0, 233, 377, 610, 987, 1597, 2584, 4181, 6765],\n");
+    t.push_str("    [(0, 0), (0, 1), (1, 0), (1, 1)],\n");
+    t.push_str("    [[[[[[1, 2], [3, 4]]]]]],\n");
+    t.push_str("]\n");
+    v.push(("matrix.py".to_string(), t));
+    let mut t = String.new();
+    t.push_str("{'status': 200, 'headers': [('Content-Type', 'application/json'), ('X-Request-Id', 'a1b2c3d4'), ('Cache-Control', 'no-store')], 'body': {'items': [{'id': 101, 'sku': 'A-100', 'qty': 2, 'price_cents': 2450, 'tags': ['coffee', 'beans']}, {'id': 102, 'sku': 'B-220', 'qty': 1, 'price_cents': 18900, 'tags': []}], 'page': {'number': 1, 'size': 2, 'total': 37}, 'next': '/api/v2/orders/9912/items?page=2&size=2'}}\n");
+    v.push(("response.py".to_string(), t));
+    let mut t = String.new();
+    t.push_str("\"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\\nUt enim ad minim veniam,   quis nostrud exercitation\\n\\nullamco laboris nisi ut aliquip ex ea commodo consequat. Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\\tTabbed end.\"\n");
+    v.push(("text.py".to_string(), t));
+    let mut t = String.new();
+    t.push_str("['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel', 'india', 'juliett', 'kilo', 'lima', 'mike', 'november', 'oscar', 'papa', 'quebec', 'romeo', 'sierra', 'tango', 'uniform', 'victor', 'whiskey', 'x-ray', 'yankee', 'zulu', 'a much longer element that will never share a line', 'end']\n");
+    v.push(("words.py".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("pformat\t@config.py\n");
+    s.push_str("pformat\t@config.py\twidth=40\n");
+    s.push_str("pformat\t@config.py\twidth=20\n");
+    s.push_str("pformat\t@config.py\twidth=1\n");
+    s.push_str("pformat\t@config.py\tindent=4\n");
+    s.push_str("pformat\t@config.py\tindent=4\twidth=30\n");
+    s.push_str("pformat\t@config.py\tindent=0\twidth=30\n");
+    s.push_str("pformat\t@config.py\tdepth=1\n");
+    s.push_str("pformat\t@config.py\tdepth=2\n");
+    s.push_str("pformat\t@config.py\tdepth=3\twidth=50\n");
+    s.push_str("pformat\t@config.py\tcompact=1\n");
+    s.push_str("pformat\t@config.py\tcompact=1\twidth=30\n");
+    s.push_str("pformat\t@config.py\tsort_dicts=0\n");
+    s.push_str("pformat\t@config.py\tunderscore_numbers=1\n");
+    s.push_str("pformat\t@config.py\twidth=60\tsort_dicts=0\tunderscore_numbers=1\tindent=2\n");
+    s.push_str("pformat\t@lock.py\n");
+    s.push_str("pformat\t@lock.py\twidth=40\n");
+    s.push_str("pformat\t@lock.py\twidth=20\n");
+    s.push_str("pformat\t@lock.py\twidth=1\n");
+    s.push_str("pformat\t@lock.py\tindent=4\n");
+    s.push_str("pformat\t@lock.py\tindent=4\twidth=30\n");
+    s.push_str("pformat\t@lock.py\tindent=0\twidth=30\n");
+    s.push_str("pformat\t@lock.py\tdepth=1\n");
+    s.push_str("pformat\t@lock.py\tdepth=2\n");
+    s.push_str("pformat\t@lock.py\tdepth=3\twidth=50\n");
+    s.push_str("pformat\t@lock.py\tcompact=1\n");
+    s.push_str("pformat\t@lock.py\tcompact=1\twidth=30\n");
+    s.push_str("pformat\t@lock.py\tsort_dicts=0\n");
+    s.push_str("pformat\t@lock.py\tunderscore_numbers=1\n");
+    s.push_str("pformat\t@lock.py\twidth=60\tsort_dicts=0\tunderscore_numbers=1\tindent=2\n");
+    s.push_str("pformat\t@matrix.py\n");
+    s.push_str("pformat\t@matrix.py\twidth=40\n");
+    s.push_str("pformat\t@matrix.py\twidth=20\n");
+    s.push_str("pformat\t@matrix.py\twidth=1\n");
+    s.push_str("pformat\t@matrix.py\tindent=4\n");
+    s.push_str("pformat\t@matrix.py\tindent=4\twidth=30\n");
+    s.push_str("pformat\t@matrix.py\tindent=0\twidth=30\n");
+    s.push_str("pformat\t@matrix.py\tdepth=1\n");
+    s.push_str("pformat\t@matrix.py\tdepth=2\n");
+    s.push_str("pformat\t@matrix.py\tdepth=3\twidth=50\n");
+    s.push_str("pformat\t@matrix.py\tcompact=1\n");
+    s.push_str("pformat\t@matrix.py\tcompact=1\twidth=30\n");
+    s.push_str("pformat\t@matrix.py\tsort_dicts=0\n");
+    s.push_str("pformat\t@matrix.py\tunderscore_numbers=1\n");
+    s.push_str("pformat\t@matrix.py\twidth=60\tsort_dicts=0\tunderscore_numbers=1\tindent=2\n");
+    s.push_str("pformat\t@response.py\n");
+    s.push_str("pformat\t@response.py\twidth=40\n");
+    s.push_str("pformat\t@response.py\twidth=20\n");
+    s.push_str("pformat\t@response.py\twidth=1\n");
+    s.push_str("pformat\t@response.py\tindent=4\n");
+    s.push_str("pformat\t@response.py\tindent=4\twidth=30\n");
+    s.push_str("pformat\t@response.py\tindent=0\twidth=30\n");
+    s.push_str("pformat\t@response.py\tdepth=1\n");
+    s.push_str("pformat\t@response.py\tdepth=2\n");
+    s.push_str("pformat\t@response.py\tdepth=3\twidth=50\n");
+    s.push_str("pformat\t@response.py\tcompact=1\n");
+    s.push_str("pformat\t@response.py\tcompact=1\twidth=30\n");
+    s.push_str("pformat\t@response.py\tsort_dicts=0\n");
+    s.push_str("pformat\t@response.py\tunderscore_numbers=1\n");
+    s.push_str("pformat\t@response.py\twidth=60\tsort_dicts=0\tunderscore_numbers=1\tindent=2\n");
+    s.push_str("pformat\t@text.py\n");
+    s.push_str("pformat\t@text.py\twidth=40\n");
+    s.push_str("pformat\t@text.py\twidth=20\n");
+    s.push_str("pformat\t@text.py\twidth=1\n");
+    s.push_str("pformat\t@text.py\tindent=4\n");
+    s.push_str("pformat\t@text.py\tindent=4\twidth=30\n");
+    s.push_str("pformat\t@text.py\tindent=0\twidth=30\n");
+    s.push_str("pformat\t@text.py\tdepth=1\n");
+    s.push_str("pformat\t@text.py\tdepth=2\n");
+    s.push_str("pformat\t@text.py\tdepth=3\twidth=50\n");
+    s.push_str("pformat\t@text.py\tcompact=1\n");
+    s.push_str("pformat\t@text.py\tcompact=1\twidth=30\n");
+    s.push_str("pformat\t@text.py\tsort_dicts=0\n");
+    s.push_str("pformat\t@text.py\tunderscore_numbers=1\n");
+    s.push_str("pformat\t@text.py\twidth=60\tsort_dicts=0\tunderscore_numbers=1\tindent=2\n");
+    s.push_str("pformat\t@words.py\n");
+    s.push_str("pformat\t@words.py\twidth=40\n");
+    s.push_str("pformat\t@words.py\twidth=20\n");
+    s.push_str("pformat\t@words.py\twidth=1\n");
+    s.push_str("pformat\t@words.py\tindent=4\n");
+    s.push_str("pformat\t@words.py\tindent=4\twidth=30\n");
+    s.push_str("pformat\t@words.py\tindent=0\twidth=30\n");
+    s.push_str("pformat\t@words.py\tdepth=1\n");
+    s.push_str("pformat\t@words.py\tdepth=2\n");
+    s.push_str("pformat\t@words.py\tdepth=3\twidth=50\n");
+    s.push_str("pformat\t@words.py\tcompact=1\n");
+    s.push_str("pformat\t@words.py\tcompact=1\twidth=30\n");
+    s.push_str("pformat\t@words.py\tsort_dicts=0\n");
+    s.push_str("pformat\t@words.py\tunderscore_numbers=1\n");
+    s.push_str("pformat\t@words.py\twidth=60\tsort_dicts=0\tunderscore_numbers=1\tindent=2\n");
+    s.push_str("saferepr\t@config.py\n");
+    s.push_str("readable\t@config.py\tdepth=2\n");
+    s.push_str("saferepr\t@lock.py\n");
+    s.push_str("readable\t@lock.py\tdepth=2\n");
+    s.push_str("saferepr\t@matrix.py\n");
+    s.push_str("readable\t@matrix.py\tdepth=2\n");
+    s.push_str("saferepr\t@response.py\n");
+    s.push_str("readable\t@response.py\tdepth=2\n");
+    s.push_str("saferepr\t@text.py\n");
+    s.push_str("readable\t@text.py\tdepth=2\n");
+    s.push_str("saferepr\t@words.py\n");
+    s.push_str("readable\t@words.py\tdepth=2\n");
+    s.push_str("pformat\t[]\n");
+    s.push_str("pformat\t[]\twidth=10\n");
+    s.push_str("pformat\t[]\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t[]\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t()\n");
+    s.push_str("pformat\t()\twidth=10\n");
+    s.push_str("pformat\t()\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t()\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t{}\n");
+    s.push_str("pformat\t{}\twidth=10\n");
+    s.push_str("pformat\t{}\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t{}\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t(1,)\n");
+    s.push_str("pformat\t(1,)\twidth=10\n");
+    s.push_str("pformat\t(1,)\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t(1,)\tcompact=1\twidth=12\n");
+    s.push_str("pformat\tset()\n");
+    s.push_str("pformat\tset()\twidth=10\n");
+    s.push_str("pformat\tset()\tdepth=1\twidth=10\n");
+    s.push_str("pformat\tset()\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t{5, 3, 4}\n");
+    s.push_str("pformat\t{5, 3, 4}\twidth=10\n");
+    s.push_str("pformat\t{5, 3, 4}\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t{5, 3, 4}\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t''\n");
+    s.push_str("pformat\t''\twidth=10\n");
+    s.push_str("pformat\t''\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t''\tcompact=1\twidth=12\n");
+    s.push_str("pformat\tb''\n");
+    s.push_str("pformat\tb''\twidth=10\n");
+    s.push_str("pformat\tb''\tdepth=1\twidth=10\n");
+    s.push_str("pformat\tb''\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t'x' 'y'\n");
+    s.push_str("pformat\t'x' 'y'\twidth=10\n");
+    s.push_str("pformat\t'x' 'y'\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t'x' 'y'\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t[1, [2, [3, [4, [5]]]]]\n");
+    s.push_str("pformat\t[1, [2, [3, [4, [5]]]]]\twidth=10\n");
+    s.push_str("pformat\t[1, [2, [3, [4, [5]]]]]\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t[1, [2, [3, [4, [5]]]]]\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t{'b': 1, 'a': {'d': 2, 'c': 3}}\n");
+    s.push_str("pformat\t{'b': 1, 'a': {'d': 2, 'c': 3}}\twidth=10\n");
+    s.push_str("pformat\t{'b': 1, 'a': {'d': 2, 'c': 3}}\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t{'b': 1, 'a': {'d': 2, 'c': 3}}\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t{2: 'two', 1: 'one', 10: 'ten'}\n");
+    s.push_str("pformat\t{2: 'two', 1: 'one', 10: 'ten'}\twidth=10\n");
+    s.push_str("pformat\t{2: 'two', 1: 'one', 10: 'ten'}\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t{2: 'two', 1: 'one', 10: 'ten'}\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t-0\n");
+    s.push_str("pformat\t-0\twidth=10\n");
+    s.push_str("pformat\t-0\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t-0\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t0x1F\n");
+    s.push_str("pformat\t0x1F\twidth=10\n");
+    s.push_str("pformat\t0x1F\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t0x1F\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t1_000_000\n");
+    s.push_str("pformat\t1_000_000\twidth=10\n");
+    s.push_str("pformat\t1_000_000\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t1_000_000\tcompact=1\twidth=12\n");
+    s.push_str("pformat\tb'\\x00\\xff\\n\\'\"'\n");
+    s.push_str("pformat\tb'\\x00\\xff\\n\\'\"'\twidth=10\n");
+    s.push_str("pformat\tb'\\x00\\xff\\n\\'\"'\tdepth=1\twidth=10\n");
+    s.push_str("pformat\tb'\\x00\\xff\\n\\'\"'\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t'\\x00\\x7f\\x80\\xa0\\xad\\u00e9'\n");
+    s.push_str("pformat\t'\\x00\\x7f\\x80\\xa0\\xad\\u00e9'\twidth=10\n");
+    s.push_str("pformat\t'\\x00\\x7f\\x80\\xa0\\xad\\u00e9'\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t'\\x00\\x7f\\x80\\xa0\\xad\\u00e9'\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t\"a'b\"\n");
+    s.push_str("pformat\t\"a'b\"\twidth=10\n");
+    s.push_str("pformat\t\"a'b\"\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t\"a'b\"\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t'a\"b'\n");
+    s.push_str("pformat\t'a\"b'\twidth=10\n");
+    s.push_str("pformat\t'a\"b'\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t'a\"b'\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t'a\\'b\"c'\n");
+    s.push_str("pformat\t'a\\'b\"c'\twidth=10\n");
+    s.push_str("pformat\t'a\\'b\"c'\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t'a\\'b\"c'\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t[True, False, None]\n");
+    s.push_str("pformat\t[True, False, None]\twidth=10\n");
+    s.push_str("pformat\t[True, False, None]\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t[True, False, None]\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t(((1,),),)\n");
+    s.push_str("pformat\t(((1,),),)\twidth=10\n");
+    s.push_str("pformat\t(((1,),),)\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t(((1,),),)\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t{'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}\n");
+    s.push_str("pformat\t{'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}\twidth=10\n");
+    s.push_str("pformat\t{'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t{'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t'one two three four five six seven eight nine ten eleven twelve'\n");
+    s.push_str("pformat\t'one two three four five six seven eight nine ten eleven twelve'\twidth=10\n");
+    s.push_str("pformat\t'one two three four five six seven eight nine ten eleven twelve'\tdepth=1\twidth=10\n");
+    s.push_str("pformat\t'one two three four five six seven eight nine ten eleven twelve'\tcompact=1\twidth=12\n");
+    s.push_str("pformat\t[1]\tindent=-1\n");
+    s.push_str("pformat\t[1]\tdepth=0\n");
+    s.push_str("pformat\t[1]\twidth=0\n");
+    s
+}

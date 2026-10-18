@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 276 |
 | codegen-gap | 270 |
-| false-positive | 220 |
+| false-positive | 221 |
 | other | 174 |
 | perf | 172 |
 | diagnostics | 166 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2933 |
-| interp | 949 |
+| codegen | 2934 |
+| interp | 950 |
 | typecheck | 459 |
 | other | 115 |
 | ownership | 111 |
@@ -212,6 +212,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-28 | 2026-10-18 | ownership | low | `karac fix` rewrites `Some(h) => h.text.push_str(w)` (a match on an owned Option in a loop) to `Some(ref h)`, which check then refuses because the arm writes through `h`; the fix should write `mut ref h` | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
 | B-2026-10-18-32 | 2026-10-18 | typecheck | low | `no method 'clone' on type 'Value'` on a user enum or struct without `#[derive(Clone)]` gives no hint that the derive is missing, and `karac fix` offers nothing | — |
+| B-2026-10-18-33 | 2026-10-18 | interp+codegen | medium | On MIR, `char.try_from(x)` with `x` a `ref i64` from `for x in v.iter()` is refused ("char.try_from expects an integer codepoint, got `ref i64`"); check passes and `karac run` prints the right text | — |
 
 ### Relocated
 

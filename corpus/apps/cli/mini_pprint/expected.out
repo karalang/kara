@@ -1,0 +1,2446 @@
+== pformat | @config.py
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart', 'new-payments', 'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above '
+  |          'eight without asking the payments team first, because their rate '
+  |          'limiter is per pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace Hopper',
+  |             'oncall': False}],
+  | 'ports': [8080, 8443, 9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100, 200, 400, 800, 1600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | width=40
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart',
+  |              'new-payments',
+  |              'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome to checkout.\n'
+  |         'Deploys freeze on Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout talks to payments '
+  |          'over mTLS. Do not raise '
+  |          'replicas above eight '
+  |          'without asking the payments '
+  |          'team first, because their '
+  |          'rate limiter is per pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace Hopper',
+  |             'oncall': False}],
+  | 'ports': [8080, 8443, 9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100,
+  |                          200,
+  |                          400,
+  |                          800,
+  |                          1600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG\r\n\x1a\n'
+  |              b'\x00\x00\x00\rIHDR'
+  |              b'\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | width=20
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart',
+  |              'new-payments',
+  |              'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome '
+  |         'to '
+  |         'checkout.\n'
+  |         'Deploys '
+  |         'freeze '
+  |         'on '
+  |         'Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout '
+  |          'talks '
+  |          'to '
+  |          'payments '
+  |          'over '
+  |          'mTLS. '
+  |          'Do not '
+  |          'raise '
+  |          'replicas '
+  |          'above '
+  |          'eight '
+  |          'without '
+  |          'asking '
+  |          'the '
+  |          'payments '
+  |          'team '
+  |          'first, '
+  |          'because '
+  |          'their '
+  |          'rate '
+  |          'limiter '
+  |          'is per '
+  |          'pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada '
+  |                     'Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace '
+  |                     'Hopper',
+  |             'oncall': False}],
+  | 'ports': [8080,
+  |           8443,
+  |           9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100,
+  |                          200,
+  |                          400,
+  |                          800,
+  |                          1600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG'
+  |              b'\r\n\x1a\n'
+  |              b'\x00\x00\x00\r'
+  |              b'IHDR'
+  |              b'\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich '
+  |            '→ '
+  |            'Köln '
+  |            '🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | width=1
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart',
+  |              'new-payments',
+  |              'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome '
+  |         'to '
+  |         'checkout.\n'
+  |         'Deploys '
+  |         'freeze '
+  |         'on '
+  |         'Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout '
+  |          'talks '
+  |          'to '
+  |          'payments '
+  |          'over '
+  |          'mTLS. '
+  |          'Do '
+  |          'not '
+  |          'raise '
+  |          'replicas '
+  |          'above '
+  |          'eight '
+  |          'without '
+  |          'asking '
+  |          'the '
+  |          'payments '
+  |          'team '
+  |          'first, '
+  |          'because '
+  |          'their '
+  |          'rate '
+  |          'limiter '
+  |          'is '
+  |          'per '
+  |          'pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada '
+  |                     'Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace '
+  |                     'Hopper',
+  |             'oncall': False}],
+  | 'ports': [8080,
+  |           8443,
+  |           9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100,
+  |                          200,
+  |                          400,
+  |                          800,
+  |                          1600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG'
+  |              b'\r\n\x1a\n'
+  |              b'\x00\x00\x00\r'
+  |              b'IHDR'
+  |              b'\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich '
+  |            '→ '
+  |            'Köln '
+  |            '🚆',
+  | 'version': 3,
+  | 'zones': {1,
+  |           2,
+  |           3}}
+== pformat | @config.py | indent=4
+  |{   'empty_dict': {},
+  |    'empty_list': [],
+  |    'empty_tuple': (),
+  |    'enabled': True,
+  |    'env': {   'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |               'LOG_LEVEL': 'info',
+  |               'REGION': 'eu-central-1'},
+  |    'fallback': None,
+  |    'features': ('beta-cart', 'new-payments', 'gift-cards'),
+  |    'limits': {   'cpu_millis': 1500,
+  |                  'memory_bytes': 2147483648,
+  |                  'open_files': 65536},
+  |    'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n',
+  |    'negative': -1234567,
+  |    'notes': 'Checkout talks to payments over mTLS. Do not raise replicas '
+  |             'above eight without asking the payments team first, because '
+  |             'their rate limiter is per pod.',
+  |    'owners': [   {   'email': 'ada@example.com',
+  |                      'name': 'Ada Lovelace',
+  |                      'oncall': True},
+  |                  {   'email': 'grace@example.com',
+  |                      'name': 'Grace Hopper',
+  |                      'oncall': False}],
+  |    'ports': [8080, 8443, 9090],
+  |    'quote': "it's",
+  |    'replicas': 4,
+  |    'retry': {   'attempts': 5,
+  |                 'backoff_ms': [100, 200, 400, 800, 1600],
+  |                 'jitter': False},
+  |    'service': 'checkout',
+  |    'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00',
+  |    'single': ('only',),
+  |    'tiny': b'ok',
+  |    'unicode': 'Zürich → Köln 🚆',
+  |    'version': 3,
+  |    'zones': {1, 2, 3}}
+== pformat | @config.py | indent=4 | width=30
+  |{   'empty_dict': {},
+  |    'empty_list': [],
+  |    'empty_tuple': (),
+  |    'enabled': True,
+  |    'env': {   'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |               'LOG_LEVEL': 'info',
+  |               'REGION': 'eu-central-1'},
+  |    'fallback': None,
+  |    'features': (   'beta-cart',
+  |                    'new-payments',
+  |                    'gift-cards'),
+  |    'limits': {   'cpu_millis': 1500,
+  |                  'memory_bytes': 2147483648,
+  |                  'open_files': 65536},
+  |    'motd': 'Welcome to '
+  |            'checkout.\n'
+  |            'Deploys freeze '
+  |            'on Fridays.\n',
+  |    'negative': -1234567,
+  |    'notes': 'Checkout talks '
+  |             'to payments '
+  |             'over mTLS. Do '
+  |             'not raise '
+  |             'replicas above '
+  |             'eight without '
+  |             'asking the '
+  |             'payments team '
+  |             'first, because '
+  |             'their rate '
+  |             'limiter is per '
+  |             'pod.',
+  |    'owners': [   {   'email': 'ada@example.com',
+  |                      'name': 'Ada '
+  |                              'Lovelace',
+  |                      'oncall': True},
+  |                  {   'email': 'grace@example.com',
+  |                      'name': 'Grace '
+  |                              'Hopper',
+  |                      'oncall': False}],
+  |    'ports': [   8080,
+  |                 8443,
+  |                 9090],
+  |    'quote': "it's",
+  |    'replicas': 4,
+  |    'retry': {   'attempts': 5,
+  |                 'backoff_ms': [   100,
+  |                                   200,
+  |                                   400,
+  |                                   800,
+  |                                   1600],
+  |                 'jitter': False},
+  |    'service': 'checkout',
+  |    'signature': b'\x89PNG'
+  |                 b'\r\n\x1a\n'
+  |                 b'\x00\x00\x00\r'
+  |                 b'IHDR'
+  |                 b'\x00\x00\x01\x00',
+  |    'single': ('only',),
+  |    'tiny': b'ok',
+  |    'unicode': 'Zürich → '
+  |               'Köln 🚆',
+  |    'version': 3,
+  |    'zones': {1, 2, 3}}
+== pformat | @config.py | indent=0 | width=30
+  |{'empty_dict': {},
+  |'empty_list': [],
+  |'empty_tuple': (),
+  |'enabled': True,
+  |'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |       'LOG_LEVEL': 'info',
+  |       'REGION': 'eu-central-1'},
+  |'fallback': None,
+  |'features': ('beta-cart',
+  |            'new-payments',
+  |            'gift-cards'),
+  |'limits': {'cpu_millis': 1500,
+  |          'memory_bytes': 2147483648,
+  |          'open_files': 65536},
+  |'motd': 'Welcome to '
+  |        'checkout.\n'
+  |        'Deploys freeze on '
+  |        'Fridays.\n',
+  |'negative': -1234567,
+  |'notes': 'Checkout talks to '
+  |         'payments over '
+  |         'mTLS. Do not raise '
+  |         'replicas above '
+  |         'eight without '
+  |         'asking the '
+  |         'payments team '
+  |         'first, because '
+  |         'their rate limiter '
+  |         'is per pod.',
+  |'owners': [{'email': 'ada@example.com',
+  |          'name': 'Ada '
+  |                  'Lovelace',
+  |          'oncall': True},
+  |          {'email': 'grace@example.com',
+  |          'name': 'Grace '
+  |                  'Hopper',
+  |          'oncall': False}],
+  |'ports': [8080, 8443, 9090],
+  |'quote': "it's",
+  |'replicas': 4,
+  |'retry': {'attempts': 5,
+  |         'backoff_ms': [100,
+  |                       200,
+  |                       400,
+  |                       800,
+  |                       1600],
+  |         'jitter': False},
+  |'service': 'checkout',
+  |'signature': b'\x89PNG'
+  |             b'\r\n\x1a\n'
+  |             b'\x00\x00\x00\r'
+  |             b'IHDR'
+  |             b'\x00\x00\x01\x00',
+  |'single': ('only',),
+  |'tiny': b'ok',
+  |'unicode': 'Zürich → Köln 🚆',
+  |'version': 3,
+  |'zones': {1, 2, 3}}
+== pformat | @config.py | depth=1
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {...},
+  | 'fallback': None,
+  | 'features': (...),
+  | 'limits': {...},
+  | 'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above '
+  |          'eight without asking the payments team first, because their rate '
+  |          'limiter is per pod.',
+  | 'owners': [...],
+  | 'ports': [...],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {...},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00',
+  | 'single': (...,),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | depth=2
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart', 'new-payments', 'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above '
+  |          'eight without asking the payments team first, because their rate '
+  |          'limiter is per pod.',
+  | 'owners': [{...}, {...}],
+  | 'ports': [8080, 8443, 9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5, 'backoff_ms': [...], 'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | depth=3 | width=50
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart',
+  |              'new-payments',
+  |              'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome to checkout.\n'
+  |         'Deploys freeze on Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout talks to payments over mTLS. '
+  |          'Do not raise replicas above eight '
+  |          'without asking the payments team '
+  |          'first, because their rate limiter is '
+  |          'per pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace Hopper',
+  |             'oncall': False}],
+  | 'ports': [8080, 8443, 9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100,
+  |                          200,
+  |                          400,
+  |                          800,
+  |                          1600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\r'
+  |              b'IHDR\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | compact=1
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart', 'new-payments', 'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above '
+  |          'eight without asking the payments team first, because their rate '
+  |          'limiter is per pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace Hopper',
+  |             'oncall': False}],
+  | 'ports': [8080, 8443, 9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100, 200, 400, 800, 1600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | compact=1 | width=30
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart',
+  |              'new-payments',
+  |              'gift-cards'),
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'motd': 'Welcome to '
+  |         'checkout.\n'
+  |         'Deploys freeze on '
+  |         'Fridays.\n',
+  | 'negative': -1234567,
+  | 'notes': 'Checkout talks to '
+  |          'payments over '
+  |          'mTLS. Do not '
+  |          'raise replicas '
+  |          'above eight '
+  |          'without asking '
+  |          'the payments team '
+  |          'first, because '
+  |          'their rate '
+  |          'limiter is per '
+  |          'pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada '
+  |                     'Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace '
+  |                     'Hopper',
+  |             'oncall': False}],
+  | 'ports': [8080, 8443, 9090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100,
+  |                          200,
+  |                          400,
+  |                          800,
+  |                          1600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG'
+  |              b'\r\n\x1a\n'
+  |              b'\x00\x00\x00\r'
+  |              b'IHDR'
+  |              b'\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | sort_dicts=0
+  |{'service': 'checkout',
+  | 'version': 3,
+  | 'replicas': 4,
+  | 'enabled': True,
+  | 'fallback': None,
+  | 'ports': [8080, 8443, 9090],
+  | 'limits': {'cpu_millis': 1500,
+  |            'memory_bytes': 2147483648,
+  |            'open_files': 65536},
+  | 'env': {'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1',
+  |         'DB_URL': 'postgres://checkout@db1.internal:5432/orders'},
+  | 'features': ('beta-cart', 'new-payments', 'gift-cards'),
+  | 'owners': [{'name': 'Ada Lovelace',
+  |             'email': 'ada@example.com',
+  |             'oncall': True},
+  |            {'name': 'Grace Hopper',
+  |             'email': 'grace@example.com',
+  |             'oncall': False}],
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100, 200, 400, 800, 1600],
+  |           'jitter': False},
+  | 'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above '
+  |          'eight without asking the payments team first, because their rate '
+  |          'limiter is per pod.',
+  | 'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n',
+  | 'empty_list': [],
+  | 'empty_dict': {},
+  | 'empty_tuple': (),
+  | 'single': ('only',),
+  | 'zones': {1, 2, 3},
+  | 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00',
+  | 'tiny': b'ok',
+  | 'quote': "it's",
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'negative': -1234567}
+== pformat | @config.py | underscore_numbers=1
+  |{'empty_dict': {},
+  | 'empty_list': [],
+  | 'empty_tuple': (),
+  | 'enabled': True,
+  | 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders',
+  |         'LOG_LEVEL': 'info',
+  |         'REGION': 'eu-central-1'},
+  | 'fallback': None,
+  | 'features': ('beta-cart', 'new-payments', 'gift-cards'),
+  | 'limits': {'cpu_millis': 1_500,
+  |            'memory_bytes': 2_147_483_648,
+  |            'open_files': 65_536},
+  | 'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n',
+  | 'negative': -1_234_567,
+  | 'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above '
+  |          'eight without asking the payments team first, because their rate '
+  |          'limiter is per pod.',
+  | 'owners': [{'email': 'ada@example.com',
+  |             'name': 'Ada Lovelace',
+  |             'oncall': True},
+  |            {'email': 'grace@example.com',
+  |             'name': 'Grace Hopper',
+  |             'oncall': False}],
+  | 'ports': [8_080, 8_443, 9_090],
+  | 'quote': "it's",
+  | 'replicas': 4,
+  | 'retry': {'attempts': 5,
+  |           'backoff_ms': [100, 200, 400, 800, 1_600],
+  |           'jitter': False},
+  | 'service': 'checkout',
+  | 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00',
+  | 'single': ('only',),
+  | 'tiny': b'ok',
+  | 'unicode': 'Zürich → Köln 🚆',
+  | 'version': 3,
+  | 'zones': {1, 2, 3}}
+== pformat | @config.py | width=60 | sort_dicts=0 | underscore_numbers=1 | indent=2
+  |{ 'service': 'checkout',
+  |  'version': 3,
+  |  'replicas': 4,
+  |  'enabled': True,
+  |  'fallback': None,
+  |  'ports': [8_080, 8_443, 9_090],
+  |  'limits': { 'cpu_millis': 1_500,
+  |              'memory_bytes': 2_147_483_648,
+  |              'open_files': 65_536},
+  |  'env': { 'LOG_LEVEL': 'info',
+  |           'REGION': 'eu-central-1',
+  |           'DB_URL': 'postgres://checkout@db1.internal:5432/orders'},
+  |  'features': ('beta-cart', 'new-payments', 'gift-cards'),
+  |  'owners': [ { 'name': 'Ada Lovelace',
+  |                'email': 'ada@example.com',
+  |                'oncall': True},
+  |              { 'name': 'Grace Hopper',
+  |                'email': 'grace@example.com',
+  |                'oncall': False}],
+  |  'retry': { 'attempts': 5,
+  |             'backoff_ms': [100, 200, 400, 800, 1_600],
+  |             'jitter': False},
+  |  'notes': 'Checkout talks to payments over mTLS. Do not '
+  |           'raise replicas above eight without asking the '
+  |           'payments team first, because their rate '
+  |           'limiter is per pod.',
+  |  'motd': 'Welcome to checkout.\n'
+  |          'Deploys freeze on Fridays.\n',
+  |  'empty_list': [],
+  |  'empty_dict': {},
+  |  'empty_tuple': (),
+  |  'single': ('only',),
+  |  'zones': {1, 2, 3},
+  |  'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+  |               b'\x00\x00\x01\x00',
+  |  'tiny': b'ok',
+  |  'quote': "it's",
+  |  'unicode': 'Zürich → Köln 🚆',
+  |  'negative': -1_234_567}
+== pformat | @lock.py
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= 0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True, 'version': '0.6.3'}}}
+== pformat | @lock.py | width=40
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= '
+  |                                                          '0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True,
+  |                                          'version': '0.6.3'}}}
+== pformat | @lock.py | width=20
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= '
+  |                                                          '0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True,
+  |                                          'version': '0.6.3'}}}
+== pformat | @lock.py | width=1
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= '
+  |                                                          '0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True,
+  |                                          'version': '0.6.3'}}}
+== pformat | @lock.py | indent=4
+  |{   'lockfileVersion': 3,
+  |    'name': 'storefront',
+  |    'packages': {   'node_modules/accepts': {   'dependencies': {   'mime-types': '~2.1.34',
+  |                                                                    'negotiator': '0.6.3'},
+  |                                                'version': '1.3.8'},
+  |                    'node_modules/cookie': {   'engines': {'node': '>= 0.6'},
+  |                                               'version': '0.6.0'},
+  |                    'node_modules/express': {   'dependencies': {   'accepts': '~1.3.8',
+  |                                                                    'body-parser': '1.20.2',
+  |                                                                    'cookie': '0.6.0'},
+  |                                                'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                                'version': '4.19.2'},
+  |                    'node_modules/negotiator': {   'dev': True,
+  |                                                   'version': '0.6.3'}}}
+== pformat | @lock.py | indent=4 | width=30
+  |{   'lockfileVersion': 3,
+  |    'name': 'storefront',
+  |    'packages': {   'node_modules/accepts': {   'dependencies': {   'mime-types': '~2.1.34',
+  |                                                                    'negotiator': '0.6.3'},
+  |                                                'version': '1.3.8'},
+  |                    'node_modules/cookie': {   'engines': {   'node': '>= '
+  |                                                                      '0.6'},
+  |                                               'version': '0.6.0'},
+  |                    'node_modules/express': {   'dependencies': {   'accepts': '~1.3.8',
+  |                                                                    'body-parser': '1.20.2',
+  |                                                                    'cookie': '0.6.0'},
+  |                                                'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                                'version': '4.19.2'},
+  |                    'node_modules/negotiator': {   'dev': True,
+  |                                                   'version': '0.6.3'}}}
+== pformat | @lock.py | indent=0 | width=30
+  |{'lockfileVersion': 3,
+  |'name': 'storefront',
+  |'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                    'negotiator': '0.6.3'},
+  |                                    'version': '1.3.8'},
+  |            'node_modules/cookie': {'engines': {'node': '>= '
+  |                                                      '0.6'},
+  |                                   'version': '0.6.0'},
+  |            'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                    'body-parser': '1.20.2',
+  |                                                    'cookie': '0.6.0'},
+  |                                    'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                    'version': '4.19.2'},
+  |            'node_modules/negotiator': {'dev': True,
+  |                                       'version': '0.6.3'}}}
+== pformat | @lock.py | depth=1
+  |{'lockfileVersion': 3, 'name': 'storefront', 'packages': {...}}
+== pformat | @lock.py | depth=2
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {...},
+  |              'node_modules/cookie': {...},
+  |              'node_modules/express': {...},
+  |              'node_modules/negotiator': {...}}}
+== pformat | @lock.py | depth=3 | width=50
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= '
+  |                                                          '0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True,
+  |                                          'version': '0.6.3'}}}
+== pformat | @lock.py | compact=1
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= 0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True, 'version': '0.6.3'}}}
+== pformat | @lock.py | compact=1 | width=30
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= '
+  |                                                          '0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True,
+  |                                          'version': '0.6.3'}}}
+== pformat | @lock.py | sort_dicts=0
+  |{'name': 'storefront',
+  | 'lockfileVersion': 3,
+  | 'packages': {'node_modules/express': {'version': '4.19.2',
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'}},
+  |              'node_modules/accepts': {'version': '1.3.8',
+  |                                       'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'}},
+  |              'node_modules/cookie': {'version': '0.6.0',
+  |                                      'engines': {'node': '>= 0.6'}},
+  |              'node_modules/negotiator': {'version': '0.6.3', 'dev': True}}}
+== pformat | @lock.py | underscore_numbers=1
+  |{'lockfileVersion': 3,
+  | 'name': 'storefront',
+  | 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34',
+  |                                                        'negotiator': '0.6.3'},
+  |                                       'version': '1.3.8'},
+  |              'node_modules/cookie': {'engines': {'node': '>= 0.6'},
+  |                                      'version': '0.6.0'},
+  |              'node_modules/express': {'dependencies': {'accepts': '~1.3.8',
+  |                                                        'body-parser': '1.20.2',
+  |                                                        'cookie': '0.6.0'},
+  |                                       'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                       'version': '4.19.2'},
+  |              'node_modules/negotiator': {'dev': True, 'version': '0.6.3'}}}
+== pformat | @lock.py | width=60 | sort_dicts=0 | underscore_numbers=1 | indent=2
+  |{ 'name': 'storefront',
+  |  'lockfileVersion': 3,
+  |  'packages': { 'node_modules/express': { 'version': '4.19.2',
+  |                                          'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz',
+  |                                          'dependencies': { 'accepts': '~1.3.8',
+  |                                                            'body-parser': '1.20.2',
+  |                                                            'cookie': '0.6.0'}},
+  |                'node_modules/accepts': { 'version': '1.3.8',
+  |                                          'dependencies': { 'mime-types': '~2.1.34',
+  |                                                            'negotiator': '0.6.3'}},
+  |                'node_modules/cookie': { 'version': '0.6.0',
+  |                                         'engines': { 'node': '>= '
+  |                                                              '0.6'}},
+  |                'node_modules/negotiator': { 'version': '0.6.3',
+  |                                             'dev': True}}}
+== pformat | @matrix.py
+  |[[1, 0, 0, 0, 12, -3, 7, 100, 1000, 10000, 100000, 1000000],
+  | [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  | [0, 0, 1, 0, 233, 377, 610, 987, 1597, 2584, 4181, 6765],
+  | [(0, 0), (0, 1), (1, 0), (1, 1)],
+  | [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | width=40
+  |[[1,
+  |  0,
+  |  0,
+  |  0,
+  |  12,
+  |  -3,
+  |  7,
+  |  100,
+  |  1000,
+  |  10000,
+  |  100000,
+  |  1000000],
+  | [0,
+  |  1,
+  |  0,
+  |  0,
+  |  5,
+  |  8,
+  |  -13,
+  |  21,
+  |  34,
+  |  55,
+  |  89,
+  |  144],
+  | [0,
+  |  0,
+  |  1,
+  |  0,
+  |  233,
+  |  377,
+  |  610,
+  |  987,
+  |  1597,
+  |  2584,
+  |  4181,
+  |  6765],
+  | [(0, 0), (0, 1), (1, 0), (1, 1)],
+  | [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | width=20
+  |[[1,
+  |  0,
+  |  0,
+  |  0,
+  |  12,
+  |  -3,
+  |  7,
+  |  100,
+  |  1000,
+  |  10000,
+  |  100000,
+  |  1000000],
+  | [0,
+  |  1,
+  |  0,
+  |  0,
+  |  5,
+  |  8,
+  |  -13,
+  |  21,
+  |  34,
+  |  55,
+  |  89,
+  |  144],
+  | [0,
+  |  0,
+  |  1,
+  |  0,
+  |  233,
+  |  377,
+  |  610,
+  |  987,
+  |  1597,
+  |  2584,
+  |  4181,
+  |  6765],
+  | [(0, 0),
+  |  (0, 1),
+  |  (1, 0),
+  |  (1, 1)],
+  | [[[[[[1, 2],
+  |      [3, 4]]]]]]]
+== pformat | @matrix.py | width=1
+  |[[1,
+  |  0,
+  |  0,
+  |  0,
+  |  12,
+  |  -3,
+  |  7,
+  |  100,
+  |  1000,
+  |  10000,
+  |  100000,
+  |  1000000],
+  | [0,
+  |  1,
+  |  0,
+  |  0,
+  |  5,
+  |  8,
+  |  -13,
+  |  21,
+  |  34,
+  |  55,
+  |  89,
+  |  144],
+  | [0,
+  |  0,
+  |  1,
+  |  0,
+  |  233,
+  |  377,
+  |  610,
+  |  987,
+  |  1597,
+  |  2584,
+  |  4181,
+  |  6765],
+  | [(0,
+  |   0),
+  |  (0,
+  |   1),
+  |  (1,
+  |   0),
+  |  (1,
+  |   1)],
+  | [[[[[[1,
+  |       2],
+  |      [3,
+  |       4]]]]]]]
+== pformat | @matrix.py | indent=4
+  |[   [1, 0, 0, 0, 12, -3, 7, 100, 1000, 10000, 100000, 1000000],
+  |    [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  |    [0, 0, 1, 0, 233, 377, 610, 987, 1597, 2584, 4181, 6765],
+  |    [(0, 0), (0, 1), (1, 0), (1, 1)],
+  |    [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | indent=4 | width=30
+  |[   [   1,
+  |        0,
+  |        0,
+  |        0,
+  |        12,
+  |        -3,
+  |        7,
+  |        100,
+  |        1000,
+  |        10000,
+  |        100000,
+  |        1000000],
+  |    [   0,
+  |        1,
+  |        0,
+  |        0,
+  |        5,
+  |        8,
+  |        -13,
+  |        21,
+  |        34,
+  |        55,
+  |        89,
+  |        144],
+  |    [   0,
+  |        0,
+  |        1,
+  |        0,
+  |        233,
+  |        377,
+  |        610,
+  |        987,
+  |        1597,
+  |        2584,
+  |        4181,
+  |        6765],
+  |    [   (0, 0),
+  |        (0, 1),
+  |        (1, 0),
+  |        (1, 1)],
+  |    [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | indent=0 | width=30
+  |[[1,
+  |0,
+  |0,
+  |0,
+  |12,
+  |-3,
+  |7,
+  |100,
+  |1000,
+  |10000,
+  |100000,
+  |1000000],
+  |[0,
+  |1,
+  |0,
+  |0,
+  |5,
+  |8,
+  |-13,
+  |21,
+  |34,
+  |55,
+  |89,
+  |144],
+  |[0,
+  |0,
+  |1,
+  |0,
+  |233,
+  |377,
+  |610,
+  |987,
+  |1597,
+  |2584,
+  |4181,
+  |6765],
+  |[(0, 0),
+  |(0, 1),
+  |(1, 0),
+  |(1, 1)],
+  |[[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | depth=1
+  |[[...], [...], [...], [...], [...]]
+== pformat | @matrix.py | depth=2
+  |[[1, 0, 0, 0, 12, -3, 7, 100, 1000, 10000, 100000, 1000000],
+  | [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  | [0, 0, 1, 0, 233, 377, 610, 987, 1597, 2584, 4181, 6765],
+  | [(...), (...), (...), (...)],
+  | [[...]]]
+== pformat | @matrix.py | depth=3 | width=50
+  |[[1,
+  |  0,
+  |  0,
+  |  0,
+  |  12,
+  |  -3,
+  |  7,
+  |  100,
+  |  1000,
+  |  10000,
+  |  100000,
+  |  1000000],
+  | [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  | [0,
+  |  0,
+  |  1,
+  |  0,
+  |  233,
+  |  377,
+  |  610,
+  |  987,
+  |  1597,
+  |  2584,
+  |  4181,
+  |  6765],
+  | [(0, 0), (0, 1), (1, 0), (1, 1)],
+  | [[[...]]]]
+== pformat | @matrix.py | compact=1
+  |[[1, 0, 0, 0, 12, -3, 7, 100, 1000, 10000, 100000, 1000000],
+  | [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  | [0, 0, 1, 0, 233, 377, 610, 987, 1597, 2584, 4181, 6765],
+  | [(0, 0), (0, 1), (1, 0), (1, 1)], [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | compact=1 | width=30
+  |[[1, 0, 0, 0, 12, -3, 7, 100,
+  |  1000, 10000, 100000,
+  |  1000000],
+  | [0, 1, 0, 0, 5, 8, -13, 21,
+  |  34, 55, 89, 144],
+  | [0, 0, 1, 0, 233, 377, 610,
+  |  987, 1597, 2584, 4181,
+  |  6765],
+  | [(0, 0), (0, 1), (1, 0),
+  |  (1, 1)],
+  | [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | sort_dicts=0
+  |[[1, 0, 0, 0, 12, -3, 7, 100, 1000, 10000, 100000, 1000000],
+  | [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  | [0, 0, 1, 0, 233, 377, 610, 987, 1597, 2584, 4181, 6765],
+  | [(0, 0), (0, 1), (1, 0), (1, 1)],
+  | [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | underscore_numbers=1
+  |[[1, 0, 0, 0, 12, -3, 7, 100, 1_000, 10_000, 100_000, 1_000_000],
+  | [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  | [0, 0, 1, 0, 233, 377, 610, 987, 1_597, 2_584, 4_181, 6_765],
+  | [(0, 0), (0, 1), (1, 0), (1, 1)],
+  | [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @matrix.py | width=60 | sort_dicts=0 | underscore_numbers=1 | indent=2
+  |[ [ 1,
+  |    0,
+  |    0,
+  |    0,
+  |    12,
+  |    -3,
+  |    7,
+  |    100,
+  |    1_000,
+  |    10_000,
+  |    100_000,
+  |    1_000_000],
+  |  [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144],
+  |  [ 0,
+  |    0,
+  |    1,
+  |    0,
+  |    233,
+  |    377,
+  |    610,
+  |    987,
+  |    1_597,
+  |    2_584,
+  |    4_181,
+  |    6_765],
+  |  [(0, 0), (0, 1), (1, 0), (1, 1)],
+  |  [[[[[[1, 2], [3, 4]]]]]]]
+== pformat | @response.py
+  |{'body': {'items': [{'id': 101,
+  |                     'price_cents': 2450,
+  |                     'qty': 2,
+  |                     'sku': 'A-100',
+  |                     'tags': ['coffee', 'beans']},
+  |                    {'id': 102,
+  |                     'price_cents': 18900,
+  |                     'qty': 1,
+  |                     'sku': 'B-220',
+  |                     'tags': []}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1, 'size': 2, 'total': 37}},
+  | 'headers': [('Content-Type', 'application/json'),
+  |             ('X-Request-Id', 'a1b2c3d4'),
+  |             ('Cache-Control', 'no-store')],
+  | 'status': 200}
+== pformat | @response.py | width=40
+  |{'body': {'items': [{'id': 101,
+  |                     'price_cents': 2450,
+  |                     'qty': 2,
+  |                     'sku': 'A-100',
+  |                     'tags': ['coffee',
+  |                              'beans']},
+  |                    {'id': 102,
+  |                     'price_cents': 18900,
+  |                     'qty': 1,
+  |                     'sku': 'B-220',
+  |                     'tags': []}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1,
+  |                   'size': 2,
+  |                   'total': 37}},
+  | 'headers': [('Content-Type',
+  |              'application/json'),
+  |             ('X-Request-Id',
+  |              'a1b2c3d4'),
+  |             ('Cache-Control',
+  |              'no-store')],
+  | 'status': 200}
+== pformat | @response.py | width=20
+  |{'body': {'items': [{'id': 101,
+  |                     'price_cents': 2450,
+  |                     'qty': 2,
+  |                     'sku': 'A-100',
+  |                     'tags': ['coffee',
+  |                              'beans']},
+  |                    {'id': 102,
+  |                     'price_cents': 18900,
+  |                     'qty': 1,
+  |                     'sku': 'B-220',
+  |                     'tags': []}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1,
+  |                   'size': 2,
+  |                   'total': 37}},
+  | 'headers': [('Content-Type',
+  |              'application/json'),
+  |             ('X-Request-Id',
+  |              'a1b2c3d4'),
+  |             ('Cache-Control',
+  |              'no-store')],
+  | 'status': 200}
+== pformat | @response.py | width=1
+  |{'body': {'items': [{'id': 101,
+  |                     'price_cents': 2450,
+  |                     'qty': 2,
+  |                     'sku': 'A-100',
+  |                     'tags': ['coffee',
+  |                              'beans']},
+  |                    {'id': 102,
+  |                     'price_cents': 18900,
+  |                     'qty': 1,
+  |                     'sku': 'B-220',
+  |                     'tags': []}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1,
+  |                   'size': 2,
+  |                   'total': 37}},
+  | 'headers': [('Content-Type',
+  |              'application/json'),
+  |             ('X-Request-Id',
+  |              'a1b2c3d4'),
+  |             ('Cache-Control',
+  |              'no-store')],
+  | 'status': 200}
+== pformat | @response.py | indent=4
+  |{   'body': {   'items': [   {   'id': 101,
+  |                                 'price_cents': 2450,
+  |                                 'qty': 2,
+  |                                 'sku': 'A-100',
+  |                                 'tags': ['coffee', 'beans']},
+  |                             {   'id': 102,
+  |                                 'price_cents': 18900,
+  |                                 'qty': 1,
+  |                                 'sku': 'B-220',
+  |                                 'tags': []}],
+  |                'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |                'page': {'number': 1, 'size': 2, 'total': 37}},
+  |    'headers': [   ('Content-Type', 'application/json'),
+  |                   ('X-Request-Id', 'a1b2c3d4'),
+  |                   ('Cache-Control', 'no-store')],
+  |    'status': 200}
+== pformat | @response.py | indent=4 | width=30
+  |{   'body': {   'items': [   {   'id': 101,
+  |                                 'price_cents': 2450,
+  |                                 'qty': 2,
+  |                                 'sku': 'A-100',
+  |                                 'tags': [   'coffee',
+  |                                             'beans']},
+  |                             {   'id': 102,
+  |                                 'price_cents': 18900,
+  |                                 'qty': 1,
+  |                                 'sku': 'B-220',
+  |                                 'tags': [   ]}],
+  |                'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |                'page': {   'number': 1,
+  |                            'size': 2,
+  |                            'total': 37}},
+  |    'headers': [   (   'Content-Type',
+  |                       'application/json'),
+  |                   (   'X-Request-Id',
+  |                       'a1b2c3d4'),
+  |                   (   'Cache-Control',
+  |                       'no-store')],
+  |    'status': 200}
+== pformat | @response.py | indent=0 | width=30
+  |{'body': {'items': [{'id': 101,
+  |                 'price_cents': 2450,
+  |                 'qty': 2,
+  |                 'sku': 'A-100',
+  |                 'tags': ['coffee',
+  |                         'beans']},
+  |                 {'id': 102,
+  |                 'price_cents': 18900,
+  |                 'qty': 1,
+  |                 'sku': 'B-220',
+  |                 'tags': []}],
+  |        'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |        'page': {'number': 1,
+  |                'size': 2,
+  |                'total': 37}},
+  |'headers': [('Content-Type',
+  |           'application/json'),
+  |           ('X-Request-Id',
+  |           'a1b2c3d4'),
+  |           ('Cache-Control',
+  |           'no-store')],
+  |'status': 200}
+== pformat | @response.py | depth=1
+  |{'body': {...}, 'headers': [...], 'status': 200}
+== pformat | @response.py | depth=2
+  |{'body': {'items': [...],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {...}},
+  | 'headers': [(...), (...), (...)],
+  | 'status': 200}
+== pformat | @response.py | depth=3 | width=50
+  |{'body': {'items': [{...}, {...}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1,
+  |                   'size': 2,
+  |                   'total': 37}},
+  | 'headers': [('Content-Type', 'application/json'),
+  |             ('X-Request-Id', 'a1b2c3d4'),
+  |             ('Cache-Control', 'no-store')],
+  | 'status': 200}
+== pformat | @response.py | compact=1
+  |{'body': {'items': [{'id': 101,
+  |                     'price_cents': 2450,
+  |                     'qty': 2,
+  |                     'sku': 'A-100',
+  |                     'tags': ['coffee', 'beans']},
+  |                    {'id': 102,
+  |                     'price_cents': 18900,
+  |                     'qty': 1,
+  |                     'sku': 'B-220',
+  |                     'tags': []}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1, 'size': 2, 'total': 37}},
+  | 'headers': [('Content-Type', 'application/json'), ('X-Request-Id', 'a1b2c3d4'),
+  |             ('Cache-Control', 'no-store')],
+  | 'status': 200}
+== pformat | @response.py | compact=1 | width=30
+  |{'body': {'items': [{'id': 101,
+  |                     'price_cents': 2450,
+  |                     'qty': 2,
+  |                     'sku': 'A-100',
+  |                     'tags': ['coffee',
+  |                              'beans']},
+  |                    {'id': 102,
+  |                     'price_cents': 18900,
+  |                     'qty': 1,
+  |                     'sku': 'B-220',
+  |                     'tags': []}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1,
+  |                   'size': 2,
+  |                   'total': 37}},
+  | 'headers': [('Content-Type',
+  |              'application/json'),
+  |             ('X-Request-Id',
+  |              'a1b2c3d4'),
+  |             ('Cache-Control',
+  |              'no-store')],
+  | 'status': 200}
+== pformat | @response.py | sort_dicts=0
+  |{'status': 200,
+  | 'headers': [('Content-Type', 'application/json'),
+  |             ('X-Request-Id', 'a1b2c3d4'),
+  |             ('Cache-Control', 'no-store')],
+  | 'body': {'items': [{'id': 101,
+  |                     'sku': 'A-100',
+  |                     'qty': 2,
+  |                     'price_cents': 2450,
+  |                     'tags': ['coffee', 'beans']},
+  |                    {'id': 102,
+  |                     'sku': 'B-220',
+  |                     'qty': 1,
+  |                     'price_cents': 18900,
+  |                     'tags': []}],
+  |          'page': {'number': 1, 'size': 2, 'total': 37},
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2'}}
+== pformat | @response.py | underscore_numbers=1
+  |{'body': {'items': [{'id': 101,
+  |                     'price_cents': 2_450,
+  |                     'qty': 2,
+  |                     'sku': 'A-100',
+  |                     'tags': ['coffee', 'beans']},
+  |                    {'id': 102,
+  |                     'price_cents': 18_900,
+  |                     'qty': 1,
+  |                     'sku': 'B-220',
+  |                     'tags': []}],
+  |          'next': '/api/v2/orders/9912/items?page=2&size=2',
+  |          'page': {'number': 1, 'size': 2, 'total': 37}},
+  | 'headers': [('Content-Type', 'application/json'),
+  |             ('X-Request-Id', 'a1b2c3d4'),
+  |             ('Cache-Control', 'no-store')],
+  | 'status': 200}
+== pformat | @response.py | width=60 | sort_dicts=0 | underscore_numbers=1 | indent=2
+  |{ 'status': 200,
+  |  'headers': [ ('Content-Type', 'application/json'),
+  |               ('X-Request-Id', 'a1b2c3d4'),
+  |               ('Cache-Control', 'no-store')],
+  |  'body': { 'items': [ { 'id': 101,
+  |                         'sku': 'A-100',
+  |                         'qty': 2,
+  |                         'price_cents': 2_450,
+  |                         'tags': ['coffee', 'beans']},
+  |                       { 'id': 102,
+  |                         'sku': 'B-220',
+  |                         'qty': 1,
+  |                         'price_cents': 18_900,
+  |                         'tags': []}],
+  |            'page': {'number': 1, 'size': 2, 'total': 37},
+  |            'next': '/api/v2/orders/9912/items?page=2&size=2'}}
+== pformat | @text.py
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+  | 'tempor incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.')
+== pformat | @text.py | width=40
+  |('Lorem ipsum dolor sit amet, '
+  | 'consectetur adipiscing elit, sed do '
+  | 'eiusmod tempor incididunt ut labore '
+  | 'et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis '
+  | 'nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex '
+  | 'ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed end.')
+== pformat | @text.py | width=20
+  |('Lorem ipsum '
+  | 'dolor sit amet, '
+  | 'consectetur '
+  | 'adipiscing elit, '
+  | 'sed do eiusmod '
+  | 'tempor '
+  | 'incididunt ut '
+  | 'labore et dolore '
+  | 'magna aliqua.\n'
+  | 'Ut enim ad minim '
+  | 'veniam,   quis '
+  | 'nostrud '
+  | 'exercitation\n'
+  | '\n'
+  | 'ullamco laboris '
+  | 'nisi ut aliquip '
+  | 'ex ea commodo '
+  | 'consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed end.')
+== pformat | @text.py | width=1
+  |('Lorem '
+  | 'ipsum '
+  | 'dolor '
+  | 'sit '
+  | 'amet, '
+  | 'consectetur '
+  | 'adipiscing '
+  | 'elit, '
+  | 'sed '
+  | 'do '
+  | 'eiusmod '
+  | 'tempor '
+  | 'incididunt '
+  | 'ut '
+  | 'labore '
+  | 'et '
+  | 'dolore '
+  | 'magna '
+  | 'aliqua.\n'
+  | 'Ut '
+  | 'enim '
+  | 'ad '
+  | 'minim '
+  | 'veniam,   '
+  | 'quis '
+  | 'nostrud '
+  | 'exercitation\n'
+  | '\n'
+  | 'ullamco '
+  | 'laboris '
+  | 'nisi '
+  | 'ut '
+  | 'aliquip '
+  | 'ex '
+  | 'ea '
+  | 'commodo '
+  | 'consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed '
+  | 'end.')
+== pformat | @text.py | indent=4
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+  | 'tempor incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.')
+== pformat | @text.py | indent=4 | width=30
+  |('Lorem ipsum dolor sit '
+  | 'amet, consectetur '
+  | 'adipiscing elit, sed do '
+  | 'eiusmod tempor incididunt '
+  | 'ut labore et dolore magna '
+  | 'aliqua.\n'
+  | 'Ut enim ad minim veniam,   '
+  | 'quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut '
+  | 'aliquip ex ea commodo '
+  | 'consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed end.')
+== pformat | @text.py | indent=0 | width=30
+  |('Lorem ipsum dolor sit '
+  | 'amet, consectetur '
+  | 'adipiscing elit, sed do '
+  | 'eiusmod tempor incididunt '
+  | 'ut labore et dolore magna '
+  | 'aliqua.\n'
+  | 'Ut enim ad minim veniam,   '
+  | 'quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut '
+  | 'aliquip ex ea commodo '
+  | 'consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed end.')
+== pformat | @text.py | depth=1
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+  | 'tempor incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.')
+== pformat | @text.py | depth=2
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+  | 'tempor incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.')
+== pformat | @text.py | depth=3 | width=50
+  |('Lorem ipsum dolor sit amet, consectetur '
+  | 'adipiscing elit, sed do eiusmod tempor '
+  | 'incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud '
+  | 'exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo '
+  | 'consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed end.')
+== pformat | @text.py | compact=1
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+  | 'tempor incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.')
+== pformat | @text.py | compact=1 | width=30
+  |('Lorem ipsum dolor sit '
+  | 'amet, consectetur '
+  | 'adipiscing elit, sed do '
+  | 'eiusmod tempor incididunt '
+  | 'ut labore et dolore magna '
+  | 'aliqua.\n'
+  | 'Ut enim ad minim veniam,   '
+  | 'quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut '
+  | 'aliquip ex ea commodo '
+  | 'consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed end.')
+== pformat | @text.py | sort_dicts=0
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+  | 'tempor incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.')
+== pformat | @text.py | underscore_numbers=1
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod '
+  | 'tempor incididunt ut labore et dolore magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.')
+== pformat | @text.py | width=60 | sort_dicts=0 | underscore_numbers=1 | indent=2
+  |('Lorem ipsum dolor sit amet, consectetur adipiscing elit, '
+  | 'sed do eiusmod tempor incididunt ut labore et dolore '
+  | 'magna aliqua.\n'
+  | 'Ut enim ad minim veniam,   quis nostrud exercitation\n'
+  | '\n'
+  | 'ullamco laboris nisi ut aliquip ex ea commodo consequat. '
+  | 'Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\t'
+  | 'Tabbed end.')
+== pformat | @words.py
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer element that will never share a line',
+  | 'end']
+== pformat | @words.py | width=40
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer element that will '
+  | 'never share a line',
+  | 'end']
+== pformat | @words.py | width=20
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer '
+  | 'element that '
+  | 'will never share '
+  | 'a line',
+  | 'end']
+== pformat | @words.py | width=1
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a '
+  | 'much '
+  | 'longer '
+  | 'element '
+  | 'that '
+  | 'will '
+  | 'never '
+  | 'share '
+  | 'a '
+  | 'line',
+  | 'end']
+== pformat | @words.py | indent=4
+  |[   'alpha',
+  |    'bravo',
+  |    'charlie',
+  |    'delta',
+  |    'echo',
+  |    'foxtrot',
+  |    'golf',
+  |    'hotel',
+  |    'india',
+  |    'juliett',
+  |    'kilo',
+  |    'lima',
+  |    'mike',
+  |    'november',
+  |    'oscar',
+  |    'papa',
+  |    'quebec',
+  |    'romeo',
+  |    'sierra',
+  |    'tango',
+  |    'uniform',
+  |    'victor',
+  |    'whiskey',
+  |    'x-ray',
+  |    'yankee',
+  |    'zulu',
+  |    'a much longer element that will never share a line',
+  |    'end']
+== pformat | @words.py | indent=4 | width=30
+  |[   'alpha',
+  |    'bravo',
+  |    'charlie',
+  |    'delta',
+  |    'echo',
+  |    'foxtrot',
+  |    'golf',
+  |    'hotel',
+  |    'india',
+  |    'juliett',
+  |    'kilo',
+  |    'lima',
+  |    'mike',
+  |    'november',
+  |    'oscar',
+  |    'papa',
+  |    'quebec',
+  |    'romeo',
+  |    'sierra',
+  |    'tango',
+  |    'uniform',
+  |    'victor',
+  |    'whiskey',
+  |    'x-ray',
+  |    'yankee',
+  |    'zulu',
+  |    'a much longer element '
+  |    'that will never share a '
+  |    'line',
+  |    'end']
+== pformat | @words.py | indent=0 | width=30
+  |['alpha',
+  |'bravo',
+  |'charlie',
+  |'delta',
+  |'echo',
+  |'foxtrot',
+  |'golf',
+  |'hotel',
+  |'india',
+  |'juliett',
+  |'kilo',
+  |'lima',
+  |'mike',
+  |'november',
+  |'oscar',
+  |'papa',
+  |'quebec',
+  |'romeo',
+  |'sierra',
+  |'tango',
+  |'uniform',
+  |'victor',
+  |'whiskey',
+  |'x-ray',
+  |'yankee',
+  |'zulu',
+  |'a much longer element that '
+  |'will never share a line',
+  |'end']
+== pformat | @words.py | depth=1
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer element that will never share a line',
+  | 'end']
+== pformat | @words.py | depth=2
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer element that will never share a line',
+  | 'end']
+== pformat | @words.py | depth=3 | width=50
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer element that will never share a '
+  | 'line',
+  | 'end']
+== pformat | @words.py | compact=1
+  |['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel',
+  | 'india', 'juliett', 'kilo', 'lima', 'mike', 'november', 'oscar', 'papa',
+  | 'quebec', 'romeo', 'sierra', 'tango', 'uniform', 'victor', 'whiskey', 'x-ray',
+  | 'yankee', 'zulu', 'a much longer element that will never share a line', 'end']
+== pformat | @words.py | compact=1 | width=30
+  |['alpha', 'bravo', 'charlie',
+  | 'delta', 'echo', 'foxtrot',
+  | 'golf', 'hotel', 'india',
+  | 'juliett', 'kilo', 'lima',
+  | 'mike', 'november', 'oscar',
+  | 'papa', 'quebec', 'romeo',
+  | 'sierra', 'tango', 'uniform',
+  | 'victor', 'whiskey', 'x-ray',
+  | 'yankee', 'zulu',
+  | 'a much longer element that '
+  | 'will never share a line',
+  | 'end']
+== pformat | @words.py | sort_dicts=0
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer element that will never share a line',
+  | 'end']
+== pformat | @words.py | underscore_numbers=1
+  |['alpha',
+  | 'bravo',
+  | 'charlie',
+  | 'delta',
+  | 'echo',
+  | 'foxtrot',
+  | 'golf',
+  | 'hotel',
+  | 'india',
+  | 'juliett',
+  | 'kilo',
+  | 'lima',
+  | 'mike',
+  | 'november',
+  | 'oscar',
+  | 'papa',
+  | 'quebec',
+  | 'romeo',
+  | 'sierra',
+  | 'tango',
+  | 'uniform',
+  | 'victor',
+  | 'whiskey',
+  | 'x-ray',
+  | 'yankee',
+  | 'zulu',
+  | 'a much longer element that will never share a line',
+  | 'end']
+== pformat | @words.py | width=60 | sort_dicts=0 | underscore_numbers=1 | indent=2
+  |[ 'alpha',
+  |  'bravo',
+  |  'charlie',
+  |  'delta',
+  |  'echo',
+  |  'foxtrot',
+  |  'golf',
+  |  'hotel',
+  |  'india',
+  |  'juliett',
+  |  'kilo',
+  |  'lima',
+  |  'mike',
+  |  'november',
+  |  'oscar',
+  |  'papa',
+  |  'quebec',
+  |  'romeo',
+  |  'sierra',
+  |  'tango',
+  |  'uniform',
+  |  'victor',
+  |  'whiskey',
+  |  'x-ray',
+  |  'yankee',
+  |  'zulu',
+  |  'a much longer element that will never share a line',
+  |  'end']
+== saferepr | @config.py
+  {'empty_dict': {}, 'empty_list': [], 'empty_tuple': (), 'enabled': True, 'env': {'DB_URL': 'postgres://checkout@db1.internal:5432/orders', 'LOG_LEVEL': 'info', 'REGION': 'eu-central-1'}, 'fallback': None, 'features': ('beta-cart', 'new-payments', 'gift-cards'), 'limits': {'cpu_millis': 1500, 'memory_bytes': 2147483648, 'open_files': 65536}, 'motd': 'Welcome to checkout.\nDeploys freeze on Fridays.\n', 'negative': -1234567, 'notes': 'Checkout talks to payments over mTLS. Do not raise replicas above eight without asking the payments team first, because their rate limiter is per pod.', 'owners': [{'email': 'ada@example.com', 'name': 'Ada Lovelace', 'oncall': True}, {'email': 'grace@example.com', 'name': 'Grace Hopper', 'oncall': False}], 'ports': [8080, 8443, 9090], 'quote': "it's", 'replicas': 4, 'retry': {'attempts': 5, 'backoff_ms': [100, 200, 400, 800, 1600], 'jitter': False}, 'service': 'checkout', 'signature': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x01\x00', 'single': ('only',), 'tiny': b'ok', 'unicode': 'Zürich → Köln 🚆', 'version': 3, 'zones': {1, 2, 3}}
+== readable | @config.py | depth=2
+  readable True recursive False
+== saferepr | @lock.py
+  {'lockfileVersion': 3, 'name': 'storefront', 'packages': {'node_modules/accepts': {'dependencies': {'mime-types': '~2.1.34', 'negotiator': '0.6.3'}, 'version': '1.3.8'}, 'node_modules/cookie': {'engines': {'node': '>= 0.6'}, 'version': '0.6.0'}, 'node_modules/express': {'dependencies': {'accepts': '~1.3.8', 'body-parser': '1.20.2', 'cookie': '0.6.0'}, 'resolved': 'https://registry.npmjs.org/express/-/express-4.19.2.tgz', 'version': '4.19.2'}, 'node_modules/negotiator': {'dev': True, 'version': '0.6.3'}}}
+== readable | @lock.py | depth=2
+  readable True recursive False
+== saferepr | @matrix.py
+  [[1, 0, 0, 0, 12, -3, 7, 100, 1000, 10000, 100000, 1000000], [0, 1, 0, 0, 5, 8, -13, 21, 34, 55, 89, 144], [0, 0, 1, 0, 233, 377, 610, 987, 1597, 2584, 4181, 6765], [(0, 0), (0, 1), (1, 0), (1, 1)], [[[[[[1, 2], [3, 4]]]]]]]
+== readable | @matrix.py | depth=2
+  readable True recursive False
+== saferepr | @response.py
+  {'body': {'items': [{'id': 101, 'price_cents': 2450, 'qty': 2, 'sku': 'A-100', 'tags': ['coffee', 'beans']}, {'id': 102, 'price_cents': 18900, 'qty': 1, 'sku': 'B-220', 'tags': []}], 'next': '/api/v2/orders/9912/items?page=2&size=2', 'page': {'number': 1, 'size': 2, 'total': 37}}, 'headers': [('Content-Type', 'application/json'), ('X-Request-Id', 'a1b2c3d4'), ('Cache-Control', 'no-store')], 'status': 200}
+== readable | @response.py | depth=2
+  readable True recursive False
+== saferepr | @text.py
+  'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\nUt enim ad minim veniam,   quis nostrud exercitation\n\nullamco laboris nisi ut aliquip ex ea commodo consequat. Supercalifragilisticexpialidociousandthensomemoretomakeitlong!\tTabbed end.'
+== readable | @text.py | depth=2
+  readable True recursive False
+== saferepr | @words.py
+  ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel', 'india', 'juliett', 'kilo', 'lima', 'mike', 'november', 'oscar', 'papa', 'quebec', 'romeo', 'sierra', 'tango', 'uniform', 'victor', 'whiskey', 'x-ray', 'yankee', 'zulu', 'a much longer element that will never share a line', 'end']
+== readable | @words.py | depth=2
+  readable True recursive False
+== pformat | []
+  |[]
+== pformat | [] | width=10
+  |[]
+== pformat | [] | depth=1 | width=10
+  |[]
+== pformat | [] | compact=1 | width=12
+  |[]
+== pformat | ()
+  |()
+== pformat | () | width=10
+  |()
+== pformat | () | depth=1 | width=10
+  |()
+== pformat | () | compact=1 | width=12
+  |()
+== pformat | {}
+  |{}
+== pformat | {} | width=10
+  |{}
+== pformat | {} | depth=1 | width=10
+  |{}
+== pformat | {} | compact=1 | width=12
+  |{}
+== pformat | (1,)
+  |(1,)
+== pformat | (1,) | width=10
+  |(1,)
+== pformat | (1,) | depth=1 | width=10
+  |(1,)
+== pformat | (1,) | compact=1 | width=12
+  |(1,)
+== pformat | set()
+  |set()
+== pformat | set() | width=10
+  |set()
+== pformat | set() | depth=1 | width=10
+  |set()
+== pformat | set() | compact=1 | width=12
+  |set()
+== pformat | {5, 3, 4}
+  |{3, 4, 5}
+== pformat | {5, 3, 4} | width=10
+  |{3, 4, 5}
+== pformat | {5, 3, 4} | depth=1 | width=10
+  |{3, 4, 5}
+== pformat | {5, 3, 4} | compact=1 | width=12
+  |{3, 4, 5}
+== pformat | ''
+  |''
+== pformat | '' | width=10
+  |''
+== pformat | '' | depth=1 | width=10
+  |''
+== pformat | '' | compact=1 | width=12
+  |''
+== pformat | b''
+  |b''
+== pformat | b'' | width=10
+  |b''
+== pformat | b'' | depth=1 | width=10
+  |b''
+== pformat | b'' | compact=1 | width=12
+  |b''
+== pformat | 'x' 'y'
+  |'xy'
+== pformat | 'x' 'y' | width=10
+  |'xy'
+== pformat | 'x' 'y' | depth=1 | width=10
+  |'xy'
+== pformat | 'x' 'y' | compact=1 | width=12
+  |'xy'
+== pformat | [1, [2, [3, [4, [5]]]]]
+  |[1, [2, [3, [4, [5]]]]]
+== pformat | [1, [2, [3, [4, [5]]]]] | width=10
+  |[1,
+  | [2,
+  |  [3,
+  |   [4,
+  |    [5]]]]]
+== pformat | [1, [2, [3, [4, [5]]]]] | depth=1 | width=10
+  |[1, [...]]
+== pformat | [1, [2, [3, [4, [5]]]]] | compact=1 | width=12
+  |[1,
+  | [2,
+  |  [3,
+  |   [4,
+  |    [5]]]]]
+== pformat | {'b': 1, 'a': {'d': 2, 'c': 3}}
+  |{'a': {'c': 3, 'd': 2}, 'b': 1}
+== pformat | {'b': 1, 'a': {'d': 2, 'c': 3}} | width=10
+  |{'a': {'c': 3,
+  |       'd': 2},
+  | 'b': 1}
+== pformat | {'b': 1, 'a': {'d': 2, 'c': 3}} | depth=1 | width=10
+  |{'a': {'c': 3,
+  |       'd': 2},
+  | 'b': 1}
+== pformat | {'b': 1, 'a': {'d': 2, 'c': 3}} | compact=1 | width=12
+  |{'a': {'c': 3,
+  |       'd': 2},
+  | 'b': 1}
+== pformat | {2: 'two', 1: 'one', 10: 'ten'}
+  |{1: 'one', 2: 'two', 10: 'ten'}
+== pformat | {2: 'two', 1: 'one', 10: 'ten'} | width=10
+  |{1: 'one',
+  | 2: 'two',
+  | 10: 'ten'}
+== pformat | {2: 'two', 1: 'one', 10: 'ten'} | depth=1 | width=10
+  |{1: 'one',
+  | 2: 'two',
+  | 10: 'ten'}
+== pformat | {2: 'two', 1: 'one', 10: 'ten'} | compact=1 | width=12
+  |{1: 'one',
+  | 2: 'two',
+  | 10: 'ten'}
+== pformat | -0
+  |0
+== pformat | -0 | width=10
+  |0
+== pformat | -0 | depth=1 | width=10
+  |0
+== pformat | -0 | compact=1 | width=12
+  |0
+== pformat | 0x1F
+  |31
+== pformat | 0x1F | width=10
+  |31
+== pformat | 0x1F | depth=1 | width=10
+  |31
+== pformat | 0x1F | compact=1 | width=12
+  |31
+== pformat | 1_000_000
+  |1000000
+== pformat | 1_000_000 | width=10
+  |1000000
+== pformat | 1_000_000 | depth=1 | width=10
+  |1000000
+== pformat | 1_000_000 | compact=1 | width=12
+  |1000000
+== pformat | b'\x00\xff\n\'"'
+  |b'\x00\xff\n\'"'
+== pformat | b'\x00\xff\n\'"' | width=10
+  |(b"\x00\xff\n'"
+  | b'"')
+== pformat | b'\x00\xff\n\'"' | depth=1 | width=10
+  |(b"\x00\xff\n'"
+  | b'"')
+== pformat | b'\x00\xff\n\'"' | compact=1 | width=12
+  |(b"\x00\xff\n'"
+  | b'"')
+== pformat | '\x00\x7f\x80\xa0\xad\u00e9'
+  |'\x00\x7f\x80\xa0\xadé'
+== pformat | '\x00\x7f\x80\xa0\xad\u00e9' | width=10
+  |('\x00\x7f\x80\xa0'
+  | '\xadé')
+== pformat | '\x00\x7f\x80\xa0\xad\u00e9' | depth=1 | width=10
+  |('\x00\x7f\x80\xa0'
+  | '\xadé')
+== pformat | '\x00\x7f\x80\xa0\xad\u00e9' | compact=1 | width=12
+  |('\x00\x7f\x80\xa0'
+  | '\xadé')
+== pformat | "a'b"
+  |"a'b"
+== pformat | "a'b" | width=10
+  |"a'b"
+== pformat | "a'b" | depth=1 | width=10
+  |"a'b"
+== pformat | "a'b" | compact=1 | width=12
+  |"a'b"
+== pformat | 'a"b'
+  |'a"b'
+== pformat | 'a"b' | width=10
+  |'a"b'
+== pformat | 'a"b' | depth=1 | width=10
+  |'a"b'
+== pformat | 'a"b' | compact=1 | width=12
+  |'a"b'
+== pformat | 'a\'b"c'
+  |'a\'b"c'
+== pformat | 'a\'b"c' | width=10
+  |'a\'b"c'
+== pformat | 'a\'b"c' | depth=1 | width=10
+  |'a\'b"c'
+== pformat | 'a\'b"c' | compact=1 | width=12
+  |'a\'b"c'
+== pformat | [True, False, None]
+  |[True, False, None]
+== pformat | [True, False, None] | width=10
+  |[True,
+  | False,
+  | None]
+== pformat | [True, False, None] | depth=1 | width=10
+  |[True,
+  | False,
+  | None]
+== pformat | [True, False, None] | compact=1 | width=12
+  |[True,
+  | False,
+  | None]
+== pformat | (((1,),),)
+  |(((1,),),)
+== pformat | (((1,),),) | width=10
+  |(((1,),),)
+== pformat | (((1,),),) | depth=1 | width=10
+  |((...,),)
+== pformat | (((1,),),) | compact=1 | width=12
+  |(((1,),),)
+== pformat | {'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}
+  |{'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}
+== pformat | {'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]} | width=10
+  |{'k': [1,
+  |       2,
+  |       3,
+  |       4,
+  |       5,
+  |       6,
+  |       7,
+  |       8,
+  |       9,
+  |       10,
+  |       11,
+  |       12,
+  |       13,
+  |       14,
+  |       15,
+  |       16,
+  |       17,
+  |       18,
+  |       19,
+  |       20]}
+== pformat | {'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]} | depth=1 | width=10
+  |{'k': [1,
+  |       2,
+  |       3,
+  |       4,
+  |       5,
+  |       6,
+  |       7,
+  |       8,
+  |       9,
+  |       10,
+  |       11,
+  |       12,
+  |       13,
+  |       14,
+  |       15,
+  |       16,
+  |       17,
+  |       18,
+  |       19,
+  |       20]}
+== pformat | {'k': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]} | compact=1 | width=12
+  |{'k': [1, 2,
+  |       3, 4,
+  |       5, 6,
+  |       7, 8,
+  |       9,
+  |       10,
+  |       11,
+  |       12,
+  |       13,
+  |       14,
+  |       15,
+  |       16,
+  |       17,
+  |       18,
+  |       19,
+  |       20]}
+== pformat | 'one two three four five six seven eight nine ten eleven twelve'
+  |'one two three four five six seven eight nine ten eleven twelve'
+== pformat | 'one two three four five six seven eight nine ten eleven twelve' | width=10
+  |('one '
+  | 'two '
+  | 'three '
+  | 'four '
+  | 'five '
+  | 'six '
+  | 'seven '
+  | 'eight '
+  | 'nine '
+  | 'ten '
+  | 'eleven '
+  | 'twelve')
+== pformat | 'one two three four five six seven eight nine ten eleven twelve' | depth=1 | width=10
+  |('one '
+  | 'two '
+  | 'three '
+  | 'four '
+  | 'five '
+  | 'six '
+  | 'seven '
+  | 'eight '
+  | 'nine '
+  | 'ten '
+  | 'eleven '
+  | 'twelve')
+== pformat | 'one two three four five six seven eight nine ten eleven twelve' | compact=1 | width=12
+  |('one two '
+  | 'three '
+  | 'four '
+  | 'five six '
+  | 'seven '
+  | 'eight '
+  | 'nine ten '
+  | 'eleven '
+  | 'twelve')
+== pformat | [1] | indent=-1
+  ValueError: indent must be >= 0
+== pformat | [1] | depth=0
+  ValueError: depth must be > 0
+== pformat | [1] | width=0
+  ValueError: width must be != 0
