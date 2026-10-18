@@ -1,0 +1,1421 @@
+== cli-01-get.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /api/v1/status 1.1 | Host: api.example.com | Accept: application/json
+  sent b'GET /api/v1/status HTTP/1.1\r\nHost: api.example.com\r\nAccept: application/json\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{"status":
+  Response(headers=<Headers([(b'content-type', b'application/json'), (b'content-length', b'15')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  Data(data=bytearray(b'{"status":'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_BODY
+> recv "up"}
+  Data(data=bytearray(b'"up"}'), chunk_start=False, chunk_end=False)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== cli-02-nginx-chunked.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /cart.json 1.1 | Host: shop.example.org | Accept-Encoding: gzip
+  sent b'GET /cart.json HTTP/1.1\r\nHost: shop.example.org\r\nAccept-Encoding: gzip\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recvfile captures/nginx-chunked.bin 23
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 23 bytes
+  Response(headers=<Headers([(b'server', b'nginx/1.24.0'), (b'date', b'Sat, 18 Oct 2026 12:00:00 GMT'), (b'content-type', b'application/json'), (b'transfer-encoding', b'chunked'), (b'connection', b'keep-alive'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  Data(data=bytearray(b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff'), chunk_start=True, chunk_end=False)
+  NEED_DATA
+  .. 23 bytes
+  Data(data=bytearray(b'\xabV\xca,I\xcd-V\xb2\x8a\xaeV*\xce.U\xb2Rr\xd45T\xd2'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  .. 23 bytes
+  Data(data=bytearray(b'Q*,\xa9T\xb22'), chunk_start=False, chunk_end=True)
+  Data(data=bytearray(b'\xaa'), chunk_start=True, chunk_end=True)
+  NEED_DATA
+  .. 23 bytes
+  Data(data=bytearray(b'\xd5\x81\x89:\xe9\x9a\xc3D\rkcu\x94J'), chunk_start=True, chunk_end=False)
+  NEED_DATA
+  .. 23 bytes
+  Data(data=bytearray(b'\xf2K\x12s\x80\xe2&\x86z\xa6\x06J\xb5\\\xd5\x83\xcc\x1c\x00\x07\x9f\xee\xa1'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  .. 23 bytes
+  Data(data=bytearray(b'\xd8\x00\x00\x00'), chunk_start=False, chunk_end=True)
+  NEED_DATA
+  .. 23 bytes
+  NEED_DATA
+  .. 9 bytes
+  EndOfMessage(headers=<Headers([(b'server-timing', b'db;dur=53'), (b'x-checksum', b'9f3a')])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== cli-03-http10-server.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /notes.txt 1.1 | Host: localhost:8000
+  sent b'GET /notes.txt HTTP/1.1\r\nHost: localhost:8000\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recvfile captures/http10-response.bin 50
+  .. 50 bytes
+  NEED_DATA
+  .. 50 bytes
+  Response(headers=<Headers([(b'server', b'SimpleHTTP/0.6 Python/3.13.0'), (b'content-type', b'text/plain')])>, http_version=b'1.0', reason=b'OK', status_code=200)
+  Data(data=bytearray(b'line one\nline two'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  .. 1 bytes
+  Data(data=bytearray(b'\n'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> eof
+  EndOfMessage(headers=<Headers([])>)
+  ConnectionClosed()
+  = CLIENT=MUST_CLOSE SERVER=CLOSED no-keep-alive
+  trailing b'' closed=True
+== cli-04-post-json.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request POST /v1/charges 1.1 | Host: api.stripe.example | Content-Type: application/json | Content-Length: 27 | Idempotency-Key: 5f2b
+  sent b'POST /v1/charges HTTP/1.1\r\nHost: api.stripe.example\r\nContent-Type: application/json\r\nContent-Length: 27\r\nIdempotency-Key: 5f2b\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data {"amount":2000,
+  sent b'{"amount":2000,'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data "cur":"eur"}
+  sent b'"cur":"eur"}'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 402 Payment Required\r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'content-length', b'0')])>, http_version=b'1.1', reason=b'Payment Required', status_code=402)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+  trailing b'' closed=False
+== cli-05-continue.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request PUT /big 1.1 | Host: s3.example | Content-Length: 4 | Expect: 100-continue
+  sent b'PUT /big HTTP/1.1\r\nHost: s3.example\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE waiting-100
+> recv HTTP/1.1 100 Continue\r\n\r\n
+  InformationalResponse(headers=<Headers([])>, http_version=b'1.1', reason=b'Continue', status_code=100)
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data abcd
+  sent b'abcd'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 OK\r\nETag: "d41d8"\r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'etag', b'"d41d8"'), (b'content-length', b'0')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+  trailing b'' closed=False
+== cli-06-informational.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload; as=style\r\n\r\nHTTP/1.1 102\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi
+  InformationalResponse(headers=<Headers([(b'link', b'</style.css>; rel=preload; as=style')])>, http_version=b'1.1', reason=b'Early Hints', status_code=103)
+  InformationalResponse(headers=<Headers([])>, http_version=b'1.1', reason=b'', status_code=102)
+  Response(headers=<Headers([(b'content-length', b'2')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  Data(data=bytearray(b'hi'), chunk_start=False, chunk_end=False)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+  trailing b'' closed=False
+== cli-07-no-body-statuses.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /cached 1.1 | Host: x | If-None-Match: "abc"
+  sent b'GET /cached HTTP/1.1\r\nHost: x\r\nIf-None-Match: "abc"\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 304 Not Modified\r\nETag: "abc"\r\nContent-Length: 1234\r\n\r\n
+  Response(headers=<Headers([(b'etag', b'"abc"'), (b'content-length', b'1234')])>, http_version=b'1.1', reason=b'Not Modified', status_code=304)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> request HEAD /file 1.1 | Host: x
+  sent b'HEAD /file HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 OK\r\nContent-Length: 1234\r\n\r\n
+  Response(headers=<Headers([(b'content-length', b'1234')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> request DELETE /x 1.1 | Host: x
+  sent b'DELETE /x HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked\r\n\r\n
+  Response(headers=<Headers([(b'transfer-encoding', b'chunked')])>, http_version=b'1.1', reason=b'No Content', status_code=204)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+  trailing b'' closed=False
+== cli-08-status-lines.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200\r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'content-length', b'0')])>, http_version=b'1.1', reason=b'', status_code=200)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 418 I'm a "teapot"\t(RFC 2324)\r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'content-length', b'0')])>, http_version=b'1.1', reason=b'I\'m a "teapot"\t(RFC 2324)', status_code=418)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 500 \r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'content-length', b'0')])>, http_version=b'1.1', reason=b'', status_code=500)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+  trailing b'' closed=False
+== cli-09-bad-status.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 20 OK\r\n\r\n
+  RemoteProtocolError: illegal status line: bytearray(b'HTTP/1.1 20 OK') [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+> next
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+  trailing b'' closed=False
+== cli-10-connect-tunnel.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request CONNECT db.internal:5432 1.1 | Host: db.internal:5432
+  sent b'CONNECT db.internal:5432 HTTP/1.1\r\nHost: db.internal:5432\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 Connection established\r\n\r\n\x16\x03\x01
+  Response(headers=<Headers([])>, http_version=b'1.1', reason=b'Connection established', status_code=200)
+  PAUSED
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+> next
+  PAUSED
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+  trailing b'\x16\x03\x01' closed=False
+== cli-11-connect-denied.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request CONNECT db.internal:5432 1.1 | Host: db.internal:5432
+  sent b'CONNECT db.internal:5432 HTTP/1.1\r\nHost: db.internal:5432\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> recv HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="corp"\r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'proxy-authenticate', b'Basic realm="corp"'), (b'content-length', b'0')])>, http_version=b'1.1', reason=b'Proxy Authentication Required', status_code=407)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== cli-12-upgrade-refused.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /socket 1.1 | Host: x | Connection: upgrade | Upgrade: websocket
+  sent b'GET /socket HTTP/1.1\r\nHost: x\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> recv HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'content-length', b'0')])>, http_version=b'1.1', reason=b'Upgrade Required', status_code=426)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== cli-13-switching.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /socket 1.1 | Host: x | Connection: upgrade | Upgrade: websocket
+  sent b'GET /socket HTTP/1.1\r\nHost: x\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> recv HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n\x81\x02hi
+  InformationalResponse(headers=<Headers([(b'upgrade', b'websocket'), (b'connection', b'Upgrade')])>, http_version=b'1.1', reason=b'Switching Protocols', status_code=101)
+  PAUSED
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+> next
+  PAUSED
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+  trailing b'\x81\x02hi' closed=False
+== cli-14-early-response.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request POST /upload 1.1 | Host: x | Content-Length: 1000000
+  sent b'POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data first part
+  sent b'first part'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n
+  Response(headers=<Headers([(b'connection', b'close'), (b'content-length', b'0')])>, http_version=b'1.1', reason=b'Payload Too Large', status_code=413)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=MUST_CLOSE no-keep-alive
+> data second part
+  sent b'second part'
+  = CLIENT=SEND_BODY SERVER=MUST_CLOSE no-keep-alive
+  trailing b'' closed=False
+== cli-15-server-closes.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nok
+  Response(headers=<Headers([(b'connection', b'close'), (b'content-length', b'2')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  Data(data=bytearray(b'ok'), chunk_start=False, chunk_end=False)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+> eof
+  ConnectionClosed()
+  = CLIENT=MUST_CLOSE SERVER=CLOSED no-keep-alive
+> cycle
+  LocalProtocolError: not in a reusable state. self.states={CLIENT: MUST_CLOSE, SERVER: CLOSED} [400]
+  = CLIENT=MUST_CLOSE SERVER=CLOSED no-keep-alive
+> close
+  sent None
+  = CLIENT=CLOSED SERVER=CLOSED no-keep-alive
+  trailing b'' closed=True
+== cli-16-truncated.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nonly ten b
+  Response(headers=<Headers([(b'content-length', b'20')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  Data(data=bytearray(b'only ten b'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_BODY
+> eof
+  RemoteProtocolError: peer closed connection without sending complete message body (received 10 bytes, expected 20) [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+  trailing b'' closed=True
+== err-01-tls.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recvfile captures/tls-hello.bin 16
+  .. 16 bytes
+  RemoteProtocolError: illegal request line [400]
+  .. 16 bytes
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  .. 16 bytes
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  .. 16 bytes
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  .. 2 bytes
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'\x16\x03\x01\x00\xf4\x01\x00\x00\xf0\x03\x03\xa1\xb2\xc3\xd4\xe5\xf6\x07\x18):K\\m~\x8f\x90\xa1\xb2\xc3\xd4\xe5\xf6\x07\x18):K\\m~\x8f\x90\x00\x00>\x13\x02\x13\x03\x13\x01\xc0,\xc00\x00\x9f\xcc\xa9\xcc\xa8\xcc\xaa\xc0+' closed=False
+== err-02-bad-request-lines.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET  / HTTP/1.1\r\n\r\n
+  RemoteProtocolError: illegal request line: bytearray(b'GET  / HTTP/1.1') [400]
+  = CLIENT=ERROR SERVER=IDLE
+> next
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-03-no-request-line.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv \r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n
+  RemoteProtocolError: no request line received [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'GET / HTTP/1.1\r\nHost: x\r\n\r\n' closed=False
+== err-04-version.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.11\r\nHost: x\r\n\r\n
+  RemoteProtocolError: illegal request line: bytearray(b'GET / HTTP/1.11') [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-05-lowercase-http.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / http/1.1\r\nHost: x\r\n\r\n
+  RemoteProtocolError: illegal request line: bytearray(b'GET / http/1.1') [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-06-missing-host.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nUser-Agent: x\r\n\r\n
+  RemoteProtocolError: Missing mandatory Host: header [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-07-two-hosts.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: a\r\nhost: b\r\n\r\n
+  RemoteProtocolError: Found multiple Host: headers [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-08-space-before-colon.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost : evil\r\n\r\n
+  RemoteProtocolError: illegal header line: bytearray(b'Host : evil') [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-09-fold-at-start.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\n Host: x\r\n\r\n
+  RemoteProtocolError: continuation line at start of headers [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-10-conflicting-length.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n
+  RemoteProtocolError: conflicting Content-Length headers [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-11-length-list.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 6\r\n\r\n
+  RemoteProtocolError: conflicting Content-Length headers [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-12-bad-length.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n
+  RemoteProtocolError: bad Content-Length [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-13-huge-length.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 123456789012345678901\r\n\r\n
+  RemoteProtocolError: bad Content-Length [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-14-gzip-te.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n
+  RemoteProtocolError: Only Transfer-Encoding: chunked is supported [501]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-15-two-te.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n
+  RemoteProtocolError: multiple Transfer-Encoding headers [501]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-16-bad-chunk-header.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nab\r\n
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'transfer-encoding', b'chunked')])>, target=b'/', http_version=b'1.1')
+  RemoteProtocolError: illegal chunk header: bytearray(b'zz\r\n') [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'ab\r\n' closed=False
+== err-17-chunk-footer.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcde\r\n
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'transfer-encoding', b'chunked')])>, target=b'/', http_version=b'1.1')
+  Data(data=bytearray(b'abc'), chunk_start=True, chunk_end=True)
+  RemoteProtocolError: malformed chunk footer: bytearray(b'de') (expected b'\r\n') [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'\r\n' closed=False
+== err-18-chunk-size-too-long.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n000000000000000000005\r\nhello\r\n
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'transfer-encoding', b'chunked')])>, target=b'/', http_version=b'1.1')
+  RemoteProtocolError: illegal chunk header: bytearray(b'000000000000000000005\r\n') [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'hello\r\n' closed=False
+== err-19-buffer-too-long.h11
+> role server max 64
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\nCookie: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  RemoteProtocolError: Receive buffer too long [431]
+  = CLIENT=ERROR SERVER=IDLE
+> next
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'GET / HTTP/1.1\r\nHost: x\r\nCookie: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' closed=False
+== err-20-garbage-after-done.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\nextra
+  Response(headers=<Headers([(b'content-length', b'0'), (b'connection', b'close')])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  EndOfMessage(headers=<Headers([])>)
+  RemoteProtocolError: Got data when expecting EOF [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR no-keep-alive
+  trailing b'extra' closed=False
+== err-21-header-value-ctl.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\nX-Bad: a\rb\r\n\r\n
+  RemoteProtocolError: illegal header line: bytearray(b'X-Bad: a\rb') [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-22-target-space.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /a b HTTP/1.1\r\nHost: x\r\n\r\n
+  RemoteProtocolError: illegal request line: bytearray(b'GET /a b HTTP/1.1') [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-23-method-chars.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv G(ET / HTTP/1.1\r\nHost: x\r\n\r\n
+  RemoteProtocolError: illegal request line: bytearray(b'G(ET / HTTP/1.1') [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== err-24-bad-trailer.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nbad trailer\r\n\r\n
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'transfer-encoding', b'chunked')])>, target=b'/', http_version=b'1.1')
+  RemoteProtocolError: illegal header line: bytearray(b'bad trailer') [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== snd-01-length.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request POST / 1.1 | Host: x | Content-Length: 3
+  sent b'POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data abcd
+  LocalProtocolError: Too much data for declared Content-Length [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+> data ab
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== snd-02-too-little.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request POST / 1.1 | Host: x | Content-Length: 3
+  sent b'POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data ab
+  sent b'ab'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  LocalProtocolError: Too little data for declared Content-Length [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+> data c
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== snd-03-trailers-with-length.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request POST / 1.1 | Host: x | Content-Length: 0
+  sent b'POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom | X-Foo: bar
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== snd-04-wrong-state.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> data too early
+  LocalProtocolError: can't handle event type Data when role=CLIENT and state=IDLE [400]
+  = CLIENT=ERROR SERVER=IDLE
+> eom
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=ERROR SERVER=IDLE
+> request GET / 1.1 | Host: x
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=ERROR SERVER=IDLE
+> request GET / 1.1 | Host: x
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'' closed=False
+== snd-05-versions.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.0
+  LocalProtocolError: I only send HTTP/1.1 [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE no-keep-alive
+> request GET / 1.0 | Host: x
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE no-keep-alive
+  trailing b'' closed=False
+== snd-06-events.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> response 99 1.1 Low
+  LocalProtocolError: Response status_code should be in range [200, 1000), not 99 [400]
+  = CLIENT=IDLE SERVER=IDLE
+> info 200 1.1 OK
+  LocalProtocolError: InformationalResponse status_code should be in range [100, 200), not 200 [400]
+  = CLIENT=IDLE SERVER=IDLE
+> response 1000 1.1 Huge
+  LocalProtocolError: Response status_code should be in range [200, 1000), not 1000 [400]
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /x 1.1 | Host: a | Host: b
+  LocalProtocolError: Found multiple Host: headers [400]
+  = CLIENT=IDLE SERVER=IDLE
+> request GET /a\x20b 1.1 | Host: x
+  LocalProtocolError: Illegal target characters [400]
+  = CLIENT=IDLE SERVER=IDLE
+> request G(ET / 1.1 | Host: x
+  LocalProtocolError: Illegal method characters [400]
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== snd-07-header-validation.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'x')])>, target=b'/', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Bad Name: x
+  LocalProtocolError: Illegal header name b'Bad Name' [400]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | X-Nul: a\x00b
+  LocalProtocolError: Illegal header value b'a\x00b' [400]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | X-Newline: a\r\nInjected: yes
+  LocalProtocolError: Illegal header value b'a\r\nInjected: yes' [400]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 12abc
+  LocalProtocolError: bad Content-Length [400]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Transfer-Encoding: identity
+  LocalProtocolError: Only Transfer-Encoding: chunked is supported [501]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 2 | Content-Length: 3
+  LocalProtocolError: conflicting Content-Length headers [400]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | X-Tail: trailing space 
+  LocalProtocolError: Illegal header value b'trailing space ' [400]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== snd-08-chunked-trailers.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request POST /logs 1.1 | Host: logs.example | Transfer-Encoding: chunked | Trailer: X-Count
+  sent b'POST /logs HTTP/1.1\r\nHost: logs.example\r\nTransfer-Encoding: chunked\r\nTrailer: X-Count\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data 2026-10-18T12:00:00Z GET /a 200\n
+  sent b'20\r\n2026-10-18T12:00:00Z GET /a 200\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data
+  sent b''
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> data 2026-10-18T12:00:01Z GET /b 404\n
+  sent b'20\r\n2026-10-18T12:00:01Z GET /b 404\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom | X-Count: 2
+  sent b'0\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== snd-09-response-cleanup.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'x'), (b'connection', b'close')])>, target=b'/', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=SEND_RESPONSE no-keep-alive
+> response 200 1.1 OK | Connection: keep-alive, Upgrade | Content-Type: text/plain
+  sent b'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nConnection: upgrade\r\n\r\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> data streamed
+  sent b'8\r\nstreamed\r\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> eom
+  sent b'0\r\n\r\n'
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+  trailing b'' closed=False
+== snd-10-cycle-errors.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> cycle
+  LocalProtocolError: not in a reusable state. self.states={CLIENT: IDLE, SERVER: IDLE} [400]
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'x')])>, target=b'/', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> cycle
+  LocalProtocolError: not in a reusable state. self.states={CLIENT: DONE, SERVER: SEND_RESPONSE} [400]
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 0
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> cycle
+  LocalProtocolError: not in a reusable state. self.states={CLIENT: DONE, SERVER: SEND_BODY} [400]
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> cycle
+  LocalProtocolError: not in a reusable state. self.states={CLIENT: IDLE, SERVER: IDLE} [400]
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== snd-11-after-error.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'x')])>, target=b'/', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 1
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data too long
+  LocalProtocolError: Too much data for declared Content-Length [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+> data x
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+> eom
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+> recv more
+  RemoteProtocolError: Got data when expecting EOF [400]
+  = CLIENT=ERROR SERVER=ERROR
+  trailing b'more' closed=False
+== snd-12-send-failed.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request GET / 1.1 | Host: x
+  sent b'GET / HTTP/1.1\r\nHost: x\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> failed
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+> eom
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+> recv HTTP/1.1 200 OK\r\n\r\n
+  Response(headers=<Headers([])>, http_version=b'1.1', reason=b'OK', status_code=200)
+  NEED_DATA
+  = CLIENT=ERROR SERVER=SEND_BODY
+  trailing b'' closed=False
+== snd-13-host-first.h11
+> role client
+  = CLIENT=IDLE SERVER=IDLE
+> request OPTIONS * 1.1 | User-Agent: probe/1.0 | Accept: */* | HOST: Example.COM:8080
+  sent b'OPTIONS * HTTP/1.1\r\nHOST: Example.COM:8080\r\nUser-Agent: probe/1.0\r\nAccept: */*\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== srv-01-get-keepalive.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /index.html HTTP/1.1\r\nHost: www.example.com\r\nAccept: text/html\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'www.example.com'), (b'accept', b'text/html')])>, target=b'/index.html', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Type: text/html; charset=utf-8 | Content-Length: 13
+  sent b'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 13\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data <h1>Hi</h1>\n
+  sent b'<h1>Hi</h1>\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data .
+  sent b'.'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /favicon.ico HTTP/1.1\r\nHost: www.example.com\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'www.example.com')])>, target=b'/favicon.ico', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 404 1.1 Not Found | Content-Length: 0
+  sent b'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== srv-02-curl-bytewise.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recvfile captures/curl-get.bin 40
+  .. 40 bytes
+  NEED_DATA
+  .. 40 bytes
+  NEED_DATA
+  .. 40 bytes
+  NEED_DATA
+  .. 40 bytes
+  NEED_DATA
+  .. 40 bytes
+  NEED_DATA
+  .. 1 bytes
+  Request(method=b'GET', headers=<Headers([(b'host', b'api.example.com'), (b'user-agent', b'curl/8.5.0'), (b'accept', b'*/*'), (b'authorization', b'Bearer eyJhbGciOiJIUzI1NiJ9.e30.ZRrHA1JJJW8opsbCGfG_HACGpVUMN_a9IV7pAx_Zmeo')])>, target=b'/api/v1/users?page=2&per_page=50', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Type: application/json | Content-Length: 2
+  sent b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data []
+  sent b'[]'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+  trailing b'' closed=False
+== srv-03-browser-post.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recvfile captures/browser-post.bin 97
+  .. 97 bytes
+  NEED_DATA
+  .. 97 bytes
+  NEED_DATA
+  .. 97 bytes
+  NEED_DATA
+  .. 97 bytes
+  NEED_DATA
+  .. 97 bytes
+  NEED_DATA
+  .. 97 bytes
+  NEED_DATA
+  .. 44 bytes
+  Request(method=b'POST', headers=<Headers([(b'host', b'shop.example.org'), (b'connection', b'keep-alive'), (b'content-length', b'40'), (b'cache-control', b'max-age=0'), (b'origin', b'https://shop.example.org'), (b'content-type', b'application/x-www-form-urlencoded'), (b'user-agent', b'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'), (b'accept', b'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'), (b'referer', b'https://shop.example.org/login?next=%2Fcart'), (b'accept-encoding', b'gzip, deflate, br, zstd'), (b'accept-language', b'en-GB,en;q=0.9,de;q=0.8'), (b'cookie', b'csrftoken=Zx81Kq; _ga=GA1.1.1234567890.1700000000')])>, target=b'/login', http_version=b'1.1')
+  Data(data=bytearray(b'username=grace&password=hunter2&next=%2F'), chunk_start=False, chunk_end=False)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 303 1.1 See Other | Location: /cart | Set-Cookie: session=7c1f; HttpOnly; Secure | Content-Length: 0
+  sent b'HTTP/1.1 303 See Other\r\nLocation: /cart\r\nSet-Cookie: session=7c1f; HttpOnly; Secure\r\nContent-Length: 0\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== srv-04-chunked-upload.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recvfile captures/upload-head.bin 64
+  .. 64 bytes
+  NEED_DATA
+  .. 64 bytes
+  NEED_DATA
+  .. 9 bytes
+  Request(method=b'PUT', headers=<Headers([(b'host', b'files.internal:8443'), (b'content-type', b'text/csv'), (b'transfer-encoding', b'chunked'), (b'expect', b'100-continue')])>, target=b'/uploads/report.csv', http_version=b'1.1')
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE waiting-100
+> info 100 1.1 Continue
+  sent b'HTTP/1.1 100 Continue\r\n\r\n'
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recvfile captures/upload-body.bin 16
+  .. 16 bytes
+  Data(data=bytearray(b'region,quart'), chunk_start=True, chunk_end=False)
+  NEED_DATA
+  .. 16 bytes
+  Data(data=bytearray(b'er,revenue\nEU,'), chunk_start=False, chunk_end=True)
+  NEED_DATA
+  .. 16 bytes
+  Data(data=bytearray(b'Q1,1200\nUS,Q'), chunk_start=True, chunk_end=False)
+  NEED_DATA
+  .. 16 bytes
+  Data(data=bytearray(b'1,3400\nAPAC,Q1,9'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  .. 9 bytes
+  Data(data=bytearray(b'\n'), chunk_start=False, chunk_end=True)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 201 1.1 Created | Location: /uploads/report.csv
+  sent b'HTTP/1.1 201 Created\r\nLocation: /uploads/report.csv\r\nTransfer-Encoding: chunked\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data stored\n
+  sent b'7\r\nstored\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b'0\r\n\r\n'
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== srv-05-pipelined.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recvfile captures/pipelined.bin 4096
+  .. 156 bytes
+  Request(method=b'GET', headers=<Headers([(b'host', b'cdn.example.net')])>, target=b'/a.css', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  PAUSED
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 4
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data a{}\n
+  sent b'a{}\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> drain
+  Request(method=b'GET', headers=<Headers([(b'host', b'cdn.example.net')])>, target=b'/b.js', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  PAUSED
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 3
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data ;\n\n
+  sent b';\n\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> drain
+  Request(method=b'GET', headers=<Headers([(b'host', b'cdn.example.net'), (b'connection', b'close')])>, target=b'/c.png', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=SEND_RESPONSE no-keep-alive
+> response 200 1.1 OK | Content-Type: image/png
+  sent b'HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> data \x89PNG
+  sent b'4\r\n\x89PNG\r\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> eom
+  sent b'0\r\n\r\n'
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+> next
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+> eof
+  ConnectionClosed()
+  = CLIENT=CLOSED SERVER=MUST_CLOSE no-keep-alive
+  trailing b'' closed=True
+== srv-06-http10-client.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.0\r\n\r\n
+  Request(method=b'GET', headers=<Headers([])>, target=b'/', http_version=b'1.0')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=SEND_RESPONSE no-keep-alive
+> response 200 1.1 OK | Content-Type: text/plain | Content-Length: 5
+  sent b'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> data hello
+  sent b'hello'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> eom
+  sent b''
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+> cycle
+  LocalProtocolError: not in a reusable state. self.states={CLIENT: MUST_CLOSE, SERVER: MUST_CLOSE} [400]
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+  trailing b'' closed=False
+== srv-07-http10-unframed.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /stream HTTP/1.0\r\nUser-Agent: Wget/1.21\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'user-agent', b'Wget/1.21')])>, target=b'/stream', http_version=b'1.0')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=SEND_RESPONSE no-keep-alive
+> response 200 1.1 OK | Content-Type: text/event-stream | Transfer-Encoding: chunked
+  sent b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> data event: tick\n\n
+  sent b'event: tick\n\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> data event: tick\n\n
+  sent b'event: tick\n\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> eom
+  sent b''
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+> close
+  sent None
+  = CLIENT=MUST_CLOSE SERVER=CLOSED no-keep-alive
+  trailing b'' closed=False
+== srv-08-chunked-response.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /events HTTP/1.1\r\nHost: feed.example\r\nConnection: Keep-Alive\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'feed.example'), (b'connection', b'Keep-Alive')])>, target=b'/events', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Cache-Control: no-cache
+  sent b'HTTP/1.1 200 OK\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data id: 1\ndata: first\n\n
+  sent b'13\r\nid: 1\ndata: first\n\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data
+  sent b''
+  = CLIENT=DONE SERVER=SEND_BODY
+> data id: 2\ndata: second\n\n
+  sent b'14\r\nid: 2\ndata: second\n\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom | X-Stream-End: clean | Server-Timing: total;dur=12
+  sent b'0\r\nServer-Timing: total;dur=12\r\n\r\n'
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== srv-09-connection-close.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv DELETE /items/42 HTTP/1.1\r\nHost: api\r\nConnection: Close, TE\r\n\r\n
+  Request(method=b'DELETE', headers=<Headers([(b'host', b'api'), (b'connection', b'Close, TE')])>, target=b'/items/42', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=MUST_CLOSE SERVER=SEND_RESPONSE no-keep-alive
+> response 204 1.1 No Content | Connection: keep-alive
+  sent b'HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n'
+  = CLIENT=MUST_CLOSE SERVER=SEND_BODY no-keep-alive
+> eom
+  sent b''
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+> cycle
+  LocalProtocolError: not in a reusable state. self.states={CLIENT: MUST_CLOSE, SERVER: MUST_CLOSE} [400]
+  = CLIENT=MUST_CLOSE SERVER=MUST_CLOSE no-keep-alive
+> recv GET / HTTP/1.1\r\nHost: api\r\n\r\n
+  RemoteProtocolError: Got data when expecting EOF [400]
+  = CLIENT=ERROR SERVER=MUST_CLOSE no-keep-alive
+> eof
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  = CLIENT=ERROR SERVER=MUST_CLOSE no-keep-alive
+> close
+  sent None
+  = CLIENT=ERROR SERVER=CLOSED no-keep-alive
+  trailing b'GET / HTTP/1.1\r\nHost: api\r\n\r\n' closed=True
+== srv-10-head.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv HEAD /big.iso HTTP/1.1\r\nHost: mirror.example\r\n\r\n
+  Request(method=b'HEAD', headers=<Headers([(b'host', b'mirror.example')])>, target=b'/big.iso', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 4700000000 | Accept-Ranges: bytes
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 4700000000\r\nAccept-Ranges: bytes\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data x
+  LocalProtocolError: Too much data for declared Content-Length [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+> eom
+  LocalProtocolError: Can't send data when our state is ERROR [400]
+  = CLIENT=MUST_CLOSE SERVER=ERROR
+  trailing b'' closed=False
+== srv-11-head-unframed.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv HEAD /live HTTP/1.1\r\nHost: tv\r\n\r\n
+  Request(method=b'HEAD', headers=<Headers([(b'host', b'tv')])>, target=b'/live', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Type: video/mp2t
+  sent b'HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nTransfer-Encoding: chunked\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== srv-12-websocket-upgrade.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /chat HTTP/1.1\r\nHost: ws.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n\x81\x85\x37\xfa\x21\x3d\x7f\x9f\x4d\x51\x58
+  Request(method=b'GET', headers=<Headers([(b'host', b'ws.example.com'), (b'upgrade', b'websocket'), (b'connection', b'Upgrade'), (b'sec-websocket-key', b'dGhlIHNhbXBsZSBub25jZQ=='), (b'sec-websocket-version', b'13')])>, target=b'/chat', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  PAUSED
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> next
+  PAUSED
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> info 101 1.1 Switching Protocols | Upgrade: websocket | Connection: Upgrade | Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+  sent b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n'
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+> next
+  PAUSED
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+  trailing b'\x81\x857\xfa!=\x7f\x9fMQX' closed=False
+== srv-13-upgrade-declined.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /chat HTTP/1.1\r\nHost: ws\r\nUpgrade: h2c\r\nConnection: Upgrade, HTTP2-Settings\r\nHTTP2-Settings: AAMAAABkAAQAoAAAAAIAAAAA\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'ws'), (b'upgrade', b'h2c'), (b'connection', b'Upgrade, HTTP2-Settings'), (b'http2-settings', b'AAMAAABkAAQAoAAAAAIAAAAA')])>, target=b'/chat', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  PAUSED
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> next
+  PAUSED
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 3
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data ok
+  sent b'ok'
+  = CLIENT=DONE SERVER=SEND_BODY
+> data k
+  sent b'k'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== srv-14-connect.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv CONNECT db.internal:5432 HTTP/1.1\r\nHost: db.internal:5432\r\n\r\n
+  Request(method=b'CONNECT', headers=<Headers([(b'host', b'db.internal:5432')])>, target=b'db.internal:5432', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  PAUSED
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> response 200 1.1 Connection established
+  sent b'HTTP/1.1 200 Connection established\r\n\r\n'
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+> next
+  PAUSED
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+> recv \x00\x00\x00\x08\x04\xd2\x16\x2f
+  PAUSED
+  = CLIENT=SWITCHED_PROTOCOL SERVER=SWITCHED_PROTOCOL
+  trailing b'\x00\x00\x00\x08\x04\xd2\x16/' closed=False
+== srv-15-connect-refused.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv CONNECT evil.example:25 HTTP/1.1\r\nHost: evil.example:25\r\nContent-Length: 0\r\n\r\n
+  Request(method=b'CONNECT', headers=<Headers([(b'host', b'evil.example:25'), (b'content-length', b'0')])>, target=b'evil.example:25', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  PAUSED
+  = CLIENT=MIGHT_SWITCH_PROTOCOL SERVER=SEND_RESPONSE
+> response 403 1.1 Forbidden | Content-Length: 0
+  sent b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+  trailing b'' closed=False
+== srv-16-obs-fold.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST /soap HTTP/1.1\r\nHost: legacy\r\nSOAPAction: "urn:\r\n\t  getQuote"\r\nX-Long: a\r\n b\r\n  c\r\nContent-Length: 0\r\n\r\n
+  Request(method=b'POST', headers=<Headers([(b'host', b'legacy'), (b'soapaction', b'"urn: getQuote"'), (b'x-long', b'a b c'), (b'content-length', b'0')])>, target=b'/soap', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== srv-17-header-forms.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost:example.com\r\nX-Empty:\r\nX-Spaces: \t a  b \t \r\nX-Ctl: a\x01b\r\nX-Obs: caf\xc3\xa9\r\nACCEPT: */*\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'example.com'), (b'x-empty', b''), (b'x-spaces', b'a  b'), (b'x-ctl', b'a\x01b'), (b'x-obs', b'caf\xc3\xa9'), (b'accept', b'*/*')])>, target=b'/', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== srv-18-lf-only.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET /lf HTTP/1.1\nHost: x\nContent-Length: 3\n\nabc
+  Request(method=b'GET', headers=<Headers([(b'host', b'x'), (b'content-length', b'3')])>, target=b'/lf', http_version=b'1.1')
+  Data(data=bytearray(b'abc'), chunk_start=False, chunk_end=False)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== srv-19-content-length-forms.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST /a HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 5,5\r\n\r\nhello
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'content-length', b'5')])>, target=b'/a', http_version=b'1.1')
+  Data(data=bytearray(b'hello'), chunk_start=False, chunk_end=False)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 0
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST /b HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\ncontent-length: 3\r\n\r\nabc
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'content-length', b'3')])>, target=b'/b', http_version=b'1.1')
+  Data(data=bytearray(b'abc'), chunk_start=False, chunk_end=False)
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== srv-20-chunked-trailers.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST /ingest HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: Chunked\r\n\r\n
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'transfer-encoding', b'chunked')])>, target=b'/ingest', http_version=b'1.1')
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv 4;name="first"; ext\r\nWiki\r\n5 \t\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n
+  Data(data=bytearray(b'Wiki'), chunk_start=True, chunk_end=True)
+  Data(data=bytearray(b'pedia'), chunk_start=True, chunk_end=True)
+  Data(data=bytearray(b' in\r\n\r\nchunks.'), chunk_start=True, chunk_end=True)
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv 0;done\r\nContent-MD5: 1B2M2Y8AsgTpgAmY7PhCfg==\r\nX-Trailer:   x  \r\n\r\n
+  EndOfMessage(headers=<Headers([(b'content-md5', b'1B2M2Y8AsgTpgAmY7PhCfg=='), (b'x-trailer', b'x')])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== srv-21-chunk-split.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST /x HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n6\r\nhel
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'transfer-encoding', b'chunked')])>, target=b'/x', http_version=b'1.1')
+  Data(data=bytearray(b'hel'), chunk_start=True, chunk_end=False)
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv lo!
+  Data(data=bytearray(b'lo!'), chunk_start=False, chunk_end=True)
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv \r
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv \n
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv 0\r\n
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> recv \r\n
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+  trailing b'' closed=False
+== srv-22-eof-mid-body.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n12345
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'content-length', b'10')])>, target=b'/upload', http_version=b'1.1')
+  Data(data=bytearray(b'12345'), chunk_start=False, chunk_end=False)
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eof
+  RemoteProtocolError: peer closed connection without sending complete message body (received 5 bytes, expected 10) [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+> next
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'' closed=True
+== srv-23-eof-mid-chunked.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv POST /upload HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nabc
+  Request(method=b'POST', headers=<Headers([(b'host', b'x'), (b'transfer-encoding', b'chunked')])>, target=b'/upload', http_version=b'1.1')
+  Data(data=bytearray(b'abc'), chunk_start=True, chunk_end=False)
+  NEED_DATA
+  = CLIENT=SEND_BODY SERVER=SEND_RESPONSE
+> eof
+  RemoteProtocolError: peer closed connection without sending complete message body (incomplete chunked read) [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE
+  trailing b'' closed=True
+== srv-24-eof-mid-headers.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\n
+  NEED_DATA
+  = CLIENT=IDLE SERVER=IDLE
+> eof
+  RemoteProtocolError: peer unexpectedly closed connection [400]
+  = CLIENT=ERROR SERVER=IDLE
+> recv more
+  RuntimeError: received close, then received more data?
+  = CLIENT=ERROR SERVER=IDLE
+  trailing b'GET / HTTP/1.1\r\nHost: x\r\n' closed=True
+== srv-25-eof-idle.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> eof
+  ConnectionClosed()
+  = CLIENT=CLOSED SERVER=MUST_CLOSE
+> next
+  ConnectionClosed()
+  = CLIENT=CLOSED SERVER=MUST_CLOSE
+> recv late
+  RuntimeError: received close, then received more data?
+  = CLIENT=CLOSED SERVER=MUST_CLOSE
+  trailing b'' closed=True
+== srv-26-keepalive-then-close.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'x')])>, target=b'/', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  NEED_DATA
+  = CLIENT=DONE SERVER=SEND_RESPONSE
+> response 200 1.1 OK | Content-Length: 0
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'
+  = CLIENT=DONE SERVER=SEND_BODY
+> eom
+  sent b''
+  = CLIENT=DONE SERVER=DONE
+> cycle
+  = CLIENT=IDLE SERVER=IDLE
+> eof
+  ConnectionClosed()
+  = CLIENT=CLOSED SERVER=MUST_CLOSE
+  trailing b'' closed=True
+== srv-27-data-after-close-request.h11
+> role server
+  = CLIENT=IDLE SERVER=IDLE
+> recv GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\nGET /again HTTP/1.1\r\n\r\n
+  Request(method=b'GET', headers=<Headers([(b'host', b'x'), (b'connection', b'close')])>, target=b'/', http_version=b'1.1')
+  EndOfMessage(headers=<Headers([])>)
+  RemoteProtocolError: Got data when expecting EOF [400]
+  = CLIENT=ERROR SERVER=SEND_RESPONSE no-keep-alive
+> response 200 1.1 OK | Content-Length: 1
+  sent b'HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n'
+  = CLIENT=ERROR SERVER=SEND_BODY no-keep-alive
+> data !
+  sent b'!'
+  = CLIENT=ERROR SERVER=SEND_BODY no-keep-alive
+> eom
+  sent b''
+  = CLIENT=ERROR SERVER=MUST_CLOSE no-keep-alive
+> next
+  RemoteProtocolError: Can't receive data when peer state is ERROR [400]
+  = CLIENT=ERROR SERVER=MUST_CLOSE no-keep-alive
+  trailing b'GET /again HTTP/1.1\r\n\r\n' closed=False

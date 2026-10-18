@@ -1,0 +1,2471 @@
+// mini_h11: an HTTP/1.1 protocol engine ported from h11 0.16.0, the
+// sans-I/O library under httpx, httpcore and uvicorn. A Connection takes
+// bytes from the network and turns them into events (Request, Response,
+// Data, EndOfMessage, ...), and turns events the program sends into bytes,
+// while it tracks both sides of the conversation:
+// - the request, status and header lines, checked against RFC 7230's
+//   grammar as h11's regexes do, with obsolete line folding;
+// - Content-Length, chunked and read-until-close bodies, chunk extensions
+//   and trailers;
+// - keep-alive, pipelining, 100-continue, Upgrade and CONNECT;
+// - the client and server state machines, and every error h11 raises,
+//   with its message and the status code it suggests.
+//
+// The run writes data/scripts/*.h11, each a list of calls on one
+// connection, and data/captures/, real traffic that some scripts feed in
+// pieces. expected.out is what oracle.py prints running the same scripts
+// with the real h11.
+
+// ------------------------------------------------------------ bytes
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn slice(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    v
+}
+
+fn starts(b: ref Vec[u8], s: Str) -> bool {
+    let p = s.bytes().to_vec();
+    if b.len() < p.len() {
+        return false;
+    }
+    for i in 0..p.len() {
+        if b[i] != p[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn is(b: ref Vec[u8], s: Str) -> bool {
+    b.len() == s.len() and starts(b, s)
+}
+
+fn find(b: ref Vec[u8], pat: Str, from: i64) -> i64 {
+    let p = to_bytes(pat);
+    let mut i = from;
+    while i + p.len() <= b.len() {
+        let mut ok = true;
+        for k in 0..p.len() {
+            if b[i + k] != p[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn lower(b: ref Vec[u8]) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for c in b {
+        v.push(if c >= b'A' and c <= b'Z' { c + 32 } else { c });
+    }
+    v
+}
+
+fn is_letter(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+// bytes.title(): each run of letters capitalized.
+fn title(b: ref Vec[u8]) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    let mut prev = false;
+    for c in b {
+        if is_letter(c) {
+            let l = if c >= b'A' and c <= b'Z' { c + 32 } else { c };
+            v.push(if prev { l } else { l - 32 });
+            prev = true;
+        } else {
+            v.push(c);
+            prev = false;
+        }
+    }
+    v
+}
+
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 0x0b or c == 0x0c
+}
+
+// bytes.strip(): ASCII whitespace off both ends.
+fn strip(b: ref Vec[u8]) -> Vec[u8] {
+    let mut s: i64 = 0;
+    let mut e = b.len();
+    while s < e and is_space(b[s]) {
+        s += 1;
+    }
+    while e > s and is_space(b[e - 1]) {
+        e -= 1;
+    }
+    slice(b, s, e)
+}
+
+fn split_on(b: ref Vec[u8], sep: u8) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn push_all(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for c in b {
+        out.push(c);
+    }
+}
+
+fn push_str(out: mut ref Vec[u8], s: Str) {
+    for c in s.bytes() {
+        out.push(c);
+    }
+}
+
+fn less(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+    }
+    a.len() < b.len()
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in b {
+        if c == b'\'' {
+            has_single = true;
+        }
+        if c == b'"' {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { b'"' } else { b'\'' };
+    let mut s = String.new();
+    s.push('b');
+    s.push(quote as char);
+    for c in b {
+        if c == quote or c == b'\\' {
+            s.push('\\');
+            s.push(c as char);
+        } else if c == b'\t' {
+            s.push_str("\\t");
+        } else if c == b'\n' {
+            s.push_str("\\n");
+        } else if c == b'\r' {
+            s.push_str("\\r");
+        } else if c < 0x20 or c >= 0x7f {
+            s.push_str(f"\\x{c:02x}");
+        } else {
+            s.push(c as char);
+        }
+    }
+    s.push(quote as char);
+    s
+}
+
+fn bytearray_repr(b: ref Vec[u8]) -> String {
+    f"bytearray({bytes_repr(b)})"
+}
+
+// ------------------------------------------------------------ errors
+
+// h11's two ProtocolErrors carry a status code a server might answer with.
+// LocalProtocolError is raised inside; next_event turns it into a
+// RemoteProtocolError, since there it is the peer's fault.
+struct H11Error {
+    kind: String,
+    msg: String,
+    hint: i64,
+}
+
+fn local(msg: own String) -> H11Error {
+    H11Error { kind: "LocalProtocolError".to_string(), msg: msg, hint: 400 }
+}
+
+fn local_hint(msg: own String, hint: i64) -> H11Error {
+    H11Error { kind: "LocalProtocolError".to_string(), msg: msg, hint: hint }
+}
+
+fn remote(msg: own String) -> H11Error {
+    H11Error { kind: "RemoteProtocolError".to_string(), msg: msg, hint: 400 }
+}
+
+fn error_line(e: ref H11Error) -> String {
+    if e.kind == "RuntimeError" {
+        f"  {e.kind}: {e.msg}"
+    } else {
+        f"  {e.kind}: {e.msg} [{e.hint}]"
+    }
+}
+
+// ------------------------------------------------------------ the grammar
+
+fn is_tchar(c: u8) -> bool {
+    is_letter(c) or (c >= b'0' and c <= b'9') or (c != b'"' and c != b'(' and c != b')' and c != b',' and c != b'/'
+        and c != b':' and c != b';' and c != b'<' and c != b'=' and c != b'>' and c != b'?' and c != b'@'
+        and c != b'[' and c != b'\\' and c != b']' and c != b'{' and c != b'}' and c > 0x20 and c < 0x7f)
+}
+
+fn is_vchar(c: u8) -> bool {
+    c >= 0x21 and c <= 0x7e
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> i64 {
+    if is_digit(c) {
+        (c - b'0') as i64
+    } else if c >= b'a' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+
+// The length of the run of bytes from `at` that pass `ok`.
+fn token_len(b: ref Vec[u8], at: i64) -> i64 {
+    let mut i = at;
+    while i < b.len() and is_tchar(b[i]) {
+        i += 1;
+    }
+    i - at
+}
+
+fn is_token(b: ref Vec[u8]) -> bool {
+    b.len() > 0 and token_len(b, 0) == b.len()
+}
+
+fn is_target(b: ref Vec[u8]) -> bool {
+    if b.is_empty() {
+        return false;
+    }
+    for c in b {
+        if not is_vchar(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// `HTTP/d.d` at `at`, to the end of the line.
+fn version_at(b: ref Vec[u8], at: i64) -> Option[Vec[u8]] {
+    if at + 8 > b.len() or not starts(slice(b, at, b.len()), "HTTP/") {
+        return None;
+    }
+    if not is_digit(b[at + 5]) or b[at + 6] != b'.' or not is_digit(b[at + 7]) {
+        return None;
+    }
+    Some(slice(b, at + 5, at + 8))
+}
+
+struct RequestLine {
+    method: Vec[u8],
+    target: Vec[u8],
+    version: Vec[u8],
+}
+
+// request-line = method SP request-target SP HTTP-version
+fn parse_request_line(b: ref Vec[u8]) -> Option[RequestLine] {
+    let m = token_len(b, 0);
+    if m == 0 or m >= b.len() or b[m] != b' ' {
+        return None;
+    }
+    let mut t = m + 1;
+    while t < b.len() and is_vchar(b[t]) {
+        t += 1;
+    }
+    if t == m + 1 or t >= b.len() or b[t] != b' ' or t + 9 != b.len() {
+        return None;
+    }
+    match version_at(b, t + 1) {
+        Some(v) => Some(RequestLine { method: slice(b, 0, m), target: slice(b, m + 1, t), version: v }),
+        None => None,
+    }
+}
+
+struct StatusLine {
+    version: Vec[u8],
+    status: i64,
+    reason: Vec[u8],
+}
+
+// status-line = HTTP-version SP 3DIGIT [SP reason-phrase], since some
+// servers leave the reason out.
+fn parse_status_line(b: ref Vec[u8]) -> Option[StatusLine] {
+    let v = version_at(b, 0)?;
+    if b.len() < 12 or b[8] != b' ' or not is_digit(b[9]) or not is_digit(b[10]) or not is_digit(b[11]) {
+        return None;
+    }
+    let status = hex_val(b[9]) * 100 + hex_val(b[10]) * 10 + hex_val(b[11]);
+    if b.len() == 12 {
+        return Some(StatusLine { version: v, status: status, reason: Vec.new() });
+    }
+    if b[12] != b' ' {
+        return None;
+    }
+    for i in 13..b.len() {
+        let c = b[i];
+        if c == 0 or c == b'\n' or c == b'\r' or c == 0x0b or c == 0x0c {
+            return None;
+        }
+    }
+    Some(StatusLine { version: v, status: status, reason: slice(b, 13, b.len()) })
+}
+
+// A header value: field-content with its outer spaces and tabs removed.
+// Inside it h11 allows anything but NUL and the whitespace that could end
+// a line.
+fn field_value_ok(b: ref Vec[u8]) -> bool {
+    for c in b {
+        if c == 0 or c == b'\n' or c == b'\r' or c == 0x0b or c == 0x0c {
+            return false;
+        }
+    }
+    b.is_empty() or (b[0] != b' ' and b[0] != b'\t' and b[b.len() - 1] != b' ' and b[b.len() - 1] != b'\t')
+}
+
+fn trim_ows(b: ref Vec[u8], from: i64) -> Vec[u8] {
+    let mut s = from;
+    let mut e = b.len();
+    while s < e and (b[s] == b' ' or b[s] == b'\t') {
+        s += 1;
+    }
+    while e > s and (b[e - 1] == b' ' or b[e - 1] == b'\t') {
+        e -= 1;
+    }
+    slice(b, s, e)
+}
+
+// header-field = field-name ":" OWS field-value OWS
+fn parse_header_line(b: ref Vec[u8]) -> Option[(Vec[u8], Vec[u8])] {
+    let n = token_len(b, 0);
+    if n == 0 or n >= b.len() or b[n] != b':' {
+        return None;
+    }
+    let value = trim_ows(b, n + 1);
+    if not field_value_ok(value) {
+        return None;
+    }
+    Some((slice(b, 0, n), value))
+}
+
+// chunk-header = 1*20HEXDIG [";" chunk-ext] OWS CRLF; the line ends in
+// its first CRLF.
+fn parse_chunk_header(b: ref Vec[u8]) -> Option[i64] {
+    let mut h: i64 = 0;
+    while h < b.len() and is_hex(b[h]) {
+        h += 1;
+    }
+    if h == 0 or h > 20 {
+        return None;
+    }
+    let rest = slice(b, h, b.len() - 2);
+    if not rest.is_empty() and rest[0] == b';' {
+        for c in rest {
+            if c == b'\n' {
+                return None;
+            }
+        }
+    } else {
+        for c in rest {
+            if c != b' ' and c != b'\t' {
+                return None;
+            }
+        }
+    }
+    let mut n: i64 = 0;
+    for i in 0..h {
+        if n < (1 << 58) {
+            n = n * 16 + hex_val(b[i]);
+        }
+    }
+    Some(n)
+}
+
+fn digits_value(b: ref Vec[u8]) -> i64 {
+    let mut n: i64 = 0;
+    for c in b {
+        if n < (1 << 58) {
+            n = n * 10 + (c - b'0') as i64;
+        }
+    }
+    n
+}
+
+// ------------------------------------------------------------ headers
+
+// A header as h11 keeps it: the name as sent, the name lowercased for
+// lookups, and the value.
+#[derive(Clone)]
+struct Header {
+    raw: Vec[u8],
+    name: Vec[u8],
+    value: Vec[u8],
+}
+
+fn headers_repr(hs: ref Vec[Header]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for h in hs {
+        parts.push(f"({bytes_repr(h.name)}, {bytes_repr(h.value)})");
+    }
+    f"<Headers([{parts.join(", ")}])>"
+}
+
+// normalize_and_validate: headers the program built are checked against
+// the grammar (parsed ones already were), and Content-Length and
+// Transfer-Encoding are checked in both.
+fn normalize(pairs: ref Vec[(Vec[u8], Vec[u8])], parsed: bool) -> Result[Vec[Header], H11Error] {
+    let mut out: Vec[Header] = Vec.new();
+    let mut seen_length: Option[Vec[u8]] = None;
+    let mut saw_te = false;
+    for pair in pairs {
+        let (raw, v) = pair;
+        if not parsed {
+            if not is_token(raw) {
+                return Err(local(f"Illegal header name {bytes_repr(raw)}"));
+            }
+            if not field_value_ok(v) {
+                return Err(local(f"Illegal header value {bytes_repr(v)}"));
+            }
+        }
+        let name = lower(raw);
+        if is(name, "content-length") {
+            let mut lengths: Vec[Vec[u8]] = Vec.new();
+            for part in split_on(v, b',') {
+                let s = strip(part);
+                if not lengths.contains(s) {
+                    lengths.push(s);
+                }
+            }
+            if lengths.len() != 1 {
+                return Err(local("conflicting Content-Length headers".to_string()));
+            }
+            let value = lengths[0].clone();
+            if value.is_empty() or value.len() > 20 {
+                return Err(local("bad Content-Length".to_string()));
+            }
+            for c in value {
+                if not is_digit(c) {
+                    return Err(local("bad Content-Length".to_string()));
+                }
+            }
+            match seen_length {
+                None => {
+                    seen_length = Some(value.clone());
+                    out.push(Header { raw: raw.clone(), name: name, value: value });
+                }
+                Some(ref seen) => {
+                    if seen != value {
+                        return Err(local("conflicting Content-Length headers".to_string()));
+                    }
+                }
+            }
+        } else if is(name, "transfer-encoding") {
+            if saw_te {
+                return Err(local_hint("multiple Transfer-Encoding headers".to_string(), 501));
+            }
+            let value = lower(v);
+            if not is(value, "chunked") {
+                return Err(local_hint("Only Transfer-Encoding: chunked is supported".to_string(), 501));
+            }
+            saw_te = true;
+            out.push(Header { raw: raw.clone(), name: name, value: value });
+        } else {
+            out.push(Header { raw: raw.clone(), name: name, value: v.clone() });
+        }
+    }
+    Ok(out)
+}
+
+// The comma-separated values of every header called `name`, lowercased.
+fn get_comma(hs: ref Vec[Header], name: Str) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    for h in hs {
+        if is(h.name, name) {
+            for part in split_on(lower(h.value), b',') {
+                let s = strip(part);
+                if not s.is_empty() {
+                    out.push(s);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn set_comma(hs: ref Vec[Header], name: Str, values: ref Vec[Vec[u8]]) -> Result[Vec[Header], H11Error] {
+    let mut pairs: Vec[(Vec[u8], Vec[u8])] = Vec.new();
+    for h in hs {
+        if not is(h.name, name) {
+            pairs.push((h.raw.clone(), h.value.clone()));
+        }
+    }
+    for v in values {
+        pairs.push((title(to_bytes(name)), v.clone()));
+    }
+    normalize(pairs, false)
+}
+
+fn has_value(vs: ref Vec[Vec[u8]], s: Str) -> bool {
+    for v in vs {
+        if is(v, s) {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ events
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Request,
+    Informational,
+    Response,
+    Data,
+    EndOfMessage,
+    ConnectionClosed,
+    NeedData,
+    Paused,
+}
+
+fn kind_name(k: Kind) -> String {
+    match k {
+        Kind.Request => "Request".to_string(),
+        Kind.Informational => "InformationalResponse".to_string(),
+        Kind.Response => "Response".to_string(),
+        Kind.Data => "Data".to_string(),
+        Kind.EndOfMessage => "EndOfMessage".to_string(),
+        Kind.ConnectionClosed => "ConnectionClosed".to_string(),
+        Kind.NeedData => "NEED_DATA".to_string(),
+        Kind.Paused => "PAUSED".to_string(),
+    }
+}
+
+// One h11 event; the fields its kind does not use are empty.
+#[derive(Clone)]
+struct Event {
+    kind: Kind,
+    method: Vec[u8],
+    target: Vec[u8],
+    version: Vec[u8],
+    status: i64,
+    reason: Vec[u8],
+    headers: Vec[Header],
+    data: Vec[u8],
+    chunk_start: bool,
+    chunk_end: bool,
+}
+
+fn event(kind: Kind) -> Event {
+    Event {
+        kind: kind,
+        method: Vec.new(),
+        target: Vec.new(),
+        version: to_bytes("1.1"),
+        status: 0,
+        reason: Vec.new(),
+        headers: Vec.new(),
+        data: Vec.new(),
+        chunk_start: false,
+        chunk_end: false,
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn event_repr(e: ref Event) -> String {
+    let hs = headers_repr(e.headers);
+    match e.kind {
+        Kind.Request => f"Request(method={bytes_repr(e.method)}, headers={hs}, target={bytes_repr(e.target)}, http_version={bytes_repr(e.version)})",
+        Kind.Informational => f"InformationalResponse(headers={hs}, http_version={bytes_repr(e.version)}, reason={bytes_repr(e.reason)}, status_code={e.status})",
+        Kind.Response => f"Response(headers={hs}, http_version={bytes_repr(e.version)}, reason={bytes_repr(e.reason)}, status_code={e.status})",
+        Kind.Data => f"Data(data={bytearray_repr(e.data)}, chunk_start={py_bool(e.chunk_start)}, chunk_end={py_bool(e.chunk_end)})",
+        Kind.EndOfMessage => f"EndOfMessage(headers={hs})",
+        Kind.ConnectionClosed => "ConnectionClosed()".to_string(),
+        _ => kind_name(e.kind),
+    }
+}
+
+// Request.__init__: the Host rules, then the method and target grammar.
+fn make_request(method: own Vec[u8], target: own Vec[u8], version: own Vec[u8], pairs: ref Vec[(Vec[u8], Vec[u8])], parsed: bool) -> Result[Event, H11Error] {
+    let headers = normalize(pairs, parsed)?;
+    let mut hosts: i64 = 0;
+    for h in headers {
+        if is(h.name, "host") {
+            hosts += 1;
+        }
+    }
+    if is(version, "1.1") and hosts == 0 {
+        return Err(local("Missing mandatory Host: header".to_string()));
+    }
+    if hosts > 1 {
+        return Err(local("Found multiple Host: headers".to_string()));
+    }
+    if not is_token(method) {
+        return Err(local("Illegal method characters".to_string()));
+    }
+    if not is_target(target) {
+        return Err(local("Illegal target characters".to_string()));
+    }
+    let mut e = event(Kind.Request);
+    e.method = method;
+    e.target = target;
+    e.version = version;
+    e.headers = headers;
+    Ok(e)
+}
+
+fn make_response(kind: Kind, status: i64, version: own Vec[u8], reason: own Vec[u8], headers: own Vec[Header]) -> Result[Event, H11Error] {
+    if kind == Kind.Informational and not (status >= 100 and status < 200) {
+        return Err(local(f"InformationalResponse status_code should be in range [100, 200), not {status}"));
+    }
+    if kind == Kind.Response and not (status >= 200 and status < 1000) {
+        return Err(local(f"Response status_code should be in range [200, 1000), not {status}"));
+    }
+    let mut e = event(kind);
+    e.status = status;
+    e.version = version;
+    e.reason = reason;
+    e.headers = headers;
+    Ok(e)
+}
+
+fn eom(headers: own Vec[Header]) -> Event {
+    let mut e = event(Kind.EndOfMessage);
+    e.headers = headers;
+    e
+}
+
+fn data_event(data: own Vec[u8], start: bool, end: bool) -> Event {
+    let mut e = event(Kind.Data);
+    e.data = data;
+    e.chunk_start = start;
+    e.chunk_end = end;
+    e
+}
+
+// ------------------------------------------------------------ the receive buffer
+
+struct Buffer {
+    data: Vec[u8],
+}
+
+fn extract(b: mut ref Buffer, count: i64) -> Vec[u8] {
+    let n = if count < b.data.len() { count } else { b.data.len() };
+    let out = slice(b.data, 0, n);
+    b.data = slice(b.data, n, b.data.len());
+    out
+}
+
+fn extract_at_most(b: mut ref Buffer, count: i64) -> Option[Vec[u8]] {
+    if b.data.is_empty() {
+        return None;
+    }
+    Some(extract(mut b, count))
+}
+
+fn extract_next_line(b: mut ref Buffer) -> Option[Vec[u8]] {
+    let i = find(b.data, "\r\n", 0);
+    if i < 0 {
+        return None;
+    }
+    Some(extract(mut b, i + 2))
+}
+
+// Everything up to the first blank line, as lines without their endings;
+// a line may end in LF alone.
+fn extract_lines(b: mut ref Buffer) -> Option[Vec[Vec[u8]]] {
+    if starts(b.data, "\n") {
+        let _ = extract(mut b, 1);
+        return Some(Vec.new());
+    }
+    if starts(b.data, "\r\n") {
+        let _ = extract(mut b, 2);
+        return Some(Vec.new());
+    }
+    let mut end: i64 = -1;
+    let mut i: i64 = 0;
+    let n = b.data.len();
+    while i < n {
+        if b.data[i] == b'\n' {
+            if i + 1 < n and b.data[i + 1] == b'\n' {
+                end = i + 2;
+                break;
+            }
+            if i + 2 < n and b.data[i + 1] == b'\r' and b.data[i + 2] == b'\n' {
+                end = i + 3;
+                break;
+            }
+        }
+        i += 1;
+    }
+    if end < 0 {
+        return None;
+    }
+    let out = extract(mut b, end);
+    let mut lines: Vec[Vec[u8]] = Vec.new();
+    for line in split_on(out, b'\n').into_iter() {
+        if not line.is_empty() and line[line.len() - 1] == b'\r' {
+            lines.push(slice(line, 0, line.len() - 1));
+        } else {
+            lines.push(line);
+        }
+    }
+    let keep = lines.len() - 2;
+    let mut v: Vec[Vec[u8]] = Vec.new();
+    for k in 0..keep {
+        v.push(lines[k].clone());
+    }
+    Some(v)
+}
+
+// A cheap early check: a request line starts with a printable byte, which
+// a TLS handshake sent to a plain-HTTP port does not.
+fn obviously_invalid(b: ref Buffer) -> bool {
+    not b.data.is_empty() and b.data[0] < 0x21
+}
+
+// ------------------------------------------------------------ readers
+
+// Header lines with obsolete line folding undone: a line that starts with
+// a space or tab continues the one before it.
+fn decode_header_lines(lines: ref Vec[Vec[u8]], from: i64) -> Result[Vec[(Vec[u8], Vec[u8])], H11Error] {
+    let mut folded: Vec[Vec[u8]] = Vec.new();
+    for k in from..lines.len() {
+        let line = lines[k].clone();
+        if not line.is_empty() and (line[0] == b' ' or line[0] == b'\t') {
+            if folded.is_empty() {
+                return Err(local("continuation line at start of headers".to_string()));
+            }
+            let mut i: i64 = 0;
+            while i < line.len() and (line[i] == b' ' or line[i] == b'\t') {
+                i += 1;
+            }
+            let last = folded.len() - 1;
+            folded[last].push(b' ');
+            for j in i..line.len() {
+                folded[last].push(line[j]);
+            }
+        } else {
+            folded.push(line);
+        }
+    }
+    let mut out: Vec[(Vec[u8], Vec[u8])] = Vec.new();
+    for line in folded {
+        match parse_header_line(line) {
+            Some(p) => out.push(p),
+            None => return Err(local(f"illegal header line: {bytearray_repr(line)}")),
+        }
+    }
+    Ok(out)
+}
+
+fn read_request(buf: mut ref Buffer) -> Result[Option[Event], H11Error] {
+    let lines = match extract_lines(mut buf) {
+        Some(l) => l,
+        None => {
+            if obviously_invalid(buf) {
+                return Err(local("illegal request line".to_string()));
+            }
+            return Ok(None);
+        }
+    };
+    if lines.is_empty() {
+        return Err(local("no request line received".to_string()));
+    }
+    let rl = match parse_request_line(lines[0]) {
+        Some(r) => r,
+        None => return Err(local(f"illegal request line: {bytearray_repr(lines[0])}")),
+    };
+    let pairs = decode_header_lines(lines, 1)?;
+    Ok(Some(make_request(rl.method, rl.target, rl.version, pairs, true)?))
+}
+
+fn read_response(buf: mut ref Buffer) -> Result[Option[Event], H11Error] {
+    let lines = match extract_lines(mut buf) {
+        Some(l) => l,
+        None => {
+            if obviously_invalid(buf) {
+                return Err(local("illegal request line".to_string()));
+            }
+            return Ok(None);
+        }
+    };
+    if lines.is_empty() {
+        return Err(local("no response line received".to_string()));
+    }
+    let sl = match parse_status_line(lines[0]) {
+        Some(s) => s,
+        None => return Err(local(f"illegal status line: {bytearray_repr(lines[0])}")),
+    };
+    let pairs = decode_header_lines(lines, 1)?;
+    let headers = normalize(pairs, true)?;
+    let kind = if sl.status < 200 { Kind.Informational } else { Kind.Response };
+    Ok(Some(make_response(kind, sl.status, sl.version, sl.reason, headers)?))
+}
+
+const R_NONE: i64 = 0;
+const R_REQUEST: i64 = 1;
+const R_RESPONSE: i64 = 2;
+const R_NOTHING: i64 = 3;
+const R_LENGTH: i64 = 4;
+const R_CHUNKED: i64 = 5;
+const R_HTTP10: i64 = 6;
+
+// What reads the peer's bytes in its current state: a start line, a body
+// framed one of three ways, or nothing at all.
+struct Reader {
+    kind: i64,
+    length: i64,
+    remaining: i64,
+    in_chunk: i64,
+    discard: Vec[u8],
+    trailer: bool,
+}
+
+fn reader(kind: i64, length: i64) -> Reader {
+    Reader { kind: kind, length: length, remaining: length, in_chunk: 0, discard: Vec.new(), trailer: false }
+}
+
+fn read_chunked(r: mut ref Reader, buf: mut ref Buffer) -> Result[Option[Event], H11Error] {
+    if r.trailer {
+        let lines = match extract_lines(mut buf) {
+            Some(l) => l,
+            None => return Ok(None),
+        };
+        let pairs = decode_header_lines(lines, 0)?;
+        return Ok(Some(eom(normalize(pairs, true)?)));
+    }
+    if not r.discard.is_empty() {
+        let data = match extract_at_most(mut buf, r.discard.len()) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+        if data != slice(r.discard, 0, data.len()) {
+            return Err(local(f"malformed chunk footer: {bytearray_repr(data)} (expected {bytes_repr(r.discard)})"));
+        }
+        r.discard = slice(r.discard, data.len(), r.discard.len());
+        if not r.discard.is_empty() {
+            return Ok(None);
+        }
+    }
+    let mut start = false;
+    if r.in_chunk == 0 {
+        let line = match extract_next_line(mut buf) {
+            Some(l) => l,
+            None => return Ok(None),
+        };
+        r.in_chunk = match parse_chunk_header(line) {
+            Some(n) => n,
+            None => return Err(local(f"illegal chunk header: {bytearray_repr(line)}")),
+        };
+        if r.in_chunk == 0 {
+            r.trailer = true;
+            return read_chunked(mut r, mut buf);
+        }
+        start = true;
+    }
+    let data = match extract_at_most(mut buf, r.in_chunk) {
+        Some(d) => d,
+        None => return Ok(None),
+    };
+    r.in_chunk -= data.len();
+    let mut end = false;
+    if r.in_chunk == 0 {
+        r.discard = to_bytes("\r\n");
+        end = true;
+    }
+    Ok(Some(data_event(data, start, end)))
+}
+
+fn read(r: mut ref Reader, buf: mut ref Buffer) -> Result[Option[Event], H11Error] {
+    if r.kind == R_REQUEST {
+        return read_request(mut buf);
+    }
+    if r.kind == R_RESPONSE {
+        return read_response(mut buf);
+    }
+    if r.kind == R_NOTHING {
+        if not buf.data.is_empty() {
+            return Err(local("Got data when expecting EOF".to_string()));
+        }
+        return Ok(None);
+    }
+    if r.kind == R_LENGTH {
+        if r.remaining == 0 {
+            return Ok(Some(eom(Vec.new())));
+        }
+        return match extract_at_most(mut buf, r.remaining) {
+            Some(d) => {
+                r.remaining -= d.len();
+                Ok(Some(data_event(d, false, false)))
+            }
+            None => Ok(None),
+        };
+    }
+    if r.kind == R_CHUNKED {
+        return read_chunked(mut r, mut buf);
+    }
+    match extract_at_most(mut buf, 999999999) {
+        Some(d) => Ok(Some(data_event(d, false, false))),
+        None => Ok(None),
+    }
+}
+
+fn has_read_eof(r: ref Reader) -> bool {
+    r.kind == R_LENGTH or r.kind == R_CHUNKED or r.kind == R_HTTP10
+}
+
+fn read_eof(r: ref Reader) -> Result[Event, H11Error] {
+    if r.kind == R_LENGTH {
+        return Err(remote(f"peer closed connection without sending complete message body (received {r.length - r.remaining} bytes, expected {r.length})"));
+    }
+    if r.kind == R_CHUNKED {
+        return Err(remote("peer closed connection without sending complete message body (incomplete chunked read)".to_string()));
+    }
+    Ok(eom(Vec.new()))
+}
+
+// ------------------------------------------------------------ writers
+
+const W_NONE: i64 = 0;
+const W_REQUEST: i64 = 1;
+const W_RESPONSE: i64 = 2;
+const W_LENGTH: i64 = 3;
+const W_CHUNKED: i64 = 4;
+const W_HTTP10: i64 = 5;
+
+struct Writer {
+    kind: i64,
+    length: i64,
+}
+
+// Host first, as h11 writes it, then the rest in order.
+fn write_headers(out: mut ref Vec[u8], hs: ref Vec[Header]) {
+    for pass in 0..2 {
+        for h in hs {
+            if is(h.name, "host") == (pass == 0) {
+                push_all(mut out, h.raw);
+                push_str(mut out, ": ");
+                push_all(mut out, h.value);
+                push_str(mut out, "\r\n");
+            }
+        }
+    }
+    push_str(mut out, "\r\n");
+}
+
+fn write(w: mut ref Writer, e: ref Event) -> Result[Vec[u8], H11Error] {
+    let mut out: Vec[u8] = Vec.new();
+    if w.kind == W_REQUEST {
+        if not is(e.version, "1.1") {
+            return Err(local("I only send HTTP/1.1".to_string()));
+        }
+        push_all(mut out, e.method);
+        out.push(b' ');
+        push_all(mut out, e.target);
+        push_str(mut out, " HTTP/1.1\r\n");
+        write_headers(mut out, e.headers);
+    } else if w.kind == W_RESPONSE {
+        if not is(e.version, "1.1") {
+            return Err(local("I only send HTTP/1.1".to_string()));
+        }
+        push_str(mut out, f"HTTP/1.1 {e.status} ");
+        push_all(mut out, e.reason);
+        push_str(mut out, "\r\n");
+        write_headers(mut out, e.headers);
+    } else if e.kind == Kind.Data {
+        if w.kind == W_LENGTH {
+            w.length -= e.data.len();
+            if w.length < 0 {
+                return Err(local("Too much data for declared Content-Length".to_string()));
+            }
+            push_all(mut out, e.data);
+        } else if w.kind == W_CHUNKED {
+            if not e.data.is_empty() {
+                push_str(mut out, f"{e.data.len():x}\r\n");
+                push_all(mut out, e.data);
+                push_str(mut out, "\r\n");
+            }
+        } else {
+            push_all(mut out, e.data);
+        }
+    } else {
+        if w.kind == W_LENGTH {
+            if w.length != 0 {
+                return Err(local("Too little data for declared Content-Length".to_string()));
+            }
+            if not e.headers.is_empty() {
+                return Err(local("Content-Length and trailers don't mix".to_string()));
+            }
+        } else if w.kind == W_CHUNKED {
+            push_str(mut out, "0\r\n");
+            write_headers(mut out, e.headers);
+        } else if not e.headers.is_empty() {
+            return Err(local("can't send trailers to HTTP/1.0 client".to_string()));
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the state machine
+
+const CLIENT: i64 = 0;
+const SERVER: i64 = 1;
+
+const IDLE: i64 = 0;
+const SEND_RESPONSE: i64 = 1;
+const SEND_BODY: i64 = 2;
+const DONE: i64 = 3;
+const MUST_CLOSE: i64 = 4;
+const CLOSED: i64 = 5;
+const ERROR: i64 = 6;
+const MIGHT_SWITCH: i64 = 7;
+const SWITCHED: i64 = 8;
+
+fn state_name(s: i64) -> String {
+    let names = ["IDLE", "SEND_RESPONSE", "SEND_BODY", "DONE", "MUST_CLOSE", "CLOSED", "ERROR", "MIGHT_SWITCH_PROTOCOL", "SWITCHED_PROTOCOL"];
+    names[s].to_string()
+}
+
+fn role_name(r: i64) -> String {
+    if r == CLIENT { "CLIENT".to_string() } else { "SERVER".to_string() }
+}
+
+// The server's half of a protocol switch: a 101 for an Upgrade, or a 2xx
+// for a CONNECT.
+const SWITCH_NONE: i64 = 0;
+const SWITCH_UPGRADE: i64 = 1;
+const SWITCH_CONNECT: i64 = 2;
+
+// EVENT_TRIGGERED_TRANSITIONS. `from_client` is the server's view of the
+// client's Request; `switch` is set on the server's switching response.
+fn transition(role: i64, state: i64, kind: Kind, from_client: bool, switch: i64) -> Option[i64] {
+    if kind == Kind.ConnectionClosed and not from_client and switch == SWITCH_NONE {
+        if state == IDLE or state == DONE or state == MUST_CLOSE or state == CLOSED {
+            return Some(CLOSED);
+        }
+        return None;
+    }
+    if state == SEND_BODY and switch == SWITCH_NONE and not from_client {
+        if kind == Kind.Data {
+            return Some(SEND_BODY);
+        }
+        if kind == Kind.EndOfMessage {
+            return Some(DONE);
+        }
+        return None;
+    }
+    if role == CLIENT {
+        if state == IDLE and kind == Kind.Request {
+            return Some(SEND_BODY);
+        }
+        return None;
+    }
+    if state == IDLE {
+        if kind == Kind.Response and switch == SWITCH_NONE {
+            return Some(SEND_BODY);
+        }
+        if kind == Kind.Request and from_client {
+            return Some(SEND_RESPONSE);
+        }
+        return None;
+    }
+    if state == SEND_RESPONSE and not from_client {
+        if kind == Kind.Informational {
+            if switch == SWITCH_UPGRADE {
+                return Some(SWITCHED);
+            }
+            if switch == SWITCH_NONE {
+                return Some(SEND_RESPONSE);
+            }
+        }
+        if kind == Kind.Response {
+            if switch == SWITCH_CONNECT {
+                return Some(SWITCHED);
+            }
+            if switch == SWITCH_NONE {
+                return Some(SEND_BODY);
+            }
+        }
+    }
+    None
+}
+
+struct ConnState {
+    states: Vec[i64],
+    keep_alive: bool,
+    pending_upgrade: bool,
+    pending_connect: bool,
+}
+
+fn fire_event(cs: mut ref ConnState, role: i64, kind: Kind, from_client: bool, switch: i64) -> Result[(), H11Error] {
+    match transition(role, cs.states[role], kind, from_client, switch) {
+        Some(s) => {
+            cs.states[role] = s;
+            Ok(())
+        }
+        None => Err(local(f"can't handle event type {kind_name(kind)} when role={role_name(role)} and state={state_name(cs.states[role])}")),
+    }
+}
+
+// STATE_TRIGGERED_TRANSITIONS, run until nothing changes.
+fn fire_states(cs: mut ref ConnState) {
+    loop {
+        let start = cs.states.clone();
+        let pending = cs.pending_upgrade or cs.pending_connect;
+        if pending and cs.states[CLIENT] == DONE {
+            cs.states[CLIENT] = MIGHT_SWITCH;
+        }
+        if not pending and cs.states[CLIENT] == MIGHT_SWITCH {
+            cs.states[CLIENT] = DONE;
+        }
+        if not cs.keep_alive {
+            for role in [CLIENT, SERVER] {
+                if cs.states[role] == DONE {
+                    cs.states[role] = MUST_CLOSE;
+                }
+            }
+        }
+        let c = cs.states[CLIENT];
+        let s = cs.states[SERVER];
+        if c == MIGHT_SWITCH and s == SWITCHED {
+            cs.states[CLIENT] = SWITCHED;
+        } else if c == CLOSED and (s == DONE or s == IDLE) {
+            cs.states[SERVER] = MUST_CLOSE;
+        } else if c == ERROR and s == DONE {
+            cs.states[SERVER] = MUST_CLOSE;
+        } else if (c == DONE or c == IDLE) and s == CLOSED {
+            cs.states[CLIENT] = MUST_CLOSE;
+        } else if c == DONE and s == ERROR {
+            cs.states[CLIENT] = MUST_CLOSE;
+        }
+        if cs.states == start {
+            return;
+        }
+    }
+}
+
+fn process_state_event(cs: mut ref ConnState, role: i64, kind: Kind, switch: i64) -> Result[(), H11Error] {
+    if switch != SWITCH_NONE {
+        let pending = if switch == SWITCH_UPGRADE { cs.pending_upgrade } else { cs.pending_connect };
+        if not pending {
+            return Err(local("Received server _SWITCH_UPGRADE event without a pending proposal".to_string()));
+        }
+    }
+    if switch == SWITCH_NONE and kind == Kind.Response {
+        cs.pending_upgrade = false;
+        cs.pending_connect = false;
+    }
+    fire_event(mut cs, role, kind, false, switch)?;
+    if kind == Kind.Request {
+        fire_event(mut cs, SERVER, Kind.Request, true, SWITCH_NONE)?;
+    }
+    fire_states(mut cs);
+    Ok(())
+}
+
+// ------------------------------------------------------------ the connection
+
+struct Connection {
+    our_role: i64,
+    their_role: i64,
+    cs: ConnState,
+    writer: Writer,
+    reader: Reader,
+    buf: Buffer,
+    closed: bool,
+    their_version: Option[Vec[u8]],
+    request_method: Option[Vec[u8]],
+    waiting_100: bool,
+    max_size: i64,
+}
+
+fn is_method(m: ref Option[Vec[u8]], s: Str) -> bool {
+    match m {
+        Some(v) => is(v, s),
+        None => false,
+    }
+}
+
+// _body_framing: how the body after this Request or Response is
+// delimited, and its length for Content-Length.
+fn body_framing(method: ref Option[Vec[u8]], e: ref Event) -> (i64, i64) {
+    if e.kind == Kind.Response {
+        if e.status == 204 or e.status == 304 or is_method(method, "HEAD")
+            or (is_method(method, "CONNECT") and e.status >= 200 and e.status < 300) {
+            return (R_LENGTH, 0);
+        }
+    }
+    if not get_comma(e.headers, "transfer-encoding").is_empty() {
+        return (R_CHUNKED, 0);
+    }
+    let lengths = get_comma(e.headers, "content-length");
+    if not lengths.is_empty() {
+        return (R_LENGTH, digits_value(lengths[0]));
+    }
+    if e.kind == Kind.Request { (R_LENGTH, 0) } else { (R_HTTP10, 0) }
+}
+
+fn new_reader(c: ref Connection, e: ref Option[Event]) -> Reader {
+    let role = c.their_role;
+    let state = c.cs.states[role];
+    if state == SEND_BODY {
+        let (kind, length) = match e {
+            Some(ev) => body_framing(c.request_method, ev),
+            None => (R_HTTP10, 0),
+        };
+        return reader(kind, length);
+    }
+    if state == IDLE and role == CLIENT {
+        return reader(R_REQUEST, 0);
+    }
+    if role == SERVER and (state == IDLE or state == SEND_RESPONSE) {
+        return reader(R_RESPONSE, 0);
+    }
+    if state == DONE or state == MUST_CLOSE or state == CLOSED {
+        return reader(R_NOTHING, 0);
+    }
+    reader(R_NONE, 0)
+}
+
+fn new_writer(c: ref Connection, e: ref Option[Event]) -> Writer {
+    let role = c.our_role;
+    let state = c.cs.states[role];
+    if state == SEND_BODY {
+        let (kind, length) = match e {
+            Some(ev) => body_framing(c.request_method, ev),
+            None => (R_HTTP10, 0),
+        };
+        let w = if kind == R_LENGTH { W_LENGTH } else if kind == R_CHUNKED { W_CHUNKED } else { W_HTTP10 };
+        return Writer { kind: w, length: length };
+    }
+    if role == CLIENT and state == IDLE {
+        return Writer { kind: W_REQUEST, length: 0 };
+    }
+    if role == SERVER and (state == IDLE or state == SEND_RESPONSE) {
+        return Writer { kind: W_RESPONSE, length: 0 };
+    }
+    Writer { kind: W_NONE, length: 0 }
+}
+
+fn connection(role: i64, max_size: i64) -> Connection {
+    let mut c = Connection {
+        our_role: role,
+        their_role: 1 - role,
+        cs: ConnState { states: vec![IDLE, IDLE], keep_alive: true, pending_upgrade: false, pending_connect: false },
+        writer: Writer { kind: W_NONE, length: 0 },
+        reader: reader(R_NONE, 0),
+        buf: Buffer { data: Vec.new() },
+        closed: false,
+        their_version: None,
+        request_method: None,
+        waiting_100: false,
+        max_size: max_size,
+    };
+    c.writer = new_writer(c, None);
+    c.reader = new_reader(c, None);
+    c
+}
+
+fn respond_to_changes(c: mut ref Connection, old: ref Vec[i64], e: ref Option[Event]) {
+    if c.cs.states[c.our_role] != old[c.our_role] {
+        c.writer = new_writer(c, e);
+    }
+    if c.cs.states[c.their_role] != old[c.their_role] {
+        c.reader = new_reader(c, e);
+    }
+}
+
+fn process_error(c: mut ref Connection, role: i64) {
+    let old = c.cs.states.clone();
+    c.cs.states[role] = ERROR;
+    fire_states(mut c.cs);
+    respond_to_changes(mut c, old, None);
+}
+
+fn version_before_11(v: ref Vec[u8]) -> bool {
+    less(v, to_bytes("1.1"))
+}
+
+fn keep_alive(e: ref Event) -> bool {
+    if has_value(get_comma(e.headers, "connection"), "close") {
+        return false;
+    }
+    not version_before_11(e.version)
+}
+
+fn process_event(c: mut ref Connection, role: i64, e: ref Event) -> Result[(), H11Error] {
+    let old = c.cs.states.clone();
+    if role == CLIENT and e.kind == Kind.Request {
+        if is(e.method, "CONNECT") {
+            c.cs.pending_connect = true;
+            fire_states(mut c.cs);
+        }
+        if not get_comma(e.headers, "upgrade").is_empty() {
+            c.cs.pending_upgrade = true;
+            fire_states(mut c.cs);
+        }
+    }
+    let mut switch = SWITCH_NONE;
+    if role == SERVER {
+        if e.kind == Kind.Informational and e.status == 101 {
+            switch = SWITCH_UPGRADE;
+        } else if e.kind == Kind.Response and c.cs.pending_connect and e.status >= 200 and e.status < 300 {
+            switch = SWITCH_CONNECT;
+        }
+    }
+    process_state_event(mut c.cs, role, e.kind, switch)?;
+    if e.kind == Kind.Request {
+        c.request_method = Some(e.method.clone());
+    }
+    let start_line = e.kind == Kind.Request or e.kind == Kind.Response or e.kind == Kind.Informational;
+    if role == c.their_role and start_line {
+        c.their_version = Some(e.version.clone());
+    }
+    if (e.kind == Kind.Request or e.kind == Kind.Response) and not keep_alive(e) {
+        c.cs.keep_alive = false;
+        fire_states(mut c.cs);
+    }
+    if e.kind == Kind.Request and not version_before_11(e.version) and has_value(get_comma(e.headers, "expect"), "100-continue") {
+        c.waiting_100 = true;
+    }
+    if e.kind == Kind.Informational or e.kind == Kind.Response {
+        c.waiting_100 = false;
+    }
+    if role == CLIENT and (e.kind == Kind.Data or e.kind == Kind.EndOfMessage) {
+        c.waiting_100 = false;
+    }
+    respond_to_changes(mut c, old, Some(e.clone()));
+    Ok(())
+}
+
+fn receive_data(c: mut ref Connection, data: ref Vec[u8]) -> Result[(), H11Error] {
+    if data.is_empty() {
+        c.closed = true;
+        return Ok(());
+    }
+    if c.closed {
+        return Err(H11Error { kind: "RuntimeError".to_string(), msg: "received close, then received more data?".to_string(), hint: 0 });
+    }
+    push_all(mut c.buf.data, data);
+    Ok(())
+}
+
+fn extract_event(c: mut ref Connection) -> Result[Event, H11Error] {
+    let state = c.cs.states[c.their_role];
+    if state == DONE and not c.buf.data.is_empty() {
+        return Ok(event(Kind.Paused));
+    }
+    if state == MIGHT_SWITCH or state == SWITCHED {
+        return Ok(event(Kind.Paused));
+    }
+    let got = read(mut c.reader, mut c.buf)?;
+    match got {
+        Some(e) => Ok(e),
+        None => {
+            if c.buf.data.is_empty() and c.closed {
+                if has_read_eof(c.reader) {
+                    return read_eof(c.reader);
+                }
+                return Ok(event(Kind.ConnectionClosed));
+            }
+            Ok(event(Kind.NeedData))
+        }
+    }
+}
+
+fn next_event_inner(c: mut ref Connection) -> Result[Event, H11Error] {
+    let e = extract_event(mut c)?;
+    if e.kind != Kind.NeedData and e.kind != Kind.Paused {
+        let role = c.their_role;
+        process_event(mut c, role, e)?;
+    }
+    if e.kind == Kind.NeedData {
+        if c.buf.data.len() > c.max_size {
+            return Err(H11Error { kind: "RemoteProtocolError".to_string(), msg: "Receive buffer too long".to_string(), hint: 431 });
+        }
+        if c.closed {
+            return Err(remote("peer unexpectedly closed connection".to_string()));
+        }
+    }
+    Ok(e)
+}
+
+fn next_event(c: mut ref Connection) -> Result[Event, H11Error] {
+    if c.cs.states[c.their_role] == ERROR {
+        return Err(remote("Can't receive data when peer state is ERROR".to_string()));
+    }
+    match next_event_inner(mut c) {
+        Ok(e) => Ok(e),
+        Err(err) => {
+            let role = c.their_role;
+            process_error(mut c, role);
+            Err(H11Error { kind: "RemoteProtocolError".to_string(), msg: err.msg.clone(), hint: err.hint })
+        }
+    }
+}
+
+// h11 rewrites a response's framing headers to what the peer can read:
+// chunked for a 1.1 client, read-until-close for 1.0, and Connection:
+// close whenever the connection will not be reused.
+fn clean_up_response(c: ref Connection, r: ref Event) -> Result[Event, H11Error] {
+    let mut headers = r.headers.clone();
+    let mut need_close = false;
+    let method = if is_method(c.request_method, "HEAD") { Some(to_bytes("GET")) } else { c.request_method.clone() };
+    let (framing, _) = body_framing(method, r);
+    if framing == R_CHUNKED or framing == R_HTTP10 {
+        headers = set_comma(headers, "content-length", Vec.new())?;
+        let old_peer = match c.their_version {
+            Some(ref v) => version_before_11(v),
+            None => true,
+        };
+        if old_peer {
+            headers = set_comma(headers, "transfer-encoding", Vec.new())?;
+            if not is_method(c.request_method, "HEAD") {
+                need_close = true;
+            }
+        } else {
+            headers = set_comma(headers, "transfer-encoding", vec![to_bytes("chunked")])?;
+        }
+    }
+    if not c.cs.keep_alive or need_close {
+        let mut values: Vec[Vec[u8]] = Vec.new();
+        for v in get_comma(headers, "connection") {
+            if not is(v, "keep-alive") and not values.contains(v) {
+                values.push(v.clone());
+            }
+        }
+        if not has_value(values, "close") {
+            values.push(to_bytes("close"));
+        }
+        // sorted(), on bytes
+        let mut sorted: Vec[Vec[u8]] = Vec.new();
+        for v in values {
+            let mut at: i64 = 0;
+            while at < sorted.len() and less(sorted[at], v) {
+                at += 1;
+            }
+            sorted.insert(at, v.clone());
+        }
+        headers = set_comma(headers, "connection", sorted)?;
+    }
+    make_response(Kind.Response, r.status, r.version.clone(), r.reason.clone(), headers)
+}
+
+fn send_inner(c: mut ref Connection, ev: ref Event) -> Result[Option[Vec[u8]], H11Error] {
+    let e = if ev.kind == Kind.Response { clean_up_response(c, ev)? } else { ev.clone() };
+    let mut w = Writer { kind: c.writer.kind, length: c.writer.length };
+    let before = c.cs.states[c.our_role];
+    let role = c.our_role;
+    process_event(mut c, role, e)?;
+    if e.kind == Kind.ConnectionClosed {
+        return Ok(None);
+    }
+    // The writer h11 picked before the event; if the state did not move,
+    // it is still the connection's own and keeps what it counted.
+    if c.cs.states[c.our_role] == before {
+        let out = write(mut c.writer, e)?;
+        return Ok(Some(out));
+    }
+    Ok(Some(write(mut w, e)?))
+}
+
+fn send(c: mut ref Connection, ev: ref Event) -> Result[Option[Vec[u8]], H11Error] {
+    if c.cs.states[c.our_role] == ERROR {
+        return Err(local("Can't send data when our state is ERROR".to_string()));
+    }
+    match send_inner(mut c, ev) {
+        Ok(v) => Ok(v),
+        Err(err) => {
+            let role = c.our_role;
+            process_error(mut c, role);
+            Err(err)
+        }
+    }
+}
+
+fn start_next_cycle(c: mut ref Connection) -> Result[(), H11Error] {
+    let old = c.cs.states.clone();
+    if old[CLIENT] != DONE or old[SERVER] != DONE {
+        return Err(local(f"not in a reusable state. self.states={{CLIENT: {state_name(old[CLIENT])}, SERVER: {state_name(old[SERVER])}}}"));
+    }
+    c.cs.states = vec![IDLE, IDLE];
+    c.request_method = None;
+    respond_to_changes(mut c, old, None);
+    Ok(())
+}
+
+// ------------------------------------------------------------ scripts
+
+// A script line's bytes: \r, \n, \t, \\ and \xHH; nothing else is special.
+fn unescape(s: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < s.len() {
+        let c = s[i];
+        if c == b'\\' and i + 1 < s.len() {
+            let n = s[i + 1];
+            if n == b'x' {
+                out.push((hex_val(s[i + 2]) * 16 + hex_val(s[i + 3])) as u8);
+                i += 4;
+                continue;
+            }
+            out.push(if n == b'r' { b'\r' } else if n == b'n' { b'\n' } else if n == b't' { b'\t' } else { b'\\' });
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+// `A B C | Name: value | Name: value` into its words and its headers.
+fn split_headers(rest: ref Vec[u8]) -> (Vec[Vec[u8]], Vec[(Vec[u8], Vec[u8])]) {
+    let mut parts: Vec[Vec[u8]] = Vec.new();
+    let mut from: i64 = 0;
+    loop {
+        let at = find(rest, " | ", from);
+        if at < 0 {
+            parts.push(slice(rest, from, rest.len()));
+            break;
+        }
+        parts.push(slice(rest, from, at));
+        from = at + 3;
+    }
+    let head = if parts[0].is_empty() { Vec.new() } else { split_on(parts[0], b' ') };
+    let mut headers: Vec[(Vec[u8], Vec[u8])] = Vec.new();
+    for k in 1..parts.len() {
+        let p = parts[k].clone();
+        let at = find(p, ": ", 0);
+        if at < 0 {
+            headers.push((unescape(p), Vec.new()));
+        } else {
+            headers.push((unescape(slice(p, 0, at)), unescape(slice(p, at + 2, p.len()))));
+        }
+    }
+    (head, headers)
+}
+
+fn text(b: ref Vec[u8]) -> String {
+    String.from_utf8(b.clone()).unwrap_or("?".to_string())
+}
+
+fn to_int(b: ref Vec[u8]) -> i64 {
+    i64.parse(text(b)).unwrap_or(0)
+}
+
+struct Script {
+    conn: Connection,
+    out: Vec[String],
+}
+
+fn say(s: mut ref Script, line: own String) {
+    s.out.push(line);
+}
+
+fn show_states(s: mut ref Script) {
+    let c = s.conn.cs.states[CLIENT];
+    let v = s.conn.cs.states[SERVER];
+    let mut line = f"  = CLIENT={state_name(c)} SERVER={state_name(v)}";
+    if s.conn.waiting_100 {
+        line.push_str(" waiting-100");
+    }
+    if not s.conn.cs.keep_alive {
+        line.push_str(" no-keep-alive");
+    }
+    say(mut s, line);
+}
+
+// One next_event(); false once there is nothing more to take for now.
+fn step(s: mut ref Script) -> bool {
+    match next_event(mut s.conn) {
+        Ok(e) => {
+            say(mut s, f"  {event_repr(e)}");
+            e.kind != Kind.NeedData and e.kind != Kind.Paused and e.kind != Kind.ConnectionClosed
+        }
+        Err(err) => {
+            say(mut s, error_line(err));
+            false
+        }
+    }
+}
+
+fn drain(s: mut ref Script) {
+    for _ in 0..100 {
+        if not step(mut s) {
+            return;
+        }
+    }
+}
+
+fn feed(s: mut ref Script, data: ref Vec[u8]) {
+    match receive_data(mut s.conn, data) {
+        Ok(_) => drain(mut s),
+        Err(err) => say(mut s, error_line(err)),
+    }
+}
+
+fn send_event(s: mut ref Script, made: own Result[Event, H11Error]) {
+    let e = match made {
+        Ok(e) => e,
+        Err(err) => {
+            say(mut s, error_line(err));
+            return;
+        }
+    };
+    match send(mut s.conn, e) {
+        Ok(Some(bytes)) => say(mut s, f"  sent {bytes_repr(bytes)}"),
+        Ok(None) => say(mut s, "  sent None".to_string()),
+        Err(err) => say(mut s, error_line(err)),
+    }
+}
+
+fn response_event(kind: Kind, head: ref Vec[Vec[u8]], pairs: ref Vec[(Vec[u8], Vec[u8])]) -> Result[Event, H11Error] {
+    let headers = normalize(pairs, false)?;
+    let mut reason: Vec[u8] = Vec.new();
+    for k in 2..head.len() {
+        if k > 2 {
+            reason.push(b' ');
+        }
+        push_all(mut reason, head[k]);
+    }
+    make_response(kind, to_int(head[0]), head[1].clone(), reason, headers)
+}
+
+fn run_op(s: mut ref Script, line: ref Vec[u8]) -> Result[(), String] {
+    let sp = find(line, " ", 0);
+    let word = text(if sp < 0 { line.clone() } else { slice(line, 0, sp) });
+    let rest = if sp < 0 { Vec.new() } else { slice(line, sp + 1, line.len()) };
+    if word == "role" {
+        let args = split_on(rest, b' ');
+        let role = if is(args[0], "client") { CLIENT } else { SERVER };
+        let size = if args.len() > 2 { to_int(args[2]) } else { 16 * 1024 };
+        s.conn = connection(role, size);
+    } else if word == "recv" {
+        feed(mut s, unescape(rest));
+    } else if word == "recvfile" {
+        let args = split_on(rest, b' ');
+        let path = f"data/{text(args[0])}";
+        let data = match fs.read_bytes(path.clone()) {
+            Ok(b) => b,
+            Err(e) => return Err(f"cannot read {path}: {e}"),
+        };
+        let size = to_int(args[1]);
+        let mut at: i64 = 0;
+        while at < data.len() {
+            let end = if at + size < data.len() { at + size } else { data.len() };
+            say(mut s, f"  .. {end - at} bytes");
+            feed(mut s, slice(data, at, end));
+            at += size;
+        }
+    } else if word == "eof" {
+        feed(mut s, Vec.new());
+    } else if word == "next" {
+        let _ = step(mut s);
+    } else if word == "drain" {
+        drain(mut s);
+    } else if word == "request" {
+        let (head, pairs) = split_headers(rest);
+        send_event(mut s, make_request(head[0].clone(), unescape(head[1]), head[2].clone(), pairs, false));
+    } else if word == "response" or word == "info" {
+        let (head, pairs) = split_headers(rest);
+        let kind = if word == "response" { Kind.Response } else { Kind.Informational };
+        send_event(mut s, response_event(kind, head, pairs));
+    } else if word == "data" {
+        send_event(mut s, Ok(data_event(unescape(rest), false, false)));
+    } else if word == "eom" {
+        let (_, pairs) = split_headers(rest);
+        let made = match normalize(pairs, false) {
+            Ok(hs) => Ok(eom(hs)),
+            Err(e) => Err(e),
+        };
+        send_event(mut s, made);
+    } else if word == "close" {
+        send_event(mut s, Ok(event(Kind.ConnectionClosed)));
+    } else if word == "cycle" {
+        if let Err(err) = start_next_cycle(mut s.conn) {
+            say(mut s, error_line(err));
+        }
+    } else if word == "failed" {
+        let role = s.conn.our_role;
+        process_error(mut s.conn, role);
+    } else {
+        return Err(f"unknown command {word}");
+    }
+    show_states(mut s);
+    Ok(())
+}
+
+fn run_script(name: ref String) -> Result[Vec[String], String] {
+    let path = f"data/scripts/{name}";
+    let body = match fs.read_bytes(path.clone()) {
+        Ok(b) => b,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    let mut s = Script { conn: connection(SERVER, 16 * 1024), out: Vec.new() };
+    for line in split_on(body, b'\n') {
+        if line.is_empty() or line[0] == b'#' {
+            continue;
+        }
+        say(mut s, f"> {text(line)}");
+        run_op(mut s, line)?;
+    }
+    say(mut s, f"  trailing {bytes_repr(s.conn.buf.data)} closed={py_bool(s.conn.closed)}");
+    Ok(s.out)
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push((hex_val(b[i]) * 16 + hex_val(b[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    for dir in ["data/scripts", "data/captures"] {
+        if let Err(e) = fs.create_dir_all(dir.to_string()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+    }
+    for file in data_files() {
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let listing = match fs.read_dir("data/scripts".to_string()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln(f"cannot list data/scripts: {e}");
+            return;
+        }
+    };
+    let mut names: Vec[String] = Vec.new();
+    for n in listing {
+        let mut at: i64 = 0;
+        while at < names.len() and names[at] < n {
+            at += 1;
+        }
+        names.insert(at, n.clone());
+    }
+    for name in names {
+        println(f"== {name}");
+        match run_script(name) {
+            Ok(lines) => println(lines.join("\n")),
+            Err(e) => println(f"  {e}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("POST /login HTTP/1.1\r\n");
+    t.push_str("Host: shop.example.org\r\n");
+    t.push_str("Connection: keep-alive\r\n");
+    t.push_str("Content-Length: 40\r\n");
+    t.push_str("Cache-Control: max-age=0\r\n");
+    t.push_str("Origin: https://shop.example.org\r\n");
+    t.push_str("Content-Type: application/x-www-form-urlencoded\r\n");
+    t.push_str("User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36\r\n");
+    t.push_str("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n");
+    t.push_str("Referer: https://shop.example.org/login?next=%2Fcart\r\n");
+    t.push_str("Accept-Encoding: gzip, deflate, br, zstd\r\n");
+    t.push_str("Accept-Language: en-GB,en;q=0.9,de;q=0.8\r\n");
+    t.push_str("Cookie: csrftoken=Zx81Kq; _ga=GA1.1.1234567890.1700000000\r\n");
+    t.push_str("\r\n");
+    t.push_str("username=grace&password=hunter2&next=%2F");
+    v.push(DataFile { path: "captures/browser-post.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /api/v1/users?page=2&per_page=50 HTTP/1.1\r\n");
+    t.push_str("Host: api.example.com\r\n");
+    t.push_str("User-Agent: curl/8.5.0\r\n");
+    t.push_str("Accept: */*\r\n");
+    t.push_str("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.ZRrHA1JJJW8opsbCGfG_HACGpVUMN_a9IV7pAx_Zmeo\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "captures/curl-get.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("HTTP/1.0 200 OK\r\n");
+    t.push_str("Server: SimpleHTTP/0.6 Python/3.13.0\r\n");
+    t.push_str("Content-type: text/plain\r\n");
+    t.push_str("\r\n");
+    t.push_str("line one\n");
+    t.push_str("line two\n");
+    v.push(DataFile { path: "captures/http10-response.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("485454502f312e3120323030204f4b0d0a5365727665723a206e67696e782f312e32342e300d0a446174653a20536174");
+    t.push_str("2c203138204f637420323032362031323a30303a303020474d540d0a436f6e74656e742d547970653a206170706c6963");
+    t.push_str("6174696f6e2f6a736f6e0d0a5472616e736665722d456e636f64696e673a206368756e6b65640d0a436f6e6e65637469");
+    t.push_str("6f6e3a206b6565702d616c6976650d0a436f6e74656e742d456e636f64696e673a20677a69700d0a566172793a204163");
+    t.push_str("636570742d456e636f64696e670d0a0d0a32383b6c656e3d34300d0a1f8b08000000000002ffab56ca2c49cd2d56b28a");
+    t.push_str("ae562ace2e55b25272d43554d2512a2ca954b2320d0a313b6c656e3d310d0aaa0d0a32393b6c656e3d34310d0ad58189");
+    t.push_str("3ae99ac3440d6b6375944af24b127380e226867aa6064ab55cd583cc1c00079feea1d80000000d0a300d0a5365727665");
+    t.push_str("722d54696d696e673a2064623b6475723d35330d0a582d436865636b73756d3a20396633610d0a0d0a");
+    v.push(DataFile { path: "captures/nginx-chunked.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("GET /a.css HTTP/1.1\r\n");
+    t.push_str("Host: cdn.example.net\r\n");
+    t.push_str("\r\n");
+    t.push_str("GET /b.js HTTP/1.1\r\n");
+    t.push_str("Host: cdn.example.net\r\n");
+    t.push_str("\r\n");
+    t.push_str("GET /c.png HTTP/1.1\r\n");
+    t.push_str("Host: cdn.example.net\r\n");
+    t.push_str("Connection: close\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "captures/pipelined.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("16030100f4010000f00303a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9000003e1302");
+    t.push_str("13031301c02cc030009fcca9cca8ccaac02b");
+    v.push(DataFile { path: "captures/tls-hello.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1a\r\n");
+    t.push_str("region,quarter,revenue\n");
+    t.push_str("EU,\r\n");
+    t.push_str("1D\r\n");
+    t.push_str("Q1,1200\n");
+    t.push_str("US,Q1,3400\n");
+    t.push_str("APAC,Q1,9\n");
+    t.push_str("\r\n");
+    t.push_str("00\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "captures/upload-body.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /uploads/report.csv HTTP/1.1\r\n");
+    t.push_str("Host: files.internal:8443\r\n");
+    t.push_str("Content-Type: text/csv\r\n");
+    t.push_str("Transfer-Encoding: chunked\r\n");
+    t.push_str("Expect: 100-continue\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "captures/upload-head.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET /api/v1/status 1.1 | Host: api.example.com | Accept: application/json\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: 15\\r\\n\\r\\n{\"status\":\n");
+    t.push_str("recv \"up\"}\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/cli-01-get.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET /cart.json 1.1 | Host: shop.example.org | Accept-Encoding: gzip\n");
+    t.push_str("eom\n");
+    t.push_str("recvfile captures/nginx-chunked.bin 23\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/cli-02-nginx-chunked.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# No framing in the response: the body runs until the server closes.\n");
+    t.push_str("role client\n");
+    t.push_str("request GET /notes.txt 1.1 | Host: localhost:8000\n");
+    t.push_str("eom\n");
+    t.push_str("recvfile captures/http10-response.bin 50\n");
+    t.push_str("eof\n");
+    v.push(DataFile { path: "scripts/cli-03-http10-server.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request POST /v1/charges 1.1 | Host: api.stripe.example | Content-Type: application/json | Content-Length: 27 | Idempotency-Key: 5f2b\n");
+    t.push_str("data {\"amount\":2000,\n");
+    t.push_str("data \"cur\":\"eur\"}\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 402 Payment Required\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/cli-04-post-json.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request PUT /big 1.1 | Host: s3.example | Content-Length: 4 | Expect: 100-continue\n");
+    t.push_str("recv HTTP/1.1 100 Continue\\r\\n\\r\\n\n");
+    t.push_str("data abcd\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 OK\\r\\nETag: \"d41d8\"\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/cli-05-continue.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 103 Early Hints\\r\\nLink: </style.css>; rel=preload; as=style\\r\\n\\r\\nHTTP/1.1 102\\r\\n\\r\\nHTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nhi\n");
+    v.push(DataFile { path: "scripts/cli-06-informational.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET /cached 1.1 | Host: x | If-None-Match: \"abc\"\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 304 Not Modified\\r\\nETag: \"abc\"\\r\\nContent-Length: 1234\\r\\n\\r\\n\n");
+    t.push_str("cycle\n");
+    t.push_str("request HEAD /file 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 OK\\r\\nContent-Length: 1234\\r\\n\\r\\n\n");
+    t.push_str("cycle\n");
+    t.push_str("request DELETE /x 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 204 No Content\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/cli-07-no-body-statuses.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    t.push_str("cycle\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 418 I'm a \"teapot\"\\t(RFC 2324)\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    t.push_str("cycle\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 500 \\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/cli-08-status-lines.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 20 OK\\r\\n\\r\\n\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/cli-09-bad-status.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request CONNECT db.internal:5432 1.1 | Host: db.internal:5432\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 Connection established\\r\\n\\r\\n\\x16\\x03\\x01\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/cli-10-connect-tunnel.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request CONNECT db.internal:5432 1.1 | Host: db.internal:5432\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 407 Proxy Authentication Required\\r\\nProxy-Authenticate: Basic realm=\"corp\"\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/cli-11-connect-denied.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET /socket 1.1 | Host: x | Connection: upgrade | Upgrade: websocket\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 426 Upgrade Required\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/cli-12-upgrade-refused.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET /socket 1.1 | Host: x | Connection: upgrade | Upgrade: websocket\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n\\x81\\x02hi\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/cli-13-switching.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# The server answers before the upload is finished.\n");
+    t.push_str("role client\n");
+    t.push_str("request POST /upload 1.1 | Host: x | Content-Length: 1000000\n");
+    t.push_str("data first part\n");
+    t.push_str("recv HTTP/1.1 413 Payload Too Large\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    t.push_str("data second part\n");
+    v.push(DataFile { path: "scripts/cli-14-early-response.h11".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 OK\\r\\nConnection: close\\r\\nContent-Length: 2\\r\\n\\r\\nok\n");
+    t.push_str("eof\n");
+    t.push_str("cycle\n");
+    t.push_str("close\n");
+    v.push(DataFile { path: "scripts/cli-15-server-closes.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 OK\\r\\nContent-Length: 20\\r\\n\\r\\nonly ten b\n");
+    t.push_str("eof\n");
+    v.push(DataFile { path: "scripts/cli-16-truncated.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# A TLS ClientHello sent to a plain-HTTP port fails before a line ends.\n");
+    t.push_str("role server\n");
+    t.push_str("recvfile captures/tls-hello.bin 16\n");
+    v.push(DataFile { path: "scripts/err-01-tls.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET  / HTTP/1.1\\r\\n\\r\\n\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/err-02-bad-request-lines.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv \\r\\nGET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-03-no-request-line.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.11\\r\\nHost: x\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-04-version.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / http/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-05-lowercase-http.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nUser-Agent: x\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-06-missing-host.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: a\\r\\nhost: b\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-07-two-hosts.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost : evil\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-08-space-before-colon.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\n Host: x\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-09-fold-at-start.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nContent-Length: 5\\r\\nContent-Length: 6\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-10-conflicting-length.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nContent-Length: 5, 6\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-11-length-list.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nContent-Length: -1\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-12-bad-length.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nContent-Length: 123456789012345678901\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-13-huge-length.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: gzip, chunked\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-14-gzip-te.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: chunked\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-15-two-te.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\nzz\\r\\nab\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-16-bad-chunk-header.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n3\\r\\nabcde\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-17-chunk-footer.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n000000000000000000005\\r\\nhello\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-18-chunk-size-too-long.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server max 64\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\nCookie: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/err-19-buffer-too-long.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\nextra\n");
+    v.push(DataFile { path: "scripts/err-20-garbage-after-done.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\nX-Bad: a\\rb\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-21-header-value-ctl.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET /a b HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-22-target-space.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv G(ET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-23-method-chars.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST / HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n0\\r\\nbad trailer\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/err-24-bad-trailer.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request POST / 1.1 | Host: x | Content-Length: 3\n");
+    t.push_str("data abcd\n");
+    t.push_str("data ab\n");
+    v.push(DataFile { path: "scripts/snd-01-length.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request POST / 1.1 | Host: x | Content-Length: 3\n");
+    t.push_str("data ab\n");
+    t.push_str("eom\n");
+    t.push_str("data c\n");
+    v.push(DataFile { path: "scripts/snd-02-too-little.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request POST / 1.1 | Host: x | Content-Length: 0\n");
+    t.push_str("eom | X-Foo: bar\n");
+    v.push(DataFile { path: "scripts/snd-03-trailers-with-length.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("data too early\n");
+    t.push_str("eom\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    v.push(DataFile { path: "scripts/snd-04-wrong-state.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.0\n");
+    t.push_str("request GET / 1.0 | Host: x\n");
+    v.push(DataFile { path: "scripts/snd-05-versions.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("response 99 1.1 Low\n");
+    t.push_str("info 200 1.1 OK\n");
+    t.push_str("response 1000 1.1 Huge\n");
+    t.push_str("request GET /x 1.1 | Host: a | Host: b\n");
+    t.push_str("request GET /a\\x20b 1.1 | Host: x\n");
+    t.push_str("request G(ET / 1.1 | Host: x\n");
+    v.push(DataFile { path: "scripts/snd-06-events.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Bad Name: x\n");
+    t.push_str("response 200 1.1 OK | X-Nul: a\\x00b\n");
+    t.push_str("response 200 1.1 OK | X-Newline: a\\r\\nInjected: yes\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 12abc\n");
+    t.push_str("response 200 1.1 OK | Transfer-Encoding: identity\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 2 | Content-Length: 3\n");
+    t.push_str("response 200 1.1 OK | X-Tail: trailing space \n");
+    v.push(DataFile { path: "scripts/snd-07-header-validation.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request POST /logs 1.1 | Host: logs.example | Transfer-Encoding: chunked | Trailer: X-Count\n");
+    t.push_str("data 2026-10-18T12:00:00Z GET /a 200\\n\n");
+    t.push_str("data\n");
+    t.push_str("data 2026-10-18T12:00:01Z GET /b 404\\n\n");
+    t.push_str("eom | X-Count: 2\n");
+    v.push(DataFile { path: "scripts/snd-08-chunked-trailers.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# h11 rewrites response framing for what the client can read.\n");
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Connection: keep-alive, Upgrade | Content-Type: text/plain\n");
+    t.push_str("data streamed\n");
+    t.push_str("eom\n");
+    v.push(DataFile { path: "scripts/snd-09-response-cleanup.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("cycle\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    t.push_str("cycle\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 0\n");
+    t.push_str("cycle\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/snd-10-cycle-errors.h11".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 1\n");
+    t.push_str("data too long\n");
+    t.push_str("data x\n");
+    t.push_str("eom\n");
+    t.push_str("recv more\n");
+    v.push(DataFile { path: "scripts/snd-11-after-error.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role client\n");
+    t.push_str("request GET / 1.1 | Host: x\n");
+    t.push_str("failed\n");
+    t.push_str("eom\n");
+    t.push_str("recv HTTP/1.1 200 OK\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/snd-12-send-failed.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# The Host header goes first on the wire, whatever order it was given in.\n");
+    t.push_str("role client\n");
+    t.push_str("request OPTIONS * 1.1 | User-Agent: probe/1.0 | Accept: */* | HOST: Example.COM:8080\n");
+    t.push_str("eom\n");
+    v.push(DataFile { path: "scripts/snd-13-host-first.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# A plain GET, answered with a body, then a second request on the same connection.\n");
+    t.push_str("role server\n");
+    t.push_str("recv GET /index.html HTTP/1.1\\r\\nHost: www.example.com\\r\\nAccept: text/html\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Type: text/html; charset=utf-8 | Content-Length: 13\n");
+    t.push_str("data <h1>Hi</h1>\\n\n");
+    t.push_str("data .\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    t.push_str("recv GET /favicon.ico HTTP/1.1\\r\\nHost: www.example.com\\r\\n\\r\\n\n");
+    t.push_str("response 404 1.1 Not Found | Content-Length: 0\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-01-get-keepalive.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# curl's request arriving one byte at a time, then answered with JSON.\n");
+    t.push_str("role server\n");
+    t.push_str("recvfile captures/curl-get.bin 40\n");
+    t.push_str("response 200 1.1 OK | Content-Type: application/json | Content-Length: 2\n");
+    t.push_str("data []\n");
+    t.push_str("eom\n");
+    v.push(DataFile { path: "scripts/srv-02-curl-bytewise.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recvfile captures/browser-post.bin 97\n");
+    t.push_str("response 303 1.1 See Other | Location: /cart | Set-Cookie: session=7c1f; HttpOnly; Secure | Content-Length: 0\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-03-browser-post.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# A chunked PUT that waits for 100 Continue, with chunk sizes in mixed case.\n");
+    t.push_str("role server\n");
+    t.push_str("recvfile captures/upload-head.bin 64\n");
+    t.push_str("info 100 1.1 Continue\n");
+    t.push_str("recvfile captures/upload-body.bin 16\n");
+    t.push_str("response 201 1.1 Created | Location: /uploads/report.csv\n");
+    t.push_str("data stored\\n\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-04-chunked-upload.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# Three requests in one read: h11 hands over one and pauses on the rest.\n");
+    t.push_str("role server\n");
+    t.push_str("recvfile captures/pipelined.bin 4096\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 4\n");
+    t.push_str("data a{}\\n\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    t.push_str("drain\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 3\n");
+    t.push_str("data ;\\n\\n\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    t.push_str("drain\n");
+    t.push_str("response 200 1.1 OK | Content-Type: image/png\n");
+    t.push_str("data \\x89PNG\n");
+    t.push_str("eom\n");
+    t.push_str("next\n");
+    t.push_str("eof\n");
+    v.push(DataFile { path: "scripts/srv-05-pipelined.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# An HTTP/1.0 client: no Host needed, and a response without a length is closed.\n");
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.0\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Type: text/plain | Content-Length: 5\n");
+    t.push_str("data hello\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-06-http10-client.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET /stream HTTP/1.0\\r\\nUser-Agent: Wget/1.21\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Type: text/event-stream | Transfer-Encoding: chunked\n");
+    t.push_str("data event: tick\\n\\n\n");
+    t.push_str("data event: tick\\n\\n\n");
+    t.push_str("eom\n");
+    t.push_str("close\n");
+    v.push(DataFile { path: "scripts/srv-07-http10-unframed.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# A 1.1 client and a streamed reply: h11 adds Transfer-Encoding and drops Content-Length.\n");
+    t.push_str("role server\n");
+    t.push_str("recv GET /events HTTP/1.1\\r\\nHost: feed.example\\r\\nConnection: Keep-Alive\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Cache-Control: no-cache\n");
+    t.push_str("data id: 1\\ndata: first\\n\\n\n");
+    t.push_str("data\n");
+    t.push_str("data id: 2\\ndata: second\\n\\n\n");
+    t.push_str("eom | X-Stream-End: clean | Server-Timing: total;dur=12\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-08-chunked-response.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv DELETE /items/42 HTTP/1.1\\r\\nHost: api\\r\\nConnection: Close, TE\\r\\n\\r\\n\n");
+    t.push_str("response 204 1.1 No Content | Connection: keep-alive\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: api\\r\\n\\r\\n\n");
+    t.push_str("eof\n");
+    t.push_str("close\n");
+    v.push(DataFile { path: "scripts/srv-09-connection-close.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# HEAD: the response keeps its Content-Length and sends no body.\n");
+    t.push_str("role server\n");
+    t.push_str("recv HEAD /big.iso HTTP/1.1\\r\\nHost: mirror.example\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 4700000000 | Accept-Ranges: bytes\n");
+    t.push_str("data x\n");
+    t.push_str("eom\n");
+    v.push(DataFile { path: "scripts/srv-10-head.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv HEAD /live HTTP/1.1\\r\\nHost: tv\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Type: video/mp2t\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-11-head-unframed.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# An Upgrade to WebSocket: after 101 the connection belongs to the new protocol.\n");
+    t.push_str("role server\n");
+    t.push_str("recv GET /chat HTTP/1.1\\r\\nHost: ws.example.com\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\\r\\nSec-WebSocket-Version: 13\\r\\n\\r\\n\\x81\\x85\\x37\\xfa\\x21\\x3d\\x7f\\x9f\\x4d\\x51\\x58\n");
+    t.push_str("next\n");
+    t.push_str("info 101 1.1 Switching Protocols | Upgrade: websocket | Connection: Upgrade | Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/srv-12-websocket-upgrade.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET /chat HTTP/1.1\\r\\nHost: ws\\r\\nUpgrade: h2c\\r\\nConnection: Upgrade, HTTP2-Settings\\r\\nHTTP2-Settings: AAMAAABkAAQAoAAAAAIAAAAA\\r\\n\\r\\n\n");
+    t.push_str("next\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 3\n");
+    t.push_str("data ok\n");
+    t.push_str("data k\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-13-upgrade-declined.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv CONNECT db.internal:5432 HTTP/1.1\\r\\nHost: db.internal:5432\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 Connection established\n");
+    t.push_str("next\n");
+    t.push_str("recv \\x00\\x00\\x00\\x08\\x04\\xd2\\x16\\x2f\n");
+    v.push(DataFile { path: "scripts/srv-14-connect.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv CONNECT evil.example:25 HTTP/1.1\\r\\nHost: evil.example:25\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    t.push_str("response 403 1.1 Forbidden | Content-Length: 0\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    v.push(DataFile { path: "scripts/srv-15-connect-refused.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# Obsolete line folding joins continuation lines with one space.\n");
+    t.push_str("role server\n");
+    t.push_str("recv POST /soap HTTP/1.1\\r\\nHost: legacy\\r\\nSOAPAction: \"urn:\\r\\n\\t  getQuote\"\\r\\nX-Long: a\\r\\n b\\r\\n  c\\r\\nContent-Length: 0\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/srv-16-obs-fold.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# Values are trimmed of spaces and tabs; empty values and odd bytes are fine.\n");
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost:example.com\\r\\nX-Empty:\\r\\nX-Spaces: \\t a  b \\t \\r\\nX-Ctl: a\\x01b\\r\\nX-Obs: caf\\xc3\\xa9\\r\\nACCEPT: */*\\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/srv-17-header-forms.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# Bare LF line endings are accepted too.\n");
+    t.push_str("role server\n");
+    t.push_str("recv GET /lf HTTP/1.1\\nHost: x\\nContent-Length: 3\\n\\nabc\n");
+    v.push(DataFile { path: "scripts/srv-18-lf-only.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST /a HTTP/1.1\\r\\nHost: x\\r\\nContent-Length: 5, 5,5\\r\\n\\r\\nhello\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 0\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    t.push_str("recv POST /b HTTP/1.1\\r\\nHost: x\\r\\nContent-Length: 3\\r\\ncontent-length: 3\\r\\n\\r\\nabc\n");
+    v.push(DataFile { path: "scripts/srv-19-content-length-forms.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST /ingest HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: Chunked\\r\\n\\r\\n\n");
+    t.push_str("recv 4;name=\"first\"; ext\\r\\nWiki\\r\\n5 \\t\\r\\npedia\\r\\nE\\r\\n in\\r\\n\\r\\nchunks.\\r\\n\n");
+    t.push_str("recv 0;done\\r\\nContent-MD5: 1B2M2Y8AsgTpgAmY7PhCfg==\\r\\nX-Trailer:   x  \\r\\n\\r\\n\n");
+    v.push(DataFile { path: "scripts/srv-20-chunked-trailers.h11".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# A chunk whose data and CRLF arrive in separate reads.\n");
+    t.push_str("role server\n");
+    t.push_str("recv POST /x HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n6\\r\\nhel\n");
+    t.push_str("recv lo!\n");
+    t.push_str("recv \\r\n");
+    t.push_str("recv \\n\n");
+    t.push_str("recv 0\\r\\n\n");
+    t.push_str("recv \\r\\n\n");
+    v.push(DataFile { path: "scripts/srv-21-chunk-split.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST /upload HTTP/1.1\\r\\nHost: x\\r\\nContent-Length: 10\\r\\n\\r\\n12345\n");
+    t.push_str("eof\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/srv-22-eof-mid-body.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv POST /upload HTTP/1.1\\r\\nHost: x\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n5\\r\\nabc\n");
+    t.push_str("eof\n");
+    v.push(DataFile { path: "scripts/srv-23-eof-mid-chunked.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\n\n");
+    t.push_str("eof\n");
+    t.push_str("recv more\n");
+    v.push(DataFile { path: "scripts/srv-24-eof-mid-headers.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("eof\n");
+    t.push_str("next\n");
+    t.push_str("recv late\n");
+    v.push(DataFile { path: "scripts/srv-25-eof-idle.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 0\n");
+    t.push_str("eom\n");
+    t.push_str("cycle\n");
+    t.push_str("eof\n");
+    v.push(DataFile { path: "scripts/srv-26-keepalive-then-close.h11".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("role server\n");
+    t.push_str("recv GET / HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\nGET /again HTTP/1.1\\r\\n\\r\\n\n");
+    t.push_str("response 200 1.1 OK | Content-Length: 1\n");
+    t.push_str("data !\n");
+    t.push_str("eom\n");
+    t.push_str("next\n");
+    v.push(DataFile { path: "scripts/srv-27-data-after-close-request.h11".to_string(), hex: false, body: t });
+}
