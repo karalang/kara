@@ -1949,13 +1949,17 @@ impl<'a> OwnershipChecker<'a> {
         // A marked argument that is itself a `mut ref` / `mut Slice` (`h.1`
         // of a `split_at_mut` pair) forwards that borrow: v1 marks it too
         // (B-2026-10-14-25), and the write lands in its referent, not in the
-        // binding that holds the handle.
+        // binding that holds the handle. A sub-range `v[a..b]` is a slice
+        // too, but one made here, of `v`: it writes `v`.
+        let sub_range = matches!(&arg.value.kind,
+            ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }));
         if self.expr_is_shared_handle(&arg.value)
-            || self
-                .typecheck_result
-                .expr_types
-                .get(&SpanKey::from_span(&arg.value.span))
-                .is_some_and(|t| matches!(t, Type::Slice { mutable: true, .. }))
+            || !sub_range
+                && self
+                    .typecheck_result
+                    .expr_types
+                    .get(&SpanKey::from_span(&arg.value.span))
+                    .is_some_and(|t| matches!(t, Type::Slice { mutable: true, .. }))
         {
             return;
         }
