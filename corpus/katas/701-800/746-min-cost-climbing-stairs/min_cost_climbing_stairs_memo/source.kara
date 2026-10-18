@@ -1,0 +1,77 @@
+// LeetCode 746 — Min Cost Climbing Stairs, recursion from the top down.
+//
+// The least spent to stand at position i (the top is position n) is the
+// cheaper of arriving from i - 1, paying cost[i - 1], and from i - 2,
+// paying cost[i - 2]; positions 0 and 1 cost nothing. The recursion
+// asks for the top and remembers each answer in a `Vec`, -1 for not yet
+// known, so each position is worked out once. O(n) time and space, and
+// a recursion n deep.
+
+fn least_to(i: i64, cost: Vec[i64], memo: mut ref Vec[i64]) -> i64 {
+    if i < 2 {
+        return 0;
+    }
+    if memo[i] != -1 {
+        return memo[i];
+    }
+    let one = least_to(i - 1, cost, mut memo) + cost[i - 1];
+    let two = least_to(i - 2, cost, mut memo) + cost[i - 2];
+    let best = if one < two { one } else { two };
+    memo[i] = best;
+    best
+}
+
+fn min_cost_climbing_stairs(cost: Vec[i64]) -> i64 {
+    let mut memo: Vec[i64] = Vec.new();
+    for _ in 0..cost.len() + 1 {
+        memo.push(-1);
+    }
+    least_to(cost.len(), cost, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(cost: Vec[i64]) {
+    println(f"{cost} -> {min_cost_climbing_stairs(cost)}");
+}
+
+fn main() {
+    show([10, 15, 20]);
+    show([1, 100, 1, 1, 1, 100, 1, 1, 100, 1]);
+    show([0, 0]);
+    show([5, 3]);
+    show([0, 0, 0, 1]);
+    show([1, 0, 0, 1, 0, 0, 1]);
+    show([999, 999, 999, 999, 999]);
+
+    let mut seed = 746;
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        big.push(next_random(mut seed) % 1000);
+    }
+    println(f"1000 random steps: {min_cost_climbing_stairs(big)}");
+    let mut most: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        most.push(999);
+    }
+    println(f"1000 steps of 999: {min_cost_climbing_stairs(most)}");
+
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 14;
+        let mut cost: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            cost.push(next_random(mut seed) % 20);
+        }
+        let got = min_cost_climbing_stairs(cost);
+        total += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"300 random stairs: costs sum to {total}, checksum {check}");
+}

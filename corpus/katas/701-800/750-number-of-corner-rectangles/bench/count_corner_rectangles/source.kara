@@ -1,0 +1,51 @@
+// LeetCode 750 — Number Of Corner Rectangles, bench: the ★ arm (pairs
+// of rows) on a 200 x 200 grid that keeps changing.
+
+fn count_corner_rectangles(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut total = 0;
+    for a in 0..m {
+        for b in a + 1..m {
+            let mut k = 0;
+            for c in 0..n {
+                if grid[a][c] == 1 and grid[b][c] == 1 {
+                    k += 1;
+                }
+            }
+            total += k * (k - 1) / 2;
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 100;
+    let mut seed = 750;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..200 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..200 {
+            row.push(next_random(mut seed) % 2);
+        }
+        grid.push(row);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for _ in 0..50 {
+            let r = next_random(mut seed) % 200;
+            let c = next_random(mut seed) % 200;
+            grid[r][c] = next_random(mut seed) % 2;
+        }
+        let k = count_corner_rectangles(grid);
+        total += k;
+        check = (check * 31 + k) % 1000000007;
+    }
+    println(f"{rounds} grids of 200 x 200: {total} rectangles in all, checksum {check}");
+}

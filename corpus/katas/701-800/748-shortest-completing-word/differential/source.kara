@@ -1,0 +1,351 @@
+// LeetCode #748: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random plates.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn shortest_completing_word_star(license_plate: String, words: Vec[String]) -> String {
+    let mut need: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        need.push(0);
+    }
+    for b in license_plate.bytes().iter() {
+        let c = *b;
+        if c >= b'a' and c <= b'z' {
+            need[(c - b'a') as i64] += 1;
+        } else if c >= b'A' and c <= b'Z' {
+            need[(c - b'A') as i64] += 1;
+        }
+    }
+    let mut best = -1;
+    for i in 0..words.len() {
+        if best != -1 and words[i].len() >= words[best].len() {
+            continue;
+        }
+        let mut have: Vec[i64] = Vec.new();
+        for _ in 0..26 {
+            have.push(0);
+        }
+        for b in words[i].bytes().iter() {
+            have[(*b - b'a') as i64] += 1;
+        }
+        let mut complete = true;
+        for c in 0..26 {
+            if have[c] < need[c] {
+                complete = false;
+            }
+        }
+        if complete {
+            best = i;
+        }
+    }
+    words[best].clone()
+}
+
+// ---- markoff arm ----------------------------------------------------
+
+fn shortest_completing_word_markoff(license_plate: String, words: Vec[String]) -> String {
+    let mut letters: Vec[u8] = Vec.new();
+    for b in license_plate.bytes().iter() {
+        let c = *b;
+        if c >= b'a' and c <= b'z' {
+            letters.push(c);
+        } else if c >= b'A' and c <= b'Z' {
+            letters.push(c - b'A' + b'a');
+        }
+    }
+    let mut best = -1;
+    for i in 0..words.len() {
+        let w = words[i].bytes();
+        let mut used: Vec[bool] = Vec.new();
+        for _ in 0..w.len() {
+            used.push(false);
+        }
+        let mut complete = true;
+        for c in letters.iter() {
+            let mut found = false;
+            for j in 0..w.len() {
+                if not found and not used[j] and w[j] == *c {
+                    used[j] = true;
+                    found = true;
+                }
+            }
+            if not found {
+                complete = false;
+                break;
+            }
+        }
+        if complete and (best == -1 or w.len() < words[best].len()) {
+            best = i;
+        }
+    }
+    words[best].clone()
+}
+
+// ---- bysize arm -----------------------------------------------------
+
+fn shortest_completing_word_bysize(license_plate: String, words: Vec[String]) -> String {
+    let mut need: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        need.push(0);
+    }
+    for b in license_plate.to_lowercase().bytes().iter() {
+        if *b >= b'a' and *b <= b'z' {
+            need[(*b - b'a') as i64] += 1;
+        }
+    }
+    let mut by_length: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..16 {
+        by_length.push(Vec.new());
+    }
+    for i in 0..words.len() {
+        by_length[words[i].len()].push(i);
+    }
+    for len in 1..16 {
+        for i in by_length[len].iter() {
+            let mut have: Vec[i64] = Vec.new();
+            for _ in 0..26 {
+                have.push(0);
+            }
+            for b in words[*i].bytes().iter() {
+                have[(*b - b'a') as i64] += 1;
+            }
+            let mut complete = true;
+            for c in 0..26 {
+                if have[c] < need[c] {
+                    complete = false;
+                }
+            }
+            if complete {
+                return words[*i].clone();
+            }
+        }
+    }
+    String.new()
+}
+
+// ---- map arm --------------------------------------------------------
+
+fn shortest_completing_word_map(license_plate: String, words: Vec[String]) -> String {
+    let mut need: Map[char, i64] = Map.new();
+    let mut total = 0;
+    for c in license_plate.to_lowercase().chars() {
+        if c >= 'a' and c <= 'z' {
+            let now = match need.get(c) {
+                Some(k) => k,
+                None => 0,
+            };
+            need.insert(c, now + 1);
+            total += 1;
+        }
+    }
+    let mut best = -1;
+    for i in 0..words.len() {
+        let mut owed = need.clone();
+        let mut left = total;
+        for c in words[i].chars() {
+            match owed.get(c) {
+                Some(k) => {
+                    if k > 0 {
+                        owed.insert(c, k - 1);
+                        left -= 1;
+                    }
+                }
+                None => {}
+            }
+        }
+        if left == 0 and (best == -1 or words[i].len() < words[best].len()) {
+            best = i;
+        }
+    }
+    words[best].clone()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, plate: String, words: Vec[String]) -> String {
+    if which == 0 {
+        shortest_completing_word_star(plate, words)
+    } else if which == 1 {
+        shortest_completing_word_markoff(plate, words)
+    } else if which == 2 {
+        shortest_completing_word_bysize(plate, words)
+    } else {
+        shortest_completing_word_map(plate, words)
+    }
+}
+
+fn random_word(seed: mut ref i64, longest: i64, letters: i64) -> String {
+    let mut s = String.new();
+    let n = 1 + next_random(mut seed) % longest;
+    for _ in 0..n {
+        s.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    s
+}
+
+fn random_plate(seed: mut ref i64, letters: i64) -> String {
+    let mut s = String.new();
+    let n = 1 + next_random(mut seed) % 7;
+    for _ in 0..n {
+        let kind = next_random(mut seed) % 6;
+        let code = if kind < 2 {
+            97 + next_random(mut seed) % letters
+        } else if kind < 4 {
+            65 + next_random(mut seed) % letters
+        } else if kind == 4 {
+            48 + next_random(mut seed) % 10
+        } else {
+            32
+        };
+        s.push(code as u8 as char);
+    }
+    s
+}
+
+fn plate_word(plate: String) -> String {
+    let mut s = String.new();
+    for c in plate.to_lowercase().chars() {
+        if c >= 'a' and c <= 'z' {
+            s.push(c);
+        }
+    }
+    if s.len() == 0 {
+        s.push('a');
+    }
+    s
+}
+
+fn reversed(s: String) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        out.push(b[i] as char);
+        i -= 1;
+    }
+    out
+}
+
+// The definition, as the problem states it: a word completes the plate
+// when, for each letter of the alphabet, it holds that letter at least
+// as often as the plate does, ignoring case, digits and spaces; the
+// answer is the shortest completing word, the first of those.
+fn definition(plate: String, words: Vec[String]) -> String {
+    let p = plate.bytes();
+    let mut best = -1;
+    for i in 0..words.len() {
+        let w = words[i].bytes();
+        let mut complete = true;
+        for c in 0..26 {
+            let lower = (97 + c) as u8;
+            let upper = (65 + c) as u8;
+            let mut in_plate = 0;
+            for x in p.iter() {
+                if *x == lower or *x == upper {
+                    in_plate += 1;
+                }
+            }
+            let mut in_word = 0;
+            for x in w.iter() {
+                if *x == lower {
+                    in_word += 1;
+                }
+            }
+            if in_word < in_plate {
+                complete = false;
+            }
+        }
+        if complete and (best == -1 or w.len() < words[best].len()) {
+            best = i;
+        }
+    }
+    words[best].clone()
+}
+
+fn main() {
+    let mut seed = 7480;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut letters = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // a plate of up to 7 characters, its letters from a to c in
+        // either case, and 1 to 8 words of 1 to 5 letters from a to e,
+        // with the plate's own letters as a last word so that some word
+        // completes it
+        let plate = random_plate(mut seed, 3);
+        let n = 1 + next_random(mut seed) % 8;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..n {
+            words.push(random_word(mut seed, 5, 5));
+        }
+        words.push(plate_word(plate.clone()));
+        let want = definition(plate.clone(), words);
+        letters += want.len();
+        // the plate reversed with every letter's case swapped
+        let mut scrambled = String.new();
+        for b in reversed(plate.clone()).bytes().iter() {
+            let c = *b;
+            if c >= b'a' and c <= b'z' {
+                scrambled.push((c - 32) as char);
+            } else if c >= b'A' and c <= b'Z' {
+                scrambled.push((c + 32) as char);
+            } else {
+                scrambled.push(c as char);
+            }
+        }
+        // every word with an 'f', which no plate holds, added at its end
+        let mut longer: Vec[String] = Vec.new();
+        for w in words.iter() {
+            let mut x = w.clone();
+            x.push('f');
+            longer.push(x);
+        }
+        for which in 0..arms {
+            let got = answer_with(which, plate.clone(), words);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the plate scrambled, the same answer.
+            checks += 1;
+            if answer_with(which, scrambled.clone(), words) != got {
+                fails[1] += 1;
+            }
+            // P3: every word one letter longer, the answer with it.
+            checks += 1;
+            let mut grown = got.clone();
+            grown.push('f');
+            if answer_with(which, plate.clone(), longer) != grown {
+                fails[2] += 1;
+            }
+            // P4: the answer reversed put first, which completes the
+            // plate just as well and comes first.
+            checks += 1;
+            let mut fronted: Vec[String] = Vec.new();
+            fronted.push(reversed(got.clone()));
+            for w in words.iter() {
+                fronted.push(w.clone());
+            }
+            if answer_with(which, plate.clone(), fronted) != reversed(got.clone()) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        failures += fails[i];
+    }
+    println(f"{cases} plates (answers {letters} letters long in all), {arms} arms, {checks} checks, {failures} failures");
+}

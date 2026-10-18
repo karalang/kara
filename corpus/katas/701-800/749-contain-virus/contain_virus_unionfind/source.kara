@@ -1,0 +1,213 @@
+// LeetCode 749 — Contain Virus, union-find.
+//
+// Each day, join every infected cell to its infected neighbours to the
+// right and below in a disjoint-set forest (path halving, union by
+// size). Then walk the clean cells: each adds one wall to every
+// infected neighbour's set, and one threatened cell to each distinct
+// set among its neighbours. A region's place in the tie order is its
+// first cell in reading order, kept at its root.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut a = x;
+    while parent[a] != a {
+        parent[a] = parent[parent[a]];
+        a = parent[a];
+    }
+    a
+}
+
+fn contain_virus(is_infected: Vec[Vec[i64]]) -> i64 {
+    let m = is_infected.len();
+    let n = is_infected[0].len();
+    let mut g: Vec[i64] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            g.push(is_infected[r][c]);
+        }
+    }
+    let mut walls = 0;
+    loop {
+        let mut parent: Vec[i64] = Vec.new();
+        let mut size: Vec[i64] = Vec.new();
+        for i in 0..m * n {
+            parent.push(i);
+            size.push(1);
+        }
+        for i in 0..m * n {
+            if g[i] != 1 {
+                continue;
+            }
+            let mut others: Vec[i64] = Vec.new();
+            if i % n < n - 1 and g[i + 1] == 1 {
+                others.push(i + 1);
+            }
+            if i / n < m - 1 and g[i + n] == 1 {
+                others.push(i + n);
+            }
+            for j in others.iter() {
+                let a = find(mut parent, i);
+                let b = find(mut parent, *j);
+                if a != b {
+                    if size[a] < size[b] {
+                        parent[a] = b;
+                        size[b] += size[a];
+                    } else {
+                        parent[b] = a;
+                        size[a] += size[b];
+                    }
+                }
+            }
+        }
+        // the first cell of each set, in reading order
+        let mut first: Vec[i64] = Vec.new();
+        let mut threat: Vec[i64] = Vec.new();
+        let mut need: Vec[i64] = Vec.new();
+        for _ in 0..m * n {
+            first.push(-1);
+            threat.push(0);
+            need.push(0);
+        }
+        for i in 0..m * n {
+            if g[i] == 1 {
+                let root = find(mut parent, i);
+                if first[root] == -1 {
+                    first[root] = i;
+                }
+            }
+        }
+        for i in 0..m * n {
+            if g[i] != 0 {
+                continue;
+            }
+            let mut near: Vec[i64] = Vec.new();
+            if i / n > 0 and g[i - n] == 1 {
+                near.push(find(mut parent, i - n));
+            }
+            if i / n < m - 1 and g[i + n] == 1 {
+                near.push(find(mut parent, i + n));
+            }
+            if i % n > 0 and g[i - 1] == 1 {
+                near.push(find(mut parent, i - 1));
+            }
+            if i % n < n - 1 and g[i + 1] == 1 {
+                near.push(find(mut parent, i + 1));
+            }
+            for k in 0..near.len() {
+                need[near[k]] += 1;
+                let mut again = false;
+                for j in 0..k {
+                    if near[j] == near[k] {
+                        again = true;
+                    }
+                }
+                if not again {
+                    threat[near[k]] += 1;
+                }
+            }
+        }
+        let mut best = -1;
+        for i in 0..m * n {
+            if first[i] != -1 and threat[i] > 0 {
+                if best == -1 or threat[i] > threat[best] or (threat[i] == threat[best] and first[i] < first[best]) {
+                    best = i;
+                }
+            }
+        }
+        if best == -1 {
+            break;
+        }
+        walls += need[best];
+        let mut next = g.clone();
+        for i in 0..m * n {
+            if g[i] == 1 {
+                if find(mut parent, i) == best {
+                    next[i] = 2;
+                }
+            } else if g[i] == 0 {
+                let mut caught = false;
+                if i / n > 0 and g[i - n] == 1 and find(mut parent, i - n) != best {
+                    caught = true;
+                }
+                if i / n < m - 1 and g[i + n] == 1 and find(mut parent, i + n) != best {
+                    caught = true;
+                }
+                if i % n > 0 and g[i - 1] == 1 and find(mut parent, i - 1) != best {
+                    caught = true;
+                }
+                if i % n < n - 1 and g[i + 1] == 1 and find(mut parent, i + 1) != best {
+                    caught = true;
+                }
+                if caught {
+                    next[i] = 1;
+                }
+            }
+        }
+        g = next;
+    }
+    walls
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(text: String) {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for row in text.split("/") {
+        let mut cells: Vec[i64] = Vec.new();
+        for c in row.chars() {
+            cells.push(if c == '1' { 1 } else { 0 });
+        }
+        grid.push(cells);
+    }
+    println(f"{text} -> {contain_virus(grid)}");
+}
+
+// An m x n grid in which each cell is infected with chance
+// `percent` in 100.
+fn random_grid(seed: mut ref i64, m: i64, n: i64, percent: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show(String.from("01000001/01000001/00000001/00000000"));
+    show(String.from("111/101/111"));
+    show(String.from("111000000/101011111/111000000"));
+    show(String.from("0"));
+    show(String.from("1"));
+    show(String.from("10"));
+    show(String.from("1111/1111"));
+    show(String.from("1000/0000/0000/0001"));
+    show(String.from("10101/01010/10101"));
+    show(String.from("00000/00100/00000"));
+
+    let mut seed = 749;
+    for percent in [1, 3, 10, 30] {
+        let grid = random_grid(mut seed, 50, 50, percent);
+        println(f"50 x 50, {percent}% infected: {contain_virus(grid)} walls");
+    }
+
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 8;
+        let n = 1 + next_random(mut seed) % 8;
+        let percent = 5 + next_random(mut seed) % 40;
+        let grid = random_grid(mut seed, m, n, percent);
+        let w = contain_virus(grid);
+        total += w;
+        check = (check * 31 + w) % 1000000007;
+    }
+    println(f"300 random grids: {total} walls in all, checksum {check}");
+}

@@ -1,0 +1,111 @@
+// LeetCode 752 — Open the Lock, breadth-first over strings.
+//
+// The textbook search: settings stay four-character strings, the dead
+// ends and the settings already reached live in `Set[String]`s, and the
+// queue is walked a level at a time, the level's number being the turns
+// so far. A setting's neighbours are made by changing one character.
+
+fn turned(s: String, wheel: i64, step: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    for c in s.chars() {
+        if i == wheel {
+            let d = (c as u32 - '0' as u32) as i64;
+            out.push((48 + (d + step) % 10) as u8 as char);
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn open_lock(deadends: Vec[String], target: String) -> i64 {
+    let mut dead: Set[String] = Set.new();
+    for d in deadends.iter() {
+        dead.insert(d.clone());
+    }
+    let start = String.from("0000");
+    if dead.contains(start) {
+        return -1;
+    }
+    let mut seen: Set[String] = Set.new();
+    seen.insert(start.clone());
+    let mut level: Vec[String] = Vec.new();
+    level.push(start);
+    let mut turns = 0;
+    while level.len() > 0 {
+        let mut next: Vec[String] = Vec.new();
+        for s in level.iter() {
+            if *s == target {
+                return turns;
+            }
+            for wheel in 0..4 {
+                for step in [1, 9] {
+                    let t = turned(s.clone(), wheel, step);
+                    if not dead.contains(t) and not seen.contains(t) {
+                        seen.insert(t.clone());
+                        next.push(t);
+                    }
+                }
+            }
+        }
+        level = next;
+        turns += 1;
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(dead: String, target: String) {
+    let mut deadends: Vec[String] = Vec.new();
+    if dead.len() > 0 {
+        for d in dead.split(" ") {
+            deadends.push(String.from(d));
+        }
+    }
+    println(f"[{dead}], {target} -> {open_lock(deadends, target.clone())}");
+}
+
+fn four(x: i64) -> String {
+    f"{x / 1000}{x / 100 % 10}{x / 10 % 10}{x % 10}"
+}
+
+fn main() {
+    show(String.from("0201 0101 0102 1212 2002"), String.from("0202"));
+    show(String.from("8888"), String.from("0009"));
+    show(String.from("8887 8889 8878 8898 8788 8988 7888 9888"), String.from("8888"));
+    show(String.from("0000"), String.from("8888"));
+    show(String.from(""), String.from("0000"));
+    show(String.from(""), String.from("5555"));
+    show(String.from("1000 9000 0100 0900 0010 0090 0001"), String.from("1234"));
+    show(String.from("1000 9000 0100 0900 0010 0090 0001 0009"), String.from("1234"));
+
+    let mut seed = 752;
+    let mut total = 0;
+    let mut stuck = 0;
+    let mut check = 0;
+    for round in 0..40 {
+        // up to 500 random dead ends, more in later rounds
+        let count = 1 + next_random(mut seed) % (12 * round + 10);
+        let mut deadends: Vec[String] = Vec.new();
+        for _ in 0..count {
+            deadends.push(four(next_random(mut seed) % 10000));
+        }
+        let target = four(next_random(mut seed) % 10000);
+        let turns = open_lock(deadends, target);
+        if turns == -1 {
+            stuck += 1;
+        } else {
+            total += turns;
+        }
+        check = (check * 31 + turns + 1) % 1000000007;
+    }
+    println(f"40 random locks: {stuck} cannot open, the rest take {total} turns in all, checksum {check}");
+}

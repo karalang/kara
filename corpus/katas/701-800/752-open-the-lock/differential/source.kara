@@ -1,0 +1,411 @@
+// LeetCode #752: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random locks.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn open_lock_star(deadends: Vec[String], target: String) -> i64 {
+    let mut blocked: Vec[bool] = Vec.new();
+    for _ in 0..10000 {
+        blocked.push(false);
+    }
+    for d in deadends.iter() {
+        blocked[i64.parse(d).unwrap()] = true;
+    }
+    let goal = i64.parse(target).unwrap();
+    if blocked[0] {
+        return -1;
+    }
+    let mut dist: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        dist.push(-1);
+    }
+    dist[0] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    while let Some(at) = queue.pop_front() {
+        if at == goal {
+            return dist[at];
+        }
+        let mut place = 1;
+        for _ in 0..4 {
+            let digit = at / place % 10;
+            for step in [1, 9] {
+                let next = at + ((digit + step) % 10 - digit) * place;
+                if not blocked[next] and dist[next] == -1 {
+                    dist[next] = dist[at] + 1;
+                    queue.push_back(next);
+                }
+            }
+            place *= 10;
+        }
+    }
+    -1
+}
+
+// ---- strings arm ----------------------------------------------------
+
+fn turned_strings(s: String, wheel: i64, step: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    for c in s.chars() {
+        if i == wheel {
+            let d = (c as u32 - '0' as u32) as i64;
+            out.push((48 + (d + step) % 10) as u8 as char);
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn open_lock_strings(deadends: Vec[String], target: String) -> i64 {
+    let mut dead: Set[String] = Set.new();
+    for d in deadends.iter() {
+        dead.insert(d.clone());
+    }
+    let start = String.from("0000");
+    if dead.contains(start) {
+        return -1;
+    }
+    let mut seen: Set[String] = Set.new();
+    seen.insert(start.clone());
+    let mut level: Vec[String] = Vec.new();
+    level.push(start);
+    let mut turns = 0;
+    while level.len() > 0 {
+        let mut next: Vec[String] = Vec.new();
+        for s in level.iter() {
+            if *s == target {
+                return turns;
+            }
+            for wheel in 0..4 {
+                for step in [1, 9] {
+                    let t = turned_strings(s.clone(), wheel, step);
+                    if not dead.contains(t) and not seen.contains(t) {
+                        seen.insert(t.clone());
+                        next.push(t);
+                    }
+                }
+            }
+        }
+        level = next;
+        turns += 1;
+    }
+    -1
+}
+
+// ---- bidir arm ------------------------------------------------------
+
+fn neighbours_bidir(x: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut place = 1;
+    for _ in 0..4 {
+        let digit = x / place % 10;
+        out.push(x + ((digit + 1) % 10 - digit) * place);
+        out.push(x + ((digit + 9) % 10 - digit) * place);
+        place *= 10;
+    }
+    out
+}
+
+fn open_lock_bidir(deadends: Vec[String], target: String) -> i64 {
+    let mut dead: Set[i64] = Set.new();
+    for d in deadends.iter() {
+        dead.insert(i64.parse(d).unwrap());
+    }
+    let goal = i64.parse(target).unwrap();
+    if dead.contains(0) or dead.contains(goal) {
+        return -1;
+    }
+    if goal == 0 {
+        return 0;
+    }
+    let mut seen: Set[i64] = Set.new();
+    let mut front: Set[i64] = Set.new();
+    let mut back: Set[i64] = Set.new();
+    front.insert(0);
+    back.insert(goal);
+    seen.insert(0);
+    seen.insert(goal);
+    let mut turns = 0;
+    while front.len() > 0 and back.len() > 0 {
+        if front.len() > back.len() {
+            let held = front;
+            front = back;
+            back = held;
+        }
+        turns += 1;
+        let mut grown: Set[i64] = Set.new();
+        for x in front.iter() {
+            for y in neighbours_bidir(*x).iter() {
+                if back.contains(*y) {
+                    return turns;
+                }
+                if not dead.contains(*y) and not seen.contains(*y) {
+                    seen.insert(*y);
+                    grown.insert(*y);
+                }
+            }
+        }
+        front = grown;
+    }
+    -1
+}
+
+// ---- astar arm ------------------------------------------------------
+
+fn estimate_astar(x: i64, goal: i64) -> i64 {
+    let mut total = 0;
+    let mut place = 1;
+    for _ in 0..4 {
+        let a = x / place % 10;
+        let b = goal / place % 10;
+        let d = if a > b { a - b } else { b - a };
+        total += if d < 10 - d { d } else { 10 - d };
+        place *= 10;
+    }
+    total
+}
+
+fn open_lock_astar(deadends: Vec[String], target: String) -> i64 {
+    let mut blocked: Vec[bool] = Vec.new();
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        blocked.push(false);
+        best.push(-1);
+    }
+    for d in deadends.iter() {
+        blocked[i64.parse(d).unwrap()] = true;
+    }
+    let goal = i64.parse(target).unwrap();
+    if blocked[0] {
+        return -1;
+    }
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    best[0] = 0;
+    queue.push((estimate_astar(0, goal), 0, 0));
+    while let Some((_, turns, at)) = queue.pop() {
+        if turns > best[at] {
+            continue;
+        }
+        if at == goal {
+            return turns;
+        }
+        let mut place = 1;
+        for _ in 0..4 {
+            let digit = at / place % 10;
+            for step in [1, 9] {
+                let next = at + ((digit + step) % 10 - digit) * place;
+                if not blocked[next] and (best[next] == -1 or turns + 1 < best[next]) {
+                    best[next] = turns + 1;
+                    queue.push((turns + 1 + estimate_astar(next, goal), turns + 1, next));
+                }
+            }
+            place *= 10;
+        }
+    }
+    -1
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, deadends: Vec[String], target: String) -> i64 {
+    if which == 0 {
+        open_lock_star(deadends, target)
+    } else if which == 1 {
+        open_lock_strings(deadends, target)
+    } else if which == 2 {
+        open_lock_bidir(deadends, target)
+    } else {
+        open_lock_astar(deadends, target)
+    }
+}
+
+fn four(x: i64) -> String {
+    f"{x / 1000}{x / 100 % 10}{x / 10 % 10}{x % 10}"
+}
+
+// Each wheel turned to its negative, 10 - d (0 staying 0).
+fn negated(s: String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let d = (c as u32 - '0' as u32) as i64;
+        out.push((48 + (10 - d) % 10) as u8 as char);
+    }
+    out
+}
+
+// The wheels in the opposite order.
+fn reversed(s: String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    for i in 0..4 {
+        out.push(cs[3 - i]);
+    }
+    out
+}
+
+// The least turns from 0000 to x with no dead ends: each wheel's
+// circular distance, summed.
+fn free_turns(x: i64) -> i64 {
+    let mut total = 0;
+    let mut y = x;
+    for _ in 0..4 {
+        let d = y % 10;
+        total += if d < 10 - d { d } else { 10 - d };
+        y /= 10;
+    }
+    total
+}
+
+// The definition: the settings reachable in at most k turns are those
+// reachable in at most k - 1, together with every setting one turn from
+// one of them that is not a dead end. Grow that set one turn at a time
+// from {0000} until it holds the target (k is the answer) or stops
+// growing (-1). No queue and no distances.
+fn definition(deadends: Vec[String], target: String) -> i64 {
+    let mut dead: Set[String] = Set.new();
+    for d in deadends.iter() {
+        dead.insert(d.clone());
+    }
+    if dead.contains(String.from("0000")) {
+        return -1;
+    }
+    let mut reached: Set[String] = Set.new();
+    reached.insert(String.from("0000"));
+    let mut k = 0;
+    loop {
+        if reached.contains(target.clone()) {
+            return k;
+        }
+        let mut more: Vec[String] = Vec.new();
+        for s in reached.iter() {
+            let x = i64.parse(s).unwrap();
+            let mut place = 1;
+            for _ in 0..4 {
+                let d = x / place % 10;
+                for step in [1, 9] {
+                    let t = four(x + ((d + step) % 10 - d) * place);
+                    if not dead.contains(t.clone()) and not reached.contains(t.clone()) {
+                        more.push(t);
+                    }
+                }
+                place *= 10;
+            }
+        }
+        if more.len() == 0 {
+            return -1;
+        }
+        for t in more.iter() {
+            reached.insert(t.clone());
+        }
+        k += 1;
+    }
+}
+
+fn main() {
+    let mut seed = 7520;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut total = 0;
+    let mut stuck = 0;
+    let cases = 400;
+    for _ in 0..cases {
+        // a target with every wheel 9, 0 or 1, and each other such
+        // setting a dead end with a chance of 0 to 70 in 100 (0000 with 1
+        // in 20), so that the dead ends wall in the way there; no target
+        // but 0000 is walled in, since it has a wheel at 1 or 9 and so a
+        // neighbour with a 2 or an 8. Then up to 10 dead ends anywhere.
+        let mut goal = 0;
+        for _ in 0..4 {
+            goal = goal * 10 + (9 + next_random(mut seed) % 3) % 10;
+        }
+        let target = four(goal);
+        let percent = next_random(mut seed) % 71;
+        let mut deadends: Vec[String] = Vec.new();
+        for i in 0..81 {
+            let mut d = 0;
+            let mut j = i;
+            for _ in 0..4 {
+                d = d * 10 + (9 + j % 3) % 10;
+                j /= 3;
+            }
+            let chance = if d == 0 { 5 } else { percent };
+            if d != goal and next_random(mut seed) % 100 < chance {
+                deadends.push(four(d));
+            }
+        }
+        for _ in 0..next_random(mut seed) % 11 {
+            let d = next_random(mut seed) % 10000;
+            if d != goal {
+                deadends.push(four(d));
+            }
+        }
+        let want = definition(deadends, target.clone());
+        if want == -1 {
+            stuck += 1;
+        } else {
+            total += want;
+        }
+        let mut negs: Vec[String] = Vec.new();
+        let mut revs: Vec[String] = Vec.new();
+        for d in deadends.iter() {
+            negs.push(negated(d.clone()));
+            revs.push(reversed(d.clone()));
+        }
+        // a dead end farther from 0000 than the answer, even with no dead
+        // ends, so on no shortest way
+        let mut far = 5555;
+        if want != -1 {
+            far = (next_random(mut seed) % 10000);
+            while free_turns(far) <= want {
+                far = (far + 1) % 10000;
+            }
+        }
+        let mut more = deadends.clone();
+        more.push(four(far));
+        for which in 0..arms {
+            let got = answer_with(which, deadends, target.clone());
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every wheel negated, in the target and the dead ends,
+            // the same answer: turning up becomes turning down.
+            checks += 1;
+            if answer_with(which, negs, negated(target.clone())) != got {
+                fails[1] += 1;
+            }
+            // P3: the wheels in the opposite order, the same answer.
+            checks += 1;
+            if answer_with(which, revs, reversed(target.clone())) != got {
+                fails[2] += 1;
+            }
+            // P4: a dead end added farther away than the answer, the same
+            // answer.
+            if got != -1 {
+                checks += 1;
+                if answer_with(which, more, target.clone()) != got {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        failures += fails[i];
+    }
+    println(f"{cases} locks ({stuck} cannot open, the rest {total} turns in all), {arms} arms, {checks} checks, {failures} failures");
+}

@@ -1,0 +1,148 @@
+// LeetCode 748 — Shortest Completing Word, a map of what is still owed.
+//
+// Count the plate's letters in a `Map[char, i64]`. For each word, take a
+// copy of the map and pay off one letter for each letter of the word
+// that is still owed; the word completes the plate when nothing is owed.
+// Keep the shortest completing word, the first among equals.
+
+fn shortest_completing_word(license_plate: String, words: Vec[String]) -> String {
+    let mut need: Map[char, i64] = Map.new();
+    let mut total = 0;
+    for c in license_plate.to_lowercase().chars() {
+        if c >= 'a' and c <= 'z' {
+            let now = match need.get(c) {
+                Some(k) => k,
+                None => 0,
+            };
+            need.insert(c, now + 1);
+            total += 1;
+        }
+    }
+    let mut best = -1;
+    for i in 0..words.len() {
+        let mut owed = need.clone();
+        let mut left = total;
+        for c in words[i].chars() {
+            match owed.get(c) {
+                Some(k) => {
+                    if k > 0 {
+                        owed.insert(c, k - 1);
+                        left -= 1;
+                    }
+                }
+                None => {}
+            }
+        }
+        if left == 0 and (best == -1 or words[i].len() < words[best].len()) {
+            best = i;
+        }
+    }
+    words[best].clone()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(plate: String, text: String) {
+    let mut words: Vec[String] = Vec.new();
+    for w in text.split(" ") {
+        words.push(String.from(w));
+    }
+    println(f"\"{plate}\", [{text}] -> {shortest_completing_word(plate.clone(), words)}");
+}
+
+fn random_word(seed: mut ref i64, longest: i64, letters: i64) -> String {
+    let mut s = String.new();
+    let n = 1 + next_random(mut seed) % longest;
+    for _ in 0..n {
+        s.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    s
+}
+
+// A plate of up to 7 characters: letters of either case from the first
+// `letters`, digits and spaces.
+fn random_plate(seed: mut ref i64, letters: i64) -> String {
+    let mut s = String.new();
+    let n = 1 + next_random(mut seed) % 7;
+    for _ in 0..n {
+        let kind = next_random(mut seed) % 6;
+        let code = if kind < 2 {
+            97 + next_random(mut seed) % letters
+        } else if kind < 4 {
+            65 + next_random(mut seed) % letters
+        } else if kind == 4 {
+            48 + next_random(mut seed) % 10
+        } else {
+            32
+        };
+        s.push(code as u8 as char);
+    }
+    s
+}
+
+// The plate's letters, lower-cased, as a word: one that always completes
+// the plate, as LeetCode promises some word does ("a" if it has none).
+fn plate_word(plate: String) -> String {
+    let mut s = String.new();
+    for c in plate.to_lowercase().chars() {
+        if c >= 'a' and c <= 'z' {
+            s.push(c);
+        }
+    }
+    if s.len() == 0 {
+        s.push('a');
+    }
+    s
+}
+
+fn main() {
+    show(String.from("1s3 PSt"), String.from("step steps stripe stepple"));
+    show(String.from("1s3 456"), String.from("looks pest stew show"));
+    show(String.from("Ah71752"), String.from("suggest letter of husband easy education drug prevent writer old"));
+    show(String.from("OgEu755"), String.from("enough these play wide wonder box arrive money tax thus"));
+    show(String.from("iMSlpe4"), String.from("claim consumer student camera public never wonder simple thought use"));
+    show(String.from("aB"), String.from("abc ab ba"));
+    show(String.from("123 456"), String.from("pear go me"));
+    show(String.from("AAa"), String.from("aa banana aaa"));
+
+    let mut seed = 748;
+    let mut lengths = 0;
+    let mut check = 0;
+    for _ in 0..30 {
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..999 {
+            words.push(random_word(mut seed, 15, 6));
+        }
+        let plate = random_plate(mut seed, 3);
+        words.push(plate_word(plate.clone()));
+        let got = shortest_completing_word(plate, words);
+        lengths += got.len();
+        for b in got.bytes().iter() {
+            check = (check * 31 + *b as i64) % 1000000007;
+        }
+    }
+    println(f"30 lists of 1000 words: answers {lengths} letters long in all, checksum {check}");
+
+    let mut total = 0;
+    check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 8;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..n {
+            words.push(random_word(mut seed, 5, 3));
+        }
+        let plate = random_plate(mut seed, 3);
+        words.push(plate_word(plate.clone()));
+        let got = shortest_completing_word(plate, words);
+        total += got.len();
+        for b in got.bytes().iter() {
+            check = (check * 31 + *b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random lists: answers {total} letters long in all, checksum {check}");
+}

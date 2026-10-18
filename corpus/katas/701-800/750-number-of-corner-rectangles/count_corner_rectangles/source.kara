@@ -1,0 +1,97 @@
+// LeetCode 750 — Number Of Corner Rectangles, pairs of rows.
+//
+// A corner rectangle is fixed by two rows and two columns where all
+// four cells are 1. For each pair of rows, count the columns where both
+// rows have a 1; any two of those k columns make a rectangle, so the
+// pair adds k(k - 1) / 2. O(m^2 x n).
+
+fn count_corner_rectangles(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut total = 0;
+    for a in 0..m {
+        for b in a + 1..m {
+            let mut k = 0;
+            for c in 0..n {
+                if grid[a][c] == 1 and grid[b][c] == 1 {
+                    k += 1;
+                }
+            }
+            total += k * (k - 1) / 2;
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(text: String) {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for row in text.split("/") {
+        let mut cells: Vec[i64] = Vec.new();
+        for c in row.chars() {
+            cells.push(if c == '1' { 1 } else { 0 });
+        }
+        grid.push(cells);
+    }
+    println(f"{text} -> {count_corner_rectangles(grid)}");
+}
+
+// An m x n grid in which each cell is 1 with chance `percent` in 100.
+fn random_grid(seed: mut ref i64, m: i64, n: i64, percent: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show(String.from("10010/00101/00010/10101"));
+    show(String.from("111/111/111"));
+    show(String.from("1111"));
+    show(String.from("1/1/1"));
+    show(String.from("0"));
+    show(String.from("11/11"));
+    show(String.from("101/010/101"));
+    show(String.from("1100/1100/0011/0011"));
+
+    let mut ones: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..50 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..50 {
+            row.push(1);
+        }
+        ones.push(row);
+    }
+    println(f"50 x 50 of ones: {count_corner_rectangles(ones)}");
+
+    let mut seed = 750;
+    let sizes = [(200, 200, 5), (100, 100, 50), (30, 200, 70), (200, 30, 70)];
+    for (m, n, percent) in sizes {
+        let grid = random_grid(mut seed, m, n, percent);
+        println(f"{m} x {n}, {percent}% ones: {count_corner_rectangles(grid)}");
+    }
+
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 8;
+        let n = 1 + next_random(mut seed) % 8;
+        let percent = 20 + next_random(mut seed) % 70;
+        let grid = random_grid(mut seed, m, n, percent);
+        let k = count_corner_rectangles(grid);
+        total += k;
+        check = (check * 31 + k) % 1000000007;
+    }
+    println(f"300 random grids: {total} rectangles in all, checksum {check}");
+}

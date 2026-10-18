@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/747-largest-number-at-least-twice-of-others/bench/dominant_index.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "b84c5d937"
+extracted_src = "3987150a"
+model_rev = "583cfb0d"
+model_src = "3987150a"

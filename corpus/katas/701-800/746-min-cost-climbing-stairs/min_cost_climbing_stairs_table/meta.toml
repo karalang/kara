@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/746-min-cost-climbing-stairs/min_cost_climbing_stairs_table.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "b84c5d937"
+extracted_src = "74b0c0a1"
+model_rev = "583cfb0d"
+model_src = "74b0c0a1"

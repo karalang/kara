@@ -1,0 +1,66 @@
+// LeetCode 746 — Min Cost Climbing Stairs, two running totals.
+//
+// Let reach(i) be the least paid to stand on the floor just before step
+// i, where standing on step 0 or 1 is free to begin with. A step can be
+// reached from the step one below or two below, paying for the step left
+// behind: reach(i) = min(reach(i - 1) + cost[i - 1], reach(i - 2) +
+// cost[i - 2]). The top is reach(n). Only the last two totals are ever
+// read, so two variables walk up the stairs. O(n) time, O(1) space.
+
+fn min_cost_climbing_stairs(cost: Vec[i64]) -> i64 {
+    let mut before = 0;
+    let mut here = 0;
+    for i in 2..cost.len() + 1 {
+        let next = if before + cost[i - 2] < here + cost[i - 1] { before + cost[i - 2] } else { here + cost[i - 1] };
+        before = here;
+        here = next;
+    }
+    here
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(cost: Vec[i64]) {
+    println(f"{cost} -> {min_cost_climbing_stairs(cost)}");
+}
+
+fn main() {
+    show([10, 15, 20]);
+    show([1, 100, 1, 1, 1, 100, 1, 1, 100, 1]);
+    show([0, 0]);
+    show([5, 3]);
+    show([0, 0, 0, 1]);
+    show([1, 0, 0, 1, 0, 0, 1]);
+    show([999, 999, 999, 999, 999]);
+
+    let mut seed = 746;
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        big.push(next_random(mut seed) % 1000);
+    }
+    println(f"1000 random steps: {min_cost_climbing_stairs(big)}");
+    let mut most: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        most.push(999);
+    }
+    println(f"1000 steps of 999: {min_cost_climbing_stairs(most)}");
+
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 14;
+        let mut cost: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            cost.push(next_random(mut seed) % 20);
+        }
+        let got = min_cost_climbing_stairs(cost);
+        total += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"300 random stairs: costs sum to {total}, checksum {check}");
+}

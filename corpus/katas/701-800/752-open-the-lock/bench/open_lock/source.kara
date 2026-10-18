@@ -1,0 +1,75 @@
+// LeetCode 752 — Open the Lock, bench: the ★ arm (breadth-first over
+// numbers) against 500 dead ends that keep changing.
+
+fn open_lock(deadends: Vec[String], target: String) -> i64 {
+    let mut blocked: Vec[bool] = Vec.new();
+    for _ in 0..10000 {
+        blocked.push(false);
+    }
+    for d in deadends.iter() {
+        blocked[i64.parse(d).unwrap()] = true;
+    }
+    let goal = i64.parse(target).unwrap();
+    if blocked[0] {
+        return -1;
+    }
+    let mut dist: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        dist.push(-1);
+    }
+    dist[0] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    while let Some(at) = queue.pop_front() {
+        if at == goal {
+            return dist[at];
+        }
+        let mut place = 1;
+        for _ in 0..4 {
+            let digit = at / place % 10;
+            for step in [1, 9] {
+                let next = at + ((digit + step) % 10 - digit) * place;
+                if not blocked[next] and dist[next] == -1 {
+                    dist[next] = dist[at] + 1;
+                    queue.push_back(next);
+                }
+            }
+            place *= 10;
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn four(x: i64) -> String {
+    f"{x / 1000}{x / 100 % 10}{x / 10 % 10}{x % 10}"
+}
+
+fn main() {
+    let rounds = 3000;
+    let mut seed = 752;
+    let mut deadends: Vec[String] = Vec.new();
+    for _ in 0..500 {
+        deadends.push(four(1 + next_random(mut seed) % 9999));
+    }
+    let mut total = 0;
+    let mut stuck = 0;
+    for _ in 0..rounds {
+        for _ in 0..5 {
+            let i = next_random(mut seed) % 500;
+            deadends[i] = four(1 + next_random(mut seed) % 9999);
+        }
+        let target = four(next_random(mut seed) % 10000);
+        let turns = open_lock(deadends, target);
+        if turns == -1 {
+            stuck += 1;
+        } else {
+            total += turns;
+        }
+    }
+    println(f"{rounds} locks with 500 dead ends: {stuck} cannot open, the rest take {total} turns in all");
+}

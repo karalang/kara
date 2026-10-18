@@ -1,0 +1,303 @@
+// LeetCode #751: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random ranges.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn address_star(ip: String) -> i64 {
+    let mut x = 0;
+    for part in ip.split(".") {
+        x = x * 256 + i64.parse(part).unwrap();
+    }
+    x
+}
+
+fn dotted_star(x: i64) -> String {
+    f"{x / 16777216 % 256}.{x / 65536 % 256}.{x / 256 % 256}.{x % 256}"
+}
+
+fn ip_to_cidr_star(ip: String, n: i64) -> Vec[String] {
+    let mut x = address_star(ip);
+    let mut left = n;
+    let mut out: Vec[String] = Vec.new();
+    while left > 0 {
+        let mut size = if x == 0 { 4294967296 } else { x & (0 - x) };
+        while size > left {
+            size /= 2;
+        }
+        let mut bits = 0;
+        while (1 << bits) < size {
+            bits += 1;
+        }
+        out.push(f"{dotted_star(x)}/{32 - bits}");
+        x += size;
+        left -= size;
+    }
+    out
+}
+
+// ---- trailing arm ---------------------------------------------------
+
+fn address_trailing(ip: String) -> i64 {
+    let parts: Vec[Str] = ip.split(".").collect();
+    let mut x = 0;
+    for i in 0..4 {
+        x = (x << 8) | i64.parse(parts[i]).unwrap();
+    }
+    x
+}
+
+fn ip_to_cidr_trailing(ip: String, n: i64) -> Vec[String] {
+    let mut x = address_trailing(ip);
+    let mut left = n;
+    let mut out: Vec[String] = Vec.new();
+    while left > 0 {
+        let mut zeros = 0;
+        while zeros < 32 and (x >> zeros) & 1 == 0 {
+            zeros += 1;
+        }
+        while (1 << zeros) > left {
+            zeros -= 1;
+        }
+        out.push(f"{(x >> 24) & 255}.{(x >> 16) & 255}.{(x >> 8) & 255}.{x & 255}/{32 - zeros}");
+        x += 1 << zeros;
+        left -= 1 << zeros;
+    }
+    out
+}
+
+// ---- tree arm -------------------------------------------------------
+
+fn address_tree(ip: String) -> i64 {
+    let mut x = 0;
+    let mut part = 0;
+    for c in ip.chars() {
+        if c == '.' {
+            x = x * 256 + part;
+            part = 0;
+        } else {
+            part = part * 10 + (c as u32 - '0' as u32) as i64;
+        }
+    }
+    x * 256 + part
+}
+
+fn cover_tree(base: i64, bits: i64, lo: i64, hi: i64, out: mut ref Vec[String]) {
+    let size = 1 << bits;
+    if base + size <= lo or base >= hi {
+        return;
+    }
+    if base >= lo and base + size <= hi {
+        out.push(f"{base / 16777216}.{base / 65536 % 256}.{base / 256 % 256}.{base % 256}/{32 - bits}");
+        return;
+    }
+    cover_tree(base, bits - 1, lo, hi, mut out);
+    cover_tree(base + size / 2, bits - 1, lo, hi, mut out);
+}
+
+fn ip_to_cidr_tree(ip: String, n: i64) -> Vec[String] {
+    let x = address_tree(ip);
+    let mut out: Vec[String] = Vec.new();
+    cover_tree(0, 32, x, x + n, mut out);
+    out
+}
+
+// ---- prefixes arm ---------------------------------------------------
+
+fn address_prefixes(ip: String) -> i64 {
+    let mut x = 0;
+    for part in ip.split(".") {
+        x = x * 256 + i64.parse(part).unwrap();
+    }
+    x
+}
+
+fn ip_to_cidr_prefixes(ip: String, n: i64) -> Vec[String] {
+    let mut x = address_prefixes(ip);
+    let mut left = n;
+    let mut out: Vec[String] = Vec.new();
+    while left > 0 {
+        let mut prefix = 0;
+        loop {
+            let size = 1 << (32 - prefix);
+            if x % size == 0 and size <= left {
+                break;
+            }
+            prefix += 1;
+        }
+        let size = 1 << (32 - prefix);
+        let mut parts: Vec[String] = Vec.new();
+        for shift in [24, 16, 8, 0] {
+            parts.push(f"{x / (1 << shift) % 256}");
+        }
+        out.push(f"{parts.join(".")}/{prefix}");
+        x += size;
+        left -= size;
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, ip: String, n: i64) -> Vec[String] {
+    if which == 0 {
+        ip_to_cidr_star(ip, n)
+    } else if which == 1 {
+        ip_to_cidr_trailing(ip, n)
+    } else if which == 2 {
+        ip_to_cidr_tree(ip, n)
+    } else {
+        ip_to_cidr_prefixes(ip, n)
+    }
+}
+
+fn written(x: i64) -> String {
+    f"{x / 16777216}.{x / 65536 % 256}.{x / 256 % 256}.{x % 256}"
+}
+
+// A block `a.b.c.d/p` read back as its first address and prefix.
+fn read_block(block: String) -> (i64, i64) {
+    let halves: Vec[Str] = block.split("/").collect();
+    let mut x = 0;
+    for part in halves[0].split(".") {
+        x = x * 256 + i64.parse(part).unwrap();
+    }
+    (x, i64.parse(halves[1]).unwrap())
+}
+
+// The definition: the fewest CIDR blocks covering exactly the addresses
+// x to x + n - 1, in address order. Start from one /32 block for each
+// address and merge two neighbouring blocks of one size into the block
+// of twice the size whenever the first starts on a multiple of that
+// size, until no two merge.
+fn definition(x: i64, n: i64) -> Vec[String] {
+    let mut starts: Vec[i64] = Vec.new();
+    let mut sizes: Vec[i64] = Vec.new();
+    for i in 0..n {
+        starts.push(x + i);
+        sizes.push(1);
+    }
+    let mut merged = true;
+    while merged {
+        merged = false;
+        let mut i = 0;
+        while i + 1 < starts.len() {
+            if sizes[i] == sizes[i + 1] and starts[i] % (2 * sizes[i]) == 0 {
+                sizes[i] = 2 * sizes[i];
+                starts.remove(i + 1);
+                sizes.remove(i + 1);
+                merged = true;
+            }
+            i += 1;
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..starts.len() {
+        let mut prefix = 32;
+        let mut s = sizes[i];
+        while s > 1 {
+            s /= 2;
+            prefix -= 1;
+        }
+        out.push(f"{written(starts[i])}/{prefix}");
+    }
+    out
+}
+
+fn main() {
+    let mut seed = 7510;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut blocks = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // an address whose first part is at most 250, its lowest 0 to 12
+        // bits cleared so that big aligned blocks occur, and 1 to 300
+        // addresses
+        let mut x = 0;
+        for _ in 0..4 {
+            x = x * 256 + next_random(mut seed) % 256;
+        }
+        x = x % 4194304 + (next_random(mut seed) % 251) * 16777216;
+        let clear = next_random(mut seed) % 13;
+        x = x / (1 << clear) * (1 << clear);
+        let n = 1 + next_random(mut seed) % 300;
+        let want = definition(x, n);
+        blocks += want.len();
+        let shift = 1024 * (1 + next_random(mut seed) % 3);
+        let mirror = 4294967295 - (x + n - 1);
+        for which in 0..arms {
+            let got = answer_with(which, written(x), n);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: read back, the blocks start on a multiple of their size,
+            // follow on from x one after another and hold n addresses.
+            checks += 1;
+            let mut at = x;
+            let mut fine = true;
+            for block in got.iter() {
+                let (start, prefix) = read_block(block.clone());
+                let size = 1 << (32 - prefix);
+                if start != at or start % size != 0 {
+                    fine = false;
+                }
+                at = start + size;
+            }
+            if not fine or at != x + n {
+                fails[1] += 1;
+            }
+            // P3: the range moved up by a multiple of 1024, larger than
+            // any block here, gives the same blocks moved up.
+            checks += 1;
+            let moved = answer_with(which, written(x + shift), n);
+            let mut same = moved.len() == got.len();
+            if same {
+                for i in 0..got.len() {
+                    let (s1, p1) = read_block(got[i].clone());
+                    let (s2, p2) = read_block(moved[i].clone());
+                    if s2 != s1 + shift or p2 != p1 {
+                        same = false;
+                    }
+                }
+            }
+            if not same {
+                fails[2] += 1;
+            }
+            // P4: the range mirrored through the address space, every
+            // address a turned into 2^32 - 1 - a, gives the same prefixes
+            // in the reverse order.
+            checks += 1;
+            let back = answer_with(which, written(mirror), n);
+            let mut reversed = back.len() == got.len();
+            if reversed {
+                for i in 0..got.len() {
+                    let (_, p1) = read_block(got[i].clone());
+                    let (_, p2) = read_block(back[back.len() - 1 - i].clone());
+                    if p1 != p2 {
+                        reversed = false;
+                    }
+                }
+            }
+            if not reversed {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        failures += fails[i];
+    }
+    println(f"{cases} ranges ({blocks} blocks in all), {arms} arms, {checks} checks, {failures} failures");
+}

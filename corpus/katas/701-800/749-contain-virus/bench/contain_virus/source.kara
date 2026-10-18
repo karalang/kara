@@ -1,0 +1,126 @@
+// LeetCode 749 — Contain Virus, bench: the ★ arm (flood fill each day)
+// on a 50 x 50 grid that keeps changing.
+
+fn contain_virus(is_infected: Vec[Vec[i64]]) -> i64 {
+    let m = is_infected.len();
+    let n = is_infected[0].len();
+    // 0 clean, 1 infected, 2 walled off
+    let mut g: Vec[i64] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            g.push(is_infected[r][c]);
+        }
+    }
+    let mut walls = 0;
+    loop {
+        let mut region: Vec[i64] = Vec.new();
+        let mut mark: Vec[i64] = Vec.new();
+        for _ in 0..m * n {
+            region.push(-1);
+            mark.push(-1);
+        }
+        let mut cells: Vec[Vec[i64]] = Vec.new();
+        let mut threats: Vec[Vec[i64]] = Vec.new();
+        let mut needs: Vec[i64] = Vec.new();
+        for start in 0..m * n {
+            if g[start] != 1 or region[start] != -1 {
+                continue;
+            }
+            let id = cells.len();
+            let mut mine: Vec[i64] = Vec.new();
+            let mut threat: Vec[i64] = Vec.new();
+            let mut need = 0;
+            let mut stack: Vec[i64] = Vec.new();
+            stack.push(start);
+            region[start] = id;
+            while stack.len() > 0 {
+                let at = stack.pop().unwrap();
+                mine.push(at);
+                let r = at / n;
+                let c = at % n;
+                let mut next: Vec[i64] = Vec.new();
+                if r > 0 {
+                    next.push(at - n);
+                }
+                if r < m - 1 {
+                    next.push(at + n);
+                }
+                if c > 0 {
+                    next.push(at - 1);
+                }
+                if c < n - 1 {
+                    next.push(at + 1);
+                }
+                for x in next.iter() {
+                    let y = *x;
+                    if g[y] == 0 {
+                        need += 1;
+                        if mark[y] != id {
+                            mark[y] = id;
+                            threat.push(y);
+                        }
+                    } else if g[y] == 1 and region[y] == -1 {
+                        region[y] = id;
+                        stack.push(y);
+                    }
+                }
+            }
+            cells.push(mine);
+            threats.push(threat);
+            needs.push(need);
+        }
+        let mut best = -1;
+        for id in 0..cells.len() {
+            if threats[id].len() > 0 and (best == -1 or threats[id].len() > threats[best].len()) {
+                best = id;
+            }
+        }
+        if best == -1 {
+            break;
+        }
+        walls += needs[best];
+        for id in 0..cells.len() {
+            if id == best {
+                for x in cells[id].iter() {
+                    g[*x] = 2;
+                }
+            } else {
+                for x in threats[id].iter() {
+                    g[*x] = 1;
+                }
+            }
+        }
+    }
+    walls
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 3000;
+    let mut seed = 749;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..50 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..50 {
+            row.push(if next_random(mut seed) % 100 < 5 { 1 } else { 0 });
+        }
+        grid.push(row);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for _ in 0..20 {
+            let r = next_random(mut seed) % 50;
+            let c = next_random(mut seed) % 50;
+            grid[r][c] = if next_random(mut seed) % 100 < 5 { 1 } else { 0 };
+        }
+        let w = contain_virus(grid);
+        total += w;
+        check = (check * 31 + w) % 1000000007;
+    }
+    println(f"{rounds} grids of 50 x 50: {total} walls in all, checksum {check}");
+}

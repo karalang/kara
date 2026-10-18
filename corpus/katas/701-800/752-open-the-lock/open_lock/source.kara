@@ -1,0 +1,100 @@
+// LeetCode 752 — Open the Lock, breadth-first over numbers.
+//
+// The lock's 10,000 settings are the numbers 0 to 9999, one digit per
+// wheel. Breadth-first search from 0000 over the eight turns of a
+// setting (each wheel one step up or down, 9 and 0 next to each other),
+// never entering a dead end, gives the fewest turns to the target, or
+// -1 if it cannot be reached. O(10^4 x 8).
+
+fn open_lock(deadends: Vec[String], target: String) -> i64 {
+    let mut blocked: Vec[bool] = Vec.new();
+    for _ in 0..10000 {
+        blocked.push(false);
+    }
+    for d in deadends.iter() {
+        blocked[i64.parse(d).unwrap()] = true;
+    }
+    let goal = i64.parse(target).unwrap();
+    if blocked[0] {
+        return -1;
+    }
+    let mut dist: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        dist.push(-1);
+    }
+    dist[0] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    while let Some(at) = queue.pop_front() {
+        if at == goal {
+            return dist[at];
+        }
+        let mut place = 1;
+        for _ in 0..4 {
+            let digit = at / place % 10;
+            for step in [1, 9] {
+                let next = at + ((digit + step) % 10 - digit) * place;
+                if not blocked[next] and dist[next] == -1 {
+                    dist[next] = dist[at] + 1;
+                    queue.push_back(next);
+                }
+            }
+            place *= 10;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(dead: String, target: String) {
+    let mut deadends: Vec[String] = Vec.new();
+    if dead.len() > 0 {
+        for d in dead.split(" ") {
+            deadends.push(String.from(d));
+        }
+    }
+    println(f"[{dead}], {target} -> {open_lock(deadends, target.clone())}");
+}
+
+fn four(x: i64) -> String {
+    f"{x / 1000}{x / 100 % 10}{x / 10 % 10}{x % 10}"
+}
+
+fn main() {
+    show(String.from("0201 0101 0102 1212 2002"), String.from("0202"));
+    show(String.from("8888"), String.from("0009"));
+    show(String.from("8887 8889 8878 8898 8788 8988 7888 9888"), String.from("8888"));
+    show(String.from("0000"), String.from("8888"));
+    show(String.from(""), String.from("0000"));
+    show(String.from(""), String.from("5555"));
+    show(String.from("1000 9000 0100 0900 0010 0090 0001"), String.from("1234"));
+    show(String.from("1000 9000 0100 0900 0010 0090 0001 0009"), String.from("1234"));
+
+    let mut seed = 752;
+    let mut total = 0;
+    let mut stuck = 0;
+    let mut check = 0;
+    for round in 0..40 {
+        // up to 500 random dead ends, more in later rounds
+        let count = 1 + next_random(mut seed) % (12 * round + 10);
+        let mut deadends: Vec[String] = Vec.new();
+        for _ in 0..count {
+            deadends.push(four(next_random(mut seed) % 10000));
+        }
+        let target = four(next_random(mut seed) % 10000);
+        let turns = open_lock(deadends, target);
+        if turns == -1 {
+            stuck += 1;
+        } else {
+            total += turns;
+        }
+        check = (check * 31 + turns + 1) % 1000000007;
+    }
+    println(f"40 random locks: {stuck} cannot open, the rest take {total} turns in all, checksum {check}");
+}

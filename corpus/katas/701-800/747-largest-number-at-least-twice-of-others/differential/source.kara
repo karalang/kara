@@ -1,0 +1,182 @@
+// LeetCode #747: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random lists.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn dominant_index_star(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut second = -1;
+    for i in 1..nums.len() {
+        if nums[i] > nums[best] {
+            second = nums[best];
+            best = i;
+        } else if nums[i] > second {
+            second = nums[i];
+        }
+    }
+    if nums[best] >= 2 * second { best } else { -1 }
+}
+
+// ---- twopass arm ----------------------------------------------------
+
+fn dominant_index_twopass(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 1..nums.len() {
+        if nums[i] > nums[best] {
+            best = i;
+        }
+    }
+    for i in 0..nums.len() {
+        if i != best and nums[best] < 2 * nums[i] {
+            return -1;
+        }
+    }
+    best
+}
+
+// ---- sort arm -------------------------------------------------------
+
+fn dominant_index_sort(nums: Vec[i64]) -> i64 {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..nums.len() {
+        pairs.push((nums[i], i));
+    }
+    pairs.sort();
+    let n = pairs.len();
+    if pairs[n - 1].0 >= 2 * pairs[n - 2].0 { pairs[n - 1].1 } else { -1 }
+}
+
+// ---- count arm ------------------------------------------------------
+
+fn dominant_index_count(nums: Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.new();
+    for _ in 0..101 {
+        count.push(0);
+    }
+    for x in nums.iter() {
+        count[*x] += 1;
+    }
+    let mut top = 100;
+    while count[top] == 0 {
+        top -= 1;
+    }
+    let mut next = top - 1;
+    while next >= 0 and count[next] == 0 {
+        next -= 1;
+    }
+    if next >= 0 and top < 2 * next {
+        return -1;
+    }
+    for i in 0..nums.len() {
+        if nums[i] == top {
+            return i;
+        }
+    }
+    -1
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        dominant_index_star(nums)
+    } else if which == 1 {
+        dominant_index_twopass(nums)
+    } else if which == 2 {
+        dominant_index_sort(nums)
+    } else {
+        dominant_index_count(nums)
+    }
+}
+
+// The definition, as the problem states it: the index of a value at
+// least twice every other value, or -1. Try every index against every
+// other.
+fn definition(nums: Vec[i64]) -> i64 {
+    for i in 0..nums.len() {
+        let mut twice = true;
+        for j in 0..nums.len() {
+            if j != i and nums[i] < 2 * nums[j] {
+                twice = false;
+            }
+        }
+        if twice {
+            return i;
+        }
+    }
+    -1
+}
+
+fn main() {
+    let mut seed = 7470;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut found = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 2 to 8 values, a unique largest m of 1 to 33 at a random place
+        // and the others below it or, half the time, at most m / 2
+        let n = 2 + next_random(mut seed) % 7;
+        let m = 1 + next_random(mut seed) % 33;
+        let at = next_random(mut seed) % n;
+        let limit = if next_random(mut seed) % 2 == 0 { m / 2 + 1 } else { m };
+        let mut nums: Vec[i64] = Vec.new();
+        for i in 0..n {
+            nums.push(if i == at { m } else { next_random(mut seed) % limit });
+        }
+        let want = definition(nums);
+        if want != -1 {
+            found += 1;
+        }
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+        }
+        let mut tripled: Vec[i64] = Vec.new();
+        for x in nums.iter() {
+            tripled.push(3 * *x);
+        }
+        let mut longer = nums.clone();
+        longer.push(m / 2);
+        for which in 0..arms {
+            let got = answer_with(which, nums);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the values in reverse order, the index reversed too.
+            checks += 1;
+            let expect = if got == -1 { -1 } else { n - 1 - got };
+            if answer_with(which, reversed) != expect {
+                fails[1] += 1;
+            }
+            // P3: every value tripled, the same answer.
+            checks += 1;
+            if answer_with(which, tripled) != got {
+                fails[2] += 1;
+            }
+            // P4: half the largest value added at the end, the same
+            // answer.
+            checks += 1;
+            if answer_with(which, longer) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        failures += fails[i];
+    }
+    println(f"{cases} lists ({found} with a dominant value), {arms} arms, {checks} checks, {failures} failures");
+}

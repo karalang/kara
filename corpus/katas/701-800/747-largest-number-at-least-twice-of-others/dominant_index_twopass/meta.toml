@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/747-largest-number-at-least-twice-of-others/dominant_index_twopass.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "b84c5d937"
+extracted_src = "ab19d8db"
+model_rev = "583cfb0d"
+model_src = "ab19d8db"

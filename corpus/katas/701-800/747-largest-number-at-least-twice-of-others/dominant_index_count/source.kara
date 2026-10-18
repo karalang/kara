@@ -1,0 +1,87 @@
+// LeetCode 747 — Largest Number At Least Twice of Others, by counting.
+//
+// Values are at most 100, so count how often each occurs, read the
+// largest and second largest values down from 100 off the counts, and
+// look up where the largest sits only if the test passes. O(n + 101).
+
+fn dominant_index(nums: Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.new();
+    for _ in 0..101 {
+        count.push(0);
+    }
+    for x in nums.iter() {
+        count[*x] += 1;
+    }
+    let mut top = 100;
+    while count[top] == 0 {
+        top -= 1;
+    }
+    let mut next = top - 1;
+    while next >= 0 and count[next] == 0 {
+        next -= 1;
+    }
+    if next >= 0 and top < 2 * next {
+        return -1;
+    }
+    for i in 0..nums.len() {
+        if nums[i] == top {
+            return i;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {dominant_index(nums)}");
+}
+
+// n values with a unique largest m at a random place, the others below
+// m, and below m / 2 + 1 when `small` is set.
+fn random_nums(seed: mut ref i64, n: i64, m: i64, small: bool) -> Vec[i64] {
+    let at = next_random(mut seed) % n;
+    let limit = if small { m / 2 + 1 } else { m };
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        nums.push(if i == at { m } else { next_random(mut seed) % limit });
+    }
+    nums
+}
+
+fn main() {
+    show([3, 6, 1, 0]);
+    show([1, 2, 3, 4]);
+    show([0, 1]);
+    show([1, 0]);
+    show([2, 4]);
+    show([2, 5]);
+    show([100, 50, 50, 49]);
+    show([0, 0, 0, 1, 0]);
+
+    let mut seed = 747;
+    let wide = random_nums(mut seed, 50, 100, false);
+    println(f"50 random values below 100 and one 100: {dominant_index(wide)}");
+    let narrow = random_nums(mut seed, 50, 100, true);
+    println(f"50 random values up to 50 and one 100: {dominant_index(narrow)}");
+
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 10;
+        let m = 1 + next_random(mut seed) % 100;
+        let small = next_random(mut seed) % 2 == 0;
+        let nums = random_nums(mut seed, n, m, small);
+        let got = dominant_index(nums);
+        if got != -1 {
+            found += 1;
+        }
+        check = (check * 31 + got + 1) % 1000000007;
+    }
+    println(f"300 random lists: {found} have a dominant value, checksum {check}");
+}

@@ -1,0 +1,11 @@
+[3, 6, 1, 0] -> 1
+[1, 2, 3, 4] -> -1
+[0, 1] -> 1
+[1, 0] -> 0
+[2, 4] -> 1
+[2, 5] -> 1
+[100, 50, 50, 49] -> 0
+[0, 0, 0, 1, 0] -> 3
+50 random values below 100 and one 100: -1
+50 random values up to 50 and one 100: 16
+300 random lists: 175 have a dominant value, checksum 721959456

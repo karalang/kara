@@ -1,0 +1,83 @@
+// LeetCode 751 — IP to CIDR, trying each prefix length.
+//
+// At each step try the prefix lengths from /0 to /32, shortest first,
+// and take the first whose block starts at x (x a multiple of its size)
+// and fits in what is left. Every block of a shorter prefix is bigger,
+// so the first that passes is the largest that may be used.
+
+fn address(ip: String) -> i64 {
+    let mut x = 0;
+    for part in ip.split(".") {
+        x = x * 256 + i64.parse(part).unwrap();
+    }
+    x
+}
+
+fn ip_to_cidr(ip: String, n: i64) -> Vec[String] {
+    let mut x = address(ip);
+    let mut left = n;
+    let mut out: Vec[String] = Vec.new();
+    while left > 0 {
+        let mut prefix = 0;
+        loop {
+            let size = 1 << (32 - prefix);
+            if x % size == 0 and size <= left {
+                break;
+            }
+            prefix += 1;
+        }
+        let size = 1 << (32 - prefix);
+        let mut parts: Vec[String] = Vec.new();
+        for shift in [24, 16, 8, 0] {
+            parts.push(f"{x / (1 << shift) % 256}");
+        }
+        out.push(f"{parts.join(".")}/{prefix}");
+        x += size;
+        left -= size;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(ip: String, n: i64) {
+    let blocks = ip_to_cidr(ip.clone(), n);
+    println(f"{ip}, {n} -> {blocks}");
+}
+
+fn main() {
+    show(String.from("255.0.0.7"), 10);
+    show(String.from("117.145.102.62"), 8);
+    show(String.from("0.0.0.0"), 1);
+    show(String.from("0.0.0.0"), 1000);
+    show(String.from("255.255.255.255"), 1);
+    show(String.from("255.255.252.24"), 1000);
+    show(String.from("1.2.3.4"), 256);
+    show(String.from("10.0.0.0"), 256);
+    show(String.from("192.168.1.1"), 1);
+    show(String.from("192.168.1.255"), 2);
+
+    let mut seed = 751;
+    let mut blocks = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let a = next_random(mut seed) % 255;
+        let b = next_random(mut seed) % 256;
+        let c = next_random(mut seed) % 256;
+        let d = next_random(mut seed) % 256;
+        let n = 1 + next_random(mut seed) % 1000;
+        let ip = f"{a}.{b}.{c}.{d}";
+        for block in ip_to_cidr(ip, n).iter() {
+            blocks += 1;
+            for ch in block.bytes().iter() {
+                check = (check * 31 + *ch as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random ranges: {blocks} blocks in all, checksum {check}");
+}

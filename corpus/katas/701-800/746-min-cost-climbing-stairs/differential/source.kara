@@ -1,0 +1,177 @@
+// LeetCode #746: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random stairs.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn min_cost_climbing_stairs_star(cost: Vec[i64]) -> i64 {
+    let mut before = 0;
+    let mut here = 0;
+    for i in 2..cost.len() + 1 {
+        let next = if before + cost[i - 2] < here + cost[i - 1] { before + cost[i - 2] } else { here + cost[i - 1] };
+        before = here;
+        here = next;
+    }
+    here
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn min_cost_climbing_stairs_table(cost: Vec[i64]) -> i64 {
+    let n = cost.len();
+    let mut paid: Vec[i64] = Vec.new();
+    paid.push(cost[0]);
+    paid.push(cost[1]);
+    for i in 2..n {
+        let cheaper = if paid[i - 1] < paid[i - 2] { paid[i - 1] } else { paid[i - 2] };
+        paid.push(cost[i] + cheaper);
+    }
+    if paid[n - 1] < paid[n - 2] { paid[n - 1] } else { paid[n - 2] }
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn least_to_memo(i: i64, cost: Vec[i64], memo: mut ref Vec[i64]) -> i64 {
+    if i < 2 {
+        return 0;
+    }
+    if memo[i] != -1 {
+        return memo[i];
+    }
+    let one = least_to_memo(i - 1, cost, mut memo) + cost[i - 1];
+    let two = least_to_memo(i - 2, cost, mut memo) + cost[i - 2];
+    let best = if one < two { one } else { two };
+    memo[i] = best;
+    best
+}
+
+fn min_cost_climbing_stairs_memo(cost: Vec[i64]) -> i64 {
+    let mut memo: Vec[i64] = Vec.new();
+    for _ in 0..cost.len() + 1 {
+        memo.push(-1);
+    }
+    least_to_memo(cost.len(), cost, mut memo)
+}
+
+// ---- down arm -------------------------------------------------------
+
+fn min_cost_climbing_stairs_down(cost: Vec[i64]) -> i64 {
+    let n = cost.len();
+    let mut rest: Vec[i64] = Vec.new();
+    for _ in 0..n + 2 {
+        rest.push(0);
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        rest[i] = cost[i] + if rest[i + 1] < rest[i + 2] { rest[i + 1] } else { rest[i + 2] };
+        i -= 1;
+    }
+    if rest[0] < rest[1] { rest[0] } else { rest[1] }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, cost: Vec[i64]) -> i64 {
+    if which == 0 {
+        min_cost_climbing_stairs_star(cost)
+    } else if which == 1 {
+        min_cost_climbing_stairs_table(cost)
+    } else if which == 2 {
+        min_cost_climbing_stairs_memo(cost)
+    } else {
+        min_cost_climbing_stairs_down(cost)
+    }
+}
+
+// The definition, as the problem states it: a climb is the set of steps
+// it stands on, which must begin at step 0 or 1, leave no gap of more
+// than one step, and end at step n - 2 or n - 1, from where one more
+// climb reaches the top; it costs the sum of those steps. Try every set
+// of steps.
+fn definition(cost: Vec[i64]) -> i64 {
+    let n = cost.len();
+    let mut best = -1;
+    for mask in 1..(1 << n) {
+        let mut ok = true;
+        let mut last = -1;
+        let mut paid = 0;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                if i - last > 2 {
+                    ok = false;
+                }
+                last = i;
+                paid += cost[i];
+            }
+        }
+        if ok and last >= n - 2 and (best == -1 or paid < best) {
+            best = paid;
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 7460;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut total = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 2 to 10 steps costing 0 to 9
+        let n = 2 + next_random(mut seed) % 9;
+        let mut cost: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            cost.push(next_random(mut seed) % 10);
+        }
+        let want = definition(cost);
+        total += want;
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(cost[n - 1 - i]);
+        }
+        let mut tripled: Vec[i64] = Vec.new();
+        for c in cost.iter() {
+            tripled.push(3 * *c);
+        }
+        let mut longer = cost.clone();
+        longer.push(0);
+        for which in 0..arms {
+            let got = answer_with(which, cost);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the stairs taken in the other order, the same answer.
+            checks += 1;
+            if answer_with(which, reversed) != got {
+                fails[1] += 1;
+            }
+            // P3: every cost tripled, the answer tripled.
+            checks += 1;
+            if answer_with(which, tripled) != 3 * got {
+                fails[2] += 1;
+            }
+            // P4: a free step added at the top, the same answer.
+            checks += 1;
+            if answer_with(which, longer) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        failures += fails[i];
+    }
+    println(f"{cases} stairs (costs sum to {total}), {arms} arms, {checks} checks, {failures} failures");
+}
