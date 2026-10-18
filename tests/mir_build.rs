@@ -4004,20 +4004,23 @@ fn main() {
 /// `std.uuid`, beside the `Clock` global.
 #[test]
 fn mir_std_time_random_uuid() {
-    const SRC: &str = r#"import std.time.{Clock, Duration, sleep};
+    const SRC: &str = r#"import std.time.{Clock, Duration, SystemTime, sleep};
 import std.random.{next_u64};
 import std.uuid.{v4};
 
 fn main() {
     let d = Duration.ms(1500);
     println(f"{d.as_ms()} {Duration.secs(2).as_ms()} {d < Duration.secs(2)} {d == Duration.ms(1500)}");
+    let t0 = SystemTime.now();
     sleep(Duration.ms(2));
+    let t1 = SystemTime.now();
+    println(f"{t0.since_epoch().as_ms() > 1700000000000} {t0 < t1}");
     let u = v4();
     let parts: Vec[Str] = u.split("-").collect();
     println(f"{u.len()} {parts.len()} {parts[2].slice(0, 1)} {next_u64() != next_u64()} {Clock.now() > 0}");
 }
 "#;
-    let want = "1500 2000 true true\n36 5 4 true true\n";
+    let want = "1500 2000 true true\ntrue true\n36 5 4 true true\n";
     let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
     assert_eq!(interp.output, want);
     for opt in [0, 2] {

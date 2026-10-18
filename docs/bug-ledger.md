@@ -93,17 +93,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 738 |
-| run-vs-build | 608 |
+| run-vs-build | 610 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 278 |
+| missing-feature | 281 |
 | codegen-gap | 270 |
-| false-positive | 227 |
-| other | 175 |
+| false-positive | 232 |
+| other | 176 |
 | perf | 172 |
 | diagnostics | 166 |
 | crash | 122 |
-| soundness | 113 |
+| soundness | 114 |
 | use-after-free | 91 |
 
 ### By surface
@@ -112,14 +112,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2934 |
 | interp | 950 |
-| typecheck | 468 |
+| typecheck | 477 |
 | other | 115 |
 | ownership | 112 |
-| cli | 78 |
-| runtime | 77 |
+| cli | 79 |
+| runtime | 78 |
 | parser | 69 |
 | autopar | 59 |
-| resolver | 46 |
+| resolver | 49 |
 | effect | 32 |
 | lexer | 12 |
 ## Current state
@@ -204,6 +204,18 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-61 | 2026-10-15 | typecheck | low | A bare repeat literal `[0u8; 32]` with no expected type is a `Vec[u8]` on `karac check` and every MIR surface, but design.md § Collection literals says "the repeat form `[v; n]` always builds an `Array`, and `n` must be a constant" and that `let v: Vec[i64] = [0; 8];` is an error; `fn f() -> Array[u8, 4] { let mut out = [0u8; 4]; out[0] = 1u8; out }` is refused with "expected 'Array[u8, 4]', found 'Vec[u8]'" | — |
 | B-2026-10-15-62 | 2026-10-15 | typecheck | low | A type error inside a gated library module's item (`std.path`, `std.encoding`) is not reported by `karac check`, which passes, while the MIR surfaces report it and stop: with `let bad: i64 = "s";` added to `std.path.is_absolute`, `import std.path.{is_absolute};` is "All checks passed." and `__mir-run` is "typecheck: 13:20: expected 'i64', found 'String'" (a line of path.kara, printed as if it were the user's) | — |
 | B-2026-10-15-56 | 2026-10-15 | typecheck | low | A struct update whose base is a BINDING of another struct type is accepted by `karac check` and every MIR surface: with `struct D { a: i64, c: bool }` and `struct E { a: i64, c: bool }`, `let o = other(); let d = D { a: 5, ..o };` (o: E) passes and copies `o.c`, though design.md:1288 says the base "must have the same struct type" | — |
+| B-2026-10-15-108 | 2026-10-15 | cli+typecheck | high | `karac check` passes a program with a `#[derive]` even when it has library-mode errors (the derive re-typecheck in `Pipeline::lower` used the legacy builtins and its result replaced the library-mode one) | — |
+| B-2026-10-15-109 | 2026-10-15 | typecheck | medium | `karac check` reports a §5.6 conflict for `bs[i] = S { x: b.x }` (and `v.push(*b)`) where `b = ref bs[i]` is last used by that statement, though the right side and arguments run before the write | — |
+| B-2026-10-15-110 | 2026-10-15 | typecheck | medium | A string literal branch beside a `Str` view branch is refused: `match line.find(" ") { Some(i) => line[i + 1..line.len()].trim(), None => "" }` reports "match arms have incompatible types: 'StringSlice' and 'String'" (and the same for if/else and inside tuples) | — |
+| B-2026-10-15-111 | 2026-10-15 | typecheck | medium | `m[name]` on a `String`-keyed map refuses a `Str` key ("expected 'String', found 'Str'") though `get` / `contains_key` take one under "views at lookup" (decision 2026-10-11), so `node.children[name]` over `path.split("/")` fails `karac check` | — |
+| B-2026-10-15-102 | 2026-10-15 | typecheck | medium | `opt ?? ""` with `opt: Option[Str]` is refused by `karac check` and every MIR surface with "expected 'StringSlice', found 'String'": the string literal after `??` is typed `String`, though design.md § String literals makes a literal a `Str` wherever a `Str` is expected, and the fallback of an `Option[Str]` is one | — |
+| B-2026-10-15-103 | 2026-10-15 | resolver | medium | `import std.path.*;` (a wildcard import of any gated library module) binds nothing in a single file: every use is "undefined name", on `karac check` and every MIR surface, though design.md § Wildcards makes it bring in every item a single-item import could bind | — |
+| B-2026-10-15-104 | 2026-10-15 | resolver | medium | `import std.path;` followed by `path.parent(p)` passes `karac check` and then fails every backend ("a type that failed to check is not lowered yet" on MIR, an internal "resolved but has no binding" error on the interpreter); FIXED AS AN ERROR, a deliberate divergence: design.md § Imports makes `import db.connection;` bind the module, and a gated module has no module value in a single file yet, so the import is now refused with the two forms that work | — |
+| B-2026-10-15-105 | 2026-10-15 | resolver+typecheck | low | A gated library module cannot be imported as a module in a single file: `import std.path;` then `path.parent(p)` (design.md § Imports, `import db.connection;` binds `connection`) is refused; the items must be imported by name or with `.*` | — |
+| B-2026-10-15-106 | 2026-10-15 | typecheck | low | A bare repeat literal `[0u8; 32]` with no expected type is a `Vec[u8]` on `karac check` and every MIR surface, but design.md § Collection literals says "the repeat form `[v; n]` always builds an `Array`, and `n` must be a constant" and that `let v: Vec[i64] = [0; 8];` is an error; `fn f() -> Array[u8, 4] { let mut out = [0u8; 4]; out[0] = 1u8; out }` is refused with "expected 'Array[u8, 4]', found 'Vec[u8]'" | — |
+| B-2026-10-15-107 | 2026-10-15 | typecheck | low | A type error inside a gated library module's item (`std.path`, `std.encoding`) is not reported by `karac check`, which passes, while the MIR surfaces report it and stop: with `let bad: i64 = "s";` added to `std.path.is_absolute`, `import std.path.{is_absolute};` is "All checks passed." and `__mir-run` is "typecheck: 13:20: expected 'i64', found 'String'" (a line of path.kara, printed as if it were the user's) | — |
+| B-2026-10-15-101 | 2026-10-15 | typecheck | low | A struct update whose base is a BINDING of another struct type is accepted by `karac check` and every MIR surface: with `struct D { a: i64, c: bool }` and `struct E { a: i64, c: bool }`, `let o = other(); let d = D { a: 5, ..o };` (o: E) passes and copies `o.c`, though design.md:1288 says the base "must have the same struct type" | — |
+| B-2026-10-15-112 | 2026-10-15 | runtime | low | `std.time.Instant` is not implemented: docs/library/time-random-env.md has `Clock.now()` return an `Instant`, but the library's `Clock.now()` is a `#[compiler_builtin]` returning Unix SECONDS as `i64`, and the library `Sub` trait (`fn sub(own self, rhs: own Self) -> Self`) has no `Output`, so `later - earlier` cannot be declared to give a `Duration` | — |
 | B-2026-10-18-1 | 2026-10-18 | typecheck+interp+codegen | low | In generic code `T.Output` reads one `Output` per type, so a type with two operator impls (`impl Add for V { type Output = V }` and `impl Mul for V { type Output = i64 }`) gives `sum2[T: Add](a: own T, b: own T) -> T.Output` the `i64` of `Mul`: `sum2(V { x: 7 }, V { x: 8 }).x` is refused with "no field 'x' on type 'i64'" | — |
 | B-2026-10-18-2 | 2026-10-18 | typecheck | medium | A `const` whose initializer is an integer literal above i64::MAX panics `karac check` (and `karac __mir-run`): `const BIG: i128 = 18446744073709551615;` reaches `narrow_literal_to_i64` from `eval_const_expr` with "internal error: 128-bit integer literal ... reached an i64-only consumer (B-2026-08-19-8 stage 5)". The same literal in a `let`, in a match pattern, or the same value spelled `(1 << 64) - 1` all work | — |
 | B-2026-10-18-3 | 2026-10-18 | ownership | medium | Inside a loop, `karac check` refuses an owned loop-local value moved by a METHOD call in each of two exclusive branches, `if c { s.link(it); } else { s.link(it); }`, with "value 'it' was moved into a container (moved at line N), used again here", when `link(mut ref self, it: own It)` pushes it into a field. The same code outside a loop, or with a free function `take(mut v, it)` inside the loop, passes; __mir-run runs the refused program correctly | — |

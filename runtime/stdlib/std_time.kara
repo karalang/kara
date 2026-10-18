@@ -1,5 +1,6 @@
-// `std.time`: `Duration` and `sleep` (docs/library/time-random-env.md;
-// B-2026-10-15-10). `Clock` and `sleep_ms` are globals of the library.
+// `std.time`: `Duration`, `SystemTime` and `sleep`
+// (docs/library/time-random-env.md; B-2026-10-15-10). `Clock` and
+// `sleep_ms` are globals of the library.
 
 /// A span of time, held in nanoseconds.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -21,6 +22,25 @@ impl Duration {
     /// The whole milliseconds in this span.
     pub fn as_ms(self) -> i64 {
         self.ns / 1000000
+    }
+}
+
+/// Wall-clock time, which can jump when the system clock is set. Use an
+/// `Instant` to measure how long something takes.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct SystemTime {
+    ns: i64,
+}
+
+impl SystemTime {
+    /// The current wall-clock time.
+    pub fn now() -> SystemTime with reads(Clock) {
+        SystemTime { ns: Clock.wall_ns() }
+    }
+
+    /// The span since the Unix epoch.
+    pub fn since_epoch(self) -> Duration {
+        Duration { ns: self.ns }
     }
 }
 
