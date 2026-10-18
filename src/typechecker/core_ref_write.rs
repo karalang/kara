@@ -78,6 +78,9 @@ struct Walk<'t, 'a> {
     /// The edit that makes a `ref self` receiver `mut ref self`.
     self_fix: Option<FixIt>,
     errors: Vec<(Span, String, Option<FixIt>)>,
+    /// Checking an assignment's target: a read-only `Slice[T]` on the way
+    /// stops it. A method that writes a slice reports its own error.
+    assigning: bool,
     /// The places enclosing `for` loops iterate, innermost last.
     borrowed: Vec<Borrowed>,
     /// Locals bound by `let name = ref <place>`: the local, and the place it
@@ -246,6 +249,7 @@ impl<'a> TypeChecker<'a> {
             self_read_only: false,
             self_fix: None,
             errors: Vec::new(),
+            assigning: false,
             borrowed: Vec::new(),
             ref_lets: Vec::new(),
             branches: Vec::new(),
@@ -1339,7 +1343,9 @@ impl Walk<'_, '_> {
             ExprKind::FieldAccess { object, .. }
             | ExprKind::TupleIndex { object, .. }
             | ExprKind::Index { object, .. } => {
-                self.check_through(object, target.span, "an assignment through it")
+                self.assigning = true;
+                self.check_through(object, target.span, "an assignment through it");
+                self.assigning = false;
             }
             ExprKind::Unary {
                 op: UnaryOp::Deref,
@@ -1396,6 +1402,22 @@ impl Walk<'_, '_> {
                      (core-semantics.md §5.9). Declare the method `mut ref self`"
                 );
             }
+            ExprKind::Identifier(n)
+                if matches!(
+                    self.node_types.get(&at.id),
+                    Some((Type::Slice { mutable: false, .. }, _))
+                ) =>
+            {
+                let ty = type_display(&self.node_types[&at.id].0);
+                let action = action.replace("through it", &format!("through `{n}`"));
+                return format!(
+                    "`{n}` is a read-only `{ty}`, so {action} cannot modify it \
+                     (library/collections.md: changing a slice in place needs a \
+                     `mut Slice[T]`). Write through the sequence itself, pass \
+                     `mut v[a..b]` to a `mut Slice[T]` parameter, or copy the \
+                     elements with `.to_vec()`"
+                );
+            }
             ExprKind::Identifier(n) => (n.as_str(), self.origin_of(n)),
             _ => {
                 return format!(
@@ -1450,6 +1472,15 @@ impl Walk<'_, '_> {
         // handle, however it was reached (§6.2 checks them at run time).
         if self.is_handle(ty) {
             return Step::Writable;
+        }
+        // A `Slice[T]` is a read-only view; only a `mut Slice[T]` writes
+        // (library/collections.md, "Changing in place"; B-2026-10-15-61).
+        if let (true, Type::Slice { mutable, .. }) = (self.assigning, ty) {
+            return if *mutable {
+                Step::Writable
+            } else {
+                Step::ReadOnly
+            };
         }
         match ty {
             Type::Ref(inner) if self.is_handle(inner) => Step::Writable,

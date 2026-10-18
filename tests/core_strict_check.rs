@@ -7345,3 +7345,29 @@ fn f64_from_bits_names_bits_as_f64() {
         "(bits + 0).bits_as_f64()",
     );
 }
+
+/// B-2026-10-15-61: a `Slice[T]` is a read-only view, so assigning through
+/// one (`s.bytes()`, `v[a..b]`) is refused; a `mut Slice[T]` parameter and a
+/// copied `Vec` still write.
+#[test]
+fn an_assignment_through_a_read_only_slice_is_refused() {
+    rejected(
+        "slice-bytes-write",
+        "fn main() {\n    let b = String.from(\"hello\");\n    let mut t = b.bytes();\n    t[4] = 97;\n    println(b);\n}\n",
+        "`t` is a read-only `Slice[u8]`",
+    );
+    rejected(
+        "slice-range-write",
+        "fn main() {\n    let v: Vec[i64] = [1, 2, 3];\n    let mut w = v[0..2];\n    w[0] = 9;\n    println(f\"{v}\");\n}\n",
+        "`w` is a read-only `Slice[i64]`",
+    );
+    rejected(
+        "slice-param-write",
+        "fn set(xs: Slice[i64]) { xs[0] = 1; }\nfn main() {\n    let v: Vec[i64] = [1, 2];\n    set(v[0..2]);\n}\n",
+        "`xs` is a read-only `Slice[i64]`",
+    );
+    accepted(
+        "slice-mut-write",
+        "fn bump(xs: mut Slice[i64]) { xs[0] = xs[0] + 1; }\nfn main() {\n    let mut v: Vec[i64] = [1, 2, 3];\n    bump(mut v[0..2]);\n    let mut t = String.from(\"hello\").bytes().to_vec();\n    t[4] = 97;\n    println(f\"{v} {String.from_utf8(t).unwrap()}\");\n}\n",
+    );
+}
