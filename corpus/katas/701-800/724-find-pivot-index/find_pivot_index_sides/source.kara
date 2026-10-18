@@ -1,0 +1,83 @@
+// LeetCode #724: Find Pivot Index -- both sides added up afresh.
+//
+// For each index in turn, add up the numbers to its left and the
+// numbers to its right, and stop at the first index where the two
+// agree. O(n^2) time, O(1) space.
+
+fn pivot_index(nums: Vec[i64]) -> i64 {
+    for i in 0..nums.len() {
+        let mut left = 0;
+        for j in 0..i {
+            left += nums[j];
+        }
+        let mut right = 0;
+        for j in i + 1..nums.len() {
+            right += nums[j];
+        }
+        if left == right {
+            return i;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    nums
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {pivot_index(nums)}");
+}
+
+fn main() {
+    show([1, 7, 3, 6, 5, 6]);
+    show([1, 2, 3]);
+    show([2, 1, -1]);
+    show([0]);
+    show([5]);
+    show([0, 0, 0]);
+    show([1, -1]);
+    show([-1, -1, -1, 0, 1, 1]);
+    show([3, 5, -2, 1, 1, 9, -6, 3]);
+    show([1, 2, 3, 4, 0, 6]);
+    // 10,000 numbers, the problem's most, at random; then 4,999 random
+    // numbers, one more, and the first 4,999 again reversed, which
+    // balance at index 4,999 if nowhere earlier.
+    let mut seed: i64 = 724;
+    let big = random_nums(10000, 1000, mut seed);
+    println(f"10000 random numbers -> {pivot_index(big)}");
+    let half = random_nums(5000, 1000, mut seed);
+    let mut balanced: Vec[i64] = Vec.new();
+    for i in 0..5000 {
+        balanced.push(half[i]);
+    }
+    for i in 0..4999 {
+        balanced.push(half[4998 - i]);
+    }
+    println(f"9999 numbers that balance -> {pivot_index(balanced)}");
+    let zeros = vec![0; 10000];
+    println(f"10000 zeros -> {pivot_index(zeros)}");
+    let mut sum = 0;
+    let mut found = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let top = next_random(mut seed) % 4;
+        let p = pivot_index(random_nums(n, top, mut seed));
+        if p >= 0 {
+            found += 1;
+        }
+        sum = (sum * 131 + p + 1) % 1000000007;
+    }
+    println(f"300 random arrays: {found} with a pivot, checksum {sum}");
+}

@@ -1,0 +1,85 @@
+// LeetCode #727: Minimum Window Subsequence -- forward, then back.
+//
+// Walk s1 forward matching s2's letters in order until the last one is
+// matched. That end is fixed, but the window may start later than where
+// the forward walk began, so walk back from the end matching s2's
+// letters from the last: where the first letter is met is the latest
+// start for that end. Keep the window if it is shorter, then begin
+// again one place after its start. O(n * m) time, O(1) space.
+
+fn min_window(s1: String, s2: String) -> String {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let n = a.len();
+    let m = b.len();
+    let mut best_start = -1;
+    let mut best_len = n + 1;
+    let mut i = 0;
+    while i < n {
+        let mut j = 0;
+        while i < n {
+            if a[i] == b[j] {
+                j += 1;
+                if j == m {
+                    break;
+                }
+            }
+            i += 1;
+        }
+        if j < m {
+            break;
+        }
+        let end = i;
+        let mut k = m - 1;
+        let mut p = end;
+        while k >= 0 {
+            if a[p] == b[k] {
+                k -= 1;
+            }
+            p -= 1;
+        }
+        let start = p + 1;
+        if end - start + 1 < best_len {
+            best_len = end - start + 1;
+            best_start = start;
+        }
+        i = start + 1;
+    }
+    if best_start < 0 {
+        return "".to_string();
+    }
+    s1.slice(best_start, best_start + best_len).to_string()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut s = "".to_string();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % kinds) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    // 10 texts of 20,000 letters from a to h, the problem's longest,
+    // made once.
+    let mut seed: i64 = 727;
+    let mut texts: Vec[String] = Vec.new();
+    for _ in 0..10 {
+        texts.push(random_word(20000, 8, mut seed));
+    }
+    // 300 rounds: every text is searched for a fresh random word of
+    // 20 letters, the windows' lengths summed.
+    let mut sum = 0;
+    for _ in 0..300 {
+        for d in 0..10 {
+            let word = random_word(20, 8, mut seed);
+            sum += min_window(texts[d], word).len();
+        }
+    }
+    println(f"300 rounds of 10 texts of 20000 letters: sum {sum}");
+}

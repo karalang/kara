@@ -1,0 +1,229 @@
+// LeetCode #728: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random ranges.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn self_dividing_star(n: i64) -> bool {
+    let mut rest = n;
+    while rest > 0 {
+        let d = rest % 10;
+        if d == 0 or n % d != 0 {
+            return false;
+        }
+        rest /= 10;
+    }
+    true
+}
+
+fn self_dividing_numbers_star(left: i64, right: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for n in left..right + 1 {
+        if self_dividing_star(n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+// ---- text arm -------------------------------------------------------
+
+fn self_dividing_numbers_text(left: i64, right: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for n in left..right + 1 {
+        let mut ok = true;
+        for c in f"{n}".bytes().iter() {
+            let d = (*c - b'0') as i64;
+            if d == 0 or n % d != 0 {
+                ok = false;
+            }
+        }
+        if ok {
+            out.push(n);
+        }
+    }
+    out
+}
+
+// ---- mask arm -------------------------------------------------------
+
+fn self_dividing_numbers_mask(left: i64, right: i64) -> Vec[i64] {
+    let mut mask: Vec[i64] = vec![0; right + 1];
+    for n in 1..right + 1 {
+        mask[n] = mask[n / 10] | (1 << (n % 10));
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for n in left..right + 1 {
+        if mask[n] & 1 == 0 {
+            let mut ok = true;
+            for d in 1..10 {
+                if mask[n] & (1 << d) != 0 and n % d != 0 {
+                    ok = false;
+                }
+            }
+            if ok {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
+// ---- lcm arm --------------------------------------------------------
+
+fn gcd_lcm(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd_lcm(b, a % b) }
+}
+
+fn self_dividing_numbers_lcm(left: i64, right: i64) -> Vec[i64] {
+    let mut l: Vec[i64] = vec![1; right + 1];
+    for n in 1..right + 1 {
+        let d = n % 10;
+        let up = l[n / 10];
+        l[n] = if d == 0 or up == 0 { 0 } else { up / gcd_lcm(up, d) * d };
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for n in left..right + 1 {
+        if l[n] != 0 and n % l[n] == 0 {
+            out.push(n);
+        }
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn numbers(which: i64, left: i64, right: i64) -> Vec[i64] {
+    if which == 0 {
+        self_dividing_numbers_star(left, right)
+    } else if which == 1 {
+        self_dividing_numbers_text(left, right)
+    } else if which == 2 {
+        self_dividing_numbers_mask(left, right)
+    } else {
+        self_dividing_numbers_lcm(left, right)
+    }
+}
+
+// Whether digit d appears in n, looking at every power of ten up to n.
+fn has_digit(n: i64, d: i64) -> bool {
+    let mut p = 1;
+    while p <= n {
+        if (n / p) % 10 == d {
+            return true;
+        }
+        p *= 10;
+    }
+    false
+}
+
+// The definition: no digit 0, and every digit from 1 to 9 that appears
+// divides the number.
+fn definition(left: i64, right: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for n in left..right + 1 {
+        let mut ok = not has_digit(n, 0);
+        for d in 1..10 {
+            if has_digit(n, d) and n % d != 0 {
+                ok = false;
+            }
+        }
+        if ok {
+            out.push(n);
+        }
+    }
+    out
+}
+
+fn main() {
+    let mut seed = 7280;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut empty = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // Ranges of 1 to 200 numbers anywhere in 1 to 3,000, small enough
+        // that the arms that fill a table up to right stay quick.
+        let left = 1 + next_random(mut seed) % 3000;
+        let mut right = left + next_random(mut seed) % 200;
+        if right > 3000 {
+            right = 3000;
+        }
+        let want = definition(left, right);
+        if want.len() == 0 {
+            empty += 1;
+        }
+        let mid = left + next_random(mut seed) % (right - left + 1);
+        for which in 0..arms {
+            let got = numbers(which, left, right);
+            // P1: the definition's numbers.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: increasing, and all in the range.
+            checks += 1;
+            let mut ok = true;
+            for i in 0..got.len() {
+                if got[i] < left or got[i] > right or (i > 0 and got[i] <= got[i - 1]) {
+                    ok = false;
+                }
+            }
+            if not ok {
+                fails[1] += 1;
+            }
+            // P3: the range cut in two gives the two lists one after the
+            // other.
+            checks += 1;
+            let mut joined = numbers(which, left, mid);
+            if mid < right {
+                for n in numbers(which, mid + 1, right).iter() {
+                    joined.push(*n);
+                }
+            }
+            if joined != got {
+                fails[2] += 1;
+            }
+            // P4: every number in the range with all digits the same is
+            // in the list, and no number with a 0 is.
+            checks += 1;
+            let mut ok4 = true;
+            for n in left..right + 1 {
+                let d = n % 10;
+                let mut same = d != 0;
+                let mut rest = n;
+                while rest > 0 {
+                    if rest % 10 != d {
+                        same = false;
+                    }
+                    rest /= 10;
+                }
+                if same and not got.contains(n) {
+                    ok4 = false;
+                }
+            }
+            for n in got.iter() {
+                if has_digit(*n, 0) {
+                    ok4 = false;
+                }
+            }
+            if not ok4 {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} ranges ({empty} with none), {arms} arms, {checks} checks, {total} failures");
+}

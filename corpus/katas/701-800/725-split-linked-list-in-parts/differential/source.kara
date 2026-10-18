@@ -1,0 +1,343 @@
+// LeetCode #725: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random lists.
+
+// ---- ★ arm ----------------------------------------------------------
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn split_list_to_parts_star(head: Option[ListNode], k: i64) -> Vec[Option[ListNode]] {
+    let mut n = 0;
+    let mut cur = head;
+    while let Some(node) = cur {
+        n += 1;
+        cur = node.next;
+    }
+    let size = n / k;
+    let extra = n % k;
+    let mut parts: Vec[Option[ListNode]] = Vec.new();
+    cur = head;
+    for i in 0..k {
+        parts.push(cur);
+        let len = if i < extra { size + 1 } else { size };
+        if len > 0 {
+            if let Some(first) = cur {
+                let mut tail = first;
+                for _ in 0..len - 1 {
+                    if let Some(next) = tail.next {
+                        tail = next;
+                    }
+                }
+                cur = tail.next;
+                tail.next = None;
+            }
+        }
+    }
+    parts
+}
+
+// ---- this arm's list, from and back to values -------------------------
+
+fn from_values_star(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = values.len();
+    while i > 0 {
+        i -= 1;
+        head = Some(ListNode { val: values[i], next: head });
+    }
+    head
+}
+
+fn to_values_star(head: Option[ListNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        out.push(node.val);
+        cur = node.next;
+    }
+    out
+}
+
+fn split_values_star(values: Vec[i64], k: i64) -> Vec[Vec[i64]] {
+    let parts = split_list_to_parts_star(from_values_star(values), k);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for p in parts.iter() {
+        out.push(to_values_star(*p));
+    }
+    out
+}
+
+// ---- arena arm ------------------------------------------------------
+
+fn split_arena_arena(next: mut ref Vec[i64], head: i64, k: i64) -> Vec[i64] {
+    let mut n = 0;
+    let mut cur = head;
+    while cur != -1 {
+        n += 1;
+        cur = next[cur];
+    }
+    let mut parts: Vec[i64] = Vec.new();
+    cur = head;
+    for i in 0..k {
+        parts.push(cur);
+        let len = n / k + (if i < n % k { 1 } else { 0 });
+        if len > 0 {
+            let mut tail = cur;
+            for _ in 0..len - 1 {
+                tail = next[tail];
+            }
+            cur = next[tail];
+            next[tail] = -1;
+        }
+    }
+    parts
+}
+
+// ---- this arm's list, from and back to values -------------------------
+
+fn split_values_arena(values: Vec[i64], k: i64) -> Vec[Vec[i64]] {
+    // Place p of the list in slot n - 1 - p.
+    let n = values.len();
+    let mut vals: Vec[i64] = vec![0; n];
+    let mut next: Vec[i64] = vec![-1; n];
+    for p in 0..n {
+        vals[n - 1 - p] = values[p];
+        if p + 1 < n {
+            next[n - 1 - p] = n - 2 - p;
+        }
+    }
+    let head = if n > 0 { n - 1 } else { -1 };
+    let heads = split_arena_arena(mut next, head, k);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for h in heads.iter() {
+        let mut part: Vec[i64] = Vec.new();
+        let mut s = *h;
+        while s != -1 {
+            part.push(vals[s]);
+            s = next[s];
+        }
+        out.push(part);
+    }
+    out
+}
+
+// ---- persistent arm -------------------------------------------------
+
+shared enum List {
+    Nil,
+    Cons(i64, List),
+}
+
+fn take_persistent(l: List, m: i64) -> List {
+    if m == 0 {
+        return List.Nil;
+    }
+    match l {
+        List.Nil => List.Nil,
+        List.Cons(v, rest) => List.Cons(v, take_persistent(rest, m - 1)),
+    }
+}
+
+fn skip_persistent(l: List, m: i64) -> List {
+    if m == 0 {
+        return l;
+    }
+    match l {
+        List.Nil => List.Nil,
+        List.Cons(_, rest) => skip_persistent(rest, m - 1),
+    }
+}
+
+fn length_persistent(l: List) -> i64 {
+    match l {
+        List.Nil => 0,
+        List.Cons(_, rest) => 1 + length_persistent(rest),
+    }
+}
+
+fn split_list_to_parts_persistent(head: List, k: i64) -> Vec[List] {
+    let n = length_persistent(head);
+    let mut parts: Vec[List] = Vec.new();
+    let mut rest = head;
+    for i in 0..k {
+        let len = if i < n % k { n / k + 1 } else { n / k };
+        parts.push(take_persistent(rest, len));
+        rest = skip_persistent(rest, len);
+    }
+    parts
+}
+
+// ---- this arm's list, from and back to values -------------------------
+
+fn split_values_persistent(values: Vec[i64], k: i64) -> Vec[Vec[i64]] {
+    let mut head = List.Nil;
+    let mut i = values.len();
+    while i > 0 {
+        i -= 1;
+        head = List.Cons(values[i], head);
+    }
+    let parts = split_list_to_parts_persistent(head, k);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for p in parts.iter() {
+        let mut part: Vec[i64] = Vec.new();
+        let mut cur = *p;
+        while let List.Cons(v, rest) = cur {
+            part.push(v);
+            cur = rest;
+        }
+        out.push(part);
+    }
+    out
+}
+
+// ---- offsets arm ----------------------------------------------------
+
+fn split_values_offsets(values: Vec[i64], k: i64) -> Vec[Vec[i64]] {
+    let n = values.len();
+    let size = n / k;
+    let extra = n % k;
+    let mut parts: Vec[Vec[i64]] = Vec.new();
+    for i in 0..k {
+        let start = i * size + (if i < extra { i } else { extra });
+        let len = if i < extra { size + 1 } else { size };
+        let mut part: Vec[i64] = Vec.new();
+        for j in start..start + len {
+            part.push(values[j]);
+        }
+        parts.push(part);
+    }
+    parts
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn split(which: i64, values: Vec[i64], k: i64) -> Vec[Vec[i64]] {
+    if which == 0 {
+        split_values_star(values, k)
+    } else if which == 1 {
+        split_values_arena(values, k)
+    } else if which == 2 {
+        split_values_persistent(values, k)
+    } else {
+        split_values_offsets(values, k)
+    }
+}
+
+// The definition: each part in turn takes the remaining numbers divided
+// by the remaining parts, rounded up.
+fn definition(values: Vec[i64], k: i64) -> Vec[Vec[i64]] {
+    let mut parts: Vec[Vec[i64]] = Vec.new();
+    let mut at = 0;
+    for j in 0..k {
+        let left = values.len() - at;
+        let parts_left = k - j;
+        let len = (left + parts_left - 1) / parts_left;
+        let mut part: Vec[i64] = Vec.new();
+        for _ in 0..len {
+            part.push(values[at]);
+            at += 1;
+        }
+        parts.push(part);
+    }
+    parts
+}
+
+fn main() {
+    let mut seed = 7250;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut uneven = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 0 to 20 numbers in 1 to 10 parts, so empty parts, even splits
+        // and uneven ones are all common.
+        let n = next_random(mut seed) % 21;
+        let k = 1 + next_random(mut seed) % 10;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 1001);
+        }
+        if n % k != 0 {
+            uneven += 1;
+        }
+        let want = definition(values.clone(), k);
+        for which in 0..arms {
+            let got = split(which, values.clone(), k);
+            // P1: the definition's parts.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: put back together in order, the list.
+            checks += 1;
+            let mut joined: Vec[i64] = Vec.new();
+            for p in got.iter() {
+                for v in p.iter() {
+                    joined.push(*v);
+                }
+            }
+            if joined != values {
+                fails[1] += 1;
+            }
+            // P3: k parts, whose lengths never grow and differ by at
+            // most one.
+            checks += 1;
+            let mut ok = got.len() == k;
+            if ok {
+                for i in 1..k {
+                    if got[i].len() > got[i - 1].len() {
+                        ok = false;
+                    }
+                }
+                if got[0].len() - got[k - 1].len() > 1 {
+                    ok = false;
+                }
+            }
+            if not ok {
+                fails[2] += 1;
+            }
+            // P4: the list less its first part, in k - 1 parts, the
+            // other parts.
+            if k > 1 and got.len() == k {
+                checks += 1;
+                let mut first_len = got[0].len();
+                if first_len > n {
+                    first_len = n;
+                }
+                let mut tail: Vec[i64] = Vec.new();
+                for j in first_len..n {
+                    tail.push(values[j]);
+                }
+                let again = split(which, tail, k - 1);
+                let mut same = again.len() == k - 1;
+                if same {
+                    for i in 1..k {
+                        if again[i - 1] != got[i] {
+                            same = false;
+                        }
+                    }
+                }
+                if not same {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} lists ({uneven} split unevenly), {arms} arms, {checks} checks, {total} failures");
+}

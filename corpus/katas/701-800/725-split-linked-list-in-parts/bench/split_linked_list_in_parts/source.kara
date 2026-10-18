@@ -1,0 +1,96 @@
+// LeetCode #725: Split Linked List in Parts -- count, then cut in place.
+//
+// With n nodes and k parts, every part has n / k nodes and the first
+// n % k parts one more. So count the nodes, then walk the list once,
+// taking each part's head, stepping to its last node and cutting the
+// link after it. Parts past the end of the list are empty. O(n + k)
+// time, O(1) space besides the k heads.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn split_list_to_parts(head: Option[ListNode], k: i64) -> Vec[Option[ListNode]] {
+    let mut n = 0;
+    let mut cur = head;
+    while let Some(node) = cur {
+        n += 1;
+        cur = node.next;
+    }
+    let size = n / k;
+    let extra = n % k;
+    let mut parts: Vec[Option[ListNode]] = Vec.new();
+    cur = head;
+    for i in 0..k {
+        parts.push(cur);
+        let len = if i < extra { size + 1 } else { size };
+        if len > 0 {
+            if let Some(first) = cur {
+                let mut tail = first;
+                for _ in 0..len - 1 {
+                    if let Some(next) = tail.next {
+                        tail = next;
+                    }
+                }
+                cur = tail.next;
+                tail.next = None;
+            }
+        }
+    }
+    parts
+}
+
+// Put the parts back together, starting from part `from` and going
+// round: each part's last node linked to the head of the part after it.
+fn rejoin(parts: Vec[Option[ListNode]], from: i64) -> Option[ListNode] {
+    let k = parts.len();
+    let mut head: Option[ListNode] = None;
+    let mut i = k;
+    while i > 0 {
+        i -= 1;
+        if let Some(first) = parts[(from + i) % k] {
+            let mut tail = first;
+            while let Some(next) = tail.next {
+                tail = next;
+            }
+            tail.next = head;
+            head = Some(first);
+        }
+    }
+    head
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 lists of 1,000 numbers from 0 to 999, made once.
+    let mut seed: i64 = 725;
+    let mut lists: Vec[Option[ListNode]] = Vec.new();
+    for _ in 0..20 {
+        let mut head: Option[ListNode] = None;
+        for _ in 0..1000 {
+            head = Some(ListNode { val: next_random(mut seed) % 1000, next: head });
+        }
+        lists.push(head);
+    }
+    // 5000 rounds: every list is split into 1 to 50 parts, the first
+    // number of every part is folded into a hash, and the parts are put
+    // back together starting from a different one.
+    let mut hash = 0;
+    for round in 0..5000 {
+        for d in 0..20 {
+            let k = 1 + (round * 7 + d) % 50;
+            let parts = split_list_to_parts(lists[d], k);
+            for p in parts.iter() {
+                let v = if let Some(first) = *p { first.val + 1 } else { 0 };
+                hash = (hash * 31 + v) % 1000000007;
+            }
+            lists[d] = rejoin(parts, round % k);
+        }
+    }
+    println(f"5000 rounds of 20 lists of 1000 numbers: hash {hash}");
+}

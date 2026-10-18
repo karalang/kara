@@ -1,0 +1,135 @@
+// LeetCode #725: Split Linked List in Parts -- a persistent list.
+//
+// The list is a `shared enum`, `Nil` or `Cons(value, rest)`, never
+// changed. Each part is a fresh copy of its first nodes, `take`, and
+// the rest of the list is reached by skipping them, `skip`, sharing the
+// input's nodes. The input is left whole. O(n + k) time, O(n) new nodes
+// and O(n) stack for the recursion.
+
+shared enum List {
+    Nil,
+    Cons(i64, List),
+}
+
+fn take(l: List, m: i64) -> List {
+    if m == 0 {
+        return List.Nil;
+    }
+    match l {
+        List.Nil => List.Nil,
+        List.Cons(v, rest) => List.Cons(v, take(rest, m - 1)),
+    }
+}
+
+fn skip(l: List, m: i64) -> List {
+    if m == 0 {
+        return l;
+    }
+    match l {
+        List.Nil => List.Nil,
+        List.Cons(_, rest) => skip(rest, m - 1),
+    }
+}
+
+fn length(l: List) -> i64 {
+    match l {
+        List.Nil => 0,
+        List.Cons(_, rest) => 1 + length(rest),
+    }
+}
+
+fn split_list_to_parts(head: List, k: i64) -> Vec[List] {
+    let n = length(head);
+    let mut parts: Vec[List] = Vec.new();
+    let mut rest = head;
+    for i in 0..k {
+        let len = if i < n % k { n / k + 1 } else { n / k };
+        parts.push(take(rest, len));
+        rest = skip(rest, len);
+    }
+    parts
+}
+
+// ---- this arm's list, from and back to values -------------------------
+
+fn split_values(values: Vec[i64], k: i64) -> Vec[Vec[i64]] {
+    let mut head = List.Nil;
+    let mut i = values.len();
+    while i > 0 {
+        i -= 1;
+        head = List.Cons(values[i], head);
+    }
+    let parts = split_list_to_parts(head, k);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for p in parts.iter() {
+        let mut part: Vec[i64] = Vec.new();
+        let mut cur = *p;
+        while let List.Cons(v, rest) = cur {
+            part.push(v);
+            cur = rest;
+        }
+        out.push(part);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(values: Vec[i64], k: i64) {
+    println(f"{values}, k = {k} -> {split_values(values, k)}");
+}
+
+// The parts' lengths, and whether they put back together are the list.
+fn summary(values: Vec[i64], k: i64) {
+    let parts = split_values(values, k);
+    let mut lengths: Vec[i64] = Vec.new();
+    let mut joined: Vec[i64] = Vec.new();
+    for p in parts.iter() {
+        lengths.push(p.len());
+        for v in p.iter() {
+            joined.push(*v);
+        }
+    }
+    println(f"{values.len()} numbers, k = {k} -> lengths {lengths}, rejoined {joined == values}");
+}
+
+fn main() {
+    show([1, 2, 3], 5);
+    show([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3);
+    show([], 3);
+    show([7], 1);
+    show([1, 2, 3, 4, 5, 6], 3);
+    show([4, 0, 4], 1);
+    show([5, 6, 7, 8], 4);
+    show([1, 2, 3, 4, 5, 6, 7], 6);
+    let mut seed: i64 = 725;
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        big.push(next_random(mut seed) % 1001);
+    }
+    summary(big.clone(), 7);
+    summary(big.clone(), 1);
+    big.pop();
+    summary(big.clone(), 50);
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 21;
+        let k = 1 + next_random(mut seed) % 8;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 1001);
+        }
+        for p in split_values(values, k).iter() {
+            sum = (sum * 131 + p.len() + 1) % 1000000007;
+            for v in p.iter() {
+                sum = (sum * 131 + *v) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random lists: checksum {sum}");
+}

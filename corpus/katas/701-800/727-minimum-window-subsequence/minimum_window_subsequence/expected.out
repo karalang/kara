@@ -1,0 +1,14 @@
+"abcdebdde", "bde" -> "bcde"
+"jmeqksfrsdcmsiwvaovztaqenprpvnbstl", "u" -> ""
+"abc", "abc" -> "abc"
+"ab", "abc" -> ""
+"abab", "ab" -> "ab"
+"aaaa", "aa" -> "aa"
+"cnhczmccqouqadqtmjjzl", "mm" -> "mccqouqadqtm"
+"fgrqsqsnodwmxzkzxwqegkndaa", "kzed" -> "kzxwqegknd"
+"zzzzaz", "az" -> "az"
+20000 random letters, 100 random letters -> length 1904 at 5389
+20000 of 3 letters, 100 of 3 letters -> length 225 at 7281
+20000 a's, 100 a's -> length 100 at 0
+ab 10000 times then c, ab 50 times then c -> length 101 at 19900
+300 random pairs: 224 with a window, checksum 803230836

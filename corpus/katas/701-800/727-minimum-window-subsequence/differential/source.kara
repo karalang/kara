@@ -1,0 +1,319 @@
+// LeetCode #727: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random pairs.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn min_window_star(s1: String, s2: String) -> String {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let n = a.len();
+    let m = b.len();
+    let mut best_start = -1;
+    let mut best_len = n + 1;
+    let mut i = 0;
+    while i < n {
+        let mut j = 0;
+        while i < n {
+            if a[i] == b[j] {
+                j += 1;
+                if j == m {
+                    break;
+                }
+            }
+            i += 1;
+        }
+        if j < m {
+            break;
+        }
+        let end = i;
+        let mut k = m - 1;
+        let mut p = end;
+        while k >= 0 {
+            if a[p] == b[k] {
+                k -= 1;
+            }
+            p -= 1;
+        }
+        let start = p + 1;
+        if end - start + 1 < best_len {
+            best_len = end - start + 1;
+            best_start = start;
+        }
+        i = start + 1;
+    }
+    if best_start < 0 {
+        return "".to_string();
+    }
+    s1.slice(best_start, best_start + best_len).to_string()
+}
+
+// ---- dp arm ---------------------------------------------------------
+
+fn min_window_dp(s1: String, s2: String) -> String {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let n = a.len();
+    let m = b.len();
+    let mut start: Vec[i64] = vec![-1; m];
+    let mut best_start = -1;
+    let mut best_len = n + 1;
+    for i in 0..n {
+        let mut j = m - 1;
+        while j >= 1 {
+            if a[i] == b[j] {
+                start[j] = start[j - 1];
+            }
+            j -= 1;
+        }
+        if a[i] == b[0] {
+            start[0] = i;
+        }
+        if start[m - 1] >= 0 and i - start[m - 1] + 1 < best_len {
+            best_len = i - start[m - 1] + 1;
+            best_start = start[m - 1];
+        }
+    }
+    if best_start < 0 {
+        return "".to_string();
+    }
+    s1.slice(best_start, best_start + best_len).to_string()
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn min_window_table(s1: String, s2: String) -> String {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let n = a.len();
+    let m = b.len();
+    let mut next: Vec[i64] = vec![n; (n + 1) * 26];
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        for c in 0..26 {
+            next[i * 26 + c] = next[(i + 1) * 26 + c];
+        }
+        next[i * 26 + (a[i] - b'a') as i64] = i;
+    }
+    let mut best_start = -1;
+    let mut best_len = n + 1;
+    for s in 0..n {
+        if a[s] != b[0] {
+            continue;
+        }
+        let mut p = s + 1;
+        let mut ok = true;
+        for j in 1..m {
+            let at = next[p * 26 + (b[j] - b'a') as i64];
+            if at == n {
+                ok = false;
+                break;
+            }
+            p = at + 1;
+        }
+        if not ok {
+            break;
+        }
+        if p - s < best_len {
+            best_len = p - s;
+            best_start = s;
+        }
+    }
+    if best_start < 0 {
+        return "".to_string();
+    }
+    s1.slice(best_start, best_start + best_len).to_string()
+}
+
+// ---- bisect arm -----------------------------------------------------
+
+// The first entry of the sorted list greater than x, or its length.
+fn first_after_bisect(places: Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = places.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if places[mid] > x {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn min_window_bisect(s1: String, s2: String) -> String {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let n = a.len();
+    let m = b.len();
+    let mut places: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..26 {
+        places.push(Vec.new());
+    }
+    for i in 0..n {
+        places[(a[i] - b'a') as i64].push(i);
+    }
+    let mut best_start = -1;
+    let mut best_len = n + 1;
+    let c0 = (b[0] - b'a') as i64;
+    for s in places[c0].iter() {
+        let mut p = *s;
+        let mut ok = true;
+        for j in 1..m {
+            let c = (b[j] - b'a') as i64;
+            let at = first_after_bisect(places[c], p);
+            if at == places[c].len() {
+                ok = false;
+                break;
+            }
+            p = places[c][at];
+        }
+        if not ok {
+            break;
+        }
+        if p - *s + 1 < best_len {
+            best_len = p - *s + 1;
+            best_start = *s;
+        }
+    }
+    if best_start < 0 {
+        return "".to_string();
+    }
+    s1.slice(best_start, best_start + best_len).to_string()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut s = "".to_string();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % kinds) as u8) as char);
+    }
+    s
+}
+
+fn window(which: i64, s1: String, s2: String) -> String {
+    if which == 0 {
+        min_window_star(s1, s2)
+    } else if which == 1 {
+        min_window_dp(s1, s2)
+    } else if which == 2 {
+        min_window_table(s1, s2)
+    } else {
+        min_window_bisect(s1, s2)
+    }
+}
+
+// Whether t's letters appear in s in order.
+fn is_subsequence(t: String, s: String) -> bool {
+    let a = t.bytes();
+    let b = s.bytes();
+    let mut j = 0;
+    for i in 0..b.len() {
+        if j < a.len() and a[j] == b[i] {
+            j += 1;
+        }
+    }
+    j == a.len()
+}
+
+fn reversed(s: String) -> String {
+    let b = s.bytes();
+    let mut out = "".to_string();
+    let mut i = b.len();
+    while i > 0 {
+        i -= 1;
+        out.push(b[i] as char);
+    }
+    out
+}
+
+// The definition: every window of s1, shortest first and leftmost first
+// among those, the first that holds s2.
+fn definition(s1: String, s2: String) -> String {
+    let n = s1.len();
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let w = s1.slice(i, i + len).to_string();
+            if is_subsequence(s2.clone(), w.clone()) {
+                return w;
+            }
+        }
+    }
+    "".to_string()
+}
+
+fn main() {
+    let mut seed = 7270;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut none = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 14 letters of 1 to 3 kinds, and 1 to 4 to find, so
+        // windows, ties and no window are all common.
+        let n = 1 + next_random(mut seed) % 14;
+        let m = 1 + next_random(mut seed) % 4;
+        let kinds = 1 + next_random(mut seed) % 3;
+        let s1 = random_word(n, kinds, mut seed);
+        let s2 = random_word(m, kinds, mut seed);
+        let want = definition(s1.clone(), s2.clone());
+        if want.len() == 0 {
+            none += 1;
+        }
+        let can = is_subsequence(s2.clone(), s1.clone());
+        let r1 = reversed(s1.clone());
+        let r2 = reversed(s2.clone());
+        for which in 0..arms {
+            let got = window(which, s1.clone(), s2.clone());
+            // P1: the definition's window.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: a piece of s1 holding s2, empty only when s1 does not
+            // hold s2 at all.
+            checks += 1;
+            let mut inside = false;
+            if got.len() > 0 and got.len() <= n {
+                for i in 0..n - got.len() + 1 {
+                    if s1.slice(i, i + got.len()) == got.as_str() {
+                        inside = true;
+                    }
+                }
+            }
+            let ok = if got.len() == 0 { not can } else { inside and is_subsequence(s2.clone(), got.clone()) };
+            if not ok {
+                fails[1] += 1;
+            }
+            // P3: both reversed, a window of the same length.
+            checks += 1;
+            if window(which, r1.clone(), r2.clone()).len() != got.len() {
+                fails[2] += 1;
+            }
+            // P4: the window itself searched gives the window back.
+            if got.len() > 0 {
+                checks += 1;
+                if window(which, got.clone(), s2.clone()) != got {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} pairs ({none} with no window), {arms} arms, {checks} checks, {total} failures");
+}

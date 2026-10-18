@@ -1,0 +1,57 @@
+// LeetCode #724: Find Pivot Index -- the total, then one running sum.
+//
+// The numbers right of index i add up to the total less the left sum
+// less nums[i]. So take the total once, then walk from the left keeping
+// the sum of the numbers passed, and stop at the first index where the
+// left sum equals what is left on the right. O(n) time, O(1) space.
+
+fn pivot_index(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    let mut left = 0;
+    for i in 0..nums.len() {
+        if left == total - left - nums[i] {
+            return i;
+        }
+        left += nums[i];
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 50 arrays of 9,999 numbers from -1000 to 1000, made once. Each
+    // starts balanced: 4,999 random numbers, a random middle one, then
+    // the first 4,999 reversed, which balance at index 4999 if nowhere
+    // earlier.
+    let mut seed: i64 = 724;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..50 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..4999 {
+            nums.push(next_random(mut seed) % 2001 - 1000);
+        }
+        nums.push(next_random(mut seed) % 2001 - 1000);
+        for j in 0..4999 {
+            nums.push(nums[4998 - j]);
+        }
+        arrays.push(nums);
+    }
+    // 1000 rounds: one number of every array changes sign, then every
+    // array's pivot index is found, the indexes summed (-1 for none).
+    let mut sum = 0;
+    for round in 0..1000 {
+        for k in 0..50 {
+            let p = (round * 7919 + k * 31) % 9999;
+            arrays[k][p] = -arrays[k][p];
+            sum += pivot_index(arrays[k]);
+        }
+    }
+    println(f"1000 rounds of 50 arrays of 9999 numbers: sum {sum}");
+}

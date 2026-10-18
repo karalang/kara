@@ -1,0 +1,128 @@
+// LeetCode #727: Minimum Window Subsequence -- latest starts, by row.
+//
+// Walking s1, keep for each prefix of s2 the latest place in s1 from
+// which that prefix can still be matched up to here, -1 if none. At a
+// letter of s1, every prefix that ends with that letter takes the start
+// of the prefix one shorter, updated from the longest prefix down so
+// each reads the value from before this letter. When the whole of s2
+// has a start, the window from it to here is the shortest ending here.
+// O(n * m) time, O(m) space.
+
+fn min_window(s1: String, s2: String) -> String {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let n = a.len();
+    let m = b.len();
+    let mut start: Vec[i64] = vec![-1; m];
+    let mut best_start = -1;
+    let mut best_len = n + 1;
+    for i in 0..n {
+        let mut j = m - 1;
+        while j >= 1 {
+            if a[i] == b[j] {
+                start[j] = start[j - 1];
+            }
+            j -= 1;
+        }
+        if a[i] == b[0] {
+            start[0] = i;
+        }
+        if start[m - 1] >= 0 and i - start[m - 1] + 1 < best_len {
+            best_len = i - start[m - 1] + 1;
+            best_start = start[m - 1];
+        }
+    }
+    if best_start < 0 {
+        return "".to_string();
+    }
+    s1.slice(best_start, best_start + best_len).to_string()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n random letters from the first `kinds` of the alphabet.
+fn random_word(n: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut s = "".to_string();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % kinds) as u8) as char);
+    }
+    s
+}
+
+fn show(s1: String, s2: String) {
+    println(f"\"{s1}\", \"{s2}\" -> \"{min_window(s1, s2)}\"");
+}
+
+// Where the window starts in s1 and how long it is, -1 for none.
+fn summary(what: String, s1: String, s2: String) {
+    let w = min_window(s1, s2);
+    let mut at = -1;
+    if w.len() > 0 {
+        for i in 0..s1.len() - w.len() + 1 {
+            if at < 0 and s1.slice(i, i + w.len()) == w.as_str() {
+                at = i;
+            }
+        }
+    }
+    println(f"{what} -> length {w.len()} at {at}");
+}
+
+fn main() {
+    show("abcdebdde".to_string(), "bde".to_string());
+    show("jmeqksfrsdcmsiwvaovztaqenprpvnbstl".to_string(), "u".to_string());
+    show("abc".to_string(), "abc".to_string());
+    show("ab".to_string(), "abc".to_string());
+    show("abab".to_string(), "ab".to_string());
+    show("aaaa".to_string(), "aa".to_string());
+    show("cnhczmccqouqadqtmjjzl".to_string(), "mm".to_string());
+    show("fgrqsqsnodwmxzkzxwqegkndaa".to_string(), "kzed".to_string());
+    show("zzzzaz".to_string(), "az".to_string());
+    let mut seed: i64 = 727;
+    let s1 = random_word(20000, 26, mut seed);
+    let s2 = random_word(100, 26, mut seed);
+    summary("20000 random letters, 100 random letters".to_string(), s1, s2);
+    let s3 = random_word(20000, 3, mut seed);
+    let s4 = random_word(100, 3, mut seed);
+    summary("20000 of 3 letters, 100 of 3 letters".to_string(), s3, s4);
+    let mut s5 = "".to_string();
+    for _ in 0..20000 {
+        s5.push('a');
+    }
+    let mut s6 = "".to_string();
+    for _ in 0..100 {
+        s6.push('a');
+    }
+    summary("20000 a's, 100 a's".to_string(), s5, s6);
+    let mut s7 = "".to_string();
+    for _ in 0..10000 {
+        s7.push_str("ab");
+    }
+    s7.push('c');
+    let mut s8 = "".to_string();
+    for _ in 0..50 {
+        s8.push_str("ab");
+    }
+    s8.push('c');
+    summary("ab 10000 times then c, ab 50 times then c".to_string(), s7, s8);
+    let mut sum = 0;
+    let mut found = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 15;
+        let m = 1 + next_random(mut seed) % 4;
+        let kinds = 1 + next_random(mut seed) % 3;
+        let w = min_window(random_word(n, kinds, mut seed), random_word(m, kinds, mut seed));
+        if w.len() > 0 {
+            found += 1;
+        }
+        for c in w.bytes().iter() {
+            sum = (sum * 131 + *c as i64) % 1000000007;
+        }
+        sum = (sum * 131 + w.len() + 1) % 1000000007;
+    }
+    println(f"300 random pairs: {found} with a window, checksum {sum}");
+}

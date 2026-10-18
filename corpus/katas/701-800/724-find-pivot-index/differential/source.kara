@@ -1,0 +1,202 @@
+// LeetCode #724: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random arrays.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn pivot_index_star(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    let mut left = 0;
+    for i in 0..nums.len() {
+        if left == total - left - nums[i] {
+            return i;
+        }
+        left += nums[i];
+    }
+    -1
+}
+
+// ---- prefix arm -----------------------------------------------------
+
+fn pivot_index_prefix(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = vec![0];
+    for i in 0..n {
+        prefix.push(prefix[i] + nums[i]);
+    }
+    for i in 0..n {
+        if prefix[i] == prefix[n] - prefix[i + 1] {
+            return i;
+        }
+    }
+    -1
+}
+
+// ---- sides arm ------------------------------------------------------
+
+fn pivot_index_sides(nums: Vec[i64]) -> i64 {
+    for i in 0..nums.len() {
+        let mut left = 0;
+        for j in 0..i {
+            left += nums[j];
+        }
+        let mut right = 0;
+        for j in i + 1..nums.len() {
+            right += nums[j];
+        }
+        if left == right {
+            return i;
+        }
+    }
+    -1
+}
+
+// ---- fromright arm --------------------------------------------------
+
+fn pivot_index_fromright(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    let mut right = 0;
+    let mut found = -1;
+    let mut i = nums.len() - 1;
+    while i >= 0 {
+        if total - right - nums[i] == right {
+            found = i;
+        }
+        right += nums[i];
+        i -= 1;
+    }
+    found
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % (2 * top + 1) - top);
+    }
+    nums
+}
+
+fn pivot(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        pivot_index_star(nums)
+    } else if which == 1 {
+        pivot_index_prefix(nums)
+    } else if which == 2 {
+        pivot_index_sides(nums)
+    } else {
+        pivot_index_fromright(nums)
+    }
+}
+
+fn sum_of(nums: Vec[i64], from: i64, to: i64) -> i64 {
+    let mut s = 0;
+    for j in from..to {
+        s += nums[j];
+    }
+    s
+}
+
+// Every index whose two sides add up the same.
+fn pivots(nums: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        if sum_of(nums.clone(), 0, i) == sum_of(nums.clone(), i + 1, nums.len()) {
+            out.push(i);
+        }
+    }
+    out
+}
+
+// The definition: the smallest of all the pivots, or -1 with none.
+fn definition(nums: Vec[i64]) -> i64 {
+    let all = pivots(nums);
+    let mut best = -1;
+    for p in all.iter() {
+        if best == -1 or *p < best {
+            best = *p;
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 7240;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut none = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 14 numbers from -t to t, t at most 4, so pivots, several
+        // pivots and no pivot are all common.
+        let n = 1 + next_random(mut seed) % 14;
+        let top = next_random(mut seed) % 5;
+        let nums = random_nums(n, top, mut seed);
+        let want = definition(nums.clone());
+        if want < 0 {
+            none += 1;
+        }
+        let all = pivots(nums.clone());
+        let last = if all.len() > 0 { all[all.len() - 1] } else { -1 };
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let mut scaled: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for x in nums.iter() {
+            scaled.push(-3 * *x);
+            total += *x;
+        }
+        let v = if total == -1 { 2 } else { 1 };
+        let mut padded = vec![v];
+        for x in nums.iter() {
+            padded.push(*x);
+        }
+        padded.push(v);
+        for which in 0..arms {
+            let got = pivot(which, nums.clone());
+            // P1: the definition's index.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the numbers reversed, the mirror of the last pivot.
+            checks += 1;
+            let back = pivot(which, reversed.clone());
+            if (last < 0 and back != -1) or (last >= 0 and back != n - 1 - last) {
+                fails[1] += 1;
+            }
+            // P3: every number times -3, the same index.
+            checks += 1;
+            if pivot(which, scaled.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: the same number put at both ends, chosen so that
+            // neither end balances, the index one place on.
+            checks += 1;
+            if pivot(which, padded.clone()) != (if got < 0 { -1 } else { got + 1 }) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} arrays ({none} with no pivot), {arms} arms, {checks} checks, {total} failures");
+}
