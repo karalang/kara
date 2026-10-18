@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 275 |
-| codegen-gap | 265 |
+| codegen-gap | 266 |
 | false-positive | 211 |
 | other | 173 |
 | perf | 171 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2923 |
+| codegen | 2924 |
 | interp | 941 |
 | typecheck | 451 |
 | other | 115 |
@@ -205,6 +205,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-8 | 2026-10-18 | lexer | low | The lexer rejects the `\xHH` escape in string, f-string and char literals (`"A\x42C"` is `error[parse]: Unknown escape sequence: \x`), although design.md § Literals lists `\xHH` (a hex byte) among the escapes of text literals | — |
 | B-2026-10-18-9 | 2026-10-18 | codegen+runtime | medium | `Vec.binary_search` on the MIR compiled backend is O(n) per call, not O(log n): `karac_mir_bsearch` (runtime/src/mir.rs) builds a fresh `Vec<usize>` of the indices 0..n on every call and binary-searches that; kata 699's bench spends 64% of its instructions there and runs 2.6x slower than legacy | — |
 | B-2026-10-18-10 | 2026-10-18 | typecheck | medium | A program's own struct named `Client`, `Response`, `HttpError` or `RequestBuilder` has none of its methods found: `karac check` and every MIR surface say "no method 'm' on type 'Client'" for each call, even inside its own `impl`, because the typechecker sends every method call on a type of that name to the library's HTTP arms; the prelude_shadow warning on the declaration says the declaration is legal | — |
+| B-2026-10-18-11 | 2026-10-18 | codegen | low | `i128.parse` and `u128.parse` are not lowered on the compiled MIR surfaces: mir-llvm, mir-llvm-asan and `karac build --mir` stop with "native `i128.parse` is not lowered yet", while `karac check` passes and mir-interp parses correctly; `parse_num` in src/codegen/mir/num.rs only handles integers of 64 bits or fewer | — |
 
 ### Relocated
 

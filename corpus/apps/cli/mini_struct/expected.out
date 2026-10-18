@@ -1,0 +1,559 @@
+# --- calcsize: byte order, size and alignment
+>>> calcsize('')
+0
+>>> calcsize('x')
+1
+>>> calcsize('3x')
+3
+>>> calcsize('c')
+1
+>>> calcsize('bB?')
+3
+>>> calcsize('hHiIlLqQnN')
+64
+>>> calcsize('<hHiIlLqQ')
+36
+>>> calcsize('>hHiIlLqQ')
+36
+>>> calcsize('!hHiIlLqQ')
+36
+>>> calcsize('=hHiIlLqQ')
+36
+>>> calcsize('@hHiIlLqQ')
+48
+>>> calcsize('efd')
+16
+>>> calcsize('<efd')
+14
+>>> calcsize('P')
+8
+>>> calcsize('ci')
+8
+>>> calcsize('<ci')
+5
+>>> calcsize('cq')
+16
+>>> calcsize('cqc')
+17
+>>> calcsize('cq0q')
+16
+>>> calcsize('ic0l')
+8
+>>> calcsize('10s')
+10
+>>> calcsize('10p')
+10
+>>> calcsize('0s')
+0
+>>> calcsize('3si')
+8
+>>> calcsize('<3si')
+7
+>>> calcsize('4h')
+8
+>>> calcsize(' 2 h  i ')
+error: bad char in struct format
+>>> calcsize('<IhhfB3x')
+16
+>>> calcsize('>4sBxH')
+8
+>>> calcsize('<4sI4s4sIHHIIHH4sI')
+44
+>>> calcsize('<IHHHHHIIIHH')
+30
+# --- calcsize: errors
+>>> calcsize('z')
+error: bad char in struct format
+>>> calcsize('<P')
+error: bad char in struct format
+>>> calcsize('<n')
+error: bad char in struct format
+>>> calcsize('>N')
+error: bad char in struct format
+>>> calcsize('<@')
+error: bad char in struct format
+>>> calcsize('4')
+error: repeat count given without format specifier
+>>> calcsize('h4')
+error: repeat count given without format specifier
+>>> calcsize('i\0')
+error: embedded null character
+>>> calcsize('99999999999999999999h')
+error: total struct size too long
+>>> calcsize(b'<hh')
+4
+>>> calcsize(3)
+TypeError: Struct() argument 1 must be a str or bytes object, not int
+# --- pack: integers
+>>> pack('b', -128)
+b'\x80'
+>>> pack('b', 127)
+b'\x7f'
+>>> pack('B', 255)
+b'\xff'
+>>> pack('<h', -2)
+b'\xfe\xff'
+>>> pack('>h', -2)
+b'\xff\xfe'
+>>> pack('<H', 0xBEEF)
+b'\xef\xbe'
+>>> pack('>H', 0xBEEF)
+b'\xbe\xef'
+>>> pack('!I', 3735928559)
+b'\xde\xad\xbe\xef'
+>>> pack('<i', -1)
+b'\xff\xff\xff\xff'
+>>> pack('<l', 2147483647)
+b'\xff\xff\xff\x7f'
+>>> pack('<q', -9223372036854775808)
+b'\x00\x00\x00\x00\x00\x00\x00\x80'
+>>> pack('>Q', 18446744073709551615)
+b'\xff\xff\xff\xff\xff\xff\xff\xff'
+>>> pack('n', -3)
+b'\xfd\xff\xff\xff\xff\xff\xff\xff'
+>>> pack('N', 7)
+b'\x07\x00\x00\x00\x00\x00\x00\x00'
+>>> pack('@hq', 1, 2)
+b'\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00'
+>>> pack('=hq', 1, 2)
+b'\x01\x00\x02\x00\x00\x00\x00\x00\x00\x00'
+>>> pack('ci', b'*', 66)
+b'*\x00\x00\x00B\x00\x00\x00'
+>>> pack('<ci', b'*', 66)
+b'*B\x00\x00\x00'
+>>> pack('3h', 1, 2, 3)
+b'\x01\x00\x02\x00\x03\x00'
+>>> pack('<2bx2B', -1, 1, 254, 2)
+b'\xff\x01\x00\xfe\x02'
+>>> pack('<i', True)
+b'\x01\x00\x00\x00'
+>>> pack('?', 0)
+b'\x00'
+>>> pack('?', 5)
+b'\x01'
+>>> pack('?', b'')
+b'\x00'
+>>> pack('?', 'x')
+b'\x01'
+>>> pack('?', None)
+b'\x00'
+>>> pack('<3?', [], [0], 0.0)
+b'\x00\x01\x00'
+>>> pack('<h', 0x7fff)
+b'\xff\x7f'
+# --- pack: integer errors
+>>> pack('b', 128)
+error: 'b' format requires -128 <= number <= 127
+>>> pack('b', -129)
+error: 'b' format requires -128 <= number <= 127
+>>> pack('B', -1)
+error: 'B' format requires 0 <= number <= 255
+>>> pack('B', 256)
+error: 'B' format requires 0 <= number <= 255
+>>> pack('<h', 32768)
+error: 'h' format requires -32768 <= number <= 32767
+>>> pack('<H', -1)
+error: 'H' format requires 0 <= number <= 65535
+>>> pack('<i', 2147483648)
+error: 'i' format requires -2147483648 <= number <= 2147483647
+>>> pack('<I', 4294967296)
+error: 'I' format requires 0 <= number <= 4294967295
+>>> pack('<l', -2147483649)
+error: 'l' format requires -2147483648 <= number <= 2147483647
+>>> pack('<L', -1)
+error: 'L' format requires 0 <= number <= 4294967295
+>>> pack('<q', 9223372036854775808)
+error: 'q' format requires -9223372036854775808 <= number <= 9223372036854775807
+>>> pack('<Q', -1)
+error: 'Q' format requires 0 <= number <= 18446744073709551615
+>>> pack('<Q', 18446744073709551616)
+error: 'Q' format requires 0 <= number <= 18446744073709551615
+>>> pack('h', 40000)
+error: 'h' format requires -32768 <= number <= 32767
+>>> pack('i', 2147483648)
+error: 'i' format requires -2147483648 <= number <= 2147483647
+>>> pack('I', -1)
+error: 'I' format requires 0 <= number <= 4294967295
+>>> pack('l', 9223372036854775808)
+error: 'l' format requires -9223372036854775808 <= number <= 9223372036854775807
+>>> pack('L', -1)
+error: 'L' format requires 0 <= number <= 18446744073709551615
+>>> pack('q', -9223372036854775809)
+error: 'q' format requires -9223372036854775808 <= number <= 9223372036854775807
+>>> pack('Q', 18446744073709551616)
+error: 'Q' format requires 0 <= number <= 18446744073709551615
+>>> pack('n', 9223372036854775808)
+error: 'n' format requires -9223372036854775808 <= number <= 9223372036854775807
+>>> pack('N', -1)
+error: 'N' format requires 0 <= number <= 18446744073709551615
+>>> pack('P', -1)
+b'\xff\xff\xff\xff\xff\xff\xff\xff'
+>>> pack('<i', 1.5)
+error: required argument is not an integer
+>>> pack('<i', '7')
+error: required argument is not an integer
+>>> pack('<i', None)
+error: required argument is not an integer
+>>> pack('<i', b'7')
+error: required argument is not an integer
+>>> pack('<hh', 1)
+error: pack expected 2 items for packing (got 1)
+>>> pack('<hh', 1, 2, 3)
+error: pack expected 2 items for packing (got 3)
+>>> pack('<h')
+error: pack expected 1 items for packing (got 0)
+>>> pack('x', 1)
+error: pack expected 0 items for packing (got 1)
+>>> pack('z', 1)
+error: bad char in struct format
+# --- pack: floats
+>>> pack('<e', 1.0)
+b'\x00<'
+>>> pack('<e', -2.5)
+b'\x00\xc1'
+>>> pack('<e', 65504.0)
+b'\xff{'
+>>> pack('<e', 65519.99)
+b'\xff{'
+>>> pack('<e', 65520.0)
+OverflowError: float too large to pack with e format
+>>> pack('<e', 0.1)
+b'f.'
+>>> pack('<e', 6e-08)
+b'\x01\x00'
+>>> pack('<e', 2.98e-08)
+b'\x00\x00'
+>>> pack('<e', 3e-08)
+b'\x01\x00'
+>>> pack('<e', 1e-10)
+b'\x00\x00'
+>>> pack('<e', -0.0)
+b'\x00\x80'
+>>> pack('>e', 1.5)
+b'>\x00'
+>>> pack('<e', float('inf'))
+b'\x00|'
+>>> pack('<e', float('-inf'))
+b'\x00\xfc'
+>>> pack('<e', 1e300)
+OverflowError: float too large to pack with e format
+>>> pack('<f', 1.0)
+b'\x00\x00\x80?'
+>>> pack('<f', 0.1)
+b'\xcd\xcc\xcc='
+>>> pack('>f', -1013.25)
+b'\xc4}P\x00'
+>>> pack('<f', 3.4028234663852886e38)
+b'\xff\xff\x7f\x7f'
+>>> pack('<f', 3.4028235e38)
+b'\xff\xff\x7f\x7f'
+>>> pack('<f', 3.5e38)
+OverflowError: float too large to pack with f format
+>>> pack('<f', 1e-46)
+b'\x00\x00\x00\x00'
+>>> pack('<f', float('inf'))
+b'\x00\x00\x80\x7f'
+>>> pack('<d', 1.0)
+b'\x00\x00\x00\x00\x00\x00\xf0?'
+>>> pack('>d', -0.1)
+b'\xbf\xb9\x99\x99\x99\x99\x99\x9a'
+>>> pack('<d', 1e308)
+b'\xa0\xc8\xeb\x85\xf3\xcc\xe1\x7f'
+>>> pack('<d', 5e-324)
+b'\x01\x00\x00\x00\x00\x00\x00\x00'
+>>> pack('<d', float('-inf'))
+b'\x00\x00\x00\x00\x00\x00\xf0\xff'
+>>> pack('<d', 3)
+b'\x00\x00\x00\x00\x00\x00\x08@'
+>>> pack('<d', True)
+b'\x00\x00\x00\x00\x00\x00\xf0?'
+>>> pack('<f', '1.0')
+error: required argument is not a float
+>>> pack('<d', None)
+error: required argument is not a float
+>>> pack('<e', b'1')
+error: required argument is not a float
+# --- pack: chars and strings
+>>> pack('c', b'a')
+b'a'
+>>> pack('c', b'')
+error: char format requires a bytes object of length 1
+>>> pack('c', b'ab')
+error: char format requires a bytes object of length 1
+>>> pack('c', 'a')
+error: char format requires a bytes object of length 1
+>>> pack('c', 97)
+error: char format requires a bytes object of length 1
+>>> pack('3c', b'x', b'y', b'z')
+b'xyz'
+>>> pack('5s', b'abc')
+b'abc\x00\x00'
+>>> pack('2s', b'abcdef')
+b'ab'
+>>> pack('0s', b'abc')
+b''
+>>> pack('s', b'')
+b'\x00'
+>>> pack('s', 'abc')
+error: argument for 's' must be a bytes object
+>>> pack('5s', 5)
+error: argument for 's' must be a bytes object
+>>> pack('5p', b'abc')
+b'\x03abc\x00'
+>>> pack('3p', b'abcdef')
+b'\x02ab'
+>>> pack('p', b'abc')
+b'\x00'
+>>> pack('0p', b'abc')
+b''
+>>> pack('300p', b'z')
+b'\x01z\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+>>> pack('4s4s', b'RIFF', b'WAVE')
+b'RIFFWAVE'
+>>> pack('<4sBxH', b'IFAC', 2, 4)
+b'IFAC\x02\x00\x04\x00'
+>>> pack('s', b'\x00\xff\'"\\')
+b'\x00'
+>>> pack('3s', b"it's")
+b"it'"
+>>> pack('5s', b'\t\n\r')
+b'\t\n\r\x00\x00'
+# --- unpack
+>>> unpack('<h', b'\xfe\xff')
+(-2,)
+>>> unpack('>h', b'\xfe\xff')
+(-257,)
+>>> unpack('<H', b'\xef\xbe')
+(48879,)
+>>> unpack('<i', b'\x00\x00\x00\x80')
+(-2147483648,)
+>>> unpack('<I', b'\x00\x00\x00\x80')
+(2147483648,)
+>>> unpack('<q', b'\xff\xff\xff\xff\xff\xff\xff\xff')
+(-1,)
+>>> unpack('<Q', b'\xff\xff\xff\xff\xff\xff\xff\xff')
+(18446744073709551615,)
+>>> unpack('>Q', b'\x00\x00\x00\x00\x00\x00\x01\x00')
+(256,)
+>>> unpack('bB', b'\x80\x80')
+(-128, 128)
+>>> unpack('?', b'\x00')
+(False,)
+>>> unpack('?', b'\x02')
+(True,)
+>>> unpack('<?', b'\x7f')
+(True,)
+>>> unpack('3?', b'\x00\x01\x00')
+(False, True, False)
+>>> unpack('c', b'\x00')
+(b'\x00',)
+>>> unpack('2c', b'q\xff')
+(b'q', b'\xff')
+>>> unpack('5s', b'ab\x00de')
+(b'ab\x00de',)
+>>> unpack('5p', b'\x03abcd')
+(b'abc',)
+>>> unpack('5p', b'\x09abcd')
+(b'abcd',)
+>>> unpack('1p', b'\x05')
+(b'',)
+>>> unpack('@hq', b'\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00')
+(1, 2)
+>>> unpack('=hq', b'\x01\x00\x02\x00\x00\x00\x00\x00\x00\x00')
+(1, 2)
+>>> unpack('<e', b'\x00\x3c')
+(1.0,)
+>>> unpack('<e', b'\xff\x7b')
+(65504.0,)
+>>> unpack('<e', b'\x01\x00')
+(5.960464477539063e-08,)
+>>> unpack('<e', b'\x00\x7c')
+(inf,)
+>>> unpack('<e', b'\x00\xfc')
+(-inf,)
+>>> unpack('<e', b'\x00\x80')
+(-0.0,)
+>>> unpack('<e', b'\x66\x2e')
+(0.0999755859375,)
+>>> unpack('<f', b'\xcd\xcc\xcc\x3d')
+(0.10000000149011612,)
+>>> unpack('>f', b'\xc4\x7d\x50\x00')
+(-1013.25,)
+>>> unpack('<f', b'\x01\x00\x00\x00')
+(1.401298464324817e-45,)
+>>> unpack('<d', b'\x9a\x99\x99\x99\x99\x99\xb9\x3f')
+(0.1,)
+>>> unpack('<d', b'\x00\x00\x00\x00\x00\x00\xf0\x7f')
+(inf,)
+>>> unpack('<d', b'\x01\x00\x00\x00\x00\x00\x00\x00')
+(5e-324,)
+>>> unpack('>d', b'\x41\x9d\x6f\x34\x54\x00\x00\x00')
+(123456789.0,)
+>>> unpack('<d', b'\x00\x00\x00\x00\x00\x00\x00\x80')
+(-0.0,)
+>>> unpack('', b'')
+()
+>>> unpack('3x', b'abc')
+()
+>>> unpack('<h', b'\x01')
+error: unpack requires a buffer of 2 bytes
+>>> unpack('<h', b'\x01\x02\x03')
+error: unpack requires a buffer of 2 bytes
+>>> unpack('<h', b'')
+error: unpack requires a buffer of 2 bytes
+>>> unpack('z', b'')
+error: bad char in struct format
+>>> unpack('<h', 'ab')
+TypeError: a bytes-like object is required, not 'str'
+>>> unpack('<h', 12)
+TypeError: a bytes-like object is required, not 'int'
+# --- unpack_from and iter_unpack
+>>> unpack_from('<h', b'\x01\x02\x03\x04', 2)
+(1027,)
+>>> unpack_from('<h', b'\x01\x02\x03\x04')
+(513,)
+>>> unpack_from('<h', b'\x01\x02\x03\x04', -2)
+(1027,)
+>>> unpack_from('<h', b'\x01\x02\x03\x04', -4)
+(513,)
+>>> unpack_from('<h', b'\x01\x02\x03\x04', 3)
+error: unpack_from requires a buffer of at least 5 bytes for unpacking 2 bytes at offset 3 (actual buffer size is 4)
+>>> unpack_from('<h', b'\x01\x02\x03\x04', 4)
+error: unpack_from requires a buffer of at least 6 bytes for unpacking 2 bytes at offset 4 (actual buffer size is 4)
+>>> unpack_from('<h', b'\x01\x02\x03\x04', 9)
+error: unpack_from requires a buffer of at least 11 bytes for unpacking 2 bytes at offset 9 (actual buffer size is 4)
+>>> unpack_from('<h', b'\x01\x02\x03\x04', -5)
+error: offset -5 out of range for 4-byte buffer
+>>> unpack_from('<h', b'\x01\x02\x03\x04', -1)
+error: not enough data to unpack 2 bytes at offset -1
+>>> unpack_from('<i', b'\x01\x02\x03', 0)
+error: unpack_from requires a buffer of at least 4 bytes for unpacking 4 bytes at offset 0 (actual buffer size is 3)
+>>> unpack_from('', b'', 0)
+()
+>>> unpack_from('', b'ab', 2)
+()
+>>> list(iter_unpack('<h', b'\x01\x00\x02\x00\x03\x00'))
+[(1,), (2,), (3,)]
+>>> list(iter_unpack('<hB', b'\x01\x00\x07\x02\x00\x08'))
+[(1, 7), (2, 8)]
+>>> list(iter_unpack('<h', b''))
+[]
+>>> list(iter_unpack('<h', b'\x01\x00\x02'))
+error: iterative unpacking requires a buffer of a multiple of 2 bytes
+>>> list(iter_unpack('', b''))
+error: cannot iteratively unpack with a struct of length 0
+>>> list(iter_unpack('3x', b'abcdef'))
+[(), ()]
+# --- pack_into and bytearrays
+>>> buf = bytearray(8)
+>>> buf
+bytearray(b'\x00\x00\x00\x00\x00\x00\x00\x00')
+>>> pack_into('<hh', buf, 2, 258, -1)
+None
+>>> buf
+bytearray(b'\x00\x00\x02\x01\xff\xff\x00\x00')
+>>> pack_into('>I', buf, -4, 0xCAFEBABE)
+None
+>>> buf
+bytearray(b'\x00\x00\x02\x01\xca\xfe\xba\xbe')
+>>> pack_into('<h', buf, 7, 1)
+error: pack_into requires a buffer of at least 9 bytes for packing 2 bytes at offset 7 (actual buffer size is 8)
+>>> pack_into('<h', buf, 8, 1)
+error: pack_into requires a buffer of at least 10 bytes for packing 2 bytes at offset 8 (actual buffer size is 8)
+>>> pack_into('<h', buf, -1, 1)
+error: no space to pack 2 bytes at offset -1
+>>> pack_into('<h', buf, -9, 1)
+error: offset -9 out of range for 8-byte buffer
+>>> pack_into('<h', buf, 0, 1, 2)
+error: pack_into expected 1 items for packing (got 2)
+>>> pack_into('<h', buf, 0, 99999)
+error: 'h' format requires -32768 <= number <= 32767
+>>> pack_into('<4s', buf, 0, b'ab')
+None
+>>> buf
+bytearray(b'ab\x00\x00\xca\xfe\xba\xbe')
+>>> pack_into('', buf, 8)
+None
+>>> pack_into('', buf, 9)
+error: pack_into requires a buffer of at least 9 bytes for packing 0 bytes at offset 9 (actual buffer size is 8)
+>>> unpack_from('<4B', buf, 4)
+(202, 254, 186, 190)
+>>> unpack('<8B', buf)
+(97, 98, 0, 0, 202, 254, 186, 190)
+>>> small = bytearray(b'\x10\x20\x30')
+>>> unpack('<3B', small)
+(16, 32, 48)
+>>> pack_into('B', small, 1, 255)
+None
+>>> small
+bytearray(b'\x10\xff0')
+>>> pack_into('B', b'\x00\x00', 0, 1)
+TypeError: argument must be read-write bytes-like object, not bytes
+>>> pack('c', bytearray(b'!'))
+error: char format requires a bytes object of length 1
+>>> pack('3s', bytearray(b'abc'))
+b'abc'
+# --- Struct objects
+>>> Struct('<hh').size
+4
+>>> Struct('<hh').format
+'<hh'
+>>> Struct('@cq').size
+16
+>>> Struct('5p').format
+'5p'
+>>> Struct('<hh').pack(1, 2)
+b'\x01\x00\x02\x00'
+>>> Struct('<hh').unpack(b'\x01\x00\x02\x00')
+(1, 2)
+>>> Struct('<hh').unpack_from(b'\x00\x00\x01\x00\x02\x00', 2)
+(1, 2)
+>>> list(Struct('<B').iter_unpack(b'\x01\x02\x03'))
+[(1,), (2,), (3,)]
+>>> Struct('q').pack(-1)
+b'\xff\xff\xff\xff\xff\xff\xff\xff'
+>>> Struct('zz')
+error: bad char in struct format
+>>> Struct('<hh').pack(1)
+error: pack expected 2 items for packing (got 1)
+# --- reading real files
+>>> unpack_file('<4sI4s', 'tone.wav', 0)
+(b'RIFF', 132, b'WAVE')
+>>> unpack_file('<4sIHHIIHH', 'tone.wav', 12)
+(b'fmt ', 16, 1, 2, 8000, 32000, 4, 16)
+>>> unpack_file('<4sI', 'tone.wav', 36)
+(b'data', 96)
+>>> unpack_file('<8h', 'tone.wav', 44)
+(0, -9000, 3926, -8820, 7420, -8289, 10097, -7428)
+>>> unpack_file('<2sBBIBB', 'notes.txt.gz', 0)
+(b'\x1f\x8b', 8, 8, 1700000000, 2, 255)
+>>> unpack_file('<10s', 'notes.txt.gz', 10)
+(b'notes.txt\x00',)
+>>> unpack_file('<II', 'notes.txt.gz', -8)
+(3057815375, 105)
+>>> unpack_file('<IHHHHHIIIHH', 'pair.zip', 0)
+(67324752, 20, 0, 0, 28069, 22621, 2673897196, 6, 6, 5, 0)
+>>> unpack_file('<5s', 'pair.zip', 30)
+(b'a.txt',)
+>>> unpack_file('<IHHHHIIIHHHHHII', 'pair.zip', -98)
+(0, 0, 0, 0, 384, 0, 2020879969, 21713012, 5122, 5123, 0, 0, 32000, 1546100671, 209019014)
+>>> unpack_file('<IHHHHIIH', 'pair.zip', -22)
+(101010256, 0, 0, 2, 2, 106, 92, 0)
+>>> unpack_file('<IhhfB3x', 'sensors.bin', 0)
+(1001, 2315, 455, 1013.25, 1)
+>>> unpack_file('<IhhfB3x', 'sensors.bin', 48)
+(2001, 3999, 120, 950.125, 2)
+>>> unpack_file('<IhhfB3x', 'sensors.bin', 64)
+(2002, -2731, 0, 0.0, 255)
+>>> records('<IhhfB3x', 'sensors.bin')
+[(1001, 2315, 455, 1013.25, 1), (1002, -415, 873, 998.5, 0), (1003, 0, 1000, 1020.0, 3), (2001, 3999, 120, 950.125, 2), (2002, -2731, 0, 0.0, 255)]
+>>> records('<IhhfB', 'sensors.bin')
+error: iterative unpacking requires a buffer of a multiple of 13 bytes
+>>> records('<Ihh', 'sensors.bin')
+[(1001, 2315, 455), (1149063168, 1, 0), (1002, -415, 873), (1148821504, 0, 0), (1003, 0, 1000), (1149173760, 3, 0), (2001, 3999, 120), (1148028928, 2, 0), (2002, -2731, 0), (0, 255, 0)]
+>>> unpack_file('>4sBxH', 'ifaces.bin', 0)
+(b'IFAC', 2, 4)
+>>> names('ifaces.bin')
+[b'eth0', b'lo', b'wlan0', b'']
+>>> unpack_file('>4sBxH', 'missing.bin', 0)
+FileNotFoundError: [Errno 2] No such file or directory: 'missing.bin'

@@ -1,0 +1,1424 @@
+// mini_struct: Python 3.13's `struct` module, ported from Modules/_struct.c,
+// and run over a session of jobs the way Python's prompt would run them.
+//
+// Each job is one Python expression, or `name = expression`. The program
+// prints `>>> job`, then the value's repr, or `Kind: message` when the job
+// raises. The expressions call calcsize, pack, pack_into, unpack,
+// unpack_from, iter_unpack and Struct, build bytearrays, and read the binary
+// files in data/ (a WAV file, a gzip member, a zip, packed sensor records and
+// a big-endian header) through three helpers the session defines.
+
+// ------------------------------------------------------------ values
+
+enum Val {
+    Int(i128),
+    Float(f64),
+    Bool(bool),
+    Bytes(Vec[u8]),
+    Buf(i64),
+    Text(String),
+    Nothing,
+    List(Vec[Val]),
+    Tuple(Vec[Val]),
+    Packer(String),
+}
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn struct_error(msg: String) -> Exc {
+    Exc { kind: "error".to_string(), msg: msg }
+}
+
+fn type_error(msg: String) -> Exc {
+    Exc { kind: "TypeError".to_string(), msg: msg }
+}
+
+fn type_name(v: ref Val) -> String {
+    match v {
+        Val.Int(_) => "int".to_string(),
+        Val.Float(_) => "float".to_string(),
+        Val.Bool(_) => "bool".to_string(),
+        Val.Bytes(_) => "bytes".to_string(),
+        Val.Buf(_) => "bytearray".to_string(),
+        Val.Text(_) => "str".to_string(),
+        Val.Nothing => "NoneType".to_string(),
+        Val.List(_) => "list".to_string(),
+        Val.Tuple(_) => "tuple".to_string(),
+        Val.Packer(_) => "Struct".to_string(),
+    }
+}
+
+fn hex_digit(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + n - 10 }
+}
+
+// The repr of a bytes object: Python picks single quotes unless the bytes
+// hold a single quote and no double quote.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(quote);
+    for c in b.iter() {
+        let c = *c;
+        if c == quote or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex_digit(c / 16));
+            out.push(hex_digit(c % 16));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap()
+}
+
+fn str_repr(s: ref String) -> String {
+    let b = s.bytes();
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(quote);
+    for c in b.iter() {
+        let c = *c;
+        if c == quote or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex_digit(c / 16));
+            out.push(hex_digit(c % 16));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap()
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+struct Session {
+    bufs: Vec[Vec[u8]],
+    names: Vec[String],
+    vals: Vec[Val],
+}
+
+impl Session {
+    fn repr(self: ref Self, v: ref Val) -> String {
+        match v {
+            Val.Int(n) => f"{n}",
+            Val.Float(x) => float_repr(*x),
+            Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+            Val.Bytes(b) => bytes_repr(b),
+            Val.Buf(i) => f"bytearray({bytes_repr(self.bufs[*i])})",
+            Val.Text(s) => str_repr(s),
+            Val.Nothing => "None".to_string(),
+            Val.List(xs) => {
+                let parts: Vec[String] = xs.iter().map(|x| self.repr(x)).collect();
+                f"[{parts.join(", ")}]"
+            }
+            Val.Tuple(xs) => {
+                if xs.len() == 1 {
+                    return f"({self.repr(xs[0])},)";
+                }
+                let parts: Vec[String] = xs.iter().map(|x| self.repr(x)).collect();
+                f"({parts.join(", ")})"
+            }
+            Val.Packer(f) => f"Struct({str_repr(f)})",
+        }
+    }
+
+    fn lookup(self: ref Self, name: ref String) -> Option[Val] {
+        for i in 0..self.names.len() {
+            if self.names[i] == *name {
+                return Some(self.vals[i].clone());
+            }
+        }
+        None
+    }
+
+    fn assign(self: mut ref Self, name: String, v: Val) {
+        for i in 0..self.names.len() {
+            if self.names[i] == name {
+                self.vals[i] = v;
+                return;
+            }
+        }
+        self.names.push(name);
+        self.vals.push(v);
+    }
+}
+
+// ------------------------------------------------------------ formats
+
+// One packed item: its format character, its size in bytes and its offset.
+// A `s` or `p` field is one item whose size is its count.
+#[derive(Clone)]
+struct Code {
+    c: u8,
+    size: i64,
+    offset: i64,
+}
+
+struct Fmt {
+    text: String,
+    native: bool,
+    little: bool,
+    size: i64,
+    len: i64,
+    codes: Vec[Code],
+}
+
+// The sizes of the standard table (`=`, `<`, `>`, `!`).
+fn std_size(c: u8) -> Option[i64] {
+    match c {
+        b'x' | b'c' | b'b' | b'B' | b'?' | b's' | b'p' => Some(1),
+        b'h' | b'H' | b'e' => Some(2),
+        b'i' | b'I' | b'l' | b'L' | b'f' => Some(4),
+        b'q' | b'Q' | b'd' => Some(8),
+        _ => None,
+    }
+}
+
+// The native table (`@`, or no prefix) of x86-64 Linux: a C long and a
+// pointer are 8 bytes, and every item is aligned to its size.
+fn native_size(c: u8) -> Option[i64] {
+    match c {
+        b'x' | b'c' | b'b' | b'B' | b'?' | b's' | b'p' => Some(1),
+        b'h' | b'H' | b'e' => Some(2),
+        b'i' | b'I' | b'f' => Some(4),
+        b'l' | b'L' | b'q' | b'Q' | b'n' | b'N' | b'd' | b'P' => Some(8),
+        _ => None,
+    }
+}
+
+const SSIZE_MAX: i64 = 9223372036854775807;
+
+fn parse_fmt(text: String) -> Result[Fmt, Exc] {
+    let b = text.bytes().to_vec();
+    if b.contains(0) {
+        return Err(struct_error("embedded null character".to_string()));
+    }
+    let mut i: i64 = 0;
+    let mut native = true;
+    let mut little = true;
+    if b.len() > 0 {
+        match b[0] {
+            b'@' => { i = 1; }
+            b'=' | b'<' => { native = false; i = 1; }
+            b'>' | b'!' => { native = false; little = false; i = 1; }
+            _ => {}
+        }
+    }
+    let too_long = struct_error("total struct size too long".to_string());
+    let mut size: i64 = 0;
+    let mut len: i64 = 0;
+    let mut codes: Vec[Code] = Vec.new();
+    while i < b.len() {
+        let mut c = b[i];
+        i += 1;
+        if c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12 {
+            continue;
+        }
+        let mut num: i64 = 1;
+        if c >= b'0' and c <= b'9' {
+            num = (c - b'0') as i64;
+            loop {
+                if i >= b.len() {
+                    return Err(struct_error("repeat count given without format specifier".to_string()));
+                }
+                c = b[i];
+                i += 1;
+                if c < b'0' or c > b'9' {
+                    break;
+                }
+                let d = (c - b'0') as i64;
+                if num >= SSIZE_MAX / 10 and (num > SSIZE_MAX / 10 or d > SSIZE_MAX % 10) {
+                    return Err(too_long);
+                }
+                num = num * 10 + d;
+            }
+        }
+        let item = if native { native_size(c) } else { std_size(c) };
+        let itemsize = match item {
+            Some(n) => n,
+            None => return Err(struct_error("bad char in struct format".to_string())),
+        };
+        if native and c != b'x' and size > 0 {
+            size = (size + itemsize - 1) / itemsize * itemsize;
+        }
+        if num > (SSIZE_MAX - size) / itemsize {
+            return Err(too_long);
+        }
+        if c == b's' or c == b'p' {
+            codes.push(Code { c: c, size: num, offset: size });
+            len += 1;
+        } else if c != b'x' {
+            for k in 0..num {
+                codes.push(Code { c: c, size: itemsize, offset: size + k * itemsize });
+            }
+            len += num;
+        }
+        size += num * itemsize;
+    }
+    Ok(Fmt { text: text, native: native, little: little, size: size, len: len, codes: codes })
+}
+
+// A format given as a str or as bytes.
+fn fmt_arg(v: ref Val) -> Result[Fmt, Exc] {
+    match v {
+        Val.Text(s) => parse_fmt(s.clone()),
+        Val.Bytes(b) => parse_fmt(String.from_utf8(b.clone()).unwrap()),
+        _ => Err(type_error(f"Struct() argument 1 must be a str or bytes object, not {type_name(v)}")),
+    }
+}
+
+// ------------------------------------------------------------ integers
+
+fn int_range(c: u8, size: i64, native: bool) -> (i128, i128) {
+    let bits = size * 8;
+    let unsigned = c == b'B' or c == b'H' or c == b'I' or c == b'L' or c == b'Q' or c == b'N';
+    if c == b'P' and native {
+        return (-(1 as i128 << 63), (1 as i128 << 64) - 1);
+    }
+    if unsigned {
+        (0, (1 as i128 << bits) - 1)
+    } else {
+        (-(1 as i128 << (bits - 1)), (1 as i128 << (bits - 1)) - 1)
+    }
+}
+
+fn is_int_code(c: u8) -> bool {
+    c == b'b' or c == b'B' or c == b'h' or c == b'H' or c == b'i' or c == b'I'
+        or c == b'l' or c == b'L' or c == b'q' or c == b'Q' or c == b'n' or c == b'N' or c == b'P'
+}
+
+fn put_int(out: mut ref Vec[u8], at: i64, size: i64, little: bool, v: i128) {
+    for k in 0..size {
+        let byte = ((v >> (8 * k)) & 255) as u8;
+        if little {
+            out[at + k] = byte;
+        } else {
+            out[at + size - 1 - k] = byte;
+        }
+    }
+}
+
+fn get_int(data: ref Vec[u8], at: i64, size: i64, little: bool, signed: bool) -> i128 {
+    let mut v: i128 = 0;
+    for k in 0..size {
+        let byte = if little { data[at + size - 1 - k] } else { data[at + k] };
+        v = v * 256 + byte as i128;
+    }
+    if signed and v >= (1 as i128 << (size * 8 - 1)) {
+        v -= 1 as i128 << (size * 8);
+    }
+    v
+}
+
+// ------------------------------------------------------------ floats
+
+fn pow2(n: i64) -> f64 {
+    let mut x: f64 = 1.0;
+    if n >= 0 {
+        for _ in 0..n {
+            x = x * 2.0;
+        }
+    } else {
+        for _ in 0..(-n) {
+            x = x / 2.0;
+        }
+    }
+    x
+}
+
+// For a positive finite x, the f and e with 0.5 <= f < 1 and x == f * 2^e.
+fn frexp(x: f64) -> (f64, i64) {
+    let mut f = x;
+    let mut e: i64 = 0;
+    while f >= 1.0 {
+        f = f / 2.0;
+        e += 1;
+    }
+    while f < 0.5 {
+        f = f * 2.0;
+        e -= 1;
+    }
+    (f, e)
+}
+
+fn is_inf(x: f64) -> bool {
+    x == 1.0 / 0.0 or x == -1.0 / 0.0
+}
+
+fn sign_bit(x: f64) -> bool {
+    (x.to_bits() >> 63) == 1
+}
+
+// PyFloat_Pack2: an IEEE 754 half, rounding half to even.
+fn pack_half(x: f64) -> Result[u16, Exc] {
+    let overflow = Exc { kind: "OverflowError".to_string(), msg: "float too large to pack with e format".to_string() };
+    let mut sign: u16 = 0;
+    let mut e: i64 = 0;
+    let mut bits: u16 = 0;
+    if x == 0.0 {
+        sign = if sign_bit(x) { 1 } else { 0 };
+    } else if is_inf(x) {
+        sign = if x < 0.0 { 1 } else { 0 };
+        e = 0x1f;
+    } else if x != x {
+        sign = if sign_bit(x) { 1 } else { 0 };
+        e = 0x1f;
+        bits = 512;
+    } else {
+        let mut y = x;
+        if y < 0.0 {
+            sign = 1;
+            y = -y;
+        }
+        let (f0, e0) = frexp(y);
+        let mut f = f0 * 2.0;
+        e = e0 - 1;
+        if e >= 16 {
+            return Err(overflow);
+        } else if e < -25 {
+            f = 0.0;
+            e = 0;
+        } else if e < -14 {
+            f = f * pow2(14 + e);
+            e = 0;
+        } else {
+            e += 15;
+            f -= 1.0;
+        }
+        f = f * 1024.0;
+        bits = f as u16;
+        let rest = f - bits as f64;
+        if rest > 0.5 or (rest == 0.5 and bits % 2 == 1) {
+            bits += 1;
+            if bits == 1024 {
+                bits = 0;
+                e += 1;
+                if e == 31 {
+                    return Err(overflow);
+                }
+            }
+        }
+    }
+    Ok(bits | ((e as u16) << 10) | (sign << 15))
+}
+
+fn unpack_half(h: u16) -> f64 {
+    let sign = (h >> 15) & 1;
+    let e = ((h >> 10) & 0x1f) as i64;
+    let f = (h & 0x3ff) as i64;
+    let mut x: f64 = 0.0;
+    if e == 0x1f {
+        if f == 0 {
+            x = 1.0 / 0.0;
+        } else {
+            x = 0.0 / 0.0;
+        }
+    } else {
+        x = f as f64 / 1024.0;
+        if e == 0 {
+            x = x * pow2(-14);
+        } else {
+            x = (x + 1.0) * pow2(e - 15);
+        }
+    }
+    if sign == 1 { -x } else { x }
+}
+
+fn float_arg(v: ref Val) -> Result[f64, Exc] {
+    match v {
+        Val.Float(x) => Ok(*x),
+        Val.Int(n) => Ok(*n as f64),
+        Val.Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
+        _ => Err(struct_error("required argument is not a float".to_string())),
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Int(n) => *n != 0,
+        Val.Float(x) => *x != 0.0,
+        Val.Bool(b) => *b,
+        Val.Bytes(b) => b.len() > 0,
+        Val.Buf(_) => true,
+        Val.Text(s) => s.len() > 0,
+        Val.Nothing => false,
+        Val.List(xs) => xs.len() > 0,
+        Val.Tuple(xs) => xs.len() > 0,
+        Val.Packer(_) => true,
+    }
+}
+
+// ------------------------------------------------------------ pack and unpack
+
+impl Session {
+    fn byte_arg(self: ref Self, v: ref Val) -> Option[Vec[u8]] {
+        match v {
+            Val.Bytes(b) => Some(b.clone()),
+            Val.Buf(i) => Some(self.bufs[*i].clone()),
+            _ => None,
+        }
+    }
+
+    // s_pack_internal: the buffer is zeroed first and the items are written in
+    // order, so an item that fails leaves the ones before it written.
+    fn pack_items(self: ref Self, f: ref Fmt, args: ref Vec[Val]) -> (Vec[u8], Option[Exc]) {
+        let mut out: Vec[u8] = Vec.new();
+        for _ in 0..f.size {
+            out.push(0);
+        }
+        for k in 0..f.codes.len() {
+            let code = f.codes[k].clone();
+            let v = args[k].clone();
+            let c = code.c;
+            if is_int_code(c) {
+                let n: i128 = match v {
+                    Val.Int(n) => n,
+                    Val.Bool(b) => if b { 1 } else { 0 },
+                    _ => return (out, Some(struct_error("required argument is not an integer".to_string()))),
+                };
+                let (lo, hi) = int_range(c, code.size, f.native);
+                if n < lo or n > hi {
+                    let ch = String.from_utf8(vec![c]).unwrap();
+                    return (out, Some(struct_error(f"'{ch}' format requires {lo} <= number <= {hi}")));
+                }
+                put_int(out, code.offset, code.size, f.little, n);
+            } else if c == b'?' {
+                out[code.offset] = if truthy(v) { 1 } else { 0 };
+            } else if c == b'c' {
+                match v {
+                    Val.Bytes(b) if b.len() == 1 => { out[code.offset] = b[0]; }
+                    _ => return (out, Some(struct_error("char format requires a bytes object of length 1".to_string()))),
+                }
+            } else if c == b's' or c == b'p' {
+                let data = match self.byte_arg(v) {
+                    Some(d) => d,
+                    None => {
+                        let ch = String.from_utf8(vec![c]).unwrap();
+                        return (out, Some(struct_error(f"argument for '{ch}' must be a bytes object")));
+                    }
+                };
+                if c == b's' {
+                    let n = if data.len() < code.size { data.len() } else { code.size };
+                    for j in 0..n {
+                        out[code.offset + j] = data[j];
+                    }
+                } else if code.size > 0 {
+                    let mut n = data.len();
+                    if n > code.size - 1 {
+                        n = code.size - 1;
+                    }
+                    if n > 255 {
+                        n = 255;
+                    }
+                    out[code.offset] = n as u8;
+                    for j in 0..n {
+                        out[code.offset + 1 + j] = data[j];
+                    }
+                }
+            } else {
+                let x = match float_arg(v) {
+                    Ok(x) => x,
+                    Err(e) => return (out, Some(e)),
+                };
+                if c == b'e' {
+                    match pack_half(x) {
+                        Ok(h) => put_int(out, code.offset, 2, f.little, h as i128),
+                        Err(e) => return (out, Some(e)),
+                    }
+                } else if c == b'f' {
+                    let bits = x.to_bits32();
+                    if not is_inf(x) and x == x and (bits & 0x7fffffff) == 0x7f800000 {
+                        return (out, Some(Exc { kind: "OverflowError".to_string(), msg: "float too large to pack with f format".to_string() }));
+                    }
+                    put_int(out, code.offset, 4, f.little, bits as i128);
+                } else {
+                    put_int(out, code.offset, 8, f.little, x.to_bits() as i128);
+                }
+            }
+        }
+        (out, None)
+    }
+
+    fn pack(self: ref Self, f: ref Fmt, args: ref Vec[Val], who: Str) -> Result[Vec[u8], Exc] {
+        if args.len() != f.len {
+            return Err(struct_error(f"{who} expected {f.len} items for packing (got {args.len()})"));
+        }
+        let (out, err) = self.pack_items(f, args);
+        match err {
+            Some(e) => Err(e),
+            None => Ok(out),
+        }
+    }
+}
+
+fn unpack_items(f: ref Fmt, data: ref Vec[u8], at: i64) -> Val {
+    let mut items: Vec[Val] = Vec.new();
+    for code in f.codes.iter() {
+        let o = at + code.offset;
+        let c = code.c;
+        if is_int_code(c) {
+            let signed = c == b'b' or c == b'h' or c == b'i' or c == b'l' or c == b'q' or c == b'n';
+            items.push(Val.Int(get_int(data, o, code.size, f.little, signed)));
+        } else if c == b'?' {
+            items.push(Val.Bool(data[o] != 0));
+        } else if c == b'c' {
+            items.push(Val.Bytes(vec![data[o]]));
+        } else if c == b's' {
+            items.push(Val.Bytes(data[o..o + code.size].to_vec()));
+        } else if c == b'p' {
+            let mut n = data[o] as i64;
+            if n >= code.size {
+                n = code.size - 1;
+            }
+            items.push(Val.Bytes(data[o + 1..o + 1 + n].to_vec()));
+        } else if c == b'e' {
+            items.push(Val.Float(unpack_half(get_int(data, o, 2, f.little, false) as u16)));
+        } else if c == b'f' {
+            let bits = get_int(data, o, 4, f.little, false) as u32;
+            items.push(Val.Float(bits.bits_as_f32()));
+        } else {
+            let bits = get_int(data, o, 8, f.little, false) as u64;
+            items.push(Val.Float(bits.bits_as_f64()));
+        }
+    }
+    Val.Tuple(items)
+}
+
+fn unpack(f: ref Fmt, data: ref Vec[u8]) -> Result[Val, Exc] {
+    if data.len() != f.size {
+        return Err(struct_error(f"unpack requires a buffer of {f.size} bytes"));
+    }
+    Ok(unpack_items(f, data, 0))
+}
+
+fn unpack_from(f: ref Fmt, data: ref Vec[u8], offset: i64) -> Result[Val, Exc] {
+    let mut off = offset;
+    let n = data.len();
+    if off < 0 {
+        if off + f.size > 0 {
+            return Err(struct_error(f"not enough data to unpack {f.size} bytes at offset {off}"));
+        }
+        if off + n < 0 {
+            return Err(struct_error(f"offset {off} out of range for {n}-byte buffer"));
+        }
+        off += n;
+    }
+    if n - off < f.size {
+        return Err(struct_error(f"unpack_from requires a buffer of at least {f.size + off} bytes for unpacking {f.size} bytes at offset {off} (actual buffer size is {n})"));
+    }
+    Ok(unpack_items(f, data, off))
+}
+
+fn iter_unpack(f: ref Fmt, data: ref Vec[u8]) -> Result[Val, Exc] {
+    if f.size == 0 {
+        return Err(struct_error("cannot iteratively unpack with a struct of length 0".to_string()));
+    }
+    if data.len() % f.size != 0 {
+        return Err(struct_error(f"iterative unpacking requires a buffer of a multiple of {f.size} bytes"));
+    }
+    let mut out: Vec[Val] = Vec.new();
+    let mut at: i64 = 0;
+    while at < data.len() {
+        out.push(unpack_items(f, data, at));
+        at += f.size;
+    }
+    Ok(Val.List(out))
+}
+
+// ------------------------------------------------------------ the session's calls
+
+fn int_arg(v: ref Val) -> Result[i64, Exc] {
+    match v {
+        Val.Int(n) => Ok(*n as i64),
+        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        _ => Err(type_error(f"'{type_name(v)}' object cannot be interpreted as an integer")),
+    }
+}
+
+fn read_data(name: ref Val) -> Result[Vec[u8], Exc] {
+    let n = match name {
+        Val.Text(s) => s.clone(),
+        _ => return Err(type_error("expected a file name".to_string())),
+    };
+    match fs.read_bytes(f"data/{n}") {
+        Ok(d) => Ok(d),
+        Err(_) => Err(Exc { kind: "FileNotFoundError".to_string(), msg: f"[Errno 2] No such file or directory: {str_repr(n)}" }),
+    }
+}
+
+impl Session {
+    fn buffer(self: ref Self, v: ref Val) -> Result[Vec[u8], Exc] {
+        match self.byte_arg(v) {
+            Some(b) => Ok(b),
+            None => Err(type_error(f"a bytes-like object is required, not '{type_name(v)}'")),
+        }
+    }
+
+    fn pack_into(self: mut ref Self, f: ref Fmt, args: ref Vec[Val]) -> Result[Val, Exc] {
+        if args.len() != f.len + 2 {
+            if args.len() == 0 {
+                return Err(type_error("pack_into expected buffer argument".to_string()));
+            }
+            if args.len() == 1 {
+                return Err(type_error("pack_into expected offset argument".to_string()));
+            }
+            return Err(struct_error(f"pack_into expected {f.len} items for packing (got {args.len() - 2})"));
+        }
+        let bi = match args[0] {
+            Val.Buf(i) => i,
+            _ => return Err(type_error(f"argument must be read-write bytes-like object, not {type_name(args[0])}")),
+        };
+        let mut off = int_arg(args[1])?;
+        let n = self.bufs[bi].len();
+        if off < 0 {
+            if off + f.size > 0 {
+                return Err(struct_error(f"no space to pack {f.size} bytes at offset {off}"));
+            }
+            if off + n < 0 {
+                return Err(struct_error(f"offset {off} out of range for {n}-byte buffer"));
+            }
+            off += n;
+        }
+        if n - off < f.size {
+            return Err(struct_error(f"pack_into requires a buffer of at least {f.size + off} bytes for packing {f.size} bytes at offset {off} (actual buffer size is {n})"));
+        }
+        let items = args[2..].to_vec();
+        let (out, err) = self.pack_items(f, items);
+        for j in 0..out.len() {
+            self.bufs[bi][off + j] = out[j];
+        }
+        match err {
+            Some(e) => Err(e),
+            None => Ok(Val.Nothing),
+        }
+    }
+
+    // The three helpers the session defines in Python: unpack_file and
+    // records read a file from data/, and names walks ifaces.bin's
+    // length-prefixed names.
+    fn names(self: ref Self, file: ref Val) -> Result[Val, Exc] {
+        let data = read_data(file)?;
+        let head = parse_fmt(">4sBxH".to_string())?;
+        let count = match unpack_from(head, data, 0)? {
+            Val.Tuple(xs) => match xs[2] {
+                Val.Int(n) => n as i64,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        let mut off = head.size;
+        let mut out: Vec[Val] = Vec.new();
+        let short = parse_fmt(">H".to_string())?;
+        for _ in 0..count {
+            let n = match unpack_from(short, data, off)? {
+                Val.Tuple(xs) => match xs[0] {
+                    Val.Int(n) => n as i64,
+                    _ => 0,
+                },
+                _ => 0,
+            };
+            off += 2;
+            let s = parse_fmt(f">{n}s")?;
+            match unpack_from(s, data, off)? {
+                Val.Tuple(xs) => out.push(xs[0].clone()),
+                _ => {}
+            }
+            off += n;
+        }
+        Ok(Val.List(out))
+    }
+
+    fn call(self: mut ref Self, name: ref String, args: Vec[Val]) -> Result[Val, Exc] {
+        match name.as_str() {
+            "calcsize" => {
+                let f = fmt_arg(args[0])?;
+                Ok(Val.Int(f.size as i128))
+            }
+            "pack" => {
+                let f = fmt_arg(args[0])?;
+                let rest = args[1..].to_vec();
+                Ok(Val.Bytes(self.pack(f, rest, "pack")?))
+            }
+            "pack_into" => {
+                let f = fmt_arg(args[0])?;
+                let rest = args[1..].to_vec();
+                self.pack_into(f, rest)
+            }
+            "unpack" => {
+                let f = fmt_arg(args[0])?;
+                let data = self.buffer(args[1])?;
+                unpack(f, data)
+            }
+            "unpack_from" => {
+                let f = fmt_arg(args[0])?;
+                let data = self.buffer(args[1])?;
+                let off = if args.len() > 2 { int_arg(args[2])? } else { 0 };
+                unpack_from(f, data, off)
+            }
+            "iter_unpack" => {
+                let f = fmt_arg(args[0])?;
+                let data = self.buffer(args[1])?;
+                iter_unpack(f, data)
+            }
+            "Struct" => {
+                let f = fmt_arg(args[0])?;
+                Ok(Val.Packer(f.text))
+            }
+            "bytearray" => {
+                let b = match args[0] {
+                    Val.Int(n) => {
+                        let mut z: Vec[u8] = Vec.new();
+                        for _ in 0..n {
+                            z.push(0);
+                        }
+                        z
+                    }
+                    _ => self.buffer(args[0])?,
+                };
+                self.bufs.push(b);
+                Ok(Val.Buf(self.bufs.len() - 1))
+            }
+            "float" => match args[0] {
+                Val.Text(s) => Ok(Val.Float(f64.parse(s).unwrap())),
+                _ => float_arg(args[0]).map(|x| Val.Float(x)),
+            },
+            "list" => match args[0] {
+                Val.Tuple(xs) => Ok(Val.List(xs)),
+                v => Ok(v),
+            },
+            "unpack_file" => {
+                let f = fmt_arg(args[0])?;
+                let data = read_data(args[1])?;
+                unpack_from(f, data, int_arg(args[2])?)
+            }
+            "records" => {
+                let f = fmt_arg(args[0])?;
+                let data = read_data(args[1])?;
+                iter_unpack(f, data)
+            }
+            "names" => self.names(args[0]),
+            _ => Err(Exc { kind: "NameError".to_string(), msg: f"name {str_repr(name)} is not defined" }),
+        }
+    }
+
+    // A Struct object's attribute, or one of its methods called with args.
+    fn method(self: mut ref Self, obj: Val, name: ref String, args: Option[Vec[Val]]) -> Result[Val, Exc] {
+        let text = match obj {
+            Val.Packer(t) => t,
+            _ => return Err(Exc { kind: "AttributeError".to_string(), msg: f"'{type_name(obj)}' object has no attribute {str_repr(name)}" }),
+        };
+        let f = parse_fmt(text.clone())?;
+        match args {
+            None => match name.as_str() {
+                "size" => Ok(Val.Int(f.size as i128)),
+                "format" => Ok(Val.Text(text)),
+                _ => Err(Exc { kind: "AttributeError".to_string(), msg: f"'Struct' object has no attribute {str_repr(name)}" }),
+            },
+            Some(a) => match name.as_str() {
+                "pack" => Ok(Val.Bytes(self.pack(f, a, "pack")?)),
+                "pack_into" => self.pack_into(f, a),
+                "unpack" => unpack(f, self.buffer(a[0])?),
+                "unpack_from" => {
+                    let off = if a.len() > 1 { int_arg(a[1])? } else { 0 };
+                    unpack_from(f, self.buffer(a[0])?, off)
+                }
+                "iter_unpack" => iter_unpack(f, self.buffer(a[0])?),
+                _ => Err(Exc { kind: "AttributeError".to_string(), msg: f"'Struct' object has no attribute {str_repr(name)}" }),
+            },
+        }
+    }
+}
+
+// ------------------------------------------------------------ reading a job
+
+enum Tok {
+    Name(String),
+    Int(i128),
+    Float(f64),
+    Text(String),
+    Bytes(Vec[u8]),
+    Punct(u8),
+    End,
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_ident(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or c == b'_' or is_digit(c)
+}
+
+fn hex_value(c: u8) -> i64 {
+    if is_digit(c) {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a' + 10) as i64
+    } else {
+        (c - b'A' + 10) as i64
+    }
+}
+
+// The bytes of a quoted literal, from just after its opening quote; the
+// escapes are Python's: \\, \', \", \t, \n, \r, \0 and \xhh.
+fn quoted(b: ref Vec[u8], start: i64) -> (Vec[u8], i64) {
+    let q = b[start - 1];
+    let mut i = start;
+    let mut out: Vec[u8] = Vec.new();
+    while b[i] != q {
+        if b[i] == b'\\' {
+            let e = b[i + 1];
+            if e == b'x' {
+                out.push((hex_value(b[i + 2]) * 16 + hex_value(b[i + 3])) as u8);
+                i += 4;
+                continue;
+            }
+            let c = match e {
+                b't' => b'\t',
+                b'n' => b'\n',
+                b'r' => b'\r',
+                b'0' => 0,
+                _ => e,
+            };
+            out.push(c);
+            i += 2;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    (out, i + 1)
+}
+
+fn lex(line: ref String) -> Vec[Tok] {
+    let b = line.bytes().to_vec();
+    let mut toks: Vec[Tok] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b' ' {
+            i += 1;
+        } else if c == b'b' and i + 1 < b.len() and (b[i + 1] == b'\'' or b[i + 1] == b'"') {
+            let (bytes, next) = quoted(b, i + 2);
+            toks.push(Tok.Bytes(bytes));
+            i = next;
+        } else if c == b'\'' or c == b'"' {
+            let (bytes, next) = quoted(b, i + 1);
+            toks.push(Tok.Text(String.from_utf8(bytes).unwrap()));
+            i = next;
+        } else if is_digit(c) {
+            let start = i;
+            if c == b'0' and i + 1 < b.len() and (b[i + 1] == b'x' or b[i + 1] == b'X') {
+                i += 2;
+                let mut n: i128 = 0;
+                while i < b.len() and is_ident(b[i]) {
+                    n = n * 16 + hex_value(b[i]) as i128;
+                    i += 1;
+                }
+                toks.push(Tok.Int(n));
+                continue;
+            }
+            let mut float = false;
+            while i < b.len() and (is_digit(b[i]) or b[i] == b'.' or b[i] == b'e'
+                or ((b[i] == b'-' or b[i] == b'+') and b[i - 1] == b'e')) {
+                if b[i] == b'.' or b[i] == b'e' {
+                    float = true;
+                }
+                i += 1;
+            }
+            let text = String.from_utf8(b[start..i].to_vec()).unwrap();
+            if float {
+                toks.push(Tok.Float(f64.parse(text).unwrap()));
+            } else {
+                toks.push(Tok.Int(i128.parse(text).unwrap()));
+            }
+        } else if is_ident(c) {
+            let start = i;
+            while i < b.len() and is_ident(b[i]) {
+                i += 1;
+            }
+            toks.push(Tok.Name(String.from_utf8(b[start..i].to_vec()).unwrap()));
+        } else {
+            toks.push(Tok.Punct(c));
+            i += 1;
+        }
+    }
+    toks.push(Tok.End);
+    toks
+}
+
+struct Reader {
+    toks: Vec[Tok],
+    pos: i64,
+}
+
+impl Reader {
+    fn peek_punct(self: ref Self, p: u8) -> bool {
+        match self.toks[self.pos] {
+            Tok.Punct(c) => c == p,
+            _ => false,
+        }
+    }
+}
+
+impl Session {
+    fn args(self: mut ref Self, r: mut ref Reader, close: u8) -> Result[Vec[Val], Exc] {
+        let mut out: Vec[Val] = Vec.new();
+        while not r.peek_punct(close) {
+            out.push(self.expr(r)?);
+            if r.peek_punct(b',') {
+                r.pos += 1;
+            }
+        }
+        r.pos += 1;
+        Ok(out)
+    }
+
+    fn expr(self: mut ref Self, r: mut ref Reader) -> Result[Val, Exc] {
+        let tok = r.toks[r.pos].clone();
+        r.pos += 1;
+        let mut v = match tok {
+            Tok.Int(n) => Val.Int(n),
+            Tok.Float(x) => Val.Float(x),
+            Tok.Text(s) => Val.Text(s),
+            Tok.Bytes(b) => Val.Bytes(b),
+            Tok.Punct(b'-') => match self.expr(r)? {
+                Val.Int(n) => Val.Int(-n),
+                Val.Float(x) => Val.Float(-x),
+                other => other,
+            },
+            Tok.Punct(b'[') => Val.List(self.args(r, b']')?),
+            Tok.Name(n) => {
+                if n == "True" {
+                    Val.Bool(true)
+                } else if n == "False" {
+                    Val.Bool(false)
+                } else if n == "None" {
+                    Val.Nothing
+                } else if r.peek_punct(b'(') {
+                    r.pos += 1;
+                    let a = self.args(r, b')')?;
+                    self.call(n, a)?
+                } else {
+                    match self.lookup(n) {
+                        Some(v) => v,
+                        None => return Err(Exc { kind: "NameError".to_string(), msg: f"name {str_repr(n)} is not defined" }),
+                    }
+                }
+            }
+            _ => return Err(Exc { kind: "SyntaxError".to_string(), msg: "invalid syntax".to_string() }),
+        };
+        while r.peek_punct(b'.') {
+            r.pos += 1;
+            let attr = match r.toks[r.pos].clone() {
+                Tok.Name(a) => a,
+                _ => return Err(Exc { kind: "SyntaxError".to_string(), msg: "invalid syntax".to_string() }),
+            };
+            r.pos += 1;
+            if r.peek_punct(b'(') {
+                r.pos += 1;
+                let a = self.args(r, b')')?;
+                v = self.method(v, attr, Some(a))?;
+            } else {
+                v = self.method(v, attr, None)?;
+            }
+        }
+        Ok(v)
+    }
+
+    fn run_job(self: mut ref Self, line: String) -> Option[String] {
+        let mut target: Option[String] = None;
+        let mut expr = line.clone();
+        if let Some(at) = line.find(" = ") {
+            let lhs = line[0..at].to_string();
+            if lhs.bytes().iter().all(|c| is_ident(*c)) {
+                target = Some(lhs);
+                expr = line[at + 3..].to_string();
+            }
+        }
+        let mut r = Reader { toks: lex(expr), pos: 0 };
+        match self.expr(r) {
+            Ok(v) => match target {
+                Some(t) => {
+                    self.assign(t, v);
+                    None
+                }
+                None => Some(self.repr(v)),
+            },
+            Err(e) => Some(f"{e.kind}: {e.msg}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push((hex_value(b[i]) * 16 + hex_value(b[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    for (name, hex) in data_files() {
+        if let Err(e) = fs.write_bytes(f"data/{name}", unhex(hex)) {
+            eprintln(f"cannot write data/{name}: {e}");
+            return;
+        }
+    }
+    let mut s = Session { bufs: Vec.new(), names: Vec.new(), vals: Vec.new() };
+    let mut out = String.new();
+    for line in jobs_text().lines() {
+        if line.starts_with("#") or line.trim().is_empty() {
+            out.push_str(f"{line}\n");
+            continue;
+        }
+        out.push_str(f">>> {line}\n");
+        if let Some(text) = s.run_job(line.to_string()) {
+            out.push_str(f"{text}\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+// The input files under data/, each as hex.
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("ifaces.bin".to_string(), "494641430200000400046574683000026c6f0005776c616e300000".to_string()));
+    v.push(("notes.txt.gz".to_string(), "1f8b080800f1536502ff6e6f7465732e747874002b2e292a4d2e5128484cce2e5648cc4b5128cd83b09d158ac152c55cc5545102004f8f42b669000000".to_string()));
+    v.push(("pair.zip".to_string(), "504b0304140000000000a56d5d58ec6e609f060000000600000005000000612e747874616c7068610a504b03041400000000007dbf9f275c8660750c0000000c000000090000006469722f622e747874627261766f20627261766f0a504b01021403140000000000a56d5d58ec6e609f0600000006000000050000000000000000000000800100000000612e747874504b010214031400000000007dbf9f275c8660750c0000000c0000000900000000000000000000008001290000006469722f622e747874504b050600000000020002006a0000005c0000000000".to_string()));
+    v.push(("sensors.bin".to_string(), "e90300000b09c70100507d4401000000ea03000061fe690300a0794400000000eb0300000000e80300007f4403000000d10700009f0f780000886d4402000000d207000055f5000000000000ff000000".to_string()));
+    v.push(("tone.wav".to_string(), "524946468400000057415645666d74201000000001000200401f0000007d00000400100064617461600000000000d8dc560f8cddfc1c9fdf7127fce28f2d82e7a82e02ed9f2a43f3e52107fa6f1506019d06fc0712f7a10e81e8b01487dcec1974d41f1e2dd120210dd3cd22e1d91823e6e4fd21e8f2861f5902ce1b8911fa16cb1e3c11a928cd0a0e2ef103".to_string()));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("# --- calcsize: byte order, size and alignment\n");
+    s.push_str("calcsize('')\n");
+    s.push_str("calcsize('x')\n");
+    s.push_str("calcsize('3x')\n");
+    s.push_str("calcsize('c')\n");
+    s.push_str("calcsize('bB?')\n");
+    s.push_str("calcsize('hHiIlLqQnN')\n");
+    s.push_str("calcsize('<hHiIlLqQ')\n");
+    s.push_str("calcsize('>hHiIlLqQ')\n");
+    s.push_str("calcsize('!hHiIlLqQ')\n");
+    s.push_str("calcsize('=hHiIlLqQ')\n");
+    s.push_str("calcsize('@hHiIlLqQ')\n");
+    s.push_str("calcsize('efd')\n");
+    s.push_str("calcsize('<efd')\n");
+    s.push_str("calcsize('P')\n");
+    s.push_str("calcsize('ci')\n");
+    s.push_str("calcsize('<ci')\n");
+    s.push_str("calcsize('cq')\n");
+    s.push_str("calcsize('cqc')\n");
+    s.push_str("calcsize('cq0q')\n");
+    s.push_str("calcsize('ic0l')\n");
+    s.push_str("calcsize('10s')\n");
+    s.push_str("calcsize('10p')\n");
+    s.push_str("calcsize('0s')\n");
+    s.push_str("calcsize('3si')\n");
+    s.push_str("calcsize('<3si')\n");
+    s.push_str("calcsize('4h')\n");
+    s.push_str("calcsize(' 2 h  i ')\n");
+    s.push_str("calcsize('<IhhfB3x')\n");
+    s.push_str("calcsize('>4sBxH')\n");
+    s.push_str("calcsize('<4sI4s4sIHHIIHH4sI')\n");
+    s.push_str("calcsize('<IHHHHHIIIHH')\n");
+    s.push_str("# --- calcsize: errors\n");
+    s.push_str("calcsize('z')\n");
+    s.push_str("calcsize('<P')\n");
+    s.push_str("calcsize('<n')\n");
+    s.push_str("calcsize('>N')\n");
+    s.push_str("calcsize('<@')\n");
+    s.push_str("calcsize('4')\n");
+    s.push_str("calcsize('h4')\n");
+    s.push_str("calcsize('i\\0')\n");
+    s.push_str("calcsize('99999999999999999999h')\n");
+    s.push_str("calcsize(b'<hh')\n");
+    s.push_str("calcsize(3)\n");
+    s.push_str("# --- pack: integers\n");
+    s.push_str("pack('b', -128)\n");
+    s.push_str("pack('b', 127)\n");
+    s.push_str("pack('B', 255)\n");
+    s.push_str("pack('<h', -2)\n");
+    s.push_str("pack('>h', -2)\n");
+    s.push_str("pack('<H', 0xBEEF)\n");
+    s.push_str("pack('>H', 0xBEEF)\n");
+    s.push_str("pack('!I', 3735928559)\n");
+    s.push_str("pack('<i', -1)\n");
+    s.push_str("pack('<l', 2147483647)\n");
+    s.push_str("pack('<q', -9223372036854775808)\n");
+    s.push_str("pack('>Q', 18446744073709551615)\n");
+    s.push_str("pack('n', -3)\n");
+    s.push_str("pack('N', 7)\n");
+    s.push_str("pack('@hq', 1, 2)\n");
+    s.push_str("pack('=hq', 1, 2)\n");
+    s.push_str("pack('ci', b'*', 66)\n");
+    s.push_str("pack('<ci', b'*', 66)\n");
+    s.push_str("pack('3h', 1, 2, 3)\n");
+    s.push_str("pack('<2bx2B', -1, 1, 254, 2)\n");
+    s.push_str("pack('<i', True)\n");
+    s.push_str("pack('?', 0)\n");
+    s.push_str("pack('?', 5)\n");
+    s.push_str("pack('?', b'')\n");
+    s.push_str("pack('?', 'x')\n");
+    s.push_str("pack('?', None)\n");
+    s.push_str("pack('<3?', [], [0], 0.0)\n");
+    s.push_str("pack('<h', 0x7fff)\n");
+    s.push_str("# --- pack: integer errors\n");
+    s.push_str("pack('b', 128)\n");
+    s.push_str("pack('b', -129)\n");
+    s.push_str("pack('B', -1)\n");
+    s.push_str("pack('B', 256)\n");
+    s.push_str("pack('<h', 32768)\n");
+    s.push_str("pack('<H', -1)\n");
+    s.push_str("pack('<i', 2147483648)\n");
+    s.push_str("pack('<I', 4294967296)\n");
+    s.push_str("pack('<l', -2147483649)\n");
+    s.push_str("pack('<L', -1)\n");
+    s.push_str("pack('<q', 9223372036854775808)\n");
+    s.push_str("pack('<Q', -1)\n");
+    s.push_str("pack('<Q', 18446744073709551616)\n");
+    s.push_str("pack('h', 40000)\n");
+    s.push_str("pack('i', 2147483648)\n");
+    s.push_str("pack('I', -1)\n");
+    s.push_str("pack('l', 9223372036854775808)\n");
+    s.push_str("pack('L', -1)\n");
+    s.push_str("pack('q', -9223372036854775809)\n");
+    s.push_str("pack('Q', 18446744073709551616)\n");
+    s.push_str("pack('n', 9223372036854775808)\n");
+    s.push_str("pack('N', -1)\n");
+    s.push_str("pack('P', -1)\n");
+    s.push_str("pack('<i', 1.5)\n");
+    s.push_str("pack('<i', '7')\n");
+    s.push_str("pack('<i', None)\n");
+    s.push_str("pack('<i', b'7')\n");
+    s.push_str("pack('<hh', 1)\n");
+    s.push_str("pack('<hh', 1, 2, 3)\n");
+    s.push_str("pack('<h')\n");
+    s.push_str("pack('x', 1)\n");
+    s.push_str("pack('z', 1)\n");
+    s.push_str("# --- pack: floats\n");
+    s.push_str("pack('<e', 1.0)\n");
+    s.push_str("pack('<e', -2.5)\n");
+    s.push_str("pack('<e', 65504.0)\n");
+    s.push_str("pack('<e', 65519.99)\n");
+    s.push_str("pack('<e', 65520.0)\n");
+    s.push_str("pack('<e', 0.1)\n");
+    s.push_str("pack('<e', 6e-08)\n");
+    s.push_str("pack('<e', 2.98e-08)\n");
+    s.push_str("pack('<e', 3e-08)\n");
+    s.push_str("pack('<e', 1e-10)\n");
+    s.push_str("pack('<e', -0.0)\n");
+    s.push_str("pack('>e', 1.5)\n");
+    s.push_str("pack('<e', float('inf'))\n");
+    s.push_str("pack('<e', float('-inf'))\n");
+    s.push_str("pack('<e', 1e300)\n");
+    s.push_str("pack('<f', 1.0)\n");
+    s.push_str("pack('<f', 0.1)\n");
+    s.push_str("pack('>f', -1013.25)\n");
+    s.push_str("pack('<f', 3.4028234663852886e38)\n");
+    s.push_str("pack('<f', 3.4028235e38)\n");
+    s.push_str("pack('<f', 3.5e38)\n");
+    s.push_str("pack('<f', 1e-46)\n");
+    s.push_str("pack('<f', float('inf'))\n");
+    s.push_str("pack('<d', 1.0)\n");
+    s.push_str("pack('>d', -0.1)\n");
+    s.push_str("pack('<d', 1e308)\n");
+    s.push_str("pack('<d', 5e-324)\n");
+    s.push_str("pack('<d', float('-inf'))\n");
+    s.push_str("pack('<d', 3)\n");
+    s.push_str("pack('<d', True)\n");
+    s.push_str("pack('<f', '1.0')\n");
+    s.push_str("pack('<d', None)\n");
+    s.push_str("pack('<e', b'1')\n");
+    s.push_str("# --- pack: chars and strings\n");
+    s.push_str("pack('c', b'a')\n");
+    s.push_str("pack('c', b'')\n");
+    s.push_str("pack('c', b'ab')\n");
+    s.push_str("pack('c', 'a')\n");
+    s.push_str("pack('c', 97)\n");
+    s.push_str("pack('3c', b'x', b'y', b'z')\n");
+    s.push_str("pack('5s', b'abc')\n");
+    s.push_str("pack('2s', b'abcdef')\n");
+    s.push_str("pack('0s', b'abc')\n");
+    s.push_str("pack('s', b'')\n");
+    s.push_str("pack('s', 'abc')\n");
+    s.push_str("pack('5s', 5)\n");
+    s.push_str("pack('5p', b'abc')\n");
+    s.push_str("pack('3p', b'abcdef')\n");
+    s.push_str("pack('p', b'abc')\n");
+    s.push_str("pack('0p', b'abc')\n");
+    s.push_str("pack('300p', b'z')\n");
+    s.push_str("pack('4s4s', b'RIFF', b'WAVE')\n");
+    s.push_str("pack('<4sBxH', b'IFAC', 2, 4)\n");
+    s.push_str("pack('s', b'\\x00\\xff\\'\"\\\\')\n");
+    s.push_str("pack('3s', b\"it's\")\n");
+    s.push_str("pack('5s', b'\\t\\n\\r')\n");
+    s.push_str("# --- unpack\n");
+    s.push_str("unpack('<h', b'\\xfe\\xff')\n");
+    s.push_str("unpack('>h', b'\\xfe\\xff')\n");
+    s.push_str("unpack('<H', b'\\xef\\xbe')\n");
+    s.push_str("unpack('<i', b'\\x00\\x00\\x00\\x80')\n");
+    s.push_str("unpack('<I', b'\\x00\\x00\\x00\\x80')\n");
+    s.push_str("unpack('<q', b'\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff')\n");
+    s.push_str("unpack('<Q', b'\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff')\n");
+    s.push_str("unpack('>Q', b'\\x00\\x00\\x00\\x00\\x00\\x00\\x01\\x00')\n");
+    s.push_str("unpack('bB', b'\\x80\\x80')\n");
+    s.push_str("unpack('?', b'\\x00')\n");
+    s.push_str("unpack('?', b'\\x02')\n");
+    s.push_str("unpack('<?', b'\\x7f')\n");
+    s.push_str("unpack('3?', b'\\x00\\x01\\x00')\n");
+    s.push_str("unpack('c', b'\\x00')\n");
+    s.push_str("unpack('2c', b'q\\xff')\n");
+    s.push_str("unpack('5s', b'ab\\x00de')\n");
+    s.push_str("unpack('5p', b'\\x03abcd')\n");
+    s.push_str("unpack('5p', b'\\x09abcd')\n");
+    s.push_str("unpack('1p', b'\\x05')\n");
+    s.push_str("unpack('@hq', b'\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x00\\x00\\x00\\x00\\x00\\x00')\n");
+    s.push_str("unpack('=hq', b'\\x01\\x00\\x02\\x00\\x00\\x00\\x00\\x00\\x00\\x00')\n");
+    s.push_str("unpack('<e', b'\\x00\\x3c')\n");
+    s.push_str("unpack('<e', b'\\xff\\x7b')\n");
+    s.push_str("unpack('<e', b'\\x01\\x00')\n");
+    s.push_str("unpack('<e', b'\\x00\\x7c')\n");
+    s.push_str("unpack('<e', b'\\x00\\xfc')\n");
+    s.push_str("unpack('<e', b'\\x00\\x80')\n");
+    s.push_str("unpack('<e', b'\\x66\\x2e')\n");
+    s.push_str("unpack('<f', b'\\xcd\\xcc\\xcc\\x3d')\n");
+    s.push_str("unpack('>f', b'\\xc4\\x7d\\x50\\x00')\n");
+    s.push_str("unpack('<f', b'\\x01\\x00\\x00\\x00')\n");
+    s.push_str("unpack('<d', b'\\x9a\\x99\\x99\\x99\\x99\\x99\\xb9\\x3f')\n");
+    s.push_str("unpack('<d', b'\\x00\\x00\\x00\\x00\\x00\\x00\\xf0\\x7f')\n");
+    s.push_str("unpack('<d', b'\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00')\n");
+    s.push_str("unpack('>d', b'\\x41\\x9d\\x6f\\x34\\x54\\x00\\x00\\x00')\n");
+    s.push_str("unpack('<d', b'\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x80')\n");
+    s.push_str("unpack('', b'')\n");
+    s.push_str("unpack('3x', b'abc')\n");
+    s.push_str("unpack('<h', b'\\x01')\n");
+    s.push_str("unpack('<h', b'\\x01\\x02\\x03')\n");
+    s.push_str("unpack('<h', b'')\n");
+    s.push_str("unpack('z', b'')\n");
+    s.push_str("unpack('<h', 'ab')\n");
+    s.push_str("unpack('<h', 12)\n");
+    s.push_str("# --- unpack_from and iter_unpack\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', 2)\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04')\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', -2)\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', -4)\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', 3)\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', 4)\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', 9)\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', -5)\n");
+    s.push_str("unpack_from('<h', b'\\x01\\x02\\x03\\x04', -1)\n");
+    s.push_str("unpack_from('<i', b'\\x01\\x02\\x03', 0)\n");
+    s.push_str("unpack_from('', b'', 0)\n");
+    s.push_str("unpack_from('', b'ab', 2)\n");
+    s.push_str("list(iter_unpack('<h', b'\\x01\\x00\\x02\\x00\\x03\\x00'))\n");
+    s.push_str("list(iter_unpack('<hB', b'\\x01\\x00\\x07\\x02\\x00\\x08'))\n");
+    s.push_str("list(iter_unpack('<h', b''))\n");
+    s.push_str("list(iter_unpack('<h', b'\\x01\\x00\\x02'))\n");
+    s.push_str("list(iter_unpack('', b''))\n");
+    s.push_str("list(iter_unpack('3x', b'abcdef'))\n");
+    s.push_str("# --- pack_into and bytearrays\n");
+    s.push_str("buf = bytearray(8)\n");
+    s.push_str("buf\n");
+    s.push_str("pack_into('<hh', buf, 2, 258, -1)\n");
+    s.push_str("buf\n");
+    s.push_str("pack_into('>I', buf, -4, 0xCAFEBABE)\n");
+    s.push_str("buf\n");
+    s.push_str("pack_into('<h', buf, 7, 1)\n");
+    s.push_str("pack_into('<h', buf, 8, 1)\n");
+    s.push_str("pack_into('<h', buf, -1, 1)\n");
+    s.push_str("pack_into('<h', buf, -9, 1)\n");
+    s.push_str("pack_into('<h', buf, 0, 1, 2)\n");
+    s.push_str("pack_into('<h', buf, 0, 99999)\n");
+    s.push_str("pack_into('<4s', buf, 0, b'ab')\n");
+    s.push_str("buf\n");
+    s.push_str("pack_into('', buf, 8)\n");
+    s.push_str("pack_into('', buf, 9)\n");
+    s.push_str("unpack_from('<4B', buf, 4)\n");
+    s.push_str("unpack('<8B', buf)\n");
+    s.push_str("small = bytearray(b'\\x10\\x20\\x30')\n");
+    s.push_str("unpack('<3B', small)\n");
+    s.push_str("pack_into('B', small, 1, 255)\n");
+    s.push_str("small\n");
+    s.push_str("pack_into('B', b'\\x00\\x00', 0, 1)\n");
+    s.push_str("pack('c', bytearray(b'!'))\n");
+    s.push_str("pack('3s', bytearray(b'abc'))\n");
+    s.push_str("# --- Struct objects\n");
+    s.push_str("Struct('<hh').size\n");
+    s.push_str("Struct('<hh').format\n");
+    s.push_str("Struct('@cq').size\n");
+    s.push_str("Struct('5p').format\n");
+    s.push_str("Struct('<hh').pack(1, 2)\n");
+    s.push_str("Struct('<hh').unpack(b'\\x01\\x00\\x02\\x00')\n");
+    s.push_str("Struct('<hh').unpack_from(b'\\x00\\x00\\x01\\x00\\x02\\x00', 2)\n");
+    s.push_str("list(Struct('<B').iter_unpack(b'\\x01\\x02\\x03'))\n");
+    s.push_str("Struct('q').pack(-1)\n");
+    s.push_str("Struct('zz')\n");
+    s.push_str("Struct('<hh').pack(1)\n");
+    s.push_str("# --- reading real files\n");
+    s.push_str("unpack_file('<4sI4s', 'tone.wav', 0)\n");
+    s.push_str("unpack_file('<4sIHHIIHH', 'tone.wav', 12)\n");
+    s.push_str("unpack_file('<4sI', 'tone.wav', 36)\n");
+    s.push_str("unpack_file('<8h', 'tone.wav', 44)\n");
+    s.push_str("unpack_file('<2sBBIBB', 'notes.txt.gz', 0)\n");
+    s.push_str("unpack_file('<10s', 'notes.txt.gz', 10)\n");
+    s.push_str("unpack_file('<II', 'notes.txt.gz', -8)\n");
+    s.push_str("unpack_file('<IHHHHHIIIHH', 'pair.zip', 0)\n");
+    s.push_str("unpack_file('<5s', 'pair.zip', 30)\n");
+    s.push_str("unpack_file('<IHHHHIIIHHHHHII', 'pair.zip', -98)\n");
+    s.push_str("unpack_file('<IHHHHIIH', 'pair.zip', -22)\n");
+    s.push_str("unpack_file('<IhhfB3x', 'sensors.bin', 0)\n");
+    s.push_str("unpack_file('<IhhfB3x', 'sensors.bin', 48)\n");
+    s.push_str("unpack_file('<IhhfB3x', 'sensors.bin', 64)\n");
+    s.push_str("records('<IhhfB3x', 'sensors.bin')\n");
+    s.push_str("records('<IhhfB', 'sensors.bin')\n");
+    s.push_str("records('<Ihh', 'sensors.bin')\n");
+    s.push_str("unpack_file('>4sBxH', 'ifaces.bin', 0)\n");
+    s.push_str("names('ifaces.bin')\n");
+    s.push_str("unpack_file('>4sBxH', 'missing.bin', 0)\n");
+    s
+}
