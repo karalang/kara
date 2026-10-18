@@ -82,14 +82,14 @@ fn encode(e: ref Event) -> String {
 }
 
 fn int_field(s: Str, what: Str) -> Result[i64, String] {
-    match i64.parse(s) {
+    match i64.parse(s).ok() {
         Some(n) => Ok(n),
         None => Err(f"bad {what} '{s}'"),
     }
 }
 
 fn decode(line: Str) -> Result[Event, String] {
-    let raw = line.split("|");
+    let raw: Vec[Str] = line.split("|").collect();
     let mut f: Vec[String] = Vec.new();
     for r in raw.iter() {
         f.push(unescape(r)?);
@@ -196,7 +196,7 @@ fn amount(w: ref Vec[String], i: i64) -> Result[i64, String] {
     if w.len() <= i {
         return Err("missing amount".to_string());
     }
-    let parts = w[i].split(".");
+    let parts: Vec[Str] = w[i].split(".").collect();
     let cents = match parts.len() {
         1 => int_field(parts[0], "amount")? * 100,
         2 => {
@@ -266,7 +266,7 @@ impl Store {
 
     // Validates one command and records its events; Err says why not.
     fn handle(mut ref self, line: Str) -> Result[String, String] {
-        let w = line.split_whitespace();
+        let w: Vec[String] = line.split_whitespace().map(|p| p.to_string()).collect();
         if w.len() < 3 {
             return Err("want: <id> <verb> <account> ...".to_string());
         }
@@ -427,7 +427,7 @@ fn recover() -> Result[Store, String] {
         } else if l.starts_with("cmd ") {
             s.seen.insert(l[4..l.len()].to_string());
         } else if l.starts_with("acct ") {
-            let f = l[5..l.len()].split("|");
+            let f: Vec[Str] = l[5..l.len()].split("|").collect();
             let a = Account {
                 exists: f[1] == "true",
                 closed: f[2] == "true",

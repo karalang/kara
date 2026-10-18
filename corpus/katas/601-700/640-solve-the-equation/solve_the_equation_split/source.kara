@@ -8,7 +8,7 @@
 fn side(text: String) -> (i64, i64) {
     let mut xs = 0;
     let mut constant = 0;
-    for term in text.replace("-", "+-").split("+").iter() {
+    for term in text.replace("-", "+-").split("+") {
         if term.len() == 0 {
             continue;
         }
@@ -29,9 +29,9 @@ fn side(text: String) -> (i64, i64) {
 }
 
 fn solve_equation(equation: String) -> String {
-    let sides = equation.split("=");
-    let (a, b) = side(sides[0]);
-    let (c, d) = side(sides[1]);
+    let sides: Vec[Str] = equation.split("=").collect();
+    let (a, b) = side(sides[0].to_string());
+    let (c, d) = side(sides[1].to_string());
     if a == c {
         if b == d {
             String.from("Infinite solutions")

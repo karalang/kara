@@ -177,7 +177,7 @@ fn serve(srv: mut ref Smtp, input: Str) -> String {
     srv.helo = String.new();
     srv.env = Envelope { from: String.new(), to: Vec.new() };
     let mut out = f"220 {DOMAIN} ESMTP sink\r\n";
-    let lines = input.split("\r\n");
+    let lines: Vec[Str] = input.split("\r\n").collect();
     let mut i = 0;
     while i < lines.len() {
         let line = ref lines[i];
@@ -299,7 +299,7 @@ fn session(listener: ref TcpListener, srv: mut ref Smtp, label: Str, steps: ref 
     match listener.accept() {
         Ok(conn) => {
             let out = match read_all(conn) {
-                Ok(raw) => serve(srv, raw),
+                Ok(raw) => serve(mut srv, raw),
                 Err(e) => f"421 4.3.0 {e}\r\n",
             };
             match conn.write_all(out.bytes()) {
@@ -322,7 +322,7 @@ fn session(listener: ref TcpListener, srv: mut ref Smtp, label: Str, steps: ref 
     for s in steps.iter() {
         match s {
             Step.Cmd(c) => println(f"C: {c}"),
-            Step.Body(b) => println(f"C: <message, {b.split("\n").len()} lines>"),
+            Step.Body(b) => println(f"C: <message, {b.split("\n").count()} lines>"),
         }
         if k < rs.len() {
             println(f"S: {rs[k].join(" | ")}");
@@ -340,7 +340,7 @@ struct Header { name: String, value: String }
 // Splits a message at the first empty line; unfolds continuation lines.
 fn parse(text: Str) -> (Vec[Header], String) {
     let mut hs: Vec[Header] = Vec.new();
-    let lines = text.split("\r\n");
+    let lines: Vec[Str] = text.split("\r\n").collect();
     let mut i = 0;
     while i < lines.len() {
         let l = ref lines[i];
@@ -460,7 +460,7 @@ fn report_parts(body: Str, bnd: Str) {
                 Ok(bytes) => {
                     let first = match String.from_utf8(bytes.clone()) {
                         Ok(s) => {
-                            let ls = s.lines();
+                            let ls: Vec[Str] = s.lines().collect();
                             if ls.len() > 0 { ls[0].clone() } else { String.new() }
                         }
                         Err(_) => "(binary)".to_string(),
@@ -522,7 +522,7 @@ fn report() {
         match boundary(ct) {
             Some(b) => report_parts(body, b),
             None => {
-                let ls = body.lines();
+                let ls: Vec[Str] = body.lines().collect();
                 println(f"    {ls.len()} body lines, last: {ls[ls.len() - 1]}");
             }
         }
