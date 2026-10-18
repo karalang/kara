@@ -6513,7 +6513,7 @@ fn iter_on_an_iterator_is_dropped() {
 }
 
 /// design.md § String literals: a literal is a `Str` wherever one is
-/// expected, which includes a branch beside a `Str` view (B-2026-10-15-17)
+/// expected, which includes a branch beside a `Str` view (B-2026-10-15-32)
 /// and a `Vec[Str]` push (B-2026-10-14-68).
 #[test]
 fn a_string_literal_takes_the_str_type_of_its_context() {
