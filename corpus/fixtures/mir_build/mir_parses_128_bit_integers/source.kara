@@ -1,0 +1,9 @@
+
+fn main() {
+    println(f"{i128.parse("18446744073709551616").unwrap()}");
+    println(f"{i128.parse(" -170141183460469231731687303715884105728 ").unwrap()}");
+    println(f"{i128.parse("170141183460469231731687303715884105728").is_none()}");
+    println(f"{u128.parse("340282366920938463463374607431768211455").unwrap()}");
+    println(f"{u128.parse("-1").is_none()} {u128.parse("x").is_none()}");
+    println(f"{i128.from_str_radix("-ff", 16).unwrap()} {u128.from_str_radix("zz", 36).unwrap()}");
+}

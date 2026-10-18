@@ -1,0 +1,9 @@
+add(1), add(2), contains(1), contains(3), add(2), contains(2), remove(2), contains(2): [null, null, true, false, null, true, null, false]
+contains(0), add(0), add(1000000), contains(0), contains(1000000), remove(0), contains(0), contains(1000000): [false, null, null, true, true, null, false, true]
+remove(5), contains(5), add(5), remove(5), remove(5), contains(5), add(5), contains(5): [null, false, null, null, null, false, null, true]
+add(0), add(1009), add(2018), remove(1009), contains(0), contains(1009), contains(2018), add(3027), contains(3027): [null, null, null, null, true, false, true, null, true]
+add(64), add(128), remove(64), contains(64), contains(128), contains(192): [null, null, null, false, true, false]
+10000 calls on keys below 1000001: checksum 54469898800005
+10000 calls on keys below 100: checksum 53702509901649
+5000 added, odd ones removed, 2500 looked up: checksum 56318052101278
+300 random sequences: checksum 769960433

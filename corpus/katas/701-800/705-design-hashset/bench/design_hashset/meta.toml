@@ -1,0 +1,16 @@
+source = "kara-katas/leetcode/701-800/705-design-hashset/bench/design_hashset.kara"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["needs-driver", "bench"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "legacy run timed out after 60s"
+bucket = "skip:legacy run timed out after 60s"
+classified_with = "2bfc20c2a"
+extracted_src = "829856b1"
