@@ -592,6 +592,77 @@ impl TypeEnv {
             .is_some()
     }
 
+    /// [`Self::has_impl`], counting only an impl whose own bounds hold for
+    /// these arguments: `impl[T: Show] Show for Wrap[T]` makes `Wrap[i64]`
+    /// a `Show` and not `Wrap[Plain]` when `Plain` is not one
+    /// (B-2026-10-13-5). An argument not yet inferred is not refused.
+    fn has_applicable_impl(
+        &self,
+        trait_name: &str,
+        target_type: &str,
+        target_args: &[Type],
+    ) -> bool {
+        let Some(impls) = self.impls_by_trait.get(trait_name) else {
+            return false;
+        };
+        impls.iter().map(|&i| &self.impls[i]).any(|imp| {
+            imp.target_type == target_type
+                && impl_args_match(&imp.target_args, target_args)
+                && self.impl_bounds_hold(imp, target_args)
+        })
+    }
+
+    /// Does the named type `ty` `#[derive]` one of `bounds`? A derive a
+    /// comptime `derive_*` expands (`Serialize`) has no impl in the table
+    /// until after type checking, so it is taken at its word here, as the
+    /// checker's own bound gate takes it.
+    fn derives_a_bound(&self, ty: &Type, bounds: &[TraitBound]) -> bool {
+        let Type::Named { name, .. } = ty else {
+            return false;
+        };
+        let derived = match self.structs.get(name) {
+            Some(s) => &s.derived_traits,
+            None => match self.enums.get(name) {
+                Some(e) => &e.derived_traits,
+                None => return false,
+            },
+        };
+        bounds
+            .iter()
+            .any(|b| b.path.last().is_some_and(|t| derived.contains(t)))
+    }
+
+    /// Do `imp`'s own bounds hold for a receiver with `target_args`? Its
+    /// params are bound by matching the target as written against the
+    /// arguments; a param left unbound, or bound to a type still being
+    /// inferred, is undecided and passes.
+    fn impl_bounds_hold(&self, imp: &ImplInfo, target_args: &[Type]) -> bool {
+        let Some(gp) = &imp.generic_params else {
+            return true;
+        };
+        fn undecided(t: &Type) -> bool {
+            match t {
+                Type::TypeVar(_) | Type::Error | Type::AssocProjection { .. } => true,
+                Type::Named { args, .. } => args.iter().any(undecided),
+                Type::Ref(i) | Type::MutRef(i) | Type::Weak(i) => undecided(i),
+                Type::Tuple(ts) => ts.iter().any(undecided),
+                Type::Array { element, .. } | Type::Slice { element, .. } => undecided(element),
+                _ => false,
+            }
+        }
+        let mut bound = HashMap::new();
+        bind_impl_params(&imp.target_generic_args, target_args, &mut bound);
+        let aligned: Vec<Type> = gp
+            .params
+            .iter()
+            .map(|p| match bound.get(&p.name) {
+                Some(t) if !undecided(t) && !self.derives_a_bound(t, &p.bounds) => t.clone(),
+                _ => Type::TypeParam(p.name.clone()),
+            })
+            .collect();
+        self.impl_bounds_discharge(imp, &aligned)
+    }
+
     /// Look up a method by name on `target_type` from `impls`, preferring
     /// inherent methods over trait methods per design.md § Method Resolution
     /// Step 3. Returns the first inherent impl's method if any matches;
@@ -1122,7 +1193,7 @@ impl TypeEnv {
         ty_args: &[Type],
         trait_name: &str,
     ) -> bool {
-        if self.has_impl(trait_name, ty_name, ty_args) {
+        if self.has_applicable_impl(trait_name, ty_name, ty_args) {
             return true;
         }
         let directly_impld_traits: Vec<&str> = self

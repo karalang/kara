@@ -5416,3 +5416,54 @@ fn deref_of_an_item_of_a_named_iter_is_accepted_and_runs() {
     assert!(err.contains("unary '*' requires"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_conditional_impl_bound_is_checked_at_a_generic_call() {
+    // B-2026-10-13-5: `impl[T: Show] Show for Wrap[T]` makes `Wrap[X]` a
+    // `Show` only when `X` is one, so `print_it(Wrap { v: Plain { .. } })`
+    // is refused at check rather than stopping the MIR builder.
+    let head = "trait Show { fn show(ref self) -> String; }\n\
+         impl Show for i64 { fn show(ref self) -> String { \"i\".to_string() } }\n\
+         struct Wrap[T] { v: T }\n\
+         impl[T: Show] Show for Wrap[T] { fn show(ref self) -> String { f\"w{self.v.show()}\" } }\n\
+         struct Plain { n: i64 }\n\
+         fn print_it[X: Show](x: ref X) { println(x.show()); }\n";
+    let bad = format!(
+        "{head}fn main() {{\n\
+         \x20   print_it(Wrap {{ v: 3 }});\n\
+         \x20   print_it(Wrap {{ v: Plain {{ n: 1 }} }});\n\
+         }}\n"
+    );
+    let (dir, path) = fixture("cond-impl-bound", &bad);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must refuse: {err}");
+    assert!(
+        err.contains("p.kara:9:"),
+        "the refusal names the call: {err}"
+    );
+    assert!(err.contains("Show"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let good = format!(
+        "{head}impl Show for Plain {{ fn show(ref self) -> String {{ f\"p{{self.n}}\" }} }}\n\
+         fn main() {{\n\
+         \x20   print_it(Wrap {{ v: 3 }});\n\
+         \x20   print_it(Wrap {{ v: Wrap {{ v: Plain {{ n: 1 }} }} }});\n\
+         }}\n"
+    );
+    let (dir, path) = fixture("cond-impl-bound-ok", &good);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "wi\nwwp1\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
