@@ -1,0 +1,81 @@
+// LeetCode #712: Minimum ASCII Delete Sum for Two Strings -- the
+// heaviest common subsequence.
+//
+// What is not deleted is a common subsequence, and both strings keep
+// it, so the cost is the two strings' sums less twice its sum. Find
+// the common subsequence of greatest ASCII sum, a weighted longest
+// common subsequence, one row at a time. O(m * n) time, O(n) space.
+
+fn minimum_delete_sum(s1: String, s2: String) -> i64 {
+    let a = s1.bytes().to_vec();
+    let b = s2.bytes().to_vec();
+    let mut total = 0;
+    for x in a.iter() {
+        total += *x as i64;
+    }
+    for x in b.iter() {
+        total += *x as i64;
+    }
+    let mut prev: Vec[i64] = Vec.new();
+    for _ in 0..b.len() + 1 {
+        prev.push(0);
+    }
+    for i in 0..a.len() {
+        let mut cur: Vec[i64] = [0];
+        for j in 0..b.len() {
+            let keep = if a[i] == b[j] { prev[j] + a[i] as i64 } else { 0 };
+            let skip = if prev[j + 1] > cur[j] { prev[j + 1] } else { cur[j] };
+            cur.push(if keep > skip { keep } else { skip });
+        }
+        prev = cur;
+    }
+    total - 2 * prev[b.len()]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` random lowercase letters from the first `k` of the alphabet.
+fn random_string(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((97 + next_random(mut seed) % k) as u8 as char);
+    }
+    s
+}
+
+fn show(s1: String, s2: String) {
+    println(f"\"{s1}\", \"{s2}\" -> {minimum_delete_sum(s1, s2)}");
+}
+
+fn main() {
+    show("sea", "eat");
+    show("delete", "leet");
+    show("a", "a");
+    show("a", "b");
+    show("abc", "");
+    show("", "");
+    show("abc", "abc");
+    show("abc", "cba");
+    show("zzzz", "z");
+    show("ab", "ba");
+    let mut seed: i64 = 712;
+    let x = random_string(1000, 26, mut seed);
+    let y = random_string(1000, 26, mut seed);
+    println(f"1000 and 1000 letters: {minimum_delete_sum(x, y)}");
+    let p = random_string(1000, 3, mut seed);
+    let q = random_string(1000, 3, mut seed);
+    println(f"1000 and 1000 of 3 letters: {minimum_delete_sum(p, q)}");
+    let mut sum = 0;
+    for _ in 0..500 {
+        let k = 1 + next_random(mut seed) % 26;
+        let s1 = random_string(next_random(mut seed) % 40, k, mut seed);
+        let s2 = random_string(next_random(mut seed) % 40, k, mut seed);
+        sum = (sum * 131 + minimum_delete_sum(s1, s2)) % 1000000007;
+    }
+    println(f"500 random pairs: checksum {sum}");
+}

@@ -1,0 +1,80 @@
+// LeetCode #712: Minimum ASCII Delete Sum for Two Strings -- one row at
+// a time.
+//
+// The ★ arm's table needs only the row above, so keep one row of
+// n + 1 and the one diagonal value it overwrites. O(m * n) time,
+// O(n) space.
+
+fn minimum_delete_sum(s1: String, s2: String) -> i64 {
+    let a = s1.bytes().to_vec();
+    let b = s2.bytes().to_vec();
+    let mut row: Vec[i64] = [0];
+    for j in 0..b.len() {
+        let last = row[j];
+        row.push(last + b[j] as i64);
+    }
+    for i in 0..a.len() {
+        let mut diag = row[0];
+        row[0] = row[0] + a[i] as i64;
+        for j in 1..b.len() + 1 {
+            let above = row[j];
+            if a[i] == b[j - 1] {
+                row[j] = diag;
+            } else {
+                let drop_a = above + a[i] as i64;
+                let drop_b = row[j - 1] + b[j - 1] as i64;
+                row[j] = if drop_a < drop_b { drop_a } else { drop_b };
+            }
+            diag = above;
+        }
+    }
+    row[b.len()]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` random lowercase letters from the first `k` of the alphabet.
+fn random_string(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((97 + next_random(mut seed) % k) as u8 as char);
+    }
+    s
+}
+
+fn show(s1: String, s2: String) {
+    println(f"\"{s1}\", \"{s2}\" -> {minimum_delete_sum(s1, s2)}");
+}
+
+fn main() {
+    show("sea", "eat");
+    show("delete", "leet");
+    show("a", "a");
+    show("a", "b");
+    show("abc", "");
+    show("", "");
+    show("abc", "abc");
+    show("abc", "cba");
+    show("zzzz", "z");
+    show("ab", "ba");
+    let mut seed: i64 = 712;
+    let x = random_string(1000, 26, mut seed);
+    let y = random_string(1000, 26, mut seed);
+    println(f"1000 and 1000 letters: {minimum_delete_sum(x, y)}");
+    let p = random_string(1000, 3, mut seed);
+    let q = random_string(1000, 3, mut seed);
+    println(f"1000 and 1000 of 3 letters: {minimum_delete_sum(p, q)}");
+    let mut sum = 0;
+    for _ in 0..500 {
+        let k = 1 + next_random(mut seed) % 26;
+        let s1 = random_string(next_random(mut seed) % 40, k, mut seed);
+        let s2 = random_string(next_random(mut seed) % 40, k, mut seed);
+        sum = (sum * 131 + minimum_delete_sum(s1, s2)) % 1000000007;
+    }
+    println(f"500 random pairs: checksum {sum}");
+}

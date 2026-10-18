@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/712-minimum-ascii-delete-sum-for-two-strings/bench/minimum_ascii_delete_sum_for_two_strings.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "4ac59f62c"
+extracted_src = "43c21e4a"
+model_rev = "583cfb0d"
+model_src = "43c21e4a"

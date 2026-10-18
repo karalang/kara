@@ -1,0 +1,13 @@
+"sea", "eat" -> 231
+"delete", "leet" -> 403
+"a", "a" -> 0
+"a", "b" -> 195
+"abc", "" -> 294
+"", "" -> 0
+"abc", "abc" -> 0
+"abc", "cba" -> 390
+"zzzz", "z" -> 366
+"ab", "ba" -> 194
+1000 and 1000 letters: 148781
+1000 and 1000 of 3 letters: 56343
+500 random pairs: checksum 500757288

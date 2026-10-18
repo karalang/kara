@@ -1,0 +1,260 @@
+// LeetCode #712: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random strings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn minimum_delete_sum_star(s1: String, s2: String) -> i64 {
+    let a = s1.bytes().to_vec();
+    let b = s2.bytes().to_vec();
+    let m = a.len();
+    let n = b.len();
+    let mut cost: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n + 1 {
+            row.push(0);
+        }
+        cost.push(row);
+    }
+    for i in 1..m + 1 {
+        cost[i][0] = cost[i - 1][0] + a[i - 1] as i64;
+    }
+    for j in 1..n + 1 {
+        cost[0][j] = cost[0][j - 1] + b[j - 1] as i64;
+    }
+    for i in 1..m + 1 {
+        for j in 1..n + 1 {
+            if a[i - 1] == b[j - 1] {
+                cost[i][j] = cost[i - 1][j - 1];
+            } else {
+                let drop_a = cost[i - 1][j] + a[i - 1] as i64;
+                let drop_b = cost[i][j - 1] + b[j - 1] as i64;
+                cost[i][j] = if drop_a < drop_b { drop_a } else { drop_b };
+            }
+        }
+    }
+    cost[m][n]
+}
+
+// ---- rolling arm ----------------------------------------------------
+
+fn minimum_delete_sum_rolling(s1: String, s2: String) -> i64 {
+    let a = s1.bytes().to_vec();
+    let b = s2.bytes().to_vec();
+    let mut row: Vec[i64] = [0];
+    for j in 0..b.len() {
+        let last = row[j];
+        row.push(last + b[j] as i64);
+    }
+    for i in 0..a.len() {
+        let mut diag = row[0];
+        row[0] = row[0] + a[i] as i64;
+        for j in 1..b.len() + 1 {
+            let above = row[j];
+            if a[i] == b[j - 1] {
+                row[j] = diag;
+            } else {
+                let drop_a = above + a[i] as i64;
+                let drop_b = row[j - 1] + b[j - 1] as i64;
+                row[j] = if drop_a < drop_b { drop_a } else { drop_b };
+            }
+            diag = above;
+        }
+    }
+    row[b.len()]
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn rest_sum_memo(v: Vec[u8], from: i64) -> i64 {
+    let mut total = 0;
+    for k in from..v.len() {
+        total += v[k] as i64;
+    }
+    total
+}
+
+fn cost_memo(a: Vec[u8], b: Vec[u8], i: i64, j: i64,
+        memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if i == a.len() {
+        return rest_sum_memo(b, j);
+    }
+    if j == b.len() {
+        return rest_sum_memo(a, i);
+    }
+    if memo[i][j] >= 0 {
+        return memo[i][j];
+    }
+    let best = if a[i] == b[j] {
+        cost_memo(a, b, i + 1, j + 1, mut memo)
+    } else {
+        let drop_a = a[i] as i64 + cost_memo(a, b, i + 1, j, mut memo);
+        let drop_b = b[j] as i64 + cost_memo(a, b, i, j + 1, mut memo);
+        if drop_a < drop_b { drop_a } else { drop_b }
+    };
+    memo[i][j] = best;
+    best
+}
+
+fn minimum_delete_sum_memo(s1: String, s2: String) -> i64 {
+    let a = s1.bytes().to_vec();
+    let b = s2.bytes().to_vec();
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..a.len() {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..b.len() {
+            row.push(-1);
+        }
+        memo.push(row);
+    }
+    cost_memo(a, b, 0, 0, mut memo)
+}
+
+// ---- keep arm -------------------------------------------------------
+
+fn minimum_delete_sum_keep(s1: String, s2: String) -> i64 {
+    let a = s1.bytes().to_vec();
+    let b = s2.bytes().to_vec();
+    let mut total = 0;
+    for x in a.iter() {
+        total += *x as i64;
+    }
+    for x in b.iter() {
+        total += *x as i64;
+    }
+    let mut prev: Vec[i64] = Vec.new();
+    for _ in 0..b.len() + 1 {
+        prev.push(0);
+    }
+    for i in 0..a.len() {
+        let mut cur: Vec[i64] = [0];
+        for j in 0..b.len() {
+            let keep = if a[i] == b[j] { prev[j] + a[i] as i64 } else { 0 };
+            let skip = if prev[j + 1] > cur[j] { prev[j + 1] } else { cur[j] };
+            cur.push(if keep > skip { keep } else { skip });
+        }
+        prev = cur;
+    }
+    total - 2 * prev[b.len()]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((97 + next_random(mut seed) % k) as u8 as char);
+    }
+    s
+}
+
+fn cost(which: i64, s1: String, s2: String) -> i64 {
+    if which == 0 {
+        minimum_delete_sum_star(s1, s2)
+    } else if which == 1 {
+        minimum_delete_sum_rolling(s1, s2)
+    } else if which == 2 {
+        minimum_delete_sum_memo(s1, s2)
+    } else {
+        minimum_delete_sum_keep(s1, s2)
+    }
+}
+
+fn ascii_sum(s: String) -> i64 {
+    let mut total = 0;
+    for c in s.chars() {
+        total += c as u32 as i64;
+    }
+    total
+}
+
+// The definition: try every subsequence of s1 as what is kept; if it
+// is also a subsequence of s2, deleting the rest of both costs the two
+// sums less twice its sum. The least such cost.
+fn definition(s1: String, s2: String) -> i64 {
+    let a = s1.bytes().to_vec();
+    let b = s2.bytes().to_vec();
+    let total = ascii_sum(s1) + ascii_sum(s2);
+    let mut best = total;
+    for mask in 0..(1 << a.len()) {
+        let mut kept: Vec[u8] = Vec.new();
+        let mut weight = 0;
+        for i in 0..a.len() {
+            if (mask >> i) & 1 == 1 {
+                kept.push(a[i]);
+                weight += a[i] as i64;
+            }
+        }
+        // Is `kept` a subsequence of b? Match greedily from the left.
+        let mut k = 0;
+        for x in b.iter() {
+            if k < kept.len() and kept[k] == *x {
+                k += 1;
+            }
+        }
+        if k == kept.len() and total - 2 * weight < best {
+            best = total - 2 * weight;
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 7120;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut zero = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        let k = 1 + next_random(mut seed) % 5;
+        let s1 = random_string(next_random(mut seed) % 11, k, mut seed);
+        let s2 = random_string(next_random(mut seed) % 11, k, mut seed);
+        let x = random_string(1, k, mut seed);
+        let want = definition(s1, s2);
+        if want == 0 {
+            zero += 1;
+        }
+        for which in 0..arms {
+            let got = cost(which, s1, s2);
+            // P1: the definition's cost.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: swapping the strings costs the same.
+            checks += 1;
+            if cost(which, s2, s1) != got {
+                fails[1] += 1;
+            }
+            // P3: a string against itself costs nothing, and against
+            // the empty string its whole sum.
+            checks += 1;
+            if cost(which, s1, s1) != 0
+                    or cost(which, s1, "") != ascii_sum(s1) {
+                fails[2] += 1;
+            }
+            // P4: the same letter added to the front of both, or to
+            // the end of both, costs nothing more.
+            checks += 1;
+            if cost(which, x + s1, x + s2) != got
+                    or cost(which, s1 + x, s2 + x) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} pairs ({zero} equal), {arms} arms, {checks} checks, {total} failures");
+}
