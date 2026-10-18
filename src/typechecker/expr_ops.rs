@@ -2506,13 +2506,41 @@ impl<'a> super::TypeChecker<'a> {
         let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &left, right_ty)?;
         self.user_operator_calls
             .insert(SpanKey::from_span(span), format!("{name}.{method}"));
-        let subst = |t: &Type| self.subst_operator_self_in(t, &left, &name, Some(at));
-        let ret = subst(&sig.return_type);
+        let ret = self.operator_sig_at(&sig.return_type, &left, &name, &args, at);
         if let Some(rhs) = sig.params.first() {
-            let rhs = subst(rhs);
+            let rhs = self.operator_sig_at(rhs, &left, &name, &args, at);
             self.check_assignable(&rhs, right_ty, right.span);
         }
         Some(ret)
+    }
+
+    /// A type in the signature of the operator impl at index `at`, read at
+    /// the operand's type `left` (`name[args]`). B-2026-10-18-43: the impl's
+    /// own parameters (`impl[T: Add] Add for W[T]`) take the operand's
+    /// arguments, and a projection on one (`W[T.Output]`) is the `Output` of
+    /// the bound it names, as at a generic call. `Self` is read in the impl's
+    /// own terms first so the substitution runs once: the operand's
+    /// arguments may spell the CALLER's parameters with the same letters.
+    fn operator_sig_at(&self, t: &Type, left: &Type, name: &str, args: &[Type], at: usize) -> Type {
+        let imp = &self.env.impls[at];
+        let mut solutions: HashMap<String, Type> = HashMap::new();
+        super::env::bind_impl_params(&imp.target_generic_args, args, &mut solutions);
+        if solutions.is_empty() {
+            return self.subst_operator_self_in(t, left, name, Some(at));
+        }
+        let own = Type::Named {
+            name: name.to_string(),
+            args: imp.target_generic_args.clone(),
+        };
+        let t = self.subst_operator_self_in(t, &own, name, Some(at));
+        let bounds = Self::bounds_by_param(imp.generic_params.as_ref(), imp.where_clause.as_ref());
+        let t = self.resolve_bounded_projections(&t, &bounds, &solutions);
+        let subs: HashMap<String, super::types::SubstValue> = solutions
+            .into_iter()
+            .map(|(k, v)| (k, super::types::SubstValue::Type(v)))
+            .collect();
+        let t = super::inference::substitute_type_params(&t, &subs);
+        self.resolve_assoc_projections(&t)
     }
 
     /// B-2026-10-15-76 — the `method` of the impl of `tr` for `name[args]`
@@ -2594,7 +2622,7 @@ impl<'a> super::TypeChecker<'a> {
         let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &operand, &operand)?;
         self.user_operator_calls
             .insert(SpanKey::from_span(span), format!("{name}.{method}"));
-        Some(self.subst_operator_self_in(&sig.return_type, &operand, &name, Some(at)))
+        Some(self.operator_sig_at(&sig.return_type, &operand, &name, &args, at))
     }
 
     /// B-2026-10-14-37 — `c[k]` on a user type with an `impl Index` (a read)

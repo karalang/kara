@@ -2941,6 +2941,45 @@ fn mir_a_projection_reads_its_bound_traits_output() {
     }
 }
 
+/// A projection that reaches a generic call or constructor as an argument
+/// is the caller's, and an operator on a generic impl reads the impl's own
+/// parameters at the operand's arguments (B-2026-10-18-44, B-2026-10-18-43).
+#[test]
+fn mir_a_callers_projection_passes_through_a_generic_call() {
+    const SRC: &str = "enum E[T] { A(T), N }\n\
+        struct V { x: i64 }\n\
+        impl Add for V { type Output = V; fn add(self, rhs: V) -> V { V { x: self.x + rhs.x } } }\n\
+        impl Neg for V { type Output = V; fn neg(self) -> V { V { x: 0 - self.x } } }\n\
+        struct W[T] { v: T }\n\
+        impl[T: Add] Add for W[T] { type Output = W[T.Output]; fn add(self, rhs: W[T]) -> W[T.Output] { W { v: self.v + rhs.v } } }\n\
+        impl[T: Neg] Neg for W[T] { type Output = W[T.Output]; fn neg(self) -> W[T.Output] { W { v: -self.v } } }\n\
+        fn pair[T: Add](a: own T, b: own T) -> Option[T.Output] { Some(a + b) }\n\
+        fn tagged[T: Add](a: own T, b: own T) -> E[T.Output] { let s = a + b; E.A(s) }\n\
+        fn id[T](x: own T) -> T { x }\n\
+        fn through[T: Add](a: own T, b: own T) -> T.Output { let s = a + b; id(s) }\n\
+        fn twice[T: Add](a: own W[T], b: own W[T]) -> W[T.Output] { a + b }\n\
+        fn main() {\n    \
+        println(f\"{pair(3, 4).unwrap()} {through(5, 6)}\");\n    \
+        match tagged(V { x: 1 }, V { x: 2 }) {\n        \
+        E.A(v) => println(f\"{v.x}\"),\n        \
+        E.N => println(\"none\"),\n    \
+        }\n    \
+        let w = W { v: V { x: 1 } } + W { v: V { x: 9 } };\n    \
+        let n = -W { v: V { x: 4 } };\n    \
+        let i = W { v: 3 } + W { v: 4 };\n    \
+        let t = twice(W { v: V { x: 2 } }, W { v: V { x: 5 } });\n    \
+        println(f\"{w.v.x} {n.v.x} {i.v} {t.v.x}\");\n\
+        }\n";
+    let want = "7 11\n3\n10 -4 7 7\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// An unsuffixed `i128::MIN` is legal where the type is `i128` and refused
 /// as out of range for `i64` where nothing gives it a type
 /// (B-2026-10-15-73).

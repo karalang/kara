@@ -3748,13 +3748,7 @@ impl<'a> super::TypeChecker<'a> {
         // `TypeParam(originating_name)` so the caller's
         // `find_unbound_type_param` (slice 2a) still surfaces the
         // unsolved-T diagnostic.
-        let ret = resolve_type_vars(
-            &sub_ret,
-            &self.env.substitutions,
-            &id_to_name,
-            &self.env.const_substitutions,
-            &const_id_to_name,
-        );
+        //
         // GAT slice 8c — apply `substitute_type_params` against the
         // `solutions` map before `resolve_assoc_projections`.
         // `resolve_type_vars` walks `TypeVar` ids but doesn't touch
@@ -3771,42 +3765,47 @@ impl<'a> super::TypeChecker<'a> {
         // type through it keeps the projection resolution surface
         // consistent.
         //
-        // GATE (B-2026-07-12-6): run this ONLY when `ret` actually
-        // carries an `AssocProjection`. `ret` is already fully resolved
-        // by `resolve_type_vars` above; re-running `substitute_type_params`
-        // over a projection-free type re-substitutes bare `TypeParam`
-        // nodes that resolution already handled. When a solution value
-        // re-introduces the same param name — e.g. a generic method
-        // `impl[T] Box[T]` calling `Some(self.items.pop())`, where the
-        // constructor's own generic param and the enclosing method's are
-        // BOTH literally `"T"`, so `solutions = {"T": Option[T]}` and the
-        // already-resolved `ret = Option[Option[T]]` — the second pass
-        // rewrites the inner `T` again, nesting a spurious extra layer
-        // (`Option[Option[Option[T]]]`). The projection-param rewrite is
-        // the only thing `resolve_type_vars` can't do, so gate on it.
+        // B-2026-10-18-44: both rewrites run on the INSTANTIATED template,
+        // before `resolve_type_vars`, because only there is every
+        // projection's `param` the CALLEE's name — the callee's own params
+        // are still metavars. After resolution a solution can carry the
+        // CALLER's projection, and when the two scopes spell their params
+        // alike the rewrite read the caller's `T.Output` as the callee's:
+        // `Some(s)` with `s: T.Output` solved the constructor's `T` to
+        // `T.Output` and then projected `T` inside it again, typing the
+        // call `Option[T.Output.Output]`. (B-2026-07-12-6 is the same
+        // capture on a bare param, which the template cannot have: its
+        // params are metavars.)
         // B-2026-10-18-1: `T.Output` under `T: Add` is the `Output` of the
         // solved type's own `impl Add`, read before the substitution below
         // forgets which bound it came from. `impl_assoc_types` keeps one
         // binding per (type, name), so a type with `impl Add` and `impl Mul`
         // would otherwise answer with whichever impl came last.
-        let ret = match where_clause {
-            Some(wc) if !solutions.is_empty() && type_contains_assoc_projection(&ret) => self
+        let template = match where_clause {
+            Some(wc) if !solutions.is_empty() && type_contains_assoc_projection(&sub_ret) => self
                 .resolve_bounded_projections(
-                    &ret,
+                    &sub_ret,
                     &Self::bounds_by_param(None, Some(wc)),
                     &solutions,
                 ),
-            _ => ret,
+            _ => sub_ret.clone(),
         };
-        let ret = if solutions.is_empty() || !type_contains_assoc_projection(&ret) {
-            ret
+        let template = if solutions.is_empty() || !type_contains_assoc_projection(&template) {
+            template
         } else {
             let solutions_as_subs: HashMap<String, SubstValue> = solutions
                 .iter()
                 .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
                 .collect();
-            substitute_type_params(&ret, &solutions_as_subs)
+            substitute_type_params(&template, &solutions_as_subs)
         };
+        let ret = resolve_type_vars(
+            &template,
+            &self.env.substitutions,
+            &id_to_name,
+            &self.env.const_substitutions,
+            &const_id_to_name,
+        );
         let ret = self.resolve_assoc_projections(&ret);
 
         // Const generics slice 3c: discharge `WhereConstraint::ConstPredicate`
@@ -3913,19 +3912,22 @@ impl<'a> super::TypeChecker<'a> {
             .iter()
             .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
             .collect();
+        // Substitute before resolving, as the return type does above
+        // (B-2026-10-18-44): after resolution a solution may carry the
+        // caller's projection, which the callee's solutions must not rewrite.
         for sub_param_ty in &sub_params {
-            let resolved = resolve_type_vars(
-                sub_param_ty,
+            let substituted = if solutions_as_subs.is_empty() {
+                sub_param_ty.clone()
+            } else {
+                substitute_type_params(sub_param_ty, &solutions_as_subs)
+            };
+            let substituted = resolve_type_vars(
+                &substituted,
                 &self.env.substitutions,
                 &id_to_name,
                 &self.env.const_substitutions,
                 &const_id_to_name,
             );
-            let substituted = if solutions_as_subs.is_empty() {
-                resolved
-            } else {
-                substitute_type_params(&resolved, &solutions_as_subs)
-            };
             self.discharge_gat_decl_constraints_in(&substituted, discharge_span);
         }
         // For the return type, fire the walker against the
@@ -3935,18 +3937,18 @@ impl<'a> super::TypeChecker<'a> {
         // as the call's return). Rebuild the pre-resolution shape
         // for the walker so projections that get erased by
         // resolution still get their GAT-decl constraints checked.
+        let pre_resolve_ret = if solutions_as_subs.is_empty() {
+            sub_ret.clone()
+        } else {
+            substitute_type_params(&sub_ret, &solutions_as_subs)
+        };
         let pre_resolve_ret = resolve_type_vars(
-            &sub_ret,
+            &pre_resolve_ret,
             &self.env.substitutions,
             &id_to_name,
             &self.env.const_substitutions,
             &const_id_to_name,
         );
-        let pre_resolve_ret = if solutions_as_subs.is_empty() {
-            pre_resolve_ret
-        } else {
-            substitute_type_params(&pre_resolve_ret, &solutions_as_subs)
-        };
         self.discharge_gat_decl_constraints_in(&pre_resolve_ret, discharge_span);
 
         ret
@@ -4254,7 +4256,7 @@ impl<'a> super::TypeChecker<'a> {
     /// `bounds` name exactly one trait that the solved type implements with
     /// its own binding of `Assoc`, replaced by that binding (B-2026-10-18-1).
     /// Any other projection is left for `resolve_assoc_projections`.
-    fn resolve_bounded_projections(
+    pub(super) fn resolve_bounded_projections(
         &self,
         ty: &Type,
         bounds: &HashMap<String, Vec<String>>,
@@ -4424,7 +4426,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Each type parameter's bound trait names, from its inline bounds and
     /// a where clause.
-    fn bounds_by_param(
+    pub(super) fn bounds_by_param(
         generics: Option<&GenericParams>,
         where_clause: Option<&WhereClause>,
     ) -> HashMap<String, Vec<String>> {

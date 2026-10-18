@@ -4892,6 +4892,42 @@ fn main() {
     );
 }
 
+/// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
+/// generic call is not projected again, and `W { .. } + W { .. }` on
+/// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.
+#[test]
+fn check_a_callers_projection_passes_through_a_generic_call() {
+    accepted(
+        "projection-through-call",
+        r#"
+enum E[T] { A(T), N }
+struct V { x: i64 }
+impl Add for V { type Output = V; fn add(self, rhs: V) -> V { V { x: self.x + rhs.x } } }
+impl Neg for V { type Output = V; fn neg(self) -> V { V { x: 0 - self.x } } }
+struct W[T] { v: T }
+impl[T: Add] Add for W[T] { type Output = W[T.Output]; fn add(self, rhs: W[T]) -> W[T.Output] { W { v: self.v + rhs.v } } }
+impl[T: Neg] Neg for W[T] { type Output = W[T.Output]; fn neg(self) -> W[T.Output] { W { v: -self.v } } }
+fn pair[T: Add](a: own T, b: own T) -> Option[T.Output] { Some(a + b) }
+fn tagged[T: Add](a: own T, b: own T) -> E[T.Output] { let s = a + b; E.A(s) }
+fn id[T](x: own T) -> T { x }
+fn through[T: Add](a: own T, b: own T) -> T.Output { let s = a + b; id(s) }
+fn twice[T: Add](a: own W[T], b: own W[T]) -> W[T.Output] { a + b }
+fn main() {
+    println(f"{pair(3, 4).unwrap()} {through(5, 6)}");
+    match tagged(V { x: 1 }, V { x: 2 }) {
+        E.A(v) => println(f"{v.x}"),
+        E.N => println("none"),
+    }
+    let w = W { v: V { x: 1 } } + W { v: V { x: 9 } };
+    let n = -W { v: V { x: 4 } };
+    let i = W { v: 3 } + W { v: 4 };
+    let t = twice(W { v: V { x: 2 } }, W { v: V { x: 5 } });
+    println(f"{w.v.x} {n.v.x} {i.v} {t.v.x}");
+}
+"#,
+    );
+}
+
 /// B-2026-10-18-10: a program's own `Client`, `Response`, `HttpError` or
 /// `RequestBuilder` is its own type, so its methods are found; an error
 /// names it as written.
