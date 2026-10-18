@@ -1,0 +1,535 @@
+== split | 1 | 0 | ls -la /tmp
+['ls', '-la', '/tmp']
+== split | 1 | 0 | echo "hello world" 'single quoted' plain
+['echo', 'hello world', 'single quoted', 'plain']
+== split | 1 | 0 | a\ b c\\d "e\"f" 'g\'h
+['a b', 'c\\d', 'e"f', 'g\\h']
+== split | 1 | 0 | a\ b c\\d "e\"f" 'g\h'
+['a b', 'c\\d', 'e"f', 'g\\h']
+== split | 1 | 0 | "a"'b'c d""e ''
+['abc', 'de', '']
+== split | 1 | 0 | cmd --opt="value with spaces" --flag
+['cmd', '--opt=value with spaces', '--flag']
+== split | 1 | 0 | echo $HOME "${PATH}" '$USER'
+['echo', '$HOME', '${PATH}', '$USER']
+== split | 1 | 0 | foo#bar # trailing comment
+['foo#bar', '#', 'trailing', 'comment']
+== split | 1 | 1 | foo#bar # trailing comment
+['foo']
+== split | 1 | 1 | # only a comment
+[]
+== split | 1 | 1 | one⏎two # c⏎three
+['one', 'two', 'three']
+== split | 1 | 0 | "unterminated
+ValueError: No closing quotation
+== split | 1 | 0 | 'unterminated
+ValueError: No closing quotation
+== split | 1 | 0 | trailing\
+ValueError: No escaped character
+== split | 1 | 0 | 
+[]
+== split | 1 | 0 |    ⇥   
+[]
+== split | 1 | 0 | "\$ \` \" \\ \n"
+['\\$ \\` " \\ \\n']
+== split | 1 | 0 | '\$ \` \" \\ \n'
+['\\$ \\` \\" \\\\ \\n']
+== split | 1 | 0 | café "naïve façade" Ünïcode
+['café', 'naïve façade', 'Ünïcode']
+== split | 0 | 0 | "a b" 'c d' e\ f
+['"a b"', "'c d'", 'e\\', 'f']
+== split | 0 | 0 | a"b c"d
+['a"b', 'c"d']
+== split | 0 | 1 | x # y
+['x']
+== split | 0 | 0 | "unterminated
+ValueError: No closing quotation
+== split | 1 | 0 | git commit -m "fix: handle \"quoted\" args" --author='A <a@b.c>'
+['git', 'commit', '-m', 'fix: handle "quoted" args', '--author=A <a@b.c>']
+== split | 1 | 0 | ssh host 'cd /srv && ./run.sh --port=8080'
+['ssh', 'host', 'cd /srv && ./run.sh --port=8080']
+== split | 1 | 0 | find . -name '*.py' -exec grep -l "TODO" {} \;
+['find', '.', '-name', '*.py', '-exec', 'grep', '-l', 'TODO', '{}', ';']
+== lex | posix | ls -la /tmp ; echo hi
+['ls', '-', 'la', '/', 'tmp', ';', 'echo', 'hi'] (line 1)
+== lex |  | ls -la /tmp ; echo hi
+['ls', '-', 'la', '/', 'tmp', ';', 'echo', 'hi'] (line 1)
+== lex | posix,ws | a=1 b=2;c=3 d|e
+['a=1', 'b=2;c=3', 'd|e'] (line 1)
+== lex | posix,punct | a=1 b=2;c=3 d|e&&f||g
+['a=1', 'b=2', ';', 'c=3', 'd', '|', 'e', '&&', 'f', '||', 'g'] (line 1)
+== lex | posix,punct | cat < in.txt > out.txt 2>&1 &
+['cat', '<', 'in.txt', '>', 'out.txt', '2', '>&', '1', '&'] (line 1)
+== lex | posix,punct | (cd sub && make) | tee log
+['(', 'cd', 'sub', '&&', 'make', ')', '|', 'tee', 'log'] (line 1)
+== lex | punct | a;b "c;d" 'e;f'
+['a', ';', 'b', '"c;d"', "'e;f'"] (line 1)
+== lex | posix,punct=; | a;b|c
+['a', ';', 'b', '|', 'c'] (line 1)
+== lex | posix,punct,ws | a=1 b=2;c=3 ~/x.y
+['a=1', 'b=2', ';', 'c=3', '~/x.y'] (line 1)
+== lex | posix,nocomment | a # b
+['a', '#', 'b'] (line 1)
+== lex |  | a.b-c/d e+f
+['a', '.', 'b', '-', 'c', '/', 'd', 'e', '+', 'f'] (line 1)
+== lex | posix | a.b-c/d e+f
+['a', '.', 'b', '-', 'c', '/', 'd', 'e', '+', 'f'] (line 1)
+== lex | punct | a.b-c/d e+f ~x
+['a.b-c/d', 'e', '+', 'f', '~x'] (line 1)
+== lex |  | x'y z'w "q r"
+["x'y", "z'w", '"q r"'] (line 1)
+== lex | posix | one⏎# comment⏎two three⏎four
+['one', 'two', 'three', 'four'] (line 4)
+== lex | posix,ws | one⏎# comment⏎two three⏎four
+['one', 'two', 'three', 'four'] (line 4)
+== quote | simple
+'simple'
+== quote | 
+"''"
+== quote | has space
+"'has space'"
+== quote | it's
+'\'it\'"\'"\'s\''
+== quote | $HOME
+"'$HOME'"
+== quote | a"b
+'\'a"b\''
+== quote | -flag=1
+'-flag=1'
+== quote | path/to/file.txt
+'path/to/file.txt'
+== quote | @%+=:,./-
+'@%+=:,./-'
+== quote | tab⇥here
+"'tab\there'"
+== quote | café
+"'café'"
+== quote | semi;colon
+"'semi;colon'"
+== join | ls | -la | my file
+"ls -la 'my file'"
+== join | echo | it's | "q" | 
+'echo \'it\'"\'"\'s\' \'"q"\' \'\''
+== join | 
+"''"
+== fnmatch | app.py | *.py
+True True
+== fnmatch | app.py | *.PY
+False False
+== fnmatch | app.py | a??.py
+True True
+== fnmatch | app.py | [ab]pp.py
+True True
+== fnmatch | app.py | [!a]pp.py
+False False
+== fnmatch | src/app.py | *.py
+True True
+== fnmatch | src/app.py | src/*
+True True
+== fnmatch | .env | *
+True True
+== fnmatch | .env | .*
+True True
+== fnmatch | v10.md | v[0-9].md
+False False
+== fnmatch | v1.md | v[0-9].md
+True True
+== fnmatch | v1.md | v[!0-9].md
+False False
+== fnmatch | a]b | a[]]b
+True True
+== fnmatch | a-b | a[a-]b
+True True
+== fnmatch | a-b | a[-a]b
+True True
+== fnmatch | a-b | a[!-]b
+False False
+== fnmatch | a[b | a[b
+True True
+== fnmatch | a[b | a[[]b
+True True
+== fnmatch | ab | a[z-a]b
+False False
+== fnmatch | a-b | a[z-a-]b
+True True
+== fnmatch | ab | a[!]b
+False False
+== fnmatch | a!b | a[!]b
+False False
+== fnmatch | a\b | a\b
+True True
+== fnmatch | a\b | a[\]b
+True True
+== fnmatch | abc | *a*b*c*
+True True
+== fnmatch | abcabd | *ab?
+True True
+== fnmatch | café.txt | caf?.txt
+True True
+== fnmatch | café.txt | *[é].txt
+True True
+== fnmatch | a^b | a[^]b
+True True
+== fnmatch | a^b | a[\^]b
+True True
+== fnmatch | x | [a-c-z]
+False False
+== fnmatch | - | [a-c-z]
+True True
+== fnmatch | b | [a-c-z]
+True True
+== fnmatch | * | [*]
+True True
+== fnmatch | line⏎break | line?break
+True True
+== fnmatch | line⏎break | line*
+True True
+== filter | *.py | app.py | util.py | README.md | .cache.py | setup.cfg
+['app.py', 'util.py', '.cache.py']
+== filter | *.[ch] | a.c | b.h | c.cc | d.hh | .e.c
+['a.c', 'b.h', '.e.c']
+== filter | [!.]* | .env | env | .. | x
+['env', 'x']
+== glob | * | 0 | 0
+  Makefile
+  Procfile
+  README.md
+  a*b
+  build
+  data.tar.gz
+  data.tgz
+  docs
+  empty
+  photo.JPG
+  photo.jpg
+  q?
+  setup.cfg
+  src
+  tests
+  Ünïcode
+(16 paths)
+== glob | * | 0 | 1
+  .env
+  .github
+  .gitignore
+  Makefile
+  Procfile
+  README.md
+  a*b
+  build
+  data.tar.gz
+  data.tgz
+  docs
+  empty
+  photo.JPG
+  photo.jpg
+  q?
+  setup.cfg
+  src
+  tests
+  Ünïcode
+(19 paths)
+== glob | .* | 0 | 0
+  .env
+  .github
+  .gitignore
+(3 paths)
+== glob | *.md | 0 | 0
+  README.md
+(1 paths)
+== glob | src/*.py | 0 | 0
+  src/__init__.py
+  src/app.py
+  src/util.py
+(3 paths)
+== glob | src/* | 0 | 0
+  src/__init__.py
+  src/app.py
+  src/models
+  src/util.py
+(4 paths)
+== glob | src/* | 0 | 1
+  src/.cache.py
+  src/__init__.py
+  src/app.py
+  src/models
+  src/util.py
+(5 paths)
+== glob | */*.py | 0 | 0
+  src/__init__.py
+  src/app.py
+  src/util.py
+  tests/test_app.py
+  tests/test_util.py
+(5 paths)
+== glob | ** | 0 | 0
+  Makefile
+  Procfile
+  README.md
+  a*b
+  build
+  data.tar.gz
+  data.tgz
+  docs
+  empty
+  photo.JPG
+  photo.jpg
+  q?
+  setup.cfg
+  src
+  tests
+  Ünïcode
+(16 paths)
+== glob | ** | 1 | 0
+  Makefile
+  Procfile
+  README.md
+  a*b
+  a*b/star.txt
+  build
+  build/lib
+  build/lib/app.py
+  data.tar.gz
+  data.tgz
+  docs
+  docs/api
+  docs/api/v1.md
+  docs/api/v10.md
+  docs/api/v2.md
+  docs/index.md
+  empty
+  photo.JPG
+  photo.jpg
+  q?
+  q?/mark.txt
+  setup.cfg
+  src
+  src/__init__.py
+  src/app.py
+  src/models
+  src/models/__init__.py
+  src/models/order.py
+  src/models/user.py
+  src/util.py
+  tests
+  tests/data
+  tests/data/notes.txt
+  tests/data/sample2.json
+  tests/data/sample[1].json
+  tests/test_app.py
+  tests/test_util.py
+  Ünïcode
+  Ünïcode/café.txt
+(39 paths)
+== glob | ** | 1 | 1
+  .env
+  .github
+  .github/workflows
+  .github/workflows/ci.yml
+  .gitignore
+  Makefile
+  Procfile
+  README.md
+  a*b
+  a*b/star.txt
+  build
+  build/lib
+  build/lib/app.py
+  data.tar.gz
+  data.tgz
+  docs
+  docs/api
+  docs/api/v1.md
+  docs/api/v10.md
+  docs/api/v2.md
+  docs/index.md
+  empty
+  photo.JPG
+  photo.jpg
+  q?
+  q?/mark.txt
+  setup.cfg
+  src
+  src/.cache.py
+  src/__init__.py
+  src/app.py
+  src/models
+  src/models/.hidden
+  src/models/.hidden/secret.py
+  src/models/__init__.py
+  src/models/order.py
+  src/models/user.py
+  src/util.py
+  tests
+  tests/data
+  tests/data/notes.txt
+  tests/data/sample2.json
+  tests/data/sample[1].json
+  tests/test_app.py
+  tests/test_util.py
+  Ünïcode
+  Ünïcode/café.txt
+(47 paths)
+== glob | **/*.py | 1 | 0
+  build/lib/app.py
+  src/__init__.py
+  src/app.py
+  src/models/__init__.py
+  src/models/order.py
+  src/models/user.py
+  src/util.py
+  tests/test_app.py
+  tests/test_util.py
+(9 paths)
+== glob | **/*.py | 1 | 1
+  build/lib/app.py
+  src/.cache.py
+  src/__init__.py
+  src/app.py
+  src/models/.hidden/secret.py
+  src/models/__init__.py
+  src/models/order.py
+  src/models/user.py
+  src/util.py
+  tests/test_app.py
+  tests/test_util.py
+(11 paths)
+== glob | src/** | 1 | 0
+  src/
+  src/__init__.py
+  src/app.py
+  src/models
+  src/models/__init__.py
+  src/models/order.py
+  src/models/user.py
+  src/util.py
+(8 paths)
+== glob | src/**/ | 1 | 0
+  src/
+  src/models/
+(2 paths)
+== glob | **/ | 1 | 0
+  a*b/
+  build/
+  build/lib/
+  docs/
+  docs/api/
+  empty/
+  q?/
+  src/
+  src/models/
+  tests/
+  tests/data/
+  Ünïcode/
+(12 paths)
+== glob | src/**/*.py | 1 | 0
+  src/__init__.py
+  src/app.py
+  src/models/__init__.py
+  src/models/order.py
+  src/models/user.py
+  src/util.py
+(6 paths)
+== glob | docs/**/v?.md | 1 | 0
+  docs/api/v1.md
+  docs/api/v2.md
+(2 paths)
+== glob | docs/**/v*.md | 0 | 0
+  docs/api/v1.md
+  docs/api/v10.md
+  docs/api/v2.md
+(3 paths)
+== glob | */ | 0 | 0
+  a*b/
+  build/
+  docs/
+  empty/
+  q?/
+  src/
+  tests/
+  Ünïcode/
+(8 paths)
+== glob | */ | 0 | 1
+  .github/
+  a*b/
+  build/
+  docs/
+  empty/
+  q?/
+  src/
+  tests/
+  Ünïcode/
+(9 paths)
+== glob | tests/data/sample[1].json | 0 | 0
+(0 paths)
+== glob | tests/data/sample[[]1].json | 0 | 0
+  tests/data/sample[1].json
+(1 paths)
+== glob | tests/data/sample[12].json | 0 | 0
+  tests/data/sample2.json
+(1 paths)
+== glob | a*b/* | 0 | 0
+  a*b/star.txt
+(1 paths)
+== glob | a[*]b/* | 0 | 0
+  a*b/star.txt
+(1 paths)
+== glob | q[?]/* | 0 | 0
+  q?/mark.txt
+(1 paths)
+== glob | Ü*/* | 0 | 0
+  Ünïcode/café.txt
+(1 paths)
+== glob | photo.* | 0 | 0
+  photo.JPG
+  photo.jpg
+(2 paths)
+== glob | *.t*gz | 0 | 0
+  data.tar.gz
+  data.tgz
+(2 paths)
+== glob | *.tar.gz | 0 | 0
+  data.tar.gz
+(1 paths)
+== glob | README.md | 0 | 0
+  README.md
+(1 paths)
+== glob | missing.txt | 0 | 0
+(0 paths)
+== glob | src/ | 0 | 0
+  src/
+(1 paths)
+== glob | missing/ | 0 | 0
+(0 paths)
+== glob | empty/* | 0 | 0
+(0 paths)
+== glob | empty/** | 1 | 0
+  empty/
+(1 paths)
+== glob | */*/*/*.py | 0 | 0
+(0 paths)
+== glob | src/models/.hidden/* | 0 | 0
+  src/models/.hidden/secret.py
+(1 paths)
+== glob | src/*/.hidden/* | 0 | 0
+  src/models/.hidden/secret.py
+(1 paths)
+== glob | src/**/secret.py | 1 | 0
+(0 paths)
+== glob | src/**/secret.py | 1 | 1
+  src/models/.hidden/secret.py
+(1 paths)
+== glob | [!.]*file | 0 | 0
+  Makefile
+  Procfile
+(2 paths)
+== escape | tests/data/sample[1].json
+'tests/data/sample[[]1].json'
+== escape | a*b/star.txt
+'a[*]b/star.txt'
+== escape | q?/mark.txt
+'q[?]/mark.txt'
+== escape | plain/path.txt
+'plain/path.txt'
+== escape | [[]]
+'[[][[]]]'

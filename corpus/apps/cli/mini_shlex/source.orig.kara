@@ -1,0 +1,1011 @@
+// mini_shlex: Python 3.13's shlex, fnmatch and glob, ported from
+// Lib/shlex.py, Lib/fnmatch.py and Lib/glob.py.
+//
+// shlex is the lexer of its own name (POSIX and compatibility modes,
+// whitespace_split, punctuation_chars, comments, line numbers) with split,
+// quote and join on top. fnmatch matches shell patterns the way its
+// translate() regexes do, bracket ranges and their corner cases included.
+// glob walks a project tree written into data/tree, with `**`, trailing
+// slashes, hidden files and escape().
+//
+// It runs data/jobs.tsv, one job per line with tab-separated fields; in a
+// field "⏎" stands for a newline and "⇥" for a tab. Each job prints `== `
+// and its fields joined by ` | `, then its output.
+
+// ------------------------------------------------------------ helpers
+
+fn has(set: Str, c: char) -> bool {
+    for x in set.chars() {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+// Python's repr of a str.
+fn py_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if (c as u32) < 32 or c as u32 == 127 {
+            out.push_str(f"\\x{c as u32:02x}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn list_repr(v: ref Vec[String]) -> String {
+    let parts: Vec[String] = v.iter().map(|s| py_repr(s)).collect();
+    f"[{parts.join(", ")}]"
+}
+
+// ------------------------------------------------------------ shlex
+
+const WORDCHARS: Str = "abcdfeghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+const POSIX_WORDCHARS: Str = "ßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞ";
+
+struct Lexer {
+    input: Vec[char],
+    pos: i64,
+    posix: bool,
+    commenters: String,
+    wordchars: String,
+    whitespace: String,
+    whitespace_split: bool,
+    quotes: String,
+    escape: String,
+    escapedquotes: String,
+    punctuation_chars: String,
+    // The state: ' ', 'a', 'c', a quote or the escape; None past the end.
+    state: Option[char],
+    pushback: Vec[String],
+    pushback_chars: Vec[char],
+    lineno: i64,
+    token: String,
+}
+
+impl Lexer {
+    fn new(text: ref String, posix: bool, punctuation_chars: Str) -> Lexer {
+        let mut wordchars = WORDCHARS.to_string();
+        if posix {
+            wordchars.push_str(POSIX_WORDCHARS);
+        }
+        if not punctuation_chars.is_empty() {
+            wordchars.push_str("~-./*?=");
+            let mut kept = String.new();
+            for c in wordchars.chars() {
+                if not has(punctuation_chars, c) {
+                    kept.push(c);
+                }
+            }
+            wordchars = kept;
+        }
+        Lexer {
+            input: text.chars().collect(),
+            pos: 0,
+            posix: posix,
+            commenters: "#".to_string(),
+            wordchars: wordchars,
+            whitespace: " \t\r\n".to_string(),
+            whitespace_split: false,
+            quotes: "'\"".to_string(),
+            escape: "\\".to_string(),
+            escapedquotes: "\"".to_string(),
+            punctuation_chars: punctuation_chars.to_string(),
+            state: Some(' '),
+            pushback: Vec.new(),
+            pushback_chars: Vec.new(),
+            lineno: 1,
+            token: String.new(),
+        }
+    }
+
+    fn read_char(mut ref self) -> Option[char] {
+        if self.pos >= self.input.len() {
+            return None;
+        }
+        let c = self.input[self.pos];
+        self.pos += 1;
+        Some(c)
+    }
+
+    // instream.readline(): the rest of the line, newline included.
+    fn skip_line(mut ref self) {
+        while let Some(c) = self.read_char() {
+            if c == '\n' {
+                break;
+            }
+        }
+    }
+
+    fn emit_now(ref self, quoted: bool) -> bool {
+        not self.token.is_empty() or (self.posix and quoted)
+    }
+
+    // read_token: one token, or None at the end in POSIX mode ("" in the
+    // compatibility mode).
+    fn read_token(mut ref self) -> Result[Option[String], String] {
+        let mut quoted = false;
+        let mut escapedstate = ' ';
+        loop {
+            let next = if not self.punctuation_chars.is_empty() and not self.pushback_chars.is_empty() {
+                self.pushback_chars.pop()
+            } else {
+                self.read_char()
+            };
+            if next == Some('\n') {
+                self.lineno += 1;
+            }
+            let state = match self.state {
+                None => {
+                    self.token = String.new();
+                    break;
+                }
+                Some(s) => s,
+            };
+            if state == ' ' {
+                let c = match next {
+                    None => {
+                        self.state = None;
+                        break;
+                    }
+                    Some(c) => c,
+                };
+                if has(self.whitespace, c) {
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                } else if has(self.commenters, c) {
+                    self.skip_line();
+                    self.lineno += 1;
+                } else if self.posix and has(self.escape, c) {
+                    escapedstate = 'a';
+                    self.state = Some(c);
+                } else if has(self.wordchars, c) {
+                    self.token = c.to_string();
+                    self.state = Some('a');
+                } else if has(self.punctuation_chars, c) {
+                    self.token = c.to_string();
+                    self.state = Some('c');
+                } else if has(self.quotes, c) {
+                    if not self.posix {
+                        self.token = c.to_string();
+                    }
+                    self.state = Some(c);
+                } else if self.whitespace_split {
+                    self.token = c.to_string();
+                    self.state = Some('a');
+                } else {
+                    self.token = c.to_string();
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                }
+            } else if has(self.quotes, state) {
+                quoted = true;
+                let c = match next {
+                    None => return Err("No closing quotation".to_string()),
+                    Some(c) => c,
+                };
+                if c == state {
+                    if not self.posix {
+                        self.token.push(c);
+                        self.state = Some(' ');
+                        break;
+                    }
+                    self.state = Some('a');
+                } else if self.posix and has(self.escape, c) and has(self.escapedquotes, state) {
+                    escapedstate = state;
+                    self.state = Some(c);
+                } else {
+                    self.token.push(c);
+                }
+            } else if has(self.escape, state) {
+                let c = match next {
+                    None => return Err("No escaped character".to_string()),
+                    Some(c) => c,
+                };
+                if has(self.quotes, escapedstate) and c != state and c != escapedstate {
+                    self.token.push(state);
+                }
+                self.token.push(c);
+                self.state = Some(escapedstate);
+            } else if state == 'a' or state == 'c' {
+                let c = match next {
+                    None => {
+                        self.state = None;
+                        break;
+                    }
+                    Some(c) => c,
+                };
+                if has(self.whitespace, c) {
+                    self.state = Some(' ');
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                } else if has(self.commenters, c) {
+                    self.skip_line();
+                    self.lineno += 1;
+                    if self.posix {
+                        self.state = Some(' ');
+                        if self.emit_now(quoted) {
+                            break;
+                        }
+                        continue;
+                    }
+                } else if state == 'c' {
+                    if has(self.punctuation_chars, c) {
+                        self.token.push(c);
+                    } else {
+                        if not has(self.whitespace, c) {
+                            self.pushback_chars.push(c);
+                        }
+                        self.state = Some(' ');
+                        break;
+                    }
+                } else if self.posix and has(self.quotes, c) {
+                    self.state = Some(c);
+                } else if self.posix and has(self.escape, c) {
+                    escapedstate = 'a';
+                    self.state = Some(c);
+                } else if has(self.wordchars, c) or has(self.quotes, c)
+                    or (self.whitespace_split and not has(self.punctuation_chars, c)) {
+                    self.token.push(c);
+                } else {
+                    if not self.punctuation_chars.is_empty() {
+                        self.pushback_chars.push(c);
+                    } else {
+                        self.pushback.insert(0, c.to_string());
+                    }
+                    self.state = Some(' ');
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        }
+        let result = self.token.clone();
+        self.token = String.new();
+        if self.posix and not quoted and result.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(result))
+    }
+
+    fn get_token(mut ref self) -> Result[Option[String], String] {
+        if not self.pushback.is_empty() {
+            return Ok(Some(self.pushback.remove(0)));
+        }
+        self.read_token()
+    }
+
+    // list(lexer): tokens up to the end marker.
+    fn tokens(mut ref self) -> Result[Vec[String], String] {
+        let mut out: Vec[String] = Vec.new();
+        loop {
+            match self.get_token()? {
+                None => break,
+                Some(t) => {
+                    if not self.posix and t.is_empty() {
+                        break;
+                    }
+                    out.push(t);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn split(s: ref String, comments: bool, posix: bool) -> Result[Vec[String], String] {
+    let mut lex = Lexer.new(s, posix, "");
+    lex.whitespace_split = true;
+    if not comments {
+        lex.commenters = String.new();
+    }
+    lex.tokens()
+}
+
+fn is_safe(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or has("_@%+=:,./-", c)
+}
+
+fn quote(s: ref String) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if s.chars().all(|c| is_safe(c)) {
+        return s.clone();
+    }
+    f"'{s.replace("'", "'\"'\"'")}'"
+}
+
+fn join(args: ref Vec[String]) -> String {
+    let parts: Vec[String] = args.iter().map(|a| quote(a)).collect();
+    parts.join(" ")
+}
+
+// ------------------------------------------------------------ fnmatch
+
+enum Item {
+    One(char),
+    Range(char, char),
+}
+
+enum Tok {
+    Star,
+    Any,
+    Lit(char),
+    Set(bool, Vec[Item]),
+    Never,
+}
+
+// translate(): a pattern as tokens. A `[` with no closing `]` is literal.
+// Inside a set, `-` splits the text into chunks the way translate does,
+// a range whose ends are out of order is dropped, an empty set never
+// matches and `[!]` matches any character.
+fn compile(pat: ref String) -> Vec[Tok] {
+    let p: Vec[char] = pat.chars().collect();
+    let n = p.len();
+    let mut out: Vec[Tok] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        let c = p[i];
+        i += 1;
+        if c == '*' {
+            match out.last() {
+                Some(Tok.Star) => {}
+                _ => out.push(Tok.Star),
+            }
+        } else if c == '?' {
+            out.push(Tok.Any);
+        } else if c == '[' {
+            let mut j = i;
+            if j < n and p[j] == '!' {
+                j += 1;
+            }
+            if j < n and p[j] == ']' {
+                j += 1;
+            }
+            while j < n and p[j] != ']' {
+                j += 1;
+            }
+            if j >= n {
+                out.push(Tok.Lit('['));
+                continue;
+            }
+            let mut neg = false;
+            let mut start = i;
+            if p[i] == '!' {
+                neg = true;
+                start = i + 1;
+            }
+            let body: Vec[char] = p[start..j].to_vec();
+            i = j + 1;
+            if body.is_empty() {
+                if neg {
+                    out.push(Tok.Any);
+                } else {
+                    out.push(Tok.Never);
+                }
+                continue;
+            }
+            // The chunks between range dashes.
+            let mut chunks: Vec[Vec[char]] = Vec.new();
+            let mut lo: i64 = 0;
+            let mut k: i64 = 1;
+            loop {
+                let mut f: i64 = -1;
+                let mut q = k;
+                while q < body.len() {
+                    if body[q] == '-' {
+                        f = q;
+                        break;
+                    }
+                    q += 1;
+                }
+                if f < 0 {
+                    break;
+                }
+                chunks.push(body[lo..f].to_vec());
+                lo = f + 1;
+                k = f + 3;
+            }
+            let last: Vec[char] = body[lo..].to_vec();
+            if not last.is_empty() {
+                chunks.push(last);
+            } else {
+                let t = chunks.len() - 1;
+                chunks[t].push('-');
+            }
+            let mut k2 = chunks.len() - 1;
+            while k2 > 0 {
+                let prev_last = chunks[k2 - 1][chunks[k2 - 1].len() - 1];
+                if prev_last > chunks[k2][0] {
+                    let mut merged: Vec[char] = chunks[k2 - 1][0..chunks[k2 - 1].len() - 1].to_vec();
+                    for x in chunks[k2][1..].iter() {
+                        merged.push(*x);
+                    }
+                    chunks[k2 - 1] = merged;
+                    chunks.remove(k2);
+                }
+                k2 -= 1;
+            }
+            let mut items: Vec[Item] = Vec.new();
+            let m = chunks.len();
+            for ci in 0..m {
+                let ch = chunks[ci].clone();
+                let mut a: i64 = 0;
+                let mut b = ch.len();
+                if ci > 0 {
+                    items.push(Item.Range(chunks[ci - 1][chunks[ci - 1].len() - 1], ch[0]));
+                    a = 1;
+                }
+                if ci < m - 1 {
+                    b -= 1;
+                }
+                for x in a..b {
+                    items.push(Item.One(ch[x]));
+                }
+            }
+            out.push(Tok.Set(neg, items));
+        } else {
+            out.push(Tok.Lit(c));
+        }
+    }
+    out
+}
+
+fn in_set(items: ref Vec[Item], c: char) -> bool {
+    for it in items.iter() {
+        match it {
+            Item.One(x) => if *x == c { return true; },
+            Item.Range(a, b) => if *a <= c and c <= *b { return true; },
+        }
+    }
+    false
+}
+
+fn match_from(toks: ref Vec[Tok], t: i64, s: ref Vec[char], i: i64) -> bool {
+    if t == toks.len() {
+        return i == s.len();
+    }
+    match toks[t] {
+        Tok.Star => {
+            let mut k = i;
+            while k <= s.len() {
+                if match_from(toks, t + 1, s, k) {
+                    return true;
+                }
+                k += 1;
+            }
+            false
+        }
+        Tok.Any => i < s.len() and match_from(toks, t + 1, s, i + 1),
+        Tok.Lit(c) => i < s.len() and s[i] == c and match_from(toks, t + 1, s, i + 1),
+        Tok.Set(neg, items) => {
+            if i >= s.len() {
+                return false;
+            }
+            in_set(items, s[i]) != neg and match_from(toks, t + 1, s, i + 1)
+        }
+        Tok.Never => false,
+    }
+}
+
+fn fnmatchcase(name: ref String, pat: ref String) -> bool {
+    let toks = compile(pat);
+    let s: Vec[char] = name.chars().collect();
+    match_from(toks, 0, s, 0)
+}
+
+// On POSIX, os.path.normcase changes nothing, so fnmatch is fnmatchcase.
+fn fnmatch(name: ref String, pat: ref String) -> bool {
+    fnmatchcase(name, pat)
+}
+
+fn filter(names: ref Vec[String], pat: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for n in names.iter() {
+        if fnmatch(n, pat) {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ glob
+
+fn has_magic(s: ref String) -> bool {
+    s.chars().any(|c| c == '*' or c == '?' or c == '[')
+}
+
+fn is_hidden(s: ref String) -> bool {
+    s.starts_with(".")
+}
+
+// os.path.split
+fn split_path(p: ref String) -> (String, String) {
+    match p.rfind("/") {
+        None => (String.new(), p.clone()),
+        Some(i) => {
+            let mut head = p[0..i + 1].to_string();
+            let tail = p[i + 1..].to_string();
+            let all_slashes = head.chars().all(|c| c == '/');
+            if not all_slashes {
+                while head.ends_with("/") {
+                    head = head[0..head.len() - 1].to_string();
+                }
+            }
+            (head, tail)
+        }
+    }
+}
+
+// os.path.join for two parts.
+fn join_path(a: ref String, b: ref String) -> String {
+    if a.is_empty() or b.starts_with("/") {
+        return b.clone();
+    }
+    if a.ends_with("/") {
+        return f"{a}{b}";
+    }
+    f"{a}/{b}"
+}
+
+// glob's _join: either part may be empty.
+fn join2(a: ref String, b: ref String) -> String {
+    if a.is_empty() or b.is_empty() {
+        if a.is_empty() { b.clone() } else { a.clone() }
+    } else {
+        join_path(a, b)
+    }
+}
+
+fn is_dir(p: ref String) -> bool {
+    let q = if p.is_empty() { ".".to_string() } else { p.clone() };
+    match fs.metadata(q) {
+        Ok(m) => m.is_dir,
+        Err(_) => false,
+    }
+}
+
+fn lexists(p: ref String) -> bool {
+    fs.exists(p.clone())
+}
+
+fn listdir(dirname: ref String, dironly: bool) -> Vec[String] {
+    let d = if dirname.is_empty() { ".".to_string() } else { dirname.clone() };
+    let names = match fs.read_dir(d.clone()) {
+        Ok(n) => n,
+        Err(_) => return Vec.new(),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for n in names {
+        if not dironly or is_dir(join_path(d, n)) {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
+struct Globber {
+    root: String,
+    recursive: bool,
+    include_hidden: bool,
+}
+
+impl Globber {
+    fn glob1(ref self, dirname: ref String, pattern: ref String, dironly: bool) -> Vec[String] {
+        let mut names = listdir(dirname, dironly);
+        if not (self.include_hidden or is_hidden(pattern)) {
+            names = names.into_iter().filter(|x| not is_hidden(x)).collect();
+        }
+        filter(names, pattern)
+    }
+
+    fn glob0(ref self, dirname: ref String, basename: ref String) -> Vec[String] {
+        if not basename.is_empty() {
+            if lexists(join_path(dirname, basename)) {
+                return vec![basename.clone()];
+            }
+        } else if is_dir(dirname) {
+            return vec![basename.clone()];
+        }
+        Vec.new()
+    }
+
+    fn glob2(ref self, dirname: ref String, dironly: bool) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        if dirname.is_empty() or is_dir(dirname) {
+            out.push(String.new());
+        }
+        self.rlistdir(dirname, dironly, mut out, "");
+        out
+    }
+
+    fn rlistdir(ref self, dirname: ref String, dironly: bool, out: mut ref Vec[String], prefix: Str) {
+        for x in listdir(dirname, dironly) {
+            if self.include_hidden or not is_hidden(x) {
+                let rel = if prefix.is_empty() { x.clone() } else { join_path(prefix.to_string(), x) };
+                out.push(rel.clone());
+                let path = if dirname.is_empty() { x.clone() } else { join_path(dirname, x) };
+                self.rlistdir(path, dironly, out, rel.as_str());
+            }
+        }
+    }
+
+    fn iglob(ref self, pathname: ref String, dironly: bool) -> Vec[String] {
+        let (dirname, basename) = split_path(pathname);
+        if not has_magic(pathname) {
+            if not basename.is_empty() {
+                if lexists(join2(self.root, pathname)) {
+                    return vec![pathname.clone()];
+                }
+            } else if is_dir(join2(self.root, dirname)) {
+                return vec![pathname.clone()];
+            }
+            return Vec.new();
+        }
+        if dirname.is_empty() {
+            if self.recursive and basename == "**" {
+                return self.glob2(self.root, dironly);
+            }
+            return self.glob1(self.root, basename, dironly);
+        }
+        let dirs = if dirname != *pathname and has_magic(dirname) {
+            self.iglob(dirname, true)
+        } else {
+            vec![dirname.clone()]
+        };
+        let mut out: Vec[String] = Vec.new();
+        for d in dirs.iter() {
+            let full = join2(self.root, d);
+            let names = if has_magic(basename) {
+                if self.recursive and basename == "**" {
+                    self.glob2(full, dironly)
+                } else {
+                    self.glob1(full, basename, dironly)
+                }
+            } else {
+                self.glob0(full, basename)
+            };
+            for name in names.iter() {
+                out.push(join_path(d, name));
+            }
+        }
+        out
+    }
+
+    fn glob(ref self, pathname: ref String) -> Vec[String] {
+        let mut got = self.iglob(pathname, false);
+        // iglob drops the empty first result of a pattern that starts with `**`.
+        if pathname.is_empty() or (self.recursive and pathname.starts_with("**")) {
+            if not got.is_empty() and got[0].is_empty() {
+                got.remove(0);
+            }
+        }
+        got
+    }
+}
+
+fn escape(path: ref String) -> String {
+    let mut out = String.new();
+    for c in path.chars() {
+        if c == '*' or c == '?' or c == '[' {
+            out.push('[');
+            out.push(c);
+            out.push(']');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn field(s: ref String) -> String {
+    s.replace("⏎", "\n").replace("⇥", "\t")
+}
+
+fn run(f: ref Vec[String]) -> String {
+    let cmd = f[0].clone();
+    let args: Vec[String] = f[1..].iter().map(|x| field(x)).collect();
+    if cmd == "split" {
+        return match split(args[2], args[1] == "1", args[0] == "1") {
+            Ok(v) => list_repr(v),
+            Err(e) => f"ValueError: {e}",
+        };
+    }
+    if cmd == "lex" {
+        let opts: Vec[String] = args[0].split(",").into_iter().filter(|o| not o.is_empty()).collect();
+        let mut punct = String.new();
+        for o in opts.iter() {
+            if o == "punct" {
+                punct = "();<>|&".to_string();
+            } else if o.starts_with("punct=") {
+                punct = o[6..].to_string();
+            }
+        }
+        let mut lx = Lexer.new(args[1], opts.contains("posix"), punct.as_str());
+        if opts.contains("ws") {
+            lx.whitespace_split = true;
+        }
+        if opts.contains("nocomment") {
+            lx.commenters = String.new();
+        }
+        return match lx.tokens() {
+            Ok(v) => f"{list_repr(v)} (line {lx.lineno})",
+            Err(e) => f"ValueError: {e}",
+        };
+    }
+    if cmd == "quote" {
+        return py_repr(quote(args[0]));
+    }
+    if cmd == "join" {
+        return py_repr(join(args));
+    }
+    if cmd == "fnmatch" {
+        let a = if fnmatch(args[0], args[1]) { "True" } else { "False" };
+        let b = if fnmatchcase(args[0], args[1]) { "True" } else { "False" };
+        return f"{a} {b}";
+    }
+    if cmd == "filter" {
+        return list_repr(filter(args[1..].to_vec(), args[0]));
+    }
+    if cmd == "glob" {
+        let g = Globber { root: "data/tree".to_string(), recursive: args[1] == "1", include_hidden: args[2] == "1" };
+        let mut got = g.glob(args[0]);
+        got.sort();
+        let mut out = String.new();
+        for p in got.iter() {
+            out.push_str(f"  {p}\n");
+        }
+        out.push_str(f"({got.len()} paths)");
+        return out;
+    }
+    if cmd == "escape" {
+        return py_repr(escape(args[0]));
+    }
+    f"unknown job {cmd}"
+}
+
+fn main() {
+    for p in tree_paths() {
+        let full = f"data/tree/{p}";
+        if p.ends_with("/") {
+            if let Err(e) = fs.create_dir_all(full) {
+                eprintln(f"cannot create {p}: {e}");
+                return;
+            }
+            continue;
+        }
+        let (dir, _) = split_path(full);
+        if let Err(e) = fs.create_dir_all(dir) {
+            eprintln(f"cannot create {dir}: {e}");
+            return;
+        }
+        if let Err(e) = fs.write(full, f"{p}\n") {
+            eprintln(f"cannot write {p}: {e}");
+            return;
+        }
+    }
+    let mut out = String.new();
+    for line in jobs_text().lines() {
+        let f: Vec[String] = line.split("\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        out.push_str(run(f).as_str());
+        out.push_str("\n");
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// The tree's paths under data/tree. A file holds its path and a
+// newline; a path ending in a slash is an empty directory.
+fn tree_paths() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(".env".to_string());
+    v.push(".github/workflows/ci.yml".to_string());
+    v.push(".gitignore".to_string());
+    v.push("Makefile".to_string());
+    v.push("Procfile".to_string());
+    v.push("README.md".to_string());
+    v.push("a*b/star.txt".to_string());
+    v.push("build/lib/app.py".to_string());
+    v.push("data.tar.gz".to_string());
+    v.push("data.tgz".to_string());
+    v.push("docs/api/v1.md".to_string());
+    v.push("docs/api/v10.md".to_string());
+    v.push("docs/api/v2.md".to_string());
+    v.push("docs/index.md".to_string());
+    v.push("empty/".to_string());
+    v.push("photo.JPG".to_string());
+    v.push("photo.jpg".to_string());
+    v.push("q?/mark.txt".to_string());
+    v.push("setup.cfg".to_string());
+    v.push("src/.cache.py".to_string());
+    v.push("src/__init__.py".to_string());
+    v.push("src/app.py".to_string());
+    v.push("src/models/.hidden/secret.py".to_string());
+    v.push("src/models/__init__.py".to_string());
+    v.push("src/models/order.py".to_string());
+    v.push("src/models/user.py".to_string());
+    v.push("src/util.py".to_string());
+    v.push("tests/data/notes.txt".to_string());
+    v.push("tests/data/sample2.json".to_string());
+    v.push("tests/data/sample[1].json".to_string());
+    v.push("tests/test_app.py".to_string());
+    v.push("tests/test_util.py".to_string());
+    v.push("Ünïcode/café.txt".to_string());
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("split\t1\t0\tls -la /tmp\n");
+    s.push_str("split\t1\t0\techo \"hello world\" 'single quoted' plain\n");
+    s.push_str("split\t1\t0\ta\\ b c\\\\d \"e\\\"f\" 'g\\'h\n");
+    s.push_str("split\t1\t0\ta\\ b c\\\\d \"e\\\"f\" 'g\\h'\n");
+    s.push_str("split\t1\t0\t\"a\"'b'c d\"\"e ''\n");
+    s.push_str("split\t1\t0\tcmd --opt=\"value with spaces\" --flag\n");
+    s.push_str("split\t1\t0\techo $HOME \"${PATH}\" '$USER'\n");
+    s.push_str("split\t1\t0\tfoo#bar # trailing comment\n");
+    s.push_str("split\t1\t1\tfoo#bar # trailing comment\n");
+    s.push_str("split\t1\t1\t# only a comment\n");
+    s.push_str("split\t1\t1\tone⏎two # c⏎three\n");
+    s.push_str("split\t1\t0\t\"unterminated\n");
+    s.push_str("split\t1\t0\t'unterminated\n");
+    s.push_str("split\t1\t0\ttrailing\\\n");
+    s.push_str("split\t1\t0\t\n");
+    s.push_str("split\t1\t0\t   ⇥   \n");
+    s.push_str("split\t1\t0\t\"\\$ \\` \\\" \\\\ \\n\"\n");
+    s.push_str("split\t1\t0\t'\\$ \\` \\\" \\\\ \\n'\n");
+    s.push_str("split\t1\t0\tcafé \"naïve façade\" Ünïcode\n");
+    s.push_str("split\t0\t0\t\"a b\" 'c d' e\\ f\n");
+    s.push_str("split\t0\t0\ta\"b c\"d\n");
+    s.push_str("split\t0\t1\tx # y\n");
+    s.push_str("split\t0\t0\t\"unterminated\n");
+    s.push_str("split\t1\t0\tgit commit -m \"fix: handle \\\"quoted\\\" args\" --author='A <a@b.c>'\n");
+    s.push_str("split\t1\t0\tssh host 'cd /srv && ./run.sh --port=8080'\n");
+    s.push_str("split\t1\t0\tfind . -name '*.py' -exec grep -l \"TODO\" {} \\;\n");
+    s.push_str("lex\tposix\tls -la /tmp ; echo hi\n");
+    s.push_str("lex\t\tls -la /tmp ; echo hi\n");
+    s.push_str("lex\tposix,ws\ta=1 b=2;c=3 d|e\n");
+    s.push_str("lex\tposix,punct\ta=1 b=2;c=3 d|e&&f||g\n");
+    s.push_str("lex\tposix,punct\tcat < in.txt > out.txt 2>&1 &\n");
+    s.push_str("lex\tposix,punct\t(cd sub && make) | tee log\n");
+    s.push_str("lex\tpunct\ta;b \"c;d\" 'e;f'\n");
+    s.push_str("lex\tposix,punct=;\ta;b|c\n");
+    s.push_str("lex\tposix,punct,ws\ta=1 b=2;c=3 ~/x.y\n");
+    s.push_str("lex\tposix,nocomment\ta # b\n");
+    s.push_str("lex\t\ta.b-c/d e+f\n");
+    s.push_str("lex\tposix\ta.b-c/d e+f\n");
+    s.push_str("lex\tpunct\ta.b-c/d e+f ~x\n");
+    s.push_str("lex\t\tx'y z'w \"q r\"\n");
+    s.push_str("lex\tposix\tone⏎# comment⏎two three⏎four\n");
+    s.push_str("lex\tposix,ws\tone⏎# comment⏎two three⏎four\n");
+    s.push_str("quote\tsimple\n");
+    s.push_str("quote\t\n");
+    s.push_str("quote\thas space\n");
+    s.push_str("quote\tit's\n");
+    s.push_str("quote\t$HOME\n");
+    s.push_str("quote\ta\"b\n");
+    s.push_str("quote\t-flag=1\n");
+    s.push_str("quote\tpath/to/file.txt\n");
+    s.push_str("quote\t@%+=:,./-\n");
+    s.push_str("quote\ttab⇥here\n");
+    s.push_str("quote\tcafé\n");
+    s.push_str("quote\tsemi;colon\n");
+    s.push_str("join\tls\t-la\tmy file\n");
+    s.push_str("join\techo\tit's\t\"q\"\t\n");
+    s.push_str("join\t\n");
+    s.push_str("fnmatch\tapp.py\t*.py\n");
+    s.push_str("fnmatch\tapp.py\t*.PY\n");
+    s.push_str("fnmatch\tapp.py\ta??.py\n");
+    s.push_str("fnmatch\tapp.py\t[ab]pp.py\n");
+    s.push_str("fnmatch\tapp.py\t[!a]pp.py\n");
+    s.push_str("fnmatch\tsrc/app.py\t*.py\n");
+    s.push_str("fnmatch\tsrc/app.py\tsrc/*\n");
+    s.push_str("fnmatch\t.env\t*\n");
+    s.push_str("fnmatch\t.env\t.*\n");
+    s.push_str("fnmatch\tv10.md\tv[0-9].md\n");
+    s.push_str("fnmatch\tv1.md\tv[0-9].md\n");
+    s.push_str("fnmatch\tv1.md\tv[!0-9].md\n");
+    s.push_str("fnmatch\ta]b\ta[]]b\n");
+    s.push_str("fnmatch\ta-b\ta[a-]b\n");
+    s.push_str("fnmatch\ta-b\ta[-a]b\n");
+    s.push_str("fnmatch\ta-b\ta[!-]b\n");
+    s.push_str("fnmatch\ta[b\ta[b\n");
+    s.push_str("fnmatch\ta[b\ta[[]b\n");
+    s.push_str("fnmatch\tab\ta[z-a]b\n");
+    s.push_str("fnmatch\ta-b\ta[z-a-]b\n");
+    s.push_str("fnmatch\tab\ta[!]b\n");
+    s.push_str("fnmatch\ta!b\ta[!]b\n");
+    s.push_str("fnmatch\ta\\b\ta\\b\n");
+    s.push_str("fnmatch\ta\\b\ta[\\]b\n");
+    s.push_str("fnmatch\tabc\t*a*b*c*\n");
+    s.push_str("fnmatch\tabcabd\t*ab?\n");
+    s.push_str("fnmatch\tcafé.txt\tcaf?.txt\n");
+    s.push_str("fnmatch\tcafé.txt\t*[é].txt\n");
+    s.push_str("fnmatch\ta^b\ta[^]b\n");
+    s.push_str("fnmatch\ta^b\ta[\\^]b\n");
+    s.push_str("fnmatch\tx\t[a-c-z]\n");
+    s.push_str("fnmatch\t-\t[a-c-z]\n");
+    s.push_str("fnmatch\tb\t[a-c-z]\n");
+    s.push_str("fnmatch\t*\t[*]\n");
+    s.push_str("fnmatch\tline⏎break\tline?break\n");
+    s.push_str("fnmatch\tline⏎break\tline*\n");
+    s.push_str("filter\t*.py\tapp.py\tutil.py\tREADME.md\t.cache.py\tsetup.cfg\n");
+    s.push_str("filter\t*.[ch]\ta.c\tb.h\tc.cc\td.hh\t.e.c\n");
+    s.push_str("filter\t[!.]*\t.env\tenv\t..\tx\n");
+    s.push_str("glob\t*\t0\t0\n");
+    s.push_str("glob\t*\t0\t1\n");
+    s.push_str("glob\t.*\t0\t0\n");
+    s.push_str("glob\t*.md\t0\t0\n");
+    s.push_str("glob\tsrc/*.py\t0\t0\n");
+    s.push_str("glob\tsrc/*\t0\t0\n");
+    s.push_str("glob\tsrc/*\t0\t1\n");
+    s.push_str("glob\t*/*.py\t0\t0\n");
+    s.push_str("glob\t**\t0\t0\n");
+    s.push_str("glob\t**\t1\t0\n");
+    s.push_str("glob\t**\t1\t1\n");
+    s.push_str("glob\t**/*.py\t1\t0\n");
+    s.push_str("glob\t**/*.py\t1\t1\n");
+    s.push_str("glob\tsrc/**\t1\t0\n");
+    s.push_str("glob\tsrc/**/\t1\t0\n");
+    s.push_str("glob\t**/\t1\t0\n");
+    s.push_str("glob\tsrc/**/*.py\t1\t0\n");
+    s.push_str("glob\tdocs/**/v?.md\t1\t0\n");
+    s.push_str("glob\tdocs/**/v*.md\t0\t0\n");
+    s.push_str("glob\t*/\t0\t0\n");
+    s.push_str("glob\t*/\t0\t1\n");
+    s.push_str("glob\ttests/data/sample[1].json\t0\t0\n");
+    s.push_str("glob\ttests/data/sample[[]1].json\t0\t0\n");
+    s.push_str("glob\ttests/data/sample[12].json\t0\t0\n");
+    s.push_str("glob\ta*b/*\t0\t0\n");
+    s.push_str("glob\ta[*]b/*\t0\t0\n");
+    s.push_str("glob\tq[?]/*\t0\t0\n");
+    s.push_str("glob\tÜ*/*\t0\t0\n");
+    s.push_str("glob\tphoto.*\t0\t0\n");
+    s.push_str("glob\t*.t*gz\t0\t0\n");
+    s.push_str("glob\t*.tar.gz\t0\t0\n");
+    s.push_str("glob\tREADME.md\t0\t0\n");
+    s.push_str("glob\tmissing.txt\t0\t0\n");
+    s.push_str("glob\tsrc/\t0\t0\n");
+    s.push_str("glob\tmissing/\t0\t0\n");
+    s.push_str("glob\tempty/*\t0\t0\n");
+    s.push_str("glob\tempty/**\t1\t0\n");
+    s.push_str("glob\t*/*/*/*.py\t0\t0\n");
+    s.push_str("glob\tsrc/models/.hidden/*\t0\t0\n");
+    s.push_str("glob\tsrc/*/.hidden/*\t0\t0\n");
+    s.push_str("glob\tsrc/**/secret.py\t1\t0\n");
+    s.push_str("glob\tsrc/**/secret.py\t1\t1\n");
+    s.push_str("glob\t[!.]*file\t0\t0\n");
+    s.push_str("escape\ttests/data/sample[1].json\n");
+    s.push_str("escape\ta*b/star.txt\n");
+    s.push_str("escape\tq?/mark.txt\n");
+    s.push_str("escape\tplain/path.txt\n");
+    s.push_str("escape\t[[]]\n");
+    s
+}

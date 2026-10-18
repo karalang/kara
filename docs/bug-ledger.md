@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 275 |
 | codegen-gap | 267 |
-| false-positive | 211 |
+| false-positive | 212 |
 | other | 173 |
 | perf | 171 |
 | diagnostics | 164 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 943 |
 | typecheck | 451 |
 | other | 115 |
-| ownership | 109 |
+| ownership | 110 |
 | runtime | 76 |
 | cli | 76 |
 | parser | 68 |
@@ -208,6 +208,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-11 | 2026-10-18 | codegen | low | `i128.parse` and `u128.parse` are not lowered on the compiled MIR surfaces: mir-llvm, mir-llvm-asan and `karac build --mir` stop with "native `i128.parse` is not lowered yet", while `karac check` passes and mir-interp parses correctly; `parse_num` in src/codegen/mir/num.rs only handles integers of 64 bits or fewer | — |
 | B-2026-10-18-12 | 2026-10-18 | interp+codegen | medium | A generic function passed as a value, `count(v, never)` with `fn never[T](x: T) -> bool`, is refused by every MIR surface with "a generic function as a value is not lowered yet" (src/mir/lower.rs fn_item_value), while `karac check` passes and `karac run --interp` runs it | — |
 | B-2026-10-18-13 | 2026-10-18 | interp+codegen | high | A match whose arms are `Some(n) => *n` and `None => b.get(k).unwrap_or(0)` keeps the second arm a `ref i64` on the MIR surfaces: `karac check` passes, `__mir-run` stops with "Sub on Ref(Addr ..) and Int(1)" when the result is used, and `__mir-llvm-run` prints an address (94122422154631) instead of 1; annotating the binding `: i64` does not help | — |
+| B-2026-10-18-14 | 2026-10-18 | ownership | low | A range view in a `for` header, `for x in v[1..].iter() { .. }`, stays borrowed after the loop ends, so `karac check` refuses a later `v.push(..)` or `v.remove(..)` with "cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"; `for x in v.iter()` passes and every MIR surface runs both | — |
 
 ### Relocated
 
