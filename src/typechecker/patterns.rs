@@ -773,7 +773,7 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or(Type::Never);
         let mut reported = false;
 
-        for arm_ty in &arm_types {
+        for (i, arm_ty) in arm_types.iter().enumerate() {
             if *arm_ty == Type::Never || *arm_ty == Type::Error || result_ty == Type::Error {
                 continue;
             }
@@ -790,6 +790,15 @@ impl<'a> super::TypeChecker<'a> {
                 Some(joined) => result_ty = joined,
                 None => {
                     if !reported {
+                        // A borrowed arm beside owned ones moves out of a
+                        // borrow (core semantics §3.7): say so, and clone.
+                        if let Some(owned) = self.reject_borrowed_arm_among_owned(
+                            &result_ty, arm_ty, i, arms, &arm_types,
+                        ) {
+                            result_ty = owned;
+                            reported = true;
+                            continue;
+                        }
                         self.type_error(
                             format!(
                                 "match arms have incompatible types: '{}' and '{}'",
@@ -806,6 +815,69 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         result_ty
+    }
+
+    /// One arm hands back a `ref T` (a `Map.get` payload, a bare `for`
+    /// element) where the other arms are an owned, non-`Copy` `T`: the match
+    /// would move the borrowed value out. Reports it at the borrowed arm,
+    /// with `.clone()` when `T` has one, and returns the owned type.
+    fn reject_borrowed_arm_among_owned(
+        &mut self,
+        result_ty: &Type,
+        arm_ty: &Type,
+        i: usize,
+        arms: &[MatchArm],
+        arm_types: &[Type],
+    ) -> Option<Type> {
+        let peel = |t: &Type| match t {
+            Type::Ref(t) | Type::MutRef(t) => Some((**t).clone()),
+            _ => None,
+        };
+        let (owned, at) = match (peel(result_ty), peel(arm_ty)) {
+            (None, Some(inner)) if inner == *result_ty => (inner, i),
+            (Some(inner), None) if inner == *arm_ty => {
+                (inner, arm_types.iter().position(|t| t == result_ty)?)
+            }
+            _ => return None,
+        };
+        if self.is_copy_type_during_check(&owned) {
+            return None;
+        }
+        let body = &arms.get(at)?.body;
+        let has_clone = self.type_supports_clone(&owned);
+        let what = match &body.kind {
+            ExprKind::Identifier(n) => format!("cannot move '{n}': it borrows its value"),
+            _ => "cannot move a non-`Copy` value out of a borrowed place".to_string(),
+        };
+        let message = format!(
+            "{what}, and the other arms of this `match` are an owned '{}'{}",
+            type_display(&owned),
+            if has_clone {
+                ". Write `.clone()` to take a copy"
+            } else {
+                ". This type has no `.clone()`: return a borrow from every arm, or use \
+                 the value in place"
+            }
+        );
+        if has_clone {
+            let end = Span {
+                offset: body.span.offset + body.span.length,
+                length: 0,
+                ..body.span
+            };
+            self.type_error_with_fix_it(
+                message,
+                body.span,
+                TypeErrorKind::BranchTypeMismatch,
+                crate::typechecker::FixIt {
+                    span: end,
+                    replacement: ".clone()".to_string(),
+                },
+            );
+        } else {
+            self.type_error(message, body.span, TypeErrorKind::BranchTypeMismatch);
+        }
+        Some(owned)
     }
 
     /// Validate a slice/array pattern against the scrutinee type and

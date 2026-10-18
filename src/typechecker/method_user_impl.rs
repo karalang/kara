@@ -1254,7 +1254,26 @@ impl<'a> super::TypeChecker<'a> {
                         "method '{}' is not callable on this `{}`{}: {}",
                         method, type_name, via, detail
                     );
-                    self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
+                    // A local type missing `Clone` is fixed by deriving it.
+                    let derive = (bound_trait == "Clone")
+                        .then(|| {
+                            let owned = match &concrete {
+                                Type::Ref(t) | Type::MutRef(t) => (**t).clone(),
+                                t => t.clone(),
+                            };
+                            self.copy_derive_fix(&owned)
+                        })
+                        .flatten()
+                        .filter(|f| f.replacement.contains("Clone"));
+                    match derive {
+                        Some(fix) => self.type_error_with_fix_it(
+                            msg,
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                            fix,
+                        ),
+                        None => self.type_error(msg, *span, TypeErrorKind::NoMethodFound),
+                    }
                     return Type::Error;
                 }
                 if (is_user_defined

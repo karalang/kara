@@ -226,9 +226,13 @@ impl<'a> super::TypeChecker<'a> {
                     // (docs/library/collections.md: `Map.get` lends the value).
                     // The checker still types `get` as `Option[V]`, so on a
                     // value payload it is the identity; the MIR pipeline takes
-                    // the Kāra body in option.kara.
+                    // the Kāra body in option.kara. `karac check` keeps this
+                    // arm against the library too, for the derive it offers.
                     "cloned"
-                        if !is_result && args.is_empty() && !self.library_methods_from_source =>
+                        if !is_result
+                            && args.is_empty()
+                            && (!self.library_methods_from_source
+                                || self.cli_lint_overrides.strict_core) =>
                     {
                         let inner = match resolve_type_var_top(&t_ty, &self.env.substitutions) {
                             Type::Ref(t) | Type::MutRef(t) => *t,

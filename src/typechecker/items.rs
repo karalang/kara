@@ -7854,6 +7854,7 @@ impl<'a> super::TypeChecker<'a> {
                     let scope = self.current_body_dim_scope.clone();
                     let declared = self.lower_body_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
+                    self.check_core_collect_into(value, &declared);
                     self.record_declared_type_for_polymorphic_rhs(value, &declared);
                     declared
                 } else {

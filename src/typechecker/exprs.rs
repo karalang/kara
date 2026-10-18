@@ -4880,10 +4880,24 @@ impl<'a> super::TypeChecker<'a> {
         else {
             return;
         };
-        if name != "Iterator" || args.len() != 1 {
+        let item = if name == "Iterator" && args.len() == 1 {
+            resolve_type_var_top(&args[0], &self.env.substitutions)
+        } else if let Some(projected) = self.library_iter_item(object) {
+            // Against the library the chain is its adaptor struct
+            // (`IterChain[SliceIter[String], ...]`), whose `Item` is the
+            // `ref String` it lends: the part under each `ref` is what
+            // `collect` would move.
+            fn under_refs(t: Type) -> Type {
+                match t {
+                    Type::Ref(inner) | Type::MutRef(inner) => under_refs(*inner),
+                    Type::Tuple(ts) => Type::Tuple(ts.into_iter().map(under_refs).collect()),
+                    t => t,
+                }
+            }
+            under_refs(projected)
+        } else {
             return;
-        }
-        let item = resolve_type_var_top(&args[0], &self.env.substitutions);
+        };
         let Some((source, part)) = self.core_lent_part_moves(&item, &lent) else {
             return;
         };
@@ -4939,6 +4953,160 @@ impl<'a> super::TypeChecker<'a> {
         self.type_lint_warning_with_fix(
             message,
             object.span,
+            TypeErrorKind::TypeMismatch,
+            "borrow_projection_copy",
+            fix,
+        );
+    }
+
+    /// The `Item` of an iterator typed by the library's sources: its adaptor
+    /// struct's `Iterator` impl, `ref`s kept (`IterEnumerate[SliceIter[String]]`
+    /// gives `(i64, ref String)`). `None` off the library, or when the
+    /// projection does not resolve.
+    fn library_iter_item(&self, object: &Expr) -> Option<Type> {
+        if !self.library_methods_from_source {
+            return None;
+        }
+        let Some(Type::Named { name, args }) = self
+            .expr_types
+            .get(&SpanKey::from_span(&object.span))
+            .map(|t| resolve_type_var_top(t, &self.env.substitutions))
+        else {
+            return None;
+        };
+        let projected = self.resolve_assoc_projections(&Type::AssocProjection {
+            param: name,
+            assoc: "Item".to_string(),
+            args: Vec::new(),
+            receiver_args: args,
+        });
+        if matches!(projected, Type::AssocProjection { .. }) {
+            return None;
+        }
+        Some(resolve_type_var_top(&projected, &self.env.substitutions))
+    }
+
+    /// §5.10 against the library: `let r: Vec[(i64, String)] = it.collect()`
+    /// where the items are `(i64, ref String)` would move each borrowed part
+    /// out of the collection it views, as the MIR builder reports. The
+    /// syntactic [`Self::check_core_collect_lent`] sees only the adaptors that
+    /// pass a lent item through; this compares the items with the declared
+    /// element, so it also sees a `map` closure that hands a borrowed part
+    /// out. A tuple literal tail of that closure gets a `.clone()` on the part.
+    pub(super) fn check_core_collect_into(&mut self, value: &Expr, declared: &Type) {
+        if !self.cli_lint_overrides.strict_core || !self.library_methods_from_source {
+            return;
+        }
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &value.kind
+        else {
+            return;
+        };
+        if method != "collect" || !args.is_empty() {
+            return;
+        }
+        let Some(item) = self.library_iter_item(object) else {
+            return;
+        };
+        let Type::Named {
+            name,
+            args: declared_args,
+        } = declared
+        else {
+            return;
+        };
+        let elem = match name.as_str() {
+            "Vec" | "Set" | "SortedSet" | "VecDeque" if declared_args.len() == 1 => {
+                &declared_args[0]
+            }
+            _ => return,
+        };
+        // Where a part is lent and the element owns it.
+        fn moved_parts(
+            tc: &super::TypeChecker<'_>,
+            item: &Type,
+            elem: &Type,
+            at: &mut Vec<usize>,
+            index: Option<usize>,
+        ) -> bool {
+            match (item, elem) {
+                (Type::Ref(_) | Type::MutRef(_), Type::Ref(_) | Type::MutRef(_)) => false,
+                (Type::Ref(inner) | Type::MutRef(inner), e) => {
+                    let moves = !tc.reads_as_value(inner)
+                        && !tc.copy_is_only_an_rc_retain(inner)
+                        && !matches!(e, Type::TypeVar(_) | Type::Error);
+                    if moves {
+                        if let Some(i) = index {
+                            at.push(i);
+                        }
+                    }
+                    moves
+                }
+                (Type::Tuple(is), Type::Tuple(es)) if is.len() == es.len() && index.is_none() => {
+                    let mut any = false;
+                    for (i, (x, e)) in is.iter().zip(es.iter()).enumerate() {
+                        any |= moved_parts(tc, x, e, at, Some(i));
+                    }
+                    any
+                }
+                _ => false,
+            }
+        }
+        let elem = resolve_type_var_top(elem, &self.env.substitutions);
+        let mut at = Vec::new();
+        if !moved_parts(self, &item, &elem, &mut at, None) {
+            return;
+        }
+        // Reported already by the syntactic rule.
+        if self.errors.iter().any(|e| {
+            e.lint_name.as_deref() == Some("borrow_projection_copy")
+                && e.span.offset >= value.span.offset
+                && e.span.offset < value.span.offset + value.span.length
+        }) {
+            return;
+        }
+        let fix = match (&object.kind, at.as_slice()) {
+            (
+                ExprKind::MethodCall {
+                    method: m,
+                    args: map_args,
+                    ..
+                },
+                [i],
+            ) if m == "map" => match map_args.first().map(|a| &a.value.kind) {
+                Some(ExprKind::Closure { body, .. }) => match &body.kind {
+                    ExprKind::Tuple(parts) if *i < parts.len() => {
+                        let part = &parts[*i].span;
+                        Some(FixIt {
+                            span: Span {
+                                offset: part.offset + part.length,
+                                length: 0,
+                                line: part.line,
+                                column: part.column,
+                            },
+                            replacement: ".clone()".to_string(),
+                        })
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+        self.type_lint_warning_with_fix(
+            format!(
+                "cannot move a non-`Copy` value out of a borrowed place: the items are \
+                 `{}`, and collecting them as `{}` would move each borrowed part out of \
+                 the collection it views (core semantics §5.10). Clone each borrowed part \
+                 before `collect`",
+                type_display(&item),
+                type_display(&elem)
+            ),
+            value.span,
             TypeErrorKind::TypeMismatch,
             "borrow_projection_copy",
             fix,

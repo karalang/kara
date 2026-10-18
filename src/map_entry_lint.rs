@@ -113,7 +113,11 @@ fn option_payload_container_type(scrutinee: &Expr, typed: &TypeCheckResult) -> O
     if name != "Option" {
         return None;
     }
-    let value = args.first()?;
+    // Against the library `get` lends the value: `Option[ref V]`.
+    let value = match args.first()? {
+        Type::Ref(v) | Type::MutRef(v) => &**v,
+        v => v,
+    };
     is_container_value_type(value).then(|| value.clone())
 }
 

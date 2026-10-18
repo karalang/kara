@@ -650,17 +650,16 @@ impl TypeEnv {
                 _ => false,
             }
         }
-        let mut bound = HashMap::new();
-        bind_impl_params(&imp.target_generic_args, target_args, &mut bound);
-        let aligned: Vec<Type> = gp
-            .params
-            .iter()
-            .map(|p| match bound.get(&p.name) {
-                Some(t) if !undecided(t) && !self.derives_a_bound(t, &p.bounds) => t.clone(),
-                _ => Type::TypeParam(p.name.clone()),
-            })
-            .collect();
-        self.impl_bounds_discharge(imp, &aligned)
+        let mut subs = self.impl_param_subs(imp, target_args);
+        for p in &gp.params {
+            let decided = subs
+                .get(&p.name)
+                .is_some_and(|t| !undecided(t) && !self.derives_a_bound(t, &p.bounds));
+            if !decided {
+                subs.insert(p.name.clone(), Type::TypeParam(p.name.clone()));
+            }
+        }
+        self.impl_bounds_discharge_with(imp, &subs, &|ty, bound| self.bound_satisfied(ty, bound))
     }
 
     /// Look up a method by name on `target_type` from `impls`, preferring
@@ -836,26 +835,50 @@ impl TypeEnv {
         target_args: &[Type],
         satisfied: &dyn Fn(&Type, &TraitBound) -> bool,
     ) -> bool {
+        let subs = self.impl_param_subs(imp, target_args);
+        self.impl_bounds_discharge_with(imp, &subs, satisfied)
+    }
+
+    /// The impl's own params bound by the receiver's type arguments: by
+    /// matching the target as written (`Option[ref T]` against
+    /// `Option[ref P]` binds `T = P`), or by position for an impl whose
+    /// target is not recorded that way. Position alone bound `T = ref P`
+    /// there, so `m.get(k).cloned()` asked whether `ref P` is `Clone`.
+    fn impl_param_subs(&self, imp: &ImplInfo, target_args: &[Type]) -> HashMap<String, Type> {
+        let mut subs = HashMap::new();
+        let Some(gp) = &imp.generic_params else {
+            return subs;
+        };
+        if !imp.target_generic_args.is_empty() && imp.target_generic_args.len() == target_args.len()
+        {
+            bind_impl_params(&imp.target_generic_args, target_args, &mut subs);
+        } else {
+            for (p, a) in gp.params.iter().zip(target_args.iter()) {
+                subs.insert(p.name.clone(), a.clone());
+            }
+        }
+        subs
+    }
+
+    /// [`Self::impl_bounds_discharge_by`] over the substitution `subs`.
+    fn impl_bounds_discharge_with(
+        &self,
+        imp: &ImplInfo,
+        subs: &HashMap<String, Type>,
+        satisfied: &dyn Fn(&Type, &TraitBound) -> bool,
+    ) -> bool {
         let Some(gp) = &imp.generic_params else {
             // No impl-level generic params → no inline bounds; the where
             // clause (if present) couldn't reference any names anyway.
             return true;
         };
 
-        // Substitution map: impl-level generic-param name → concrete arg.
-        let subs: std::collections::HashMap<&str, &Type> = gp
-            .params
-            .iter()
-            .zip(target_args.iter())
-            .map(|(p, a)| (p.name.as_str(), a))
-            .collect();
-
         // Inline bounds on each generic param.
         for param in &gp.params {
             if param.bounds.is_empty() {
                 continue;
             }
-            let Some(&subst_ty) = subs.get(param.name.as_str()) else {
+            let Some(subst_ty) = subs.get(param.name.as_str()) else {
                 // Receiver had fewer type args than the impl declares — e.g.
                 // resolving a method on `self` inside the impl (whose type is
                 // the bare target name, no args) or a receiver whose generic
@@ -902,7 +925,7 @@ impl TypeEnv {
                     continue;
                 }
                 let owned;
-                let target_ty: &Type = if let Some(&t) = subs.get(type_name.as_str()) {
+                let target_ty: &Type = if let Some(t) = subs.get(type_name.as_str()) {
                     t
                 } else if gp.params.iter().any(|p| &p.name == type_name) {
                     // An impl param the receiver gave no arg for (`self`
@@ -951,14 +974,9 @@ impl TypeEnv {
         target_args: &[Type],
     ) -> Option<(String, TraitBound, Type)> {
         let gp = imp.generic_params.as_ref()?;
-        let subs: std::collections::HashMap<&str, &Type> = gp
-            .params
-            .iter()
-            .zip(target_args.iter())
-            .map(|(p, a)| (p.name.as_str(), a))
-            .collect();
+        let subs = self.impl_param_subs(imp, target_args);
         for param in &gp.params {
-            let Some(&subst_ty) = subs.get(param.name.as_str()) else {
+            let Some(subst_ty) = subs.get(param.name.as_str()) else {
                 continue;
             };
             if matches!(subst_ty, Type::TypeParam(_)) {

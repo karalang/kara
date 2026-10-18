@@ -126,10 +126,7 @@ impl<'a> super::TypeChecker<'a> {
                 // v2 core: a collection's `.clone()` clones each element, so
                 // the element type needs `.clone()` too (design.md § Derive).
                 // A local type that lacks it gets a derive.
-                if self.cli_lint_overrides.strict_core
-                    && !self.library_methods_from_source
-                    && !self.type_supports_clone(&self_ty)
-                {
+                if self.cli_lint_overrides.strict_core && !self.type_supports_clone(&self_ty) {
                     if let Some((name, fix)) = self.copy_derive_fix_named(&self_ty) {
                         self.type_error_with_fix_it(
                             format!(
