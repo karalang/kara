@@ -215,6 +215,17 @@ pub(crate) fn string_receiver_arg_is_borrow(
         .then_some(true)
 }
 
+/// A named place and its projections: `w`, `w.p`, `w.ps[i].n`, `self.x`.
+pub(crate) fn is_place_projection(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } => is_place_projection(object),
+        _ => false,
+    }
+}
+
 pub(crate) fn arg_is_borrow_by_method_name(
     method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
     method: &str,

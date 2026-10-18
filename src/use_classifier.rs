@@ -491,7 +491,9 @@ impl<'a> UseClassifier<'a> {
             StmtKind::MultiAssign { .. } => unreachable!(
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
             ),
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                pattern, ty, value, ..
+            } => {
                 // Round 12.18: record the local's type by name BEFORE
                 // walking the value, using the value-span (which is
                 // unaliased — only `MethodCall.span == receiver.span`
@@ -533,7 +535,19 @@ impl<'a> UseClassifier<'a> {
                 // `let ref name @ PATTERN = rhs` borrows the RHS
                 // (design.md § @ Bindings) — read, not consume. Mirrors
                 // the `block_stmt` Let-arm gate in the legacy walker.
-                let rhs_mode = self.let_rhs_mode(pattern);
+                let mut rhs_mode = self.let_rhs_mode(pattern);
+                // `let p: mut ref P = w.p;` reads `w.p`: check's error with a
+                // fix that writes the borrow operator is the one offered, as
+                // the ownership twin does (B-2026-10-15-14).
+                if crate::ownership::core_rules()
+                    && crate::ownership::is_place_projection(value)
+                    && matches!(
+                        ty.as_ref().map(|t| &t.kind),
+                        Some(crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_))
+                    )
+                {
+                    rhs_mode = Mode::Reading;
+                }
                 // v2 core §4.6: a struct pattern that copies or borrows its
                 // parts reads just those parts of a local.
                 let copied_parts = crate::ownership::core_copied_parts(

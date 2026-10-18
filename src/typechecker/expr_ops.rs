@@ -4066,6 +4066,29 @@ impl<'a> super::TypeChecker<'a> {
                     ty
                 }
             }
+            // `mut ref place` (core-semantics.md §5.1, B-2026-10-15-14): a
+            // unique borrow of a named place and its projections, of type
+            // `mut ref T`. Whether the place is writable is §5.9's question,
+            // answered by the core write walk; whether it is `let mut`, the
+            // ownership checker's. Only the v2 core has it.
+            UnaryOp::MutRef => {
+                let core = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+                if !core || !is_named_place_projection(operand) {
+                    self.type_error(
+                        "error[E_REF_OPERAND_UNSUPPORTED]: `mut ref` borrows a place: a local, \
+                         `self`, or a field or element of one (core-semantics.md §5.1)"
+                            .to_string(),
+                        *span,
+                        TypeErrorKind::RefOperandUnsupported,
+                    );
+                    return Type::Error;
+                }
+                match ty {
+                    Type::Error => Type::Error,
+                    Type::Ref(inner) | Type::MutRef(inner) => Type::MutRef(inner),
+                    t => Type::MutRef(Box::new(t)),
+                }
+            }
             UnaryOp::Deref => match ty {
                 Type::Ref(inner) | Type::MutRef(inner) => *inner,
                 // Raw-pointer dereference (`*const T` / `*mut T`) typechecks

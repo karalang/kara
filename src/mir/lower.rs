@@ -4933,6 +4933,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(dest, Rvalue::Ref(BorrowKind::Shared, p));
                         return Ok(());
                     }
+                    // `mut ref v[i]`: a unique borrow of a place
+                    // (B-2026-10-15-14).
+                    UnaryOp::MutRef if self.is_place(operand) => {
+                        let p = self.expr_place(operand, true)?;
+                        self.assign(dest, Rvalue::Ref(BorrowKind::Mut, p));
+                        return Ok(());
+                    }
                     _ => return self.unsupported(e.span, "this unary operator"),
                 };
                 let t = self.expr_ty(operand)?;

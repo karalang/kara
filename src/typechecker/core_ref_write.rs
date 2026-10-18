@@ -88,6 +88,12 @@ struct Walk<'t, 'a> {
     branches: Vec<(usize, usize)>,
     /// Conflicting writes to a borrowed place (§5.6, §6.2).
     conflicts: Vec<(Span, String, Option<FixIt>)>,
+    /// Reads of a place a `mut ref` local borrows (§5.6). A write at the
+    /// same place reports instead.
+    read_conflicts: Vec<(Span, String)>,
+    /// The place expressions already asked about a read, by address: each
+    /// projection chain is asked once, as a whole.
+    place_seen: FxHashSet<usize>,
     /// The program's own free functions by name, for the kind check at a
     /// call (§9.6). Library functions are not migrated to `MutFn` yet.
     fn_decls: &'t FxHashMap<String, &'a Function>,
@@ -129,6 +135,9 @@ struct Borrowed {
     binding: Option<RefHold>,
     /// The edit that removes a conflict with this borrow, when one is known.
     fix: Option<FixIt>,
+    /// A `let name = mut ref <place>` borrow: while it is live the place is
+    /// not read either (§5.6).
+    unique: bool,
 }
 
 /// A `ref` pattern binding's borrow (§5.6): a write to the place conflicts
@@ -236,6 +245,8 @@ impl<'a> TypeChecker<'a> {
             ref_lets: Vec::new(),
             branches: Vec::new(),
             conflicts: Vec::new(),
+            read_conflicts: Vec::new(),
+            place_seen: FxHashSet::default(),
             fn_decls: &fn_decls,
             method_decls: &method_decls,
             closures: Vec::new(),
@@ -281,6 +292,7 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect()];
             w.borrowed.clear();
+            w.place_seen.clear();
             w.ref_lets.clear();
             w.branches.clear();
             w.mut_fn_params.clear();
@@ -299,7 +311,9 @@ impl<'a> TypeChecker<'a> {
         let kind_errors = w.kind_errors;
         let prefix_errors = w.prefix_errors;
         let once_calls = w.once_calls;
-        for (span, message) in w.removed_calls {
+        let read_conflicts = w.read_conflicts;
+        let removed_calls = w.removed_calls;
+        for (span, message) in removed_calls {
             self.type_error(message, span, TypeErrorKind::RemovedInCore);
         }
         for (span, message) in kind_errors {
@@ -308,6 +322,16 @@ impl<'a> TypeChecker<'a> {
         for (span, message, fix) in prefix_errors {
             self.type_error_with_fix_it(message, span, TypeErrorKind::CapturePrefixRemoved, fix);
         }
+        let reads: Vec<_> = read_conflicts
+            .into_iter()
+            .filter(|(r, _)| {
+                !conflicts
+                    .iter()
+                    .any(|(c, _, _)| r.offset >= c.offset && r.offset <= c.offset + c.length)
+            })
+            .map(|(r, m)| (r, m, None))
+            .collect();
+        conflicts.extend(reads);
         conflicts.sort_by_key(|(s, _, _)| s.offset);
         conflicts.dedup_by(|a, b| a.0.offset == b.0.offset);
         let mut fixed_loops: FxHashSet<usize> = FxHashSet::default();
@@ -474,6 +498,7 @@ impl Walk<'_, '_> {
             handle,
             binding: None,
             fix: None,
+            unique: false,
         })
     }
 
@@ -504,13 +529,14 @@ impl Walk<'_, '_> {
         let (
             PatternKind::Binding(name),
             ExprKind::Unary {
-                op: UnaryOp::Ref,
+                op: op @ (UnaryOp::Ref | UnaryOp::MutRef),
                 operand,
             },
         ) = (&pattern.kind, &value.kind)
         else {
             return Vec::new();
         };
+        let unique = matches!(op, UnaryOp::MutRef);
         let (Some((root, path, handle)), Some(text)) =
             (self.place_path(operand), place_text(operand))
         else {
@@ -539,6 +565,7 @@ impl Walk<'_, '_> {
                 uses,
             }),
             fix: None,
+            unique,
         }])
     }
 
@@ -561,6 +588,7 @@ impl Walk<'_, '_> {
             handle: *handle || inner.handle,
             binding: None,
             fix: None,
+            unique: false,
         })
     }
 
@@ -610,6 +638,7 @@ impl Walk<'_, '_> {
                         uses,
                     }),
                     fix: None,
+                    unique: false,
                 });
             }
         }
@@ -652,8 +681,9 @@ impl Walk<'_, '_> {
         };
         let text = place_text(place).unwrap_or_else(|| b.text.clone());
         let message = if let Some(RefHold { name, .. }) = &b.binding {
+            let kw = if b.unique { "mut ref" } else { "ref" };
             format!(
-                "cannot {verb} `{text}` while `ref {name}` borrows `{}`: `{name}` is used \
+                "cannot {verb} `{text}` while `{kw} {name}` borrows `{}`: `{name}` is used \
                  after this (core-semantics.md §5.6). Use `{name}` before the write, or \
                  clone what you need from it first",
                 b.text
@@ -676,6 +706,57 @@ impl Walk<'_, '_> {
         };
         let fix = b.fix.clone();
         self.conflicts.push((at, message, fix));
+    }
+
+    /// §5.6: a read of a place while a `mut ref` local that borrows it, or a
+    /// place inside it, is still used later. Asked once per projection
+    /// chain, for the whole chain.
+    fn check_borrowed_read(&mut self, place: &Expr) {
+        let key = place as *const Expr as usize;
+        if !self.place_seen.insert(key) {
+            return;
+        }
+        let mut cur = place;
+        while let ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } = &cur.kind
+        {
+            self.place_seen
+                .insert(object.as_ref() as *const Expr as usize);
+            cur = object;
+        }
+        if !self.borrowed.iter().any(|b| b.unique) {
+            return;
+        }
+        let Some((root, path, _)) = self.place_path(place) else {
+            return;
+        };
+        let after = place.span.offset;
+        let branches = &self.branches;
+        let Some(b) = self.borrowed.iter().rev().find(|b| {
+            b.unique
+                && b.binding.as_ref().is_some_and(|h| {
+                    h.uses
+                        .iter()
+                        .any(|(u, p)| *u > after && !exclusive(p, branches))
+                })
+                && b.root == root
+                && b.path
+                    .iter()
+                    .zip(&path)
+                    .all(|(x, y)| x.is_none() || y.is_none() || x == y)
+        }) else {
+            return;
+        };
+        let name = b.binding.as_ref().map_or("", |h| h.name.as_str());
+        let text = place_text(place).unwrap_or_else(|| b.text.clone());
+        let message = format!(
+            "cannot read `{text}` while `mut ref {name}` borrows `{}`: `{name}` is used \
+             after this (core-semantics.md §5.6). Read it through `{name}`, or use \
+             `{name}` for the last time first",
+            b.text
+        );
+        self.read_conflicts.push((place.span, message));
     }
 
     fn lookup(&self, name: &str) -> Option<&Binding> {
@@ -757,6 +838,16 @@ impl Walk<'_, '_> {
     }
 
     fn expr(&mut self, e: &Expr) {
+        if matches!(
+            e.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::SelfValue
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::TupleIndex { .. }
+                | ExprKind::Index { .. }
+        ) {
+            self.check_borrowed_read(e);
+        }
         match &e.kind {
             ExprKind::MethodCall { object, method, .. }
                 if self.method_writes_receiver(e, object, method) =>
@@ -945,6 +1036,16 @@ impl Walk<'_, '_> {
                     self.closure_writes.insert(e.span.offset, name);
                 }
                 return;
+            }
+            // `mut ref place` writes through the place (§5.9) and conflicts
+            // with any borrow of it still in use (§5.6).
+            ExprKind::Unary {
+                op: UnaryOp::MutRef,
+                operand,
+            } => {
+                self.check_through(operand, e.span, "a `mut ref` borrow through it");
+                self.check_borrowed_write(operand, e.span, "borrow `mut ref`");
+                self.note_capture_write(operand);
             }
             _ => {}
         }

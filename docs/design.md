@@ -2623,6 +2623,16 @@ let first = Some(ref self.items[0]);   // build an `Option[ref T]` in a method b
 
 A local bound this way is a reference, with the origins of [core-semantics.md §5.3](core-semantics.md#5-references-and-views-c5).
 
+**`mut ref place` borrows a place for writing.** It is the mutable twin of `ref place`: `mut ref v[i]` and `mut ref s.field` produce a `mut ref` to that place. It moves nothing. The place must be writable: rooted at a `let mut` local, a `mut ref` parameter or a `mut ref self` receiver, and never reached through a shared `ref` ([core-semantics.md §5.9](core-semantics.md#5-references-and-views-c5)). While the borrow is live, the place is read and written only through it ([core-semantics.md §5.6](core-semantics.md#5-references-and-views-c5)). This is how one element is updated in several steps without indexing it at every write:
+
+```kara
+let up = mut ref pool.members[idx];   // borrow the element
+up.refused += 1;                      // writes go through `up`
+up.down_for = 3;                      // `up` needs no `let mut`: `let mut` would only let it be rebound
+```
+
+**A type annotation is not a borrow.** `let p: mut ref P = w.p;` and `let r: ref P = w.p;` are errors, because the right side is the place's value, which the `let` would move. Write the operator: `let p = mut ref w.p;` (`karac fix` inserts it). At a call the callee's signature already says the argument is borrowed, so the only spelling there is the marker: `f(mut x)`, not `f(mut ref x)` ([core-semantics.md §5.1](core-semantics.md#5-references-and-views-c5)).
+
 **A non-`Copy` field read through a reference is an error.** `let m = s.r;` with `s: ref S`, or a bare parameter `s: S`, and a non-`Copy` `r` would move out of a borrowed place ([core-semantics.md §3.7](core-semantics.md#3-moves)). Write `s.r.clone()` for an independent value, or `ref s.r` to borrow it. The same holds for an element read through an index ([`Index` and `IndexMut`](#index-and-indexmut)).
 
 ### Function values

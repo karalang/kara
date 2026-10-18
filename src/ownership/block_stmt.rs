@@ -64,10 +64,28 @@ impl<'a> super::OwnershipChecker<'a> {
             StmtKind::Let {
                 is_mut,
                 pattern,
+                ty,
                 value,
-                ..
             } => {
                 self.report_mut_ref_pattern_write(pattern, value);
+                // `let p: mut ref P = w.p;` is check's error with a fix that
+                // writes `mut ref` (core-semantics §5.1, B-2026-10-15-14).
+                // Read it as that borrow here, so the fix is the only one
+                // offered and no move or `let mut` cascade follows it.
+                let annotated_borrow = crate::ownership::core_rules()
+                    && crate::ownership::is_place_projection(value)
+                    && ty
+                        .as_ref()
+                        .and_then(|t| match t.kind {
+                            crate::ast::TypeKind::Ref(_) => Some(false),
+                            crate::ast::TypeKind::MutRef(_) => Some(true),
+                            _ => None,
+                        })
+                        .is_some();
+                let annotated_mut = matches!(
+                    ty.as_ref().map(|t| &t.kind),
+                    Some(crate::ast::TypeKind::MutRef(_))
+                );
                 // If the RHS is a closure, detect once-callability before
                 // processing so we can check which outer bindings it consumed.
                 // Value is consumed by the let binding — unless the pattern
@@ -75,7 +93,8 @@ impl<'a> super::OwnershipChecker<'a> {
                 // whole subtree borrows, so the RHS is read, not moved. So is
                 // a pattern that binds only `ref` / `mut ref` names under the
                 // v2 core (§4.6).
-                if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })
+                if annotated_borrow
+                    || matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })
                     || (crate::ownership::core_rules()
                         && !pattern.binding_names().is_empty()
                         && !self.pattern_binds_anything(pattern))
@@ -122,6 +141,12 @@ impl<'a> super::OwnershipChecker<'a> {
                     .get(&SpanKey::from_span(&value.span))
                 {
                     let rhs_ty = rhs_ty.clone();
+                    let rhs_ty = match (annotated_borrow, annotated_mut, rhs_ty) {
+                        (true, _, t @ (Type::Ref(_) | Type::MutRef(_))) => t,
+                        (true, true, t) => Type::MutRef(Box::new(t)),
+                        (true, false, t) => Type::Ref(Box::new(t)),
+                        (false, _, t) => t,
+                    };
                     self.record_let_binding_types(pattern, &rhs_ty);
                 }
 

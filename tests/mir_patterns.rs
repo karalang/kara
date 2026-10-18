@@ -400,3 +400,32 @@ fn main() {
         "b 7\na\n",
     );
 }
+
+/// `mut ref place` borrows a field or an element for writing, and the
+/// writes land in the place (core semantics §5.1, B-2026-10-15-14).
+#[test]
+fn a_mut_ref_place_writes_through_to_the_place() {
+    assert_runs(
+        r#"
+struct U { refused: i64, down_for: i64 }
+struct Pl { members: Vec[U] }
+struct Proxy { pools: Vec[Pl], hits: i64 }
+impl Pl {
+    fn at(mut ref self, i: i64) -> mut ref U { mut ref self.members[i] }
+}
+fn main() {
+    let mut proxy = Proxy { pools: vec![Pl { members: vec![U { refused: 0, down_for: 0 }, U { refused: 0, down_for: 0 }] }], hits: 0 };
+    let pool = mut ref proxy.pools[0];
+    let up = mut ref pool.members[1];
+    up.refused += 1;
+    up.down_for = 3;
+    let u0 = pool.at(0);
+    u0.refused += 7;
+    let h = mut ref proxy.hits;
+    h += 2;
+    println(f"{proxy.pools[0].members[1].refused} {proxy.pools[0].members[1].down_for} {proxy.pools[0].members[0].refused} {proxy.hits}");
+}
+"#,
+        "1 3 7 2\n",
+    );
+}

@@ -3206,7 +3206,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Unary { op, operand } => match op {
                 UnaryOp::Not => Some(self.context.bool_type().into()),
                 UnaryOp::Neg | UnaryOp::BitNot => self.infer_expr_llvm_type(operand, locals),
-                UnaryOp::Deref | UnaryOp::Ref => None,
+                UnaryOp::Deref | UnaryOp::Ref | UnaryOp::MutRef => None,
             },
 
             // Block expression: its value is the tail expression's value.

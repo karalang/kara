@@ -3544,7 +3544,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                 format!("{PREFIX} dereference (`*`) is not allowed in a refinement predicate"),
                 expr.span,
             )),
-            UnaryOp::Ref => Err((
+            UnaryOp::Ref | UnaryOp::MutRef => Err((
                 format!("{PREFIX} borrow (`ref`) is not allowed in a refinement predicate"),
                 expr.span,
             )),

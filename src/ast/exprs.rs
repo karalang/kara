@@ -468,6 +468,10 @@ pub enum UnaryOp {
     /// element type has no `.clone()`, borrowing is the ONLY way to read
     /// `v[i]` without moving out of the container.
     Ref, // ref
+    /// `mut ref place` — a unique borrow of a place, the mutable twin of
+    /// `ref place` (core-semantics.md §5.1, B-2026-10-15-14). It moves
+    /// nothing and needs a writable place (§5.9).
+    MutRef, // mut ref
 }
 
 // ── Closures ─────────────────────────────────────────────────────

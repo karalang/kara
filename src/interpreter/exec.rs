@@ -876,7 +876,7 @@ fn with_borrowed_roots(idents: Vec<String>, borrows: &HashMap<String, Vec<String
 /// `f`). `None` when the initializer is not a `ref` of a name-rooted place.
 fn ref_borrow_roots(value: &Expr, borrows: &HashMap<String, Vec<String>>) -> Option<Vec<String>> {
     let ExprKind::Unary {
-        op: UnaryOp::Ref,
+        op: UnaryOp::Ref | UnaryOp::MutRef,
         operand,
     } = &value.kind
     else {

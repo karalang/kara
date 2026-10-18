@@ -413,7 +413,7 @@ impl<'a> super::Interpreter<'a> {
                 // `ref <place>` needs the PLACE, not the operand's value, so it
                 // is intercepted here rather than reaching `eval_unary` (the
                 // same shape codegen uses for `Deref`). B-2026-08-26-36.
-                if matches!(op, UnaryOp::Ref) {
+                if matches!(op, UnaryOp::Ref | UnaryOp::MutRef) {
                     return self.eval_ref_borrow(operand, &expr.span);
                 }
                 let val = self.eval_expr_inner(operand);

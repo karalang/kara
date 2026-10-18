@@ -138,6 +138,7 @@ impl super::Formatter {
                     UnaryOp::BitNot => "~",
                     UnaryOp::Deref => "*",
                     UnaryOp::Ref => "ref ",
+                    UnaryOp::MutRef => "mut ref ",
                 });
                 self.format_expr(operand);
             }

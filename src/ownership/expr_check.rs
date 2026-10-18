@@ -626,7 +626,19 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.check_expr_reading(left, states, param_types, param_usage);
                 self.check_expr_reading(right, states, param_types, param_usage);
             }
-            ExprKind::Unary { operand, .. } => {
+            ExprKind::Unary { op, operand } => {
+                // `mut ref place` writes through its root, which must be
+                // `let mut` like any other write (B-2026-10-15-14).
+                if matches!(op, crate::ast::UnaryOp::MutRef) {
+                    if let Some(root) = Self::root_identifier(operand) {
+                        self.report_write_to_immutable_binding(
+                            &root,
+                            &expr.span,
+                            OwnershipErrorKind::ReassignToImmutable,
+                            format!("cannot borrow `{root}` as `mut ref`"),
+                        );
+                    }
+                }
                 self.check_expr_reading(operand, states, param_types, param_usage);
             }
             ExprKind::Call { callee, args } => {

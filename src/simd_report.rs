@@ -708,6 +708,7 @@ fn unop_desc(op: &UnaryOp) -> String {
         UnaryOp::Not => "`!`".to_string(),
         UnaryOp::Deref => "`*`".to_string(),
         UnaryOp::Ref => "`ref`".to_string(),
+        UnaryOp::MutRef => "`mut ref`".to_string(),
     }
 }
 

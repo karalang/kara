@@ -6831,3 +6831,94 @@ fn app_rows_of_2026_10_15() {
         "a reference to a temporary outlives its statement",
     );
 }
+
+/// B-2026-10-15-14: `mut ref place` borrows a place for writing; a `let`
+/// annotation never borrows, and its fix writes the operator.
+#[test]
+fn mut_ref_place_borrows_a_place_for_writing() {
+    let prog = |body: &str| {
+        format!(
+            "struct P {{ n: i64 }}\n\
+             struct W {{ p: P, ps: Vec[P] }}\n\
+             fn main() {{\n\
+                 {body}\n\
+             }}\n"
+        )
+    };
+    let w = "let mut w = W { p: P { n: 1 }, ps: vec![P { n: 1 }, P { n: 2 }] };";
+    accepted(
+        "mut-ref-place",
+        &prog(&format!(
+            "{w}\n let p = mut ref w.p;\n p.n += 5;\n let e = mut ref w.ps[1];\n \
+             e.n += 1;\n println(f\"{{w.p.n}} {{w.ps[1].n}}\");"
+        )),
+    );
+    rejected(
+        "mut-ref-place-needs-let-mut",
+        &prog("let w = W { p: P { n: 1 }, ps: Vec.new() };\n let p = mut ref w.p;\n p.n += 1;"),
+        "cannot borrow `w` as `mut ref`",
+    );
+    rejected(
+        "mut-ref-place-read-while-live",
+        &prog(&format!(
+            "{w}\n let p = mut ref w.p;\n println(f\"{{w.p.n}}\");\n p.n += 1;"
+        )),
+        "cannot read `w.p.n` while `mut ref p` borrows `w.p`",
+    );
+    rejected(
+        "mut-ref-place-write-while-live",
+        &prog(&format!(
+            "{w}\n let p = mut ref w.p;\n w.p.n = 4;\n p.n += 1;"
+        )),
+        "cannot assign `w.p.n` while `mut ref p` borrows `w.p`",
+    );
+    rejected(
+        "mut-ref-place-twice",
+        &prog(&format!(
+            "{w}\n let p = mut ref w.p;\n let q = mut ref w.p;\n q.n += 1;\n p.n += 1;"
+        )),
+        "while `mut ref p` borrows `w.p`",
+    );
+    rejected(
+        "mut-ref-place-through-a-ref-param",
+        "struct P { n: i64 }\n\
+         fn f(p: ref P) { let q = mut ref p; q.n += 1; }\n\
+         fn main() { let p = P { n: 1 }; f(p); }\n",
+        "`p` is a `ref` parameter",
+    );
+    rejected(
+        "mut-ref-of-a-temporary",
+        &prog("let r = mut ref (P { n: 2 });\n println(f\"{r.n}\");"),
+        "`mut ref` borrows a place",
+    );
+    // A use of the borrow before the place is read again is fine.
+    accepted(
+        "mut-ref-place-last-use-first",
+        &prog(&format!(
+            "{w}\n let p = mut ref w.p;\n p.n += 1;\n println(f\"{{w.p.n}}\");"
+        )),
+    );
+    rejected_then_fixed_by(
+        "annotation-is-not-a-mut-borrow",
+        &prog(&format!(
+            "{w}\n let p: mut ref P = w.p;\n p.n += 5;\n println(f\"{{w.p.n}}\");"
+        )),
+        "a type annotation does not borrow",
+        "let p: mut ref P = mut ref w.p;",
+    );
+    rejected_then_fixed_by(
+        "annotation-is-not-a-borrow",
+        &prog(&format!(
+            "{w}\n let r: ref P = w.ps[0];\n println(f\"{{r.n}} {{w.ps.len()}}\");"
+        )),
+        "a type annotation does not borrow",
+        "let r: ref P = ref w.ps[0];",
+    );
+    // A place that already holds a reference is copied, not borrowed.
+    accepted(
+        "annotated-ref-copy",
+        "struct P { n: i64 }\n\
+         fn f(q: mut ref P) { let r: mut ref P = q; r.n += 1; }\n\
+         fn main() { let mut p = P { n: 1 }; f(mut p); println(f\"{p.n}\"); }\n",
+    );
+}

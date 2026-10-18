@@ -12944,6 +12944,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // reaches this arm is a `ref` in a position the let-binding path
             // never sees — still a compiler gap, but say so plainly rather
             // than claiming the state cannot happen.
+            // `mut ref place` is a v2 form; the legacy backend never lowers it.
+            UnaryOp::MutRef => Err(concat!(
+                "codegen: `mut ref place` is not supported by the legacy backend. ",
+                "Build with `--mir`."
+            )
+            .into()),
             UnaryOp::Ref => Err(concat!(
                 "codegen: `ref` is not supported in this position (only a ",
                 "`let` binding over a container element is lowered). This is a ",

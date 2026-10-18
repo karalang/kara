@@ -7160,7 +7160,7 @@ impl<'a> super::TypeChecker<'a> {
                 })
             }
             ExprKind::Unary {
-                op: UnaryOp::Ref,
+                op: UnaryOp::Ref | UnaryOp::MutRef,
                 operand,
             } => {
                 if self.core_expr_is_temp(operand) {
@@ -7952,6 +7952,44 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// core-semantics.md §5.1 (B-2026-10-15-14): a `let` annotation states
+    /// the type and never creates the borrow. `let p: mut ref P = w.p;` would
+    /// move `w.p`; the fix writes the operator, `mut ref w.p`.
+    fn reject_borrow_by_annotation(&mut self, value: &Expr, declared: &Type) {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+            || !super::expr_ops::is_named_place_projection(value)
+        {
+            return;
+        }
+        let op = match declared {
+            Type::MutRef(_) => "mut ref",
+            Type::Ref(_) => "ref",
+            _ => return,
+        };
+        // A place that already holds a reference is copied, not borrowed.
+        if matches!(
+            self.node_types.get(&value.id),
+            Some((Type::Ref(_) | Type::MutRef(_), _))
+        ) {
+            return;
+        }
+        self.type_error_with_fix_it(
+            format!(
+                "a type annotation does not borrow: this `let` would move the place \
+                 (core-semantics.md §5.1). Borrow it by writing `{op}` before the place"
+            ),
+            value.span,
+            TypeErrorKind::TypeMismatch,
+            FixIt {
+                span: Span {
+                    length: 0,
+                    ..value.span
+                },
+                replacement: format!("{op} "),
+            },
+        );
+    }
+
     fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
         if let StmtKind::Expr(expr) = &stmt.kind {
             return self.infer_expr(expr);
@@ -7973,6 +8011,7 @@ impl<'a> super::TypeChecker<'a> {
                     let scope = self.current_body_dim_scope.clone();
                     let declared = self.lower_body_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
+                    self.reject_borrow_by_annotation(value, &declared);
                     self.check_core_collect_into(value, &declared);
                     self.record_declared_type_for_polymorphic_rhs(value, &declared);
                     declared

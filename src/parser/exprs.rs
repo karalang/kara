@@ -1055,6 +1055,25 @@ impl super::Parser {
                     },
                 })
             }
+            // `mut ref place` — the unique twin of `ref place` (core-semantics
+            // §5.1). `mut ref |...|` is the closure capture prefix, handled
+            // by its own arm below.
+            Token::Mut
+                if matches!(self.peek_token_ref_at(1), Token::Ref)
+                    && !matches!(self.peek_token_ref_at(2), Token::Pipe | Token::PipePipe) =>
+            {
+                self.advance(); // mut
+                self.advance(); // ref
+                let operand = self.parse_expr_bp(24)?;
+                Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::MutRef,
+                        operand: Box::new(operand),
+                    },
+                })
+            }
             // Half-open ranges in prefix (start-less) position:
             //   `..expr`  → RangeTo[T]
             //   `..=expr` → RangeToInclusive[T]

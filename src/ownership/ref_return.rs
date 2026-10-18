@@ -520,7 +520,7 @@ fn classify_borrow_return(
         // v2 core §5.1 / design.md § Returns: `ref <place>` borrows the place,
         // so it is pinned exactly when the place's root is (B-2026-10-14-38).
         ExprKind::Unary {
-            op: UnaryOp::Ref,
+            op: UnaryOp::Ref | UnaryOp::MutRef,
             operand,
         } if super::core_rules() => ref_place_shape(operand, ref_params, ref_locals),
         // An element place (`self.cells[i]` as an `index_mut` body's tail)
@@ -1056,7 +1056,7 @@ fn collect_core_ref_locals(
             defs[n].iter().all(|d| match d {
                 CoreDef::Value(e) => match &e.kind {
                     ExprKind::Unary {
-                        op: UnaryOp::Ref,
+                        op: UnaryOp::Ref | UnaryOp::MutRef,
                         operand,
                     } => ref_place_shape(operand, ref_params, &all).is_none(),
                     ExprKind::Identifier(m) => ref_params.contains(m) || all.contains(m),
