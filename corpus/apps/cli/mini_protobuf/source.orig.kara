@@ -385,10 +385,7 @@ fn b64_decode(text: ref Vec[i64]) -> Result[Vec[i64], String] {
 
 // ------------------------------------------------------------- schema
 
-// Named FieldDesc, not Field: a program's own `Field` breaks the protobuf
-// library the v2 build appends (kara B-2026-10-18-45). Rename it back
-// when that is fixed.
-struct FieldDesc {
+struct Field {
     name: String,
     json: String,
     number: i64,
@@ -405,7 +402,7 @@ struct FieldDesc {
 struct MsgType {
     full: String,
     name: String,
-    fields: Vec[FieldDesc],
+    fields: Vec[Field],
     oneofs: Vec[String],
     map_entry: bool,
     proto3: bool,
@@ -444,7 +441,7 @@ impl Schema {
         -1
     }
 
-    fn field(ref self, m: i64, f: i64) -> ref FieldDesc {
+    fn field(ref self, m: i64, f: i64) -> ref Field {
         ref self.msgs[m].fields[f]
     }
 
@@ -623,9 +620,9 @@ struct ProtoParser {
     pending: Vec[Pending],
 }
 
-fn new_field(name: own String, number: i64, label: i64) -> FieldDesc {
+fn new_field(name: own String, number: i64, label: i64) -> Field {
     let json = json_name(name);
-    FieldDesc {
+    Field {
         name,
         json,
         number,
@@ -1105,7 +1102,7 @@ impl Store {
         -1
     }
 
-    // FieldDesc values, singular or repeated. A singular field without
+    // Field values, singular or repeated. A singular field without
     // presence that takes its default value is unset.
     fn put_int(mut ref self, s: ref Schema, m: i64, f: i64, v: i128) {
         if s.msgs[self.ms[m].ty].fields[f].label == REPEATED {
@@ -1850,7 +1847,7 @@ fn spaces(out: mut ref Vec[i64], n: i64) {
     }
 }
 
-fn scalar_text(s: ref Schema, fd: ref FieldDesc, sl: ref Slot, i: i64) -> String {
+fn scalar_text(s: ref Schema, fd: ref Field, sl: ref Slot, i: i64) -> String {
     let t = fd.typ;
     if t == T_DOUBLE {
         repr_double(sl.reals[i])
@@ -3114,7 +3111,7 @@ fn is_int64(typ: i64) -> bool {
 }
 
 // _FieldToJsonObject for element i of a slot.
-fn json_value(a: ref Store, s: ref Schema, o: ref JsonOpts, fd: ref FieldDesc, sl: ref Slot, i: i64) -> J {
+fn json_value(a: ref Store, s: ref Schema, o: ref JsonOpts, fd: ref Field, sl: ref Slot, i: i64) -> J {
     let t = fd.typ;
     if t == T_MESSAGE {
         json_message(a, s, o, sl.msgs[i])
@@ -3153,7 +3150,7 @@ fn json_value(a: ref Store, s: ref Schema, o: ref JsonOpts, fd: ref FieldDesc, s
     }
 }
 
-fn json_name_of(o: ref JsonOpts, fd: ref FieldDesc) -> Vec[i64] {
+fn json_name_of(o: ref JsonOpts, fd: ref Field) -> Vec[i64] {
     ascii_cps(if o.names { fd.name.clone() } else { fd.json.clone() })
 }
 
@@ -3448,7 +3445,7 @@ fn json_text(v: ref J) -> String {
 
 // _ConvertScalarFieldValue: the value for field fd, an int in `.0`, a
 // float in `.1` or bytes in `.2`.
-fn json_scalar(s: ref Schema, fd: ref FieldDesc, v: ref J, path: ref String, require_str: bool) -> Result[(i128, f64, Vec[i64]), JErr] {
+fn json_scalar(s: ref Schema, fd: ref Field, v: ref J, path: ref String, require_str: bool) -> Result[(i128, f64, Vec[i64]), JErr] {
     let t = fd.typ;
     let k = kind_of(t);
     let r: Result[(i128, f64, Vec[i64]), JErr] = if t == T_ENUM {

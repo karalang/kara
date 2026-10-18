@@ -253,6 +253,10 @@ fn error_text(e: ref GraphError[String]) -> String {
     }
 }
 
+fn graph_err(e: GraphError[String]) -> String {
+    error_text(e)
+}
+
 // ------------------------------------------------------------ jobs
 
 // "d:b,c;b:a" -> d after b and c, b after a; "-" is the empty graph.
@@ -354,17 +358,17 @@ fn ci(path: ref String, workers: i64, out: mut ref String) -> Result[(), String]
         };
         secs.insert(f[0].clone(), n);
         let needs: Vec[String] = if f[2] == "-" { Vec.new() } else { f[2].split(",").map(|p| p.to_string()).collect() };
-        ts.add(f[0], needs).map_err(|e| error_text(e))?;
+        ts.add(f[0], needs).map_err(graph_err)?;
     }
-    ts.prepare().map_err(|e| error_text(e))?;
+    ts.prepare().map_err(graph_err)?;
     let mut queue: Vec[String] = Vec.new();
     // (finish time, start order, job)
     let mut running: Vec[(i64, i64, String)] = Vec.new();
     let mut now = 0;
     let mut busy = 0;
     let mut seq = 0;
-    while ts.is_active().map_err(|e| error_text(e))? {
-        for j in ts.get_ready().map_err(|e| error_text(e))?.into_iter() {
+    while ts.is_active().map_err(graph_err)? {
+        for j in ts.get_ready().map_err(graph_err)?.into_iter() {
             queue.push(j);
         }
         while not queue.is_empty() and running.len() < workers {
@@ -392,7 +396,7 @@ fn ci(path: ref String, workers: i64, out: mut ref String) -> Result[(), String]
         };
         now = finish;
         out.push_str(f"  t={now:>3} done  {name}\n");
-        ts.done(vec![name]).map_err(|e| error_text(e))?;
+        ts.done(vec![name]).map_err(graph_err)?;
     }
     out.push_str(f"  {workers} workers: {now}s wall, {busy}s of work, {100 * busy / (now * workers)}% busy\n");
     Ok(())
@@ -438,7 +442,7 @@ fn install(path: ref String, target: ref String, out: mut ref String) -> Result[
             Some(ds) => ds.clone(),
             None => Vec.new(),
         };
-        ts.add(p, ds).map_err(|e| error_text(e))?;
+        ts.add(p, ds).map_err(graph_err)?;
         for d in ds.iter() {
             todo.push(d.clone());
         }

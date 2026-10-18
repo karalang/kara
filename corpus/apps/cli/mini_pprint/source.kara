@@ -245,7 +245,7 @@ fn bytes_repr(b: ref Vec[i64]) -> String {
     for x in b.iter() {
         if x == quote or x == 92 {
             out.push('\\');
-            out.push(char.try_from(*x).unwrap()); // *x: B-2026-10-18-33
+            out.push(char.try_from(x).unwrap());
         } else if x == 9 {
             out.push_str("\\t");
         } else if x == 10 {
@@ -256,7 +256,7 @@ fn bytes_repr(b: ref Vec[i64]) -> String {
             out.push_str("\\x");
             out.push_str(hex2(x));
         } else {
-            out.push(char.try_from(*x).unwrap()); // *x: B-2026-10-18-33
+            out.push(char.try_from(x).unwrap());
         }
     }
     out.push(char.try_from(quote).unwrap());

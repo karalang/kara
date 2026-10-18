@@ -18,11 +18,9 @@ impl PyRepr for i64 {
     }
 }
 
-// B-2026-10-18-17: `karac check` refuses `*self` on a `ref self`
-// receiver, so the receiver is read as a plain bool.
 impl PyRepr for bool {
     fn py_repr(ref self) -> String {
-        if self { "True".to_string() } else { "False".to_string() }
+        if *self { "True".to_string() } else { "False".to_string() }
     }
 }
 
@@ -216,9 +214,7 @@ impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
     }
 
     fn of(items: ref Vec[K]) -> Counter[K] {
-        // B-2026-10-18-18: `Counter.new()` needs its type written out on
-        // the MIR surfaces, here and below.
-        let mut c: Counter[K] = Counter.new();
+        let mut c = Counter.new();
         c.update(items);
         c
     }
@@ -298,22 +294,19 @@ impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
 
     // +c and -c
     fn signed(ref self, negate: bool) -> Counter[K] {
-        let mut r: Counter[K] = Counter.new();
+        let mut r = Counter.new();
         for (k, n) in self.d.items().into_iter() {
-            // B-2026-10-18-3 and B-2026-10-15-20: a move in each of two
-            // exclusive branches of a loop is refused, and so is a clone in
-            // one with a move in the other, so both branches clone.
             if not negate and n > 0 {
-                r.d.set(k.clone(), n);
+                r.d.set(k, n);
             } else if negate and n < 0 {
-                r.d.set(k.clone(), 0 - n);
+                r.d.set(k, 0 - n);
             }
         }
         r
     }
 
     fn add(ref self, other: ref Counter[K]) -> Counter[K] {
-        let mut r: Counter[K] = Counter.new();
+        let mut r = Counter.new();
         for (k, n) in self.d.items().into_iter() {
             let m = n + other.count(k);
             if m > 0 {
@@ -329,7 +322,7 @@ impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
     }
 
     fn sub(ref self, other: ref Counter[K]) -> Counter[K] {
-        let mut r: Counter[K] = Counter.new();
+        let mut r = Counter.new();
         for (k, n) in self.d.items().into_iter() {
             let m = n - other.count(k);
             if m > 0 {
@@ -345,7 +338,7 @@ impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
     }
 
     fn union(ref self, other: ref Counter[K]) -> Counter[K] {
-        let mut r: Counter[K] = Counter.new();
+        let mut r = Counter.new();
         for (k, n) in self.d.items().into_iter() {
             let o = other.count(k);
             let m = if n < o { o } else { n };
@@ -362,7 +355,7 @@ impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
     }
 
     fn intersect(ref self, other: ref Counter[K]) -> Counter[K] {
-        let mut r: Counter[K] = Counter.new();
+        let mut r = Counter.new();
         for (k, n) in self.d.items().into_iter() {
             let o = other.count(k);
             let m = if n < o { n } else { o };
@@ -397,9 +390,7 @@ fn most_repr(v: ref Vec[(String, i64)]) -> String {
 fn word_list(args: ref Vec[String]) -> Result[Vec[String], String] {
     if args.len() == 1 and args[0].starts_with("@") {
         let text = read_data(args[0])?;
-        // B-2026-10-18-37: collect inside `Ok(..)` does not lower on MIR.
-        let words: Vec[String] = text.split_whitespace().map(|p| p.to_string()).collect();
-        return Ok(words);
+        return Ok(text.split_whitespace().map(|p| p.to_string()).collect());
     }
     Ok(args.clone())
 }
@@ -840,14 +831,11 @@ fn chain_op(cm: mut ref ChainMap[String, Value], cmd: ref String, a: ref Vec[Str
     } else if cmd == "pop" {
         return Ok(Some(cm.first_remove(a[0])?.py_repr()));
     } else if cmd == "child" {
-        // B-2026-10-18-18: the new map needs its type written out.
-        let fresh: Dict[String, Value] = Dict.new();
-        cm.maps.insert(0, fresh);
+        cm.maps.insert(0, Dict.new());
     } else if cmd == "parents" {
         cm.maps.remove(0);
         if cm.maps.is_empty() {
-            let fresh: Dict[String, Value] = Dict.new();
-            cm.maps.push(fresh);
+            cm.maps.push(Dict.new());
         }
     } else {
         return Err(f"unknown chain op {cmd}");
