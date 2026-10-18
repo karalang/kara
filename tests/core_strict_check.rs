@@ -6683,6 +6683,17 @@ fn app_rows_of_2026_10_15() {
              println(f\"{files.len()} {files[1].1}\");\n\
          }\n",
     );
+    // B-2026-10-14-68, widened again: an array literal mixing a `Str` const
+    // and a literal, in either order.
+    accepted(
+        "array-literal-beside-str-const",
+        "const DB: Str = \"kv.db\";\n\
+         fn main() {\n\
+             for p in [DB, \"kv.wal\"].iter() { println(f\"{p}\"); }\n\
+             let b = [\"kv.wal\", DB];\n\
+             println(f\"{b.len()}\");\n\
+         }\n",
+    );
     // B-2026-10-15-7: a `match v[i]` arm binding is a `ref`; reading it
     // with `==` or in a format hole is no move, and moving it still is.
     accepted(
