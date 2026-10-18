@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/744-find-smallest-letter-greater-than-target/bench/next_greatest_letter.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "1a5c083e3"
+extracted_src = "0cad5d3b"
+model_rev = "583cfb0d"
+model_src = "0cad5d3b"

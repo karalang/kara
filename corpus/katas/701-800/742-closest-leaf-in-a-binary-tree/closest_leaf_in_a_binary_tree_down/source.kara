@@ -1,0 +1,188 @@
+// LeetCode #742: Closest Leaf in a Binary Tree -- the nearest leaf
+// below every ancestor.
+//
+// A path from k to a leaf climbs to some ancestor of k, possibly k
+// itself, and then goes down. So find, for every node, its nearest leaf
+// below it, and the path from the root to k; the answer is the best
+// over k's ancestors of the climb to the ancestor plus that ancestor's
+// nearest leaf below. Distances tie to the smaller leaf value. O(n).
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+// The nearest leaf below node i, as (distance, value), for every node.
+fn below(nodes: Vec[Node], i: i64, near: mut ref Vec[(i64, i64)]) {
+    let node = ref nodes[i];
+    if node.left == -1 and node.right == -1 {
+        near[i] = (0, node.val);
+        return;
+    }
+    let mut best = (1000000, 0);
+    for c in [node.left, node.right] {
+        if c != -1 {
+            below(nodes, c, mut near);
+            let got = (near[c].0 + 1, near[c].1);
+            if got < best {
+                best = got;
+            }
+        }
+    }
+    near[i] = best;
+}
+
+// The path from node i down to the node holding k, appended to `path`;
+// false when k is not below i.
+fn path_to(nodes: Vec[Node], i: i64, k: i64, path: mut ref Vec[i64]) -> bool {
+    if i == -1 {
+        return false;
+    }
+    path.push(i);
+    if nodes[i].val == k or path_to(nodes, nodes[i].left, k, mut path) or path_to(nodes, nodes[i].right, k, mut path) {
+        return true;
+    }
+    path.pop();
+    false
+}
+
+fn find_closest_leaf(nodes: Vec[Node], k: i64) -> i64 {
+    let mut near: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..nodes.len() {
+        near.push((0, 0));
+    }
+    below(nodes, 0, mut near);
+    let mut path: Vec[i64] = Vec.new();
+    path_to(nodes, 0, k, mut path);
+    let mut best = (1000000, 0);
+    let last = path.len() - 1;
+    for j in 0..path.len() {
+        let a = path[j];
+        let got = (last - j + near[a].0, near[a].1);
+        if got < best {
+            best = got;
+        }
+    }
+    best.1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+const NULL: i64 = -1000000007;
+
+// The index pool from a level-order array with NULL for a missing child;
+// the root is index 0.
+fn build(vals: Vec[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < vals.len() {
+        let cur = queue[head];
+        head += 1;
+        if vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].left = id;
+            queue.push(id);
+        }
+        i += 1;
+        if i < vals.len() and vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].right = id;
+            queue.push(id);
+        }
+        i += 1;
+    }
+    nodes
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(vals: Vec[i64], k: i64) {
+    let mut text = String.from("[");
+    for i in 0..vals.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        if vals[i] == NULL {
+            text.push_str("null");
+        } else {
+            text.push_str(vals[i].to_string().as_str());
+        }
+    }
+    text.push_str("]");
+    println(f"{text}, k = {k} -> {find_closest_leaf(build(vals), k)}");
+}
+
+// A random tree of n nodes, each added as a child of an earlier node
+// with a free place, valued by a random order of 1 to n; parents always
+// come before their children in the pool.
+fn random_tree(seed: mut ref i64, n: i64) -> Vec[Node] {
+    let mut values: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        values.push(v);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        let t = values[i];
+        values[i] = values[j];
+        values[j] = t;
+    }
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: values[0], left: -1, right: -1 });
+    for i in 1..n {
+        loop {
+            let p = next_random(mut seed) % i;
+            if next_random(mut seed) % 2 == 0 {
+                if nodes[p].left == -1 {
+                    nodes[p].left = i;
+                    break;
+                }
+            } else if nodes[p].right == -1 {
+                nodes[p].right = i;
+                break;
+            }
+        }
+        nodes.push(Node { val: values[i], left: -1, right: -1 });
+    }
+    nodes
+}
+
+fn main() {
+    show([1, 3, 2], 1);
+    show([1], 1);
+    show([1, 2, 3, 4, NULL, NULL, NULL, 5, NULL, 6], 2);
+    show([1, 2, 3, 4, 5, 6, 7], 1);
+    show([1, 2, 3, 4, 5, 6, 7], 6);
+    show([5, 4, 9, 3, NULL, NULL, 8, 2, NULL, NULL, 7, 1, NULL, NULL, 6], 4);
+    show([5, 4, 9, 3, NULL, NULL, 8, 2, NULL, NULL, 7, 1, NULL, NULL, 6], 5);
+    show([10, 20, NULL, 30, NULL, 40, 50], 20);
+    let mut seed: i64 = 742;
+    let big = random_tree(mut seed, 1000);
+    let mut sum = 0;
+    for k in 1..1001 {
+        sum = (sum * 131 + find_closest_leaf(big, k)) % 1000000007;
+    }
+    println(f"a random tree of 1000 nodes, every k: checksum {sum}");
+    let mut path: Vec[Node] = Vec.new();
+    for i in 0..1000 {
+        path.push(Node { val: i + 1, left: if i < 999 { i + 1 } else { -1 }, right: -1 });
+    }
+    println(f"a path of 1000 nodes, k at the top -> {find_closest_leaf(path, 1)}");
+    let mut sum2 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 15;
+        let tree = random_tree(mut seed, n);
+        let k = 1 + next_random(mut seed) % n;
+        sum2 = (sum2 * 131 + find_closest_leaf(tree, k)) % 1000000007;
+    }
+    println(f"300 random trees of 1 to 15 nodes: checksum {sum2}");
+}

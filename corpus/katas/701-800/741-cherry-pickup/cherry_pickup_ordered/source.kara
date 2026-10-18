@@ -1,0 +1,124 @@
+// LeetCode #741: Cherry Pickup -- walkers kept in order.
+//
+// The two walkers are interchangeable, so only pairs with the first
+// walker's row no greater than the second's need keeping: a pair the
+// other way round is the same state. Step the layers as the ★ arm does
+// over that half of the table, folding each move that would cross the
+// walkers back onto the ordered pair. About half the states.
+
+fn cherry_pickup(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    if grid[0][0] == -1 {
+        return 0;
+    }
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..n * n {
+        best.push(-1);
+    }
+    best[0] = grid[0][0];
+    for k in 1..2 * n - 1 {
+        let mut next: Vec[i64] = Vec.new();
+        for _ in 0..n * n {
+            next.push(-1);
+        }
+        let low = if k >= n { k - n + 1 } else { 0 };
+        let high = if k < n { k } else { n - 1 };
+        for a in low..high + 1 {
+            for b in a..high + 1 {
+                if grid[a][k - a] == -1 or grid[b][k - b] == -1 {
+                    continue;
+                }
+                let mut from = -1;
+                for da in 0..2 {
+                    for db in 0..2 {
+                        let pa = a - da;
+                        let pb = b - db;
+                        if pa < 0 or pb < 0 {
+                            continue;
+                        }
+                        let lo = if pa < pb { pa } else { pb };
+                        let hi = if pa < pb { pb } else { pa };
+                        if best[lo * n + hi] > from {
+                            from = best[lo * n + hi];
+                        }
+                    }
+                }
+                if from < 0 {
+                    continue;
+                }
+                let mut here = grid[a][k - a];
+                if b != a {
+                    here += grid[b][k - b];
+                }
+                next[a * n + b] = from + here;
+            }
+        }
+        best = next;
+    }
+    let last = best[(n - 1) * n + n - 1];
+    if last < 0 { 0 } else { last }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"{grid} -> {cherry_pickup(grid)}");
+}
+
+// An n by n grid with a thorn in about one cell in `thorns` and a
+// cherry in about half the rest; the two corners are never thorns.
+fn random_grid(seed: mut ref i64, n: i64, thorns: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            let corner = (r == 0 and c == 0) or (r == n - 1 and c == n - 1);
+            if not corner and next_random(mut seed) % thorns == 0 {
+                row.push(-1);
+            } else {
+                row.push(next_random(mut seed) % 2);
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show([[0, 1, -1], [1, 0, -1], [1, 1, 1]]);
+    show([[1, 1, -1], [1, -1, 1], [-1, 1, 1]]);
+    show([[1]]);
+    show([[0]]);
+    show([[1, 1, 1], [1, 1, 1], [1, 1, 1]]);
+    show([[1, 1, 1, 1], [-1, -1, -1, 1], [1, 1, 1, 1], [1, -1, -1, 1]]);
+    show([[0, 1, 1, 0], [1, -1, 1, 1], [1, 1, -1, 1], [0, 1, 1, 1]]);
+    show([[1, -1], [-1, 1]]);
+    let mut seed: i64 = 741;
+    let big = random_grid(mut seed, 50, 10);
+    println(f"50 by 50, a thorn in about one cell in 10 -> {cherry_pickup(big)}");
+    let mut full: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..50 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..50 {
+            row.push(1);
+        }
+        full.push(row);
+    }
+    println(f"50 by 50, a cherry in every cell -> {cherry_pickup(full)}");
+    let mut sum = 0;
+    let mut most = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 6;
+        let thorns = 2 + next_random(mut seed) % 4;
+        let grid = random_grid(mut seed, n, thorns);
+        let got = cherry_pickup(grid);
+        most += got;
+        sum = (sum * 131 + got + 1) % 1000000007;
+    }
+    println(f"300 random grids up to 6 by 6: {most} cherries in all, checksum {sum}");
+}

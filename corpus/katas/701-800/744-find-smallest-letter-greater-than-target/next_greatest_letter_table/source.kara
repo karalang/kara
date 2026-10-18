@@ -1,0 +1,98 @@
+// LeetCode 744 — Find Smallest Letter Greater Than Target, a table.
+//
+// Mark which of the 26 letters occur, then try the letters one at a
+// time from the one after the target upward, and past 'z' from 'a'
+// again; the first marked one is the answer. The wrap needs no special
+// case: the smallest letter present is the first letter of the sorted
+// list. O(n + 26).
+
+fn next_greatest_letter(letters: Vec[char], target: char) -> char {
+    let mut present: Vec[bool] = Vec.new();
+    for _ in 0..26 {
+        present.push(false);
+    }
+    for c in letters.iter() {
+        present[(*c as u32 - 'a' as u32) as i64] = true;
+    }
+    let t = (target as u32 - 'a' as u32) as i64;
+    for step in 1..27 {
+        let i = (t + step) % 26;
+        if present[i] {
+            return (i + 'a' as u32 as i64) as u8 as char;
+        }
+    }
+    letters[0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(text: String, target: char) {
+    let letters: Vec[char] = text.chars().collect();
+    let mut shown = String.from("[");
+    for i in 0..letters.len() {
+        if i > 0 {
+            shown.push_str(", ");
+        }
+        shown.push(letters[i]);
+    }
+    shown.push_str("]");
+    println(f"{shown}, target {target} -> {next_greatest_letter(letters, target)}");
+}
+
+// n sorted letters starting at `first`, each the same as the one before
+// or, one time in `step`, the next letter up, never past 'z'; the last
+// is moved up one if the list would otherwise hold a single letter.
+fn random_letters(seed: mut ref i64, n: i64, first: char, step: i64) -> Vec[char] {
+    let mut letters: Vec[char] = Vec.new();
+    let mut c = first as u32;
+    for _ in 0..n {
+        if next_random(mut seed) % step == 0 and c < 'z' as u32 {
+            c += 1;
+        }
+        letters.push(c as u8 as char);
+    }
+    if letters[0] == letters[n - 1] {
+        letters[n - 1] = (letters[0] as u32 + 1) as u8 as char;
+    }
+    letters
+}
+
+fn main() {
+    show(String.from("cfj"), 'a');
+    show(String.from("cfj"), 'c');
+    show(String.from("xxyy"), 'z');
+    show(String.from("cfj"), 'd');
+    show(String.from("cfj"), 'g');
+    show(String.from("cfj"), 'j');
+    show(String.from("ab"), 'z');
+    show(String.from("az"), 'y');
+    show(String.from("eeeeennn"), 'e');
+
+    let mut seed = 744;
+    let big = random_letters(mut seed, 10000, 'a', 500);
+    let mut answers = String.new();
+    for t in 0..26 {
+        answers.push(next_greatest_letter(big, (t + 'a' as u32 as i64) as u8 as char));
+    }
+    println(f"10000 letters from {big[0]} to {big[9999]}, every target: {answers}");
+
+    let mut wraps = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 11;
+        let first = (next_random(mut seed) % 20 + 'a' as u32 as i64) as u8 as char;
+        let letters = random_letters(mut seed, n, first, 3);
+        let target = (next_random(mut seed) % 26 + 'a' as u32 as i64) as u8 as char;
+        let got = next_greatest_letter(letters, target);
+        if got <= target {
+            wraps += 1;
+        }
+        check = (check * 31 + got as u32 as i64) % 1000000007;
+    }
+    println(f"300 random lists: {wraps} wrap round, checksum {check}");
+}

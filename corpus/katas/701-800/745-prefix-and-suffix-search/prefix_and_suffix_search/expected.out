@@ -1,0 +1,7 @@
+[apple]: f(a, e) = 0
+[apple apply ape pale]: f(a, e) = 2 f(ap, y) = 1 f(p, e) = 3 f(apple, apple) = 0 f(b, e) = -1
+[abc abc]: f(a, c) = 1 f(abc, abc) = 1
+[a ab ba]: f(a, a) = 0 f(ab, ab) = 1 f(aba, a) = -1 f(b, a) = 2
+[abcdefg gfedcba]: f(abcdefg, g) = 0 f(g, gfedcba) = 1 f(abc, cba) = -1
+10000 words of up to 7 letters from a to e, 3000 queries: 1917 found, indices sum to 15673942
+300 random filters, 3000 queries: 242 found, checksum 325783650

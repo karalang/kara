@@ -1,0 +1,159 @@
+// LeetCode 743 — Network Delay Time, Floyd and Warshall.
+//
+// Every pair at once: a matrix of the shortest time from each node to
+// each other, at first just the edges, then improved by letting the
+// ways pass through node 1, then also node 2, and so on; after node n
+// every entry is the shortest time. The answer reads k's row. O(n^3),
+// far more than one source needs, but the matrix answers every k.
+
+const NEVER: i64 = 1000000000;
+
+fn network_delay_time(times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n + 1 {
+            row.push(if i == j { 0 } else { NEVER });
+        }
+        d.push(row);
+    }
+    for t in times.iter() {
+        let (u, v, w) = *t;
+        if w < d[u][v] {
+            d[u][v] = w;
+        }
+    }
+    for m in 1..n + 1 {
+        for i in 1..n + 1 {
+            if d[i][m] == NEVER {
+                continue;
+            }
+            for j in 1..n + 1 {
+                if d[i][m] + d[m][j] < d[i][j] {
+                    d[i][j] = d[i][m] + d[m][j];
+                }
+            }
+        }
+    }
+    let mut last = 0;
+    for v in 1..n + 1 {
+        if d[k][v] == NEVER {
+            return -1;
+        }
+        if d[k][v] > last {
+            last = d[k][v];
+        }
+    }
+    last
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(times: Vec[(i64, i64, i64)], n: i64, k: i64) {
+    let mut text = String.from("[");
+    for i in 0..times.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        let (u, v, w) = times[i];
+        text.push_str(f"[{u}, {v}, {w}]".as_str());
+    }
+    text.push_str("]");
+    println(f"{text}, n = {n}, k = {k} -> {network_delay_time(times, n, k)}");
+}
+
+// m distinct edges between distinct nodes of 1..n, each taking 0 to
+// max_w; m must be at most n (n - 1).
+fn random_graph(seed: mut ref i64, n: i64, m: i64, max_w: i64) -> Vec[(i64, i64, i64)] {
+    let mut used: Vec[bool] = Vec.new();
+    for _ in 0..(n + 1) * (n + 1) {
+        used.push(false);
+    }
+    let mut times: Vec[(i64, i64, i64)] = Vec.new();
+    while times.len() < m {
+        let u = 1 + next_random(mut seed) % n;
+        let v = 1 + next_random(mut seed) % n;
+        if u == v or used[u * (n + 1) + v] {
+            continue;
+        }
+        used[u * (n + 1) + v] = true;
+        let w = next_random(mut seed) % (max_w + 1);
+        times.push((u, v, w));
+    }
+    times
+}
+
+// Sources 1 to 20 of one graph: how many reach all nodes, and the sum
+// of their answers.
+fn twenty_sources(times: Vec[(i64, i64, i64)], n: i64) -> (i64, i64) {
+    let mut reach = 0;
+    let mut sum = 0;
+    for k in 1..21 {
+        let got = network_delay_time(times, n, k);
+        if got != -1 {
+            reach += 1;
+            sum += got;
+        }
+    }
+    (reach, sum)
+}
+
+fn main() {
+    show([(2, 1, 1), (2, 3, 1), (3, 4, 1)], 4, 2);
+    show([(1, 2, 1)], 2, 1);
+    show([(1, 2, 1)], 2, 2);
+    show([(1, 2, 10), (1, 3, 1), (3, 2, 1)], 3, 1);
+    show([(1, 2, 1), (2, 3, 2), (3, 1, 4)], 3, 2);
+    show([(1, 2, 0), (2, 3, 0), (3, 1, 0)], 3, 3);
+    show([(1, 2, 5), (2, 3, 5)], 4, 1);
+
+    let mut seed = 743;
+    let dense = random_graph(mut seed, 100, 6000, 100);
+    let (reach, sum) = twenty_sources(dense, 100);
+    println(f"100 nodes, 6000 edges, k = 1 to 20: {reach} reach every node, answers sum to {sum}");
+    let mut ring = random_graph(mut seed, 100, 300, 100);
+    for i in 1..101 {
+        let j = i % 100 + 1;
+        let mut found = false;
+        for t in ring.iter() {
+            if t.0 == i and t.1 == j {
+                found = true;
+            }
+        }
+        if not found {
+            ring.push((i, j, 100));
+        }
+    }
+    let (reach, sum) = twenty_sources(ring, 100);
+    println(f"a ring of 100 nodes with 300 more edges, k = 1 to 20: {reach} reach every node, answers sum to {sum}");
+
+    let mut path: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 1..100 {
+        path.push((i, i + 1, 100));
+    }
+    let first = network_delay_time(path, 100, 1);
+    let middle = network_delay_time(path, 100, 50);
+    println(f"a path of 100 nodes: k = 1 -> {first}, k = 50 -> {middle}");
+
+    let mut all = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 7;
+        let m = 1 + next_random(mut seed) % (n * (n - 1));
+        let times = random_graph(mut seed, n, m, 20);
+        let k = 1 + next_random(mut seed) % n;
+        let got = network_delay_time(times, n, k);
+        if got != -1 {
+            all += 1;
+            total += got;
+        }
+        check = (check * 31 + got + 2) % 1000000007;
+    }
+    println(f"300 random graphs: {all} reach every node, answers sum to {total}, checksum {check}");
+}

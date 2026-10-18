@@ -1,0 +1,114 @@
+// LeetCode #742: Closest Leaf in a Binary Tree -- breadth first from k.
+//
+// The nearest leaf may lie below k or past any of its ancestors, so
+// treat the tree as an undirected graph: each node's neighbours are its
+// children and its parent. Search outward from k a layer at a time; the
+// first layer holding a leaf holds the nearest ones, and of those the
+// smallest value is returned. O(n).
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn find_closest_leaf(nodes: Vec[Node], k: i64) -> i64 {
+    let n = nodes.len();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut start = 0;
+    for i in 0..n {
+        parent.push(-1);
+        if nodes[i].val == k {
+            start = i;
+        }
+    }
+    for i in 0..n {
+        if nodes[i].left != -1 {
+            parent[nodes[i].left] = i;
+        }
+        if nodes[i].right != -1 {
+            parent[nodes[i].right] = i;
+        }
+    }
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        seen.push(false);
+    }
+    seen[start] = true;
+    let mut layer: Vec[i64] = [start];
+    loop {
+        let mut best = -1;
+        for x in layer.iter() {
+            let node = ref nodes[*x];
+            if node.left == -1 and node.right == -1 and (best == -1 or node.val < best) {
+                best = node.val;
+            }
+        }
+        if best != -1 {
+            return best;
+        }
+        let mut next: Vec[i64] = Vec.new();
+        for x in layer.iter() {
+            for y in [nodes[*x].left, nodes[*x].right, parent[*x]] {
+                if y != -1 and not seen[y] {
+                    seen[y] = true;
+                    next.push(y);
+                }
+            }
+        }
+        layer = next;
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // A random tree of 1,000 nodes valued 1 to 1,000, each added as a
+    // child of an earlier node with a free place, made once; in each of
+    // 60 rounds the values of two random nodes are swapped and the
+    // closest leaf to every value is found and summed.
+    let mut seed: i64 = 742;
+    let n = 1000;
+    let mut values: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        values.push(v);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        let t = values[i];
+        values[i] = values[j];
+        values[j] = t;
+    }
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: values[0], left: -1, right: -1 });
+    for i in 1..n {
+        loop {
+            let p = next_random(mut seed) % i;
+            if next_random(mut seed) % 2 == 0 {
+                if nodes[p].left == -1 {
+                    nodes[p].left = i;
+                    break;
+                }
+            } else if nodes[p].right == -1 {
+                nodes[p].right = i;
+                break;
+            }
+        }
+        nodes.push(Node { val: values[i], left: -1, right: -1 });
+    }
+    let mut total = 0;
+    for _ in 0..60 {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        let t = nodes[a].val;
+        nodes[a].val = nodes[b].val;
+        nodes[b].val = t;
+        for k in 1..n + 1 {
+            total += find_closest_leaf(nodes, k);
+        }
+    }
+    println(f"60 rounds of 1000 queries on a 1000-node tree: answers sum to {total}");
+}

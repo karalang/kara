@@ -1,0 +1,11 @@
+[c, f, j], target a -> c
+[c, f, j], target c -> f
+[x, x, y, y], target z -> x
+[c, f, j], target d -> f
+[c, f, j], target g -> j
+[c, f, j], target j -> c
+[a, b], target z -> a
+[a, z], target y -> z
+[e, e, e, e, e, n, n, n], target e -> n
+10000 letters from a to v, every target: bcdefghijklmnopqrstuvaaaaa
+300 random lists: 159 wrap round, checksum 428499494

@@ -1,0 +1,395 @@
+// LeetCode #741: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random grids.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn cherry_pickup_star(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let none = -1;
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(none);
+        }
+        best.push(row);
+    }
+    if grid[0][0] == -1 {
+        return 0;
+    }
+    best[0][0] = grid[0][0];
+    for k in 1..2 * n - 1 {
+        let mut next: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(none);
+            }
+            next.push(row);
+        }
+        let low = if k >= n { k - n + 1 } else { 0 };
+        let high = if k < n { k } else { n - 1 };
+        for r1 in low..high + 1 {
+            for r2 in low..high + 1 {
+                let c1 = k - r1;
+                let c2 = k - r2;
+                if grid[r1][c1] == -1 or grid[r2][c2] == -1 {
+                    continue;
+                }
+                // each walker came from above or from the left
+                let mut from = none;
+                for d1 in 0..2 {
+                    for d2 in 0..2 {
+                        let p1 = r1 - d1;
+                        let p2 = r2 - d2;
+                        if p1 >= 0 and p2 >= 0 and best[p1][p2] > from {
+                            from = best[p1][p2];
+                        }
+                    }
+                }
+                if from == none {
+                    continue;
+                }
+                let mut here = grid[r1][c1];
+                if r2 != r1 {
+                    here += grid[r2][c2];
+                }
+                next[r1][r2] = from + here;
+            }
+        }
+        best = next;
+    }
+    if best[n - 1][n - 1] == none { 0 } else { best[n - 1][n - 1] }
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn most_memo(grid: Vec[Vec[i64]], memo: mut ref Vec[i64], k: i64, r1: i64, r2: i64) -> i64 {
+    let n = grid.len();
+    let c1 = k - r1;
+    let c2 = k - r2;
+    if r1 >= n or c1 >= n or r2 >= n or c2 >= n {
+        return -1;
+    }
+    if grid[r1][c1] == -1 or grid[r2][c2] == -1 {
+        return -1;
+    }
+    let key = (k * n + r1) * n + r2;
+    if memo[key] != -2 {
+        return memo[key];
+    }
+    let mut here = grid[r1][c1];
+    if r1 != r2 {
+        here += grid[r2][c2];
+    }
+    let mut result = -1;
+    if r1 == n - 1 and c1 == n - 1 {
+        result = here;
+    } else {
+        let mut ahead = -1;
+        for d1 in 0..2 {
+            for d2 in 0..2 {
+                let got = most_memo(grid, mut memo, k + 1, r1 + d1, r2 + d2);
+                if got > ahead {
+                    ahead = got;
+                }
+            }
+        }
+        if ahead >= 0 {
+            result = here + ahead;
+        }
+    }
+    memo[key] = result;
+    result
+}
+
+fn cherry_pickup_memo(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut memo: Vec[i64] = Vec.new();
+    for _ in 0..(2 * n) * n * n {
+        memo.push(-2);
+    }
+    let got = most_memo(grid, mut memo, 0, 0, 0);
+    if got < 0 { 0 } else { got }
+}
+
+// ---- ordered arm ----------------------------------------------------
+
+fn cherry_pickup_ordered(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    if grid[0][0] == -1 {
+        return 0;
+    }
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..n * n {
+        best.push(-1);
+    }
+    best[0] = grid[0][0];
+    for k in 1..2 * n - 1 {
+        let mut next: Vec[i64] = Vec.new();
+        for _ in 0..n * n {
+            next.push(-1);
+        }
+        let low = if k >= n { k - n + 1 } else { 0 };
+        let high = if k < n { k } else { n - 1 };
+        for a in low..high + 1 {
+            for b in a..high + 1 {
+                if grid[a][k - a] == -1 or grid[b][k - b] == -1 {
+                    continue;
+                }
+                let mut from = -1;
+                for da in 0..2 {
+                    for db in 0..2 {
+                        let pa = a - da;
+                        let pb = b - db;
+                        if pa < 0 or pb < 0 {
+                            continue;
+                        }
+                        let lo = if pa < pb { pa } else { pb };
+                        let hi = if pa < pb { pb } else { pa };
+                        if best[lo * n + hi] > from {
+                            from = best[lo * n + hi];
+                        }
+                    }
+                }
+                if from < 0 {
+                    continue;
+                }
+                let mut here = grid[a][k - a];
+                if b != a {
+                    here += grid[b][k - b];
+                }
+                next[a * n + b] = from + here;
+            }
+        }
+        best = next;
+    }
+    let last = best[(n - 1) * n + n - 1];
+    if last < 0 { 0 } else { last }
+}
+
+// ---- twice arm ------------------------------------------------------
+
+fn cherry_pickup_twice(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..n * n * n * n {
+        best.push(-1);
+    }
+    for s in 0..2 * n - 1 {
+        for r1 in 0..n {
+            let c1 = s - r1;
+            if c1 < 0 or c1 >= n {
+                continue;
+            }
+            for r2 in 0..n {
+                let c2 = s - r2;
+                if c2 < 0 or c2 >= n {
+                    continue;
+                }
+                if grid[r1][c1] == -1 or grid[r2][c2] == -1 {
+                    continue;
+                }
+                let mut here = grid[r1][c1];
+                if r1 != r2 {
+                    here += grid[r2][c2];
+                }
+                if s == 0 {
+                    best[0] = here;
+                    continue;
+                }
+                let mut from = -1;
+                for m1 in 0..2 {
+                    let p1r = r1 - m1;
+                    let p1c = c1 - 1 + m1;
+                    for m2 in 0..2 {
+                        let p2r = r2 - m2;
+                        let p2c = c2 - 1 + m2;
+                        if p1r < 0 or p1c < 0 or p2r < 0 or p2c < 0 {
+                            continue;
+                        }
+                        let v = best[((p1r * n + p1c) * n + p2r) * n + p2c];
+                        if v > from {
+                            from = v;
+                        }
+                    }
+                }
+                if from >= 0 {
+                    best[((r1 * n + c1) * n + r2) * n + c2] = from + here;
+                }
+            }
+        }
+    }
+    let last = best[n * n * n * n - 1];
+    if last < 0 { 0 } else { last }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        cherry_pickup_star(grid)
+    } else if which == 1 {
+        cherry_pickup_memo(grid)
+    } else if which == 2 {
+        cherry_pickup_ordered(grid)
+    } else {
+        cherry_pickup_twice(grid)
+    }
+}
+
+// Every path from the near corner to the far one by steps right and
+// down that avoids the thorns, each as the list of its cells r * n + c.
+fn paths(grid: Vec[Vec[i64]], r: i64, c: i64, sofar: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let n = grid.len();
+    if r >= n or c >= n or grid[r][c] == -1 {
+        return;
+    }
+    sofar.push(r * n + c);
+    if r == n - 1 and c == n - 1 {
+        out.push(sofar.clone());
+    } else {
+        paths(grid, r + 1, c, mut sofar, mut out);
+        paths(grid, r, c + 1, mut sofar, mut out);
+    }
+    sofar.pop();
+}
+
+// The definition, as the problem states it: go there by one path and
+// back by another, the way back being a path there walked in reverse,
+// and pick each cherry on either once. Try every pair of paths.
+fn definition(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    let mut sofar: Vec[i64] = Vec.new();
+    paths(grid, 0, 0, mut sofar, mut all);
+    let mut best = 0;
+    for a in all.iter() {
+        for b in all.iter() {
+            let mut picked: Vec[bool] = Vec.new();
+            for _ in 0..n * n {
+                picked.push(false);
+            }
+            let mut got = 0;
+            for cell in a.iter() {
+                if not picked[*cell] {
+                    picked[*cell] = true;
+                    got += grid[*cell / n][*cell % n];
+                }
+            }
+            for cell in b.iter() {
+                if not picked[*cell] {
+                    picked[*cell] = true;
+                    got += grid[*cell / n][*cell % n];
+                }
+            }
+            if got > best {
+                best = got;
+            }
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 7410;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut cherries = 0;
+    let mut blocked = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 by 1 to 5 by 5, a thorn in about one cell in 2 to 6 and a
+        // cherry in about half the rest; the corners are never thorns
+        let n = 1 + next_random(mut seed) % 5;
+        let thorns = 2 + next_random(mut seed) % 5;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for r in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..n {
+                let corner = (r == 0 and c == 0) or (r == n - 1 and c == n - 1);
+                if not corner and next_random(mut seed) % thorns == 0 {
+                    row.push(-1);
+                } else {
+                    row.push(next_random(mut seed) % 2);
+                }
+            }
+            grid.push(row);
+        }
+        let want = definition(grid);
+        cherries += want;
+        let mut none: Vec[Vec[i64]] = Vec.new();
+        let mut through: Vec[i64] = Vec.new();
+        paths(grid, 0, 0, mut through, mut none);
+        if none.len() == 0 {
+            blocked += 1;
+        }
+        // the grid turned about its main diagonal, and turned half way
+        // round
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        let mut round: Vec[Vec[i64]] = Vec.new();
+        for r in 0..n {
+            let mut a: Vec[i64] = Vec.new();
+            let mut b: Vec[i64] = Vec.new();
+            for c in 0..n {
+                a.push(grid[c][r]);
+                b.push(grid[n - 1 - r][n - 1 - c]);
+            }
+            turned.push(a);
+            round.push(b);
+        }
+        // one cell that is not a thorn changed from cherry to empty or
+        // from empty to cherry
+        let mut fr = next_random(mut seed) % n;
+        let mut fc = next_random(mut seed) % n;
+        if grid[fr][fc] == -1 {
+            fr = 0;
+            fc = 0;
+        }
+        let mut flipped = grid.clone();
+        flipped[fr][fc] = 1 - grid[fr][fc];
+        for which in 0..arms {
+            let got = answer_with(which, grid);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the grid turned about its main diagonal, the same
+            // answer.
+            checks += 1;
+            if answer_with(which, turned) != got {
+                fails[1] += 1;
+            }
+            // P3: the grid turned half way round, so that the trip there
+            // is the trip back, the same answer.
+            checks += 1;
+            if answer_with(which, round) != got {
+                fails[2] += 1;
+            }
+            // P4: a cherry taken away costs at most one, and a cherry
+            // added gains at most one.
+            checks += 1;
+            let change = answer_with(which, flipped) - got;
+            let ok = if grid[fr][fc] == 1 { change == 0 or change == -1 } else { change == 0 or change == 1 };
+            if not ok {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} grids ({blocked} with no way through, {cherries} cherries in all), {arms} arms, {checks} checks, {total} failures");
+}

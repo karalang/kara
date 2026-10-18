@@ -1,0 +1,202 @@
+// LeetCode #744: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random lists.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn next_greatest_letter_star(letters: Vec[char], target: char) -> char {
+    let mut lo = 0;
+    let mut hi = letters.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if letters[mid] <= target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo == letters.len() { letters[0] } else { letters[lo] }
+}
+
+// ---- scan arm -------------------------------------------------------
+
+fn next_greatest_letter_scan(letters: Vec[char], target: char) -> char {
+    for c in letters.iter() {
+        if *c > target {
+            return *c;
+        }
+    }
+    letters[0]
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn next_greatest_letter_table(letters: Vec[char], target: char) -> char {
+    let mut present: Vec[bool] = Vec.new();
+    for _ in 0..26 {
+        present.push(false);
+    }
+    for c in letters.iter() {
+        present[(*c as u32 - 'a' as u32) as i64] = true;
+    }
+    let t = (target as u32 - 'a' as u32) as i64;
+    for step in 1..27 {
+        let i = (t + step) % 26;
+        if present[i] {
+            return (i + 'a' as u32 as i64) as u8 as char;
+        }
+    }
+    letters[0]
+}
+
+// ---- least arm ------------------------------------------------------
+
+fn next_greatest_letter_least(letters: Vec[char], target: char) -> char {
+    let mut best = letters[0];
+    let mut found = false;
+    let mut least = letters[0];
+    for c in letters.iter() {
+        let x = *c;
+        if x < least {
+            least = x;
+        }
+        if x > target and (not found or x < best) {
+            best = x;
+            found = true;
+        }
+    }
+    if found { best } else { least }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, letters: Vec[char], target: char) -> char {
+    if which == 0 {
+        next_greatest_letter_star(letters, target)
+    } else if which == 1 {
+        next_greatest_letter_scan(letters, target)
+    } else if which == 2 {
+        next_greatest_letter_table(letters, target)
+    } else {
+        next_greatest_letter_least(letters, target)
+    }
+}
+
+fn letter(code: i64) -> char {
+    code as u8 as char
+}
+
+fn code(c: char) -> i64 {
+    c as u32 as i64
+}
+
+// The definition, as the problem states it: the smallest letter in the
+// list greater than the target, found by asking for each letter after
+// the target in turn whether the list holds it; if none, the first
+// letter.
+fn definition(letters: Vec[char], target: char) -> char {
+    for c in code(target) + 1..code('z') + 1 {
+        for x in letters.iter() {
+            if *x == letter(c) {
+                return letter(c);
+            }
+        }
+    }
+    letters[0]
+}
+
+fn main() {
+    let mut seed = 7440;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut wraps = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 2 to 8 sorted letters starting anywhere from 'a' to 's', at
+        // least two of them different, and any target
+        let n = 2 + next_random(mut seed) % 7;
+        let mut letters: Vec[char] = Vec.new();
+        let mut c = code('a') + next_random(mut seed) % 19;
+        for _ in 0..n {
+            letters.push(letter(c));
+            if next_random(mut seed) % 2 == 0 {
+                c += 1;
+            }
+        }
+        if letters[0] == letters[n - 1] {
+            letters[n - 1] = letter(code(letters[0]) + 1);
+        }
+        let target = letter(code('a') + next_random(mut seed) % 26);
+        let want = definition(letters, target);
+        if want <= target {
+            wraps += 1;
+        }
+        // every letter and the target moved up by the same number of
+        // places, as many as keeps them all at 'z' or below
+        let mut top = code(target);
+        if code(letters[n - 1]) > top {
+            top = code(letters[n - 1]);
+        }
+        let shift = next_random(mut seed) % (code('z') - top + 1);
+        let mut moved: Vec[char] = Vec.new();
+        for x in letters.iter() {
+            moved.push(letter(code(*x) + shift));
+        }
+        // every letter written twice
+        let mut doubled: Vec[char] = Vec.new();
+        for x in letters.iter() {
+            doubled.push(*x);
+            doubled.push(*x);
+        }
+        // the target itself inserted where it sorts
+        let mut with_target: Vec[char] = Vec.new();
+        let mut placed = false;
+        for x in letters.iter() {
+            if not placed and *x > target {
+                with_target.push(target);
+                placed = true;
+            }
+            with_target.push(*x);
+        }
+        if not placed {
+            with_target.push(target);
+        }
+        for which in 0..arms {
+            let got = answer_with(which, letters, target);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: everything moved up, the answer moved up with it.
+            checks += 1;
+            if answer_with(which, moved, letter(code(target) + shift)) != letter(code(got) + shift) {
+                fails[1] += 1;
+            }
+            // P3: every letter twice, the same answer.
+            checks += 1;
+            if answer_with(which, doubled, target) != got {
+                fails[2] += 1;
+            }
+            // P4: the target added to the list, the same answer.
+            checks += 1;
+            if answer_with(which, with_target, target) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        failures += fails[i];
+    }
+    println(f"{cases} lists ({wraps} wrapping round), {arms} arms, {checks} checks, {failures} failures");
+}

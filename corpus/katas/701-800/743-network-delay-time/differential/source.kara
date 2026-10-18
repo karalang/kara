@@ -1,0 +1,358 @@
+// LeetCode #743: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random graphs.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn network_delay_time_star(times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    let mut adj: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for t in times.iter() {
+        let (u, v, w) = *t;
+        adj[u].push((v, w));
+    }
+    let mut heard: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        heard.push(-1);
+    }
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, k));
+    let mut settled = 0;
+    let mut last = 0;
+    while let Some((d, u)) = queue.pop() {
+        if heard[u] != -1 {
+            continue;
+        }
+        heard[u] = d;
+        settled += 1;
+        last = d;
+        for e in adj[u].iter() {
+            let (v, w) = *e;
+            if heard[v] == -1 {
+                queue.push((d + w, v));
+            }
+        }
+    }
+    if settled == n { last } else { -1 }
+}
+
+// ---- dense arm ------------------------------------------------------
+
+fn network_delay_time_dense(times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    let mut edge: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n + 1 {
+            row.push(-1);
+        }
+        edge.push(row);
+    }
+    for t in times.iter() {
+        let (u, v, w) = *t;
+        edge[u][v] = w;
+    }
+    let mut best: Vec[i64] = Vec.new();
+    let mut done: Vec[bool] = Vec.new();
+    for _ in 0..n + 1 {
+        best.push(-1);
+        done.push(false);
+    }
+    best[k] = 0;
+    let mut last = 0;
+    for _ in 0..n {
+        let mut u = -1;
+        for v in 1..n + 1 {
+            if not done[v] and best[v] != -1 and (u == -1 or best[v] < best[u]) {
+                u = v;
+            }
+        }
+        if u == -1 {
+            return -1;
+        }
+        done[u] = true;
+        last = best[u];
+        for v in 1..n + 1 {
+            let w = edge[u][v];
+            if w != -1 and not done[v] and (best[v] == -1 or best[u] + w < best[v]) {
+                best[v] = best[u] + w;
+            }
+        }
+    }
+    last
+}
+
+// ---- bellman arm ----------------------------------------------------
+
+const NEVER_BELLMAN: i64 = 1000000000;
+
+fn network_delay_time_bellman(times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    let mut heard: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        heard.push(NEVER_BELLMAN);
+    }
+    heard[k] = 0;
+    for _ in 1..n {
+        let mut changed = false;
+        for t in times.iter() {
+            let (u, v, w) = *t;
+            if heard[u] != NEVER_BELLMAN and heard[u] + w < heard[v] {
+                heard[v] = heard[u] + w;
+                changed = true;
+            }
+        }
+        if not changed {
+            break;
+        }
+    }
+    let mut last = 0;
+    for v in 1..n + 1 {
+        if heard[v] == NEVER_BELLMAN {
+            return -1;
+        }
+        if heard[v] > last {
+            last = heard[v];
+        }
+    }
+    last
+}
+
+// ---- floyd arm ------------------------------------------------------
+
+const NEVER_FLOYD: i64 = 1000000000;
+
+fn network_delay_time_floyd(times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n + 1 {
+            row.push(if i == j { 0 } else { NEVER_FLOYD });
+        }
+        d.push(row);
+    }
+    for t in times.iter() {
+        let (u, v, w) = *t;
+        if w < d[u][v] {
+            d[u][v] = w;
+        }
+    }
+    for m in 1..n + 1 {
+        for i in 1..n + 1 {
+            if d[i][m] == NEVER_FLOYD {
+                continue;
+            }
+            for j in 1..n + 1 {
+                if d[i][m] + d[m][j] < d[i][j] {
+                    d[i][j] = d[i][m] + d[m][j];
+                }
+            }
+        }
+    }
+    let mut last = 0;
+    for v in 1..n + 1 {
+        if d[k][v] == NEVER_FLOYD {
+            return -1;
+        }
+        if d[k][v] > last {
+            last = d[k][v];
+        }
+    }
+    last
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    if which == 0 {
+        network_delay_time_star(times, n, k)
+    } else if which == 1 {
+        network_delay_time_dense(times, n, k)
+    } else if which == 2 {
+        network_delay_time_bellman(times, n, k)
+    } else {
+        network_delay_time_floyd(times, n, k)
+    }
+}
+
+// m distinct edges between distinct nodes of 1..n, each taking 0 to
+// max_w.
+fn random_graph(seed: mut ref i64, n: i64, m: i64, max_w: i64) -> Vec[(i64, i64, i64)] {
+    let mut used: Vec[bool] = Vec.new();
+    for _ in 0..(n + 1) * (n + 1) {
+        used.push(false);
+    }
+    let mut times: Vec[(i64, i64, i64)] = Vec.new();
+    while times.len() < m {
+        let u = 1 + next_random(mut seed) % n;
+        let v = 1 + next_random(mut seed) % n;
+        if u == v or used[u * (n + 1) + v] {
+            continue;
+        }
+        used[u * (n + 1) + v] = true;
+        let w = next_random(mut seed) % (max_w + 1);
+        times.push((u, v, w));
+    }
+    times
+}
+
+// Walk every simple path out of u, which was reached at time t, and
+// keep each node's earliest time.
+fn every_path(w: Vec[Vec[i64]], n: i64, u: i64, t: i64, on: mut ref Vec[bool], best: mut ref Vec[i64]) {
+    if best[u] == -1 or t < best[u] {
+        best[u] = t;
+    }
+    for v in 1..n + 1 {
+        if w[u][v] != -1 and not on[v] {
+            on[v] = true;
+            every_path(w, n, v, t + w[u][v], mut on, mut best);
+            on[v] = false;
+        }
+    }
+}
+
+// The definition, as the problem states it: a node hears the signal at
+// the time of its quickest way from k, here the least over every
+// simple path; the answer is the latest of those times, or -1 when some
+// node has no way at all.
+fn definition(times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    let mut w: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n + 1 {
+            row.push(-1);
+        }
+        w.push(row);
+    }
+    for t in times.iter() {
+        w[t.0][t.1] = t.2;
+    }
+    let mut on: Vec[bool] = Vec.new();
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        on.push(false);
+        best.push(-1);
+    }
+    on[k] = true;
+    every_path(w, n, k, 0, mut on, mut best);
+    let mut last = 0;
+    for v in 1..n + 1 {
+        if best[v] == -1 {
+            return -1;
+        }
+        if best[v] > last {
+            last = best[v];
+        }
+    }
+    last
+}
+
+fn main() {
+    let mut seed = 7430;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut unreached = 0;
+    let mut total = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        let n = 2 + next_random(mut seed) % 5;
+        let m = 1 + next_random(mut seed) % (n * (n - 1));
+        let times = random_graph(mut seed, n, m, 9);
+        let k = 1 + next_random(mut seed) % n;
+        let want = definition(times, n, k);
+        if want == -1 {
+            unreached += 1;
+        } else {
+            total += want;
+        }
+        // the nodes renamed by a random order
+        let mut order: Vec[i64] = Vec.new();
+        for v in 0..n + 1 {
+            order.push(v);
+        }
+        for i in 1..n + 1 {
+            let j = i + next_random(mut seed) % (n + 1 - i);
+            let t = order[i];
+            order[i] = order[j];
+            order[j] = t;
+        }
+        let mut renamed: Vec[(i64, i64, i64)] = Vec.new();
+        for t in times.iter() {
+            renamed.push((order[t.0], order[t.1], t.2));
+        }
+        // every edge taking three times as long
+        let mut slower: Vec[(i64, i64, i64)] = Vec.new();
+        for t in times.iter() {
+            slower.push((t.0, t.1, 3 * t.2));
+        }
+        // one edge added that was not there, when there is room
+        let mut added: Vec[(i64, i64, i64)] = Vec.new();
+        for t in times.iter() {
+            added.push(*t);
+        }
+        let room = m < n * (n - 1);
+        let mut extra = 0;
+        if room {
+            let mut u = 0;
+            let mut v = 0;
+            loop {
+                u = 1 + next_random(mut seed) % n;
+                v = 1 + next_random(mut seed) % n;
+                let mut there = u == v;
+                for t in times.iter() {
+                    if t.0 == u and t.1 == v {
+                        there = true;
+                    }
+                }
+                if not there {
+                    break;
+                }
+            }
+            extra = next_random(mut seed) % 20;
+            added.push((u, v, extra));
+        }
+        for which in 0..arms {
+            let got = answer_with(which, times, n, k);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the nodes renamed, the same answer.
+            checks += 1;
+            if answer_with(which, renamed, n, order[k]) != got {
+                fails[1] += 1;
+            }
+            // P3: every time tripled, the answer tripled.
+            checks += 1;
+            let expect = if got == -1 { -1 } else { 3 * got };
+            if answer_with(which, slower, n, k) != expect {
+                fails[2] += 1;
+            }
+            // P4: when every node hears the signal, a new edge cannot
+            // make the last one hear it later, and changes nothing if
+            // it takes at least as long as the old answer.
+            if room and got != -1 {
+                checks += 1;
+                let now = answer_with(which, added, n, k);
+                if now < 0 or now > got or (extra >= got and now != got) {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        failures += fails[i];
+    }
+    println(f"{cases} graphs ({unreached} with a node never reached, answers sum to {total}), {arms} arms, {checks} checks, {failures} failures");
+}

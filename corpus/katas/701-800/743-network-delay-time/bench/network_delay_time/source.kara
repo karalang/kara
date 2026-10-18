@@ -1,0 +1,80 @@
+// LeetCode 743 — Network Delay Time, bench: the ★ arm (Dijkstra with a
+// priority queue) on a 100-node graph of 6000 edges, every source, while
+// edge times change.
+
+fn network_delay_time(times: Vec[(i64, i64, i64)], n: i64, k: i64) -> i64 {
+    let mut adj: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for t in times.iter() {
+        let (u, v, w) = *t;
+        adj[u].push((v, w));
+    }
+    let mut heard: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        heard.push(-1);
+    }
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, k));
+    let mut settled = 0;
+    let mut last = 0;
+    while let Some((d, u)) = queue.pop() {
+        if heard[u] != -1 {
+            continue;
+        }
+        heard[u] = d;
+        settled += 1;
+        last = d;
+        for e in adj[u].iter() {
+            let (v, w) = *e;
+            if heard[v] == -1 {
+                queue.push((d + w, v));
+            }
+        }
+    }
+    if settled == n { last } else { -1 }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_graph(seed: mut ref i64, n: i64, m: i64, max_w: i64) -> Vec[(i64, i64, i64)] {
+    let mut used: Vec[bool] = Vec.new();
+    for _ in 0..(n + 1) * (n + 1) {
+        used.push(false);
+    }
+    let mut times: Vec[(i64, i64, i64)] = Vec.new();
+    while times.len() < m {
+        let u = 1 + next_random(mut seed) % n;
+        let v = 1 + next_random(mut seed) % n;
+        if u == v or used[u * (n + 1) + v] {
+            continue;
+        }
+        used[u * (n + 1) + v] = true;
+        let w = next_random(mut seed) % (max_w + 1);
+        times.push((u, v, w));
+    }
+    times
+}
+
+fn main() {
+    let rounds = 12;
+    let mut seed = 743;
+    let mut times = random_graph(mut seed, 100, 6000, 100);
+    let mut total = 0;
+    for _ in 0..rounds {
+        for _ in 0..50 {
+            let i = next_random(mut seed) % times.len();
+            let w = next_random(mut seed) % 101;
+            let (u, v, _) = times[i];
+            times[i] = (u, v, w);
+        }
+        for k in 1..101 {
+            total += network_delay_time(times, 100, k);
+        }
+    }
+    println(f"{rounds} rounds of 100 queries on 100 nodes and 6000 edges: answers sum to {total}");
+}

@@ -1,0 +1,108 @@
+// LeetCode #741: Cherry Pickup -- two walkers, one layer at a time.
+//
+// A trip to the far corner and back, picking every cherry passed, is
+// the same as two walkers going from the near corner to the far one
+// together, one step each at a time, a cherry on a cell they share
+// counted once. After k steps a walker in row r is in column k - r, so
+// the state is the pair of rows: keep the best cherries for every pair
+// after k steps, and build the next layer from it. O(n^3).
+
+fn cherry_pickup(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let none = -1;
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(none);
+        }
+        best.push(row);
+    }
+    if grid[0][0] == -1 {
+        return 0;
+    }
+    best[0][0] = grid[0][0];
+    for k in 1..2 * n - 1 {
+        let mut next: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(none);
+            }
+            next.push(row);
+        }
+        let low = if k >= n { k - n + 1 } else { 0 };
+        let high = if k < n { k } else { n - 1 };
+        for r1 in low..high + 1 {
+            for r2 in low..high + 1 {
+                let c1 = k - r1;
+                let c2 = k - r2;
+                if grid[r1][c1] == -1 or grid[r2][c2] == -1 {
+                    continue;
+                }
+                // each walker came from above or from the left
+                let mut from = none;
+                for d1 in 0..2 {
+                    for d2 in 0..2 {
+                        let p1 = r1 - d1;
+                        let p2 = r2 - d2;
+                        if p1 >= 0 and p2 >= 0 and best[p1][p2] > from {
+                            from = best[p1][p2];
+                        }
+                    }
+                }
+                if from == none {
+                    continue;
+                }
+                let mut here = grid[r1][c1];
+                if r2 != r1 {
+                    here += grid[r2][c2];
+                }
+                next[r1][r2] = from + here;
+            }
+        }
+        best = next;
+    }
+    if best[n - 1][n - 1] == none { 0 } else { best[n - 1][n - 1] }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // A 50 by 50 grid with a thorn in about one cell in 10 and a cherry
+    // in about half the rest, made once; in each of 300 rounds 5 random
+    // cells other than the corners change to a thorn, a cherry or
+    // nothing, and the most cherries are found again and summed.
+    let mut seed: i64 = 741;
+    let n = 50;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            let corner = (r == 0 and c == 0) or (r == n - 1 and c == n - 1);
+            if not corner and next_random(mut seed) % 10 == 0 {
+                row.push(-1);
+            } else {
+                row.push(next_random(mut seed) % 2);
+            }
+        }
+        grid.push(row);
+    }
+    let mut total = 0;
+    for _ in 0..300 {
+        for _ in 0..5 {
+            let r = next_random(mut seed) % n;
+            let c = next_random(mut seed) % n;
+            let v = next_random(mut seed) % 10;
+            let corner = (r == 0 and c == 0) or (r == n - 1 and c == n - 1);
+            if not corner {
+                grid[r][c] = if v == 0 { -1 } else { v % 2 };
+            }
+        }
+        total += cherry_pickup(grid);
+    }
+    println(f"300 rounds of a 50 by 50 grid: {total} cherries in all");
+}

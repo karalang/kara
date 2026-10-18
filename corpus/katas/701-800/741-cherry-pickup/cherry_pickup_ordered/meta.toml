@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/741-cherry-pickup/cherry_pickup_ordered.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "1a5c083e3"
+extracted_src = "c6bce15e"
+model_rev = "583cfb0d"
+model_src = "c6bce15e"

@@ -1,0 +1,112 @@
+// LeetCode 745 — Prefix and Suffix Search, a scan from the end.
+//
+// Keep the words and answer each query by walking them from the last,
+// returning the first whose prefix and suffix match. Nothing is built,
+// and a query costs O(n) word tests, which suits few queries.
+
+struct WordFilter {
+    words: Vec[String],
+}
+
+impl WordFilter {
+    fn new(words: Vec[String]) -> WordFilter {
+        WordFilter { words: words.clone() }
+    }
+
+    fn f(self, pref: String, suff: String) -> i64 {
+        let mut i = self.words.len() - 1;
+        while i >= 0 {
+            let w = ref self.words[i];
+            if w.starts_with(pref.clone()) and w.ends_with(suff.clone()) {
+                return i;
+            }
+            i -= 1;
+        }
+        -1
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn words_of(text: String) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    for w in text.split(" ") {
+        words.push(String.from(w));
+    }
+    words
+}
+
+// One filter and its queries, given as "pref suff" pairs.
+fn show(text: String, queries: Vec[(String, String)]) {
+    let filter = WordFilter.new(words_of(text.clone()));
+    let mut line = String.from("[");
+    line.push_str(text.as_str());
+    line.push_str("]:");
+    for q in queries.iter() {
+        let got = filter.f(q.0.clone(), q.1.clone());
+        line.push_str(f" f({q.0}, {q.1}) = {got}".as_str());
+    }
+    println(line);
+}
+
+fn random_word(seed: mut ref i64, longest: i64, letters: i64) -> String {
+    let mut s = String.new();
+    let n = 1 + next_random(mut seed) % longest;
+    for _ in 0..n {
+        s.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    s
+}
+
+fn main() {
+    show(String.from("apple"), [(String.from("a"), String.from("e"))]);
+    show(String.from("apple apply ape pale"), [(String.from("a"), String.from("e")), (String.from("ap"), String.from("y")), (String.from("p"), String.from("e")), (String.from("apple"), String.from("apple")), (String.from("b"), String.from("e"))]);
+    show(String.from("abc abc"), [(String.from("a"), String.from("c")), (String.from("abc"), String.from("abc"))]);
+    show(String.from("a ab ba"), [(String.from("a"), String.from("a")), (String.from("ab"), String.from("ab")), (String.from("aba"), String.from("a")), (String.from("b"), String.from("a"))]);
+    show(String.from("abcdefg gfedcba"), [(String.from("abcdefg"), String.from("g")), (String.from("g"), String.from("gfedcba")), (String.from("abc"), String.from("cba"))]);
+
+    let mut seed = 745;
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..10000 {
+        words.push(random_word(mut seed, 7, 5));
+    }
+    let filter = WordFilter.new(words);
+    let mut found = 0;
+    let mut sum = 0;
+    for _ in 0..3000 {
+        let pref = random_word(mut seed, 4, 5);
+        let suff = random_word(mut seed, 4, 5);
+        let got = filter.f(pref, suff);
+        if got != -1 {
+            found += 1;
+            sum += got;
+        }
+    }
+    println(f"10000 words of up to 7 letters from a to e, 3000 queries: {found} found, indices sum to {sum}");
+
+    let mut hits = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let mut small: Vec[String] = Vec.new();
+        for _ in 0..n {
+            small.push(random_word(mut seed, 4, 3));
+        }
+        let filter = WordFilter.new(small);
+        for _ in 0..10 {
+            let pref = random_word(mut seed, 3, 3);
+            let suff = random_word(mut seed, 3, 3);
+            let got = filter.f(pref, suff);
+            if got != -1 {
+                hits += 1;
+            }
+            check = (check * 31 + got + 2) % 1000000007;
+        }
+    }
+    println(f"300 random filters, 3000 queries: {hits} found, checksum {check}");
+}
