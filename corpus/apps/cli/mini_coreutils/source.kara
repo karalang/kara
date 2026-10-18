@@ -1,0 +1,3099 @@
+// mini_coreutils: the small coreutils that shell scripts call between
+// the text filters, as one multi-call program answering what GNU
+// coreutils 9.4 answers in the C locale: `printf`, `expr`, `seq`,
+// `test`, `basename`, `dirname`, `od`, `base64`, `fold`, `expand`,
+// `unexpand`, `factor` and `cat`. The run writes the input files into
+// `data/` and a `jobs.tsv` of pipelines (one per line, tab-separated
+// arguments, a tab inside an argument written as a vertical tab, stages
+// separated by a group-separator argument so that `|` can be an argument
+// of `expr`), then runs each one, feeding each stage's output to the
+// next, and prints what a shell prints: the `$ ...` line, the last
+// stage's stdout, every stage's stderr in order, and `[exit N]` when the
+// last stage's status is not 0.
+//
+// expected.out is GNU coreutils 9.4's output on the same files, made by
+// oracle.py.
+//
+// Workarounds:
+// - B-2026-10-18-8: the lexer rejects `\xHH` in string literals, so the
+//   data section writes control bytes as `\u{1}` rather than `\x01`.
+
+// ------------------------------------------------------------ bytes and lines
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn push_bytes(v: mut ref Vec[u8], s: Str) {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        v.push(b[i]);
+    }
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_upper(c: u8) -> bool {
+    c >= b'A' and c <= b'Z'
+}
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_alpha(c: u8) -> bool {
+    is_upper(c) or is_lower(c)
+}
+
+// A blank, as sort and join read fields.
+fn is_blank(c: u8) -> bool {
+    c == b' ' or c == b'\t'
+}
+
+// White space, as wc counts words.
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == 11 or c == 12 or c == b'\r'
+}
+
+fn upper(c: u8) -> u8 {
+    if is_lower(c) { c - 32 } else { c }
+}
+
+fn repeat_byte(c: u8, n: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        v.push(c);
+    }
+    from_bytes(v)
+}
+
+fn pad_left(s: Str, width: i64) -> String {
+    let mut out = String.new();
+    if s.len() < width {
+        out.push_str(repeat_byte(b' ', width - s.len()));
+    }
+    out.push_str(s);
+    out
+}
+
+// The lines of a text, without their newlines; a last line with no
+// newline counts as a line.
+fn lines_of(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+
+// A positive decimal number, or -1.
+fn parse_count(s: Str) -> i64 {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return -1;
+    }
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return -1;
+        }
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+
+// ------------------------------------------------------------ a tool's run
+
+// What one stage printed, and its exit status.
+struct Io {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+fn io_new() -> Io {
+    Io { out: String.new(), err: String.new(), status: 0 }
+}
+
+fn fail(tool: Str, msg: Str, status: i64) -> Io {
+    Io { out: String.new(), err: f"{tool}: {msg}\n", status: status }
+}
+
+// A usage error: the message and GNU's pointer to --help.
+fn usage(tool: Str, msg: Str) -> Io {
+    Io { out: String.new(), err: f"{tool}: {msg}\nTry '{tool} --help' for more information.\n", status: 1 }
+}
+
+// A file operand's text: "-" (or no operand) is the stage's input.
+fn read_input(name: Str, stdin: Str, dir: Str) -> Option[String] {
+    if name == "-" {
+        return Some(stdin.to_string());
+    }
+    match fs.read_to_string(f"{dir}/{name}") {
+        Ok(t) => Some(t),
+        Err(_) => None,
+    }
+}
+
+// ------------------------------------------------------------ options
+
+// A command line taken apart the way getopt does: short options
+// (clustered, a value attached or in the next argument), long options
+// (`--name` or `--name=value`), and operands, in any order.
+struct Opts {
+    flags: Vec[u8],
+    keys: Vec[u8],
+    vals: Vec[String],
+    longs: Vec[String],
+    long_vals: Vec[String],
+    operands: Vec[String],
+    error: String,
+}
+
+impl Opts {
+    fn has(ref self, c: u8) -> bool {
+        for i in 0..self.flags.len() {
+            if self.flags[i] == c {
+                return true;
+            }
+        }
+        false
+    }
+
+    // The values given to a short option, in order.
+    fn values(ref self, c: u8) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..self.keys.len() {
+            if self.keys[i] == c {
+                out.push(self.vals[i].clone());
+            }
+        }
+        out
+    }
+
+    fn last(ref self, c: u8) -> Option[String] {
+        let v = self.values(c);
+        if v.len() == 0 {
+            return None;
+        }
+        Some(v[v.len() - 1].clone())
+    }
+
+    fn has_long(ref self, name: Str) -> bool {
+        for i in 0..self.longs.len() {
+            if self.longs[i] == name {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn long(ref self, name: Str) -> Option[String] {
+        let mut found: Option[String] = None;
+        for i in 0..self.longs.len() {
+            if self.longs[i] == name {
+                found = Some(self.long_vals[i].clone());
+            }
+        }
+        found
+    }
+}
+
+// `with_value` lists the short options that take a value.
+fn parse_opts(args: ref Vec[String], with_value: Str) -> Opts {
+    let wv = to_bytes(with_value);
+    let mut o = Opts { flags: Vec.new(), keys: Vec.new(), vals: Vec.new(), longs: Vec.new(), long_vals: Vec.new(), operands: Vec.new(), error: String.new() };
+    let mut i: i64 = 0;
+    let mut only_operands = false;
+    while i < args.len() {
+        let a = args[i].clone();
+        let b = to_bytes(a);
+        i += 1;
+        if only_operands or b.len() < 2 or b[0] != b'-' {
+            o.operands.push(a);
+            continue;
+        }
+        if a == "--" {
+            only_operands = true;
+            continue;
+        }
+        if b[1] == b'-' {
+            let mut eq: i64 = -1;
+            for k in 2..b.len() {
+                if eq < 0 and b[k] == b'=' {
+                    eq = k;
+                }
+            }
+            if eq < 0 {
+                o.longs.push(byte_str(b, 2, b.len()));
+                o.long_vals.push(String.new());
+            } else {
+                o.longs.push(byte_str(b, 2, eq));
+                o.long_vals.push(byte_str(b, eq + 1, b.len()));
+            }
+            continue;
+        }
+        let mut k: i64 = 1;
+        while k < b.len() {
+            let c = b[k];
+            let mut takes = false;
+            for q in 0..wv.len() {
+                if wv[q] == c {
+                    takes = true;
+                }
+            }
+            if not takes {
+                o.flags.push(c);
+                k += 1;
+                continue;
+            }
+            let value = if k + 1 < b.len() {
+                byte_str(b, k + 1, b.len())
+            } else if i < args.len() {
+                i += 1;
+                args[i - 1].clone()
+            } else {
+                o.error = f"option requires an argument -- '{from_bytes(vec![c])}'";
+                String.new()
+            };
+            o.flags.push(c);
+            o.keys.push(c);
+            o.vals.push(value);
+            break;
+        }
+    }
+    o
+}
+
+
+// ------------------------------------------------------------ numbers
+
+// GNU's quote(): an argument in single quotes.
+fn q(s: Str) -> String {
+    f"'{s}'"
+}
+
+fn hex_val(c: u8) -> i64 {
+    if is_digit(c) {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else if c >= b'A' and c <= b'F' {
+        (c - b'A') as i64 + 10
+    } else {
+        -1
+    }
+}
+
+// An integer argument as printf reads it with strtoimax: blanks, a
+// sign, then `0x` hex, `0` octal or decimal; `'c` is the code of c.
+// Gives the value and an error message ("" when it read cleanly).
+fn int_arg(s: Str) -> (i64, String) {
+    let b = to_bytes(s);
+    if b.len() > 0 and (b[0] == b'\'' or b[0] == b'"') {
+        if b.len() < 2 {
+            return (0, String.new());
+        }
+        return (b[1] as i64, String.new());
+    }
+    let mut i: i64 = 0;
+    while i < b.len() and is_space(b[i]) {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'-' or b[i] == b'+') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    let mut base: i64 = 10;
+    if i + 2 < b.len() and b[i] == b'0' and (b[i + 1] == b'x' or b[i + 1] == b'X') and hex_val(b[i + 2]) >= 0 {
+        base = 16;
+        i += 2;
+    } else if i < b.len() and b[i] == b'0' {
+        base = 8;
+    }
+    let start = i;
+    let mut v: i64 = 0;
+    while i < b.len() {
+        let d = hex_val(b[i]);
+        if d < 0 or d >= base {
+            break;
+        }
+        v = v * base + d;
+        i += 1;
+    }
+    if neg {
+        v = -v;
+    }
+    if i == start {
+        return (0, f"{q(s)}: expected a numeric value");
+    }
+    if i < b.len() {
+        return (v, f"{q(s)}: value not completely converted");
+    }
+    (v, String.new())
+}
+
+// A decimal number: its digits as one integer and how many of them are
+// after the point (`-12.50` is mag 1250, scale 2, neg).
+#[derive(Copy, Clone)]
+struct Dec {
+    neg: bool,
+    mag: i64,
+    scale: i64,
+}
+
+fn pow10(n: i64) -> i64 {
+    let mut p: i64 = 1;
+    for _ in 0..n {
+        p *= 10;
+    }
+    p
+}
+
+fn parse_dec(s: Str) -> Option[Dec] {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i < b.len() and is_space(b[i]) {
+        i += 1;
+    }
+    let mut d = Dec { neg: false, mag: 0, scale: 0 };
+    if i < b.len() and (b[i] == b'-' or b[i] == b'+') {
+        d.neg = b[i] == b'-';
+        i += 1;
+    }
+    let mut digits: i64 = 0;
+    let mut point = false;
+    while i < b.len() {
+        if is_digit(b[i]) {
+            d.mag = d.mag * 10 + (b[i] - b'0') as i64;
+            digits += 1;
+            if point {
+                d.scale += 1;
+            }
+        } else if b[i] == b'.' and not point {
+            point = true;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if digits == 0 {
+        return None;
+    }
+    Some(d)
+}
+
+// The number at `scale` digits after the point, rounding half away
+// from zero.
+fn rescale(d: Dec, scale: i64) -> Dec {
+    if scale >= d.scale {
+        return Dec { neg: d.neg, mag: d.mag * pow10(scale - d.scale), scale: scale };
+    }
+    let p = pow10(d.scale - scale);
+    let mut m = d.mag / p;
+    if (d.mag % p) * 2 >= p {
+        m += 1;
+    }
+    Dec { neg: d.neg, mag: m, scale: scale }
+}
+
+// The digits of a Dec with its point, no sign.
+fn dec_digits(d: Dec) -> String {
+    let p = pow10(d.scale);
+    let int_part = d.mag / p;
+    if d.scale == 0 {
+        return f"{int_part}";
+    }
+    let frac = f"{d.mag % p}";
+    f"{int_part}.{repeat_byte(b'0', d.scale - frac.len())}{frac}"
+}
+
+// ------------------------------------------------------------ printf
+
+// One `%` directive: its flags, width and precision (-1 when absent).
+#[derive(Copy, Clone)]
+struct Spec {
+    minus: bool,
+    plus: bool,
+    space: bool,
+    alt: bool,
+    zero: bool,
+    width: i64,
+    prec: i64,
+}
+
+// Lays out a converted number: sign, prefix and digits padded to the
+// width with spaces, or with zeros after the prefix.
+fn pad_num(sp: Spec, sign: Str, prefix: Str, digits: Str) -> String {
+    let len = sign.len() + prefix.len() + digits.len();
+    let mut out = String.new();
+    if sp.minus {
+        out.push_str(sign);
+        out.push_str(prefix);
+        out.push_str(digits);
+        if len < sp.width {
+            out.push_str(repeat_byte(b' ', sp.width - len));
+        }
+    } else if sp.zero {
+        out.push_str(sign);
+        out.push_str(prefix);
+        if len < sp.width {
+            out.push_str(repeat_byte(b'0', sp.width - len));
+        }
+        out.push_str(digits);
+    } else {
+        if len < sp.width {
+            out.push_str(repeat_byte(b' ', sp.width - len));
+        }
+        out.push_str(sign);
+        out.push_str(prefix);
+        out.push_str(digits);
+    }
+    out
+}
+
+fn pad_str(sp: Spec, s: Str) -> String {
+    let mut out = String.new();
+    if not sp.minus and s.len() < sp.width {
+        out.push_str(repeat_byte(b' ', sp.width - s.len()));
+    }
+    out.push_str(s);
+    if sp.minus and s.len() < sp.width {
+        out.push_str(repeat_byte(b' ', sp.width - s.len()));
+    }
+    out
+}
+
+fn sign_of(sp: Spec, neg: bool) -> String {
+    if neg {
+        "-".to_string()
+    } else if sp.plus {
+        "+".to_string()
+    } else if sp.space {
+        " ".to_string()
+    } else {
+        String.new()
+    }
+}
+
+// An integer conversion: d i o u x X.
+fn conv_int(sp: Spec, conv: u8, v: i64) -> String {
+    let mut s = sp;
+    if s.prec >= 0 {
+        s.zero = false;
+    }
+    let mut neg = false;
+    let mut digits = String.new();
+    let mut prefix = String.new();
+    if conv == b'd' or conv == b'i' {
+        neg = v < 0;
+        let m = if neg { (0 as i128) - (v as i128) } else { v as i128 };
+        digits = f"{m}";
+    } else {
+        let u = v as u64;
+        if conv == b'o' {
+            digits = f"{u:o}";
+        } else if conv == b'x' {
+            digits = f"{u:x}";
+        } else if conv == b'X' {
+            digits = f"{u:X}";
+        } else {
+            digits = f"{u}";
+        }
+        if s.alt and (conv == b'x' or conv == b'X') and v != 0 {
+            prefix = if conv == b'x' { "0x".to_string() } else { "0X".to_string() };
+        }
+    }
+    if s.prec == 0 and v == 0 {
+        digits = String.new();
+    }
+    if s.prec > digits.len() {
+        digits = f"{repeat_byte(b'0', s.prec - digits.len())}{digits}";
+    }
+    if s.alt and conv == b'o' and not digits.starts_with("0") {
+        digits = f"0{digits}";
+    }
+    let sign = if conv == b'd' or conv == b'i' { sign_of(s, neg) } else { String.new() };
+    pad_num(s, sign, prefix, digits)
+}
+
+// A %f conversion of a decimal number.
+fn conv_fixed(sp: Spec, d: Dec) -> String {
+    let p = if sp.prec < 0 { 6 } else { sp.prec };
+    let r = rescale(d, p);
+    let mut digits = dec_digits(r);
+    if p == 0 and sp.alt {
+        digits.push_str(".");
+    }
+    pad_num(sp, sign_of(sp, r.neg and r.mag != 0), "", digits)
+}
+
+// A %g conversion of a whole number (the only kind seq hands it here).
+fn conv_general(sp: Spec, d: Dec) -> String {
+    let r = rescale(d, 0);
+    pad_num(sp, sign_of(sp, r.neg and r.mag != 0), "", f"{r.mag}")
+}
+
+// Interprets the escapes of printf's format (`octal_0` false: \NNN) or
+// of a %b argument (`octal_0` true: \0NNN). Returns the bytes and
+// whether a \c asked to stop all output.
+fn escapes(s: Str, octal_0: bool) -> (Vec[u8], bool) {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] != b'\\' or i + 1 >= b.len() {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let (bytes, used, stop) = one_escape(b, i, octal_0);
+        for k in 0..bytes.len() {
+            out.push(bytes[k]);
+        }
+        if stop {
+            return (out, true);
+        }
+        i += used;
+    }
+    (out, false)
+}
+
+// The escape at `at` (a backslash): its bytes, its length, and whether
+// it is \c.
+fn one_escape(b: ref Vec[u8], at: i64, octal_0: bool) -> (Vec[u8], i64, bool) {
+    let e = b[at + 1];
+    let mut out: Vec[u8] = Vec.new();
+    let simple = if e == b'n' {
+        10
+    } else if e == b't' {
+        9
+    } else if e == b'r' {
+        13
+    } else if e == b'a' {
+        7
+    } else if e == b'b' {
+        8
+    } else if e == b'f' {
+        12
+    } else if e == b'v' {
+        11
+    } else if e == b'e' {
+        27
+    } else if e == b'\\' {
+        92
+    } else if e == b'"' {
+        34
+    } else {
+        -1
+    };
+    if simple >= 0 {
+        out.push(simple as u8);
+        return (out, 2, false);
+    }
+    if e == b'c' {
+        return (out, 2, true);
+    }
+    if e == b'x' and at + 2 < b.len() and hex_val(b[at + 2]) >= 0 {
+        let mut v: i64 = 0;
+        let mut i = at + 2;
+        while i < b.len() and i < at + 4 and hex_val(b[i]) >= 0 {
+            v = v * 16 + hex_val(b[i]);
+            i += 1;
+        }
+        out.push(v as u8);
+        return (out, i - at, false);
+    }
+    if e >= b'0' and e <= b'7' {
+        let mut i = at + 1;
+        let mut limit = at + 4;
+        if octal_0 and e == b'0' {
+            i = at + 2;
+            limit = at + 5;
+        }
+        let mut v: i64 = 0;
+        while i < b.len() and i < limit and b[i] >= b'0' and b[i] <= b'7' {
+            v = v * 8 + (b[i] - b'0') as i64;
+            i += 1;
+        }
+        out.push((v % 256) as u8);
+        return (out, i - at, false);
+    }
+    out.push(b'\\');
+    out.push(e);
+    (out, 2, false)
+}
+
+// printf's state across one run: the arguments, the next one to use,
+// and what has been written.
+struct Printf {
+    args: Vec[String],
+    next: i64,
+    out: Vec[u8],
+    err: String,
+    status: i64,
+}
+
+impl Printf {
+    fn take(mut ref self) -> Option[String] {
+        if self.next >= self.args.len() {
+            return None;
+        }
+        self.next += 1;
+        Some(self.args[self.next - 1].clone())
+    }
+
+    fn take_int(mut ref self) -> i64 {
+        match self.take() {
+            None => 0,
+            Some(a) => {
+                let (v, e) = int_arg(a);
+                if e.len() > 0 {
+                    self.err.push_str(f"printf: {e}\n");
+                    self.status = 1;
+                }
+                v
+            }
+        }
+    }
+
+    fn take_dec(mut ref self) -> Dec {
+        match self.take() {
+            None => Dec { neg: false, mag: 0, scale: 0 },
+            Some(a) => match parse_dec(a) {
+                Some(d) => d,
+                None => {
+                    self.err.push_str(f"printf: {q(a)}: expected a numeric value\n");
+                    self.status = 1;
+                    Dec { neg: false, mag: 0, scale: 0 }
+                }
+            },
+        }
+    }
+
+    fn put(mut ref self, s: Str) {
+        push_bytes(mut self.out, s);
+    }
+}
+
+// One pass over the format. Returns false when output must stop: a \c,
+// or an invalid directive (which also sets the error).
+fn printf_pass(fmt: ref Vec[u8], p: mut ref Printf) -> bool {
+    let mut i: i64 = 0;
+    while i < fmt.len() {
+        let c = fmt[i];
+        if c == b'\\' and i + 1 < fmt.len() {
+            let (bytes, used, stop) = one_escape(fmt, i, false);
+            for k in 0..bytes.len() {
+                p.out.push(bytes[k]);
+            }
+            if stop {
+                return false;
+            }
+            i += used;
+            continue;
+        }
+        if c != b'%' {
+            p.out.push(c);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        if i < fmt.len() and fmt[i] == b'%' {
+            p.out.push(b'%');
+            i += 1;
+            continue;
+        }
+        let mut sp = Spec { minus: false, plus: false, space: false, alt: false, zero: false, width: 0, prec: -1 };
+        while i < fmt.len() {
+            let f = fmt[i];
+            if f == b'-' {
+                sp.minus = true;
+            } else if f == b'+' {
+                sp.plus = true;
+            } else if f == b' ' {
+                sp.space = true;
+            } else if f == b'#' {
+                sp.alt = true;
+            } else if f == b'0' {
+                sp.zero = true;
+            } else {
+                break;
+            }
+            i += 1;
+        }
+        if i < fmt.len() and fmt[i] == b'*' {
+            let w = p.take_int();
+            if w < 0 {
+                sp.minus = true;
+                sp.width = -w;
+            } else {
+                sp.width = w;
+            }
+            i += 1;
+        } else {
+            while i < fmt.len() and is_digit(fmt[i]) {
+                sp.width = sp.width * 10 + (fmt[i] - b'0') as i64;
+                i += 1;
+            }
+        }
+        if i < fmt.len() and fmt[i] == b'.' {
+            i += 1;
+            sp.prec = 0;
+            if i < fmt.len() and fmt[i] == b'*' {
+                let pr = p.take_int();
+                sp.prec = if pr < 0 { -1 } else { pr };
+                i += 1;
+            } else {
+                while i < fmt.len() and is_digit(fmt[i]) {
+                    sp.prec = sp.prec * 10 + (fmt[i] - b'0') as i64;
+                    i += 1;
+                }
+            }
+        }
+        if sp.minus {
+            sp.zero = false;
+        }
+        let conv = if i < fmt.len() { fmt[i] } else { 0 };
+        i += 1;
+        if conv == b'd' or conv == b'i' or conv == b'o' or conv == b'u' or conv == b'x' or conv == b'X' {
+            let v = p.take_int();
+            let s = conv_int(sp, conv, v);
+            p.put(s);
+        } else if conv == b'f' or conv == b'F' {
+            let d = p.take_dec();
+            let s = conv_fixed(sp, d);
+            p.put(s);
+        } else if conv == b's' {
+            let mut a = p.take().unwrap_or(String.new());
+            if sp.prec >= 0 and sp.prec < a.len() {
+                a = byte_str(to_bytes(a), 0, sp.prec);
+            }
+            let s = pad_str(sp, a);
+            p.put(s);
+        } else if conv == b'c' {
+            let a = to_bytes(p.take().unwrap_or(String.new()));
+            let mut one: Vec[u8] = Vec.new();
+            if a.len() > 0 {
+                one.push(a[0]);
+            }
+            let s = pad_str(sp, from_bytes(one));
+            p.put(s);
+        } else if conv == b'b' {
+            let a = p.take().unwrap_or(String.new());
+            let (bytes, stop) = escapes(a, true);
+            let s = pad_str(sp, from_bytes(bytes));
+            p.put(s);
+            if stop {
+                return false;
+            }
+        } else {
+            let end = if i < fmt.len() { i + 1 } else { fmt.len() };
+            p.err.push_str(f"printf: {byte_str(fmt, start, end)}: invalid conversion specification\n");
+            p.status = 1;
+            return false;
+        }
+    }
+    true
+}
+
+fn printf_tool(args: ref Vec[String]) -> Io {
+    if args.len() == 0 {
+        return usage("printf", "missing operand");
+    }
+    let fmt = to_bytes(args[0]);
+    let mut rest: Vec[String] = Vec.new();
+    for i in 1..args.len() {
+        rest.push(args[i].clone());
+    }
+    let mut p = Printf { args: rest, next: 0, out: Vec.new(), err: String.new(), status: 0 };
+    loop {
+        let before = p.next;
+        if not printf_pass(fmt, mut p) {
+            break;
+        }
+        if p.next == before or p.next >= p.args.len() {
+            break;
+        }
+    }
+    Io { out: from_bytes(p.out), err: p.err, status: p.status }
+}
+
+// ------------------------------------------------------------ expr
+
+// An optional minus and one or more digits, as expr takes an integer.
+fn looks_int(s: Str) -> bool {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    if b.len() > 0 and b[0] == b'-' {
+        i = 1;
+    }
+    if i >= b.len() {
+        return false;
+    }
+    while i < b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn int_of(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut neg = false;
+    let mut v: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'-' {
+            neg = true;
+        } else {
+            v = v * 10 + (b[i] - b'0') as i64;
+        }
+    }
+    if neg { -v } else { v }
+}
+
+// A value expr treats as false: the empty string or a zero.
+fn is_null(s: Str) -> bool {
+    if s.len() == 0 {
+        return true;
+    }
+    looks_int(s) and int_of(s) == 0
+}
+
+// An integer result, as expr prints it.
+fn norm(s: Str) -> String {
+    if looks_int(s) {
+        return f"{int_of(s)}";
+    }
+    s.to_string()
+}
+
+// One piece of a basic regular expression.
+#[derive(Copy, Clone)]
+struct Atom {
+    kind: u8, // c: a byte, .: any, [: a class, (: group start, ): group end, $: the end
+    byte: u8,
+    class_at: i64,
+    star: bool,
+}
+
+struct Bre {
+    atoms: Vec[Atom],
+    classes: Vec[Vec[bool]],
+    groups: i64,
+}
+
+fn compile_bre(pat: Str) -> Result[Bre, String] {
+    let b = to_bytes(pat);
+    let mut re = Bre { atoms: Vec.new(), classes: Vec.new(), groups: 0 };
+    let mut i: i64 = 0;
+    if b.len() > 0 and b[0] == b'^' {
+        i = 1;
+    }
+    while i < b.len() {
+        let c = b[i];
+        if c == b'*' and re.atoms.len() > 0 {
+            let n = re.atoms.len() - 1;
+            let last = re.atoms[n];
+            if last.kind != b'(' and last.kind != b')' {
+                re.atoms[n] = Atom { kind: last.kind, byte: last.byte, class_at: last.class_at, star: true };
+                i += 1;
+                continue;
+            }
+        }
+        if c == b'\\' and i + 1 < b.len() {
+            let e = b[i + 1];
+            i += 2;
+            if e == b'(' {
+                re.groups += 1;
+                re.atoms.push(Atom { kind: b'(', byte: 0, class_at: 0, star: false });
+            } else if e == b')' {
+                re.atoms.push(Atom { kind: b')', byte: 0, class_at: 0, star: false });
+            } else {
+                re.atoms.push(Atom { kind: b'c', byte: e, class_at: 0, star: false });
+            }
+            continue;
+        }
+        if c == b'.' {
+            re.atoms.push(Atom { kind: b'.', byte: 0, class_at: 0, star: false });
+            i += 1;
+            continue;
+        }
+        if c == b'$' and i + 1 == b.len() {
+            re.atoms.push(Atom { kind: b'$', byte: 0, class_at: 0, star: false });
+            i += 1;
+            continue;
+        }
+        if c == b'[' {
+            let mut set: Vec[bool] = Vec.new();
+            for _ in 0..256 {
+                set.push(false);
+            }
+            let mut j = i + 1;
+            let mut negate = false;
+            if j < b.len() and b[j] == b'^' {
+                negate = true;
+                j += 1;
+            }
+            let mut first = true;
+            while j < b.len() and (first or b[j] != b']') {
+                first = false;
+                let lo = b[j];
+                if j + 2 < b.len() and b[j + 1] == b'-' and b[j + 2] != b']' {
+                    let hi = b[j + 2];
+                    let mut k = lo as i64;
+                    while k <= hi as i64 {
+                        set[k] = true;
+                        k += 1;
+                    }
+                    j += 3;
+                } else {
+                    set[lo as i64] = true;
+                    j += 1;
+                }
+            }
+            if j >= b.len() {
+                return Err("Unmatched [, [^, [:, [., or [=".to_string());
+            }
+            if negate {
+                for k in 0..256 {
+                    set[k] = not set[k];
+                }
+            }
+            re.atoms.push(Atom { kind: b'[', byte: 0, class_at: re.classes.len(), star: false });
+            re.classes.push(set);
+            i = j + 1;
+            continue;
+        }
+        re.atoms.push(Atom { kind: b'c', byte: c, class_at: 0, star: false });
+        i += 1;
+    }
+    Ok(re)
+}
+
+fn atom_matches(re: ref Bre, a: Atom, c: u8) -> bool {
+    if a.kind == b'.' {
+        true
+    } else if a.kind == b'[' {
+        re.classes[a.class_at][c as i64]
+    } else {
+        a.byte == c
+    }
+}
+
+// Matches atoms from `ai` at subject position `si`; gives where the
+// match ends, or -1. Group starts and ends are recorded in `caps`.
+fn match_at(re: ref Bre, ai: i64, s: ref Vec[u8], si: i64, caps: mut ref Vec[i64]) -> i64 {
+    if ai >= re.atoms.len() {
+        return si;
+    }
+    let a = re.atoms[ai];
+    if a.kind == b'(' {
+        let old = caps[0];
+        caps[0] = si;
+        let r = match_at(re, ai + 1, s, si, mut caps);
+        if r < 0 {
+            caps[0] = old;
+        }
+        return r;
+    }
+    if a.kind == b')' {
+        let old = caps[1];
+        caps[1] = si;
+        let r = match_at(re, ai + 1, s, si, mut caps);
+        if r < 0 {
+            caps[1] = old;
+        }
+        return r;
+    }
+    if a.kind == b'$' {
+        return if si == s.len() { match_at(re, ai + 1, s, si, mut caps) } else { -1 };
+    }
+    if not a.star {
+        if si < s.len() and atom_matches(re, a, s[si]) {
+            return match_at(re, ai + 1, s, si + 1, mut caps);
+        }
+        return -1;
+    }
+    let mut n: i64 = 0;
+    while si + n < s.len() and atom_matches(re, a, s[si + n]) {
+        n += 1;
+    }
+    while n >= 0 {
+        let r = match_at(re, ai + 1, s, si + n, mut caps);
+        if r >= 0 {
+            return r;
+        }
+        n -= 1;
+    }
+    -1
+}
+
+// `s : pat`: the first group's text, or the length matched.
+fn expr_match(s: Str, pat: Str) -> Result[String, String] {
+    let re = compile_bre(pat)?;
+    let subject = to_bytes(s);
+    let mut caps: Vec[i64] = vec![-1, -1];
+    let end = match_at(re, 0, subject, 0, mut caps);
+    if re.groups > 0 {
+        if end < 0 or caps[0] < 0 or caps[1] < caps[0] {
+            return Ok(String.new());
+        }
+        return Ok(byte_str(subject, caps[0], caps[1]));
+    }
+    Ok(f"{if end < 0 { 0 } else { end }}")
+}
+
+struct Expr {
+    args: Vec[String],
+    pos: i64,
+    error: String,
+    status: i64,
+}
+
+impl Expr {
+    fn peek(ref self) -> String {
+        if self.pos < self.args.len() { self.args[self.pos].clone() } else { String.new() }
+    }
+
+    fn at(ref self, op: Str) -> bool {
+        self.pos < self.args.len() and self.args[self.pos] == op
+    }
+
+    fn syntax(mut ref self, msg: String) {
+        if self.error.len() == 0 {
+            self.error = f"syntax error: {msg}";
+            self.status = 2;
+        }
+    }
+
+    fn fault(mut ref self, msg: Str) {
+        if self.error.len() == 0 {
+            self.error = msg.to_string();
+            self.status = 2;
+        }
+    }
+
+    // A primary: a parenthesized expression or a token.
+    fn primary(mut ref self) -> String {
+        if self.pos >= self.args.len() {
+            let prev = if self.pos > 0 { self.args[self.pos - 1].clone() } else { String.new() };
+            self.syntax(f"missing argument after {q(prev)}");
+            return String.new();
+        }
+        if self.at("(") {
+            self.pos += 1;
+            let v = self.or_expr();
+            if not self.at(")") {
+                if self.pos >= self.args.len() {
+                    self.syntax(f"expecting ')' after {q(self.args[self.pos - 1])}");
+                } else {
+                    self.syntax(f"expecting ')' instead of {q(self.peek())}");
+                }
+                return String.new();
+            }
+            self.pos += 1;
+            return v;
+        }
+        self.pos += 1;
+        self.args[self.pos - 1].clone()
+    }
+
+    fn unary(mut ref self) -> String {
+        if self.at("quote") {
+            self.pos += 1;
+            return self.primary();
+        }
+        if self.at("length") {
+            self.pos += 1;
+            let s = self.unary();
+            return f"{s.len()}";
+        }
+        if self.at("match") {
+            self.pos += 1;
+            let s = self.unary();
+            let p = self.unary();
+            return self.do_match(s, p);
+        }
+        if self.at("substr") {
+            self.pos += 1;
+            let s = self.unary();
+            let p = self.unary();
+            let n = self.unary();
+            if not looks_int(p) or not looks_int(n) {
+                return String.new();
+            }
+            let pi = int_of(p);
+            let ni = int_of(n);
+            let len = s.len();
+            if pi < 1 or pi > len or ni < 1 {
+                return String.new();
+            }
+            let end = if pi - 1 + ni > len { len } else { pi - 1 + ni };
+            return byte_str(to_bytes(s), pi - 1, end);
+        }
+        if self.at("index") {
+            self.pos += 1;
+            let s = to_bytes(self.unary());
+            let set = to_bytes(self.unary());
+            for i in 0..s.len() {
+                for k in 0..set.len() {
+                    if s[i] == set[k] {
+                        return f"{i + 1}";
+                    }
+                }
+            }
+            return "0".to_string();
+        }
+        self.primary()
+    }
+
+    fn do_match(mut ref self, s: Str, p: Str) -> String {
+        match expr_match(s, p) {
+            Ok(v) => v,
+            Err(e) => {
+                self.fault(e);
+                String.new()
+            }
+        }
+    }
+
+    fn colon(mut ref self) -> String {
+        let mut l = self.unary();
+        while self.at(":") {
+            self.pos += 1;
+            let r = self.unary();
+            l = self.do_match(l, r);
+        }
+        l
+    }
+
+    fn arith(mut ref self, l: Str, op: Str, r: Str) -> String {
+        if not looks_int(l) or not looks_int(r) {
+            self.fault("non-integer argument");
+            return String.new();
+        }
+        let a = int_of(l);
+        let b = int_of(r);
+        if (op == "/" or op == "%") and b == 0 {
+            self.fault("division by zero");
+            return String.new();
+        }
+        let v = if op == "+" {
+            a + b
+        } else if op == "-" {
+            a - b
+        } else if op == "*" {
+            a * b
+        } else if op == "/" {
+            a / b
+        } else {
+            a % b
+        };
+        f"{v}"
+    }
+
+    fn product(mut ref self) -> String {
+        let mut l = self.colon();
+        while self.at("*") or self.at("/") or self.at("%") {
+            let op = self.peek();
+            self.pos += 1;
+            let r = self.colon();
+            l = self.arith(l, op, r);
+        }
+        l
+    }
+
+    fn sum(mut ref self) -> String {
+        let mut l = self.product();
+        while self.at("+") or self.at("-") {
+            let op = self.peek();
+            self.pos += 1;
+            let r = self.product();
+            l = self.arith(l, op, r);
+        }
+        l
+    }
+
+    fn compare(mut ref self) -> String {
+        let mut l = self.sum();
+        loop {
+            let op = self.peek();
+            let is_cmp = self.pos < self.args.len() and (op == "<" or op == "<=" or op == "=" or op == "==" or op == "!=" or op == ">=" or op == ">");
+            if not is_cmp {
+                break;
+            }
+            self.pos += 1;
+            let r = self.sum();
+            let c = if looks_int(l) and looks_int(r) {
+                let a = int_of(l);
+                let b = int_of(r);
+                if a < b { -1 } else if a > b { 1 } else { 0 }
+            } else {
+                cmp_str(l, r)
+            };
+            let t = if op == "<" {
+                c < 0
+            } else if op == "<=" {
+                c <= 0
+            } else if op == "=" or op == "==" {
+                c == 0
+            } else if op == "!=" {
+                c != 0
+            } else if op == ">=" {
+                c >= 0
+            } else {
+                c > 0
+            };
+            l = if t { "1".to_string() } else { "0".to_string() };
+        }
+        l
+    }
+
+    fn and_expr(mut ref self) -> String {
+        let mut l = self.compare();
+        while self.at("&") {
+            self.pos += 1;
+            let r = self.compare();
+            if is_null(l) or is_null(r) {
+                l = "0".to_string();
+            }
+        }
+        l
+    }
+
+    fn or_expr(mut ref self) -> String {
+        let mut l = self.and_expr();
+        while self.at("|") {
+            self.pos += 1;
+            let r = self.and_expr();
+            if is_null(l) {
+                l = if is_null(r) { "0".to_string() } else { r };
+            }
+        }
+        l
+    }
+}
+
+fn cmp_str(a: Str, b: Str) -> i64 {
+    let x = to_bytes(a);
+    let y = to_bytes(b);
+    let mut i: i64 = 0;
+    while i < x.len() and i < y.len() {
+        if x[i] != y[i] {
+            return if x[i] < y[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    if x.len() == y.len() {
+        0
+    } else if x.len() < y.len() {
+        -1
+    } else {
+        1
+    }
+}
+
+fn expr_tool(args: ref Vec[String]) -> Io {
+    if args.len() == 0 {
+        return usage("expr", "missing operand");
+    }
+    let mut e = Expr { args: args.clone(), pos: 0, error: String.new(), status: 0 };
+    let v = e.or_expr();
+    if e.error.len() == 0 and e.pos < e.args.len() {
+        e.syntax(f"unexpected argument {q(e.peek())}");
+    }
+    if e.error.len() > 0 {
+        return fail("expr", e.error, e.status);
+    }
+    let out = norm(v);
+    let status = if is_null(out) { 1 } else { 0 };
+    Io { out: f"{out}\n", err: String.new(), status: status }
+}
+
+// ------------------------------------------------------------ seq
+
+fn dec_add(a: Dec, b: Dec) -> Dec {
+    let sa = if a.neg { -a.mag } else { a.mag };
+    let sb = if b.neg { -b.mag } else { b.mag };
+    let v = sa + sb;
+    Dec { neg: v < 0, mag: if v < 0 { -v } else { v }, scale: a.scale }
+}
+
+fn dec_cmp(a: Dec, b: Dec) -> i64 {
+    let sa = if a.neg { -a.mag } else { a.mag };
+    let sb = if b.neg { -b.mag } else { b.mag };
+    if sa < sb { -1 } else if sa > sb { 1 } else { 0 }
+}
+
+// A number at `prec` digits after the point, as seq prints it by
+// default: %.Nf.
+fn seq_plain(d: Dec, prec: i64) -> String {
+    let r = rescale(d, prec);
+    let sign = if r.neg and r.mag != 0 { "-" } else { "" };
+    f"{sign}{dec_digits(r)}"
+}
+
+// The one directive of a -f format, applied to a number: the text
+// before it, the directive, and the text after.
+fn seq_format(fmt: Str, d: Dec) -> Result[String, String] {
+    let b = to_bytes(fmt);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    let mut used = false;
+    while i < b.len() {
+        if b[i] != b'%' {
+            out.push_str(byte_str(b, i, i + 1));
+            i += 1;
+            continue;
+        }
+        if i + 1 < b.len() and b[i + 1] == b'%' {
+            out.push_str("%");
+            i += 2;
+            continue;
+        }
+        if used {
+            return Err(f"format {q(fmt)} has too many % directives");
+        }
+        used = true;
+        let mut sp = Spec { minus: false, plus: false, space: false, alt: false, zero: false, width: 0, prec: -1 };
+        i += 1;
+        while i < b.len() and (b[i] == b'-' or b[i] == b'+' or b[i] == b' ' or b[i] == b'#' or b[i] == b'0') {
+            if b[i] == b'-' {
+                sp.minus = true;
+            } else if b[i] == b'+' {
+                sp.plus = true;
+            } else if b[i] == b' ' {
+                sp.space = true;
+            } else if b[i] == b'#' {
+                sp.alt = true;
+            } else {
+                sp.zero = true;
+            }
+            i += 1;
+        }
+        while i < b.len() and is_digit(b[i]) {
+            sp.width = sp.width * 10 + (b[i] - b'0') as i64;
+            i += 1;
+        }
+        if i < b.len() and b[i] == b'.' {
+            i += 1;
+            sp.prec = 0;
+            while i < b.len() and is_digit(b[i]) {
+                sp.prec = sp.prec * 10 + (b[i] - b'0') as i64;
+                i += 1;
+            }
+        }
+        if sp.minus {
+            sp.zero = false;
+        }
+        let conv = if i < b.len() { b[i] } else { 0 };
+        i += 1;
+        if conv == b'f' or conv == b'F' {
+            out.push_str(conv_fixed(sp, d));
+        } else if conv == b'g' or conv == b'G' {
+            out.push_str(conv_general(sp, d));
+        } else {
+            return Err(f"format {q(fmt)} has unknown %{byte_str(b, i - 1, i)} directive");
+        }
+    }
+    if not used {
+        return Err(f"format {q(fmt)} has no % directive");
+    }
+    Ok(out)
+}
+
+fn seq_tool(args: ref Vec[String]) -> Io {
+    let mut sep = "\n".to_string();
+    let mut fmt = String.new();
+    let mut equal = false;
+    let mut nums: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let a = args[i].clone();
+        let b = to_bytes(a);
+        i += 1;
+        // A negative number is an operand, not an option.
+        let opt = nums.len() == 0 and b.len() > 1 and b[0] == b'-' and not is_digit(b[1]) and b[1] != b'.';
+        if not opt {
+            nums.push(a);
+            continue;
+        }
+        let c = b[1];
+        if c == b'w' {
+            equal = true;
+        } else if c == b's' or c == b'f' {
+            let v = if b.len() > 2 {
+                byte_str(b, 2, b.len())
+            } else if i < args.len() {
+                i += 1;
+                args[i - 1].clone()
+            } else {
+                return usage("seq", f"option requires an argument -- '{byte_str(b, 1, 2)}'");
+            };
+            if c == b's' {
+                sep = v;
+            } else {
+                fmt = v;
+            }
+        } else {
+            return usage("seq", f"invalid option -- '{byte_str(b, 1, 2)}'");
+        }
+    }
+    if nums.len() == 0 {
+        return usage("seq", "missing operand");
+    }
+    if nums.len() > 3 {
+        return usage("seq", f"extra operand {q(nums[3])}");
+    }
+    let mut ds: Vec[Dec] = Vec.new();
+    for k in 0..nums.len() {
+        match parse_dec(nums[k]) {
+            Some(d) => ds.push(d),
+            None => return usage("seq", f"invalid floating point argument: {q(nums[k])}"),
+        }
+    }
+    let one = Dec { neg: false, mag: 1, scale: 0 };
+    let (first, step, last) = if ds.len() == 1 {
+        (one, one, ds[0])
+    } else if ds.len() == 2 {
+        (ds[0], one, ds[1])
+    } else {
+        (ds[0], ds[1], ds[2])
+    };
+    if step.mag == 0 {
+        return usage("seq", f"invalid Zero increment value: {q(nums[1])}");
+    }
+    // Output precision: the most digits after the point among the first
+    // number and the increment; exact arithmetic at the most among all.
+    let prec = if first.scale > step.scale { first.scale } else { step.scale };
+    let mut scale = if prec > last.scale { prec } else { last.scale };
+    if scale < 0 {
+        scale = 0;
+    }
+    let f = rescale(first, scale);
+    let s = rescale(step, scale);
+    let l = rescale(last, scale);
+    let mut width: i64 = 0;
+    if equal {
+        let a = seq_plain(f, prec).len();
+        let z = seq_plain(l, prec).len();
+        width = if a > z { a } else { z };
+    }
+    let mut out = String.new();
+    let mut x = f;
+    let mut count: i64 = 0;
+    loop {
+        let c = dec_cmp(x, l);
+        if (not s.neg and c > 0) or (s.neg and c < 0) {
+            break;
+        }
+        if count > 0 {
+            out.push_str(sep);
+        }
+        if fmt.len() > 0 {
+            match seq_format(fmt, x) {
+                Ok(t) => out.push_str(t),
+                Err(e) => return fail("seq", e, 1),
+            }
+        } else {
+            let mut t = seq_plain(x, prec);
+            if t.len() < width {
+                let tb = to_bytes(t);
+                let neg = tb[0] == b'-';
+                let digits = if neg { byte_str(tb, 1, tb.len()) } else { t.clone() };
+                t = f"{if neg { "-" } else { "" }}{repeat_byte(b'0', width - t.len())}{digits}";
+            }
+            out.push_str(t);
+        }
+        count += 1;
+        x = dec_add(x, s);
+    }
+    if count > 0 {
+        out.push_str("\n");
+    }
+    Io { out: out, err: String.new(), status: 0 }
+}
+
+// ------------------------------------------------------------ test
+
+fn unary_op(s: Str) -> bool {
+    s == "-e" or s == "-f" or s == "-d" or s == "-s" or s == "-z" or s == "-n"
+}
+
+fn binary_op(s: Str) -> bool {
+    s == "=" or s == "==" or s == "!=" or s == "<" or s == ">" or s == "-eq" or s == "-ne" or s == "-lt" or s == "-le" or s == "-gt" or s == "-ge"
+}
+
+// An integer as test reads one: blanks, a sign, digits, blanks.
+fn test_int(s: Str) -> Option[i64] {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i < b.len() and is_blank(b[i]) {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'-' or b[i] == b'+') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    let start = i;
+    let mut v: i64 = 0;
+    while i < b.len() and is_digit(b[i]) {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if i == start {
+        return None;
+    }
+    while i < b.len() and is_blank(b[i]) {
+        i += 1;
+    }
+    if i < b.len() {
+        return None;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// test's parser: the arguments, where it is, and the first error.
+struct Test {
+    args: Vec[String],
+    pos: i64,
+    dir: String,
+    error: String,
+}
+
+impl Test {
+    fn arg(ref self, k: i64) -> String {
+        if k < self.args.len() { self.args[k].clone() } else { String.new() }
+    }
+
+    fn syntax(mut ref self, msg: own String) {
+        if self.error.len() == 0 {
+            self.error = msg;
+        }
+    }
+
+    // `missing argument after` the last argument, GNU's beyond().
+    fn beyond(mut ref self) -> bool {
+        let last = self.arg(self.args.len() - 1);
+        self.syntax(f"missing argument after {q(last)}");
+        self.pos = self.args.len();
+        false
+    }
+
+    fn unary(mut ref self) -> bool {
+        let op = self.arg(self.pos);
+        if self.pos + 1 >= self.args.len() {
+            return self.beyond();
+        }
+        let x = self.arg(self.pos + 1);
+        self.pos += 2;
+        if op == "-z" {
+            return x.len() == 0;
+        }
+        if op == "-n" {
+            return x.len() > 0;
+        }
+        match fs.metadata(f"{self.dir}/{x}") {
+            Ok(m) => {
+                if op == "-f" {
+                    not m.is_dir
+                } else if op == "-d" {
+                    m.is_dir
+                } else if op == "-s" {
+                    m.len > 0
+                } else {
+                    true
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn binary(mut ref self) -> bool {
+        let l = self.arg(self.pos);
+        let op = self.arg(self.pos + 1);
+        let r = self.arg(self.pos + 2);
+        self.pos += 3;
+        if op == "=" or op == "==" {
+            return l == r;
+        }
+        if op == "!=" {
+            return l != r;
+        }
+        if op == "<" {
+            return cmp_str(l, r) < 0;
+        }
+        if op == ">" {
+            return cmp_str(l, r) > 0;
+        }
+        let a = match test_int(l) {
+            Some(v) => v,
+            None => {
+                self.syntax(f"invalid integer {q(l)}");
+                return false;
+            }
+        };
+        let b = match test_int(r) {
+            Some(v) => v,
+            None => {
+                self.syntax(f"invalid integer {q(r)}");
+                return false;
+            }
+        };
+        if op == "-eq" {
+            a == b
+        } else if op == "-ne" {
+            a != b
+        } else if op == "-lt" {
+            a < b
+        } else if op == "-le" {
+            a <= b
+        } else if op == "-gt" {
+            a > b
+        } else {
+            a >= b
+        }
+    }
+
+    fn term(mut ref self) -> bool {
+        if self.pos >= self.args.len() {
+            return self.beyond();
+        }
+        let a = self.arg(self.pos);
+        let mut negate = false;
+        let mut cur = a;
+        while cur == "!" {
+            negate = not negate;
+            self.pos += 1;
+            if self.pos >= self.args.len() {
+                return self.beyond();
+            }
+            cur = self.arg(self.pos);
+        }
+        let mut value = false;
+        if cur == "(" {
+            self.pos += 1;
+            let mut n: i64 = 1;
+            while self.pos + n < self.args.len() and self.arg(self.pos + n) != ")" {
+                if n == 4 {
+                    n = self.args.len() - self.pos;
+                    break;
+                }
+                n += 1;
+            }
+            value = self.posix(n);
+            if self.pos >= self.args.len() {
+                self.syntax("')' expected".to_string());
+            } else if self.arg(self.pos) != ")" {
+                self.syntax(f"')' expected, found {q(self.arg(self.pos))}");
+            }
+            self.pos += 1;
+        } else if self.args.len() - self.pos >= 3 and binary_op(self.arg(self.pos + 1)) {
+            value = self.binary();
+        } else if unary_op(cur) {
+            value = self.unary();
+        } else {
+            value = cur.len() > 0;
+            self.pos += 1;
+        }
+        value != negate
+    }
+
+    fn and_expr(mut ref self) -> bool {
+        let mut v = self.term();
+        while self.pos < self.args.len() and self.arg(self.pos) == "-a" {
+            self.pos += 1;
+            let r = self.term();
+            v = v and r;
+        }
+        v
+    }
+
+    fn or_expr(mut ref self) -> bool {
+        let mut v = self.and_expr();
+        while self.pos < self.args.len() and self.arg(self.pos) == "-o" {
+            self.pos += 1;
+            let r = self.and_expr();
+            v = v or r;
+        }
+        v
+    }
+
+    // GNU's posixtest(): the special cases for one to four arguments.
+    fn posix(mut ref self, n: i64) -> bool {
+        let p = self.pos;
+        if n == 1 {
+            self.pos += 1;
+            return self.arg(p).len() > 0;
+        }
+        if n == 2 {
+            if self.arg(p) == "!" {
+                self.pos += 2;
+                return self.arg(p + 1).len() == 0;
+            }
+            if unary_op(self.arg(p)) {
+                return self.unary();
+            }
+            return self.beyond();
+        }
+        if n == 3 {
+            if binary_op(self.arg(p + 1)) {
+                return self.binary();
+            }
+            if self.arg(p) == "!" {
+                self.pos += 1;
+                return not self.posix(2);
+            }
+            if self.arg(p) == "(" and self.arg(p + 2) == ")" {
+                self.pos += 3;
+                return self.arg(p + 1).len() > 0;
+            }
+            if self.arg(p + 1) == "-a" or self.arg(p + 1) == "-o" {
+                return self.or_expr();
+            }
+            self.syntax(f"{q(self.arg(p + 1))}: binary operator expected");
+            return false;
+        }
+        if n == 4 {
+            if self.arg(p) == "!" {
+                self.pos += 1;
+                return not self.posix(3);
+            }
+            if self.arg(p) == "(" and self.arg(p + 3) == ")" {
+                self.pos += 1;
+                let v = self.posix(2);
+                self.pos += 1;
+                return v;
+            }
+        }
+        if n <= 0 {
+            return false;
+        }
+        self.or_expr()
+    }
+}
+
+fn test_tool(args: ref Vec[String], dir: Str) -> Io {
+    let mut t = Test { args: args.clone(), pos: 0, dir: dir.to_string(), error: String.new() };
+    let n = t.args.len();
+    let v = t.posix(n);
+    if t.error.len() == 0 and t.pos < n {
+        t.syntax(f"extra argument {q(t.arg(t.pos))}");
+    }
+    if t.error.len() > 0 {
+        return fail("test", t.error, 2);
+    }
+    Io { out: String.new(), err: String.new(), status: if v { 0 } else { 1 } }
+}
+
+// ------------------------------------------------------------ basename and dirname
+
+// The last component of a path, as basename takes it.
+fn base_of(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut end = b.len();
+    while end > 1 and b[end - 1] == b'/' {
+        end -= 1;
+    }
+    if end == 1 and b[0] == b'/' {
+        return "/".to_string();
+    }
+    let mut st = end;
+    while st > 0 and b[st - 1] != b'/' {
+        st -= 1;
+    }
+    byte_str(b, st, end)
+}
+
+fn strip_suffix(name: Str, suffix: Str) -> String {
+    if suffix.len() > 0 and name.len() > suffix.len() and name.ends_with(suffix) {
+        return byte_str(to_bytes(name), 0, name.len() - suffix.len());
+    }
+    name.to_string()
+}
+
+fn basename_tool(args: ref Vec[String]) -> Io {
+    let o = parse_opts(args, "s");
+    if o.error.len() > 0 {
+        return usage("basename", o.error);
+    }
+    if o.operands.len() == 0 {
+        return usage("basename", "missing operand");
+    }
+    let mut out = String.new();
+    let multi = o.has(b'a') or o.has(b's');
+    if not multi {
+        if o.operands.len() > 2 {
+            return usage("basename", f"extra operand {q(o.operands[2])}");
+        }
+        let suffix = if o.operands.len() == 2 { o.operands[1].clone() } else { String.new() };
+        out.push_str(strip_suffix(base_of(o.operands[0]), suffix));
+        out.push_str("\n");
+        return Io { out: out, err: String.new(), status: 0 };
+    }
+    let suffix = o.last(b's').unwrap_or(String.new());
+    for i in 0..o.operands.len() {
+        out.push_str(strip_suffix(base_of(o.operands[i]), suffix));
+        out.push_str("\n");
+    }
+    Io { out: out, err: String.new(), status: 0 }
+}
+
+// The directory part of a path, as dirname gives it.
+fn dir_of(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut end = b.len();
+    while end > 1 and b[end - 1] == b'/' {
+        end -= 1;
+    }
+    while end > 0 and b[end - 1] != b'/' {
+        end -= 1;
+    }
+    if end == 0 {
+        return ".".to_string();
+    }
+    while end > 1 and b[end - 1] == b'/' {
+        end -= 1;
+    }
+    byte_str(b, 0, end)
+}
+
+fn dirname_tool(args: ref Vec[String]) -> Io {
+    if args.len() == 0 {
+        return usage("dirname", "missing operand");
+    }
+    let mut out = String.new();
+    for i in 0..args.len() {
+        out.push_str(dir_of(args[i]));
+        out.push_str("\n");
+    }
+    Io { out: out, err: String.new(), status: 0 }
+}
+
+// ------------------------------------------------------------ od
+
+const NAMES: Array[Str, 33] = ["nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel", "bs", "ht", "nl", "vt", "ff", "cr", "so", "si", "dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb", "can", "em", "sub", "esc", "fs", "gs", "rs", "us", "sp"];
+
+// One output type: its letter (a c d o u x), its size in bytes, and
+// whether printable characters follow (`z`).
+#[derive(Copy, Clone)]
+struct OdType {
+    kind: u8,
+    size: i64,
+    chars: bool,
+}
+
+fn parse_od_type(spec: Str) -> Result[OdType, String] {
+    let b = to_bytes(spec);
+    if b.len() == 0 {
+        return Err(f"invalid type string {q(spec)}");
+    }
+    let k = b[0];
+    let mut t = OdType { kind: k, size: 1, chars: false };
+    let mut i: i64 = 1;
+    if k == b'd' or k == b'o' or k == b'u' or k == b'x' {
+        t.size = 4;
+        if i < b.len() and is_digit(b[i]) {
+            let mut n: i64 = 0;
+            while i < b.len() and is_digit(b[i]) {
+                n = n * 10 + (b[i] - b'0') as i64;
+                i += 1;
+            }
+            if n != 1 and n != 2 and n != 4 and n != 8 {
+                return Err(f"invalid type string {q(spec)};\nthis system doesn't provide a {n}-byte integral type");
+            }
+            t.size = n;
+        } else if i < b.len() and (b[i] == b'C' or b[i] == b'S' or b[i] == b'I' or b[i] == b'L') {
+            t.size = if b[i] == b'C' { 1 } else if b[i] == b'S' { 2 } else if b[i] == b'I' { 4 } else { 8 };
+            i += 1;
+        }
+    } else if k != b'a' and k != b'c' {
+        return Err(f"invalid character {q(byte_str(b, 0, 1))} in type string {q(spec)}");
+    }
+    if i < b.len() and b[i] == b'z' {
+        t.chars = true;
+        i += 1;
+    }
+    if i < b.len() {
+        return Err(f"invalid character {q(byte_str(b, i, i + 1))} in type string {q(spec)}");
+    }
+    Ok(t)
+}
+
+// The width of one field of a type, not counting its leading space.
+fn field_width(t: OdType) -> i64 {
+    if t.kind == b'a' or t.kind == b'c' {
+        return 3;
+    }
+    if t.kind == b'x' {
+        return t.size * 2;
+    }
+    if t.kind == b'o' {
+        return if t.size == 1 { 3 } else if t.size == 2 { 6 } else if t.size == 4 { 11 } else { 22 };
+    }
+    if t.kind == b'u' {
+        return if t.size == 1 { 3 } else if t.size == 2 { 5 } else if t.size == 4 { 10 } else { 20 };
+    }
+    if t.size == 1 { 4 } else if t.size == 2 { 6 } else if t.size == 4 { 11 } else { 20 }
+}
+
+fn od_char(c: u8, named: bool) -> String {
+    if named {
+        let m = c & 127;
+        if m <= 32 {
+            return NAMES[m as i64].to_string();
+        }
+        if m == 127 {
+            return "del".to_string();
+        }
+        return from_bytes(vec![m]);
+    }
+    if c == 0 {
+        "\\0".to_string()
+    } else if c == 7 {
+        "\\a".to_string()
+    } else if c == 8 {
+        "\\b".to_string()
+    } else if c == 12 {
+        "\\f".to_string()
+    } else if c == 10 {
+        "\\n".to_string()
+    } else if c == 13 {
+        "\\r".to_string()
+    } else if c == 9 {
+        "\\t".to_string()
+    } else if c == 11 {
+        "\\v".to_string()
+    } else if c >= 32 and c < 127 {
+        from_bytes(vec![c])
+    } else {
+        f"{repeat_byte(b'0', 3 - f"{c:o}".len())}{c:o}"
+    }
+}
+
+// One element: `size` bytes little-endian from `at`, zero past the end.
+fn od_value(t: OdType, b: ref Vec[u8], at: i64, end: i64) -> String {
+    if t.kind == b'a' or t.kind == b'c' {
+        return od_char(b[at], t.kind == b'a');
+    }
+    let mut u: u64 = 0;
+    let mut k = t.size - 1;
+    while k >= 0 {
+        let byte = if at + k < end { b[at + k] as u64 } else { 0 as u64 };
+        u = u * 256 + byte;
+        k -= 1;
+    }
+    if t.kind == b'x' {
+        let h = f"{u:x}";
+        return f"{repeat_byte(b'0', t.size * 2 - h.len())}{h}";
+    }
+    if t.kind == b'o' {
+        let o = f"{u:o}";
+        let w = field_width(t);
+        return if o.len() < w { f"{repeat_byte(b'0', w - o.len())}{o}" } else { o };
+    }
+    if t.kind == b'u' {
+        return f"{u}";
+    }
+    // Signed: the two's-complement value of `size` bytes.
+    let bits = t.size * 8;
+    if bits == 64 {
+        let v = u as i64;
+        return f"{v}";
+    }
+    let full = (1 as i64) << bits;
+    let mut v = u as i64;
+    if v >= full / 2 {
+        v -= full;
+    }
+    f"{v}"
+}
+
+fn od_addr(radix: u8, off: i64) -> String {
+    if radix == b'n' {
+        return String.new();
+    }
+    let s = if radix == b'd' {
+        f"{off}"
+    } else if radix == b'x' {
+        f"{off:x}"
+    } else {
+        f"{off:o}"
+    };
+    let w = if radix == b'x' { 6 } else { 7 };
+    if s.len() < w { f"{repeat_byte(b'0', w - s.len())}{s}" } else { s }
+}
+
+fn od_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "AtNjw");
+    if o.error.len() > 0 {
+        return usage("od", o.error);
+    }
+    let mut radix = b'o';
+    if let Some(a) = o.last(b'A') {
+        let ab = to_bytes(a);
+        if ab.len() != 1 or (ab[0] != b'o' and ab[0] != b'd' and ab[0] != b'x' and ab[0] != b'n') {
+            return usage("od", f"invalid output address radix {q(a)}; it must be one character from [doxn]");
+        }
+        radix = ab[0];
+    }
+    let mut spec = "o2".to_string();
+    if o.has(b'c') {
+        spec = "c".to_string();
+    }
+    if o.has(b'b') {
+        spec = "o1".to_string();
+    }
+    if let Some(t) = o.last(b't') {
+        spec = t;
+    }
+    let t = match parse_od_type(spec) {
+        Ok(t) => t,
+        Err(e) => return fail("od", e, 1),
+    };
+    let mut width: i64 = 16;
+    if let Some(w) = o.last(b'w') {
+        width = if w.len() == 0 { 32 } else { parse_count(w) };
+    }
+    let skip = match o.last(b'j') {
+        Some(j) => parse_count(j),
+        None => 0,
+    };
+    let limit = match o.last(b'N') {
+        Some(n) => parse_count(n),
+        None => -1,
+    };
+    let mut data: Vec[u8] = Vec.new();
+    let names = if o.operands.len() == 0 { vec!["-".to_string()] } else { o.operands.clone() };
+    for i in 0..names.len() {
+        match read_input(names[i], stdin, dir) {
+            Some(text) => push_bytes(mut data, text),
+            None => return fail("od", f"{names[i]}: No such file or directory", 1),
+        }
+    }
+    let mut end = data.len();
+    let start = if skip > end { end } else { skip };
+    if limit >= 0 and start + limit < end {
+        end = start + limit;
+    }
+    let fw = field_width(t);
+    let per_line = width / t.size;
+    let mut out = String.new();
+    let mut at = start;
+    let mut prev: Vec[u8] = Vec.new();
+    let mut have_prev = false;
+    let mut starred = false;
+    while at < end {
+        let n = if end - at < width { end - at } else { width };
+        let mut chunk: Vec[u8] = Vec.new();
+        for k in 0..n {
+            chunk.push(data[at + k]);
+        }
+        if not o.has(b'v') and have_prev and n == width and cmp_bytes(chunk, prev) == 0 {
+            if not starred {
+                out.push_str("*\n");
+                starred = true;
+            }
+            at += n;
+            continue;
+        }
+        starred = false;
+        out.push_str(od_addr(radix, at));
+        let mut e = at;
+        let mut fields: i64 = 0;
+        while e < at + n {
+            let v = od_value(t, data, e, at + n);
+            out.push_str(" ");
+            out.push_str(pad_left(v, fw));
+            e += t.size;
+            fields += 1;
+        }
+        if t.chars {
+            out.push_str(repeat_byte(b' ', (per_line - fields) * (fw + 1)));
+            out.push_str("  >");
+            let mut shown: Vec[u8] = Vec.new();
+            for k in 0..n {
+                let c = chunk[k];
+                shown.push(if c >= 32 and c < 127 { c } else { b'.' });
+            }
+            out.push_str(from_bytes(shown));
+            out.push_str("<");
+        }
+        out.push_str("\n");
+        prev = chunk;
+        have_prev = true;
+        at += n;
+    }
+    if radix != b'n' {
+        out.push_str(od_addr(radix, end));
+        out.push_str("\n");
+    }
+    Io { out: out, err: String.new(), status: 0 }
+}
+
+fn cmp_bytes(x: ref Vec[u8], y: ref Vec[u8]) -> i64 {
+    if x.len() != y.len() {
+        return 1;
+    }
+    for i in 0..x.len() {
+        if x[i] != y[i] {
+            return 1;
+        }
+    }
+    0
+}
+
+// ------------------------------------------------------------ base64
+
+const B64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(data: ref Vec[u8]) -> Vec[u8] {
+    let alpha = to_bytes(B64_ALPHABET);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < data.len() {
+        let n = if data.len() - i < 3 { data.len() - i } else { 3 };
+        let b0 = data[i] as i64;
+        let b1 = if n > 1 { data[i + 1] as i64 } else { 0 };
+        let b2 = if n > 2 { data[i + 2] as i64 } else { 0 };
+        let v = b0 * 65536 + b1 * 256 + b2;
+        out.push(alpha[v / 262144]);
+        out.push(alpha[(v / 4096) % 64]);
+        out.push(if n > 1 { alpha[(v / 64) % 64] } else { b'=' });
+        out.push(if n > 2 { alpha[v % 64] } else { b'=' });
+        i += 3;
+    }
+    out
+}
+
+fn b64_value(c: u8) -> i64 {
+    if is_upper(c) {
+        (c - b'A') as i64
+    } else if is_lower(c) {
+        (c - b'a') as i64 + 26
+    } else if is_digit(c) {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// Decodes, skipping newlines; on a bad character, keeps what the
+// characters before it decode to and reports it.
+fn b64_decode(text: ref Vec[u8]) -> (Vec[u8], bool) {
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad: Vec[i64] = Vec.new();
+    let mut pads: i64 = 0;
+    for i in 0..text.len() {
+        let c = text[i];
+        if c == b'\n' {
+            continue;
+        }
+        if c == b'=' and quad.len() >= 2 {
+            pads += 1;
+            quad.push(0);
+        } else {
+            let v = b64_value(c);
+            if v < 0 or pads > 0 {
+                flush_quad(quad, mut out);
+                return (out, false);
+            }
+            quad.push(v);
+        }
+        if quad.len() == 4 {
+            let v = quad[0] * 262144 + quad[1] * 4096 + quad[2] * 64 + quad[3];
+            out.push((v / 65536) as u8);
+            if pads < 2 {
+                out.push(((v / 256) % 256) as u8);
+            }
+            if pads < 1 {
+                out.push((v % 256) as u8);
+            }
+            quad = Vec.new();
+            pads = 0;
+        }
+    }
+    if quad.len() > 0 {
+        flush_quad(quad, mut out);
+        return (out, false);
+    }
+    (out, true)
+}
+
+// The whole bytes that a partial group of characters holds.
+fn flush_quad(quad: ref Vec[i64], out: mut ref Vec[u8]) {
+    if quad.len() < 2 {
+        return;
+    }
+    let mut v: i64 = 0;
+    for k in 0..4 {
+        v = v * 64 + if k < quad.len() { quad[k] } else { 0 };
+    }
+    out.push((v / 65536) as u8);
+    if quad.len() > 2 {
+        out.push(((v / 256) % 256) as u8);
+    }
+}
+
+fn base64_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "w");
+    if o.error.len() > 0 {
+        return usage("base64", o.error);
+    }
+    let mut wrap: i64 = 76;
+    if let Some(w) = o.last(b'w') {
+        wrap = parse_count(w);
+        if wrap < 0 {
+            return fail("base64", f"invalid wrap size: {q(w)}", 1);
+        }
+    }
+    let name = if o.operands.len() > 0 { o.operands[0].clone() } else { "-".to_string() };
+    let text = match read_input(name, stdin, dir) {
+        Some(t) => t,
+        None => return fail("base64", f"{name}: No such file or directory", 1),
+    };
+    let data = to_bytes(text);
+    if o.has(b'd') {
+        let (bytes, ok) = b64_decode(data);
+        let mut io = io_new();
+        io.out = from_bytes(bytes);
+        if not ok {
+            io.err = "base64: invalid input\n".to_string();
+            io.status = 1;
+        }
+        return io;
+    }
+    let enc = b64_encode(data);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..enc.len() {
+        if wrap > 0 and i > 0 and i % wrap == 0 {
+            out.push(b'\n');
+        }
+        out.push(enc[i]);
+    }
+    if wrap > 0 and enc.len() > 0 {
+        out.push(b'\n');
+    }
+    Io { out: from_bytes(out), err: String.new(), status: 0 }
+}
+
+// ------------------------------------------------------------ fold
+
+// The column after printing `c` at `col`.
+fn advance(col: i64, c: u8, bytes: bool) -> i64 {
+    if bytes {
+        return col + 1;
+    }
+    if c == 8 {
+        return if col > 0 { col - 1 } else { 0 };
+    }
+    if c == b'\r' {
+        return 0;
+    }
+    if c == b'\t' {
+        return col + 8 - col % 8;
+    }
+    col + 1
+}
+
+fn fold_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "w");
+    if o.error.len() > 0 {
+        return usage("fold", o.error);
+    }
+    let mut width: i64 = 80;
+    if let Some(w) = o.last(b'w') {
+        width = parse_count(w);
+        if width < 1 {
+            return fail("fold", f"invalid number of columns: {q(w)}: Numerical result out of range", 1);
+        }
+    }
+    let bytes = o.has(b'b');
+    let spaces = o.has(b's');
+    let names = if o.operands.len() == 0 { vec!["-".to_string()] } else { o.operands.clone() };
+    let mut out: Vec[u8] = Vec.new();
+    for f in 0..names.len() {
+        let text = match read_input(names[f], stdin, dir) {
+            Some(t) => to_bytes(t),
+            None => return fail("fold", f"{names[f]}: No such file or directory", 1),
+        };
+        let mut line: Vec[u8] = Vec.new();
+        let mut col: i64 = 0;
+        for i in 0..text.len() {
+            let c = text[i];
+            if c == b'\n' {
+                for k in 0..line.len() {
+                    out.push(line[k]);
+                }
+                out.push(b'\n');
+                line = Vec.new();
+                col = 0;
+                continue;
+            }
+            loop {
+                let next = advance(col, c, bytes);
+                if next <= width {
+                    col = next;
+                    line.push(c);
+                    break;
+                }
+                if spaces {
+                    let mut blank: i64 = -1;
+                    for k in 0..line.len() {
+                        if is_blank(line[k]) {
+                            blank = k;
+                        }
+                    }
+                    if blank >= 0 {
+                        for k in 0..blank + 1 {
+                            out.push(line[k]);
+                        }
+                        out.push(b'\n');
+                        let mut rest: Vec[u8] = Vec.new();
+                        col = 0;
+                        for k in blank + 1..line.len() {
+                            rest.push(line[k]);
+                            col = advance(col, line[k], bytes);
+                        }
+                        line = rest;
+                        continue;
+                    }
+                }
+                if line.len() == 0 {
+                    col = next;
+                    line.push(c);
+                    break;
+                }
+                for k in 0..line.len() {
+                    out.push(line[k]);
+                }
+                out.push(b'\n');
+                line = Vec.new();
+                col = 0;
+            }
+        }
+        for k in 0..line.len() {
+            out.push(line[k]);
+        }
+    }
+    Io { out: from_bytes(out), err: String.new(), status: 0 }
+}
+
+// ------------------------------------------------------------ expand and unexpand
+
+// Tab stops: one size repeated, or a list after which a tab is a space.
+struct Tabs {
+    size: i64,
+    list: Vec[i64],
+}
+
+fn parse_tabs(spec: Option[String]) -> Result[Tabs, String] {
+    let mut t = Tabs { size: 8, list: Vec.new() };
+    let s = match spec {
+        Some(s) => s,
+        None => return Ok(t),
+    };
+    let b = to_bytes(s);
+    let mut cur: i64 = -1;
+    let mut stops: Vec[i64] = Vec.new();
+    for i in 0..b.len() + 1 {
+        if i == b.len() or b[i] == b',' or b[i] == b' ' {
+            if cur > 0 {
+                stops.push(cur);
+            } else if cur == 0 {
+                return Err("tab size cannot be 0".to_string());
+            }
+            cur = -1;
+        } else if is_digit(b[i]) {
+            cur = if cur < 0 { 0 } else { cur * 10 };
+            cur += (b[i] - b'0') as i64;
+        } else {
+            return Err(f"tab size contains invalid character(s): {q(byte_str(b, i, b.len()))}");
+        }
+    }
+    if stops.len() == 1 {
+        t.size = stops[0];
+    } else {
+        for k in 1..stops.len() {
+            if stops[k] <= stops[k - 1] {
+                return Err("tab sizes must be ascending".to_string());
+            }
+        }
+        t.list = stops;
+    }
+    Ok(t)
+}
+
+// The next tab stop after `col`, and whether there is none (past the
+// end of a list).
+fn next_stop(t: ref Tabs, col: i64) -> (i64, bool) {
+    if t.list.len() == 0 {
+        return (col - col % t.size + t.size, false);
+    }
+    for k in 0..t.list.len() {
+        if t.list[k] > col {
+            return (t.list[k], false);
+        }
+    }
+    (col + 1, true)
+}
+
+fn tab_inputs(tool: Str, o: ref Opts, stdin: Str, dir: Str) -> Result[Vec[String], Io] {
+    let names = if o.operands.len() == 0 { vec!["-".to_string()] } else { o.operands.clone() };
+    let mut texts: Vec[String] = Vec.new();
+    for i in 0..names.len() {
+        match read_input(names[i], stdin, dir) {
+            Some(t) => texts.push(t),
+            None => return Err(fail(tool, f"{names[i]}: No such file or directory", 1)),
+        }
+    }
+    Ok(texts)
+}
+
+fn expand_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "t");
+    if o.error.len() > 0 {
+        return usage("expand", o.error);
+    }
+    let tabs = match parse_tabs(o.last(b't')) {
+        Ok(t) => t,
+        Err(e) => return fail("expand", e, 1),
+    };
+    let initial = o.has(b'i');
+    let texts = match tab_inputs("expand", o, stdin, dir) {
+        Ok(t) => t,
+        Err(io) => return io,
+    };
+    let mut out: Vec[u8] = Vec.new();
+    for f in 0..texts.len() {
+        let b = to_bytes(texts[f]);
+        let mut col: i64 = 0;
+        let mut leading = true;
+        for i in 0..b.len() {
+            let c = b[i];
+            if c == b'\n' {
+                out.push(c);
+                col = 0;
+                leading = true;
+                continue;
+            }
+            if c == b'\t' and leading {
+                let (stop, _) = next_stop(tabs, col);
+                while col < stop {
+                    out.push(b' ');
+                    col += 1;
+                }
+                continue;
+            }
+            if c != b' ' and c != b'\t' and initial {
+                leading = false;
+            }
+            out.push(c);
+            col = if c == 8 { if col > 0 { col - 1 } else { 0 } } else { col + 1 };
+        }
+    }
+    Io { out: from_bytes(out), err: String.new(), status: 0 }
+}
+
+fn unexpand_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let o = parse_opts(args, "t");
+    if o.error.len() > 0 {
+        return usage("unexpand", o.error);
+    }
+    let tabs = match parse_tabs(o.last(b't')) {
+        Ok(t) => t,
+        Err(e) => return fail("unexpand", e, 1),
+    };
+    // -t implies -a, unless --first-only says otherwise.
+    let entire = (o.has(b'a') or o.last(b't').is_some()) and not o.has_long("first-only");
+    let texts = match tab_inputs("unexpand", o, stdin, dir) {
+        Ok(t) => t,
+        Err(io) => return io,
+    };
+    let mut out: Vec[u8] = Vec.new();
+    for f in 0..texts.len() {
+        let b = to_bytes(texts[f]);
+        let mut i: i64 = 0;
+        while i < b.len() {
+            // One line, following GNU's unexpand loop.
+            let mut col: i64 = 0;
+            let mut convert = true;
+            let mut prev_blank = true;
+            let mut one_before = false;
+            let mut pending: Vec[u8] = Vec.new();
+            loop {
+                let at_end = i >= b.len();
+                let mut c: u8 = if at_end { 0 } else { b[i] };
+                i += 1;
+                let mut blank = false;
+                if convert and not at_end {
+                    blank = c == b' ' or c == b'\t';
+                    if blank {
+                        let (next, last) = next_stop(tabs, col);
+                        if last {
+                            convert = false;
+                        }
+                        if convert {
+                            if c == b'\t' {
+                                col = next;
+                                if pending.len() > 0 {
+                                    pending[0] = b'\t';
+                                }
+                            } else {
+                                col += 1;
+                                if not (prev_blank and col == next) {
+                                    if col == next {
+                                        one_before = true;
+                                    }
+                                    pending.push(c);
+                                    prev_blank = true;
+                                    continue;
+                                }
+                                c = b'\t';
+                                if pending.len() > 0 {
+                                    pending[0] = b'\t';
+                                }
+                            }
+                            // Drop the pending blanks unless one blank came
+                            // just before the previous stop.
+                            let keep = if one_before and pending.len() > 0 { 1 } else { 0 };
+                            let mut kept: Vec[u8] = Vec.new();
+                            for k in 0..keep {
+                                kept.push(pending[k]);
+                            }
+                            pending = kept;
+                        }
+                    } else if c == 8 {
+                        if col > 0 {
+                            col -= 1;
+                        }
+                    } else {
+                        col += 1;
+                    }
+                }
+                if pending.len() > 0 {
+                    if pending.len() > 1 and one_before {
+                        pending[0] = b'\t';
+                    }
+                    for k in 0..pending.len() {
+                        out.push(pending[k]);
+                    }
+                    pending = Vec.new();
+                    one_before = false;
+                }
+                prev_blank = blank;
+                convert = convert and (entire or blank);
+                if at_end {
+                    break;
+                }
+                out.push(c);
+                if c == b'\n' {
+                    break;
+                }
+            }
+        }
+    }
+    Io { out: from_bytes(out), err: String.new(), status: 0 }
+}
+
+// ------------------------------------------------------------ factor and cat
+
+fn factor_line(n: i64) -> String {
+    let mut out = f"{n}:";
+    let mut m = n;
+    let mut d: i64 = 2;
+    while m > 1 and d * d <= m {
+        while m % d == 0 {
+            out.push_str(f" {d}");
+            m /= d;
+        }
+        d += if d == 2 { 1 } else { 2 };
+    }
+    if m > 1 {
+        out.push_str(f" {m}");
+    }
+    out.push_str("\n");
+    out
+}
+
+fn factor_tool(args: ref Vec[String], stdin: Str) -> Io {
+    let mut nums: Vec[String] = args.clone();
+    if args.len() == 0 {
+        let b = to_bytes(stdin);
+        let mut cur: Vec[u8] = Vec.new();
+        for i in 0..b.len() + 1 {
+            if i == b.len() or is_space(b[i]) {
+                if cur.len() > 0 {
+                    nums.push(from_bytes(cur));
+                    cur = Vec.new();
+                }
+            } else {
+                cur.push(b[i]);
+            }
+        }
+    }
+    let mut io = io_new();
+    for i in 0..nums.len() {
+        let n = parse_count(nums[i]);
+        if n < 0 {
+            io.err.push_str(f"factor: {q(nums[i])} is not a valid positive integer\n");
+            io.status = 1;
+            continue;
+        }
+        io.out.push_str(factor_line(n));
+    }
+    io
+}
+
+fn cat_tool(args: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let names = if args.len() == 0 { vec!["-".to_string()] } else { args.clone() };
+    let mut io = io_new();
+    for i in 0..names.len() {
+        match read_input(names[i], stdin, dir) {
+            Some(t) => io.out.push_str(t),
+            None => {
+                io.err.push_str(f"cat: {names[i]}: No such file or directory\n");
+                io.status = 1;
+            }
+        }
+    }
+    io
+}
+
+// ------------------------------------------------------------ the input files
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("aGVsbG8*d29ybGQ=\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("port=8080\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("KARA\u{1}\0\u{2}\u{7f}\tv1.2\n");
+    s.push_str("café\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("        server {\n");
+    s.push_str("            listen 80;\n");
+    s.push_str("    \t    root /srv/www;\n");
+    s.push_str("  mixed  spacing   here\n");
+    s.push_str("        }\n");
+    s
+}
+
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("TODO\tship the release notes\tdue: fri\n");
+    s.push_str("name\tqty\tprice\n");
+    s.push_str("widget\t12\t2.50\n");
+    s.push_str("a\tbb\tccc\tdddd\n");
+    s.push_str("The deploy script runs every night at two and rotates the logs before it uploads them to the archive bucket.\n");
+    s.push_str("x\t\ty\n");
+    s
+}
+
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("22\n");
+    s.push_str("80\n");
+    s.push_str("443\n");
+    s.push_str("8080\n");
+    s
+}
+
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("user=deploy\n");
+    s.push_str("password=hunter2 & more!\n");
+    s
+}
+
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("Once upon a time there was a build server that never slept. It compiled every commit that anyone pushed, day and night.\n");
+    s.push_str("\n");
+    s.push_str("Then one day the disk filled up.\n");
+    s
+}
+
+fn file_9() -> String {
+    let mut s = String.new();
+    s.push_str("dXNlcj1kZXBsb3kKcGFzc3dvcmQ9aHVudGVyMiAmIG1vcmUhCg==\n");
+    s
+}
+
+fn file_10() -> String {
+    let mut s = String.new();
+    s.push_str("VGhlIHF1aWNrIGJyb3du\n");
+    s.push_str("IGZveCBqdW1wcyBvdmVy\n");
+    s.push_str("IHRoZSBsYXp5IGRvZy4=\n");
+    s
+}
+
+fn file_11() -> String {
+    let mut s = String.new();
+    s.push_str("printf\t%s has %d items\\n\tcart\t3\n");
+    s.push_str("printf\t%-10s|%5s|\\n\tleft\tright\ta\tb\n");
+    s.push_str("printf\t%05d %+d % d %x %X %o %#x %#o\\n\t42\t7\t9\t255\t255\t8\t255\t8\n");
+    s.push_str("printf\t%.2f %8.3f %-8.1f| %f\\n\t3.14159\t2.5\t10\t1\n");
+    s.push_str("printf\t%c%c%c\\n\tabc\txyz\t9\n");
+    s.push_str("printf\t%s=%s\\n\ta\t1\tb\t2\tc\n");
+    s.push_str("printf\t[%*d] [%-*d] [%.*s]\\n\t6\t42\t4\t7\t3\tabcdef\n");
+    s.push_str("printf\t%d %d %d %d\\n\t0x1F\t010\t'A\t-12\n");
+    s.push_str("printf\t%b|%s\\n\ttab\\there\ttab\\there\n");
+    s.push_str("printf\toctal \\101\\102 hex \\x43\\x44 quote \\\" back \\\\ pct %%\\n\n");
+    s.push_str("printf\t%b\tone\\ctwo\n");
+    s.push_str("printf\t%.3s|%10.4s|\\n\tabcdef\tabcdef\n");
+    s.push_str("printf\t%d\\n\t12abc\n");
+    s.push_str("printf\t%d %s\\n\tx1\n");
+    s.push_str("printf\t%u %i\\n\t-1\t077\n");
+    s.push_str("printf\tno newline\n");
+    s.push_str("printf\t%z\\n\t1\n");
+    s.push_str("printf\n");
+    s.push_str("expr\t3\t+\t4\t*\t2\n");
+    s.push_str("expr\t(\t3\t+\t4\t)\t*\t2\n");
+    s.push_str("expr\t17\t/\t5\t-\t17\t%\t5\n");
+    s.push_str("expr\t-7\t/\t2\n");
+    s.push_str("expr\t-7\t%\t2\n");
+    s.push_str("expr\t5\t>\t3\n");
+    s.push_str("expr\tabc\t<\tabd\n");
+    s.push_str("expr\t10\t<\t9\n");
+    s.push_str("expr\t10\t=\t010\n");
+    s.push_str("expr\t0\t|\tfallback\n");
+    s.push_str("expr\t\t|\t0\n");
+    s.push_str("expr\t3\t&\t0\n");
+    s.push_str("expr\tlength\tdeploy-2026\n");
+    s.push_str("expr\tsubstr\trelease-v1.4.2\t10\t3\n");
+    s.push_str("expr\tindex\tuser@example.com\t@.\n");
+    s.push_str("expr\trelease-v1.4.2\t:\trelease-v\\([0-9]*\\)\n");
+    s.push_str("expr\trelease-v1.4.2\t:\t.*\n");
+    s.push_str("expr\tbackup_2026.tar.gz\t:\t\\(.*\\)\\.tar\\.gz$\n");
+    s.push_str("expr\tmatch\thost42\t[a-z]*\n");
+    s.push_str("expr\tabc\t:\tx*\n");
+    s.push_str("expr\tfile.txt\t:\t\\(.*\\)\\.png\n");
+    s.push_str("expr\t4\t/\t0\n");
+    s.push_str("expr\t4\t+\tx\n");
+    s.push_str("expr\t4\t+\n");
+    s.push_str("expr\t1\t2\n");
+    s.push_str("seq\t5\n");
+    s.push_str("seq\t3\t7\n");
+    s.push_str("seq\t10\t-3\t1\n");
+    s.push_str("seq\t-s\t,\t1\t6\n");
+    s.push_str("seq\t-w\t8\t11\n");
+    s.push_str("seq\t-w\t-2\t2\n");
+    s.push_str("seq\t0\t0.25\t1\n");
+    s.push_str("seq\t1.5\t4\n");
+    s.push_str("seq\t-f\tnode%02g\t1\t3\n");
+    s.push_str("seq\t-f\t%.3f\t0\t0.5\t1\n");
+    s.push_str("seq\t-s\t \t-w\t1\t3\t10\n");
+    s.push_str("seq\t5\t1\n");
+    s.push_str("seq\t1\t0\t3\n");
+    s.push_str("seq\tabc\n");
+    s.push_str("seq\n");
+    s.push_str("test\t-f\tnotes.txt\n");
+    s.push_str("test\t-f\tconf.d\n");
+    s.push_str("test\t-d\tconf.d\n");
+    s.push_str("test\t-e\tmissing.txt\n");
+    s.push_str("test\t-s\tempty.txt\n");
+    s.push_str("test\t-s\tnotes.txt\n");
+    s.push_str("test\t-z\t\n");
+    s.push_str("test\t-n\t\n");
+    s.push_str("test\tabc\t=\tabc\n");
+    s.push_str("test\tabc\t!=\tabc\n");
+    s.push_str("test\t10\t-lt\t9\n");
+    s.push_str("test\t10\t-ge\t10\n");
+    s.push_str("test\t-5\t-lt\t3\n");
+    s.push_str("test\t!\t-d\tnotes.txt\n");
+    s.push_str("test\t-f\tnotes.txt\t-a\t-d\tconf.d\n");
+    s.push_str("test\t-f\tmissing\t-o\t-z\t\n");
+    s.push_str("test\t(\t1\t-eq\t2\t)\t-o\tx\t=\tx\n");
+    s.push_str("test\tabc\n");
+    s.push_str("test\t\n");
+    s.push_str("test\n");
+    s.push_str("test\tabc\t-eq\t1\n");
+    s.push_str("test\t1\t-eq\n");
+    s.push_str("basename\t/var/log/nginx/access.log\n");
+    s.push_str("basename\t/var/log/nginx/access.log\t.log\n");
+    s.push_str("basename\t-s\t.tar.gz\t/srv/backup/db.tar.gz\n");
+    s.push_str("basename\t-a\t/etc/hosts\tusr/lib/\t/\tplain\n");
+    s.push_str("basename\t.log\t.log\n");
+    s.push_str("basename\ta//b///\n");
+    s.push_str("dirname\t/var/log/nginx/access.log\trelative\t/\tusr/lib/\t//srv//x\n");
+    s.push_str("basename\n");
+    s.push_str("od\theader.bin\n");
+    s.push_str("od\t-c\theader.bin\n");
+    s.push_str("od\t-A\tx\t-t\tx1z\theader.bin\n");
+    s.push_str("od\t-A\td\t-t\tu1\t-N\t8\theader.bin\n");
+    s.push_str("od\t-A\tn\t-t\tx2\theader.bin\n");
+    s.push_str("od\t-t\td4\t-j\t4\theader.bin\n");
+    s.push_str("od\t-b\t-w8\tports.txt\n");
+    s.push_str("od\t-t\ta\theader.bin\n");
+    s.push_str("od\t-A\tx\t-t\tx1\tempty.txt\n");
+    s.push_str("printf\t%s\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\t\u{1d}\tod\t-A\td\t-c\n");
+    s.push_str("printf\t%s\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\t\u{1d}\tod\t-A\td\t-v\t-c\n");
+    s.push_str("od\t-t\tx8\theader.bin\n");
+    s.push_str("od\t-t\tq1\theader.bin\n");
+    s.push_str("base64\tsecret.txt\n");
+    s.push_str("base64\t-w\t16\tsecret.txt\n");
+    s.push_str("base64\t-w\t0\tsecret.txt\n");
+    s.push_str("base64\t-d\ttoken.b64\n");
+    s.push_str("base64\t-d\twrapped.b64\n");
+    s.push_str("printf\t%s\ta\t\u{1d}\tbase64\n");
+    s.push_str("printf\t%s\tab\t\u{1d}\tbase64\t\u{1d}\tbase64\t-d\n");
+    s.push_str("base64\t-d\tbad.b64\n");
+    s.push_str("base64\tmissing.txt\n");
+    s.push_str("fold\t-w\t30\tstory.txt\n");
+    s.push_str("fold\t-s\t-w\t30\tstory.txt\n");
+    s.push_str("fold\t-w\t20\tnotes.txt\n");
+    s.push_str("fold\t-b\t-w\t20\tnotes.txt\n");
+    s.push_str("fold\t-w\t0\tstory.txt\n");
+    s.push_str("expand\tnotes.txt\n");
+    s.push_str("expand\t-t\t4\tnotes.txt\n");
+    s.push_str("expand\t-t\t8,14,20\tnotes.txt\n");
+    s.push_str("expand\t-i\t-t\t2\tindent.txt\n");
+    s.push_str("unexpand\tindent.txt\n");
+    s.push_str("unexpand\t-a\tindent.txt\n");
+    s.push_str("unexpand\t-t\t4\tindent.txt\n");
+    s.push_str("expand\tnotes.txt\t\u{1d}\tunexpand\t-a\n");
+    s.push_str("factor\t12\t97\t1\t0\t360\t1001\t65536\n");
+    s.push_str("factor\t600851475143\t9999999967\t4294967297\n");
+    s.push_str("printf\t%s\\n\t84 91\t  1024\u{b}77\t\u{1d}\tfactor\n");
+    s.push_str("factor\t12\tx9\t15\n");
+    s.push_str("seq\t2\t12\t\u{1d}\tfactor\n");
+    s
+}
+
+// Each input file's path under data/, and its text.
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("bad.b64".to_string(), file_0()));
+    v.push(("conf.d/app.conf".to_string(), file_1()));
+    v.push(("empty.txt".to_string(), file_2()));
+    v.push(("header.bin".to_string(), file_3()));
+    v.push(("indent.txt".to_string(), file_4()));
+    v.push(("notes.txt".to_string(), file_5()));
+    v.push(("ports.txt".to_string(), file_6()));
+    v.push(("secret.txt".to_string(), file_7()));
+    v.push(("story.txt".to_string(), file_8()));
+    v.push(("token.b64".to_string(), file_9()));
+    v.push(("wrapped.b64".to_string(), file_10()));
+    v.push(("../jobs.tsv".to_string(), file_11()));
+    v
+}
+
+// ------------------------------------------------------------ the run
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/conf.d".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    let files = data_files();
+    for i in 0..files.len() {
+        let (name, text) = files[i].clone();
+        let path = f"data/{name}";
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// Runs one stage: `argv[0]` is the tool, `stdin` what the previous
+// stage printed.
+fn run_tool(argv: ref Vec[String], stdin: Str, dir: Str) -> Io {
+    let tool = argv[0].clone();
+    let mut args: Vec[String] = Vec.new();
+    for i in 1..argv.len() {
+        args.push(argv[i].clone());
+    }
+    if tool == "printf" {
+        printf_tool(args)
+    } else if tool == "expr" {
+        expr_tool(args)
+    } else if tool == "seq" {
+        seq_tool(args)
+    } else if tool == "test" {
+        test_tool(args, dir)
+    } else if tool == "basename" {
+        basename_tool(args)
+    } else if tool == "dirname" {
+        dirname_tool(args)
+    } else if tool == "od" {
+        od_tool(args, stdin, dir)
+    } else if tool == "base64" {
+        base64_tool(args, stdin, dir)
+    } else if tool == "fold" {
+        fold_tool(args, stdin, dir)
+    } else if tool == "expand" {
+        expand_tool(args, stdin, dir)
+    } else if tool == "unexpand" {
+        unexpand_tool(args, stdin, dir)
+    } else if tool == "factor" {
+        factor_tool(args, stdin)
+    } else if tool == "cat" {
+        cat_tool(args, stdin, dir)
+    } else {
+        fail("sh", f"{tool}: command not found", 127)
+    }
+}
+
+// An argument as a shell would need it written.
+fn quote(a: Str) -> String {
+    let b = a.bytes();
+    let mut plain = b.len() > 0;
+    for i in 0..b.len() {
+        let c = b[i];
+        let ok = is_alpha(c) or is_digit(c) or c == b'_' or c == b'.' or c == b'/' or c == b'=' or c == b'+' or c == b':' or c == b',' or c == b'%' or c == b'@' or c == b'-';
+        if not ok {
+            plain = false;
+        }
+    }
+    if plain {
+        return a.to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'\'');
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            push_bytes(mut out, "'\\''");
+        } else {
+            out.push(b[i]);
+        }
+    }
+    out.push(b'\'');
+    from_bytes(out)
+}
+
+// Prints text, marking a missing final newline.
+fn show(text: Str) {
+    print(text);
+    if text.len() > 0 and not text.ends_with("\n") {
+        println("[no newline at end]");
+    }
+}
+
+// A job line's arguments: tab-separated, a vertical tab standing for a
+// tab inside one.
+fn job_args(line: Str) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == b'\t' {
+            out.push(from_bytes(cur));
+            cur = Vec.new();
+        } else if b[i] == 11 {
+            cur.push(b'\t');
+        } else {
+            cur.push(b[i]);
+        }
+    }
+    out.push(from_bytes(cur));
+    out
+}
+
+// The stage separator in a job line.
+const PIPE: u8 = 29;
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let jobs = match fs.read_to_string("jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read jobs.tsv: {e}"),
+    };
+    let lines = lines_of(jobs);
+    for j in 0..lines.len() {
+        let args = job_args(lines[j]);
+        let mut shown = String.new();
+        let mut stages: Vec[Vec[String]] = Vec.new();
+        let mut cur: Vec[String] = Vec.new();
+        for k in 0..args.len() {
+            if k > 0 {
+                shown.push_str(" ");
+            }
+            let b = to_bytes(args[k]);
+            if b.len() == 1 and b[0] == PIPE {
+                shown.push_str("|");
+                stages.push(cur);
+                cur = Vec.new();
+            } else {
+                shown.push_str(quote(args[k]));
+                cur.push(args[k].clone());
+            }
+        }
+        stages.push(cur);
+        println(f"$ {shown}");
+        let mut data = String.new();
+        let mut errs: Vec[String] = Vec.new();
+        let mut status: i64 = 0;
+        for s in 0..stages.len() {
+            let res = run_tool(stages[s], data, "data");
+            data = res.out;
+            errs.push(res.err);
+            status = res.status;
+        }
+        show(data);
+        for e in 0..errs.len() {
+            show(errs[e]);
+        }
+        if status != 0 {
+            println(f"[exit {status}]");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_coreutils: {e}");
+    }
+}

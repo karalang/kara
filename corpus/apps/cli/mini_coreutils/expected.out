@@ -1,0 +1,435 @@
+$ printf '%s has %d items\n' cart 3
+cart has 3 items
+$ printf '%-10s|%5s|\n' left right a b
+left      |right|
+a         |    b|
+$ printf '%05d %+d % d %x %X %o %#x %#o\n' 42 7 9 255 255 8 255 8
+00042 +7  9 ff FF 10 0xff 010
+$ printf '%.2f %8.3f %-8.1f| %f\n' 3.14159 2.5 10 1
+3.14    2.500 10.0    | 1.000000
+$ printf '%c%c%c\n' abc xyz 9
+ax9
+$ printf '%s=%s\n' a 1 b 2 c
+a=1
+b=2
+c=
+$ printf '[%*d] [%-*d] [%.*s]\n' 6 42 4 7 3 abcdef
+[    42] [7   ] [abc]
+$ printf '%d %d %d %d\n' 0x1F 010 ''\''A' -12
+31 8 65 -12
+$ printf '%b|%s\n' 'tab\there' 'tab\there'
+tab	here|tab\there
+$ printf 'octal \101\102 hex \x43\x44 quote \" back \\ pct %%\n'
+octal AB hex CD quote " back \ pct %
+$ printf %b 'one\ctwo'
+one[no newline at end]
+$ printf '%.3s|%10.4s|\n' abcdef abcdef
+abc|      abcd|
+$ printf '%d\n' 12abc
+12
+printf: '12abc': value not completely converted
+[exit 1]
+$ printf '%d %s\n' x1
+0 
+printf: 'x1': expected a numeric value
+[exit 1]
+$ printf '%u %i\n' -1 077
+18446744073709551615 63
+$ printf 'no newline'
+no newline[no newline at end]
+$ printf '%z\n' 1
+printf: %z\: invalid conversion specification
+[exit 1]
+$ printf
+printf: missing operand
+Try 'printf --help' for more information.
+[exit 1]
+$ expr 3 + 4 '*' 2
+11
+$ expr '(' 3 + 4 ')' '*' 2
+14
+$ expr 17 / 5 - 17 % 5
+1
+$ expr -7 / 2
+-3
+$ expr -7 % 2
+-1
+$ expr 5 '>' 3
+1
+$ expr abc '<' abd
+1
+$ expr 10 '<' 9
+0
+[exit 1]
+$ expr 10 = 010
+1
+$ expr 0 '|' fallback
+fallback
+$ expr '' '|' 0
+0
+[exit 1]
+$ expr 3 '&' 0
+0
+[exit 1]
+$ expr length deploy-2026
+11
+$ expr substr release-v1.4.2 10 3
+1.4
+$ expr index user@example.com @.
+5
+$ expr release-v1.4.2 : 'release-v\([0-9]*\)'
+1
+$ expr release-v1.4.2 : '.*'
+14
+$ expr backup_2026.tar.gz : '\(.*\)\.tar\.gz$'
+backup_2026
+$ expr match host42 '[a-z]*'
+4
+$ expr abc : 'x*'
+0
+[exit 1]
+$ expr file.txt : '\(.*\)\.png'
+
+[exit 1]
+$ expr 4 / 0
+expr: division by zero
+[exit 2]
+$ expr 4 + x
+expr: non-integer argument
+[exit 2]
+$ expr 4 +
+expr: syntax error: missing argument after '+'
+[exit 2]
+$ expr 1 2
+expr: syntax error: unexpected argument '2'
+[exit 2]
+$ seq 5
+1
+2
+3
+4
+5
+$ seq 3 7
+3
+4
+5
+6
+7
+$ seq 10 -3 1
+10
+7
+4
+1
+$ seq -s , 1 6
+1,2,3,4,5,6
+$ seq -w 8 11
+08
+09
+10
+11
+$ seq -w -2 2
+-2
+-1
+00
+01
+02
+$ seq 0 0.25 1
+0.00
+0.25
+0.50
+0.75
+1.00
+$ seq 1.5 4
+1.5
+2.5
+3.5
+$ seq -f node%02g 1 3
+node01
+node02
+node03
+$ seq -f %.3f 0 0.5 1
+0.000
+0.500
+1.000
+$ seq -s ' ' -w 1 3 10
+01 04 07 10
+$ seq 5 1
+$ seq 1 0 3
+seq: invalid Zero increment value: '0'
+Try 'seq --help' for more information.
+[exit 1]
+$ seq abc
+seq: invalid floating point argument: 'abc'
+Try 'seq --help' for more information.
+[exit 1]
+$ seq
+seq: missing operand
+Try 'seq --help' for more information.
+[exit 1]
+$ test -f notes.txt
+$ test -f conf.d
+[exit 1]
+$ test -d conf.d
+$ test -e missing.txt
+[exit 1]
+$ test -s empty.txt
+[exit 1]
+$ test -s notes.txt
+$ test -z ''
+$ test -n ''
+[exit 1]
+$ test abc = abc
+$ test abc '!=' abc
+[exit 1]
+$ test 10 -lt 9
+[exit 1]
+$ test 10 -ge 10
+$ test -5 -lt 3
+$ test '!' -d notes.txt
+$ test -f notes.txt -a -d conf.d
+$ test -f missing -o -z ''
+$ test '(' 1 -eq 2 ')' -o x = x
+$ test abc
+$ test ''
+[exit 1]
+$ test
+[exit 1]
+$ test abc -eq 1
+test: invalid integer 'abc'
+[exit 2]
+$ test 1 -eq
+test: missing argument after '-eq'
+[exit 2]
+$ basename /var/log/nginx/access.log
+access.log
+$ basename /var/log/nginx/access.log .log
+access
+$ basename -s .tar.gz /srv/backup/db.tar.gz
+db
+$ basename -a /etc/hosts usr/lib/ / plain
+hosts
+lib
+/
+plain
+$ basename .log .log
+.log
+$ basename a//b///
+b
+$ dirname /var/log/nginx/access.log relative / usr/lib/ //srv//x
+/var/log/nginx
+.
+/
+usr
+//srv
+$ basename
+basename: missing operand
+Try 'basename --help' for more information.
+[exit 1]
+$ od header.bin
+0000000 040513 040522 000001 077402 073011 027061 005062 060543
+0000020 141546 005251
+0000024
+$ od -c header.bin
+0000000   K   A   R   A 001  \0 002 177  \t   v   1   .   2  \n   c   a
+0000020   f 303 251  \n
+0000024
+$ od -A x -t x1z header.bin
+000000 4b 41 52 41 01 00 02 7f 09 76 31 2e 32 0a 63 61  >KARA.....v1.2.ca<
+000010 66 c3 a9 0a                                      >f...<
+000014
+$ od -A d -t u1 -N 8 header.bin
+0000000  75  65  82  65   1   0   2 127
+0000008
+$ od -A n -t x2 header.bin
+ 414b 4152 0001 7f02 7609 2e31 0a32 6163
+ c366 0aa9
+$ od -t d4 -j 4 header.bin
+0000004  2130837505   774993417  1633880626   178897766
+0000024
+$ od -b -w8 ports.txt
+0000000 062 062 012 070 060 012 064 064
+0000010 063 012 070 060 070 060 012
+0000017
+$ od -t a header.bin
+0000000   K   A   R   A soh nul stx del  ht   v   1   .   2  nl   c   a
+0000020   f   C   )  nl
+0000024
+$ od -A x -t x1 empty.txt
+000000
+$ printf %s aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab | od -A d -c
+0000000   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a
+*
+0000032   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a   b
+0000048
+$ printf %s aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab | od -A d -v -c
+0000000   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a
+0000016   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a
+0000032   a   a   a   a   a   a   a   a   a   a   a   a   a   a   a   b
+0000048
+$ od -t x8 header.bin
+0000000 7f0200014152414b 61630a322e317609
+0000020 000000000aa9c366
+0000024
+$ od -t q1 header.bin
+od: invalid character 'q' in type string 'q1'
+[exit 1]
+$ base64 secret.txt
+dXNlcj1kZXBsb3kKcGFzc3dvcmQ9aHVudGVyMiAmIG1vcmUhCg==
+$ base64 -w 16 secret.txt
+dXNlcj1kZXBsb3kK
+cGFzc3dvcmQ9aHVu
+dGVyMiAmIG1vcmUh
+Cg==
+$ base64 -w 0 secret.txt
+dXNlcj1kZXBsb3kKcGFzc3dvcmQ9aHVudGVyMiAmIG1vcmUhCg==[no newline at end]
+$ base64 -d token.b64
+user=deploy
+password=hunter2 & more!
+$ base64 -d wrapped.b64
+The quick brown fox jumps over the lazy dog.[no newline at end]
+$ printf %s a | base64
+YQ==
+$ printf %s ab | base64 | base64 -d
+ab[no newline at end]
+$ base64 -d bad.b64
+hello[no newline at end]
+base64: invalid input
+[exit 1]
+$ base64 missing.txt
+base64: missing.txt: No such file or directory
+[exit 1]
+$ fold -w 30 story.txt
+Once upon a time there was a b
+uild server that never slept. 
+It compiled every commit that 
+anyone pushed, day and night.
+
+Then one day the disk filled u
+p.
+$ fold -s -w 30 story.txt
+Once upon a time there was a 
+build server that never 
+slept. It compiled every 
+commit that anyone pushed, 
+day and night.
+
+Then one day the disk filled 
+up.
+$ fold -w 20 notes.txt
+TODO	ship the rel
+ease notes	due:
+ fri
+name	qty	pric
+e
+widget	12	2.50
+a	bb	ccc
+	dddd
+The deploy script ru
+ns every night at tw
+o and rotates the lo
+gs before it uploads
+ them to the archive
+ bucket.
+x		y
+$ fold -b -w 20 notes.txt
+TODO	ship the releas
+e notes	due: fri
+name	qty	price
+widget	12	2.50
+a	bb	ccc	dddd
+The deploy script ru
+ns every night at tw
+o and rotates the lo
+gs before it uploads
+ them to the archive
+ bucket.
+x		y
+$ fold -w 0 story.txt
+fold: invalid number of columns: '0': Numerical result out of range
+[exit 1]
+$ expand notes.txt
+TODO    ship the release notes  due: fri
+name    qty     price
+widget  12      2.50
+a       bb      ccc     dddd
+The deploy script runs every night at two and rotates the logs before it uploads them to the archive bucket.
+x               y
+$ expand -t 4 notes.txt
+TODO    ship the release notes  due: fri
+name    qty price
+widget  12  2.50
+a   bb  ccc dddd
+The deploy script runs every night at two and rotates the logs before it uploads them to the archive bucket.
+x       y
+$ expand -t 8,14,20 notes.txt
+TODO    ship the release notes due: fri
+name    qty   price
+widget  12    2.50
+a       bb    ccc   dddd
+The deploy script runs every night at two and rotates the logs before it uploads them to the archive bucket.
+x             y
+$ expand -i -t 2 indent.txt
+        server {
+            listen 80;
+          root /srv/www;
+  mixed  spacing   here
+        }
+$ unexpand indent.txt
+	server {
+	    listen 80;
+	    root /srv/www;
+  mixed  spacing   here
+	}
+$ unexpand -a indent.txt
+	server {
+	    listen 80;
+	    root /srv/www;
+  mixed	 spacing   here
+	}
+$ unexpand -t 4 indent.txt
+		server {
+			listen 80;
+			root /srv/www;
+  mixed	 spacing   here
+		}
+$ expand notes.txt | unexpand -a
+TODO	ship the release notes	due: fri
+name	qty	price
+widget	12	2.50
+a	bb	ccc	dddd
+The deploy script runs every night at two and rotates the logs before it uploads them to the archive bucket.
+x		y
+$ factor 12 97 1 0 360 1001 65536
+12: 2 2 3
+97: 97
+1:
+0:
+360: 2 2 2 3 3 5
+1001: 7 11 13
+65536: 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
+$ factor 600851475143 9999999967 4294967297
+600851475143: 71 839 1471 6857
+9999999967: 9999999967
+4294967297: 641 6700417
+$ printf '%s\n' '84 91' '  1024	77' | factor
+84: 2 2 3 7
+91: 7 13
+1024: 2 2 2 2 2 2 2 2 2 2
+77: 7 11
+$ factor 12 x9 15
+12: 2 2 3
+15: 3 5
+factor: 'x9' is not a valid positive integer
+[exit 1]
+$ seq 2 12 | factor
+2: 2
+3: 3
+4: 2 2
+5: 5
+6: 2 3
+7: 7
+8: 2 2 2
+9: 3 3
+10: 2 5
+11: 11
+12: 2 2 3

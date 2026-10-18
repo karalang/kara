@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 274 |
+| missing-feature | 275 |
 | codegen-gap | 265 |
 | false-positive | 210 |
 | other | 173 |
@@ -121,7 +121,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 59 |
 | resolver | 42 |
 | effect | 32 |
-| lexer | 11 |
+| lexer | 12 |
 ## Current state
 
 _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-18). Do not edit this block by hand; edit the ledger and regenerate._
@@ -207,6 +207,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-5 | 2026-10-18 | ownership | low | A slice of a String taken inside a match arm and immediately copied, `let dir = match o { Some(i) => path[..i].to_string(), None => ".".to_string() };`, leaves `karac check` treating the slice borrow as live, so a later move of `path` is refused with "cannot move `path` while a slice borrow into it is still live"; the same slice outside a match, or in an if/else, passes | — |
 | B-2026-10-18-6 | 2026-10-18 | typecheck | low | An `if` whose one branch is a string literal and whose other branch is a `Str` is refused, `let a = if c { "-" } else { name.as_str() };` failing `karac check` and the MIR typecheck with "if/else branches have incompatible types: 'String' and 'StringSlice'" (either branch order); design.md § String literals says a literal takes `Str` the way an integer literal takes its expected type, and B-2026-10-15-52 made an integer literal branch take its sibling's type, but a string literal branch still does not | — |
 | B-2026-10-18-7 | 2026-10-18 | ownership | medium | `karac check` refuses `for p in 0..4 { let a = p + 1; let b = p + 2; }` with "value 'p' moved here, used again here" when an earlier binding named `p`, already out of scope, was a `Vec[i64]`: the range loop's `p` is treated as non-Copy; with no earlier `p`, or with `let p = 3` in place of the loop, it passes | — |
+| B-2026-10-18-8 | 2026-10-18 | lexer | low | The lexer rejects the `\xHH` escape in string, f-string and char literals (`"A\x42C"` is `error[parse]: Unknown escape sequence: \x`), although design.md § Literals lists `\xHH` (a hex byte) among the escapes of text literals | — |
 
 ### Relocated
 
