@@ -48,10 +48,18 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 | `starts_with` | `fn starts_with(self, pat: Str) -> bool` | |
 | `ends_with` | `fn ends_with(self, pat: Str) -> bool` | |
 | `find` | `fn find(self, pat: Str) -> Option[i64]` | Byte offset of the first match. A valid place to cut with `s[a..b]` |
+| `rfind` | `fn rfind(self, pat: Str) -> Option[i64]` | Byte offset of the last match. An empty `pat` is found at the end |
+| `split_once` | `fn split_once(self, sep: Str) -> Option[(Str, Str)]` | The text before and after the first `sep`, both views into `self`; `None` when `sep` does not occur |
+| `rsplit_once` | `fn rsplit_once(self, sep: Str) -> Option[(Str, Str)]` | The same at the last `sep` |
+| `strip_prefix` | `fn strip_prefix(self, prefix: Str) -> Option[Str]` | The text after `prefix`, a view into `self`; `None` when it does not start with `prefix` |
+| `strip_suffix` | `fn strip_suffix(self, suffix: Str) -> Option[Str]` | The text before `suffix`, a view into `self`; `None` when it does not end with `suffix` |
 | `split` | `fn split(self, sep: Str) -> impl Iterator[Item = Str]` | Lazy; each piece is a view into `self` |
+| `splitn` | `fn splitn(self, n: i64, sep: Str) -> impl Iterator[Item = Str]` | At most `n` pieces, as `split` makes them; the last holds the rest of the text. `n <= 0` makes none |
 | `lines` | `fn lines(self) -> impl Iterator[Item = Str]` | Lazy; splits at line ends |
 | `split_whitespace` | `fn split_whitespace(self) -> impl Iterator[Item = Str]` | Lazy; splits at runs of whitespace |
 | `trim` | `fn trim(self) -> Str` | Strips leading and trailing whitespace; a view into `self`, like the splitters |
+| `trim_start` | `fn trim_start(self) -> Str` | Strips leading whitespace only; a view into `self` |
+| `trim_end` | `fn trim_end(self) -> Str` | Strips trailing whitespace only; a view into `self` |
 | `replace` | `fn replace(self, from: Str, to: Str) -> String` | Replaces every occurrence |
 | `to_uppercase` | `fn to_uppercase(self) -> String` | Unicode uppercasing |
 | `to_lowercase` | `fn to_lowercase(self) -> String` | Unicode lowercasing |

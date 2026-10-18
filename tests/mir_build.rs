@@ -3779,3 +3779,48 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-15-15 — the `Str` searchers and cutters beside `find` and
+// `split`: `rfind`, `split_once`, `rsplit_once`, `strip_prefix`,
+// `strip_suffix` and `splitn`, each answering views into the text, on a
+// `Str` and through a `String`.
+#[test]
+fn mir_str_cutters_answer_views() {
+    const SRC: &str = r#"fn show(o: Option[(Str, Str)]) -> String {
+    match o {
+        Some((a, b)) => f"[{a}|{b}]",
+        None => "none",
+    }
+}
+fn main() {
+    let s = "a/b/c.txt";
+    println(f"{s.rfind("/")} {s.rfind("x")} {s.rfind("")} {"ééa".rfind("é")}");
+    println(f"{show(s.split_once("/"))} {show(s.rsplit_once("/"))} {show(s.split_once("?"))}");
+    println(f"{s.strip_prefix("a/")} {s.strip_suffix(".txt")} {s.strip_prefix("z")}");
+    let parts: Vec[Str] = s.splitn(2, "/").collect();
+    println(f"{parts.len()} {parts[0]} {parts[1]}");
+    let e: Vec[Str] = "abc".splitn(3, "").collect();
+    println(f"{e.len()} [{e[0]}] [{e[1]}] [{e[2]}]");
+    let z: Vec[Str] = s.splitn(0, "/").collect();
+    let one: Vec[Str] = s.splitn(1, "/").collect();
+    let many: Vec[Str] = s.splitn(9, "/").collect();
+    println(f"{z.len()} {one[0]} {many.len()} {many[2]}");
+    let owned = "key=value=x".to_string();
+    match owned.split_once("=") {
+        Some((k, v)) => println(f"{k} {v}"),
+        None => println("none"),
+    }
+    println(f"{owned.rfind("=")} {owned.strip_prefix("key")} {owned.trim_end()}");
+    let w: Vec[Str] = owned.splitn(2, "=").collect();
+    println(f"{w[1]}");
+}
+"#;
+    let want = "Some(3) Some(7) Some(9) Some(2)\n[a|b/c.txt] [a/b|c.txt] none\nSome(b/c.txt) Some(a/b/c) None\n2 a b/c.txt\n3 [] [a] [bc]\n0 a/b/c.txt 3 c.txt\nkey value=x\nSome(9) Some(=value=x) key=value=x\nvalue=x\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

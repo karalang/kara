@@ -695,6 +695,70 @@ impl StringSlice {
         }
         self.slice(0, end)
     }
+
+    /// The byte offset of the last occurrence of `pat`, a valid place to cut
+    /// with `s[a..b]`. An empty `pat` is found at the end (B-2026-10-15-15).
+    fn rfind(self, pat: Str) -> Option[i64] {
+        let n = self.len();
+        let m = pat.len();
+        if m > n {
+            return None;
+        }
+        let mut at = n;
+        loop {
+            if at + m <= n and self.slice(at, n).starts_with(pat) {
+                return Some(at);
+            }
+            if at == 0 {
+                return None;
+            }
+            at = at - self.char_before_byte(at).len_utf8();
+        }
+    }
+
+    /// The text before and after the first `sep`, both views into it; `None`
+    /// when `sep` does not occur.
+    fn split_once(self, sep: Str) -> Option[(Str, Str)] {
+        match self.find(sep) {
+            Some(i) => Some((self.slice(0, i), self.slice(i + sep.len(), self.len()))),
+            None => None,
+        }
+    }
+
+    /// The text before and after the last `sep`, both views into it; `None`
+    /// when `sep` does not occur.
+    fn rsplit_once(self, sep: Str) -> Option[(Str, Str)] {
+        match self.rfind(sep) {
+            Some(i) => Some((self.slice(0, i), self.slice(i + sep.len(), self.len()))),
+            None => None,
+        }
+    }
+
+    /// The text after `prefix`, a view into it; `None` when the text does
+    /// not start with `prefix`.
+    fn strip_prefix(self, prefix: Str) -> Option[Str] {
+        if self.starts_with(prefix) {
+            Some(self.slice(prefix.len(), self.len()))
+        } else {
+            None
+        }
+    }
+
+    /// The text before `suffix`, a view into it; `None` when the text does
+    /// not end with `suffix`.
+    fn strip_suffix(self, suffix: Str) -> Option[Str] {
+        if self.ends_with(suffix) {
+            Some(self.slice(0, self.len() - suffix.len()))
+        } else {
+            None
+        }
+    }
+
+    /// At most `n` pieces, as `split` makes them, the last one holding the
+    /// rest of the text. `n <= 0` makes none.
+    fn splitn(self, n: i64, sep: Str) -> StrSplitN {
+        StrSplitN { inner: self.split(sep), left: n }
+    }
 }
 
 impl String {
@@ -732,6 +796,36 @@ impl String {
     /// `trim_end` of the text as a `Str`: a view into `self`.
     fn trim_end(ref self) -> Str {
         self.as_str().trim_end()
+    }
+
+    /// `rfind` of the text as a `Str`.
+    fn rfind(ref self, pat: Str) -> Option[i64] {
+        self.as_str().rfind(pat)
+    }
+
+    /// `split_once` of the text as a `Str`: both pieces are views into `self`.
+    fn split_once(ref self, sep: Str) -> Option[(Str, Str)] {
+        self.as_str().split_once(sep)
+    }
+
+    /// `rsplit_once` of the text as a `Str`: both pieces are views into `self`.
+    fn rsplit_once(ref self, sep: Str) -> Option[(Str, Str)] {
+        self.as_str().rsplit_once(sep)
+    }
+
+    /// `strip_prefix` of the text as a `Str`: a view into `self`.
+    fn strip_prefix(ref self, prefix: Str) -> Option[Str] {
+        self.as_str().strip_prefix(prefix)
+    }
+
+    /// `strip_suffix` of the text as a `Str`: a view into `self`.
+    fn strip_suffix(ref self, suffix: Str) -> Option[Str] {
+        self.as_str().strip_suffix(suffix)
+    }
+
+    /// `splitn` of the text as a `Str`: each piece is a view into `self`.
+    fn splitn(ref self, n: i64, sep: Str) -> StrSplitN {
+        self.as_str().splitn(n, sep)
     }
 }
 
@@ -777,6 +871,33 @@ impl Iterator for StrSplit {
                 Some(self.s.slice(at, n))
             }
         }
+    }
+}
+
+/// At most `left` more pieces of a `Str` between the occurrences of a
+/// separator, the last holding the rest of the text: `splitn`.
+struct StrSplitN {
+    inner: StrSplit,
+    left: i64,
+}
+
+impl Iterator for StrSplitN {
+    type Item = Str;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.left <= 0 {
+            return None;
+        }
+        self.left = self.left - 1;
+        if self.left > 0 {
+            return self.inner.next();
+        }
+        if self.inner.done {
+            return None;
+        }
+        self.inner.done = true;
+        let at = if self.inner.pos < 0 { 0 } else { self.inner.pos };
+        Some(self.inner.s.slice(at, self.inner.s.len()))
     }
 }
 
