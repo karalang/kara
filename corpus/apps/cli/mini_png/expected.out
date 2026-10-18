@@ -1,0 +1,853 @@
+== check annotated.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk gAMA at offset 0x00021, length 4: gamma 0.45455
+  chunk cHRM at offset 0x00031, length 32: white (0.3127, 0.3290), red (0.6400, 0.3300), green (0.3000, 0.6000), blue (0.1500, 0.0600)
+  chunk sRGB at offset 0x0005d, length 1: rendering intent: perceptual
+  chunk sBIT at offset 0x0006a, length 3: significant bits 5, 6, 5
+  chunk IDAT at offset 0x00079, length 710
+  chunk tEXt at offset 0x0034b, length 15: Title: Café menu
+  chunk tEXt at offset 0x00366, length 11: Author: José
+  chunk zTXt at offset 0x0037d, length 44: Comment (compressed): Drawn by hand.\nSecond line.
+  chunk iTXt at offset 0x003b5, length 61: Description [fr, Description]: Un cercle rouge — très simple
+  chunk iTXt at offset 0x003fe, length 33: Software [-, -] (compressed): mini_png ✓
+  chunk tIME at offset 0x0042b, length 7: 9 Mar 2024 17:42:05 UTC
+  chunk prVt at offset 0x0043e, length 12: unknown ancillary chunk
+  chunk pHYs at offset 0x00456, length 9: 2835 x 2835 pixels/meter (72 dpi)
+  chunk IEND at offset 0x0046b, length 0
+  OK: annotated.png (32x32, 24-bit RGB, non-interlaced, 77.1%)
+== check bkgd-phys.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 4 image, 24-bit RGB, non-interlaced
+  chunk bKGD at offset 0x00021, length 6: background red = 255, green = 255, blue = 255
+  chunk pHYs at offset 0x00033, length 9: 1 x 2 pixels, aspect ratio only
+  chunk IDAT at offset 0x00048, length 41
+  chunk IEND at offset 0x0007d, length 0
+  OK: bkgd-phys.png (4x4, 24-bit RGB, non-interlaced, 21.1%)
+== check circle-fixed.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 300
+  chunk IEND at offset 0x00159, length 0
+  OK: circle-fixed.png (32x32, 24-bit RGB, non-interlaced, 90.3%)
+== check circle-huffman.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 1143
+  chunk IEND at offset 0x004a4, length 0
+  OK: circle-huffman.png (32x32, 24-bit RGB, non-interlaced, 63.1%)
+== check circle-idat1.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 1
+  (347 IDAT chunks, 347 bytes)
+  chunk IEND at offset 0x011c0, length 0
+  OK: circle-idat1.png (32x32, 24-bit RGB, non-interlaced, 88.8%)
+== check circle-idat100.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 100
+  (4 IDAT chunks, 347 bytes)
+  chunk IEND at offset 0x001ac, length 0
+  OK: circle-idat100.png (32x32, 24-bit RGB, non-interlaced, 88.8%)
+== check circle-level0.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 3115
+  chunk IEND at offset 0x00c58, length 0
+  OK: circle-level0.png (32x32, 24-bit RGB, non-interlaced, -0.3%)
+== check circle-level1.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 432
+  chunk IEND at offset 0x001dd, length 0
+  OK: circle-level1.png (32x32, 24-bit RGB, non-interlaced, 86.0%)
+== check circle-level9.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 320
+  chunk IEND at offset 0x0016d, length 0
+  OK: circle-level9.png (32x32, 24-bit RGB, non-interlaced, 89.6%)
+== check circle-rle.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 1676
+  chunk IEND at offset 0x006b9, length 0
+  OK: circle-rle.png (32x32, 24-bit RGB, non-interlaced, 46.0%)
+== check circle-window512.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 351
+  chunk IEND at offset 0x0018c, length 0
+  OK: circle-window512.png (32x32, 24-bit RGB, non-interlaced, 88.6%)
+== check favicon-pal8.png
+  chunk IHDR at offset 0x00008, length 13: 16 x 16 image, 8-bit palette, non-interlaced
+  chunk PLTE at offset 0x00021, length 12: 4 palette entries
+  chunk tRNS at offset 0x00039, length 3: 3 transparency entries
+  chunk IDAT at offset 0x00048, length 68
+  chunk IEND at offset 0x00098, length 0
+  OK: favicon-pal8.png (16x16, 8-bit palette, non-interlaced, 75.0%)
+== check gray1-checker.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 8 image, 1-bit grayscale, non-interlaced
+  chunk IDAT at offset 0x00021, length 24
+  chunk IEND at offset 0x00045, length 0
+  OK: gray1-checker.png (8x8, 1-bit grayscale, non-interlaced, -50.0%)
+== check gray1-interlaced.png
+  chunk IHDR at offset 0x00008, length 13: 9 x 7 image, 1-bit grayscale, interlaced
+  chunk IDAT at offset 0x00021, length 27
+  chunk IEND at offset 0x00048, length 0
+  OK: gray1-interlaced.png (9x7, 1-bit grayscale, interlaced, 12.9%)
+== check gray16.png
+  chunk IHDR at offset 0x00008, length 13: 16 x 8 image, 16-bit grayscale, non-interlaced
+  chunk IDAT at offset 0x00021, length 104
+  chunk IEND at offset 0x00095, length 0
+  OK: gray16.png (16x8, 16-bit grayscale, non-interlaced, 60.6%)
+== check gray2.png
+  chunk IHDR at offset 0x00008, length 13: 10 x 3 image, 2-bit grayscale, non-interlaced
+  chunk IDAT at offset 0x00021, length 20
+  chunk IEND at offset 0x00041, length 0
+  OK: gray2.png (10x3, 2-bit grayscale, non-interlaced, -66.6%)
+== check gray4-trns.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 4 image, 4-bit grayscale, non-interlaced
+  chunk tRNS at offset 0x00021, length 2: gray = 5
+  chunk IDAT at offset 0x0002f, length 13
+  chunk IEND at offset 0x00048, length 0
+  OK: gray4-trns.png (4x4, 4-bit grayscale, non-interlaced, -8.3%)
+== check gray4.png
+  chunk IHDR at offset 0x00008, length 13: 16 x 4 image, 4-bit grayscale, non-interlaced
+  chunk IDAT at offset 0x00021, length 39
+  chunk IEND at offset 0x00054, length 0
+  OK: gray4.png (16x4, 4-bit grayscale, non-interlaced, -8.3%)
+== check gray8-3x2-interlaced.png
+  chunk IHDR at offset 0x00008, length 13: 3 x 2 image, 8-bit grayscale, interlaced
+  chunk IDAT at offset 0x00021, length 18
+  chunk IEND at offset 0x0003f, length 0
+  OK: gray8-3x2-interlaced.png (3x2, 8-bit grayscale, interlaced, -80.0%)
+== check gray8-gradient.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 16 image, 8-bit grayscale, non-interlaced
+  chunk IDAT at offset 0x00021, length 132
+  chunk IEND at offset 0x000b1, length 0
+  OK: gray8-gradient.png (32x16, 8-bit grayscale, non-interlaced, 75.0%)
+== check gray8-trns.png
+  chunk IHDR at offset 0x00008, length 13: 6 x 4 image, 8-bit grayscale, non-interlaced
+  chunk tRNS at offset 0x00021, length 2: gray = 0
+  chunk IDAT at offset 0x0002f, length 18
+  chunk IEND at offset 0x0004d, length 0
+  OK: gray8-trns.png (6x4, 8-bit grayscale, non-interlaced, 35.7%)
+== check graya16-interlaced.png
+  chunk IHDR at offset 0x00008, length 13: 7 x 5 image, 32-bit grayscale+alpha, interlaced
+  chunk IDAT at offset 0x00021, length 111
+  chunk IEND at offset 0x0009c, length 0
+  OK: graya16-interlaced.png (7x5, 32-bit grayscale+alpha, interlaced, 26.4%)
+== check graya16.png
+  chunk IHDR at offset 0x00008, length 13: 6 x 6 image, 32-bit grayscale+alpha, non-interlaced
+  chunk IDAT at offset 0x00021, length 90
+  chunk IEND at offset 0x00087, length 0
+  OK: graya16.png (6x6, 32-bit grayscale+alpha, non-interlaced, 40.0%)
+== check graya8.png
+  chunk IHDR at offset 0x00008, length 13: 12 x 12 image, 16-bit grayscale+alpha, non-interlaced
+  chunk IDAT at offset 0x00021, length 109
+  chunk IEND at offset 0x0009a, length 0
+  OK: graya8.png (12x12, 16-bit grayscale+alpha, non-interlaced, 63.6%)
+== check icc-iccp.png
+  chunk IHDR at offset 0x00008, length 13: 2 x 2 image, 24-bit RGB, non-interlaced
+  chunk iCCP at offset 0x00021, length 27: profile Built-in sRGB, 128 bytes
+  chunk IDAT at offset 0x00048, length 20
+  chunk IEND at offset 0x00068, length 0
+  OK: icc-iccp.png (2x2, 24-bit RGB, non-interlaced, -42.8%)
+== check pal1.png
+  chunk IHDR at offset 0x00008, length 13: 12 x 5 image, 1-bit palette, non-interlaced
+  chunk PLTE at offset 0x00021, length 6: 2 palette entries
+  chunk IDAT at offset 0x00033, length 23
+  chunk IEND at offset 0x00056, length 0
+  OK: pal1.png (12x5, 1-bit palette, non-interlaced, -53.3%)
+== check pal2.png
+  chunk IHDR at offset 0x00008, length 13: 9 x 5 image, 2-bit palette, non-interlaced
+  chunk PLTE at offset 0x00021, length 12: 4 palette entries
+  chunk IDAT at offset 0x00039, length 28
+  chunk IEND at offset 0x00061, length 0
+  OK: pal2.png (9x5, 2-bit palette, non-interlaced, -40.0%)
+== check pal4-interlaced.png
+  chunk IHDR at offset 0x00008, length 13: 10 x 10 image, 4-bit palette, interlaced
+  chunk PLTE at offset 0x00021, length 48: 16 palette entries
+  chunk IDAT at offset 0x0005d, length 74
+  chunk IEND at offset 0x000b3, length 0
+  OK: pal4-interlaced.png (10x10, 4-bit palette, interlaced, 1.3%)
+== check pal4.png
+  chunk IHDR at offset 0x00008, length 13: 20 x 6 image, 4-bit palette, non-interlaced
+  chunk PLTE at offset 0x00021, length 48: 16 palette entries
+  chunk IDAT at offset 0x0005d, length 44
+  chunk IEND at offset 0x00095, length 0
+  OK: pal4.png (20x6, 4-bit palette, non-interlaced, 33.3%)
+== check rgb16.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 8 image, 48-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 226
+  chunk IEND at offset 0x0010f, length 0
+  OK: rgb16.png (8x8, 48-bit RGB, non-interlaced, 42.3%)
+== check rgb8-circle.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 710
+  chunk IEND at offset 0x002f3, length 0
+  OK: rgb8-circle.png (32x32, 24-bit RGB, non-interlaced, 77.1%)
+== check rgb8-interlaced.png
+  chunk IHDR at offset 0x00008, length 13: 13 x 11 image, 24-bit RGB, interlaced
+  chunk IDAT at offset 0x00021, length 268
+  chunk IEND at offset 0x00139, length 0
+  OK: rgb8-interlaced.png (13x11, 24-bit RGB, interlaced, 40.5%)
+== check rgb8-trns.png
+  chunk IHDR at offset 0x00008, length 13: 32 x 32 image, 24-bit RGB, non-interlaced
+  chunk tRNS at offset 0x00021, length 6: red = 255, green = 255, blue = 255
+  chunk IDAT at offset 0x00033, length 300
+  chunk IEND at offset 0x0016b, length 0
+  OK: rgb8-trns.png (32x32, 24-bit RGB, non-interlaced, 90.3%)
+== check rgba16.png
+  chunk IHDR at offset 0x00008, length 13: 5 x 5 image, 64-bit RGB+alpha, non-interlaced
+  chunk IDAT at offset 0x00021, length 115
+  chunk IEND at offset 0x000a0, length 0
+  OK: rgba16.png (5x5, 64-bit RGB+alpha, non-interlaced, 43.9%)
+== check rgba8-1x1-interlaced.png
+  chunk IHDR at offset 0x00008, length 13: 1 x 1 image, 32-bit RGB+alpha, interlaced
+  chunk IDAT at offset 0x00021, length 13
+  chunk IEND at offset 0x0003a, length 0
+  OK: rgba8-1x1-interlaced.png (1x1, 32-bit RGB+alpha, interlaced, -160.0%)
+== check rgba8.png
+  chunk IHDR at offset 0x00008, length 13: 24 x 24 image, 32-bit RGB+alpha, non-interlaced
+  chunk IDAT at offset 0x00021, length 565
+  chunk IEND at offset 0x00262, length 0
+  OK: rgba8.png (24x24, 32-bit RGB+alpha, non-interlaced, 75.7%)
+== decode annotated.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode bkgd-phys.png
+  4x4 24-bit RGB, 16 pixels, RGBA crc32 1c0a6576
+  alpha: 16 opaque, 0 transparent, 0 partial
+  |@%%#|
+  |%#**|
+  |**+=|
+  |+==-|
+== decode circle-fixed.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-huffman.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-idat1.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-idat100.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-level0.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-level1.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-level9.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-rle.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode circle-window512.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode favicon-pal8.png
+  16x16 8-bit palette, 256 pixels, RGBA crc32 8d87c2ed
+  alpha: 174 opaque, 60 transparent, 22 partial
+  |                |
+  | ************** |
+  | ************** |
+  | ************** |
+  | ***+ ++ ++ *** |
+  | *** ++ ++ +*** |
+  | ***++ ++ ++*** |
+  | ***+ ++ ++ *** |
+  | *** ++ ++ +*** |
+  | ***++ ++ ++*** |
+  | ***+ ++ ++ *** |
+  | *** ++ ++ +*** |
+  | ************** |
+  | ************** |
+  | ************** |
+  |                |
+== decode gray1-checker.png
+  8x8 1-bit grayscale, 64 pixels, RGBA crc32 a1e27a8e
+  alpha: 64 opaque, 0 transparent, 0 partial
+  |@@  @@  |
+  |@@  @@  |
+  |  @@  @@|
+  |  @@  @@|
+  |@@  @@  |
+  |@@  @@  |
+  |  @@  @@|
+  |  @@  @@|
+== decode gray1-interlaced.png
+  9x7 1-bit grayscale, 63 pixels, RGBA crc32 3959aa87
+  alpha: 63 opaque, 0 transparent, 0 partial
+  |@@@@@@@@@|
+  |@ @ @ @ @|
+  |@@@@@@@@@|
+  |@ @ @ @ @|
+  |@@@@@@@@@|
+  |@ @ @ @ @|
+  |@@@@@@@@@|
+== decode gray16.png
+  16x8 16-bit grayscale, 128 pixels, RGBA crc32 d738840d
+  alpha: 128 opaque, 0 transparent, 0 partial
+  |@@%%#**+==--:.. |
+  |@@%%#**+==--:.. |
+  |@@%%#**+==--:.. |
+  |@@%%#**+==--:.. |
+  |@@%##**+==-::.. |
+  |@@%##**+==-::.. |
+  |@@%##**+==-::.. |
+  |@@%##*++==-::.  |
+== decode gray2.png
+  10x3 2-bit grayscale, 30 pixels, RGBA crc32 cb7958ca
+  alpha: 30 opaque, 0 transparent, 0 partial
+  |@*- @*- @*|
+  |*- @*- @*-|
+  |- @*- @*- |
+== decode gray4-trns.png
+  4x4 4-bit grayscale, 16 pixels, RGBA crc32 fe713d74
+  alpha: 12 opaque, 4 transparent, 0 partial
+  |@ - |
+  |@ - |
+  |@ - |
+  |@ - |
+== decode gray4.png
+  16x4 4-bit grayscale, 64 pixels, RGBA crc32 1840c8a0
+  alpha: 64 opaque, 0 transparent, 0 partial
+  |@@%%#**+==-::.  |
+  |%#**+==-::.  @@%|
+  |*+==-::.  @@%%#*|
+  |=-::.  @@%%#**+=|
+== decode gray8-3x2-interlaced.png
+  3x2 8-bit grayscale, 6 pixels, RGBA crc32 e919a182
+  alpha: 6 opaque, 0 transparent, 0 partial
+  |@*:|
+  |@*:|
+== decode gray8-gradient.png
+  32x16 8-bit grayscale, 512 pixels, RGBA crc32 359817b5
+  alpha: 512 opaque, 0 transparent, 0 partial
+  |@@@@%%%###***+++====---:::...   |
+  |@@@%%%####***+++===---::::...   |
+  |@@@%%%###***+++====---:::...   @|
+  |@@%%%####***+++===---::::...   @|
+  |@@%%%###***+++====---:::...   @@|
+  |@%%%####***+++===---::::...   @@|
+  |@%%%###***+++====---:::...   @@@|
+  |%%%####***+++===---::::...   @@@|
+  |%%%###***+++====---:::...   @@@@|
+  |%%####***+++===---::::...   @@@%|
+  |%%###***+++====---:::...   @@@@%|
+  |%####***+++===---::::...   @@@%%|
+  |%###***+++====---:::...   @@@@%%|
+  |####***+++===---::::...   @@@%%%|
+  |###***+++====---:::...   @@@@%%%|
+  |###***+++===---::::...   @@@%%%#|
+== decode gray8-trns.png
+  6x4 8-bit grayscale, 24 pixels, RGBA crc32 0c35741a
+  alpha: 20 opaque, 4 transparent, 0 partial
+  | %*=: |
+  | %*=: |
+  | %*=: |
+  | %*=: |
+== decode graya16-interlaced.png
+  7x5 32-bit grayscale+alpha, 35 pixels, RGBA crc32 d38ecc92
+  alpha: 0 opaque, 7 transparent, 28 partial
+  |       |
+  |....   |
+  |--::.. |
+  |+==-:..|
+  |#*+=-:.|
+== decode graya16.png
+  6x6 32-bit grayscale+alpha, 36 pixels, RGBA crc32 d377227e
+  alpha: 6 opaque, 0 transparent, 30 partial
+  |@%*+-:|
+  |%#*=-:|
+  |#*+-:.|
+  |++=-:.|
+  |=--:..|
+  |-::.. |
+== decode graya8.png
+  12x12 16-bit grayscale+alpha, 144 pixels, RGBA crc32 d9d0f9ba
+  alpha: 0 opaque, 12 transparent, 132 partial
+  |            |
+  |            |
+  |......      |
+  |:::.....    |
+  |--::::....  |
+  |=---:::...  |
+  |===---::... |
+  |++==---::.. |
+  |**++==--:.. |
+  |#**++=--::..|
+  |%#**++=--:..|
+  |@%#**+==-:..|
+== decode icc-iccp.png
+  2x2 24-bit RGB, 4 pixels, RGBA crc32 e080c293
+  alpha: 4 opaque, 0 transparent, 0 partial
+  |@#|
+  |%+|
+== decode pal1.png
+  12x5 1-bit palette, 60 pixels, RGBA crc32 1a72c574
+  alpha: 60 opaque, 0 transparent, 0 partial
+  |@:@:@:@:@:@:|
+  |:@:@:@:@:@:@|
+  |@:@:@:@:@:@:|
+  |:@:@:@:@:@:@|
+  |@:@:@:@:@:@:|
+== decode pal2.png
+  9x5 2-bit palette, 45 pixels, RGBA crc32 2864dc94
+  alpha: 45 opaque, 0 transparent, 0 partial
+  |=========|
+  |=========|
+  |=========|
+  |=========|
+  |=========|
+== decode pal4-interlaced.png
+  10x10 4-bit palette, 100 pixels, RGBA crc32 f97c233d
+  alpha: 100 opaque, 0 transparent, 0 partial
+  |=======+++|
+  |======++++|
+  |=====+++++|
+  |====++++++|
+  |===+++++++|
+  |==+++++++*|
+  |=+++++++**|
+  |+++++++**=|
+  |++++++**==|
+  |+++++**===|
+== decode pal4.png
+  20x6 4-bit palette, 120 pixels, RGBA crc32 a96e4ee4
+  alpha: 120 opaque, 0 transparent, 0 partial
+  |=======+++++++**====|
+  |=====+++++++**======|
+  |===+++++++**=======+|
+  |=+++++++**=======+++|
+  |++++++**=======+++++|
+  |++++**=======+++++++|
+== decode rgb16.png
+  8x8 48-bit RGB, 64 pixels, RGBA crc32 75389084
+  alpha: 64 opaque, 0 transparent, 0 partial
+  |@@@%%%##|
+  |@%%%##**|
+  |%%##***+|
+  |##**+++=|
+  |**+++==-|
+  |*++==--:|
+  |+==--::.|
+  |=--::.. |
+== decode rgb8-circle.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 957b7888
+  alpha: 1024 opaque, 0 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode rgb8-interlaced.png
+  13x11 24-bit RGB, 143 pixels, RGBA crc32 2689d305
+  alpha: 143 opaque, 0 transparent, 0 partial
+  |@@@@%%%%###**|
+  |@@%%%%###***+|
+  |%%%%####***++|
+  |%%###***++++=|
+  |###*#***++===|
+  |#*****++=====|
+  |***+++++=----|
+  |++++++==----:|
+  |+====---=---:|
+  |===---::--:::|
+  |=---::::::::.|
+== decode rgb8-trns.png
+  32x32 24-bit RGB, 1024 pixels, RGBA crc32 ec875be4
+  alpha: 616 opaque, 408 transparent, 0 partial
+  |                                |
+  |            ++++++++            |
+  |        ++++++++++++++++        |
+  |      ++++++++++++++++++==      |
+  |    ++++++++++++============    |
+  |   ++++======================   |
+  |  ===========================-  |
+  |  ===================---------  |
+  |  ===========-----------------  |
+  |  ===-------------------------  |
+  |   ------------------------::   |
+  |    ---------------:::::::::    |
+  |     ------::::::::::::::::     |
+  |       ::::::::::::::::::       |
+  |          ::::::::::::          |
+  |                                |
+== decode rgba16.png
+  5x5 64-bit RGB+alpha, 25 pixels, RGBA crc32 eb941c33
+  alpha: 9 opaque, 0 transparent, 16 partial
+  |@%%#*|
+  |%#*++|
+  |**+=-|
+  |+=-::|
+  |=-:..|
+== decode rgba8-1x1-interlaced.png
+  1x1 32-bit RGB+alpha, 1 pixels, RGBA crc32 b422a3f1
+  alpha: 0 opaque, 0 transparent, 1 partial
+  |.|
+== decode rgba8.png
+  24x24 32-bit RGB+alpha, 576 pixels, RGBA crc32 c4434d2d
+  alpha: 2 opaque, 48 transparent, 526 partial
+  |                        |
+  |                        |
+  |           .............|
+  |        .............:::|
+  |      .......:::::::::::|
+  |     ......:::::::::----|
+  |    .....::::::---------|
+  |    .....:::::---------=|
+  |    ....::::-------===  |
+  |   ....:::::------==    |
+  |   ....::::------=    ..|
+  |   ....::::-----     ...|
+  |   ....::::----    .....|
+  |   ...:::::---    ......|
+  |   ....::::--    .......|
+  |   ....::::-    ........|
+== encode gray1-checker.png
+  filters: none 4, sub 0, up 4, average 0, paeth 0
+  wrote 74 bytes (was 81), IDAT 17 bytes, crc32 f8af9f76
+  read back: same pixels
+== encode gray8-gradient.png
+  filters: none 0, sub 1, up 15, average 0, paeth 0
+  wrote 78 bytes (was 189), IDAT 21 bytes, crc32 72cbd969
+  read back: same pixels
+== encode rgb8-circle.png
+  filters: none 0, sub 12, up 8, average 0, paeth 12
+  wrote 348 bytes (was 767), IDAT 291 bytes, crc32 677177e7
+  read back: same pixels
+== encode pal4.png
+  filters: none 0, sub 1, up 5, average 0, paeth 0
+  wrote 149 bytes (was 161), IDAT 32 bytes, crc32 60551735
+  read back: same pixels
+== encode favicon-pal8.png
+  filters: none 2, sub 2, up 11, average 0, paeth 1
+  wrote 148 bytes (was 164), IDAT 52 bytes, crc32 db10f24c
+  read back: same pixels
+== encode rgba8.png
+  filters: none 0, sub 1, up 0, average 0, paeth 23
+  wrote 241 bytes (was 622), IDAT 184 bytes, crc32 a8e90ac7
+  read back: same pixels
+== encode rgb16.png
+  filters: none 0, sub 1, up 0, average 0, paeth 7
+  wrote 169 bytes (was 283), IDAT 112 bytes, crc32 82067512
+  read back: same pixels
+== encode rgb8-interlaced.png
+  filters: none 0, sub 1, up 0, average 0, paeth 10
+  wrote 130 bytes (was 325), IDAT 73 bytes, crc32 39f62f84
+  read back: same pixels
+== encode graya16-interlaced.png
+  filters: none 0, sub 1, up 0, average 0, paeth 4
+  wrote 86 bytes (was 168), IDAT 29 bytes, crc32 2250573d
+  read back: same pixels
+== encode circle-huffman.png
+  filters: none 0, sub 12, up 8, average 0, paeth 12
+  wrote 348 bytes (was 1200), IDAT 291 bytes, crc32 677177e7
+  read back: same pixels
+== encode gray4.png stored
+  filters: none 0, sub 1, up 0, average 0, paeth 3
+  wrote 104 bytes (was 96), IDAT 47 bytes, crc32 ddf30472
+  read back: same pixels
+== encode rgb8-trns.png stored
+  filters: none 0, sub 12, up 8, average 0, paeth 12
+  wrote 3190 bytes (was 375), IDAT 3115 bytes, crc32 01debaf0
+  read back: same pixels
+== encode rgba8-1x1-interlaced.png stored
+  filters: none 1, sub 0, up 0, average 0, paeth 0
+  wrote 73 bytes (was 70), IDAT 16 bytes, crc32 47d33c0e
+  read back: same pixels
+== check broken/bad-chunk-name.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  ERROR: invalid chunk name a1b2 at offset 0x00021
+== check broken/bad-combo.png
+  ERROR: IHDR: invalid bit depth 4 for color type 2
+== check broken/bad-crc.png
+  ERROR: CRC error in chunk IHDR (computed 3cafe9a7, expected 3dafe9a7)
+== check broken/bad-depth.png
+  ERROR: IHDR: invalid bit depth 3 for color type 0
+== check broken/bad-filter-method.png
+  ERROR: IHDR: invalid filter method 1
+== check broken/bad-filter-type.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 15
+  chunk IEND at offset 0x0003c, length 0
+  ERROR: row 1: invalid filter type 5
+== check broken/bad-interlace.png
+  ERROR: IHDR: invalid interlace method 2
+== check broken/bad-signature.png
+  ERROR: not a PNG file (bad signature)
+== check broken/data-after-iend.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 55
+  chunk IEND at offset 0x00064, length 0
+  ERROR: 4 bytes of data after IEND
+== check broken/empty.png
+  ERROR: not a PNG file (bad signature)
+== check broken/extra-data.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 12
+  chunk IEND at offset 0x00039, length 0
+  ERROR: image data too long (43 bytes, 39 used)
+== check broken/huge-length.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  ERROR: chunk tEXt at offset 0x00021: truncated (length 2147483632, 3 bytes left)
+== check broken/idat-split-by-text.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 10
+  chunk tEXt at offset 0x00037, length 3: k: v
+  ERROR: IDAT chunks are not consecutive
+== check broken/ihdr-not-first.png
+  ERROR: first chunk must be IHDR, not gAMA
+== check broken/no-idat.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 8
+  chunk IEND at offset 0x00035, length 0
+  ERROR: image data too short (0 bytes)
+== check broken/no-iend.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 55
+  ERROR: file doesn't end with an IEND chunk
+== check broken/no-plte.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 8-bit palette, non-interlaced
+  ERROR: palette image has no PLTE before IDAT
+== check broken/plte-in-gray.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 8-bit grayscale, non-interlaced
+  ERROR: PLTE not allowed in a grayscale image
+== check broken/plte-index.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 8-bit palette, non-interlaced
+  chunk PLTE at offset 0x00021, length 6: 2 palette entries
+  chunk IDAT at offset 0x00033, length 15
+  chunk IEND at offset 0x0004e, length 0
+  ERROR: palette index 2 out of range (2 entries)
+== check broken/short-data.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 11
+  chunk IEND at offset 0x00038, length 0
+  ERROR: image data too short (31 bytes)
+== check broken/trns-too-long.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 8-bit palette, non-interlaced
+  chunk PLTE at offset 0x00021, length 6: 2 palette entries
+  ERROR: tRNS: 3 entries, more than the 2 palette entries
+== check broken/truncated.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  ERROR: chunk IDAT at offset 0x00021: truncated (length 55, 41 bytes left)
+== check broken/two-ihdr.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  ERROR: multiple IHDR chunks
+== check broken/unknown-critical.png
+  chunk IHDR at offset 0x00008, length 13: 8 x 4 image, 24-bit RGB, non-interlaced
+  chunk cRIT at offset 0x00021, length 1: unknown ancillary chunk
+  chunk IDAT at offset 0x0002e, length 55
+  chunk IEND at offset 0x00071, length 0
+  OK: broken/unknown-critical.png (8x4, 24-bit RGB, non-interlaced, 45.0%)
+== check broken/zero-width.png
+  ERROR: IHDR: invalid image dimensions (0x3)
+== check broken/zlib-adler.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 27
+  chunk IEND at offset 0x00048, length 0
+  ERROR: zlib: incorrect data check
+== check broken/zlib-block-type.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 11
+  chunk IEND at offset 0x00038, length 0
+  ERROR: zlib: invalid block type
+== check broken/zlib-header.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 27
+  chunk IEND at offset 0x00048, length 0
+  ERROR: zlib: incorrect header check
+== check broken/zlib-method.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 27
+  chunk IEND at offset 0x00048, length 0
+  ERROR: zlib: unknown compression method
+== check broken/zlib-stored-length.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 46
+  chunk IEND at offset 0x0005b, length 0
+  ERROR: zlib: invalid stored block lengths
+== check broken/zlib-too-far.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 11
+  chunk IEND at offset 0x00038, length 0
+  ERROR: zlib: invalid distance too far back
+== check broken/zlib-truncated.png
+  chunk IHDR at offset 0x00008, length 13: 4 x 3 image, 24-bit RGB, non-interlaced
+  chunk IDAT at offset 0x00021, length 13
+  chunk IEND at offset 0x0003a, length 0
+  ERROR: zlib: incomplete or truncated stream
+== decode broken/bad-filter-type.png
+  ERROR: row 1: invalid filter type 5
+== decode broken/plte-index.png
+  ERROR: palette index 2 out of range (2 entries)
+== decode broken/zlib-adler.png
+  ERROR: zlib: incorrect data check

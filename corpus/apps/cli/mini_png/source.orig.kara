@@ -1,0 +1,2241 @@
+// mini_png: a PNG checker, decoder and encoder in the manner of pngcheck,
+// with its own inflate and deflate. It walks the chunks of each file and
+// checks their order, lengths and CRCs; decodes the image data through
+// inflate, the five row filters and Adam7 into RGBA; and encodes an image
+// again with adaptive filtering, LZ77 and fixed Huffman codes, then reads
+// the result back. data/jobs.tsv lists the jobs.
+
+const CHANNEL_COUNT: Array[i64, 7] = [1, 0, 3, 1, 2, 0, 4];
+const PASS_X: Array[i64, 7] = [0, 4, 0, 2, 0, 1, 0];
+const PASS_Y: Array[i64, 7] = [0, 0, 4, 0, 2, 0, 1];
+const PASS_DX: Array[i64, 7] = [8, 8, 4, 4, 2, 2, 1];
+const PASS_DY: Array[i64, 7] = [8, 8, 8, 4, 4, 2, 2];
+const LEN_BASE: Array[i64, 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA: Array[i64, 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+const DIST_BASE: Array[i64, 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const DIST_EXTRA: Array[i64, 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const CL_ORDER: Array[i64, 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+// ------------------------------------------------------------- bytes
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+fn copy_range(d: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in start..end {
+        v.push(d[i]);
+    }
+    v
+}
+
+fn be32(d: ref Vec[i64], i: i64) -> i64 {
+    (d[i] << 24) | (d[i + 1] << 16) | (d[i + 2] << 8) | d[i + 3]
+}
+
+fn be16(d: ref Vec[i64], i: i64) -> i64 {
+    (d[i] << 8) | d[i + 1]
+}
+
+fn push_be32(out: mut ref Vec[i64], v: i64) {
+    out.push((v >> 24) & 255);
+    out.push((v >> 16) & 255);
+    out.push((v >> 8) & 255);
+    out.push(v & 255);
+}
+
+fn find_zero(d: ref Vec[i64], start: i64, end: i64) -> i64 {
+    for i in start..end {
+        if d[i] == 0 {
+            return i;
+        }
+    }
+    -1
+}
+
+fn crc32(d: ref Vec[i64], start: i64, end: i64) -> i64 {
+    let mut c = 0xFFFFFFFF;
+    for i in start..end {
+        c = c ^ d[i];
+        for k in 0..8 {
+            if (c & 1) == 1 {
+                c = (c >> 1) ^ 0xEDB88320;
+            } else {
+                c = c >> 1;
+            }
+        }
+    }
+    c ^ 0xFFFFFFFF
+}
+
+fn adler32(d: ref Vec[i64]) -> i64 {
+    let mut a = 1;
+    let mut b = 0;
+    for i in 0..d.len() {
+        a = (a + d[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+// The bytes as text, Latin-1 or UTF-8, with backslashes and newlines
+// escaped.
+fn show_text(d: ref Vec[i64], start: i64, end: i64, latin1: bool) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in start..end {
+        let c = d[i];
+        if c == 92 {
+            out.push(b'\\');
+            out.push(b'\\');
+        } else if c == 10 {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if latin1 {
+            push_utf8(mut out, c);
+        } else {
+            out.push(c as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn utf8_text(d: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in start..end {
+        out.push(d[i] as u8);
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn zpad(v: i64, width: i64) -> String {
+    let mut s = f"{v}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+// ------------------------------------------------------------- inflate
+
+fn truncated() -> String {
+    "incomplete or truncated stream".to_string()
+}
+
+// A canonical Huffman code: how many codes of each length, and the
+// symbols in code order.
+struct Huff {
+    count: Vec[i64],
+    symbol: Vec[i64],
+    max: i64,
+}
+
+fn make_huff(lens: ref Vec[i64], start: i64, n: i64) -> Huff {
+    let mut count = zeros(16);
+    for i in 0..n {
+        count[lens[start + i]] += 1;
+    }
+    let mut offs = zeros(16);
+    for len in 1..15 {
+        offs[len + 1] = offs[len] + count[len];
+    }
+    let mut symbol = zeros(n);
+    for sym in 0..n {
+        let l = lens[start + sym];
+        if l != 0 {
+            symbol[offs[l]] = sym;
+            offs[l] += 1;
+        }
+    }
+    let mut max = 0;
+    for len in 1..16 {
+        if count[len] > 0 {
+            max = len;
+        }
+    }
+    Huff { count, symbol, max }
+}
+
+// zlib's inflate_table refuses an over-subscribed code, and an incomplete
+// one unless it is a single code of one bit for literals or distances.
+fn huff_ok(h: ref Huff, code_lengths: bool) -> bool {
+    let mut left = 1;
+    for len in 1..16 {
+        left = left << 1;
+        left -= h.count[len];
+        if left < 0 {
+            return false;
+        }
+    }
+    if left > 0 and h.max > 0 and (code_lengths or h.max != 1) {
+        return false;
+    }
+    true
+}
+
+struct Inflater {
+    pos: i64,
+    buf: i64,
+    cnt: i64,
+    out: Vec[i64],
+}
+
+impl Inflater {
+    fn bits(mut ref self, src: ref Vec[i64], need: i64) -> Result[i64, String] {
+        while self.cnt < need {
+            if self.pos >= src.len() {
+                return Err(truncated());
+            }
+            self.buf = self.buf | (src[self.pos] << self.cnt);
+            self.pos += 1;
+            self.cnt += 8;
+        }
+        let v = self.buf & ((1 << need) - 1);
+        self.buf = self.buf >> need;
+        self.cnt -= need;
+        Ok(v)
+    }
+
+    // The next symbol, or -1 for a code the table does not have.
+    fn symbol(mut ref self, src: ref Vec[i64], h: ref Huff) -> Result[i64, String] {
+        let mut code = 0;
+        let mut first = 0;
+        let mut index = 0;
+        let mut len = 1;
+        while len <= h.max {
+            code = code | self.bits(src, 1)?;
+            let count = h.count[len];
+            if code - count < first {
+                return Ok(h.symbol[index + code - first]);
+            }
+            index += count;
+            first += count;
+            first = first << 1;
+            code = code << 1;
+            len += 1;
+        }
+        Ok(-1)
+    }
+
+    fn stored(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        self.buf = 0;
+        self.cnt = 0;
+        let len = self.bits(src, 16)?;
+        let nlen = self.bits(src, 16)?;
+        if len != (nlen ^ 0xFFFF) {
+            return Err("invalid stored block lengths".to_string());
+        }
+        for k in 0..len {
+            if self.pos >= src.len() {
+                return Err(truncated());
+            }
+            self.out.push(src[self.pos]);
+            self.pos += 1;
+        }
+        Ok(())
+    }
+
+    fn codes(mut ref self, src: ref Vec[i64], lit: ref Huff, dist: ref Huff) -> Result[(), String] {
+        loop {
+            let sym = self.symbol(src, lit)?;
+            if sym < 0 {
+                return Err("invalid literal/length code".to_string());
+            }
+            if sym < 256 {
+                self.out.push(sym);
+            } else if sym == 256 {
+                return Ok(());
+            } else {
+                let k = sym - 257;
+                if k >= 29 {
+                    return Err("invalid literal/length code".to_string());
+                }
+                let len = LEN_BASE[k] + self.bits(src, LEN_EXTRA[k])?;
+                let ds = self.symbol(src, dist)?;
+                if ds < 0 or ds >= 30 {
+                    return Err("invalid distance code".to_string());
+                }
+                let d = DIST_BASE[ds] + self.bits(src, DIST_EXTRA[ds])?;
+                if d > self.out.len() {
+                    return Err("invalid distance too far back".to_string());
+                }
+                for m in 0..len {
+                    let v = self.out[self.out.len() - d];
+                    self.out.push(v);
+                }
+            }
+        }
+    }
+
+    fn fixed(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        let mut lens: Vec[i64] = Vec.new();
+        for i in 0..288 {
+            lens.push(if i < 144 { 8 } else if i < 256 { 9 } else if i < 280 { 7 } else { 8 });
+        }
+        let lit = make_huff(lens, 0, 288);
+        let mut dl: Vec[i64] = Vec.new();
+        for i in 0..30 {
+            dl.push(5);
+        }
+        let dist = make_huff(dl, 0, 30);
+        self.codes(src, lit, dist)
+    }
+
+    fn dynamic(mut ref self, src: ref Vec[i64]) -> Result[(), String] {
+        let nlen = self.bits(src, 5)? + 257;
+        let ndist = self.bits(src, 5)? + 1;
+        let ncode = self.bits(src, 4)? + 4;
+        if nlen > 286 or ndist > 30 {
+            return Err("too many length or distance symbols".to_string());
+        }
+        let mut cl = zeros(19);
+        for i in 0..ncode {
+            cl[CL_ORDER[i]] = self.bits(src, 3)?;
+        }
+        let clh = make_huff(cl, 0, 19);
+        if not huff_ok(clh, true) {
+            return Err("invalid code lengths set".to_string());
+        }
+        let total = nlen + ndist;
+        let mut lens = zeros(total);
+        let mut idx = 0;
+        while idx < total {
+            let sym = self.symbol(src, clh)?;
+            if sym < 0 {
+                return Err("invalid code lengths set".to_string());
+            }
+            if sym < 16 {
+                lens[idx] = sym;
+                idx += 1;
+            } else {
+                let mut v = 0;
+                let mut rep = 0;
+                if sym == 16 {
+                    if idx == 0 {
+                        return Err("invalid bit length repeat".to_string());
+                    }
+                    v = lens[idx - 1];
+                    rep = 3 + self.bits(src, 2)?;
+                } else if sym == 17 {
+                    rep = 3 + self.bits(src, 3)?;
+                } else {
+                    rep = 11 + self.bits(src, 7)?;
+                }
+                if idx + rep > total {
+                    return Err("invalid bit length repeat".to_string());
+                }
+                for k in 0..rep {
+                    lens[idx] = v;
+                    idx += 1;
+                }
+            }
+        }
+        if lens[256] == 0 {
+            return Err("invalid code -- missing end-of-block".to_string());
+        }
+        let lit = make_huff(lens, 0, nlen);
+        if not huff_ok(lit, false) {
+            return Err("invalid literal/lengths set".to_string());
+        }
+        let dist = make_huff(lens, nlen, ndist);
+        if not huff_ok(dist, false) {
+            return Err("invalid distances set".to_string());
+        }
+        self.codes(src, lit, dist)
+    }
+}
+
+fn inflate_stream(z: ref Vec[i64]) -> Result[Vec[i64], String] {
+    let mut s = Inflater { pos: 0, buf: 0, cnt: 0, out: Vec.new() };
+    let cmf = s.bits(z, 8)?;
+    let flg = s.bits(z, 8)?;
+    if (cmf * 256 + flg) % 31 != 0 {
+        return Err("incorrect header check".to_string());
+    }
+    if (cmf & 15) != 8 {
+        return Err("unknown compression method".to_string());
+    }
+    if (cmf >> 4) + 8 > 15 {
+        return Err("invalid window size".to_string());
+    }
+    loop {
+        let last = s.bits(z, 1)?;
+        let kind = s.bits(z, 2)?;
+        if kind == 0 {
+            s.stored(z)?;
+        } else if kind == 1 {
+            s.fixed(z)?;
+        } else if kind == 2 {
+            s.dynamic(z)?;
+        } else {
+            return Err("invalid block type".to_string());
+        }
+        if last == 1 {
+            break;
+        }
+    }
+    s.buf = 0;
+    s.cnt = 0;
+    let mut check = 0;
+    for k in 0..4 {
+        check = (check << 8) | s.bits(z, 8)?;
+    }
+    if check != adler32(s.out) {
+        return Err("incorrect data check".to_string());
+    }
+    Ok(s.out)
+}
+
+// zlib.decompress, with its error messages.
+fn inflate(z: ref Vec[i64]) -> Result[Vec[i64], String] {
+    match inflate_stream(z) {
+        Ok(v) => Ok(v),
+        Err(m) => Err(f"zlib: {m}"),
+    }
+}
+
+// ------------------------------------------------------------- chunks
+
+struct Img {
+    w: i64,
+    h: i64,
+    depth: i64,
+    ctype: i64,
+    inter: i64,
+    has_ihdr: bool,
+    plte: Vec[i64],
+    has_plte: bool,
+    trns: Vec[i64],
+    has_trns: bool,
+    z: Vec[i64],
+}
+
+fn describe(depth: i64, ctype: i64) -> String {
+    if ctype == 0 {
+        f"{depth}-bit grayscale"
+    } else if ctype == 2 {
+        f"{3 * depth}-bit RGB"
+    } else if ctype == 3 {
+        f"{depth}-bit palette"
+    } else if ctype == 4 {
+        f"{2 * depth}-bit grayscale+alpha"
+    } else {
+        f"{4 * depth}-bit RGB+alpha"
+    }
+}
+
+fn interlacing(inter: i64) -> String {
+    if inter == 1 { "interlaced".to_string() } else { "non-interlaced".to_string() }
+}
+
+fn depth_ok(ctype: i64, depth: i64) -> bool {
+    if ctype == 0 {
+        depth == 1 or depth == 2 or depth == 4 or depth == 8 or depth == 16
+    } else if ctype == 3 {
+        depth == 1 or depth == 2 or depth == 4 or depth == 8
+    } else {
+        depth == 8 or depth == 16
+    }
+}
+
+fn name_of(d: ref Vec[i64], at: i64) -> String {
+    let mut out = String.new();
+    for k in 0..4 {
+        let c = d[at + k];
+        if c > 32 and c < 127 {
+            out.push_str(utf8_text(d, at + k, at + k + 1));
+        } else {
+            out.push_str(f"\\x{c:02x}");
+        }
+    }
+    out
+}
+
+fn is_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn fixed4(v: i64) -> String {
+    f"{v / 100000}.{zpad((v % 100000) / 10, 4)}"
+}
+
+fn month(m: i64) -> String {
+    let names: Vec[Str] = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ").collect();
+    names[m - 1].to_string()
+}
+
+fn intent(i: i64) -> String {
+    let names: Vec[Str] = "perceptual,relative colorimetric,saturation,absolute colorimetric".split(",").collect();
+    names[i].to_string()
+}
+
+struct Run {
+    n: i64,
+    bytes: i64,
+}
+
+impl Run {
+    fn end(mut ref self, lines: mut ref Vec[String]) {
+        if self.n > 1 {
+            lines.push(f"  ({self.n} IDAT chunks, {self.bytes} bytes)");
+        }
+        self.n = 0;
+        self.bytes = 0;
+    }
+}
+
+fn sig_ok(d: ref Vec[i64]) -> bool {
+    let sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    for i in 0..8 {
+        if d[i] != sig[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// Checks the chunks, printing a line for each, and returns the image's
+// header, palette, transparency and compressed data.
+fn walk(data: ref Vec[i64], lines: mut ref Vec[String]) -> Result[Img, String] {
+    if data.len() < 8 or not sig_ok(data) {
+        return Err("not a PNG file (bad signature)".to_string());
+    }
+    let n = data.len();
+    let mut img = Img {
+        w: 0,
+        h: 0,
+        depth: 0,
+        ctype: 0,
+        inter: 0,
+        has_ihdr: false,
+        plte: Vec.new(),
+        has_plte: false,
+        trns: Vec.new(),
+        has_trns: false,
+        z: Vec.new(),
+    };
+    let mut pos = 8;
+    let mut seen_idat = false;
+    let mut prev = String.new();
+    let mut run = Run { n: 0, bytes: 0 };
+    loop {
+        if pos == n {
+            run.end(lines);
+            return Err("file doesn't end with an IEND chunk".to_string());
+        }
+        if n - pos < 8 {
+            run.end(lines);
+            return Err(f"truncated chunk header at offset 0x{pos:05x}");
+        }
+        let length = be32(data, pos);
+        let name = name_of(data, pos + 4);
+        if length > 0x7FFFFFFF {
+            run.end(lines);
+            return Err(f"chunk {name} at offset 0x{pos:05x}: invalid length {length}");
+        }
+        if pos + 12 + length > n {
+            run.end(lines);
+            return Err(f"chunk {name} at offset 0x{pos:05x}: truncated (length {length}, {n - pos - 8} bytes left)");
+        }
+        let mut letters = true;
+        for k in 0..4 {
+            if not is_letter(data[pos + 4 + k]) {
+                letters = false;
+            }
+        }
+        if not letters {
+            run.end(lines);
+            return Err(f"invalid chunk name {name} at offset 0x{pos:05x}");
+        }
+        let b = pos + 8;
+        let e = b + length;
+        let crc = be32(data, e);
+        let computed = crc32(data, pos + 4, e);
+        if crc != computed {
+            run.end(lines);
+            return Err(f"CRC error in chunk {name} (computed {computed:08x}, expected {crc:08x})");
+        }
+        if name != "IDAT" or prev != "IDAT" {
+            run.end(lines);
+        }
+        let head = f"  chunk {name} at offset 0x{pos:05x}, length {length}";
+        let mut show = true;
+        let mut detail = String.new();
+        if not img.has_ihdr and name != "IHDR" {
+            return Err(f"first chunk must be IHDR, not {name}");
+        }
+        if name == "IHDR" {
+            if img.has_ihdr {
+                return Err("multiple IHDR chunks".to_string());
+            }
+            if length != 13 {
+                return Err(f"IHDR: invalid length {length}");
+            }
+            let w = be32(data, b);
+            let h = be32(data, b + 4);
+            let depth = data[b + 8];
+            let ctype = data[b + 9];
+            if w == 0 or h == 0 or w > 0x7FFFFFFF or h > 0x7FFFFFFF {
+                return Err(f"IHDR: invalid image dimensions ({w}x{h})");
+            }
+            if ctype > 6 or ctype == 1 or ctype == 5 {
+                return Err(f"IHDR: invalid color type {ctype}");
+            }
+            if not depth_ok(ctype, depth) {
+                return Err(f"IHDR: invalid bit depth {depth} for color type {ctype}");
+            }
+            if data[b + 10] != 0 {
+                return Err(f"IHDR: invalid compression method {data[b + 10]}");
+            }
+            if data[b + 11] != 0 {
+                return Err(f"IHDR: invalid filter method {data[b + 11]}");
+            }
+            if data[b + 12] > 1 {
+                return Err(f"IHDR: invalid interlace method {data[b + 12]}");
+            }
+            img.w = w;
+            img.h = h;
+            img.depth = depth;
+            img.ctype = ctype;
+            img.inter = data[b + 12];
+            img.has_ihdr = true;
+            detail = f"{w} x {h} image, {describe(depth, ctype)}, {interlacing(img.inter)}";
+        } else if name == "PLTE" {
+            let ctype = img.ctype;
+            if ctype == 0 or ctype == 4 {
+                return Err("PLTE not allowed in a grayscale image".to_string());
+            }
+            if img.has_plte {
+                return Err("multiple PLTE chunks".to_string());
+            }
+            if seen_idat {
+                return Err("PLTE must come before IDAT".to_string());
+            }
+            if length == 0 or length % 3 != 0 or length > 768 {
+                return Err(f"PLTE: invalid length {length}");
+            }
+            let entries = length / 3;
+            if ctype == 3 and entries > (1 << img.depth) {
+                return Err(f"PLTE: too many entries ({entries}) for a {img.depth}-bit palette");
+            }
+            img.plte = copy_range(data, b, e);
+            img.has_plte = true;
+            detail = f"{entries} palette entries";
+        } else if name == "tRNS" {
+            let ctype = img.ctype;
+            if seen_idat {
+                return Err("tRNS must come before IDAT".to_string());
+            }
+            if ctype == 4 or ctype == 6 {
+                return Err("tRNS not allowed with an alpha channel".to_string());
+            }
+            if ctype == 3 {
+                if not img.has_plte {
+                    return Err("tRNS before PLTE".to_string());
+                }
+                let entries = img.plte.len() / 3;
+                if length > entries {
+                    return Err(f"tRNS: {length} entries, more than the {entries} palette entries");
+                }
+                detail = f"{length} transparency entries";
+            } else if ctype == 0 {
+                if length != 2 {
+                    return Err(f"tRNS: invalid length {length}");
+                }
+                detail = f"gray = {be16(data, b)}";
+            } else {
+                if length != 6 {
+                    return Err(f"tRNS: invalid length {length}");
+                }
+                detail = f"red = {be16(data, b)}, green = {be16(data, b + 2)}, blue = {be16(data, b + 4)}";
+            }
+            img.trns = copy_range(data, b, e);
+            img.has_trns = true;
+        } else if name == "IDAT" {
+            if seen_idat and prev != "IDAT" {
+                return Err("IDAT chunks are not consecutive".to_string());
+            }
+            if img.ctype == 3 and not img.has_plte {
+                return Err("palette image has no PLTE before IDAT".to_string());
+            }
+            seen_idat = true;
+            for i in b..e {
+                img.z.push(data[i]);
+            }
+            run.n += 1;
+            run.bytes += length;
+            if run.n > 1 {
+                show = false;
+            }
+        } else if name == "IEND" {
+            if length != 0 {
+                return Err(f"IEND: invalid length {length}");
+            }
+            lines.push(head);
+            pos += 12;
+            if pos < n {
+                return Err(f"{n - pos} bytes of data after IEND");
+            }
+            break;
+        } else if name == "gAMA" {
+            if length != 4 {
+                return Err(f"gAMA: invalid length {length}");
+            }
+            let g = be32(data, b);
+            detail = f"gamma {g / 100000}.{zpad(g % 100000, 5)}";
+        } else if name == "cHRM" {
+            if length != 32 {
+                return Err(f"cHRM: invalid length {length}");
+            }
+            let mut v: Vec[String] = Vec.new();
+            for k in 0..8 {
+                v.push(fixed4(be32(data, b + 4 * k)));
+            }
+            detail = f"white ({v[0]}, {v[1]}), red ({v[2]}, {v[3]}), green ({v[4]}, {v[5]}), blue ({v[6]}, {v[7]})";
+        } else if name == "sRGB" {
+            if length != 1 {
+                return Err(f"sRGB: invalid length {length}");
+            }
+            if data[b] > 3 {
+                return Err(f"sRGB: invalid rendering intent {data[b]}");
+            }
+            detail = f"rendering intent: {intent(data[b])}";
+        } else if name == "sBIT" {
+            let mut parts: Vec[String] = Vec.new();
+            for i in b..e {
+                parts.push(f"{data[i]}");
+            }
+            detail = f"significant bits {parts.join(", ")}";
+        } else if name == "bKGD" {
+            let ctype = img.ctype;
+            if ctype == 3 {
+                detail = f"background index {data[b]}";
+            } else if ctype == 0 or ctype == 4 {
+                detail = f"background gray {be16(data, b)}";
+            } else {
+                detail = f"background red = {be16(data, b)}, green = {be16(data, b + 2)}, blue = {be16(data, b + 4)}";
+            }
+        } else if name == "pHYs" {
+            if length != 9 {
+                return Err(f"pHYs: invalid length {length}");
+            }
+            let x = be32(data, b);
+            let y = be32(data, b + 4);
+            if data[b + 8] == 1 {
+                detail = f"{x} x {y} pixels/meter";
+                if x == y {
+                    detail.push_str(f" ({(x * 254 + 5000) / 10000} dpi)");
+                }
+            } else {
+                detail = f"{x} x {y} pixels, aspect ratio only";
+            }
+        } else if name == "tIME" {
+            if length != 7 {
+                return Err(f"tIME: invalid length {length}");
+            }
+            let year = be16(data, b);
+            detail = f"{data[b + 3]} {month(data[b + 2])} {year} {zpad(data[b + 4], 2)}:{zpad(data[b + 5], 2)}:{zpad(data[b + 6], 2)} UTC";
+        } else if name == "tEXt" {
+            let z0 = find_zero(data, b, e);
+            if z0 < 0 {
+                return Err("tEXt: missing null separator".to_string());
+            }
+            detail = f"{show_text(data, b, z0, true)}: {show_text(data, z0 + 1, e, true)}";
+        } else if name == "zTXt" {
+            let z0 = find_zero(data, b, e);
+            if z0 < 0 {
+                return Err("zTXt: missing null separator".to_string());
+            }
+            let text = inflate(copy_range(data, z0 + 2, e))?;
+            detail = f"{show_text(data, b, z0, true)} (compressed): {show_text(text, 0, text.len(), true)}";
+        } else if name == "iTXt" {
+            let z0 = find_zero(data, b, e);
+            let flag = data[z0 + 1];
+            let l0 = find_zero(data, z0 + 3, e);
+            let t0 = find_zero(data, l0 + 1, e);
+            let mut lang = utf8_text(data, z0 + 3, l0);
+            if lang.len() == 0 {
+                lang = "-".to_string();
+            }
+            let mut trans = utf8_text(data, l0 + 1, t0);
+            if trans.len() == 0 {
+                trans = "-".to_string();
+            }
+            let mut text = copy_range(data, t0 + 1, e);
+            let mut how = "";
+            if flag != 0 {
+                text = inflate(text)?;
+                how = " (compressed)";
+            }
+            detail = f"{show_text(data, b, z0, true)} [{lang}, {trans}]{how}: {show_text(text, 0, text.len(), false)}";
+        } else if name == "iCCP" {
+            let z0 = find_zero(data, b, e);
+            let profile = inflate(copy_range(data, z0 + 2, e))?;
+            detail = f"profile {show_text(data, b, z0, true)}, {profile.len()} bytes";
+        } else {
+            if (data[pos + 4] & 32) == 0 {
+                return Err(f"unknown critical chunk {name}");
+            }
+            detail = "unknown ancillary chunk".to_string();
+        }
+        if show {
+            if detail.len() > 0 {
+                lines.push(f"{head}: {detail}");
+            } else {
+                lines.push(head);
+            }
+        }
+        prev = name;
+        pos = e + 4;
+    }
+    if not seen_idat {
+        return Err("no IDAT chunks".to_string());
+    }
+    Ok(img)
+}
+
+// ------------------------------------------------------------- decoding
+
+fn paeth(a: i64, b: i64, c: i64) -> i64 {
+    let p = a + b - c;
+    let pa = (p - a).abs();
+    let pb = (p - b).abs();
+    let pc = (p - c).abs();
+    if pa <= pb and pa <= pc {
+        a
+    } else if pb <= pc {
+        b
+    } else {
+        c
+    }
+}
+
+// Undoes the row filters of one pass into `out`, returning the position
+// after its rows.
+fn unfilter(raw: ref Vec[i64], pos: i64, rows: i64, rowbytes: i64, bpp: i64, rowno: i64, out: mut ref Vec[i64]) -> Result[i64, String] {
+    let mut p = pos;
+    for y in 0..rows {
+        if p + 1 + rowbytes > raw.len() {
+            return Err(f"image data too short ({raw.len()} bytes)");
+        }
+        let f = raw[p];
+        if f > 4 {
+            return Err(f"row {rowno + y}: invalid filter type {f}");
+        }
+        let row0 = y * rowbytes;
+        for i in 0..rowbytes {
+            let x = raw[p + 1 + i];
+            let a = if i >= bpp { out[row0 + i - bpp] } else { 0 };
+            let b = if y > 0 { out[row0 - rowbytes + i] } else { 0 };
+            let c = if y > 0 and i >= bpp { out[row0 - rowbytes + i - bpp] } else { 0 };
+            let v = if f == 0 {
+                x
+            } else if f == 1 {
+                x + a
+            } else if f == 2 {
+                x + b
+            } else if f == 3 {
+                x + (a + b) / 2
+            } else {
+                x + paeth(a, b, c)
+            };
+            out.push(v & 255);
+        }
+        p += 1 + rowbytes;
+    }
+    Ok(p)
+}
+
+fn sample(rows: ref Vec[i64], row0: i64, x: i64, k: i64, depth: i64, ch: i64) -> i64 {
+    if depth < 8 {
+        let bit = x * depth;
+        (rows[row0 + bit / 8] >> (8 - depth - bit % 8)) & ((1 << depth) - 1)
+    } else if depth == 8 {
+        rows[row0 + x * ch + k]
+    } else {
+        let i = row0 + (x * ch + k) * 2;
+        (rows[i] << 8) | rows[i + 1]
+    }
+}
+
+fn bytes_per_pixel(depth: i64, ch: i64) -> i64 {
+    let b = depth * ch / 8;
+    if b < 1 { 1 } else { b }
+}
+
+// The samples of every pixel at the file's depth, row by row, and the
+// size of the inflated data.
+struct Decoded {
+    pix: Vec[i64],
+    rawlen: i64,
+}
+
+fn decode(img: ref Img) -> Result[Decoded, String] {
+    let w = img.w;
+    let h = img.h;
+    let depth = img.depth;
+    let ch = CHANNEL_COUNT[img.ctype];
+    let bpp = bytes_per_pixel(depth, ch);
+    let raw = inflate(img.z)?;
+    let mut pix = zeros(w * h * ch);
+    let mut pos = 0;
+    let mut rowno = 0;
+    let passes = if img.inter == 1 { 7 } else { 1 };
+    for k in 0..passes {
+        let mut x0 = 0;
+        let mut y0 = 0;
+        let mut dx = 1;
+        let mut dy = 1;
+        if img.inter == 1 {
+            x0 = PASS_X[k];
+            y0 = PASS_Y[k];
+            dx = PASS_DX[k];
+            dy = PASS_DY[k];
+        }
+        let pw = if w > x0 { (w - x0 + dx - 1) / dx } else { 0 };
+        let ph = if h > y0 { (h - y0 + dy - 1) / dy } else { 0 };
+        if pw == 0 or ph == 0 {
+            continue;
+        }
+        let rowbytes = (pw * depth * ch + 7) / 8;
+        let mut rows: Vec[i64] = Vec.new();
+        pos = unfilter(raw, pos, ph, rowbytes, bpp, rowno, mut rows)?;
+        rowno += ph;
+        for j in 0..ph {
+            for i in 0..pw {
+                let at = ((y0 + j * dy) * w + x0 + i * dx) * ch;
+                for c in 0..ch {
+                    pix[at + c] = sample(rows, j * rowbytes, i, c, depth, ch);
+                }
+            }
+        }
+    }
+    if pos != raw.len() {
+        return Err(f"image data too long ({raw.len()} bytes, {pos} used)");
+    }
+    if img.ctype == 3 {
+        let entries = img.plte.len() / 3;
+        for i in 0..w * h {
+            if pix[i] >= entries {
+                return Err(f"palette index {pix[i]} out of range ({entries} entries)");
+            }
+        }
+    }
+    Ok(Decoded { pix, rawlen: raw.len() })
+}
+
+#[derive(Copy, Clone)]
+struct Px {
+    r: i64,
+    g: i64,
+    b: i64,
+    a: i64,
+}
+
+fn to8(v: i64, depth: i64) -> i64 {
+    if depth == 16 {
+        v >> 8
+    } else if depth == 8 {
+        v
+    } else {
+        v * 255 / ((1 << depth) - 1)
+    }
+}
+
+// Pixel `i` as 8-bit RGBA.
+fn rgba(img: ref Img, pix: ref Vec[i64], i: i64) -> Px {
+    let ctype = img.ctype;
+    let depth = img.depth;
+    let p = i * CHANNEL_COUNT[ctype];
+    let t = ref img.trns;
+    if ctype == 3 {
+        let k = pix[p];
+        let a = if img.has_trns and k < t.len() { t[k] } else { 255 };
+        return Px { r: img.plte[3 * k], g: img.plte[3 * k + 1], b: img.plte[3 * k + 2], a };
+    }
+    if ctype == 0 {
+        let v = to8(pix[p], depth);
+        let a = if img.has_trns and pix[p] == be16(t, 0) { 0 } else { 255 };
+        return Px { r: v, g: v, b: v, a };
+    }
+    if ctype == 4 {
+        let v = to8(pix[p], depth);
+        return Px { r: v, g: v, b: v, a: to8(pix[p + 1], depth) };
+    }
+    if ctype == 2 {
+        let key = img.has_trns and pix[p] == be16(t, 0) and pix[p + 1] == be16(t, 2) and pix[p + 2] == be16(t, 4);
+        let a = if key { 0 } else { 255 };
+        return Px { r: to8(pix[p], depth), g: to8(pix[p + 1], depth), b: to8(pix[p + 2], depth), a };
+    }
+    Px { r: to8(pix[p], depth), g: to8(pix[p + 1], depth), b: to8(pix[p + 2], depth), a: to8(pix[p + 3], depth) }
+}
+
+fn ratio(raw: i64, comp: i64) -> String {
+    let mut q = 1000 * (raw - comp) / raw;
+    let mut sign = "";
+    if q < 0 {
+        sign = "-";
+        q = -q;
+    }
+    f"{sign}{q / 10}.{q % 10}%"
+}
+
+struct Loaded {
+    img: Img,
+    pix: Vec[i64],
+    rawlen: i64,
+    size: i64,
+}
+
+fn read_file(path: ref String) -> Result[Vec[i64], String] {
+    match fs.read_bytes(f"data/{path}") {
+        Ok(b) => {
+            let mut v: Vec[i64] = Vec.new();
+            for c in b {
+                v.push(c as i64);
+            }
+            Ok(v)
+        }
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn load(path: ref String, lines: mut ref Vec[String]) -> Result[Loaded, String] {
+    let data = read_file(path)?;
+    let img = walk(data, mut lines)?;
+    let d = decode(img)?;
+    Ok(Loaded { img, pix: d.pix, rawlen: d.rawlen, size: data.len() })
+}
+
+fn check(path: ref String) {
+    let mut lines: Vec[String] = Vec.new();
+    match load(path, mut lines) {
+        Ok(l) => {
+            let img = ref l.img;
+            lines.push(f"  OK: {path} ({img.w}x{img.h}, {describe(img.depth, img.ctype)}, {interlacing(img.inter)}, {ratio(l.rawlen, img.z.len())})");
+        }
+        Err(e) => lines.push(f"  ERROR: {e}"),
+    }
+    for line in lines {
+        println(line);
+    }
+}
+
+fn show_decode(path: ref String) {
+    let mut lines: Vec[String] = Vec.new();
+    let l = match load(path, mut lines) {
+        Ok(l) => l,
+        Err(e) => {
+            println(f"  ERROR: {e}");
+            return;
+        }
+    };
+    let img = ref l.img;
+    let w = img.w;
+    let h = img.h;
+    let mut buf: Vec[i64] = Vec.new();
+    let mut opaque = 0;
+    let mut clear = 0;
+    let mut part = 0;
+    for i in 0..w * h {
+        let q = rgba(img, l.pix, i);
+        buf.push(q.r);
+        buf.push(q.g);
+        buf.push(q.b);
+        buf.push(q.a);
+        if q.a == 255 {
+            opaque += 1;
+        } else if q.a == 0 {
+            clear += 1;
+        } else {
+            part += 1;
+        }
+    }
+    println(f"  {w}x{h} {describe(img.depth, img.ctype)}, {w * h} pixels, RGBA crc32 {crc32(buf, 0, buf.len()):08x}");
+    println(f"  alpha: {opaque} opaque, {clear} transparent, {part} partial");
+    let ramp = "@%#*+=-:. ".bytes();
+    let cols = if w < 32 { w } else { 32 };
+    let rows = if h < 16 { h } else { 16 };
+    for r in 0..rows {
+        let y = r * h / rows;
+        let mut line: Vec[u8] = Vec.new();
+        for c in 0..cols {
+            let x = c * w / cols;
+            let q = rgba(img, l.pix, y * w + x);
+            let red = (q.r * q.a + 255 * (255 - q.a)) / 255;
+            let g = (q.g * q.a + 255 * (255 - q.a)) / 255;
+            let b = (q.b * q.a + 255 * (255 - q.a)) / 255;
+            let lum = (299 * red + 587 * g + 114 * b) / 1000;
+            line.push(ramp[lum * 10 / 256]);
+        }
+        println(f"  |{String.from_utf8(line).unwrap()}|");
+    }
+}
+
+// ------------------------------------------------------------- encoding
+
+fn pack(img: ref Img, pix: ref Vec[i64], y: i64) -> Vec[i64] {
+    let w = img.w;
+    let depth = img.depth;
+    let ch = CHANNEL_COUNT[img.ctype];
+    let mut out: Vec[i64] = Vec.new();
+    if depth < 8 {
+        let mut acc = 0;
+        let mut n = 0;
+        for x in 0..w {
+            acc = (acc << depth) | pix[y * w + x];
+            n += depth;
+            if n == 8 {
+                out.push(acc);
+                acc = 0;
+                n = 0;
+            }
+        }
+        if n > 0 {
+            out.push(acc << (8 - n));
+        }
+        return out;
+    }
+    for x in 0..w {
+        for k in 0..ch {
+            let v = pix[(y * w + x) * ch + k];
+            if depth == 8 {
+                out.push(v);
+            } else {
+                out.push(v >> 8);
+                out.push(v & 255);
+            }
+        }
+    }
+    out
+}
+
+fn filtered(f: i64, row: ref Vec[i64], prev: ref Vec[i64], bpp: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..row.len() {
+        let x = row[i];
+        let a = if i >= bpp { row[i - bpp] } else { 0 };
+        let b = prev[i];
+        let c = if i >= bpp { prev[i - bpp] } else { 0 };
+        let v = if f == 0 {
+            x
+        } else if f == 1 {
+            x - a
+        } else if f == 2 {
+            x - b
+        } else if f == 3 {
+            x - (a + b) / 2
+        } else {
+            x - paeth(a, b, c)
+        };
+        out.push(v & 255);
+    }
+    out
+}
+
+struct BitWriter {
+    out: Vec[i64],
+    acc: i64,
+    n: i64,
+}
+
+impl BitWriter {
+    fn put(mut ref self, v: i64, n: i64) {
+        self.acc = self.acc | (v << self.n);
+        self.n += n;
+        while self.n >= 8 {
+            self.out.push(self.acc & 255);
+            self.acc = self.acc >> 8;
+            self.n -= 8;
+        }
+    }
+
+    // A Huffman code, most significant bit first.
+    fn code(mut ref self, c: i64, n: i64) {
+        let mut r = 0;
+        for i in 0..n {
+            r = (r << 1) | ((c >> i) & 1);
+        }
+        self.put(r, n);
+    }
+
+    fn literal(mut ref self, v: i64) {
+        if v < 144 {
+            self.code(0x30 + v, 8);
+        } else if v < 256 {
+            self.code(0x190 + v - 144, 9);
+        } else if v < 280 {
+            self.code(v - 256, 7);
+        } else {
+            self.code(0xC0 + v - 280, 8);
+        }
+    }
+
+    fn finish(mut ref self) {
+        if self.n > 0 {
+            self.out.push(self.acc & 255);
+            self.acc = 0;
+            self.n = 0;
+        }
+    }
+}
+
+fn key3(d: ref Vec[i64], p: i64) -> i64 {
+    (d[p] << 16) | (d[p + 1] << 8) | d[p + 2]
+}
+
+// One fixed-Huffman block: greedy LZ77 over a hash chain of three-byte
+// prefixes, trying the 64 nearest earlier positions.
+fn deflate_fixed(data: ref Vec[i64]) -> Vec[i64] {
+    let mut bw = BitWriter { out: Vec.new(), acc: 0, n: 0 };
+    bw.put(1, 1);
+    bw.put(1, 2);
+    let n = data.len();
+    let mut last: Map[i64, i64] = Map.new();
+    let mut chain = zeros(n);
+    let mut i = 0;
+    while i < n {
+        let mut best = 0;
+        let mut dist = 0;
+        if i + 3 <= n {
+            let mut cand = match last.get(key3(data, i)) {
+                Some(q) => q,
+                None => -1,
+            };
+            let mut tried = 0;
+            while cand >= 0 and tried < 64 {
+                if i - cand > 32768 {
+                    break;
+                }
+                let limit = if n - i < 258 { n - i } else { 258 };
+                let mut m = 0;
+                while m < limit and data[cand + m] == data[i + m] {
+                    m += 1;
+                }
+                if m > best {
+                    best = m;
+                    dist = i - cand;
+                    if m == limit {
+                        break;
+                    }
+                }
+                tried += 1;
+                cand = chain[cand];
+            }
+        }
+        let step = if best >= 3 { best } else { 1 };
+        if best >= 3 {
+            let mut c = 0;
+            while c + 1 < 29 and LEN_BASE[c + 1] <= best {
+                c += 1;
+            }
+            bw.literal(257 + c);
+            bw.put(best - LEN_BASE[c], LEN_EXTRA[c]);
+            let mut d = 0;
+            while d + 1 < 30 and DIST_BASE[d + 1] <= dist {
+                d += 1;
+            }
+            bw.code(d, 5);
+            bw.put(dist - DIST_BASE[d], DIST_EXTRA[d]);
+        } else {
+            bw.literal(data[i]);
+        }
+        for p in i..i + step {
+            if p + 3 <= n {
+                let k = key3(data, p);
+                chain[p] = match last.get(k) {
+                    Some(q) => q,
+                    None => -1,
+                };
+                last.insert(k, p);
+            }
+        }
+        i += step;
+    }
+    bw.literal(256);
+    bw.finish();
+    bw.out
+}
+
+fn deflate_stored(data: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    loop {
+        let end = if i + 65535 < data.len() { i + 65535 } else { data.len() };
+        let last = i + 65535 >= data.len();
+        out.push(if last { 1 } else { 0 });
+        let len = end - i;
+        out.push(len & 255);
+        out.push(len >> 8);
+        out.push((len ^ 0xFFFF) & 255);
+        out.push((len ^ 0xFFFF) >> 8);
+        for k in i..end {
+            out.push(data[k]);
+        }
+        i += 65535;
+        if last {
+            return out;
+        }
+    }
+}
+
+fn put_chunk(out: mut ref Vec[i64], kind: Str, data: ref Vec[i64]) {
+    push_be32(mut out, data.len());
+    let mut body: Vec[i64] = Vec.new();
+    for c in kind.bytes() {
+        body.push(c as i64);
+    }
+    for i in 0..data.len() {
+        body.push(data[i]);
+    }
+    for i in 0..body.len() {
+        out.push(body[i]);
+    }
+    push_be32(mut out, crc32(body, 0, body.len()));
+}
+
+fn encode(path: ref String, stored: bool) {
+    let mut lines: Vec[String] = Vec.new();
+    let l = match load(path, mut lines) {
+        Ok(l) => l,
+        Err(e) => {
+            println(f"  ERROR: {e}");
+            return;
+        }
+    };
+    let img = ref l.img;
+    let ch = CHANNEL_COUNT[img.ctype];
+    let bpp = bytes_per_pixel(img.depth, ch);
+    let mut raw: Vec[i64] = Vec.new();
+    let mut counts = zeros(5);
+    let mut prev = zeros((img.w * img.depth * ch + 7) / 8);
+    for y in 0..img.h {
+        let cur = pack(img, l.pix, y);
+        let mut best_score = -1;
+        let mut best_f = 0;
+        let mut best_row: Vec[i64] = Vec.new();
+        for f in 0..5 {
+            let fr = filtered(f, cur, prev, bpp);
+            let mut score = 0;
+            for i in 0..fr.len() {
+                score += if fr[i] < 128 { fr[i] } else { 256 - fr[i] };
+            }
+            if best_score < 0 or score < best_score {
+                best_score = score;
+                best_f = f;
+                best_row = fr;
+            }
+        }
+        counts[best_f] += 1;
+        raw.push(best_f);
+        for i in 0..best_row.len() {
+            raw.push(best_row[i]);
+        }
+        prev = cur;
+    }
+    let body = if stored { deflate_stored(raw) } else { deflate_fixed(raw) };
+    let mut z: Vec[i64] = Vec.new();
+    z.push(0x78);
+    z.push(0x01);
+    for i in 0..body.len() {
+        z.push(body[i]);
+    }
+    push_be32(mut z, adler32(raw));
+    let mut out: Vec[i64] = Vec.new();
+    for c in [137, 80, 78, 71, 13, 10, 26, 10] {
+        out.push(c);
+    }
+    let mut ihdr: Vec[i64] = Vec.new();
+    push_be32(mut ihdr, img.w);
+    push_be32(mut ihdr, img.h);
+    ihdr.push(img.depth);
+    ihdr.push(img.ctype);
+    ihdr.push(0);
+    ihdr.push(0);
+    ihdr.push(0);
+    put_chunk(mut out, "IHDR", ihdr);
+    if img.has_plte {
+        put_chunk(mut out, "PLTE", img.plte);
+    }
+    if img.has_trns {
+        put_chunk(mut out, "tRNS", img.trns);
+    }
+    put_chunk(mut out, "IDAT", z);
+    put_chunk(mut out, "IEND", Vec.new());
+    println(f"  filters: none {counts[0]}, sub {counts[1]}, up {counts[2]}, average {counts[3]}, paeth {counts[4]}");
+    println(f"  wrote {out.len()} bytes (was {l.size}), IDAT {z.len()} bytes, crc32 {crc32(out, 0, out.len()):08x}");
+    let mut scratch: Vec[String] = Vec.new();
+    let mut same = false;
+    if let Ok(img2) = walk(out, mut scratch) {
+        if let Ok(d2) = decode(img2) {
+            same = true;
+            for i in 0..img.w * img.h {
+                let a = rgba(img, l.pix, i);
+                let b = rgba(img2, d2.pix, i);
+                if a.r != b.r or a.g != b.g or a.b != b.b or a.a != b.a {
+                    same = false;
+                }
+            }
+        }
+    }
+    println(f"  read back: {if same { "same pixels" } else { "DIFFERENT pixels" }}");
+}
+
+// ------------------------------------------------------------- data
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    for job in jobs.lines() {
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
+        println(f"== {f.join(" ")}");
+        if f[0] == "check" {
+            check(f[1]);
+        } else if f[0] == "decode" {
+            show_decode(f[1]);
+        } else {
+            encode(f[1], f.len() > 2);
+        }
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda30000000467414d410000b18f0bfc61");
+    t.push_str("05000000206348524d00007a26000080840000fa00000080e8000075300000ea6000003a98000017709cba513c000000");
+    t.push_str("017352474200aece1ce90000000373424954050605330b8d80000002c649444154789cbdd6bf6b53511407f0176bbb59");
+    t.push_str("74528ca8e8603b4425fa4ca17188e0ed100a919aa1af48048f43142225a2718894b304210e199ac140390e452c680527");
+    t.push_str("97db45114cf2f2fbf7efa6565041c13f40535a6293bea4314d3c7cdf5beebd87071feee308bffb5caada23f4b3f675b2");
+    t.push_str("2921ce24c59b29f1765abc9311ef65c5fb39f1515e7cdcc9d981b9b9b936cbb1f16bdf165eab060614f363e1fdcf858f");
+    t.push_str("876ee9db74d8df6a216298500983aaa1c15dbfb164785adb7972c5a6bcac28136286306311668c32538c99e34c4a304b");
+    t.push_str("92418a59d3cc9661f62c73e49833cfb0c05c45e62e314f99793b450e4d5edef8f6ae72fc2d34756b4696a7c68421a1eb");
+    t.push_str("54a79e37356c400e4e5f68e5d9797ebd4a0e5fd7d47b36220fed06da45d535fca0098036083a19f42130848145c01805");
+    t.push_str("530ccc719012604902a4c09a065b06ec5970e4c099072c80ab08ee1278cae0ad806f15a80a8b6bb0a4801cb87bb66bdb");
+    t.push_str("9d51cf9b37db6e21fb6747f762bb33ebb36f1a90d757e6f7cedb94035747b621f783773bf2271cf1a32680da20ea64d4");
+    t.push_str("87d01046164163144d3134c7514aa0258990426b1a6d19b467d19143671eb180ae22ba4be829a3b782be55a42a2eaee1");
+    t.push_str("d2675c6e40f63f19eda1f0668e3e34fd45eeadf0561a90e53e205ffa9fc81b37993401d2064927933e448630b10819a3");
+    t.push_str("648a91394e52822c49821459d364cb903d4b8e1c39f384057215c95d224f99bc15f2ad125569718d146ff28b9edee4e9");
+    t.push_str("c69b5cab8bd3d15ef1d6bb0b4dbfeb2f85673de11d3ed3e2777d613228bf1bdb23eab1094919b95e32d787b821cc5984");
+    t.push_str("1ba3dc14e3e6389712dc92e490e2d634b765b83dcb1d39eecc732c705791bb4bdc53e6de0af7753a78853f5ce902f6c4");
+    t.push_str("b875672be5c1ebfc38ff5758c5ee429bc1eb88fac661b5f4f5fbcb5d494f691f1c54eb5a91b41cbc364b736eb9f64ea4");
+    t.push_str("6614574f8f3adb1fdf28c569a987d5f7e9fa0f14a67e0f818c122d0000000f744558745469746c6500436166e9206d65");
+    t.push_str("6e755d82a2950000000b74455874417574686f72004a6f73e912390e6c0000002c7a545874436f6d6d656e740000789c");
+    t.push_str("73294a2ccf5348aa54c848cc4bd1e30a4e4dcecf4b51c8c9cc4bd50300826d093dc250ad250000003d69545874446573");
+    t.push_str("6372697074696f6e0000006672004465736372697074696f6e00556e20636572636c6520726f75676520e28094207472");
+    t.push_str("c3a8732073696d706c65c0059cfd0000002169545874536f6674776172650001000000789ccbcdcccb8c2fc84b577834");
+    t.push_str("67320021380583105d04c40000000774494d4507e80309112a050e8ef7f50000000c7072567470726976617465206461");
+    t.push_str("746105e533e4000000097048597300000b1300000b1301009a9c180000000049454e44ae426082");
+    v.push(DataFile { path: "annotated.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000408020000002693092900000006624b474400ff00ff00ffa0");
+    t.push_str("bda7930000000970485973000000010000000200640897150000002949444154789c0dc7310100000cc23084a1a44a2a");
+    t.push_str("0c815bbe24a1c1b0909416cbfa918a323fa3c3b1716c0310e1c739ac630000000049454e44ae426082");
+    v.push(DataFile { path: "bkgd-phys.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a7000000016131623278d21a84150000");
+    t.push_str("003749444154789c63606048916348b16148896248a9604899c690b28521e512430a23830d508201133131d8306045cc");
+    t.push_str("0c1546fc720c980800e6da0ba64cc272060000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-chunk-name.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030402000000fe66d4900000002349444154789c0dc7b10100");
+    t.push_str("300c83307006feffb8d52620697404a6cdce9fe5dabaf50007ff0073de461e970000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-combo.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003dafe9a70000003749444154789c6360604891");
+    t.push_str("6348b16148896248a9604899c690b28521e512430a23830d508201133131d8306045cc0c1546fc720c980800e6da0ba6");
+    t.push_str("4cc272060000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-crc.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030300000000e64fc00b0000000e49444154789c6360040206");
+    t.push_str("3801000069000d5fc489bd0000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-depth.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030802000100228d08d00000002349444154789c0dc7b10100");
+    t.push_str("300c83307006feffb8d52620697404a6cdce9fe5dabaf50007ff0073de461e970000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-filter-method.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000000f49444154789c63604002ac");
+    t.push_str("0cb8000000a9000608b6d4c00000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-filter-type.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030802000002d59858bd0000002349444154789c0dc7b10100");
+    t.push_str("300c83307006feffb8d52620697404a6cdce9fe5dabaf50007ff0073de461e970000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-interlace.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0d1a0a0000000d49484452000000080000000408020000003cafe9a70000003749444154789c6360604891");
+    t.push_str("6348b16148896248a9604899c690b28521e512430a23830d508201133131d8306045cc0c1546fc720c980800e6da0ba6");
+    t.push_str("4cc272060000000049454e44ae426082");
+    v.push(DataFile { path: "broken/bad-signature.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a70000003749444154789c6360604891");
+    t.push_str("6348b16148896248a9604899c690b28521e512430a23830d508201133131d8306045cc0c1546fc720c980800e6da0ba6");
+    t.push_str("4cc272060000000049454e44ae4260826a756e6b");
+    v.push(DataFile { path: "broken/data-after-iend.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "broken/empty.png".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000000c49444154789c6360201a00");
+    t.push_str("00002b0001a48374000000000049454e44ae426082");
+    v.push(DataFile { path: "broken/extra-data.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a77ffffff074455874616263");
+    v.push(DataFile { path: "broken/huge-length.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a70000000a49444154789c6360606462");
+    t.push_str("666165c421d97500000003744558746b0076cb04f390000000114944415463e7e0e4e24666f33020b179010f1500ebb4");
+    t.push_str("eafa300000000049454e44ae426082");
+    v.push(DataFile { path: "broken/idat-split-by-text.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000467414d410000b18f0bfc61050000000d49484452000000080000000408020000003cafe9");
+    t.push_str("a70000003749444154789c63606048916348b16148896248a9604899c690b28521e512430a23830d508201133131d830");
+    t.push_str("6045cc0c1546fc720c980800e6da0ba64cc272060000000049454e44ae426082");
+    v.push(DataFile { path: "broken/ihdr-not-first.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000000849444154789c0300000000");
+    t.push_str("01480689d20000000049454e44ae426082");
+    v.push(DataFile { path: "broken/no-idat.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a70000003749444154789c6360604891");
+    t.push_str("6348b16148896248a9604899c690b28521e512430a23830d508201133131d8306045cc0c1546fc720c980800e6da0ba6");
+    t.push_str("4cc27206");
+    v.push(DataFile { path: "broken/no-iend.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030803000000832a5ef40000000e49444154789c6360600442");
+    t.push_str("38010000390007d56c5f840000000049454e44ae426082");
+    v.push(DataFile { path: "broken/no-plte.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030800000000919ff11a00000003504c5445000000a77a3dda");
+    t.push_str("0000000f49444154789c63606064626680130000870013223d5f880000000049454e44ae426082");
+    v.push(DataFile { path: "broken/plte-in-gray.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030803000000832a5ef400000006504c5445000000ffffffa5");
+    t.push_str("d99fdd0000000f49444154789c63606064626680130000870013223d5f880000000049454e44ae426082");
+    v.push(DataFile { path: "broken/plte-index.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000000b49444154789c6360c00b00");
+    t.push_str("001f000180fd43da0000000049454e44ae426082");
+    v.push(DataFile { path: "broken/short-data.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000030803000000832a5ef400000006504c544500000009090902");
+    t.push_str("a881ad0000000374524e530001020d6394b30000000e49444154789c636060044238010000390007d56c5f8400000000");
+    t.push_str("49454e44ae426082");
+    v.push(DataFile { path: "broken/trns-too-long.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a70000003749444154789c6360604891");
+    t.push_str("6348b16148896248a9604899c690b28521e512430a23830d508201133131d8306045");
+    v.push(DataFile { path: "broken/truncated.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a70000000d4948445200000008000000");
+    t.push_str("0408020000003cafe9a70000003749444154789c63606048916348b16148896248a9604899c690b28521e512430a2383");
+    t.push_str("0d508201133131d8306045cc0c1546fc720c980800e6da0ba64cc272060000000049454e44ae426082");
+    v.push(DataFile { path: "broken/two-ihdr.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000408020000003cafe9a700000001635249547886f6eab80000");
+    t.push_str("003749444154789c63606048916348b16148896248a9604899c690b28521e512430a23830d508201133131d8306045cc");
+    t.push_str("0c1546fc720c980800e6da0ba64cc272060000000049454e44ae426082");
+    v.push(DataFile { path: "broken/unknown-critical.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000000000000030802000000327d99eb0000002349444154789c0dc7b10100");
+    t.push_str("300c83307006feffb8d52620697404a6cdce9fe5dabaf50007ff0073de461e970000000049454e44ae426082");
+    v.push(DataFile { path: "broken/zero-width.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000001b4944415478da6360606462");
+    t.push_str("66616563e7e0e4e24666f33020b179010f150014e92afb8e0000000049454e44ae426082");
+    v.push(DataFile { path: "broken/zlib-adler.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000000b49444154789c0700000000");
+    t.push_str("00000000973e885a0000000049454e44ae426082");
+    v.push(DataFile { path: "broken/zlib-block-type.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000001b49444154789d6360606462");
+    t.push_str("66616563e7e0e4e24666f33020b179010f1500ebd83108060000000049454e44ae426082");
+    v.push(DataFile { path: "broken/zlib-header.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000001b4944415477096360606462");
+    t.push_str("66616563e7e0e4e24666f33020b179010f1500eb1a659dab0000000049454e44ae426082");
+    v.push(DataFile { path: "broken/zlib-method.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000002e4944415478010127002700");
+    t.push_str("00000102030405060708090a0b000102030405060708090a0b0c0002030405060708090a0b0c0d244422b20000000049");
+    t.push_str("454e44ae426082");
+    v.push(DataFile { path: "broken/zlib-stored-length.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000000b4944415478016300120000");
+    t.push_str("0000000052a5d64c0000000049454e44ae426082");
+    v.push(DataFile { path: "broken/zlib-too-far.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000040000000308020000003b9639910000000d4944415478da6360606462");
+    t.push_str("66616563e7e09512fd5f0000000049454e44ae426082");
+    v.push(DataFile { path: "broken/zlib-truncated.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda30000012c49444154780163fcffff3f");
+    t.push_str("032d01e3a0b0e0aa693423032b265239dd44a90597ad03b11a8d8c948e569063c14547778246232385fd79245870c1dd");
+    t.push_str("8924d321487e672651169cf7b525c3740892db9c42c08273c116649b0e41b26be3715a7036d29842d321486679140e0b");
+    t.push_str("e2a964c1426c169c49d5a38ae910243d3b14c3826caa5a3015d582d3859a54341d82a4fa03902c28a781059dc816d4d2");
+    t.push_str("c08266640b9a6960412db2059d34b0a01cd9827e1a5850886cc1541a58908d6cc16c1a58901a809ad1165235a3c563e6");
+    t.push_str("e4e554b52012c3025061b7964a855d30aed27433952cf0c56101109cdb497185e38ebbc28180f3fb29a8321d09559910");
+    t.push_str("70e1285995be3571953e045c3c4d62b3c59494660b1c5cbe4844c34b9fac861732b87a1d47d35193e2a623e580e61600");
+    t.push_str("000d23b3c128718da60000000049454e44ae426082");
+    v.push(DataFile { path: "circle-fixed.png".to_string(), hex: true, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda30000047749444154780105c1cb0b28");
+    t.push_str("085dc7d1cf97b3bee3f3eae8943d10bc6113a19846562896952489656648610f09dcb469fdfb2706c10963400883dc48");
+    t.push_str("90410852546896d88b2208823bbe9feded1cdffbdef7eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    t.push_str("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeecedd5555555555555555555555555555555555555555555555e5eeaa");
+    t.push_str("aaaaaaaaaaaaaafad737fce6d79efde4d79efd8baf3ffb975f7ff6afbef1ec5f7fe3d94f7ff3d9cfbcf8f7df52555555");
+    t.push_str("5555555595bbabaaaaaaaaaaaabef853effaea473f31c618638cf1cd8ffecdb73efa772ffa9d3757555555555555eeae");
+    t.push_str("aaaaaaaaaa2fbce5ed5f79eee3638c31c618638cf1ade7fee1dbcf7dee85bffdc6aaaaaaaaaadc5d55555555fdf3dbdf");
+    t.push_str("3ac618638c31c618638cf1ed8f7dfe85ef7f4355555555b9bbaaaaaaea9f7ef9a7c718638c31c618638c31c6f8ce9f7e");
+    t.push_str("e105ef7b5d555555e5eeaaaaaa3effee378d31c618638c31c618638c31c677feec8b2ff8f51fafaaaa72775555fde36f");
+    t.push_str("bc7e8c31c618638c31c618638c31c6f8ee9fffdb13bffa745555eeaeaaaae73ff99131c618638c31c618638c31c61863");
+    t.push_str("3cf1aea7abaa727755f5b9dffbb131c618638c31c618638c31c618638cef7ef23f9e78e76babcadd55d5e34f7d788c31");
+    t.push_str("c618638c31c618638c31c618633cf18ed75695bbab3efb873f32c618638c31c618638c31c618638c31c6ff7deabf1efc");
+    t.push_str("c2a3cadd558f3ffdcc18638c31c618638c31c618638c31c618e3c1cf3daadc5df5f833cf8c31c618638c31c618638c31");
+    t.push_str("c618638c311ebcf551e5eeaac77ffbcc18638c31c618638c31c618638c31c618e3c1cf3eaadc5df5f8ef9f19638c31c6");
+    t.push_str("18638c31c618638c31c618633c78f3a3cadd558f3ffbcc18638c31c618638c31c618638c31c618e3c14f3eaadc5df5f8");
+    t.push_str("f3cf8c31c618638c31c618638c31c618638c311efcc4a3cadd558fbff0cc18638c31c618638c31c618638c31c618e3c1");
+    t.push_str("eb1f55eeae7aeaf51f7afc2f1f1e638c31c618638c31c618638c31c6184f7de0dd55e5eeaaeaf1bf7f788c31c618638c");
+    t.push_str("31c618638c31c618633cf1f46babcadd55d52b9ffe83e7fff323638c31c618638c31c618638c31c6f8bef7bcb7aa2a77");
+    t.push_str("5755d5f3fffd9131c618638c31c618638c31c618633cf19aa7abaa72775555bdf2351f7cfe7ffe788c31c618638c31c6");
+    t.push_str("18638c31c6f7ffd2fbabaaaadc5d5555d52b5efdbb5ffadf3f19638c31c618638c31c61863bcea6d1fa8aaaaaadc5d55");
+    t.push_str("5555f58a1ffac0971e3f37c618638c31c618638c317ee0673e5855555555eeaeaaaaaaaa9e7cd56f7df9cb1f1b638c31");
+    t.push_str("c618638c31c60fbee9435555555555b9bbaaaaaaaaaa9e7ceafd2f7fea7d5ff9dac7c718638c31c6183ffcba3f7ae153");
+    t.push_str("6facaaaaaaaaaa7277555555555555d5cb9f7cefcb9efcb5af7ef313638c31c678f58fde8b9e7c7355555555555555b9");
+    t.push_str("bbaaaaaaaaaaaaaaaa5ef6f0dd0f1ffecac387ef7ce9c377bcf4e12fbee4e1cfbfe4e1db5efcf02d5555555555555555");
+    t.push_str("55eeaeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaff07c215efed9ca19e210000000049454e44ae426082");
+    v.push(DataFile { path: "circle-huffman.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda300000001494441547876e684e60000");
+    t.push_str("0001494441549cd181a287000000014944415463fc834d0a0000000149444154f9ec5937500000000149444154ff053a");
+    t.push_str("92650000000149444154ff053a926500000001494441543f9e5e50d5000000014944415403b1312c5200000001494441");
+    t.push_str("542d6de7219d0000000149444154015f3f4d7e00000001494441540bbfeaa46000000001494441544d205540c5000000");
+    t.push_str("01494441544d205540c50000000149444154278d32c8830000000149444154d647880a090000000149444154822b8e9f");
+    t.push_str("e40000000149444154ab693c07880000000149444154a6178d7b350000000149444154d1d9ec9faa0000000149444154");
+    t.push_str("8ccc36b2e300000001494441540c218e31c30000000149444154acf758922b000000014944415498d6ec669e00000001");
+    t.push_str("4944415448503fb44a0000000149444154e5f8586b1f0000000149444154747f50c8cd000000014944415413ac863c36");
+    t.push_str("0000000149444154a58e842a8f000000014944415416dcecc8b900000001494441545c4ae560370000000149444154b6");
+    t.push_str("0a3a6b5100000001494441540ecf8050ef0000000149444154042f55b9f1000000014944415499a1eb56080000000149");
+    t.push_str("444154c5c3364bd70000000149444154c65a3f1a6d00000001494441548a255517d60000000149444154553339d89300");
+    t.push_str("00000149444154f67ce62ac10000000149444154ae1956f3070000000149444154750857f85b00000001494441543397");
+    t.push_str("e81cfe00000001494441545043532c1c000000014944415456aa3089290000000149444154e9f1ee2734000000014944");
+    t.push_str("4154686b51948200000001494441540558528967000000014944415439773df5e0000000014944415416dcecc8b90000");
+    t.push_str("0001494441545c4ae560370000000149444154747f50c8cd0000000149444154747f50c8cd0000000149444154c72d38");
+    t.push_str("2afb000000014944415463fc834d0a000000014944415434098c895d000000014944415432e0ef2c6800000001494441");
+    t.push_str("54b8ed8246560000000149444154ef188d82010000000149444154d8a030270e00000001494441540bbfeaa460000000");
+    t.push_str("014944415454443ee8050000000149444154a9873266a40000000149444154b0e359ce6400000001494441543f9e5e50");
+    t.push_str("d500000001494441548f553fe3590000000149444154042f55b9f100000001494441540bbfeaa4600000000149444154");
+    t.push_str("2ef4ee70270000000149444154b8ed82465600000001494441543b993394cc00000001494441541142885d1a00000001");
+    t.push_str("4944415463fc834d0a000000014944415434098c895d000000014944415432e0ef2c6800000001494441547876e684e6");
+    t.push_str("0000000149444154e886e917a200000001494441543ee959604300000001494441545d3de250a100000001494441547e");
+    t.push_str("9f8521d3000000014944415467fbee8913000000014944415426fa35f81500000001494441545134541c8a0000000149");
+    t.push_str("44415416dcecc8b900000001494441549cd181a2870000000149444154f70be11a570000000149444154b593333aeb00");
+    t.push_str("0000014944415425633ca9af0000000149444154d5de815bb30000000149444154747f50c8cd00000001494441540826");
+    t.push_str("e3f5da00000001494441547876e684e60000000149444154e48f5f5b8900000001494441543b993394cc000000014944");
+    t.push_str("415447c080a9db00000001494441546e823231b7000000014944415473e1345d6e00000001494441540ac8ed94f60000");
+    t.push_str("000149444154015f3f4d7e00000001494441540bbfeaa4600000000149444154ce54e4925f0000000149444154055852");
+    t.push_str("896700000001494441545bd481f594000000014944415490d837eeac000000014944415467fbee891300000001494441");
+    t.push_str("543aee34a45a0000000149444154042f55b9f100000001494441543c0757016f00000001494441540ecf8050ef000000");
+    t.push_str("01494441545ea4eb011b0000000149444154281d8dd5120000000149444154bb748b17ec000000014944415436e782e8");
+    t.push_str("7100000001494441541ed237408b0000000149444154a7608a4ba3000000014944415405585289670000000149444154");
+    t.push_str("67fbee89130000000149444154238a5f0c9a00000001494441548dbb3182750000000149444154296a8ae58400000001");
+    t.push_str("494441543179e67dd200000001494441541d4b3e1131000000014944415402c6361cc400000001494441549e3f8fc3ab");
+    t.push_str("0000000149444154445989f86100000001494441542ef4ee7027000000014944415493413ebf16000000014944415459");
+    t.push_str("3a8f94b800000001494441541ed237408b000000014944415485b5ea0a470000000149444154ddd05ad3810000000149");
+    t.push_str("44415402c6361cc4000000014944415406c15bd8dd000000014944415436e782e87100000001494441540ac8ed94f600");
+    t.push_str("000001494441540d568901550000000149444154c72d382afb000000014944415402c6361cc400000001494441541035");
+    t.push_str("8f6d8c000000014944415416dcecc8b900000001494441549cd181a287000000014944415449273884dc000000014944");
+    t.push_str("4154d5de815bb30000000149444154a367e78fba0000000149444154dca75de3170000000149444154f9ec5937500000");
+    t.push_str("00014944415410358f6d8c0000000149444154f095858ff4000000014944415434098c895d0000000149444154750857");
+    t.push_str("f85b0000000149444154b593333aeb0000000149444154f492e84bed0000000149444154ec8184d3bb00000001494441");
+    t.push_str("545043532c1c0000000149444154747f50c8cd00000001494441540bbfeaa4600000000149444154686b519482000000");
+    t.push_str("0149444154e1ff35af0600000001494441547c718b40ff000000014944415484c2ed3ad1000000014944415405585289");
+    t.push_str("670000000149444154a7608a4ba300000001494441540bbfeaa4600000000149444154357e8bb9cb0000000149444154");
+    t.push_str("a9873266a40000000149444154e5f8586b1f00000001494441547c718b40ff00000001494441540826e3f5da00000001");
+    t.push_str("494441547876e684e6000000014944415456aa3089290000000149444154b8ed82465600000001494441544129e30cee");
+    t.push_str("0000000149444154aa1e3b371e00000001494441543f9e5e50d500000001494441540028387de8000000014944415461");
+    t.push_str("128d2c260000000149444154015f3f4d7e00000001494441548dbb31827500000001494441549cd181a2870000000149");
+    t.push_str("4441543f9e5e50d500000001494441546a855ff5ae0000000149444154c1c45b8fce0000000149444154a8f035563200");
+    t.push_str("0000014944415405585289670000000149444154d4a9866b250000000149444154b4e4340a7d0000000149444154c0b3");
+    t.push_str("5cbf58000000014944415434098c895d0000000149444154f5e5ef7b7b0000000149444154fa755066ea000000014944");
+    t.push_str("415499a1eb5608000000014944415485b5ea0a4700000001494441547a98e8e5ca000000014944415454443ee8050000");
+    t.push_str("00014944415434098c895d000000014944415457dd37b9bf00000001494441542af383b43e00000001494441543ee959");
+    t.push_str("604300000001494441540028387de80000000149444154c5c3364bd7000000014944415402c6361cc400000001494441");
+    t.push_str("5410358f6d8c0000000149444154a0feeede000000000149444154691c56a41400000001494441544eb95c117f000000");
+    t.push_str("014944415406c15bd8dd000000014944415402c6361cc4000000014944415493413ebf160000000149444154c8bd8737");
+    t.push_str("6a00000001494441544bc936e5f0000000014944415467fbee89130000000149444154d7308f3a9f0000000149444154");
+    t.push_str("1ad55a8492000000014944415453da5a7da60000000149444154c5c3364bd700000001494441545043532c1c00000001");
+    t.push_str("49444154e9f1ee27340000000149444154e088329f9000000001494441545043532c1c00000001494441542c1ae0110b");
+    t.push_str("000000014944415416dcecc8b9000000014944415480c580fec800000001494441540028387de800000001494441544d");
+    t.push_str("205540c500000001494441544bc936e5f0000000014944415453da5a7da600000001494441542013565d200000000149");
+    t.push_str("444154300ee14d440000000149444154f67ce62ac100000001494441543d705031f900000001494441547befefd55c00");
+    t.push_str("000001494441546e823231b70000000149444154a7608a4ba300000001494441540558528967000000014944415485b5");
+    t.push_str("ea0a47000000014944415426fa35f8150000000149444154ca538956460000000149444154b8ed824656000000014944");
+    t.push_str("415447c080a9db00000001494441542164516db6000000014944415473e1345d6e0000000149444154d1d9ec9faa0000");
+    t.push_str("0001494441546bf258c538000000014944415434098c895d0000000149444154238a5f0c9a0000000149444154f70be1");
+    t.push_str("1a57000000014944415413ac863c360000000149444154e716560a330000000149444154f70be11a5700000001494441");
+    t.push_str("54db393976b400000001494441549236398f8000000001494441546d1b3b600d0000000149444154ba038c277a000000");
+    t.push_str("0149444154acf758922b000000014944415463fc834d0a00000001494441543c0757016f00000001494441549a38e207");
+    t.push_str("b200000001494441540826e3f5da00000001494441549631544b9900000001494441543aee34a45a0000000149444154");
+    t.push_str("d9d73717980000000149444154d0aeebaf3c0000000149444154f1e282bf620000000149444154f095858ff400000001");
+    t.push_str("4944415485b5ea0a470000000149444154a367e78fba00000001494441544eb95c117f00000001494441546462e7d8a9");
+    t.push_str("000000014944415498d6ec669e00000001494441542ef4ee7027000000014944415467fbee891300000001494441548d");
+    t.push_str("bb31827500000001494441545ea4eb011b00000001494441542164516db6000000014944415463fc834d0a0000000149");
+    t.push_str("444154b77d3d5bc700000001494441540028387de800000001494441540826e3f5da00000001494441540c218e31c300");
+    t.push_str("00000149444154acf758922b0000000149444154f70be11a5700000001494441545d3de250a100000001494441543c07");
+    t.push_str("57016f0000000149444154edf683e32d00000001494441544eb95c117f00000001494441549236398f80000000014944");
+    t.push_str("4154e9f1ee27340000000149444154f27b8beed80000000149444154a6178d7b350000000149444154584d88a42e0000");
+    t.push_str("0001494441549a38e207b200000001494441541432e2a995000000014944415438003ac57600000001494441542d6de7");
+    t.push_str("219d00000001494441540028387de8000000014944415402c6361cc400000001494441547d068c706900000001494441");
+    t.push_str("54d337e2fe8600000001494441549da68692110000000149444154405ee43c780000000149444154f27b8beed8000000");
+    t.push_str("0149444154f27b8beed80000000149444154c5c3364bd70000000149444154405ee43c780000000149444154822b8e9f");
+    t.push_str("e4000000014944415446b787994d00000001494441542b848484a80000000149444154ea68e7768e0000000149444154");
+    t.push_str("17abebf82f0000000149444154e3113bce2a000000014944415491af30de3a000000014944415425633ca9af00000001");
+    t.push_str("49444154d0aeebaf3c0000000149444154b20d57af480000000149444154d337e2fe860000000149444154d5de815bb3");
+    t.push_str("00000001494441545fd3ec318d00000001494441540fb8876079000000014944415424143b99390000000149444154af");
+    t.push_str("6e51c39100000001494441545ea4eb011b00000001494441548f553fe3590000000149444154c65a3f1a6d0000000149");
+    t.push_str("4441542af383b43e0000000149444154ab693c07880000000149444154acf758922b0000000149444154593a8f94b800");
+    t.push_str("000001494441544bc936e5f00000000149444154d0aeebaf3c00000001494441547a98e8e5ca0000000149444154a210");
+    t.push_str("e0bf2c0000000149444154da4e3e46220000000149444154a6178d7b350000000149444154da4e3e4622000000014944");
+    t.push_str("41549a38e207b200000001494441544bc936e5f0000000014944415489bc5c466c00000001494441545134541c8a0000");
+    t.push_str("00014944415446b787994d0000000149444154be04e1e36300000001494441540558528967000000014944415494df5a");
+    t.push_str("2ab500000001494441540028387de800000001494441540028387de80000000149444154691c56a41400000001494441");
+    t.push_str("54f095858ff4000000014944415449273884dc00000001494441547d068c70690000000049454e44ae426082");
+    v.push(DataFile { path: "circle-idat1.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda30000006449444154789c63f9ffff3f");
+    t.push_str("032d010b4d4d27d682aba6d18c0cac9848e57413a5165cb60e0499c5c68a55f6ae75335056e9680539165c7474c76334");
+    t.push_str("32b8efd80b54a9b03f8f040b2eb83b1163343278e83e5d7e672651169cf7b525d5740878e43b476e730a010bcecedf90");
+    t.push_str("7c0000006449444154055b90673a043c0e5e28bb361ea70567238d29311d029e442e93591e85dd0206360a0dc7021016");
+    t.push_str("9c49d5a3dcf910f03475b5f4ec50740b68e17c8405a70b35a9e57c087856b841aa3f0061018d9c3f6ac1a805d4b4c034");
+    t.push_str("f5fa99857a5434572a3e00c5022d1bfd92000000644944415410a0694e060293c84b67d71a53c550e9e0502c1680004d");
+    t.push_str("4b532030f63d7b6ea7058526cab8472173d16b3423f713e7f7db926dbaac633c9a08963ad9d0f1f085a34e64982e678d");
+    t.push_str("5e2163b700080cacf75d3ced4e92e9f2a6589a14382d00027dd39d40f2e90e81440000002f49444154f2c54082462bea");
+    t.push_str("17e39125d0b2d3d55f0f24af5e8fc62aabac594bd07aa2daa6da9a4b895146be0594000069f0497ded6f843900000000");
+    t.push_str("49454e44ae426082");
+    v.push(DataFile { path: "circle-idat100.png".to_string(), hex: true, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda300000c2b49444154780101200cdff3");
+    t.push_str("00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ff00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffff00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd4345ad5345fd63464");
+    t.push_str("d73469d8346ed93473da3478db347dffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffff00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd23a50d33a55d43a5ad53a5fd63a");
+    t.push_str("64d73a69d83a6ed93a73da3a78db3a7ddc3a82dd3a87ffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffff00ffffffffffffffffffffffffffffffffffffffffffffffffd04046d1404bd24050d34055d4405ad5405fd6");
+    t.push_str("4064d74069d8406ed94073da4078db407ddc4082dd4087de408cdf4091ffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffff00ffffffffffffffffffffffffffffffffffffffffffcf4641d04646d1464bd24650d34655d4465ad5465f");
+    t.push_str("d64664d74669d8466ed94673da4678db467ddc4682dd4687de468cdf4691e04696ffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffff00ffffffffffffffffffffffffffffffffffffce4c3ccf4c41d04c46d14c4bd24c50d34c55d44c5ad54c");
+    t.push_str("5fd64c64d74c69d84c6ed94c73da4c78db4c7ddc4c82dd4c87de4c8cdf4c91e04c96e14c9bffffffffffffffffffffff");
+    t.push_str("ffffffffffffff00ffffffffffffffffffffffffffffffcd5237ce523ccf5241d05246d1524bd25250d35255d4525ad5");
+    t.push_str("525fd65264d75269d8526ed95273da5278db527ddc5282dd5287de528cdf5291e05296e1529be252a0ffffffffffffff");
+    t.push_str("ffffffffffffffff00ffffffffffffffffffffffffcc5832cd5837ce583ccf5841d05846d1584bd25850d35855d4585a");
+    t.push_str("d5585fd65864d75869d8586ed95873da5878db587ddc5882dd5887de588cdf5891e05896e1589be258a0e358a5ffffff");
+    t.push_str("ffffffffffffffffff00ffffffffffffffffffffffffcc5e32cd5e37ce5e3ccf5e41d05e46d15e4bd25e50d35e55d45e");
+    t.push_str("5ad55e5fd65e64d75e69d85e6ed95e73da5e78db5e7ddc5e82dd5e87de5e8cdf5e91e05e96e15e9be25ea0e35ea5ffff");
+    t.push_str("ffffffffffffffffffff00ffffffffffffffffffcb642dcc6432cd6437ce643ccf6441d06446d1644bd26450d36455d4");
+    t.push_str("645ad5645fd66464d76469d8646ed96473da6478db647ddc6482dd6487de648cdf6491e06496e1649be264a0e364a5e4");
+    t.push_str("64aaffffffffffffffffff00ffffffffffffffffffcb6a2dcc6a32cd6a37ce6a3ccf6a41d06a46d16a4bd26a50d36a55");
+    t.push_str("d46a5ad56a5fd66a64d76a69d86a6ed96a73da6a78db6a7ddc6a82dd6a87de6a8cdf6a91e06a96e16a9be26aa0e36aa5");
+    t.push_str("e46aaaffffffffffffffffff00ffffffffffffca7028cb702dcc7032cd7037ce703ccf7041d07046d1704bd27050d370");
+    t.push_str("55d4705ad5705fd67064d77069d8706ed97073da7078db707ddc7082dd7087de708cdf7091e07096e1709be270a0e370");
+    t.push_str("a5e470aae570afffffffffffff00ffffffffffffca7628cb762dcc7632cd7637ce763ccf7641d07646d1764bd27650d3");
+    t.push_str("7655d4765ad5765fd67664d77669d8766ed97673da7678db767ddc7682dd7687de768cdf7691e07696e1769be276a0e3");
+    t.push_str("76a5e476aae576afffffffffffff00ffffffffffffca7c28cb7c2dcc7c32cd7c37ce7c3ccf7c41d07c46d17c4bd27c50");
+    t.push_str("d37c55d47c5ad57c5fd67c64d77c69d87c6ed97c73da7c78db7c7ddc7c82dd7c87de7c8cdf7c91e07c96e17c9be27ca0");
+    t.push_str("e37ca5e47caae57cafffffffffffff00ffffffffffffca8228cb822dcc8232cd8237ce823ccf8241d08246d1824bd282");
+    t.push_str("50d38255d4825ad5825fd68264d78269d8826ed98273da8278db827ddc8282dd8287de828cdf8291e08296e1829be282");
+    t.push_str("a0e382a5e482aae582afffffffffffff00ffffffffffffca8828cb882dcc8832cd8837ce883ccf8841d08846d1884bd2");
+    t.push_str("8850d38855d4885ad5885fd68864d78869d8886ed98873da8878db887ddc8882dd8887de888cdf8891e08896e1889be2");
+    t.push_str("88a0e388a5e488aae588afffffffffffff00ffffffffffffca8e28cb8e2dcc8e32cd8e37ce8e3ccf8e41d08e46d18e4b");
+    t.push_str("d28e50d38e55d48e5ad58e5fd68e64d78e69d88e6ed98e73da8e78db8e7ddc8e82dd8e87de8e8cdf8e91e08e96e18e9b");
+    t.push_str("e28ea0e38ea5e48eaae58eafffffffffffff00ffffffffffffca9428cb942dcc9432cd9437ce943ccf9441d09446d194");
+    t.push_str("4bd29450d39455d4945ad5945fd69464d79469d8946ed99473da9478db947ddc9482dd9487de948cdf9491e09496e194");
+    t.push_str("9be294a0e394a5e494aae594afffffffffffff00ffffffffffffca9a28cb9a2dcc9a32cd9a37ce9a3ccf9a41d09a46d1");
+    t.push_str("9a4bd29a50d39a55d49a5ad59a5fd69a64d79a69d89a6ed99a73da9a78db9a7ddc9a82dd9a87de9a8cdf9a91e09a96e1");
+    t.push_str("9a9be29aa0e39aa5e49aaae59aafffffffffffff00ffffffffffffffffffcba02dcca032cda037cea03ccfa041d0a046");
+    t.push_str("d1a04bd2a050d3a055d4a05ad5a05fd6a064d7a069d8a06ed9a073daa078dba07ddca082dda087dea08cdfa091e0a096");
+    t.push_str("e1a09be2a0a0e3a0a5e4a0aaffffffffffffffffff00ffffffffffffffffffcba62dcca632cda637cea63ccfa641d0a6");
+    t.push_str("46d1a64bd2a650d3a655d4a65ad5a65fd6a664d7a669d8a66ed9a673daa678dba67ddca682dda687dea68cdfa691e0a6");
+    t.push_str("96e1a69be2a6a0e3a6a5e4a6aaffffffffffffffffff00ffffffffffffffffffffffffccac32cdac37ceac3ccfac41d0");
+    t.push_str("ac46d1ac4bd2ac50d3ac55d4ac5ad5ac5fd6ac64d7ac69d8ac6ed9ac73daac78dbac7ddcac82ddac87deac8cdfac91e0");
+    t.push_str("ac96e1ac9be2aca0e3aca5ffffffffffffffffffffffff00ffffffffffffffffffffffffccb232cdb237ceb23ccfb241");
+    t.push_str("d0b246d1b24bd2b250d3b255d4b25ad5b25fd6b264d7b269d8b26ed9b273dab278dbb27ddcb282ddb287deb28cdfb291");
+    t.push_str("e0b296e1b29be2b2a0e3b2a5ffffffffffffffffffffffff00ffffffffffffffffffffffffffffffcdb837ceb83ccfb8");
+    t.push_str("41d0b846d1b84bd2b850d3b855d4b85ad5b85fd6b864d7b869d8b86ed9b873dab878dbb87ddcb882ddb887deb88cdfb8");
+    t.push_str("91e0b896e1b89be2b8a0ffffffffffffffffffffffffffffff00ffffffffffffffffffffffffffffffffffffcebe3ccf");
+    t.push_str("be41d0be46d1be4bd2be50d3be55d4be5ad5be5fd6be64d7be69d8be6ed9be73dabe78dbbe7ddcbe82ddbe87debe8cdf");
+    t.push_str("be91e0be96e1be9bffffffffffffffffffffffffffffffffffff00ffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("cfc441d0c446d1c44bd2c450d3c455d4c45ad5c45fd6c464d7c469d8c46ed9c473dac478dbc47ddcc482ddc487dec48c");
+    t.push_str("dfc491e0c496ffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffd0ca46d1ca4bd2ca50d3ca55d4ca5ad5ca5fd6ca64d7ca69d8ca6ed9ca73daca78dbca7ddcca82ddca87deca");
+    t.push_str("8cdfca91ffffffffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffd2d050d3d055d4d05ad5d05fd6d064d7d069d8d06ed9d073dad078dbd07ddcd082ddd087ff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffd4d65ad5d65fd6d664d7d669d8d66ed9d673dad678dbd67dffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    t.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff71f50d00357c80790000000049454e44");
+    t.push_str("ae426082");
+    v.push(DataFile { path: "circle-level0.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda3000001b049444154780163fa4f63c0");
+    t.push_str("c44063409405574da3af99265c374dbd619a75d334ff9669c96dd3ca3ba675c4b88d800597ad03af588731b031604577");
+    t.push_str("ad9bef5977e0b706a705171ddd2f39fa6035174df0be63ef03c749b8acc16ec1057727345308721fba4fc76a07160bce");
+    t.push_str("fbda12340eab8247be7330ed40b7e05cb00556cd440a3e0e5e8866078a0567238d8934088fb22791cb90ed40b1008f36");
+    t.push_str("d2a4906c40587026558f345370a45da0214f5357c3ad4058402dd3a1e6c06c805a70ba5093ba163c2bdc00b102e603dc");
+    t.push_str("fe25df62b00da316e00bc0d1202298f09083c834f53abed02468168602a9d400b0f90cb0640ae46128a24804623c0392");
+    t.push_str("05269197283211c97dd291a130f3912c00092129a2880d371ed907404163dfb314990b769f8c6f1492f9683e60603072");
+    t.push_str("3f41891db2eef1c8a603d948910c9331743c4c9e1d728e2930331034160b809206d6fb48b543de3a13612a120bbb0540");
+    t.push_str("05faa63bf54cb710638da269b182691e9299284c9c164054e9eaafd7d15f85cb1a65fd5a25fd0a14f33038042c80a8d7");
+    t.push_str("d65caaa5b9405373b686e63475cd896a9a3daa9aed2a9a4d18a6611120ca022cfa881602000dcfb3e1a591baaa000000");
+    t.push_str("0049454e44ae426082");
+    v.push(DataFile { path: "circle-level1.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda3000001404944415478da63f9ffff3f");
+    t.push_str("032d010b038d0151165c358d666460c5442aa79b28b5e0b27520c82c3656acb277ad9b81b24a472bc8b1e0a2a33b1ea3");
+    t.push_str("91c17dc75ea04a85fd79245870c1dd8918a391c143f7e9f23b3389b2e0bcaf2da9a643c023df39729b530858702ed882");
+    t.push_str("3cd321e071f042d9b5f1382d381b694c89e910f0247299ccf2281c3e60a3653e3893aa47b9f321e069ea6ae9d9a1183e");
+    t.push_str("60a3654e3e5da8492de743c0b3c20d52fd01483e60a37559346ac1a805145b609a7afdcc423d2a9a2b151f40df9c0c04");
+    t.push_str("269197ceae35a68aa1d2c1a103519a0281b1efd9733b2d283451c63d0a5f8d66e47ee2fc7e5bb24d97758c275c271b3a");
+    t.push_str("1ebe70d4890cd3e5ac53886d551858efbb78da9d24d3e54d33496b17e99bee0435bc2e0612345a51bf98fc969daefe7a");
+    t.push_str("50d3f17a34565965cd5aeab44db535970eded6350069f0497de40074a90000000049454e44ae426082");
+    v.push(DataFile { path: "circle-level9.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda30000068c494441547801b5c1bbabaa");
+    t.push_str("60000070ff9cb3b4c481201a6a71a94102211c72f9161d4410c441976fd14184401a6c71c92184034d4d4d4d3dcdf733");
+    t.push_str("7b9dbfe3bb101c3897fbe02ef7f7c3d07f86a1ff0c43ff207ca7a2773a7e07c93b93be73d9bb90bf4bc5bb82fe0186fe");
+    t.push_str("ca6f13419b0cdb54d4a6e33648da4cdae6b2b690b7a5a2ad946d58b555f45718fa03af8b9fbb7dbf4b045d32ec525197");
+    t.push_str("8ebb20e9326997cbba42de958aae527661d5552f5dbdee4ed01f60e8774e78cfc3f133def77122c0c910a7229c8e7190");
+    t.push_str("e04c8a73192ee4b854e04a89c30a572fb85ee3932b3e45bf83a15f1c079dd3a0e70df0f3a0ef0f88604086032a1ad0f1");
+    t.push_str("002403261d70d940c807523150ca01ac06ea65a0d783c97530bd0d66e81718fad961d83a0e3ba761cf1be2e761df1f12");
+    t.push_str("c1900c875434a4e32148864c3ae4b2a1900fa562a89443580dd5cb50af8793eb707a1bceee431bfd0c43dfec47cdc3a8");
+    t.push_str("751c754ea39e37c2cfa3be3f228211198ea86844c723908c9874c46523211f49c5482947b01aa997915e8f26d7d1f436");
+    t.push_str("9add47f6633447df60e89bfdb87918b78ee3ce69dcf3c6f879dcf7c7443026c331158de9780c9231938eb96c2ce463a9");
+    t.push_str("182be5185663f532d6ebf1e43a9edec6b3fbd87e8ce7e81b0c7dd981c61e340fa075049d13e879003f83be0f88009021");
+    t.push_str("a02240c700248049019701210752019412c00aa817a0d7607205d31b98dd81fd00f32758a02f18fab2631b7bb679605b");
+    t.push_str("47b673627b1e8b9fd9becf12014b862c15b174cc8284655296cb582167a582554a1656ac7a61f59a9d5cd9e98d9ddd59");
+    t.push_str("fbc1ce9fec027dc1d0cb967fdbf18d3ddf3cf0ad23df39f13d8fc7cf7cdfe7898027439e8a783ae641c23329cf65bc90");
+    t.push_str("f352c12b250f2b5ebdf07acd4faefcf4c6cfeebcfde0e74f7ef1c97fa0170cbd6cc5b79dd8d88bcd83d83a8a9d93d8f3");
+    t.push_str("44fc2cf67d9108443214a948a463112422938a5c260ab92815a2528ab012d58ba8d7e2e42a4e6fe2ec2eda0f71fe1417");
+    t.push_str("9fe2077ac1d0cb567edbc98dbddc3cc8ada3dc39c93d4fc6cf72df9789402643998a643a96412233a9cc65b290cb5221");
+    t.push_str("2ba50c2b59bdc87a2d4faef2f426cfeeb2fd90e74f79f1297fa0170cbd6ce1db0e36f6b07980ad23ec9c60cf83f819f6");
+    t.push_str("7d4804900c2115413a8620814c0ab90c0a39940aa894105650bd40bd86932b9cdee0ec0eed079c3fe1e2137ea0170cbd");
+    t.push_str("6cb5b79dd6d86bcd83d63a6a9d93d6f334fcacf57d8d083432d4a848a3630d241a936a5ca609b926159a526ab0d2d48b");
+    t.push_str("a6d7dae4aa4d6fdaecaed90f6dfed4169fda077ac1d0cbd678db198dbdd13c18ada3d139193dcfc0cf46df3788c02043");
+    t.push_str("838a0c3a36406230a9c16586901b526128a5012b43bd187a6d4caec6f466ccee86fd30e64f63f1697ca0170cbd6ccdb7");
+    t.push_str("9dd9d89bcd83d93a9a9d93d9f34cfc6cf67d93084c3234a9c8a463132426939a5c660ab92915a6529ab032d58ba9d7e6");
+    t.push_str("e46a4e6fe6ec6eda0f73fe34179fe6077ac1d0cbd67adb598dbdd53c58ada3d539593dcfc2cf56dfb788c022438b8a2c");
+    t.push_str("3ab6406231a9c56596905b526129a5052b4bbd587a6d4daed6f466cdee96fdb0e64f6bf1697da0170c7dd9d98dbddd3c");
+    t.push_str("d8ada3dd39d93dcfc6cf76dfb789c026439b8a6c3ab6416233a9cd65b690db52612ba50d2b5bbdd87a6d4faef6f466cf");
+    t.push_str("eeb6fdb0e74f7b81be60e8cbce69ec9de6c1691d9dcec9e9790e7e76fabe43040e193a54e4d0b1031287491d2e7384dc");
+    t.push_str("910a47291d5839eac5d16b677275a637677677ec87337f3a0bf40543dfecdde6c16d1dddcec9ed792e7e76fbbe4b042e");
+    t.push_str("19ba54e4d2b10b1297495d2e7385dc950a57295d58b9eac5d56b777275a737777677ed873b47df60e89bfdb27958b68e");
+    t.push_str("cbce69d9f396f879d9f79744b024c325152de978099225932eb96c29e44ba9582ae512564bf5b2d4ebe5e4ba9cde96b3");
+    t.push_str("fbd27e2ce7e81b0cfdecb06a1d579dd3aae7adf0f3aaefaf886045862b2a5ad1f10a242b265d71d94ac85752b152ca15");
+    t.push_str("ac56ea65a5d7abc97535bdad66f7958d7e86a15f1cd79dd3bae7adf1f3baefaf89604d866b2a5ad3f11a246b265d73d9");
+    t.push_str("5ac8d752b156ca35acd6ea65add7ebc9753dbdad67e81718fa9dd3a6e76df0f3a6ef6f886043861b2adad0f106241b26");
+    t.push_str("dd70d946c83752b151ca0dac36ea65a3d79bc9753345bf83a13ff0b6f879dbf7b744b025c32d156de9780b922d936eb9");
+    t.push_str("6c2be45ba9d82ae516565bf5b2d5ebed04fd0186fecaf788c023438f8a3c3af640e231a9c7659e907b52e129a5072b4f");
+    t.push_str("457f85a17f10c65414d3710c929849632e8b853c968a5841ff0043ff1986feb31f71f50d0056c543b20000000049454e");
+    t.push_str("44ae426082");
+    v.push(DataFile { path: "circle-rle.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda30000015f49444154189563fa4f63c0");
+    t.push_str("c44063409405574da3af99265c374dbd619a75d334ff9669c96dd3ca3ba67554b0e0b275e015eb30063606ace8ae75f3");
+    t.push_str("3deb0e322db8e8e87ec9d10797d1c8e8be63ef03c749a45970c1dd8918a391d143f7e9c45a70ded79654d321e891ef1c");
+    t.push_str("c2169c0bb620cf74087a1cbc109f0567238d29311d829e442ec3ed038a4d8722ac169c49d5a396054f535763f301b59c");
+    t.push_str("8fea09a805a70b35a96bc1b3c20da83ea0aef3913c316ac1a80554b3c034f53a754d974a0d40f501d53dc1c0806e8149");
+    t.push_str("e4256a992e1d198ac5026a7a0209a05860ec7b9672d3657ca3705a000446ee2728315dd63d1ecd40740b80c0d0f13079");
+    t.push_str("a6cb39a6609a86c5022030b0de47aae9f2d699588dc26e0110e89beed433dd428cd18aa6c50aa679b8ccc1690104e8ea");
+    t.push_str("afd7d15f85cb6865fd5a25fd0afc2610b00002b435976a692ed0d49cada1394d5d73a29a668faa66bb8a6613317a89b2");
+    t.push_str("801200000dcfb3e1108ced560000000049454e44ae426082");
+    v.push(DataFile { path: "circle-window512.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000010000000100803000000282d0f530000000c504c54450000002060e0fa");
+    t.push_str("fafae63c28d02c4ace0000000374524e5300ffc8fced732e0000004449444154789c636140038c40880cfeb310a782e9");
+    t.push_str("3f230308fd87a96084f019ffc15440f9083390b4405440f98c703398a0427033604a1870da02368d01490501bfa00100");
+    t.push_str("97fb252469257ccd0000000049454e44ae426082");
+    v.push(DataFile { path: "favicon-pal8.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000008000000080100000000ec7483260000001849444154789c6330663466");
+    t.push_str("9ac99cc692ce60cc7886890100166d02d9153830700000000049454e44ae426082");
+    v.push(DataFile { path: "gray1-checker.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d494844520000000900000007010000000185e76a5b0000001b49444154789c6360800046");
+    t.push_str("3866626066600865600c5dcdc4c00000079c01612e7b369f0000000049454e44ae426082");
+    v.push(DataFile { path: "gray1-interlaced.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000010000000081000000000858dfc080000006849444154789c6360601060");
+    t.push_str("506030607060086048602860686098c0b0806103c301860b0c0f183e303032320a30e0834c8c040033131327233ec802");
+    t.push_str("54c4800f32b0b28ab2aab29ab2bab286b2a6b296b2b6b24e655dcaba95f528eb55d6a7ac5f5919d9d8287424000ecd12");
+    t.push_str("87bd33b3640000000049454e44ae426082");
+    v.push(DataFile { path: "gray16.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d494844520000000a000000030200000000c5e6d9080000001449444154789c6390961660");
+    t.push_str("cc61f8c2e4ea1a00000c44028413066a400000000049454e44ae426082");
+    v.push(DataFile { path: "gray2.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000040400000000496a2ca30000000274524e53000506f939b700");
+    t.push_str("00000d49444154789c63605dcf0043000f9802d112d228610000000049454e44ae426082");
+    v.push(DataFile { path: "gray4-trns.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000010000000040400000000672f0d310000002749444154789c636054764d");
+    t.push_str("ef5c7df63da3891208082931198380b2b13173bab6b6b4b2b6b63600a5c607ddbed961420000000049454e44ae426082");
+    v.push(DataFile { path: "gray4.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000003000000020800000001cf1809500000001249444154789c63606038c1");
+    t.push_str("90c2c0987a1200090c025ca044e7bd0000000049454e44ae426082");
+    v.push(DataFile { path: "gray8-3x2-interlaced.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000100800000000526b22850000008449444154789c6360e01090");
+    t.push_str("50d030b070f0088848c828a868e8983063c18a0d3b0e9cb870e3c18b0f3f185938f0032616028099830d2f6823640007");
+    t.push_str("83888c8a8e898d8b4f484c4a4e494d4bcf94394bd66cd973e4cc953b4fde7cf9c3c2c32841b12385f03b928d90012c0c");
+    t.push_str("7802111cc88c3a143b5206772012722407c4917802111cc8001b8248bbd50457e40000000049454e44ae426082");
+    v.push(DataFile { path: "gray8-gradient.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000006000000040800000000886f119f0000000274524e5300007693cd3800");
+    t.push_str("00001249444154789c6360304e9b79e63f03360a0099820bf52e744fa00000000049454e44ae426082");
+    v.push(DataFile { path: "gray8-trns.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000070000000510040000010404d2860000006f49444154789c6d8db10dc0");
+    t.push_str("200c049fac4243e531a85980f46c40c9000cc1060c40e3929a093c022324a64993975e2ff96c3fa0aaedc428b58d021f");
+    t.push_str("80b501e3834e0e8aec43e4da22af1d19d60129037dbe6bd629c5b9bb809b3f83c43a121f485226a98da44f92b5498cd6");
+    t.push_str("ea9f3f3f4bff2b2970d201580000000049454e44ae426082");
+    v.push(DataFile { path: "graya16-interlaced.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000060000000610040000001a55fb800000005a49444154789c636060f8ff");
+    t.push_str("5f5de0ff7f3f85ffff4b0dfeff9fe3f0ffffe180ffff191918ee5c5717606040c74c0c0c776f60c3cc0c0c5606221cef");
+    t.push_str("dfa06316880aac20c05c5d20c0dc4f21c0bcd420c07c8e4380f9e180007300c90e2e91c7fce7100000000049454e44ae");
+    t.push_str("426082");
+    v.push(DataFile { path: "graya16.png".to_string(), hex: true, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d494844520000000c0000000c0804000000fc7c946c0000006d49444154789c95cd311502");
+    t.push_str("310004d10950419bf390878688380734d7ac8354288888888888d45ba7c7060808c5ed2fb7182092c8ec1c142a8dce60");
+    t.push_str("12d8222b17b6b52bcffb63e5f67bff4c514959bb0e155535750d4d05dea7e3afd371472767ef3e5c5cdddc3d3c1df8ac");
+    t.push_str("e35fc7bd26d9562aef3d0000000049454e44ae426082");
+    v.push(DataFile { path: "graya8.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a730000001b694343504275696c742d69");
+    t.push_str("6e20735247420000789c6360185800000080000154edd47c0000001449444154789c63606060f8cf0002ffff33fc0700");
+    t.push_str("11fc03fd04182bc00000000049454e44ae426082");
+    v.push(DataFile { path: "icc-iccp.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("check\tannotated.png\n");
+    t.push_str("check\tbkgd-phys.png\n");
+    t.push_str("check\tcircle-fixed.png\n");
+    t.push_str("check\tcircle-huffman.png\n");
+    t.push_str("check\tcircle-idat1.png\n");
+    t.push_str("check\tcircle-idat100.png\n");
+    t.push_str("check\tcircle-level0.png\n");
+    t.push_str("check\tcircle-level1.png\n");
+    t.push_str("check\tcircle-level9.png\n");
+    t.push_str("check\tcircle-rle.png\n");
+    t.push_str("check\tcircle-window512.png\n");
+    t.push_str("check\tfavicon-pal8.png\n");
+    t.push_str("check\tgray1-checker.png\n");
+    t.push_str("check\tgray1-interlaced.png\n");
+    t.push_str("check\tgray16.png\n");
+    t.push_str("check\tgray2.png\n");
+    t.push_str("check\tgray4-trns.png\n");
+    t.push_str("check\tgray4.png\n");
+    t.push_str("check\tgray8-3x2-interlaced.png\n");
+    t.push_str("check\tgray8-gradient.png\n");
+    t.push_str("check\tgray8-trns.png\n");
+    t.push_str("check\tgraya16-interlaced.png\n");
+    t.push_str("check\tgraya16.png\n");
+    t.push_str("check\tgraya8.png\n");
+    t.push_str("check\ticc-iccp.png\n");
+    t.push_str("check\tpal1.png\n");
+    t.push_str("check\tpal2.png\n");
+    t.push_str("check\tpal4-interlaced.png\n");
+    t.push_str("check\tpal4.png\n");
+    t.push_str("check\trgb16.png\n");
+    t.push_str("check\trgb8-circle.png\n");
+    t.push_str("check\trgb8-interlaced.png\n");
+    t.push_str("check\trgb8-trns.png\n");
+    t.push_str("check\trgba16.png\n");
+    t.push_str("check\trgba8-1x1-interlaced.png\n");
+    t.push_str("check\trgba8.png\n");
+    t.push_str("decode\tannotated.png\n");
+    t.push_str("decode\tbkgd-phys.png\n");
+    t.push_str("decode\tcircle-fixed.png\n");
+    t.push_str("decode\tcircle-huffman.png\n");
+    t.push_str("decode\tcircle-idat1.png\n");
+    t.push_str("decode\tcircle-idat100.png\n");
+    t.push_str("decode\tcircle-level0.png\n");
+    t.push_str("decode\tcircle-level1.png\n");
+    t.push_str("decode\tcircle-level9.png\n");
+    t.push_str("decode\tcircle-rle.png\n");
+    t.push_str("decode\tcircle-window512.png\n");
+    t.push_str("decode\tfavicon-pal8.png\n");
+    t.push_str("decode\tgray1-checker.png\n");
+    t.push_str("decode\tgray1-interlaced.png\n");
+    t.push_str("decode\tgray16.png\n");
+    t.push_str("decode\tgray2.png\n");
+    t.push_str("decode\tgray4-trns.png\n");
+    t.push_str("decode\tgray4.png\n");
+    t.push_str("decode\tgray8-3x2-interlaced.png\n");
+    t.push_str("decode\tgray8-gradient.png\n");
+    t.push_str("decode\tgray8-trns.png\n");
+    t.push_str("decode\tgraya16-interlaced.png\n");
+    t.push_str("decode\tgraya16.png\n");
+    t.push_str("decode\tgraya8.png\n");
+    t.push_str("decode\ticc-iccp.png\n");
+    t.push_str("decode\tpal1.png\n");
+    t.push_str("decode\tpal2.png\n");
+    t.push_str("decode\tpal4-interlaced.png\n");
+    t.push_str("decode\tpal4.png\n");
+    t.push_str("decode\trgb16.png\n");
+    t.push_str("decode\trgb8-circle.png\n");
+    t.push_str("decode\trgb8-interlaced.png\n");
+    t.push_str("decode\trgb8-trns.png\n");
+    t.push_str("decode\trgba16.png\n");
+    t.push_str("decode\trgba8-1x1-interlaced.png\n");
+    t.push_str("decode\trgba8.png\n");
+    t.push_str("encode\tgray1-checker.png\n");
+    t.push_str("encode\tgray8-gradient.png\n");
+    t.push_str("encode\trgb8-circle.png\n");
+    t.push_str("encode\tpal4.png\n");
+    t.push_str("encode\tfavicon-pal8.png\n");
+    t.push_str("encode\trgba8.png\n");
+    t.push_str("encode\trgb16.png\n");
+    t.push_str("encode\trgb8-interlaced.png\n");
+    t.push_str("encode\tgraya16-interlaced.png\n");
+    t.push_str("encode\tcircle-huffman.png\n");
+    t.push_str("encode\tgray4.png\tstored\n");
+    t.push_str("encode\trgb8-trns.png\tstored\n");
+    t.push_str("encode\trgba8-1x1-interlaced.png\tstored\n");
+    t.push_str("check\tbroken/bad-chunk-name.png\n");
+    t.push_str("check\tbroken/bad-combo.png\n");
+    t.push_str("check\tbroken/bad-crc.png\n");
+    t.push_str("check\tbroken/bad-depth.png\n");
+    t.push_str("check\tbroken/bad-filter-method.png\n");
+    t.push_str("check\tbroken/bad-filter-type.png\n");
+    t.push_str("check\tbroken/bad-interlace.png\n");
+    t.push_str("check\tbroken/bad-signature.png\n");
+    t.push_str("check\tbroken/data-after-iend.png\n");
+    t.push_str("check\tbroken/empty.png\n");
+    t.push_str("check\tbroken/extra-data.png\n");
+    t.push_str("check\tbroken/huge-length.png\n");
+    t.push_str("check\tbroken/idat-split-by-text.png\n");
+    t.push_str("check\tbroken/ihdr-not-first.png\n");
+    t.push_str("check\tbroken/no-idat.png\n");
+    t.push_str("check\tbroken/no-iend.png\n");
+    t.push_str("check\tbroken/no-plte.png\n");
+    t.push_str("check\tbroken/plte-in-gray.png\n");
+    t.push_str("check\tbroken/plte-index.png\n");
+    t.push_str("check\tbroken/short-data.png\n");
+    t.push_str("check\tbroken/trns-too-long.png\n");
+    t.push_str("check\tbroken/truncated.png\n");
+    t.push_str("check\tbroken/two-ihdr.png\n");
+    t.push_str("check\tbroken/unknown-critical.png\n");
+    t.push_str("check\tbroken/zero-width.png\n");
+    t.push_str("check\tbroken/zlib-adler.png\n");
+    t.push_str("check\tbroken/zlib-block-type.png\n");
+    t.push_str("check\tbroken/zlib-header.png\n");
+    t.push_str("check\tbroken/zlib-method.png\n");
+    t.push_str("check\tbroken/zlib-stored-length.png\n");
+    t.push_str("check\tbroken/zlib-too-far.png\n");
+    t.push_str("check\tbroken/zlib-truncated.png\n");
+    t.push_str("decode\tbroken/bad-filter-type.png\n");
+    t.push_str("decode\tbroken/plte-index.png\n");
+    t.push_str("decode\tbroken/zlib-adler.png\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d494844520000000c0000000501030000004bb49f6c00000006504c5445000000ffc80018");
+    t.push_str("dcd0640000001749444154789c63080d605cf58d69f506e6066596d5bf01297005f48633fb1e0000000049454e44ae42");
+    t.push_str("6082");
+    v.push(DataFile { path: "pal1.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000009000000050203000000ea3d2ef80000000c504c544500ff0010ef2520");
+    t.push_str("df4a30cf6f09c3c0840000001c49444154789c6360606060946678cac4cecec0acc1f384e538030300165602f8a28bff");
+    t.push_str("c30000000049454e44ae426082");
+    v.push(DataFile { path: "pal2.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d494844520000000a0000000a0403000001081be21800000030504c544500ff0010ef2520");
+    t.push_str("df4a30cf6f40bf9450afb9609fde708f03807f28906f4da05f72b04f97c03fbcd02fe1e01f06f00f2b06c2f338000000");
+    t.push_str("4a49444154789c63e0606c6070603cc0e07180418d318bc9854125630163868b098370f8044653177326252505663f63");
+    t.push_str("2d1620cd20641256318bd144090898408412b32f90106201114a0022d90d1b3c5104940000000049454e44ae426082");
+    v.push(DataFile { path: "pal4-interlaced.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d494844520000001400000006040300000031b9a3ae00000030504c544500ff0010ef2520");
+    t.push_str("df4a30cf6f40bf9450afb9609fde708f03807f28906f4da05f72b04f97c03fbcd02fe1e01f06f00f2b06c2f338000000");
+    t.push_str("2c49444154789c636054764def5c7df63da332a3b2121808292931c1594accae3096120b9ca5c400d601d60900b3550e");
+    t.push_str("5b6bfa034c0000000049454e44ae426082");
+    v.push(DataFile { path: "pal4.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000080000000810020000001bfdf59f000000e249444154789c4dcfaf0ac2");
+    t.push_str("501406f0a35b10ffe0650e3658f08217349a0d62328ad1b2e01bdc621c18ef03180c06a341581dac2c1816c5e813187d");
+    t.push_str("04ef77a6b81b7e1c3e389cfb11f11b2ee07c0fe302269c9f38cf397f72de201a4daa05e705ddafb236d76d560bd07dc1");
+    t.push_str("d61d763328ced03730d030da3844cb3591909edf5ac3f60d763371f6fcde15b390d03b40dfb8bf0b38077181a893415c");
+    t.push_str("f8d9af6661494b7448cb8199efd3722ce2222d67c7c4e62b79b2f9f692db7c377ddadc64b6f4e35d950ef4df50cbda5c");
+    t.push_str("cf6d69c55f525c5a7169c5a5159756938181a186d1e603a29c49d85ca31f370000000049454e44ae426082");
+    v.push(DataFile { path: "rgb16.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda3000002c649444154789cbdd6bf6b53");
+    t.push_str("511407f0176bbb5974528ca8e8603b4425fa4ca17188e0ed100a919aa1af48048f43142225a2718894b304210e199ac1");
+    t.push_str("40390e452c68052797db45114cf2f2fbf7efa6565041c13f40535a6293bea4314d3c7cdf5beebd87071feee308bffb5c");
+    t.push_str("aada23f4b3f675b22921ce24c59b29f1765abc9311ef65c5fb39f1515e7cdcc9d981b9b9b936cbb1f16bdf165eab0606");
+    t.push_str("14f363e1fdcf858f876ee9db74d8df6a216298500983aaa1c15dbfb164785adb7972c5a6bcac28136286306311668c32");
+    t.push_str("538c99e34c4a304b92418a59d3cc9661f62c73e49833cfb0c05c45e62e314f99793b450e4d5edef8f6ae72fc2d34756b");
+    t.push_str("4696a7c68421a1eb54a79e37356c400e4e5f68e5d9797ebd4a0e5fd7d47b36220fed06da45d535fca0098036083a19f4");
+    t.push_str("2130848145c01805530ccc719012604902a4c09a065b06ec5970e4c099072c80ab08ee1278cae0ad806f15a80a8b6bb0");
+    t.push_str("a4801cb87bb66bdb9d51cf9b37db6e21fb6747f762bb33ebb36f1a90d757e6f7cedb94035747b621f783773bf2271cf1");
+    t.push_str("a32680da20ea64d487d01046164163144d3134c7514aa0258990426b1a6d19b467d19143671eb180ae22ba4be829a3b7");
+    t.push_str("82be55a42a2eaee1d2675c6e40f63f19eda1f0668e3e34fd45eeadf0561a90e53e205ffa9fc81b37993401d206492793");
+    t.push_str("3e448630b10819a3648a91394e52822c49821459d364cb903d4b8e1c39f384057215c95d224f99bc15f2ad125569718d");
+    t.push_str("146ff28b9edee4e9c69b5cab8bd3d15ef1d6bb0b4dbfeb2f85673de11d3ed3e2777d613228bf1bdb23eab1094919b95e");
+    t.push_str("32d787b821cc59841ba3dc14e3e6389712dc92e490e2d634b765b83dcb1d39eecc732c705791bb4bdc53e6de0af7753a");
+    t.push_str("78853f5ce902f6c4b875672be5c1ebfc38ff5758c5ee429bc1eb88fac661b5f4f5fbcb5d494f691f1c54eb5a91b41cbc");
+    t.push_str("364b736eb9f64ea46614574f8f3adb1fdf28c569a987d5f7e9fa0f14a67e0f818c122d0000000049454e44ae426082");
+    v.push(DataFile { path: "rgb8-circle.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d494844520000000d0000000b08020000015cd7a0a00000010c49444154789c754f316e83");
+    t.push_str("40109cb35358341414db51d2b13d12a553f95e703a8936b45457a641447900e203a4a1a57045637f00ff200851a4f30f");
+    t.push_str("029c1ca1449146a3b9d91ded1c005430026753e10d12f18856c873bbbca063a951e976d40601fc0caa432902ad24ae12");
+    t.push_str("ed6e5e806ea125c07ec090ac328e2b2e3b3623df04de5580e1819b153665836b76c1151edc086182538eb441d1a3161e");
+    t.push_str("876b44fdf06ebe0356e00ff060f5ded1478f068fb0b299f969992006fc15bcb037d5d15424d3673e5d9a29ec27172077");
+    t.push_str("4e051446e44b3a25146794e6a42a2a1a321dd53d95235d049e430ff707d2ffb4ed66ebd986b6e4f0cbdfe3e5e8d0c1a1");
+    t.push_str("af15878d7eddfaf6177720fcc3bc75be01660373f648525cdc0000000049454e44ae426082");
+    v.push(DataFile { path: "rgb8-interlaced.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda30000000674524e5300ff00ff00ff37");
+    t.push_str("581b7d0000012c49444154789c63fcffff3f032d01e3a0b0e0aa693423032b265239dd44a90597ad03b11a8d8c948e56");
+    t.push_str("9063c14547778246232385fd79245870c1dd8924d321487e672651169cf7b525c3740892db9c42c08273c116649b0e41");
+    t.push_str("b26be3715a7036d29842d321486679140e0be2a964c1426c169c49d5a38ae910243d3b14c3826caa5a3015d582d3859a");
+    t.push_str("54341d82a4fa03902c28a781059dc816d4d2c08266640b9a6960412db2059d34b0a01cd9827e1a5850886cc1541a5890");
+    t.push_str("8d6cc16c1a58901a809ad1165235a3c563e6e4e554b52012c3025061b7964a855d30aed27433952cf0c56101109cdb49");
+    t.push_str("7185e38ebbc28180f3fb29a8321d0955991070e1285995be3571953e045c3c4d62b3c59494660b1c5cbe4844c34b9fac");
+    t.push_str("861732b87a1d47d35193e2a623e580e61600000d23b3c1a46862470000000049454e44ae426082");
+    v.push(DataFile { path: "rgb8-trns.png".to_string(), hex: true, body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000005000000051006000000ddfffaa60000007349444154789c6360008239");
+    t.push_str("0effff1b9d80d0a91320f48c08087d5a0142333230189d80296460f869600ca67f60d04c0c0c102684fe6100a13f2440");
+    t.push_str("e8971320f4c303cc0c0c69027e0a0d0d9229524f18183e3e907a02a2df5640e8171320f4d3152c081321564068908920");
+    t.push_str("003211041e1c0000f09e3f0acc2244700000000049454e44ae426082");
+    v.push(DataFile { path: "rgba16.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000010000000108060000016812f41f0000000d49444154789c63e01291d3");
+    t.push_str("000000cd00656a9984420000000049454e44ae426082");
+    v.push(DataFile { path: "rgba8-1x1-interlaced.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000018000000180806000000e0773df80000023549444154789cbdd1af73d4");
+    t.push_str("4018c6f15cef47dbbbf67eb4690b82184c44cfac4110514c0435112088a9790535319808c43367302700b13a02cce908");
+    t.push_str("d419cc2b50d16730a7fb1fc093cc2260a6a2b477b3f399d97766677776be9ee7c1eb934f01856428a298124a4928a39c");
+    t.push_str("6634274b052da8a4252955b4a235b5bc7efd80d7da949dfa76e2435ebd6f5387bad4a35ddaa37daad7800ee8908634a2");
+    t.push_str("314de8888ec9a7133aa5b3b6e75f78ddaeb7436da7e3749d9eb3ebec39fb4edf193807ce61add3fc805fa11d6a53e761");
+    t.push_str("193630e8fa06fdc060141af8c6e0716410c4064f13833035988a81c90c9ee506d1cce0c5dc20b606978541b230785d1a");
+    t.push_str("a44b832b3590cae07a6590ad0ddeb5bca889dcdb942d449e36911f24280d9d9133be2d72977ab44b7bb4ffff840d047d");
+    t.push_str("5fe0078220148446602241140be24490a48254049209b25c90cf04b3b9606e05b610140bc1a214944bc152055a09aa95");
+    t.push_str("60b516ac5b5ed6441e6cca1622c74de40709ea4ce8131dd5ee12b93e39a0033aa4e12dfcbf67cb061623df22082ca6a1");
+    t.push_str("45642c2e238b34b6b84e2cf2d4e28358d8cce26b6e51ce2cbecf2d2a6bf1b3b0b85958fc2a2d864b8b276a715e593c5f");
+    t.push_str("59bc5c5bbc6979451379bc295b887cd544be4fd0c99fa074ecf8cec97d231fd3982674e4e67f281b287c5f11068a2854");
+    t.push_str("24462191228f15f34451a48a52149a2956b9e266a6e8cc158face2bc505c2c14af4ac5dba5e2bd2a3e568a2f2bc5b7b5");
+    t.push_str("e247cbab9ac8279bb285c87913f92e413fdf16d43975ce6abf0142adef02dfbc767f0000000049454e44ae426082");
+    v.push(DataFile { path: "rgba8.png".to_string(), hex: true, body: t });
+}
