@@ -1,0 +1,473 @@
+// LeetCode #716: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random calls.
+
+// ---- ★ arm ----------------------------------------------------------
+
+struct MaxStackStar {
+    values: Vec[i64],
+    maxes: Vec[i64],
+}
+
+impl MaxStackStar {
+    fn new() -> MaxStackStar {
+        MaxStackStar { values: Vec.new(), maxes: Vec.new() }
+    }
+
+    fn push(mut ref self, x: i64) {
+        let mut m = x;
+        if self.maxes.len() > 0 and self.maxes[self.maxes.len() - 1] > x {
+            m = self.maxes[self.maxes.len() - 1];
+        }
+        self.values.push(x);
+        self.maxes.push(m);
+    }
+
+    fn pop(mut ref self) -> i64 {
+        self.maxes.pop();
+        self.values.pop().unwrap()
+    }
+
+    fn top(ref self) -> i64 {
+        self.values[self.values.len() - 1]
+    }
+
+    fn peek_max(ref self) -> i64 {
+        self.maxes[self.maxes.len() - 1]
+    }
+
+    fn pop_max(mut ref self) -> i64 {
+        let m = self.peek_max();
+        let mut buffer: Vec[i64] = Vec.new();
+        while self.top() != m {
+            buffer.push(self.pop());
+        }
+        self.pop();
+        while buffer.len() > 0 {
+            let x = buffer.pop().unwrap();
+            self.push(x);
+        }
+        m
+    }
+}
+
+// ---- heap arm -------------------------------------------------------
+
+struct MaxStackHeap {
+    stack: Vec[(i64, i64)],
+    heap: PriorityQueue[(i64, i64)],
+    removed: Vec[bool],
+}
+
+impl MaxStackHeap {
+    fn new() -> MaxStackHeap {
+        MaxStackHeap { stack: Vec.new(), heap: PriorityQueue.max_first(), removed: Vec.new() }
+    }
+
+    fn push(mut ref self, x: i64) {
+        let id = self.removed.len();
+        self.removed.push(false);
+        self.stack.push((x, id));
+        self.heap.push((x, id));
+    }
+
+    // Drop values already removed through the other side.
+    fn settle(mut ref self) {
+        while self.removed[self.stack[self.stack.len() - 1].1] {
+            self.stack.pop();
+        }
+        loop {
+            let id = match self.heap.peek() {
+                Some(top) => top.1,
+                None => break,
+            };
+            if not self.removed[id] {
+                break;
+            }
+            self.heap.pop();
+        }
+    }
+
+    fn pop(mut ref self) -> i64 {
+        self.settle();
+        let (x, id) = self.stack.pop().unwrap();
+        self.removed[id] = true;
+        x
+    }
+
+    fn top(mut ref self) -> i64 {
+        self.settle();
+        self.stack[self.stack.len() - 1].0
+    }
+
+    fn peek_max(mut ref self) -> i64 {
+        self.settle();
+        match self.heap.peek() {
+            Some(top) => top.0,
+            None => 0,
+        }
+    }
+
+    fn pop_max(mut ref self) -> i64 {
+        self.settle();
+        let (x, id) = self.heap.pop().unwrap();
+        self.removed[id] = true;
+        x
+    }
+}
+
+// ---- sorted-map arm -------------------------------------------------
+
+struct MaxStackSorted {
+    values: Vec[i64],
+    before: Vec[i64],
+    after: Vec[i64],
+    tail: i64,
+    ids: SortedMap[i64, Vec[i64]],
+}
+
+impl MaxStackSorted {
+    fn new() -> MaxStackSorted {
+        MaxStackSorted {
+            values: Vec.new(),
+            before: Vec.new(),
+            after: Vec.new(),
+            tail: -1,
+            ids: SortedMap.new(),
+        }
+    }
+
+    fn push(mut ref self, x: i64) {
+        let id = self.values.len();
+        self.values.push(x);
+        self.before.push(self.tail);
+        self.after.push(-1);
+        if self.tail != -1 {
+            self.after[self.tail] = id;
+        }
+        self.tail = id;
+        if self.ids.contains_key(x) {
+            self.ids[x].push(id);
+        } else {
+            self.ids.insert(x, [id]);
+        }
+    }
+
+    // Take `id`, the newest id of its value, out of the list and the
+    // map.
+    fn unlink(mut ref self, id: i64) -> i64 {
+        let b = self.before[id];
+        let a = self.after[id];
+        if b != -1 {
+            self.after[b] = a;
+        }
+        if a != -1 {
+            self.before[a] = b;
+        }
+        if self.tail == id {
+            self.tail = b;
+        }
+        let x = self.values[id];
+        self.ids[x].pop();
+        if self.ids[x].len() == 0 {
+            self.ids.remove(x);
+        }
+        x
+    }
+
+    fn pop(mut ref self) -> i64 {
+        self.unlink(self.tail)
+    }
+
+    fn top(ref self) -> i64 {
+        self.values[self.tail]
+    }
+
+    fn peek_max(ref self) -> i64 {
+        match self.ids.floor(i64.MAX) {
+            Some((x, _)) => *x,
+            None => 0,
+        }
+    }
+
+    fn pop_max(mut ref self) -> i64 {
+        let mut id = -1;
+        if let Some((_, held)) = self.ids.floor(i64.MAX) {
+            id = held[held.len() - 1];
+        }
+        self.unlink(id)
+    }
+}
+
+// ---- scan arm -------------------------------------------------------
+
+struct MaxStackScan {
+    values: Vec[i64],
+}
+
+impl MaxStackScan {
+    fn new() -> MaxStackScan {
+        MaxStackScan { values: Vec.new() }
+    }
+
+    // The index of the top-most largest value.
+    fn max_at(ref self) -> i64 {
+        let mut at = 0;
+        for i in 1..self.values.len() {
+            if self.values[i] >= self.values[at] {
+                at = i;
+            }
+        }
+        at
+    }
+
+    fn push(mut ref self, x: i64) {
+        self.values.push(x);
+    }
+
+    fn pop(mut ref self) -> i64 {
+        self.values.pop().unwrap()
+    }
+
+    fn top(ref self) -> i64 {
+        self.values[self.values.len() - 1]
+    }
+
+    fn peek_max(ref self) -> i64 {
+        self.values[self.max_at()]
+    }
+
+    fn pop_max(mut ref self) -> i64 {
+        let at = self.max_at();
+        self.values.remove(at)
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Each call is (kind, x): 0 pushes x, then 1 pops, 2 reads the top,
+// 3 reads the max and 4 pops the max. The answers are theirs.
+fn run(which: i64, calls: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut answers: Vec[i64] = Vec.new();
+    if which == 0 {
+        let mut s = MaxStackStar.new();
+        for call in calls.iter() {
+            let (kind, x) = *call;
+            if kind == 0 {
+                s.push(x);
+            } else if kind == 1 {
+                answers.push(s.pop());
+            } else if kind == 2 {
+                answers.push(s.top());
+            } else if kind == 3 {
+                answers.push(s.peek_max());
+            } else {
+                answers.push(s.pop_max());
+            }
+        }
+    } else if which == 1 {
+        let mut s = MaxStackHeap.new();
+        for call in calls.iter() {
+            let (kind, x) = *call;
+            if kind == 0 {
+                s.push(x);
+            } else if kind == 1 {
+                answers.push(s.pop());
+            } else if kind == 2 {
+                answers.push(s.top());
+            } else if kind == 3 {
+                answers.push(s.peek_max());
+            } else {
+                answers.push(s.pop_max());
+            }
+        }
+    } else if which == 2 {
+        let mut s = MaxStackSorted.new();
+        for call in calls.iter() {
+            let (kind, x) = *call;
+            if kind == 0 {
+                s.push(x);
+            } else if kind == 1 {
+                answers.push(s.pop());
+            } else if kind == 2 {
+                answers.push(s.top());
+            } else if kind == 3 {
+                answers.push(s.peek_max());
+            } else {
+                answers.push(s.pop_max());
+            }
+        }
+    } else {
+        let mut s = MaxStackScan.new();
+        for call in calls.iter() {
+            let (kind, x) = *call;
+            if kind == 0 {
+                s.push(x);
+            } else if kind == 1 {
+                answers.push(s.pop());
+            } else if kind == 2 {
+                answers.push(s.top());
+            } else if kind == 3 {
+                answers.push(s.peek_max());
+            } else {
+                answers.push(s.pop_max());
+            }
+        }
+    }
+    answers
+}
+
+// The definition: a plain list, bottom first. The max calls look down
+// from the top and take the first value no smaller than every other.
+fn definition(calls: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for call in calls.iter() {
+        let (kind, x) = *call;
+        if kind == 0 {
+            stack.push(x);
+        } else if kind == 1 or kind == 2 {
+            let n = stack.len();
+            answers.push(stack[n - 1]);
+            if kind == 1 {
+                stack.truncate(n - 1);
+            }
+        } else {
+            let mut at = -1;
+            let mut i = stack.len() - 1;
+            while i >= 0 {
+                let mut biggest = true;
+                for y in stack.iter() {
+                    if *y > stack[i] {
+                        biggest = false;
+                    }
+                }
+                if biggest and at == -1 {
+                    at = i;
+                }
+                i -= 1;
+            }
+            answers.push(stack[at]);
+            if kind == 4 {
+                let mut rest: Vec[i64] = Vec.new();
+                for j in 0..stack.len() {
+                    if j != at {
+                        rest.push(stack[j]);
+                    }
+                }
+                stack = rest;
+            }
+        }
+    }
+    answers
+}
+
+fn main() {
+    let mut seed = 7160;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut answered = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // Up to 40 calls, values from -spread to spread, so ties are
+        // common; never a read of an empty stack.
+        let spread = next_random(mut seed) % 6;
+        let count = 1 + next_random(mut seed) % 40;
+        let mut calls: Vec[(i64, i64)] = Vec.new();
+        let mut size = 0;
+        for _ in 0..count {
+            if size == 0 or next_random(mut seed) % 2 == 0 {
+                calls.push((0, next_random(mut seed) % (2 * spread + 1) - spread));
+                size += 1;
+            } else {
+                let kind = 1 + next_random(mut seed) % 4;
+                calls.push((kind, 0));
+                if kind == 1 or kind == 4 {
+                    size -= 1;
+                }
+            }
+        }
+        // The same calls, then popped empty, or emptied by max pops.
+        let mut popped = calls.clone();
+        let mut maxed = calls.clone();
+        for _ in 0..size {
+            popped.push((1, 0));
+            maxed.push((4, 0));
+        }
+        let lift = 1 + next_random(mut seed) % 10000000;
+        let mut lifted: Vec[(i64, i64)] = Vec.new();
+        for call in calls.iter() {
+            let (kind, x) = *call;
+            lifted.push((kind, x + lift));
+        }
+        let want = definition(calls.clone());
+        let want_popped = definition(popped.clone());
+        answered += want.len();
+        for which in 0..arms {
+            let got = run(which, calls.clone());
+            // P1: every answer is the definition's.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: popped empty afterwards, what is left is the
+            // definition's, top first.
+            checks += 1;
+            let got_popped = run(which, popped.clone());
+            if got_popped != want_popped {
+                fails[1] += 1;
+            }
+            // P3: every value raised by the same amount, every answer
+            // raised by it.
+            checks += 1;
+            let up = run(which, lifted.clone());
+            let mut same = up.len() == got.len();
+            for i in 0..up.len() {
+                if same and up[i] != got[i] + lift {
+                    same = false;
+                }
+            }
+            if not same {
+                fails[2] += 1;
+            }
+            // P4: emptied by max pops afterwards, what is left comes out
+            // largest first, and is what popping empties.
+            checks += 1;
+            let got_maxed = run(which, maxed.clone());
+            let n = got.len();
+            let mut drained: Vec[i64] = Vec.new();
+            let mut left_over: Vec[i64] = Vec.new();
+            for i in n..got_maxed.len() {
+                drained.push(got_maxed[i]);
+            }
+            for i in n..got_popped.len() {
+                left_over.push(got_popped[i]);
+            }
+            let mut ok = drained.len() == size;
+            for i in 1..drained.len() {
+                if drained[i] > drained[i - 1] {
+                    ok = false;
+                }
+            }
+            left_over.sort();
+            left_over.reverse();
+            if not ok or drained != left_over {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} call sequences ({answered} answers), {arms} arms, {checks} checks, {total} failures");
+}

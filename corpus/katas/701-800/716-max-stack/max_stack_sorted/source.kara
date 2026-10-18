@@ -1,0 +1,167 @@
+// LeetCode #716: Max Stack -- a linked list and a sorted map of ids.
+//
+// The values sit in a doubly linked list, held in vectors of previous
+// and next ids, in push order; a `SortedMap` takes each distinct value
+// to the ids holding it, oldest first. The map's last key is the max
+// and its last id the top-most copy, which `pop_max` unlinks from the
+// middle of the list. O(log n) per call.
+
+struct MaxStack {
+    values: Vec[i64],
+    before: Vec[i64],
+    after: Vec[i64],
+    tail: i64,
+    ids: SortedMap[i64, Vec[i64]],
+}
+
+impl MaxStack {
+    fn new() -> MaxStack {
+        MaxStack {
+            values: Vec.new(),
+            before: Vec.new(),
+            after: Vec.new(),
+            tail: -1,
+            ids: SortedMap.new(),
+        }
+    }
+
+    fn push(mut ref self, x: i64) {
+        let id = self.values.len();
+        self.values.push(x);
+        self.before.push(self.tail);
+        self.after.push(-1);
+        if self.tail != -1 {
+            self.after[self.tail] = id;
+        }
+        self.tail = id;
+        if self.ids.contains_key(x) {
+            self.ids[x].push(id);
+        } else {
+            self.ids.insert(x, [id]);
+        }
+    }
+
+    // Take `id`, the newest id of its value, out of the list and the
+    // map.
+    fn unlink(mut ref self, id: i64) -> i64 {
+        let b = self.before[id];
+        let a = self.after[id];
+        if b != -1 {
+            self.after[b] = a;
+        }
+        if a != -1 {
+            self.before[a] = b;
+        }
+        if self.tail == id {
+            self.tail = b;
+        }
+        let x = self.values[id];
+        self.ids[x].pop();
+        if self.ids[x].len() == 0 {
+            self.ids.remove(x);
+        }
+        x
+    }
+
+    fn pop(mut ref self) -> i64 {
+        self.unlink(self.tail)
+    }
+
+    fn top(ref self) -> i64 {
+        self.values[self.tail]
+    }
+
+    fn peek_max(ref self) -> i64 {
+        match self.ids.floor(i64.MAX) {
+            Some((x, _)) => *x,
+            None => 0,
+        }
+    }
+
+    fn pop_max(mut ref self) -> i64 {
+        let mut id = -1;
+        if let Some((_, held)) = self.ids.floor(i64.MAX) {
+            id = held[held.len() - 1];
+        }
+        self.unlink(id)
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Each call is (kind, x): 0 pushes x, then 1 pops, 2 reads the top,
+// 3 reads the max and 4 pops the max. The answers are theirs.
+fn run(calls: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut s = MaxStack.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for call in calls.iter() {
+        let (kind, x) = *call;
+        if kind == 0 {
+            s.push(x);
+        } else if kind == 1 {
+            answers.push(s.pop());
+        } else if kind == 2 {
+            answers.push(s.top());
+        } else if kind == 3 {
+            answers.push(s.peek_max());
+        } else {
+            answers.push(s.pop_max());
+        }
+    }
+    answers
+}
+
+// `count` random calls, pushes `push_weight` times in 8 likely and
+// values from -`spread` to `spread`, never a read of an empty stack.
+fn random_calls(seed: mut ref i64, count: i64, push_weight: i64, spread: i64) -> Vec[(i64, i64)] {
+    let mut calls: Vec[(i64, i64)] = Vec.new();
+    let mut size = 0;
+    for _ in 0..count {
+        if size == 0 or next_random(mut seed) % 8 < push_weight {
+            let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % (2 * spread + 1) - spread;
+            calls.push((0, x));
+            size += 1;
+        } else {
+            let kind = 1 + next_random(mut seed) % 4;
+            calls.push((kind, 0));
+            if kind == 1 or kind == 4 {
+                size -= 1;
+            }
+        }
+    }
+    calls
+}
+
+fn summary(name: String, answers: Vec[i64]) {
+    let mut sum = 0;
+    for a in answers.iter() {
+        sum = (sum * 131 + *a + 10000001) % 1000000007;
+    }
+    println(f"{name}: {answers.len()} answers, checksum {sum}");
+}
+
+fn main() {
+    println(f"{run([(0, 5), (0, 1), (0, 5), (2, 0), (4, 0), (2, 0), (3, 0), (1, 0), (2, 0)])}");
+    println(f"{run([(0, 7), (3, 0), (2, 0), (4, 0), (0, -3), (3, 0), (1, 0)])}");
+    println(f"{run([(0, 1), (0, 2), (0, 3), (0, 4), (4, 0), (4, 0), (3, 0), (2, 0), (4, 0), (4, 0)])}");
+    println(f"{run([(0, 4), (0, 3), (0, 2), (0, 1), (4, 0), (2, 0), (3, 0), (4, 0), (3, 0), (1, 0), (3, 0)])}");
+    println(f"{run([(0, 2), (0, 2), (0, 1), (0, 2), (4, 0), (2, 0), (4, 0), (2, 0), (3, 0), (4, 0), (3, 0)])}");
+    println(f"{run([(0, -10000000), (0, 10000000), (0, -10000000), (3, 0), (4, 0), (3, 0), (2, 0), (0, 10000000), (0, 10000000), (4, 0), (1, 0), (3, 0)])}");
+    let mut seed: i64 = 716;
+    summary("20000 calls, values to 10^7", run(random_calls(mut seed, 20000, 4, 10000000)));
+    summary("20000 calls, values to 5", run(random_calls(mut seed, 20000, 4, 5)));
+    summary("10000 calls, mostly pushes", run(random_calls(mut seed, 10000, 6, 1000)));
+    let mut rising: Vec[(i64, i64)] = Vec.new();
+    for i in 0..2000 {
+        rising.push((0, i));
+    }
+    for _ in 0..2000 {
+        rising.push((4, 0));
+    }
+    summary("2000 rising pushes, then 2000 max pops", run(rising));
+}

@@ -1,0 +1,11 @@
+[true, false, true]
+[true, false, true, true, false]
+[true, false, false, true, false, true]
+[false, true, false]
+[true, false, true, false]
+[false, false, true, true, true]
+[true, true, false, true]
+10000 calls up to 10^9: 3256 queries, 913 held, checksum 90676009
+10000 calls up to 100: 3282 queries, 832 held, checksum 826981095
+10000 short calls up to 10^6: 3376 queries, 535 held, checksum 250319768
+10000 calls up to 10^9 of up to 10^6: 3279 queries, 485 held, checksum 317174182

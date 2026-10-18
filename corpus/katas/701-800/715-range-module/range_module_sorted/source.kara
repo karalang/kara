@@ -1,0 +1,156 @@
+// LeetCode #715: Range Module -- a sorted map from start to end.
+//
+// The same disjoint, non-touching ranges, kept in a `SortedMap` from
+// each range's start to its end. `floor` finds the range that starts at
+// or before a number, and `range` walks the ranges that start inside a
+// call's span, which adding merges and removing trims. O(log n) per
+// range touched.
+
+struct RangeModule {
+    spans: SortedMap[i64, i64],
+}
+
+impl RangeModule {
+    fn new() -> RangeModule {
+        RangeModule { spans: SortedMap.new() }
+    }
+
+    fn add_range(mut ref self, left: i64, right: i64) {
+        let mut lo = left;
+        let mut hi = right;
+        if let Some((s, e)) = self.spans.floor(left) {
+            if *e >= left {
+                lo = *s;
+                if *e > hi {
+                    hi = *e;
+                }
+            }
+        }
+        let mut gone: Vec[i64] = Vec.new();
+        for (s, e) in self.spans.range_inclusive(lo, hi) {
+            gone.push(*s);
+            if *e > hi {
+                hi = *e;
+            }
+        }
+        for s in gone.iter() {
+            self.spans.remove(*s);
+        }
+        self.spans.insert(lo, hi);
+    }
+
+    fn query_range(ref self, left: i64, right: i64) -> bool {
+        match self.spans.floor(left) {
+            Some((_, e)) => *e >= right,
+            None => false,
+        }
+    }
+
+    fn remove_range(mut ref self, left: i64, right: i64) {
+        // A range starting before left keeps its part below left, and
+        // its part from right on if it reaches past right.
+        let mut before = 0;
+        let mut before_end = 0;
+        if let Some((s, e)) = self.spans.floor(left - 1) {
+            before = *s;
+            before_end = *e;
+        }
+        if before_end > left {
+            self.spans.insert(before, left);
+            if before_end > right {
+                self.spans.insert(right, before_end);
+            }
+        }
+        // Ranges starting inside [left, right) go, all but their part
+        // from right on.
+        let mut gone: Vec[i64] = Vec.new();
+        let mut tail = 0;
+        for (s, e) in self.spans.range(left, right) {
+            gone.push(*s);
+            if *e > right {
+                tail = *e;
+            }
+        }
+        for s in gone.iter() {
+            self.spans.remove(*s);
+        }
+        if tail > right {
+            self.spans.insert(right, tail);
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_below(seed: mut ref i64, bound: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % bound
+}
+
+// Each call is (kind, left, right): 0 adds, 1 removes, 2 queries. The
+// answers are the queries'.
+fn run(calls: Vec[(i64, i64, i64)]) -> Vec[bool] {
+    let mut m = RangeModule.new();
+    let mut answers: Vec[bool] = Vec.new();
+    for call in calls.iter() {
+        let (kind, left, right) = *call;
+        if kind == 0 {
+            m.add_range(left, right);
+        } else if kind == 1 {
+            m.remove_range(left, right);
+        } else {
+            answers.push(m.query_range(left, right));
+        }
+    }
+    answers
+}
+
+// `count` random calls with left from 1 to `top` and a length from 1 to
+// `longest`, kept within the problem's 10^9.
+fn random_calls(seed: mut ref i64, count: i64, top: i64, longest: i64) -> Vec[(i64, i64, i64)] {
+    let mut calls: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..count {
+        let kind = next_random(mut seed) % 3;
+        let left = 1 + random_below(mut seed, top);
+        let mut right = left + 1 + random_below(mut seed, longest);
+        if right > 1000000000 {
+            right = 1000000000;
+        }
+        if left < right {
+            calls.push((kind, left, right));
+        }
+    }
+    calls
+}
+
+fn summary(name: String, answers: Vec[bool]) {
+    let mut held = 0;
+    let mut sum = 0;
+    for a in answers.iter() {
+        let bit = if *a { 1 } else { 0 };
+        held += bit;
+        sum = (sum * 131 + bit + 1) % 1000000007;
+    }
+    println(f"{name}: {answers.len()} queries, {held} held, checksum {sum}");
+}
+
+fn main() {
+    println(f"{run([(0, 10, 20), (1, 14, 16), (2, 10, 14), (2, 13, 15), (2, 16, 17)])}");
+    println(f"{run([(0, 1, 3), (0, 3, 5), (2, 1, 5), (1, 2, 3), (2, 1, 5), (2, 1, 2), (2, 3, 5), (2, 2, 3)])}");
+    println(f"{run([(0, 1, 10), (1, 1, 2), (1, 9, 10), (2, 2, 9), (2, 1, 3), (2, 8, 10), (1, 5, 6), (2, 2, 5), (2, 5, 7), (2, 6, 9)])}");
+    println(f"{run([(0, 1, 2), (0, 3, 4), (0, 5, 6), (0, 7, 8), (2, 1, 8), (0, 2, 7), (2, 1, 8), (2, 1, 9)])}");
+    println(f"{run([(0, 5, 10), (1, 1, 4), (1, 11, 20), (2, 5, 10), (1, 1, 20), (2, 5, 6), (0, 1, 2), (2, 1, 2), (2, 1, 3)])}");
+    println(f"{run([(2, 1, 2), (1, 1, 2), (0, 4, 6), (0, 1, 3), (2, 1, 6), (0, 3, 4), (2, 1, 6), (1, 3, 4), (2, 1, 3), (2, 4, 6)])}");
+    println(f"{run([(0, 1, 1000000000), (2, 1, 1000000000), (1, 500000000, 500000001), (2, 1, 500000000), (2, 499999999, 500000002), (2, 500000001, 1000000000)])}");
+    let mut seed: i64 = 715;
+    summary("10000 calls up to 10^9", run(random_calls(mut seed, 10000, 999999999, 1000000000)));
+    summary("10000 calls up to 100", run(random_calls(mut seed, 10000, 100, 20)));
+    summary("10000 short calls up to 10^6", run(random_calls(mut seed, 10000, 1000000, 1000)));
+    summary("10000 calls up to 10^9 of up to 10^6", run(random_calls(mut seed, 10000, 999999999, 1000000)));
+}

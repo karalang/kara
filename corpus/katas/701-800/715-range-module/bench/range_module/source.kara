@@ -1,0 +1,139 @@
+// LeetCode #715: Range Module -- a sorted list of disjoint ranges.
+//
+// The tracked numbers are kept as half-open ranges in two parallel
+// lists, sorted, with no two ranges overlapping or touching, so the ends
+// rise as the starts do. A binary search on the ends finds the first
+// range a call can reach; adding merges the ranges it meets into one,
+// removing trims or splits them, and a query asks whether one range
+// holds the whole of [left, right). O(log n) to find, O(n) to shift.
+
+struct RangeModule {
+    starts: Vec[i64],
+    ends: Vec[i64],
+}
+
+impl RangeModule {
+    fn new() -> RangeModule {
+        RangeModule { starts: Vec.new(), ends: Vec.new() }
+    }
+
+    // The index of the first range that ends after x.
+    fn first_ending_after(ref self, x: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.ends.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.ends[mid] > x {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    }
+
+    fn add_range(mut ref self, left: i64, right: i64) {
+        // Every range that overlaps or touches [left, right) merges.
+        let i = self.first_ending_after(left - 1);
+        let mut lo = left;
+        let mut hi = right;
+        let mut j = i;
+        while j < self.starts.len() and self.starts[j] <= right {
+            if self.starts[j] < lo {
+                lo = self.starts[j];
+            }
+            if self.ends[j] > hi {
+                hi = self.ends[j];
+            }
+            j += 1;
+        }
+        if j == i {
+            self.starts.insert(i, lo);
+            self.ends.insert(i, hi);
+        } else {
+            self.starts[i] = lo;
+            self.ends[i] = hi;
+            for _ in i + 1..j {
+                self.starts.remove(i + 1);
+                self.ends.remove(i + 1);
+            }
+        }
+    }
+
+    fn query_range(ref self, left: i64, right: i64) -> bool {
+        let i = self.first_ending_after(left);
+        i < self.starts.len() and self.starts[i] <= left and self.ends[i] >= right
+    }
+
+    fn remove_range(mut ref self, left: i64, right: i64) {
+        let mut i = self.first_ending_after(left);
+        if i < self.starts.len() and self.starts[i] < left {
+            let end = self.ends[i];
+            self.ends[i] = left;
+            if end > right {
+                // [left, right) falls inside one range: split it.
+                self.starts.insert(i + 1, right);
+                self.ends.insert(i + 1, end);
+                return;
+            }
+            i += 1;
+        }
+        while i < self.starts.len() and self.starts[i] < right {
+            if self.ends[i] > right {
+                self.starts[i] = right;
+                return;
+            }
+            self.starts.remove(i);
+            self.ends.remove(i);
+        }
+    }
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_below(seed: mut ref i64, bound: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % bound
+}
+
+fn main() {
+    // 10 lists of 100,000 random calls, a third of each kind, on numbers
+    // up to 10^7 with spans of up to 10^4, made once.
+    let mut seed: i64 = 715;
+    let mut lists: Vec[Vec[(i64, i64, i64)]] = Vec.new();
+    for _ in 0..10 {
+        let mut calls: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..100000 {
+            let kind = next_random(mut seed) % 3;
+            let left = 1 + random_below(mut seed, 10000000);
+            let right = left + 1 + random_below(mut seed, 10000);
+            calls.push((kind, left, right));
+        }
+        lists.push(calls);
+    }
+    // Each list run on a fresh module in 10 rounds, the queries held
+    // counted.
+    let mut held = 0;
+    for _ in 0..10 {
+        for calls in lists.iter() {
+            let mut m = RangeModule.new();
+            for call in calls.iter() {
+                let (kind, left, right) = *call;
+                if kind == 0 {
+                    m.add_range(left, right);
+                } else if kind == 1 {
+                    m.remove_range(left, right);
+                } else if m.query_range(left, right) {
+                    held += 1;
+                }
+            }
+        }
+    }
+    println(f"10 rounds of 10 lists of 100000 calls: {held} queries held");
+}

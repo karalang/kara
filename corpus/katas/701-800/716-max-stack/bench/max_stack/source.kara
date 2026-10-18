@@ -1,0 +1,108 @@
+// LeetCode #716: Max Stack -- a stack of running maxima beside it.
+//
+// Beside each value, keep the largest value at or below it on the
+// stack, so the top of that second stack is the stack's max. `pop_max`
+// pops values into a buffer until the max is on top, drops it, and
+// pushes the buffer back, which rebuilds the maxima above it. O(1) per
+// call but `pop_max`, which is O(n).
+
+struct MaxStack {
+    values: Vec[i64],
+    maxes: Vec[i64],
+}
+
+impl MaxStack {
+    fn new() -> MaxStack {
+        MaxStack { values: Vec.new(), maxes: Vec.new() }
+    }
+
+    fn push(mut ref self, x: i64) {
+        let mut m = x;
+        if self.maxes.len() > 0 and self.maxes[self.maxes.len() - 1] > x {
+            m = self.maxes[self.maxes.len() - 1];
+        }
+        self.values.push(x);
+        self.maxes.push(m);
+    }
+
+    fn pop(mut ref self) -> i64 {
+        self.maxes.pop();
+        self.values.pop().unwrap()
+    }
+
+    fn top(ref self) -> i64 {
+        self.values[self.values.len() - 1]
+    }
+
+    fn peek_max(ref self) -> i64 {
+        self.maxes[self.maxes.len() - 1]
+    }
+
+    fn pop_max(mut ref self) -> i64 {
+        let m = self.peek_max();
+        let mut buffer: Vec[i64] = Vec.new();
+        while self.top() != m {
+            buffer.push(self.pop());
+        }
+        self.pop();
+        while buffer.len() > 0 {
+            let x = buffer.pop().unwrap();
+            self.push(x);
+        }
+        m
+    }
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 10 lists of 100,000 random calls, half of them pushes of values up
+    // to 10^6 and the rest spread over the four reads, made once.
+    let mut seed: i64 = 716;
+    let mut lists: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..10 {
+        let mut calls: Vec[(i64, i64)] = Vec.new();
+        let mut size = 0;
+        for _ in 0..100000 {
+            if size == 0 or next_random(mut seed) % 2 == 0 {
+                let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000001;
+                calls.push((0, x));
+                size += 1;
+            } else {
+                let kind = 1 + next_random(mut seed) % 4;
+                calls.push((kind, 0));
+                if kind == 1 or kind == 4 {
+                    size -= 1;
+                }
+            }
+        }
+        lists.push(calls);
+    }
+    // Each list run on a fresh stack in 10 rounds, every answer summed.
+    let mut sum = 0;
+    for _ in 0..10 {
+        for calls in lists.iter() {
+            let mut s = MaxStack.new();
+            for call in calls.iter() {
+                let (kind, x) = *call;
+                if kind == 0 {
+                    s.push(x);
+                } else if kind == 1 {
+                    sum += s.pop();
+                } else if kind == 2 {
+                    sum += s.top();
+                } else if kind == 3 {
+                    sum += s.peek_max();
+                } else {
+                    sum += s.pop_max();
+                }
+            }
+        }
+    }
+    println(f"10 rounds of 10 lists of 100000 calls: sum {sum}");
+}
