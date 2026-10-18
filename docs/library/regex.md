@@ -81,7 +81,7 @@ struct RegexError {
 
 ## Effects
 
-Every method has `allocates(Heap)`, and nothing else. Compiling builds the pattern's program, a search uses scratch memory, and results are new values. No method reads or writes a resource or blocks, and none panics on any input: a bad pattern is an `Err`, and a group that is missing or did not take part is `None`. **Divergence:** the implementation also infers `panics` for these methods today (`src/mir/effects.rs`), which is wider than this.
+Every method has `allocates(Heap)`, and nothing else. Compiling builds the pattern's program, a search uses scratch memory, and results are new values. No method reads or writes a resource or blocks, and none panics on any input: a bad pattern is an `Err`, and a group that is missing or did not take part is `None`. **Divergence:** effect inference still reports `panics` for the methods whose library bodies index or count (`compile`, `find`, `captures` and the rest; `escape` is clean), from the bounds and overflow checks it cannot prove away. That is the analysis over-approximating, as it does for any Kāra code that indexes, not a reachable panic.
 
 ## Not in v1
 
