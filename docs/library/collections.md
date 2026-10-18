@@ -93,7 +93,8 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from `len` on. Does nothing if `len >= self.len()` |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
 | `resize` | `fn resize(mut ref self, n: i64, val: own T) where T: Clone` | Sets the length to exactly `n`: truncates when shrinking, appends copies of `val` when growing. `n < 0` counts as 0. `val` is moved into the first new slot and cloned into the rest, and dropped when there is no new slot |
-| `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Appends every item, in order. `a.extend(b)` moves every element of the `Vec` `b` onto the end of `a`. There is no `append` |
+| `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Appends every item, in order. `a.extend(b)` moves every element of the `Vec` `b` onto the end of `a`. There is no `append`: a borrowed `b` is emptied onto `a` with `a.extend(mem.take(mut b))` |
+| `extend_from_slice` | `fn extend_from_slice(mut ref self, items: Slice[T]) where T: Clone` | Appends a clone of every element of `items`, in order, and leaves the source alone: `buf.extend_from_slice(s.bytes())` |
 | `capacity` | `fn capacity(self) -> i64` | A lower bound, not an allocator promise: `capacity() >= len()` always, and `capacity() >= len() + n` after `reserve(n)`. The exact value is unspecified, so compare with `>=` |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` more elements; it may over-allocate. `additional <= 0` does nothing. Never changes `len()` |
 | `reserve_exact` | `fn reserve_exact(mut ref self, additional: i64)` | As `reserve`, but asks for no slack beyond `len() + additional` |
@@ -343,6 +344,7 @@ enum AllocError {
 |  | `push(x)` | `try_push(x)` |
 |  | `insert(i, x)` | `try_insert(i, x)` |
 |  | `extend(items)` | `try_extend(items)` |
+|  | `extend_from_slice(items)` | `try_extend_from_slice(items)` |
 |  | `reserve(n)` | `try_reserve(n)` |
 |  | `reserve_exact(n)` | `try_reserve_exact(n)` |
 |  | `resize(n, val)` | `try_resize(n, val)` |

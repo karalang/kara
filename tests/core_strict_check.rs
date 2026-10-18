@@ -6296,3 +6296,139 @@ fn every_argument_to_a_mutating_parameter_is_marked() {
         "bump(mut n);",
     );
 }
+
+/// B-2026-10-14-38: design.md § Returns returns a borrow of a place with
+/// `ref <place>`, pinned by the place's root, and a `ref` local walked down a
+/// tree copies the reference on each step.
+#[test]
+fn a_borrow_of_a_place_rooted_at_a_borrowed_parameter_is_returned() {
+    accepted(
+        "borrow-return-place",
+        "struct User { name: String, age: i64 }\n\
+         struct Node { val: i64, next: Option[Node], kids: Map[String, Node] }\n\
+         struct List { head: Node }\n\
+         impl List {\n\
+             fn head(self) -> ref Node { ref self.head }\n\
+             fn first_val(self) -> ref i64 { ref self.head.val }\n\
+             fn last(self) -> ref Node {\n\
+                 let mut node = ref self.head;\n\
+                 while let Some(n) = node.next { node = n; }\n\
+                 node\n\
+             }\n\
+             fn find(self, path: Vec[String]) -> ref Node {\n\
+                 let mut node = ref self.head;\n\
+                 for name in path.iter() { node = ref node.kids[name.clone()]; }\n\
+                 node\n\
+             }\n\
+         }\n\
+         fn name(user: User) -> ref String { ref user.name }\n\
+         fn main() {\n\
+             let u = User { name: \"ada\".to_string(), age: 36 };\n\
+             println(f\"{name(u)} {u.age}\");\n\
+             let l = List { head: Node { val: 1, next: Some(Node { val: 3, next: None, kids: Map.new() }), kids: Map.new() } };\n\
+             println(f\"{l.head().val} {l.last().val} {l.first_val()} {l.find(Vec.new()).val}\");\n\
+         }\n",
+    );
+}
+
+/// B-2026-10-14-38: a `ref <place>` or `ref` local rooted at an owned value
+/// still dangles.
+#[test]
+fn a_borrow_of_an_owned_place_is_not_returned() {
+    for (tag, src) in [
+        (
+            "owned-param",
+            "struct User { name: String }\n\
+             fn name(user: own User) -> ref String { ref user.name }\n\
+             fn main() {}\n",
+        ),
+        (
+            "owned-local",
+            "struct User { name: String }\n\
+             fn name() -> ref String { let u = User { name: \"x\".to_string() }; ref u.name }\n\
+             fn main() {}\n",
+        ),
+        (
+            "reassigned-to-local",
+            "struct Node { val: i64, next: Option[Node] }\n\
+             struct List { head: Node }\n\
+             impl List {\n\
+                 fn pick(self) -> ref Node {\n\
+                     let other = Node { val: 9, next: None };\n\
+                     let mut node = ref self.head;\n\
+                     node = ref other;\n\
+                     node\n\
+                 }\n\
+             }\n\
+             fn main() {}\n",
+        ),
+        (
+            "projected-from-local",
+            "struct Node { val: i64, next: Option[Node] }\n\
+             struct List { head: Node }\n\
+             impl List {\n\
+                 fn pick(self) -> ref Node {\n\
+                     let local = Node { val: 9, next: None };\n\
+                     let mut node = ref self.head;\n\
+                     if let Some(n) = local.next { node = n; }\n\
+                     node\n\
+                 }\n\
+             }\n\
+             fn main() {}\n",
+        ),
+    ] {
+        rejected(
+            tag,
+            src,
+            "returned borrow does not originate from a `ref` parameter",
+        );
+    }
+}
+
+/// B-2026-10-13-24 (Gowtham, 2026-10-14): there is no `Vec.append`.
+/// `karac fix` writes `extend` over the moved elements, `mem.take` for a
+/// borrowed source, and `extend_from_slice` stays.
+#[test]
+fn append_is_written_as_extend() {
+    rejected_then_fixed_by(
+        "append-borrowed",
+        "fn drain_into(a: mut ref Vec[i64], b: mut ref Vec[i64]) {\n\
+             a.append(mut b);\n\
+         }\n\
+         fn main() {\n\
+             let mut d: Vec[i64] = vec![1];\n\
+             let mut x: Vec[i64] = vec![5];\n\
+             drain_into(mut d, mut x);\n\
+             d.extend_from_slice(x.as_slice());\n\
+             println(f\"{d} {x}\");\n\
+         }\n",
+        "there is no `Vec.append`",
+        "a.extend(mem.take(mut b));",
+    );
+    rejected_then_fixed_by(
+        "append-owned",
+        "fn main() {\n\
+             let mut d: Vec[i64] = vec![1];\n\
+             let y: Vec[i64] = vec![7];\n\
+             d.append(y);\n\
+             println(f\"{d}\");\n\
+         }\n",
+        "there is no `Vec.append`",
+        "d.extend(y);",
+    );
+    rejected_then_fixed_by(
+        "try-append",
+        "fn grow(d: mut ref Vec[i64]) -> Result[(), AllocError] {\n\
+             let y: Vec[i64] = vec![7];\n\
+             d.try_append(y)?;\n\
+             Ok(())\n\
+         }\n\
+         fn main() {\n\
+             let mut d: Vec[i64] = vec![1];\n\
+             grow(mut d).unwrap();\n\
+             println(f\"{d}\");\n\
+         }\n",
+        "there is no `Vec.try_append`",
+        "d.try_extend(y)?;",
+    );
+}

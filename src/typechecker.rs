@@ -2461,6 +2461,9 @@ pub struct TypeChecker<'a> {
     /// (`let v: Vec[(ref K, ref V)] = m.iter().collect()`): the lent items
     /// are kept, not moved, so v2 core §5.10's move check skips them.
     pub(super) core_collect_keeps_refs: FxHashSet<SpanKey>,
+    /// Set while a `try_<base>` call types its base method, so the base's
+    /// strict rules can name the method as written (`try_append`).
+    pub(super) core_try_companion: bool,
     /// See [`TypeCheckResult::core_for_into_iter_receivers`].
     pub(super) core_for_into_iter_receivers: FxHashMap<SpanKey, Span>,
     /// v2 core §3.7, checked per instantiation: inside a generic body, each
@@ -3306,6 +3309,7 @@ impl<'a> TypeChecker<'a> {
             core_moving_scrutinees: FxHashMap::default(),
             core_borrowed_receivers: FxHashSet::default(),
             core_collect_keeps_refs: FxHashSet::default(),
+            core_try_companion: false,
             core_for_into_iter_receivers: FxHashMap::default(),
             core_generic_moves: FxHashMap::default(),
             current_fn_core_key: None,

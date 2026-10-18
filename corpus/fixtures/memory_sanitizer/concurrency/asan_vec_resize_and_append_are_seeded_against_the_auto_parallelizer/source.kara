@@ -8,13 +8,13 @@ fn main() {
     a.push(10);
     let mut b: Vec[i64] = Vec.new();
     b.push(30);
-    a.append(b);
+    a.extend(b);
     println(f"append: {a.len()} {a[0]} {a[1]}");
     let mut p: Vec[String] = Vec.new();
     p.push("one");
     let mut q: Vec[String] = Vec.new();
     q.push("two");
-    p.append(q);
+    p.extend(q);
     p.resize(4, "pad");
     println(f"heap: {p.len()} {p[0]} {p[1]} {p[2]} {p[3]}");
 }

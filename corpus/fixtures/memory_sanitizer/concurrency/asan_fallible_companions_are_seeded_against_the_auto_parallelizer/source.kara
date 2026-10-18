@@ -7,7 +7,7 @@ fn build() -> Result[i64, AllocError] {
     v.try_resize(4, 9)?;
     let mut spare: Vec[i64] = Vec.new();
     spare.push(7);
-    v.try_append(spare)?;
+    v.try_extend(spare)?;
     let mut s: String = String.new();
     s.try_push_str("hi")?;
     let mut other: Vec[i64] = Vec.new();

@@ -1454,7 +1454,9 @@ impl<'a> super::TypeChecker<'a> {
         // define `try_push` / `try_clone` / … is never shadowed.
         if let Some(base) = crate::fallible_alloc::instance_companion_base(method) {
             if self.receiver_is_alloc_collection(object) {
+                let outer = std::mem::replace(&mut self.core_try_companion, true);
                 let base_ret = self.infer_method_call(object, base, args, span, args_close_span);
+                self.core_try_companion = outer;
                 if base_ret == Type::Error {
                     return Type::Error;
                 }
@@ -2125,6 +2127,9 @@ impl<'a> super::TypeChecker<'a> {
                     name: "Option".to_string(),
                     args: vec![Type::Ref(Box::new(elem))],
                 };
+            }
+            if method == "append" && !deque && self.cli_lint_overrides.strict_core {
+                self.reject_core_vec_append(object, args, args_close_span);
             }
             if let Some(ty) = self.infer_vec_method(&elem, method, args, span) {
                 // Stash the element type at the non-aliased close-paren leaf so
@@ -5473,4 +5478,69 @@ fn gpu_reduce_shader_op(op: ReduceOp) -> ReduceOp {
         ReduceOp::Mean => ReduceOp::Sum,
         other => other,
     }
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// There is no `Vec.append` (Gowtham, 2026-10-14, B-2026-10-13-24):
+    /// `a.extend(b)` moves every element of an owned `b`, and a borrowed `b`
+    /// is emptied with `a.extend(mem.take(mut b))`. Reported by the strict
+    /// commands, with the rewrite when the argument is a plain place.
+    fn reject_core_vec_append(&mut self, object: &Expr, args: &[CallArg], close: &Span) {
+        let [arg] = args else {
+            return;
+        };
+        let try_ = if self.core_try_companion { "try_" } else { "" };
+        let (spelling, rest) = if arg.mut_marker {
+            (
+                "mem.take(mut b)",
+                ", which moves every element of `b` and leaves it empty",
+            )
+        } else {
+            ("b", ", which moves every element of `b`")
+        };
+        let message = format!(
+            "there is no `Vec.{try_}append`: write `a.{try_}extend({spelling})`{rest} \
+             (docs/library/collections.md, `extend`)"
+        );
+        let recv_end = object.span.offset + object.span.length;
+        let end = close.offset + close.length;
+        let place = append_place_text(&arg.value).filter(|_| arg.label.is_none() && end > recv_end);
+        match place {
+            Some(t) => {
+                let replacement = if arg.mut_marker {
+                    format!(".{try_}extend(mem.take(mut {t}))")
+                } else {
+                    format!(".{try_}extend({t})")
+                };
+                self.type_error_with_fix_it(
+                    message,
+                    arg.value.span,
+                    TypeErrorKind::NoMethodFound,
+                    super::FixIt {
+                        span: Span {
+                            offset: recv_end,
+                            length: end - recv_end,
+                            line: object.span.line,
+                            column: object.span.column + object.span.length,
+                        },
+                        replacement,
+                    },
+                );
+            }
+            None => self.type_error(message, arg.value.span, TypeErrorKind::NoMethodFound),
+        }
+    }
+}
+
+/// A place written as a binding, `self`, or a field chain off one.
+fn append_place_text(e: &Expr) -> Option<String> {
+    Some(match &e.kind {
+        ExprKind::Identifier(n) => n.clone(),
+        ExprKind::SelfValue => "self".to_string(),
+        ExprKind::FieldAccess { object, field } => {
+            format!("{}.{field}", append_place_text(object)?)
+        }
+        ExprKind::TupleIndex { object, index } => format!("{}.{index}", append_place_text(object)?),
+        _ => return None,
+    })
 }

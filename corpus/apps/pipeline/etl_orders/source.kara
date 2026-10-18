@@ -297,8 +297,8 @@ fn main() -> Result[(), IoError] {
     }
 
     let mut rejects: Vec[Reject] = Vec.new();
-    rejects.append(customer_rejects);
-    rejects.append(order_rejects);
+    rejects.extend(customer_rejects);
+    rejects.extend(order_rejects);
 
     let mut by_tier_month: SortedMap[String, Totals] = SortedMap.new();
     let mut by_tier: SortedMap[String, Totals] = SortedMap.new();
