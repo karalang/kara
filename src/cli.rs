@@ -1208,7 +1208,9 @@ impl Pipeline {
             return;
         };
         let user = |s: &crate::token::Span| s.offset < n;
-        self.parsed.errors.retain(|e| user(&e.span));
+        // A parse error in the library is kept: the library is fixed text,
+        // so one means the library is broken, and the check of the user's
+        // program against what did parse would be wrong.
         if let Some(r) = self.resolved.as_mut() {
             r.errors.retain(|e| user(&e.span));
         }
