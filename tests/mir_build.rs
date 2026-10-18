@@ -4685,3 +4685,35 @@ fn main() {
         }
     }
 }
+
+/// `Display` for an `f32` shows its own shortest digits, not the widened
+/// `f64`'s (B-2026-10-18-47), in a bare hole, `to_string` and inside a
+/// `Vec`; a precision and the `f64`s are unchanged.
+#[test]
+fn mir_build_f32_display_shows_its_own_shortest_digits() {
+    let src = r#"
+fn main() {
+    let z: f32 = 0.1;
+    let w: f32 = 3.0;
+    let big: f32 = 16777216.0;
+    let d: f64 = 0.1;
+    println(f"{z} {w} {big} {d}");
+    println(z.to_string());
+    println(f"[{z:.3}]");
+    let v: Vec[f32] = [0.1, 0.2, 1.5];
+    println(f"{v}");
+    let x = z * 3.0;
+    println(f"{x}");
+}
+"#;
+    let want = karac::mir::lower::run_source(src).expect("interp").output;
+    assert_eq!(
+        want,
+        "0.1 3.0 16777216.0 0.1\n0.1\n[0.100]\n[0.1, 0.2, 1.5]\n0.3\n",
+    );
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
