@@ -1,0 +1,71 @@
+// LeetCode #693: Binary Number with Alternating Bits -- bit by bit.
+//
+// Read the bits from the bottom, each one against the one before it; two
+// equal neighbours answer no. O(log n).
+
+fn has_alternating_bits(n: i64) -> bool {
+    let mut rest = n >> 1;
+    let mut last = n & 1;
+    while rest > 0 {
+        let bit = rest & 1;
+        if bit == last {
+            return false;
+        }
+        last = bit;
+        rest = rest >> 1;
+    }
+    true
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The three LeetCode examples.
+    println(f"5: {has_alternating_bits(5)}, 7: {has_alternating_bits(7)}, 11: {has_alternating_bits(11)}");
+    // The smallest numbers, and the largest the constraints allow.
+    println(f"1: {has_alternating_bits(1)}, 2: {has_alternating_bits(2)}, 3: {has_alternating_bits(3)}, 4: {has_alternating_bits(4)}");
+    println(f"2147483647: {has_alternating_bits(2147483647)}, 1431655765: {has_alternating_bits(1431655765)}, 715827882: {has_alternating_bits(715827882)}");
+    // Every alternating number up to a million, and one bit flipped in
+    // each of the 31-bit ones.
+    let mut found = 0;
+    let mut sum = 0;
+    for n in 1..1000001 {
+        if has_alternating_bits(n) {
+            found += 1;
+            sum += n;
+        }
+    }
+    println(f"1 to 1000000: {found} alternate, summing to {sum}");
+    let mut kept = 0;
+    for b in 0..31 {
+        if has_alternating_bits(1431655765 ^ (1 << b)) {
+            kept += 1;
+        }
+    }
+    println(f"1431655765 with one bit flipped: {kept} of 31 still alternate");
+    // A million random numbers from 1 to 2^31 - 1, half of them an
+    // alternating number with its low bits replaced.
+    let mut seed = 693;
+    let mut yes = 0;
+    let mut checksum = 0;
+    for i in 0..1000000 {
+        let mut n = next_random(mut seed) * 65536 + next_random(mut seed);
+        if i % 2 == 0 {
+            let keep = next_random(mut seed) % 8;
+            n = (1431655765 >> (next_random(mut seed) % 30)) ^ (n % (1 << keep));
+        }
+        if n == 0 {
+            n = 1;
+        }
+        if has_alternating_bits(n) {
+            yes += 1;
+            checksum = (checksum * 31 + n) % 1000000007;
+        }
+    }
+    println(f"a million random numbers: {yes} alternate, checksum {checksum}");
+}

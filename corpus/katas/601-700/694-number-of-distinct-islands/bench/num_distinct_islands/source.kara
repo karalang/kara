@@ -1,0 +1,105 @@
+// LeetCode #694: Number of Distinct Islands -- bench program for the union-find arm.
+//
+// 40 grids of 50 by 50, land from 30 to 60 percent, are built once; then
+// in each of 150 rounds every grid's distinct islands are counted with
+// the union-find arm, and the counts go into a checksum.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn num_distinct_islands(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..m * n {
+        parent.push(i);
+    }
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                continue;
+            }
+            if r + 1 < m and grid[r + 1][c] == 1 {
+                let a = find(mut parent, r * n + c);
+                let b = find(mut parent, (r + 1) * n + c);
+                parent[a] = b;
+            }
+            if c + 1 < n and grid[r][c + 1] == 1 {
+                let a = find(mut parent, r * n + c);
+                let b = find(mut parent, r * n + c + 1);
+                parent[a] = b;
+            }
+        }
+    }
+    let mut first: Vec[i64] = vec![-1; m * n];
+    let mut slot: Vec[i64] = vec![-1; m * n];
+    let mut shapes: Vec[Vec[i64]] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                continue;
+            }
+            let root = find(mut parent, r * n + c);
+            if first[root] < 0 {
+                first[root] = r * n + c;
+                slot[root] = shapes.len();
+                shapes.push(Vec.new());
+            }
+            let r0 = first[root] / n;
+            let c0 = first[root] % n;
+            shapes[slot[root]].push((r - r0) * 200 + (c - c0));
+        }
+    }
+    shapes.sort();
+    let mut distinct = 0;
+    for i in 0..shapes.len() {
+        if i == 0 or shapes[i] != shapes[i - 1] {
+            distinct += 1;
+        }
+    }
+    distinct
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 694;
+    let mut grids: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..40 {
+        let percent = 30 + next_random(mut seed) % 31;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..50 {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..50 {
+                line.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+            }
+            grid.push(line);
+        }
+        grids.push(grid);
+    }
+    let rounds = 150;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..rounds {
+        for grid in grids.iter() {
+            let r = num_distinct_islands(grid);
+            total += r;
+            checksum = (checksum * 31 + r) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 40 grids of 50 by 50: {total} distinct islands counted, checksum {checksum}");
+}

@@ -1,0 +1,406 @@
+// LeetCode #694: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random problems.
+
+// ---- star arm ----------------------------------------------------------
+
+fn num_distinct_islands_star(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = vec![vec![false; n]; m];
+    let mut shapes: Set[String] = Set.new();
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 1 and not seen[r][c] {
+                let mut path = String.new();
+                walk_star(grid, mut seen, r, c, 's', mut path);
+                shapes.insert(path);
+            }
+        }
+    }
+    shapes.len()
+}
+
+fn walk_star(grid: ref Vec[Vec[i64]], seen: mut ref Vec[Vec[bool]], r: i64, c: i64, step: char, path: mut ref String) {
+    if r < 0 or c < 0 or r >= grid.len() or c >= grid[0].len() {
+        return;
+    }
+    if grid[r][c] == 0 or seen[r][c] {
+        return;
+    }
+    seen[r][c] = true;
+    path.push(step);
+    walk_star(grid, seen, r + 1, c, 'd', path);
+    walk_star(grid, seen, r - 1, c, 'u', path);
+    walk_star(grid, seen, r, c + 1, 'r', path);
+    walk_star(grid, seen, r, c - 1, 'l', path);
+    path.push('b');
+}
+
+// ---- bfs arm -----------------------------------------------------------
+
+fn num_distinct_islands_bfs(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = vec![vec![false; n]; m];
+    let mut shapes: Set[Vec[i64]] = Set.new();
+    let dr = [1, -1, 0, 0];
+    let dc = [0, 0, 1, -1];
+    for r0 in 0..m {
+        for c0 in 0..n {
+            if grid[r0][c0] == 0 or seen[r0][c0] {
+                continue;
+            }
+            let mut cells: Vec[i64] = Vec.new();
+            let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+            queue.push_back((r0, c0));
+            seen[r0][c0] = true;
+            while queue.len() > 0 {
+                let (r, c) = queue.pop_front().unwrap();
+                cells.push((r - r0) * 200 + (c - c0));
+                for d in 0..4 {
+                    let nr = r + dr[d];
+                    let nc = c + dc[d];
+                    if nr >= 0 and nc >= 0 and nr < m and nc < n and grid[nr][nc] == 1 and not seen[nr][nc] {
+                        seen[nr][nc] = true;
+                        queue.push_back((nr, nc));
+                    }
+                }
+            }
+            cells.sort();
+            shapes.insert(cells);
+        }
+    }
+    shapes.len()
+}
+
+// ---- unionfind arm -----------------------------------------------------
+
+fn find_unionfind(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn num_distinct_islands_unionfind(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..m * n {
+        parent.push(i);
+    }
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                continue;
+            }
+            if r + 1 < m and grid[r + 1][c] == 1 {
+                let a = find_unionfind(mut parent, r * n + c);
+                let b = find_unionfind(mut parent, (r + 1) * n + c);
+                parent[a] = b;
+            }
+            if c + 1 < n and grid[r][c + 1] == 1 {
+                let a = find_unionfind(mut parent, r * n + c);
+                let b = find_unionfind(mut parent, r * n + c + 1);
+                parent[a] = b;
+            }
+        }
+    }
+    // For each root, the island's first cell and its offsets so far.
+    let mut first: Vec[i64] = vec![-1; m * n];
+    let mut slot: Vec[i64] = vec![-1; m * n];
+    let mut shapes: Vec[Vec[i64]] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                continue;
+            }
+            let root = find_unionfind(mut parent, r * n + c);
+            if first[root] < 0 {
+                first[root] = r * n + c;
+                slot[root] = shapes.len();
+                shapes.push(Vec.new());
+            }
+            let r0 = first[root] / n;
+            let c0 = first[root] % n;
+            shapes[slot[root]].push((r - r0) * 200 + (c - c0));
+        }
+    }
+    shapes.sort();
+    let mut distinct = 0;
+    for i in 0..shapes.len() {
+        if i == 0 or shapes[i] != shapes[i - 1] {
+            distinct += 1;
+        }
+    }
+    distinct
+}
+
+// ---- picture arm -------------------------------------------------------
+
+fn num_distinct_islands_picture(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = vec![vec![false; n]; m];
+    let mut pictures: Vec[String] = Vec.new();
+    for r0 in 0..m {
+        for c0 in 0..n {
+            if grid[r0][c0] == 0 or seen[r0][c0] {
+                continue;
+            }
+            let mut cells: Vec[(i64, i64)] = Vec.new();
+            let mut stack: Vec[(i64, i64)] = vec![(r0, c0)];
+            seen[r0][c0] = true;
+            let mut top = r0;
+            let mut bottom = r0;
+            let mut left = c0;
+            let mut right = c0;
+            while stack.len() > 0 {
+                let (r, c) = stack.pop().unwrap();
+                cells.push((r, c));
+                top = top.min(r);
+                bottom = bottom.max(r);
+                left = left.min(c);
+                right = right.max(c);
+                if r + 1 < m and grid[r + 1][c] == 1 and not seen[r + 1][c] {
+                    seen[r + 1][c] = true;
+                    stack.push((r + 1, c));
+                }
+                if r > 0 and grid[r - 1][c] == 1 and not seen[r - 1][c] {
+                    seen[r - 1][c] = true;
+                    stack.push((r - 1, c));
+                }
+                if c + 1 < n and grid[r][c + 1] == 1 and not seen[r][c + 1] {
+                    seen[r][c + 1] = true;
+                    stack.push((r, c + 1));
+                }
+                if c > 0 and grid[r][c - 1] == 1 and not seen[r][c - 1] {
+                    seen[r][c - 1] = true;
+                    stack.push((r, c - 1));
+                }
+            }
+            let width = right - left + 1;
+            let height = bottom - top + 1;
+            let mut canvas: Vec[bool] = vec![false; width * height];
+            for (r, c) in cells.iter() {
+                canvas[(*r - top) * width + (*c - left)] = true;
+            }
+            let mut picture = String.new();
+            for i in 0..height {
+                for j in 0..width {
+                    picture.push(if canvas[i * width + j] { '#' } else { '.' });
+                }
+                picture.push('/');
+            }
+            let mut known = false;
+            for p in pictures.iter() {
+                if *p == picture {
+                    known = true;
+                }
+            }
+            if not known {
+                pictures.push(picture);
+            }
+        }
+    }
+    pictures.len()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        num_distinct_islands_star(grid)
+    } else if which == 1 {
+        num_distinct_islands_bfs(grid)
+    } else if which == 2 {
+        num_distinct_islands_unionfind(grid)
+    } else {
+        num_distinct_islands_picture(grid)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: label every land cell with its own number, then lower
+// each label to the least of its land neighbours' until nothing changes,
+// so each island ends with one label. Two islands have the same shape
+// when they have as many cells and moving every cell of one by the step
+// between their first cells lands on a cell of the other. The answer
+// counts the islands unlike every island before them.
+fn definition(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut label: Vec[Vec[i64]] = vec![vec![-1; n]; m];
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 1 {
+                label[r][c] = r * n + c;
+            }
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..m {
+            for c in 0..n {
+                if label[r][c] < 0 {
+                    continue;
+                }
+                let mut low = label[r][c];
+                if r > 0 and label[r - 1][c] >= 0 and label[r - 1][c] < low {
+                    low = label[r - 1][c];
+                }
+                if r + 1 < m and label[r + 1][c] >= 0 and label[r + 1][c] < low {
+                    low = label[r + 1][c];
+                }
+                if c > 0 and label[r][c - 1] >= 0 and label[r][c - 1] < low {
+                    low = label[r][c - 1];
+                }
+                if c + 1 < n and label[r][c + 1] >= 0 and label[r][c + 1] < low {
+                    low = label[r][c + 1];
+                }
+                if low < label[r][c] {
+                    label[r][c] = low;
+                    changed = true;
+                }
+            }
+        }
+    }
+    // Each label's cells, in reading order.
+    let mut labels: Vec[i64] = Vec.new();
+    let mut cells: Vec[Vec[(i64, i64)]] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            let l = label[r][c];
+            if l < 0 {
+                continue;
+            }
+            let mut k = -1;
+            for i in 0..labels.len() {
+                if labels[i] == l {
+                    k = i;
+                }
+            }
+            if k < 0 {
+                k = labels.len();
+                labels.push(l);
+                cells.push(Vec.new());
+            }
+            cells[k].push((r, c));
+        }
+    }
+    let mut count = 0;
+    for a in 0..cells.len() {
+        let mut new_shape = true;
+        for b in 0..a {
+            if cells[a].len() != cells[b].len() {
+                continue;
+            }
+            let dr = cells[b][0].0 - cells[a][0].0;
+            let dc = cells[b][0].1 - cells[a][0].1;
+            let mut same = true;
+            for (r, c) in cells[a].iter() {
+                let rr = *r + dr;
+                let cc = *c + dc;
+                if rr < 0 or cc < 0 or rr >= m or cc >= n or label[rr][cc] != labels[b] {
+                    same = false;
+                }
+            }
+            if same {
+                new_shape = false;
+            }
+        }
+        if new_shape {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn main() {
+    let mut seed = 6940;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 4000;
+    for _ in 0..cases {
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        let percent = 20 + next_random(mut seed) % 51;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                line.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+            }
+            grid.push(line);
+        }
+        // A row and a column of water added above and to the left; each
+        // row reversed; the grid twice side by side with water between.
+        let mut padded: Vec[Vec[i64]] = vec![vec![0; n + 1]];
+        let mut mirrored: Vec[Vec[i64]] = Vec.new();
+        let mut doubled: Vec[Vec[i64]] = Vec.new();
+        for r in 0..m {
+            let mut p: Vec[i64] = vec![0];
+            let mut back: Vec[i64] = Vec.new();
+            let mut two: Vec[i64] = Vec.new();
+            for c in 0..n {
+                p.push(grid[r][c]);
+                back.push(grid[r][n - 1 - c]);
+                two.push(grid[r][c]);
+            }
+            two.push(0);
+            for c in 0..n {
+                two.push(grid[r][c]);
+            }
+            padded.push(p);
+            mirrored.push(back);
+            doubled.push(two);
+        }
+        let want = definition(grid);
+        for which in 0..arms {
+            let got = answer(which, grid);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: water added above and to the left changes nothing.
+            checks += 1;
+            if answer(which, padded) != got {
+                fails[1] += 1;
+            }
+            // P3: the mirror image has as many distinct shapes.
+            checks += 1;
+            if answer(which, mirrored) != got {
+                fails[2] += 1;
+            }
+            // P4: a second copy beside the first adds no new shape.
+            checks += 1;
+            if answer(which, doubled) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} grids, {arms} arms, {checks} checks, {total} failures");
+}

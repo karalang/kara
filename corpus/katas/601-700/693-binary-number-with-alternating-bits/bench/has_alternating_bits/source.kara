@@ -1,0 +1,26 @@
+// LeetCode #693: Binary Number with Alternating Bits -- bench program for the ★ arm.
+//
+// 100 million numbers, each an alternating number of random length with
+// its two lowest bits flipped at random, so that a quarter alternate;
+// each is tested with the shift-and-xor arm and counted.
+
+fn has_alternating_bits(n: i64) -> bool {
+    let x = n ^ (n >> 1);
+    x & (x + 1) == 0
+}
+
+fn main() {
+    let mut seed = 693;
+    let count = 100000000;
+    let mut yes = 0;
+    let mut checksum = 0;
+    for _ in 0..count {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (1431655765 >> (seed % 31)) ^ ((seed >> 8) % 4);
+        if n > 0 and has_alternating_bits(n) {
+            yes += 1;
+            checksum = (checksum * 31 + n) % 1000000007;
+        }
+    }
+    println(f"{count} numbers: {yes} alternate, checksum {checksum}");
+}

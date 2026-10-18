@@ -1,0 +1,5 @@
+example 1: 1
+example 2: 3
+water: 0, all land: 1, checkerboard: 1
+an L and its mirror: 2, an L turned: 2, three copies: 1
+200 random grids: 3086 distinct islands in all, checksum 312535177

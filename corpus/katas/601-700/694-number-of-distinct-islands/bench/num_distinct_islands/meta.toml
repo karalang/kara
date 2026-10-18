@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/694-number-of-distinct-islands/bench/num_distinct_islands.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "9a6e736c4"
+extracted_src = "7e0b7fb4"
+model_rev = "583cfb0d"
+model_src = "7e0b7fb4"

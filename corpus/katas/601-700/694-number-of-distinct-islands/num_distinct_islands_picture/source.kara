@@ -1,0 +1,147 @@
+// LeetCode #694: Number of Distinct Islands -- draw each one.
+//
+// Each island, found with an explicit stack, is drawn inside its own
+// bounding box as rows of '#' and '.', separated by '/'. Two islands
+// have the same shape exactly when their drawings are equal, so each
+// drawing is looked up in the list of drawings so far and added if new.
+// O(m n + k^2 s) for k islands of size s at most.
+
+fn num_distinct_islands(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = vec![vec![false; n]; m];
+    let mut pictures: Vec[String] = Vec.new();
+    for r0 in 0..m {
+        for c0 in 0..n {
+            if grid[r0][c0] == 0 or seen[r0][c0] {
+                continue;
+            }
+            let mut cells: Vec[(i64, i64)] = Vec.new();
+            let mut stack: Vec[(i64, i64)] = vec![(r0, c0)];
+            seen[r0][c0] = true;
+            let mut top = r0;
+            let mut bottom = r0;
+            let mut left = c0;
+            let mut right = c0;
+            while stack.len() > 0 {
+                let (r, c) = stack.pop().unwrap();
+                cells.push((r, c));
+                top = top.min(r);
+                bottom = bottom.max(r);
+                left = left.min(c);
+                right = right.max(c);
+                if r + 1 < m and grid[r + 1][c] == 1 and not seen[r + 1][c] {
+                    seen[r + 1][c] = true;
+                    stack.push((r + 1, c));
+                }
+                if r > 0 and grid[r - 1][c] == 1 and not seen[r - 1][c] {
+                    seen[r - 1][c] = true;
+                    stack.push((r - 1, c));
+                }
+                if c + 1 < n and grid[r][c + 1] == 1 and not seen[r][c + 1] {
+                    seen[r][c + 1] = true;
+                    stack.push((r, c + 1));
+                }
+                if c > 0 and grid[r][c - 1] == 1 and not seen[r][c - 1] {
+                    seen[r][c - 1] = true;
+                    stack.push((r, c - 1));
+                }
+            }
+            let width = right - left + 1;
+            let height = bottom - top + 1;
+            let mut canvas: Vec[bool] = vec![false; width * height];
+            for (r, c) in cells.iter() {
+                canvas[(*r - top) * width + (*c - left)] = true;
+            }
+            let mut picture = String.new();
+            for i in 0..height {
+                for j in 0..width {
+                    picture.push(if canvas[i * width + j] { '#' } else { '.' });
+                }
+                picture.push('/');
+            }
+            let mut known = false;
+            for p in pictures.iter() {
+                if *p == picture {
+                    known = true;
+                }
+            }
+            if not known {
+                pictures.push(picture);
+            }
+        }
+    }
+    pictures.len()
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn grid_of(rows: ref Vec[Str]) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for row in rows.iter() {
+        let mut line: Vec[i64] = Vec.new();
+        for b in row.bytes().iter() {
+            line.push(*b as i64 - 48);
+        }
+        grid.push(line);
+    }
+    grid
+}
+
+// An m by n grid, each cell land with probability `percent` in 100.
+fn random_grid(m: i64, n: i64, percent: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut line: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            line.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+        }
+        grid.push(line);
+    }
+    grid
+}
+
+fn main() {
+    // The two LeetCode examples.
+    let ex1 = num_distinct_islands(grid_of(vec!["11000", "11000", "00011", "00011"]));
+    let ex2 = num_distinct_islands(grid_of(vec!["11011", "10000", "00001", "11011"]));
+    println(f"example 1: {ex1}");
+    println(f"example 2: {ex2}");
+    // One cell of water; a 50 by 50 grid of land; a 50 by 50 checkerboard.
+    let water = num_distinct_islands(grid_of(vec!["0"]));
+    let mut land: Vec[Vec[i64]] = Vec.new();
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for r in 0..50 {
+        land.push(vec![1; 50]);
+        let mut line: Vec[i64] = Vec.new();
+        for c in 0..50 {
+            line.push((r + c) % 2);
+        }
+        board.push(line);
+    }
+    println(f"water: {water}, all land: {num_distinct_islands(land)}, checkerboard: {num_distinct_islands(board)}");
+    // An L and its mirror image are different shapes, and so are an L
+    // and the same L turned; two copies of one are not.
+    let mirrored = num_distinct_islands(grid_of(vec!["11000", "10000", "00011", "00001"]));
+    let turned = num_distinct_islands(grid_of(vec!["11000", "10000", "00001", "00011"]));
+    let copies = num_distinct_islands(grid_of(vec!["11011", "10010", "00000", "11000", "10000"]));
+    println(f"an L and its mirror: {mirrored}, an L turned: {turned}, three copies: {copies}");
+    // 200 random grids of up to 50 by 50, land from 10 to 70 percent.
+    let mut seed = 694;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..200 {
+        let m = 1 + next_random(mut seed) % 50;
+        let n = 1 + next_random(mut seed) % 50;
+        let percent = 10 + next_random(mut seed) % 61;
+        let r = num_distinct_islands(random_grid(m, n, percent, mut seed));
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"200 random grids: {total} distinct islands in all, checksum {checksum}");
+}

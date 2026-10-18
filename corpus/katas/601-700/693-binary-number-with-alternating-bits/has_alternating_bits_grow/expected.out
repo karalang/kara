@@ -1,0 +1,6 @@
+5: true, 7: false, 11: false
+1: true, 2: true, 3: false, 4: false
+2147483647: false, 1431655765: true, 715827882: true
+1 to 1000000: 20 alternate, summing to 1398090
+1431655765 with one bit flipped: 1 of 31 still alternate
+a million random numbers: 131573 alternate, checksum 681808527
