@@ -6068,3 +6068,50 @@ fn a_collection_constructor_is_a_function_value() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_value_enum_carries_another_value_enum() {
+    // B-2026-10-06-86: one level of enum nesting was a limit of the legacy
+    // backend. `karac check` already dropped it; the MIR pipeline applied it
+    // still, so a checked program was refused there.
+    let src = "#[derive(Clone, PartialEq)]\n\
+         enum Kind { Round, Square }\n\
+         enum Tok { Open(Kind), Close(Kind), Word(String) }\n\
+         enum Wrap[T] { Val(T), No }\n\
+         fn main() {\n\
+         \x20   let toks = vec![Tok.Open(Kind.Square), Tok.Word(\"x\".to_string()), Tok.Close(Kind.Square)];\n\
+         \x20   let mut stack: Vec[Kind] = Vec.new();\n\
+         \x20   let mut ok = 0;\n\
+         \x20   for t in toks.iter() {\n\
+         \x20       match t {\n\
+         \x20           Tok.Open(k) => stack.push(k.clone()),\n\
+         \x20           Tok.Close(k) => { if stack.pop() == Some(k.clone()) { ok += 1; } }\n\
+         \x20           Tok.Word(w) => println(f\"word {w}\"),\n\
+         \x20       }\n\
+         \x20   }\n\
+         \x20   let w: Wrap[Kind] = Wrap.Val(Kind.Round);\n\
+         \x20   match w { Wrap.Val(Kind.Round) => println(f\"ok {ok} round\"), _ => println(\"other\") }\n\
+         }\n";
+    let (dir, path) = fixture("nested-enum", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "word x\nok 1 round\n",
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
