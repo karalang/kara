@@ -1100,9 +1100,24 @@ impl<'a> CfgBuilder<'a> {
                 then_block,
                 else_branch,
             } => {
-                let after_scrutinee = self.lower_expr(value, cur, exit, loops);
+                // v2 core: a place scrutinee is moved only where the pattern
+                // matched and bound a part of it (core-semantics.md §4.6;
+                // B-2026-10-15-32), so its use goes on the matching path.
+                let on_match = crate::ownership::core_rules()
+                    && crate::ownership::is_place_projection(value)
+                    && !pattern_bindings(pattern).is_empty();
+                let after_scrutinee = if on_match {
+                    cur
+                } else {
+                    self.lower_expr(value, cur, exit, loops)
+                };
                 let then_entry = self.new_block();
                 self.add_edge(after_scrutinee, then_entry);
+                let then_entry = if on_match {
+                    self.lower_expr(value, then_entry, exit, loops)
+                } else {
+                    then_entry
+                };
                 // B-2026-09-25-1 — scope the pattern's bindings to an `@armN`
                 // frame, exactly as a `match` arm's are: an `if let` binding
                 // is a fresh name distinct from any outer binding it shadows.
@@ -1148,7 +1163,19 @@ impl<'a> CfgBuilder<'a> {
                 merge
             }
             ExprKind::Match { scrutinee, arms } => {
-                let after_scrut = self.lower_expr(scrutinee, cur, exit, loops);
+                // v2 core: a place scrutinee is moved only in the arms whose
+                // pattern binds a part of it (core-semantics.md §4.6;
+                // B-2026-10-15-32), so its use goes in those arms.
+                let per_arm = crate::ownership::core_rules()
+                    && crate::ownership::is_place_projection(scrutinee)
+                    && arms
+                        .iter()
+                        .any(|a| !pattern_bindings(&a.pattern).is_empty());
+                let after_scrut = if per_arm {
+                    cur
+                } else {
+                    self.lower_expr(scrutinee, cur, exit, loops)
+                };
                 let merge = self.new_block();
                 if arms.is_empty() {
                     self.add_edge(after_scrut, merge);
@@ -1156,6 +1183,11 @@ impl<'a> CfgBuilder<'a> {
                     for arm in arms {
                         let arm_entry = self.new_block();
                         self.add_edge(after_scrut, arm_entry);
+                        let arm_entry = if per_arm && !pattern_bindings(&arm.pattern).is_empty() {
+                            self.lower_expr(scrutinee, arm_entry, exit, loops)
+                        } else {
+                            arm_entry
+                        };
                         let mut arm_cur = arm_entry;
                         // Alpha-rename this arm's pattern bindings so a
                         // same-named binding in a sibling arm can't pair across

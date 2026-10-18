@@ -1846,6 +1846,9 @@ impl<'a> UseClassifier<'a> {
         }
         // A built-in `String` method reads its arguments, as the ownership
         // twin decides (B-2026-10-15-23).
+        if crate::ownership::numeric_parse_arg_is_borrow(method_call, arg_index) {
+            return true;
+        }
         if let Some(b) = crate::ownership::string_receiver_arg_is_borrow(
             self.tc,
             self.method_param_modes,

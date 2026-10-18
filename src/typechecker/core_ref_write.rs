@@ -94,6 +94,11 @@ struct Walk<'t, 'a> {
     /// The place expressions already asked about a read, by address: each
     /// projection chain is asked once, as a whole.
     place_seen: FxHashSet<usize>,
+    /// Offsets the current point cannot reach code past: the end of each
+    /// `return` it is inside or about to run into. A use of a `ref` local
+    /// there is on no path from here, so it does not keep the borrow live
+    /// (§5.6; B-2026-10-15-31).
+    dead_after: Vec<usize>,
     /// The program's own free functions by name, for the kind check at a
     /// call (§9.6). Library functions are not migrated to `MutFn` yet.
     fn_decls: &'t FxHashMap<String, &'a Function>,
@@ -247,6 +252,7 @@ impl<'a> TypeChecker<'a> {
             conflicts: Vec::new(),
             read_conflicts: Vec::new(),
             place_seen: FxHashSet::default(),
+            dead_after: Vec::new(),
             fn_decls: &fn_decls,
             method_decls: &method_decls,
             closures: Vec::new(),
@@ -293,6 +299,7 @@ impl<'a> TypeChecker<'a> {
                 .collect()];
             w.borrowed.clear();
             w.place_seen.clear();
+            w.dead_after.clear();
             w.ref_lets.clear();
             w.branches.clear();
             w.mut_fn_params.clear();
@@ -365,6 +372,23 @@ impl<'a> TypeChecker<'a> {
 
 impl Walk<'_, '_> {
     fn block(&mut self, b: &Block) {
+        // A block that ends in `return` and holds no `break` or `continue`
+        // leaves the function from every point in it.
+        let ends = self
+            .closures
+            .is_empty()
+            .then(|| block_return_end(b))
+            .flatten();
+        if let Some(end) = ends {
+            self.dead_after.push(end);
+        }
+        self.block_inner(b);
+        if ends.is_some() {
+            self.dead_after.pop();
+        }
+    }
+
+    fn block_inner(&mut self, b: &Block) {
         self.scopes.push(Vec::new());
         let lets = self.ref_lets.len();
         let mut held = Vec::new();
@@ -665,11 +689,12 @@ impl Walk<'_, '_> {
             return;
         };
         let branches = &self.branches;
+        let dead = &self.dead_after;
         let overlaps = |b: &Borrowed| {
             b.binding.as_ref().is_none_or(|h| {
-                h.uses
-                    .iter()
-                    .any(|(u, p)| *u >= after && !exclusive(p, branches))
+                h.uses.iter().any(|(u, p)| {
+                    *u >= after && !exclusive(p, branches) && !dead.iter().any(|d| u >= d)
+                })
             }) && b.root == root
                 && b.path
                     .iter()
@@ -733,12 +758,13 @@ impl Walk<'_, '_> {
         };
         let after = place.span.offset;
         let branches = &self.branches;
+        let dead = &self.dead_after;
         let Some(b) = self.borrowed.iter().rev().find(|b| {
             b.unique
                 && b.binding.as_ref().is_some_and(|h| {
-                    h.uses
-                        .iter()
-                        .any(|(u, p)| *u > after && !exclusive(p, branches))
+                    h.uses.iter().any(|(u, p)| {
+                        *u > after && !exclusive(p, branches) && !dead.iter().any(|d| u >= d)
+                    })
                 })
                 && b.root == root
                 && b.path
@@ -849,6 +875,13 @@ impl Walk<'_, '_> {
             self.check_borrowed_read(e);
         }
         match &e.kind {
+            // Nothing after a `return` runs once its value is computed.
+            ExprKind::Return(Some(v)) if self.closures.is_empty() => {
+                self.dead_after.push(e.span.offset + e.span.length);
+                self.expr(v);
+                self.dead_after.pop();
+                return;
+            }
             ExprKind::MethodCall { object, method, .. }
                 if self.method_writes_receiver(e, object, method) =>
             {
@@ -1504,6 +1537,45 @@ fn uses_in_expr(
             Child::Expr(x) => uses_in_expr(x, name, branch, out),
             Child::Block(b) => uses_in_block(b, name, branch, out),
         }),
+    }
+}
+
+/// The end of the `return` that ends `b`, when `b` holds no `break` or
+/// `continue` that could leave it another way.
+fn block_return_end(b: &Block) -> Option<usize> {
+    let last = match (&b.final_expr, b.stmts.last()) {
+        (Some(e), _) => e.as_ref(),
+        (None, Some(s)) => match &s.kind {
+            StmtKind::Expr(e) => e,
+            _ => return None,
+        },
+        (None, None) => return None,
+    };
+    if !matches!(last.kind, ExprKind::Return(_)) {
+        return None;
+    }
+    let mut jumps = false;
+    crate::index_disjoint::for_each_block_child(b, &mut |c| jumps |= child_jumps(c));
+    (!jumps).then_some(last.span.offset + last.span.length)
+}
+
+/// Whether a `break` or `continue` is anywhere inside, closures aside.
+fn child_jumps(c: Child<'_>) -> bool {
+    match c {
+        Child::Expr(e) => match &e.kind {
+            ExprKind::Break { .. } | ExprKind::Continue { .. } => true,
+            ExprKind::Closure { .. } => false,
+            _ => {
+                let mut j = false;
+                for_each_child_public(e, &mut |c| j |= child_jumps(c));
+                j
+            }
+        },
+        Child::Block(b) => {
+            let mut j = false;
+            crate::index_disjoint::for_each_block_child(b, &mut |c| j |= child_jumps(c));
+            j
+        }
     }
 }
 

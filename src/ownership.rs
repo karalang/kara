@@ -175,6 +175,23 @@ pub(crate) fn ambient_arg_is_borrow(
     Some(matches!(mode, OwnershipMode::Ref | OwnershipMode::MutRef))
 }
 
+/// `i64.parse(s)` / `u8.from_str_radix(s, 16)`: a number type's parser
+/// reads its text (`parse(s: Str)`, docs/library/core-types.md § Parsing), so
+/// under the v2 core the text argument is a borrow, a field of a value
+/// included (B-2026-10-15-38).
+pub(crate) fn numeric_parse_arg_is_borrow(method_call: &Expr, arg_index: usize) -> bool {
+    let ExprKind::MethodCall { object, method, .. } = &method_call.kind else {
+        return false;
+    };
+    arg_index == 0
+        && core_rules()
+        && matches!(method.as_str(), "parse" | "from_str_radix")
+        && matches!(&object.kind, ExprKind::Identifier(t) if matches!(t.as_str(),
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+            | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+            | "f32" | "f64"))
+}
+
 /// Whether argument `arg_index` of a method called on a `String` or `Str`
 /// receiver is a borrow, decided by the receiver's type rather than the
 /// method's name: the `String` declaration when there is one, and otherwise,

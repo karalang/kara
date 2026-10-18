@@ -6983,3 +6983,237 @@ fn mut_ref_place_borrows_a_place_for_writing() {
          fn main() { let mut p = P { n: 1 }; f(mut p); println(f\"{p.n}\"); }\n",
     );
 }
+
+/// Rows from the real-world apps of 2026-10-15 (mini_lua, mini_jinja).
+#[test]
+fn app_rows_of_2026_10_15_lua_jinja() {
+    // B-2026-10-15-31: a `return` ends a `ref` local's reach, so a use in a
+    // later branch does not keep the borrow live at a write in this one.
+    accepted(
+        "ref-borrow-ends-at-return",
+        r#"struct P { toks: Vec[i64], p: i64, out: Vec[i64] }
+impl P {
+    fn add(mut ref self, v: i64) -> i64 {
+        self.out.push(v);
+        self.out.len() - 1
+    }
+    fn simple(mut ref self) -> i64 {
+        let t = ref self.toks[self.p];
+        if *t == 1 {
+            self.p += 1;
+            return self.add(10);
+        }
+        if *t == 2 {
+            self.p += 1;
+            return self.add(20);
+        }
+        -1
+    }
+}
+fn main() {
+    let mut p = P { toks: vec![2, 1], p: 0, out: Vec.new() };
+    let a = p.simple();
+    let b = p.simple();
+    println(f"{a} {b} {p.out.len()}");
+}
+"#,
+    );
+    // ...but a use reachable after the write still does, through a branch
+    // that falls through, inside the returned value, or after a `continue`.
+    rejected(
+        "ref-borrow-live-without-return",
+        r#"struct P { toks: Vec[i64], out: Vec[i64] }
+impl P {
+    fn add(mut ref self, v: i64) -> i64 {
+        self.out.push(v);
+        self.out.len() - 1
+    }
+    fn simple(mut ref self) -> i64 {
+        let t = ref self.toks[0];
+        if *t == 1 {
+            self.add(10);
+        }
+        if *t == 3 {
+            return self.add(5) + *t;
+        }
+        *t
+    }
+}
+fn main() {
+    let mut p = P { toks: vec![2, 1], out: Vec.new() };
+    println(f"{p.simple()}");
+}
+"#,
+        "while `ref t` borrows",
+    );
+    rejected(
+        "ref-borrow-live-past-continue",
+        r#"struct P { toks: Vec[i64], p: i64, out: Vec[i64] }
+impl P {
+    fn add(mut ref self, v: i64) -> i64 {
+        self.out.push(v);
+        self.out.len() - 1
+    }
+    fn simple(mut ref self) -> i64 {
+        let t = ref self.toks[self.p];
+        if *t == 1 {
+            self.add(10);
+            return 0;
+        }
+        for k in 0..2 {
+            if *t == 2 {
+                self.add(20);
+                continue;
+            }
+        }
+        *t
+    }
+}
+fn main() {
+    let mut p = P { toks: vec![2, 1], p: 0, out: Vec.new() };
+    println(f"{p.simple()}");
+}
+"#,
+        "while `ref t` borrows",
+    );
+    // B-2026-10-15-32: a pattern binding moves its part out of an owned
+    // scrutinee only in the arm or path where it bound.
+    accepted(
+        "scrutinee-moves-only-where-bound",
+        r#"enum V { Text(String), Int(i64) }
+fn show(v: ref V) -> String {
+    match v {
+        V.Text(s) => s.clone(),
+        V.Int(i) => f"{i}",
+    }
+}
+fn describe(v: own V) -> String {
+    match v {
+        V.Text(s) => s,
+        V.Int(_) => show(v),
+    }
+}
+fn first_text(v: own V) -> String {
+    if let V.Text(s) = v {
+        return s;
+    }
+    show(v)
+}
+fn main() {
+    println(describe(V.Text("a".to_string())));
+    println(describe(V.Int(7)));
+    println(first_text(V.Text("b".to_string())));
+    println(first_text(V.Int(8)));
+}
+"#,
+    );
+    rejected(
+        "scrutinee-moved-where-bound",
+        r#"enum V { Text(String), Int(i64) }
+fn show(v: ref V) -> String {
+    match v {
+        V.Text(s) => s.clone(),
+        V.Int(i) => f"{i}",
+    }
+}
+fn a(v: own V) -> String {
+    let r = match v {
+        V.Text(s) => s,
+        V.Int(_) => "i".to_string(),
+    };
+    r + show(v)
+}
+fn b(v: own V) -> String {
+    if let V.Text(s) = v {
+        println(s);
+    }
+    show(v)
+}
+fn c(v: own V) -> String {
+    match v {
+        V.Text(s) => { let t = s; show(v) + t }
+        V.Int(_) => show(v),
+    }
+}
+fn main() {
+    println(a(V.Int(1)));
+    println(b(V.Int(1)));
+    println(c(V.Int(1)));
+}
+"#,
+        "moved",
+    );
+    // B-2026-10-15-38: a number type's `parse` borrows its text, a field
+    // included.
+    accepted(
+        "numeric-parse-borrows-a-field",
+        r#"struct T { text: String, f: f64 }
+fn main() {
+    let mut out: Vec[T] = Vec.new();
+    let mut t = T { text: "1.5".to_string(), f: 0.0 };
+    t.f = f64.parse(t.text).unwrap_or(0.0);
+    out.push(t);
+    let text = "2.5".to_string();
+    let g = f64.parse(text).unwrap_or(0.0);
+    out.push(T { text: text, f: g });
+    println(f"{out[0].f} {out[1].f} {out[1].text}");
+}
+"#,
+    );
+    accepted(
+        "numeric-parse-borrows-a-field-2",
+        r#"struct T { text: String, f: f64 }
+fn g(s: Str) -> i64 { s.len() }
+fn main() {
+    let mut out: Vec[T] = Vec.new();
+    let mut t = T { text: "1.5".to_string(), f: 0.0 };
+    let n = g(t.text);
+    let k = t.text.len();
+    out.push(t);
+    let mut u = T { text: "1.5".to_string(), f: 0.0 };
+    let r = f64.parse(u.text);
+    println(f"{n} {k} {out.len()} {u.text}");
+}
+"#,
+    );
+    // B-2026-10-15-20, third case: a loop-body binding read in an `if`,
+    // then moved into a constructor that is a call argument.
+    accepted(
+        "loop-body-binding-into-ctor-arg",
+        r#"enum E { F(i64, String), G(i64) }
+struct A { es: Vec[E] }
+impl A {
+    fn add(mut ref self, e: own E) -> i64 {
+        self.es.push(e);
+        self.es.len() - 1
+    }
+}
+struct P { i: i64, bad: String }
+impl P {
+    fn next_name(mut ref self) -> Result[String, String] {
+        self.i += 1;
+        Ok(f"n{self.i}")
+    }
+    fn run(mut ref self, tree: mut ref A) -> Result[i64, String] {
+        let mut e: i64 = 0;
+        loop {
+            if self.i < 2 {
+                let name = self.next_name()?;
+                if self.bad == "" {
+                    self.bad = f"bad {name}";
+                }
+                e = tree.add(E.F(e, name));
+            } else {
+                return Ok(e);
+            }
+        }
+    }
+}
+fn main() {
+    let mut p = P { i: 0, bad: String.new() };
+    let mut a = A { es: Vec.new() };
+    println(f"{p.run(mut a).unwrap()} {p.bad}");
+}
+"#,
+    );
+}

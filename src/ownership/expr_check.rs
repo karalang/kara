@@ -899,16 +899,23 @@ impl<'a> super::OwnershipChecker<'a> {
                 // D5 migration: a binding moves its part out of an owned
                 // scrutinee, as `match` below treats it, so a bare parameter
                 // matched this way keeps `own`. Legacy reads it.
-                if self.d5.is_some()
+                let moves = self.d5.is_some()
                     && self.pattern_binds_anything(pattern)
-                    && !self.is_borrow_typed_scrutinee(value, param_types)
-                {
+                    && !self.is_borrow_typed_scrutinee(value, param_types);
+                // A place scrutinee moves only on the path where the pattern
+                // matched and bound (core-semantics.md §4.6; B-2026-10-15-32).
+                let on_match = moves && crate::ownership::is_place_projection(value);
+                let errors = self.errors.len();
+                if moves && !on_match {
                     self.check_expr_consuming(value, states, param_types, param_usage);
                 } else {
                     self.check_expr_reading(value, states, param_types, param_usage);
                 }
                 self.report_mut_ref_pattern_write(pattern, value);
                 let mut then_states = states.clone();
+                if on_match && self.errors.len() == errors {
+                    self.check_expr_consuming(value, &mut then_states, param_types, param_usage);
+                }
                 self.define_pattern_states(pattern, &mut then_states);
                 self.check_block(then_block, &mut then_states, param_types, param_usage);
                 self.reject_shared_enum_drop_payload_move(
@@ -951,15 +958,32 @@ impl<'a> super::OwnershipChecker<'a> {
                 let any_arm_binds = arms
                     .iter()
                     .any(|arm| self.pattern_binds_anything(&arm.pattern));
-                if any_arm_binds && !scrut_is_borrow {
+                // A place scrutinee moves only in the arms whose pattern
+                // binds a part of it (core-semantics.md §4.6;
+                // B-2026-10-15-32).
+                let per_arm = self.d5.is_some()
+                    && any_arm_binds
+                    && !scrut_is_borrow
+                    && crate::ownership::is_place_projection(scrutinee);
+                let errors = self.errors.len();
+                if any_arm_binds && !scrut_is_borrow && !per_arm {
                     self.check_expr_consuming(scrutinee, states, param_types, param_usage);
                 } else {
                     self.check_expr_reading(scrutinee, states, param_types, param_usage);
                 }
+                let per_arm = per_arm && self.errors.len() == errors;
                 let mut all_arm_states: Vec<HashMap<String, ValueState>> = Vec::new();
                 for arm in arms {
                     self.report_mut_ref_pattern_write(&arm.pattern, scrutinee);
                     let mut arm_states = states.clone();
+                    if per_arm && self.pattern_binds_anything(&arm.pattern) {
+                        self.check_expr_consuming(
+                            scrutinee,
+                            &mut arm_states,
+                            param_types,
+                            param_usage,
+                        );
+                    }
                     self.define_pattern_states(&arm.pattern, &mut arm_states);
                     if let Some(guard) = &arm.guard {
                         self.check_expr_reading(guard, &mut arm_states, param_types, param_usage);
