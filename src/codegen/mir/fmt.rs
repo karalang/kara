@@ -159,9 +159,16 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = self.load(p, ty)?;
                 self.rt("fmt_f64", &[v.into()])
             }
-            // An `f32` prints as the `f64` it widens to, as the
+            // An `f32` prints its own shortest digits, as the interpreter
+            // does (B-2026-10-18-47).
+            TyKind::Float(FloatTy::F32) => {
+                let v = self.load(p, ty)?;
+                let v = self.float_of(v, ty)?;
+                self.rt("fmt_f32", &[v.into()])
+            }
+            // A half-width float prints as the `f64` it widens to, as the
             // interpreter's floats are all `f64`.
-            TyKind::Float(FloatTy::F32 | FloatTy::F16 | FloatTy::BF16) => {
+            TyKind::Float(FloatTy::F16 | FloatTy::BF16) => {
                 let v = self.load(p, ty)?;
                 let v = self.float_of(v, ty)?;
                 let w = self

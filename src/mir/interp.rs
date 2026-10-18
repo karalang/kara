@@ -7976,6 +7976,11 @@ impl<'a> Interp<'a> {
         };
         Ok(match (self.tys.kind(ty), v) {
             (TyKind::Int(IntTy::U128), Value::Int(i)) => (*i as u128).to_string(),
+            // An `f32` prints its own shortest digits, not its widened f64's
+            // (B-2026-10-18-47).
+            (TyKind::Float(crate::mir::ty::FloatTy::F32), Value::Float(f)) => {
+                crate::format_spec::display_f32(*f as f32)
+            }
             (TyKind::Ref(t) | TyKind::MutRef(t), Value::Ref(addr)) => {
                 let inner = self.slot(addr)?;
                 if !inner.fully_init() {
@@ -12089,9 +12094,13 @@ fn u128_binop(
 }
 
 /// The range of `it`, for a type narrower than `u128` (whose values the
-/// interpreter holds as their bits in an `i128`).
+/// interpreter holds as their bits in an `i128`). `i128` is the whole of
+/// `i128`, which the shifts below would overflow on (B-2026-10-18-46).
 fn range(it: IntTy) -> (i128, i128) {
     let bits = it.bits();
+    if bits == 128 {
+        return (i128::MIN, i128::MAX);
+    }
     if it.signed() {
         (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
     } else {

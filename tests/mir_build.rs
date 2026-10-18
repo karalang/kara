@@ -1799,6 +1799,38 @@ fn main() {
     }
 }
 
+/// A float cast to `i128` saturates at `i128`'s own bounds instead of
+/// overflowing the interpreter's range computation (B-2026-10-18-46), and an
+/// `f32` prints its own shortest digits on both backends (B-2026-10-18-47).
+#[test]
+fn mir_f64_to_i128_and_f32_display() {
+    const SRC: &str = r#"fn main() {
+    let f: f64 = 1e22;
+    let w = f as i128;
+    println(f"{w}");
+    let g: f64 = -1e40;
+    println(f"{g as i128} {1e40 as i128} {(0.0 / 0.0) as i128}");
+    let z: f32 = 0.1;
+    println(f"{z}");
+    println(z.to_string());
+    let v: Vec[f32] = vec![0.1, 2.5, 1.0e-7];
+    println(f"{v}");
+    let d: f64 = 0.1;
+    println(f"{d} {z as f64}");
+}
+"#;
+    let want = "10000000000000000000000\n\
+        -170141183460469231731687303715884105728 170141183460469231731687303715884105727 0\n\
+        0.1\n0.1\n[0.1, 2.5, 1e-07]\n0.1 0.10000000149011612\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// `collect`'s `C: FromIterator[V]` holds for the collection the context
 /// names: `String` collects `char`s, not `String`s or numbers
 /// (B-2026-10-15-2).
