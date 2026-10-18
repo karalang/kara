@@ -4026,3 +4026,83 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-15-51: an unsuffixed literal on the left of `&`, `|` or `^`
+/// takes the other operand's integer type, as it does under `+`.
+#[test]
+fn mir_bitwise_literal_left_operand_takes_the_peer_type() {
+    const SRC: &str = r#"fn main() {
+    let c: u8 = 20;
+    let d: u8 = 0xC0 ^ c;
+    let g: u8 = (c >> 2) | 0x80;
+    let x: u8 = 0x80 | (c & 0x3F);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(0xC0 | (c >> 6));
+    println(f"{d} {g} {x} {out[0]}");
+}
+"#;
+    let want = "212 133 148 192\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-15-52: a literal branch of an `if` or `match` takes the type the
+/// other branches agree on, whichever branch comes first.
+#[test]
+fn mir_literal_branch_takes_the_other_branch_type() {
+    const SRC: &str = r#"fn f(c: bool, y: u128) -> u128 {
+    let x = if c { 0 } else { y };
+    x
+}
+
+fn g(k: i64, y: u8) -> u8 {
+    let z = match k { 0 => 255, 1 => y, _ => { 7 } };
+    z
+}
+
+fn main() {
+    let y: u8 = 7;
+    let z: u8 = if true { 1 } else { y };
+    println(f"{f(true, 5)} {f(false, 5)} {z} {g(0, 3)} {g(1, 3)} {g(2, 3)}");
+}
+"#;
+    let want = "0 5 1 255 3 7\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// B-2026-10-15-50: a variant is constructed through a type alias of its enum.
+#[test]
+fn mir_variant_constructed_through_a_type_alias() {
+    const SRC: &str = r#"enum NetE { A, B(i32) }
+type OldE = NetE;
+
+fn f(x: i64) -> Result[i64, OldE] {
+    if x > 0 { Ok(x) } else { Err(OldE.B(7)) }
+}
+
+fn main() {
+    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
+    let u = OldE.A;
+    match u { NetE.A => println("a"), _ => println("x") }
+}
+"#;
+    let want = "b 7\na\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
