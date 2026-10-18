@@ -627,7 +627,7 @@ impl Walk<'_, '_> {
     /// up to `after` has run: an assignment's right side and a call's
     /// arguments are evaluated before the place is written, so a `ref`
     /// binding last used there no longer borrows it (two-phase, as for every
-    /// `mut ref` argument; B-2026-10-15-2).
+    /// `mut ref` argument; B-2026-10-15-10).
     fn check_borrowed_write_after(&mut self, place: &Expr, at: Span, after: usize, verb: &str) {
         if self.borrowed.is_empty() {
             return;

@@ -7439,7 +7439,7 @@ impl<'a> super::TypeChecker<'a> {
                         };
                         // A READ looks the key up, so a `String`-keyed map takes
                         // a `Str` as `get` does ("views at lookup",
-                        // B-2026-10-15-7); `m[k] = v` may insert, which stores
+                        // B-2026-10-15-12); `m[k] = v` may insert, which stores
                         // the key, so it keeps the owned `K`.
                         let view_lookup = !index_is_lhs && self.is_key_view(&k_ty, &key_ty);
                         if key_ty != Type::Error && !view_lookup {

@@ -1519,7 +1519,7 @@ impl Pipeline {
             profile_config.profile = self.profile;
             // And in the same mode: a check over the library takes the
             // library's methods here too, or a program with a `#[derive]` was
-            // checked against the legacy builtins (B-2026-10-15-1).
+            // checked against the legacy builtins (B-2026-10-15-9).
             let retyped = if self.library_len.is_some() {
                 crate::typecheck_with_lint_overrides_profile_and_library(
                     &self.parsed.program,
