@@ -1291,10 +1291,22 @@ impl<'a> super::TypeChecker<'a> {
                     let via = trait_of_impl
                         .map(|t| format!(" (via `impl {} for {}`)", t, type_name))
                         .unwrap_or_default();
-                    let msg = format!(
+                    let mut msg = format!(
                         "method '{}' is not callable on this `{}`{}: {}",
                         method, type_name, via, detail
                     );
+                    // `flatten()` over items that are collections, not
+                    // iterators (`mat.iter().flatten()` on a `Vec[Vec[T]]`):
+                    // say what to write, as the spec's own example does.
+                    if type_name == "IterFlatten" && bound_trait == "Iterator" {
+                        msg = format!(
+                            "`flatten` needs items that are themselves iterators \
+                             (docs/library/iterators.md: `where Self.Item: Iterator`), \
+                             and `{}` is not one: write `.flat_map(|v| v.iter())` in \
+                             place of `.flatten()`",
+                            type_display(&concrete)
+                        );
+                    }
                     // A local type missing `Clone` is fixed by deriving it.
                     let derive = (bound_trait == "Clone")
                         .then(|| {

@@ -6155,3 +6155,67 @@ fn sorted_ranges_are_lazy_iterators() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn iterator_terminals_lend_their_items_and_flatten_needs_iterators() {
+    // B-2026-10-14-24: against the library, `min` / `max` / `next` / `last`
+    // over `v.iter()` give `Option[ref T]`, so `*` reads the item, and the
+    // `_by` / `_by_key` terminals exist, as both MIR backends run them.
+    let src = "fn main() {\n\
+         \x20   let nums = vec![5, 3, 8, 1, 9];\n\
+         \x20   let a: i64 = *nums.iter().min().unwrap();\n\
+         \x20   let b: i64 = *nums.iter().max().unwrap();\n\
+         \x20   let c = *nums[1..=3].iter().min().unwrap();\n\
+         \x20   let m: Option[ref i64] = nums.iter().max();\n\
+         \x20   let d = *m.unwrap();\n\
+         \x20   let e = *nums.iter().next().unwrap();\n\
+         \x20   let f = *nums.iter().last().unwrap();\n\
+         \x20   let g = *nums.iter().min_by_key(|v| -*v).unwrap();\n\
+         \x20   let h = *nums.iter().max_by(|x, y| x.cmp(y)).unwrap();\n\
+         \x20   println(f\"{a} {b} {c} {d} {e} {f} {g} {h}\");\n\
+         }\n";
+    let (dir, path) = fixture("iter-terminals", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "1 9 1 9 5 9 9 9\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    // B-2026-10-14-18: `flatten` takes items that are iterators, so check
+    // refuses it over a `Vec[Vec[i64]]` as the MIR backends do, and says to
+    // write `flat_map`; that spelling passes.
+    let src = "fn main() {\n\
+         \x20   let mat = vec![vec![1, 2], vec![3]];\n\
+         \x20   let flat: Vec[i64] = mat.iter().flatten().collect();\n\
+         \x20   println(f\"{flat}\");\n\
+         }\n";
+    let (dir, path) = fixture("flatten-vecs", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must refuse: {err}");
+    assert!(err.contains(".flat_map(|v| v.iter())"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = "fn main() {\n\
+         \x20   let mat = vec![vec![1, 2], vec![3]];\n\
+         \x20   let flat: Vec[i64] = mat.iter().flat_map(|v| v.iter()).collect();\n\
+         \x20   println(f\"{flat}\");\n\
+         }\n";
+    let (dir, path) = fixture("flat-map-vecs", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "[1, 2, 3]\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
