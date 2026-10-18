@@ -5146,12 +5146,52 @@ impl<'a> super::TypeChecker<'a> {
             },
             _ => None,
         };
+        // `|p| p` over a tuple view: its `.clone()` would copy the
+        // references it holds, so the parts are cloned one by one.
+        let mut how = "Clone each borrowed part before `collect`".to_string();
+        let fix = fix.or_else(|| {
+            let ExprKind::MethodCall {
+                method: m,
+                args: map_args,
+                ..
+            } = &object.kind
+            else {
+                return None;
+            };
+            let Some(ExprKind::Closure { body, .. }) = map_args.first().map(|a| &a.value.kind)
+            else {
+                return None;
+            };
+            let (ExprKind::Identifier(n), Type::Tuple(parts)) = (&body.kind, &item) else {
+                return None;
+            };
+            if m != "map" {
+                return None;
+            }
+            let parts: Vec<String> = (0..parts.len())
+                .map(|i| {
+                    if at.contains(&i) {
+                        format!("{n}.{i}.clone()")
+                    } else {
+                        format!("{n}.{i}")
+                    }
+                })
+                .collect();
+            let replacement = format!("({})", parts.join(", "));
+            how = format!(
+                "A tuple's `.clone()` copies the references it holds, so clone its parts: \
+                 write `{replacement}`"
+            );
+            Some(FixIt {
+                span: body.span,
+                replacement,
+            })
+        });
         self.type_lint_warning_with_fix(
             format!(
                 "cannot move a non-`Copy` value out of a borrowed place: the items are \
                  `{}`, and collecting them as `{}` would move each borrowed part out of \
-                 the collection it views (core semantics §5.10). Clone each borrowed part \
-                 before `collect`",
+                 the collection it views (core semantics §5.10). {how}",
                 type_display(&item),
                 type_display(&elem)
             ),

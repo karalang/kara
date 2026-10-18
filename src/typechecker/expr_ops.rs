@@ -4100,20 +4100,7 @@ impl<'a> super::TypeChecker<'a> {
                             .borrowed_deref_operands
                             .contains(&SpanKey::from_span(span))
                     {
-                        let fix = crate::typechecker::FixIt {
-                            span: Span { length: 1, ..*span },
-                            replacement: String::new(),
-                        };
-                        self.type_lint_warning_with_fix(
-                            "cannot move a non-`Copy` value out of a borrow with `*`: the \
-                             binding already reads the value in place, so drop the `*` (or \
-                             write `.clone()` for a copy)"
-                                .to_string(),
-                            *span,
-                            TypeErrorKind::InvalidUnaryOp,
-                            "borrow_projection_copy",
-                            Some(fix),
-                        );
+                        self.warn_deref_moves_out_of_borrow(span);
                     }
                     other
                 }
@@ -4131,6 +4118,63 @@ impl<'a> super::TypeChecker<'a> {
                 }
             },
         }
+    }
+
+    /// `let q = *p;` with `p` a view the library types as a real `ref` (an
+    /// item of `v.iter()`, a map payload): binding a non-`Copy` value moves
+    /// it out of the borrow, as the native check's view arm reports.
+    pub(super) fn reject_deref_move_of_lent_item(&mut self, value: &Expr) {
+        if !self.cli_lint_overrides.strict_core || !self.library_methods_from_source {
+            return;
+        }
+        let ExprKind::Unary {
+            op: UnaryOp::Deref,
+            operand,
+        } = &value.kind
+        else {
+            return;
+        };
+        let ExprKind::Identifier(n) = &operand.kind else {
+            return;
+        };
+        if !self.local_scope.is_view(n) {
+            return;
+        }
+        let Some(Type::Ref(inner) | Type::MutRef(inner)) = self
+            .expr_types
+            .get(&SpanKey::from_span(&operand.span))
+            .map(|t| resolve_type_var_top(t, &self.env.substitutions))
+        else {
+            return;
+        };
+        if self.is_copy_type_during_check(&inner) || self.is_shared_handle(&inner) {
+            return;
+        }
+        // Reported already by the view arm.
+        if self.errors.iter().any(|e| {
+            e.span == value.span && e.lint_name.as_deref() == Some("borrow_projection_copy")
+        }) {
+            return;
+        }
+        self.warn_deref_moves_out_of_borrow(&value.span);
+    }
+
+    /// v2 core: `*p` of a non-`Copy` value moves it out of the borrow `p`
+    /// lends; `p` already reads it in place.
+    pub(super) fn warn_deref_moves_out_of_borrow(&mut self, span: &Span) {
+        let fix = crate::typechecker::FixIt {
+            span: Span { length: 1, ..*span },
+            replacement: String::new(),
+        };
+        self.type_lint_warning_with_fix(
+            "cannot move a non-`Copy` value out of a borrow with `*`: the binding already \
+             reads the value in place, so drop the `*` (or write `.clone()` for a copy)"
+                .to_string(),
+            *span,
+            TypeErrorKind::InvalidUnaryOp,
+            "borrow_projection_copy",
+            Some(fix),
+        );
     }
 
     // ── Pipe Desugaring ──────────────────────────────────────────

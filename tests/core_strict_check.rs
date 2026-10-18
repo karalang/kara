@@ -3475,20 +3475,15 @@ fn closure_local_moved_after_its_loop_is_accepted() {
 fn map_closure_collect_takes_the_outer_element_type() {
     let src = "fn main() {\n\
                    let s = \"let us code\";\n\
-                   let words: Vec[String] = s.split(\" \").iter().map(|w| w.chars().rev().collect()).collect();\n\
-                   let firsts: Vec[String] = s.split(\" \").iter().map(|w| { let n = w.len(); w.chars().take(n - 1).collect() }).collect();\n\
-                   let u: Vec[Set[char]] = s.split(\" \").iter().map(|w| w.chars().collect()).collect();\n\
-                   let v: Vec[Vec[char]] = s.split(\" \").iter().map(|w| w.chars().collect()).collect();\n\
+                   let words: Vec[String] = s.split(\" \").map(|w| w.chars().rev().collect()).collect();\n\
+                   let firsts: Vec[String] = s.split(\" \").map(|w| { let n = w.len(); w.chars().take(n - 1).collect() }).collect();\n\
+                   let u: Vec[Set[char]] = s.split(\" \").map(|w| w.chars().collect()).collect();\n\
+                   let v: Vec[Vec[char]] = s.split(\" \").map(|w| w.chars().collect()).collect();\n\
                    println(f\"{words.join(\" \")} {firsts} {u[1].len()} {u[2].len()} {v[0]}\");\n\
                }\n";
     accepted("map-closure-collect", src);
     let (dir, path) = fixture("map-closure-collect-run", src);
-    let out = karac()
-        .arg("run")
-        .arg("--interp")
-        .arg(&path)
-        .output()
-        .unwrap();
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         "tel su edoc [le, u, cod] 2 4 [l, e, t]\n",
@@ -3661,7 +3656,8 @@ fn refs_held_in_a_vec_of_refs_are_copies() {
                  v.push(c);\n\
              }\n\
              println(f\"{v.len()}\");\n",
-            "cannot move 'c'",
+            // Against the library `c` is the `ref Node` the iterator lends.
+            "expected 'Node', found 'ref Node'",
         ),
         (
             "vec-of-nodes-index",

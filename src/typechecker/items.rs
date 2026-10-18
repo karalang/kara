@@ -7962,6 +7962,7 @@ impl<'a> super::TypeChecker<'a> {
                 // initializer is the canonical value position, so a non-`Copy`
                 // element read here is rejected (B-2026-08-26-21).
                 self.reject_index_move_non_copy(value, &expected_ty);
+                self.reject_deref_move_of_lent_item(value);
                 // v2 core §3.7: a branch yielding a reference where the `let`
                 // keeps an owned value would move out of the borrow.
                 if self.cli_lint_overrides.strict_core

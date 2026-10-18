@@ -1058,10 +1058,13 @@ fn mir_text_methods_read_a_ref_char() {
     let t = "x,y,ab";
     let owned = String.from("ba,c");
     for c in days.iter() {
-        println(f"{t.find(c)} {t.split(c).len()} {owned.find(c)} {owned.split(c).len()}");
+        let sep = c.to_string();
+        println(f"{t.find(c)} {t.split(sep.as_str()).count()} {owned.find(c)} {owned.split(sep.as_str()).count()}");
     }
 }
 "#;
+    // `split` takes a `Str` separator (docs/library/strings.md), so the
+    // char is given as text there; `find` and `push` read the `ref char`.
     let want = "ab,\nSome(4) 2 Some(1) 2\nSome(5) 2 Some(0) 2\nSome(1) 3 Some(2) 2\n";
     let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
     assert_eq!(interp.output, want);
