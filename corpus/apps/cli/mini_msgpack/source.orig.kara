@@ -1,0 +1,2075 @@
+// mini_msgpack: MessagePack, ported from msgpack-python 1.2.3's reference
+// implementation (msgpack/fallback.py), the serializer under Fluentd,
+// Fluent Bit, Celery, Salt, RQ and neovim's RPC.
+// - Packer: every int, float, str, bin, array, map and ext format, with
+//   use_bin_type and use_single_float, Timestamp (32, 64 and 96 bit) and
+//   ExtType, and its OverflowError and ValueError messages;
+// - Unpacker: the one-shot unpackb and the streaming feed/iterate mode
+//   with tell(), its buffer limits (max_buffer_size, max_str_len,
+//   max_bin_len, max_array_len, max_map_len, max_ext_len), raw, use_list,
+//   timestamp and strict_map_key, and every error it raises: FormatError,
+//   ExtraData, BufferFull, incomplete input, CPython's UTF-8 decode
+//   errors and Python's dict rules for keys (1, 1.0 and True are one key;
+//   a list key is unhashable);
+// - Python's repr of what comes out, so output can be compared directly;
+// - a Fluentd forward-protocol decoder (Message, Forward and
+//   PackedForward modes, EventTime) over a captured stream.
+//
+// The run writes data/json/ (documents to pack, with $bin, $ext, $ts,
+// $tuple and repeat conventions for what JSON cannot spell), data/bin/
+// (MessagePack files, some broken on purpose) and data/jobs.tsv; then it
+// runs every job. expected.out is what oracle.py prints with the real
+// msgpack.
+
+// ------------------------------------------------------------ values
+
+// A Python value, as msgpack hands it over. A map keeps its keys and
+// values alternating, in insertion order.
+#[derive(Clone)]
+enum Val {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    UInt(u64),
+    Big(String),
+    Float(f64),
+    Str(String),
+    Bytes(Vec[u8]),
+    List(Vec[Val]),
+    Tuple(Vec[Val]),
+    Map(Vec[Val]),
+    Ext(i64, Vec[u8]),
+    Ts(i64, i64),
+}
+
+fn type_name(v: ref Val) -> String {
+    let s = match v {
+        Val.Nil => "NoneType",
+        Val.Bool(_) => "bool",
+        Val.Int(_) => "int",
+        Val.UInt(_) => "int",
+        Val.Big(_) => "int",
+        Val.Float(_) => "float",
+        Val.Str(_) => "str",
+        Val.Bytes(_) => "bytes",
+        Val.List(_) => "list",
+        Val.Tuple(_) => "tuple",
+        Val.Map(_) => "dict",
+        Val.Ext(_, _) => "msgpack.ext.ExtType",
+        Val.Ts(_, _) => "msgpack.ext.Timestamp",
+    };
+    s.to_string()
+}
+
+// A number's value, for Python's cross-type equality (True == 1 == 1.0).
+fn as_number(v: ref Val) -> Option[f64] {
+    match v {
+        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Val.Int(i) => Some(*i as f64),
+        Val.UInt(u) => Some(*u as f64),
+        Val.Float(f) => Some(*f),
+        _ => None,
+    }
+}
+
+fn is_int_like(v: ref Val) -> bool {
+    match v {
+        Val.Bool(_) => true,
+        Val.Int(_) => true,
+        Val.UInt(_) => true,
+        _ => false,
+    }
+}
+
+fn int_of(v: ref Val) -> i64 {
+    match v {
+        Val.Bool(b) => if *b { 1 } else { 0 },
+        Val.Int(i) => *i,
+        Val.UInt(u) => *u as i64,
+        _ => 0,
+    }
+}
+
+fn bytes_eq(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn list_eq(a: ref Vec[Val], b: ref Vec[Val]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if not py_eq(a[i], b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// Python's ==, for the values that can be dict keys.
+fn py_eq(a: ref Val, b: ref Val) -> bool {
+    if is_int_like(a) and is_int_like(b) {
+        let ua = match a { Val.UInt(u) => Some(*u), _ => None };
+        let ub = match b { Val.UInt(u) => Some(*u), _ => None };
+        return match (ua, ub) {
+            (Some(x), Some(y)) => x == y,
+            (Some(_), None) => false,
+            (None, Some(_)) => false,
+            (None, None) => int_of(a) == int_of(b),
+        };
+    }
+    if let Some(x) = as_number(a) {
+        if let Some(y) = as_number(b) {
+            return x == y;
+        }
+        return false;
+    }
+    match a {
+        Val.Nil => match b { Val.Nil => true, _ => false },
+        Val.Str(x) => match b { Val.Str(y) => x == y, _ => false },
+        Val.Bytes(x) => match b { Val.Bytes(y) => bytes_eq(x, y), _ => false },
+        Val.Tuple(x) => match b { Val.Tuple(y) => list_eq(x, y), _ => false },
+        Val.Ext(c, d) => match b {
+            Val.Ext(c2, d2) => *c == *c2 and bytes_eq(d, d2),
+            _ => false,
+        },
+        Val.Ts(s, n) => match b { Val.Ts(s2, n2) => *s == *s2 and *n == *n2, _ => false },
+        _ => false,
+    }
+}
+
+// The type Python's hash() refuses, if the key holds one.
+fn unhashable(v: ref Val) -> Option[String] {
+    match v {
+        Val.List(_) => Some("list".to_string()),
+        Val.Map(_) => Some("dict".to_string()),
+        Val.Tuple(items) => {
+            for x in items {
+                if let Some(t) = unhashable(x) {
+                    return Some(t);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+// d[key] = value, with Python's rule that an equal key keeps its place
+// and its first spelling.
+fn dict_set(m: mut ref Vec[Val], key: own Val, value: own Val) {
+    let mut i = 0;
+    while i < m.len() {
+        if py_eq(m[i], key) {
+            m[i + 1] = value;
+            return;
+        }
+        i += 2;
+    }
+    m.push(key);
+    m.push(value);
+}
+
+// ------------------------------------------------------------ text
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+fn utf8_string(b: own Vec[u8]) -> String {
+    String.from_utf8(b).unwrap_or("?".to_string())
+}
+
+// The code points of well-formed UTF-8.
+fn code_points(b: ref Vec[u8]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as u32;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as u32 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as u32 & 0x3F) << 6) | (b[i + 2] as u32 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as u32 & 0x3F) << 12)
+                | ((b[i + 2] as u32 & 0x3F) << 6) | (b[i + 3] as u32 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn hex2(b: u8) -> String {
+    f"{b:02x}"
+}
+
+fn utf8_error(at: i64, len: i64, first: u8, reason: Str) -> String {
+    if len == 1 {
+        f"UnicodeDecodeError: 'utf-8' codec can't decode byte 0x{hex2(first)} in position {at}: {reason}"
+    } else {
+        f"UnicodeDecodeError: 'utf-8' codec can't decode bytes in position {at}-{at + len - 1}: {reason}"
+    }
+}
+
+// bytes.decode("utf-8"), with CPython's error messages.
+fn decode_utf8(b: ref Vec[u8]) -> Result[String, String] {
+    let mut i = 0;
+    let n = b.len();
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            i += 1;
+            continue;
+        }
+        let mut need = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            } else if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            } else if c == 0xF4 {
+                hi = 0x8F;
+            }
+        } else {
+            return Err(utf8_error(i, 1, c, "invalid start byte"));
+        }
+        for k in 1..need + 1 {
+            if i + k >= n {
+                return Err(utf8_error(i, n - i, c, "unexpected end of data"));
+            }
+            let d = b[i + k];
+            let (a, z) = if k == 1 { (lo, hi) } else { (0x80, 0xBF) };
+            if d < a or d > z {
+                return Err(utf8_error(i, k, c, "invalid continuation byte"));
+            }
+        }
+        i += need + 1;
+    }
+    Ok(utf8_string(b.clone()))
+}
+
+// The characters str.isprintable() refuses among the ones the data uses:
+// controls, the Latin-1 no-break space and soft hyphen, format characters,
+// separators and private use.
+fn printable(c: u32) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) {
+        return false;
+    }
+    true
+}
+
+fn hex_digits(v: u32, width: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn quote_for(cps: ref Vec[u32]) -> u32 {
+    let mut single = false;
+    let mut double = false;
+    for c in cps {
+        if c == 39 {
+            single = true;
+        }
+        if c == 34 {
+            double = true;
+        }
+    }
+    if single and not double { 34 } else { 39 }
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let cps = code_points(s.bytes().to_vec());
+    let q = quote_for(cps);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q as u8);
+    for c in cps {
+        if c == q or c == 92 {
+            out.push(92);
+            out.push(c as u8);
+        } else if c == 9 {
+            out.push(92);
+            out.push(b't');
+        } else if c == 10 {
+            out.push(92);
+            out.push(b'n');
+        } else if c == 13 {
+            out.push(92);
+            out.push(b'r');
+        } else if printable(c) {
+            push_utf8(mut out, c);
+        } else {
+            let esc = if c < 0x100 {
+                f"\\x{hex_digits(c, 2)}"
+            } else if c < 0x10000 {
+                f"\\u{hex_digits(c, 4)}"
+            } else {
+                f"\\U{hex_digits(c, 8)}"
+            };
+            for x in esc.bytes() {
+                out.push(*x);
+            }
+        }
+    }
+    out.push(q as u8);
+    utf8_string(out)
+}
+
+// repr(bytes)
+fn repr_bytes(b: ref Vec[u8]) -> String {
+    let mut cps: Vec[u32] = Vec.new();
+    for x in b {
+        cps.push(x as u32);
+    }
+    let q = quote_for(cps) as u8;
+    let mut out = String.new();
+    out.push_str("b");
+    out.push_str(if q == 34 { "\"" } else { "'" });
+    for x in b {
+        if x == q or x == 92 {
+            out.push_str(if x == 92 { "\\\\" } else if q == 34 { "\\\"" } else { "\\'" });
+        } else if x == 9 {
+            out.push_str("\\t");
+        } else if x == 10 {
+            out.push_str("\\n");
+        } else if x == 13 {
+            out.push_str("\\r");
+        } else if x >= 0x20 and x < 0x7F {
+            out.push_str(utf8_string(vec![x]));
+        } else {
+            out.push_str(f"\\x{hex2(x)}");
+        }
+    }
+    out.push_str(if q == 34 { "\"" } else { "'" });
+    out
+}
+
+// repr(float)
+fn repr_float(f: f64) -> String {
+    // f64 has no is_nan yet (roadmap.md, Phase 11+ NaN/Inf handling).
+    if f != f {
+        return "nan".to_string();
+    }
+    f"{f}"
+}
+
+fn repr_list(items: ref Vec[Val], open: Str, close: Str) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in items {
+        parts.push(repr(x));
+    }
+    let comma = if open == "(" and items.len() == 1 { "," } else { "" };
+    f"{open}{parts.join(", ")}{comma}{close}"
+}
+
+fn repr(v: ref Val) -> String {
+    match v {
+        Val.Nil => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(i) => f"{i}",
+        Val.UInt(u) => f"{u}",
+        Val.Big(s) => s.clone(),
+        Val.Float(f) => repr_float(*f),
+        Val.Str(s) => repr_str(s),
+        Val.Bytes(b) => repr_bytes(b),
+        Val.List(items) => repr_list(items, "[", "]"),
+        Val.Tuple(items) => repr_list(items, "(", ")"),
+        Val.Map(m) => {
+            let mut parts: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < m.len() {
+                parts.push(f"{repr(m[i])}: {repr(m[i + 1])}");
+                i += 2;
+            }
+            let mut t = "{".to_string();
+            t.push_str(parts.join(", "));
+            t.push_str("}");
+            t
+        }
+        Val.Ext(c, d) => f"ExtType(code={c}, data={repr_bytes(d)})",
+        Val.Ts(s, n) => f"Timestamp(seconds={s}, nanoseconds={n})",
+    }
+}
+
+const LIMIT: i64 = 2000;
+
+fn short(s: own String) -> String {
+    let n = s.chars().count();
+    if n <= LIMIT {
+        return s;
+    }
+    let head: String = s.chars().take(LIMIT).collect();
+    f"{head}... ({n} chars)"
+}
+
+// ------------------------------------------------------------ JSON
+
+// json.loads, for the documents the run packs.
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[Val, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut m: Vec[Val] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(Val.Map(m));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(f"expected ':' at {self.at}");
+                }
+                let v = self.value()?;
+                dict_set(mut m, Val.Str(k), v);
+                self.ws();
+                if self.eat("}") {
+                    return Ok(Val.Map(m));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[Val] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(Val.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(Val.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(Val.Str(self.string()?));
+        }
+        if self.eat("true") {
+            return Ok(Val.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(Val.Bool(false));
+        }
+        if self.eat("null") {
+            return Ok(Val.Nil);
+        }
+        if self.eat("NaN") {
+            return Ok(Val.Float(0.0 / 0.0));
+        }
+        self.number()
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.b[self.at];
+            self.at += 1;
+            let d = if c >= b'0' and c <= b'9' {
+                c - b'0'
+            } else if c >= b'a' and c <= b'f' {
+                c - b'a' + 10
+            } else {
+                c - b'A' + 10
+            };
+            v = v * 16 + d as u32;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.eat("\"") {
+            return Err(f"expected string at {self.at}");
+        }
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.at >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.b[self.at];
+            self.at += 1;
+            if e == b'n' {
+                out.push(10);
+            } else if e == b't' {
+                out.push(9);
+            } else if e == b'r' {
+                out.push(13);
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(utf8_string(out))
+    }
+
+    fn number(mut ref self) -> Result[Val, String] {
+        let start = self.at;
+        let mut float = false;
+        if self.eat("-") {
+            if self.eat("Infinity") {
+                return Ok(Val.Float(-1.0 / 0.0));
+            }
+        } else if self.eat("Infinity") {
+            return Ok(Val.Float(1.0 / 0.0));
+        }
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c >= b'0' and c <= b'9' {
+                self.at += 1;
+            } else if c == b'.' or c == b'e' or c == b'E' or c == b'+' or c == b'-' {
+                float = true;
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        let text = utf8_string(self.b[start..self.at].to_vec());
+        if text.is_empty() or text == "-" {
+            return Err(f"bad value at {start}");
+        }
+        if float {
+            return match f64.parse(text) {
+                Ok(f) => Ok(Val.Float(f)),
+                Err(_) => Err(f"bad number {text}"),
+            };
+        }
+        if let Ok(i) = i64.parse(text) {
+            return Ok(Val.Int(i));
+        }
+        if let Ok(u) = u64.parse(text) {
+            return Ok(Val.UInt(u));
+        }
+        Ok(Val.Big(text))
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push((hex_val(b[i]) * 16 + hex_val(b[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+
+fn arg_str(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+// The run's conventions for what JSON cannot spell: {"$bin": hex},
+// {"$ext": [code, hex]}, {"$ts": [seconds, nanoseconds]}, {"$tuple": [..]},
+// and generated big values.
+fn conv(v: own Val) -> Result[Val, String] {
+    match v {
+        Val.List(items) => {
+            let mut out: Vec[Val] = Vec.new();
+            for x in items.into_iter() {
+                out.push(conv(x)?);
+            }
+            Ok(Val.List(out))
+        }
+        Val.Map(m) => {
+            if m.len() == 2 {
+                if let Val.Str(k) = m[0].clone() {
+                    let a = m[1].clone();
+                    let args = match a.clone() {
+                        Val.List(items) => items,
+                        _ => vec![a.clone()],
+                    };
+                    if k == "$bin" {
+                        return Ok(Val.Bytes(unhex(arg_str(a))));
+                    }
+                    if k == "$ext" {
+                        let code = int_of(args[0]);
+                        if code < 0 or code > 127 {
+                            return Err("ValueError: code must be 0~127".to_string());
+                        }
+                        return Ok(Val.Ext(code, unhex(arg_str(args[1]))));
+                    }
+                    if k == "$ts" {
+                        let ns = int_of(args[1]);
+                        if ns < 0 or ns >= 1000000000 {
+                            return Err("ValueError: nanoseconds must be a non-negative integer less than 999999999.".to_string());
+                        }
+                        return Ok(Val.Ts(int_of(args[0]), ns));
+                    }
+                    if k == "$tuple" {
+                        let mut out: Vec[Val] = Vec.new();
+                        for x in args.into_iter() {
+                            out.push(conv(x)?);
+                        }
+                        return Ok(Val.Tuple(out));
+                    }
+                    if k == "$repeat" {
+                        return Ok(Val.Str(arg_str(args[0]).repeat(int_of(args[1]))));
+                    }
+                    if k == "$binrepeat" {
+                        let unit = unhex(arg_str(args[0]));
+                        let mut out: Vec[u8] = Vec.new();
+                        for _ in 0..int_of(args[1]) {
+                            for x in unit {
+                                out.push(x);
+                            }
+                        }
+                        return Ok(Val.Bytes(out));
+                    }
+                    if k == "$range" {
+                        let mut out: Vec[Val] = Vec.new();
+                        for i in 0..int_of(a) {
+                            out.push(Val.Int(i));
+                        }
+                        return Ok(Val.List(out));
+                    }
+                    if k == "$map" {
+                        let mut out: Vec[Val] = Vec.new();
+                        for i in 0..int_of(a) {
+                            out.push(Val.Str(f"k{i}"));
+                            out.push(Val.Int(i));
+                        }
+                        return Ok(Val.Map(out));
+                    }
+                }
+            }
+            let mut out: Vec[Val] = Vec.new();
+            let mut i = 0;
+            while i < m.len() {
+                out.push(m[i].clone());
+                out.push(conv(m[i + 1].clone())?);
+                i += 2;
+            }
+            Ok(Val.Map(out))
+        }
+        other => Ok(other),
+    }
+}
+
+// ------------------------------------------------------------ Packer
+
+struct Packer {
+    use_bin_type: bool,
+    use_single_float: bool,
+    buf: Vec[u8],
+}
+
+fn push_be(out: mut ref Vec[u8], v: u64, n: i64) {
+    let mut k = n - 1;
+    while k >= 0 {
+        out.push(((v >> (k * 8) as u64) & 0xFF) as u8);
+        k -= 1;
+    }
+}
+
+// Timestamp.to_bytes
+fn ts_bytes(seconds: i64, ns: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    if (seconds >> 34) == 0 {
+        let data64: u64 = ((ns as u64) << 34) | (seconds as u64);
+        if data64 & 0xFFFFFFFF00000000 == 0 {
+            push_be(mut out, data64, 4);
+        } else {
+            push_be(mut out, data64, 8);
+        }
+    } else {
+        push_be(mut out, ns as u64, 4);
+        push_be(mut out, seconds as u64, 8);
+    }
+    out
+}
+
+impl Packer {
+    fn byte(mut ref self, b: i64) {
+        self.buf.push(b as u8);
+    }
+
+    fn head(mut ref self, code: i64, v: u64, n: i64) {
+        self.byte(code);
+        push_be(mut self.buf, v, n);
+    }
+
+    fn pack(mut ref self, v: ref Val) -> Result[(), String] {
+        match v {
+            Val.Nil => self.byte(0xC0),
+            Val.Bool(b) => self.byte(if *b { 0xC3 } else { 0xC2 }),
+            Val.Int(i) => self.pack_int(*i),
+            Val.UInt(u) => self.head(0xCF, *u, 8),
+            Val.Big(_) => return Err("OverflowError: Integer value out of range".to_string()),
+            Val.Float(f) => {
+                if self.use_single_float {
+                    let s = *f as f32;
+                    let inf = 1.0 / 0.0;
+                    let s_inf = s as f64 == inf or s as f64 == -inf;
+                    if s_inf and *f != inf and *f != -inf {
+                        return Err("OverflowError: float too large to pack with f format".to_string());
+                    }
+                    self.head(0xCA, f.to_bits32() as u64, 4);
+                } else {
+                    self.head(0xCB, f.to_bits(), 8);
+                }
+            }
+            Val.Str(s) => {
+                let b = s.bytes();
+                self.raw_header(b.len());
+                for x in b {
+                    self.buf.push(*x);
+                }
+            }
+            Val.Bytes(b) => {
+                self.bin_header(b.len());
+                for x in b {
+                    self.buf.push(x);
+                }
+            }
+            Val.Ext(c, d) => self.ext(*c, d),
+            Val.Ts(s, n) => {
+                let d = ts_bytes(*s, *n);
+                self.ext(-1, d);
+            }
+            Val.List(items) => {
+                self.array_header(items.len());
+                for x in items {
+                    self.pack(x)?;
+                }
+            }
+            Val.Tuple(items) => {
+                self.array_header(items.len());
+                for x in items {
+                    self.pack(x)?;
+                }
+            }
+            Val.Map(m) => {
+                self.map_header(m.len() / 2);
+                for x in m {
+                    self.pack(x)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn pack_int(mut ref self, obj: i64) {
+        if 0 <= obj and obj < 0x80 {
+            self.byte(obj);
+        } else if -0x20 <= obj and obj < 0 {
+            self.byte(obj & 0xFF);
+        } else if 0x80 <= obj and obj <= 0xFF {
+            self.head(0xCC, obj as u64, 1);
+        } else if -0x80 <= obj and obj < 0 {
+            self.head(0xD0, (obj & 0xFF) as u64, 1);
+        } else if 0xFF < obj and obj <= 0xFFFF {
+            self.head(0xCD, obj as u64, 2);
+        } else if -0x8000 <= obj and obj < -0x80 {
+            self.head(0xD1, (obj & 0xFFFF) as u64, 2);
+        } else if 0xFFFF < obj and obj <= 0xFFFFFFFF {
+            self.head(0xCE, obj as u64, 4);
+        } else if -0x80000000 <= obj and obj < -0x8000 {
+            self.head(0xD2, (obj & 0xFFFFFFFF) as u64, 4);
+        } else if obj > 0 {
+            self.head(0xCF, obj as u64, 8);
+        } else {
+            self.head(0xD3, obj as u64, 8);
+        }
+    }
+
+    fn ext(mut ref self, code: i64, data: ref Vec[u8]) {
+        let l = data.len();
+        if l == 1 {
+            self.byte(0xD4);
+        } else if l == 2 {
+            self.byte(0xD5);
+        } else if l == 4 {
+            self.byte(0xD6);
+        } else if l == 8 {
+            self.byte(0xD7);
+        } else if l == 16 {
+            self.byte(0xD8);
+        } else if l <= 0xFF {
+            self.head(0xC7, l as u64, 1);
+        } else if l <= 0xFFFF {
+            self.head(0xC8, l as u64, 2);
+        } else {
+            self.head(0xC9, l as u64, 4);
+        }
+        self.byte(code & 0xFF);
+        for x in data {
+            self.buf.push(x);
+        }
+    }
+
+    fn array_header(mut ref self, n: i64) {
+        if n <= 0x0F {
+            self.byte(0x90 + n);
+        } else if n <= 0xFFFF {
+            self.head(0xDC, n as u64, 2);
+        } else {
+            self.head(0xDD, n as u64, 4);
+        }
+    }
+
+    fn map_header(mut ref self, n: i64) {
+        if n <= 0x0F {
+            self.byte(0x80 + n);
+        } else if n <= 0xFFFF {
+            self.head(0xDE, n as u64, 2);
+        } else {
+            self.head(0xDF, n as u64, 4);
+        }
+    }
+
+    fn raw_header(mut ref self, n: i64) {
+        if n <= 0x1F {
+            self.byte(0xA0 + n);
+        } else if self.use_bin_type and n <= 0xFF {
+            self.head(0xD9, n as u64, 1);
+        } else if n <= 0xFFFF {
+            self.head(0xDA, n as u64, 2);
+        } else {
+            self.head(0xDB, n as u64, 4);
+        }
+    }
+
+    fn bin_header(mut ref self, n: i64) {
+        if not self.use_bin_type {
+            self.raw_header(n);
+        } else if n <= 0xFF {
+            self.head(0xC4, n as u64, 1);
+        } else if n <= 0xFFFF {
+            self.head(0xC5, n as u64, 2);
+        } else {
+            self.head(0xC6, n as u64, 4);
+        }
+    }
+}
+
+// ------------------------------------------------------------ Unpacker
+
+const TYPE_IMMEDIATE: i64 = 0;
+const TYPE_ARRAY: i64 = 1;
+const TYPE_MAP: i64 = 2;
+const TYPE_RAW: i64 = 3;
+const TYPE_BIN: i64 = 4;
+const TYPE_EXT: i64 = 5;
+
+// OutOfData is the Unpacker's "wait for more bytes"; anything else is an
+// error as `Name: message`.
+enum UErr {
+    OutOfData,
+    Fail(String),
+}
+
+fn fail(msg: own String) -> UErr {
+    UErr.Fail(msg)
+}
+
+struct Opts {
+    raw: bool,
+    use_list: bool,
+    timestamp: i64,
+    strict_map_key: bool,
+    max_buffer: i64,
+    max_str: i64,
+    max_bin: i64,
+    max_array: i64,
+    max_map: i64,
+    max_ext: i64,
+    use_bin_type: bool,
+    single: bool,
+}
+
+fn default_opts() -> Opts {
+    Opts {
+        raw: false, use_list: true, timestamp: 0, strict_map_key: true,
+        max_buffer: 100 * 1024 * 1024, max_str: -1, max_bin: -1, max_array: -1, max_map: -1,
+        max_ext: -1, use_bin_type: true, single: false,
+    }
+}
+
+struct Header {
+    typ: i64,
+    n: i64,
+    obj: Val,
+    data: Vec[u8],
+}
+
+struct Unpacker {
+    o: Opts,
+    max_buffer: i64,
+    max_str: i64,
+    max_bin: i64,
+    max_array: i64,
+    max_map: i64,
+    max_ext: i64,
+    buffer: Vec[u8],
+    buff_i: i64,
+    checkpoint: i64,
+    stream_offset: i64,
+}
+
+fn limit(v: i64, d: i64) -> i64 {
+    if v == -1 { d } else { v }
+}
+
+fn new_unpacker(o: ref Opts, max_buffer_size: i64) -> Unpacker {
+    let mb = if max_buffer_size == 0 { 2147483647 } else { max_buffer_size };
+    Unpacker {
+        o: Opts {
+            raw: o.raw, use_list: o.use_list, timestamp: o.timestamp, strict_map_key: o.strict_map_key,
+            max_buffer: mb, max_str: o.max_str, max_bin: o.max_bin, max_array: o.max_array,
+            max_map: o.max_map, max_ext: o.max_ext, use_bin_type: o.use_bin_type, single: o.single,
+        },
+        max_buffer: mb,
+        max_str: limit(o.max_str, mb),
+        max_bin: limit(o.max_bin, mb),
+        max_array: limit(o.max_array, mb),
+        max_map: limit(o.max_map, mb / 2),
+        max_ext: limit(o.max_ext, mb),
+        buffer: Vec.new(),
+        buff_i: 0,
+        checkpoint: 0,
+        stream_offset: 0,
+    }
+}
+
+fn be(b: ref Vec[u8], at: i64, n: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..n {
+        v = (v << 8) | b[at + k] as u64;
+    }
+    v
+}
+
+fn signed(v: u64, n: i64) -> i64 {
+    if n == 8 {
+        return v as i64;
+    }
+    let bits = n * 8;
+    let x = v as i64;
+    if x >= (1 << (bits - 1)) { x - (1 << bits) } else { x }
+}
+
+impl Unpacker {
+    fn feed(mut ref self, data: ref Vec[u8]) -> Result[(), String] {
+        if self.buffer.len() - self.buff_i + data.len() > self.max_buffer {
+            return Err("BufferFull".to_string());
+        }
+        if self.checkpoint > 0 {
+            let mut rest: Vec[u8] = Vec.new();
+            for i in self.checkpoint..self.buffer.len() {
+                rest.push(self.buffer[i]);
+            }
+            self.buffer = rest;
+            self.buff_i -= self.checkpoint;
+            self.checkpoint = 0;
+        }
+        for x in data {
+            self.buffer.push(x);
+        }
+        Ok(())
+    }
+
+    fn consume(mut ref self) {
+        self.stream_offset += self.buff_i - self.checkpoint;
+        self.checkpoint = self.buff_i;
+    }
+
+    fn reserve(mut ref self, n: i64) -> Result[(), UErr] {
+        if self.buffer.len() - self.buff_i - n >= 0 {
+            return Ok(());
+        }
+        self.buff_i = self.checkpoint;
+        Err(UErr.OutOfData)
+    }
+
+    fn read(mut ref self, n: i64) -> Result[Vec[u8], UErr] {
+        self.reserve(n)?;
+        let mut out: Vec[u8] = Vec.new();
+        for k in 0..n {
+            out.push(self.buffer[self.buff_i + k]);
+        }
+        self.buff_i += n;
+        Ok(out)
+    }
+
+    fn sized(mut ref self, size: i64) -> Result[u64, UErr] {
+        self.reserve(size)?;
+        let v = be(self.buffer, self.buff_i, size);
+        self.buff_i += size;
+        Ok(v)
+    }
+
+    fn too_big(ref self, n: i64, what: Str, lim: i64) -> UErr {
+        fail(f"ValueError: {n} exceeds max_{what}_len({lim})")
+    }
+
+    fn read_header(mut ref self) -> Result[Header, UErr] {
+        let mut h = Header { typ: TYPE_IMMEDIATE, n: 0, obj: Val.Nil, data: Vec.new() };
+        self.reserve(1)?;
+        let b = self.buffer[self.buff_i] as i64;
+        self.buff_i += 1;
+        if b & 0x80 == 0 {
+            h.obj = Val.Int(b);
+        } else if b & 0xE0 == 0xE0 {
+            h.obj = Val.Int(b - 256);
+        } else if b & 0xE0 == 0xA0 {
+            h.n = b & 0x1F;
+            h.typ = TYPE_RAW;
+            if h.n > self.max_str {
+                return Err(self.too_big(h.n, "str", self.max_str));
+            }
+            h.data = self.read(h.n)?;
+        } else if b & 0xF0 == 0x90 {
+            h.n = b & 0x0F;
+            h.typ = TYPE_ARRAY;
+            if h.n > self.max_array {
+                return Err(self.too_big(h.n, "array", self.max_array));
+            }
+        } else if b & 0xF0 == 0x80 {
+            h.n = b & 0x0F;
+            h.typ = TYPE_MAP;
+            if h.n > self.max_map {
+                return Err(self.too_big(h.n, "map", self.max_map));
+            }
+        } else if b == 0xC0 {
+            h.obj = Val.Nil;
+        } else if b == 0xC2 {
+            h.obj = Val.Bool(false);
+        } else if b == 0xC3 {
+            h.obj = Val.Bool(true);
+        } else if b >= 0xC4 and b <= 0xC6 {
+            let size = if b == 0xC4 { 1 } else if b == 0xC5 { 2 } else { 4 };
+            h.typ = TYPE_BIN;
+            h.n = self.sized(size)? as i64;
+            if h.n > self.max_bin {
+                return Err(self.too_big(h.n, "bin", self.max_bin));
+            }
+            h.data = self.read(h.n)?;
+        } else if b >= 0xC7 and b <= 0xC9 {
+            let size = if b == 0xC7 { 1 } else if b == 0xC8 { 2 } else { 4 };
+            h.typ = TYPE_EXT;
+            self.reserve(size + 1)?;
+            let l = be(self.buffer, self.buff_i, size) as i64;
+            h.n = signed(self.buffer[self.buff_i + size] as u64, 1);
+            self.buff_i += size + 1;
+            if l > self.max_ext {
+                return Err(self.too_big(l, "ext", self.max_ext));
+            }
+            h.data = self.read(l)?;
+        } else if b == 0xCA {
+            let v = self.sized(4)?;
+            h.obj = Val.Float((v as u32).bits_as_f32() as f64);
+        } else if b == 0xCB {
+            let v = self.sized(8)?;
+            h.obj = Val.Float(v.bits_as_f64());
+        } else if b >= 0xCC and b <= 0xCF {
+            let size = if b == 0xCC { 1 } else if b == 0xCD { 2 } else if b == 0xCE { 4 } else { 8 };
+            let v = self.sized(size)?;
+            h.obj = if v > 9223372036854775807 { Val.UInt(v) } else { Val.Int(v as i64) };
+        } else if b >= 0xD0 and b <= 0xD3 {
+            let size = if b == 0xD0 { 1 } else if b == 0xD1 { 2 } else if b == 0xD2 { 4 } else { 8 };
+            let v = self.sized(size)?;
+            h.obj = Val.Int(signed(v, size));
+        } else if b >= 0xD4 and b <= 0xD8 {
+            let size = if b == 0xD4 { 1 } else if b == 0xD5 { 2 } else if b == 0xD6 { 4 } else if b == 0xD7 { 8 } else { 16 };
+            h.typ = TYPE_EXT;
+            if self.max_ext < size {
+                return Err(self.too_big(size, "ext", self.max_ext));
+            }
+            self.reserve(size + 1)?;
+            h.n = signed(self.buffer[self.buff_i] as u64, 1);
+            for k in 0..size {
+                h.data.push(self.buffer[self.buff_i + 1 + k]);
+            }
+            self.buff_i += size + 1;
+        } else if b >= 0xD9 and b <= 0xDB {
+            let size = if b == 0xD9 { 1 } else if b == 0xDA { 2 } else { 4 };
+            h.typ = TYPE_RAW;
+            h.n = self.sized(size)? as i64;
+            if h.n > self.max_str {
+                return Err(self.too_big(h.n, "str", self.max_str));
+            }
+            h.data = self.read(h.n)?;
+        } else if b == 0xDC or b == 0xDD {
+            h.typ = TYPE_ARRAY;
+            h.n = self.sized(if b == 0xDC { 2 } else { 4 })? as i64;
+            if h.n > self.max_array {
+                return Err(self.too_big(h.n, "array", self.max_array));
+            }
+        } else if b == 0xDE or b == 0xDF {
+            h.typ = TYPE_MAP;
+            h.n = self.sized(if b == 0xDE { 2 } else { 4 })? as i64;
+            if h.n > self.max_map {
+                return Err(self.too_big(h.n, "map", self.max_map));
+            }
+        } else {
+            return Err(fail(f"FormatError: Unknown header: 0x{hex2(b as u8)}"));
+        }
+        Ok(h)
+    }
+
+    fn unpack(mut ref self) -> Result[Val, UErr] {
+        let h = self.read_header()?;
+        if h.typ == TYPE_ARRAY {
+            let mut items: Vec[Val] = Vec.new();
+            for _ in 0..h.n {
+                items.push(self.unpack()?);
+            }
+            return Ok(if self.o.use_list { Val.List(items) } else { Val.Tuple(items) });
+        }
+        if h.typ == TYPE_MAP {
+            let mut m: Vec[Val] = Vec.new();
+            for _ in 0..h.n {
+                let key = self.unpack()?;
+                let ok = match key {
+                    Val.Str(_) => true,
+                    Val.Bytes(_) => true,
+                    _ => false,
+                };
+                if self.o.strict_map_key and not ok {
+                    return Err(fail(f"ValueError: <class '{type_name(key)}'> is not allowed for map key"));
+                }
+                let value = self.unpack()?;
+                if let Some(t) = unhashable(key) {
+                    return Err(fail(f"TypeError: unhashable type: '{t}'"));
+                }
+                dict_set(mut m, key, value);
+            }
+            return Ok(Val.Map(m));
+        }
+        if h.typ == TYPE_RAW {
+            if self.o.raw {
+                return Ok(Val.Bytes(h.data));
+            }
+            return match decode_utf8(h.data) {
+                Ok(s) => Ok(Val.Str(s)),
+                Err(e) => Err(fail(e)),
+            };
+        }
+        if h.typ == TYPE_BIN {
+            return Ok(Val.Bytes(h.data));
+        }
+        if h.typ == TYPE_EXT {
+            if h.n == -1 {
+                return self.timestamp(h.data);
+            }
+            if h.n < 0 {
+                return Err(fail("ValueError: code must be 0~127".to_string()));
+            }
+            return Ok(Val.Ext(h.n, h.data));
+        }
+        Ok(h.obj)
+    }
+
+    // Timestamp.from_bytes, then the `timestamp` option's conversion.
+    fn timestamp(ref self, b: ref Vec[u8]) -> Result[Val, UErr] {
+        let (seconds, ns) = if b.len() == 4 {
+            (be(b, 0, 4) as i64, 0)
+        } else if b.len() == 8 {
+            let d = be(b, 0, 8);
+            ((d & 0x00000003FFFFFFFF) as i64, (d >> 34) as i64)
+        } else if b.len() == 12 {
+            (be(b, 4, 8) as i64, be(b, 0, 4) as i64)
+        } else {
+            return Err(fail("ValueError: Timestamp type can only be created from 32, 64, or 96-bit byte objects".to_string()));
+        };
+        if ns >= 1000000000 {
+            return Err(fail("ValueError: nanoseconds must be a non-negative integer less than 999999999.".to_string()));
+        }
+        if self.o.timestamp == 1 {
+            return Ok(Val.Float(seconds as f64 + ns as f64 / 1e9));
+        }
+        if self.o.timestamp == 2 {
+            if seconds >= 0 {
+                let total = seconds as u64 * 1000000000 + ns as u64;
+                return Ok(if total > 9223372036854775807 { Val.UInt(total) } else { Val.Int(total as i64) });
+            }
+            return Ok(Val.Int(seconds * 1000000000 + ns));
+        }
+        Ok(Val.Ts(seconds, ns))
+    }
+}
+
+fn err_text(e: own UErr) -> String {
+    match e {
+        UErr.OutOfData => "ValueError: Unpack failed: incomplete input".to_string(),
+        UErr.Fail(m) => m,
+    }
+}
+
+// msgpack.unpackb
+fn unpackb(data: ref Vec[u8], o: ref Opts) -> Result[Val, String] {
+    let mut u = new_unpacker(o, data.len());
+    u.feed(data)?;
+    let v = match u.unpack() {
+        Ok(v) => v,
+        Err(e) => return Err(err_text(e)),
+    };
+    if u.buff_i < u.buffer.len() {
+        return Err("ExtraData: unpack(b) received extra data.".to_string());
+    }
+    Ok(v)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn parse_opts(words: ref Vec[Str]) -> Opts {
+    let mut o = default_opts();
+    for k in 2..words.len() {
+        let w = words[k];
+        let eq = w.find("=").unwrap_or(0);
+        let name = w[0..eq];
+        let v = i64.parse(w[eq + 1..]).unwrap_or(0);
+        if name == "raw" {
+            o.raw = v != 0;
+        } else if name == "list" {
+            o.use_list = v != 0;
+        } else if name == "ts" {
+            o.timestamp = v;
+        } else if name == "strict" {
+            o.strict_map_key = v != 0;
+        } else if name == "max_buffer" {
+            o.max_buffer = v;
+        } else if name == "max_str" {
+            o.max_str = v;
+        } else if name == "max_bin" {
+            o.max_bin = v;
+        } else if name == "max_array" {
+            o.max_array = v;
+        } else if name == "max_map" {
+            o.max_map = v;
+        } else if name == "max_ext" {
+            o.max_ext = v;
+        } else if name == "bin" {
+            o.use_bin_type = v != 0;
+        } else if name == "single" {
+            o.single = v != 0;
+        }
+    }
+    o
+}
+
+fn hexdump(b: ref Vec[u8]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    out.push(f"  {b.len()} bytes");
+    let shown = if b.len() <= 256 { b.len() } else { 64 };
+    let mut i = 0;
+    while i < shown {
+        let mut parts: Vec[String] = Vec.new();
+        let end = if i + 16 < shown { i + 16 } else { shown };
+        for k in i..end {
+            parts.push(hex2(b[k]));
+        }
+        out.push(f"  {parts.join(" ")}");
+        i += 16;
+    }
+    if b.len() > 256 {
+        out.push("  ...".to_string());
+        let mut parts: Vec[String] = Vec.new();
+        for k in b.len() - 16..b.len() {
+            parts.push(hex2(b[k]));
+        }
+        out.push(f"  {parts.join(" ")}");
+    }
+    out
+}
+
+fn run_pack(name: Str, o: ref Opts) -> Vec[String] {
+    let text = match fs.read_to_string(f"data/json/{name}.json") {
+        Ok(t) => t,
+        Err(e) => return vec![f"  cannot read: {e}"],
+    };
+    let mut j = JsonReader { b: text.bytes().to_vec(), at: 0 };
+    let doc = match j.value() {
+        Ok(v) => v,
+        Err(e) => return vec![f"  error: {e}"],
+    };
+    let value = match conv(doc) {
+        Ok(v) => v,
+        Err(e) => return vec![f"  error: {e}"],
+    };
+    let mut p = Packer { use_bin_type: o.use_bin_type, use_single_float: o.single, buf: Vec.new() };
+    if let Err(e) = p.pack(value) {
+        return vec![f"  error: {e}"];
+    }
+    let mut out = hexdump(p.buf);
+    match unpackb(p.buf, default_opts()) {
+        Ok(v) => out.push(f"  = {short(repr(v))}"),
+        Err(e) => out.push(f"  = error: {e}"),
+    }
+    out
+}
+
+fn read_bin(name: Str) -> Result[Vec[u8], String] {
+    match fs.read_bytes(f"data/bin/{name}.mp") {
+        Ok(b) => Ok(b),
+        Err(e) => Err(f"  cannot read: {e}"),
+    }
+}
+
+fn run_unpack(name: Str, o: ref Opts) -> Vec[String] {
+    let data = match read_bin(name) {
+        Ok(b) => b,
+        Err(e) => return vec![e],
+    };
+    match unpackb(data, o) {
+        Ok(v) => vec![f"  {short(repr(v))}"],
+        Err(e) => vec![f"  error: {e}"],
+    }
+}
+
+fn event_time(t: ref Val) -> Result[String, String] {
+    match t {
+        Val.Int(i) => Ok(f"{i}.000000000"),
+        Val.Ext(code, d) => {
+            if *code == 0 and d.len() == 8 {
+                let ns = be(d, 4, 4) as i64;
+                let mut frac = f"{ns}";
+                while frac.len() < 9 {
+                    frac = f"0{frac}";
+                }
+                Ok(f"{be(d, 0, 4)}.{frac}")
+            } else {
+                Err(f"bad time {repr(t)}")
+            }
+        }
+        _ => Err(f"bad time {repr(t)}"),
+    }
+}
+
+// str.encode("latin-1")
+fn latin1(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in code_points(s.bytes().to_vec()) {
+        out.push(c as u8);
+    }
+    out
+}
+
+// One Fluentd forward-protocol message: Message mode [tag, time, record,
+// option?], Forward mode [tag, [[time, record], ...], option?], or
+// PackedForward mode [tag, packed entries, option?].
+fn forward_lines(obj: ref Val) -> Result[Vec[String], String] {
+    let items = match obj {
+        Val.List(items) => items.clone(),
+        _ => Vec.new(),
+    };
+    if items.len() < 2 {
+        return Err(f"not a message: {short(repr(obj))}");
+    }
+    let tag = match items[0] {
+        Val.Str(s) => s.clone(),
+        other => repr(other),
+    };
+    let mut entries: Vec[Val] = Vec.new();
+    let mut option = Val.Nil;
+    let packed = match items[1] {
+        Val.Bytes(b) => Some(b.clone()),
+        Val.Str(s) => Some(latin1(s)),
+        _ => None,
+    };
+    if let Val.List(es) = items[1].clone() {
+        entries = es;
+        if items.len() > 2 {
+            option = items[2].clone();
+        }
+    } else if let Some(raw) = packed {
+        let mut sub = new_unpacker(default_opts(), if raw.len() > 1 { raw.len() } else { 1 });
+        sub.feed(raw)?;
+        loop {
+            match sub.unpack() {
+                Ok(v) => {
+                    sub.consume();
+                    entries.push(v);
+                }
+                Err(UErr.OutOfData) => break,
+                Err(UErr.Fail(m)) => {
+                    let colon = m.find(": ").unwrap_or(0);
+                    return Err(m[colon + 2..].to_string());
+                }
+            }
+        }
+        if items.len() > 2 {
+            option = items[2].clone();
+        }
+    } else {
+        if items.len() < 3 {
+            return Err(f"not a message: {short(repr(obj))}");
+        }
+        entries.push(Val.List(vec![items[1].clone(), items[2].clone()]));
+        if items.len() > 3 {
+            option = items[3].clone();
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for e in entries {
+        let pair = match e {
+            Val.List(p) => p.clone(),
+            _ => Vec.new(),
+        };
+        if pair.len() != 2 {
+            return Err(f"bad entry: {short(repr(e))}");
+        }
+        let t = event_time(pair[0])?;
+        out.push(f"  {tag} {t} {short(repr(pair[1]))}");
+    }
+    if let Val.Map(m) = option {
+        let mut i = 0;
+        while i < m.len() {
+            if let Val.Str(k) = m[i].clone() {
+                if k == "chunk" {
+                    out.push(f"  ack {arg_str(m[i + 1])}");
+                }
+            }
+            i += 2;
+        }
+    }
+    Ok(out)
+}
+
+// Feeds a file to an Unpacker `chunk` bytes at a time, taking every
+// object as soon as it is whole.
+fn run_stream(name: Str, chunk: i64, o: ref Opts, fwd: bool) -> Vec[String] {
+    let data = match read_bin(name) {
+        Ok(b) => b,
+        Err(e) => return vec![e],
+    };
+    let mut u = new_unpacker(o, o.max_buffer);
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < data.len() {
+        let end = if i + chunk < data.len() { i + chunk } else { data.len() };
+        let mut piece: Vec[u8] = Vec.new();
+        for k in i..end {
+            piece.push(data[k]);
+        }
+        i = end;
+        if let Err(e) = u.feed(piece) {
+            out.push(f"  error: {e}");
+            return out;
+        }
+        loop {
+            match u.unpack() {
+                Ok(v) => {
+                    u.consume();
+                    if fwd {
+                        match forward_lines(v) {
+                            Ok(lines) => {
+                                for l in lines.into_iter() {
+                                    out.push(l);
+                                }
+                            }
+                            Err(e) => out.push(f"  rejected: {e}"),
+                        }
+                    } else {
+                        out.push(f"  @{u.stream_offset} {short(repr(v))}");
+                    }
+                }
+                Err(UErr.OutOfData) => {
+                    u.consume();
+                    break;
+                }
+                Err(UErr.Fail(m)) => {
+                    out.push(f"  error: {m}");
+                    return out;
+                }
+            }
+        }
+    }
+    let rest = u.buffer.len() - u.buff_i;
+    if rest > 0 {
+        out.push(f"  rest {rest} bytes");
+    }
+    out
+}
+
+fn run_job(line: Str) -> Vec[String] {
+    let w: Vec[Str] = line.split_whitespace().collect();
+    let o = parse_opts(w);
+    if w[0] == "pack" {
+        return run_pack(w[1], o);
+    }
+    if w[0] == "unpack" {
+        return run_unpack(w[1], o);
+    }
+    // A stream job's options follow the chunk size, which parse_opts
+    // skips as it has no `=`.
+    let chunk = i64.parse(w[2]).unwrap_or(1);
+    run_stream(w[1], chunk, o, w[0] == "forward")
+}
+
+// ------------------------------------------------------------ main
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    for dir in ["data/json", "data/bin"] {
+        if let Err(e) = fs.create_dir_all(dir.to_string()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+    }
+    for file in data_files() {
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.tsv: {e}");
+            return;
+        }
+    };
+    for line in jobs.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        println(f"== {line}");
+        println(run_job(line).join("\n"));
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("d5ff0001");
+    v.push(DataFile { path: "bin/bad-timestamp.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a57af09f9841");
+    v.push(DataFile { path: "bin/bad-utf8-4end.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a3e28228");
+    v.push(DataFile { path: "bin/bad-utf8-cont.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a2e228");
+    v.push(DataFile { path: "bin/bad-utf8-cont1.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a46162e282");
+    v.push(DataFile { path: "bin/bad-utf8-end.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a2c080");
+    v.push(DataFile { path: "bin/bad-utf8-overlong.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("91a361ff62");
+    v.push(DataFile { path: "bin/bad-utf8-start.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a3eda080");
+    v.push(DataFile { path: "bin/bad-utf8-surrogate.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a4f4908080");
+    v.push(DataFile { path: "bin/bad-utf8-toobig.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("95c40469742773c403612262c4056122622763c404090a0d5cc404007f80ff");
+    v.push(DataFile { path: "bin/bytes-quotes.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("dd000003e80102");
+    v.push(DataFile { path: "bin/claims-big-array.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("c5100061");
+    v.push(DataFile { path: "bin/claims-big-bin.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("c810000161");
+    v.push(DataFile { path: "bin/claims-big-ext.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("86a16101");
+    v.push(DataFile { path: "bin/claims-big-map.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("db0001000061");
+    v.push(DataFile { path: "bin/claims-big-str.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "bin/empty.mp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("8401a161c3a162cb3ff0000000000000a16302a164");
+    v.push(DataFile { path: "bin/equal-keys.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("84a373657100a56c6576656ca4696e666fa36d7367b372657175657374203020746f6f6b2033206d73a27473d6ff6553");
+    t.push_str("f10084a373657101a56c6576656ca47761726ea36d7367b472657175657374203120746f6f6b203230206d73a27473d7");
+    t.push_str("ff00000fa06553f13c84a373657102a56c6576656ca56572726f72a36d7367b472657175657374203220746f6f6b2033");
+    t.push_str("37206d73a27473d7ff00001f406553f17884a373657103a56c6576656ca4696e666fa36d7367b4726571756573742033");
+    t.push_str("20746f6f6b203534206d73a27473d7ff00002ee06553f1b484a373657104a56c6576656ca47761726ea36d7367b47265");
+    t.push_str("7175657374203420746f6f6b203731206d73a27473d7ff00003e806553f1f084a373657105a56c6576656ca56572726f");
+    t.push_str("72a36d7367b472657175657374203520746f6f6b203838206d73a27473d7ff00004e206553f22c84a373657106a56c65");
+    t.push_str("76656ca4696e666fa36d7367b572657175657374203620746f6f6b20313035206d73a27473d7ff00005dc06553f26884");
+    t.push_str("a373657107a56c6576656ca47761726ea36d7367b572657175657374203720746f6f6b20313232206d73a27473d7ff00");
+    t.push_str("006d606553f2a484a373657108a56c6576656ca56572726f72a36d7367b572657175657374203820746f6f6b20313339");
+    t.push_str("206d73a27473d7ff00007d006553f2e084a373657109a56c6576656ca4696e666fa36d7367b572657175657374203920");
+    t.push_str("746f6f6b20313536206d73a27473d7ff00008ca06553f31c84a37365710aa56c6576656ca47761726ea36d7367b67265");
+    t.push_str("717565737420313020746f6f6b20313733206d73a27473d7ff00009c406553f35884a37365710ba56c6576656ca56572");
+    t.push_str("726f72a36d7367b67265717565737420313120746f6f6b20313930206d73a27473d7ff0000abe06553f394");
+    v.push(DataFile { path: "bin/event-stream.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("92010203");
+    v.push(DataFile { path: "bin/extra-data.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("98d40161d5026162d60361626364d7040000000000000000d805000102030405060708090a0b0c0d0e0fc7030678797a");
+    t.push_str("c70007c8012c7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
+    t.push_str("7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
+    t.push_str("7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
+    t.push_str("7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
+    t.push_str("7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
+    t.push_str("7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
+    t.push_str("7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
+    v.push(DataFile { path: "bin/exts.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("93aa6170702e616363657373ce6553f16483a66d6574686f64a3474554a470617468a72f6865616c7468a67374617475");
+    t.push_str("73ccc894aa6170702e616363657373d7006553f1650ee6b28083a66d6574686f64a4504f5354a470617468a62f6c6f67");
+    t.push_str("696ea6737461747573cd012e81a56368756e6bb870386e39676d7854515643382f6e6832776c4b4b65513d3d93aa6170");
+    t.push_str("702e776f726b65729292ce6553f16682a36a6f62a6726573697a65a26d732992d7006553f1670000000782a36a6f62a9");
+    t.push_str("7468756d626e61696ca26d730c82a56368756e6bb8467164396674547053626533734e374c724259774a513d3da47369");
+    t.push_str("7a650293a96170702e6361636865c44d92ce6553f16882a56576656e74aa63616368652d6d697373a36b6579a9757365");
+    t.push_str("723a3138313592d7006553f1693b9ac9ff82a56576656e74a963616368652d686974a36b6579a6757365723a3781a473");
+    t.push_str("697a650292a96170702e6361636865da0060c292c38e6553c3b168c282c2a56576656e74c2aa63616368652d6d697373");
+    t.push_str("c2a36b6579c2a9757365723a31383135c292c397006553c3b1693bc29ac389c3bfc282c2a56576656e74c2a963616368");
+    t.push_str("652d686974c2a36b6579c2a6757365723a3793a86261642e74696d65a979657374657264617981a1780193a86261642e");
+    t.push_str("74696d65cb400c00000000000081a1780192a96261642e73686170650592aa6261642e7061636b6564c4039201c181a3");
+    t.push_str("6e6f74a8616e20617272617993ad6261642e6576656e7474696d65d500000181a17801");
+    v.push(DataFile { path: "bin/forward.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("97cb4341c37937e08000cb3ee4f8b588e368f1cb3f1a36e2eb1c432dcb437b69b4ba630f35cb4480f0cf064dd592cb43");
+    t.push_str("40000000000000cb81a56e1fc2f8f359");
+    v.push(DataFile { path: "bin/hex-floats.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("8301a36f6e6502a374776ffdab6d696e7573207468726565");
+    v.push(DataFile { path: "bin/int-keys.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81c4016b01");
+    v.push(DataFile { path: "bin/key-bin.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81c301");
+    v.push(DataFile { path: "bin/key-bool.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("8101c1");
+    v.push(DataFile { path: "bin/key-err-first.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81d4010001");
+    v.push(DataFile { path: "bin/key-ext.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81a26f6b81cb3ff8000000000000a178");
+    v.push(DataFile { path: "bin/key-float-in-nest.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("810102");
+    v.push(DataFile { path: "bin/key-int.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81920102a176");
+    v.push(DataFile { path: "bin/key-list.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81c001");
+    v.push(DataFile { path: "bin/key-none.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81d6ff0000000101");
+    v.push(DataFile { path: "bin/key-ts.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("819101a178");
+    v.push(DataFile { path: "bin/list-key.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("8180a178");
+    v.push(DataFile { path: "bin/map-key.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("86c000c301cb400400000000000002c4016b03a16b0492010205");
+    v.push(DataFile { path: "bin/mixed-keys.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d48001c702fe0102");
+    v.push(DataFile { path: "bin/negative-ext-code.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("93a573686f7274da00287878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("7878da012c79797979797979797979797979797979797979797979797979797979797979797979797979797979797979");
+    t.push_str("797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979");
+    t.push_str("797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979");
+    t.push_str("797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979");
+    t.push_str("797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979");
+    t.push_str("797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979");
+    t.push_str("7979797979797979797979797979797979");
+    v.push(DataFile { path: "bin/raw-strings.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("84a475736572a3616461a26964cd0717a5726f6c657392a561646d696ea3646576a46d65746183a6616374697665c3a5");
+    t.push_str("73636f7265cb4058e00000000000a6617661746172c40489504e47");
+    v.push(DataFile { path: "bin/record.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("dc0012c0c3c2007fffe0cd012cd1fed4cf0000010000000000d3ffffff0000000000cfffffffffffffffffcb3ff80000");
+    t.push_str("00000000cb8000000000000000cb7ff0000000000000cb7ff8000000000000a26869c40500ff62696e");
+    v.push(DataFile { path: "bin/scalars.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("95ca3dcccccdca3fc00000ca7f7fc99eca00000001cac0200000");
+    v.push(DataFile { path: "bin/single-floats.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("84a373657100a56c6576656ca4696e666fa36d7367b372657175657374203020746f6f6b2033206d73a27473d6ff6553");
+    t.push_str("f10084a373657101a56c6576656ca47761726ea36d7367b472657175657374203120746f6f6b203230206d73a27473d7");
+    t.push_str("ff00000fa06553f13c84a373657102a56c6576656ca56572726f72a36d7367b472657175657374203220746f6f6b2033");
+    t.push_str("37206d73a27473d7ff00001f406553f17884a373657103a56c6576656ca4696e666fa36d7367b4726571756573742033");
+    t.push_str("20746f6f6b203534");
+    v.push(DataFile { path: "bin/stream-truncated.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81a16101920102c1a56166746572");
+    v.push(DataFile { path: "bin/stream-with-junk.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("96d6ff00000000d6ff6553f100d7ff773594006553f100c70cff00000001fffffffffffeae80c70cff00000007000000");
+    t.push_str("0400000000d7ffee6b27fdffffffff");
+    v.push(DataFile { path: "bin/timestamps.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("930102");
+    v.push(DataFile { path: "bin/truncated-array.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("cb4009");
+    v.push(DataFile { path: "bin/truncated-float.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a56865");
+    v.push(DataFile { path: "bin/truncated-str.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("9392019202039081a1709104");
+    v.push(DataFile { path: "bin/tuples.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("81a161019102");
+    v.push(DataFile { path: "bin/two-docs.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("9201c1");
+    v.push(DataFile { path: "bin/unknown-header.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("99a5636166c3a9a6e697a5e69caca4f09f9880aa746162097127756f7465adc285c2a0e2808be280a8efbbbfa4697427");
+    t.push_str("73a56122622763a15ca3001f7f");
+    v.push(DataFile { path: "bin/utf8-mix.mp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("93cc05cd0005cf0000000000000005dc0002d07fd1ff80de0001d9016bc40176dd00000001db000000026f6bdf000000");
+    t.push_str("01da00016bc600000000c5000142c800010941c9000000010a42");
+    v.push(DataFile { path: "bin/wide-headers.mp".to_string(), hex: true, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("pack package\n");
+    t.push_str("pack geojson\n");
+    t.push_str("pack ints\n");
+    t.push_str("pack floats\n");
+    t.push_str("pack strings\n");
+    t.push_str("pack dupes\n");
+    t.push_str("pack special\n");
+    t.push_str("pack nested\n");
+    t.push_str("pack package bin=0\n");
+    t.push_str("pack ints bin=0\n");
+    t.push_str("pack floats bin=0\n");
+    t.push_str("pack strings bin=0\n");
+    t.push_str("pack special bin=0\n");
+    t.push_str("pack floats single=1\n");
+    t.push_str("pack geojson single=1\n");
+    t.push_str("pack big\n");
+    t.push_str("pack big bin=0\n");
+    t.push_str("pack too-big-int\n");
+    t.push_str("pack too-small-int\n");
+    t.push_str("pack bad-ext\n");
+    t.push_str("pack bad-ts\n");
+    t.push_str("unpack scalars\n");
+    t.push_str("unpack single-floats\n");
+    t.push_str("unpack record\n");
+    t.push_str("unpack exts\n");
+    t.push_str("unpack timestamps\n");
+    t.push_str("unpack negative-ext-code\n");
+    t.push_str("unpack raw-strings\n");
+    t.push_str("unpack wide-headers\n");
+    t.push_str("unpack tuples\n");
+    t.push_str("unpack utf8-mix\n");
+    t.push_str("unpack bytes-quotes\n");
+    t.push_str("unpack hex-floats\n");
+    t.push_str("unpack two-docs\n");
+    t.push_str("unpack int-keys\n");
+    t.push_str("unpack key-bin\n");
+    t.push_str("unpack empty\n");
+    t.push_str("unpack record raw=1\n");
+    t.push_str("unpack raw-strings raw=1\n");
+    t.push_str("unpack tuples list=0\n");
+    t.push_str("unpack record list=0\n");
+    t.push_str("unpack timestamps ts=1\n");
+    t.push_str("unpack timestamps ts=2\n");
+    t.push_str("unpack int-keys strict=0\n");
+    t.push_str("unpack mixed-keys strict=0\n");
+    t.push_str("unpack mixed-keys strict=0 list=0\n");
+    t.push_str("unpack equal-keys strict=0\n");
+    t.push_str("unpack list-key strict=0\n");
+    t.push_str("unpack list-key strict=0 list=0\n");
+    t.push_str("unpack map-key strict=0\n");
+    t.push_str("unpack unknown-header\n");
+    t.push_str("unpack truncated-array\n");
+    t.push_str("unpack truncated-str\n");
+    t.push_str("unpack truncated-float\n");
+    t.push_str("unpack claims-big-array\n");
+    t.push_str("unpack claims-big-map\n");
+    t.push_str("unpack claims-big-str\n");
+    t.push_str("unpack claims-big-bin\n");
+    t.push_str("unpack claims-big-ext\n");
+    t.push_str("unpack bad-utf8-start\n");
+    t.push_str("unpack bad-utf8-cont\n");
+    t.push_str("unpack bad-utf8-cont1\n");
+    t.push_str("unpack bad-utf8-end\n");
+    t.push_str("unpack bad-utf8-overlong\n");
+    t.push_str("unpack bad-utf8-surrogate\n");
+    t.push_str("unpack bad-utf8-toobig\n");
+    t.push_str("unpack bad-utf8-4end\n");
+    t.push_str("unpack bad-timestamp\n");
+    t.push_str("unpack extra-data\n");
+    t.push_str("unpack key-int\n");
+    t.push_str("unpack key-float-in-nest\n");
+    t.push_str("unpack key-list\n");
+    t.push_str("unpack key-ext\n");
+    t.push_str("unpack key-ts\n");
+    t.push_str("unpack key-none\n");
+    t.push_str("unpack key-bool\n");
+    t.push_str("unpack key-err-first\n");
+    t.push_str("unpack bad-utf8-start raw=1\n");
+    t.push_str("unpack record max_str=3\n");
+    t.push_str("unpack record max_bin=3\n");
+    t.push_str("unpack record max_array=1\n");
+    t.push_str("unpack record max_map=3\n");
+    t.push_str("unpack exts max_ext=3\n");
+    t.push_str("unpack exts max_ext=0\n");
+    t.push_str("stream event-stream 1\n");
+    t.push_str("stream event-stream 7\n");
+    t.push_str("stream event-stream 64\n");
+    t.push_str("stream event-stream 100000\n");
+    t.push_str("stream event-stream 13 ts=1\n");
+    t.push_str("stream stream-with-junk 3\n");
+    t.push_str("stream stream-truncated 50\n");
+    t.push_str("stream event-stream 40 max_buffer=60\n");
+    t.push_str("stream event-stream 40 max_buffer=200\n");
+    t.push_str("stream two-docs 2\n");
+    t.push_str("forward forward 1\n");
+    t.push_str("forward forward 17\n");
+    t.push_str("forward forward 4096\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"x\": {\"$ext\": [200, \"00\"]}}\n");
+    v.push(DataFile { path: "json/bad-ext.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"x\": {\"$ts\": [0, 1000000000]}}\n");
+    v.push(DataFile { path: "json/bad-ts.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"str16\": {\"$repeat\": [\"ab\", 200]},\n");
+    t.push_str(" \"str32\": {\"$repeat\": [\"xyz\", 22000]},\n");
+    t.push_str(" \"bin16\": {\"$binrepeat\": [\"c0ffee\", 100]},\n");
+    t.push_str(" \"bin32\": {\"$binrepeat\": [\"00\", 70000]},\n");
+    t.push_str(" \"array16\": {\"$range\": 16},\n");
+    t.push_str(" \"array32\": {\"$range\": 70000},\n");
+    t.push_str(" \"map16\": {\"$map\": 20}}\n");
+    v.push(DataFile { path: "json/big.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"id\": 1, \"name\": \"first\", \"id\": 2, \"tags\": [\"a\"], \"name\": \"second\"}\n");
+    v.push(DataFile { path: "json/dupes.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[0.0, -0.0, 1.0, 0.1, -2.5, 3.141592653589793, 1e300, 2.2250738585072014e-308, 5e-324,\n");
+    t.push_str(" 1.7976931348623157e308, 1e16, 123456789.125, 1e-7, 6.02214076e23, 1e400, -1e400]\n");
+    v.push(DataFile { path: "json/floats.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"type\": \"FeatureCollection\",\n");
+    t.push_str(" \"features\": [\n");
+    t.push_str("  {\"type\": \"Feature\", \"id\": 1,\n");
+    t.push_str("   \"geometry\": {\"type\": \"Point\", \"coordinates\": [-122.4194, 37.7749]},\n");
+    t.push_str("   \"properties\": {\"name\": \"San Francisco\", \"population\": 808437, \"density\": 7272.8}},\n");
+    t.push_str("  {\"type\": \"Feature\", \"id\": 2,\n");
+    t.push_str("   \"geometry\": {\"type\": \"LineString\",\n");
+    t.push_str("                \"coordinates\": [[2.3522, 48.8566], [4.8357, 45.764], [5.3698, 43.2965]]},\n");
+    t.push_str("   \"properties\": {\"name\": \"Paris - Lyon - Marseille\", \"km\": 775, \"electrified\": true}},\n");
+    t.push_str("  {\"type\": \"Feature\", \"id\": 3,\n");
+    t.push_str("   \"geometry\": {\"type\": \"Polygon\",\n");
+    t.push_str("                \"coordinates\": [[[139.69, 35.68], [139.77, 35.68], [139.77, 35.72],\n");
+    t.push_str("                                 [139.69, 35.72], [139.69, 35.68]]]},\n");
+    t.push_str("   \"properties\": {\"name\": \"\\u6771\\u4eac\", \"area_km2\": 0.0315, \"tags\": [\"capital\", \"\\ud83d\\uddfc\"]}}\n");
+    t.push_str(" ]}\n");
+    v.push(DataFile { path: "json/geojson.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[0, 1, 127, 128, 255, 256, 65535, 65536, 4294967295, 4294967296,\n");
+    t.push_str(" 9223372036854775807, 9223372036854775808, 18446744073709551615,\n");
+    t.push_str(" -1, -32, -33, -128, -129, -32768, -32769, -2147483648, -2147483649,\n");
+    t.push_str(" -9223372036854775808, -0, 1000000007]\n");
+    v.push(DataFile { path: "json/ints.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\": {\"b\": {\"c\": {\"d\": {\"e\": [[[[[{\"f\": [true, false, null]}]]]]]}}}}}\n");
+    v.push(DataFile { path: "json/nested.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"@acme/web-dashboard\",\n");
+    t.push_str("  \"version\": \"3.14.1\",\n");
+    t.push_str("  \"private\": true,\n");
+    t.push_str("  \"description\": \"Operations dashboard for the \\\"acme\\\" fleet\",\n");
+    t.push_str("  \"main\": \"dist/index.js\",\n");
+    t.push_str("  \"scripts\": {\"build\": \"vite build\", \"test\": \"vitest run --coverage\", \"lint\": \"eslint .\"},\n");
+    t.push_str("  \"dependencies\": {\"react\": \"^18.3.1\", \"react-dom\": \"^18.3.1\", \"zod\": \"3.23.8\"},\n");
+    t.push_str("  \"engines\": {\"node\": \">=20\"},\n");
+    t.push_str("  \"files\": [],\n");
+    t.push_str("  \"keywords\": [\"ops\", \"dashboard\", \"fleet\"],\n");
+    t.push_str("  \"license\": null\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "json/package.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"blob\": {\"$bin\": \"00ff10deadbeef\"},\n");
+    t.push_str(" \"empty_blob\": {\"$bin\": \"\"},\n");
+    t.push_str(" \"ext1\": {\"$ext\": [5, \"2a\"]},\n");
+    t.push_str(" \"ext2\": {\"$ext\": [6, \"0102\"]},\n");
+    t.push_str(" \"ext4\": {\"$ext\": [7, \"01020304\"]},\n");
+    t.push_str(" \"ext8\": {\"$ext\": [8, \"0102030405060708\"]},\n");
+    t.push_str(" \"ext16\": {\"$ext\": [9, \"000102030405060708090a0b0c0d0e0f\"]},\n");
+    t.push_str(" \"ext3\": {\"$ext\": [10, \"abcdef\"]},\n");
+    t.push_str(" \"ext0\": {\"$ext\": [127, \"\"]},\n");
+    t.push_str(" \"ts32\": {\"$ts\": [1700000000, 0]},\n");
+    t.push_str(" \"ts64\": {\"$ts\": [1700000000, 123456789]},\n");
+    t.push_str(" \"ts96\": {\"$ts\": [-1, 999999999]},\n");
+    t.push_str(" \"ts96b\": {\"$ts\": [17179869184, 5]},\n");
+    t.push_str(" \"point\": {\"$tuple\": [1, 2]}}\n");
+    v.push(DataFile { path: "json/special.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[\"\", \"a\", \"hello, world\", \"it's\", \"say \\\"hi\\\"\", \"both ' and \\\"\", \"back\\\\slash\",\n");
+    t.push_str(" \"tab\\there\", \"line\\nbreak\\r\\n\", \"nul\\u0000and\\u001fus\\u007fdel\",\n");
+    t.push_str(" \"caf\\u00e9\", \"\\u00a0nbsp\", \"\\u00adshy\", \"zero\\u200bwidth\", \"line\\u2028sep\",\n");
+    t.push_str(" \"bom\\ufeff\", \"private\\ue000use\", \"\\u65e5\\u672c\\u8a9e\", \"emoji \\ud83d\\ude00\\ud83c\\udf89\",\n");
+    t.push_str(" \"Gr\\u00fc\\u00dfe \\u03b1\\u03b2\\u03b3\", \"c1\\u0085next\",\n");
+    t.push_str(" \"exactly thirty-one bytes long!!\", \"exactly thirty-two bytes long!!!\",\n");
+    t.push_str(" \"a string that is longer than thirty-two bytes, so str8 (or raw16 without bin type)\"]\n");
+    v.push(DataFile { path: "json/strings.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"ok\": 1, \"bad\": 18446744073709551616}\n");
+    v.push(DataFile { path: "json/too-big-int.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1, 2, -9223372036854775809]\n");
+    v.push(DataFile { path: "json/too-small-int.json".to_string(), hex: false, body: t });
+}

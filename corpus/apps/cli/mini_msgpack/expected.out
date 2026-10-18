@@ -1,0 +1,437 @@
+== pack package
+  313 bytes
+  8b a4 6e 61 6d 65 b3 40 61 63 6d 65 2f 77 65 62
+  2d 64 61 73 68 62 6f 61 72 64 a7 76 65 72 73 69
+  6f 6e a6 33 2e 31 34 2e 31 a7 70 72 69 76 61 74
+  65 c3 ab 64 65 73 63 72 69 70 74 69 6f 6e d9 29
+  ...
+  64 a5 66 6c 65 65 74 a7 6c 69 63 65 6e 73 65 c0
+  = {'name': '@acme/web-dashboard', 'version': '3.14.1', 'private': True, 'description': 'Operations dashboard for the "acme" fleet', 'main': 'dist/index.js', 'scripts': {'build': 'vite build', 'test': 'vitest run --coverage', 'lint': 'eslint .'}, 'dependencies': {'react': '^18.3.1', 'react-dom': '^18.3.1', 'zod': '3.23.8'}, 'engines': {'node': '>=20'}, 'files': [], 'keywords': ['ops', 'dashboard', 'fleet'], 'license': None}
+== pack geojson
+  554 bytes
+  82 a4 74 79 70 65 b1 46 65 61 74 75 72 65 43 6f
+  6c 6c 65 63 74 69 6f 6e a8 66 65 61 74 75 72 65
+  73 93 84 a4 74 79 70 65 a7 46 65 61 74 75 72 65
+  a2 69 64 01 a8 67 65 6f 6d 65 74 72 79 82 a4 74
+  ...
+  67 73 92 a7 63 61 70 69 74 61 6c a4 f0 9f 97 bc
+  = {'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'id': 1, 'geometry': {'type': 'Point', 'coordinates': [-122.4194, 37.7749]}, 'properties': {'name': 'San Francisco', 'population': 808437, 'density': 7272.8}}, {'type': 'Feature', 'id': 2, 'geometry': {'type': 'LineString', 'coordinates': [[2.3522, 48.8566], [4.8357, 45.764], [5.3698, 43.2965]]}, 'properties': {'name': 'Paris - Lyon - Marseille', 'km': 775, 'electrified': True}}, {'type': 'Feature', 'id': 3, 'geometry': {'type': 'Polygon', 'coordinates': [[[139.69, 35.68], [139.77, 35.68], [139.77, 35.72], [139.69, 35.72], [139.69, 35.68]]]}, 'properties': {'name': '東京', 'area_km2': 0.0315, 'tags': ['capital', '🗼']}}]}
+== pack ints
+  108 bytes
+  dc 00 19 00 01 7f cc 80 cc ff cd 01 00 cd ff ff
+  ce 00 01 00 00 ce ff ff ff ff cf 00 00 00 01 00
+  00 00 00 cf 7f ff ff ff ff ff ff ff cf 80 00 00
+  00 00 00 00 00 cf ff ff ff ff ff ff ff ff ff e0
+  d0 df d0 80 d1 ff 7f d1 80 00 d2 ff ff 7f ff d2
+  80 00 00 00 d3 ff ff ff ff 7f ff ff ff d3 80 00
+  00 00 00 00 00 00 00 ce 3b 9a ca 07
+  = [0, 1, 127, 128, 255, 256, 65535, 65536, 4294967295, 4294967296, 9223372036854775807, 9223372036854775808, 18446744073709551615, -1, -32, -33, -128, -129, -32768, -32769, -2147483648, -2147483649, -9223372036854775808, 0, 1000000007]
+== pack floats
+  147 bytes
+  dc 00 10 cb 00 00 00 00 00 00 00 00 cb 80 00 00
+  00 00 00 00 00 cb 3f f0 00 00 00 00 00 00 cb 3f
+  b9 99 99 99 99 99 9a cb c0 04 00 00 00 00 00 00
+  cb 40 09 21 fb 54 44 2d 18 cb 7e 37 e4 3c 88 00
+  75 9c cb 00 10 00 00 00 00 00 00 cb 00 00 00 00
+  00 00 00 01 cb 7f ef ff ff ff ff ff ff cb 43 41
+  c3 79 37 e0 80 00 cb 41 9d 6f 34 54 80 00 00 cb
+  3e 7a d7 f2 9a bc af 48 cb 44 df e1 85 ca 57 c5
+  17 cb 7f f0 00 00 00 00 00 00 cb ff f0 00 00 00
+  00 00 00
+  = [0.0, -0.0, 1.0, 0.1, -2.5, 3.141592653589793, 1e+300, 2.2250738585072014e-308, 5e-324, 1.7976931348623157e+308, 1e+16, 123456789.125, 1e-07, 6.02214076e+23, inf, -inf]
+== pack strings
+  357 bytes
+  dc 00 18 a0 a1 61 ac 68 65 6c 6c 6f 2c 20 77 6f
+  72 6c 64 a4 69 74 27 73 a8 73 61 79 20 22 68 69
+  22 ac 62 6f 74 68 20 27 20 61 6e 64 20 22 aa 62
+  61 63 6b 5c 73 6c 61 73 68 a8 74 61 62 09 68 65
+  ...
+  69 74 68 6f 75 74 20 62 69 6e 20 74 79 70 65 29
+  = ['', 'a', 'hello, world', "it's", 'say "hi"', 'both \' and "', 'back\\slash', 'tab\there', 'line\nbreak\r\n', 'nul\x00and\x1fus\x7fdel', 'café', '\xa0nbsp', '\xadshy', 'zero\u200bwidth', 'line\u2028sep', 'bom\ufeff', 'private\ue000use', '日本語', 'emoji 😀🎉', 'Grüße αβγ', 'c1\x85next', 'exactly thirty-one bytes long!!', 'exactly thirty-two bytes long!!!', 'a string that is longer than thirty-two bytes, so str8 (or raw16 without bin type)']
+== pack dupes
+  25 bytes
+  83 a2 69 64 02 a4 6e 61 6d 65 a6 73 65 63 6f 6e
+  64 a4 74 61 67 73 91 a1 61
+  = {'id': 2, 'name': 'second', 'tags': ['a']}
+== pack special
+  190 bytes
+  8e a4 62 6c 6f 62 c4 07 00 ff 10 de ad be ef aa
+  65 6d 70 74 79 5f 62 6c 6f 62 c4 00 a4 65 78 74
+  31 d4 05 2a a4 65 78 74 32 d5 06 01 02 a4 65 78
+  74 34 d6 07 01 02 03 04 a4 65 78 74 38 d7 08 01
+  02 03 04 05 06 07 08 a5 65 78 74 31 36 d8 09 00
+  01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f a4
+  65 78 74 33 c7 03 0a ab cd ef a4 65 78 74 30 c7
+  00 7f a4 74 73 33 32 d6 ff 65 53 f1 00 a4 74 73
+  36 34 d7 ff 1d 6f 34 54 65 53 f1 00 a4 74 73 39
+  36 c7 0c ff 3b 9a c9 ff ff ff ff ff ff ff ff ff
+  a5 74 73 39 36 62 c7 0c ff 00 00 00 05 00 00 00
+  04 00 00 00 00 a5 70 6f 69 6e 74 92 01 02
+  = {'blob': b'\x00\xff\x10\xde\xad\xbe\xef', 'empty_blob': b'', 'ext1': ExtType(code=5, data=b'*'), 'ext2': ExtType(code=6, data=b'\x01\x02'), 'ext4': ExtType(code=7, data=b'\x01\x02\x03\x04'), 'ext8': ExtType(code=8, data=b'\x01\x02\x03\x04\x05\x06\x07\x08'), 'ext16': ExtType(code=9, data=b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f'), 'ext3': ExtType(code=10, data=b'\xab\xcd\xef'), 'ext0': ExtType(code=127, data=b''), 'ts32': Timestamp(seconds=1700000000, nanoseconds=0), 'ts64': Timestamp(seconds=1700000000, nanoseconds=123456789), 'ts96': Timestamp(seconds=-1, nanoseconds=999999999), 'ts96b': Timestamp(seconds=17179869184, nanoseconds=5), 'point': [1, 2]}
+== pack nested
+  27 bytes
+  81 a1 61 81 a1 62 81 a1 63 81 a1 64 81 a1 65 91
+  91 91 91 91 81 a1 66 93 c3 c2 c0
+  = {'a': {'b': {'c': {'d': {'e': [[[[[{'f': [True, False, None]}]]]]]}}}}}
+== pack package bin=0
+  314 bytes
+  8b a4 6e 61 6d 65 b3 40 61 63 6d 65 2f 77 65 62
+  2d 64 61 73 68 62 6f 61 72 64 a7 76 65 72 73 69
+  6f 6e a6 33 2e 31 34 2e 31 a7 70 72 69 76 61 74
+  65 c3 ab 64 65 73 63 72 69 70 74 69 6f 6e da 00
+  ...
+  64 a5 66 6c 65 65 74 a7 6c 69 63 65 6e 73 65 c0
+  = {'name': '@acme/web-dashboard', 'version': '3.14.1', 'private': True, 'description': 'Operations dashboard for the "acme" fleet', 'main': 'dist/index.js', 'scripts': {'build': 'vite build', 'test': 'vitest run --coverage', 'lint': 'eslint .'}, 'dependencies': {'react': '^18.3.1', 'react-dom': '^18.3.1', 'zod': '3.23.8'}, 'engines': {'node': '>=20'}, 'files': [], 'keywords': ['ops', 'dashboard', 'fleet'], 'license': None}
+== pack ints bin=0
+  108 bytes
+  dc 00 19 00 01 7f cc 80 cc ff cd 01 00 cd ff ff
+  ce 00 01 00 00 ce ff ff ff ff cf 00 00 00 01 00
+  00 00 00 cf 7f ff ff ff ff ff ff ff cf 80 00 00
+  00 00 00 00 00 cf ff ff ff ff ff ff ff ff ff e0
+  d0 df d0 80 d1 ff 7f d1 80 00 d2 ff ff 7f ff d2
+  80 00 00 00 d3 ff ff ff ff 7f ff ff ff d3 80 00
+  00 00 00 00 00 00 00 ce 3b 9a ca 07
+  = [0, 1, 127, 128, 255, 256, 65535, 65536, 4294967295, 4294967296, 9223372036854775807, 9223372036854775808, 18446744073709551615, -1, -32, -33, -128, -129, -32768, -32769, -2147483648, -2147483649, -9223372036854775808, 0, 1000000007]
+== pack floats bin=0
+  147 bytes
+  dc 00 10 cb 00 00 00 00 00 00 00 00 cb 80 00 00
+  00 00 00 00 00 cb 3f f0 00 00 00 00 00 00 cb 3f
+  b9 99 99 99 99 99 9a cb c0 04 00 00 00 00 00 00
+  cb 40 09 21 fb 54 44 2d 18 cb 7e 37 e4 3c 88 00
+  75 9c cb 00 10 00 00 00 00 00 00 cb 00 00 00 00
+  00 00 00 01 cb 7f ef ff ff ff ff ff ff cb 43 41
+  c3 79 37 e0 80 00 cb 41 9d 6f 34 54 80 00 00 cb
+  3e 7a d7 f2 9a bc af 48 cb 44 df e1 85 ca 57 c5
+  17 cb 7f f0 00 00 00 00 00 00 cb ff f0 00 00 00
+  00 00 00
+  = [0.0, -0.0, 1.0, 0.1, -2.5, 3.141592653589793, 1e+300, 2.2250738585072014e-308, 5e-324, 1.7976931348623157e+308, 1e+16, 123456789.125, 1e-07, 6.02214076e+23, inf, -inf]
+== pack strings bin=0
+  359 bytes
+  dc 00 18 a0 a1 61 ac 68 65 6c 6c 6f 2c 20 77 6f
+  72 6c 64 a4 69 74 27 73 a8 73 61 79 20 22 68 69
+  22 ac 62 6f 74 68 20 27 20 61 6e 64 20 22 aa 62
+  61 63 6b 5c 73 6c 61 73 68 a8 74 61 62 09 68 65
+  ...
+  69 74 68 6f 75 74 20 62 69 6e 20 74 79 70 65 29
+  = ['', 'a', 'hello, world', "it's", 'say "hi"', 'both \' and "', 'back\\slash', 'tab\there', 'line\nbreak\r\n', 'nul\x00and\x1fus\x7fdel', 'café', '\xa0nbsp', '\xadshy', 'zero\u200bwidth', 'line\u2028sep', 'bom\ufeff', 'private\ue000use', '日本語', 'emoji 😀🎉', 'Grüße αβγ', 'c1\x85next', 'exactly thirty-one bytes long!!', 'exactly thirty-two bytes long!!!', 'a string that is longer than thirty-two bytes, so str8 (or raw16 without bin type)']
+== pack special bin=0
+  188 bytes
+  8e a4 62 6c 6f 62 a7 00 ff 10 de ad be ef aa 65
+  6d 70 74 79 5f 62 6c 6f 62 a0 a4 65 78 74 31 d4
+  05 2a a4 65 78 74 32 d5 06 01 02 a4 65 78 74 34
+  d6 07 01 02 03 04 a4 65 78 74 38 d7 08 01 02 03
+  04 05 06 07 08 a5 65 78 74 31 36 d8 09 00 01 02
+  03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f a4 65 78
+  74 33 c7 03 0a ab cd ef a4 65 78 74 30 c7 00 7f
+  a4 74 73 33 32 d6 ff 65 53 f1 00 a4 74 73 36 34
+  d7 ff 1d 6f 34 54 65 53 f1 00 a4 74 73 39 36 c7
+  0c ff 3b 9a c9 ff ff ff ff ff ff ff ff ff a5 74
+  73 39 36 62 c7 0c ff 00 00 00 05 00 00 00 04 00
+  00 00 00 a5 70 6f 69 6e 74 92 01 02
+  = error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 1: invalid start byte
+== pack floats single=1
+  error: OverflowError: float too large to pack with f format
+== pack geojson single=1
+  474 bytes
+  82 a4 74 79 70 65 b1 46 65 61 74 75 72 65 43 6f
+  6c 6c 65 63 74 69 6f 6e a8 66 65 61 74 75 72 65
+  73 93 84 a4 74 79 70 65 a7 46 65 61 74 75 72 65
+  a2 69 64 01 a8 67 65 6f 6d 65 74 72 79 82 a4 74
+  ...
+  67 73 92 a7 63 61 70 69 74 61 6c a4 f0 9f 97 bc
+  = {'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'id': 1, 'geometry': {'type': 'Point', 'coordinates': [-122.41940307617188, 37.774898529052734]}, 'properties': {'name': 'San Francisco', 'population': 808437, 'density': 7272.7998046875}}, {'type': 'Feature', 'id': 2, 'geometry': {'type': 'LineString', 'coordinates': [[2.3522000312805176, 48.85660171508789], [4.835700035095215, 45.763999938964844], [5.369800090789795, 43.29650115966797]]}, 'properties': {'name': 'Paris - Lyon - Marseille', 'km': 775, 'electrified': True}}, {'type': 'Feature', 'id': 3, 'geometry': {'type': 'Polygon', 'coordinates': [[[139.69000244140625, 35.68000030517578], [139.77000427246094, 35.68000030517578], [139.77000427246094, 35.720001220703125], [139.69000244140625, 35.720001220703125], [139.69000244140625, 35.68000030517578]]]}, 'properties': {'name': '東京', 'area_km2': 0.03150000050663948, 'tags': ['capital', '🗼']}}]}
+== pack big
+  355424 bytes
+  87 a5 73 74 72 31 36 da 01 90 61 62 61 62 61 62
+  61 62 61 62 61 62 61 62 61 62 61 62 61 62 61 62
+  61 62 61 62 61 62 61 62 61 62 61 62 61 62 61 62
+  61 62 61 62 61 62 61 62 61 62 61 62 61 62 61 62
+  ...
+  10 a3 6b 31 37 11 a3 6b 31 38 12 a3 6b 31 39 13
+  = {'str16': 'abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab', 'str32': 'xyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzxyzx... (826835 chars)
+== pack big bin=0
+  355424 bytes
+  87 a5 73 74 72 31 36 da 01 90 61 62 61 62 61 62
+  61 62 61 62 61 62 61 62 61 62 61 62 61 62 61 62
+  61 62 61 62 61 62 61 62 61 62 61 62 61 62 61 62
+  61 62 61 62 61 62 61 62 61 62 61 62 61 62 61 62
+  ...
+  10 a3 6b 31 37 11 a3 6b 31 38 12 a3 6b 31 39 13
+  = error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte
+== pack too-big-int
+  error: OverflowError: Integer value out of range
+== pack too-small-int
+  error: OverflowError: Integer value out of range
+== pack bad-ext
+  error: ValueError: code must be 0~127
+== pack bad-ts
+  error: ValueError: nanoseconds must be a non-negative integer less than 999999999.
+== unpack scalars
+  [None, True, False, 0, 127, -1, -32, 300, -300, 1099511627776, -1099511627776, 18446744073709551615, 1.5, -0.0, inf, nan, 'hi', b'\x00\xffbin']
+== unpack single-floats
+  [0.10000000149011612, 1.5, 3.3999999521443642e+38, 1.401298464324817e-45, -2.5]
+== unpack record
+  {'user': 'ada', 'id': 1815, 'roles': ['admin', 'dev'], 'meta': {'active': True, 'score': 99.5, 'avatar': b'\x89PNG'}}
+== unpack exts
+  [ExtType(code=1, data=b'a'), ExtType(code=2, data=b'ab'), ExtType(code=3, data=b'abcd'), ExtType(code=4, data=b'\x00\x00\x00\x00\x00\x00\x00\x00'), ExtType(code=5, data=b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f'), ExtType(code=6, data=b'xyz'), ExtType(code=7, data=b''), ExtType(code=127, data=b'\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f')]
+== unpack timestamps
+  [Timestamp(seconds=0, nanoseconds=0), Timestamp(seconds=1700000000, nanoseconds=0), Timestamp(seconds=1700000000, nanoseconds=500000000), Timestamp(seconds=-86400, nanoseconds=1), Timestamp(seconds=17179869184, nanoseconds=7), Timestamp(seconds=8589934591, nanoseconds=999999999)]
+== unpack negative-ext-code
+  error: ValueError: code must be 0~127
+== unpack raw-strings
+  ['short', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy']
+== unpack wide-headers
+  error: ExtraData: unpack(b) received extra data.
+== unpack tuples
+  [[1, [2, 3]], [], {'p': [4]}]
+== unpack utf8-mix
+  ['café', '日本', '😀', "tab\tq'uote", '\x85\xa0\u200b\u2028\ufeff', "it's", 'a"b\'c', '\\', '\x00\x1f\x7f']
+== unpack bytes-quotes
+  [b"it's", b'a"b', b'a"b\'c', b'\t\n\r\\', b'\x00\x7f\x80\xff']
+== unpack hex-floats
+  [1e+16, 1e-05, 0.0001, 1.2345678901234568e+17, 1e+22, 9007199254740992.0, -1e-300]
+== unpack two-docs
+  error: ExtraData: unpack(b) received extra data.
+== unpack int-keys
+  error: ValueError: <class 'int'> is not allowed for map key
+== unpack key-bin
+  {b'k': 1}
+== unpack empty
+  error: ValueError: Unpack failed: incomplete input
+== unpack record raw=1
+  {b'user': b'ada', b'id': 1815, b'roles': [b'admin', b'dev'], b'meta': {b'active': True, b'score': 99.5, b'avatar': b'\x89PNG'}}
+== unpack raw-strings raw=1
+  [b'short', b'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', b'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy']
+== unpack tuples list=0
+  ((1, (2, 3)), (), {'p': (4,)})
+== unpack record list=0
+  {'user': 'ada', 'id': 1815, 'roles': ('admin', 'dev'), 'meta': {'active': True, 'score': 99.5, 'avatar': b'\x89PNG'}}
+== unpack timestamps ts=1
+  [0.0, 1700000000.0, 1700000000.5, -86399.999999999, 17179869184.0, 8589934592.0]
+== unpack timestamps ts=2
+  [0, 1700000000000000000, 1700000000500000000, -86399999999999, 17179869184000000007, 8589934591999999999]
+== unpack int-keys strict=0
+  {1: 'one', 2: 'two', -3: 'minus three'}
+== unpack mixed-keys strict=0
+  error: TypeError: unhashable type: 'list'
+== unpack mixed-keys strict=0 list=0
+  {None: 0, True: 1, 2.5: 2, b'k': 3, 'k': 4, (1, 2): 5}
+== unpack equal-keys strict=0
+  {1: 'c', 2: 'd'}
+== unpack list-key strict=0
+  error: TypeError: unhashable type: 'list'
+== unpack list-key strict=0 list=0
+  {(1,): 'x'}
+== unpack map-key strict=0
+  error: TypeError: unhashable type: 'dict'
+== unpack unknown-header
+  error: FormatError: Unknown header: 0xc1
+== unpack truncated-array
+  error: ValueError: Unpack failed: incomplete input
+== unpack truncated-str
+  error: ValueError: 5 exceeds max_str_len(3)
+== unpack truncated-float
+  error: ValueError: Unpack failed: incomplete input
+== unpack claims-big-array
+  error: ValueError: 1000 exceeds max_array_len(7)
+== unpack claims-big-map
+  error: ValueError: 6 exceeds max_map_len(2)
+== unpack claims-big-str
+  error: ValueError: 65536 exceeds max_str_len(6)
+== unpack claims-big-bin
+  error: ValueError: 4096 exceeds max_bin_len(4)
+== unpack claims-big-ext
+  error: ValueError: 4096 exceeds max_ext_len(5)
+== unpack bad-utf8-start
+  error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 1: invalid start byte
+== unpack bad-utf8-cont
+  error: UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte
+== unpack bad-utf8-cont1
+  error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte
+== unpack bad-utf8-end
+  error: UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 2-3: unexpected end of data
+== unpack bad-utf8-overlong
+  error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte
+== unpack bad-utf8-surrogate
+  error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte
+== unpack bad-utf8-toobig
+  error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf4 in position 0: invalid continuation byte
+== unpack bad-utf8-4end
+  error: UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 1-3: invalid continuation byte
+== unpack bad-timestamp
+  error: ValueError: Timestamp type can only be created from 32, 64, or 96-bit byte objects
+== unpack extra-data
+  error: ExtraData: unpack(b) received extra data.
+== unpack key-int
+  error: ValueError: <class 'int'> is not allowed for map key
+== unpack key-float-in-nest
+  error: ValueError: <class 'float'> is not allowed for map key
+== unpack key-list
+  error: ValueError: <class 'list'> is not allowed for map key
+== unpack key-ext
+  error: ValueError: <class 'msgpack.ext.ExtType'> is not allowed for map key
+== unpack key-ts
+  error: ValueError: <class 'msgpack.ext.Timestamp'> is not allowed for map key
+== unpack key-none
+  error: ValueError: <class 'NoneType'> is not allowed for map key
+== unpack key-bool
+  error: ValueError: <class 'bool'> is not allowed for map key
+== unpack key-err-first
+  error: ValueError: <class 'int'> is not allowed for map key
+== unpack bad-utf8-start raw=1
+  [b'a\xffb']
+== unpack record max_str=3
+  error: ValueError: 4 exceeds max_str_len(3)
+== unpack record max_bin=3
+  error: ValueError: 4 exceeds max_bin_len(3)
+== unpack record max_array=1
+  error: ValueError: 2 exceeds max_array_len(1)
+== unpack record max_map=3
+  error: ValueError: 4 exceeds max_map_len(3)
+== unpack exts max_ext=3
+  error: ValueError: 4 exceeds max_ext_len(3)
+== unpack exts max_ext=0
+  error: ValueError: 1 exceeds max_ext_len(0)
+== stream event-stream 1
+  @50 {'seq': 0, 'level': 'info', 'msg': 'request 0 took 3 ms', 'ts': Timestamp(seconds=1700000000, nanoseconds=0)}
+  @105 {'seq': 1, 'level': 'warn', 'msg': 'request 1 took 20 ms', 'ts': Timestamp(seconds=1700000060, nanoseconds=1000)}
+  @161 {'seq': 2, 'level': 'error', 'msg': 'request 2 took 37 ms', 'ts': Timestamp(seconds=1700000120, nanoseconds=2000)}
+  @216 {'seq': 3, 'level': 'info', 'msg': 'request 3 took 54 ms', 'ts': Timestamp(seconds=1700000180, nanoseconds=3000)}
+  @271 {'seq': 4, 'level': 'warn', 'msg': 'request 4 took 71 ms', 'ts': Timestamp(seconds=1700000240, nanoseconds=4000)}
+  @327 {'seq': 5, 'level': 'error', 'msg': 'request 5 took 88 ms', 'ts': Timestamp(seconds=1700000300, nanoseconds=5000)}
+  @383 {'seq': 6, 'level': 'info', 'msg': 'request 6 took 105 ms', 'ts': Timestamp(seconds=1700000360, nanoseconds=6000)}
+  @439 {'seq': 7, 'level': 'warn', 'msg': 'request 7 took 122 ms', 'ts': Timestamp(seconds=1700000420, nanoseconds=7000)}
+  @496 {'seq': 8, 'level': 'error', 'msg': 'request 8 took 139 ms', 'ts': Timestamp(seconds=1700000480, nanoseconds=8000)}
+  @552 {'seq': 9, 'level': 'info', 'msg': 'request 9 took 156 ms', 'ts': Timestamp(seconds=1700000540, nanoseconds=9000)}
+  @609 {'seq': 10, 'level': 'warn', 'msg': 'request 10 took 173 ms', 'ts': Timestamp(seconds=1700000600, nanoseconds=10000)}
+  @667 {'seq': 11, 'level': 'error', 'msg': 'request 11 took 190 ms', 'ts': Timestamp(seconds=1700000660, nanoseconds=11000)}
+== stream event-stream 7
+  @50 {'seq': 0, 'level': 'info', 'msg': 'request 0 took 3 ms', 'ts': Timestamp(seconds=1700000000, nanoseconds=0)}
+  @105 {'seq': 1, 'level': 'warn', 'msg': 'request 1 took 20 ms', 'ts': Timestamp(seconds=1700000060, nanoseconds=1000)}
+  @161 {'seq': 2, 'level': 'error', 'msg': 'request 2 took 37 ms', 'ts': Timestamp(seconds=1700000120, nanoseconds=2000)}
+  @216 {'seq': 3, 'level': 'info', 'msg': 'request 3 took 54 ms', 'ts': Timestamp(seconds=1700000180, nanoseconds=3000)}
+  @271 {'seq': 4, 'level': 'warn', 'msg': 'request 4 took 71 ms', 'ts': Timestamp(seconds=1700000240, nanoseconds=4000)}
+  @327 {'seq': 5, 'level': 'error', 'msg': 'request 5 took 88 ms', 'ts': Timestamp(seconds=1700000300, nanoseconds=5000)}
+  @383 {'seq': 6, 'level': 'info', 'msg': 'request 6 took 105 ms', 'ts': Timestamp(seconds=1700000360, nanoseconds=6000)}
+  @439 {'seq': 7, 'level': 'warn', 'msg': 'request 7 took 122 ms', 'ts': Timestamp(seconds=1700000420, nanoseconds=7000)}
+  @496 {'seq': 8, 'level': 'error', 'msg': 'request 8 took 139 ms', 'ts': Timestamp(seconds=1700000480, nanoseconds=8000)}
+  @552 {'seq': 9, 'level': 'info', 'msg': 'request 9 took 156 ms', 'ts': Timestamp(seconds=1700000540, nanoseconds=9000)}
+  @609 {'seq': 10, 'level': 'warn', 'msg': 'request 10 took 173 ms', 'ts': Timestamp(seconds=1700000600, nanoseconds=10000)}
+  @667 {'seq': 11, 'level': 'error', 'msg': 'request 11 took 190 ms', 'ts': Timestamp(seconds=1700000660, nanoseconds=11000)}
+== stream event-stream 64
+  @50 {'seq': 0, 'level': 'info', 'msg': 'request 0 took 3 ms', 'ts': Timestamp(seconds=1700000000, nanoseconds=0)}
+  @105 {'seq': 1, 'level': 'warn', 'msg': 'request 1 took 20 ms', 'ts': Timestamp(seconds=1700000060, nanoseconds=1000)}
+  @161 {'seq': 2, 'level': 'error', 'msg': 'request 2 took 37 ms', 'ts': Timestamp(seconds=1700000120, nanoseconds=2000)}
+  @216 {'seq': 3, 'level': 'info', 'msg': 'request 3 took 54 ms', 'ts': Timestamp(seconds=1700000180, nanoseconds=3000)}
+  @271 {'seq': 4, 'level': 'warn', 'msg': 'request 4 took 71 ms', 'ts': Timestamp(seconds=1700000240, nanoseconds=4000)}
+  @327 {'seq': 5, 'level': 'error', 'msg': 'request 5 took 88 ms', 'ts': Timestamp(seconds=1700000300, nanoseconds=5000)}
+  @383 {'seq': 6, 'level': 'info', 'msg': 'request 6 took 105 ms', 'ts': Timestamp(seconds=1700000360, nanoseconds=6000)}
+  @439 {'seq': 7, 'level': 'warn', 'msg': 'request 7 took 122 ms', 'ts': Timestamp(seconds=1700000420, nanoseconds=7000)}
+  @496 {'seq': 8, 'level': 'error', 'msg': 'request 8 took 139 ms', 'ts': Timestamp(seconds=1700000480, nanoseconds=8000)}
+  @552 {'seq': 9, 'level': 'info', 'msg': 'request 9 took 156 ms', 'ts': Timestamp(seconds=1700000540, nanoseconds=9000)}
+  @609 {'seq': 10, 'level': 'warn', 'msg': 'request 10 took 173 ms', 'ts': Timestamp(seconds=1700000600, nanoseconds=10000)}
+  @667 {'seq': 11, 'level': 'error', 'msg': 'request 11 took 190 ms', 'ts': Timestamp(seconds=1700000660, nanoseconds=11000)}
+== stream event-stream 100000
+  @50 {'seq': 0, 'level': 'info', 'msg': 'request 0 took 3 ms', 'ts': Timestamp(seconds=1700000000, nanoseconds=0)}
+  @105 {'seq': 1, 'level': 'warn', 'msg': 'request 1 took 20 ms', 'ts': Timestamp(seconds=1700000060, nanoseconds=1000)}
+  @161 {'seq': 2, 'level': 'error', 'msg': 'request 2 took 37 ms', 'ts': Timestamp(seconds=1700000120, nanoseconds=2000)}
+  @216 {'seq': 3, 'level': 'info', 'msg': 'request 3 took 54 ms', 'ts': Timestamp(seconds=1700000180, nanoseconds=3000)}
+  @271 {'seq': 4, 'level': 'warn', 'msg': 'request 4 took 71 ms', 'ts': Timestamp(seconds=1700000240, nanoseconds=4000)}
+  @327 {'seq': 5, 'level': 'error', 'msg': 'request 5 took 88 ms', 'ts': Timestamp(seconds=1700000300, nanoseconds=5000)}
+  @383 {'seq': 6, 'level': 'info', 'msg': 'request 6 took 105 ms', 'ts': Timestamp(seconds=1700000360, nanoseconds=6000)}
+  @439 {'seq': 7, 'level': 'warn', 'msg': 'request 7 took 122 ms', 'ts': Timestamp(seconds=1700000420, nanoseconds=7000)}
+  @496 {'seq': 8, 'level': 'error', 'msg': 'request 8 took 139 ms', 'ts': Timestamp(seconds=1700000480, nanoseconds=8000)}
+  @552 {'seq': 9, 'level': 'info', 'msg': 'request 9 took 156 ms', 'ts': Timestamp(seconds=1700000540, nanoseconds=9000)}
+  @609 {'seq': 10, 'level': 'warn', 'msg': 'request 10 took 173 ms', 'ts': Timestamp(seconds=1700000600, nanoseconds=10000)}
+  @667 {'seq': 11, 'level': 'error', 'msg': 'request 11 took 190 ms', 'ts': Timestamp(seconds=1700000660, nanoseconds=11000)}
+== stream event-stream 13 ts=1
+  @50 {'seq': 0, 'level': 'info', 'msg': 'request 0 took 3 ms', 'ts': 1700000000.0}
+  @105 {'seq': 1, 'level': 'warn', 'msg': 'request 1 took 20 ms', 'ts': 1700000060.000001}
+  @161 {'seq': 2, 'level': 'error', 'msg': 'request 2 took 37 ms', 'ts': 1700000120.000002}
+  @216 {'seq': 3, 'level': 'info', 'msg': 'request 3 took 54 ms', 'ts': 1700000180.000003}
+  @271 {'seq': 4, 'level': 'warn', 'msg': 'request 4 took 71 ms', 'ts': 1700000240.000004}
+  @327 {'seq': 5, 'level': 'error', 'msg': 'request 5 took 88 ms', 'ts': 1700000300.000005}
+  @383 {'seq': 6, 'level': 'info', 'msg': 'request 6 took 105 ms', 'ts': 1700000360.000006}
+  @439 {'seq': 7, 'level': 'warn', 'msg': 'request 7 took 122 ms', 'ts': 1700000420.000007}
+  @496 {'seq': 8, 'level': 'error', 'msg': 'request 8 took 139 ms', 'ts': 1700000480.000008}
+  @552 {'seq': 9, 'level': 'info', 'msg': 'request 9 took 156 ms', 'ts': 1700000540.000009}
+  @609 {'seq': 10, 'level': 'warn', 'msg': 'request 10 took 173 ms', 'ts': 1700000600.00001}
+  @667 {'seq': 11, 'level': 'error', 'msg': 'request 11 took 190 ms', 'ts': 1700000660.000011}
+== stream stream-with-junk 3
+  @4 {'a': 1}
+  @7 [1, 2]
+  error: FormatError: Unknown header: 0xc1
+== stream stream-truncated 50
+  @50 {'seq': 0, 'level': 'info', 'msg': 'request 0 took 3 ms', 'ts': Timestamp(seconds=1700000000, nanoseconds=0)}
+  @105 {'seq': 1, 'level': 'warn', 'msg': 'request 1 took 20 ms', 'ts': Timestamp(seconds=1700000060, nanoseconds=1000)}
+  @161 {'seq': 2, 'level': 'error', 'msg': 'request 2 took 37 ms', 'ts': Timestamp(seconds=1700000120, nanoseconds=2000)}
+  rest 39 bytes
+== stream event-stream 40 max_buffer=60
+  error: BufferFull
+== stream event-stream 40 max_buffer=200
+  @50 {'seq': 0, 'level': 'info', 'msg': 'request 0 took 3 ms', 'ts': Timestamp(seconds=1700000000, nanoseconds=0)}
+  @105 {'seq': 1, 'level': 'warn', 'msg': 'request 1 took 20 ms', 'ts': Timestamp(seconds=1700000060, nanoseconds=1000)}
+  @161 {'seq': 2, 'level': 'error', 'msg': 'request 2 took 37 ms', 'ts': Timestamp(seconds=1700000120, nanoseconds=2000)}
+  @216 {'seq': 3, 'level': 'info', 'msg': 'request 3 took 54 ms', 'ts': Timestamp(seconds=1700000180, nanoseconds=3000)}
+  @271 {'seq': 4, 'level': 'warn', 'msg': 'request 4 took 71 ms', 'ts': Timestamp(seconds=1700000240, nanoseconds=4000)}
+  @327 {'seq': 5, 'level': 'error', 'msg': 'request 5 took 88 ms', 'ts': Timestamp(seconds=1700000300, nanoseconds=5000)}
+  @383 {'seq': 6, 'level': 'info', 'msg': 'request 6 took 105 ms', 'ts': Timestamp(seconds=1700000360, nanoseconds=6000)}
+  @439 {'seq': 7, 'level': 'warn', 'msg': 'request 7 took 122 ms', 'ts': Timestamp(seconds=1700000420, nanoseconds=7000)}
+  @496 {'seq': 8, 'level': 'error', 'msg': 'request 8 took 139 ms', 'ts': Timestamp(seconds=1700000480, nanoseconds=8000)}
+  @552 {'seq': 9, 'level': 'info', 'msg': 'request 9 took 156 ms', 'ts': Timestamp(seconds=1700000540, nanoseconds=9000)}
+  @609 {'seq': 10, 'level': 'warn', 'msg': 'request 10 took 173 ms', 'ts': Timestamp(seconds=1700000600, nanoseconds=10000)}
+  @667 {'seq': 11, 'level': 'error', 'msg': 'request 11 took 190 ms', 'ts': Timestamp(seconds=1700000660, nanoseconds=11000)}
+== stream two-docs 2
+  @4 {'a': 1}
+  @6 [2]
+== forward forward 1
+  app.access 1700000100.000000000 {'method': 'GET', 'path': '/health', 'status': 200}
+  app.access 1700000101.250000000 {'method': 'POST', 'path': '/login', 'status': 302}
+  ack p8n9gmxTQVC8/nh2wlKKeQ==
+  app.worker 1700000102.000000000 {'job': 'resize', 'ms': 41}
+  app.worker 1700000103.000000007 {'job': 'thumbnail', 'ms': 12}
+  ack Fqd9ftTpSbe3sN7LrBYwJQ==
+  app.cache 1700000104.000000000 {'event': 'cache-miss', 'key': 'user:1815'}
+  app.cache 1700000105.999999999 {'event': 'cache-hit', 'key': 'user:7'}
+  app.cache 1700000104.000000000 {'event': 'cache-miss', 'key': 'user:1815'}
+  app.cache 1700000105.999999999 {'event': 'cache-hit', 'key': 'user:7'}
+  rejected: bad entry: 121
+  rejected: bad time 3.5
+  rejected: not a message: ['bad.shape', 5]
+  rejected: Unknown header: 0xc1
+  rejected: not a message: {'not': 'an array'}
+  rejected: bad time ExtType(code=0, data=b'\x00\x01')
+== forward forward 17
+  app.access 1700000100.000000000 {'method': 'GET', 'path': '/health', 'status': 200}
+  app.access 1700000101.250000000 {'method': 'POST', 'path': '/login', 'status': 302}
+  ack p8n9gmxTQVC8/nh2wlKKeQ==
+  app.worker 1700000102.000000000 {'job': 'resize', 'ms': 41}
+  app.worker 1700000103.000000007 {'job': 'thumbnail', 'ms': 12}
+  ack Fqd9ftTpSbe3sN7LrBYwJQ==
+  app.cache 1700000104.000000000 {'event': 'cache-miss', 'key': 'user:1815'}
+  app.cache 1700000105.999999999 {'event': 'cache-hit', 'key': 'user:7'}
+  app.cache 1700000104.000000000 {'event': 'cache-miss', 'key': 'user:1815'}
+  app.cache 1700000105.999999999 {'event': 'cache-hit', 'key': 'user:7'}
+  rejected: bad entry: 121
+  rejected: bad time 3.5
+  rejected: not a message: ['bad.shape', 5]
+  rejected: Unknown header: 0xc1
+  rejected: not a message: {'not': 'an array'}
+  rejected: bad time ExtType(code=0, data=b'\x00\x01')
+== forward forward 4096
+  app.access 1700000100.000000000 {'method': 'GET', 'path': '/health', 'status': 200}
+  app.access 1700000101.250000000 {'method': 'POST', 'path': '/login', 'status': 302}
+  ack p8n9gmxTQVC8/nh2wlKKeQ==
+  app.worker 1700000102.000000000 {'job': 'resize', 'ms': 41}
+  app.worker 1700000103.000000007 {'job': 'thumbnail', 'ms': 12}
+  ack Fqd9ftTpSbe3sN7LrBYwJQ==
+  app.cache 1700000104.000000000 {'event': 'cache-miss', 'key': 'user:1815'}
+  app.cache 1700000105.999999999 {'event': 'cache-hit', 'key': 'user:7'}
+  app.cache 1700000104.000000000 {'event': 'cache-miss', 'key': 'user:1815'}
+  app.cache 1700000105.999999999 {'event': 'cache-hit', 'key': 'user:7'}
+  rejected: bad entry: 121
+  rejected: bad time 3.5
+  rejected: not a message: ['bad.shape', 5]
+  rejected: Unknown header: 0xc1
+  rejected: not a message: {'not': 'an array'}
+  rejected: bad time ExtType(code=0, data=b'\x00\x01')
