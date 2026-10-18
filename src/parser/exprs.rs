@@ -231,11 +231,78 @@ impl super::Parser {
         result
     }
 
+    /// A postfix operator after a block-like expression that ended a
+    /// statement (B-2026-10-18-25): `match d { .. }.to_string()`. Reported
+    /// at the operator, with a fix that wraps the expression in parentheses.
+    fn block_like_postfix_error(&mut self, lhs: &Expr) {
+        let (article, what) = match &lhs.kind {
+            ExprKind::If { .. } | ExprKind::IfLet { .. } => ("an", "`if`"),
+            ExprKind::Match { .. } => ("a", "`match`"),
+            ExprKind::While { .. } | ExprKind::WhileLet { .. } => ("a", "`while`"),
+            ExprKind::For { .. } => ("a", "`for`"),
+            ExprKind::Loop { .. } => ("a", "`loop`"),
+            ExprKind::Unsafe(_) => ("an", "`unsafe` block"),
+            ExprKind::Seq(_) => ("a", "`seq` block"),
+            ExprKind::Par(_) => ("a", "`par` block"),
+            ExprKind::Lock { .. } => ("a", "`lock` block"),
+            ExprKind::Providers { .. } => ("a", "`providers` block"),
+            _ => ("a", "block"),
+        };
+        let op = match self.peek_token_ref() {
+            Token::QuestionDot => "?.",
+            Token::Question => "?",
+            _ => ".",
+        };
+        let at = self.current_span();
+        self.error_at(
+            &format!(
+                "{article} {what} at the start of a statement ends the statement at its \
+                 `}}`, so the `{op}` after it has nothing to apply to; put the {what} in \
+                 parentheses to use its value"
+            ),
+            at,
+        );
+        let end = lhs.span.offset + lhs.span.length;
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&at),
+            vec![
+                crate::resolver::TextEdit {
+                    offset: lhs.span.offset,
+                    length: 0,
+                    replacement: "(".to_string(),
+                },
+                crate::resolver::TextEdit {
+                    offset: end,
+                    length: 0,
+                    replacement: ")".to_string(),
+                },
+            ],
+        );
+    }
+
     fn parse_expr_bp_with_ctx_inner(&mut self, min_bp: u8, stmt_ctx: bool) -> Option<Expr> {
+        // A parenthesized prefix is not block-like, whatever it holds:
+        // parentheses leave no node in the AST, so `(if c { a } else { b })`
+        // comes back as a bare `If`, and checking the node alone would end
+        // the statement at the `)` and refuse the `.len()` that design.md
+        // § Statements gives as the way to apply postfix in statement
+        // position (B-2026-10-18-25).
+        let parenthesized = self.check(&Token::LeftParen);
         let mut lhs = self.parse_prefix()?;
 
-        if stmt_ctx && Self::is_block_like_prefix(&lhs) {
-            return Some(lhs);
+        if stmt_ctx && !parenthesized && Self::is_block_like_prefix(&lhs) {
+            // `.`, `?.` and `?` cannot start a statement, so one here means
+            // the postfix was meant for the block-like expression. Say so,
+            // offer the parentheses as the fix, and parse on as if they
+            // were written, rather than reporting the `.` as a missing
+            // expression.
+            if !matches!(
+                self.peek_token_ref(),
+                Token::Dot | Token::QuestionDot | Token::Question
+            ) {
+                return Some(lhs);
+            }
+            self.block_like_postfix_error(&lhs);
         }
 
         loop {

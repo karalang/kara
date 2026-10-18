@@ -1902,7 +1902,7 @@ The statements are `let`, `let…else`, assignment, `defer`, `errdefer` and expr
 
 **A block-like expression in statement position drops its value** at the end of the statement. The `must_use` lint applies as usual ([§11](#must_use)), so a discarded `par { … }` whose value is a tuple of `Result`s warns.
 
-**A block-like expression in statement position ends at its `}`.** The next token starts a new statement, even one that could otherwise apply to it (`.`, `(`, `[`, `?`), so a `while` loop followed by a line starting `[1, 2]` is two statements. To apply an operator to a block-like expression in statement position, parenthesize it: `(if c { a } else { b }).len()`.
+**A block-like expression in statement position ends at its `}`.** The next token starts a new statement, even one that could otherwise apply to it (`.`, `(`, `[`, `?`), so a `while` loop followed by a line starting `[1, 2]` is two statements. To apply an operator to a block-like expression in statement position, parenthesize it: `(if c { a } else { b }).len()`. Since `.`, `?.` and `?` cannot start a statement, one written there is an error whose fix adds the parentheses.
 
 **Other separators.** Match arms are separated by `,`, which is optional after an arm whose body is a block. Fields and parameters are separated by `,`, and a trailing comma is allowed. Top-level items have no separator.
 

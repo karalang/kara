@@ -16486,3 +16486,73 @@ fn test_unsuffixed_i128_min_folds_to_a_single_integer_node() {
         value.kind
     );
 }
+
+/// Parentheses take a block-like expression out of statement position, so
+/// postfix applies to it there, as design.md § Statements says; without
+/// them the `.` is reported at the operator with a fix that adds them
+/// (B-2026-10-18-25).
+#[test]
+fn postfix_on_a_parenthesized_block_like_statement() {
+    let ok = "fn w(c: bool) -> i64 {\n    (if c { 1 } else { 2 }).abs()\n}\n\
+              fn n(d: i64) -> String {\n    (match d {\n        0 => \"a\",\n        _ => \"b\",\n    }).to_string()\n}\n\
+              fn m() {\n    (if true { 1 } else { 2 });\n    ({ 5 }).abs();\n}";
+    let p = parse_ok(ok);
+    let Item::Function(f) = &p.items[0] else {
+        panic!("not a function")
+    };
+    let tail = f.body.final_expr.as_ref().expect("the call is the tail");
+    assert!(
+        matches!(&tail.kind, ExprKind::MethodCall { method, .. } if method == "abs"),
+        "{:?}",
+        tail.kind
+    );
+
+    let src =
+        "fn n(d: i64) -> String {\n    match d {\n        _ => \"b\",\n    }.to_string()\n}\n\
+               fn w(c: bool) -> i64 {\n    if c { 1 } else { 2 }.abs()\n}\n\
+               fn q() -> Option[i64] {\n    { Some(1) }?.abs();\n    None\n}";
+    let r = parse(src);
+    assert_eq!(r.errors.len(), 3, "{:?}", r.errors);
+    assert!(
+        r.errors[0].message.contains(
+            "a `match` at the start of a statement ends the statement at its `}`, so the `.` after it"
+        ),
+        "{}",
+        r.errors[0].message
+    );
+    assert!(
+        r.errors[1].message.starts_with("an `if` at"),
+        "{}",
+        r.errors[1].message
+    );
+    assert!(
+        r.errors[2].message.contains("the `?.` after it"),
+        "{}",
+        r.errors[2].message
+    );
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for e in &r.errors {
+        let key = karac::resolver::SpanKey::from_span(&e.span);
+        for ed in r.fix_diffs.get(&key).expect("every form has a fix") {
+            edits.push((ed.offset, ed.length, ed.replacement.clone()));
+        }
+    }
+    edits.sort();
+    let mut out = src.to_string();
+    for (off, len, rep) in edits.into_iter().rev() {
+        out.replace_range(off..off + len, &rep);
+    }
+    assert_eq!(
+        out,
+        "fn n(d: i64) -> String {\n    (match d {\n        _ => \"b\",\n    }).to_string()\n}\n\
+         fn w(c: bool) -> i64 {\n    (if c { 1 } else { 2 }).abs()\n}\n\
+         fn q() -> Option[i64] {\n    ({ Some(1) })?.abs();\n    None\n}"
+    );
+    assert!(parse(&out).errors.is_empty());
+
+    // A `[` or `(` can start a statement, so after a block-like one it still
+    // does, with no new diagnostic.
+    assert!(parse("fn m() {\n    while false { }\n    [1, 2].len();\n}")
+        .errors
+        .is_empty());
+}

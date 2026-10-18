@@ -134,6 +134,12 @@ const CORPUS: &[&str] = &[
     "f(g(x))",
     "v[0].field",
     "a.b(c).d",
+    // Postfix on a parenthesized block-like expression in statement position
+    // (B-2026-10-18-25): the oracle wraps each input as a statement, and the
+    // seed used to end the statement at the `)`.
+    "(if a { b } else { c }).m()",
+    "(match x { _ => a }).m(y)",
+    "({ a }).b",
     // Postfix mixed with prefix / binary.
     "-a.b",
     "a.b + c",
