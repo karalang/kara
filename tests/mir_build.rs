@@ -3390,3 +3390,88 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_ref_result_outliving_its_referent_is_copied_out() {
+    // B-2026-10-18-19: a tail `v.first().unwrap()` of a LOCAL `Vec` (or a
+    // `PriorityQueue`'s `peek`) returned the reference into the `i64`
+    // slot, so it dangled once the local died: `__mir-run` reported a use
+    // after free and the compiled lanes printed addresses. Fixed by
+    // B-2026-10-18-4's read-through in the built MIR.
+    let src = r#"
+fn top() -> i64 {
+    let v: Vec[i64] = vec![7];
+    v.first().unwrap()
+}
+fn topq() -> i64 {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(7);
+    q.peek().unwrap_or(0)
+}
+fn main_a() {
+    let words = vec![4, 5];
+    let t = top();
+    println(f"{t} {words} {topq()}");
+}
+struct Least {
+    mut top: PriorityQueue[i64],
+}
+impl Least {
+    fn add(mut ref self, val: i64) -> i64 {
+        self.top.push(val);
+        self.top.peek().unwrap()
+    }
+}
+fn answers(adds: Vec[i64]) -> Vec[i64] {
+    let mut s = Least { top: PriorityQueue.new() };
+    let mut out: Vec[i64] = Vec.new();
+    for a in adds.iter() {
+        out.push(s.add(*a));
+    }
+    out
+}
+fn main_b() {
+    println(f"{answers(vec![5, 3, 8])}");
+}
+fn main() {
+    main_a();
+    main_b();
+}
+"#;
+    let want = "7 [4, 5] 7\n[5, 3, 3]\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+#[test]
+fn mir_a_match_arm_ref_result_is_read_into_the_value_slot() {
+    // B-2026-10-18-13: `None => b.get(k).unwrap_or(0)` beside `Some(n) => *n`
+    // stored the arm's `ref i64` into the `i64` match result. Fixed by
+    // B-2026-10-18-4's read-through.
+    let src = r#"
+fn main() {
+    let mut a: Map[char, i64] = Map.new();
+    let mut b: Map[char, i64] = Map.new();
+    b.insert('x', 2);
+    a.insert('y', 5);
+    let numb = match a.get('x') {
+        Some(n) => *n,
+        None => b.get('x').unwrap_or(0),
+    };
+    println(f"{numb - 1}");
+}
+"#;
+    let want = "1\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
