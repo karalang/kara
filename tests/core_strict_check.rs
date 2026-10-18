@@ -7304,3 +7304,27 @@ fn main() {
 "#,
     );
 }
+
+/// B-2026-10-15-1: the items of `zip` and `chain` over `iter()` are the
+/// references `iter()` gives, so `*x` reads them.
+#[test]
+fn zip_and_chain_items_are_references() {
+    accepted(
+        "zip-chain-refs",
+        r#"
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    a.len() == b.len() and a.iter().zip(b.iter()).all(|(x, y)| *x == *y)
+}
+fn main() {
+    let a: Vec[i64] = vec![1, 2, 3];
+    let b: Vec[i64] = vec![1, 2, 4];
+    let mut d = 0;
+    for (x, y) in a.iter().zip(b.iter()) { d += *y - *x; }
+    for p in a.iter().zip(b.iter()) { d += *p.1 - *p.0; }
+    let mut c = 0;
+    for x in a.iter().chain(b.iter()) { c += *x; }
+    println(f"{same(a, b)} {d} {c}");
+}
+"#,
+    );
+}
