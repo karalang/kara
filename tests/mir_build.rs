@@ -338,7 +338,10 @@ fn mir_build_reports_where_a_panic_happened() {
 
 /// `KARAC_DEBUG_INFO=1` gives the compiled program line tables: gdb stops
 /// at a Kāra line and its backtrace names the Kāra lines of each frame, at
-/// -O0 and through -O2's inlining. Skipped without a usable gdb.
+/// -O0 and through -O2's inlining. Skipped without a usable gdb. The
+/// `Vec` is collected and the index comes from the program's arguments,
+/// so -O2 cannot fold the call away now that it sees a literal `Vec`'s
+/// allocation and contents.
 #[test]
 fn mir_build_line_tables_drive_gdb() {
     let gdb_ok = Command::new("gdb")
@@ -350,7 +353,7 @@ fn mir_build_line_tables_drive_gdb() {
         return;
     }
     let src = "fn pick(v: ref Vec[i64], i: i64) -> i64 {\n    v[i]\n}\n\n\
-               fn main() {\n    let v = vec![1, 2, 3];\n    println(f\"{pick(v, 1)}\");\n}\n";
+               fn main() {\n    let v: Vec[i64] = \"1 2 3\".split(\" \").map(|s| i64.parse(s).unwrap()).collect();\n    println(f\"{pick(v, env.args().len())}\");\n}\n";
     for opt in ["0", "2"] {
         let dir = Scratch::new();
         let envs = [("KARAC_MIR_OPT", opt), ("KARAC_DEBUG_INFO", "1")];
@@ -4815,6 +4818,39 @@ fn main() {
     let want = "2\nwas 1\nc1! t\n";
     let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
     assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// A fresh `Vec` is allocated in line (kata 28's bench): empty, zero-sized
+/// element, `with_capacity`, a literal, `filled` and a clone all give
+/// the MIR interpreter's answers.
+#[test]
+fn mir_build_inline_vec_allocation_agrees_with_the_interpreter() {
+    let src = r#"
+fn main() {
+    let a: Vec[u8] = Vec.filled(0, 1u8);
+    let mut b: Vec[i64] = Vec.with_capacity(0);
+    b.push(7);
+    let c: Vec[()] = Vec.filled(3, ());
+    let d: Vec[i64] = vec![1, 2, 3];
+    let mut e: Vec[i64] = Vec.with_capacity(2);
+    for i in 0..5 {
+        e.push(i * i);
+    }
+    let f = e.clone();
+    let g: Vec[String] = Vec.filled(2, "x".to_string());
+    println(f"{a.len()} {b} {c.len()} {d} {e} {f} {g}");
+}
+"#;
+    let want = karac::mir::lower::run_source(src).expect("interp").output;
+    assert_eq!(
+        want,
+        "0 [7] 3 [1, 2, 3] [0, 1, 4, 9, 16] [0, 1, 4, 9, 16] [x, x]\n"
+    );
     for opt in [0, 2] {
         if let Some(out) = build_and_run(src, opt) {
             assert_eq!(out, want, "at -O{opt}");

@@ -141,7 +141,7 @@ impl<'ctx> Cx<'ctx, '_> {
             TyKind::Intrinsic(IntrinsicTy::Vec(el)) => {
                 let n = self.load_i64(self.offset(src, 8)?)?;
                 let size = self.layout(el)?.size;
-                self.rt("vec_alloc", &[dst.into(), n.into(), self.i64(size).into()])?;
+                self.vec_alloc(dst, n, size)?;
                 let db = self.load_ptr(dst)?;
                 let sb = self.load_ptr(src)?;
                 self.clone_elems(db, sb, n, el)

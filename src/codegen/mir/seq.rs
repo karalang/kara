@@ -1250,7 +1250,7 @@ impl<'ctx> Cx<'ctx, '_> {
                         .into_int_value()
                 };
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), count.into(), self.i64(16).into()])?;
+                self.vec_alloc(d, count, 16)?;
                 let buf = self.load_ptr(d)?;
                 let chunks = method == "chunks";
                 self.count_loop(count, |cx, i| {
@@ -1405,7 +1405,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.abort_unless(ok, "index out of bounds")?;
                 let tail = self.builder.build_int_sub(n, at, "").map_err(e)?;
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), tail.into(), self.i64(size).into()])?;
+                self.vec_alloc(d, tail, size)?;
                 let nb = self.load_ptr(d)?;
                 let from = self.elem_ptr(p, at, size)?;
                 let bytes = self
@@ -1681,7 +1681,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .into_int_value();
         let c = self.callee_by_ref(&args[1])?;
         let d = self.place_ptr(dest)?;
-        self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+        self.vec_alloc(d, n, size)?;
         let buf = self.load_ptr(d)?;
         let i64t = self.tys.intern(TyKind::Int(crate::mir::IntTy::I64));
         let arg = self.entry_slot(8, "from_fn.i")?;
@@ -1721,7 +1721,7 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<()> {
         let size = self.layout(el)?.size;
         let d = self.place_ptr(dest)?;
-        self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+        self.vec_alloc(d, n, size)?;
         let buf = self.load_ptr(d)?;
         self.clone_seq(buf, p, n, el)
     }

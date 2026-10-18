@@ -909,7 +909,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     _ => 1,
                 };
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                self.vec_alloc(d, n, size)?;
                 self.store(self.offset(d, 8)?, self.i64(0).into())
             }
             ("String", "clear") => {
@@ -926,10 +926,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let size = self.layout(el)?.size;
                 let src = self.operand_ptr(&args[0])?;
                 let d = self.place_ptr(dest)?;
-                self.rt(
-                    "vec_alloc",
-                    &[d.into(), self.i64(n).into(), self.i64(size).into()],
-                )?;
+                self.vec_alloc(d, self.i64(n), size)?;
                 if n * size != 0 {
                     let buf = self.load_ptr(d)?;
                     self.builder
@@ -948,7 +945,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.abort_unless(ok, "explicit panic")?;
                 let val = self.operand_ptr(&args[1])?;
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 let empty = self.is_zero(n)?;
                 let f = self.cur_fn()?;
@@ -1041,10 +1038,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("Env", "args") => {
                 let d = self.place_ptr(dest)?;
-                self.rt(
-                    "vec_alloc",
-                    &[d.into(), self.i64(1).into(), self.i64(24).into()],
-                )?;
+                self.vec_alloc(d, self.i64(1), 24)?;
                 let buf = self.load_ptr(d)?;
                 let (s, n) = self.str_const("main")?;
                 self.rt("string_from", &[buf.into(), s.into(), n.into()])
@@ -1192,6 +1186,86 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.position_at_end(bad);
         self.abort_with(msg)?;
         self.builder.position_at_end(good);
+        Ok(())
+    }
+
+    /// A fresh `Vec` of `n` slots of `size` bytes at `d`, with `len = n`
+    /// (no buffer and `cap = 0` when that is no bytes), as
+    /// `karac_mir_vec_alloc` builds it but from `malloc` in line, so LLVM
+    /// sees a new allocation and its length. A count past the
+    /// allocation ceiling goes to the runtime, which panics as before, and
+    /// a failed `malloc` aborts, so no path joins with an unknown length.
+    pub(super) fn vec_alloc(
+        &mut self,
+        d: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        size: u64,
+    ) -> R<()> {
+        let null = self.ptr_ty().const_null();
+        if size == 0 {
+            self.store(d, null.into())?;
+            self.store(self.offset(d, 8)?, n.into())?;
+            return self.store(self.offset(d, 16)?, self.i64(0).into());
+        }
+        let f = self.cur_fn()?;
+        let heap = self.llcx.append_basic_block(f, "alloc.heap");
+        let empty = self.llcx.append_basic_block(f, "alloc.empty");
+        let got = self.llcx.append_basic_block(f, "alloc.got");
+        let slow = self.llcx.append_basic_block(f, "alloc.slow");
+        let done = self.llcx.append_basic_block(f, "alloc.done");
+        // The runtime's ceiling, `KARAC_MAX_ALLOC_BYTES`.
+        let limit = self.i64(((1u64 << 61) - 1) / size);
+        let fits = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, n, limit, "")
+            .map_err(e)?;
+        let nonzero = self
+            .builder
+            .build_int_compare(IntPredicate::NE, n, self.i64(0), "")
+            .map_err(e)?;
+        let small = self.llcx.append_basic_block(f, "alloc.fits");
+        self.builder
+            .build_conditional_branch(fits, small, slow)
+            .map_err(e)?;
+        self.builder.position_at_end(small);
+        self.builder
+            .build_conditional_branch(nonzero, heap, empty)
+            .map_err(e)?;
+        self.builder.position_at_end(empty);
+        self.store(d, null.into())?;
+        self.store(self.offset(d, 8)?, n.into())?;
+        self.store(self.offset(d, 16)?, self.i64(0).into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(heap);
+        let bytes = self
+            .builder
+            .build_int_nuw_mul(n, self.i64(size), "")
+            .map_err(e)?;
+        let malloc = self.libc_fn("malloc");
+        let p = self
+            .builder
+            .build_call(malloc, &[bytes.into()], "buf")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let failed = self.builder.build_is_null(p, "").map_err(e)?;
+        let oom = self.llcx.append_basic_block(f, "alloc.oom");
+        self.builder
+            .build_conditional_branch(failed, oom, got)
+            .map_err(e)?;
+        self.builder.position_at_end(oom);
+        self.abort_with("out of memory")?;
+        self.builder.position_at_end(got);
+        self.store(d, p.into())?;
+        self.store(self.offset(d, 8)?, n.into())?;
+        self.store(self.offset(d, 16)?, n.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(slow);
+        // Past the ceiling the runtime panics and does not come back.
+        self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+        self.builder.build_unreachable().map_err(e)?;
+        self.builder.position_at_end(done);
         Ok(())
     }
 

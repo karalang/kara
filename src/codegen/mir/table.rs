@@ -337,7 +337,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let n = self.mrt_i64("map_len", &[h.into()])?;
                 let size = self.layout(t.entry)?.size;
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 self.count_loop(n, |cx, i| {
                     let at = cx.entry_at(h, i)?;
@@ -444,7 +444,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let n = self.mrt_i64("map_len", &[h.into()])?;
                 let size = self.layout(t.entry)?.size;
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 self.count_loop(n, |cx, i| {
                     let at = cx.entry_at(h, i)?;
@@ -510,7 +510,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let h = self.load_ptr(hp)?;
                 let n = self.mrt_i64("map_len", &[h.into()])?;
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 self.count_loop(n, |cx, i| {
                     let at = cx.entry_at(h, i)?;
@@ -613,7 +613,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .into_int_value();
                 let size = self.layout(el)?.size;
                 let d = self.place_ptr(dest)?;
-                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                self.vec_alloc(d, n, size)?;
                 let buf = self.load_ptr(d)?;
                 self.count_loop(n, |cx, i| {
                     let j = cx.builder.build_int_add(start, i, "").map_err(e)?;
