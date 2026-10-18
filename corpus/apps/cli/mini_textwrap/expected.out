@@ -1,0 +1,377 @@
+== wrap | 30 | - | The quick brown fox jumps over the lazy dog.
+  |The quick brown fox jumps over|
+  |the lazy dog.|
+(2 lines)
+== wrap | 10 | - | The quick brown fox jumps over the lazy dog.
+  |The quick|
+  |brown fox|
+  |jumps over|
+  |the lazy|
+  |dog.|
+(5 lines)
+== wrap | 1 | - | abc def
+  |a|
+  |b|
+  |c|
+  |d|
+  |e|
+  |f|
+(6 lines)
+== wrap | 3 | - | abcdefgh ij
+  |abc|
+  |def|
+  |gh|
+  |ij|
+(4 lines)
+== wrap | 0 | - | anything
+ValueError: invalid width 0 (must be > 0)
+== wrap | -5 | - | anything
+ValueError: invalid width -5 (must be > 0)
+== wrap | 20 | - | 
+(0 lines)
+== wrap | 20 | - |    
+(0 lines)
+== wrap | 20 | dw=0 |    
+  |   |
+(1 lines)
+== wrap | 20 | - |   leading and trailing spaces  
+  |  leading and|
+  |trailing spaces|
+(2 lines)
+== wrap | 20 | dw=0 |   leading and trailing spaces  
+  |  leading and |
+  |trailing spaces  |
+(2 lines)
+== wrap | 12 | - | well-known self-contained state-of-the-art
+  |well-known|
+  |self-|
+  |contained|
+  |state-of-|
+  |the-art|
+(5 lines)
+== wrap | 12 | boh=0 | well-known self-contained state-of-the-art
+  |well-known s|
+  |elf-containe|
+  |d state-of-t|
+  |he-art|
+(4 lines)
+== wrap | 8 | - | well-known self-contained state-of-the-art
+  |well-|
+  |known|
+  |self-con|
+  |tained|
+  |state-|
+  |of-the-|
+  |art|
+(7 lines)
+== wrap | 15 | - | this is--an em-dash test--with words
+  |this is--an em-|
+  |dash test--with|
+  |words|
+(3 lines)
+== wrap | 15 | - | a ---- b --c d-- e
+  |a ---- b --c|
+  |d-- e|
+(2 lines)
+== wrap | 10 | - | x-y-z a-b-c-d-e-f-g-h-i-j
+  |x-y-z a-b-|
+  |c-d-e-f-g-|
+  |h-i-j|
+(3 lines)
+== wrap | 6 | - | co-op re-enter -flag --opt pre--
+  |co-op|
+  |re-|
+  |enter|
+  |-flag|
+  |--opt|
+  |pre--|
+(6 lines)
+== wrap | 10 | - | 12-34 ab-12 12-ab a1-b2
+  |12-34|
+  |ab-12|
+  |12-ab|
+  |a1-b2|
+(4 lines)
+== wrap | 20 | - | hyphen-at-the-very-end-
+  |hyphen-at-the-very-|
+  |end-|
+(2 lines)
+== wrap | 10 | - | aaaaaaaaaaaaaaaaaaaaaaaaa
+  |aaaaaaaaaa|
+  |aaaaaaaaaa|
+  |aaaaa|
+(3 lines)
+== wrap | 10 | blw=0 | aaaaaaaaaaaaaaaaaaaaaaaaa bb
+  |aaaaaaaaaaaaaaaaaaaaaaaaa|
+  |bb|
+(2 lines)
+== wrap | 10 | - | aaaa-bbbb-cccc-dddd-eeee
+  |aaaa-bbbb-|
+  |cccc-dddd-|
+  |eeee|
+(3 lines)
+== wrap | 10 | boh=0 | aaaa-bbbb-cccc-dddd-eeee
+  |aaaa-bbbb-|
+  |cccc-dddd-|
+  |eeee|
+(3 lines)
+== wrap | 10 | - | ----------abc
+  |----------|
+  |abc|
+(2 lines)
+== wrap | 7 | - | --------ab-cd
+  |-------|
+  |-ab-cd|
+(2 lines)
+== wrap | 20 | - | one⇥two⇥⇥three
+  |one     two|
+  |three|
+(2 lines)
+== wrap | 20 | ts=4 | one⇥two⇥⇥three
+  |one two     three|
+(1 lines)
+== wrap | 20 | tabs=0 | one⇥two⇥⇥three
+  |one two  three|
+(1 lines)
+== wrap | 20 | tabs=0,rw=0 | one⇥two⇥⇥three
+  |one⇥two⇥⇥three|
+(1 lines)
+== wrap | 20 | rw=0 | line one⏎line two
+  |line one⏎line two|
+(1 lines)
+== wrap | 20 | - | line one⏎line two⏎⏎line four
+  |line one line two|
+  |line four|
+(2 lines)
+== wrap | 20 | - | cr␍and␋vt␌ff
+  |cr and vt ff|
+(1 lines)
+== wrap | 20 | rw=0,tabs=0 | cr␍and␋vt␌ff
+  |cr␍and␋vt␌ff|
+(1 lines)
+== wrap | 25 | fse=1 | This is a sentence. And another! Is it? Yes.
+  |This is a sentence.  And|
+  |another!  Is it?  Yes.|
+(2 lines)
+== wrap | 25 | fse=1 | Mr. Smith met Dr. Jones. "Quoted." Ok.'
+  |Mr.  Smith met Dr.|
+  |Jones.  "Quoted."  Ok.'|
+(2 lines)
+== wrap | 25 | fse=1 | end with a.  Already two. Word.⇥tab
+  |end with a.  Already two.|
+  |Word.  tab|
+(2 lines)
+== wrap | 25 | fse=1,rw=0 | end. next
+  |end.  next|
+(1 lines)
+== wrap | 24 | ii=* ,si=   | The first line gets a bullet and the rest are indented to match it.
+  |* The first line gets a|
+  |  bullet and the rest|
+  |  are indented to match|
+  |  it.|
+(4 lines)
+== wrap | 24 | ii=>>> ,si=...  | print the value of a very long expression here
+  |>>> print the value of a|
+  |... very long expression|
+  |... here|
+(3 lines)
+== wrap | 10 | ii=0123456789 | abc def
+  |0123456789a|
+  |bc def|
+(2 lines)
+== wrap | 10 | ii=012345678901 | abc def
+  |012345678901a|
+  |bc def|
+(2 lines)
+== wrap | 15 | ml=2 | one two three four five six seven eight nine
+  |one two three|
+  |four five [...]|
+(2 lines)
+== wrap | 15 | ml=1 | one two three four five six seven eight nine
+  |one two [...]|
+(1 lines)
+== wrap | 15 | ml=1 | one two three
+  |one two three|
+(1 lines)
+== wrap | 15 | ml=2,ph= ... | one two three four five six seven eight nine
+  |one two three|
+  |four five ...|
+(2 lines)
+== wrap | 15 | ml=2,ph=… | one two three four five six seven eight nine
+  |one two three|
+  |four five six…|
+(2 lines)
+== wrap | 10 | ml=1,ph= [...] | verylongwordthatbreaks here
+  |[...]|
+(1 lines)
+== wrap | 5 | ml=1 | abcdefghij
+  |[...]|
+(1 lines)
+== wrap | 6 | ml=2,ph=[...] | ab cd ef gh ij
+  |ab cd|
+  |[...]|
+(2 lines)
+== wrap | 10 | ml=2,ph=  [more] | alpha beta gamma delta epsilon
+  |alpha beta|
+  |[more]|
+(2 lines)
+== wrap | 10 | ml=1,ph=xxxxxxxxxxx | a
+ValueError: placeholder too large for max width
+== wrap | 10 | ml=2,si=    ,ph=...... | a b c
+  |a b c|
+(1 lines)
+== wrap | 12 | ml=3 | short   lines   with   gaps   between   them   all
+  |short|
+  |lines   with|
+  |gaps [...]|
+(3 lines)
+== wrap | 12 | ml=3,dw=0 | short   lines   with   gaps   between   them   all
+  |short   |
+  |lines   with|
+  |[...]|
+(3 lines)
+== wrap | 18 | - | 10¤km and 2¤h are pairs; ¤ alone
+  |10¤km and 2¤h are|
+  |pairs; ¤ alone|
+(2 lines)
+== wrap | 16 | - | Café naïve façade Ünïcode-wörds über-schön
+  |Café naïve|
+  |façade Ünïcode-|
+  |wörds über-schön|
+(3 lines)
+== wrap | 40 | - | @commit.txt
+  |Fix the off-by-one in the ring buffer's|
+  |wrap-around logic -- the reader could|
+  |observe a half-written slot when the|
+  |writer lapped it. This affects every|
+  |multi-producer queue built on top of it,|
+  |e.g. the log shipper and the metrics|
+  |pipeline.  See|
+  |https://example.org/issues/4711-ring-|
+  |buffer-wraparound-race for the full|
+  |write-up.  Reviewed-by: A. N. Other|
+  |<another@example.org>|
+(11 lines)
+== wrap | 72 | fse=1 | @commit.txt
+  |Fix the off-by-one in the ring buffer's wrap-around logic -- the reader|
+  |could observe a half-written slot when the writer lapped it.  This|
+  |affects every multi-producer queue built on top of it, e.g.  the log|
+  |shipper and the metrics pipeline.  See|
+  |https://example.org/issues/4711-ring-buffer-wraparound-race for the full|
+  |write-up.  Reviewed-by: A. N. Other <another@example.org>|
+(6 lines)
+== wrap | 50 | ii=- ,si=  ,boh=0 | @notes.md
+  |- Kāra's ownership model has three tiers: owned|
+  |  values, borrowed references and|
+  |  reference-counted shared values. Most code never|
+  |  needs the third.  A long identifier like configu|
+  |  ration_loader_with_environment_overrides_and_def|
+  |  aults does not fit on one line, nor does https:/|
+  |  /docs.example.org/very/long/path/to/a/page.html|
+  |  at all.  Distances are written 10¤km and 2¤h;|
+  |  the no-break space keeps each pair together.|
+  |  Café, naïve and façade are words too.  Short.|
+(10 lines)
+== wrap | 33 | ml=4 | @notes.md
+  |Kāra's ownership model has three|
+  |tiers: owned values, borrowed|
+  |references and reference-counted|
+  |shared values. Most code [...]|
+(4 lines)
+== fill | 30 | - | The quick brown fox jumps over the lazy dog.
+  |The quick brown fox jumps over⏎the lazy dog.|
+== fill | 16 | ii=# ,si=#  | a comment that wraps over several lines
+  |# a comment that⏎# wraps over⏎# several lines|
+== fill | 20 | - | 
+  ||
+== shorten | 12 | - | Hello  world!
+  |Hello world!|
+== shorten | 11 | - | Hello  world!
+  |Hello [...]|
+== shorten | 30 | - |    lots   of   space | and⇥tabs⏎and newlines   
+  |lots of space|
+== shorten | 15 | ph=… | The quick brown fox jumps over the lazy dog.
+  |The quick…|
+== shorten | 15 | ph= (more) | The quick brown fox jumps over the lazy dog.
+  |The (more)|
+== shorten | 6 | - | Hello world
+  |[...]|
+== shorten | 5 | - | Hello world
+  |[...]|
+== shorten | 4 | ph=.. | abcdefgh
+  |..|
+== shorten | 60 | - | @commit.txt
+  |Fix the off-by-one in the ring buffer's wrap-around [...]|
+== shorten | 10 | blw=0 | supercalifragilistic word
+  |[...]|
+== dedent | @docstring.txt
+  |Parse a configuration file.⏎⏎The file is read line by line; each line is either a comment,⏎a section header or a key-value pair.⏎⏎    Nested examples keep their extra indent.⏎⇥A tab after the margin stays.⏎⏎Returns a dict of dicts.⏎|
+== dedent | @mixed.txt
+  |  two spaces⏎⇥one tab⏎  ⇥two spaces then a tab⏎⏎  back to two⏎|
+== dedent | @notes.md
+  |Kāra's ownership model has three tiers: owned values, borrowed references and reference-counted shared values. Most code never needs the third.⏎⏎A long identifier like configuration_loader_with_environment_overrides_and_defaults does not fit on one line, nor does https://docs.example.org/very/long/path/to/a/page.html at all.⏎⏎Distances are written 10¤km and 2¤h; the no-break space keeps each pair together. Café, naïve and façade are words too.⏎⏎Short.⏎|
+== dedent |     a⏎      b⏎    c
+  |a⏎  b⏎c|
+== dedent |   a⏎⇥b
+  |  a⏎⇥b|
+== dedent | ⏎   ⏎   x⏎   y⏎ 
+  |⏎⏎x⏎y⏎|
+== dedent |    only⏎   
+  |only⏎|
+== dedent | 
+  ||
+== dedent |   ␍⏎  x
+  |␍⏎x|
+== indent | >  | - | @docstring.txt
+  |>     Parse a configuration file.⏎⏎>     The file is read line by line; each line is either a comment,⏎>     a section header or a key-value pair.⏎      ⏎>         Nested examples keep their extra indent.⏎>     ⇥A tab after the margin stays.⏎⏎>     Returns a dict of dicts.⏎|
+== indent | >  | all | @mixed.txt
+  |>   two spaces⏎> ⇥one tab⏎>   ⇥two spaces then a tab⏎> ⏎>   back to two⏎|
+== indent |    | - | one⏎⏎   ⏎two
+  |  one⏎⏎   ⏎  two|
+== indent | #  | all | one⏎⏎   ⏎two
+  |# one⏎# ⏎#    ⏎# two|
+== indent | *  | - | cr␍line␍⏎crlf␍⏎ff␌end
+  |* cr␍* line␍⏎* crlf␍⏎* ff␌* end|
+== indent | |  | - | 
+  ||
+== indent | |  | all | no newline at end
+  || no newline at end|
+== fmt | 50 | @notes.md
+  |Kāra's ownership model has three tiers: owned|
+  |values, borrowed references and reference-counted|
+  |shared values. Most code never needs the third.|
+  --
+  |A long identifier like configuration_loader_with_e|
+  |nvironment_overrides_and_defaults does not fit on|
+  |one line, nor does https://docs.example.org/very/l|
+  |ong/path/to/a/page.html at all.|
+  --
+  |Distances are written 10¤km and 2¤h; the no-break|
+  |space keeps each pair together. Café, naïve and|
+  |façade are words too.|
+  --
+  |Short.|
+== fmt | 30 | @commit.txt
+  |Fix the off-by-one in the ring|
+  |buffer's wrap-around logic --|
+  |the reader could observe a|
+  |half-written slot when the|
+  |writer lapped it. This affects|
+  |every multi-producer queue|
+  |built on top of it, e.g. the|
+  |log shipper and the metrics|
+  |pipeline.  See https://example|
+  |.org/issues/4711-ring-buffer-|
+  |wraparound-race for the full|
+  |write-up.|
+  --
+  |Reviewed-by: A. N. Other|
+  |<another@example.org>|
+== fmt | 20 | @tabs.txt
+  |name    size|
+  |modified a.txt   12|
+  |2026-10-18 longer-|
+  |name.json|
+  |4096    2026-01-02 x|
+  |1|
+  |double tab|
