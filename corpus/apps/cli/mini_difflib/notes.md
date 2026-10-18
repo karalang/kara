@@ -86,3 +86,8 @@ After those edits the program matched expected.out on both MIR
 surfaces.
 
 Written 2026-10-18 by the real-world apps thread; karac at 83fab1e1e8.
+
+Reverted 2026-10-18, karac at 79a6c2eb9a: B-2026-10-18-13 is fixed, so
+`quick_ratio` uses `fullbcount.get(elt).unwrap_or(0)` in the match arm
+again. That is the original line, and the app still matches on all four
+MIR surfaces.

@@ -72,3 +72,8 @@ These work around gaps:
 - `Cache.stat` binds the counter before returning it. Returned
   straight from `get(..).unwrap_or(0)`, the compiled backends return
   the counter's address (B-2026-10-18-4, new).
+
+Reverted 2026-10-18, karac at 79a6c2eb9a: B-2026-10-18-4 is fixed, so
+`Cache.stat` returns `self.stats.get(name).unwrap_or(0)` directly again.
+That is the original line, and the app still matches on all four MIR
+surfaces.

@@ -13,8 +13,6 @@
 //   B-2026-10-12-3  there is no `Map.get_mut`; __chain_b uses `entry`
 //   B-2026-10-18-12 a generic function is not a value on the MIR surfaces;
 //                   `no_junk` is written once per element type
-//   B-2026-10-18-13 `m.get(k).unwrap_or(0)` as one match arm against `*n`
-//                   stays a reference on MIR; quick_ratio matches both lookups
 
 // ------------------------------------------------------------ SequenceMatcher
 
@@ -259,14 +257,9 @@ impl[T: Eq + Hash + Clone] Matcher[T] {
         let mut avail: Map[T, i64] = Map.new();
         let mut matches: i64 = 0;
         for elt in self.a.iter() {
-            // B-2026-10-18-13: `unwrap_or(0)` on a `get` in one match arm
-            // stays a reference on the MIR surfaces, so both lookups match.
             let numb = match avail.get(elt) {
                 Some(n) => *n,
-                None => match fullbcount.get(elt) {
-                    Some(n) => *n,
-                    None => 0,
-                },
+                None => fullbcount.get(elt).unwrap_or(0),
             };
             avail.insert(elt.clone(), numb - 1);
             if numb > 0 {

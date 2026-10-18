@@ -25,8 +25,6 @@
 //                    every site, the first included
 //   B-2026-10-15-20  joined, built in an if and then moved: joined.clone()
 //   B-2026-10-12-3   Map has no get_mut: contains_key, then items[key]
-//   B-2026-10-18-4   a ref i64 returned as i64 is its address on the compiled
-//                    backends: stat binds the value first
 
 const START: i64 = 1760000000;
 const PROCESS_STARTED: i64 = START - 2;
@@ -139,10 +137,7 @@ impl Cache {
     }
 
     fn stat(self, name: Str) -> i64 {
-        // Bound first: returned directly, the compiled backends return
-        // the reference's address (B-2026-10-18-4).
-        let n: i64 = self.stats.get(name).unwrap_or(0);
-        n
+        self.stats.get(name).unwrap_or(0)
     }
 
     fn realtime(self, exptime0: i64) -> i64 {
