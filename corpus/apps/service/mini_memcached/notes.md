@@ -77,3 +77,7 @@ Reverted 2026-10-18, karac at 79a6c2eb9a: B-2026-10-18-4 is fixed, so
 `Cache.stat` returns `self.stats.get(name).unwrap_or(0)` directly again.
 That is the original line, and the app still matches on all four MIR
 surfaces.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).

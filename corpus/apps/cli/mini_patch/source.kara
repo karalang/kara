@@ -533,11 +533,11 @@ fn parse_range(text: Str) -> Option[(i64, i64)] {
         }
     }
     if comma < 0 {
-        let start = i64.parse(text.to_string())?;
+        let start = i64.parse(text.to_string()).ok()?;
         return Some((start, 1));
     }
-    let start = i64.parse(byte_str(b, 0, comma))?;
-    let len = i64.parse(byte_str(b, comma + 1, b.len()))?;
+    let start = i64.parse(byte_str(b, 0, comma)).ok()?;
+    let len = i64.parse(byte_str(b, comma + 1, b.len())).ok()?;
     Some((start, len))
 }
 
@@ -847,7 +847,7 @@ fn apply_patch(dir: Str, text: Str, reverse: bool, out: mut ref String) -> Resul
             }
         };
         let fp = FilePatch { old_name: old_name, new_name: new_name, hunks: hunks };
-        if not apply_file(dir, fp, reverse, out)? {
+        if not apply_file(dir, fp, reverse, mut out)? {
             status = 1;
         }
     }

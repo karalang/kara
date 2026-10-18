@@ -151,34 +151,34 @@ fn save(docs: ref Vec[DocIndex]) -> Result[(), String] {
 
 fn load() -> Result[Vec[DocIndex], String] {
     let text = fs.read_to_string(INDEX).map_err(|_| "cannot read search.idx".to_string())?;
-    let lines = text.lines();
-    let head: Vec[String] = lines[0].split(" ");
+    let lines: Vec[Str] = text.lines().collect();
+    let head: Vec[String] = lines[0].split(" ").map(|p| p.to_string()).collect();
     if head.len() != 3 or head[0] != "kestrel-index" or head[1] != "1" {
         return Err("line 1: not a kestrel index".to_string());
     }
-    let count = i64.parse(head[2]).ok_or("line 1: bad document count".to_string())?;
+    let count = i64.parse(head[2]).map_err(|_| "line 1: bad document count".to_string())?;
     let mut docs: Vec[DocIndex] = Vec.new();
     let mut at = 1;
     for _ in 0..count {
-        let f: Vec[String] = lines[at].split(" ");
+        let f: Vec[String] = lines[at].split(" ").map(|p| p.to_string()).collect();
         if f.len() != 5 or f[0] != "doc" {
             return Err(f"line {at + 1}: expected a doc line");
         }
-        let words = i64.parse(f[3]).ok_or(f"line {at + 1}: bad word count")?;
-        let n = i64.parse(f[4]).ok_or(f"line {at + 1}: bad term count")?;
+        let words = i64.parse(f[3]).map_err(|_| f"line {at + 1}: bad word count")?;
+        let n = i64.parse(f[4]).map_err(|_| f"line {at + 1}: bad term count")?;
         at += 1;
         let mut terms: SortedMap[String, Vec[i64]] = SortedMap.new();
         for _ in 0..n {
             if at >= lines.len() {
                 return Err(f"line {at + 1}: index ends early");
             }
-            let parts: Vec[String] = lines[at].split(" ");
+            let parts: Vec[String] = lines[at].split(" ").map(|p| p.to_string()).collect();
             if parts.len() != 2 {
                 return Err(f"line {at + 1}: expected a term and its positions");
             }
             let mut ps: Vec[i64] = Vec.new();
             for p in parts[1].split(",") {
-                ps.push(i64.parse(p).ok_or(f"line {at + 1}: bad position '{p}'")?);
+                ps.push(i64.parse(p).map_err(|_| f"line {at + 1}: bad position '{p}'")?);
             }
             terms.insert(parts[0].clone(), ps);
             at += 1;

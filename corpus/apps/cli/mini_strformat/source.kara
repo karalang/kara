@@ -1091,10 +1091,10 @@ fn vformat(fmt: ref Vec[char], lo: i64, hi: i64, args: ref Vec[Value], kw: ref M
         if markup {
             let field = parse_field(fmt, s, hi)?;
             s = field.next;
-            let found = get_field(fmt, field.name_lo, field.name_hi, args, kw, auto)?;
+            let found = get_field(fmt, field.name_lo, field.name_hi, args, kw, mut auto)?;
             let obj = if field.conv != '\u{0}' { convert(found, field.conv)? } else { found };
             let spec = if field.expand {
-                to_chars(vformat(fmt, field.spec_lo, field.spec_hi, args, kw, depth - 1, auto)?)
+                to_chars(vformat(fmt, field.spec_lo, field.spec_hi, args, kw, depth - 1, mut auto)?)
             } else {
                 let mut v: Vec[char] = Vec.new();
                 let mut k = field.spec_lo;
@@ -1323,7 +1323,7 @@ fn keywords() -> Map[String, Value] {
 }
 
 fn parse_int(x: ref String) -> Result[i64, String] {
-    match i64.parse(x.clone()) {
+    match i64.parse(x.clone()).ok() {
         Some(n) => Ok(n),
         None => Err(f"not an integer: {x}"),
     }
@@ -1392,8 +1392,8 @@ fn read_items() -> Result[Vec[Item], String] {
         if first {
             first = false;
         } else {
-            let f = line.split(",");
-            items.push(Item { sku: f[0].clone(), item: f[1].clone(), qty: parse_int(f[2])?, cents: parse_int(f[3])? });
+            let f: Vec[Str] = line.split(",").collect();
+            items.push(Item { sku: f[0].clone(), item: f[1].clone(), qty: parse_int(f[2].to_string())?, cents: parse_int(f[3].to_string())? });
         }
     }
     Ok(items)
@@ -1476,7 +1476,7 @@ fn mail(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
     match substitute(read(f[1])?, d) {
         Ok(t) => {
             for line in t.split("\n") {
-                out.push_str(f"  |{esc(line)}\n");
+                out.push_str(f"  |{esc(line.to_string())}\n");
             }
         }
         Err(e) => out.push_str(f"  {error_text(e)}\n"),
@@ -1503,9 +1503,9 @@ fn run(f: ref Vec[String], kw: ref Map[String, Value], out: mut ref String) -> R
         }
         out.push_str(f"  safe {esc(safe_substitute(tmpl, d))}\n");
     } else if kind == "invoice" {
-        invoice(f[2], parse_int(f[3])?, out)?;
+        invoice(f[2], parse_int(f[3])?, mut out)?;
     } else if kind == "mail" {
-        mail(f, out)?;
+        mail(f, mut out)?;
     } else {
         return Err(f"unknown job {kind}");
     }
@@ -1514,7 +1514,7 @@ fn run(f: ref Vec[String], kw: ref Map[String, Value], out: mut ref String) -> R
 
 fn main() {
     for (path, contents) in data_files() {
-        let parts = path.split("/");
+        let parts: Vec[Str] = path.split("/").collect();
         let mut dir = "data".to_string();
         let mut k = 0;
         while k + 1 < parts.len() {
@@ -1543,7 +1543,7 @@ fn main() {
     };
     let kw = keywords();
     for job in jobs.lines() {
-        let f = job.split("\t");
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
         let mut parts: Vec[String] = Vec.new();
         for x in f.iter() {
             parts.push(esc(x));

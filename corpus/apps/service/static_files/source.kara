@@ -296,7 +296,7 @@ fn etag_list_matches(header: Str, tag: Str) -> bool {
         return true;
     }
     let want = if tag.starts_with("W/") { tag.substring(2, tag.len()) } else { tag.to_string() };
-    for part in h.split(",").iter() {
+    for part in h.split(",") {
         let mut p = part.trim().to_string();
         if p.starts_with("W/") {
             p = p.substring(2, p.len());
@@ -316,7 +316,7 @@ fn parse_ranges(header: Str, size: i64) -> Option[Ranges] {
         return None;
     }
     let mut out = Ranges { first: Vec.new(), last: Vec.new() };
-    for raw in header.substring(6, header.len()).split(",").iter() {
+    for raw in header.substring(6, header.len()).split(",") {
         let s = raw.trim().to_string();
         let dash = match s.find("-") {
             Some(d) => d,
@@ -511,7 +511,7 @@ fn route(t: ref Vec[u32], req: ref Req) -> Resp {
         None => {}
     }
     let mut segs: Vec[String] = Vec.new();
-    let raws = path.split("/");
+    let raws: Vec[Str] = path.split("/").collect();
     for j in 1..raws.len() {
         if raws[j] == "" {
             continue;
@@ -601,8 +601,8 @@ fn encode(r: ref Resp, head_only: bool, close: bool, out: mut ref Vec[u8]) -> i6
 }
 
 fn parse_request(head: Str) -> Option[Req] {
-    let lines = head.split("\r\n");
-    let parts = lines[0].split(" ");
+    let lines: Vec[Str] = head.split("\r\n").collect();
+    let parts: Vec[Str] = lines[0].split(" ").collect();
     if parts.len() != 3 or not parts[2].starts_with("HTTP/") {
         return None;
     }
@@ -738,7 +738,7 @@ fn session(t: ref Vec[u32], listener: ref TcpListener, title: Str, reqs: ref Vec
             continue;
         }
         let end = find_crlf2(got, at);
-        let lines = text_of(got, at, end).split("\r\n");
+        let lines: Vec[String] = text_of(got, at, end).split("\r\n").map(|p| p.to_string()).collect();
         println(f"  {rq.label} -> {lines[0]}");
         let mut length = 0;
         let mut ctype = "".to_string();
@@ -762,7 +762,8 @@ fn session(t: ref Vec[u32], listener: ref TcpListener, title: Str, reqs: ref Vec
             println(f"    {name}: {value}");
         }
         at = end + 4;
-        let status = i64.parse(lines[0].split(" ")[1]).unwrap_or(0);
+        let words: Vec[Str] = lines[0].split(" ").collect();
+        let status = i64.parse(words[1]).unwrap_or(0);
         if rq.no_body or status == 204 or status == 304 {
             continue;
         }
@@ -770,7 +771,7 @@ fn session(t: ref Vec[u32], listener: ref TcpListener, title: Str, reqs: ref Vec
         at += length;
         println(f"    body {body.len()} bytes crc {hex8(crc32(t, body))} \"{shown(body)}\"");
         if ctype.starts_with("text/html") or ctype.starts_with("multipart/") {
-            let ls = text_of(body, 0, body.len()).split("\n");
+            let ls: Vec[String] = text_of(body, 0, body.len()).split("\n").map(|p| p.to_string()).collect();
             for j in 0..ls.len() - 1 {
                 println(f"    | {ls[j].replace("\r", "\\r")}");
             }
@@ -988,12 +989,12 @@ fn main() {
         Ok(_) => {}
         Err(_) => println("cannot write access.log"),
     }
-    let back = fs.read_to_string("access.log").unwrap_or("".to_string()).lines();
+    let back: Vec[String] = fs.read_to_string("access.log").unwrap_or("".to_string()).lines().map(|p| p.to_string()).collect();
     println("== access.log");
     let mut counts: SortedMap[String, i64] = SortedMap.new();
     let mut total = 0;
     for ln in back.iter() {
-        let f = ln.split(" ");
+        let f: Vec[Str] = ln.split(" ").collect();
         let code = f[f.len() - 2].clone();
         let c = counts.get(code).unwrap_or(0);
         counts.insert(code, c + 1);

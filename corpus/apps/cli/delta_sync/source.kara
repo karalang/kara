@@ -166,7 +166,7 @@ fn new_stats() -> SyncStats {
 fn flush(out: mut ref Vec[u8], lit: mut ref Vec[u8], st: mut ref SyncStats) {
     if lit.len() > 0 {
         out.push(OP_LIT);
-        put32(out, lit.len());
+        put32(mut out, lit.len());
         for x in lit.iter() {
             out.push(x);
         }
@@ -212,7 +212,7 @@ fn make_delta(src: ref Vec[u8], sig: ref Sig, st: mut ref SyncStats) -> Vec[u8] 
             }
         }
         if found >= 0 {
-            flush(mut out, mut lit, st);
+            flush(mut out, mut lit, mut st);
             out.push(OP_COPY);
             put32(mut out, found);
             st.copies += 1;
@@ -237,7 +237,7 @@ fn make_delta(src: ref Vec[u8], sig: ref Sig, st: mut ref SyncStats) -> Vec[u8] 
     let rest = n - i;
     let last = sig.lens.len() - 1;
     if rest > 0 and last >= 0 and sig.lens[last] == rest and sig.strong[last] == md5(src[i..n]) {
-        flush(mut out, mut lit, st);
+        flush(mut out, mut lit, mut st);
         out.push(OP_COPY);
         put32(mut out, last);
         st.copies += 1;
@@ -246,7 +246,7 @@ fn make_delta(src: ref Vec[u8], sig: ref Sig, st: mut ref SyncStats) -> Vec[u8] 
             lit.push(src[j]);
         }
     }
-    flush(mut out, mut lit, st);
+    flush(mut out, mut lit, mut st);
     out.push(OP_END);
     for x in md5_raw(src[0..n]).iter() {
         out.push(x);
@@ -426,7 +426,7 @@ fn build_trees() {
     // the destination is an older copy: a paragraph added near the top,
     // one edited in the middle, bytes changed and cut in the data file,
     // the log a prefix of today's, and a file that has since been removed
-    let paras = notes.split("\n\n");
+    let paras: Vec[Str] = notes.split("\n\n").collect();
     let mut old_paras: Vec[String] = Vec.new();
     for j in 0..paras.len() {
         if j == 1 {

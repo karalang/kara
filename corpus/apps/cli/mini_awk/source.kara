@@ -624,17 +624,17 @@ fn add_thread(re: ref Re, n: i64, l: mut ref Threads, mark: mut ref Vec[i64], pc
     mark[pc] = sp;
     let op = re.prog[pc].op;
     if op == I_JMP {
-        add_thread(re, n, l, mark, re.prog[pc].x, start, sp);
+        add_thread(re, n, mut l, mut mark, re.prog[pc].x, start, sp);
     } else if op == I_SPLIT {
-        add_thread(re, n, l, mark, re.prog[pc].x, start, sp);
-        add_thread(re, n, l, mark, re.prog[pc].y, start, sp);
+        add_thread(re, n, mut l, mut mark, re.prog[pc].x, start, sp);
+        add_thread(re, n, mut l, mut mark, re.prog[pc].y, start, sp);
     } else if op == I_BOL {
         if sp == 0 {
-            add_thread(re, n, l, mark, pc + 1, start, sp);
+            add_thread(re, n, mut l, mut mark, pc + 1, start, sp);
         }
     } else if op == I_EOL {
         if sp == n {
-            add_thread(re, n, l, mark, pc + 1, start, sp);
+            add_thread(re, n, mut l, mut mark, pc + 1, start, sp);
         }
     } else {
         l.pcs.push(pc);

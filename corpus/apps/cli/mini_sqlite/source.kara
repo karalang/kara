@@ -904,7 +904,7 @@ fn literal(t: Str) -> Val {
     if let Some(n) = py_int(t) {
         return Val.Int(n);
     }
-    match f64.parse(t) {
+    match f64.parse(t).ok() {
         Some(x) => Val.Real(x),
         None => Val.Null,
     }
@@ -1099,11 +1099,11 @@ fn walk(db: ref Db, no: i64, name: Str, path: Str, info: mut ref Vec[PageInfo]) 
             info[chain[k]] = PageInfo { kind: "overflow".to_string(), name: name.to_string(), path: f"{path}{hex_digits(i, 3)}+{hex_digits(k, 6)}", cells: 0, payload: here, unused: db.usable - 4 - here, max: 0 };
         }
         if not leaf {
-            walk(db, cell.left, name, f"{path}{hex_digits(i, 3)}/", info)?;
+            walk(db, cell.left, name, f"{path}{hex_digits(i, 3)}/", mut info)?;
         }
     }
     if not leaf {
-        walk(db, page.right, name, f"{path}{hex_digits(n, 3)}/", info)?;
+        walk(db, page.right, name, f"{path}{hex_digits(n, 3)}/", mut info)?;
     }
     let kind = if leaf { "leaf" } else { "internal" };
     info[no] = PageInfo { kind: kind.to_string(), name: name.to_string(), path: path.to_string(), cells: n, payload: pay, unused: unused, max: max };
@@ -1112,7 +1112,7 @@ fn walk(db: ref Db, no: i64, name: Str, path: Str, info: mut ref Vec[PageInfo]) 
 
 // Every row of a rowid table, in rowid order.
 fn table_rows(db: ref Db, no: i64, out: mut ref Vec[(i64, Vec[Val])]) -> Result[(), String] {
-    table_range(db, no, -9223372036854775807 - 1, 9223372036854775807, out)
+    table_range(db, no, -9223372036854775807 - 1, 9223372036854775807, mut out)
 }
 
 // The rows with a <= rowid <= b, visiting only the subtrees that can
@@ -1133,12 +1133,12 @@ fn table_range(db: ref Db, no: i64, a: i64, b: i64, out: mut ref Vec[(i64, Vec[V
     for i in 0..n {
         let cell = read_cell(db, page, i);
         if cell.rowid >= a and (i == 0 or prev < b) {
-            table_range(db, cell.left, a, b, out)?;
+            table_range(db, cell.left, a, b, mut out)?;
         }
         prev = cell.rowid;
     }
     if n == 0 or prev < b {
-        table_range(db, page.right, a, b, out)?;
+        table_range(db, page.right, a, b, mut out)?;
     }
     Ok(())
 }
@@ -1202,12 +1202,12 @@ fn index_entries(db: ref Db, no: i64, out: mut ref Vec[Vec[Val]]) -> Result[(), 
     for i in 0..page.cells.len() {
         let cell = read_cell(db, page, i);
         if not page.is_leaf() {
-            index_entries(db, cell.left, out)?;
+            index_entries(db, cell.left, mut out)?;
         }
         out.push(record_of(db, cell));
     }
     if not page.is_leaf() {
-        index_entries(db, page.right, out)?;
+        index_entries(db, page.right, mut out)?;
     }
     Ok(())
 }
@@ -1222,7 +1222,7 @@ fn index_equal(db: ref Db, no: i64, key: ref Val, out: mut ref Vec[Vec[Val]]) ->
         let rec = record_of(db, cell);
         let c = compare_vals(rec[0], key);
         if not page.is_leaf() and c >= 0 and (i == 0 or prev <= 0) {
-            index_equal(db, cell.left, key, out)?;
+            index_equal(db, cell.left, key, mut out)?;
         }
         if c == 0 {
             out.push(rec);
@@ -1230,7 +1230,7 @@ fn index_equal(db: ref Db, no: i64, key: ref Val, out: mut ref Vec[Vec[Val]]) ->
         prev = c;
     }
     if not page.is_leaf() and (n == 0 or prev <= 0) {
-        index_equal(db, page.right, key, out)?;
+        index_equal(db, page.right, key, mut out)?;
     }
     Ok(())
 }

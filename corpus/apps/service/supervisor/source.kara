@@ -270,7 +270,7 @@ fn parse_config(text: Str) -> Config {
     let mut section = String.new();
     let mut in_prog = false;
     let mut n = 0;
-    for raw in text.lines().iter() {
+    for raw in text.lines() {
         n += 1;
         let mut line = raw.trim().to_string();
         if line.len() == 0 or line.starts_with(";") or line.starts_with("#") {
@@ -305,7 +305,7 @@ fn parse_config(text: Str) -> Config {
         let key = line.substring(0, eq).trim().to_string();
         let val = line.substring(eq + 1, line.len()).trim().to_string();
         if section == "supervisor" {
-            match i64.parse(val) {
+            match i64.parse(val).ok() {
                 Some(v) => {
                     if key == "poll_ms" {
                         poll = v;
@@ -350,7 +350,7 @@ fn set_key(p: mut ref Prog, key: Str, val: Str, n: i64, warnings: mut ref Vec[St
             errors.push(f"line {n} [{p.name}]: autorestart must be true, false or unexpected");
         }
     } else if key == "startretries" or key == "backoff_ms" or key == "max_runtime_ms" or key == "stdout_maxbytes" or key == "stdout_backups" {
-        let parsed = i64.parse(val);
+        let parsed = i64.parse(val).ok();
         let ok = match parsed {
             Some(v) => v >= 0,
             None => false,
@@ -373,8 +373,8 @@ fn set_key(p: mut ref Prog, key: Str, val: Str, n: i64, warnings: mut ref Vec[St
         }
     } else if key == "exitcodes" {
         let mut codes: Vec[i64] = Vec.new();
-        for part in val.split(",").iter() {
-            match i64.parse(part.trim()) {
+        for part in val.split(",") {
+            match i64.parse(part.trim()).ok() {
                 Some(c) => codes.push(c),
                 None => {
                     errors.push(f"line {n} [{p.name}]: bad exitcodes '{val}'");
@@ -514,14 +514,14 @@ fn finished(p: mut ref Prog, code: i64, now: i64) {
     p.out = None;
     p.err = None;
     if p.logfile.len() == 0 {
-        for l in out.lines().iter() {
+        for l in out.lines() {
             p.events.push(f"  | {l}");
         }
     } else if out.len() > 0 {
         let r = rotate(p, out);
         p.events.push(f"  wrote {out.len()} bytes to {p.logfile}, {r} rotation(s)");
     }
-    for l in err.lines().iter() {
+    for l in err.lines() {
         p.events.push(f"  ! {l}");
     }
     p.last = f"{code}";
@@ -533,7 +533,7 @@ fn finished(p: mut ref Prog, code: i64, now: i64) {
     }
     let how = if expected { "expected" } else { "unexpected" };
     if p.autorestart == "true" or (p.autorestart == "unexpected" and not expected) {
-        give_up_or_retry(p, now, f"exited {code} ({how})");
+        give_up_or_retry(mut p, now, f"exited {code} ({how})");
     } else {
         p.state = State.Exited;
         p.events.push(f"  exited {code} ({how})");
@@ -559,7 +559,7 @@ fn poll_one(p: mut ref Prog, now: i64) {
             None => return,
         };
         match child.try_wait() {
-            Ok(Some(st)) => finished(p, (st.code().unwrap_or(-1) as i64), now),
+            Ok(Some(st)) => finished(mut p, (st.code().unwrap_or(-1) as i64), now),
             Ok(None) => {
                 p.child = Some(child);
                 if p.max_runtime_ms > 0 and now - p.started_at >= p.max_runtime_ms {
@@ -583,7 +583,7 @@ fn poll_one(p: mut ref Prog, now: i64) {
                     p.events.push(f"  ran past {p.max_runtime_ms} ms; killed");
                 }
             }
-            Err(_) => finished(p, -1, now),
+            Err(_) => finished(mut p, -1, now),
         }
         return;
     }
@@ -592,8 +592,8 @@ fn poll_one(p: mut ref Prog, now: i64) {
         _ => false,
     };
     if backing_off and now >= p.next_start {
-        if not start(p, now) {
-            give_up_or_retry(p, now, "spawn failed");
+        if not start(mut p, now) {
+            give_up_or_retry(mut p, now, "spawn failed");
         }
     }
 }
@@ -704,7 +704,7 @@ fn main() {
     for name in ["chatty.log", "chatty.log.1", "chatty.log.2", "chatty.log.3"] {
         if fs.exists(name.clone()) {
             let body = fs.read_to_string(name).unwrap_or("".to_string());
-            let lines = body.lines();
+            let lines: Vec[Str] = body.lines().collect();
             println(f"  {name}: {lines.len()} lines, first [{lines[0]}]");
         } else {
             println(f"  {name}: absent");

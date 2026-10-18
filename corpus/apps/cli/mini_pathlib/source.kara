@@ -1746,7 +1746,7 @@ fn walk(dir: Str, out: mut ref Vec[PPath], dirs: mut ref Vec[bool]) -> Result[()
         out.push(path_of(false, rel));
         dirs.push(is_dir);
         if is_dir {
-            walk(rel, out, dirs)?;
+            walk(rel, mut out, mut dirs)?;
         }
     }
     Ok(())

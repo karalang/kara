@@ -1179,7 +1179,7 @@ fn is_para(b: ref Block) -> bool {
 struct Rendered { body: String, headings: Vec[Heading], nblocks: i64 }
 
 fn render_md(src: Str) -> Rendered {
-    let mut lines: Vec[String] = src.replace("\r\n", "\n").split("\n");
+    let mut lines: Vec[String] = src.replace("\r\n", "\n").split("\n").map(|p| p.to_string()).collect();
     if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
         lines.pop();
     }

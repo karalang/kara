@@ -1480,7 +1480,7 @@ fn place(ast: ref Ast, st: mut ref State, e: i64) -> Place {
     match ref ast.exprs[e] {
         Expr.Var(n) => Place { kind: PL_VAR, name: n.clone(), ix: 0 },
         Expr.Elem(n, ix) => {
-            let i = eval(ast, st, *ix).to_int();
+            let i = eval(ast, mut st, *ix).to_int();
             Place { kind: PL_ELEM, name: n.clone(), ix: i }
         }
         Expr.Special(k) => Place { kind: PL_SPECIAL, name: String.new(), ix: *k },
@@ -1555,52 +1555,52 @@ fn eval(ast: ref Ast, st: mut ref State, e: i64) -> Num {
         Expr.Lit(t) => st.literal(t),
         Expr.Var(n) => st.get_var(n),
         Expr.Elem(n, ix) => {
-            let i = eval(ast, st, *ix).to_int();
+            let i = eval(ast, mut st, *ix).to_int();
             st.get_elem(n, i)
         }
         Expr.Special(k) => st.special(*k),
         Expr.Assign(target, op, value) => {
-            let p = place(ast, st, *target);
-            let mut v = eval(ast, st, *value);
+            let p = place(ast, mut st, *target);
+            let mut v = eval(ast, mut st, *value);
             if op != "=" {
-                let cur = load(st, p);
+                let cur = load(mut st, p);
                 let bop = byte_str(to_bytes(op), 0, 1);
                 v = binary(st, bop, cur, v);
             }
-            store(st, p, v.clone());
+            store(mut st, p, v.clone());
             v
         }
         Expr.Inc(target, delta, prefix) => {
-            let p = place(ast, st, *target);
-            let cur = load(st, p);
+            let p = place(ast, mut st, *target);
+            let cur = load(mut st, p);
             let next = cur.clone() + from_int(*delta);
-            store(st, p, next.clone());
+            store(mut st, p, next.clone());
             if *prefix { next } else { cur }
         }
-        Expr.Negate(x) => -eval(ast, st, *x),
-        Expr.Not(x) => truth(eval(ast, st, *x).is_zero()),
+        Expr.Negate(x) => -eval(ast, mut st, *x),
+        Expr.Not(x) => truth(eval(ast, mut st, *x).is_zero()),
         Expr.Bin(op, a, b) => {
-            let x = eval(ast, st, *a);
-            let y = eval(ast, st, *b);
+            let x = eval(ast, mut st, *a);
+            let y = eval(ast, mut st, *b);
             binary(st, op, x, y)
         }
         Expr.And(a, b) => {
-            if eval(ast, st, *a).is_zero() {
+            if eval(ast, mut st, *a).is_zero() {
                 return zero();
             }
-            truth(not eval(ast, st, *b).is_zero())
+            truth(not eval(ast, mut st, *b).is_zero())
         }
         Expr.Or(a, b) => {
-            if not eval(ast, st, *a).is_zero() {
+            if not eval(ast, mut st, *a).is_zero() {
                 return from_int(1);
             }
-            truth(not eval(ast, st, *b).is_zero())
+            truth(not eval(ast, mut st, *b).is_zero())
         }
-        Expr.Paren(x) => eval(ast, st, *x),
-        Expr.Call(n, args) => call(ast, st, n, args),
-        Expr.Length(x) => from_int(length(eval(ast, st, *x))),
-        Expr.Sqrt(x) => sqrt(eval(ast, st, *x), st.scale),
-        Expr.ScaleOf(x) => from_int(eval(ast, st, *x).scale),
+        Expr.Paren(x) => eval(ast, mut st, *x),
+        Expr.Call(n, args) => call(ast, mut st, n, args),
+        Expr.Length(x) => from_int(length(eval(ast, mut st, *x))),
+        Expr.Sqrt(x) => sqrt(eval(ast, mut st, *x), st.scale),
+        Expr.ScaleOf(x) => from_int(eval(ast, mut st, *x).scale),
         Expr.ArrArg(_) => zero(),
         Expr.Text(_) => zero(),
     }
@@ -1619,7 +1619,7 @@ fn call(ast: ref Ast, st: mut ref State, name: Str, args: ref Vec[i64]) -> Num {
     for i in 0..f.params.len() {
         let kind = f.kinds[i];
         if kind == P_SCALAR {
-            values.push(if i < args.len() { eval(ast, st, args[i]) } else { zero() });
+            values.push(if i < args.len() { eval(ast, mut st, args[i]) } else { zero() });
             ids.push(-1);
             continue;
         }
@@ -1663,7 +1663,7 @@ fn call(ast: ref Ast, st: mut ref State, name: Str, args: ref Vec[i64]) -> Num {
             st.vstacks[slot].push(zero());
         }
     }
-    let status = exec_list(ast, st, f.body);
+    let status = exec_list(ast, mut st, f.body);
     let result = if status == RETURN { st.ret.clone() } else { zero() };
     for i in 0..f.autos.len() {
         let aname = ref f.autos[i];
@@ -1704,13 +1704,13 @@ fn prints(ast: ref Ast, st: ref State, e: i64) -> bool {
 }
 
 fn is_zero_at(ast: ref Ast, st: mut ref State, e: i64) -> bool {
-    eval(ast, st, e).is_zero()
+    eval(ast, mut st, e).is_zero()
 }
 
 fn exec(ast: ref Ast, st: mut ref State, s: i64) -> i64 {
     match ref ast.stmts[s] {
         Stmt.Eval(e) => {
-            let v = eval(ast, st, *e);
+            let v = eval(ast, mut st, *e);
             if st.halted {
                 return HALT;
             }
@@ -1730,7 +1730,7 @@ fn exec(ast: ref Ast, st: mut ref State, s: i64) -> i64 {
                 match ref ast.exprs[list[i]] {
                     Expr.Text(t) => st.out_escaped(t),
                     _ => {
-                        let v = eval(ast, st, list[i]);
+                        let v = eval(ast, mut st, list[i]);
                         st.out_num(v);
                     }
                 }
@@ -1744,21 +1744,21 @@ fn exec(ast: ref Ast, st: mut ref State, s: i64) -> i64 {
             HALT
         }
         Stmt.Return(e) => {
-            st.ret = if *e < 0 { zero() } else { eval(ast, st, *e) };
+            st.ret = if *e < 0 { zero() } else { eval(ast, mut st, *e) };
             RETURN
         }
         Stmt.If(c, then, other) => {
-            if not is_zero_at(ast, st, *c) {
-                return exec(ast, st, *then);
+            if not is_zero_at(ast, mut st, *c) {
+                return exec(ast, mut st, *then);
             }
             if *other >= 0 {
-                return exec(ast, st, *other);
+                return exec(ast, mut st, *other);
             }
             RUN
         }
         Stmt.While(c, body) => {
-            while not is_zero_at(ast, st, *c) {
-                let r = exec(ast, st, *body);
+            while not is_zero_at(ast, mut st, *c) {
+                let r = exec(ast, mut st, *body);
                 if r == BREAK {
                     break;
                 }
@@ -1770,13 +1770,13 @@ fn exec(ast: ref Ast, st: mut ref State, s: i64) -> i64 {
         }
         Stmt.For(init, c, step, body) => {
             if *init >= 0 {
-                eval(ast, st, *init);
+                eval(ast, mut st, *init);
             }
             loop {
-                if *c >= 0 and is_zero_at(ast, st, *c) {
+                if *c >= 0 and is_zero_at(ast, mut st, *c) {
                     break;
                 }
-                let r = exec(ast, st, *body);
+                let r = exec(ast, mut st, *body);
                 if r == BREAK {
                     break;
                 }
@@ -1784,18 +1784,18 @@ fn exec(ast: ref Ast, st: mut ref State, s: i64) -> i64 {
                     return r;
                 }
                 if *step >= 0 {
-                    eval(ast, st, *step);
+                    eval(ast, mut st, *step);
                 }
             }
             RUN
         }
-        Stmt.Block(list) => exec_list(ast, st, list),
+        Stmt.Block(list) => exec_list(ast, mut st, list),
     }
 }
 
 fn exec_list(ast: ref Ast, st: mut ref State, list: ref Vec[i64]) -> i64 {
     for i in 0..list.len() {
-        let r = exec(ast, st, list[i]);
+        let r = exec(ast, mut st, list[i]);
         if r != RUN {
             return r;
         }

@@ -436,11 +436,11 @@ fn dump(out: mut ref Vec[String], tag: Str, x: ref Vec[String], lo: i64, hi: i64
 
 fn plain_replace(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i64, b: ref Vec[String], blo: i64, bhi: i64) {
     if bhi - blo < ahi - alo {
-        dump(out, "+", b, blo, bhi);
-        dump(out, "-", a, alo, ahi);
+        dump(mut out, "+", b, blo, bhi);
+        dump(mut out, "-", a, alo, ahi);
     } else {
-        dump(out, "-", a, alo, ahi);
-        dump(out, "+", b, blo, bhi);
+        dump(mut out, "-", a, alo, ahi);
+        dump(mut out, "+", b, blo, bhi);
     }
 }
 
@@ -509,7 +509,7 @@ fn fancy_replace(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i6
     if best_ratio < cutoff {
         match eqi {
             None => {
-                plain_replace(out, a, alo, ahi, b, blo, bhi);
+                plain_replace(mut out, a, alo, ahi, b, blo, bhi);
                 return;
             }
             Some((i, j)) => {
@@ -519,7 +519,7 @@ fn fancy_replace(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i6
             }
         }
     }
-    fancy_helper(out, a, alo, best_i, b, blo, best_j);
+    fancy_helper(mut out, a, alo, best_i, b, blo, best_j);
     let aelt = a[best_i].clone();
     let belt = b[best_j].clone();
     if not identical {
@@ -541,22 +541,22 @@ fn fancy_replace(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i6
                 btags.push_str(repeat(' ', lb));
             }
         }
-        qformat(out, aelt, belt, atags, btags);
+        qformat(mut out, aelt, belt, atags, btags);
     } else {
         out.push(f"  {aelt}");
     }
-    fancy_helper(out, a, best_i + 1, ahi, b, best_j + 1, bhi);
+    fancy_helper(mut out, a, best_i + 1, ahi, b, best_j + 1, bhi);
 }
 
 fn fancy_helper(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i64, b: ref Vec[String], blo: i64, bhi: i64) {
     if alo < ahi {
         if blo < bhi {
-            fancy_replace(out, a, alo, ahi, b, blo, bhi);
+            fancy_replace(mut out, a, alo, ahi, b, blo, bhi);
         } else {
-            dump(out, "-", a, alo, ahi);
+            dump(mut out, "-", a, alo, ahi);
         }
     } else if blo < bhi {
-        dump(out, "+", b, blo, bhi);
+        dump(mut out, "+", b, blo, bhi);
     }
 }
 
@@ -809,7 +809,7 @@ fn main() {
     };
     let mut out = String.new();
     for job in jobs.iter() {
-        let fields: Vec[String] = chomp(job).split("\t");
+        let fields: Vec[String] = chomp(job).split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {fields.join(" | ")}\n");
         let text = match run(fields) {
             Ok(t) => t,

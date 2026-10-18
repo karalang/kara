@@ -86,3 +86,7 @@ Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-15-19 is fixed, so
 `parser.parse(line)` passes the `String` without `.as_str()`. Each of
 these is the original line again, and the app still matches on all four
 MIR surfaces.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits, with one more by hand: Four `let x: Vec[Str] = <temporary>.split(..).collect()` lines that `karac fix` wrote borrow a temporary; they collect `Vec[String]` instead, and `lines[0].split(" ")[1]` collects the words first (B-2026-10-18-35). The app matches expected.out on all four MIR backends again (karac at a4b0967495).

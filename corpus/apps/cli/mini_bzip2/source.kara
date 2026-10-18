@@ -618,7 +618,7 @@ fn put_bits(w: mut ref BitWriter, n: i64, v: i64) {
 
 fn put_byte_list(w: mut ref BitWriter, bytes: ref Vec[i64]) {
     for b in bytes {
-        put_bits(w, 8, b);
+        put_bits(mut w, 8, b);
     }
 }
 
@@ -897,10 +897,10 @@ fn compress_block(w: mut ref BitWriter, b: ref Block) {
     let n = blk.len();
     let ptr = bwt_sort(blk);
     let orig = position(ptr, 0);
-    put_byte_list(w, BLOCK_MAGIC.as_slice().to_vec());
-    put_bits(w, 32, b.crc);
-    put_bits(w, 1, 0);
-    put_bits(w, 24, orig);
+    put_byte_list(mut w, BLOCK_MAGIC.as_slice().to_vec());
+    put_bits(mut w, 32, b.crc);
+    put_bits(mut w, 1, 0);
+    put_bits(mut w, 24, orig);
     // move-to-front over the last column, with zero runs as RUNA/RUNB
     let mut in_use: Vec[bool] = Vec.new();
     for _ in 0..256 {
@@ -1063,38 +1063,38 @@ fn compress_block(w: mut ref BitWriter, b: ref Block) {
         in16.push(any);
     }
     for i in 0..16 {
-        put_bits(w, 1, if in16[i] { 1 } else { 0 });
+        put_bits(mut w, 1, if in16[i] { 1 } else { 0 });
     }
     for i in 0..16 {
         if in16[i] {
             for j in 0..16 {
-                put_bits(w, 1, if in_use[i * 16 + j] { 1 } else { 0 });
+                put_bits(mut w, 1, if in_use[i * 16 + j] { 1 } else { 0 });
             }
         }
     }
-    put_bits(w, 3, ng);
-    put_bits(w, 15, sels.len());
+    put_bits(mut w, 3, ng);
+    put_bits(mut w, 15, sels.len());
     for j in selmtf {
         for _ in 0..j {
-            put_bits(w, 1, 1);
+            put_bits(mut w, 1, 1);
         }
-        put_bits(w, 1, 0);
+        put_bits(mut w, 1, 0);
     }
     // each table's lengths as steps up (10) and down (11) from the last
     for t in 0..ng {
         let row = ref lens[t];
         let mut cur = row[0];
-        put_bits(w, 5, cur);
+        put_bits(mut w, 5, cur);
         for i in 0..alpha {
             while cur < row[i] {
-                put_bits(w, 2, 2);
+                put_bits(mut w, 2, 2);
                 cur += 1;
             }
             while cur > row[i] {
-                put_bits(w, 2, 3);
+                put_bits(mut w, 2, 3);
                 cur -= 1;
             }
-            put_bits(w, 1, 0);
+            put_bits(mut w, 1, 0);
         }
     }
     let mut g1: i64 = 0;
@@ -1104,7 +1104,7 @@ fn compress_block(w: mut ref BitWriter, b: ref Block) {
         let t = sels[sc];
         for i in g1..ge + 1 {
             let s = mtfv[i];
-            put_bits(w, lens[t][s], codes[t][s]);
+            put_bits(mut w, lens[t][s], codes[t][s]);
         }
         g1 = ge + 1;
         sc += 1;
@@ -1232,7 +1232,7 @@ fn next_sym(r: mut ref BitReader, g: mut ref Groups) -> Result[i64, String] {
     let tables = ref g.tables;
     let t = ref tables[g.sels[g.group]];
     let mut zn = t.minlen;
-    let mut zv = get_bits(r, zn)?;
+    let mut zv = get_bits(mut r, zn)?;
     loop {
         if zn > 20 {
             return data_err();
@@ -1241,7 +1241,7 @@ fn next_sym(r: mut ref BitReader, g: mut ref Groups) -> Result[i64, String] {
             break;
         }
         zn += 1;
-        zv = (zv << 1) | get_bits(r, 1)?;
+        zv = (zv << 1) | get_bits(mut r, 1)?;
     }
     let k = zv - t.base[zn];
     if k < 0 or k >= 258 or k >= t.perm.len() {
@@ -1253,7 +1253,7 @@ fn next_sym(r: mut ref BitReader, g: mut ref Groups) -> Result[i64, String] {
 fn read_magic(r: mut ref BitReader) -> Result[Vec[i64], String] {
     let mut m: Vec[i64] = Vec.new();
     for _ in 0..6 {
-        m.push(get_bits(r, 8)?);
+        m.push(get_bits(mut r, 8)?);
     }
     Ok(m)
 }
@@ -1261,24 +1261,24 @@ fn read_magic(r: mut ref BitReader) -> Result[Vec[i64], String] {
 // One stream: its blocks go to sink, and -vv notes go to note.
 fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut ref Vec[u8], note: mut ref String) -> Result[(), String] {
     for want in [b'B', b'Z', b'h'] {
-        if get_bits(r, 8)? != want as i64 {
+        if get_bits(mut r, 8)? != want as i64 {
             return Err("magic".to_string());
         }
     }
-    let level = get_bits(r, 8)? - 0x30;
+    let level = get_bits(mut r, 8)? - 0x30;
     if level < 1 or level > 9 {
         return Err("magic".to_string());
     }
     let mut comb: i64 = 0;
     let mut blockno: i64 = 0;
     loop {
-        let magic = read_magic(r)?;
+        let magic = read_magic(mut r)?;
         if magic == END_MAGIC.as_slice().to_vec() {
-            let stored = get_bits(r, 32)?;
+            let stored = get_bits(mut r, 32)?;
             if stored != comb {
                 return data_err();
             }
-            drop_partial(r);
+            drop_partial(mut r);
             return Ok(());
         }
         if magic != BLOCK_MAGIC.as_slice().to_vec() {
@@ -1288,21 +1288,21 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
         if verbose >= 2 {
             note.push_str(f"\n    [{blockno}: huff+mtf ");
         }
-        let bcrc = get_bits(r, 32)?;
-        get_bits(r, 1)?;
-        let orig = get_bits(r, 24)?;
+        let bcrc = get_bits(mut r, 32)?;
+        get_bits(mut r, 1)?;
+        let orig = get_bits(mut r, 24)?;
         if orig > 10 + 100000 * level {
             return data_err();
         }
         let mut in16: Vec[i64] = Vec.new();
         for _ in 0..16 {
-            in16.push(get_bits(r, 1)?);
+            in16.push(get_bits(mut r, 1)?);
         }
         let mut unseq: Vec[u8] = Vec.new();
         for i in 0..16 {
             if in16[i] == 1 {
                 for j in 0..16 {
-                    if get_bits(r, 1)? == 1 {
+                    if get_bits(mut r, 1)? == 1 {
                         unseq.push((i * 16 + j) as u8);
                     }
                 }
@@ -1313,11 +1313,11 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
             return data_err();
         }
         let alpha = ninuse + 2;
-        let ng = get_bits(r, 3)?;
+        let ng = get_bits(mut r, 3)?;
         if ng < 2 or ng > 6 {
             return data_err();
         }
-        let nsel = get_bits(r, 15)?;
+        let nsel = get_bits(mut r, 15)?;
         if nsel < 1 {
             return data_err();
         }
@@ -1328,7 +1328,7 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
         let mut sels: Vec[i64] = Vec.new();
         for i in 0..nsel {
             let mut j: i64 = 0;
-            while get_bits(r, 1)? == 1 {
+            while get_bits(mut r, 1)? == 1 {
                 j += 1;
                 if j >= ng {
                     return data_err();
@@ -1341,17 +1341,17 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
         }
         let mut tables: Vec[Table] = Vec.new();
         for _ in 0..ng {
-            let mut cur = get_bits(r, 5)?;
+            let mut cur = get_bits(mut r, 5)?;
             let mut lens: Vec[i64] = Vec.new();
             for _ in 0..alpha {
                 loop {
                     if cur < 1 or cur > 20 {
                         return data_err();
                     }
-                    if get_bits(r, 1)? == 0 {
+                    if get_bits(mut r, 1)? == 0 {
                         break;
                     }
-                    if get_bits(r, 1)? == 0 {
+                    if get_bits(mut r, 1)? == 0 {
                         cur += 1;
                     } else {
                         cur -= 1;
@@ -1369,7 +1369,7 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
             yy[i] = i;
         }
         let mut tt: Vec[u8] = Vec.new();
-        let mut s = next_sym(r, mut g)?;
+        let mut s = next_sym(mut r, mut g)?;
         while s != eob {
             if s <= 1 {
                 let mut es: i64 = -1;
@@ -1380,7 +1380,7 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
                     }
                     es += if s == 0 { nn } else { 2 * nn };
                     nn *= 2;
-                    s = next_sym(r, mut g)?;
+                    s = next_sym(mut r, mut g)?;
                 }
                 es += 1;
                 let uc = unseq[yy[0]];
@@ -1397,7 +1397,7 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
                 let v = yy[s - 1];
                 to_front(mut yy, s - 1);
                 tt.push(unseq[v]);
-                s = next_sym(r, mut g)?;
+                s = next_sym(mut r, mut g)?;
             }
         }
         let n = tt.len();
@@ -1466,7 +1466,7 @@ fn decode_file(t: ref Vec[i64], data: ref Vec[u8], verbose: i64, sink: mut ref V
     let mut sno: i64 = 0;
     loop {
         sno += 1;
-        if let Err(e) = decode_stream(t, mut r, verbose, sink, note) {
+        if let Err(e) = decode_stream(t, mut r, verbose, mut sink, mut note) {
             if e == "magic" and sno > 1 {
                 return Ok(true);
             }
@@ -1529,7 +1529,7 @@ fn fixed(x: f64, width: i64, places: i64) -> String {
 fn write_output(job: mut ref Job, outp: Str, bytes: own Vec[u8], inp: Str, keep: bool) -> bool {
     if let Err(e) = fs.write_bytes(outp.to_string(), bytes) {
         job.err.push_str(f"bzip2: Can't create output file {outp}: {e}.\n");
-        set_exit(job, 1);
+        set_exit(mut job, 1);
         return false;
     }
     if not keep {
@@ -1581,7 +1581,7 @@ fn bzip2(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String]) {
         let data = if is_file_path(path) { read_input(path) } else { None };
         let Some(data) = data else {
             job.err.push_str(f"bzip2: Can't open input {f}: No such file or directory.\n");
-            set_exit(job, 1);
+            set_exit(mut job, 1);
             continue;
         };
         if mode == b't' {
@@ -1620,7 +1620,7 @@ fn bzip2(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String]) {
             let outp = f"data/{outn}";
             if not tostd and not force and exists_path(outp) {
                 job.err.push_str(f"bzip2: Output file {outn} already exists.\n");
-                set_exit(job, 1);
+                set_exit(mut job, 1);
                 continue;
             }
             if verbose > 0 {
@@ -1638,13 +1638,13 @@ fn bzip2(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String]) {
                 }
                 Err(e) => {
                     job.err.push_str(f"\nbzip2: {f}: {error_text(e)}\n");
-                    set_exit(job, 2);
+                    set_exit(mut job, 2);
                     continue;
                 }
             }
             if tostd {
                 job.out.push_str(from_bytes(sink));
-            } else if not write_output(job, outp, sink, path, keep) {
+            } else if not write_output(mut job, outp, sink, path, keep) {
                 continue;
             }
             if verbose > 0 {
@@ -1656,7 +1656,7 @@ fn bzip2(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String]) {
         let outp = f"data/{outn}";
         if not tostd and not force and exists_path(outp) {
             job.err.push_str(f"bzip2: Output file {outn} already exists.\n");
-            set_exit(job, 1);
+            set_exit(mut job, 1);
             continue;
         }
         if verbose > 0 {
@@ -1667,7 +1667,7 @@ fn bzip2(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String]) {
         let nout = z.len();
         if tostd {
             job.out.push_str(from_bytes(z));
-        } else if not write_output(job, outp, z, path, keep) {
+        } else if not write_output(mut job, outp, z, path, keep) {
             continue;
         }
         if verbose > 0 {
@@ -1685,7 +1685,7 @@ fn bzip2(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String]) {
     }
     if test_fail {
         job.err.push_str("\nYou can use the `bzip2recover' program to attempt to recover\ndata from undamaged sections of corrupted files.\n\n");
-        set_exit(job, 2);
+        set_exit(mut job, 2);
     }
 }
 
@@ -1696,7 +1696,7 @@ fn sha256sum(job: mut ref Job, args: ref Vec[String]) {
             Some(b) => job.out.push_str(f"{hex_of(sha256(b))}  {f}\n"),
             None => {
                 job.err.push_str(f"sha256sum: {f}: No such file or directory\n");
-                set_exit(job, 1);
+                set_exit(mut job, 1);
             }
         }
     }

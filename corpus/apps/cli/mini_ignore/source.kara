@@ -1742,7 +1742,7 @@ fn walk(dir: Str, out: mut ref Vec[String], dirs: mut ref Vec[bool]) -> Result[(
         out.push(rel.clone());
         dirs.push(is_dir);
         if is_dir {
-            walk(rel, out, dirs)?;
+            walk(rel, mut out, mut dirs)?;
         }
     }
     Ok(())

@@ -1007,7 +1007,7 @@ fn source(arg: ref String) -> Result[String, String] {
 }
 
 fn parse_int(x: ref String) -> Result[i64, String] {
-    match i64.parse(x.clone()) {
+    match i64.parse(x.clone()).ok() {
         Some(n) => Ok(n),
         None => Err(f"not an integer: {x}"),
     }
@@ -1022,7 +1022,7 @@ fn printer(fields: ref Vec[String]) -> Result[Result[Printer, String], String] {
     let mut underscore_numbers = false;
     let mut k = 2;
     while k < fields.len() {
-        let kv = fields[k].split("=");
+        let kv: Vec[Str] = fields[k].split("=").collect();
         let key = kv[0].clone();
         let v = kv[1].clone();
         if key == "indent" {
@@ -1078,7 +1078,7 @@ fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
 
 fn main() {
     for (path, contents) in data_files() {
-        let parts = path.split("/");
+        let parts: Vec[Str] = path.split("/").collect();
         let mut dir = "data".to_string();
         let mut k = 0;
         while k + 1 < parts.len() {
@@ -1106,7 +1106,7 @@ fn main() {
         }
     };
     for job in jobs.lines() {
-        let f = job.split("\t");
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
         println(f"== {f.join(" | ")}");
         let mut out = String.new();
         match run(f, mut out) {

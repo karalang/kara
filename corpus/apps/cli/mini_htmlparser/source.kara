@@ -158,7 +158,7 @@ fn push_code(out: mut ref String, num: i64) {
 fn numeric_ref(num: i64, out: mut ref String) {
     match invalid_charref(num) {
         Some(v) => {
-            push_code(out, v);
+            push_code(mut out, v);
             return;
         }
         None => {}
@@ -170,7 +170,7 @@ fn numeric_ref(num: i64, out: mut ref String) {
     if invalid_codepoint(num) {
         return;
     }
-    push_code(out, num);
+    push_code(mut out, num);
 }
 
 // The digits raw[lo..hi] in base 10 or 16, held at 0x110000 once past
@@ -1154,10 +1154,10 @@ fn links(p: ref HtmlParser, out: mut ref String) {
     for e in p.events.iter() {
         match e.ev {
             Event.Start(tag, attrs) => {
-                link_starttag(tag, attrs, out, mut title, mut in_title, mut description);
+                link_starttag(tag, attrs, mut out, mut title, mut in_title, mut description);
             }
             Event.StartEnd(tag, attrs) => {
-                link_starttag(tag, attrs, out, mut title, mut in_title, mut description);
+                link_starttag(tag, attrs, mut out, mut title, mut in_title, mut description);
             }
             Event.End(tag) => {
                 if tag == "title" {
@@ -1335,7 +1335,7 @@ fn text_of(p: ref HtmlParser, out: mut ref String) {
         }
     }
     for line in st.parts.split("\n") {
-        let l = strip_ws(line);
+        let l = strip_ws(line.to_string());
         if l.len() > 0 {
             out.push_str(f"  | {esc(l)}\n");
         }
@@ -1539,7 +1539,7 @@ fn sanitize(p: ref HtmlParser, out: mut ref String) {
         }
     }
     for line in s.out.split("\n") {
-        out.push_str(f"  | {esc(line)}\n");
+        out.push_str(f"  | {esc(line.to_string())}\n");
     }
     out.push_str(f"  removed {s.removed_tags} tags, {s.removed_attrs} attributes\n");
 }
@@ -1561,7 +1561,7 @@ fn run(f: ref Vec[String], ents: ref Map[String, String], out: mut ref String) -
     let kind = f[0].clone();
     if kind == "events" {
         let src = source(f[1])?;
-        let chunk = match i64.parse(f[3].clone()) {
+        let chunk = match i64.parse(f[3].clone()).ok() {
             Some(n) => n,
             None => return Err(f"bad chunk {f[3]}"),
         };
@@ -1579,13 +1579,13 @@ fn run(f: ref Vec[String], ents: ref Map[String, String], out: mut ref String) -
         let src = source(f[1])?;
         let p = parse_all(src, true, 0, ents);
         if kind == "links" {
-            links(p, out);
+            links(p, mut out);
         } else if kind == "text" {
-            text_of(p, out);
+            text_of(p, mut out);
         } else if kind == "toc" {
-            toc(p, out);
+            toc(p, mut out);
         } else if kind == "sanitize" {
-            sanitize(p, out);
+            sanitize(p, mut out);
         } else {
             return Err(f"unknown job {kind}");
         }
@@ -1595,7 +1595,7 @@ fn run(f: ref Vec[String], ents: ref Map[String, String], out: mut ref String) -
 
 fn main() {
     for (path, contents) in data_files() {
-        let parts = path.split("/");
+        let parts: Vec[Str] = path.split("/").collect();
         let mut dir = "data".to_string();
         let mut k = 0;
         while k + 1 < parts.len() {
@@ -1624,7 +1624,7 @@ fn main() {
     };
     let ents = html5_entities();
     for job in jobs.lines() {
-        let f = job.split("\t");
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
         let mut out = String.new();
         println(f"== {esc(f.join(" | "))}");
         match run(f, ents, mut out) {

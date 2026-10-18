@@ -49,3 +49,7 @@ Not filed, because there is no process spec yet (B-2026-10-15-6): after
 before waiting. Rust's `Child::wait` keeps the output handles.
 
 Written 2026-10-15 by the real-world apps thread; karac at f32a0eebf2.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits, with one more by hand: `karac fix` wrote `match parsed.ok()` and a later `parsed.unwrap_or(0)` then used a moved value; the `.ok()` moved to the `let` (B-2026-10-18-35). The app matches expected.out on all four MIR backends again (karac at a4b0967495).

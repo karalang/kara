@@ -542,7 +542,7 @@ fn parse_deps(list: mut ref Vec[Dep], depends: Str, flags: i64) {
                     _ => false,
                 };
                 if outside {
-                    add_dep(list, new_dep(byte_str(buf, pkg_at, pkg_at + pkg_len), None, cmp, flags));
+                    add_dep(mut list, new_dep(byte_str(buf, pkg_at, pkg_at + pkg_len), None, cmp, flags));
                     cmp = Cmp.Any;
                     pkg_len = 0;
                 }
@@ -571,7 +571,7 @@ fn parse_deps(list: mut ref Vec[Dep], depends: Str, flags: i64) {
                 if is_separator(c) or at(buf, ptr + 1) == 0 {
                     let version = byte_str(buf, vstart, ptr);
                     state = DepState.Outside;
-                    add_dep(list, new_dep(byte_str(buf, pkg_at, pkg_at + pkg_len), Some(version), cmp, flags));
+                    add_dep(mut list, new_dep(byte_str(buf, pkg_at, pkg_at + pkg_len), Some(version), cmp, flags));
                     cmp = Cmp.Any;
                     cmpname = Vec.new();
                     pkg_len = 0;
@@ -692,7 +692,7 @@ fn add_fragment(list: mut ref Vec[Frag], s: Str) {
         let mut parent = list.remove(n - 1);
         parent.data = f"{parent.data} {munge(s)}";
         parent.merged = true;
-        copy_fragment(list, parent, false);
+        copy_fragment(mut list, parent, false);
         return;
     }
     list.push(Frag { kind: 0, data: s.to_string(), merged: false });
@@ -1189,7 +1189,7 @@ impl Client {
     fn add_var(ref self, vars: mut ref Vec[Tuple], key: Str, value: Str, parse: bool) {
         let v = dequote(value);
         let stored = if parse { self.expand(vars, v) } else { v };
-        put_tuple(vars, key, stored);
+        put_tuple(mut vars, key, stored);
     }
 
     // ---------------------------------------------------------- parsing
@@ -1219,32 +1219,32 @@ impl Client {
             }
         } else if same_ignoring_case(key, "Requires") {
             let d = self.expand(pkg.vars, value);
-            parse_deps(pkg.required, d, 0);
+            parse_deps(mut pkg.required, d, 0);
         } else if same_ignoring_case(key, "Requires.private") {
             let d = self.expand(pkg.vars, value);
-            parse_deps(pkg.requires_private, d, 0);
+            parse_deps(mut pkg.requires_private, d, 0);
         } else if same_ignoring_case(key, "Requires.internal") {
             let d = self.expand(pkg.vars, value);
-            parse_deps(pkg.requires_private, d, DEP_INTERNAL);
+            parse_deps(mut pkg.requires_private, d, DEP_INTERNAL);
         } else if same_ignoring_case(key, "Conflicts") {
             let d = self.expand(pkg.vars, value);
-            parse_deps(pkg.conflicts, d, 0);
+            parse_deps(mut pkg.conflicts, d, 0);
         } else if same_ignoring_case(key, "Provides") {
             let d = self.expand(pkg.vars, value);
-            parse_deps(pkg.provides, d, 0);
+            parse_deps(mut pkg.provides, d, 0);
         } else if same_ignoring_case(key, "Cflags") or same_ignoring_case(key, "Cflags.private") or same_ignoring_case(key, "Libs") or same_ignoring_case(key, "Libs.private") {
             let expanded = self.expand(pkg.vars, value);
             match argv_split(expanded) {
                 Some(args) => {
                     for a in args {
                         if same_ignoring_case(key, "Cflags") {
-                            add_fragment(pkg.cflags, a);
+                            add_fragment(mut pkg.cflags, a);
                         } else if same_ignoring_case(key, "Cflags.private") {
-                            add_fragment(pkg.cflags_private, a);
+                            add_fragment(mut pkg.cflags_private, a);
                         } else if same_ignoring_case(key, "Libs") {
-                            add_fragment(pkg.libs, a);
+                            add_fragment(mut pkg.libs, a);
                         } else {
-                            add_fragment(pkg.libs_private, a);
+                            add_fragment(mut pkg.libs_private, a);
                         }
                     }
                 }

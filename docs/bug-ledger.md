@@ -97,24 +97,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 279 |
-| codegen-gap | 270 |
+| codegen-gap | 271 |
 | false-positive | 226 |
 | other | 175 |
 | perf | 173 |
-| diagnostics | 166 |
+| diagnostics | 167 |
 | crash | 122 |
-| soundness | 113 |
+| soundness | 114 |
 | use-after-free | 91 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2935 |
-| interp | 950 |
-| typecheck | 468 |
+| codegen | 2936 |
+| interp | 951 |
+| typecheck | 469 |
 | other | 115 |
-| ownership | 112 |
+| ownership | 113 |
 | runtime | 78 |
 | cli | 78 |
 | parser | 69 |
@@ -192,6 +192,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-32 | 2026-10-18 | typecheck | low | `no method 'clone' on type 'Value'` on a user enum or struct without `#[derive(Clone)]` gives no hint that the derive is missing, and `karac fix` offers nothing | — |
 | B-2026-10-18-33 | 2026-10-18 | interp+codegen | medium | On MIR, `char.try_from(x)` with `x` a `ref i64` from `for x in v.iter()` is refused ("char.try_from expects an integer codepoint, got `ref i64`"); check passes and `karac run` prints the right text | — |
 | B-2026-10-18-34 | 2026-10-18 | codegen | low | After B-2026-10-13-34, `i64.parse(t[0..2])` on the MIR compiled backend still makes two out-of-line runtime calls per parse (`karac_mir_str_view`, then `karac_mir_parse_int`), so kata 539's bench runs 1.25 s against 0.44 s for the same program with the digits read by byte arithmetic, and 0.51 s for the Rust mirror | — |
+| B-2026-10-18-35 | 2026-10-18 | typecheck | medium | After the parse→Result and lazy split/lines change (a0ca700228, acd593fc77), `karac fix` leaves four common call shapes unmigrated: `.ok_or(..)` on a parse Result, `s.split(..)[i]` / `s.lines()[0]` indexing, and `Vec[String]` from `split(..).filter(..).collect()` | — |
+| B-2026-10-18-36 | 2026-10-18 | ownership | medium | `karac check` accepts walking a lazy `split` iterator inside an outer loop (`for g in given` where `given = a.split(",")` is moved on the first outer pass); MIR's move check refuses it, while legacy `karac run` re-walks it and prints `x` and `y` | — |
+| B-2026-10-18-37 | 2026-10-18 | interp+codegen | medium | On MIR, `Ok(s.split_whitespace().map(|p| p.to_string()).collect())` as the tail of a `Result[Vec[String], String]` fn does not lower (`UnsolvedParam("C")`); check passes | — |
 
 ### Relocated
 

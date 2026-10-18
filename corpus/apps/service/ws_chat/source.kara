@@ -264,8 +264,8 @@ fn push_bytes(dst: mut ref Vec[u8], src: Slice[u8]) {
 
 // Checks the upgrade request; returns the reply head, and whether to go on.
 fn handshake(head: Str) -> (String, bool) {
-    let lines: Vec[String] = head.split("\r\n");
-    let first: Vec[String] = lines[0].split(" ");
+    let lines: Vec[String] = head.split("\r\n").map(|p| p.to_string()).collect();
+    let first: Vec[String] = lines[0].split(" ").map(|p| p.to_string()).collect();
     let mut key = String.new();
     let mut upgrade = false;
     let mut version = String.new();
@@ -307,7 +307,7 @@ fn send_text(room: mut ref Room, to: i64, text: Str) {
 fn broadcast(room: mut ref Room, text: Str) {
     room.history.push(text.to_string());
     for i in 0..room.conns.len() {
-        send_text(room, i, text);
+        send_text(mut room, i, text);
     }
 }
 
@@ -331,11 +331,11 @@ fn on_message(room: mut ref Room, i: i64, text: Str) {
             }
         }
         if taken or new_nick.len() == 0 {
-            send_text(room, i, f"* nick {new_nick} is taken");
+            send_text(mut room, i, f"* nick {new_nick} is taken");
         } else {
             let old = room.conns[i].nick.clone();
             room.conns[i].nick = new_nick.clone();
-            broadcast(room, f"* {old} is now {new_nick}");
+            broadcast(mut room, f"* {old} is now {new_nick}");
         }
     } else if text == "/who" {
         let mut names: Vec[String] = Vec.new();
@@ -345,17 +345,17 @@ fn on_message(room: mut ref Room, i: i64, text: Str) {
             }
         }
         names.sort();
-        send_text(room, i, f"* here: {names.join(", ")}");
+        send_text(mut room, i, f"* here: {names.join(", ")}");
     } else if text == "/history" {
         let n = room.history.len();
         let from = if n > 3 { n - 3 } else { 0 };
         for k in from..n {
             let line = room.history[k].clone();
-            send_text(room, i, f"| {line}");
+            send_text(mut room, i, f"| {line}");
         }
     } else {
         let nick = room.conns[i].nick.clone();
-        broadcast(room, f"<{nick}> {text}");
+        broadcast(mut room, f"<{nick}> {text}");
     }
 }
 
@@ -367,14 +367,14 @@ fn on_frames(room: mut ref Room, i: i64, buf: Slice[u8], start: i64) {
             Some(x) => x,
             None => {
                 if at < buf.len() {
-                    close_conn(room, i, 1002, "truncated frame");
+                    close_conn(mut room, i, 1002, "truncated frame");
                 }
                 return;
             }
         };
         at = next;
         if not frame.masked {
-            close_conn(room, i, 1002, "client frames must be masked");
+            close_conn(mut room, i, 1002, "client frames must be masked");
             return;
         }
         let op = frame.opcode;
@@ -393,15 +393,15 @@ fn on_frames(room: mut ref Room, i: i64, buf: Slice[u8], start: i64) {
             push_bytes(mut room.conns[i].out, echo);
             room.conns[i].open = false;
             println(f"  server: {nick} closed with {code}");
-            broadcast(room, f"* {nick} left");
+            broadcast(mut room, f"* {nick} left");
             return;
         } else if op == 1 or op == 2 or op == 0 {
             if op == 0 and room.conns[i].partial_op == 0 {
-                close_conn(room, i, 1002, "continuation with nothing to continue");
+                close_conn(mut room, i, 1002, "continuation with nothing to continue");
                 return;
             }
             if op != 0 and room.conns[i].partial_op != 0 {
-                close_conn(room, i, 1002, "new message inside a fragmented one");
+                close_conn(mut room, i, 1002, "new message inside a fragmented one");
                 return;
             }
             if op != 0 {
@@ -409,7 +409,7 @@ fn on_frames(room: mut ref Room, i: i64, buf: Slice[u8], start: i64) {
             }
             push_bytes(mut room.conns[i].partial, frame.payload);
             if room.conns[i].partial.len() > MAX_MESSAGE {
-                close_conn(room, i, 1009, "message too big");
+                close_conn(mut room, i, 1009, "message too big");
                 return;
             }
             if frame.fin {
@@ -418,19 +418,19 @@ fn on_frames(room: mut ref Room, i: i64, buf: Slice[u8], start: i64) {
                 room.conns[i].partial = Vec.new();
                 room.conns[i].partial_op = 0;
                 if kind == 2 {
-                    send_text(room, i, f"* binary message of {whole.len()} bytes ignored");
+                    send_text(mut room, i, f"* binary message of {whole.len()} bytes ignored");
                 } else {
                     match utf8(whole) {
-                        Some(text) => on_message(room, i, text),
+                        Some(text) => on_message(mut room, i, text),
                         None => {
-                            close_conn(room, i, 1007, "text is not UTF-8");
+                            close_conn(mut room, i, 1007, "text is not UTF-8");
                             return;
                         }
                     }
                 }
             }
         } else {
-            close_conn(room, i, 1002, f"unknown opcode {op}");
+            close_conn(mut room, i, 1002, f"unknown opcode {op}");
             return;
         }
     }
@@ -535,17 +535,17 @@ fn round(listener: ref TcpListener, room: mut ref Room, clients: mut ref Vec[Pee
         if ok {
             room.conns[i].open = true;
             let nick = room.conns[i].nick.clone();
-            broadcast(room, f"* {nick} joined");
+            broadcast(mut room, f"* {nick} joined");
         }
     }
     for i in 0..room.conns.len() {
         if room.conns[i].open {
-            on_frames(room, i, inputs[i], starts[i]);
+            on_frames(mut room, i, inputs[i], starts[i]);
         }
     }
     for i in 0..room.conns.len() {
         if room.conns[i].open {
-            close_conn(room, i, 1001, "server going away");
+            close_conn(mut room, i, 1001, "server going away");
         }
         let out = room.conns[i].out.clone();
         match room.conns[i].stream.write_all(out) {
@@ -572,7 +572,8 @@ fn round(listener: ref TcpListener, room: mut ref Room, clients: mut ref Vec[Pee
             head_bytes.push(bytes[k]);
         }
         let head = utf8(head_bytes).unwrap_or(String.new());
-        let status: Vec[String] = head.lines()[0].split(" ");
+        let first: Vec[Str] = head.lines().collect();
+        let status: Vec[String] = first[0].split(" ").map(|p| p.to_string()).collect();
         let mut accept = "-".to_string();
         for l in head.lines() {
             if l.to_lowercase().starts_with("sec-websocket-accept:") {

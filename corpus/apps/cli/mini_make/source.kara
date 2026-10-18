@@ -176,7 +176,7 @@ fn split_args(s: Str) -> Vec[String] {
 
 // A glob with `*` as its only wildcard.
 fn glob_match(pat: Str, name: Str) -> bool {
-    let parts = pat.split("*");
+    let parts: Vec[Str] = pat.split("*").collect();
     if parts.len() == 1 {
         return pat == name;
     }
@@ -323,7 +323,7 @@ impl Make {
         let mut current: Vec[String] = Vec.new();
         let mut current_pattern = false;
         let mut n = 0;
-        for raw in text.lines().iter() {
+        for raw in text.lines() {
             n += 1;
             if raw.starts_with("\t") and current.len() > 0 {
                 let cmd = raw.substring(1, raw.len());
@@ -618,7 +618,7 @@ impl Make {
             return Ok(());
         }
         let (code, text) = shell(cmd);
-        for l in text.lines().iter() {
+        for l in text.lines() {
             self.out.push(l.clone());
         }
         if code != 0 {

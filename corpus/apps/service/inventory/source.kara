@@ -132,16 +132,16 @@ fn encode_item(i: ref Item) -> String {
 }
 
 fn decode_line(line: Str) -> Option[(String, Option[Item])] {
-    let f: Vec[String] = line.split("|");
+    let f: Vec[String] = line.split("|").map(|p| p.to_string()).collect();
     if f.len() == 2 and f[0] == "del" {
         return Some((f[1].clone(), None));
     }
     if f.len() != 6 or f[0] != "put" {
         return None;
     }
-    let on_hand = i64.parse(f[3])?;
-    let reserved = i64.parse(f[4])?;
-    let cents = i64.parse(f[5])?;
+    let on_hand = i64.parse(f[3]).ok()?;
+    let reserved = i64.parse(f[4]).ok()?;
+    let cents = i64.parse(f[5]).ok()?;
     Some((f[1].clone(), Some(Item { sku: f[1].clone(), name: f[2].clone(), on_hand: on_hand, reserved: reserved, price: Money { cents: cents } })))
 }
 
@@ -154,7 +154,7 @@ impl FileStore {
             Ok(t) => t,
             Err(_) => String.new(),
         };
-        let lines: Vec[String] = text.lines().iter().map(|l| l.to_string()).collect();
+        let lines: Vec[String] = text.lines().map(|l| l.to_string()).collect();
         let mut torn = false;
         for k in 0..lines.len() {
             match decode_line(lines[k]) {
@@ -401,7 +401,7 @@ impl[S: Store] Service[S] {
             Some(r) => return f"{r} (replayed)",
             None => {}
         }
-        let w: Vec[String] = cmd.split(" ");
+        let w: Vec[String] = cmd.split(" ").map(|p| p.to_string()).collect();
         let reply = if w[0] == "stock" and w.len() == 5 {
             let qty = i64.parse(w[3]).unwrap_or(0);
             let cents = i64.parse(w[4]).unwrap_or(0);
@@ -409,7 +409,7 @@ impl[S: Store] Service[S] {
         } else if (w[0] == "reserve" or w[0] == "quote") and w.len() >= 3 {
             let mut lines: Vec[Line] = Vec.new();
             for k in 2..w.len() {
-                let parts: Vec[String] = w[k].split("x");
+                let parts: Vec[String] = w[k].split("x").map(|p| p.to_string()).collect();
                 if parts.len() == 2 {
                     lines.push(Line { sku: parts[0].clone(), qty: i64.parse(parts[1]).unwrap_or(0) });
                 }
@@ -567,7 +567,7 @@ fn main() {
             let svc = Service.new(s);
             let r = svc.report();
             println(f"  | {r[0]}");
-            let lines = fs.read_to_string("inventory.log".to_string()).unwrap_or(String.new()).lines().len();
+            let lines = fs.read_to_string("inventory.log".to_string()).unwrap_or(String.new()).lines().count();
             println(f"  log after recovery: {lines} lines");
         }
         Err(e) => println(f"  open: {e}"),

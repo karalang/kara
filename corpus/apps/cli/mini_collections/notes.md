@@ -73,3 +73,7 @@ After those edits the program matched expected.out on both MIR
 surfaces. `karac fix` found nothing to fix.
 
 Written 2026-10-18 by the real-world apps thread; karac at ab69f69327.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits, with one more by hand: The LRU job's keys collect into `Vec[String]` (the `Lru[String, String]` takes `ref String`), and `word_list` binds its collected `Vec[String]` before `return Ok(..)`, because a `collect()` inside `Ok(..)` does not lower on MIR (B-2026-10-18-37). The app matches expected.out on all four MIR backends again (karac at a4b0967495).

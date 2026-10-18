@@ -210,7 +210,7 @@ fn parse_value(t: Str) -> Result[f64, String] {
     if t == "NaN" {
         return Ok(0.0 / 0.0);
     }
-    match f64.parse(t) {
+    match f64.parse(t).ok() {
         Some(v) => Ok(v),
         None => Err(f"bad value '{t}'"),
     }
@@ -252,7 +252,7 @@ fn parse_sample(line: Str) -> Result[Sample, String] {
         i = l.end;
     }
     let mut rest: Vec[String] = Vec.new();
-    for w in line.substring(i, line.len()).split(" ").iter() {
+    for w in line.substring(i, line.len()).split(" ") {
         if w.len() > 0 {
             rest.push(w.clone());
         }
@@ -265,7 +265,7 @@ fn parse_sample(line: Str) -> Result[Sample, String] {
     }
     let value = parse_value(rest[0])?;
     if rest.len() == 2 {
-        match i64.parse(rest[1]) {
+        match i64.parse(rest[1]).ok() {
             Some(_) => {}
             None => return Err(f"bad timestamp '{rest[1]}'"),
         }
@@ -279,13 +279,13 @@ fn parse(text: Str) -> Scrape {
     let mut sc = Scrape { types: Map.new(), samples: Vec.new(), index: Map.new(), errors: Vec.new() };
     let mut seen: Vec[String] = Vec.new();
     let mut n = 0;
-    for line in text.lines().iter() {
+    for line in text.lines() {
         n += 1;
         if line.trim().len() == 0 {
             continue;
         }
         if line.starts_with("#") {
-            let w = line.split(" ");
+            let w: Vec[Str] = line.split(" ").collect();
             if w.len() >= 4 and w[1] == "TYPE" {
                 let name = w[2].clone();
                 let mut ty = w[3].trim().to_string();
@@ -703,7 +703,7 @@ fn main() {
     let mut text = out.join("\n");
     text.push_str("\n");
     put("aggregated.prom", text);
-    for l in text.lines().iter() {
+    for l in text.lines() {
         println(f"  {l}");
     }
     let back = parse(fs.read_to_string("aggregated.prom").unwrap_or("".to_string()));

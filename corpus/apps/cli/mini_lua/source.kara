@@ -142,7 +142,7 @@ fn lex(src: Str) -> Result[Vec[Token], String] {
             }
             let text = byte_str(b, st, i);
             if float {
-                let v = match f64.parse(text) {
+                let v = match f64.parse(text).ok() {
                     Some(v) => v,
                     None => return Err(f"{line}: malformed number near '{text}'"),
                 };
@@ -1387,7 +1387,7 @@ fn str_to_number(s: Str) -> Option[Value] {
         return None;
     }
     let t = s.substring(st, en);
-    match f64.parse(t) {
+    match f64.parse(t).ok() {
         Some(x) => Some(Value.Num(x)),
         None => None,
     }
@@ -2152,7 +2152,7 @@ fn tostring_meta(ast: ref Ast, st: mut ref State, v: ref Value) -> Result[String
     if is_callable(h) {
         let mut args: Vec[Value] = Vec.new();
         args.push(v.clone());
-        let r = first(call_value(ast, st, h, args)?);
+        let r = first(call_value(ast, mut st, h, args)?);
         return match r {
             Value.Text(s) => Ok(s),
             _ => Err(st.lib_error("'__tostring' must return a string")),
@@ -2212,7 +2212,7 @@ fn index_value(ast: ref Ast, st: mut ref State, obj: own Value, key: ref Value, 
             let mut args: Vec[Value] = Vec.new();
             args.push(cur.clone());
             args.push(key.clone());
-            return Ok(first(call_value(ast, st, handler, args)?));
+            return Ok(first(call_value(ast, mut st, handler, args)?));
         }
         cur = handler;
     }
@@ -2237,7 +2237,7 @@ fn call_value(ast: ref Ast, st: mut ref State, f: ref Value, args: own Vec[Value
     }
     if lf.builtin >= 0 {
         st.push_frame(false, 0);
-        let r = call_builtin(ast, st, lf, args);
+        let r = call_builtin(ast, mut st, lf, args);
         st.pop_frame();
         return r;
     }
@@ -2259,7 +2259,7 @@ fn call_value(ast: ref Ast, st: mut ref State, f: ref Value, args: own Vec[Value
         i += 1;
     }
     st.push_frame(true, 0);
-    let r = exec_stmts(ast, st, env, proto.body);
+    let r = exec_stmts(ast, mut st, env, proto.body);
     st.pop_frame();
     match r {
         Ok(Flow.Return(vs)) => Ok(vs),
@@ -2285,12 +2285,12 @@ fn eval_list(ast: ref Ast, st: mut ref State, env: ref Env, list: ref Vec[i64]) 
     for i in 0..n {
         let e = list[i];
         if i == n - 1 and is_multi(ast, e) {
-            let vs = eval_call(ast, st, env, e)?;
+            let vs = eval_call(ast, mut st, env, e)?;
             for v in vs.into_iter() {
                 out.push(v);
             }
         } else {
-            out.push(eval(ast, st, env, e)?);
+            out.push(eval(ast, mut st, env, e)?);
         }
     }
     Ok(out)
@@ -2300,22 +2300,22 @@ fn eval_call(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Ve
     let x = ref ast.exprs[e];
     match x {
         Expr.Call(fe, args, line) => {
-            let fv = eval(ast, st, env, *fe)?;
-            let argv = eval_list(ast, st, env, args)?;
+            let fv = eval(ast, mut st, env, *fe)?;
+            let argv = eval_list(ast, mut st, env, args)?;
             st.set_line(*line);
             if not is_callable(fv) {
                 return Err(st.rt_error(f"attempt to call a {type_name(fv)} value{describe(ast, env, *fe)}"));
             }
-            call_value(ast, st, fv, argv)
+            call_value(ast, mut st, fv, argv)
         }
         Expr.Method(oe, name, args, line) => {
-            let ov = eval(ast, st, env, *oe)?;
+            let ov = eval(ast, mut st, env, *oe)?;
             st.set_line(*line);
             let key = Value.Text(name.clone());
-            let fv = index_value(ast, st, ov.clone(), key, describe(ast, env, *oe))?;
+            let fv = index_value(ast, mut st, ov.clone(), key, describe(ast, env, *oe))?;
             let mut argv: Vec[Value] = Vec.new();
             argv.push(ov);
-            let rest = eval_list(ast, st, env, args)?;
+            let rest = eval_list(ast, mut st, env, args)?;
             for v in rest.into_iter() {
                 argv.push(v);
             }
@@ -2323,11 +2323,11 @@ fn eval_call(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Ve
             if not is_callable(fv) {
                 return Err(st.rt_error(f"attempt to call a {type_name(fv)} value (method '{name}')"));
             }
-            call_value(ast, st, fv, argv)
+            call_value(ast, mut st, fv, argv)
         }
         _ => {
             let mut out: Vec[Value] = Vec.new();
-            out.push(eval(ast, st, env, e)?);
+            out.push(eval(ast, mut st, env, e)?);
             Ok(out)
         }
     }
@@ -2347,46 +2347,46 @@ fn eval(ast: ref Ast, st: mut ref State, env: ref Env, e: i64) -> Result[Value, 
             None => Ok(st.globals.get_str(n)),
         },
         Expr.Index(oe, ke) => {
-            let ov = eval(ast, st, env, *oe)?;
-            let kv = eval(ast, st, env, *ke)?;
-            index_value(ast, st, ov, kv, describe(ast, env, *oe))
+            let ov = eval(ast, mut st, env, *oe)?;
+            let kv = eval(ast, mut st, env, *ke)?;
+            index_value(ast, mut st, ov, kv, describe(ast, env, *oe))
         }
-        Expr.Call(_, _, _) => Ok(first(eval_call(ast, st, env, e)?)),
-        Expr.Method(_, _, _, _) => Ok(first(eval_call(ast, st, env, e)?)),
-        Expr.Function(p) => Ok(make_closure(st, env, ast, *p)),
+        Expr.Call(_, _, _) => Ok(first(eval_call(ast, mut st, env, e)?)),
+        Expr.Method(_, _, _, _) => Ok(first(eval_call(ast, mut st, env, e)?)),
+        Expr.Function(p) => Ok(make_closure(mut st, env, ast, *p)),
         Expr.Binary(op, l, r, line) => {
-            let a = eval(ast, st, env, *l)?;
-            let b = eval(ast, st, env, *r)?;
+            let a = eval(ast, mut st, env, *l)?;
+            let b = eval(ast, mut st, env, *r)?;
             st.set_line(*line);
-            binary(ast, st, op, a, b)
+            binary(ast, mut st, op, a, b)
         }
         Expr.Unary(op, o, line) => {
-            let a = eval(ast, st, env, *o)?;
+            let a = eval(ast, mut st, env, *o)?;
             st.set_line(*line);
-            unary(ast, st, op, a, describe(ast, env, *o))
+            unary(ast, mut st, op, a, describe(ast, env, *o))
         }
         Expr.And(l, r) => {
-            let a = eval(ast, st, env, *l)?;
+            let a = eval(ast, mut st, env, *l)?;
             if not truthy(a) {
                 return Ok(a);
             }
-            eval(ast, st, env, *r)
+            eval(ast, mut st, env, *r)
         }
         Expr.Or(l, r) => {
-            let a = eval(ast, st, env, *l)?;
+            let a = eval(ast, mut st, env, *l)?;
             if truthy(a) {
                 return Ok(a);
             }
-            eval(ast, st, env, *r)
+            eval(ast, mut st, env, *r)
         }
-        Expr.Paren(i) => eval(ast, st, env, *i),
+        Expr.Paren(i) => eval(ast, mut st, env, *i),
         Expr.Table(items, keys, vals) => {
             let t = st.new_table();
-            let positional = eval_list(ast, st, env, items)?;
+            let positional = eval_list(ast, mut st, env, items)?;
             for i in 0..keys.len() {
-                let k = eval(ast, st, env, keys[i])?;
+                let k = eval(ast, mut st, env, keys[i])?;
                 check_key(st, k)?;
-                let v = eval(ast, st, env, vals[i])?;
+                let v = eval(ast, mut st, env, vals[i])?;
                 t.set(k, v);
             }
             let mut i: i64 = 1;
@@ -2434,7 +2434,7 @@ fn try_meta(ast: ref Ast, st: mut ref State, event: Str, a: ref Value, b: ref Va
     let mut args: Vec[Value] = Vec.new();
     args.push(a.clone());
     args.push(b.clone());
-    Ok(Some(first(call_value(ast, st, h, args)?)))
+    Ok(Some(first(call_value(ast, mut st, h, args)?)))
 }
 
 fn arith(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, b: ref Value) -> Result[Value, Value] {
@@ -2486,7 +2486,7 @@ fn arith(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, b: ref Value) -
             return Ok(Value.Num(float_mod(fx, fy)));
         }
     }
-    if let Some(r) = try_meta(ast, st, arith_event(op), a, b)? {
+    if let Some(r) = try_meta(ast, mut st, arith_event(op), a, b)? {
         return Ok(r);
     }
     // luaG_opinterror: blame the first operand that is not a number
@@ -2516,7 +2516,7 @@ fn concat(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value) -> Result
             return Ok(Value.Text(f"{x}{y}"));
         }
     }
-    if let Some(r) = try_meta(ast, st, "__concat", a, b)? {
+    if let Some(r) = try_meta(ast, mut st, "__concat", a, b)? {
         return Ok(r);
     }
     let bad = match concat_piece(a) {
@@ -2589,7 +2589,7 @@ fn values_equal(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value) -> 
     if not both_tables(a, b) {
         return Ok(false);
     }
-    match try_meta(ast, st, "__eq", a, b)? {
+    match try_meta(ast, mut st, "__eq", a, b)? {
         Some(r) => Ok(truthy(r)),
         None => Ok(false),
     }
@@ -2621,7 +2621,7 @@ fn less_than(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value, or_equ
         }
     }
     let event = if or_equal { "__le" } else { "__lt" };
-    match try_meta(ast, st, event, a, b)? {
+    match try_meta(ast, mut st, event, a, b)? {
         Some(r) => Ok(truthy(r)),
         None => Err(compare_error(st, a, b)),
     }
@@ -2629,27 +2629,27 @@ fn less_than(ast: ref Ast, st: mut ref State, a: ref Value, b: ref Value, or_equ
 
 fn binary(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, b: ref Value) -> Result[Value, Value] {
     if op == "==" {
-        return Ok(Value.Bool(values_equal(ast, st, a, b)?));
+        return Ok(Value.Bool(values_equal(ast, mut st, a, b)?));
     }
     if op == "~=" {
-        return Ok(Value.Bool(not values_equal(ast, st, a, b)?));
+        return Ok(Value.Bool(not values_equal(ast, mut st, a, b)?));
     }
     if op == "<" {
-        return Ok(Value.Bool(less_than(ast, st, a, b, false)?));
+        return Ok(Value.Bool(less_than(ast, mut st, a, b, false)?));
     }
     if op == ">" {
-        return Ok(Value.Bool(less_than(ast, st, b, a, false)?));
+        return Ok(Value.Bool(less_than(ast, mut st, b, a, false)?));
     }
     if op == "<=" {
-        return Ok(Value.Bool(less_than(ast, st, a, b, true)?));
+        return Ok(Value.Bool(less_than(ast, mut st, a, b, true)?));
     }
     if op == ">=" {
-        return Ok(Value.Bool(less_than(ast, st, b, a, true)?));
+        return Ok(Value.Bool(less_than(ast, mut st, b, a, true)?));
     }
     if op == ".." {
-        return concat(ast, st, a, b);
+        return concat(ast, mut st, a, b);
     }
-    arith(ast, st, op, a, b)
+    arith(ast, mut st, op, a, b)
 }
 
 fn unary(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, what: Str) -> Result[Value, Value] {
@@ -2667,7 +2667,7 @@ fn unary(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, what: Str) -> R
         Some(Value.Int(i)) => Ok(Value.Int((0 as i64).wrapping_sub(i))),
         Some(Value.Num(x)) => Ok(Value.Num(-x)),
         _ => {
-            if let Some(r) = try_meta(ast, st, "__unm", a, a)? {
+            if let Some(r) = try_meta(ast, mut st, "__unm", a, a)? {
                 return Ok(r);
             }
             Err(st.rt_error(f"attempt to perform arithmetic on a {type_name(a)} value{what}"))
@@ -2679,13 +2679,13 @@ fn unary(ast: ref Ast, st: mut ref State, op: Str, a: ref Value, what: Str) -> R
 
 fn exec_block(ast: ref Ast, st: mut ref State, env: ref Env, b: i64) -> Result[Flow, Value] {
     let inner = new_env(env);
-    exec_stmts(ast, st, inner, b)
+    exec_stmts(ast, mut st, inner, b)
 }
 
 fn exec_stmts(ast: ref Ast, st: mut ref State, env: ref Env, b: i64) -> Result[Flow, Value] {
     let list = ref ast.blocks[b];
     for si in list.iter() {
-        let f = exec_stmt(ast, st, env, *si)?;
+        let f = exec_stmt(ast, mut st, env, *si)?;
         match f {
             Flow.Normal => {}
             other => return Ok(other),
@@ -2732,7 +2732,7 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
     let stmt = ref ast.stmts[s];
     match stmt {
         Stmt.Local(names, values) => {
-            let vs = eval_list(ast, st, env, values)?;
+            let vs = eval_list(ast, mut st, env, values)?;
             let mut i: i64 = 0;
             for v in vs.into_iter() {
                 if i < names.len() {
@@ -2749,7 +2749,7 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
         Stmt.LocalFunction(name, p) => {
             // declared first, so the function can call itself
             declare(env, name, Value.Nil);
-            let f = make_closure(st, env, ast, *p);
+            let f = make_closure(mut st, env, ast, *p);
             let n = env.cells.len();
             env.cells[n - 1].v = f;
             Ok(Flow.Normal)
@@ -2764,14 +2764,14 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
                         None => places.push(Place { cell: None, global: n.clone(), obj: Value.Nil, key: Value.Nil, what: String.new() }),
                     },
                     Expr.Index(oe, ke) => {
-                        let ov = eval(ast, st, env, *oe)?;
-                        let kv = eval(ast, st, env, *ke)?;
+                        let ov = eval(ast, mut st, env, *oe)?;
+                        let kv = eval(ast, mut st, env, *ke)?;
                         places.push(Place { cell: None, global: String.new(), obj: ov, key: kv, what: describe(ast, env, *oe) });
                     }
                     _ => return Err(st.rt_error("cannot assign to this expression")),
                 }
             }
-            let vs = eval_list(ast, st, env, values)?;
+            let vs = eval_list(ast, mut st, env, values)?;
             let mut vals: Vec[Value] = Vec.new();
             for v in vs.into_iter() {
                 vals.push(v);
@@ -2782,34 +2782,34 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
             st.set_line(ast.lines[s]);
             let mut i: i64 = 0;
             for p in places.into_iter() {
-                assign(st, p, vals[i].clone())?;
+                assign(mut st, p, vals[i].clone())?;
                 i += 1;
             }
             Ok(Flow.Normal)
         }
         Stmt.Expression(e) => {
-            eval_call(ast, st, env, *e)?;
+            eval_call(ast, mut st, env, *e)?;
             Ok(Flow.Normal)
         }
         Stmt.If(conds, blocks, other) => {
             for i in 0..conds.len() {
-                let c = eval(ast, st, env, conds[i])?;
+                let c = eval(ast, mut st, env, conds[i])?;
                 if truthy(c) {
-                    return exec_block(ast, st, env, blocks[i]);
+                    return exec_block(ast, mut st, env, blocks[i]);
                 }
             }
             if *other >= 0 {
-                return exec_block(ast, st, env, *other);
+                return exec_block(ast, mut st, env, *other);
             }
             Ok(Flow.Normal)
         }
         Stmt.While(c, body) => {
             loop {
-                let cv = eval(ast, st, env, *c)?;
+                let cv = eval(ast, mut st, env, *c)?;
                 if not truthy(cv) {
                     break;
                 }
-                match exec_block(ast, st, env, *body)? {
+                match exec_block(ast, mut st, env, *body)? {
                     Flow.Break => break,
                     Flow.Return(vs) => return Ok(Flow.Return(vs)),
                     Flow.Normal => {}
@@ -2821,23 +2821,23 @@ fn exec_stmt(ast: ref Ast, st: mut ref State, env: ref Env, s: i64) -> Result[Fl
             loop {
                 // the condition can see the body's locals
                 let inner = new_env(env);
-                match exec_stmts(ast, st, inner, *body)? {
+                match exec_stmts(ast, mut st, inner, *body)? {
                     Flow.Break => break,
                     Flow.Return(vs) => return Ok(Flow.Return(vs)),
                     Flow.Normal => {}
                 }
-                let cv = eval(ast, st, inner, *c)?;
+                let cv = eval(ast, mut st, inner, *c)?;
                 if truthy(cv) {
                     break;
                 }
             }
             Ok(Flow.Normal)
         }
-        Stmt.NumFor(var, start, stop, step, body) => exec_numfor(ast, st, env, var, *start, *stop, *step, *body),
-        Stmt.GenFor(names, values, body) => exec_genfor(ast, st, env, names, values, *body),
-        Stmt.Return(values) => Ok(Flow.Return(eval_list(ast, st, env, values)?)),
+        Stmt.NumFor(var, start, stop, step, body) => exec_numfor(ast, mut st, env, var, *start, *stop, *step, *body),
+        Stmt.GenFor(names, values, body) => exec_genfor(ast, mut st, env, names, values, *body),
+        Stmt.Return(values) => Ok(Flow.Return(eval_list(ast, mut st, env, values)?)),
         Stmt.Break => Ok(Flow.Break),
-        Stmt.Do(b) => exec_block(ast, st, env, *b),
+        Stmt.Do(b) => exec_block(ast, mut st, env, *b),
     }
 }
 
@@ -2852,16 +2852,16 @@ fn for_number(st: ref State, v: own Value, what: Str) -> Result[Value, Value] {
 fn run_body(ast: ref Ast, st: mut ref State, env: ref Env, var: Str, v: own Value, body: i64) -> Result[Flow, Value] {
     let ienv = new_env(env);
     declare(ienv, var, v);
-    exec_block(ast, st, ienv, body)
+    exec_block(ast, mut st, ienv, body)
 }
 
 fn exec_numfor(ast: ref Ast, st: mut ref State, env: ref Env, var: Str, start: i64, stop: i64, step: i64, body: i64) -> Result[Flow, Value] {
-    let a0 = eval(ast, st, env, start)?;
+    let a0 = eval(ast, mut st, env, start)?;
     let a = for_number(st, a0, "initial value")?;
-    let b0 = eval(ast, st, env, stop)?;
+    let b0 = eval(ast, mut st, env, stop)?;
     let b = for_number(st, b0, "limit")?;
     let c = if step >= 0 {
-        let c0 = eval(ast, st, env, step)?;
+        let c0 = eval(ast, mut st, env, step)?;
         for_number(st, c0, "step")?
     } else {
         Value.Int(1)
@@ -2894,7 +2894,7 @@ fn exec_numfor(ast: ref Ast, st: mut ref State, env: ref Env, var: Str, start: i
             }
             let mut i = i0;
             loop {
-                match run_body(ast, st, env, var, Value.Int(i), body)? {
+                match run_body(ast, mut st, env, var, Value.Int(i), body)? {
                     Flow.Break => break,
                     Flow.Return(vs) => return Ok(Flow.Return(vs)),
                     Flow.Normal => {}
@@ -2918,7 +2918,7 @@ fn exec_numfor(ast: ref Ast, st: mut ref State, env: ref Env, var: Str, start: i
         return Err(st.rt_error("'for' step is zero"));
     }
     while (s > 0.0 and x <= lim) or (s < 0.0 and x >= lim) {
-        match run_body(ast, st, env, var, Value.Num(x), body)? {
+        match run_body(ast, mut st, env, var, Value.Num(x), body)? {
             Flow.Break => break,
             Flow.Return(vs) => return Ok(Flow.Return(vs)),
             Flow.Normal => {}
@@ -2929,7 +2929,7 @@ fn exec_numfor(ast: ref Ast, st: mut ref State, env: ref Env, var: Str, start: i
 }
 
 fn exec_genfor(ast: ref Ast, st: mut ref State, env: ref Env, names: ref Vec[String], values: ref Vec[i64], body: i64) -> Result[Flow, Value] {
-    let vs = eval_list(ast, st, env, values)?;
+    let vs = eval_list(ast, mut st, env, values)?;
     let mut three: Vec[Value] = Vec.new();
     for v in vs.into_iter() {
         if three.len() < 3 {
@@ -2949,7 +2949,7 @@ fn exec_genfor(ast: ref Ast, st: mut ref State, env: ref Env, names: ref Vec[Str
         if not is_callable(f) {
             return Err(st.rt_error(f"attempt to call a {type_name(f)} value"));
         }
-        let rs = call_value(ast, st, f, args)?;
+        let rs = call_value(ast, mut st, f, args)?;
         let mut got: Vec[Value] = Vec.new();
         for v in rs.into_iter() {
             got.push(v);
@@ -2963,7 +2963,7 @@ fn exec_genfor(ast: ref Ast, st: mut ref State, env: ref Env, names: ref Vec[Str
             let v = if i < got.len() { got[i].clone() } else { Value.Nil };
             declare(ienv, names[i], v);
         }
-        match exec_block(ast, st, ienv, body)? {
+        match exec_block(ast, mut st, ienv, body)? {
             Flow.Break => break,
             Flow.Return(r) => return Ok(Flow.Return(r)),
             Flow.Normal => {}
@@ -3118,18 +3118,18 @@ fn text_of_bytes(b: Slice[u8]) -> String {
 fn call_builtin(ast: ref Ast, st: mut ref State, f: ref LFunc, args: own Vec[Value]) -> Result[Vec[Value], Value] {
     let id = f.builtin;
     if id < 20 {
-        return base_lib(ast, st, f, id, args);
+        return base_lib(ast, mut st, f, id, args);
     }
     if id < 30 {
-        return math_lib(st, id, args);
+        return math_lib(mut st, id, args);
     }
     if id < 40 {
-        return table_lib(ast, st, id, args);
+        return table_lib(ast, mut st, id, args);
     }
     if id < 60 {
-        return string_lib(ast, st, f, id, args);
+        return string_lib(ast, mut st, f, id, args);
     }
-    io_lib(ast, st, f, id, args)
+    io_lib(ast, mut st, f, id, args)
 }
 
 fn base_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[Value]) -> Result[Vec[Value], Value] {
@@ -3139,7 +3139,7 @@ fn base_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Ve
             if i > 0 {
                 line.push_str("\t");
             }
-            line.push_str(tostring_meta(ast, st, args[i])?);
+            line.push_str(tostring_meta(ast, mut st, args[i])?);
         }
         println(line);
         return Ok(none());
@@ -3150,7 +3150,7 @@ fn base_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Ve
     }
     if id == B_TOSTRING {
         let v = check_any(st, args, 0, "tostring")?;
-        return Ok(one(Value.Text(tostring_meta(ast, st, v)?)));
+        return Ok(one(Value.Text(tostring_meta(ast, mut st, v)?)));
     }
     if id == B_TONUMBER {
         if args.len() >= 2 and not is_nil(args[1]) {
@@ -3188,7 +3188,7 @@ fn base_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Ve
     }
     if id == B_IPAIRS_ITER {
         let i = check_int(st, args, 1, "ipairs")? + 1;
-        let v = index_value(ast, st, arg(args, 0), Value.Int(i), "")?;
+        let v = index_value(ast, mut st, arg(args, 0), Value.Int(i), "")?;
         if is_nil(v) {
             return Ok(one(Value.Nil));
         }
@@ -3332,7 +3332,7 @@ fn base_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Ve
         k += 1;
     }
     let _ = f;
-    match call_value(ast, st, fv, rest) {
+    match call_value(ast, mut st, fv, rest) {
         Ok(vs) => {
             let mut out: Vec[Value] = Vec.new();
             out.push(Value.Bool(true));
@@ -3420,12 +3420,12 @@ fn num_less(a: ref Value, b: ref Value) -> bool {
 
 fn sort_less(ast: ref Ast, st: mut ref State, comp: ref Value, a: ref Value, b: ref Value) -> Result[bool, Value] {
     if is_nil(comp) {
-        return less_than(ast, st, a, b, false);
+        return less_than(ast, mut st, a, b, false);
     }
     let mut args: Vec[Value] = Vec.new();
     args.push(a.clone());
     args.push(b.clone());
-    let r = first(call_value(ast, st, comp, args)?);
+    let r = first(call_value(ast, mut st, comp, args)?);
     Ok(truthy(r))
 }
 
@@ -3446,14 +3446,14 @@ fn merge_sort(ast: ref Ast, st: mut ref State, comp: ref Value, v: own Vec[Value
         }
         k += 1;
     }
-    let l = merge_sort(ast, st, comp, left)?;
-    let r = merge_sort(ast, st, comp, right)?;
+    let l = merge_sort(ast, mut st, comp, left)?;
+    let r = merge_sort(ast, mut st, comp, right)?;
     let mut out: Vec[Value] = Vec.new();
     let mut i: i64 = 0;
     let mut j: i64 = 0;
     while i < l.len() and j < r.len() {
         // take from the right only when it is strictly smaller: stable
-        if sort_less(ast, st, comp, r[j], l[i])? {
+        if sort_less(ast, mut st, comp, r[j], l[i])? {
             out.push(r[j].clone());
             j += 1;
         } else {
@@ -3541,7 +3541,7 @@ fn table_lib(ast: ref Ast, st: mut ref State, id: i64, args: own Vec[Value]) -> 
         for i in 1..n + 1 {
             items.push(t.get(Value.Int(i)));
         }
-        let sorted = merge_sort(ast, st, comp, items)?;
+        let sorted = merge_sort(ast, mut st, comp, items)?;
         let mut i: i64 = 1;
         for v in sorted.into_iter() {
             t.set(Value.Int(i), v);
@@ -3579,14 +3579,14 @@ fn gsub_value(ast: ref Ast, st: mut ref State, ms: ref MatchState, s: i64, e: i6
                 Ok(k) => k,
                 Err(m) => return Err(st.lib_error(m)),
             };
-            index_value(ast, st, repl.clone(), k, "")?
+            index_value(ast, mut st, repl.clone(), k, "")?
         }
         Value.Fun(_) => {
             let caps = match ms.captures(s, e, true) {
                 Ok(c) => c,
                 Err(m) => return Err(st.lib_error(m)),
             };
-            first(call_value(ast, st, repl, caps)?)
+            first(call_value(ast, mut st, repl, caps)?)
         }
         _ => {
             // a string: %0-%9 and %%
@@ -3699,7 +3699,7 @@ fn string_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own 
         return Ok(one(Value.Text(text_of_bytes(b))));
     }
     if id == B_FORMAT {
-        return Ok(one(Value.Text(str_format(ast, st, args)?)));
+        return Ok(one(Value.Text(str_format(ast, mut st, args)?)));
     }
     let s = check_str(st, args, 0, fname)?;
     if id == B_REP {
@@ -3796,7 +3796,7 @@ fn string_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own 
         };
         if e != -1 and e != last {
             n += 1;
-            gsub_value(ast, st, ms, src, e, repl, mut out)?;
+            gsub_value(ast, mut st, ms, src, e, repl, mut out)?;
             src = e;
             last = e;
         } else if src < ms.src.len() {
@@ -3996,7 +3996,7 @@ fn str_format(ast: ref Ast, st: mut ref State, args: ref Vec[Value]) -> Result[S
             let finite = x == x and x <= 1.7976931348623157e308 and x >= -1.7976931348623157e308;
             pad(t, width, left, zero and finite)
         } else if conv == b's' {
-            let mut t = tostring_meta(ast, st, args[argi])?;
+            let mut t = tostring_meta(ast, mut st, args[argi])?;
             if prec >= 0 and t.len() > prec {
                 t = byte_str(t.bytes(), 0, prec);
             }
@@ -4026,7 +4026,7 @@ fn write_piece(st: ref State, args: ref Vec[Value], i: i64, fname: Str) -> Resul
 
 fn split_lines(content: Str) -> Vec[Value] {
     let mut out: Vec[Value] = Vec.new();
-    let parts = content.split("\n");
+    let parts: Vec[Str] = content.split("\n").collect();
     let n = parts.len();
     for i in 0..n {
         if i == n - 1 and parts[i].len() == 0 {
@@ -4087,7 +4087,7 @@ fn io_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[
             Ok(c) => c,
             Err(_) => return Err(st.lib_error(no_file(path))),
         };
-        return Ok(one(lines_iter(st, content)));
+        return Ok(one(lines_iter(mut st, content)));
     }
     if id == B_LINES_ITER {
         let i: i64 = match f.state[0] {
@@ -4155,14 +4155,14 @@ fn io_lib(ast: ref Ast, st: mut ref State, f: ref LFunc, id: i64, args: own Vec[
         return Ok(one(Value.Bool(true)));
     }
     // read and lines work from the read position
-    let pos = match i64.parse(h.ud[3].clone()) {
+    let pos = match i64.parse(h.ud[3].clone()).ok() {
         Some(p) => p,
         None => 0,
     };
     let rest = h.ud[1].substring(pos);
     if id == B_FLINES {
         h.ud[3] = f"{h.ud[1].len()}";
-        return Ok(one(lines_iter(st, rest)));
+        return Ok(one(lines_iter(mut st, rest)));
     }
     // read(fmt): "a" (the rest) or "l" (one line, the default)
     let fmt = if args.len() >= 2 { check_str(st, args, 1, "read")? } else { "l".to_string() };

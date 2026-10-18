@@ -669,18 +669,18 @@ fn scan_number(d: ref Dec, a: mut ref Store, i: i64) -> Option[(i64, i64)] {
     if is_float {
         let mut n = new_node(K_FLOAT);
         // `f64.parse` returns an Option on v2, not the spec's Result (B-2026-10-12-6)
-        n.f = match f64.parse(text) {
+        n.f = match f64.parse(text).ok() {
             Some(x) => x,
             None => 0.0,
         };
-        return Some((add(a, n), j));
+        return Some((add(mut a, n), j));
     }
     let mut n = new_node(K_INT);
-    n.i = match i64.parse(text) {
+    n.i = match i64.parse(text).ok() {
         Some(x) => x,
         None => 0,
     };
-    Some((add(a, n), j))
+    Some((add(mut a, n), j))
 }
 
 fn scan_value(d: ref Dec, a: mut ref Store, i: i64) -> Result[(i64, i64), Bad] {
@@ -692,26 +692,26 @@ fn scan_value(d: ref Dec, a: mut ref Store, i: i64) -> Result[(i64, i64), Bad] {
         let (t, e) = scan_string(d, i + 1)?;
         let mut n = new_node(K_STR);
         n.s = t;
-        return Ok((add(a, n), e));
+        return Ok((add(mut a, n), e));
     }
     if c == 123 {
-        return scan_object(d, a, i + 1);
+        return scan_object(d, mut a, i + 1);
     }
     if c == 91 {
-        return scan_array(d, a, i + 1);
+        return scan_array(d, mut a, i + 1);
     }
     if starts_at_cp(d, i, "null") {
-        return Ok((add(a, new_node(K_NULL)), i + 4));
+        return Ok((add(mut a, new_node(K_NULL)), i + 4));
     }
     if starts_at_cp(d, i, "true") {
         let mut n = new_node(K_BOOL);
         n.b = true;
-        return Ok((add(a, n), i + 4));
+        return Ok((add(mut a, n), i + 4));
     }
     if starts_at_cp(d, i, "false") {
-        return Ok((add(a, new_node(K_BOOL)), i + 5));
+        return Ok((add(mut a, new_node(K_BOOL)), i + 5));
     }
-    if let Some(r) = scan_number(d, a, i) {
+    if let Some(r) = scan_number(d, mut a, i) {
         return Ok(r);
     }
     Err(bad("Expecting value", i))
@@ -727,14 +727,14 @@ fn put_key(a: mut ref Store, o: i64, k: own String, v: i64) {
     }
     let mut kn = new_node(K_STR);
     kn.s = k.clone();
-    let kid = add(a, kn);
+    let kid = add(mut a, kn);
     a.nodes[o].keys.push(k);
     a.nodes[o].kids.push(v);
     a.nodes[o].key_nodes.push(kid);
 }
 
 fn scan_object(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), Bad] {
-    let o = add(a, new_node(K_OBJ));
+    let o = add(mut a, new_node(K_OBJ));
     let mut end = start;
     let mut nc = cp_at(d, end);
     if nc != 34 {
@@ -761,9 +761,9 @@ fn scan_object(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), B
         }
         end += 1;
         end = skip_ws(d, end);
-        let (v, e2) = scan_value(d, a, end)?;
+        let (v, e2) = scan_value(d, mut a, end)?;
         end = e2;
-        put_key(a, o, key, v);
+        put_key(mut a, o, key, v);
         end = skip_ws(d, end);
         nc = cp_at(d, end);
         end += 1;
@@ -787,13 +787,13 @@ fn scan_object(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), B
 }
 
 fn scan_array(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), Bad] {
-    let arr = add(a, new_node(K_ARR));
+    let arr = add(mut a, new_node(K_ARR));
     let mut end = skip_ws(d, start);
     if cp_at(d, end) == 93 {
         return Ok((arr, end + 1));
     }
     loop {
-        let (v, e1) = scan_value(d, a, end)?;
+        let (v, e1) = scan_value(d, mut a, end)?;
         end = e1;
         a.nodes[arr].kids.push(v);
         end = skip_ws(d, end);
@@ -816,7 +816,7 @@ fn scan_array(d: ref Dec, a: mut ref Store, start: i64) -> Result[(i64, i64), Ba
 fn decode(a: mut ref Store, text: Str) -> Result[i64, String] {
     let d = Dec { s: code_points(text) };
     let i = skip_ws(d, 0);
-    let r = scan_value(d, a, i);
+    let r = scan_value(d, mut a, i);
     match r {
         Ok((v, end)) => {
             let e = skip_ws(d, end);
@@ -919,21 +919,21 @@ fn take_from(r: mut ref Rx, start: i64) -> Vec[Ins] {
 
 fn rx_alt(r: mut ref Rx) {
     let mut start = r.prog.len();
-    rx_seq(r);
+    rx_seq(mut r);
     if rx_peek(r) != 124 {
         return;
     }
     let mut jumps: Vec[i64] = Vec.new();
     while rx_peek(r) == 124 {
         r.p += 1;
-        let body = take_from(r, start);
+        let body = take_from(mut r, start);
         let n = body.len();
         r.prog.push(ins(OP_SPLIT, 0, start + 1, start + 2 + n));
         r.prog.extend(shifted(body, 1));
         jumps.push(r.prog.len());
         r.prog.push(ins(OP_JMP, 0, -1, -1));
         start = r.prog.len();
-        rx_seq(r);
+        rx_seq(mut r);
     }
     let end = r.prog.len();
     for j in jumps {
@@ -943,7 +943,7 @@ fn rx_alt(r: mut ref Rx) {
 
 fn rx_seq(r: mut ref Rx) {
     while r.p < r.src.len() and rx_peek(r) != 124 and rx_peek(r) != 41 {
-        rx_repeat(r);
+        rx_repeat(mut r);
     }
 }
 
@@ -962,12 +962,12 @@ fn rx_atom(r: mut ref Rx) {
     if c == 40 {
         if rx_peek(r) == 63 and r.p + 1 < r.src.len() and r.src[r.p + 1] == b':' {
             r.p += 2;
-            rx_alt(r);
+            rx_alt(mut r);
         } else {
             r.groups += 1;
             let g = r.groups;
             r.prog.push(ins(OP_SAVE, 2 * g, 0, 0));
-            rx_alt(r);
+            rx_alt(mut r);
             r.prog.push(ins(OP_SAVE, 2 * g + 1, 0, 0));
         }
         r.p += 1;
@@ -978,7 +978,7 @@ fn rx_atom(r: mut ref Rx) {
     } else if c == 46 {
         r.prog.push(ins(OP_ANY, 0, 0, 0));
     } else if c == 91 {
-        let set = rx_class(r);
+        let set = rx_class(mut r);
         r.prog.push(set);
     } else if c == 92 {
         let e = r.src[r.p] as i64;
@@ -1046,17 +1046,17 @@ fn rx_number(r: mut ref Rx) -> i64 {
 
 fn rx_repeat(r: mut ref Rx) {
     let start = r.prog.len();
-    rx_atom(r);
+    rx_atom(mut r);
     let c = rx_peek(r);
     let mut lo: i64 = 0;
     let mut hi: i64 = -1;
     if c == 123 {
         r.p += 1;
-        lo = rx_number(r);
+        lo = rx_number(mut r);
         hi = lo;
         if rx_peek(r) == 44 {
             r.p += 1;
-            hi = if rx_peek(r) == 125 { -1 } else { rx_number(r) };
+            hi = if rx_peek(r) == 125 { -1 } else { rx_number(mut r) };
         }
         r.p += 1;
     } else if c == 42 {
@@ -1070,7 +1070,7 @@ fn rx_repeat(r: mut ref Rx) {
     } else {
         return;
     }
-    let body = take_from(r, start);
+    let body = take_from(mut r, start);
     let n = body.len();
     for _ in 0..lo {
         let at = r.prog.len();
@@ -1803,21 +1803,21 @@ fn inc_ver(rx: ref Rxs, v: mut ref Ver, release: Str, ident: ref Option[String],
         v.patch = 0;
         v.minor = 0;
         v.major += 1;
-        inc_ver(rx, v, "pre", ident, base)?;
+        inc_ver(rx, mut v, "pre", ident, base)?;
     } else if release == "preminor" {
         v.pre.clear();
         v.patch = 0;
         v.minor += 1;
-        inc_ver(rx, v, "pre", ident, base)?;
+        inc_ver(rx, mut v, "pre", ident, base)?;
     } else if release == "prepatch" {
         v.pre.clear();
-        inc_ver(rx, v, "patch", ident, base)?;
-        inc_ver(rx, v, "pre", ident, base)?;
+        inc_ver(rx, mut v, "patch", ident, base)?;
+        inc_ver(rx, mut v, "pre", ident, base)?;
     } else if release == "prerelease" {
         if v.pre.len() == 0 {
-            inc_ver(rx, v, "patch", ident, base)?;
+            inc_ver(rx, mut v, "patch", ident, base)?;
         }
-        inc_ver(rx, v, "pre", ident, base)?;
+        inc_ver(rx, mut v, "pre", ident, base)?;
     } else if release == "release" {
         if v.pre.len() == 0 {
             return Err(f"version {v.raw} is not a prerelease");
@@ -1882,7 +1882,7 @@ fn inc_ver(rx: ref Rxs, v: mut ref Ver, release: Str, ident: ref Option[String],
     } else {
         return Err(f"invalid increment argument: {release}");
     }
-    format_ver(v);
+    format_ver(mut v);
     let mut raw = v.version.clone();
     if v.build.len() > 0 {
         raw.push_str("+");
@@ -3096,7 +3096,7 @@ fn load_json(st: mut ref Store, path: Str) -> Result[i64, String] {
         Ok(t) => t,
         Err(e) => return Err(f"cannot read {path}: {e}"),
     };
-    decode(st, text)
+    decode(mut st, text)
 }
 
 fn str_of(st: ref Store, v: i64) -> String {

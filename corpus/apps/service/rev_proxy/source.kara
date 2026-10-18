@@ -146,7 +146,7 @@ fn parse_message(raw: Str) -> Result[Message, String] {
         Some(i) => i,
         None => return Err("no end of headers".to_string()),
     };
-    let lines: Vec[String] = raw[0..head_end].split("\r\n");
+    let lines: Vec[String] = raw[0..head_end].split("\r\n").map(|p| p.to_string()).collect();
     let mut headers: Vec[Header] = Vec.new();
     let mut i = 1;
     while i < lines.len() {
@@ -169,7 +169,7 @@ fn parse_message(raw: Str) -> Result[Message, String] {
         m.body = dechunk(rest)?;
     } else {
         let len = match header(m, "content-length") {
-            Some(v) => match i64.parse(v) {
+            Some(v) => match i64.parse(v).ok() {
                 Some(n) => n,
                 None => return Err(f"bad content-length [{v}]"),
             },
@@ -239,7 +239,7 @@ fn simple(status: i64, body: Str) -> String {
 }
 
 fn status_of(start: Str) -> i64 {
-    let parts: Vec[String] = start.split(" ");
+    let parts: Vec[String] = start.split(" ").map(|p| p.to_string()).collect();
     if parts.len() < 2 {
         return 0;
     }
@@ -249,7 +249,7 @@ fn status_of(start: Str) -> i64 {
 // ---- origins ----------------------------------------------------------
 
 fn origin_reply(name: Str, req: ref Message) -> String {
-    let parts: Vec[String] = req.start.split(" ");
+    let parts: Vec[String] = req.start.split(" ").map(|p| p.to_string()).collect();
     let method = parts[0].clone();
     let path = parts[1].clone();
     let mut headers: Vec[Header] = vec![
@@ -390,7 +390,7 @@ fn forward(proxy: mut ref Proxy, origins: mut ref Vec[Origin], req: ref Message,
     headers.push(Header { name: "X-Forwarded-Prefix".to_string(), value: prefix[0..prefix.len() - 1].to_string() });
     headers.push(Header { name: "Via".to_string(), value: "1.1 kproxy".to_string() });
     let outgoing = render(f"{method} {upstream_path} HTTP/1.1", headers, req.body);
-    try_pool(mut proxy.pools[pi], origins, outgoing, method)
+    try_pool(mut proxy.pools[pi], mut origins, outgoing, method)
 }
 
 // Tries the pool's upstreams in round-robin order until one answers.
@@ -402,7 +402,7 @@ fn try_pool(pool: mut ref Cluster, origins: mut ref Vec[Origin], outgoing: Str, 
     let mut tries = 0;
     let mut last_reply: Option[(String, String)] = None;
     loop {
-        let idx = match pick(pool, tried) {
+        let idx = match pick(mut pool, tried) {
             Some(i) => i,
             None => break,
         };
@@ -423,7 +423,7 @@ fn try_pool(pool: mut ref Cluster, origins: mut ref Vec[Origin], outgoing: Str, 
             println(f"  [pool {pool.name}] {name} write failed");
             continue;
         }
-        serve_origin(origins, name);
+        serve_origin(mut origins, name);
         let raw = match read_all(conn) {
             Ok(r) => r,
             Err(e) => {
@@ -470,13 +470,13 @@ fn handle_client(proxy: mut ref Proxy, origins: mut ref Vec[Origin]) {
     };
     let (reply, upstream, tries, method, path) = match parse_message(raw) {
         Ok(req) => {
-            let parts: Vec[String] = req.start.split(" ");
+            let parts: Vec[String] = req.start.split(" ").map(|p| p.to_string()).collect();
             if parts.len() != 3 or not parts[2].starts_with("HTTP/1.") {
                 (simple(400, "bad request line"), "-".to_string(), 0, "?".to_string(), "?".to_string())
             } else if req.body.len() > MAX_BODY {
                 (simple(413, f"body over {MAX_BODY} bytes"), "-".to_string(), 0, parts[0].clone(), parts[1].clone())
             } else {
-                let (r, u, t) = forward(proxy, origins, req, parts[0], parts[1]);
+                let (r, u, t) = forward(mut proxy, mut origins, req, parts[0], parts[1]);
                 (r, u, t, parts[0].clone(), parts[1].clone())
             }
         }
@@ -513,7 +513,7 @@ fn send(proxy: mut ref Proxy, origins: mut ref Vec[Origin], label: Str, raw: Str
         Ok(_) => {}
         Err(_) => println("client shutdown failed"),
     }
-    handle_client(proxy, origins);
+    handle_client(mut proxy, mut origins);
     match read_all(client) {
         Ok(resp) => match parse_message(resp) {
             Ok(m) => {

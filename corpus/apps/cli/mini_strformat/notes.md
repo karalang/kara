@@ -74,3 +74,7 @@ Compiler gaps: B-2026-10-18-32 (the missing hint) only.
 After those edits the program matched expected.out on both MIR surfaces.
 
 Written 2026-10-18 by the real-world apps thread; karac at a73d3c10ad.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits, with one more by hand: `let parts = path.split("/")` became `let parts: Vec[Str] = path.split("/").collect()` by hand (B-2026-10-18-35). The app matches expected.out on all four MIR backends again (karac at a4b0967495).

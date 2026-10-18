@@ -1002,7 +1002,7 @@ impl TomlParser {
             }
             return Ok(TVal.Int(v));
         }
-        match f64.parse(tok.replace("_", "")) {
+        match f64.parse(tok.replace("_", "")).ok() {
             Some(x) => Ok(TVal.Float(x)),
             None => Err(self.err(f"invalid number {tok}")),
         }
@@ -1146,14 +1146,14 @@ fn render_value(doc: ref Doc, path: Str, v: ref TVal, out: mut ref Vec[String]) 
             }
             for i in 0..tb.keys.len() {
                 let sub = if path.len() == 0 { show_key(tb.keys[i]) } else { f"{path}.{show_key(tb.keys[i])}" };
-                render_value(doc, sub, tb.vals[i], out);
+                render_value(doc, sub, tb.vals[i], mut out);
             }
         }
         TVal.Arr(a) => {
             let items = ref doc.arrays[*a];
             out.push(f"{path} = array[{items.len()}]");
             for i in 0..items.len() {
-                render_value(doc, f"{path}[{i}]", items[i], out);
+                render_value(doc, f"{path}[{i}]", items[i], mut out);
             }
         }
         TVal.Text(s) => out.push(f"{path} = string {quote(s)}"),

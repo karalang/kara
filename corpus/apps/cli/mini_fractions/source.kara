@@ -364,7 +364,7 @@ fn skip_spaces(chars: ref Vec[char], i: i64) -> i64 {
 }
 
 fn to_i64(s: ref String) -> i64 {
-    match i64.parse(s.clone()) {
+    match i64.parse(s.clone()).ok() {
         Some(n) => n,
         None => 0,
     }
@@ -451,7 +451,7 @@ fn parse_fraction(text: ref String) -> Result[Fraction, FracError] {
 fn parse_mixed(s: ref String) -> Result[Fraction, FracError] {
     let mut total = Fraction.int(0);
     for part in s.split(" ") {
-        total = total + parse_fraction(part)?;
+        total = total + parse_fraction(part.to_string())?;
     }
     Ok(total)
 }
@@ -612,7 +612,7 @@ fn read_data(path: ref String) -> Result[String, String] {
 fn recipe(path: ref String, factor: Fraction, out: mut ref String) -> Result[(), String] {
     let text = read_data(path)?;
     for line in text.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         let q = parse_mixed(f[0]).map_err(|e| e.text())?;
         let unit = if f[1] == "-" { String.new() } else { f"{f[1]} " };
         out.push_str(f"  {pad_left(mixed(q * factor), 6)} {unit}{f[2]}\n");
@@ -635,10 +635,10 @@ fn bill(path: ref String, tip_pct: i64, out: mut ref String) -> Result[(), Strin
     let mut owed: SortedMap[String, Fraction] = SortedMap.new();
     let mut total = 0;
     for line in text.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         let c = to_i64(f[1]);
         total += c;
-        let people: Vec[String] = f[2].split(",");
+        let people: Vec[String] = f[2].split(",").map(|p| p.to_string()).collect();
         let share = Fraction.new(c, people.len()).map_err(|e| e.text())?;
         for p in people.iter() {
             let before = match owed.get(p) {
@@ -843,7 +843,7 @@ fn main() {
     };
     let mut out = String.new();
     for line in jobs.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         if let Err(e) = run(f, mut out) {
             out.push_str(f"error: {e}\n");

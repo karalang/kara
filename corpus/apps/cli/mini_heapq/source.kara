@@ -39,13 +39,13 @@ fn siftup[T: Ord](heap: mut ref Vec[T], pos: i64) {
         pos = child;
         child = 2 * pos + 1;
     }
-    siftdown(heap, startpos, pos);
+    siftdown(mut heap, startpos, pos);
 }
 
 fn heappush[T: Ord](heap: mut ref Vec[T], item: own T) {
     heap.push(item);
     let last = heap.len() - 1;
-    siftdown(heap, 0, last);
+    siftdown(mut heap, 0, last);
 }
 
 fn heappop[T: Ord](heap: mut ref Vec[T]) -> Option[T] {
@@ -56,7 +56,7 @@ fn heappop[T: Ord](heap: mut ref Vec[T]) -> Option[T] {
     heap.swap(0, n - 1);
     let top = heap.pop();
     if not heap.is_empty() {
-        siftup(heap, 0);
+        siftup(mut heap, 0);
     }
     top
 }
@@ -69,7 +69,7 @@ fn heapreplace[T: Ord](heap: mut ref Vec[T], item: own T) -> Option[T] {
     let last = heap.len() - 1;
     heap.swap(0, last);
     let top = heap.pop();
-    siftup(heap, 0);
+    siftup(mut heap, 0);
     top
 }
 
@@ -81,7 +81,7 @@ fn heappushpop[T: Ord](heap: mut ref Vec[T], item: own T) -> T {
     let last = heap.len() - 1;
     heap.swap(0, last);
     let top = heap.pop().unwrap();
-    siftup(heap, 0);
+    siftup(mut heap, 0);
     top
 }
 
@@ -90,7 +90,7 @@ fn heapify[T: Ord](x: mut ref Vec[T]) {
     let mut i = n / 2;
     while i > 0 {
         i -= 1;
-        siftup(x, i);
+        siftup(mut x, i);
     }
 }
 
@@ -122,14 +122,14 @@ fn siftup_max[T: Ord](heap: mut ref Vec[T], pos: i64) {
         pos = child;
         child = 2 * pos + 1;
     }
-    siftdown_max(heap, startpos, pos);
+    siftdown_max(mut heap, startpos, pos);
 }
 
 fn heapify_max[T: Ord](x: mut ref Vec[T]) {
     let mut i = x.len() / 2;
     while i > 0 {
         i -= 1;
-        siftup_max(x, i);
+        siftup_max(mut x, i);
     }
 }
 
@@ -138,7 +138,7 @@ fn heapreplace_max[T: Ord](heap: mut ref Vec[T], item: own T) {
     let last = heap.len() - 1;
     heap.swap(0, last);
     let _ = heap.pop();
-    siftup_max(heap, 0);
+    siftup_max(mut heap, 0);
 }
 
 // A decorated element, (key, order, index): order is unique, so the
@@ -381,14 +381,14 @@ struct Rec {
 }
 
 fn num(s: ref String) -> i64 {
-    match i64.parse(s.clone()) {
+    match i64.parse(s.clone()).ok() {
         Some(n) => n,
         None => 0,
     }
 }
 
 fn parse_rec(line: ref String) -> Rec {
-    let p: Vec[String] = line.split(" ");
+    let p: Vec[String] = line.split(" ").map(|p| p.to_string()).collect();
     Rec {
         line: line.clone(),
         time: p[0].clone(),
@@ -433,7 +433,7 @@ fn ints(field: ref String) -> Vec[i64] {
     if field.is_empty() or field == "-" {
         return Vec.new();
     }
-    field.split(",").iter().map(|x| num(x)).collect()
+    field.split(",").map(|x| num(x.to_string())).collect()
 }
 
 fn show(xs: ref Vec[i64]) -> String {
@@ -454,7 +454,7 @@ fn heap_job(init: ref String, ops: ref String, out: mut ref String) {
     heapify(mut h);
     out.push_str(f"  heapify -> {show(h)}\n");
     for op in ops.split("|") {
-        let parts: Vec[String] = op.split(" ");
+        let parts: Vec[String] = op.split(" ").map(|p| p.to_string()).collect();
         let cmd = parts[0].clone();
         if cmd == "push" {
             heappush(mut h, num(parts[1]));
@@ -500,7 +500,7 @@ fn top_job(largest: bool, n: i64, key: ref String, data: ref String, out: mut re
 }
 
 fn merge_job(key: ref String, spec: ref String, out: mut ref String) -> Result[(), String] {
-    let groups: Vec[String] = spec.split(";");
+    let groups: Vec[String] = spec.split(";").map(|p| p.to_string()).collect();
     if not groups.iter().any(|g| g.ends_with(".log")) {
         let lists: Vec[Vec[i64]] = groups.iter().map(|g| ints(g)).collect();
         out.push_str(f"  {show(merge(lists, |x| *x))}\n");
@@ -558,7 +558,7 @@ fn read_roads() -> Result[Map[String, Vec[(String, i64)]], String] {
         if line.is_empty() or line.starts_with("#") {
             continue;
         }
-        let p: Vec[String] = line.split("\t");
+        let p: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         let w = num(p[2]);
         adj.entry(p[0].clone()).or_insert(Vec.new()).push((p[1].clone(), w));
         adj.entry(p[1].clone()).or_insert(Vec.new()).push((p[0].clone(), w));
@@ -703,7 +703,7 @@ fn sched_job(file: ref String, out: mut ref String) -> Result[(), String] {
         if line.is_empty() or line.starts_with("#") {
             continue;
         }
-        let p: Vec[String] = line.split("\t");
+        let p: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         let (t, pri, kind, name) = (num(p[0]), num(p[1]), p[2].clone(), p[3].clone());
         let action = if kind == "once" {
             Action.Once(name.clone())
@@ -832,7 +832,7 @@ fn main() {
     };
     let mut out = String.new();
     for line in jobs.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         if let Err(e) = run(f, mut out) {
             out.push_str(f"error: {e}\n");

@@ -627,7 +627,7 @@ fn options(width: i64, spec: ref String) -> Wrapper {
         let key = part[0..eq].to_string();
         let value = part[eq + 1..].to_string();
         let flag = value == "1";
-        let num: i64 = match i64.parse(value) {
+        let num: i64 = match i64.parse(value).ok() {
             Some(n) => n,
             None => 0,
         };
@@ -684,7 +684,7 @@ fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
         show_one(mut out, Ok(indent(t, prefix, f[2] == "all")));
         return Ok(());
     }
-    let width: i64 = match i64.parse(f[1].clone()) {
+    let width: i64 = match i64.parse(f[1].clone()).ok() {
         Some(n) => n,
         None => return Err(f"bad width {f[1]}"),
     };
@@ -761,7 +761,7 @@ fn main() {
     };
     let mut out = String.new();
     for line in jobs.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         if let Err(e) = run(f, mut out) {
             out.push_str(f"error: {e}\n");

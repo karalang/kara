@@ -2708,7 +2708,7 @@ fn dict_config(st: mut ref St, cfg: ref JValue) -> Result[(), Vec[String]] {
     let mut deferred: Vec[String] = Vec.new();
     for name in hnames {
         let c = obj_get(hcfg, name).unwrap_or(empty.clone());
-        match configure_handler(st, c, fmts, filters, hnames, handlers) {
+        match configure_handler(mut st, c, fmts, filters, hnames, handlers) {
             Ok(h) => {
                 st.hds[h].name = name.clone();
                 handlers.names.push(name.clone());
@@ -2725,7 +2725,7 @@ fn dict_config(st: mut ref St, cfg: ref JValue) -> Result[(), Vec[String]] {
     }
     for name in deferred {
         let c = obj_get(hcfg, name).unwrap_or(empty.clone());
-        match configure_handler(st, c, fmts, filters, hnames, handlers) {
+        match configure_handler(mut st, c, fmts, filters, hnames, handlers) {
             Ok(h) => {
                 st.hds[h].name = name.clone();
                 handlers.names.push(name.clone());
@@ -2761,7 +2761,7 @@ fn dict_config(st: mut ref St, cfg: ref JValue) -> Result[(), Vec[String]] {
         }
         let c = obj_get(lcfg, name).unwrap_or(empty.clone());
         let lg = st.get_logger(name);
-        if let Err(chain) = common_logger_config(st, lg, c, handlers, filters) {
+        if let Err(chain) = common_logger_config(mut st, lg, c, handlers, filters) {
             return Err(wrap(f"ValueError: Unable to configure logger {py_repr(name)}", chain));
         }
         st.lgs[lg].disabled = false;
@@ -2786,7 +2786,7 @@ fn dict_config(st: mut ref St, cfg: ref JValue) -> Result[(), Vec[String]] {
 
     if let Some(r) = obj_get(cfg, "root") {
         if truthy(r) {
-            if let Err(chain) = common_logger_config(st, 0, r, handlers, filters) {
+            if let Err(chain) = common_logger_config(mut st, 0, r, handlers, filters) {
                 return Err(wrap("ValueError: Unable to configure root logger", chain));
             }
         }
@@ -3706,14 +3706,14 @@ fn run_line(st: mut ref St, line: Str) -> Result[(), String] {
         for k in 1..fields.len() {
             opts.push(fields[k].clone());
         }
-        if let Err(e) = basic_config(st, opts) {
+        if let Err(e) = basic_config(mut st, opts) {
             println(f"  {e}");
         }
     } else if cmd == "getlogger" {
         let _ = st.get_logger(arg);
     } else if cmd == "config" {
         let cfg = parse_json(read(fields[1])?)?;
-        if let Err(chain) = dict_config(st, cfg) {
+        if let Err(chain) = dict_config(mut st, cfg) {
             show_error(chain);
         }
     } else if cmd == "tree" {

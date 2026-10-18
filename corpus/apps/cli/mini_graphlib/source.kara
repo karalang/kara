@@ -262,11 +262,11 @@ fn graph(spec: ref String) -> TopologicalSorter[String] {
         return ts;
     }
     for part in spec.split(";") {
-        let f: Vec[String] = part.split(":");
+        let f: Vec[String] = part.split(":").map(|p| p.to_string()).collect();
         let mut preds: Vec[String] = Vec.new();
-        for p in f[1].split(",").into_iter() {
+        for p in f[1].split(",") {
             if not p.is_empty() {
-                preds.push(p);
+                preds.push(p.to_string());
             }
         }
         match ts.add(f[0], preds) {
@@ -320,7 +320,7 @@ fn steps(spec: ref String, ops: ref String, out: mut ref String) {
             let node = op[5..].to_string();
             ts.done(vec![node.clone()]).map(|_| f"done {node}")
         } else if op.starts_with("add:") {
-            let f: Vec[String] = op.split(":");
+            let f: Vec[String] = op.split(":").map(|p| p.to_string()).collect();
             ts.add(f[1], vec![f[2].clone()]).map(|_| f"add {f[1]}")
         } else {
             Ok(f"unknown op {op}")
@@ -347,13 +347,13 @@ fn ci(path: ref String, workers: i64, out: mut ref String) -> Result[(), String]
     let mut secs: Map[String, i64] = Map.new();
     let mut ts: TopologicalSorter[String] = TopologicalSorter.new();
     for line in text.lines() {
-        let f: Vec[String] = line.split("\t");
-        let n = match i64.parse(f[1].clone()) {
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        let n = match i64.parse(f[1].clone()).ok() {
             Some(n) => n,
             None => return Err(f"bad seconds in: {line}"),
         };
         secs.insert(f[0].clone(), n);
-        let needs: Vec[String] = if f[2] == "-" { Vec.new() } else { f[2].split(",") };
+        let needs: Vec[String] = if f[2] == "-" { Vec.new() } else { f[2].split(",").map(|p| p.to_string()).collect() };
         ts.add(f[0], needs).map_err(|e| error_text(e))?;
     }
     ts.prepare().map_err(|e| error_text(e))?;
@@ -468,7 +468,7 @@ fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
     } else if kind == "steps" {
         steps(f[1], f[2], mut out);
     } else if kind == "ci" {
-        let workers = match i64.parse(f[2].clone()) {
+        let workers = match i64.parse(f[2].clone()).ok() {
             Some(n) => n,
             None => return Err(f"bad worker count {f[2]}"),
         };
@@ -507,7 +507,7 @@ fn main() {
     };
     let mut out = String.new();
     for line in jobs.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         if let Err(e) = run(f, mut out) {
             out.push_str(f"error: {e}\n");

@@ -297,7 +297,7 @@ fn load_filter(name: Str) -> Result[Option[Filter], String] {
 // ------------------------------------------------------------ addresses
 
 fn parse_v4(s: Str) -> Option[i64] {
-    let parts = s.split(".");
+    let parts: Vec[Str] = s.split(".").collect();
     if parts.len() != 4 {
         return None;
     }
@@ -306,7 +306,7 @@ fn parse_v4(s: Str) -> Option[i64] {
         if p.is_empty() or not p.bytes().iter().all(|b| *b >= b'0' and *b <= b'9') {
             return None;
         }
-        let v = i64.parse(p)?;
+        let v = i64.parse(p).ok()?;
         if v > 255 {
             return None;
         }
@@ -572,7 +572,7 @@ fn run_jail(name: Str, cfg: ref Section, filter: ref Filter, dates: ref DateDete
     let bantime = setting(cfg, "bantime", 600);
     let increment = cfg.get("bantime.increment").unwrap_or("false".to_string()) == "true";
     let maxtime = setting(cfg, "bantime.maxtime", 0);
-    let ignores = cfg.get("ignoreip").unwrap_or(String.new()).split_whitespace();
+    let ignores: Vec[String] = cfg.get("ignoreip").unwrap_or(String.new()).split_whitespace().map(|p| p.to_string()).collect();
     let inc = if increment { f" (increment, max {maxtime}s)" } else { String.new() };
     println(f"Jail '{name}': {filter.fail.len()} failregex, {filter.ignore.len()} ignoreregex, maxretry {maxretry}, findtime {findtime}s, bantime {bantime}s{inc}");
     let mut fres: Vec[Regex] = Vec.new();

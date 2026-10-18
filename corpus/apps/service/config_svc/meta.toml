@@ -11,4 +11,4 @@ env = { CFG_SERVER__PORT = "9090", CFG_FEATURES__BETA = "true", CFG_LIMITS__MAX_
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "3385ce51b"
-extracted_src = "75736453"
+extracted_src = "6923c022"

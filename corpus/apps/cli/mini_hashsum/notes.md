@@ -65,3 +65,7 @@ Reverted 2026-10-15, karac at eae83f9d88: B-2026-10-15-67 is fixed for
 32- and 64-bit rotates on every v2 surface, so `mini_hashsum.kara` is
 `mini_hashsum.orig.kara` again, with the natural `.rotate_left(n)` and
 `.rotate_right(n)` calls, and still matches on all four MIR surfaces.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).

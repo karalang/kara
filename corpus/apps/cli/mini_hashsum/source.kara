@@ -1354,7 +1354,7 @@ fn check_lists(job: mut ref Job, prog: Str, algo: Str, bits: i64, files: ref Vec
         let path = f"data/{sf}";
         if path_kind(path) != 1 {
             job.err.push_str(f"{prog}: {sf}: No such file or directory\n");
-            set_exit(job, 1);
+            set_exit(mut job, 1);
             continue;
         }
         let text = match fs.read_bytes(path) {
@@ -1414,7 +1414,7 @@ fn check_lists(job: mut ref Job, prog: Str, algo: Str, bits: i64, files: ref Vec
         }
         if good == 0 {
             job.err.push_str(f"{prog}: {sf}: no properly formatted checksum lines found\n");
-            set_exit(job, 1);
+            set_exit(mut job, 1);
             continue;
         }
         if not o.status {
@@ -1430,10 +1430,10 @@ fn check_lists(job: mut ref Job, prog: Str, algo: Str, bits: i64, files: ref Vec
         }
         if o.ignore_missing and verified == 0 {
             job.err.push_str(f"{prog}: {sf}: no file was verified\n");
-            set_exit(job, 1);
+            set_exit(mut job, 1);
         }
         if bad_read > 0 or mismatch > 0 or (o.strict and bad_format > 0) {
-            set_exit(job, 1);
+            set_exit(mut job, 1);
         }
     }
 }
@@ -1493,7 +1493,7 @@ fn run_tool(job: mut ref Job, t: ref Vec[i64], prog: Str, args: ref Vec[String])
                     job.err.push_str(f"  - ‘{x}’\n");
                 }
                 job.err.push_str("Try 'cksum --help' for more information.\n");
-                set_exit(job, 1);
+                set_exit(mut job, 1);
                 return;
             }
             algo = name.clone();
@@ -1512,19 +1512,19 @@ fn run_tool(job: mut ref Job, t: ref Vec[i64], prog: Str, args: ref Vec[String])
             } else {
                 job.err.push_str(f"{prog}: maximum digest length for ‘BLAKE2b’ is 512 bits\n");
             }
-            set_exit(job, 1);
+            set_exit(mut job, 1);
             return;
         }
         bits = n;
     }
     if o.check {
         let a = if prog == "cksum" { String.new() } else { algo.clone() };
-        check_lists(job, prog, a, bits, files, o);
+        check_lists(mut job, prog, a, bits, files, o);
         return;
     }
     for f in files {
-        let Some(data) = read_file(job, prog, f) else {
-            set_exit(job, 1);
+        let Some(data) = read_file(mut job, prog, f) else {
+            set_exit(mut job, 1);
             continue;
         };
         let n = data.len();

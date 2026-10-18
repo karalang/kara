@@ -11,4 +11,4 @@ env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "3385ce51b"
-extracted_src = "a286afb4"
+extracted_src = "ce7fc6f4"

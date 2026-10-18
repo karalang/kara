@@ -94,13 +94,13 @@ enum Data {
 struct Record { name: String, ttl: i64, rtype: i64, data: Data }
 
 fn parse_ipv4(s: Str) -> Option[Vec[u8]] {
-    let parts: Vec[String] = s.split(".");
+    let parts: Vec[String] = s.split(".").map(|p| p.to_string()).collect();
     if parts.len() != 4 {
         return None;
     }
     let mut out: Vec[u8] = Vec.new();
     for p in parts.iter() {
-        match i64.parse(p) {
+        match i64.parse(p).ok() {
             Some(n) => {
                 if n < 0 or n > 255 {
                     return None;
@@ -298,7 +298,7 @@ fn parse_zone(text: Str) -> Result[Zone, String] {
             continue;
         }
         if f[0] == "$TTL" {
-            ttl = match i64.parse(f[1]) {
+            ttl = match i64.parse(f[1]).ok() {
                 Some(n) => n,
                 None => return Err(f"line {line_no}: bad $TTL"),
             };
@@ -307,7 +307,7 @@ fn parse_zone(text: Str) -> Result[Zone, String] {
         let name = absolute(f[0], origin);
         let mut at = 1;
         let mut rttl = ttl;
-        match i64.parse(f[at]) {
+        match i64.parse(f[at]).ok() {
             Some(n) => {
                 rttl = n;
                 at += 1;
@@ -337,7 +337,7 @@ fn parse_zone(text: Str) -> Result[Zone, String] {
                 None => return Err(f"line {line_no}: bad IPv6 address {f[at]}"),
             }
         } else if rtype == T_MX {
-            match i64.parse(f[at]) {
+            match i64.parse(f[at]).ok() {
                 Some(p) => Data.Mx(p, absolute(f[at + 1], origin)),
                 None => return Err(f"line {line_no}: bad MX preference"),
             }
@@ -350,7 +350,7 @@ fn parse_zone(text: Str) -> Result[Zone, String] {
         } else if rtype == T_SOA {
             let mut nums: Vec[i64] = Vec.new();
             for k in at + 2..at + 7 {
-                match i64.parse(f[k]) {
+                match i64.parse(f[k]).ok() {
                     Some(n) => nums.push(n),
                     None => return Err(f"line {line_no}: bad SOA number {f[k]}"),
                 }
@@ -457,7 +457,7 @@ fn write_rr(w: mut ref Writer, owner: Str, r: ref Record) {
     w.u16(r.rtype);
     w.u16(1);
     w.u32(r.ttl);
-    write_rdata(w, r.data);
+    write_rdata(mut w, r.data);
 }
 
 struct Reader { buf: Vec[u8], pos: i64 }

@@ -565,12 +565,12 @@ impl JsonParser {
             return Err(self.err("value expected"));
         }
         if float {
-            return match f64.parse(text) {
+            return match f64.parse(text).ok() {
                 Some(x) => Ok(Val.Float(x)),
                 None => Err(self.err("bad number")),
             };
         }
-        match i64.parse(text) {
+        match i64.parse(text).ok() {
             Some(i) => Ok(Val.Int(i)),
             None => Err(self.err("bad number")),
         }
@@ -2600,7 +2600,7 @@ fn render_block(ast: ref Ast, r: mut ref R, name: Str, depth: i64, idx: i64) -> 
     r.bdepths.push(depth);
     r.scopes.push(new_dict(false));
     let body = r.cb[idx];
-    let res = render_body(ast, r, body, mut out);
+    let res = render_body(ast, mut r, body, mut out);
     r.scopes.pop();
     r.bnames.pop();
     r.bdepths.pop();
@@ -2625,7 +2625,7 @@ fn render_body(ast: ref Ast, r: mut ref R, body: i64, out: mut ref String) -> Re
     let n = ast.bodies[body].len();
     for i in 0..n {
         let nd = ast.bodies[body][i];
-        render_node(ast, r, nd, out)?;
+        render_node(ast, mut r, nd, mut out)?;
     }
     Ok(())
 }
@@ -2640,7 +2640,7 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
         }
         Node.Print(e) => {
             if not r.suppress {
-                let v = eval(ast, r, *e)?;
+                let v = eval(ast, mut r, *e)?;
                 out.push_str(output_text(v, r.auto));
             }
         }
@@ -2648,24 +2648,24 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             if r.suppress {
                 return Ok(());
             }
-            render_for(ast, r, targets, *iter, *cond, *body, *els, out)?;
+            render_for(ast, mut r, targets, *iter, *cond, *body, *els, mut out)?;
         }
         Node.If(conds, bodies, els) => {
             if r.suppress {
                 return Ok(());
             }
             for i in 0..conds.len() {
-                let c = eval(ast, r, conds[i])?;
+                let c = eval(ast, mut r, conds[i])?;
                 if truthy(c) {
-                    return render_body(ast, r, bodies[i], out);
+                    return render_body(ast, mut r, bodies[i], mut out);
                 }
             }
             if *els >= 0 {
-                render_body(ast, r, *els, out)?;
+                render_body(ast, mut r, *els, mut out)?;
             }
         }
         Node.Set(name, attr, e) => {
-            let v = eval(ast, r, *e)?;
+            let v = eval(ast, mut r, *e)?;
             if attr.len() == 0 {
                 dict_set(top_frame(r), name, v);
                 return Ok(());
@@ -2690,12 +2690,12 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             }
             let idx = chain_entry(r, name, 0);
             if idx >= 0 {
-                let s = render_block(ast, r, name, 0, idx)?;
+                let s = render_block(ast, mut r, name, 0, idx)?;
                 out.push_str(s);
             }
         }
         Node.Extends(e) => {
-            let name = eval(ast, r, *e)?;
+            let name = eval(ast, mut r, *e)?;
             r.parent = load(ast, name)?;
             r.suppress = true;
         }
@@ -2703,22 +2703,22 @@ fn render_node(ast: ref Ast, r: mut ref R, nd: i64, out: mut ref String) -> Resu
             if r.suppress {
                 return Ok(());
             }
-            let name = eval(ast, r, *e)?;
+            let name = eval(ast, mut r, *e)?;
             let tid = load(ast, name)?;
             // the included template sees this context, and its own blocks
             let mut inner = new_state(r.scopes.clone(), ast.tpls[tid].auto);
             inner.scopes.push(new_dict(false));
             add_blocks(ast, mut inner, tid);
-            render_body(ast, mut inner, ast.tpls[tid].root, out)?;
+            render_body(ast, mut inner, ast.tpls[tid].root, mut out)?;
         }
         Node.Import(e, alias) => {
-            let name = eval(ast, r, *e)?;
+            let name = eval(ast, mut r, *e)?;
             let tid = load(ast, name)?;
             let module = module_of(ast, tid)?;
             dict_set(top_frame(r), alias, Val.Dict(module));
         }
         Node.FromImport(e, names) => {
-            let name = eval(ast, r, *e)?;
+            let name = eval(ast, mut r, *e)?;
             let tid = load(ast, name)?;
             let module = module_of(ast, tid)?;
             for i in 0..names.len() {
@@ -2755,7 +2755,7 @@ fn bind_targets(frame: ref JDict, targets: ref Vec[String], item: ref Val) -> Re
 }
 
 fn render_for(ast: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, cond: i64, body: i64, els: i64, out: mut ref String) -> Result[(), String] {
-    let seq = eval(ast, r, iter)?;
+    let seq = eval(ast, mut r, iter)?;
     let all = items_of(seq)?;
     // the `if` filter runs first, so `loop` counts what it keeps
     let mut items: Vec[Val] = Vec.new();
@@ -2767,7 +2767,7 @@ fn render_for(ast: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, c
         let frame = new_dict(false);
         bind_targets(frame, targets, all[i])?;
         r.scopes.push(frame);
-        let c = eval(ast, r, cond);
+        let c = eval(ast, mut r, cond);
         r.scopes.pop();
         if truthy(c?) {
             items.push(all[i].clone());
@@ -2776,7 +2776,7 @@ fn render_for(ast: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, c
     let n = items.len();
     if n == 0 {
         if els >= 0 {
-            render_body(ast, r, els, out)?;
+            render_body(ast, mut r, els, mut out)?;
         }
         return Ok(());
     }
@@ -2793,7 +2793,7 @@ fn render_for(ast: ref Ast, r: mut ref R, targets: ref Vec[String], iter: i64, c
         dict_set(lp, "length", Val.Int(n));
         dict_set(frame, "loop", Val.Dict(lp));
         r.scopes.push(frame);
-        let res = render_body(ast, r, body, out);
+        let res = render_body(ast, mut r, body, mut out);
         r.scopes.pop();
         res?;
     }
@@ -2814,34 +2814,34 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             None => Ok(undef(f"{str_repr(n)} is undefined")),
         },
         Expr.Attr(obj, name) => {
-            let v = eval(ast, r, *obj)?;
+            let v = eval(ast, mut r, *obj)?;
             get_attr(v, name)
         }
         Expr.Item(obj, key) => {
-            let v = eval(ast, r, *obj)?;
-            let k = eval(ast, r, *key)?;
+            let v = eval(ast, mut r, *obj)?;
+            let k = eval(ast, mut r, *key)?;
             get_item(v, k)
         }
         Expr.Slice(obj, a, b) => {
-            let v = eval(ast, r, *obj)?;
-            let start = if *a >= 0 { eval(ast, r, *a)? } else { Val.None };
-            let stop = if *b >= 0 { eval(ast, r, *b)? } else { Val.None };
+            let v = eval(ast, mut r, *obj)?;
+            let start = if *a >= 0 { eval(ast, mut r, *a)? } else { Val.None };
+            let stop = if *b >= 0 { eval(ast, mut r, *b)? } else { Val.None };
             get_slice(v, start, stop)
         }
         Expr.ListLit(items) => {
             let mut vs: Vec[Val] = Vec.new();
             for i in 0..items.len() {
-                vs.push(eval(ast, r, items[i])?);
+                vs.push(eval(ast, mut r, items[i])?);
             }
             Ok(new_list(vs))
         }
         Expr.Bin(op, a, b) => {
-            let va = eval(ast, r, *a)?;
-            let vb = eval(ast, r, *b)?;
+            let va = eval(ast, mut r, *a)?;
+            let vb = eval(ast, mut r, *b)?;
             binop(op, va, vb)
         }
         Expr.Neg(a) => {
-            let v = eval(ast, r, *a)?;
+            let v = eval(ast, mut r, *a)?;
             if let Some(err) = undef_error(v) {
                 return Err(err);
             }
@@ -2853,37 +2853,37 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             }
         }
         Expr.Not(a) => {
-            let v = eval(ast, r, *a)?;
+            let v = eval(ast, mut r, *a)?;
             Ok(Val.Bool(not truthy(v)))
         }
         Expr.And(a, b) => {
-            let v = eval(ast, r, *a)?;
+            let v = eval(ast, mut r, *a)?;
             if not truthy(v) {
                 return Ok(v);
             }
-            eval(ast, r, *b)
+            eval(ast, mut r, *b)
         }
         Expr.Or(a, b) => {
-            let v = eval(ast, r, *a)?;
+            let v = eval(ast, mut r, *a)?;
             if truthy(v) {
                 return Ok(v);
             }
-            eval(ast, r, *b)
+            eval(ast, mut r, *b)
         }
         Expr.Cond(test, yes, no) => {
-            let t = eval(ast, r, *test)?;
+            let t = eval(ast, mut r, *test)?;
             if truthy(t) {
-                return eval(ast, r, *yes);
+                return eval(ast, mut r, *yes);
             }
             if *no >= 0 {
-                return eval(ast, r, *no);
+                return eval(ast, mut r, *no);
             }
             Ok(undef(f"the inline if-expression on line {line} evaluated to false and no else section was defined."))
         }
         Expr.Cmp(first, ops, rest) => {
-            let mut left = eval(ast, r, *first)?;
+            let mut left = eval(ast, mut r, *first)?;
             for i in 0..ops.len() {
-                let right = eval(ast, r, rest[i])?;
+                let right = eval(ast, mut r, rest[i])?;
                 let op = ref ops[i];
                 let ok = if op == "==" {
                     val_eq(left, right)
@@ -2916,7 +2916,7 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             let mut vs: Vec[Val] = Vec.new();
             let mut any_safe = false;
             for i in 0..args.len() {
-                let v = eval(ast, r, args[i])?;
+                let v = eval(ast, mut r, args[i])?;
                 if is_safe(v) {
                     any_safe = true;
                 }
@@ -2937,21 +2937,21 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
             Ok(Val.Str(s))
         }
         Expr.Filter(value, name, args, kwn, kwv) => {
-            let v = eval(ast, r, *value)?;
-            let (a, kv) = eval_args(ast, r, args, kwv)?;
-            apply_filter(ast, r, name, v, a, kwn, kv)
+            let v = eval(ast, mut r, *value)?;
+            let (a, kv) = eval_args(ast, mut r, args, kwv)?;
+            apply_filter(ast, mut r, name, v, a, kwn, kv)
         }
         Expr.Test(value, name, negated, args) => {
-            let v = eval(ast, r, *value)?;
+            let v = eval(ast, mut r, *value)?;
             let mut a: Vec[Val] = Vec.new();
             for i in 0..args.len() {
-                a.push(eval(ast, r, args[i])?);
+                a.push(eval(ast, mut r, args[i])?);
             }
             let res = apply_test(name, v, a)?;
             Ok(Val.Bool(res != *negated))
         }
         Expr.Call(f, args, kwn, kwv) => {
-            let (a, kv) = eval_args(ast, r, args, kwv)?;
+            let (a, kv) = eval_args(ast, mut r, args, kwv)?;
             // the globals: namespace() and super()
             let fx = ref ast.exprs[*f];
             if let Expr.Name(n) = fx {
@@ -2964,13 +2964,13 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
                         return Ok(Val.Dict(d));
                     }
                     if n == "super" {
-                        return call_super(ast, r);
+                        return call_super(ast, mut r);
                     }
                 }
             }
-            let callee = eval(ast, r, *f)?;
+            let callee = eval(ast, mut r, *f)?;
             match callee {
-                Val.Macro(m) => call_macro(ast, r, m, a, kwn, kv),
+                Val.Macro(m) => call_macro(ast, mut r, m, a, kwn, kv),
                 Val.Undef(msg) => Err(f"UndefinedError: {msg}"),
                 other => Err(f"TypeError: {str_repr(type_name(other))} object is not callable"),
             }
@@ -2981,11 +2981,11 @@ fn eval(ast: ref Ast, r: mut ref R, e: i64) -> Result[Val, String] {
 fn eval_args(ast: ref Ast, r: mut ref R, args: ref Vec[i64], kwv: ref Vec[i64]) -> Result[(Vec[Val], Vec[Val]), String] {
     let mut a: Vec[Val] = Vec.new();
     for i in 0..args.len() {
-        a.push(eval(ast, r, args[i])?);
+        a.push(eval(ast, mut r, args[i])?);
     }
     let mut kv: Vec[Val] = Vec.new();
     for i in 0..kwv.len() {
-        kv.push(eval(ast, r, kwv[i])?);
+        kv.push(eval(ast, mut r, kwv[i])?);
     }
     Ok((a, kv))
 }
@@ -3000,7 +3000,7 @@ fn call_super(ast: ref Ast, r: mut ref R) -> Result[Val, String] {
     if idx < 0 {
         return Err(f"TemplateRuntimeError: no parent block called {str_repr(name)}.");
     }
-    let s = render_block(ast, r, name, depth, idx)?;
+    let s = render_block(ast, mut r, name, depth, idx)?;
     if r.auto {
         return Ok(Val.Safe(s));
     }
@@ -3223,7 +3223,7 @@ fn attr_path(v: ref Val, path: Str) -> Result[Val, String] {
     for i in 0..b.len() + 1 {
         if i == b.len() or b[i] == b'.' {
             let part = byte_str(b, st, i);
-            let key = match i64.parse(part) {
+            let key = match i64.parse(part).ok() {
                 Some(k) => Val.Int(k),
                 None => Val.Str(part),
             };
@@ -3346,9 +3346,9 @@ fn apply_filter(ast: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Vec
             Val.Int(i) => Val.Int(i),
             Val.Bool(b) => Val.Int(if b { 1 } else { 0 }),
             Val.Float(x) => Val.Int(x as i64),
-            Val.Str(s) => match i64.parse(strip(s)) {
+            Val.Str(s) => match i64.parse(strip(s)).ok() {
                 Some(i) => Val.Int(i),
-                None => match f64.parse(strip(s)) {
+                None => match f64.parse(strip(s)).ok() {
                     Some(x) => Val.Int(x as i64),
                     None => dflt,
                 },
@@ -3360,7 +3360,7 @@ fn apply_filter(ast: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Vec
         let dflt = arg_or(args, kwn, kwv, 0, "default", Val.Float(0.0));
         return Ok(match as_float(v) {
             Some(x) => Val.Float(x),
-            None => match f64.parse(strip(to_str(v))) {
+            None => match f64.parse(strip(to_str(v))).ok() {
                 Some(x) => Val.Float(x),
                 None => dflt,
             },
@@ -3544,15 +3544,15 @@ fn apply_filter(ast: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Vec
             }
             let no_names: Vec[String] = Vec.new();
             let no_vals: Vec[Val] = Vec.new();
-            out.push(apply_filter(ast, r, fname, items[i].clone(), rest, no_names, no_vals)?);
+            out.push(apply_filter(ast, mut r, fname, items[i].clone(), rest, no_names, no_vals)?);
         }
         return Ok(new_list(out));
     }
     if name == "selectattr" {
-        return filter_select(ast, r, v, args, true);
+        return filter_select(ast, mut r, v, args, true);
     }
     if name == "rejectattr" {
-        return filter_select(ast, r, v, args, false);
+        return filter_select(ast, mut r, v, args, false);
     }
     if name == "first" or name == "last" {
         let items = items_of(v)?;

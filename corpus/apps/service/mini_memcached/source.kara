@@ -292,7 +292,7 @@ fn serve(cache: mut ref Cache, data: ref Vec[u8], c: mut ref Conn) -> i64 {
         }
         c.log.push(f"> {show(line)}");
         let text = from_bytes(line);
-        let toks = text.split_whitespace();
+        let toks: Vec[Str] = text.split_whitespace().collect();
         if toks.is_empty() {
             c.say("ERROR");
             continue;

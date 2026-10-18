@@ -1875,11 +1875,11 @@ fn parse_marker_op(t: mut ref Tokenizer) -> Result[String, SyntaxErr] {
 
 fn parse_marker_item(t: mut ref Tokenizer) -> Result[MNode, SyntaxErr] {
     t.consume("WS");
-    let (lv, l) = parse_marker_var(t)?;
+    let (lv, l) = parse_marker_var(mut t)?;
     t.consume("WS");
-    let op = parse_marker_op(t)?;
+    let op = parse_marker_op(mut t)?;
     t.consume("WS");
-    let (rv, r) = parse_marker_var(t)?;
+    let (rv, r) = parse_marker_var(mut t)?;
     t.consume("WS");
     Ok(MNode.Item(lv, l, op, rv, r))
 }
@@ -1889,12 +1889,12 @@ fn parse_marker_atom(t: mut ref Tokenizer) -> Result[MNode, SyntaxErr] {
     let node = if t.peek("LEFT_PARENTHESIS") {
         let open = t.open("LEFT_PARENTHESIS");
         t.consume("WS");
-        let inner = parse_marker(t)?;
+        let inner = parse_marker(mut t)?;
         t.consume("WS");
         t.close(open, "RIGHT_PARENTHESIS", "LEFT_PARENTHESIS", "marker expression")?;
         inner
     } else {
-        parse_marker_item(t)?
+        parse_marker_item(mut t)?
     };
     t.consume("WS");
     Ok(node)
@@ -1902,11 +1902,11 @@ fn parse_marker_atom(t: mut ref Tokenizer) -> Result[MNode, SyntaxErr] {
 
 fn parse_marker(t: mut ref Tokenizer) -> Result[MNode, SyntaxErr] {
     let mut list: Vec[MNode] = Vec.new();
-    list.push(parse_marker_atom(t)?);
+    list.push(parse_marker_atom(mut t)?);
     while t.check("BOOLOP") {
         let op = t.read();
         list.push(MNode.Word(op));
-        list.push(parse_marker_atom(t)?);
+        list.push(parse_marker_atom(mut t)?);
     }
     Ok(MNode.List(list))
 }
@@ -2151,7 +2151,7 @@ fn parse_version_many(t: mut ref Tokenizer) -> Result[String, SyntaxErr] {
 fn parse_specifier(t: mut ref Tokenizer) -> Result[String, SyntaxErr] {
     let open = t.open("LEFT_PARENTHESIS");
     t.consume("WS");
-    let s = parse_version_many(t)?;
+    let s = parse_version_many(mut t)?;
     t.consume("WS");
     t.close(open, "RIGHT_PARENTHESIS", "LEFT_PARENTHESIS", "version specifier")?;
     Ok(s)
@@ -2162,7 +2162,7 @@ fn parse_requirement_marker(t: mut ref Tokenizer, start: i64, expected: Str) -> 
         return Err(t.error_from(f"Expected {expected} or end", start));
     }
     t.read();
-    let m = parse_marker(t)?;
+    let m = parse_marker(mut t)?;
     t.consume("WS");
     Ok(m)
 }
@@ -2172,7 +2172,7 @@ fn parse_requirement_parts(t: mut ref Tokenizer) -> Result[(String, Vec[String],
     t.consume("WS");
     let name = t.expect("IDENTIFIER", "package name at the start of dependency specifier")?;
     t.consume("WS");
-    let extras = parse_extras(t)?;
+    let extras = parse_extras(mut t)?;
     t.consume("WS");
     let mut url = String.new();
     let mut spec = String.new();
@@ -2185,16 +2185,16 @@ fn parse_requirement_parts(t: mut ref Tokenizer) -> Result[(String, Vec[String],
         if not t.peek("END") {
             t.expect("WS", "whitespace after URL")?;
             if not t.peek("END") {
-                marker = Some(parse_requirement_marker(t, url_start, "semicolon (after URL and whitespace)")?);
+                marker = Some(parse_requirement_marker(mut t, url_start, "semicolon (after URL and whitespace)")?);
             }
         }
     } else {
         let start = t.pos;
-        spec = parse_specifier(t)?;
+        spec = parse_specifier(mut t)?;
         t.consume("WS");
         if not t.peek("END") {
             let expected = if spec.len() > 0 { "comma (within version specifier), semicolon (after version specifier)" } else { "semicolon (after name with no version specifier)" };
-            marker = Some(parse_requirement_marker(t, start, expected)?);
+            marker = Some(parse_requirement_marker(mut t, start, expected)?);
         }
     }
     t.expect("END", "end of dependency specifier")?;
@@ -2650,7 +2650,7 @@ fn read_reqs(path: Str, reqs: mut ref Vec[Requirement], cons: mut ref Vec[Requir
             let rest = strip(byte_str(to_bytes(text), 3, text.len()));
             let dir = dirname(path);
             let other = if dir.len() > 0 { f"{dir}/{rest}" } else { rest };
-            read_reqs(other, reqs, cons, as_constraint or text.starts_with("-c "))?;
+            read_reqs(other, mut reqs, mut cons, as_constraint or text.starts_with("-c "))?;
             continue;
         }
         match parse_requirement(text) {

@@ -84,3 +84,7 @@ calls again, with the original `unhex`. `__mir-run` now runs the program
 in 5 s and 212 MB, and the app still matches on all four MIR surfaces.
 `karac check` on it takes about 42 s and 1.8 GB, which the drop schedule
 thread puts in the frozen legacy auto-par conflict graph.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).

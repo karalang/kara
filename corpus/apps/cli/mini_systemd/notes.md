@@ -67,3 +67,7 @@ These are workarounds for gaps:
   refused the later `fs.write(path, ..)` because the slice borrow from
   the match arm stayed live (B-2026-10-18-5). The index now comes from
   `unwrap_or(0)` and the slice is taken outside any match.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).

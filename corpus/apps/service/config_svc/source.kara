@@ -146,7 +146,7 @@ impl Reader {
             _ => {}
         }
         let text: String = self.chars[start..self.at].iter().collect();
-        match i64.parse(text) {
+        match i64.parse(text).ok() {
             Some(n) => Ok(Jv.Int(n)),
             None => {
                 self.at = start;
@@ -252,14 +252,14 @@ fn write_json(v: ref Jv, out: mut ref String) {
         Jv.Null => out.push_str("null"),
         Jv.Bool(b) => out.push_str(if b { "true" } else { "false" }),
         Jv.Int(n) => out.push_str(f"{n}"),
-        Jv.Text(s) => quote(s, out),
+        Jv.Text(s) => quote(s, mut out),
         Jv.Arr(items) => {
             out.push('[');
             for i in 0..items.len() {
                 if i > 0 {
                     out.push(',');
                 }
-                write_json(items[i], out);
+                write_json(items[i], mut out);
             }
             out.push(']');
         }
@@ -269,9 +269,9 @@ fn write_json(v: ref Jv, out: mut ref String) {
                 if i > 0 {
                     out.push(',');
                 }
-                quote(fields[i].0, out);
+                quote(fields[i].0, mut out);
                 out.push(':');
-                write_json(fields[i].1, out);
+                write_json(fields[i].1, mut out);
             }
             out.push('}');
         }
@@ -362,7 +362,7 @@ fn array_index(seg: Str, len: i64) -> Option[i64] {
             return None;
         }
     }
-    match i64.parse(seg) {
+    match i64.parse(seg).ok() {
         Some(n) => if n < len { Some(n) } else { None },
         None => None,
     }
@@ -504,7 +504,7 @@ fn leaves(patch: ref Jv, at: Str, out: mut ref Vec[String]) {
     match patch {
         Jv.Obj(fields) => {
             for (k, v) in fields.iter() {
-                leaves(v, f"{at}/{escape_seg(k)}", out);
+                leaves(v, f"{at}/{escape_seg(k)}", mut out);
             }
         }
         _ => out.push(at.to_string()),
@@ -535,7 +535,7 @@ fn validate(v: ref Jv, s: ref Jv, at: Str, errs: mut ref Vec[String]) {
         for (k, fv) in fields.iter() {
             let child = f"{at}/{escape_seg(k)}";
             match field(props, k) {
-                Some(ps) => validate(fv, ps, child, errs),
+                Some(ps) => validate(fv, ps, child, mut errs),
                 None => errs.push(f"{child}: unknown key"),
             }
         }
@@ -582,7 +582,7 @@ fn validate(v: ref Jv, s: ref Jv, at: Str, errs: mut ref Vec[String]) {
                 }
                 let item_schema = field(s, "items").unwrap_or(Jv.Obj(Vec.new()));
                 for i in 0..items.len() {
-                    validate(items[i], item_schema, f"{at}/{i}", errs);
+                    validate(items[i], item_schema, f"{at}/{i}", mut errs);
                 }
             }
             _ => errs.push(f"{here}: expected an array, found {kind(v)}"),
@@ -594,7 +594,7 @@ fn validate(v: ref Jv, s: ref Jv, at: Str, errs: mut ref Vec[String]) {
 
 fn env_value(ty: Str, raw: Str) -> Result[Jv, String] {
     if ty == "int" {
-        match i64.parse(raw) {
+        match i64.parse(raw).ok() {
             Some(n) => Ok(Jv.Int(n)),
             None => Err("expected an int".to_string()),
         }
@@ -620,7 +620,7 @@ fn env_layer(schema: ref Jv, at: Str, prefix: Str, layer: mut ref Jv, ptrs: mut 
             Some(Jv.Obj(props)) => {
                 for (k, ps) in props.iter() {
                     let name = k.to_uppercase();
-                    env_layer(ps, f"{at}/{escape_seg(k)}", f"{prefix}__{name}", layer, ptrs, notes);
+                    env_layer(ps, f"{at}/{escape_seg(k)}", f"{prefix}__{name}", mut layer, mut ptrs, mut notes);
                 }
             }
             _ => {}
@@ -635,7 +635,7 @@ fn env_layer(schema: ref Jv, at: Str, prefix: Str, layer: mut ref Jv, ptrs: mut 
         Ok(raw) => match env_value(ty, raw) {
             Ok(v) => {
                 let path = parse_pointer(at).unwrap_or(Vec.new());
-                match set_at(layer, path, 0, v) {
+                match set_at(mut layer, path, 0, v) {
                     Ok(_) => {}
                     Err(e) => notes.push(f"env {var}: {e}"),
                 }
@@ -771,7 +771,7 @@ fn handle(st: mut ref Store, r: ref Req) -> Resp {
         if r.method != "POST" {
             return error(405, "use POST");
         }
-        return reload(st);
+        return reload(mut st);
     }
     if r.path != "/config" and not r.path.starts_with("/config/") {
         return error(404, f"no route for {r.path}");
@@ -856,8 +856,8 @@ fn parse_requests(raw: Str) -> Result[Vec[Req], String] {
             Some(i) => i,
             None => return Err("incomplete request head".to_string()),
         };
-        let lines = rest[0..head_end].split("\r\n");
-        let parts = lines[0].split(" ");
+        let lines: Vec[Str] = rest[0..head_end].split("\r\n").collect();
+        let parts: Vec[Str] = lines[0].split(" ").collect();
         if parts.len() != 3 {
             return Err(f"bad request line '{lines[0]}'");
         }
@@ -869,7 +869,7 @@ fn parse_requests(raw: Str) -> Result[Vec[Req], String] {
                     let k = l[0..i].trim().to_string();
                     let v = l[i + 1..l.len()].trim().to_string();
                     if k.to_lowercase() == "content-length" {
-                        length = match i64.parse(v) {
+                        length = match i64.parse(v).ok() {
                             Some(n) => n,
                             None => return Err(f"bad Content-Length '{v}'"),
                         };
@@ -927,7 +927,7 @@ fn serve(st: mut ref Store, raw: Str) -> String {
     };
     let mut out = String.new();
     for r in reqs.iter() {
-        let resp = handle(st, r);
+        let resp = handle(mut st, r);
         st.log.push(f"{r.method} {r.path} -> {resp.status} (v{st.version})");
         out.push_str(render(resp));
     }
@@ -967,7 +967,7 @@ fn print_responses(resp: Str, tag: own String) -> String {
                 return tag;
             }
         };
-        let lines = rest[0..head_end].split("\r\n");
+        let lines: Vec[Str] = rest[0..head_end].split("\r\n").collect();
         let mut length = 0;
         let mut line = lines[0].clone();
         let mut warning = String.new();
@@ -1014,7 +1014,7 @@ fn session(listener: ref TcpListener, st: mut ref Store, label: Str, batch: Str,
     match listener.accept() {
         Ok(conn) => {
             let out = match read_all(conn) {
-                Ok(raw) => serve(st, raw),
+                Ok(raw) => serve(mut st, raw),
                 Err(e) => render(error(400, e)),
             };
             match conn.write_all(out.bytes()) {

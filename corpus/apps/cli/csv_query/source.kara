@@ -104,7 +104,7 @@ fn csv_fields(line: Str, lineno: i64) -> Result[Vec[String], String] {
 }
 
 fn load_csv(name: Str, text: Str) -> Result[Table, String] {
-    let lines = text.lines();
+    let lines: Vec[Str] = text.lines().collect();
     if lines.is_empty() {
         return Err(f"{name}.csv: empty file");
     }

@@ -510,7 +510,7 @@ fn load_rules() -> Result[Vec[Vec[String]], String] {
         if line.is_empty() or line.starts_with("#") {
             continue;
         }
-        rules.push(line.split("\t"));
+        rules.push(line.split("\t").map(|p| p.to_string()).collect());
     }
     Ok(rules)
 }
@@ -525,7 +525,7 @@ fn load_holidays() -> Result[Map[String, String], String] {
         if line.is_empty() {
             continue;
         }
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.insert(f[0].clone(), f[1].clone());
     }
     Ok(out)
@@ -550,14 +550,14 @@ fn rule_days(rule: ref Vec[String], y: i64, m: i64, hol: ref Map[String, String]
     let mut out: Vec[i64] = Vec.new();
     let kind = rule[1].clone();
     if kind == "weekly" {
-        let want: Vec[i64] = rule[2].split(",").iter().map(|a| abbr_index(a)).collect();
+        let want: Vec[i64] = rule[2].split(",").map(|a| abbr_index(a.to_string())).collect();
         for d in 1..n + 1 {
             if want.contains(weekday(y, m, d)) {
                 out.push(d);
             }
         }
     } else if kind == "nth" {
-        let k = match i64.parse(rule[2].clone()) {
+        let k = match i64.parse(rule[2].clone()).ok() {
             Some(k) => k,
             None => 0,
         };
@@ -579,7 +579,7 @@ fn rule_days(rule: ref Vec[String], y: i64, m: i64, hol: ref Map[String, String]
         }
         out.push(d);
     } else if kind == "day" {
-        let want = match i64.parse(rule[2].clone()) {
+        let want = match i64.parse(rule[2].clone()).ok() {
             Some(k) => k,
             None => 1,
         };
@@ -662,7 +662,7 @@ fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
     let kind = f[0].clone();
     let mut a: Vec[i64] = Vec.new();
     for i in 1..f.len() {
-        match i64.parse(f[i].clone()) {
+        match i64.parse(f[i].clone()).ok() {
             Some(n) => a.push(n),
             None => return Err(f"not a number: {f[i]}"),
         }
@@ -737,7 +737,7 @@ fn main() {
     };
     let mut out = String.new();
     for line in jobs.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         if let Err(e) = run(f, mut out) {
             out.push_str(f"error: {e}\n");

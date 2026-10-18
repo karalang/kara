@@ -1177,14 +1177,14 @@ fn qp_quote(out: mut ref Vec[u8], c: u8) {
 // line that is just "." is quoted too.
 fn qp_write(out: mut ref Vec[u8], s: ref Vec[u8], line_end: Str) {
     if s.len() > 0 and (s[s.len() - 1] == b' ' or s[s.len() - 1] == b'\t') {
-        append(out, sub(s, 0, s.len() - 1));
-        qp_quote(out, s[s.len() - 1]);
+        append(mut out, sub(s, 0, s.len() - 1));
+        qp_quote(mut out, s[s.len() - 1]);
     } else if s.len() == 1 and s[0] == b'.' {
-        qp_quote(out, b'.');
+        qp_quote(mut out, b'.');
     } else {
-        append(out, s);
+        append(mut out, s);
     }
-    push_str_bytes(out, line_end);
+    push_str_bytes(mut out, line_end);
 }
 
 // Lines as readline returns them, each with its newline.

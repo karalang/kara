@@ -363,7 +363,7 @@ fn py_float(s: Str) -> Option[f64] {
     if i != b.len() {
         return None;
     }
-    f64.parse(from_bytes(clean))
+    f64.parse(from_bytes(clean)).ok()
 }
 
 // shlex.split, for words, quotes and backslashes.
@@ -1853,7 +1853,7 @@ fn match_items(items: ref Vec[Item], k: i64, pat: ref Vec[u8], pos: i64, lens: m
     let mut c = n;
     while c >= it.min {
         lens[k] = c;
-        if match_items(items, k + 1, pat, pos + c, lens) {
+        if match_items(items, k + 1, pat, pos + c, mut lens) {
             return true;
         }
         c -= 1;

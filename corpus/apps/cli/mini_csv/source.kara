@@ -450,7 +450,7 @@ fn new_reader(text: Str, d: ref Dialect, lf_only: bool, limit: i64) -> Result[Re
 
 // Python's float() of a field.
 fn to_float(s: Str) -> Result[f64, String] {
-    match f64.parse(strip(s)) {
+    match f64.parse(strip(s)).ok() {
         Some(x) => Ok(x),
         None => Err(f"could not convert string to float: {py_repr(s)}"),
     }

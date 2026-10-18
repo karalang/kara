@@ -504,7 +504,7 @@ fn sign(k: ref Vec[u32], header: Str, claims: Str, key: Slice[u8]) -> String {
 }
 
 fn verify(a: ref Auth, token: Str) -> Result[JObj, String] {
-    let parts = token.split(".");
+    let parts: Vec[Str] = token.split(".").collect();
     if parts.len() != 3 {
         return Err(f"malformed token: {parts.len()} segments");
     }
@@ -583,7 +583,7 @@ fn error(status: i64, msg: Str, extra: Str) -> String {
 struct Request { method: String, path: String, auth: String, body: String }
 
 fn form_value(body: Str, key: Str) -> String {
-    for pair in body.split("&").iter() {
+    for pair in body.split("&") {
         match pair.find("=") {
             Some(k) => {
                 if pair.substring(0, k) == key {
@@ -675,8 +675,8 @@ fn serve(a: ref Auth, data: ref Vec[u8]) -> (String, i64) {
             break;
         }
         let head = text_of(data, at, end);
-        let lines = head.split("\r\n");
-        let first = lines[0].split(" ");
+        let lines: Vec[Str] = head.split("\r\n").collect();
+        let first: Vec[Str] = lines[0].split(" ").collect();
         let mut r = Request { method: first[0].clone(), path: first[1].clone(), auth: String.new(), body: String.new() };
         let mut length = 0;
         for k in 1..lines.len() {
@@ -769,7 +769,7 @@ fn session(a: ref Auth, listener: ref TcpListener, label: Str, reqs: ref Vec[Str
         if end < 0 {
             break;
         }
-        let lines = text_of(got, at, end).split("\r\n");
+        let lines: Vec[String] = text_of(got, at, end).split("\r\n").map(|p| p.to_string()).collect();
         let mut length = 0;
         let mut shown: Vec[String] = Vec.new();
         for k in 1..lines.len() {
@@ -890,7 +890,7 @@ fn main() {
     show(r);
     let alice = token_of(r[0].body);
     let bob = token_of(r[3].body);
-    let parts = alice.split(".");
+    let parts: Vec[Str] = alice.split(".").collect();
     println(f"  alice token: {alice.len()} chars, header {decoded(parts[0])}");
     println(f"  claims {decoded(parts[1])}");
     println(f"  signature {parts[2]}");

@@ -898,16 +898,16 @@ fn put_number(out: mut ref String, v: i64, digits_in: i64, sp: ref Spec) {
             }
         }
         width = if width > padding { width - padding } else { 0 };
-        put_text(out, body, Spec { pad: sp.pad, upper: false, lower: false, width: width - len + body.len() });
+        put_text(mut out, body, Spec { pad: sp.pad, upper: false, lower: false, width: width - len + body.len() });
     } else {
         let shown = if neg { f"-{body}" } else { body };
-        put_text(out, shown, Spec { pad: sp.pad, upper: false, lower: false, width: width });
+        put_text(mut out, shown, Spec { pad: sp.pad, upper: false, lower: false, width: width });
     }
 }
 
 fn put_spacepad(out: mut ref String, v: i64, digits: i64, sp: ref Spec) {
     let p = if sp.pad == 0 { b'_' } else { sp.pad };
-    put_number(out, v, digits, Spec { pad: p, upper: sp.upper, lower: sp.lower, width: sp.width });
+    put_number(mut out, v, digits, Spec { pad: p, upper: sp.upper, lower: sp.lower, width: sp.width });
 }
 
 fn hour12(h: i64) -> i64 {
@@ -1205,7 +1205,7 @@ fn directive(key: Str, els: mut ref Vec[El]) -> Result[bool, ()] {
         } else {
             "%a %b %d %H:%M:%S %Y"
         };
-        let _ = compile(sub, els);
+        let _ = compile(sub, mut els);
         return Ok(true);
     } else if key == "Od" or key == "Oe" or key == "Om" or key == "Ow" or key == "Oy" or key == "OC" or key == "OH" or key == "OI" or key == "OM" or key == "OS" {
         // the C locale's alt_digits is empty, which makes these match nothing
@@ -1265,7 +1265,7 @@ fn compile(fmt: Str, els: mut ref Vec[El]) -> Result[(), String] {
         if is_regex_special(n) or n == b'\'' {
             return Err(key);
         }
-        match directive(key, els) {
+        match directive(key, mut els) {
             Ok(_) => {}
             Err(_) => return Err(key),
         }
@@ -1384,7 +1384,7 @@ fn match_from(els: ref Vec[El], b: ref Vec[u8], k: i64, pos: i64, ends: mut ref 
     if el.kind == LIT {
         if pos < b.len() and lower_byte(b[pos]) == lower_byte(el.ch) {
             ends[k] = pos + 1;
-            return match_from(els, b, k + 1, pos + 1, ends);
+            return match_from(els, b, k + 1, pos + 1, mut ends);
         }
         return false;
     }
@@ -1395,7 +1395,7 @@ fn match_from(els: ref Vec[El], b: ref Vec[u8], k: i64, pos: i64, ends: mut ref 
         }
         while e > pos {
             ends[k] = e;
-            if match_from(els, b, k + 1, e, ends) {
+            if match_from(els, b, k + 1, e, mut ends) {
                 return true;
             }
             e -= 1;
@@ -1404,7 +1404,7 @@ fn match_from(els: ref Vec[El], b: ref Vec[u8], k: i64, pos: i64, ends: mut ref 
     }
     for e in group_ends(el, b, pos) {
         ends[k] = e;
-        if match_from(els, b, k + 1, e, ends) {
+        if match_from(els, b, k + 1, e, mut ends) {
             return true;
         }
     }

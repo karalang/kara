@@ -622,7 +622,7 @@ fn decode(r: mut ref Reader, h: ref Huff) -> Result[i64, String] {
 
 fn codes(t: ref Tables, r: mut ref Reader, out: mut ref Vec[u8], lc: ref Huff, dc: ref Huff) -> Result[(), String] {
     loop {
-        let s = decode(r, lc)?;
+        let s = decode(mut r, lc)?;
         if s < 256 {
             out.push(s as u8);
         } else if s == 256 {
@@ -633,7 +633,7 @@ fn codes(t: ref Tables, r: mut ref Reader, out: mut ref Vec[u8], lc: ref Huff, d
                 return Err(f"invalid length symbol {s}");
             }
             let n = t.lbase[ls] + r.bits(t.lextra[ls])?;
-            let ds = decode(r, dc)?;
+            let ds = decode(mut r, dc)?;
             if ds >= 30 {
                 return Err(f"invalid distance symbol {ds}");
             }
@@ -675,7 +675,7 @@ fn dynamic_block(t: ref Tables, r: mut ref Reader, out: mut ref Vec[u8]) -> Resu
     }
     let mut lens: Vec[i64] = Vec.new();
     while lens.len() < nlen + ndist {
-        let s = decode(r, ch)?;
+        let s = decode(mut r, ch)?;
         if s < 16 {
             lens.push(s);
         } else {
@@ -711,7 +711,7 @@ fn dynamic_block(t: ref Tables, r: mut ref Reader, out: mut ref Vec[u8]) -> Resu
     if dh.left < 0 or (dh.left > 0 and ndist - dh.count[0] != 1) {
         return Err("bad distance code".to_string());
     }
-    codes(t, r, out, lh, dh)
+    codes(t, mut r, mut out, lh, dh)
 }
 
 fn inflate(t: ref Tables, data: ref Vec[u8], pos: i64) -> Result[Inflated, String] {
@@ -1227,7 +1227,7 @@ fn run() -> Result[(), String] {
         Ok(s) => s,
         Err(_) => return Err("reference text is not UTF-8".to_string()),
     };
-    let lines = text.lines();
+    let lines: Vec[Str] = text.lines().collect();
     println(f"reference stream from zlib -9: {reference.len()} -> {r.out.len()} bytes, blocks {r.kinds}, crc {crc32(t.crc, r.out):08x}, {lines.len()} lines, last [{lines[lines.len() - 1]}]");
     let again = gzip(t, r.out);
     println(f"our gzip of the same text: {again.len()} bytes");

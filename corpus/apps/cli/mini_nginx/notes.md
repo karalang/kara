@@ -78,3 +78,7 @@ All of them were author errors, and none was a compiler gap:
 - `mut` was missing at three call sites that pass a fresh local to a
   `mut ref` parameter.
 - `check(b)` discarded its `Option`; it is now `let _ = check(b)`.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).

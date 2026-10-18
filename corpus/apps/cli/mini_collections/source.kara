@@ -397,7 +397,9 @@ fn most_repr(v: ref Vec[(String, i64)]) -> String {
 fn word_list(args: ref Vec[String]) -> Result[Vec[String], String] {
     if args.len() == 1 and args[0].starts_with("@") {
         let text = read_data(args[0])?;
-        return Ok(text.split_whitespace());
+        // B-2026-10-18-37: collect inside `Ok(..)` does not lower on MIR.
+        let words: Vec[String] = text.split_whitespace().map(|p| p.to_string()).collect();
+        return Ok(words);
     }
     Ok(args.clone())
 }
@@ -405,7 +407,7 @@ fn word_list(args: ref Vec[String]) -> Result[Vec[String], String] {
 fn counter_job(ops: ref String, out: mut ref String) -> Result[(), String] {
     let mut c: Counter[String] = Counter.new();
     for op in ops.split("|") {
-        let p: Vec[String] = op.split(" ");
+        let p: Vec[String] = op.split(" ").map(|p| p.to_string()).collect();
         let cmd = p[0].clone();
         let args: Vec[String] = p[1..].iter().filter(|a| not a.is_empty()).map(|a| a.clone()).collect();
         if cmd == "new" {
@@ -637,7 +639,7 @@ fn deque_op(d: mut ref Deque[i64], cmd: ref String, a: ref Vec[i64]) -> Result[O
 fn deque_job(maxlen: ref String, ops: ref String, out: mut ref String) {
     let mut d: Deque[i64] = Deque.new(if maxlen == "-" { None } else { Some(num(maxlen)) });
     for op in ops.split("|") {
-        let p: Vec[String] = op.split(" ");
+        let p: Vec[String] = op.split(" ").map(|p| p.to_string()).collect();
         let a: Vec[i64] = p[1..].iter().map(|x| num(x)).collect();
         match deque_op(mut d, p[0], a) {
             Ok(None) => out.push_str(f"  {op} -> {d.repr()}\n"),
@@ -689,7 +691,7 @@ fn odict_op(d: mut ref Dict[String, i64], cmd: ref String, a: ref Vec[String]) -
 fn odict_job(ops: ref String, out: mut ref String) {
     let mut d: Dict[String, i64] = Dict.new();
     for op in ops.split("|") {
-        let p: Vec[String] = op.split(" ");
+        let p: Vec[String] = op.split(" ").map(|p| p.to_string()).collect();
         let a: Vec[String] = p[1..].to_vec();
         match odict_op(mut d, p[0], a) {
             Ok(None) => out.push_str(f"  {op} -> {odict_repr(d)}\n"),
@@ -739,7 +741,7 @@ impl[K: Hash + Eq + Clone, V: Clone] Lru[K, V] {
 }
 
 fn lru_job(maxsize: i64, file: ref String, out: mut ref String) -> Result[(), String] {
-    let keys = read_data(file)?.split_whitespace();
+    let keys: Vec[String] = read_data(file)?.split_whitespace().map(|p| p.to_string()).collect();
     let mut lru: Lru[String, String] = Lru.new(maxsize);
     let mut marks: Vec[String] = Vec.new();
     for k in keys.iter() {
@@ -800,7 +802,7 @@ impl[K: Hash + Eq + Clone + PyRepr, V: Clone + PyRepr] ChainMap[K, V] {
 }
 
 fn value_of(s: ref String) -> Value {
-    match i64.parse(s.clone()) {
+    match i64.parse(s.clone()).ok() {
         Some(n) => Value.Int(n),
         None => Value.Text(s.clone()),
     }
@@ -812,7 +814,7 @@ fn parse_map(spec: ref String) -> Dict[String, Value] {
         return d;
     }
     for part in spec.split(",") {
-        let kv: Vec[String] = part.split("=");
+        let kv: Vec[String] = part.split("=").map(|p| p.to_string()).collect();
         d.set(kv[0].clone(), value_of(kv[1]));
     }
     d
@@ -856,7 +858,7 @@ fn chain_op(cm: mut ref ChainMap[String, Value], cmd: ref String, a: ref Vec[Str
 fn chain_job(specs: ref Vec[String], ops: ref String, out: mut ref String) {
     let mut cm: ChainMap[String, Value] = ChainMap { maps: specs.iter().map(|s| parse_map(s)).collect() };
     for op in ops.split("|") {
-        let p: Vec[String] = op.split(" ");
+        let p: Vec[String] = op.split(" ").map(|p| p.to_string()).collect();
         let a: Vec[String] = p[1..].to_vec();
         match chain_op(mut cm, p[0], a) {
             Ok(None) => out.push_str(f"  {op} -> {cm.repr()}\n"),
@@ -882,7 +884,7 @@ fn group_job(file: ref String, out: mut ref String) -> Result[(), String] {
     let mut by_status: Dict[String, Vec[String]] = Dict.new();
     let mut ips: Vec[String] = Vec.new();
     for line in text.lines() {
-        let p: Vec[String] = line.split(" ");
+        let p: Vec[String] = line.split(" ").map(|p| p.to_string()).collect();
         let mut paths = match by_status.get(p[3]) {
             Some(v) => v,
             None => Vec.new(),
@@ -913,7 +915,7 @@ fn tail_job(n: i64, file: ref String, out: mut ref String) -> Result[(), String]
 }
 
 fn num(s: ref String) -> i64 {
-    match i64.parse(s.clone()) {
+    match i64.parse(s.clone()).ok() {
         Some(n) => n,
         None => 0,
     }
@@ -966,7 +968,7 @@ fn main() {
     };
     let mut out = String.new();
     for line in jobs.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         if let Err(e) = run(f, mut out) {
             out.push_str(f"error: {e}\n");

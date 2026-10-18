@@ -674,7 +674,7 @@ fn backtrack(re: ref Pattern, t: ref Vec[u8], pc0: i64, sp0: i64, caps: mut ref 
                 return false;
             }
         } else if op == I_SPLIT {
-            if backtrack(re, t, re.prog[pc].x, sp, caps, want) {
+            if backtrack(re, t, re.prog[pc].x, sp, mut caps, want) {
                 return true;
             }
             pc = re.prog[pc].y;
@@ -684,7 +684,7 @@ fn backtrack(re: ref Pattern, t: ref Vec[u8], pc0: i64, sp0: i64, caps: mut ref 
             let slot = re.prog[pc].x;
             let old = caps[slot];
             caps[slot] = sp;
-            if backtrack(re, t, pc + 1, sp, caps, want) {
+            if backtrack(re, t, pc + 1, sp, mut caps, want) {
                 return true;
             }
             caps[slot] = old;
@@ -736,15 +736,15 @@ fn add_thread(re: ref Pattern, t: ref Vec[u8], l: mut ref Threads, mark: mut ref
     mark[pc] = sp;
     let op = re.prog[pc].op;
     if op == I_JMP {
-        add_thread(re, t, l, mark, re.prog[pc].x, start, sp);
+        add_thread(re, t, mut l, mut mark, re.prog[pc].x, start, sp);
     } else if op == I_SPLIT {
-        add_thread(re, t, l, mark, re.prog[pc].x, start, sp);
-        add_thread(re, t, l, mark, re.prog[pc].y, start, sp);
+        add_thread(re, t, mut l, mut mark, re.prog[pc].x, start, sp);
+        add_thread(re, t, mut l, mut mark, re.prog[pc].y, start, sp);
     } else if op == I_SAVE or op == I_PROGRESS {
-        add_thread(re, t, l, mark, pc + 1, start, sp);
+        add_thread(re, t, mut l, mut mark, pc + 1, start, sp);
     } else if op == I_ASSERT {
         if assert_holds(re.prog[pc].x, t, sp) {
-            add_thread(re, t, l, mark, pc + 1, start, sp);
+            add_thread(re, t, mut l, mut mark, pc + 1, start, sp);
         }
     } else {
         l.pcs.push(pc);

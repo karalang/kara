@@ -389,7 +389,7 @@ fn normalize(uri: Str) -> Option[String] {
         }
     }
     let decoded = String.from_utf8(out).unwrap_or("?".to_string());
-    let segs = decoded.split("/");
+    let segs: Vec[Str] = decoded.split("/").collect();
     let mut parts: Vec[String] = Vec.new();
     for s in segs[1..] {
         if s.is_empty() or s == "." {
@@ -801,18 +801,18 @@ fn handle(srv: ref Server, req: mut ref Req, upstreams: mut ref Vec[Upstream]) -
     let mut server_phase = true;
     loop {
         if server_phase {
-            if let Err(d) = run_rewrites(srv.rewrites, req) {
+            if let Err(d) = run_rewrites(srv.rewrites, mut req) {
                 return d;
             }
         }
         server_phase = false;
-        let li = match find_location(srv, req) {
+        let li = match find_location(srv, mut req) {
             Some(i) => i,
             None => return done(404),
         };
         let loc = ref srv.locations[li];
         req.lines.push(f"location: {loc.label()}");
-        let flag = match run_rewrites(loc.body, req) {
+        let flag = match run_rewrites(loc.body, mut req) {
             Ok(f) => f,
             Err(d) => return d,
         };
@@ -959,7 +959,7 @@ fn serve(site: mut ref Site, port: i64, host: Str, target: Str) {
                 println(f"  normalized: {n}");
             }
             req.uri = n;
-            handle(srv, mut req, site.upstreams)
+            handle(srv, mut req, mut site.upstreams)
         }
     };
     let mut last_loc = String.new();
@@ -1427,7 +1427,7 @@ fn run() -> Result[(), String] {
         if line.is_empty() or line.starts_with("#") {
             continue;
         }
-        let f = line.split(" ");
+        let f: Vec[Str] = line.split(" ").collect();
         serve(mut site, i64.parse(f[1]).unwrap_or(80), f[2].as_str(), f[3].as_str());
     }
     for u in site.upstreams {

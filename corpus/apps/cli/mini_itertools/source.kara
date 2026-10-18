@@ -640,7 +640,7 @@ fn ints(field: ref String) -> Vec[i64] {
         return out;
     }
     for part in field.split(",") {
-        match i64.parse(part.clone()) {
+        match i64.parse(part.clone()).ok() {
             Some(n) => out.push(n),
             None => {}
         }
@@ -651,13 +651,13 @@ fn ints(field: ref String) -> Vec[i64] {
 fn lists(field: ref String) -> Vec[Vec[i64]] {
     let mut out: Vec[Vec[i64]] = Vec.new();
     for part in field.split(";") {
-        out.push(ints(part));
+        out.push(ints(part.to_string()));
     }
     out
 }
 
 fn num(field: ref String) -> i64 {
-    match i64.parse(field.clone()) {
+    match i64.parse(field.clone()).ok() {
         Some(n) => n,
         None => 0,
     }
@@ -803,7 +803,7 @@ fn load(path: ref String) -> Result[Vec[Row], String] {
             first = false;
             continue;
         }
-        let c: Vec[String] = line.split(",");
+        let c: Vec[String] = line.split(",").map(|p| p.to_string()).collect();
         if c.len() != 6 {
             return Err(f"bad row: {line}");
         }
@@ -973,7 +973,7 @@ fn main() {
     };
     let mut out = String.new();
     for line in jobs.lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         if let Err(e) = run(f, mut out) {
             out.push_str(f"error: {e}\n");

@@ -68,3 +68,7 @@ After those, the program matched expected.out on the first run on all
 three MIR surfaces.
 
 Written 2026-10-15 by the real-world apps thread; karac at 72cc0d4a00.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).

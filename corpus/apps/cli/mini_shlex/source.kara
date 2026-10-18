@@ -750,7 +750,7 @@ fn run(f: ref Vec[String]) -> String {
         };
     }
     if cmd == "lex" {
-        let opts: Vec[String] = args[0].split(",").into_iter().filter(|o| not o.is_empty()).collect();
+        let opts: Vec[String] = args[0].split(",").filter(|o| not o.is_empty()).map(|o| o.to_string()).collect();
         let mut punct = String.new();
         for o in opts.iter() {
             if o == "punct" {
@@ -824,7 +824,7 @@ fn main() {
     }
     let mut out = String.new();
     for line in jobs_text().lines() {
-        let f: Vec[String] = line.split("\t");
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
         out.push_str(f"== {f.join(" | ")}\n");
         out.push_str(run(f).as_str());
         out.push_str("\n");

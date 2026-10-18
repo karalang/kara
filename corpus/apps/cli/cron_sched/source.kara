@@ -114,7 +114,7 @@ fn name_value(s: Str, names: ref Vec[String], base: i64) -> Option[i64] {
             return Some(i + base);
         }
     }
-    i64.parse(s)
+    i64.parse(s).ok()
 }
 
 fn parse_field(f: Str, lo: i64, hi: i64, names: ref Vec[String], base: i64) -> Result[u64, String] {
@@ -122,7 +122,7 @@ fn parse_field(f: Str, lo: i64, hi: i64, names: ref Vec[String], base: i64) -> R
     for part in f.split(",") {
         let (range, step) = match part.find("/") {
             Some(i) => {
-                let st = match i64.parse(part[i + 1..part.len()]) {
+                let st = match i64.parse(part[i + 1..part.len()]).ok() {
                     Some(n) => n,
                     None => return Err(f"bad step in {part}"),
                 };
@@ -253,7 +253,7 @@ fn parse_crontab(text: Str) -> (Vec[Job], Vec[String]) {
         if t.len() == 0 or t.starts_with("#") {
             continue;
         }
-        let words: Vec[String] = t.split_whitespace().iter().map(|w| w.to_string()).collect();
+        let words: Vec[String] = t.split_whitespace().map(|w| w.to_string()).collect();
         let (time, rest) = if words[0].starts_with("@") {
             match macro_fields(words[0]) {
                 Some(f) => (f, 1),
@@ -273,7 +273,7 @@ fn parse_crontab(text: Str) -> (Vec[Job], Vec[String]) {
             errors.push(f"line {n}: no command");
             continue;
         }
-        let fields: Vec[String] = time.split(" ").iter().map(|w| w.to_string()).collect();
+        let fields: Vec[String] = time.split(" ").map(|w| w.to_string()).collect();
         let mut command = String.new();
         for k in rest + 1..words.len() {
             if command.len() > 0 {
@@ -320,9 +320,9 @@ fn load_state() -> SortedMap[String, i64] {
     match fs.read_to_string("cron.state".to_string()) {
         Ok(text) => {
             for line in text.lines() {
-                let p: Vec[String] = line.split(" ");
+                let p: Vec[String] = line.split(" ").map(|p| p.to_string()).collect();
                 if p.len() == 2 {
-                    match i64.parse(p[1]) {
+                    match i64.parse(p[1]).ok() {
                         Some(t) => {
                             m.insert(p[0].clone(), t);
                         }

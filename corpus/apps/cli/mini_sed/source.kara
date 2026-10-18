@@ -770,7 +770,7 @@ fn backtrack(re: ref Pattern, t: ref Vec[u8], pc0: i64, sp0: i64, caps: mut ref 
                 return false;
             }
         } else if op == I_SPLIT {
-            if backtrack(re, t, re.prog[pc].x, sp, caps, want) {
+            if backtrack(re, t, re.prog[pc].x, sp, mut caps, want) {
                 return true;
             }
             pc = re.prog[pc].y;
@@ -780,7 +780,7 @@ fn backtrack(re: ref Pattern, t: ref Vec[u8], pc0: i64, sp0: i64, caps: mut ref 
             let slot = re.prog[pc].x;
             let old = caps[slot];
             caps[slot] = sp;
-            if backtrack(re, t, pc + 1, sp, caps, want) {
+            if backtrack(re, t, pc + 1, sp, mut caps, want) {
                 return true;
             }
             caps[slot] = old;
@@ -832,15 +832,15 @@ fn add_thread(re: ref Pattern, t: ref Vec[u8], l: mut ref Threads, mark: mut ref
     mark[pc] = sp;
     let op = re.prog[pc].op;
     if op == I_JMP {
-        add_thread(re, t, l, mark, re.prog[pc].x, start, sp);
+        add_thread(re, t, mut l, mut mark, re.prog[pc].x, start, sp);
     } else if op == I_SPLIT {
-        add_thread(re, t, l, mark, re.prog[pc].x, start, sp);
-        add_thread(re, t, l, mark, re.prog[pc].y, start, sp);
+        add_thread(re, t, mut l, mut mark, re.prog[pc].x, start, sp);
+        add_thread(re, t, mut l, mut mark, re.prog[pc].y, start, sp);
     } else if op == I_SAVE or op == I_PROGRESS {
-        add_thread(re, t, l, mark, pc + 1, start, sp);
+        add_thread(re, t, mut l, mut mark, pc + 1, start, sp);
     } else if op == I_ASSERT {
         if assert_holds(re.prog[pc].x, t, sp) {
-            add_thread(re, t, l, mark, pc + 1, start, sp);
+            add_thread(re, t, mut l, mut mark, pc + 1, start, sp);
         }
     } else {
         l.pcs.push(pc);
@@ -1748,7 +1748,7 @@ fn regex_of(r: mut ref Run, re: i64) -> i64 {
 }
 
 fn ps_matches(sc: ref Script, r: mut ref Run, re: i64) -> bool {
-    let k = regex_of(r, re);
+    let k = regex_of(mut r, re);
     if k < 0 {
         return false;
     }
@@ -1764,7 +1764,7 @@ fn addr_matches(sc: ref Script, r: mut ref Run, a: ref Addr) -> bool {
         return r.is_last();
     }
     if a.kind == A_RE {
-        return ps_matches(sc, r, a.re);
+        return ps_matches(sc, mut r, a.re);
     }
     if a.kind == A_STEP {
         if a.step <= 0 {
@@ -1781,7 +1781,7 @@ fn range_closes(sc: ref Script, r: mut ref Run, k: i64, a2: ref Addr) -> bool {
         return r.is_last();
     }
     if a2.kind == A_RE {
-        return ps_matches(sc, r, a2.re);
+        return ps_matches(sc, mut r, a2.re);
     }
     r.line >= r.ends[k]
 }
@@ -1794,15 +1794,15 @@ fn selects(sc: ref Script, r: mut ref Run, k: i64) -> bool {
     if a1.kind == A_NONE {
         yes = true;
     } else if a2.kind == A_NONE {
-        yes = addr_matches(sc, r, a1);
+        yes = addr_matches(sc, mut r, a1);
     } else if r.active[k] or (a1.kind == A_ZERO and r.line == 1) {
         // `0,/re/` is a range already open at the first line
         r.active[k] = true;
-        if range_closes(sc, r, k, a2) {
+        if range_closes(sc, mut r, k, a2) {
             r.active[k] = false;
         }
         yes = true;
-    } else if addr_matches(sc, r, a1) {
+    } else if addr_matches(sc, mut r, a1) {
         yes = true;
         let n = a2.n;
         if a2.kind == A_LINE {
@@ -1855,7 +1855,7 @@ fn replace_into(res: mut ref Vec[u8], pieces: ref Vec[Piece], t: ref Vec[u8], ca
         let kind = pieces[k].kind;
         if kind == P_LIT {
             for j in 0..pieces[k].text.len() {
-                put_case(res, pieces[k].text[j], mut cs);
+                put_case(mut res, pieces[k].text[j], mut cs);
             }
         } else if kind == P_GROUP {
             let g = pieces[k].n;
@@ -1863,7 +1863,7 @@ fn replace_into(res: mut ref Vec[u8], pieces: ref Vec[Piece], t: ref Vec[u8], ca
             let e = caps[2 * g + 1];
             if s >= 0 and e >= 0 {
                 for j in s..e {
-                    put_case(res, t[j], mut cs);
+                    put_case(mut res, t[j], mut cs);
                 }
             }
         } else {
@@ -1882,7 +1882,7 @@ fn replace_into(res: mut ref Vec[u8], pieces: ref Vec[Piece], t: ref Vec[u8], ca
 
 // `s`: true when a replacement was made.
 fn substitute(sc: ref Script, r: mut ref Run, k: i64) -> bool {
-    let ri = regex_of(r, sc.cmds[k].re);
+    let ri = regex_of(mut r, sc.cmds[k].re);
     if ri < 0 {
         return false;
     }
@@ -1965,7 +1965,7 @@ fn execute(sc: ref Script, r: mut ref Run) -> i64 {
             pc += 1;
             continue;
         }
-        if not selects(sc, r, pc) {
+        if not selects(sc, mut r, pc) {
             pc = if name == b'{' { sc.cmds[pc].target } else { pc + 1 };
             continue;
         }
@@ -2048,7 +2048,7 @@ fn execute(sc: ref Script, r: mut ref Run) -> i64 {
         } else if name == b'r' {
             r.appends.push(Pending { file: true, text: sc.cmds[pc].text.clone() });
         } else if name == b's' {
-            if substitute(sc, r, pc) {
+            if substitute(sc, mut r, pc) {
                 r.replaced = true;
                 let k = sc.cmds[pc].wout;
                 if sc.cmds[pc].print {
@@ -2110,7 +2110,7 @@ fn run_unit(sc: ref Script, r: mut ref Run) {
             r.replaced = false;
         }
         reread = true;
-        let end = execute(sc, r);
+        let end = execute(sc, mut r);
         if end == E_QUIT {
             break;
         }

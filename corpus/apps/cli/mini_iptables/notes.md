@@ -64,3 +64,7 @@ These are workarounds for gaps:
 `conntrack_list` once bound `c.orig` before reading `c.orig.proto`, a
 workaround for B-2026-10-14-70. It was dropped after the fix in
 0bacd9912b.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits, with one more by hand: `let given = a.split(",")`, now a one-shot iterator, was walked once per state inside a loop; check passed it, and MIR refused it as a use after move (B-2026-10-18-36). It collects into a `Vec[Str]` and walks `given.iter()`. The app matches expected.out on all four MIR backends again (karac at a4b0967495).

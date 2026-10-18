@@ -56,9 +56,9 @@ fn last_index_of(s: Str, c: u8) -> Option[i64] {
 
 fn words(s: Str) -> Vec[String] {
     let mut out: Vec[String] = Vec.new();
-    for w in s.split(" ").into_iter() {
+    for w in s.split(" ") {
         if not w.is_empty() {
-            out.push(w);
+            out.push(w.to_string());
         }
     }
     out
@@ -193,20 +193,20 @@ impl Unit {
             let v = line[eq + 1..].trim();
             if is_list(k.as_str()) {
                 if v.is_empty() {
-                    self.lists[k] = Vec.new();
+                    self.lists[k.to_string()] = Vec.new();
                 } else {
                     let mut cur = self.list(k.as_str());
                     if k == "Environment" {
-                        cur.push(v);
+                        cur.push(v.to_string());
                     } else {
                         for w in words(v.as_str()).into_iter() {
                             cur.push(w);
                         }
                     }
-                    self.lists[k] = cur;
+                    self.lists[k.to_string()] = cur;
                 }
             } else {
-                self.scalars[k] = v;
+                self.scalars[k.to_string()] = v.to_string();
             }
         }
     }
@@ -565,7 +565,7 @@ fn dfs(befores: ref Map[String, Vec[String]], n: Str, color: mut ref Map[String,
             return;
         }
         if c == 0 {
-            dfs(befores, d.as_str(), color, stack, cycle);
+            dfs(befores, d.as_str(), mut color, mut stack, mut cycle);
         }
     }
     let _ = stack.pop();

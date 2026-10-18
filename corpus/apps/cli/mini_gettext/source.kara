@@ -1167,7 +1167,7 @@ fn parse_header(c: mut ref Catalog, tmsg: ref Vec[u8]) -> Result[(), String] {
             let (k0, _, v0) = partition(item, b':');
             let k = lower(strip(k0));
             let v = strip(v0);
-            set_info(c, k, v);
+            set_info(mut c, k, v);
             lastk = k.clone();
             if k == "content-type" {
                 let at = find_str(v, "charset=");
@@ -1181,7 +1181,7 @@ fn parse_header(c: mut ref Catalog, tmsg: ref Vec[u8]) -> Result[(), String] {
                 };
             }
         } else if lastk.len() > 0 {
-            add_info(c, lastk, item);
+            add_info(mut c, lastk, item);
         }
     }
     Ok(())

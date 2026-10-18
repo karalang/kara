@@ -67,3 +67,7 @@ are collected with `rx.into_iter()`; B-2026-10-14-52 is fixed, so `main`
 walks `DOCS` itself. `save` is `fs.write(..).map_err(..)` again, which
 B-2026-10-15-5 (still open) used to refuse. Each of these is the
 original line again, and the app still matches on all four MIR surfaces.
+
+## Library migration, 2026-10-18
+
+Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits, with one more by hand: `i64.parse(..).ok_or(msg)?` became `.map_err(|_| msg)?` by hand; `karac fix` does not rewrite `ok_or` on a `Result` (B-2026-10-18-35). The app matches expected.out on all four MIR backends again (karac at a4b0967495).

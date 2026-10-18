@@ -255,7 +255,7 @@ fn codes(bits: mut ref Bits, out: mut ref Vec[u8], lit: ref Huff, dist: ref Huff
     let dist_base = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
     let dist_extra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
     loop {
-        let sym = decode(bits, lit)?;
+        let sym = decode(mut bits, lit)?;
         if sym < 256 {
             out.push(sym as u8);
         } else if sym == 256 {
@@ -266,7 +266,7 @@ fn codes(bits: mut ref Bits, out: mut ref Vec[u8], lit: ref Huff, dist: ref Huff
                 return Err("inflate: bad length symbol".to_string());
             }
             let len = len_base[li] + bits.need(len_extra[li])?;
-            let di = decode(bits, dist)?;
+            let di = decode(mut bits, dist)?;
             if di >= 30 {
                 return Err("inflate: bad distance symbol".to_string());
             }
@@ -309,7 +309,7 @@ fn dynamic_tables(bits: mut ref Bits) -> Result[(Huff, Huff), String] {
     let lencode = huff(cl);
     let mut lengths: Vec[i64] = Vec.new();
     while lengths.len() < nlen + ndist {
-        let sym = decode(bits, lencode)?;
+        let sym = decode(mut bits, lencode)?;
         if sym < 16 {
             lengths.push(sym);
         } else {
@@ -552,7 +552,7 @@ fn parse_object(raw: Slice[u8]) -> Result[Object, String] {
     for j in sp + 1..nul {
         len_bytes.push(raw[j]);
     }
-    let len = match i64.parse(text_of(len_bytes)) {
+    let len = match i64.parse(text_of(len_bytes)).ok() {
         Some(n) => n,
         None => return Err("object: bad length".to_string()),
     };
@@ -794,8 +794,8 @@ fn status(repo: ref Repo) -> Result[(), String] {
 // A line diff from the longest common subsequence, printed as one hunk of
 // changes with a line of context on each side of every change.
 fn diff(old: Str, new: Str) {
-    let a: Vec[String] = old.lines().iter().map(|l| l.to_string()).collect();
-    let b: Vec[String] = new.lines().iter().map(|l| l.to_string()).collect();
+    let a: Vec[String] = old.lines().map(|l| l.to_string()).collect();
+    let b: Vec[String] = new.lines().map(|l| l.to_string()).collect();
     let n = a.len();
     let m = b.len();
     let mut t: Vec[Vec[i64]] = Vec.new();
@@ -965,7 +965,9 @@ fn run() -> Result[(), String] {
         let raw = inflate(unhex(hex))?;
         let ok = if sha1(raw) == id { "ok" } else { "MISMATCH" };
         let obj = parse_object(raw)?;
-        println(f"  {id[0..7]} {obj.kind} {obj.body.len()} bytes, hash {ok}: {text_of(obj.body).lines()[0]}");
+        let body_text = text_of(obj.body);
+        let first: Vec[Str] = body_text.lines().collect();
+        println(f"  {id[0..7]} {obj.kind} {obj.body.len()} bytes, hash {ok}: {first[0]}");
     }
 
     println("== fsck");

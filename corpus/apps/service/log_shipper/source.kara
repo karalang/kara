@@ -423,12 +423,12 @@ impl LineParser for Combined {
         if q1 < 0 or q2 < 0 {
             return Err("no request".to_string());
         }
-        let req = text_of(rbytes, q1 + 1, q2).split(" ");
+        let req: Vec[String] = text_of(rbytes, q1 + 1, q2).split(" ").map(|p| p.to_string()).collect();
         if req.len() != 3 {
             return Err("bad request line".to_string());
         }
         let tail = text_of(rbytes, q2 + 1, rbytes.len());
-        let nums = tail.trim().split(" ");
+        let nums: Vec[Str] = tail.trim().split(" ").collect();
         if nums.len() < 2 or not is_digits(nums[0]) or not (is_digits(nums[1]) or nums[1] == "-") {
             return Err("bad status or size".to_string());
         }
@@ -517,7 +517,7 @@ fn make_transforms(host: own String) -> Vec[Transform] {
         }
         match field(r, "client") {
             Some(c) => {
-                let parts = c.split(".");
+                let parts: Vec[Str] = c.split(".").collect();
                 if parts.len() == 4 {
                     r.insert("client".to_string(), Val.S(f"{parts[0]}.{parts[1]}.{parts[2]}.0"));
                 }
@@ -580,8 +580,8 @@ fn load_checkpoints() -> SortedMap[String, Cp] {
     if not fs.exists("state/checkpoints".to_string()) {
         return cps;
     }
-    for ln in fs.read_to_string("state/checkpoints".to_string()).unwrap_or("".to_string()).lines().iter() {
-        let f = ln.split("\t");
+    for ln in fs.read_to_string("state/checkpoints".to_string()).unwrap_or("".to_string()).lines() {
+        let f: Vec[Str] = ln.split("\t").collect();
         cps.insert(f[0].clone(), Cp { fp: f[1].clone(), off: i64.parse(f[2]).unwrap_or(0) });
     }
     cps
@@ -667,7 +667,7 @@ fn field_of(ln: Str, k: Str) -> String {
 impl Collector {
     fn handle(mut ref self, data: ref Vec[u8]) -> Answer {
         let end = find_crlf2(data);
-        let head = text_of(data, 0, end).split("\r\n");
+        let head: Vec[String] = text_of(data, 0, end).split("\r\n").map(|p| p.to_string()).collect();
         let body = text_of(data, end + 4, data.len());
         self.requests += 1;
         let n = self.requests;
@@ -678,7 +678,7 @@ impl Collector {
             Some(ra) => return Answer { status: 503, retry: ra.clone(), msg: "overloaded".to_string() },
             None => {}
         }
-        let all = body.split("\n");
+        let all: Vec[Str] = body.split("\n").collect();
         let mut lines: Vec[String] = Vec.new();
         for k in 0..all.len() - 1 {
             lines.push(all[k].clone());
@@ -755,8 +755,9 @@ fn post(col: mut ref Collector, ndjson: Str) -> Answer {
     }
     let got = read_all(client);
     let end = find_crlf2(got);
-    let lines = text_of(got, 0, end).split("\r\n");
-    let status = i64.parse(lines[0].split(" ")[1]).unwrap_or(0);
+    let lines: Vec[String] = text_of(got, 0, end).split("\r\n").map(|p| p.to_string()).collect();
+    let words: Vec[Str] = lines[0].split(" ").collect();
+    let status = i64.parse(words[1]).unwrap_or(0);
     let mut retry = "".to_string();
     for k in 1..lines.len() {
         if lines[k].starts_with("Retry-After: ") {
@@ -799,7 +800,7 @@ impl Shipper {
             for it in items.iter() {
                 body.push_str(f"{it.line}\n");
             }
-            let a = post(col, body);
+            let a = post(mut col, body);
             if a.status == 200 {
                 println(f"    {label}: {items.len()} records -> 200 {a.msg}");
                 return;
@@ -1103,7 +1104,7 @@ fn main() {
             println(f"  {ln}");
         }
     }
-    let dead = fs.read_to_string("dead/letters.ndjson".to_string()).unwrap_or("".to_string()).lines();
+    let dead: Vec[String] = fs.read_to_string("dead/letters.ndjson".to_string()).unwrap_or("".to_string()).lines().map(|p| p.to_string()).collect();
     println(f"== dead letters: {dead.len()}");
     for ln in dead.iter() {
         println(f"  {if ln.len() > 90 { ln.substring(0, 90) } else { ln.clone() }}");

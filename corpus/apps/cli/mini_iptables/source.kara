@@ -139,7 +139,7 @@ fn tokenize(line: Str) -> Vec[String] {
 // ------------------------------------------------------------ addresses
 
 fn ip_num(s: Str) -> Option[i64] {
-    let parts = s.split(".");
+    let parts: Vec[Str] = s.split(".").collect();
     if parts.len() != 4 {
         return None;
     }
@@ -393,10 +393,10 @@ fn parse_rule(tokens: ref Vec[String], chains: ref Vec[String]) -> Result[Rule, 
             let k = r.proto_match();
             r.matches[k].icmp = if a == "echo-request" { 8 } else if a == "echo-reply" { 0 } else { num(a.as_str()) };
         } else if (t == "--ctstate" or t == "--state") and (ckind == "conntrack" or ckind == "state") {
-            let given = a.split(",");
+            let given: Vec[Str] = a.split(",").collect();
             let mut states: Vec[String] = Vec.new();
             for s in STATES {
-                for g in given {
+                for g in given.iter() {
                     if g == s {
                         states.push(s.to_string());
                     }
@@ -664,7 +664,7 @@ fn read_file(p: Str) -> String {
 
 fn restore(tables: mut ref Vec[Table], path: Str) -> i64 {
     let text = read_file(path);
-    let mut lines = text.split("\n");
+    let mut lines: Vec[Str] = text.split("\n").collect();
     if not lines.is_empty() and lines[lines.len() - 1].is_empty() {
         let _ = lines.pop();
     }
@@ -686,7 +686,7 @@ fn restore(tables: mut ref Vec[Table], path: Str) -> i64 {
         }
         let ti = staged.len() - 1;
         if line.starts_with(":") {
-            let parts = line[1..].split(" ");
+            let parts: Vec[Str] = line[1..].split(" ").collect();
             // B-2026-10-18-6: the literal branch needs the annotation to be a Str.
             let policy: Str = if parts[1] == "-" { "" } else { parts[1].as_str() };
             let mut c = new_chain(parts[0].as_str(), policy);
@@ -972,7 +972,7 @@ fn parse_packet(tokens: ref Vec[String]) -> Packet {
         let key = t[..eq].to_string();
         let v = t[eq + 1..].to_string();
         if key == "flags" {
-            p.flags = v.split(",");
+            p.flags = v.split(",").map(|p| p.to_string()).collect();
         } else if key == "type" {
             p.icmp = num(v.as_str());
         } else if key == "len" {

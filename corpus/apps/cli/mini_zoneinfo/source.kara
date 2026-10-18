@@ -2073,7 +2073,7 @@ fn walk(dir: Str, out: mut ref Vec[String]) -> Result[(), String] {
             Err(e) => return Err(f"cannot stat {rel}: {e}"),
         };
         if is_dir {
-            walk(rel, out)?;
+            walk(rel, mut out)?;
         } else {
             out.push(rel);
         }
