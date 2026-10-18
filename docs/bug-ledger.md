@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 273 |
 | false-positive | 234 |
 | other | 175 |
-| perf | 173 |
+| perf | 174 |
 | diagnostics | 167 |
 | crash | 124 |
 | soundness | 114 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2943 |
+| codegen | 2944 |
 | interp | 959 |
 | typecheck | 475 |
 | other | 115 |
@@ -187,6 +187,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-48 | 2026-10-18 | interp+codegen | medium | The MIR instance of an impl method binds the impl's type parameters to the target's arguments by POSITION: `impl[T: Clone, I: Iterator] Iterator for Tagged[I, T]` instantiates as `Tagged[String, VecIter[i64]].next` for a `Tagged[VecIter[i64], String]`, and `__mir-run` stops with 'clone of VecIter[i64] needs its Clone body' | — |
 | B-2026-10-18-49 | 2026-10-18 | interp+codegen | medium | The MIR builder does not lower a struct field typed by an associated-type projection of the struct's parameter: `struct MapIt[I: Iterator] { it: I, f: Fn(own I.Item) -> I.Item }` built as `MapIt { it: VecIter {..}, f: |x: i64| x * 10 }` checks, and `__mir-run` stops with 'an associated type of `I` is not lowered yet' | — |
 | B-2026-10-18-50 | 2026-10-18 | interp+codegen | medium | On MIR, a `Str` copied out of a local `Vec[Str]` (`w = parts[0]` after `let parts: Vec[Str] = s.split(",").collect()`) stays borrowed from the Vec, so using `w` after `parts` dies is refused by the borrow checker (E0516, or E0509 when returned); `karac check` passes | — |
+| B-2026-10-18-51 | 2026-10-18 | codegen | medium | The MIR pre-size pass (`src/mir/presize.rs`) reserves room only for a `while i < n` counting loop, not a `for` loop: `let mut v: Vec[i64] = Vec.new(); for _ in 0..26 { v.push(0); }` allocates four times (4, 8, 16, 32 elements) under `karac build --mir` where the `while` spelling and legacy `karac build` allocate once (26), so kata 748's bench, which builds a 26-slot count this way per word, is 3.3x legacy | — |
 
 ### Relocated
 
