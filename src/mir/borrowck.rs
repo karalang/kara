@@ -545,9 +545,29 @@ impl Cx<'_> {
     /// The origins of a value read from `place`: what its local holds,
     /// when its type can hold any.
     fn place_origins(&self, o: &Origins, place: &Place, into: &mut LoanSet) {
-        if self.holds(place) {
-            into.union(o.get(place.local));
+        if !self.holds(place) {
+            return;
         }
+        // A value read through one reference (`*r`, `(*r).f`) holds what
+        // the places `r` borrows hold, not `r`'s borrow of them: a `Str`
+        // copied out of `v[0]` views what the `Vec`'s elements view, and
+        // outlives the `Vec` (B-2026-10-18-50).
+        let through_one = place.projection.first() == Some(&ProjElem::Deref)
+            && !place.projection[1..].contains(&ProjElem::Deref);
+        if through_one {
+            for li in o.get(place.local).iter() {
+                let l = &self.loans[li];
+                if l.place.projection.contains(&ProjElem::Deref) {
+                    // A borrow of something behind another reference:
+                    // what it holds came from outside, as before.
+                    into.insert(li);
+                } else {
+                    self.place_origins(o, &l.place, into);
+                }
+            }
+            return;
+        }
+        into.union(o.get(place.local));
     }
 
     fn operand_origins(&self, o: &Origins, op: &Operand, into: &mut LoanSet) {
@@ -1865,5 +1885,69 @@ fn main() {\n    let s = String.from(\"xyz\");\n    let mut it = It { rest: s.as
             crate::mir::lower::tests::run_source(field).unwrap(),
             ("x\ny\n".into(), Some(0))
         );
+    }
+
+    /// A `Str` copied out of a `Vec[Str]` views what the elements view,
+    /// so it outlives the `Vec` (B-2026-10-18-50); a reference into the
+    /// `Vec`, a view of a `String` in a `Vec`, and a view of a `String`
+    /// that dies are still refused.
+    #[test]
+    fn mir_borrowck_a_str_copied_out_of_a_vec_outlives_it() {
+        let run = crate::mir::lower::tests::run_source;
+        let ok = r#"fn first(s: Str) -> Str {
+    let mut w = s;
+    if s.contains(",") {
+        let parts: Vec[Str] = s.split(",").collect();
+        w = parts[0];
+    }
+    w
+}
+fn main() {
+    println(first("ab,cd"));
+    println(first("xy"));
+    let s2 = "ab,cd";
+    let parts2: Vec[Str] = s2.split(",").collect();
+    let x: Str = parts2[1];
+    let moved = parts2;
+    println(x);
+    println(moved.len());
+}
+"#;
+        assert_eq!(run(ok).unwrap(), ("ab\nxy\ncd\n2\n".into(), Some(0)));
+        for bad in [
+            r#"fn main() {
+    let v: Vec[String] = vec!["ab".to_string(), "cd".to_string()];
+    let t: Str = v[0].as_str();
+    let moved = v;
+    println(t);
+    println(moved.len());
+}
+"#,
+            r#"fn pick(v: ref Vec[Str]) -> ref Str { v.get(0).unwrap() }
+fn main() {
+    let s = "ab,cd";
+    let parts: Vec[Str] = s.split(",").collect();
+    let r = pick(parts);
+    let moved = parts;
+    println(r);
+    println(moved.len());
+}
+"#,
+            r#"fn main() {
+    let owned = "ab,cd".to_string();
+    let mut w: Str = "";
+    {
+        let parts: Vec[Str] = owned.as_str().split(",").collect();
+        w = parts[1];
+    }
+    let gone = owned;
+    println(w);
+    println(gone);
+}
+"#,
+        ] {
+            let err = run(bad).expect_err(bad);
+            assert!(err.contains("[E0516]"), "{bad}: {err}");
+        }
     }
 }
