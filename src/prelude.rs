@@ -1838,7 +1838,7 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
         ],
         &["MutexGuard"],
     ),
-    (&["std", "time"], &["Clock", "sleep_ms"], &["Instant"]),
+    (&["std", "time"], &["Clock", "sleep_ms"], &[]),
     (
         &["std", "io"],
         &[

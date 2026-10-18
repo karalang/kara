@@ -7303,10 +7303,16 @@ fn std_time_reports_unknown_and_missing_items() {
         "import std.time.{Duration, Bogus};\nfn main() { println(f\"{Duration.ms(2).as_ms()}\"); }\n",
         "`std.time` has no item `Bogus`",
     );
-    rejected(
+    // `Instant` landed (B-2026-10-15-112); `MutexGuard` keeps the missing
+    // case covered.
+    accepted(
         "std-time-instant",
-        "import std.time.{Instant};\nfn main() { }\n",
-        "`std.time.Instant` is in the library spec (docs/library) but not implemented yet",
+        "import std.time.{Instant};\nfn main() { let i = Instant.now(); println(f\"{i.elapsed().as_ms() >= 0}\"); }\n",
+    );
+    rejected(
+        "std-sync-mutex-guard",
+        "import std.sync.{MutexGuard};\nfn main() { }\n",
+        "`std.sync.MutexGuard` is in the library spec (docs/library) but not implemented yet",
     );
 }
 

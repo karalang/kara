@@ -4030,6 +4030,29 @@ fn main() {
     }
 }
 
+/// B-2026-10-15-112: `std.time.Instant` on the monotonic clock.
+#[test]
+fn mir_std_time_instant() {
+    const SRC: &str = r#"import std.time.{Duration, Instant, sleep};
+
+fn main() {
+    let i0 = Instant.now();
+    sleep(Duration.ms(2));
+    let i1 = Instant.now();
+    let later = i0.add(Duration.ms(5));
+    println(f"{i1.duration_since(i0).as_ms() >= 2} {i0 < i1} {later.duration_since(i0).as_ms()} {i0.elapsed().as_ms() >= 2}");
+}
+"#;
+    let want = "true true 5 true\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-15-51: an unsuffixed literal on the left of `&`, `|` or `^`
 /// takes the other operand's integer type, as it does under `+`.
 #[test]

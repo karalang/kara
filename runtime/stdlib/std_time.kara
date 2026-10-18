@@ -1,4 +1,4 @@
-// `std.time`: `Duration`, `SystemTime` and `sleep`
+// `std.time`: `Duration`, `Instant`, `SystemTime` and `sleep`
 // (docs/library/time-random-env.md; B-2026-10-15-10). `Clock` and
 // `sleep_ms` are globals of the library.
 
@@ -41,6 +41,39 @@ impl SystemTime {
     /// The span since the Unix epoch.
     pub fn since_epoch(self) -> Duration {
         Duration { ns: self.ns }
+    }
+}
+
+/// A point on the monotonic clock, for measuring elapsed time.
+///
+/// The spec reads one with `Clock.now()` and compares two with `-`; until
+/// `Clock.now()` returns an `Instant` and the arithmetic traits have an
+/// `Output` (B-2026-10-15-112), it is read with `Instant.now()` and
+/// compared with `duration_since`.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Instant {
+    ns: i64,
+}
+
+impl Instant {
+    /// The current reading of the monotonic clock.
+    pub fn now() -> Instant with reads(Clock) {
+        Instant { ns: Clock.monotonic_ns() }
+    }
+
+    /// The span from `earlier` to this instant (`self - earlier`).
+    pub fn duration_since(self, earlier: Instant) -> Duration {
+        Duration { ns: self.ns - earlier.ns }
+    }
+
+    /// The instant `d` after this one (`self + d`).
+    pub fn add(self, d: Duration) -> Instant {
+        Instant { ns: self.ns + d.ns }
+    }
+
+    /// The span from this instant to now.
+    pub fn elapsed(self) -> Duration with reads(Clock) {
+        Duration { ns: Clock.monotonic_ns() - self.ns }
     }
 }
 
