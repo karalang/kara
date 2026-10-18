@@ -4514,3 +4514,45 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_collect_inside_a_constructor_takes_the_expected_target() {
+    // B-2026-10-18-37: `Ok(s.split_whitespace().map(..).collect())` as the
+    // tail of a `Result[Vec[String], String]` fn left `collect`'s `C`
+    // unsolved: the expected type seeded `Ok`'s `T`, but the argument was
+    // inferred rather than checked against it.
+    let src = r#"
+fn words(text: ref String) -> Result[Vec[String], String] {
+    Ok(text.split_whitespace().map(|p| p.to_string()).collect())
+}
+fn evens(v: ref Vec[i64]) -> Option[Vec[i64]] {
+    if v.is_empty() {
+        return None;
+    }
+    return Some(v.iter().filter(|x| *x % 2 == 0).map(|x| *x).collect());
+}
+fn uniq(v: ref Vec[i64]) -> Result[Set[i64], String] {
+    Ok(v.iter().map(|x| *x).collect())
+}
+fn upper(s: ref String) -> Option[String] {
+    Some(s.chars().map(|c| c.to_ascii_uppercase()).collect())
+}
+fn main() {
+    match words("a b c".to_string()) {
+        Ok(v) => println(f"{v.len()} {v[2]}"),
+        Err(e) => println(e),
+    }
+    let v: Vec[i64] = vec![1, 2, 4, 2];
+    let s = "ab".to_string();
+    println(f"{evens(v).unwrap().len()} {uniq(v).unwrap().len()} {upper(s).unwrap()}");
+}
+"#;
+    let want = "3 c\n3 3 AB\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

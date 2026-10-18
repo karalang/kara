@@ -3335,12 +3335,16 @@ impl<'a> super::TypeChecker<'a> {
                 //     argument whose element is an unsolved var rather than a
                 //     default — is left alone for now; widening gate 3 to reach
                 //     it is a separate question with its own regression risk.)
+                // The library's `collect()` is generic in its target, which
+                // only the slot names: `Ok(xs.collect())` for a
+                // `Result[Vec[String], E]` (B-2026-10-18-37).
                 let arg_adopts_from_context = matches!(
                     &arg.value.kind,
                     ExprKind::ArrayLiteral(_)
                         | ExprKind::PrefixCollectionLiteral { .. }
                         | ExprKind::RepeatLiteral { .. }
-                );
+                ) || (self.library_methods_from_source
+                    && is_bare_collect(&arg.value));
                 let seeded_slot = if seeded_from_expectation && arg_adopts_from_context {
                     let resolved = resolve_type_vars(
                         &sub_params[idx],
