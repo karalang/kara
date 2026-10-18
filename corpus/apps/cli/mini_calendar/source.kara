@@ -1,0 +1,829 @@
+// mini_calendar: Python 3.13's `calendar` module (Calendar, TextCalendar,
+// HTMLCalendar and the module functions), ported from calendar.py, and a
+// team agenda built on it.
+//
+// The run writes the team's meeting rules and the year's holidays into
+// data/, then runs data/jobs.tsv. Each job prints `== ` and its fields
+// joined by ` | `, then its output.
+
+// ------------------------------------------------------------ dates
+
+const MONDAY: i64 = 0;
+const SATURDAY: i64 = 5;
+
+// Python's floor division and modulo, which round toward minus infinity.
+fn floordiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+fn pymod(a: i64, b: i64) -> i64 {
+    a - floordiv(a, b) * b
+}
+
+fn isleap(year: i64) -> bool {
+    year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+}
+
+// The number of leap years in [y1, y2).
+fn leapdays(y1: i64, y2: i64) -> i64 {
+    let a = y1 - 1;
+    let b = y2 - 1;
+    (floordiv(b, 4) - floordiv(a, 4)) - (floordiv(b, 100) - floordiv(a, 100)) + (floordiv(b, 400) - floordiv(a, 400))
+}
+
+fn mdays(month: i64) -> i64 {
+    match month {
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn monthlen(year: i64, month: i64) -> i64 {
+    if month == 2 and isleap(year) {
+        29
+    } else {
+        mdays(month)
+    }
+}
+
+// Days since 1970-01-01 in the proleptic Gregorian calendar (Howard
+// Hinnant's days_from_civil), what datetime.date.toordinal() differs from
+// by a constant.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = floordiv(y, 400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+// 0 = Monday .. 6 = Sunday. Outside datetime's years 1..9999 Python
+// moves the year into 2000..2399, which has the same weekdays.
+fn weekday(year: i64, month: i64, day: i64) -> i64 {
+    let y = if year < 1 or year > 9999 { 2000 + pymod(year, 400) } else { year };
+    // 1970-01-01 was a Thursday.
+    pymod(days_from_civil(y, month, day) + 3, 7)
+}
+
+fn validate_month(month: i64) -> Result[(), String] {
+    if month < 1 or month > 12 {
+        return Err(f"bad month number {month}; must be 1-12");
+    }
+    Ok(())
+}
+
+// (weekday of the 1st, number of days).
+fn monthrange(year: i64, month: i64) -> Result[(i64, i64), String] {
+    validate_month(month)?;
+    Ok((weekday(year, month, 1), monthlen(year, month)))
+}
+
+fn prevmonth(year: i64, month: i64) -> (i64, i64) {
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    }
+}
+
+fn nextmonth(year: i64, month: i64) -> (i64, i64) {
+    if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    }
+}
+
+fn timegm(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> i64 {
+    let days = days_from_civil(year, month, 1) + day - 1;
+    ((days * 24 + hour) * 60 + minute) * 60 + second
+}
+
+fn day_name(d: i64) -> String {
+    let s = match d {
+        0 => "Monday",
+        1 => "Tuesday",
+        2 => "Wednesday",
+        3 => "Thursday",
+        4 => "Friday",
+        5 => "Saturday",
+        _ => "Sunday",
+    };
+    s.to_string()
+}
+
+fn day_abbr(d: i64) -> String {
+    day_name(d)[0..3].to_string()
+}
+
+fn month_name(m: i64) -> String {
+    let s = match m {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        _ => "December",
+    };
+    s.to_string()
+}
+
+fn month_abbr(m: i64) -> String {
+    month_name(m)[0..3].to_string()
+}
+
+// ------------------------------------------------------------ Calendar
+
+// Splits a list into rows of n, as `[xs[i:i+n] for i in range(0, len, n)]`.
+fn rows_of[T: Clone](xs: ref Vec[T], n: i64) -> Vec[Vec[T]] {
+    let mut out: Vec[Vec[T]] = Vec.new();
+    let mut i = 0;
+    while i < xs.len() {
+        let mut row: Vec[T] = Vec.new();
+        let mut j = i;
+        while j < i + n and j < xs.len() {
+            row.push(xs[j].clone());
+            j += 1;
+        }
+        out.push(row);
+        i += n;
+    }
+    out
+}
+
+struct Calendar {
+    first: i64,
+}
+
+impl Calendar {
+    fn new(first: i64) -> Calendar {
+        Calendar { first: first }
+    }
+
+    fn firstweekday(self) -> i64 {
+        pymod(self.first, 7)
+    }
+
+    fn iterweekdays(self) -> Vec[i64] {
+        let f = self.firstweekday();
+        let mut out: Vec[i64] = Vec.new();
+        for i in f..f + 7 {
+            out.push(i % 7);
+        }
+        out
+    }
+
+    // Day numbers for whole weeks, 0 outside the month.
+    fn itermonthdays(self, year: i64, month: i64) -> Result[Vec[i64], String] {
+        let (day1, ndays) = monthrange(year, month)?;
+        let f = self.firstweekday();
+        let mut out: Vec[i64] = Vec.new();
+        for _ in 0..pymod(day1 - f, 7) {
+            out.push(0);
+        }
+        for d in 1..ndays + 1 {
+            out.push(d);
+        }
+        for _ in 0..pymod(f - day1 - ndays, 7) {
+            out.push(0);
+        }
+        Ok(out)
+    }
+
+    fn itermonthdays2(self, year: i64, month: i64) -> Result[Vec[(i64, i64)], String] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        let mut i = self.firstweekday();
+        for d in self.itermonthdays(year, month)? {
+            out.push((d, i % 7));
+            i += 1;
+        }
+        Ok(out)
+    }
+
+    // (year, month, day) for whole weeks, running into the months around.
+    fn itermonthdays3(self, year: i64, month: i64) -> Result[Vec[(i64, i64, i64)], String] {
+        let (day1, ndays) = monthrange(year, month)?;
+        let f = self.firstweekday();
+        let before = pymod(day1 - f, 7);
+        let after = pymod(f - day1 - ndays, 7);
+        let mut out: Vec[(i64, i64, i64)] = Vec.new();
+        let (py, pm) = prevmonth(year, month);
+        let end = monthlen(py, pm) + 1;
+        for d in end - before..end {
+            out.push((py, pm, d));
+        }
+        for d in 1..ndays + 1 {
+            out.push((year, month, d));
+        }
+        let (ny, nm) = nextmonth(year, month);
+        for d in 1..after + 1 {
+            out.push((ny, nm, d));
+        }
+        Ok(out)
+    }
+
+    fn monthdays2calendar(self, year: i64, month: i64) -> Result[Vec[Vec[(i64, i64)]], String] {
+        let days = self.itermonthdays2(year, month)?;
+        Ok(rows_of(days, 7))
+    }
+
+    fn monthdayscalendar(self, year: i64, month: i64) -> Result[Vec[Vec[i64]], String] {
+        let days = self.itermonthdays(year, month)?;
+        Ok(rows_of(days, 7))
+    }
+
+    fn yeardays2calendar(self, year: i64, width: i64) -> Vec[Vec[Vec[Vec[(i64, i64)]]]] {
+        let mut months: Vec[Vec[Vec[(i64, i64)]]] = Vec.new();
+        for m in 1..13 {
+            match self.monthdays2calendar(year, m) {
+                Ok(c) => months.push(c),
+                Err(_) => {}
+            }
+        }
+        rows_of(months, width)
+    }
+}
+
+// ------------------------------------------------------------ TextCalendar
+
+// str.center: the extra space goes left when the margin and the width are
+// both odd.
+fn center(s: ref String, width: i64) -> String {
+    let n = s.chars().count();
+    if width <= n {
+        return s.clone();
+    }
+    let marg = width - n;
+    let left = marg / 2 + (marg & width & 1);
+    let mut out = String.new();
+    for _ in 0..left {
+        out.push(' ');
+    }
+    out.push_str(s);
+    for _ in 0..marg - left {
+        out.push(' ');
+    }
+    out
+}
+
+fn rstrip(s: ref String) -> String {
+    s.trim_end().to_string()
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(' ');
+    }
+    s
+}
+
+fn newlines(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push('\n');
+    }
+    s
+}
+
+// Columns centred in colwidth and joined by `spacing` spaces.
+fn formatstring(cols: ref Vec[String], colwidth: i64, spacing: i64) -> String {
+    let parts: Vec[String] = cols.iter().map(|c| center(c, colwidth)).collect();
+    parts.join(spaces(spacing))
+}
+
+struct TextCalendar {
+    cal: Calendar,
+}
+
+impl TextCalendar {
+    fn new(first: i64) -> TextCalendar {
+        TextCalendar { cal: Calendar.new(first) }
+    }
+
+    fn formatday(self, day: i64, width: i64) -> String {
+        let s = if day == 0 { String.new() } else { f"{day:>2}" };
+        center(s, width)
+    }
+
+    fn formatweek(self, week: ref Vec[(i64, i64)], width: i64) -> String {
+        let parts: Vec[String] = week.iter().map(|p| self.formatday(p.0, width)).collect();
+        parts.join(" ")
+    }
+
+    fn formatweekday(self, day: i64, width: i64) -> String {
+        let name = if width >= 9 { day_name(day) } else { day_abbr(day) };
+        let cut: String = name.chars().take(width).collect();
+        center(cut, width)
+    }
+
+    fn formatweekheader(self, width: i64) -> String {
+        let parts: Vec[String] = self.cal.iterweekdays().iter().map(|d| self.formatweekday(*d, width)).collect();
+        parts.join(" ")
+    }
+
+    fn formatmonthname(self, year: i64, month: i64, width: i64, withyear: bool) -> Result[String, String] {
+        validate_month(month)?;
+        let mut s = month_name(month);
+        if withyear {
+            s = f"{s} {year}";
+        }
+        Ok(center(s, width))
+    }
+
+    fn formatmonth(self, year: i64, month: i64, w0: i64, l0: i64) -> Result[String, String] {
+        let w = if w0 > 2 { w0 } else { 2 };
+        let l = if l0 > 1 { l0 } else { 1 };
+        let mut s = rstrip(self.formatmonthname(year, month, 7 * (w + 1) - 1, true)?);
+        s.push_str(newlines(l));
+        s.push_str(rstrip(self.formatweekheader(w)));
+        s.push_str(newlines(l));
+        for week in self.cal.monthdays2calendar(year, month)? {
+            s.push_str(rstrip(self.formatweek(week, w)));
+            s.push_str(newlines(l));
+        }
+        Ok(s)
+    }
+
+    fn formatyear(self, year: i64, w0: i64, l0: i64, c0: i64, m: i64) -> Result[String, String] {
+        let w = if w0 > 2 { w0 } else { 2 };
+        let l = if l0 > 1 { l0 } else { 1 };
+        let c = if c0 > 2 { c0 } else { 2 };
+        let colwidth = (w + 1) * 7 - 1;
+        let mut v = String.new();
+        v.push_str(rstrip(center(f"{year}", colwidth * m + c * (m - 1))));
+        v.push_str(newlines(l));
+        let header = self.formatweekheader(w);
+        let mut i = 0;
+        for row in self.cal.yeardays2calendar(year, m) {
+            let last = if m * (i + 1) + 1 < 13 { m * (i + 1) + 1 } else { 13 };
+            v.push_str(newlines(l));
+            let mut names: Vec[String] = Vec.new();
+            let mut headers: Vec[String] = Vec.new();
+            for k in m * i + 1..last {
+                names.push(self.formatmonthname(year, k, colwidth, false)?);
+                headers.push(header.clone());
+            }
+            v.push_str(rstrip(formatstring(names, colwidth, c)));
+            v.push_str(newlines(l));
+            v.push_str(rstrip(formatstring(headers, colwidth, c)));
+            v.push_str(newlines(l));
+            let mut height = 0;
+            for cal in row.iter() {
+                if cal.len() > height {
+                    height = cal.len();
+                }
+            }
+            for j in 0..height {
+                let mut weeks: Vec[String] = Vec.new();
+                for cal in row.iter() {
+                    if j >= cal.len() {
+                        weeks.push(String.new());
+                    } else {
+                        weeks.push(self.formatweek(cal[j], w));
+                    }
+                }
+                v.push_str(rstrip(formatstring(weeks, colwidth, c)));
+                v.push_str(newlines(l));
+            }
+            i += 1;
+        }
+        Ok(v)
+    }
+}
+
+// ------------------------------------------------------------ HTMLCalendar
+
+fn css_day(d: i64) -> String {
+    let s = match d {
+        0 => "mon",
+        1 => "tue",
+        2 => "wed",
+        3 => "thu",
+        4 => "fri",
+        5 => "sat",
+        _ => "sun",
+    };
+    s.to_string()
+}
+
+struct HtmlCalendar {
+    cal: Calendar,
+}
+
+impl HtmlCalendar {
+    fn new(first: i64) -> HtmlCalendar {
+        HtmlCalendar { cal: Calendar.new(first) }
+    }
+
+    fn formatday(self, day: i64, wd: i64) -> String {
+        if day == 0 {
+            "<td class=\"noday\">&nbsp;</td>".to_string()
+        } else {
+            f"<td class=\"{css_day(wd)}\">{day}</td>"
+        }
+    }
+
+    fn formatweek(self, week: ref Vec[(i64, i64)]) -> String {
+        let mut s = String.new();
+        for (d, wd) in week.iter() {
+            s.push_str(self.formatday(*d, *wd));
+        }
+        f"<tr>{s}</tr>"
+    }
+
+    fn formatweekheader(self) -> String {
+        let mut s = String.new();
+        for d in self.cal.iterweekdays() {
+            s.push_str(f"<th class=\"{css_day(d)}\">{day_abbr(d)}</th>");
+        }
+        f"<tr>{s}</tr>"
+    }
+
+    fn formatmonthname(self, year: i64, month: i64, withyear: bool) -> Result[String, String] {
+        validate_month(month)?;
+        let s = if withyear { f"{month_name(month)} {year}" } else { month_name(month) };
+        Ok(f"<tr><th colspan=\"7\" class=\"month\">{s}</th></tr>")
+    }
+
+    fn formatmonth(self, year: i64, month: i64, withyear: bool) -> Result[String, String] {
+        let mut v = String.new();
+        v.push_str("<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" class=\"month\">\n");
+        v.push_str(self.formatmonthname(year, month, withyear)?);
+        v.push_str("\n");
+        v.push_str(self.formatweekheader());
+        v.push_str("\n");
+        for week in self.cal.monthdays2calendar(year, month)? {
+            v.push_str(self.formatweek(week));
+            v.push_str("\n");
+        }
+        v.push_str("</table>\n");
+        Ok(v)
+    }
+
+    fn formatyear(self, year: i64, width0: i64) -> Result[String, String] {
+        let width = if width0 > 1 { width0 } else { 1 };
+        let mut v = String.new();
+        v.push_str("<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" class=\"year\">\n");
+        v.push_str(f"<tr><th colspan=\"{width}\" class=\"year\">{year}</th></tr>");
+        let mut i = 1;
+        while i < 13 {
+            let last = if i + width < 13 { i + width } else { 13 };
+            v.push_str("<tr>");
+            for m in i..last {
+                v.push_str("<td>");
+                v.push_str(self.formatmonth(year, m, false)?);
+                v.push_str("</td>");
+            }
+            v.push_str("</tr>");
+            i += width;
+        }
+        v.push_str("</table>");
+        Ok(v)
+    }
+}
+
+// ------------------------------------------------------------ the team agenda
+
+fn date_key(y: i64, m: i64, d: i64) -> String {
+    f"{y:04}-{m:02}-{d:02}"
+}
+
+fn load_rules() -> Result[Vec[Vec[String]], String] {
+    let text = match fs.read_to_string("data/rules.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => return Err(f"cannot read rules.tsv: {e}"),
+    };
+    let mut rules: Vec[Vec[String]] = Vec.new();
+    for line in text.lines() {
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        rules.push(line.split("\t"));
+    }
+    Ok(rules)
+}
+
+fn load_holidays() -> Result[Map[String, String], String] {
+    let text = match fs.read_to_string("data/holidays.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => return Err(f"cannot read holidays.tsv: {e}"),
+    };
+    let mut out: Map[String, String] = Map.new();
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t");
+        out.insert(f[0].clone(), f[1].clone());
+    }
+    Ok(out)
+}
+
+fn abbr_index(a: ref String) -> i64 {
+    for d in 0..7 {
+        if day_abbr(d) == *a {
+            return d;
+        }
+    }
+    -1
+}
+
+fn is_workday(y: i64, m: i64, d: i64, hol: ref Map[String, String]) -> bool {
+    weekday(y, m, d) < SATURDAY and not hol.contains_key(date_key(y, m, d))
+}
+
+// The days of month m on which a rule falls.
+fn rule_days(rule: ref Vec[String], y: i64, m: i64, hol: ref Map[String, String]) -> Vec[i64] {
+    let n = monthlen(y, m);
+    let mut out: Vec[i64] = Vec.new();
+    let kind = rule[1].clone();
+    if kind == "weekly" {
+        let want: Vec[i64] = rule[2].split(",").iter().map(|a| abbr_index(a)).collect();
+        for d in 1..n + 1 {
+            if want.contains(weekday(y, m, d)) {
+                out.push(d);
+            }
+        }
+    } else if kind == "nth" {
+        let k = match i64.parse(rule[2].clone()) {
+            Some(k) => k,
+            None => 0,
+        };
+        let wd = abbr_index(rule[3]);
+        let mut days: Vec[i64] = Vec.new();
+        for d in 1..n + 1 {
+            if weekday(y, m, d) == wd {
+                days.push(d);
+            }
+        }
+        let idx = if k > 0 { k - 1 } else { days.len() + k };
+        if idx >= 0 and idx < days.len() {
+            out.push(days[idx]);
+        }
+    } else if kind == "last-weekday" {
+        let mut d = n;
+        while not is_workday(y, m, d, hol) {
+            d -= 1;
+        }
+        out.push(d);
+    } else if kind == "day" {
+        let want = match i64.parse(rule[2].clone()) {
+            Some(k) => k,
+            None => 1,
+        };
+        out.push(if want < n { want } else { n });
+    }
+    out
+}
+
+fn agenda(y: i64, m: i64, first: i64, out: mut ref String) -> Result[(), String] {
+    out.push_str(TextCalendar.new(first).formatmonth(y, m, 0, 0)?);
+    let hol = load_holidays()?;
+    let rules = load_rules()?;
+    let n = monthlen(y, m);
+    let mut events: Vec[Vec[String]] = Vec.new();
+    for _ in 0..n + 1 {
+        events.push(Vec.new());
+    }
+    for r in rules.iter() {
+        for d in rule_days(r, y, m, hol) {
+            events[d].push(r[0].clone());
+        }
+    }
+    for d in 1..n + 1 {
+        let key = date_key(y, m, d);
+        let mut names: Vec[String] = Vec.new();
+        if let Some(h) = hol.get(key) {
+            names.push(f"holiday: {h}");
+        }
+        for e in events[d].iter() {
+            names.push(e.clone());
+        }
+        if not names.is_empty() {
+            out.push_str(f"  {key} {day_abbr(weekday(y, m, d))}  {names.join(", ")}\n");
+        }
+    }
+    Ok(())
+}
+
+fn workdays(y: i64, out: mut ref String) -> Result[(), String] {
+    let hol = load_holidays()?;
+    let mut total = 0;
+    for m in 1..13 {
+        let mut work = 0;
+        let mut off = 0;
+        for d in 1..monthlen(y, m) + 1 {
+            if weekday(y, m, d) < SATURDAY {
+                if hol.contains_key(date_key(y, m, d)) {
+                    off += 1;
+                } else {
+                    work += 1;
+                }
+            }
+        }
+        total += work;
+        let note = if off == 0 {
+            String.new()
+        } else if off == 1 {
+            " (1 holiday)".to_string()
+        } else {
+            f" ({off} holidays)"
+        };
+        out.push_str(f"  {month_abbr(m)} {work} workdays{note}\n");
+    }
+    out.push_str(f"  total {total}\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ jobs
+
+fn list_repr(v: ref Vec[i64]) -> String {
+    let parts: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn ymd_repr(t: ref (i64, i64, i64)) -> String {
+    f"({t.0}, {t.1}, {t.2})"
+}
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    let mut a: Vec[i64] = Vec.new();
+    for i in 1..f.len() {
+        match i64.parse(f[i].clone()) {
+            Some(n) => a.push(n),
+            None => return Err(f"not a number: {f[i]}"),
+        }
+    }
+    if kind == "isleap" {
+        let r = if isleap(a[0]) { "True" } else { "False" };
+        out.push_str(f"  {r}\n");
+    } else if kind == "leapdays" {
+        out.push_str(f"  {leapdays(a[0], a[1])}\n");
+    } else if kind == "weekday" {
+        let d = weekday(a[0], a[1], a[2]);
+        out.push_str(f"  {d} {day_name(d)}\n");
+    } else if kind == "monthrange" {
+        match monthrange(a[0], a[1]) {
+            Ok((d, n)) => out.push_str(f"  {d} {n}\n"),
+            Err(e) => out.push_str(f"  IllegalMonthError: {e}\n"),
+        }
+    } else if kind == "month" {
+        match TextCalendar.new(a[2]).formatmonth(a[0], a[1], a[3], a[4]) {
+            Ok(s) => out.push_str(s),
+            Err(e) => out.push_str(f"  IllegalMonthError: {e}\n"),
+        }
+    } else if kind == "monthcal" {
+        let weeks = Calendar.new(a[2]).monthdayscalendar(a[0], a[1])?;
+        let parts: Vec[String] = weeks.iter().map(|w| list_repr(w)).collect();
+        out.push_str(f"  [{parts.join(", ")}]\n");
+    } else if kind == "days3" {
+        let days = Calendar.new(a[2]).itermonthdays3(a[0], a[1])?;
+        out.push_str(f"  {days.len()} days, {ymd_repr(days[0])} .. {ymd_repr(days[days.len() - 1])}\n");
+    } else if kind == "year" {
+        out.push_str(TextCalendar.new(a[1]).formatyear(a[0], a[2], a[3], a[4], a[5])?);
+    } else if kind == "html" {
+        out.push_str(HtmlCalendar.new(a[2]).formatmonth(a[0], a[1], true)?);
+    } else if kind == "htmlyear" {
+        out.push_str(HtmlCalendar.new(MONDAY).formatyear(a[0], a[1])?);
+        out.push_str("\n");
+    } else if kind == "timegm" {
+        out.push_str(f"  {timegm(a[0], a[1], a[2], a[3], a[4], a[5])}\n");
+    } else if kind == "agenda" {
+        agenda(a[0], a[1], a[2], mut out)?;
+    } else if kind == "workdays" {
+        workdays(a[0], mut out)?;
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    for (path, contents) in data_files() {
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        if let Err(e) = run(f, mut out) {
+            out.push_str(f"error: {e}\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("2026-01-01\tNew Year's Day\n");
+    t.push_str("2026-05-25\tMemorial Day\n");
+    t.push_str("2026-07-03\tIndependence Day (observed)\n");
+    t.push_str("2026-09-07\tLabor Day\n");
+    t.push_str("2026-11-26\tThanksgiving\n");
+    t.push_str("2026-12-25\tChristmas Day\n");
+    v.push(("holidays.tsv".to_string(), t));
+    let mut t = String.new();
+    t.push_str("# name\tkind\targs (tab-separated)\n");
+    t.push_str("standup\tweekly\tMon,Wed,Fri\n");
+    t.push_str("retro\tnth\t2\tTue\n");
+    t.push_str("board\tnth\t-1\tThu\n");
+    t.push_str("payday\tlast-weekday\n");
+    t.push_str("rent\tday\t1\n");
+    t.push_str("review\tday\t31\n");
+    t.push_str("offsite\tnth\t5\tFri\n");
+    v.push(("rules.tsv".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("isleap\t2024\n");
+    s.push_str("isleap\t1900\n");
+    s.push_str("isleap\t2000\n");
+    s.push_str("isleap\t2026\n");
+    s.push_str("leapdays\t1900\t2025\n");
+    s.push_str("leapdays\t2000\t2000\n");
+    s.push_str("leapdays\t1\t10000\n");
+    s.push_str("weekday\t2026\t10\t18\n");
+    s.push_str("weekday\t1970\t1\t1\n");
+    s.push_str("weekday\t2000\t2\t29\n");
+    s.push_str("weekday\t1\t1\t1\n");
+    s.push_str("weekday\t10000\t3\t1\n");
+    s.push_str("weekday\t0\t6\t15\n");
+    s.push_str("monthrange\t2024\t2\n");
+    s.push_str("monthrange\t2026\t2\n");
+    s.push_str("monthrange\t1900\t2\n");
+    s.push_str("monthrange\t2026\t12\n");
+    s.push_str("monthrange\t2026\t13\n");
+    s.push_str("monthrange\t2026\t0\n");
+    s.push_str("month\t2026\t2\t0\t0\t0\n");
+    s.push_str("month\t2026\t2\t6\t0\t0\n");
+    s.push_str("month\t2026\t10\t0\t3\t2\n");
+    s.push_str("month\t2015\t2\t6\t2\t1\n");
+    s.push_str("month\t2026\t3\t2\t9\t1\n");
+    s.push_str("month\t1752\t9\t0\t2\t1\n");
+    s.push_str("month\t2026\t11\t13\t4\t1\n");
+    s.push_str("month\t2026\t13\t0\t0\t0\n");
+    s.push_str("monthcal\t2026\t10\t0\n");
+    s.push_str("monthcal\t2026\t2\t6\n");
+    s.push_str("monthcal\t2021\t2\t0\n");
+    s.push_str("days3\t2026\t1\t0\n");
+    s.push_str("days3\t2026\t3\t6\n");
+    s.push_str("days3\t2026\t12\t3\n");
+    s.push_str("year\t2024\t6\t2\t1\t6\t3\n");
+    s.push_str("year\t2026\t0\t2\t1\t6\t4\n");
+    s.push_str("year\t2025\t0\t3\t1\t2\t2\n");
+    s.push_str("html\t2026\t10\t0\n");
+    s.push_str("html\t2026\t2\t6\n");
+    s.push_str("htmlyear\t2026\t4\n");
+    s.push_str("timegm\t2026\t10\t18\t9\t30\t0\n");
+    s.push_str("timegm\t1970\t1\t1\t0\t0\t0\n");
+    s.push_str("timegm\t1969\t12\t31\t23\t59\t59\n");
+    s.push_str("timegm\t2038\t1\t19\t3\t14\t8\n");
+    s.push_str("agenda\t2026\t1\t0\n");
+    s.push_str("agenda\t2026\t5\t6\n");
+    s.push_str("agenda\t2026\t7\t0\n");
+    s.push_str("agenda\t2026\t2\t0\n");
+    s.push_str("workdays\t2026\n");
+    s
+}
