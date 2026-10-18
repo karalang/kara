@@ -7467,3 +7467,18 @@ fn an_if_of_borrowed_fields_lent_to_a_ref_param_is_refused() {
             .replace("{ two.b }", "{ ref two.b }"),
     );
 }
+
+/// B-2026-10-15-101: the base of a struct update must have the literal's
+/// struct type, a binding base as much as a call (B-2026-10-15-47).
+#[test]
+fn a_struct_update_binding_base_of_another_type_is_refused() {
+    rejected(
+        "spread-binding-of-another-type",
+        "struct D { a: i64, c: bool }\nstruct E { a: i64, c: bool }\nfn other() -> E { E { a: 1, c: true } }\nfn main() {\n    let o = other();\n    let d = D { a: 5, ..o };\n    println(f\"{d.a} {d.c}\");\n}\n",
+        "the base of a struct update must be a 'D', found 'E'",
+    );
+    accepted(
+        "spread-binding-of-the-same-type",
+        "struct D { a: i64, c: bool }\nfn show(base: ref D) -> D { D { a: 7, ..base } }\nfn main() {\n    let o = D { a: 1, c: true };\n    let d = D { a: 5, ..o };\n    let e = show(d);\n    println(f\"{d.a} {d.c} {e.a}\");\n}\n",
+    );
+}

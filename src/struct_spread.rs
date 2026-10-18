@@ -52,7 +52,14 @@ use std::collections::HashMap;
 /// type for a non-generic struct (`None` for a generic one).
 type StructFields = HashMap<String, Vec<(String, Option<TypeExpr>)>>;
 
+thread_local! {
+    /// The bases [`rewrite_struct_literal`] expands, drained into
+    /// `Program::struct_spread_bases` at the end of the pass.
+    static BASES: std::cell::RefCell<Vec<(Span, Expr)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub fn expand_struct_spreads(program: &mut Program) {
+    BASES.with(|b| b.borrow_mut().clear());
     let mut fields: StructFields = HashMap::new();
     for item in &program.items {
         if let Item::StructDef(s) = item {
@@ -95,6 +102,11 @@ pub fn expand_struct_spreads(program: &mut Program) {
         }
     }
     program.items = items;
+    for (span, base) in BASES.with(|b| std::mem::take(&mut *b.borrow_mut())) {
+        program
+            .struct_spread_bases
+            .insert(crate::resolver::SpanKey::from_span(&span), base);
+    }
 }
 
 /// True for a base expression cheap and safe to evaluate once per copied
@@ -275,6 +287,9 @@ fn rewrite_struct_literal(e: &mut Expr, structs: &StructFields) {
         return;
     }
     let base = base.clone();
+    if !generic {
+        BASES.with(|b| b.borrow_mut().push((e.span, (*base).clone())));
+    }
     for (i, fname) in missing.into_iter().enumerate() {
         // DISTINCT synthetic spans, one per copied field — the crate's
         // `offset + i`, `length: 0` convention (`collect_synth_span`).

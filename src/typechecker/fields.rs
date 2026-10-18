@@ -859,6 +859,43 @@ impl<'a> super::TypeChecker<'a> {
         Some(out)
     }
 
+    /// design.md § Struct literals: the base of a struct update "must have
+    /// the same struct type". `struct_spread` has already turned
+    /// `D { a: 5, ..o }` into `D { a: 5, c: o.c }`, which any `o` with a `c`
+    /// field satisfies, so the base it recorded is checked here
+    /// (B-2026-10-15-101).
+    fn check_struct_update_base(&mut self, struct_name: &str, span: &Span) {
+        let Some(base) = self
+            .program
+            .struct_spread_bases
+            .get(&crate::typechecker::SpanKey::from_span(span))
+            .cloned()
+        else {
+            return;
+        };
+        let ty = self.infer_expr(&base);
+        let ty = match resolve_type_var_top(&ty, &self.env.substitutions) {
+            Type::Ref(inner) | Type::MutRef(inner) => *inner,
+            t => t,
+        };
+        let name = match &ty {
+            Type::Named { name, .. } => name.as_str(),
+            _ => return,
+        };
+        if name != struct_name {
+            self.type_error(
+                format!(
+                    "the base of a struct update must be a '{struct_name}', found '{}' \
+                     (design.md § Struct literals): write the remaining fields out, \
+                     or convert the base first",
+                    super::types::type_display(&ty)
+                ),
+                base.span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+    }
+
     pub(super) fn infer_struct_literal(
         &mut self,
         path: &[String],
@@ -938,6 +975,8 @@ impl<'a> super::TypeChecker<'a> {
                 }
             },
         };
+
+        self.check_struct_update_base(&struct_name, span);
 
         // `#[deprecated]` slice 4 — emit the deprecation warning when
         // the struct's defining decl carries a `Deprecation` payload.
