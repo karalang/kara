@@ -1,0 +1,168 @@
+// LeetCode #709: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random strings.
+
+// ---- ★ arm -----------------------------------------------------------
+
+fn lower_star(s: String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push((c as u32 + 32) as u8 as char);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ---- bytes arm -------------------------------------------------------
+
+fn lower_bytes(s: String) -> String {
+    let mut bytes = s.bytes().to_vec();
+    for i in 0..bytes.len() {
+        if bytes[i] >= b'A' and bytes[i] <= b'Z' {
+            bytes[i] = bytes[i] | 0x20;
+        }
+    }
+    String.from_utf8(bytes).expect("ASCII bytes stay valid UTF-8")
+}
+
+// ---- table arm -------------------------------------------------------
+
+fn lower_table() -> Vec[u8] {
+    let mut table: Vec[u8] = Vec.new();
+    for b in 0..128 {
+        table.push(b as u8);
+    }
+    for k in 0..26 {
+        table[65 + k] = (97 + k) as u8;
+    }
+    table
+}
+
+fn lower_table_arm(s: String) -> String {
+    let table = lower_table();
+    let mut out = String.new();
+    for b in s.bytes() {
+        out.push(table[b as i64] as char);
+    }
+    out
+}
+
+// ---- stdlib arm ------------------------------------------------------
+
+fn lower_stdlib(s: String) -> String {
+    s.to_lowercase()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn lower(which: i64, s: String) -> String {
+    if which == 0 {
+        lower_star(s)
+    } else if which == 1 {
+        lower_bytes(s)
+    } else if which == 2 {
+        lower_table_arm(s)
+    } else {
+        lower_stdlib(s)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: a character found in the uppercase alphabet becomes
+// the character at the same place in the lowercase one.
+fn definition(s: String) -> String {
+    let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let lower: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut out = String.new();
+    for c in s.chars() {
+        let mut at = -1;
+        let mut i = 0;
+        for u in upper.chars() {
+            if u == c {
+                at = i;
+            }
+            i += 1;
+        }
+        out.push(if at >= 0 { lower[at] } else { c });
+    }
+    out
+}
+
+fn random_string(n: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((32 + next_random(mut seed) % 95) as u8 as char);
+    }
+    s
+}
+
+fn main() {
+    let mut seed = 7090;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut letters = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // Two random printable strings of 0 to 100 characters.
+        let a = random_string(next_random(mut seed) % 101, mut seed);
+        let b = random_string(next_random(mut seed) % 101, mut seed);
+        let want = definition(a.clone());
+        for c in a.chars() {
+            if c >= 'A' and c <= 'Z' {
+                letters += 1;
+            }
+        }
+        for which in 0..arms {
+            let got = lower(which, a.clone());
+            // P1: the definition's string.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: lowering twice is lowering once.
+            checks += 1;
+            if lower(which, got.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: the same length, and every character that is not an
+            // uppercase letter where it was.
+            checks += 1;
+            let before: Vec[char] = a.chars().collect();
+            let after: Vec[char] = got.chars().collect();
+            let mut off = before.len() != after.len();
+            if not off {
+                for i in 0..before.len() {
+                    let c = before[i];
+                    if not (c >= 'A' and c <= 'Z') and after[i] != c {
+                        off = true;
+                    }
+                }
+            }
+            if off {
+                fails[2] += 1;
+            }
+            // P4: lowering two strings joined is joining them lowered.
+            checks += 1;
+            if lower(which, a.clone() + b.clone()) != got + lower(which, b.clone()) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} strings ({letters} uppercase letters), {arms} arms, {checks} checks, {total} failures");
+}

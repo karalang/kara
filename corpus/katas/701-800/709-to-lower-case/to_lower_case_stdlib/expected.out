@@ -1,0 +1,8 @@
+"Hello" -> "hello"
+"here" -> "here"
+"LOVELY" -> "lovely"
+"Q" -> "q"
+"@AZ[`az{" -> "@az[`az{"
+" !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~" -> " !"#$%&'()*+,-./0123456789:;<=>?@abcdefghijklmnopqrstuvwxyz[\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+"h4gi6'@-p_:25Flsl(R &>#}fxF)JKx^4-9fNekruSg$)XKN2?FvOM(ZX0KH!i51|*GH7%/M1$DV~f00A!Xju4NI`<!?9wZ)Xb*F" -> "h4gi6'@-p_:25flsl(r &>#}fxf)jkx^4-9fnekrusg$)xkn2?fvom(zx0kh!i51|*gh7%/m1$dv~f00a!xju4ni`<!?9wz)xb*f"
+1000 random strings: 982 changed, checksum 297609765
