@@ -1,0 +1,2655 @@
+// mini_plistlib: Python 3.13's plistlib (Lib/plistlib.py) ported to Kāra.
+//
+// It reads and writes property lists in both of Apple's formats: the XML
+// one (with a small XML reader in place of expat) and the binary
+// `bplist00` one (CFBinaryPList's layout, as plistlib reads and writes
+// it). The run writes real-world property lists into data/ (an app's
+// Info.plist, a launchd job, an editor's binary preferences, an
+// NSKeyedArchiver file, edge cases and broken files) and then runs
+// data/jobs.tsv: `load` prints the value's repr, `xml` and `bin` print
+// what `dumps` makes of it, `roundtrip` compares the value with itself
+// read back from each format, and `get` walks a key path.
+// expected.out is the output of oracle.py, the same jobs on the real
+// plistlib.
+
+#[derive(Clone)]
+struct Dt {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+}
+
+// A plist value. Containers live in a Heap and are named by their index,
+// so two references to one container stay one object, as they are in
+// Python; a UID carries an identity for the same reason.
+#[derive(Clone)]
+enum Val {
+    Str(String),
+    Int(i128),
+    Real(f64),
+    Bool(bool),
+    Data(Vec[u8]),
+    Date(Dt),
+    Uid(i128, i64),
+    NoneV,
+    Arr(i64),
+    Dict(i64),
+}
+
+struct DictObj {
+    keys: Vec[Val],
+    vals: Vec[Val],
+}
+
+struct Heap {
+    arrays: Vec[Vec[Val]],
+    dicts: Vec[DictObj],
+    uids: i64,
+}
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn invalid() -> Exc {
+    exc("InvalidFileException", "Invalid file".to_string())
+}
+
+impl Heap {
+    fn new() -> Heap {
+        Heap { arrays: Vec.new(), dicts: Vec.new(), uids: 0 }
+    }
+
+    fn new_array(mut ref self) -> i64 {
+        self.arrays.push(Vec.new());
+        self.arrays.len() - 1
+    }
+
+    fn new_dict(mut ref self) -> i64 {
+        self.dicts.push(DictObj { keys: Vec.new(), vals: Vec.new() });
+        self.dicts.len() - 1
+    }
+
+    fn new_uid(mut ref self, n: i128) -> Val {
+        self.uids += 1;
+        Val.Uid(n, self.uids)
+    }
+
+    // d[k] = v: an equal key keeps its place and takes the new value.
+    fn dict_set(mut ref self, d: i64, k: own Val, v: own Val) {
+        let n = self.dicts[d].keys.len();
+        for i in 0..n {
+            if key_eq(self.dicts[d].keys[i], k) {
+                self.dicts[d].vals[i] = v;
+                return;
+            }
+        }
+        self.dicts[d].keys.push(k);
+        self.dicts[d].vals.push(v);
+    }
+
+    fn push(mut ref self, a: i64, v: own Val) {
+        self.arrays[a].push(v);
+    }
+}
+
+fn is_container(v: ref Val) -> bool {
+    match v {
+        Val.Arr(_) => true,
+        Val.Dict(_) => true,
+        _ => false,
+    }
+}
+
+// A number's exact value as an integer, when it has one: 1 == 1.0 == True.
+fn as_int(v: ref Val) -> Option[i128] {
+    match v {
+        Val.Int(n) => Some(*n),
+        Val.Bool(b) => if *b { Some(1) } else { Some(0) },
+        Val.Real(x) => {
+            let x = *x;
+            if x == x.floor() and x > -1.0e38 and x < 1.0e38 {
+                Some(x as i128)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_number(v: ref Val) -> bool {
+    match v {
+        Val.Int(_) => true,
+        Val.Bool(_) => true,
+        Val.Real(_) => true,
+        _ => false,
+    }
+}
+
+fn num_eq(a: ref Val, b: ref Val) -> bool {
+    match (a, b) {
+        (Val.Real(x), Val.Real(y)) => *x == *y,
+        _ => {
+            match (as_int(a), as_int(b)) {
+                (Some(x), Some(y)) => x == y,
+                _ => false,
+            }
+        }
+    }
+}
+
+fn dt_eq(a: ref Dt, b: ref Dt) -> bool {
+    a.y == b.y and a.mo == b.mo and a.d == b.d and a.h == b.h and a.mi == b.mi and a.s == b.s and a.us == b.us
+}
+
+// Equality of two hashable values, as a dict compares its keys.
+fn key_eq(a: ref Val, b: ref Val) -> bool {
+    if is_number(a) and is_number(b) {
+        return num_eq(a, b);
+    }
+    match (a, b) {
+        (Val.Str(x), Val.Str(y)) => *x == *y,
+        (Val.Data(x), Val.Data(y)) => *x == *y,
+        (Val.Date(x), Val.Date(y)) => dt_eq(x, y),
+        (Val.Uid(x, _), Val.Uid(y, _)) => *x == *y,
+        (Val.NoneV, Val.NoneV) => true,
+        _ => false,
+    }
+}
+
+// Python's == over two values that may live in different heaps.
+fn deep_eq(ha: ref Heap, a: ref Val, hb: ref Heap, b: ref Val) -> bool {
+    match (a, b) {
+        (Val.Arr(x), Val.Arr(y)) => {
+            let xs = ha.arrays[*x].clone();
+            let ys = hb.arrays[*y].clone();
+            if xs.len() != ys.len() {
+                return false;
+            }
+            for i in 0..xs.len() {
+                if not deep_eq(ha, xs[i], hb, ys[i]) {
+                    return false;
+                }
+            }
+            true
+        }
+        (Val.Dict(x), Val.Dict(y)) => {
+            let dx = ha.dicts[*x].keys.len();
+            let dy = hb.dicts[*y].keys.len();
+            if dx != dy {
+                return false;
+            }
+            for i in 0..dx {
+                let k = ha.dicts[*x].keys[i].clone();
+                let mut found = false;
+                for j in 0..dy {
+                    if key_eq(k, hb.dicts[*y].keys[j]) {
+                        found = true;
+                        let va = ha.dicts[*x].vals[i].clone();
+                        let vb = hb.dicts[*y].vals[j].clone();
+                        if not deep_eq(ha, va, hb, vb) {
+                            return false;
+                        }
+                    }
+                }
+                if not found {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => {
+            if is_container(a) or is_container(b) {
+                return false;
+            }
+            key_eq(a, b)
+        }
+    }
+}
+
+// ---------------------------------------------------------------- repr
+
+fn hex_digit(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + n - 10 }
+}
+
+fn push_hex2(out: mut ref Vec[u8], c: u8) {
+    out.push(b'\\');
+    out.push(b'x');
+    out.push(hex_digit(c / 16));
+    out.push(hex_digit(c % 16));
+}
+
+// The repr of a bytes object: Python picks single quotes unless the bytes
+// hold a single quote and no double quote.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(quote);
+    for c in b.iter() {
+        let c = *c;
+        if c == quote or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c < 32 or c >= 127 {
+            push_hex2(mut out, c);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap()
+}
+
+// The repr of a str. Printable characters stay as they are; the C0 and C1
+// controls, DEL and the no-break space are escaped.
+fn str_repr(s: ref String) -> String {
+    let b = s.bytes();
+    let quote = if b.contains(b'\'') and not b.contains(b'"') { b'"' } else { b'\'' };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(quote);
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == quote or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c < 32 or c == 127 {
+            push_hex2(mut out, c);
+        } else if c == 0xC2 and i + 1 < b.len() and b[i + 1] <= 0xA0 {
+            push_hex2(mut out, b[i + 1]);
+            i += 1;
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap()
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn date_repr(d: ref Dt) -> String {
+    let mut s = f"datetime.datetime({d.y}, {d.mo}, {d.d}, {d.h}, {d.mi}";
+    if d.s != 0 or d.us != 0 {
+        s.push_str(f", {d.s}");
+    }
+    if d.us != 0 {
+        s.push_str(f", {d.us}");
+    }
+    s.push_str(")");
+    s
+}
+
+fn repr(h: ref Heap, v: ref Val) -> String {
+    match v {
+        Val.Str(s) => str_repr(s),
+        Val.Int(n) => f"{n}",
+        Val.Real(x) => float_repr(*x),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Data(b) => bytes_repr(b),
+        Val.Date(d) => date_repr(d),
+        Val.Uid(n, _) => f"UID({n})",
+        Val.NoneV => "None".to_string(),
+        Val.Arr(a) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in h.arrays[*a].iter() {
+                parts.push(repr(h, x));
+            }
+            f"[{parts.join(", ")}]"
+        }
+        Val.Dict(d) => {
+            let mut parts: Vec[String] = Vec.new();
+            let n = h.dicts[*d].keys.len();
+            for i in 0..n {
+                parts.push(f"{repr(h, h.dicts[*d].keys[i])}: {repr(h, h.dicts[*d].vals[i])}");
+            }
+            "{" + parts.join(", ") + "}"
+        }
+    }
+}
+
+fn type_name(v: ref Val) -> String {
+    let n = match v {
+        Val.Str(_) => "str",
+        Val.Int(_) => "int",
+        Val.Real(_) => "float",
+        Val.Bool(_) => "bool",
+        Val.Data(_) => "bytes",
+        Val.Date(_) => "datetime",
+        Val.Uid(_, _) => "UID",
+        Val.NoneV => "NoneType",
+        Val.Arr(_) => "list",
+        Val.Dict(_) => "dict",
+    };
+    n.to_string()
+}
+
+// ------------------------------------------------------- number parsing
+
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 0x0B or c == 0x0C
+}
+
+fn strip(s: ref String) -> String {
+    let b = s.bytes();
+    let mut a = 0;
+    let mut z = b.len();
+    while a < z and is_space(b[a]) {
+        a += 1;
+    }
+    while z > a and is_space(b[z - 1]) {
+        z -= 1;
+    }
+    String.from_utf8(b[a..z].to_vec()).unwrap()
+}
+
+fn digit_val(c: u8, base: i64) -> i64 {
+    let v = if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 10
+    } else if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64 + 10
+    } else {
+        99
+    };
+    if v < base { v } else { -1 }
+}
+
+// Digits of `base` with single underscores between them, as int() takes
+// them. A leading underscore is allowed only right after a base prefix.
+fn parse_digits(b: ref Slice[u8], start: i64, base: i64, lead_ok: bool) -> Option[i128] {
+    let mut i = start;
+    let mut n: i128 = 0;
+    let mut any = false;
+    let mut prev_us = lead_ok;
+    if i < b.len() and b[i] == b'_' {
+        if not lead_ok {
+            return None;
+        }
+        i += 1;
+        prev_us = true;
+    }
+    while i < b.len() {
+        let c = b[i];
+        if c == b'_' {
+            if prev_us or not any {
+                return None;
+            }
+            prev_us = true;
+        } else {
+            let d = digit_val(c, base);
+            if d < 0 {
+                return None;
+            }
+            n = n * (base as i128) + (d as i128);
+            any = true;
+            prev_us = false;
+        }
+        i += 1;
+    }
+    if not any or prev_us {
+        return None;
+    }
+    Some(n)
+}
+
+// end_integer: int(raw, 16) when raw starts with 0x or 0X, else int(raw).
+fn parse_int(raw: ref String) -> Result[i128, Exc] {
+    let hex = raw.starts_with("0x") or raw.starts_with("0X");
+    let base = if hex { 16 } else { 10 };
+    let fail = exc("ValueError", f"invalid literal for int() with base {base}: {str_repr(raw)}");
+    let t = strip(raw);
+    let b = t.bytes();
+    if hex {
+        return match parse_digits(b, 2, 16, true) {
+            Some(n) => Ok(n),
+            None => Err(fail),
+        };
+    }
+    let mut start = 0;
+    let mut neg = false;
+    if b.len() > 0 and (b[0] == b'+' or b[0] == b'-') {
+        neg = b[0] == b'-';
+        start = 1;
+    }
+    match parse_digits(b, start, 10, false) {
+        Some(n) => Ok(if neg { -n } else { n }),
+        None => Err(fail),
+    }
+}
+
+// float(raw): Python's grammar, then the library parse on the digits.
+fn parse_real(raw: ref String) -> Result[f64, Exc] {
+    let fail = exc("ValueError", f"could not convert string to float: {str_repr(raw)}");
+    let t = strip(raw);
+    let b = t.bytes();
+    let mut i = 0;
+    let mut sign = "";
+    if b.len() > 0 and (b[0] == b'+' or b[0] == b'-') {
+        if b[0] == b'-' {
+            sign = "-";
+        }
+        i = 1;
+    }
+    let word = t[i..].to_lowercase();
+    if word == "inf" or word == "infinity" {
+        return Ok(if sign == "-" { -1.0 / 0.0 } else { 1.0 / 0.0 });
+    }
+    if word == "nan" {
+        return Ok(0.0 / 0.0);
+    }
+    // mantissa digits, an optional point and digits, an optional exponent
+    let mut clean: Vec[u8] = sign.bytes().to_vec();
+    let mut int_digits = 0;
+    let mut frac_digits = 0;
+    let mut prev_digit = false;
+    while i < b.len() and (b[i] >= b'0' and b[i] <= b'9' or b[i] == b'_') {
+        if b[i] == b'_' {
+            if not prev_digit or i + 1 >= b.len() or b[i + 1] < b'0' or b[i + 1] > b'9' {
+                return Err(fail);
+            }
+            prev_digit = false;
+        } else {
+            clean.push(b[i]);
+            int_digits += 1;
+            prev_digit = true;
+        }
+        i += 1;
+    }
+    if int_digits == 0 {
+        clean.push(b'0');
+    }
+    if i < b.len() and b[i] == b'.' {
+        clean.push(b'.');
+        i += 1;
+        prev_digit = false;
+        while i < b.len() and (b[i] >= b'0' and b[i] <= b'9' or b[i] == b'_') {
+            if b[i] == b'_' {
+                if not prev_digit or i + 1 >= b.len() or b[i + 1] < b'0' or b[i + 1] > b'9' {
+                    return Err(fail);
+                }
+                prev_digit = false;
+            } else {
+                clean.push(b[i]);
+                frac_digits += 1;
+                prev_digit = true;
+            }
+            i += 1;
+        }
+        if frac_digits == 0 {
+            clean.push(b'0');
+        }
+    }
+    if int_digits == 0 and frac_digits == 0 {
+        return Err(fail);
+    }
+    if i < b.len() and (b[i] == b'e' or b[i] == b'E') {
+        clean.push(b'e');
+        i += 1;
+        if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+            clean.push(b[i]);
+            i += 1;
+        }
+        let mut exp_digits = 0;
+        while i < b.len() and b[i] >= b'0' and b[i] <= b'9' {
+            clean.push(b[i]);
+            exp_digits += 1;
+            i += 1;
+        }
+        if exp_digits == 0 {
+            return Err(fail);
+        }
+    }
+    if i != b.len() {
+        return Err(fail);
+    }
+    let text = String.from_utf8(clean).unwrap();
+    match f64.parse(text) {
+        Ok(x) => Ok(x),
+        Err(_) => Err(fail),
+    }
+}
+
+fn two_digits(b: ref Slice[u8], i: i64) -> Option[i64] {
+    if i + 1 < b.len() and b[i] >= b'0' and b[i] <= b'9' and b[i + 1] >= b'0' and b[i + 1] <= b'9' {
+        Some(((b[i] - b'0') as i64) * 10 + ((b[i + 1] - b'0') as i64))
+    } else {
+        None
+    }
+}
+
+// _dateParser: YYYY[-MM[-DD[THH[:MM[:SS]]]]]Z, matched at the start.
+fn parse_date(raw: ref String) -> Result[Dt, Exc] {
+    let b = raw.bytes();
+    let bad = exc("ValueError", f"bad date {str_repr(raw)}");
+    let (y1, y2) = match (two_digits(b, 0), two_digits(b, 2)) {
+        (Some(p), Some(q)) => (p, q),
+        _ => return Err(bad),
+    };
+    let mut parts: Vec[i64] = Vec.new();
+    parts.push(y1 * 100 + y2);
+    let mut i = 4;
+    let seps: Vec[u8] = vec![b'-', b'-', b'T', b':', b':'];
+    let mut k = 0;
+    while k < 5 {
+        if i < b.len() and b[i] == seps[k] {
+            match two_digits(b, i + 1) {
+                Some(v) => {
+                    parts.push(v);
+                    i += 3;
+                }
+                None => break,
+            }
+        } else {
+            break;
+        }
+        k += 1;
+    }
+    if i >= b.len() or b[i] != b'Z' {
+        return Err(bad);
+    }
+    while parts.len() < 6 {
+        parts.push(0);
+    }
+    Ok(Dt { y: parts[0], mo: parts[1], d: parts[2], h: parts[3], mi: parts[4], s: parts[5], us: 0 })
+}
+
+// ------------------------------------------------------------- base64
+
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// binascii.a2b_base64, not strict: characters outside the alphabet are
+// skipped, and a run of `=` is counted only to complete the last quad.
+fn b64_decode(s: ref String) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad = 0;
+    let mut left: i64 = 0;
+    let mut pads = 0;
+    for c in s.bytes().iter() {
+        let c = *c;
+        if c == b'=' {
+            pads += 1;
+            continue;
+        }
+        let v = b64_value(c);
+        if v < 0 {
+            continue;
+        }
+        pads = 0;
+        if quad == 0 {
+            left = v;
+            quad = 1;
+        } else if quad == 1 {
+            out.push(((left << 2) | (v >> 4)) as u8);
+            left = v & 0x0F;
+            quad = 2;
+        } else if quad == 2 {
+            out.push((((left << 4) | (v >> 2)) & 0xFF) as u8);
+            left = v & 0x03;
+            quad = 3;
+        } else {
+            out.push((((left << 6) | v) & 0xFF) as u8);
+            left = 0;
+            quad = 0;
+        }
+    }
+    if quad == 1 {
+        let n = out.len() / 3 * 4 + 1;
+        return Err(exc("Error", f"Invalid base64-encoded string: number of data characters ({n}) cannot be 1 more than a multiple of 4"));
+    }
+    if quad != 0 and quad + pads < 4 {
+        return Err(exc("Error", "Incorrect padding".to_string()));
+    }
+    Ok(out)
+}
+
+fn b64_encode(b: ref Vec[u8], start: i64, end: i64) -> String {
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        let a = b[i] as i64;
+        let c1 = if i + 1 < end { b[i + 1] as i64 } else { 0 };
+        let c2 = if i + 2 < end { b[i + 2] as i64 } else { 0 };
+        out.push(alphabet[a >> 2]);
+        out.push(alphabet[((a & 3) << 4) | (c1 >> 4)]);
+        if i + 1 < end {
+            out.push(alphabet[((c1 & 15) << 2) | (c2 >> 6)]);
+        } else {
+            out.push(b'=');
+        }
+        if i + 2 < end {
+            out.push(alphabet[c2 & 63]);
+        } else {
+            out.push(b'=');
+        }
+        i += 3;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// --------------------------------------------------------- XML reader
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+// _PlistParser over a small XML reader. Line ends are normalized first,
+// as expat does, so a line number is one more than the newlines before a
+// tag.
+struct XmlParser {
+    text: Vec[u8],
+    pos: i64,
+    line: i64,
+    tag_line: i64,
+    stack: Vec[Val],
+    key: Option[String],
+    root: Option[Val],
+    data: Vec[u8],
+}
+
+fn normalize_newlines(b: ref Slice[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        i = 3;
+    }
+    while i < b.len() {
+        if b[i] == b'\r' {
+            out.push(b'\n');
+            if i + 1 < b.len() and b[i + 1] == b'\n' {
+                i += 1;
+            }
+        } else {
+            out.push(b[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+impl XmlParser {
+    fn starts(ref self, s: Str) -> bool {
+        let p = s.bytes();
+        if self.pos + p.len() > self.text.len() {
+            return false;
+        }
+        for k in 0..p.len() {
+            if self.text[self.pos + k] != p[k] {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn advance(mut ref self) {
+        if self.text[self.pos] == b'\n' {
+            self.line += 1;
+        }
+        self.pos += 1;
+    }
+
+    // Moves past the next `end`, or to the end of the text.
+    fn skip_past(mut ref self, end: Str) {
+        while self.pos < self.text.len() and not self.starts(end) {
+            self.advance();
+        }
+        let n = end.len();
+        let mut k = 0;
+        while k < n and self.pos < self.text.len() {
+            self.advance();
+            k += 1;
+        }
+    }
+
+    fn get_data(mut ref self) -> String {
+        let d = String.from_utf8(self.data.clone()).unwrap();
+        self.data = Vec.new();
+        d
+    }
+
+    fn add_object(mut ref self, heap: mut ref Heap, value: own Val) -> Result[(), Exc] {
+        let line = self.tag_line;
+        match self.key.clone() {
+            Some(k) => {
+                let top = self.stack[self.stack.len() - 1].clone();
+                match top {
+                    Val.Dict(d) => heap.dict_set(d, Val.Str(k), value),
+                    _ => return Err(exc("ValueError", f"unexpected element at line {line}")),
+                }
+                self.key = None;
+            }
+            None => {
+                if self.stack.is_empty() {
+                    self.root = Some(value);
+                } else {
+                    let top = self.stack[self.stack.len() - 1].clone();
+                    match top {
+                        Val.Arr(a) => heap.push(a, value),
+                        _ => return Err(exc("ValueError", f"unexpected element at line {line}")),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn top_is_dict(ref self) -> bool {
+        match self.stack[self.stack.len() - 1] {
+            Val.Dict(_) => true,
+            _ => false,
+        }
+    }
+
+    fn begin(mut ref self, heap: mut ref Heap, name: ref String) -> Result[(), Exc] {
+        self.data = Vec.new();
+        if name == "dict" {
+            let d = Val.Dict(heap.new_dict());
+            self.add_object(mut heap, d.clone())?;
+            self.stack.push(d);
+        } else if name == "array" {
+            let a = Val.Arr(heap.new_array());
+            self.add_object(mut heap, a.clone())?;
+            self.stack.push(a);
+        }
+        Ok(())
+    }
+
+    fn end(mut ref self, heap: mut ref Heap, name: ref String) -> Result[(), Exc] {
+        let line = self.tag_line;
+        if name == "dict" {
+            let k = self.key.clone().unwrap_or("".to_string());
+            if k.len() > 0 {
+                return Err(exc("ValueError", f"missing value for key {str_repr(k)} at line {line}"));
+            }
+            self.stack.pop();
+        } else if name == "key" {
+            let has_key = match self.key.clone() {
+                Some(k) => k.len() > 0,
+                None => false,
+            };
+            if has_key or not self.top_is_dict() {
+                return Err(exc("ValueError", f"unexpected key at line {line}"));
+            }
+            self.key = Some(self.get_data());
+        } else if name == "array" {
+            self.stack.pop();
+        } else if name == "true" {
+            self.add_object(mut heap, Val.Bool(true))?;
+        } else if name == "false" {
+            self.add_object(mut heap, Val.Bool(false))?;
+        } else if name == "integer" {
+            let raw = self.get_data();
+            let n = parse_int(raw)?;
+            self.add_object(mut heap, Val.Int(n))?;
+        } else if name == "real" {
+            let raw = self.get_data();
+            let x = parse_real(raw)?;
+            self.add_object(mut heap, Val.Real(x))?;
+        } else if name == "string" {
+            let s = self.get_data();
+            self.add_object(mut heap, Val.Str(s))?;
+        } else if name == "data" {
+            let raw = self.get_data();
+            let b = b64_decode(raw)?;
+            self.add_object(mut heap, Val.Data(b))?;
+        } else if name == "date" {
+            let raw = self.get_data();
+            let d = parse_date(raw)?;
+            self.add_object(mut heap, Val.Date(d))?;
+        }
+        Ok(())
+    }
+
+    // An entity or character reference, after its `&`.
+    fn reference(mut ref self) {
+        let start = self.pos;
+        while self.pos < self.text.len() and self.text[self.pos] != b';' {
+            self.pos += 1;
+        }
+        let name = String.from_utf8(self.text[start..self.pos].to_vec()).unwrap();
+        self.pos += 1;
+        if name == "lt" {
+            self.data.push(b'<');
+        } else if name == "gt" {
+            self.data.push(b'>');
+        } else if name == "amp" {
+            self.data.push(b'&');
+        } else if name == "quot" {
+            self.data.push(b'"');
+        } else if name == "apos" {
+            self.data.push(b'\'');
+        } else if name.starts_with("#x") {
+            let digits: Vec[u8] = name.bytes()[2..].to_vec();
+            let cp = parse_digits(digits, 0, 16, false).unwrap_or(0);
+            push_utf8(mut self.data, cp as i64);
+        } else if name.starts_with("#") {
+            let digits: Vec[u8] = name.bytes()[1..].to_vec();
+            let cp = parse_digits(digits, 0, 10, false).unwrap_or(0);
+            push_utf8(mut self.data, cp as i64);
+        }
+    }
+
+    fn doctype(mut ref self) -> Result[(), Exc] {
+        while self.pos < self.text.len() and self.text[self.pos] != b'>' and self.text[self.pos] != b'[' {
+            self.advance();
+        }
+        if self.pos < self.text.len() and self.text[self.pos] == b'[' {
+            while self.pos < self.text.len() and self.text[self.pos] != b']' {
+                if self.starts("<!ENTITY") {
+                    return Err(exc("InvalidFileException", "XML entity declarations are not supported in plist files".to_string()));
+                }
+                self.advance();
+            }
+        }
+        self.skip_past(">");
+        Ok(())
+    }
+
+    // A start tag, after its `<`: the name, attributes, and `>` or `/>`.
+    fn start_tag(mut ref self, heap: mut ref Heap) -> Result[bool, Exc] {
+        let start = self.pos;
+        while self.pos < self.text.len() and not is_space(self.text[self.pos]) and self.text[self.pos] != b'>' and self.text[self.pos] != b'/' {
+            self.pos += 1;
+        }
+        let name = String.from_utf8(self.text[start..self.pos].to_vec()).unwrap();
+        let mut quote: u8 = 0;
+        while self.pos < self.text.len() {
+            let c = self.text[self.pos];
+            if quote != 0 {
+                if c == quote {
+                    quote = 0;
+                }
+            } else if c == b'"' or c == b'\'' {
+                quote = c;
+            } else if c == b'>' {
+                break;
+            }
+            self.advance();
+        }
+        let empty = self.text[self.pos - 1] == b'/';
+        self.pos += 1;
+        self.begin(mut heap, name)?;
+        if empty {
+            self.end(mut heap, name)?;
+        }
+        Ok(empty)
+    }
+
+    fn parse(mut ref self, heap: mut ref Heap) -> Result[Val, Exc] {
+        let mut depth = 0;
+        while self.pos < self.text.len() {
+            let c = self.text[self.pos];
+            if c != b'<' {
+                if c == b'&' {
+                    self.pos += 1;
+                    self.reference();
+                } else {
+                    if depth > 0 {
+                        self.data.push(c);
+                    }
+                    self.advance();
+                }
+                continue;
+            }
+            self.tag_line = self.line;
+            if self.starts("<?") {
+                self.skip_past("?>");
+            } else if self.starts("<!--") {
+                self.skip_past("-->");
+            } else if self.starts("<![CDATA[") {
+                self.pos += 9;
+                while self.pos < self.text.len() and not self.starts("]]>") {
+                    let ch = self.text[self.pos];
+                    self.data.push(ch);
+                    self.advance();
+                }
+                self.pos += 3;
+            } else if self.starts("<!DOCTYPE") {
+                self.doctype()?;
+            } else if self.starts("</") {
+                self.pos += 2;
+                let start = self.pos;
+                while self.pos < self.text.len() and self.text[self.pos] != b'>' {
+                    self.pos += 1;
+                }
+                let name = strip(String.from_utf8(self.text[start..self.pos].to_vec()).unwrap());
+                self.pos += 1;
+                self.end(mut heap, name)?;
+                depth -= 1;
+            } else {
+                self.pos += 1;
+                if not self.start_tag(mut heap)? {
+                    depth += 1;
+                }
+            }
+        }
+        match self.root.clone() {
+            Some(v) => Ok(v),
+            None => Ok(Val.NoneV),
+        }
+    }
+}
+
+fn is_fmt_xml(b: ref Slice[u8]) -> bool {
+    let mut s = 0;
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        s = 3;
+    }
+    let rest = b[s..].to_vec();
+    starts_bytes(rest, "<?xml") or starts_bytes(rest, "<plist")
+}
+
+fn starts_bytes(b: ref Slice[u8], p: Str) -> bool {
+    let q = p.bytes();
+    if b.len() < q.len() {
+        return false;
+    }
+    for i in 0..q.len() {
+        if b[i] != q[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn load_xml(heap: mut ref Heap, data: ref Slice[u8]) -> Result[Val, Exc] {
+    let mut p = XmlParser {
+        text: normalize_newlines(data),
+        pos: 0,
+        line: 1,
+        tag_line: 1,
+        stack: Vec.new(),
+        key: None,
+        root: None,
+        data: Vec.new(),
+    };
+    p.parse(mut heap)
+}
+
+// ---------------------------------------------------------- datetimes
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// Microseconds from 2001-01-01, the binary format's epoch.
+fn date_micros(d: ref Dt) -> i64 {
+    let days = days_from_civil(d.y, d.mo, d.d) - days_from_civil(2001, 1, 1);
+    ((days * 86400 + d.h * 3600 + d.mi * 60 + d.s) * 1000000) + d.us
+}
+
+// (value - datetime(2001, 1, 1)).total_seconds()
+fn date_seconds(d: ref Dt) -> f64 {
+    let us = date_micros(d);
+    if us % 1000000 == 0 {
+        (us / 1000000) as f64
+    } else {
+        (us as f64) / 1000000.0
+    }
+}
+
+fn round_half_even(y: f64) -> f64 {
+    let r = y.round();
+    if (r - y).abs() == 0.5 {
+        let t = y.trunc();
+        if (t as i64) % 2 == 0 { t } else { r }
+    } else {
+        r
+    }
+}
+
+// datetime(2001, 1, 1) + timedelta(seconds=f)
+fn date_from_seconds(f: f64) -> Result[Dt, Exc] {
+    if f != f or f > 3.0e11 or f < -3.0e11 {
+        return Err(invalid());
+    }
+    let t = f.trunc();
+    let us = round_half_even((f - t) * 1000000.0) as i64;
+    let total = (t as i64) * 1000000 + us;
+    let secs = floor_div(total, 1000000);
+    let rest_us = total - secs * 1000000;
+    let days = floor_div(secs, 86400);
+    let sod = secs - days * 86400;
+    let (y, mo, d) = civil_from_days(days + days_from_civil(2001, 1, 1));
+    if y < 1 or y > 9999 {
+        return Err(invalid());
+    }
+    Ok(Dt { y: y, mo: mo, d: d, h: sod / 3600, mi: (sod / 60) % 60, s: sod % 60, us: rest_us })
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn pad4(n: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < 4 {
+        s = "0" + s;
+    }
+    s
+}
+
+// _date_to_string: the microseconds are dropped.
+fn date_text(d: ref Dt) -> String {
+    f"{pad4(d.y)}-{pad2(d.mo)}-{pad2(d.d)}T{pad2(d.h)}:{pad2(d.mi)}:{pad2(d.s)}Z"
+}
+
+// ------------------------------------------------------------ dict items
+
+fn is_str(v: ref Val) -> bool {
+    match v {
+        Val.Str(_) => true,
+        _ => false,
+    }
+}
+
+fn key_text(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => "".to_string(),
+    }
+}
+
+// _dict_items: the (key, value) pairs, sorted when asked, with the
+// non-string keys dropped (skipkeys) or refused before sorting.
+fn dict_items(h: ref Heap, d: i64, sort_keys: bool, skipkeys: bool) -> Result[Vec[(Val, Val)], Exc] {
+    let mut items: Vec[(Val, Val)] = Vec.new();
+    let n = h.dicts[d].keys.len();
+    for i in 0..n {
+        items.push((h.dicts[d].keys[i].clone(), h.dicts[d].vals[i].clone()));
+    }
+    if not sort_keys {
+        return Ok(items);
+    }
+    let mut kept: Vec[(Val, Val)] = Vec.new();
+    for it in items.into_iter() {
+        if is_str(it.0) {
+            kept.push(it);
+        } else if not skipkeys {
+            return Err(exc("TypeError", "keys must be strings".to_string()));
+        }
+    }
+    // insertion sort by key, in code point order
+    let mut i = 1;
+    while i < kept.len() {
+        let mut j = i;
+        while j > 0 and key_text(kept[j].0) < key_text(kept[j - 1].0) {
+            kept.swap(j, j - 1);
+            j -= 1;
+        }
+        i += 1;
+    }
+    Ok(kept)
+}
+
+// --------------------------------------------------------- XML writer
+
+const PLIST_HEADER: Str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
+
+fn escape(text: ref String) -> Result[String, Exc] {
+    for c in text.bytes().iter() {
+        let c = *c;
+        if c < 32 and c != b'\t' and c != b'\n' and c != b'\r' {
+            return Err(exc("ValueError", "strings can't contain control characters; use bytes instead".to_string()));
+        }
+    }
+    let t = text.replace("\r\n", "\n");
+    let t = t.replace("\r", "\n");
+    let t = t.replace("&", "&amp;");
+    let t = t.replace("<", "&lt;");
+    let t = t.replace(">", "&gt;");
+    Ok(t)
+}
+
+struct XmlWriter {
+    out: String,
+    level: i64,
+    sort_keys: bool,
+    skipkeys: bool,
+}
+
+impl XmlWriter {
+    fn writeln(mut ref self, line: ref String) {
+        if line.len() > 0 {
+            for _ in 0..self.level {
+                self.out.push_str("\t");
+            }
+            self.out.push_str(line);
+        }
+        self.out.push_str("\n");
+    }
+
+    fn begin_element(mut ref self, name: Str) {
+        self.writeln(f"<{name}>");
+        self.level += 1;
+    }
+
+    fn end_element(mut ref self, name: Str) {
+        self.level -= 1;
+        self.writeln(f"</{name}>");
+    }
+
+    fn simple(mut ref self, name: Str, value: ref String) -> Result[(), Exc] {
+        let v = escape(value)?;
+        self.writeln(f"<{name}>{v}</{name}>");
+        Ok(())
+    }
+
+    fn empty(mut ref self, name: Str) {
+        self.writeln(f"<{name}/>");
+    }
+
+    fn write_value(mut ref self, h: ref Heap, v: ref Val) -> Result[(), Exc] {
+        match v {
+            Val.Str(s) => self.simple("string", s)?,
+            Val.Bool(b) => if *b { self.empty("true") } else { self.empty("false") },
+            Val.Int(n) => {
+                let n = *n;
+                let lo: i128 = -9223372036854775808;
+                let hi: i128 = 18446744073709551616;
+                if n >= lo and n < hi {
+                    self.simple("integer", f"{n}")?;
+                } else {
+                    return Err(exc("OverflowError", f"{n}"));
+                }
+            }
+            Val.Real(x) => self.simple("real", float_repr(*x))?,
+            Val.Dict(d) => self.write_dict(h, *d)?,
+            Val.Data(b) => self.write_bytes(b),
+            Val.Date(d) => self.simple("date", date_text(d))?,
+            Val.Arr(a) => self.write_array(h, *a)?,
+            Val.NoneV => return Err(exc("TypeError", "unsupported type: <class 'NoneType'>".to_string())),
+            Val.Uid(_, _) => return Err(exc("TypeError", "unsupported type: <class 'plistlib.UID'>".to_string())),
+        }
+        Ok(())
+    }
+
+    fn write_bytes(mut ref self, b: ref Vec[u8]) {
+        self.begin_element("data");
+        self.level -= 1;
+        let width = 76 - 8 * self.level;
+        let maxline = if width > 16 { width } else { 16 };
+        let maxbin = (maxline / 4) * 3;
+        let mut i = 0;
+        while i < b.len() {
+            let end = if i + maxbin < b.len() { i + maxbin } else { b.len() };
+            self.writeln(b64_encode(b, i, end));
+            i = end;
+        }
+        self.level += 1;
+        self.end_element("data");
+    }
+
+    fn write_dict(mut ref self, h: ref Heap, d: i64) -> Result[(), Exc] {
+        if h.dicts[d].keys.is_empty() {
+            self.empty("dict");
+            return Ok(());
+        }
+        self.begin_element("dict");
+        let items = dict_items(h, d, self.sort_keys, self.skipkeys)?;
+        for it in items.iter() {
+            match it.0 {
+                Val.Str(k) => {
+                    self.simple("key", k)?;
+                    self.write_value(h, it.1)?;
+                }
+                _ => {
+                    if not self.skipkeys {
+                        return Err(exc("TypeError", "keys must be strings".to_string()));
+                    }
+                }
+            }
+        }
+        self.end_element("dict");
+        Ok(())
+    }
+
+    fn write_array(mut ref self, h: ref Heap, a: i64) -> Result[(), Exc] {
+        if h.arrays[a].is_empty() {
+            self.empty("array");
+            return Ok(());
+        }
+        self.begin_element("array");
+        let n = h.arrays[a].len();
+        for i in 0..n {
+            self.write_value(h, h.arrays[a][i])?;
+        }
+        self.end_element("array");
+        Ok(())
+    }
+}
+
+fn dumps_xml(h: ref Heap, v: ref Val, sort_keys: bool, skipkeys: bool) -> Result[String, Exc] {
+    let mut w = XmlWriter { out: PLIST_HEADER.to_string(), level: 0, sort_keys: sort_keys, skipkeys: skipkeys };
+    w.writeln("<plist version=\"1.0\">");
+    w.write_value(h, v)?;
+    w.writeln("</plist>");
+    Ok(w.out)
+}
+
+// ------------------------------------------------------ binary reader
+
+fn be_uint(b: ref Slice[u8], pos: i64, size: i64) -> i128 {
+    let mut n: i128 = 0;
+    for k in 0..size {
+        n = n * 256 + (b[pos + k] as i128);
+    }
+    n
+}
+
+fn utf16_decode(b: ref Vec[u8]) -> Option[String] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        let u = (b[i] as i64) * 256 + (b[i + 1] as i64);
+        i += 2;
+        if u >= 0xD800 and u <= 0xDBFF {
+            if i + 1 >= b.len() {
+                return None;
+            }
+            let w = (b[i] as i64) * 256 + (b[i + 1] as i64);
+            if w < 0xDC00 or w > 0xDFFF {
+                return None;
+            }
+            i += 2;
+            push_utf8(mut out, 0x10000 + ((u - 0xD800) << 10) + (w - 0xDC00));
+        } else if u >= 0xDC00 and u <= 0xDFFF {
+            return None;
+        } else {
+            push_utf8(mut out, u);
+        }
+    }
+    Some(String.from_utf8(out).unwrap())
+}
+
+// _BinaryPlistParser. Any read past the end, bad token or bad reference
+// is the one InvalidFileException("Invalid file").
+struct BinParser {
+    b: Vec[u8],
+    pos: i64,
+    offsets: Vec[i64],
+    cache: Vec[Option[Val]],
+    ref_size: i64,
+}
+
+impl BinParser {
+    fn byte(mut ref self) -> Result[i64, Exc] {
+        if self.pos < 0 or self.pos >= self.b.len() {
+            return Err(invalid());
+        }
+        let c = self.b[self.pos] as i64;
+        self.pos += 1;
+        Ok(c)
+    }
+
+    // _read: exactly n bytes, or the file is invalid.
+    fn read(mut ref self, n: i64) -> Result[Vec[u8], Exc] {
+        if n < 0 or self.pos < 0 or self.pos + n > self.b.len() {
+            return Err(invalid());
+        }
+        let out = self.b[self.pos..self.pos + n].to_vec();
+        self.pos += n;
+        Ok(out)
+    }
+
+    // fp.read(n): what is there, up to n bytes.
+    fn read_some(mut ref self, n: i64) -> Vec[u8] {
+        let end = if self.pos + n < self.b.len() { self.pos + n } else { self.b.len() };
+        if self.pos >= end {
+            return Vec.new();
+        }
+        let out = self.b[self.pos..end].to_vec();
+        self.pos = end;
+        out
+    }
+
+    fn read_ints(mut ref self, n: i64, size: i64) -> Result[Vec[i64], Exc] {
+        let data = self.read(size * n)?;
+        if size == 0 {
+            return Err(invalid());
+        }
+        let mut out: Vec[i64] = Vec.new();
+        for k in 0..n {
+            let v = be_uint(data, k * size, size);
+            if v > 9223372036854775807 {
+                out.push(-1);
+            } else {
+                out.push(v as i64);
+            }
+        }
+        Ok(out)
+    }
+
+    fn get_size(mut ref self, low: i64) -> Result[i64, Exc] {
+        if low != 15 {
+            return Ok(low);
+        }
+        let m = self.byte()? & 3;
+        let s = 1 << m;
+        let d = self.read(s)?;
+        let v = be_uint(d, 0, s);
+        if v > 9223372036854775807 {
+            return Err(invalid());
+        }
+        Ok(v as i64)
+    }
+
+    fn read_object(mut ref self, heap: mut ref Heap, r: i64) -> Result[Val, Exc] {
+        if r < 0 or r >= self.cache.len() {
+            return Err(invalid());
+        }
+        match self.cache[r].clone() {
+            Some(v) => return Ok(v),
+            None => {}
+        }
+        self.pos = self.offsets[r];
+        let token = self.byte()?;
+        let hi = token & 0xF0;
+        let lo = token & 0x0F;
+        let result = if token == 0x00 {
+            Val.NoneV
+        } else if token == 0x08 {
+            Val.Bool(false)
+        } else if token == 0x09 {
+            Val.Bool(true)
+        } else if token == 0x0F {
+            Val.Data(Vec.new())
+        } else if hi == 0x10 {
+            let d = self.read_some(1 << lo);
+            if d.len() > 16 {
+                return Err(invalid());
+            }
+            let mut n = be_uint(d, 0, d.len());
+            if lo >= 3 and d.len() > 0 and d[0] >= 128 {
+                if d.len() == 16 {
+                    // two's complement of a full 128-bit value
+                    let top: i128 = 170141183460469231731687303715884105727;
+                    n = n - top - top - 2;
+                } else {
+                    let mut m: i128 = 1;
+                    for _ in 0..d.len() {
+                        m = m * 256;
+                    }
+                    n = n - m;
+                }
+            }
+            Val.Int(n)
+        } else if token == 0x22 {
+            let d = self.read(4)?;
+            let bits = be_uint(d, 0, 4) as u32;
+            Val.Real(bits.bits_as_f32() as f64)
+        } else if token == 0x23 {
+            let d = self.read(8)?;
+            let bits = be_uint(d, 0, 8) as u64;
+            Val.Real(bits.bits_as_f64())
+        } else if token == 0x33 {
+            let d = self.read(8)?;
+            let bits = be_uint(d, 0, 8) as u64;
+            Val.Date(date_from_seconds(bits.bits_as_f64())?)
+        } else if hi == 0x40 {
+            let s = self.get_size(lo)?;
+            Val.Data(self.read(s)?)
+        } else if hi == 0x50 {
+            let s = self.get_size(lo)?;
+            let d = self.read(s)?;
+            for c in d.iter() {
+                if *c >= 128 {
+                    return Err(invalid());
+                }
+            }
+            Val.Str(String.from_utf8(d).unwrap())
+        } else if hi == 0x60 {
+            let s = self.get_size(lo)?;
+            let d = self.read(s * 2)?;
+            match utf16_decode(d) {
+                Some(t) => Val.Str(t),
+                None => return Err(invalid()),
+            }
+        } else if hi == 0x80 {
+            let d = self.read_some(1 + lo);
+            heap.new_uid(be_uint(d, 0, d.len()))
+        } else if hi == 0xA0 {
+            let s = self.get_size(lo)?;
+            let refs = self.read_ints(s, self.ref_size)?;
+            let a = heap.new_array();
+            self.cache[r] = Some(Val.Arr(a));
+            for x in refs.iter() {
+                let v = self.read_object(mut heap, *x)?;
+                heap.push(a, v);
+            }
+            Val.Arr(a)
+        } else if hi == 0xD0 {
+            let s = self.get_size(lo)?;
+            let keys = self.read_ints(s, self.ref_size)?;
+            let vals = self.read_ints(s, self.ref_size)?;
+            let d = heap.new_dict();
+            self.cache[r] = Some(Val.Dict(d));
+            for k in 0..s {
+                let v = self.read_object(mut heap, vals[k])?;
+                let key = self.read_object(mut heap, keys[k])?;
+                if is_container(key) {
+                    return Err(invalid());
+                }
+                heap.dict_set(d, key, v);
+            }
+            Val.Dict(d)
+        } else {
+            return Err(invalid());
+        };
+        self.cache[r] = Some(result.clone());
+        Ok(result)
+    }
+}
+
+fn load_binary(heap: mut ref Heap, data: ref Slice[u8]) -> Result[Val, Exc] {
+    if data.len() < 32 {
+        return Err(invalid());
+    }
+    let t = data.len() - 32;
+    let offset_size = data[t + 6] as i64;
+    let ref_size = data[t + 7] as i64;
+    let num = be_uint(data, t + 8, 8);
+    let top = be_uint(data, t + 16, 8);
+    let table = be_uint(data, t + 24, 8);
+    if num > 1000000 or table > 1000000000 or top > 1000000 {
+        return Err(invalid());
+    }
+    let mut p = BinParser { b: data.to_vec(), pos: table as i64, offsets: Vec.new(), cache: Vec.new(), ref_size: ref_size };
+    p.offsets = p.read_ints(num as i64, offset_size)?;
+    for _ in 0..(num as i64) {
+        p.cache.push(None);
+    }
+    p.read_object(mut heap, top as i64)
+}
+
+// ------------------------------------------------------ binary writer
+
+fn count_to_size(n: i64) -> i64 {
+    if n < 256 {
+        1
+    } else if n < 65536 {
+        2
+    } else if n < 4294967296 {
+        4
+    } else {
+        8
+    }
+}
+
+fn push_be(out: mut ref Vec[u8], v: i128, size: i64) {
+    let mut k = size - 1;
+    while k >= 0 {
+        out.push(((v >> (8 * k)) & 255) as u8);
+        k -= 1;
+    }
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b.iter() {
+        out.push(hex_digit(*c / 16));
+        out.push(hex_digit(*c % 16));
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// The key plistlib's writer files an object under: (type, value) for the
+// scalars, so equal scalars are written once, and the identity for
+// containers, None and UIDs.
+fn obj_key(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => "s" + s,
+        Val.Int(n) => f"i{n}",
+        Val.Bool(b) => if *b { "bT".to_string() } else { "bF".to_string() },
+        Val.Real(x) => {
+            let x = if *x == 0.0 { 0.0 } else { *x };
+            f"f{x.to_bits()}"
+        }
+        Val.Date(d) => f"t{date_micros(d)}",
+        Val.Data(b) => "d" + hex_of(b),
+        Val.Uid(_, id) => f"U{id}",
+        Val.NoneV => "N".to_string(),
+        Val.Arr(a) => f"A{a}",
+        Val.Dict(d) => f"D{d}",
+    }
+}
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+struct BinWriter {
+    sort_keys: bool,
+    skipkeys: bool,
+    objlist: Vec[Val],
+    table: Map[String, i64],
+    out: Vec[u8],
+    offsets: Vec[i64],
+    ref_size: i64,
+}
+
+impl BinWriter {
+    // The string keys and their values of a dict, as the writer walks them.
+    fn pairs(ref self, h: ref Heap, d: i64) -> Result[Vec[(Val, Val)], Exc] {
+        let items = dict_items(h, d, self.sort_keys, self.skipkeys)?;
+        let mut out: Vec[(Val, Val)] = Vec.new();
+        for it in items.into_iter() {
+            if is_str(it.0) {
+                out.push(it);
+            } else if not self.skipkeys {
+                return Err(exc("TypeError", "keys must be strings".to_string()));
+            }
+        }
+        Ok(out)
+    }
+
+    fn flatten(mut ref self, h: ref Heap, v: ref Val) -> Result[(), Exc] {
+        let k = obj_key(v);
+        if self.table.contains_key(k) {
+            return Ok(());
+        }
+        self.table.insert(k, self.objlist.len());
+        self.objlist.push(v.clone());
+        match v {
+            Val.Dict(d) => {
+                let pairs = self.pairs(h, *d)?;
+                for p in pairs.iter() {
+                    self.flatten(h, p.0)?;
+                }
+                for p in pairs.iter() {
+                    self.flatten(h, p.1)?;
+                }
+            }
+            Val.Arr(a) => {
+                let n = h.arrays[*a].len();
+                for i in 0..n {
+                    self.flatten(h, h.arrays[*a][i])?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn refnum(ref self, v: ref Val) -> i64 {
+        self.table.get(obj_key(v)).unwrap_or(0)
+    }
+
+    fn write_size(mut ref self, token: i64, size: i64) {
+        if size < 15 {
+            self.out.push((token | size) as u8);
+        } else if size < 256 {
+            self.out.push((token | 15) as u8);
+            self.out.push(0x10);
+            self.out.push(size as u8);
+        } else if size < 65536 {
+            self.out.push((token | 15) as u8);
+            self.out.push(0x11);
+            push_be(mut self.out, size as i128, 2);
+        } else {
+            self.out.push((token | 15) as u8);
+            self.out.push(0x12);
+            push_be(mut self.out, size as i128, 4);
+        }
+    }
+
+    fn write_refs(mut ref self, refs: ref Vec[i64]) {
+        for r in refs.iter() {
+            push_be(mut self.out, *r as i128, self.ref_size);
+        }
+    }
+
+    fn write_object(mut ref self, h: ref Heap, v: ref Val) -> Result[(), Exc] {
+        let r = self.refnum(v);
+        self.offsets[r] = self.out.len();
+        match v {
+            Val.NoneV => self.out.push(0x00),
+            Val.Bool(b) => {
+                // B-2026-10-18-42: a literal-only `if` as an argument is typed i64.
+                let t: u8 = if *b { 0x09 } else { 0x08 };
+                self.out.push(t);
+            }
+            Val.Int(n) => {
+                let n = *n;
+                let i63: i128 = 9223372036854775808;
+                if n < 0 {
+                    if n < -i63 {
+                        return Err(exc("OverflowError", f"{n}"));
+                    }
+                    self.out.push(0x13);
+                    push_be(mut self.out, n, 8);
+                } else if n < 256 {
+                    self.out.push(0x10);
+                    push_be(mut self.out, n, 1);
+                } else if n < 65536 {
+                    self.out.push(0x11);
+                    push_be(mut self.out, n, 2);
+                } else if n < 4294967296 {
+                    self.out.push(0x12);
+                    push_be(mut self.out, n, 4);
+                } else if n < i63 {
+                    self.out.push(0x13);
+                    push_be(mut self.out, n, 8);
+                } else if n < i63 * 2 {
+                    self.out.push(0x14);
+                    push_be(mut self.out, n, 16);
+                } else {
+                    return Err(exc("OverflowError", f"{n}"));
+                }
+            }
+            Val.Real(x) => {
+                self.out.push(0x23);
+                push_be(mut self.out, x.to_bits() as i128, 8);
+            }
+            Val.Date(d) => {
+                self.out.push(0x33);
+                push_be(mut self.out, date_seconds(d).to_bits() as i128, 8);
+            }
+            Val.Data(b) => {
+                self.write_size(0x40, b.len());
+                for c in b.iter() {
+                    self.out.push(*c);
+                }
+            }
+            Val.Str(s) => {
+                let b = s.bytes();
+                let mut ascii = true;
+                for c in b.iter() {
+                    if *c >= 128 {
+                        ascii = false;
+                    }
+                }
+                if ascii {
+                    self.write_size(0x50, b.len());
+                    for c in b.iter() {
+                        self.out.push(*c);
+                    }
+                } else {
+                    let mut units: Vec[i64] = Vec.new();
+                    for cp in codepoints(b).iter() {
+                        let cp = *cp;
+                        if cp >= 0x10000 {
+                            units.push(0xD800 + ((cp - 0x10000) >> 10));
+                            units.push(0xDC00 + ((cp - 0x10000) & 0x3FF));
+                        } else {
+                            units.push(cp);
+                        }
+                    }
+                    self.write_size(0x60, units.len());
+                    for u in units.iter() {
+                        push_be(mut self.out, *u as i128, 2);
+                    }
+                }
+            }
+            Val.Uid(n, _) => {
+                let n = *n;
+                if n < 256 {
+                    self.out.push(0x80);
+                    push_be(mut self.out, n, 1);
+                } else if n < 65536 {
+                    self.out.push(0x81);
+                    push_be(mut self.out, n, 2);
+                } else if n < 4294967296 {
+                    self.out.push(0x83);
+                    push_be(mut self.out, n, 4);
+                } else {
+                    self.out.push(0x87);
+                    push_be(mut self.out, n, 8);
+                }
+            }
+            Val.Arr(a) => {
+                let mut refs: Vec[i64] = Vec.new();
+                for x in h.arrays[*a].iter() {
+                    refs.push(self.refnum(x));
+                }
+                self.write_size(0xA0, refs.len());
+                self.write_refs(refs);
+            }
+            Val.Dict(d) => {
+                let pairs = self.pairs(h, *d)?;
+                let mut krefs: Vec[i64] = Vec.new();
+                let mut vrefs: Vec[i64] = Vec.new();
+                for p in pairs.iter() {
+                    krefs.push(self.refnum(p.0));
+                    vrefs.push(self.refnum(p.1));
+                }
+                self.write_size(0xD0, krefs.len());
+                self.write_refs(krefs);
+                self.write_refs(vrefs);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn dumps_binary(h: ref Heap, v: ref Val, sort_keys: bool, skipkeys: bool) -> Result[Vec[u8], Exc] {
+    let mut w = BinWriter {
+        sort_keys: sort_keys,
+        skipkeys: skipkeys,
+        objlist: Vec.new(),
+        table: Map.new(),
+        out: Vec.new(),
+        offsets: Vec.new(),
+        ref_size: 1,
+    };
+    w.flatten(h, v)?;
+    let num = w.objlist.len();
+    for _ in 0..num {
+        w.offsets.push(0);
+    }
+    w.ref_size = count_to_size(num);
+    for c in "bplist00".bytes().iter() {
+        w.out.push(*c);
+    }
+    let objs = w.objlist.clone();
+    for o in objs.iter() {
+        w.write_object(h, o)?;
+    }
+    let top = w.refnum(v);
+    let table = w.out.len();
+    let offset_size = count_to_size(table);
+    let offsets = w.offsets.clone();
+    for off in offsets.iter() {
+        push_be(mut w.out, *off as i128, offset_size);
+    }
+    for _ in 0..6 {
+        w.out.push(0);
+    }
+    w.out.push(offset_size as u8);
+    w.out.push(w.ref_size as u8);
+    push_be(mut w.out, num as i128, 8);
+    push_be(mut w.out, top as i128, 8);
+    push_be(mut w.out, table as i128, 8);
+    Ok(w.out)
+}
+
+// ------------------------------------------------------------- jobs
+
+fn loads(heap: mut ref Heap, data: ref Slice[u8]) -> Result[Val, Exc] {
+    if is_fmt_xml(data) {
+        return load_xml(mut heap, data);
+    }
+    if starts_bytes(data, "bplist00") {
+        return load_binary(mut heap, data);
+    }
+    Err(invalid())
+}
+
+fn hex_n(n: i64, width: i64) -> String {
+    let mut digits: Vec[u8] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        digits.push(hex_digit((v % 16) as u8));
+        v = v / 16;
+    }
+    while digits.len() < width {
+        digits.push(b'0');
+    }
+    digits.reverse();
+    String.from_utf8(digits).unwrap()
+}
+
+fn hexdump(out: mut ref String, b: ref Vec[u8]) {
+    let mut i = 0;
+    while i < b.len() {
+        let end = if i + 16 < b.len() { i + 16 } else { b.len() };
+        let mut parts: Vec[String] = Vec.new();
+        for k in i..end {
+            parts.push(hex_n(b[k] as i64, 2));
+        }
+        out.push_str(f"  {hex_n(i, 6)}  {parts.join(" ")}\n");
+        i = end;
+    }
+}
+
+fn get_path(h: ref Heap, root: ref Val, path: ref Vec[String]) -> String {
+    let mut v = root.clone();
+    let mut wher = String.new();
+    for p in path.iter() {
+        let place = if wher.is_empty() { "the root".to_string() } else { wher.clone() };
+        let next = match v {
+            Val.Dict(d) => {
+                let mut found: Option[Val] = None;
+                let n = h.dicts[d].keys.len();
+                for i in 0..n {
+                    if key_eq(h.dicts[d].keys[i], Val.Str(p.clone())) {
+                        found = Some(h.dicts[d].vals[i].clone());
+                    }
+                }
+                match found {
+                    Some(x) => x,
+                    None => return f"no key {str_repr(p)} in {place}",
+                }
+            }
+            Val.Arr(a) => {
+                let i = i64.parse(p).unwrap_or(0);
+                let n = h.arrays[a].len();
+                if i >= n {
+                    return f"index {i} out of range in {place} ({n} items)";
+                }
+                h.arrays[a][i].clone()
+            }
+            _ => return f"{place} is a {type_name(v)}, not a container",
+        };
+        v = next;
+        wher.push_str(f"/{p}");
+    }
+    repr(h, v)
+}
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), Exc] {
+    let data = match fs.read_bytes(f"data/{f[1]}") {
+        Ok(b) => b,
+        Err(e) => return Err(exc("OSError", f"{e}")),
+    };
+    let mut heap = Heap.new();
+    let value = loads(mut heap, data)?;
+    let mut sort_keys = true;
+    let mut skipkeys = false;
+    for i in 2..f.len() {
+        if f[i] == "sort_keys=0" {
+            sort_keys = false;
+        } else if f[i] == "skipkeys=1" {
+            skipkeys = true;
+        }
+    }
+    let cmd = f[0].clone();
+    if cmd == "load" {
+        let fmt = if starts_bytes(data, "bplist00") { "binary" } else { "xml" };
+        out.push_str(f"  {fmt} {repr(heap, value)}\n");
+    } else if cmd == "xml" {
+        let x = dumps_xml(heap, value, sort_keys, skipkeys)?;
+        for line in x.split("\n") {
+            out.push_str(f"  |{line}\n");
+        }
+    } else if cmd == "bin" {
+        let b = dumps_binary(heap, value, sort_keys, skipkeys)?;
+        out.push_str(f"  {b.len()} bytes\n");
+        hexdump(mut out, b);
+    } else if cmd == "roundtrip" {
+        let x = dumps_xml(heap, value, true, false)?;
+        let b = dumps_binary(heap, value, true, false)?;
+        let mut hx = Heap.new();
+        let vx = loads(mut hx, x.bytes())?;
+        let mut hb = Heap.new();
+        let vb = loads(mut hb, b)?;
+        let again = dumps_xml(hb, vb, true, false)?;
+        let ex = if deep_eq(heap, value, hx, vx) { "True" } else { "False" };
+        let eb = if deep_eq(heap, value, hb, vb) { "True" } else { "False" };
+        let same = if again == x { "True" } else { "False" };
+        out.push_str(f"  xml {x.len()} bytes, equal {ex}; binary {b.len()} bytes, equal {eb}; xml again same {same}\n");
+    } else if cmd == "get" {
+        let path: Vec[String] = f[2..].to_vec();
+        out.push_str(f"  {get_path(heap, value, path)}\n");
+    }
+    Ok(())
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for (path, contents) in text_files() {
+        make_parent(path)?;
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    for (path, hex) in binary_files() {
+        make_parent(path)?;
+        if let Err(e) = fs.write_bytes(f"data/{path}", unhex(hex)) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        return Err(f"cannot write jobs.tsv: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    for job in jobs.lines() {
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
+        println(f"== {f.join(" | ")}");
+        let mut out = String.new();
+        match run(f, mut out) {
+            Ok(()) => print(out),
+            Err(e) => {
+                print(out);
+                println(f"  {e.kind}: {e.msg}");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------- data
+// The text files under data/, as (path, contents).
+fn text_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
+    t.push_str("<plist version=\"1.0\">\n");
+    t.push_str("<dict>\n");
+    t.push_str("\t<key>CFBundleDevelopmentRegion</key>\n");
+    t.push_str("\t<string>en</string>\n");
+    t.push_str("\t<key>CFBundleDisplayName</key>\n");
+    t.push_str("\t<string>Café Notes</string>\n");
+    t.push_str("\t<key>CFBundleExecutable</key>\n");
+    t.push_str("\t<string>CafeNotes</string>\n");
+    t.push_str("\t<key>CFBundleIdentifier</key>\n");
+    t.push_str("\t<string>com.example.cafenotes</string>\n");
+    t.push_str("\t<key>CFBundleInfoDictionaryVersion</key>\n");
+    t.push_str("\t<string>6.0</string>\n");
+    t.push_str("\t<key>CFBundlePackageType</key>\n");
+    t.push_str("\t<string>APPL</string>\n");
+    t.push_str("\t<key>CFBundleShortVersionString</key>\n");
+    t.push_str("\t<string>2.4.1</string>\n");
+    t.push_str("\t<key>CFBundleVersion</key>\n");
+    t.push_str("\t<string>2041</string>\n");
+    t.push_str("\t<key>CFBundleURLTypes</key>\n");
+    t.push_str("\t<array>\n");
+    t.push_str("\t\t<dict>\n");
+    t.push_str("\t\t\t<key>CFBundleURLName</key>\n");
+    t.push_str("\t\t\t<string>com.example.cafenotes.open</string>\n");
+    t.push_str("\t\t\t<key>CFBundleURLSchemes</key>\n");
+    t.push_str("\t\t\t<array>\n");
+    t.push_str("\t\t\t\t<string>cafenotes</string>\n");
+    t.push_str("\t\t\t\t<string>cafe-notes</string>\n");
+    t.push_str("\t\t\t</array>\n");
+    t.push_str("\t\t</dict>\n");
+    t.push_str("\t</array>\n");
+    t.push_str("\t<key>CFBundleDocumentTypes</key>\n");
+    t.push_str("\t<array>\n");
+    t.push_str("\t\t<dict>\n");
+    t.push_str("\t\t\t<key>CFBundleTypeExtensions</key>\n");
+    t.push_str("\t\t\t<array>\n");
+    t.push_str("\t\t\t\t<string>cnote</string>\n");
+    t.push_str("\t\t\t</array>\n");
+    t.push_str("\t\t\t<key>CFBundleTypeName</key>\n");
+    t.push_str("\t\t\t<string>Café Note</string>\n");
+    t.push_str("\t\t\t<key>CFBundleTypeRole</key>\n");
+    t.push_str("\t\t\t<string>Editor</string>\n");
+    t.push_str("\t\t\t<key>LSHandlerRank</key>\n");
+    t.push_str("\t\t\t<string>Owner</string>\n");
+    t.push_str("\t\t</dict>\n");
+    t.push_str("\t</array>\n");
+    t.push_str("\t<key>LSApplicationCategoryType</key>\n");
+    t.push_str("\t<string>public.app-category.productivity</string>\n");
+    t.push_str("\t<key>LSMinimumSystemVersion</key>\n");
+    t.push_str("\t<string>12.0</string>\n");
+    t.push_str("\t<key>NSHighResolutionCapable</key>\n");
+    t.push_str("\t<true/>\n");
+    t.push_str("\t<key>NSSupportsAutomaticTermination</key>\n");
+    t.push_str("\t<false/>\n");
+    t.push_str("\t<key>NSHumanReadableCopyright</key>\n");
+    t.push_str("\t<string>Copyright © 2024 Example &amp; Co. All rights reserved.</string>\n");
+    t.push_str("\t<key>NSAppTransportSecurity</key>\n");
+    t.push_str("\t<dict>\n");
+    t.push_str("\t\t<key>NSAllowsArbitraryLoads</key>\n");
+    t.push_str("\t\t<false/>\n");
+    t.push_str("\t\t<key>NSExceptionDomains</key>\n");
+    t.push_str("\t\t<dict>\n");
+    t.push_str("\t\t\t<key>sync.example.com</key>\n");
+    t.push_str("\t\t\t<dict>\n");
+    t.push_str("\t\t\t\t<key>NSExceptionMinimumTLSVersion</key>\n");
+    t.push_str("\t\t\t\t<string>TLSv1.2</string>\n");
+    t.push_str("\t\t\t\t<key>NSIncludesSubdomains</key>\n");
+    t.push_str("\t\t\t\t<true/>\n");
+    t.push_str("\t\t\t</dict>\n");
+    t.push_str("\t\t</dict>\n");
+    t.push_str("\t</dict>\n");
+    t.push_str("\t<key>UIRequiredDeviceCapabilities</key>\n");
+    t.push_str("\t<array/>\n");
+    t.push_str("</dict>\n");
+    t.push_str("</plist>\n");
+    v.push(("Info.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\"?>\n");
+    t.push_str("<!DOCTYPE plist [\n");
+    t.push_str("<!ENTITY boom \"kaboom\">\n");
+    t.push_str("]>\n");
+    t.push_str("<plist><string>&boom;</string></plist>\n");
+    v.push(("bad/entity.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><integer>0xZZ</integer></plist>\n");
+    v.push(("bad/hex.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><array><integer>12</integer><integer>12a</integer></array></plist>\n");
+    v.push(("bad/int.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\"?>\n");
+    t.push_str("<plist>\n");
+    t.push_str("<array>\n");
+    t.push_str("\t<string>a</string>\n");
+    t.push_str("\t<key>oops</key>\n");
+    t.push_str("</array>\n");
+    t.push_str("</plist>\n");
+    v.push(("bad/key-in-array.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist>\n");
+    t.push_str("<dict>\n");
+    t.push_str("\t<key>Label</key>\n");
+    t.push_str("\t<string>x</string>\n");
+    t.push_str("\t<key>Program</key>\n");
+    t.push_str("</dict>\n");
+    t.push_str("</plist>\n");
+    v.push(("bad/missing-value.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><integer>-0x10</integer></plist>\n");
+    v.push(("bad/neg-hex.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><data>YWJ</data></plist>\n");
+    v.push(("bad/padding.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><data>YWJjZ</data></plist>\n");
+    v.push(("bad/padding5.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><dict><key>r</key><real>abc</real></dict></plist>\n");
+    v.push(("bad/real.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist>\n");
+    t.push_str("<dict>\n");
+    t.push_str("\t<key>a</key>\n");
+    t.push_str("\t<key>b</key>\n");
+    t.push_str("\t<true/>\n");
+    t.push_str("</dict>\n");
+    t.push_str("</plist>\n");
+    v.push(("bad/two-keys.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist>\n");
+    t.push_str("<dict>\n");
+    t.push_str("\t<key>a</key>\n");
+    t.push_str("\t<integer>1</integer>\n");
+    t.push_str("\t<string>stray</string>\n");
+    t.push_str("</dict>\n");
+    t.push_str("</plist>\n");
+    v.push(("bad/value-without-key.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
+    t.push_str("<plist version=\"1.0\">\n");
+    t.push_str("<dict>\n");
+    t.push_str("\t<key>Label</key>\n");
+    t.push_str("\t<string>com.example.backup</string>\n");
+    t.push_str("\t<!-- run the nightly backup as the backup user -->\n");
+    t.push_str("\t<key>UserName</key>\n");
+    t.push_str("\t<string>backup</string>\n");
+    t.push_str("\t<key>ProgramArguments</key>\n");
+    t.push_str("\t<array>\n");
+    t.push_str("\t\t<string>/usr/local/bin/backup</string>\n");
+    t.push_str("\t\t<string>--target</string>\n");
+    t.push_str("\t\t<string>/Volumes/Archive</string>\n");
+    t.push_str("\t\t<string>--exclude=*.tmp</string>\n");
+    t.push_str("\t</array>\n");
+    t.push_str("\t<key>EnvironmentVariables</key>\n");
+    t.push_str("\t<dict>\n");
+    t.push_str("\t\t<key>PATH</key>\n");
+    t.push_str("\t\t<string>/usr/local/bin:/usr/bin:/bin</string>\n");
+    t.push_str("\t\t<key>BACKUP_LEVEL</key>\n");
+    t.push_str("\t\t<string>incremental</string>\n");
+    t.push_str("\t</dict>\n");
+    t.push_str("\t<key>StartCalendarInterval</key>\n");
+    t.push_str("\t<array>\n");
+    t.push_str("\t\t<dict>\n");
+    t.push_str("\t\t\t<key>Hour</key>\n");
+    t.push_str("\t\t\t<integer>2</integer>\n");
+    t.push_str("\t\t\t<key>Minute</key>\n");
+    t.push_str("\t\t\t<integer>30</integer>\n");
+    t.push_str("\t\t</dict>\n");
+    t.push_str("\t\t<dict>\n");
+    t.push_str("\t\t\t<key>Weekday</key>\n");
+    t.push_str("\t\t\t<integer>0</integer>\n");
+    t.push_str("\t\t\t<key>Hour</key>\n");
+    t.push_str("\t\t\t<integer>4</integer>\n");
+    t.push_str("\t\t\t<key>Minute</key>\n");
+    t.push_str("\t\t\t<integer>0</integer>\n");
+    t.push_str("\t\t</dict>\n");
+    t.push_str("\t</array>\n");
+    t.push_str("\t<key>KeepAlive</key>\n");
+    t.push_str("\t<dict>\n");
+    t.push_str("\t\t<key>SuccessfulExit</key>\n");
+    t.push_str("\t\t<false/>\n");
+    t.push_str("\t\t<key>NetworkState</key>\n");
+    t.push_str("\t\t<true/>\n");
+    t.push_str("\t</dict>\n");
+    t.push_str("\t<key>ThrottleInterval</key>\n");
+    t.push_str("\t<integer>300</integer>\n");
+    t.push_str("\t<key>Nice</key>\n");
+    t.push_str("\t<integer>-5</integer>\n");
+    t.push_str("\t<key>SoftResourceLimits</key>\n");
+    t.push_str("\t<dict>\n");
+    t.push_str("\t\t<key>NumberOfFiles</key>\n");
+    t.push_str("\t\t<integer>4096</integer>\n");
+    t.push_str("\t</dict>\n");
+    t.push_str("\t<key>StandardOutPath</key>\n");
+    t.push_str("\t<string>/var/log/backup.log</string>\n");
+    t.push_str("\t<key>StandardErrorPath</key>\n");
+    t.push_str("\t<string>/var/log/backup.err</string>\n");
+    t.push_str("\t<key>WorkingDirectory</key>\n");
+    t.push_str("\t<string>/var/empty</string>\n");
+    t.push_str("</dict>\n");
+    t.push_str("</plist>\n");
+    v.push(("com.example.backup.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist version=\"1.0\">\r\n");
+    t.push_str("<dict>\r\n");
+    t.push_str("  <key>entities</key><string>a &lt;b&gt; &amp; &quot;c&quot; &apos;d&apos; &#65;&#x42;&#169;&#x1F600;</string>\r\n");
+    t.push_str("  <key>cdata</key><string><![CDATA[x < y && y > z]]></string>\r\n");
+    t.push_str("  <key>mixed</key><string>one\r\n");
+    t.push_str("two\r");
+    t.push_str("three\n");
+    t.push_str("four\ttab</string>\r\n");
+    t.push_str("  <key>empty</key><string></string>\r\n");
+    t.push_str("  <key>empty2</key><string/>\r\n");
+    t.push_str("  <key>ints</key>\r\n");
+    t.push_str("  <array>\r\n");
+    t.push_str("    <integer>0</integer><integer>+5</integer><integer> 7 </integer><integer>1_000</integer>\r\n");
+    t.push_str("    <integer>-42</integer><integer>0x1F</integer><integer>0X_ff</integer>\r\n");
+    t.push_str("    <integer>9223372036854775807</integer><integer>-9223372036854775808</integer>\r\n");
+    t.push_str("    <integer>18446744073709551615</integer><integer>9223372036854775808</integer>\r\n");
+    t.push_str("  </array>\r\n");
+    t.push_str("  <key>reals</key>\r\n");
+    t.push_str("  <array>\r\n");
+    t.push_str("    <real>1.5</real><real>1e3</real><real>-0.0</real><real>0.0</real><real>inf</real><real>-Infinity</real>\r\n");
+    t.push_str("    <real> .5</real><real>5.</real><real>1_0.25</real><real>0.1</real><real>1e-7</real><real>123456789012345678</real>\r\n");
+    t.push_str("    <real>2.5e-308</real><real>1.7976931348623157e308</real><real>3.0</real><real>100</real>\r\n");
+    t.push_str("  </array>\r\n");
+    t.push_str("  <key>dates</key>\r\n");
+    t.push_str("  <array>\r\n");
+    t.push_str("    <date>2024-02-29T23:59:59Z</date><date>1999-12-31T00:00:00Z</date><date>2001-01-01Z</date>\r\n");
+    t.push_str("    <date>2024-06-15T09Z</date><date>2024-06-15T09:45Z</date><date>0001-01-01T00:00:00Z</date>\r\n");
+    t.push_str("  </array>\r\n");
+    t.push_str("  <key>blob</key>\r\n");
+    t.push_str("  <data>\r\n");
+    t.push_str("    SGVs bG8s\r\n");
+    t.push_str("    IHBs aXN0\r\n");
+    t.push_str("    IQ==\r\n");
+    t.push_str("  </data>\r\n");
+    t.push_str("  <key>nodata</key><data></data>\r\n");
+    t.push_str("  <key>nested</key><array><array><array><dict/></array><array/></array></array>\r\n");
+    t.push_str("  <key>dup</key><string>first</string>\r\n");
+    t.push_str("  <key>z-last</key><true/>\r\n");
+    t.push_str("  <key>dup</key><string>second</string>\r\n");
+    t.push_str("  <key>&lt;angle&gt;</key><integer>1</integer>\r\n");
+    t.push_str("  <key>Ünïcode</key><string>日本語テキスト</string>\r\n");
+    t.push_str("  <key>emoji</key><string>🚀 launch</string>\r\n");
+    t.push_str("  <key>unknown</key><string>a<b>ignored-reset</b>tail</string>\r\n");
+    t.push_str("</dict>\r\n");
+    t.push_str("</plist>\r\n");
+    v.push(("edges.plist".to_string(), t));
+    let mut t = String.new();
+    v.push(("empty.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("{\"not\": \"a plist\"}\n");
+    v.push(("notes.json".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist version=\"1.0\"><string>just a string</string></plist>\n");
+    v.push(("ok/bare.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><array><integer>-9999999999999999999</integer><integer>18446744073709551616</integer></array></plist>\n");
+    v.push(("ok/overflow.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><array><data>YQ==YQ==</data><data>Y=Q==</data><data>YQ=a=</data><data>!!YWJj</data><data>YWJj====</data></array></plist>\n");
+    v.push(("ok/padding-quirks.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<plist><string>first</string><string>second</string></plist>\n");
+    v.push(("ok/roots.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
+    t.push_str("<plist version=\"1.0\">\n");
+    t.push_str("<dict>\n");
+    t.push_str("    <key>NSWindow Frame Main</key>\n");
+    t.push_str("    <string>120 340 980 640 0 0 1680 1025 </string>\n");
+    t.push_str("    <key>RecentFiles</key>\n");
+    t.push_str("    <array>\n");
+    t.push_str("        <string>/Users/ana/Notes/Groceries.cnote</string>\n");
+    t.push_str("        <string>/Users/ana/Notes/Trip – Lisbon.cnote</string>\n");
+    t.push_str("        <string>/Users/ana/Notes/🚀 Launch plan.cnote</string>\n");
+    t.push_str("    </array>\n");
+    t.push_str("    <key>FontName</key>\n");
+    t.push_str("    <string>Menlo-Regular</string>\n");
+    t.push_str("    <key>FontSize</key>\n");
+    t.push_str("    <real>13.0</real>\n");
+    t.push_str("    <key>Zoom</key>\n");
+    t.push_str("    <real>1.25</real>\n");
+    t.push_str("    <key>LineSpacing</key>\n");
+    t.push_str("    <real>0.1</real>\n");
+    t.push_str("    <key>AutosaveDelay</key>\n");
+    t.push_str("    <integer>30</integer>\n");
+    t.push_str("    <key>LastLaunch</key>\n");
+    t.push_str("    <date>2024-03-09T17:42:05Z</date>\n");
+    t.push_str("    <key>FirstLaunch</key>\n");
+    t.push_str("    <date>1998-07-04T08:00:00Z</date>\n");
+    t.push_str("    <key>TrialEnds</key>\n");
+    t.push_str("    <date>2024-04-01T00:00:00Z</date>\n");
+    t.push_str("    <key>WindowState</key>\n");
+    t.push_str("    <data>\n");
+    t.push_str("    AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v//4A\n");
+    t.push_str("    AQ==\n");
+    t.push_str("    </data>\n");
+    t.push_str("    <key>Big</key>\n");
+    t.push_str("    <integer>9223372036854775813</integer>\n");
+    t.push_str("    <key>Small</key>\n");
+    t.push_str("    <integer>-9223372036854775808</integer>\n");
+    t.push_str("    <key>Negative</key>\n");
+    t.push_str("    <integer>-1</integer>\n");
+    t.push_str("    <key>Medium</key>\n");
+    t.push_str("    <integer>70000</integer>\n");
+    t.push_str("    <key>Huge32</key>\n");
+    t.push_str("    <integer>4000000000</integer>\n");
+    t.push_str("    <key>Flags</key>\n");
+    t.push_str("    <array>\n");
+    t.push_str("        <true/>\n");
+    t.push_str("        <false/>\n");
+    t.push_str("        <true/>\n");
+    t.push_str("        <true/>\n");
+    t.push_str("    </array>\n");
+    t.push_str("    <key>Ratios</key>\n");
+    t.push_str("    <array>\n");
+    t.push_str("        <real>0.5</real>\n");
+    t.push_str("        <real>0.5</real>\n");
+    t.push_str("        <real>1.0</real>\n");
+    t.push_str("        <integer>1</integer>\n");
+    t.push_str("        <true/>\n");
+    t.push_str("    </array>\n");
+    t.push_str("    <key>Zeros</key>\n");
+    t.push_str("    <array>\n");
+    t.push_str("        <real>0.0</real>\n");
+    t.push_str("        <real>-0.0</real>\n");
+    t.push_str("        <integer>0</integer>\n");
+    t.push_str("        <false/>\n");
+    t.push_str("    </array>\n");
+    t.push_str("    <key>Empty</key>\n");
+    t.push_str("    <dict/>\n");
+    t.push_str("    <key>EmptyList</key>\n");
+    t.push_str("    <array/>\n");
+    t.push_str("    <key>Theme</key>\n");
+    t.push_str("    <dict>\n");
+    t.push_str("        <key>Dark</key>\n");
+    t.push_str("        <dict>\n");
+    t.push_str("            <key>Accent</key>\n");
+    t.push_str("            <string>orange</string>\n");
+    t.push_str("            <key>Contrast</key>\n");
+    t.push_str("            <integer>2</integer>\n");
+    t.push_str("        </dict>\n");
+    t.push_str("        <key>Light</key>\n");
+    t.push_str("        <dict>\n");
+    t.push_str("            <key>Accent</key>\n");
+    t.push_str("            <string>blue</string>\n");
+    t.push_str("            <key>Contrast</key>\n");
+    t.push_str("            <integer>1</integer>\n");
+    t.push_str("        </dict>\n");
+    t.push_str("    </dict>\n");
+    t.push_str("    <key>SameTwice</key>\n");
+    t.push_str("    <array>\n");
+    t.push_str("        <string>repeat</string>\n");
+    t.push_str("        <string>repeat</string>\n");
+    t.push_str("        <string>repeat</string>\n");
+    t.push_str("    </array>\n");
+    t.push_str("</dict>\n");
+    t.push_str("</plist>\n");
+    v.push(("prefs.xml.plist".to_string(), t));
+    v
+}
+
+// The binary files under data/, as (path, hex of the bytes).
+fn binary_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("62706c6973743030df10110102030405060708090a0b0c0d0e0f10111213141f20212223242c2d2e2f393a323b5f1019");
+    t.push_str("434642756e646c65446576656c6f706d656e74526567696f6e5f1013434642756e646c65446973706c61794e616d655f");
+    t.push_str("1015434642756e646c65446f63756d656e7454797065735f1012434642756e646c6545786563757461626c655f101243");
+    t.push_str("4642756e646c654964656e7469666965725f101d434642756e646c65496e666f44696374696f6e61727956657273696f");
+    t.push_str("6e5f1013434642756e646c655061636b616765547970655f101a434642756e646c6553686f727456657273696f6e5374");
+    t.push_str("72696e675f1010434642756e646c6555524c54797065735f100f434642756e646c6556657273696f6e5f10194c534170");
+    t.push_str("706c69636174696f6e43617465676f7279547970655f10164c534d696e696d756d53797374656d56657273696f6e5f10");
+    t.push_str("164e534170705472616e73706f727453656375726974795f10174e53486967685265736f6c7574696f6e43617061626c");
+    t.push_str("655f10184e5348756d616e5265616461626c65436f707972696768745f101e4e53537570706f7274734175746f6d6174");
+    t.push_str("69635465726d696e6174696f6e5f101c554952657175697265644465766963654361706162696c697469657352656e6a");
+    t.push_str("00430061006600e90020004e006f007400650073a115d4161718191a1c1d1e5f1016434642756e646c65547970654578");
+    t.push_str("74656e73696f6e735f1010434642756e646c65547970654e616d655f1010434642756e646c6554797065526f6c655d4c");
+    t.push_str("5348616e646c657252616e6ba11b55636e6f74656900430061006600e90020004e006f0074006556456469746f72554f");
+    t.push_str("776e657259436166654e6f7465735f1015636f6d2e6578616d706c652e636166656e6f74657353362e30544150504c55");
+    t.push_str("322e342e31a125d2262728295f100f434642756e646c6555524c4e616d655f1012434642756e646c6555524c53636865");
+    t.push_str("6d65735f101a636f6d2e6578616d706c652e636166656e6f7465732e6f70656ea22a2b59636166656e6f7465735a6361");
+    t.push_str("66652d6e6f74657354323034315f10207075626c69632e6170702d63617465676f72792e70726f647563746976697479");
+    t.push_str("5431322e30d2303132335f10164e53416c6c6f77734172626974726172794c6f6164735f10124e53457863657074696f");
+    t.push_str("6e446f6d61696e7308d134355f101073796e632e6578616d706c652e636f6dd2363738395f101c4e5345786365707469");
+    t.push_str("6f6e4d696e696d756d544c5356657273696f6e5f10144e53496e636c75646573537562646f6d61696e7357544c537631");
+    t.push_str("2e32096f10330043006f0070007900720069006700680074002000a9002000320030003200340020004500780061006d");
+    t.push_str("0070006c00650020002600200043006f002e00200041006c006c00200072006900670068007400730020007200650073");
+    t.push_str("00650072007600650064002ea00008002d0049005f0077008c00a100c100d700f4010701190135014e01670181019c01");
+    t.push_str("bd01dc01df01f401f601ff0218022b023e024c024e02540267026e0274027e0296029a029f02a502a702ac02be02d302");
+    t.push_str("f002f302fd0308030d03300335033a035303680369036c037f038403a303ba03c203c3042c0000000000000201000000");
+    t.push_str("000000003c0000000000000000000000000000042d");
+    v.push(("Info.binary.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c697374303052c3a908000000000000010100000000000000010000000000000000000000000000000b");
+    v.push(("badascii.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030d101025161a3030405100110021003080b0d11131500000000000001010000000000000006000000");
+    t.push_str("00000000000000000000001000");
+    v.push(("badoffset.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030a10908000000000000010100000000000000010000000000000000000000000000000a");
+    v.push(("badref.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030a10170080a000000000000010100000000000000020000000000000000000000000000000b");
+    v.push(("badtoken.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("efbbbf3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e0a3c706c697374");
+    t.push_str("2076657273696f6e3d22312e30223e0a3c61727261793e0a093c737472696e673e62797465206f72646572206d61726b");
+    t.push_str("3c2f737472696e673e0a093c696e74656765723e313c2f696e74656765723e0a3c2f61727261793e0a3c2f706c697374");
+    t.push_str("3e0a");
+    v.push(("bom.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030df10170102030405060708090a0b0c0d0e0f101112131415161718191d1e1f202122232425262728");
+    t.push_str("292a2b2e32353637415f10134e5357696e646f77204672616d65204d61696e5b526563656e7446696c657358466f6e74");
+    t.push_str("4e616d6558466f6e7453697a65545a6f6f6d5b4c696e6553706163696e675d4175746f7361766544656c61795a4c6173");
+    t.push_str("744c61756e63685b46697273744c61756e636859547269616c456e64735b57696e646f7753746174655342696755536d");
+    t.push_str("616c6c584e65676174697665564d656469756d5648756765333255466c61677356526174696f73555a65726f7355456d");
+    t.push_str("70747959456d7074794c697374555468656d655953616d6554776963655f101e31323020333430203938302036343020");
+    t.push_str("3020302031363830203130323520a31a1b1c5f10202f55736572732f616e612f4e6f7465732f47726f6365726965732e");
+    t.push_str("636e6f74656f1024002f00550073006500720073002f0061006e0061002f004e006f007400650073002f005400720069");
+    t.push_str("0070002020130020004c006900730062006f006e002e0063006e006f007400656f1025002f0055007300650072007300");
+    t.push_str("2f0061006e0061002f004e006f007400650073002fd83dde800020004c00610075006e0063006800200070006c006100");
+    t.push_str("6e002e0063006e006f007400655d4d656e6c6f2d526567756c617223402a000000000000233ff4000000000000233fb9");
+    t.push_str("99999999999a101e3341c5ce6b7680000033c192c79e000000003341c5dd18404000004f103400010203040506070809");
+    t.push_str("0a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2ffffe0001140000000000");
+    t.push_str("000000800000000000000513800000000000000013ffffffffffffffff120001117012ee6b2800a42c2d2c2c0908a52f");
+    t.push_str("2f30312c233fe0000000000000233ff00000000000001001a43333342d2300000000000000001000d0a0d238393a3f54");
+    t.push_str("4461726b554c69676874d23b3c3d3e56416363656e7458436f6e7472617374566f72616e67651002d23b3c403154626c");
+    t.push_str("7565a34242425672657065617400080039004f005b0064006d0072007e008c009700a300ad00b900bd00c300cc00d300");
+    t.push_str("da00e000e700ed00f300fd0103010d012e0132015501a001ed01fb0204020d021602180221022a0233026a027b028402");
+    t.push_str("8d02920297029c029d029e02a402ad02b602b802bd02c602c802c902ca02cf02d402da02df02e602ef02f602f802fd03");
+    t.push_str("020306000000000000020100000000000000430000000000000000000000000000030d");
+    v.push(("com.example.cafenotes.plist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030a10153610162080a000000000000010100000000000000020000000000000000000000000000000e");
+    v.push(("control.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030d1010210055466697665080b0d000000000000010100000000000000030000000000000000000000");
+    t.push_str("0000000012");
+    v.push(("intkey.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030d10102a05176080b0c00000000000001010000000000000003000000000000000000000000000000");
+    t.push_str("0e");
+    v.push(("listkey.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030d6000100020003000400050006000700080009000a000b000d546e6f6e6553663332546931323853");
+    t.push_str("756964546c6f6e6755757466313600223dcccccd140000000000000000ffffffffffffffffa2000c000e5f1014787878");
+    t.push_str("787878787878787878787878787878787880076300e9d83dde8081012c0821262a2f33383e3f44555a71737a00000000");
+    t.push_str("00000102000000000000000f0000000000000000000000000000007d");
+    v.push(("odd.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030d401020304050623265924617263686976657258246f626a656374735424746f7058247665727369");
+    t.push_str("6f6e5f100f4e534b657965644172636869766572a70708111213192055246e756c6cd4090a0b0c0d0e0f105624636c61");
+    t.push_str("737355636f756e745474616773557469746c6580048003800580025d5765656b6c79207265706f7274102ad214151617");
+    t.push_str("5824636c61737365735a24636c6173736e616d65a21718565265706f7274584e534f626a656374d2091a1b1c5a4e532e");
+    t.push_str("6f626a656374738006a31d1e1f800281012c8300011170d214152122a22218574e534172726179d1242554726f6f7480");
+    t.push_str("0112000186a008111b242932444c525b62686d737577797b898b9099a4a7aeb7bcc7c9cdcfd2d7dcdfe7eaeff1000000");
+    t.push_str("00000001010000000000000027000000000000000000000000000000f6");
+    v.push(("report.archive".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030d3010203040405546c65667455726967687454626f7468a3060607a0567368617265641009080f14");
+    t.push_str("1a1f23242b000000000000010100000000000000080000000000000000000000000000002d");
+    v.push(("shared.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c697374303000");
+    v.push(("short.bplist".to_string(), t));
+    let mut t = String.new();
+    t.push_str("62706c6973743030d101025161a3030405100110021003080b0d11131500000000000001010000000000000006000000");
+    t.push_str("0000000000000000");
+    v.push(("truncated.bplist".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("load\tInfo.plist\n");
+    s.push_str("xml\tInfo.plist\n");
+    s.push_str("bin\tInfo.plist\n");
+    s.push_str("load\tcom.example.backup.plist\n");
+    s.push_str("xml\tcom.example.backup.plist\n");
+    s.push_str("bin\tcom.example.backup.plist\n");
+    s.push_str("load\tedges.plist\n");
+    s.push_str("xml\tedges.plist\n");
+    s.push_str("bin\tedges.plist\n");
+    s.push_str("load\tbom.plist\n");
+    s.push_str("xml\tbom.plist\n");
+    s.push_str("bin\tbom.plist\n");
+    s.push_str("load\tcom.example.cafenotes.plist\n");
+    s.push_str("xml\tcom.example.cafenotes.plist\n");
+    s.push_str("bin\tcom.example.cafenotes.plist\n");
+    s.push_str("load\tInfo.binary.plist\n");
+    s.push_str("xml\tInfo.binary.plist\n");
+    s.push_str("bin\tInfo.binary.plist\n");
+    s.push_str("load\treport.archive\n");
+    s.push_str("xml\treport.archive\n");
+    s.push_str("bin\treport.archive\n");
+    s.push_str("load\tprefs.xml.plist\n");
+    s.push_str("xml\tprefs.xml.plist\n");
+    s.push_str("bin\tprefs.xml.plist\n");
+    s.push_str("load\tshared.bplist\n");
+    s.push_str("xml\tshared.bplist\n");
+    s.push_str("bin\tshared.bplist\n");
+    s.push_str("load\todd.bplist\n");
+    s.push_str("xml\todd.bplist\n");
+    s.push_str("bin\todd.bplist\n");
+    s.push_str("load\tintkey.bplist\n");
+    s.push_str("xml\tintkey.bplist\n");
+    s.push_str("bin\tintkey.bplist\n");
+    s.push_str("load\tcontrol.bplist\n");
+    s.push_str("xml\tcontrol.bplist\n");
+    s.push_str("bin\tcontrol.bplist\n");
+    s.push_str("load\tok/padding-quirks.plist\n");
+    s.push_str("xml\tok/padding-quirks.plist\n");
+    s.push_str("bin\tok/padding-quirks.plist\n");
+    s.push_str("load\tok/overflow.plist\n");
+    s.push_str("xml\tok/overflow.plist\n");
+    s.push_str("bin\tok/overflow.plist\n");
+    s.push_str("load\tok/roots.plist\n");
+    s.push_str("xml\tok/roots.plist\n");
+    s.push_str("bin\tok/roots.plist\n");
+    s.push_str("load\tok/bare.plist\n");
+    s.push_str("xml\tok/bare.plist\n");
+    s.push_str("bin\tok/bare.plist\n");
+    s.push_str("xml\tcom.example.cafenotes.plist\tsort_keys=0\n");
+    s.push_str("bin\tcom.example.cafenotes.plist\tsort_keys=0\n");
+    s.push_str("xml\tedges.plist\tsort_keys=0\n");
+    s.push_str("bin\tedges.plist\tsort_keys=0\n");
+    s.push_str("xml\treport.archive\tsort_keys=0\n");
+    s.push_str("bin\treport.archive\tsort_keys=0\n");
+    s.push_str("xml\tprefs.xml.plist\tsort_keys=0\n");
+    s.push_str("bin\tprefs.xml.plist\tsort_keys=0\n");
+    s.push_str("xml\tshared.bplist\tsort_keys=0\n");
+    s.push_str("bin\tshared.bplist\tsort_keys=0\n");
+    s.push_str("xml\tintkey.bplist\tskipkeys=1\n");
+    s.push_str("bin\tintkey.bplist\tskipkeys=1\n");
+    s.push_str("bin\tintkey.bplist\tsort_keys=0\n");
+    s.push_str("bin\tintkey.bplist\tsort_keys=0\tskipkeys=1\n");
+    s.push_str("roundtrip\tInfo.plist\n");
+    s.push_str("roundtrip\tedges.plist\n");
+    s.push_str("roundtrip\tcom.example.cafenotes.plist\n");
+    s.push_str("roundtrip\todd.bplist\n");
+    s.push_str("roundtrip\treport.archive\n");
+    s.push_str("load\tlistkey.bplist\n");
+    s.push_str("load\ttruncated.bplist\n");
+    s.push_str("load\tbadoffset.bplist\n");
+    s.push_str("load\tbadtoken.bplist\n");
+    s.push_str("load\tbadref.bplist\n");
+    s.push_str("load\tbadascii.bplist\n");
+    s.push_str("load\tshort.bplist\n");
+    s.push_str("load\tnotes.json\n");
+    s.push_str("load\tempty.plist\n");
+    s.push_str("load\tbad/key-in-array.plist\n");
+    s.push_str("load\tbad/missing-value.plist\n");
+    s.push_str("load\tbad/value-without-key.plist\n");
+    s.push_str("load\tbad/two-keys.plist\n");
+    s.push_str("load\tbad/entity.plist\n");
+    s.push_str("load\tbad/int.plist\n");
+    s.push_str("load\tbad/hex.plist\n");
+    s.push_str("load\tbad/real.plist\n");
+    s.push_str("load\tbad/neg-hex.plist\n");
+    s.push_str("load\tbad/padding.plist\n");
+    s.push_str("load\tbad/padding5.plist\n");
+    s.push_str("get\tcom.example.cafenotes.plist\tFontSize\n");
+    s.push_str("get\tInfo.plist\tFontSize\n");
+    s.push_str("get\treport.archive\tFontSize\n");
+    s.push_str("get\tedges.plist\tFontSize\n");
+    s.push_str("get\tInfo.plist\tCFBundleURLTypes\t0\tCFBundleURLSchemes\t1\n");
+    s.push_str("get\tInfo.plist\tNSAppTransportSecurity\tNSExceptionDomains\tsync.example.com\n");
+    s.push_str("get\tcom.example.backup.plist\tStartCalendarInterval\t1\tWeekday\n");
+    s.push_str("get\tcom.example.backup.plist\tProgramArguments\t9\n");
+    s.push_str("get\tcom.example.cafenotes.plist\tTrialEnds\n");
+    s.push_str("get\tcom.example.cafenotes.plist\tTheme\tDark\tAccent\tx\n");
+    s.push_str("get\treport.archive\t$objects\t1\ttitle\n");
+    s
+}

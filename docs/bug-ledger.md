@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 279 |
 | codegen-gap | 272 |
-| false-positive | 229 |
+| false-positive | 230 |
 | other | 175 |
 | perf | 173 |
 | diagnostics | 167 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2938 |
 | interp | 953 |
-| typecheck | 471 |
+| typecheck | 472 |
 | other | 115 |
 | ownership | 113 |
 | runtime | 78 |
@@ -198,6 +198,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-39 | 2026-10-18 | typecheck | low | `Map.get_mut(k)` with a `Str` key on a `Map[String, V]` is refused ("expected 'ref String', found 'Str'"), though `get`, `remove` and `contains_key` take a `Str` there | — |
 | B-2026-10-18-40 | 2026-10-18 | interp+codegen | medium | On MIR, `let mut out = s; out = " " + out;` with `s` a bare (borrowed) `String` param builds invalid MIR ("assigning String to _3 of type ref String"); check passes | — |
 | B-2026-10-18-41 | 2026-10-18 | interp+codegen | medium | On MIR, `match it.value { V.List(q) => q.push(..) }` with `it` from `m.get_mut(k).unwrap()` is refused by the borrow checker ("mutable borrow of (*_16) through a shared reference [E0517]"); check passes | — |
+| B-2026-10-18-42 | 2026-10-18 | typecheck | low | An `if` whose branches are both unsuffixed integer literals is typed `i64` when it is a call argument, so `v.push(if c { 9 } else { 8 })` on a `Vec[u8]` is refused ("implicit coercion from 'i64' to 'u8' would narrow"), while `let x: u8 = if c { 9 } else { 8 };` passes | — |
 
 ### Relocated
 
