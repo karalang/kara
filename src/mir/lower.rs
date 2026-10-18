@@ -3486,6 +3486,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let targs = self.tys().tcx().list(args);
                     return self.index_set(target, object, index, value, base, &targs);
                 }
+                // A user type's `impl IndexSet` (B-2026-10-14-47).
+                if let Some((d, inst_args)) = self.user_impl_method(base, "IndexSet", "index_set") {
+                    return self.user_index_set(target, object, index, value, base, d, inst_args);
+                }
             }
         }
         // Left to right: the target's own subexpressions, then the value,
@@ -4276,21 +4280,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let r = self.temp(rt);
         self.assign(r, Rvalue::Ref(borrow, base));
-        let idx = match self.tys().tcx().kind(pt) {
-            HK::Ref(it) | HK::MutRef(it) if !self.is_reference(self.operand_ty(&idx)) => {
-                let v = self.temp(it);
-                self.assign(v, Rvalue::Use(idx));
-                let lent = self.temp(pt);
-                let kind = if matches!(self.tys().tcx().kind(pt), HK::MutRef(_)) {
-                    BorrowKind::Mut
-                } else {
-                    BorrowKind::Shared
-                };
-                self.assign(lent, Rvalue::Ref(kind, Place::local(v)));
-                Operand::Move(Place::local(lent))
-            }
-            _ => idx,
-        };
+        let idx = self.lend_to(idx, pt);
         let out = self.temp(out_t);
         let name = self.lcx.instance(d, inst_args.clone());
         let func = self.fn_operand(&name, d, inst_args);
@@ -4306,6 +4296,100 @@ impl<'l, 'a> Bx<'l, 'a> {
             next,
         );
         Ok(Place::local(out).project(ProjElem::Deref))
+    }
+
+    /// `op` as an argument of type `pt`: lent from a temporary when `pt`
+    /// is a reference and `op` is not. The temporary is the statement's, so
+    /// a key that owns a value (`c["a".to_string()]`) is dropped with it.
+    fn lend_to(&mut self, op: Operand, pt: Ty) -> Operand {
+        match self.tys().tcx().kind(pt) {
+            HK::Ref(it) | HK::MutRef(it) if !self.is_reference(self.operand_ty(&op)) => {
+                let v = self.scoped_temp(it);
+                self.assign(v, Rvalue::Use(op));
+                let lent = self.temp(pt);
+                let kind = if matches!(self.tys().tcx().kind(pt), HK::MutRef(_)) {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                self.assign(lent, Rvalue::Ref(kind, Place::local(v)));
+                Operand::Move(Place::local(lent))
+            }
+            _ => op,
+        }
+    }
+
+    /// `c[k] = v` on a user type with an `impl IndexSet`: the call
+    /// `c.index_set(k, v)`, with the key, then the value, evaluated before
+    /// the receiver's borrow starts, as for a map (design.md § `Index` and
+    /// `IndexMut`, B-2026-10-14-47).
+    #[allow(clippy::too_many_arguments)]
+    fn user_index_set(
+        &mut self,
+        target: &'a Expr,
+        object: &'a Expr,
+        index: &'a Expr,
+        value: &'a Expr,
+        base: Ty,
+        d: DefId,
+        inst_args: Vec<Ty>,
+    ) -> R<()> {
+        let f = self.lcx.fns[&d].f;
+        let (Some(m), [kp, vp]) = (f.self_param.clone(), f.params.as_slice()) else {
+            return self.unsupported(
+                target.span,
+                "an `index_set` that does not take `self`, a key and a value",
+            );
+        };
+        if self.lcx.fns[&d].impl_params == 0 {
+            self.lcx.self_tys.entry(d).or_insert(base);
+        }
+        if self.self_mode(f, m, base) != SelfParam::MutRef {
+            return self.unsupported(target.span, "an `index_set` without `mut ref self`");
+        }
+        let kt = self.callee_param_ty(kp, &inst_args)?;
+        let vt = self.callee_param_ty(vp, &inst_args)?;
+        let recv = self.recv_place(object, true)?;
+        let key = match self.tys().tcx().kind(kt) {
+            HK::Ref(_) | HK::MutRef(_) => {
+                let k = self.expr_operand(index)?;
+                self.lend_to(k, kt)
+            }
+            _ => self.owned_operand(index, kt)?,
+        };
+        let val = match self.tys().tcx().kind(vt) {
+            HK::Ref(_) | HK::MutRef(_) => {
+                let v = self.expr_operand(value)?;
+                self.lend_to(v, vt)
+            }
+            _ => {
+                let v = self.owned_operand(value, vt)?;
+                if self.downgrades(&v, vt) {
+                    self.downgrade(v, vt)
+                } else {
+                    self.widen(v, vt)
+                }
+            }
+        };
+        let mut rest = vec![key, val];
+        let mut args = vec![self.recv_borrow_after(recv, &mut rest)?];
+        args.extend(rest);
+        let unit = self.unit();
+        let out = self.temp(unit);
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args,
+                destination: Place::local(out),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(())
     }
 
     /// `base[idx]` on a fixed-size array: a bounds check that aborts, then

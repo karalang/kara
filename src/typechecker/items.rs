@@ -8520,7 +8520,14 @@ impl<'a> super::TypeChecker<'a> {
                 // on entry and resets to false for nested reads.
                 let saved = self.assigning_lhs;
                 self.assigning_lhs = true;
+                let saved_set = self.index_set_target.take();
+                if matches!(&target.kind, ExprKind::Index { index, .. }
+                    if !matches!(index.kind, ExprKind::Range { .. }))
+                {
+                    self.index_set_target = Some(SpanKey::from_span(&target.span));
+                }
                 let target_ty = self.infer_expr(target);
+                self.index_set_target = saved_set;
                 self.assigning_lhs = saved;
                 self.check_assignment_target_is_place(target, Some(value));
                 self.check_read_only_slice_write(target);

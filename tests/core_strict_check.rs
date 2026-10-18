@@ -4317,6 +4317,117 @@ fn main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// B-2026-10-14-47: a plain `c[k] = v` stores through `IndexSet` when the
+// type implements it; the value is checked against `index_set`'s, and a
+// type with only `IndexSet` cannot be read or compound-assigned through
+// `[]`.
+#[test]
+fn user_index_set_is_accepted() {
+    accepted(
+        "user-index-set",
+        r#"struct Registry { keys: Vec[String], vals: Vec[i64] }
+impl Registry {
+    fn new() -> Registry { Registry { keys: Vec.new(), vals: Vec.new() } }
+    fn find(ref self, k: ref String) -> Option[i64] {
+        let mut i = 0;
+        while i < self.keys.len() {
+            if self.keys[i] == *k { return Some(i); }
+            i += 1;
+        }
+        None
+    }
+}
+impl Index[String] for Registry {
+    type Output = i64;
+    fn index(ref self, k: ref String) -> ref i64 {
+        let i = self.find(k).expect("missing key");
+        ref self.vals[i]
+    }
+}
+impl IndexMut[String] for Registry {
+    type Output = i64;
+    fn index_mut(mut ref self, k: ref String) -> mut ref i64 {
+        let i = self.find(k).expect("missing key");
+        mut ref self.vals[i]
+    }
+}
+impl IndexSet[String] for Registry {
+    type Output = i64;
+    fn index_set(mut ref self, k: own String, v: own i64) {
+        match self.find(k) {
+            Some(i) => { self.vals[i] = v; }
+            None => { self.keys.push(k); self.vals.push(v); }
+        }
+    }
+}
+struct Sparse[V] { keys: Vec[i64], vals: Vec[V] }
+impl[V] Sparse[V] {
+    fn new() -> Sparse[V] { Sparse { keys: Vec.new(), vals: Vec.new() } }
+    fn len(ref self) -> i64 { self.keys.len() }
+}
+impl[V] IndexSet[i64] for Sparse[V] {
+    type Output = V;
+    fn index_set(mut ref self, k: own i64, v: own V) {
+        let mut i = 0;
+        while i < self.keys.len() {
+            if self.keys[i] == k {
+                self.vals[i] = v;
+                return;
+            }
+            i += 1;
+        }
+        self.keys.push(k);
+        self.vals.push(v);
+    }
+}
+fn main() {
+    let mut r = Registry.new();
+    r["a".to_string()] = 1;
+    r["b".to_string()] = 2;
+    r["a".to_string()] = 10;
+    r["b".to_string()] += 5;
+    println(f"{r["a".to_string()]} {r["b".to_string()]} {r.keys.len()}");
+    let mut s: Sparse[String] = Sparse.new();
+    s[7] = "seven".to_string();
+    s[1000000] = "big".to_string();
+    s[7] = "SEVEN".to_string();
+    println(f"{s.len()} {s.vals[0]} {s.vals[1]}");
+}
+"#,
+    );
+    let (dir, path) = fixture(
+        "user-index-set-refused",
+        r#"struct Sparse { keys: Vec[i64], vals: Vec[i64] }
+impl IndexSet[i64] for Sparse {
+    type Output = i64;
+    fn index_set(mut ref self, k: own i64, v: own i64) { self.keys.push(k); self.vals.push(v); }
+}
+fn main() {
+    let mut s = Sparse { keys: Vec.new(), vals: Vec.new() };
+    s[1] = "x";
+    s[2] += 1;
+    println(f"{s[1]}");
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(
+        err.contains("8:12: expected 'i64', found 'String'"),
+        "{err}"
+    );
+    assert!(
+        err.contains("9:5: `Sparse` implements `IndexSet` but not `Index`"),
+        "{err}"
+    );
+    assert!(
+        err.contains("10:16: `Sparse` implements `IndexSet` but not `Index`"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `?` is postfix, so `f()?.x` is `(f()?).x` and `f()?.m()` is `(f()?).m()`
 /// (design.md § Results and propagation; B-2026-10-14-50). The check took
 /// `?.` for the removed optional-chaining operator and refused it on every

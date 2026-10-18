@@ -398,7 +398,7 @@ impl<'a> super::Resolver<'a> {
     fn check_operator_trait_restriction(&mut self, trait_path: &PathExpr, target: &TypeExpr) {
         const OPERATOR_TRAIT_NAMES: &[&str] = &[
             "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Eq", "Ord", "BitAnd", "BitOr", "BitXor",
-            "Shl", "Shr", "Not", "Index", "IndexMut", "Display",
+            "Shl", "Shr", "Not", "Index", "IndexMut", "IndexSet", "Display",
         ];
         const STDLIB_ALLOWLIST: &[&str] = &[
             "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f16", "bf16",

@@ -472,6 +472,7 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "Default",
     "Index",
     "IndexMut",
+    "IndexSet",
     "Display",
     // CR-202 slice 5g.
     "Debug",

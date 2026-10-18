@@ -13,3 +13,10 @@ trait Index {
 trait IndexMut {
     type Output;
 }
+
+// `c[key] = value` stores through `IndexSet.index_set(c, key, value)` when
+// `c`'s type implements it, for a keyed collection whose key may not be
+// present yet (B-2026-10-14-47).
+trait IndexSet {
+    type Output;
+}

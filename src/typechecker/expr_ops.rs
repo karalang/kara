@@ -2643,6 +2643,33 @@ impl<'a> super::TypeChecker<'a> {
                 .collect();
             Some((sig, subs))
         };
+        // B-2026-10-14-47 — a plain `c[k] = v` to the whole element stores
+        // through `IndexSet` when the type implements it: the key may not be
+        // present yet. Its type is the stored value's, `index_set`'s second
+        // parameter.
+        let whole_store = write && self.index_set_target == Some(SpanKey::from_span(span));
+        if let Some((sig, subs)) = whole_store
+            .then(|| lookup("IndexSet", "index_set"))
+            .flatten()
+        {
+            let at = |this: &Self, t: &Type| {
+                super::inference::substitute_type_params(
+                    &this.subst_operator_self(t, &recv, &name),
+                    &subs,
+                )
+            };
+            let [key, value] = sig.params.as_slice() else {
+                self.type_error(
+                    format!("`{name}.index_set` must take `mut ref self`, a key and a value"),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Some(Type::Error);
+            };
+            let key = at(self, key);
+            self.check_assignable(&key, idx_ty, index.span);
+            return Some(at(self, value));
+        }
         let read = lookup("Index", "index");
         let written = lookup("IndexMut", "index_mut");
         let (sig, subs) = match (write, written, read) {
@@ -2653,6 +2680,20 @@ impl<'a> super::TypeChecker<'a> {
                         "`{name}` implements `Index` but not `IndexMut`, so an element of it \
                          cannot be written through `[]`"
                     ),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Some(Type::Error);
+            }
+            // A type that only stores through `IndexSet` (B-2026-10-14-47).
+            _ if lookup("IndexSet", "index_set").is_some() => {
+                let why = if write {
+                    "`IndexMut`, so `[]` can only store a whole element with a plain `=`"
+                } else {
+                    "`Index`, so an element of it cannot be read through `[]`"
+                };
+                self.type_error(
+                    format!("`{name}` implements `IndexSet` but not {why}"),
                     *span,
                     TypeErrorKind::TypeMismatch,
                 );

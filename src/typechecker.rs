@@ -2588,6 +2588,10 @@ pub struct TypeChecker<'a> {
     /// fire there. Line 549 slice 2a — "field assignment is
     /// unconditionally safe" per design.md § FFI Unions.
     pub(super) assigning_lhs: bool,
+    /// The `c[k]` that is the whole target of a plain `c[k] = v`, which
+    /// stores through `IndexSet` when `c`'s type implements it (design.md
+    /// § `Index` and `IndexMut`, B-2026-10-14-47).
+    pub(super) index_set_target: Option<SpanKey>,
     /// `Some("ref")` / `Some("mut ref")` while typechecking a call
     /// argument whose callee parameter type is `Type::Ref(_)` /
     /// `Type::MutRef(_)`. Consumed by `infer_field_access`'s union arm
@@ -3363,6 +3367,7 @@ impl<'a> TypeChecker<'a> {
             unsafe_depth: 0,
             comptime_depth: 0,
             assigning_lhs: false,
+            index_set_target: None,
             borrow_context: None,
             mut_through_param_arg: false,
             current_return_type: None,
