@@ -213,7 +213,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-26 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces `check(n).map_err(text)?` with a NAMED function stops with "'?' cannot propagate error 'F' as 'String': target is not a named type": `map_err[F]`'s `F` is not taken from the function's return type; check, `run --interp` and legacy build pass, and a closure `.map_err(|e| text(e))?` or a typed `let r: Result[i64, String] = ...` works | — |
 | B-2026-10-18-27 | 2026-10-18 | typecheck | medium | check refuses `Some(ref t) => title = Some(f"{t}{s}")`, an assignment to the matched place whose only use of `t` is in the value being stored; mir-interp and mir-llvm run it | — |
 | B-2026-10-18-28 | 2026-10-18 | ownership | low | `karac fix` rewrites `Some(h) => h.text.push_str(w)` (a match on an owned Option in a loop) to `Some(ref h)`, which check then refuses because the arm writes through `h`; the fix should write `mut ref h` | — |
-| B-2026-10-18-29 | 2026-10-18 | codegen | medium | `karac __mir-llvm-asan` build time grows with the square of a function's length: a 2231-statement table function takes 168 s against 16 s on mir-llvm, past the corpus's 60 s limit | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
 | B-2026-10-18-31 | 2026-10-18 | runtime+cli | high | The v2 ASan lane (`karac __mir-llvm-asan`) cannot see a leak: `karac_mir_run_main` runs `main` on `big_stack`, an mmap'd stack it switches to by hand, and LeakSanitizer reports nothing allocated there, so every 'no leak' verdict from the lane since 8969be0434 (2026-10-13) is vacuous | — |
 
@@ -4145,6 +4144,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-18-12 | interp+codegen | medium | A generic function passed as a value, `count(v, never)` with `fn never[T](x: T) -> bool`, is refused by every MIR surface with "a generic function as… | 6f256df19a |
 | B-2026-10-18-13 | interp+codegen | high | A match whose arms are `Some(n) => *n` and `None => b.get(k).unwrap_or(0)` keeps the second arm a `ref i64` on the MIR surfaces: `karac check` passes… | a2fbdd9c11 |
 | B-2026-10-18-19 | interp+codegen | high | A function declared `-> i64` whose tail is `<local>.first().unwrap()` or `q.peek().unwrap()` on a LOCAL `Vec`/`PriorityQueue`, or whose `ref i64` res… | a2fbdd9c11 |
+| B-2026-10-18-29 | codegen | medium | `karac __mir-llvm-asan` build time grows with the square of a function's length: a 2231-statement table function takes 168 s against 16 s on mir-llvm… | 24740acba2 |
 
 </details>
 
