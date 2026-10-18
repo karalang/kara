@@ -888,7 +888,13 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         }
         // Pure libraries over values: they allocate, and a bad index or
         // argument panics. Parsing command-line arguments reads them.
-        ("Regex" | "RegexEngine" | "Match" | "Json" | "Arg" | "Stats", _) => vec![HEAP, PANICS],
+        ("Json" | "Arg" | "Stats", _) => vec![HEAP, PANICS],
+        // The regex natives allocate and never panic: an offset outside the
+        // text or off a character boundary finds no match, and a pattern
+        // that does not compile has no groups and no matches
+        // (docs/library/regex.md § Effects). `Regex` and `Match` have no
+        // natives; their methods are Kāra, inferred from their bodies.
+        ("RegexEngine", _) => vec![HEAP],
         ("Parser", "parse") => vec![(Reads, "Env", None), HEAP, PANICS],
         ("Parser", _) => vec![HEAP, PANICS],
         ("format_spec", "") => vec![HEAP],
@@ -2254,5 +2260,23 @@ fn main() {
             out.effects.iter().next().unwrap().key,
             Key::Param(1, vec![0; MAX_PATH])
         );
+    }
+
+    /// The regex natives allocate and nothing else (docs/library/regex.md
+    /// § Effects), so `Regex.escape`, which is one native call, cannot
+    /// panic. Methods with a loop or an index still can, as far as the
+    /// analysis sees: their bodies' arithmetic and indexing are checked.
+    #[test]
+    fn effects_regex_natives_do_not_panic() {
+        let r = from_source(
+            "fn esc() -> String {
+    Regex.escape(\"a.b\")
+}
+fn main() {
+    println(esc());
+}
+",
+        );
+        assert_eq!(effects(&r, "esc"), vec!["allocates(Heap)".to_string()]);
     }
 }
