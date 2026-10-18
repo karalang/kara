@@ -1,0 +1,172 @@
+// LeetCode #721: Accounts Merge -- union-find over the accounts.
+//
+// Remember, for each email, the first account it appeared in. An
+// account that lists an email already seen is joined with that first
+// account in a union-find over the account numbers. Then each email
+// goes into the set of its account's root, as a set so repeats fold,
+// and each set is sorted under its root's name. O(E log E).
+
+fn root_of(parent: mut ref Vec[i64], x: i64) -> i64 {
+    if parent[x] != x {
+        let top = root_of(mut parent, parent[x]);
+        parent[x] = top;
+    }
+    parent[x]
+}
+
+fn accounts_merge(accounts: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..accounts.len() {
+        parent.push(i);
+    }
+    let mut first_seen: Map[String, i64] = Map.new();
+    for i in 0..accounts.len() {
+        for k in 1..accounts[i].len() {
+            let email = accounts[i][k].clone();
+            if first_seen.contains_key(email.clone()) {
+                let a = root_of(mut parent, first_seen[email]);
+                let b = root_of(mut parent, i);
+                if a != b {
+                    parent[b] = a;
+                }
+            } else {
+                first_seen.insert(email, i);
+            }
+        }
+    }
+    let mut groups: Map[i64, Set[String]] = Map.new();
+    for i in 0..accounts.len() {
+        let root = root_of(mut parent, i);
+        if not groups.contains_key(root) {
+            groups.insert(root, Set.new());
+        }
+        for k in 1..accounts[i].len() {
+            groups[root].insert(accounts[i][k].clone());
+        }
+    }
+    let mut merged: Vec[Vec[String]] = Vec.new();
+    for (root, group) in groups.iter() {
+        let mut sorted: Vec[String] = Vec.new();
+        for email in group.iter() {
+            sorted.push(email.clone());
+        }
+        sorted.sort();
+        let mut account = vec![accounts[*root][0].clone()];
+        for email in sorted.iter() {
+            account.push(email.clone());
+        }
+        merged.push(account);
+    }
+    merged
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(words: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in words.iter() {
+        out.push(w.to_string());
+    }
+    out
+}
+
+// The merged accounts one per line, each as its name and emails joined
+// by spaces, the lines sorted, since any order of accounts is allowed.
+fn canonical(merged: Vec[Vec[String]]) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    for account in merged.iter() {
+        lines.push(account.join(" "));
+    }
+    lines.sort();
+    lines
+}
+
+fn show(accounts: Vec[Vec[String]]) {
+    println(canonical(accounts_merge(accounts)).join(" | "));
+}
+
+// Random accounts: email number e always belongs to name e % 4, so an
+// account picks a name and then up to `most` emails of that name's
+// from the first `pool`.
+fn random_accounts(count: i64, most: i64, pool: i64, seed: mut ref i64) -> Vec[Vec[String]] {
+    let names = ["Ada", "Bo", "Cy", "Di"];
+    let mut accounts: Vec[Vec[String]] = Vec.new();
+    for _ in 0..count {
+        let who = next_random(mut seed) % 4;
+        let mut account = vec![names[who].to_string()];
+        let n = 1 + next_random(mut seed) % most;
+        for _ in 0..n {
+            let e = 4 * (next_random(mut seed) % (pool / 4)) + who;
+            account.push(f"u{e}@m.co");
+        }
+        accounts.push(account);
+    }
+    accounts
+}
+
+fn summary(merged: Vec[Vec[String]]) -> String {
+    let mut largest = 0;
+    let mut emails = 0;
+    for account in merged.iter() {
+        emails += account.len() - 1;
+        if account.len() - 1 > largest {
+            largest = account.len() - 1;
+        }
+    }
+    f"{merged.len()} people, {emails} emails, the most {largest}"
+}
+
+fn main() {
+    show([
+        strings(["John", "johnsmith@mail.com", "john_newyork@mail.com"]),
+        strings(["John", "johnsmith@mail.com", "john00@mail.com"]),
+        strings(["Mary", "mary@mail.com"]),
+        strings(["John", "johnnybravo@mail.com"]),
+    ]);
+    show([
+        strings(["Gabe", "Gabe0@m.co", "Gabe3@m.co", "Gabe1@m.co"]),
+        strings(["Kevin", "Kevin3@m.co", "Kevin5@m.co", "Kevin0@m.co"]),
+        strings(["Ethan", "Ethan5@m.co", "Ethan4@m.co", "Ethan0@m.co"]),
+        strings(["Hanzo", "Hanzo3@m.co", "Hanzo1@m.co", "Hanzo0@m.co"]),
+        strings(["Fern", "Fern5@m.co", "Fern1@m.co", "Fern0@m.co"]),
+    ]);
+    show([strings(["Al", "al@m.co"])]);
+    show([strings(["Al", "al@m.co", "al@m.co"]), strings(["Al", "al@m.co"])]);
+    show([strings(["Al", "a@m.co", "b@m.co"]), strings(["Al", "c@m.co", "d@m.co"]), strings(["Al", "b@m.co", "c@m.co"])]);
+    show([strings(["Al", "x@m.co"]), strings(["Al", "y@m.co"])]);
+    show([strings(["Bo", "d@m.co", "c@m.co"]), strings(["Al", "b@m.co", "a@m.co"]), strings(["Bo", "e@m.co", "d@m.co"])]);
+    // 1,000 accounts, the problem's most, each sharing its last email
+    // with the next one's first, listed from the far end.
+    let mut chain: Vec[Vec[String]] = Vec.new();
+    let mut i = 999;
+    while i >= 0 {
+        chain.push(vec!["Zed".to_string(), f"z{i}@m.co", f"z{i + 1}@m.co"]);
+        i -= 1;
+    }
+    println(f"a chain of 1000 accounts: {summary(accounts_merge(chain))}");
+    let mut seed: i64 = 721;
+    let wide = random_accounts(1000, 3, 8000, mut seed);
+    println(f"1000 accounts of up to 3 emails over 8000: {summary(accounts_merge(wide))}");
+    let dense = random_accounts(1000, 9, 400, mut seed);
+    println(f"1000 accounts of up to 9 emails over 400: {summary(accounts_merge(dense))}");
+    let mut sum = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 30;
+        let most = 1 + next_random(mut seed) % 4;
+        let pool = 4 + 4 * (next_random(mut seed) % 20);
+        let lines = canonical(accounts_merge(random_accounts(count, most, pool, mut seed)));
+        for line in lines.iter() {
+            for c in line.bytes().iter() {
+                sum = (sum * 31 + (*c as i64)) % 1000000007;
+            }
+            sum = (sum * 31 + 10) % 1000000007;
+        }
+        sum = (sum * 131 + lines.len()) % 1000000007;
+    }
+    println(f"300 random account lists: checksum {sum}");
+}

@@ -1,0 +1,405 @@
+// LeetCode #721: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random account lists.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn find_star(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let up = parent[at];
+        parent[at] = root;
+        at = up;
+    }
+    root
+}
+
+fn accounts_merge_star(accounts: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut id: Map[String, i64] = Map.new();
+    let mut emails: Vec[String] = Vec.new();
+    let mut owner: Vec[String] = Vec.new();
+    let mut parent: Vec[i64] = Vec.new();
+    for account in accounts.iter() {
+        let mut first = -1;
+        for k in 1..account.len() {
+            let email = account[k].clone();
+            if not id.contains_key(email.clone()) {
+                id.insert(email.clone(), emails.len());
+                parent.push(emails.len());
+                emails.push(email.clone());
+                owner.push(account[0].clone());
+            }
+            let e = id[email];
+            if first < 0 {
+                first = e;
+            } else {
+                let a = find_star(mut parent, first);
+                let b = find_star(mut parent, e);
+                if a != b {
+                    parent[b] = a;
+                }
+            }
+        }
+    }
+    let mut groups: Map[i64, Vec[String]] = Map.new();
+    for e in 0..emails.len() {
+        let root = find_star(mut parent, e);
+        if not groups.contains_key(root) {
+            groups.insert(root, Vec.new());
+        }
+        groups[root].push(emails[e].clone());
+    }
+    let mut merged: Vec[Vec[String]] = Vec.new();
+    for (root, group) in groups.iter() {
+        let mut sorted = group.clone();
+        sorted.sort();
+        let mut account = vec![owner[*root].clone()];
+        for email in sorted.iter() {
+            account.push(email.clone());
+        }
+        merged.push(account);
+    }
+    merged
+}
+
+// ---- dfs arm --------------------------------------------------------
+
+fn accounts_merge_dfs(accounts: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut links: Map[String, Vec[String]] = Map.new();
+    let mut owner: Map[String, String] = Map.new();
+    let mut order: Vec[String] = Vec.new();
+    for account in accounts.iter() {
+        for k in 1..account.len() {
+            let email = account[k].clone();
+            if not links.contains_key(email.clone()) {
+                links.insert(email.clone(), Vec.new());
+                owner.insert(email.clone(), account[0].clone());
+                order.push(email.clone());
+            }
+            if k > 1 {
+                links[account[1].clone()].push(email.clone());
+                links[email].push(account[1].clone());
+            }
+        }
+    }
+    let mut seen: Set[String] = Set.new();
+    let mut merged: Vec[Vec[String]] = Vec.new();
+    for start in order.iter() {
+        if seen.contains(start.clone()) {
+            continue;
+        }
+        seen.insert(start.clone());
+        let mut stack = vec![start.clone()];
+        let mut group: Vec[String] = Vec.new();
+        while stack.len() > 0 {
+            let email = stack.pop().unwrap();
+            for next in links[email.clone()].iter() {
+                if not seen.contains(next.clone()) {
+                    seen.insert(next.clone());
+                    stack.push(next.clone());
+                }
+            }
+            group.push(email);
+        }
+        group.sort();
+        let mut account = vec![owner[start.clone()].clone()];
+        for email in group.iter() {
+            account.push(email.clone());
+        }
+        merged.push(account);
+    }
+    merged
+}
+
+// ---- byaccount arm --------------------------------------------------
+
+fn root_of_byaccount(parent: mut ref Vec[i64], x: i64) -> i64 {
+    if parent[x] != x {
+        let top = root_of_byaccount(mut parent, parent[x]);
+        parent[x] = top;
+    }
+    parent[x]
+}
+
+fn accounts_merge_byaccount(accounts: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..accounts.len() {
+        parent.push(i);
+    }
+    let mut first_seen: Map[String, i64] = Map.new();
+    for i in 0..accounts.len() {
+        for k in 1..accounts[i].len() {
+            let email = accounts[i][k].clone();
+            if first_seen.contains_key(email.clone()) {
+                let a = root_of_byaccount(mut parent, first_seen[email]);
+                let b = root_of_byaccount(mut parent, i);
+                if a != b {
+                    parent[b] = a;
+                }
+            } else {
+                first_seen.insert(email, i);
+            }
+        }
+    }
+    let mut groups: Map[i64, Set[String]] = Map.new();
+    for i in 0..accounts.len() {
+        let root = root_of_byaccount(mut parent, i);
+        if not groups.contains_key(root) {
+            groups.insert(root, Set.new());
+        }
+        for k in 1..accounts[i].len() {
+            groups[root].insert(accounts[i][k].clone());
+        }
+    }
+    let mut merged: Vec[Vec[String]] = Vec.new();
+    for (root, group) in groups.iter() {
+        let mut sorted: Vec[String] = Vec.new();
+        for email in group.iter() {
+            sorted.push(email.clone());
+        }
+        sorted.sort();
+        let mut account = vec![accounts[*root][0].clone()];
+        for email in sorted.iter() {
+            account.push(email.clone());
+        }
+        merged.push(account);
+    }
+    merged
+}
+
+// ---- fold arm -------------------------------------------------------
+
+fn accounts_merge_fold(accounts: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut people: Vec[Vec[String]] = Vec.new();
+    for account in accounts.iter() {
+        let mut joined: Set[String] = Set.new();
+        for k in 1..account.len() {
+            joined.insert(account[k].clone());
+        }
+        let mut kept: Vec[Vec[String]] = Vec.new();
+        let mut taken: Vec[Vec[String]] = Vec.new();
+        for person in people.iter() {
+            let mut shares = false;
+            for k in 1..person.len() {
+                if joined.contains(person[k].clone()) {
+                    shares = true;
+                    break;
+                }
+            }
+            if shares {
+                taken.push(person.clone());
+            } else {
+                kept.push(person.clone());
+            }
+        }
+        for person in taken.iter() {
+            for k in 1..person.len() {
+                joined.insert(person[k].clone());
+            }
+        }
+        let mut emails: Vec[String] = Vec.new();
+        for email in joined.iter() {
+            emails.push(email.clone());
+        }
+        emails.sort();
+        let mut merged = vec![account[0].clone()];
+        for email in emails.iter() {
+            merged.push(email.clone());
+        }
+        kept.push(merged);
+        people = kept;
+    }
+    people
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_accounts(count: i64, most: i64, pool: i64, seed: mut ref i64) -> Vec[Vec[String]] {
+    let names = ["Ada", "Bo", "Cy", "Di"];
+    let mut accounts: Vec[Vec[String]] = Vec.new();
+    for _ in 0..count {
+        let who = next_random(mut seed) % 4;
+        let mut account = vec![names[who].to_string()];
+        let n = 1 + next_random(mut seed) % most;
+        for _ in 0..n {
+            let e = 4 * (next_random(mut seed) % (pool / 4)) + who;
+            account.push(f"u{e}@m.co");
+        }
+        accounts.push(account);
+    }
+    accounts
+}
+
+fn canonical(merged: Vec[Vec[String]]) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    for account in merged.iter() {
+        lines.push(account.join(" "));
+    }
+    lines.sort();
+    lines
+}
+
+fn merged(which: i64, accounts: Vec[Vec[String]]) -> Vec[String] {
+    if which == 0 {
+        canonical(accounts_merge_star(accounts))
+    } else if which == 1 {
+        canonical(accounts_merge_dfs(accounts))
+    } else if which == 2 {
+        canonical(accounts_merge_byaccount(accounts))
+    } else {
+        canonical(accounts_merge_fold(accounts))
+    }
+}
+
+// The definition, with no union-find, graph, map or set: start with
+// one person per account, its emails without repeats, and join any two
+// people who share an email until no two do; then sort each person's
+// emails.
+fn definition(accounts: Vec[Vec[String]]) -> Vec[String] {
+    let mut people: Vec[Vec[String]] = Vec.new();
+    for account in accounts.iter() {
+        let mut person = vec![account[0].clone()];
+        for k in 1..account.len() {
+            let mut repeat = false;
+            for j in 1..person.len() {
+                if person[j] == account[k] {
+                    repeat = true;
+                }
+            }
+            if not repeat {
+                person.push(account[k].clone());
+            }
+        }
+        people.push(person);
+    }
+    let mut joined = true;
+    while joined {
+        joined = false;
+        let mut a = 0;
+        while a < people.len() and not joined {
+            let mut b = a + 1;
+            while b < people.len() and not joined {
+                let mut shared = false;
+                for i in 1..people[a].len() {
+                    for j in 1..people[b].len() {
+                        if people[a][i] == people[b][j] {
+                            shared = true;
+                        }
+                    }
+                }
+                if shared {
+                    let other = people.remove(b);
+                    for j in 1..other.len() {
+                        let mut repeat = false;
+                        for i in 1..people[a].len() {
+                            if people[a][i] == other[j] {
+                                repeat = true;
+                            }
+                        }
+                        if not repeat {
+                            people[a].push(other[j].clone());
+                        }
+                    }
+                    joined = true;
+                }
+                b += 1;
+            }
+            a += 1;
+        }
+    }
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for person in people.iter() {
+        let mut emails: Vec[String] = Vec.new();
+        for k in 1..person.len() {
+            emails.push(person[k].clone());
+        }
+        emails.sort();
+        let mut account = vec![person[0].clone()];
+        for email in emails.iter() {
+            account.push(email.clone());
+        }
+        out.push(account);
+    }
+    canonical(out)
+}
+
+fn main() {
+    let mut seed = 7210;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut joins = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 8 accounts of 1 to 4 emails from a pool of 4 to 40, so
+        // shared emails and chains are common.
+        let count = 1 + next_random(mut seed) % 8;
+        let most = 1 + next_random(mut seed) % 4;
+        let pool = 4 + 4 * (next_random(mut seed) % 10);
+        let accounts = random_accounts(count, most, pool, mut seed);
+        let want = definition(accounts.clone());
+        if want.len() < accounts.len() {
+            joins += 1;
+        }
+        let mut reversed = accounts.clone();
+        reversed.reverse();
+        let mut flipped: Vec[Vec[String]] = Vec.new();
+        let mut pairs: Vec[Vec[String]] = Vec.new();
+        for account in accounts.iter() {
+            let mut back = vec![account[0].clone()];
+            let mut k = account.len() - 1;
+            while k >= 1 {
+                back.push(account[k].clone());
+                k -= 1;
+            }
+            flipped.push(back);
+            if account.len() == 2 {
+                pairs.push(account.clone());
+            }
+            for k in 2..account.len() {
+                pairs.push(vec![account[0].clone(), account[k - 1].clone(), account[k].clone()]);
+            }
+        }
+        for which in 0..arms {
+            let got = merged(which, accounts.clone());
+            // P1: the definition's people.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the accounts reversed, the same people.
+            checks += 1;
+            if merged(which, reversed.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: each account's emails reversed, the same people.
+            checks += 1;
+            if merged(which, flipped.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: each account split into accounts of two neighbouring
+            // emails, the same people.
+            checks += 1;
+            if merged(which, pairs.clone()) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} account lists ({joins} with a merge), {arms} arms, {checks} checks, {total} failures");
+}

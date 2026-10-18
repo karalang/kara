@@ -1,0 +1,133 @@
+// LeetCode #720: Longest Word in Dictionary -- a trie, walked through
+// word ends only.
+//
+// Put every word in a trie and mark the node where each ends. A word
+// can be built exactly when every node on its path is marked, so a
+// depth-first walk from the root that only steps onto marked nodes
+// reaches exactly the words that can be built. Children are tried from
+// a to z and only a strictly deeper node replaces the best, so of the
+// deepest nodes the walk keeps the first, the smallest word. O(L).
+
+fn deepest(next: Vec[Vec[i64]], word_at: Vec[i64], node: i64, depth: i64) -> (i64, i64) {
+    let mut best = (depth, word_at[node]);
+    for c in 0..26 {
+        let child = next[node][c];
+        if child != 0 and word_at[child] >= 0 {
+            let got = deepest(next, word_at, child, depth + 1);
+            if got.0 > best.0 {
+                best = got;
+            }
+        }
+    }
+    best
+}
+
+fn longest_word(words: Vec[String]) -> String {
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    let mut word_at: Vec[i64] = Vec.new();
+    next.push(vec![0; 26]);
+    word_at.push(-1);
+    for i in 0..words.len() {
+        let mut node = 0;
+        for b in words[i].bytes().iter() {
+            let c = (*b - b'a') as i64;
+            if next[node][c] == 0 {
+                next[node][c] = next.len();
+                next.push(vec![0; 26]);
+                word_at.push(-1);
+            }
+            node = next[node][c];
+        }
+        word_at[node] = i;
+    }
+    let found = deepest(next, word_at, 0, 0);
+    if found.1 < 0 { String.new() } else { words[found.1].clone() }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(longest: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let n = 1 + next_random(mut seed) % longest;
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+// Words grown from one another: two times in three a word already made
+// with one more letter, otherwise a fresh word of up to `longest`
+// letters, so long chains form and some break off.
+fn grown_words(count: i64, longest: i64, letters: i64, seed: mut ref i64) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count {
+        if words.len() > 0 and next_random(mut seed) % 3 != 0 {
+            let mut w = words[next_random(mut seed) % words.len()].clone();
+            if w.len() < 30 {
+                w.push(((97 + next_random(mut seed) % letters) as u8) as char);
+            }
+            words.push(w);
+        } else {
+            words.push(random_word(longest, letters, mut seed));
+        }
+    }
+    words
+}
+
+fn show(words: Vec[String]) {
+    println(f"[{words.join(", ")}] -> \"{longest_word(words)}\"");
+}
+
+fn main() {
+    show(["w", "wo", "wor", "worl", "world"].iter().map(|s| s.to_string()).collect());
+    show(["a", "banana", "app", "appl", "ap", "apply", "apple"].iter().map(|s| s.to_string()).collect());
+    show(["a"].iter().map(|s| s.to_string()).collect());
+    show(["abc"].iter().map(|s| s.to_string()).collect());
+    show(["ab", "abc"].iter().map(|s| s.to_string()).collect());
+    show(["z", "y", "x"].iter().map(|s| s.to_string()).collect());
+    show(["b", "ba", "a"].iter().map(|s| s.to_string()).collect());
+    show(["a", "ac", "ab", "abd", "acd"].iter().map(|s| s.to_string()).collect());
+    show(["a", "ab", "abc", "b", "bc", "bcd", "bcde"].iter().map(|s| s.to_string()).collect());
+    show(["m", "mo", "mon", "moon", "mood", "moo"].iter().map(|s| s.to_string()).collect());
+    // A chain of 30 letters, the problem's longest word, with the
+    // 29-letter link missing from a second chain.
+    let mut chain: Vec[String] = Vec.new();
+    let mut a = String.new();
+    let mut b = String.new();
+    for i in 0..30 {
+        a.push('q');
+        b.push('b');
+        chain.push(a.clone());
+        if i != 28 {
+            chain.push(b.clone());
+        }
+    }
+    println(f"two 30-letter chains, one broken -> {longest_word(chain)}");
+    let mut seed: i64 = 720;
+    let grown = grown_words(1000, 3, 3, mut seed);
+    println(f"1000 grown words from 3 letters -> {longest_word(grown)}");
+    let grown26 = grown_words(1000, 4, 26, mut seed);
+    println(f"1000 grown words from 26 letters -> {longest_word(grown26)}");
+    let mut fresh: Vec[String] = Vec.new();
+    for _ in 0..1000 {
+        fresh.push(random_word(30, 26, mut seed));
+    }
+    println(f"1000 random words of up to 30 letters -> \"{longest_word(fresh)}\"");
+    let mut sum = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 40;
+        let letters = 1 + next_random(mut seed) % 4;
+        let words = grown_words(count, 3, letters, mut seed);
+        let answer = longest_word(words);
+        sum = (sum * 131 + answer.len()) % 1000000007;
+        for c in answer.bytes().iter() {
+            sum = (sum * 31 + (*c as i64)) % 1000000007;
+        }
+    }
+    println(f"300 random dictionaries: checksum {sum}");
+}

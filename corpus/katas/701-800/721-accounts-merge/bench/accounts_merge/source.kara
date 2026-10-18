@@ -1,0 +1,119 @@
+// LeetCode #721: Accounts Merge -- union-find over the emails.
+//
+// Give every email a number the first time it is seen, and join each
+// account's emails into one set of a union-find, so that two accounts
+// sharing an email end up in the same set, however long the chain
+// between them. Then gather the emails by their set, sort each group,
+// and put the owner's name in front. O(E log E), E the emails.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let up = parent[at];
+        parent[at] = root;
+        at = up;
+    }
+    root
+}
+
+fn accounts_merge(accounts: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut id: Map[String, i64] = Map.new();
+    let mut emails: Vec[String] = Vec.new();
+    let mut owner: Vec[String] = Vec.new();
+    let mut parent: Vec[i64] = Vec.new();
+    for account in accounts.iter() {
+        let mut first = -1;
+        for k in 1..account.len() {
+            let email = account[k].clone();
+            if not id.contains_key(email.clone()) {
+                id.insert(email.clone(), emails.len());
+                parent.push(emails.len());
+                emails.push(email.clone());
+                owner.push(account[0].clone());
+            }
+            let e = id[email];
+            if first < 0 {
+                first = e;
+            } else {
+                let a = find(mut parent, first);
+                let b = find(mut parent, e);
+                if a != b {
+                    parent[b] = a;
+                }
+            }
+        }
+    }
+    let mut groups: Map[i64, Vec[String]] = Map.new();
+    for e in 0..emails.len() {
+        let root = find(mut parent, e);
+        if not groups.contains_key(root) {
+            groups.insert(root, Vec.new());
+        }
+        groups[root].push(emails[e].clone());
+    }
+    let mut merged: Vec[Vec[String]] = Vec.new();
+    for (root, group) in groups.iter() {
+        let mut sorted = group.clone();
+        sorted.sort();
+        let mut account = vec![owner[*root].clone()];
+        for email in sorted.iter() {
+            account.push(email.clone());
+        }
+        merged.push(account);
+    }
+    merged
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 lists of 1,000 accounts, made once: each account a name of four
+    // and 1 to 4 emails from that name's quarter of 8,000.
+    let names = ["Ada", "Bo", "Cy", "Di"];
+    let mut seed: i64 = 721;
+    let mut lists: Vec[Vec[Vec[String]]] = Vec.new();
+    for _ in 0..20 {
+        let mut accounts: Vec[Vec[String]] = Vec.new();
+        for _ in 0..1000 {
+            let who = next_random(mut seed) % 4;
+            let mut account = vec![names[who].to_string()];
+            let n = 1 + next_random(mut seed) % 4;
+            for _ in 0..n {
+                let e = 4 * (next_random(mut seed) % 2000) + who;
+                account.push(f"u{e}@m.co");
+            }
+            accounts.push(account);
+        }
+        lists.push(accounts);
+    }
+    // 50 rounds: in every list one account's last email becomes the
+    // first email of the next account of the same name, then the list
+    // is merged; the people and their smallest emails' lengths summed.
+    let mut sum = 0;
+    for round in 0..50 {
+        for d in 0..20 {
+            let i = (round * 7919 + d * 104729) % 1000;
+            let mut j = (i + 1) % 1000;
+            while lists[d][j][0] != lists[d][i][0] {
+                j = (j + 1) % 1000;
+            }
+            let last = lists[d][i].len() - 1;
+            lists[d][i][last] = lists[d][j][1].clone();
+            let merged = accounts_merge(lists[d]);
+            sum += merged.len();
+            for person in merged.iter() {
+                sum += person[1].len();
+            }
+        }
+    }
+    println(f"50 rounds of 20 lists of 1000 accounts: sum {sum}");
+}

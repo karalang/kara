@@ -1,0 +1,89 @@
+// LeetCode #720: Longest Word in Dictionary -- a trie, walked through
+// word ends only (the trie arm; it is the same algorithm in all five
+// languages, where the ★ arm's sort and set would be five libraries').
+//
+// Put every word in a trie and mark the node where each ends. A
+// depth-first walk from the root that only steps onto marked nodes
+// reaches exactly the words that can be built; children are tried from
+// a to z and only a strictly deeper node replaces the best. O(L).
+fn deepest(next: Vec[Vec[i64]], word_at: Vec[i64], node: i64, depth: i64) -> (i64, i64) {
+    let mut best = (depth, word_at[node]);
+    for c in 0..26 {
+        let child = next[node][c];
+        if child != 0 and word_at[child] >= 0 {
+            let got = deepest(next, word_at, child, depth + 1);
+            if got.0 > best.0 {
+                best = got;
+            }
+        }
+    }
+    best
+}
+
+fn longest_word(words: Vec[String]) -> String {
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    let mut word_at: Vec[i64] = Vec.new();
+    next.push(vec![0; 26]);
+    word_at.push(-1);
+    for i in 0..words.len() {
+        let mut node = 0;
+        for b in words[i].bytes().iter() {
+            let c = (*b - b'a') as i64;
+            if next[node][c] == 0 {
+                next[node][c] = next.len();
+                next.push(vec![0; 26]);
+                word_at.push(-1);
+            }
+            node = next[node][c];
+        }
+        word_at[node] = i;
+    }
+    let found = deepest(next, word_at, 0, 0);
+    if found.1 < 0 { String.new() } else { words[found.1].clone() }
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 40 dictionaries of 1,000 words from 4 letters, made once, each
+    // word but the fresh ones grown from an earlier word by one letter.
+    let mut seed: i64 = 720;
+    let mut dicts: Vec[Vec[String]] = Vec.new();
+    for _ in 0..40 {
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..1000 {
+            if words.len() > 0 and next_random(mut seed) % 4 != 0 {
+                let mut w = words[next_random(mut seed) % words.len()].clone();
+                if w.len() < 30 {
+                    w.push(((97 + next_random(mut seed) % 4) as u8) as char);
+                }
+                words.push(w);
+            } else {
+                let mut w = String.new();
+                for _ in 0..1 + next_random(mut seed) % 3 {
+                    w.push(((97 + next_random(mut seed) % 4) as u8) as char);
+                }
+                words.push(w);
+            }
+        }
+        dicts.push(words);
+    }
+    // 300 rounds: one word of each dictionary gets a letter more, then
+    // every dictionary is asked again, every answer's length summed.
+    let mut sum = 0;
+    for round in 0..300 {
+        for d in 0..40 {
+            let i = (round * 7919 + d * 104729) % 1000;
+            if dicts[d][i].len() < 30 {
+                dicts[d][i].push(((97 + round % 4) as u8) as char);
+            }
+            sum += longest_word(dicts[d]).len();
+        }
+    }
+    println(f"300 rounds of 40 dictionaries of 1000 words: sum {sum}");
+}

@@ -1,0 +1,162 @@
+// LeetCode #721: Accounts Merge -- each account folded into the people
+// found so far.
+//
+// Keep a list of people, each a name and a sorted list of emails. For
+// each account, take out every person who shares an email with it, put
+// their emails and the account's into one set, and add that back as one
+// person. A chain of accounts folds up one link at a time. O(n * E)
+// for the scans, with no union-find and no graph.
+
+fn accounts_merge(accounts: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut people: Vec[Vec[String]] = Vec.new();
+    for account in accounts.iter() {
+        let mut joined: Set[String] = Set.new();
+        for k in 1..account.len() {
+            joined.insert(account[k].clone());
+        }
+        let mut kept: Vec[Vec[String]] = Vec.new();
+        let mut taken: Vec[Vec[String]] = Vec.new();
+        for person in people.iter() {
+            let mut shares = false;
+            for k in 1..person.len() {
+                if joined.contains(person[k].clone()) {
+                    shares = true;
+                    break;
+                }
+            }
+            if shares {
+                taken.push(person.clone());
+            } else {
+                kept.push(person.clone());
+            }
+        }
+        for person in taken.iter() {
+            for k in 1..person.len() {
+                joined.insert(person[k].clone());
+            }
+        }
+        let mut emails: Vec[String] = Vec.new();
+        for email in joined.iter() {
+            emails.push(email.clone());
+        }
+        emails.sort();
+        let mut merged = vec![account[0].clone()];
+        for email in emails.iter() {
+            merged.push(email.clone());
+        }
+        kept.push(merged);
+        people = kept;
+    }
+    people
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(words: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in words.iter() {
+        out.push(w.to_string());
+    }
+    out
+}
+
+// The merged accounts one per line, each as its name and emails joined
+// by spaces, the lines sorted, since any order of accounts is allowed.
+fn canonical(merged: Vec[Vec[String]]) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    for account in merged.iter() {
+        lines.push(account.join(" "));
+    }
+    lines.sort();
+    lines
+}
+
+fn show(accounts: Vec[Vec[String]]) {
+    println(canonical(accounts_merge(accounts)).join(" | "));
+}
+
+// Random accounts: email number e always belongs to name e % 4, so an
+// account picks a name and then up to `most` emails of that name's
+// from the first `pool`.
+fn random_accounts(count: i64, most: i64, pool: i64, seed: mut ref i64) -> Vec[Vec[String]] {
+    let names = ["Ada", "Bo", "Cy", "Di"];
+    let mut accounts: Vec[Vec[String]] = Vec.new();
+    for _ in 0..count {
+        let who = next_random(mut seed) % 4;
+        let mut account = vec![names[who].to_string()];
+        let n = 1 + next_random(mut seed) % most;
+        for _ in 0..n {
+            let e = 4 * (next_random(mut seed) % (pool / 4)) + who;
+            account.push(f"u{e}@m.co");
+        }
+        accounts.push(account);
+    }
+    accounts
+}
+
+fn summary(merged: Vec[Vec[String]]) -> String {
+    let mut largest = 0;
+    let mut emails = 0;
+    for account in merged.iter() {
+        emails += account.len() - 1;
+        if account.len() - 1 > largest {
+            largest = account.len() - 1;
+        }
+    }
+    f"{merged.len()} people, {emails} emails, the most {largest}"
+}
+
+fn main() {
+    show([
+        strings(["John", "johnsmith@mail.com", "john_newyork@mail.com"]),
+        strings(["John", "johnsmith@mail.com", "john00@mail.com"]),
+        strings(["Mary", "mary@mail.com"]),
+        strings(["John", "johnnybravo@mail.com"]),
+    ]);
+    show([
+        strings(["Gabe", "Gabe0@m.co", "Gabe3@m.co", "Gabe1@m.co"]),
+        strings(["Kevin", "Kevin3@m.co", "Kevin5@m.co", "Kevin0@m.co"]),
+        strings(["Ethan", "Ethan5@m.co", "Ethan4@m.co", "Ethan0@m.co"]),
+        strings(["Hanzo", "Hanzo3@m.co", "Hanzo1@m.co", "Hanzo0@m.co"]),
+        strings(["Fern", "Fern5@m.co", "Fern1@m.co", "Fern0@m.co"]),
+    ]);
+    show([strings(["Al", "al@m.co"])]);
+    show([strings(["Al", "al@m.co", "al@m.co"]), strings(["Al", "al@m.co"])]);
+    show([strings(["Al", "a@m.co", "b@m.co"]), strings(["Al", "c@m.co", "d@m.co"]), strings(["Al", "b@m.co", "c@m.co"])]);
+    show([strings(["Al", "x@m.co"]), strings(["Al", "y@m.co"])]);
+    show([strings(["Bo", "d@m.co", "c@m.co"]), strings(["Al", "b@m.co", "a@m.co"]), strings(["Bo", "e@m.co", "d@m.co"])]);
+    // 1,000 accounts, the problem's most, each sharing its last email
+    // with the next one's first, listed from the far end.
+    let mut chain: Vec[Vec[String]] = Vec.new();
+    let mut i = 999;
+    while i >= 0 {
+        chain.push(vec!["Zed".to_string(), f"z{i}@m.co", f"z{i + 1}@m.co"]);
+        i -= 1;
+    }
+    println(f"a chain of 1000 accounts: {summary(accounts_merge(chain))}");
+    let mut seed: i64 = 721;
+    let wide = random_accounts(1000, 3, 8000, mut seed);
+    println(f"1000 accounts of up to 3 emails over 8000: {summary(accounts_merge(wide))}");
+    let dense = random_accounts(1000, 9, 400, mut seed);
+    println(f"1000 accounts of up to 9 emails over 400: {summary(accounts_merge(dense))}");
+    let mut sum = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 30;
+        let most = 1 + next_random(mut seed) % 4;
+        let pool = 4 + 4 * (next_random(mut seed) % 20);
+        let lines = canonical(accounts_merge(random_accounts(count, most, pool, mut seed)));
+        for line in lines.iter() {
+            for c in line.bytes().iter() {
+                sum = (sum * 31 + (*c as i64)) % 1000000007;
+            }
+            sum = (sum * 31 + 10) % 1000000007;
+        }
+        sum = (sum * 131 + lines.len()) % 1000000007;
+    }
+    println(f"300 random account lists: checksum {sum}");
+}

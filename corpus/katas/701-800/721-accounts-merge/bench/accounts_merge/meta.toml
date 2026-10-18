@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/721-accounts-merge/bench/accounts_merge.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "a4b096749"
+extracted_src = "4386c23f"
+model_rev = "583cfb0d"
+model_src = "4386c23f"

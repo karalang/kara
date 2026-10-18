@@ -1,0 +1,15 @@
+[w, wo, wor, worl, world] -> "world"
+[a, banana, app, appl, ap, apply, apple] -> "apple"
+[a] -> "a"
+[abc] -> ""
+[ab, abc] -> ""
+[z, y, x] -> "x"
+[b, ba, a] -> "ba"
+[a, ac, ab, abd, acd] -> "abd"
+[a, ab, abc, b, bc, bcd, bcde] -> "bcde"
+[m, mo, mon, moon, mood, moo] -> "mood"
+two 30-letter chains, one broken -> qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+1000 grown words from 3 letters -> caaacaabbcaaa
+1000 grown words from 26 letters -> nqudleur
+1000 random words of up to 30 letters -> "ao"
+300 random dictionaries: checksum 219059333

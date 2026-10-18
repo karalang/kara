@@ -1,0 +1,413 @@
+// LeetCode #723: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random boards.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn candy_crush_star(board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut b = board.clone();
+    let m = b.len();
+    let n = b[0].len();
+    let mut stable = false;
+    while not stable {
+        stable = true;
+        for r in 0..m {
+            for c in 0..n - 2 {
+                let v = b[r][c].abs();
+                if v != 0 and b[r][c + 1].abs() == v and b[r][c + 2].abs() == v {
+                    b[r][c] = -v;
+                    b[r][c + 1] = -v;
+                    b[r][c + 2] = -v;
+                    stable = false;
+                }
+            }
+        }
+        for r in 0..m - 2 {
+            for c in 0..n {
+                let v = b[r][c].abs();
+                if v != 0 and b[r + 1][c].abs() == v and b[r + 2][c].abs() == v {
+                    b[r][c] = -v;
+                    b[r + 1][c] = -v;
+                    b[r + 2][c] = -v;
+                    stable = false;
+                }
+            }
+        }
+        for c in 0..n {
+            let mut write = m - 1;
+            let mut r = m - 1;
+            while r >= 0 {
+                if b[r][c] > 0 {
+                    b[write][c] = b[r][c];
+                    write -= 1;
+                }
+                r -= 1;
+            }
+            while write >= 0 {
+                b[write][c] = 0;
+                write -= 1;
+            }
+        }
+    }
+    b
+}
+
+// ---- mask arm -------------------------------------------------------
+
+fn candy_crush_mask(board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut b = board.clone();
+    let m = b.len();
+    let n = b[0].len();
+    loop {
+        let mut crush: Vec[Vec[bool]] = Vec.new();
+        for _ in 0..m {
+            crush.push(vec![false; n]);
+        }
+        let mut any = false;
+        for r in 0..m {
+            for c in 0..n {
+                let v = b[r][c];
+                if v == 0 {
+                    continue;
+                }
+                if c + 2 < n and b[r][c + 1] == v and b[r][c + 2] == v {
+                    crush[r][c] = true;
+                    crush[r][c + 1] = true;
+                    crush[r][c + 2] = true;
+                    any = true;
+                }
+                if r + 2 < m and b[r + 1][c] == v and b[r + 2][c] == v {
+                    crush[r][c] = true;
+                    crush[r + 1][c] = true;
+                    crush[r + 2][c] = true;
+                    any = true;
+                }
+            }
+        }
+        if not any {
+            break;
+        }
+        for c in 0..n {
+            let mut gone = 0;
+            let mut r = m - 1;
+            while r >= 0 {
+                if crush[r][c] or b[r][c] == 0 {
+                    gone += 1;
+                } else if gone > 0 {
+                    b[r + gone][c] = b[r][c];
+                }
+                r -= 1;
+            }
+            for k in 0..gone {
+                b[k][c] = 0;
+            }
+        }
+    }
+    b
+}
+
+// ---- runs arm -------------------------------------------------------
+
+fn candy_crush_runs(board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut b = board.clone();
+    let m = b.len();
+    let n = b[0].len();
+    let mut any = true;
+    while any {
+        any = false;
+        let mut crush: Vec[Vec[bool]] = Vec.new();
+        for _ in 0..m {
+            crush.push(vec![false; n]);
+        }
+        for r in 0..m {
+            let mut start = 0;
+            while start < n {
+                let mut end = start + 1;
+                while end < n and b[r][end] == b[r][start] {
+                    end += 1;
+                }
+                if b[r][start] != 0 and end - start >= 3 {
+                    for c in start..end {
+                        crush[r][c] = true;
+                    }
+                    any = true;
+                }
+                start = end;
+            }
+        }
+        for c in 0..n {
+            let mut start = 0;
+            while start < m {
+                let mut end = start + 1;
+                while end < m and b[end][c] == b[start][c] {
+                    end += 1;
+                }
+                if b[start][c] != 0 and end - start >= 3 {
+                    for r in start..end {
+                        crush[r][c] = true;
+                    }
+                    any = true;
+                }
+                start = end;
+            }
+        }
+        for c in 0..n {
+            let mut kept: Vec[i64] = Vec.new();
+            let mut r = m - 1;
+            while r >= 0 {
+                if not crush[r][c] and b[r][c] != 0 {
+                    kept.push(b[r][c]);
+                }
+                r -= 1;
+            }
+            for k in 0..m {
+                b[m - 1 - k][c] = if k < kept.len() { kept[k] } else { 0 };
+            }
+        }
+    }
+    b
+}
+
+// ---- columns arm ----------------------------------------------------
+
+fn candy_crush_columns(board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = board.len();
+    let n = board[0].len();
+    let mut cols: Vec[Vec[i64]] = Vec.new();
+    for c in 0..n {
+        let mut col: Vec[i64] = Vec.new();
+        let mut r = m - 1;
+        while r >= 0 {
+            if board[r][c] != 0 {
+                col.push(board[r][c]);
+            }
+            r -= 1;
+        }
+        cols.push(col);
+    }
+    loop {
+        let mut crush: Vec[Vec[bool]] = Vec.new();
+        for c in 0..n {
+            crush.push(vec![false; cols[c].len()]);
+        }
+        let mut any = false;
+        for c in 0..n {
+            for h in 0..cols[c].len() {
+                let v = cols[c][h];
+                if h + 2 < cols[c].len() and cols[c][h + 1] == v and cols[c][h + 2] == v {
+                    crush[c][h] = true;
+                    crush[c][h + 1] = true;
+                    crush[c][h + 2] = true;
+                    any = true;
+                }
+                if c + 2 < n and h < cols[c + 1].len() and h < cols[c + 2].len() and cols[c + 1][h] == v and cols[c + 2][h] == v {
+                    crush[c][h] = true;
+                    crush[c + 1][h] = true;
+                    crush[c + 2][h] = true;
+                    any = true;
+                }
+            }
+        }
+        if not any {
+            break;
+        }
+        for c in 0..n {
+            let mut kept: Vec[i64] = Vec.new();
+            for h in 0..cols[c].len() {
+                if not crush[c][h] {
+                    kept.push(cols[c][h]);
+                }
+            }
+            cols[c] = kept;
+        }
+    }
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        b.push(vec![0; n]);
+    }
+    for c in 0..n {
+        for h in 0..cols[c].len() {
+            b[m - 1 - h][c] = cols[c][h];
+        }
+    }
+    b
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_board(m: i64, n: i64, kinds: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(1 + next_random(mut seed) % kinds);
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn crushed(which: i64, board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    if which == 0 {
+        candy_crush_star(board)
+    } else if which == 1 {
+        candy_crush_mask(board)
+    } else if which == 2 {
+        candy_crush_runs(board)
+    } else {
+        candy_crush_columns(board)
+    }
+}
+
+// Whether the cell lies in some window of three equal candies across or
+// down, every window that holds it tried.
+fn in_run(b: Vec[Vec[i64]], r: i64, c: i64) -> bool {
+    let v = b[r][c];
+    if v == 0 {
+        return false;
+    }
+    for s in 0..3 {
+        let left = c - s;
+        if left >= 0 and left + 2 < b[0].len() and b[r][left] == v and b[r][left + 1] == v and b[r][left + 2] == v {
+            return true;
+        }
+        let top = r - s;
+        if top >= 0 and top + 2 < b.len() and b[top][c] == v and b[top + 1][c] == v and b[top + 2][c] == v {
+            return true;
+        }
+    }
+    false
+}
+
+// The definition: each round, every cell in a window of three is
+// emptied at once; then any candy above an empty cell swaps down with
+// it, one step at a time, until none does. Rounds repeat until one
+// empties nothing.
+fn definition(board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut b = board.clone();
+    let m = b.len();
+    let n = b[0].len();
+    loop {
+        let mut gone: Vec[(i64, i64)] = Vec.new();
+        for r in 0..m {
+            for c in 0..n {
+                if in_run(b.clone(), r, c) {
+                    gone.push((r, c));
+                }
+            }
+        }
+        if gone.len() == 0 {
+            break;
+        }
+        for cell in gone.iter() {
+            b[cell.0][cell.1] = 0;
+        }
+        let mut moved = true;
+        while moved {
+            moved = false;
+            for r in 0..m - 1 {
+                for c in 0..n {
+                    if b[r][c] != 0 and b[r + 1][c] == 0 {
+                        b[r + 1][c] = b[r][c];
+                        b[r][c] = 0;
+                        moved = true;
+                    }
+                }
+            }
+        }
+    }
+    b
+}
+
+fn mirrored(b: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in b.iter() {
+        let mut flipped = row.clone();
+        flipped.reverse();
+        out.push(flipped);
+    }
+    out
+}
+
+// Each candy v renamed 10 * v + 3; empty cells stay empty.
+fn renamed(b: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in b.iter() {
+        let mut named: Vec[i64] = Vec.new();
+        for v in row.iter() {
+            named.push(if *v == 0 { 0 } else { 10 * *v + 3 });
+        }
+        out.push(named);
+    }
+    out
+}
+
+// No candy above an empty cell.
+fn settled(b: Vec[Vec[i64]]) -> bool {
+    for r in 0..b.len() - 1 {
+        for c in 0..b[0].len() {
+            if b[r][c] != 0 and b[r + 1][c] == 0 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn main() {
+    let mut seed = 7230;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut cleared = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 3 to 7 rows and columns of 1 to 4 kinds, so runs, overlaps
+        // and chain reactions are common.
+        let m = 3 + next_random(mut seed) % 5;
+        let n = 3 + next_random(mut seed) % 5;
+        let kinds = 1 + next_random(mut seed) % 4;
+        let board = random_board(m, n, kinds, mut seed);
+        let want = definition(board.clone());
+        if want != board {
+            cleared += 1;
+        }
+        for which in 0..arms {
+            let got = crushed(which, board.clone());
+            // P1: the definition's board.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the board mirrored, the result mirrored.
+            checks += 1;
+            if crushed(which, mirrored(board.clone())) != mirrored(got.clone()) {
+                fails[1] += 1;
+            }
+            // P3: the candies renamed, the result renamed.
+            checks += 1;
+            if crushed(which, renamed(board.clone())) != renamed(got.clone()) {
+                fails[2] += 1;
+            }
+            // P4: the result settled and stable: no candy above an
+            // empty cell, and crushing it again changes nothing.
+            checks += 1;
+            if not settled(got.clone()) or crushed(which, got.clone()) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} boards ({cleared} with a crush), {arms} arms, {checks} checks, {total} failures");
+}

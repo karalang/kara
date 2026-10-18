@@ -1,0 +1,248 @@
+// LeetCode #720: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random dictionaries.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn longest_word_star(words: Vec[String]) -> String {
+    let mut sorted = words.clone();
+    sorted.sort();
+    let mut built: Set[String] = Set.new();
+    let mut best = String.new();
+    for word in sorted.iter() {
+        if word.len() == 1 or built.contains(word.slice(0, word.len() - 1).to_string()) {
+            built.insert(word.clone());
+            if word.len() > best.len() {
+                best = word.clone();
+            }
+        }
+    }
+    best
+}
+
+// ---- trie arm -------------------------------------------------------
+
+fn deepest_trie(next: Vec[Vec[i64]], word_at: Vec[i64], node: i64, depth: i64) -> (i64, i64) {
+    let mut best = (depth, word_at[node]);
+    for c in 0..26 {
+        let child = next[node][c];
+        if child != 0 and word_at[child] >= 0 {
+            let got = deepest_trie(next, word_at, child, depth + 1);
+            if got.0 > best.0 {
+                best = got;
+            }
+        }
+    }
+    best
+}
+
+fn longest_word_trie(words: Vec[String]) -> String {
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    let mut word_at: Vec[i64] = Vec.new();
+    next.push(vec![0; 26]);
+    word_at.push(-1);
+    for i in 0..words.len() {
+        let mut node = 0;
+        for b in words[i].bytes().iter() {
+            let c = (*b - b'a') as i64;
+            if next[node][c] == 0 {
+                next[node][c] = next.len();
+                next.push(vec![0; 26]);
+                word_at.push(-1);
+            }
+            node = next[node][c];
+        }
+        word_at[node] = i;
+    }
+    let found = deepest_trie(next, word_at, 0, 0);
+    if found.1 < 0 { String.new() } else { words[found.1].clone() }
+}
+
+// ---- every arm ------------------------------------------------------
+
+fn longest_word_every(words: Vec[String]) -> String {
+    let mut all: Set[String] = Set.new();
+    for word in words.iter() {
+        all.insert(word.clone());
+    }
+    let mut best = String.new();
+    for word in words.iter() {
+        let mut buildable = true;
+        for k in 1..word.len() {
+            if not all.contains(word.slice(0, k).to_string()) {
+                buildable = false;
+                break;
+            }
+        }
+        if buildable and (word.len() > best.len() or (word.len() == best.len() and *word < best)) {
+            best = word.clone();
+        }
+    }
+    best
+}
+
+// ---- levels arm -----------------------------------------------------
+
+fn longest_word_levels(words: Vec[String]) -> String {
+    let mut by_length: Vec[Vec[String]] = Vec.new();
+    for word in words.iter() {
+        while by_length.len() <= word.len() {
+            by_length.push(Vec.new());
+        }
+        by_length[word.len()].push(word.clone());
+    }
+    let mut level: Set[String] = Set.new();
+    let mut best = String.new();
+    let mut length = 1;
+    while length < by_length.len() {
+        let mut found: Set[String] = Set.new();
+        for word in by_length[length].iter() {
+            if length == 1 or level.contains(word.slice(0, length - 1).to_string()) {
+                found.insert(word.clone());
+            }
+        }
+        if found.len() == 0 {
+            break;
+        }
+        best = String.new();
+        for word in found.iter() {
+            if best.len() == 0 or *word < best {
+                best = word.clone();
+            }
+        }
+        level = found;
+        length += 1;
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(longest: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let n = 1 + next_random(mut seed) % longest;
+    for _ in 0..n {
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn grown_words(count: i64, longest: i64, letters: i64, seed: mut ref i64) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count {
+        if words.len() > 0 and next_random(mut seed) % 3 != 0 {
+            let mut w = words[next_random(mut seed) % words.len()].clone();
+            w.push(((97 + next_random(mut seed) % letters) as u8) as char);
+            words.push(w);
+        } else {
+            words.push(random_word(longest, letters, mut seed));
+        }
+    }
+    words
+}
+
+fn answer(which: i64, words: Vec[String]) -> String {
+    if which == 0 {
+        longest_word_star(words)
+    } else if which == 1 {
+        longest_word_trie(words)
+    } else if which == 2 {
+        longest_word_every(words)
+    } else {
+        longest_word_levels(words)
+    }
+}
+
+// The definition, with no set, no trie and no sort: a word can be built
+// when each of its shorter prefixes is somewhere in the list, found by
+// comparing it with every word; of those, the longest, then the
+// smallest.
+fn definition(words: Vec[String]) -> String {
+    let mut best = String.new();
+    for word in words.iter() {
+        let mut buildable = true;
+        for k in 1..word.len() {
+            let prefix = word.slice(0, k).to_string();
+            let mut found = false;
+            for other in words.iter() {
+                if *other == prefix {
+                    found = true;
+                }
+            }
+            if not found {
+                buildable = false;
+            }
+        }
+        if buildable and (word.len() > best.len() or (word.len() == best.len() and *word < best)) {
+            best = word.clone();
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 7200;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut empty = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 12 words from 1 to 3 letters, grown from one another, so
+        // chains, broken chains and ties are common.
+        let count = 1 + next_random(mut seed) % 12;
+        let letters = 1 + next_random(mut seed) % 3;
+        let words = grown_words(count, 3, letters, mut seed);
+        let want = definition(words.clone());
+        if want.len() == 0 {
+            empty += 1;
+        }
+        let mut reversed = words.clone();
+        reversed.reverse();
+        let mut doubled = words.clone();
+        for w in words.iter() {
+            doubled.push(w.clone());
+        }
+        let mut longer = want.clone();
+        longer.push(((97 + next_random(mut seed) % letters) as u8) as char);
+        let mut extended = words.clone();
+        extended.push(longer.clone());
+        for which in 0..arms {
+            let got = answer(which, words.clone());
+            // P1: the definition's word.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the words reversed, the same word.
+            checks += 1;
+            if answer(which, reversed.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: every word twice, the same word.
+            checks += 1;
+            if answer(which, doubled.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: the word with one more letter added to the list, an
+            // answer that starts with it.
+            checks += 1;
+            if not answer(which, extended.clone()).starts_with(longer.clone()) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} dictionaries ({empty} with no answer), {arms} arms, {checks} checks, {total} failures");
+}
