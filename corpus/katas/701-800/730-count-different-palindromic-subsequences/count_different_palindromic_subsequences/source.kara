@@ -1,0 +1,115 @@
+// LeetCode #730: Count Different Palindromic Subsequences -- by
+// interval, with the next and previous copy of the end letter.
+//
+// count[i][j] is the number of different non-empty palindromes among
+// the subsequences of s[i..=j]. If the end letters differ, a palindrome
+// cannot use both, so count[i + 1][j] + count[i][j - 1], less the ones
+// counted twice, count[i + 1][j - 1]. If they are the same letter c,
+// every palindrome inside can be wrapped in c ... c, doubling the
+// inside's count; then look at the copies of c strictly inside: with
+// none, add "c" and "cc"; with one, add only "cc", since "c" is already
+// inside; with two or more, the palindromes inside the innermost pair
+// were wrapped twice, so take away count[lo + 1][hi - 1]. All modulo
+// 10^9 + 7. O(n^2) time and space.
+
+fn count_palindromic_subsequences(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes();
+    let n = b.len();
+    // next_same[i]: the next place after i with the same letter, n if none;
+    // prev_same[j]: the last place before j with the same letter, -1.
+    let mut next_same: Vec[i64] = vec![n; n];
+    let mut prev_same: Vec[i64] = vec![-1; n];
+    let mut last: Vec[i64] = vec![-1; 4];
+    for i in 0..n {
+        let c = (b[i] - b'a') as i64;
+        prev_same[i] = last[c];
+        if last[c] >= 0 {
+            next_same[last[c]] = i;
+        }
+        last[c] = i;
+    }
+    let mut count: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        count.push(vec![0; n]);
+    }
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        count[i][i] = 1;
+        for j in i + 1..n {
+            let inner = if i + 1 <= j - 1 { count[i + 1][j - 1] } else { 0 };
+            let mut v = 0;
+            if b[i] != b[j] {
+                v = count[i + 1][j] + count[i][j - 1] - inner;
+            } else {
+                let lo = next_same[i];
+                let hi = prev_same[j];
+                if lo > hi {
+                    v = 2 * inner + 2;
+                } else if lo == hi {
+                    v = 2 * inner + 1;
+                } else {
+                    let twice = if lo + 1 <= hi - 1 { count[lo + 1][hi - 1] } else { 0 };
+                    v = 2 * inner - twice;
+                }
+            }
+            count[i][j] = ((v % m) + m) % m;
+        }
+    }
+    count[0][n - 1]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut s = "".to_string();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % kinds) as u8) as char);
+    }
+    s
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {count_palindromic_subsequences(s)}");
+}
+
+fn main() {
+    show("bccb".to_string());
+    show("abcdabcdabcdabcdabcdabcdabcdabcddcbadcbadcbadcbadcbadcbadcbadcba".to_string());
+    show("a".to_string());
+    show("aaaa".to_string());
+    show("abcd".to_string());
+    show("aba".to_string());
+    show("abba".to_string());
+    show("aabbaa".to_string());
+    show("dcbabcd".to_string());
+    let mut seed: i64 = 730;
+    let big = random_word(1000, 4, mut seed);
+    println(f"1000 random letters -> {count_palindromic_subsequences(big)}");
+    let two = random_word(1000, 2, mut seed);
+    println(f"1000 random a's and b's -> {count_palindromic_subsequences(two)}");
+    let mut same = "".to_string();
+    for _ in 0..1000 {
+        same.push('a');
+    }
+    println(f"1000 a's -> {count_palindromic_subsequences(same)}");
+    let mut cycle = "".to_string();
+    for _ in 0..250 {
+        cycle.push_str("abcd");
+    }
+    println(f"abcd 250 times -> {count_palindromic_subsequences(cycle)}");
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let kinds = 1 + next_random(mut seed) % 4;
+        let v = count_palindromic_subsequences(random_word(n, kinds, mut seed));
+        sum = (sum * 131 + v) % 1000000007;
+    }
+    println(f"300 random strings: checksum {sum}");
+}

@@ -1,0 +1,102 @@
+// LeetCode #730: Count Different Palindromic Subsequences -- one table
+// per end letter.
+//
+// by[c][i][j] counts the different palindromes in s[i..=j] that begin
+// and end with letter c. If s[i] is not c, it cannot be the first
+// letter, so by[c][i + 1][j]; likewise if s[j] is not c. If both are c,
+// the palindromes are "c", "cc", and c ... c around every palindrome of
+// s[i + 1..=j - 1], whatever its letter: 2 plus the four tables' sum
+// there (1 when i == j). The answer sums the four tables over the whole
+// string. All modulo 10^9 + 7. O(4 n^2) time and space.
+
+fn count_palindromic_subsequences(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes();
+    let n = b.len();
+    // by[c * n * n + i * n + j]
+    let mut by: Vec[i64] = vec![0; 4 * n * n];
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        for j in i..n {
+            for c in 0..4 {
+                let letter = b'a' + c as u8;
+                let at = c * n * n + i * n + j;
+                if b[i] != letter {
+                    by[at] = if i + 1 <= j { by[c * n * n + (i + 1) * n + j] } else { 0 };
+                } else if b[j] != letter {
+                    by[at] = by[c * n * n + i * n + j - 1];
+                } else if i == j {
+                    by[at] = 1;
+                } else {
+                    let mut v = 2;
+                    if i + 1 <= j - 1 {
+                        for d in 0..4 {
+                            v += by[d * n * n + (i + 1) * n + j - 1];
+                        }
+                    }
+                    by[at] = v % m;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for c in 0..4 {
+        total += by[c * n * n + n - 1];
+    }
+    total % m
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut s = "".to_string();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % kinds) as u8) as char);
+    }
+    s
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {count_palindromic_subsequences(s)}");
+}
+
+fn main() {
+    show("bccb".to_string());
+    show("abcdabcdabcdabcdabcdabcdabcdabcddcbadcbadcbadcbadcbadcbadcbadcba".to_string());
+    show("a".to_string());
+    show("aaaa".to_string());
+    show("abcd".to_string());
+    show("aba".to_string());
+    show("abba".to_string());
+    show("aabbaa".to_string());
+    show("dcbabcd".to_string());
+    let mut seed: i64 = 730;
+    let big = random_word(1000, 4, mut seed);
+    println(f"1000 random letters -> {count_palindromic_subsequences(big)}");
+    let two = random_word(1000, 2, mut seed);
+    println(f"1000 random a's and b's -> {count_palindromic_subsequences(two)}");
+    let mut same = "".to_string();
+    for _ in 0..1000 {
+        same.push('a');
+    }
+    println(f"1000 a's -> {count_palindromic_subsequences(same)}");
+    let mut cycle = "".to_string();
+    for _ in 0..250 {
+        cycle.push_str("abcd");
+    }
+    println(f"abcd 250 times -> {count_palindromic_subsequences(cycle)}");
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let kinds = 1 + next_random(mut seed) % 4;
+        let v = count_palindromic_subsequences(random_word(n, kinds, mut seed));
+        sum = (sum * 131 + v) % 1000000007;
+    }
+    println(f"300 random strings: checksum {sum}");
+}

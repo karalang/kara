@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/730-count-different-palindromic-subsequences/bench/count_different_palindromic_subsequences.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "2c05889a9"
+extracted_src = "20ba2c25"
+model_rev = "583cfb0d"
+model_src = "20ba2c25"

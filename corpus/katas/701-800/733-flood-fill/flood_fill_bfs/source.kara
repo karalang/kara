@@ -1,0 +1,136 @@
+// LeetCode #733: Flood Fill -- breadth first, with a queue.
+//
+// Paint the start and queue it. Take places from the front of the
+// queue; each neighbour inside the image that still has the old color
+// is painted as it is queued, so no place is queued twice. When the new
+// color is the old one, return the image as it is. O(m n) time and
+// space.
+
+fn flood_fill(image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) -> Vec[Vec[i64]] {
+    let mut img = image;
+    let old = img[sr][sc];
+    if old == color {
+        return img;
+    }
+    let m = img.len();
+    let n = img[0].len();
+    let steps = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    img[sr][sc] = color;
+    queue.push_back((sr, sc));
+    while let Some((r, c)) = queue.pop_front() {
+        for s in steps.iter() {
+            let nr = r + s.0;
+            let nc = c + s.1;
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and img[nr][nc] == old {
+                img[nr][nc] = color;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    img
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) {
+    let before = f"{image}";
+    let after = flood_fill(image, sr, sc, color);
+    println(f"{before} from ({sr}, {sc}) to {color} -> {after}");
+}
+
+fn digest(what: String, image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) {
+    let before = image.clone();
+    let after = flood_fill(image, sr, sc, color);
+    let mut changed = 0;
+    let mut sum = 0;
+    for r in 0..after.len() {
+        for c in 0..after[r].len() {
+            if after[r][c] != before[r][c] {
+                changed += 1;
+            }
+            sum = (sum * 131 + after[r][c] + 1) % 1000000007;
+        }
+    }
+    println(f"{what} -> changed {changed}, checksum {sum}");
+}
+
+fn grid(m: i64, n: i64, v: i64) -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        g.push(vec![v; n]);
+    }
+    g
+}
+
+fn main() {
+    show([[1, 1, 1], [1, 1, 0], [1, 0, 1]], 1, 1, 2);
+    show([[0, 0, 0], [0, 0, 0]], 0, 0, 0);
+    show([[5]], 0, 0, 9);
+    show([[1, 2, 1], [2, 1, 2], [1, 2, 1]], 1, 1, 3);
+    show([[0, 0, 1, 0], [1, 0, 1, 0], [0, 0, 0, 0], [0, 1, 1, 1]], 3, 0, 4);
+    show([[2, 2, 2, 2], [2, 3, 3, 2], [2, 3, 3, 2], [2, 2, 2, 2]], 1, 2, 2);
+    let mut seed: i64 = 733;
+    let mut random = grid(50, 50, 0);
+    for r in 0..50 {
+        for c in 0..50 {
+            random[r][c] = if next_random(mut seed) % 3 == 0 { 1 } else { 0 };
+        }
+    }
+    random[25][25] = 0;
+    digest("50 x 50 random, two thirds 0s, from the middle".to_string(), random, 25, 25, 2);
+    let mut snake = grid(50, 50, 0);
+    for r in 0..50 {
+        if r % 2 == 1 {
+            for c in 0..50 {
+                snake[r][c] = 1;
+            }
+            if r % 4 == 1 {
+                snake[r][49] = 0;
+            } else {
+                snake[r][0] = 0;
+            }
+        }
+    }
+    digest("50 x 50 winding path, from a corner".to_string(), snake, 0, 0, 5);
+    digest("50 x 50 all one color".to_string(), grid(50, 50, 7), 49, 49, 3);
+    let mut board = grid(50, 50, 0);
+    for r in 0..50 {
+        for c in 0..50 {
+            board[r][c] = (r + c) % 2;
+        }
+    }
+    digest("50 x 50 checkerboard".to_string(), board, 10, 20, 2);
+    let mut sum = 0;
+    let mut changed = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 8;
+        let n = 1 + next_random(mut seed) % 8;
+        let kinds = 1 + next_random(mut seed) % 3;
+        let mut image = grid(m, n, 0);
+        for r in 0..m {
+            for c in 0..n {
+                image[r][c] = next_random(mut seed) % kinds;
+            }
+        }
+        let sr = next_random(mut seed) % m;
+        let sc = next_random(mut seed) % n;
+        let color = next_random(mut seed) % 4;
+        let before = image.clone();
+        let after = flood_fill(image, sr, sc, color);
+        for r in 0..m {
+            for c in 0..n {
+                if after[r][c] != before[r][c] {
+                    changed += 1;
+                }
+                sum = (sum * 131 + after[r][c] + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random images: changed {changed}, checksum {sum}");
+}

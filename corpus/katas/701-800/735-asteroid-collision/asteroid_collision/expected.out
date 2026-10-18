@@ -1,0 +1,13 @@
+[5, 10, -5] -> [5, 10]
+[8, -8] -> []
+[10, 2, -5] -> [10]
+[-2, -1, 1, 2] -> [-2, -1, 1, 2]
+[1, -2, -2, -2] -> [-2, -2, -2]
+[3, 2, 1, -6, 4] -> [-6, 4]
+[-1, 3, -3, 2, -1, -2] -> [-1]
+[1, 2, 3, -3, -2, -1] -> []
+10000 random asteroids -> 298 left, checksum 303913397
+9999 right-movers and one large left-mover -> 1 left, checksum 1
+5000 equal pairs -> 0 left, checksum 0
+5000 right-movers met by their mirror -> 0 left, checksum 0
+300 random rows: 1221 left, checksum 395946160

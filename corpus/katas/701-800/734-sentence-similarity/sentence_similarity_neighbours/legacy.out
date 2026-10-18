@@ -1,0 +1,12 @@
+[great, acting, skills] and [fine, drama, talent] with [(great, fine), (drama, acting), (skills, talent)] -> true
+[great] and [great] with [] -> true
+[great] and [doubleplus, good] with [(great, doubleplus)] -> false
+[a] and [c] with [(a, b), (b, c)] -> false
+[b] and [a] with [(a, b)] -> true
+[a, b] and [b, a] with [(a, b)] -> true
+[x, y, z] and [x, y, q] with [(x, q), (y, q)] -> false
+1000 words, each paired with its counterpart -> true
+the same with the last word changed -> false
+the same with the pairs left out -> false
+the same one word short -> false
+300 random cases: 93 similar, checksum 431841868

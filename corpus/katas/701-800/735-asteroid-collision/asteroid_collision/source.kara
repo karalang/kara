@@ -1,0 +1,106 @@
+// LeetCode #735: Asteroid Collision -- a stack of survivors.
+//
+// Each asteroid moves right if positive and left if negative, at the
+// same speed, its size the absolute value. When two meet, the smaller
+// explodes, and both when they are the same size. Only a left-mover
+// meeting a right-mover to its left can collide. Walk the row keeping
+// the survivors so far on a stack: a left-mover destroys the smaller
+// right-movers on top, then is destroyed by a larger one, dies with an
+// equal one, or survives onto the stack. O(n) time.
+
+fn asteroid_collision(asteroids: Vec[i64]) -> Vec[i64] {
+    let mut stack: Vec[i64] = Vec.new();
+    for a in asteroids.iter() {
+        let mut alive = true;
+        while alive and *a < 0 and stack.len() > 0 and stack[stack.len() - 1] > 0 {
+            let top = stack[stack.len() - 1];
+            if top < -*a {
+                stack.pop();
+            } else {
+                if top == -*a {
+                    stack.pop();
+                }
+                alive = false;
+            }
+        }
+        if alive {
+            stack.push(*a);
+        }
+    }
+    stack
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(row: Vec[i64]) {
+    println(f"{row} -> {asteroid_collision(row)}");
+}
+
+fn digest(what: String, row: Vec[i64]) {
+    let left = asteroid_collision(row);
+    let mut sum = 0;
+    for a in left.iter() {
+        sum = (sum * 131 + *a + 1001) % 1000000007;
+    }
+    println(f"{what} -> {left.len()} left, checksum {sum}");
+}
+
+fn main() {
+    show([5, 10, -5]);
+    show([8, -8]);
+    show([10, 2, -5]);
+    show([-2, -1, 1, 2]);
+    show([1, -2, -2, -2]);
+    show([3, 2, 1, -6, 4]);
+    show([-1, 3, -3, 2, -1, -2]);
+    show([1, 2, 3, -3, -2, -1]);
+    let mut seed: i64 = 735;
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        let size = 1 + next_random(mut seed) % 1000;
+        random.push(if next_random(mut seed) % 2 == 0 { size } else { -size });
+    }
+    digest("10000 random asteroids".to_string(), random);
+    let mut wall: Vec[i64] = Vec.new();
+    for i in 0..9999 {
+        wall.push(1 + i % 999);
+    }
+    wall.push(-1000);
+    digest("9999 right-movers and one large left-mover".to_string(), wall);
+    let mut pairs: Vec[i64] = Vec.new();
+    for i in 0..5000 {
+        pairs.push(1 + i % 1000);
+        pairs.push(-(1 + i % 1000));
+    }
+    digest("5000 equal pairs".to_string(), pairs);
+    let mut nested: Vec[i64] = Vec.new();
+    for i in 0..5000 {
+        nested.push(1 + i % 1000);
+    }
+    for i in 0..5000 {
+        nested.push(-(1 + (4999 - i) % 1000));
+    }
+    digest("5000 right-movers met by their mirror".to_string(), nested);
+    let mut sum = 0;
+    let mut left = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 12;
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let size = 1 + next_random(mut seed) % 5;
+            row.push(if next_random(mut seed) % 2 == 0 { size } else { -size });
+        }
+        let out = asteroid_collision(row);
+        left += out.len();
+        for a in out.iter() {
+            sum = (sum * 131 + *a + 1001) % 1000000007;
+        }
+        sum = (sum * 131 + 7) % 1000000007;
+    }
+    println(f"300 random rows: {left} left, checksum {sum}");
+}

@@ -1,0 +1,143 @@
+// LeetCode #732: My Calendar III -- a segment tree grown on demand.
+//
+// Each node covers a half-open stretch of [0, 10^9]: `added` counts
+// bookings that cover all of it, and `most` is the most bookings over
+// any point of it, `added` included. Children are made only where a
+// booking reaches. Each booking is added to its stretch, and the root's
+// `most` is then the answer. O(log 10^9) per booking.
+
+shared struct Node {
+    mut added: i64,
+    mut most: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+}
+
+fn fresh() -> Node {
+    Node { added: 0, most: 0, left: None, right: None }
+}
+
+fn most_of(child: Option[Node]) -> i64 {
+    match child {
+        Some(c) => c.most,
+        None => 0,
+    }
+}
+
+fn add(node: Node, lo: i64, hi: i64, start: i64, end: i64) {
+    if start <= lo and hi <= end {
+        node.added += 1;
+        node.most += 1;
+        return;
+    }
+    let mid = lo + (hi - lo) / 2;
+    if start < mid {
+        if node.left.is_none() {
+            node.left = Some(fresh());
+        }
+        if let Some(l) = node.left {
+            add(l, lo, mid, start, end);
+        }
+    }
+    if mid < end {
+        if node.right.is_none() {
+            node.right = Some(fresh());
+        }
+        if let Some(r) = node.right {
+            add(r, mid, hi, start, end);
+        }
+    }
+    let l = most_of(node.left);
+    let r = most_of(node.right);
+    node.most = node.added + if l > r { l } else { r };
+}
+
+struct MyCalendarThree {
+    root: Node,
+}
+
+impl MyCalendarThree {
+    fn new() -> MyCalendarThree {
+        MyCalendarThree { root: fresh() }
+    }
+
+    fn book(mut ref self, start: i64, end: i64) -> i64 {
+        add(self.root, 0, 1000000000, start, end);
+        self.root.most
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(bookings: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut cal = MyCalendarThree.new();
+    let mut out: Vec[i64] = Vec.new();
+    for b in bookings.iter() {
+        out.push(cal.book(b.0, b.1));
+    }
+    out
+}
+
+fn show(bookings: Vec[(i64, i64)]) {
+    println(f"{bookings} -> {run(bookings)}");
+}
+
+fn count(what: String, bookings: Vec[(i64, i64)]) {
+    let got = run(bookings);
+    println(f"{what} -> at most {got[got.len() - 1]} at once");
+}
+
+fn main() {
+    show([(10, 20), (50, 60), (10, 40), (5, 15), (5, 10), (25, 55)]);
+    show([(0, 10), (0, 10), (0, 10), (10, 20), (10, 20), (5, 15)]);
+    show([(24, 40), (43, 50), (27, 43), (5, 21), (30, 40), (14, 29), (3, 19), (3, 14), (25, 39), (6, 19)]);
+    show([(0, 1000000000), (0, 1), (999999999, 1000000000), (0, 1000000000)]);
+    show([(5, 6), (6, 7), (4, 5), (5, 6), (4, 7), (1, 2)]);
+    let mut seed: i64 = 732;
+    let mut random: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..1000 {
+        let s = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000;
+        let len = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000;
+        let e = if s + len > 1000000000 { 1000000000 } else { s + len };
+        random.push((s, e));
+    }
+    count("1000 random bookings up to 10^9".to_string(), random);
+    let mut rising: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        rising.push((i * 10, i * 10 + 25));
+    }
+    count("1000 bookings, each over the next two, rising".to_string(), rising);
+    let mut falling: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        falling.push((10000 - i * 10, 10025 - i * 10));
+    }
+    count("1000 bookings, each over the next two, falling".to_string(), falling);
+    let mut nested: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        nested.push((500 - i / 2, 501 + i / 2));
+    }
+    count("1000 bookings around one point".to_string(), nested);
+    let mut sum = 0;
+    let mut deepest = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let mut bookings: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let s = next_random(mut seed) % 100;
+            let e = s + 1 + next_random(mut seed) % 15;
+            bookings.push((s, e));
+        }
+        for k in run(bookings).iter() {
+            if *k > deepest {
+                deepest = *k;
+            }
+            sum = (sum * 131 + *k) % 1000000007;
+        }
+    }
+    println(f"300 random runs: at most {deepest} at once, checksum {sum}");
+}

@@ -1,0 +1,252 @@
+// LeetCode #734: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random sentences.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn are_sentences_similar_star(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut similar: Set[(String, String)] = Set.new();
+    for p in pairs.iter() {
+        similar.insert((p.0.clone(), p.1.clone()));
+        similar.insert((p.1.clone(), p.0.clone()));
+    }
+    for i in 0..sentence1.len() {
+        let a = sentence1[i].clone();
+        let b = sentence2[i].clone();
+        if a != b and not similar.contains((a, b)) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- neighbours arm -------------------------------------------------
+
+fn are_sentences_similar_neighbours(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut near: Map[String, Set[String]] = Map.new();
+    for p in pairs.iter() {
+        near.entry(p.0.clone()).or_insert(Set.new()).insert(p.1.clone());
+        near.entry(p.1.clone()).or_insert(Set.new()).insert(p.0.clone());
+    }
+    for i in 0..sentence1.len() {
+        if sentence1[i] == sentence2[i] {
+            continue;
+        }
+        match near.get(sentence1[i].clone()) {
+            Some(words) => {
+                if not words.contains(sentence2[i].clone()) {
+                    return false;
+                }
+            }
+            None => {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn ordered_sorted(a: own String, b: own String) -> (String, String) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+fn are_sentences_similar_sorted(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut sorted: Vec[(String, String)] = Vec.new();
+    for p in pairs.iter() {
+        sorted.push(ordered_sorted(p.0.clone(), p.1.clone()));
+    }
+    sorted.sort();
+    for i in 0..sentence1.len() {
+        if sentence1[i] == sentence2[i] {
+            continue;
+        }
+        let want = ordered_sorted(sentence1[i].clone(), sentence2[i].clone());
+        let mut lo = 0;
+        let mut hi = sorted.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if sorted[mid] < want {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo == sorted.len() or sorted[lo] != want {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- scan arm -------------------------------------------------------
+
+fn are_sentences_similar_scan(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    for i in 0..sentence1.len() {
+        let a = sentence1[i].as_str();
+        let b = sentence2[i].as_str();
+        if a == b {
+            continue;
+        }
+        let mut found = false;
+        for p in pairs.iter() {
+            if (p.0 == a and p.1 == b) or (p.0 == b and p.1 == a) {
+                found = true;
+                break;
+            }
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn similar_with(which: i64, a: Vec[String], b: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if which == 0 {
+        are_sentences_similar_star(a, b, pairs)
+    } else if which == 1 {
+        are_sentences_similar_neighbours(a, b, pairs)
+    } else if which == 2 {
+        are_sentences_similar_sorted(a, b, pairs)
+    } else {
+        are_sentences_similar_scan(a, b, pairs)
+    }
+}
+
+// The definition, as the problem states it: the same number of words,
+// and at every place the two words are equal or one of the pairs holds
+// them, either way round.
+fn definition(a: Vec[String], b: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut all = true;
+    for i in 0..a.len() {
+        let mut ok = a[i] == b[i];
+        for p in pairs.iter() {
+            if (p.0 == a[i] and p.1 == b[i]) or (p.1 == a[i] and p.0 == b[i]) {
+                ok = true;
+            }
+        }
+        if not ok {
+            all = false;
+        }
+    }
+    all
+}
+
+fn word(k: i64) -> String {
+    f"w{k}"
+}
+
+fn main() {
+    let mut seed = 7340;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut similar = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 6 words of 6, 0 to 6 pairs; each word of the second
+        // sentence is the first's word, a word from a pair, or any word,
+        // and one case in ten has an extra word.
+        let n = 1 + next_random(mut seed) % 6;
+        let np = next_random(mut seed) % 7;
+        let mut pairs: Vec[(String, String)] = Vec.new();
+        for _ in 0..np {
+            pairs.push((word(next_random(mut seed) % 6), word(next_random(mut seed) % 6)));
+        }
+        let mut a: Vec[String] = Vec.new();
+        let mut b: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let x = next_random(mut seed) % 6;
+            a.push(word(x));
+            let pick = next_random(mut seed) % 3;
+            if pick == 0 or np == 0 {
+                b.push(word(x));
+            } else if pick == 1 {
+                let p = next_random(mut seed) % np;
+                if next_random(mut seed) % 2 == 0 {
+                    b.push(pairs[p].1.clone());
+                } else {
+                    b.push(pairs[p].0.clone());
+                }
+            } else {
+                b.push(word(next_random(mut seed) % 6));
+            }
+        }
+        if next_random(mut seed) % 10 == 0 {
+            b.push(word(0));
+        }
+        let want = definition(a, b, pairs);
+        if want {
+            similar += 1;
+        }
+        let mut flipped: Vec[(String, String)] = Vec.new();
+        for p in pairs.iter() {
+            flipped.push((p.1.clone(), p.0.clone()));
+        }
+        for which in 0..arms {
+            let got = similar_with(which, a, b, pairs);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the two sentences the other way round, the same answer.
+            checks += 1;
+            if similar_with(which, b, a, pairs) != got {
+                fails[1] += 1;
+            }
+            // P3: every pair written the other way round, the same
+            // answer.
+            checks += 1;
+            if similar_with(which, a, b, flipped) != got {
+                fails[2] += 1;
+            }
+            // P4: with the same number of words, similar exactly when
+            // every place alone, as one-word sentences, is similar.
+            if a.len() == b.len() {
+                checks += 1;
+                let mut each = true;
+                for i in 0..a.len() {
+                    if not similar_with(which, [a[i].clone()], [b[i].clone()], pairs) {
+                        each = false;
+                    }
+                }
+                if each != got {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} cases ({similar} similar), {arms} arms, {checks} checks, {total} failures");
+}

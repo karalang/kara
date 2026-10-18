@@ -1,0 +1,60 @@
+// LeetCode #729: My Calendar I -- every booking checked in turn.
+//
+// Two half-open intervals [s1, e1) and [s2, e2) overlap exactly when
+// s1 < e2 and s2 < e1. Keep the accepted bookings in a list and accept
+// a new one only if it overlaps none of them. O(n) per booking.
+
+struct MyCalendar {
+    booked: Vec[(i64, i64)],
+}
+
+impl MyCalendar {
+    fn new() -> MyCalendar {
+        MyCalendar { booked: Vec.new() }
+    }
+
+    fn book(mut ref self, start: i64, end: i64) -> bool {
+        for b in self.booked.iter() {
+            if start < b.1 and b.0 < end {
+                return false;
+            }
+        }
+        self.booked.push((start, end));
+        true
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 lists of 1,000 random bookings of up to 10^6 minutes, ending
+    // before 10^9 even when moved by the round number, made once.
+    let mut seed: i64 = 729;
+    let mut lists: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..20 {
+        let mut bookings: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..1000 {
+            let s = (next_random(mut seed) * 32768 + next_random(mut seed)) % 998999000;
+            let len = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000;
+            bookings.push((s, s + len));
+        }
+        lists.push(bookings);
+    }
+    // 80 rounds: every list is booked into a fresh calendar, moved
+    // later by the round number, and the accepted bookings counted.
+    let mut accepted = 0;
+    for round in 0..80 {
+        for d in 0..20 {
+            let mut cal = MyCalendar.new();
+            for b in lists[d].iter() {
+                if cal.book(b.0 + round, b.1 + round) {
+                    accepted += 1;
+                }
+            }
+        }
+    }
+    println(f"80 rounds of 20 lists of 1000 bookings: {accepted} accepted");
+}

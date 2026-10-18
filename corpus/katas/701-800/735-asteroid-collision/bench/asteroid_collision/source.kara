@@ -1,0 +1,67 @@
+// LeetCode #735: Asteroid Collision -- a stack of survivors.
+//
+// Each asteroid moves right if positive and left if negative, at the
+// same speed, its size the absolute value. When two meet, the smaller
+// explodes, and both when they are the same size. Only a left-mover
+// meeting a right-mover to its left can collide. Walk the row keeping
+// the survivors so far on a stack: a left-mover destroys the smaller
+// right-movers on top, then is destroyed by a larger one, dies with an
+// equal one, or survives onto the stack. O(n) time.
+
+fn asteroid_collision(asteroids: Vec[i64]) -> Vec[i64] {
+    let mut stack: Vec[i64] = Vec.new();
+    for a in asteroids.iter() {
+        let mut alive = true;
+        while alive and *a < 0 and stack.len() > 0 and stack[stack.len() - 1] > 0 {
+            let top = stack[stack.len() - 1];
+            if top < -*a {
+                stack.pop();
+            } else {
+                if top == -*a {
+                    stack.pop();
+                }
+                alive = false;
+            }
+        }
+        if alive {
+            stack.push(*a);
+        }
+    }
+    stack
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 735;
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..10000 {
+            let size = 1 + next_random(mut seed) % 1000;
+            if next_random(mut seed) % 2 == 0 {
+                row.push(size);
+            } else {
+                row.push(-size);
+            }
+        }
+        rows.push(row);
+    }
+    let mut left = 0;
+    let mut sum = 0;
+    for _ in 0..500 {
+        for k in 0..20 {
+            let j = next_random(mut seed) % 10000;
+            rows[k][j] = -rows[k][j];
+            let survivors = asteroid_collision(rows[k]);
+            left += survivors.len();
+            for a in survivors.iter() {
+                sum = (sum * 31 + *a + 1000) % 1000000007;
+            }
+        }
+    }
+    println(f"500 rounds of 20 rows of 10000 asteroids: {left} left, checksum {sum}");
+}

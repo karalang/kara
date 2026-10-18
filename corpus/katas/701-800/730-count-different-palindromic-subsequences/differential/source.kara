@@ -1,0 +1,318 @@
+// LeetCode #730: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random strings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn count_palindromic_subsequences_star(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes();
+    let n = b.len();
+    // next_same[i]: the next place after i with the same letter, n if none;
+    // prev_same[j]: the last place before j with the same letter, -1.
+    let mut next_same: Vec[i64] = vec![n; n];
+    let mut prev_same: Vec[i64] = vec![-1; n];
+    let mut last: Vec[i64] = vec![-1; 4];
+    for i in 0..n {
+        let c = (b[i] - b'a') as i64;
+        prev_same[i] = last[c];
+        if last[c] >= 0 {
+            next_same[last[c]] = i;
+        }
+        last[c] = i;
+    }
+    let mut count: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        count.push(vec![0; n]);
+    }
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        count[i][i] = 1;
+        for j in i + 1..n {
+            let inner = if i + 1 <= j - 1 { count[i + 1][j - 1] } else { 0 };
+            let mut v = 0;
+            if b[i] != b[j] {
+                v = count[i + 1][j] + count[i][j - 1] - inner;
+            } else {
+                let lo = next_same[i];
+                let hi = prev_same[j];
+                if lo > hi {
+                    v = 2 * inner + 2;
+                } else if lo == hi {
+                    v = 2 * inner + 1;
+                } else {
+                    let twice = if lo + 1 <= hi - 1 { count[lo + 1][hi - 1] } else { 0 };
+                    v = 2 * inner - twice;
+                }
+            }
+            count[i][j] = ((v % m) + m) % m;
+        }
+    }
+    count[0][n - 1]
+}
+
+// ---- letters arm ----------------------------------------------------
+
+fn count_palindromic_subsequences_letters(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes();
+    let n = b.len();
+    // by[c * n * n + i * n + j]
+    let mut by: Vec[i64] = vec![0; 4 * n * n];
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        for j in i..n {
+            for c in 0..4 {
+                let letter = b'a' + c as u8;
+                let at = c * n * n + i * n + j;
+                if b[i] != letter {
+                    by[at] = if i + 1 <= j { by[c * n * n + (i + 1) * n + j] } else { 0 };
+                } else if b[j] != letter {
+                    by[at] = by[c * n * n + i * n + j - 1];
+                } else if i == j {
+                    by[at] = 1;
+                } else {
+                    let mut v = 2;
+                    if i + 1 <= j - 1 {
+                        for d in 0..4 {
+                            v += by[d * n * n + (i + 1) * n + j - 1];
+                        }
+                    }
+                    by[at] = v % m;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for c in 0..4 {
+        total += by[c * n * n + n - 1];
+    }
+    total % m
+}
+
+// ---- outer arm ------------------------------------------------------
+
+fn inside_outer(memo: mut ref Vec[i64], first: Vec[i64], last: Vec[i64], n: i64, i: i64, j: i64) -> i64 {
+    if i > j {
+        return 0;
+    }
+    if memo[i * n + j] >= 0 {
+        return memo[i * n + j];
+    }
+    let mut total = 0;
+    for c in 0..4 {
+        // first[c * (n + 1) + i]: the first c at or after i, n if none;
+        // last[c * (n + 1) + j + 1]: the last c at or before j, -1.
+        let a = first[c * (n + 1) + i];
+        let b = last[c * (n + 1) + j + 1];
+        if a <= j {
+            total += 1;
+            if b > a {
+                total += 1 + inside_outer(mut memo, first, last, n, a + 1, b - 1);
+            }
+        }
+    }
+    total %= 1000000007;
+    memo[i * n + j] = total;
+    total
+}
+
+fn count_palindromic_subsequences_outer(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut first: Vec[i64] = vec![n; 4 * (n + 1)];
+    let mut last: Vec[i64] = vec![-1; 4 * (n + 1)];
+    for c in 0..4 {
+        let letter = b'a' + c as u8;
+        let mut i = n;
+        while i > 0 {
+            i -= 1;
+            first[c * (n + 1) + i] = if b[i] == letter { i } else { first[c * (n + 1) + i + 1] };
+        }
+        for j in 0..n {
+            last[c * (n + 1) + j + 1] = if b[j] == letter { j } else { last[c * (n + 1) + j] };
+        }
+    }
+    let mut memo: Vec[i64] = vec![-1; n * n];
+    inside_outer(mut memo, first, last, n, 0, n - 1)
+}
+
+// ---- lengths arm ----------------------------------------------------
+
+fn count_palindromic_subsequences_lengths(s: String) -> i64 {
+    let m = 1000000007;
+    let b = s.bytes();
+    let n = b.len();
+    // next_at[c][i]: the first c at or after i, n if none;
+    // prev_at[c][j]: the last c at or before j, -1 if none.
+    let mut next_at: Vec[Vec[i64]] = Vec.new();
+    let mut prev_at: Vec[Vec[i64]] = Vec.new();
+    for c in 0..4 {
+        let letter = b'a' + c as u8;
+        let mut nx: Vec[i64] = vec![n; n + 1];
+        let mut i = n;
+        while i > 0 {
+            i -= 1;
+            nx[i] = if b[i] == letter { i } else { nx[i + 1] };
+        }
+        let mut pv: Vec[i64] = vec![-1; n];
+        for j in 0..n {
+            pv[j] = if b[j] == letter { j } else if j > 0 { pv[j - 1] } else { -1 };
+        }
+        next_at.push(nx);
+        prev_at.push(pv);
+    }
+    let mut count: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        count.push(vec![0; n]);
+    }
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let j = i + len - 1;
+            let mut total = 0;
+            for c in 0..4 {
+                let a = next_at[c][i];
+                if a <= j {
+                    let z = prev_at[c][j];
+                    total += 1;
+                    if z > a {
+                        total += 1;
+                        if a + 1 <= z - 1 {
+                            total += count[a + 1][z - 1];
+                        }
+                    }
+                }
+            }
+            count[i][j] = total % m;
+        }
+    }
+    count[0][n - 1]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut s = "".to_string();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % kinds) as u8) as char);
+    }
+    s
+}
+
+fn count(which: i64, s: String) -> i64 {
+    if which == 0 {
+        count_palindromic_subsequences_star(s)
+    } else if which == 1 {
+        count_palindromic_subsequences_letters(s)
+    } else if which == 2 {
+        count_palindromic_subsequences_outer(s)
+    } else {
+        count_palindromic_subsequences_lengths(s)
+    }
+}
+
+// The definition: every subsequence, one per subset of places, kept in
+// a set when it reads the same both ways.
+fn definition(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut seen: Set[String] = Set.new();
+    for mask in 1..(1 << n) {
+        let mut sub: Vec[u8] = Vec.new();
+        for i in 0..n {
+            if mask & (1 << i) != 0 {
+                sub.push(b[i]);
+            }
+        }
+        let mut same = true;
+        for k in 0..sub.len() {
+            if sub[k] != sub[sub.len() - 1 - k] {
+                same = false;
+            }
+        }
+        if same {
+            let mut t = "".to_string();
+            for c in sub.iter() {
+                t.push(*c as char);
+            }
+            seen.insert(t);
+        }
+    }
+    seen.len()
+}
+
+fn main() {
+    let mut seed = 7300;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut most = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 10 letters from the first 1 to 4 of a to d.
+        let n = 1 + next_random(mut seed) % 10;
+        let kinds = 1 + next_random(mut seed) % 4;
+        let s = random_word(n, kinds, mut seed);
+        let want = definition(s.clone());
+        if want > most {
+            most = want;
+        }
+        let b = s.bytes();
+        let mut reversed = "".to_string();
+        let mut renamed = "".to_string();
+        let mut has_d = false;
+        for k in 0..n {
+            reversed.push(b[n - 1 - k] as char);
+            renamed.push((b'a' + b'd' - b[k]) as char);
+            if b[k] == b'd' {
+                has_d = true;
+            }
+        }
+        let mut wrapped = "d".to_string();
+        wrapped.push_str(s.as_str());
+        wrapped.push('d');
+        for which in 0..arms {
+            let got = count(which, s.clone());
+            // P1: the definition's count.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the string reversed, the same count.
+            checks += 1;
+            if count(which, reversed.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: the letters renamed a to d, b to c and back, the same
+            // count.
+            checks += 1;
+            if count(which, renamed.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: with no d in the string, a d at both ends: each
+            // palindrome inside alone and wrapped in d ... d, and d and
+            // dd, so twice as many plus two.
+            if not has_d {
+                checks += 1;
+                if count(which, wrapped.clone()) != 2 * got + 2 {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} strings (most {most} palindromes), {arms} arms, {checks} checks, {total} failures");
+}

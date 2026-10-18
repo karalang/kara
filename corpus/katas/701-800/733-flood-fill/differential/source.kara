@@ -1,0 +1,300 @@
+// LeetCode #733: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random images.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn flood_fill_star(image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) -> Vec[Vec[i64]] {
+    let mut img = image;
+    let old = img[sr][sc];
+    if old == color {
+        return img;
+    }
+    let m = img.len();
+    let n = img[0].len();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((sr, sc));
+    while let Some((r, c)) = stack.pop() {
+        if r < 0 or r >= m or c < 0 or c >= n or img[r][c] != old {
+            continue;
+        }
+        img[r][c] = color;
+        stack.push((r + 1, c));
+        stack.push((r - 1, c));
+        stack.push((r, c + 1));
+        stack.push((r, c - 1));
+    }
+    img
+}
+
+// ---- recursive arm --------------------------------------------------
+
+fn fill_recursive(img: mut ref Vec[Vec[i64]], r: i64, c: i64, old: i64, color: i64) {
+    img[r][c] = color;
+    if r > 0 and img[r - 1][c] == old {
+        fill_recursive(mut img, r - 1, c, old, color);
+    }
+    if r + 1 < img.len() and img[r + 1][c] == old {
+        fill_recursive(mut img, r + 1, c, old, color);
+    }
+    if c > 0 and img[r][c - 1] == old {
+        fill_recursive(mut img, r, c - 1, old, color);
+    }
+    if c + 1 < img[r].len() and img[r][c + 1] == old {
+        fill_recursive(mut img, r, c + 1, old, color);
+    }
+}
+
+fn flood_fill_recursive(image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) -> Vec[Vec[i64]] {
+    let mut img = image;
+    let old = img[sr][sc];
+    if old != color {
+        fill_recursive(mut img, sr, sc, old, color);
+    }
+    img
+}
+
+// ---- bfs arm --------------------------------------------------------
+
+fn flood_fill_bfs(image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) -> Vec[Vec[i64]] {
+    let mut img = image;
+    let old = img[sr][sc];
+    if old == color {
+        return img;
+    }
+    let m = img.len();
+    let n = img[0].len();
+    let steps = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    img[sr][sc] = color;
+    queue.push_back((sr, sc));
+    while let Some((r, c)) = queue.pop_front() {
+        for s in steps.iter() {
+            let nr = r + s.0;
+            let nc = c + s.1;
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and img[nr][nc] == old {
+                img[nr][nc] = color;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    img
+}
+
+// ---- scanline arm ---------------------------------------------------
+
+fn flood_fill_scanline(image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) -> Vec[Vec[i64]] {
+    let mut img = image;
+    let old = img[sr][sc];
+    if old == color {
+        return img;
+    }
+    let m = img.len();
+    let n = img[0].len();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((sr, sc));
+    while let Some((r, c)) = stack.pop() {
+        if img[r][c] != old {
+            continue;
+        }
+        let mut lo = c;
+        while lo > 0 and img[r][lo - 1] == old {
+            lo -= 1;
+        }
+        let mut hi = c;
+        while hi + 1 < n and img[r][hi + 1] == old {
+            hi += 1;
+        }
+        for x in lo..hi + 1 {
+            img[r][x] = color;
+        }
+        for nr in [r - 1, r + 1] {
+            if nr < 0 or nr >= m {
+                continue;
+            }
+            let mut x = lo;
+            while x <= hi {
+                if img[nr][x] == old {
+                    stack.push((nr, x));
+                    while x <= hi and img[nr][x] == old {
+                        x += 1;
+                    }
+                } else {
+                    x += 1;
+                }
+            }
+        }
+    }
+    img
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn fill_with(which: i64, image: own Vec[Vec[i64]], sr: i64, sc: i64, color: i64) -> Vec[Vec[i64]] {
+    if which == 0 {
+        flood_fill_star(image, sr, sc, color)
+    } else if which == 1 {
+        flood_fill_recursive(image, sr, sc, color)
+    } else if which == 2 {
+        flood_fill_bfs(image, sr, sc, color)
+    } else {
+        flood_fill_scanline(image, sr, sc, color)
+    }
+}
+
+// The definition: mark the start, then sweep the whole image again and
+// again, marking every pixel of the start's color next to a marked one,
+// until a sweep marks nothing; then paint the marked pixels.
+fn definition(image: Vec[Vec[i64]], sr: i64, sc: i64, color: i64) -> Vec[Vec[i64]] {
+    let m = image.len();
+    let n = image[0].len();
+    let old = image[sr][sc];
+    let mut marked: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..m {
+        marked.push(vec![false; n]);
+    }
+    marked[sr][sc] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for r in 0..m {
+            for c in 0..n {
+                if not marked[r][c] and image[r][c] == old {
+                    let near = (r > 0 and marked[r - 1][c]) or (r + 1 < m and marked[r + 1][c])
+                        or (c > 0 and marked[r][c - 1]) or (c + 1 < n and marked[r][c + 1]);
+                    if near {
+                        marked[r][c] = true;
+                        grew = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = image.clone();
+    for r in 0..m {
+        for c in 0..n {
+            if marked[r][c] {
+                out[r][c] = color;
+            }
+        }
+    }
+    out
+}
+
+fn transpose(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut t: Vec[Vec[i64]] = Vec.new();
+    for c in 0..image[0].len() {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..image.len() {
+            row.push(image[r][c]);
+        }
+        t.push(row);
+    }
+    t
+}
+
+fn main() {
+    let mut seed = 7330;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut painted = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 8 by 1 to 8 pixels of 1 to 3 colors, painted with one of
+        // 4 colors from a random place, so the new color is sometimes
+        // the old one, sometimes absent and sometimes elsewhere.
+        let m = 1 + next_random(mut seed) % 8;
+        let n = 1 + next_random(mut seed) % 8;
+        let kinds = 1 + next_random(mut seed) % 3;
+        let mut image: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(next_random(mut seed) % kinds);
+            }
+            image.push(row);
+        }
+        let sr = next_random(mut seed) % m;
+        let sc = next_random(mut seed) % n;
+        let color = next_random(mut seed) % 4;
+        let old = image[sr][sc];
+        let want = definition(image, sr, sc, color);
+        for r in 0..m {
+            for c in 0..n {
+                if want[r][c] != image[r][c] {
+                    painted += 1;
+                }
+            }
+        }
+        let mut absent = true;
+        for r in 0..m {
+            for c in 0..n {
+                if image[r][c] == color {
+                    absent = false;
+                }
+            }
+        }
+        for which in 0..arms {
+            let got = fill_with(which, image.clone(), sr, sc, color);
+            // P1: the definition's image.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every changed pixel had the start's color and has the
+            // new one, the start itself has the new color, and no pixel
+            // of the start's color is left next to a changed one.
+            checks += 1;
+            let mut ok = got.len() == m and got[sr][sc] == color;
+            if ok {
+                for r in 0..m {
+                    for c in 0..n {
+                        let changed = got[r][c] != image[r][c];
+                        if changed and (image[r][c] != old or got[r][c] != color) {
+                            ok = false;
+                        }
+                        if not changed and image[r][c] == old and old != color {
+                            if (r > 0 and got[r - 1][c] != image[r - 1][c])
+                                or (r + 1 < m and got[r + 1][c] != image[r + 1][c])
+                                or (c > 0 and got[r][c - 1] != image[r][c - 1])
+                                or (c + 1 < n and got[r][c + 1] != image[r][c + 1]) {
+                                ok = false;
+                            }
+                        }
+                    }
+                }
+            }
+            if not ok {
+                fails[1] += 1;
+            }
+            // P3: when the new color appears nowhere in the image,
+            // filling back from the start with the old color restores it.
+            if absent {
+                checks += 1;
+                if fill_with(which, got.clone(), sr, sc, old) != image {
+                    fails[2] += 1;
+                }
+            }
+            // P4: the image transposed, started at (sc, sr), gives the
+            // answer transposed.
+            checks += 1;
+            if fill_with(which, transpose(image), sc, sr, color) != transpose(got) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} images ({painted} pixels changed), {arms} arms, {checks} checks, {total} failures");
+}

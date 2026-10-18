@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/735-asteroid-collision/bench/asteroid_collision.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "2c05889a9"
+extracted_src = "9256ac9c"
+model_rev = "583cfb0d"
+model_src = "9256ac9c"

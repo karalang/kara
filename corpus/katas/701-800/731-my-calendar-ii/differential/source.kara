@@ -1,0 +1,380 @@
+// LeetCode #731: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random runs of
+// bookings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+struct MyCalendarTwoStar {
+    booked: Vec[(i64, i64)],
+    doubled: Vec[(i64, i64)],
+}
+
+impl MyCalendarTwoStar {
+    fn new() -> MyCalendarTwoStar {
+        MyCalendarTwoStar { booked: Vec.new(), doubled: Vec.new() }
+    }
+
+    fn book(mut ref self, start: i64, end: i64) -> bool {
+        for d in self.doubled.iter() {
+            if start < d.1 and d.0 < end {
+                return false;
+            }
+        }
+        for b in self.booked.iter() {
+            if start < b.1 and b.0 < end {
+                let lo = if start > b.0 { start } else { b.0 };
+                let hi = if end < b.1 { end } else { b.1 };
+                self.doubled.push((lo, hi));
+            }
+        }
+        self.booked.push((start, end));
+        true
+    }
+}
+
+// ---- counts arm -----------------------------------------------------
+
+struct MyCalendarTwoCounts {
+    delta: SortedMap[i64, i64],
+}
+
+impl MyCalendarTwoCounts {
+    fn new() -> MyCalendarTwoCounts {
+        MyCalendarTwoCounts { delta: SortedMap.new() }
+    }
+
+    fn change(mut ref self, at: i64, by: i64) {
+        let old = match self.delta.get(at) {
+            Some(v) => *v,
+            None => 0,
+        };
+        if old + by == 0 {
+            self.delta.remove(at);
+        } else {
+            self.delta.insert(at, old + by);
+        }
+    }
+
+    fn book(mut ref self, start: i64, end: i64) -> bool {
+        self.change(start, 1);
+        self.change(end, -1);
+        let mut covered = 0;
+        for (_, d) in self.delta.range(0, end) {
+            covered += *d;
+            if covered >= 3 {
+                self.change(start, -1);
+                self.change(end, 1);
+                return false;
+            }
+        }
+        true
+    }
+}
+
+// ---- segtree arm ----------------------------------------------------
+
+shared struct Node {
+    mut added: i64,
+    mut most: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+}
+
+fn fresh() -> Node {
+    Node { added: 0, most: 0, left: None, right: None }
+}
+
+fn most_of(child: Option[Node]) -> i64 {
+    match child {
+        Some(c) => c.most,
+        None => 0,
+    }
+}
+
+fn query(node: Node, lo: i64, hi: i64, start: i64, end: i64) -> i64 {
+    if start <= lo and hi <= end {
+        return node.most;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let mut best = 0;
+    if start < mid {
+        if let Some(l) = node.left {
+            let q = query(l, lo, mid, start, end);
+            if q > best {
+                best = q;
+            }
+        }
+    }
+    if mid < end {
+        if let Some(r) = node.right {
+            let q = query(r, mid, hi, start, end);
+            if q > best {
+                best = q;
+            }
+        }
+    }
+    node.added + best
+}
+
+fn add(node: Node, lo: i64, hi: i64, start: i64, end: i64) {
+    if start <= lo and hi <= end {
+        node.added += 1;
+        node.most += 1;
+        return;
+    }
+    let mid = lo + (hi - lo) / 2;
+    if start < mid {
+        if node.left.is_none() {
+            node.left = Some(fresh());
+        }
+        if let Some(l) = node.left {
+            add(l, lo, mid, start, end);
+        }
+    }
+    if mid < end {
+        if node.right.is_none() {
+            node.right = Some(fresh());
+        }
+        if let Some(r) = node.right {
+            add(r, mid, hi, start, end);
+        }
+    }
+    let l = most_of(node.left);
+    let r = most_of(node.right);
+    node.most = node.added + if l > r { l } else { r };
+}
+
+struct MyCalendarTwoSegtree {
+    root: Node,
+}
+
+impl MyCalendarTwoSegtree {
+    fn new() -> MyCalendarTwoSegtree {
+        MyCalendarTwoSegtree { root: fresh() }
+    }
+
+    fn book(mut ref self, start: i64, end: i64) -> bool {
+        if query(self.root, 0, 1000000000, start, end) >= 2 {
+            return false;
+        }
+        add(self.root, 0, 1000000000, start, end);
+        true
+    }
+}
+
+// ---- pieces arm -----------------------------------------------------
+
+struct MyCalendarTwoPieces {
+    pieces: Vec[(i64, i64, i64)],
+}
+
+impl MyCalendarTwoPieces {
+    fn new() -> MyCalendarTwoPieces {
+        MyCalendarTwoPieces { pieces: Vec.new() }
+    }
+
+    fn book(mut ref self, start: i64, end: i64) -> bool {
+        for p in self.pieces.iter() {
+            if start < p.1 and p.0 < end and p.2 == 2 {
+                return false;
+            }
+        }
+        let mut next: Vec[(i64, i64, i64)] = Vec.new();
+        let mut at = start;
+        for p in self.pieces.iter() {
+            if p.1 <= start {
+                next.push(*p);
+            } else if p.0 >= end {
+                if at < end {
+                    next.push((at, end, 1));
+                    at = end;
+                }
+                next.push(*p);
+            } else {
+                if p.0 < start {
+                    next.push((p.0, start, 1));
+                }
+                if p.0 > at {
+                    next.push((at, p.0, 1));
+                }
+                let lo = if p.0 > start { p.0 } else { start };
+                let hi = if p.1 < end { p.1 } else { end };
+                next.push((lo, hi, 2));
+                at = hi;
+                if p.1 > end {
+                    next.push((end, p.1, 1));
+                }
+            }
+        }
+        if at < end {
+            next.push((at, end, 1));
+        }
+        self.pieces = next;
+        true
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(which: i64, bookings: Vec[(i64, i64)]) -> Vec[bool] {
+    let mut out: Vec[bool] = Vec.new();
+    if which == 0 {
+        let mut cal = MyCalendarTwoStar.new();
+        for b in bookings.iter() {
+            out.push(cal.book(b.0, b.1));
+        }
+    } else if which == 1 {
+        let mut cal = MyCalendarTwoCounts.new();
+        for b in bookings.iter() {
+            out.push(cal.book(b.0, b.1));
+        }
+    } else if which == 2 {
+        let mut cal = MyCalendarTwoSegtree.new();
+        for b in bookings.iter() {
+            out.push(cal.book(b.0, b.1));
+        }
+    } else {
+        let mut cal = MyCalendarTwoPieces.new();
+        for b in bookings.iter() {
+            out.push(cal.book(b.0, b.1));
+        }
+    }
+    out
+}
+
+// The definition: how many bookings hold each minute, 0 to 1199; a
+// booking is accepted when no minute it covers is held twice, and then
+// holds its minutes once more.
+fn definition(bookings: Vec[(i64, i64)]) -> Vec[bool] {
+    let mut held: Vec[i64] = vec![0; 1200];
+    let mut out: Vec[bool] = Vec.new();
+    for b in bookings.iter() {
+        let mut free = true;
+        for x in b.0..b.1 {
+            if held[x] >= 2 {
+                free = false;
+            }
+        }
+        if free {
+            for x in b.0..b.1 {
+                held[x] += 1;
+            }
+        }
+        out.push(free);
+    }
+    out
+}
+
+// Three bookings share a minute when the latest start is before the
+// earliest end.
+fn share(a: (i64, i64), b: (i64, i64), c: (i64, i64)) -> bool {
+    let mut lo = a.0;
+    if b.0 > lo {
+        lo = b.0;
+    }
+    if c.0 > lo {
+        lo = c.0;
+    }
+    let mut hi = a.1;
+    if b.1 < hi {
+        hi = b.1;
+    }
+    if c.1 < hi {
+        hi = c.1;
+    }
+    lo < hi
+}
+
+fn main() {
+    let mut seed = 7310;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut refused = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 20 bookings of 1 to 15 minutes starting in 0 to 79, so
+        // triple bookings, double ones and free slots are all common.
+        let n = 1 + next_random(mut seed) % 20;
+        let mut bookings: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let s = next_random(mut seed) % 80;
+            bookings.push((s, s + 1 + next_random(mut seed) % 15));
+        }
+        let want = definition(bookings.clone());
+        for w in want.iter() {
+            if not *w {
+                refused += 1;
+            }
+        }
+        let mut shifted: Vec[(i64, i64)] = Vec.new();
+        for b in bookings.iter() {
+            shifted.push((b.0 + 1000, b.1 + 1000));
+        }
+        for which in 0..arms {
+            let got = run(which, bookings.clone());
+            // P1: the definition's answers.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: no accepted booking shares a minute with two accepted
+            // before it, and each refused one does.
+            checks += 1;
+            let mut ok = got.len() == n;
+            if ok {
+                for i in 0..n {
+                    let mut clash = false;
+                    for j in 0..i {
+                        for k in 0..j {
+                            if got[j] and got[k] and share(bookings[i], bookings[j], bookings[k]) {
+                                clash = true;
+                            }
+                        }
+                    }
+                    if got[i] == clash {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                fails[1] += 1;
+            }
+            // P3: every booking 1000 minutes later, the same answers.
+            checks += 1;
+            if run(which, shifted.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: the accepted bookings alone, last first, all accepted.
+            checks += 1;
+            let mut kept: Vec[(i64, i64)] = Vec.new();
+            let mut i = got.len();
+            while i > 0 {
+                i -= 1;
+                if got[i] {
+                    kept.push(bookings[i]);
+                }
+            }
+            for r in run(which, kept).iter() {
+                if not *r {
+                    fails[3] += 1;
+                    break;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} runs ({refused} bookings refused), {arms} arms, {checks} checks, {total} failures");
+}

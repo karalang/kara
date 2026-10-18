@@ -1,0 +1,120 @@
+// LeetCode #729: My Calendar I -- a sorted list, binary searched.
+//
+// Keep the bookings sorted by start; since they never overlap, their
+// ends are sorted too. A binary search finds where the new booking
+// would go: it fits if the booking before it ends by its start and the
+// booking after it starts no earlier than its end. Then insert it
+// there. O(log n) to check, O(n) to insert.
+
+struct MyCalendar {
+    starts: Vec[i64],
+    ends: Vec[i64],
+}
+
+impl MyCalendar {
+    fn new() -> MyCalendar {
+        MyCalendar { starts: Vec.new(), ends: Vec.new() }
+    }
+
+    fn book(mut ref self, start: i64, end: i64) -> bool {
+        // The first booking that starts at or after `start`.
+        let mut lo = 0;
+        let mut hi = self.starts.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.starts[mid] < start {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo > 0 and self.ends[lo - 1] > start {
+            return false;
+        }
+        if lo < self.starts.len() and self.starts[lo] < end {
+            return false;
+        }
+        self.starts.insert(lo, start);
+        self.ends.insert(lo, end);
+        true
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(bookings: Vec[(i64, i64)]) -> Vec[bool] {
+    let mut cal = MyCalendar.new();
+    let mut out: Vec[bool] = Vec.new();
+    for b in bookings.iter() {
+        out.push(cal.book(b.0, b.1));
+    }
+    out
+}
+
+fn show(bookings: Vec[(i64, i64)]) {
+    println(f"{bookings} -> {run(bookings)}");
+}
+
+fn count(what: String, bookings: Vec[(i64, i64)]) {
+    let mut yes = 0;
+    for r in run(bookings).iter() {
+        if *r {
+            yes += 1;
+        }
+    }
+    println(f"{what} -> {yes} accepted");
+}
+
+fn main() {
+    show([(10, 20), (15, 25), (20, 30)]);
+    show([(10, 20), (5, 10), (20, 21), (9, 11), (0, 5)]);
+    show([(47, 50), (33, 41), (39, 45), (33, 42), (25, 32), (26, 35), (19, 25), (3, 8), (8, 13), (18, 27)]);
+    show([(0, 1000000000), (0, 1), (999999999, 1000000000)]);
+    show([(5, 6), (5, 6), (4, 5), (6, 7), (4, 7)]);
+    let mut seed: i64 = 729;
+    let mut random: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..1000 {
+        let s = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000;
+        let len = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000;
+        let e = if s + len > 1000000000 { 1000000000 } else { s + len };
+        random.push((s, e));
+    }
+    count("1000 random bookings up to 10^9".to_string(), random);
+    let mut rising: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        rising.push((i * 10, i * 10 + 10));
+    }
+    count("1000 bookings end to end, rising".to_string(), rising);
+    let mut falling: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        falling.push((10000 - i * 10 - 10, 10000 - i * 10));
+    }
+    count("1000 bookings end to end, falling".to_string(), falling);
+    let mut nested: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        nested.push((500 - i / 2, 501 + i / 2));
+    }
+    count("1000 bookings around one point".to_string(), nested);
+    let mut sum = 0;
+    let mut accepted = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let mut bookings: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let s = next_random(mut seed) % 100;
+            let e = s + 1 + next_random(mut seed) % 15;
+            bookings.push((s, e));
+        }
+        for r in run(bookings).iter() {
+            let v = if *r { 1 } else { 0 };
+            accepted += v;
+            sum = (sum * 131 + v + 1) % 1000000007;
+        }
+    }
+    println(f"300 random runs: {accepted} accepted, checksum {sum}");
+}

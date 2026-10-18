@@ -1,0 +1,14 @@
+"bccb" -> 6
+"abcdabcdabcdabcdabcdabcdabcdabcddcbadcbadcbadcbadcbadcbadcbadcba" -> 104860361
+"a" -> 1
+"aaaa" -> 4
+"abcd" -> 4
+"aba" -> 4
+"abba" -> 6
+"aabbaa" -> 10
+"dcbabcd" -> 22
+1000 random letters -> 224301141
+1000 random a's and b's -> 184994892
+1000 a's -> 1000
+abcd 250 times -> 108153352
+300 random strings: checksum 791078518

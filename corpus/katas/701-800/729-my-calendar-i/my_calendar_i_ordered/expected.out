@@ -1,0 +1,10 @@
+[(10, 20), (15, 25), (20, 30)] -> [true, false, true]
+[(10, 20), (5, 10), (20, 21), (9, 11), (0, 5)] -> [true, true, true, false, true]
+[(47, 50), (33, 41), (39, 45), (33, 42), (25, 32), (26, 35), (19, 25), (3, 8), (8, 13), (18, 27)] -> [true, true, false, false, true, false, true, true, true, false]
+[(0, 1000000000), (0, 1), (999999999, 1000000000)] -> [true, false, false]
+[(5, 6), (5, 6), (4, 5), (6, 7), (4, 7)] -> [true, false, true, true, false]
+1000 random bookings up to 10^9 -> 661 accepted
+1000 bookings end to end, rising -> 1000 accepted
+1000 bookings end to end, falling -> 1000 accepted
+1000 bookings around one point -> 1 accepted
+300 random runs: 1736 accepted, checksum 206682753

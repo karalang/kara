@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/733-flood-fill/flood_fill.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "2c05889a9"
+extracted_src = "17d95743"
+model_rev = "583cfb0d"
+model_src = "17d95743"

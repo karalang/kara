@@ -1,0 +1,109 @@
+// LeetCode #730: Count Different Palindromic Subsequences -- by outer
+// letter, top down.
+//
+// Every different palindrome has an outer letter c. Among those inside
+// s[i..=j], take the first copy of c at a and the last at b: c itself
+// counts once, and if b > a so does cc, and so does c ... c around every
+// different palindrome of s[a + 1..=b - 1]; the outermost pair stands
+// for every pair, so nothing is counted twice. Summed over the four
+// letters, with the inside counts memoized. All modulo 10^9 + 7.
+// O(4 n^2) time, O(n^2) space, recursion depth up to n / 2.
+
+fn inside(memo: mut ref Vec[i64], first: Vec[i64], last: Vec[i64], n: i64, i: i64, j: i64) -> i64 {
+    if i > j {
+        return 0;
+    }
+    if memo[i * n + j] >= 0 {
+        return memo[i * n + j];
+    }
+    let mut total = 0;
+    for c in 0..4 {
+        // first[c * (n + 1) + i]: the first c at or after i, n if none;
+        // last[c * (n + 1) + j + 1]: the last c at or before j, -1.
+        let a = first[c * (n + 1) + i];
+        let b = last[c * (n + 1) + j + 1];
+        if a <= j {
+            total += 1;
+            if b > a {
+                total += 1 + inside(mut memo, first, last, n, a + 1, b - 1);
+            }
+        }
+    }
+    total %= 1000000007;
+    memo[i * n + j] = total;
+    total
+}
+
+fn count_palindromic_subsequences(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut first: Vec[i64] = vec![n; 4 * (n + 1)];
+    let mut last: Vec[i64] = vec![-1; 4 * (n + 1)];
+    for c in 0..4 {
+        let letter = b'a' + c as u8;
+        let mut i = n;
+        while i > 0 {
+            i -= 1;
+            first[c * (n + 1) + i] = if b[i] == letter { i } else { first[c * (n + 1) + i + 1] };
+        }
+        for j in 0..n {
+            last[c * (n + 1) + j + 1] = if b[j] == letter { j } else { last[c * (n + 1) + j] };
+        }
+    }
+    let mut memo: Vec[i64] = vec![-1; n * n];
+    inside(mut memo, first, last, n, 0, n - 1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut s = "".to_string();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % kinds) as u8) as char);
+    }
+    s
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {count_palindromic_subsequences(s)}");
+}
+
+fn main() {
+    show("bccb".to_string());
+    show("abcdabcdabcdabcdabcdabcdabcdabcddcbadcbadcbadcbadcbadcbadcbadcba".to_string());
+    show("a".to_string());
+    show("aaaa".to_string());
+    show("abcd".to_string());
+    show("aba".to_string());
+    show("abba".to_string());
+    show("aabbaa".to_string());
+    show("dcbabcd".to_string());
+    let mut seed: i64 = 730;
+    let big = random_word(1000, 4, mut seed);
+    println(f"1000 random letters -> {count_palindromic_subsequences(big)}");
+    let two = random_word(1000, 2, mut seed);
+    println(f"1000 random a's and b's -> {count_palindromic_subsequences(two)}");
+    let mut same = "".to_string();
+    for _ in 0..1000 {
+        same.push('a');
+    }
+    println(f"1000 a's -> {count_palindromic_subsequences(same)}");
+    let mut cycle = "".to_string();
+    for _ in 0..250 {
+        cycle.push_str("abcd");
+    }
+    println(f"abcd 250 times -> {count_palindromic_subsequences(cycle)}");
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let kinds = 1 + next_random(mut seed) % 4;
+        let v = count_palindromic_subsequences(random_word(n, kinds, mut seed));
+        sum = (sum * 131 + v) % 1000000007;
+    }
+    println(f"300 random strings: checksum {sum}");
+}
