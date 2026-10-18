@@ -8202,3 +8202,136 @@ fn literal_branches_pushed_take_the_element_type() {
         "integer literal 300 out of range for 'u8'",
     );
 }
+
+/// B-2026-10-18-7: a pattern binding (`for`, `match` arm, `if let`,
+/// `while let`, closure parameter) reads the type the checker gave it, not
+/// the type of an earlier local of the same name, live or out of scope.
+#[test]
+fn pattern_bindings_do_not_take_an_earlier_locals_type() {
+    accepted_and_runs(
+        "for-after-dead-vec-local",
+        r#"fn main() {
+    for r in 0..2 {
+        let p: Vec[i64] = vec![r];
+        println(f"{p.len()}");
+    }
+    for p in 0..4 {
+        let a = p + 1;
+        let b = p + 2;
+        println(f"{a} {b}");
+    }
+}
+"#,
+        "1\n1\n1 2\n2 3\n3 4\n4 5\n",
+    );
+    accepted_and_runs(
+        "patterns-after-dead-vec-local",
+        r#"fn main() {
+    {
+        let p: Vec[i64] = vec![1];
+        println(f"{p.len()}");
+    }
+    let o: Option[i64] = Some(3);
+    match o {
+        Some(p) => {
+            let a = p + 1;
+            let b = p + 2;
+            println(f"{a} {b}");
+        }
+        None => {}
+    }
+    if let Some(p) = o {
+        let a = p + 1;
+        let b = p + 2;
+        println(f"{a} {b}");
+    }
+    let mut it = vec![5, 6].into_iter();
+    while let Some(p) = it.next() {
+        let a = p + 1;
+        let b = p + 2;
+        println(f"{a} {b}");
+    }
+    let f = |p: i64| {
+        let a = p + 1;
+        let b = p + 2;
+        a + b
+    };
+    println(f"{f(1)}");
+}
+"#,
+        "1\n4 5\n4 5\n6 7\n7 8\n5\n",
+    );
+    accepted_and_runs(
+        "patterns-shadowing-live-vec-local",
+        r#"fn eat(v: own Vec[i64]) -> i64 {
+    v.len()
+}
+
+fn main() {
+    let p: Vec[i64] = vec![1, 2];
+    let o: Option[i64] = Some(3);
+    match o {
+        Some(p) => {
+            let a = p + 1;
+            let b = p + 2;
+            println(f"{a} {b}");
+        }
+        None => {}
+    }
+    for p in 0..2 {
+        let a = p + 1;
+        println(f"{a} {p}");
+    }
+    println(f"{eat(p)}");
+}
+"#,
+        "4 5\n1 0\n2 1\n2\n",
+    );
+    rejected(
+        "shadowed-vec-local-still-moves",
+        r#"fn eat(v: own Vec[i64]) -> i64 {
+    v.len()
+}
+
+fn main() {
+    let p: Vec[i64] = vec![1, 2];
+    let o: Option[i64] = Some(3);
+    match o {
+        Some(p) => {
+            let a = p + 1;
+            let b = p + 2;
+            println(f"{a} {b}");
+        }
+        None => {}
+    }
+    for p in 0..2 {
+        let a = p + 1;
+        println(f"{a} {p}");
+    }
+    println(f"{eat(p)}");
+    println(f"{eat(p)}");
+}
+"#,
+        "value 'p' moved here, used again here",
+    );
+}
+
+/// B-2026-10-15-111: an index read on a `String`-keyed map takes a `Str`
+/// key, as `get` and `contains_key` do.
+#[test]
+fn map_index_read_takes_a_str_key() {
+    accepted_and_runs(
+        "map-index-str-key",
+        r#"fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("ab".to_string(), 3);
+    for name in "x/ab".split("/") {
+        if m.contains_key(name) {
+            println(m[name]);
+        }
+    }
+}
+"#,
+        "3\n",
+    );
+}

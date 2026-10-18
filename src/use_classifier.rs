@@ -479,11 +479,37 @@ impl<'a> UseClassifier<'a> {
     }
 
     fn walk_block(&mut self, block: &Block, terminal_mode: Mode) {
+        // B-2026-10-18-7 — a block's `let`s go out of scope with it, so a
+        // later binding of the same name does not read their types.
+        let outer = (!block.stmts.is_empty()).then(|| self.local_types.clone());
         for stmt in &block.stmts {
             self.walk_stmt(stmt);
         }
         if let Some(final_expr) = &block.final_expr {
             self.walk_expr(final_expr, terminal_mode);
+        }
+        if let Some(outer) = outer {
+            self.local_types = outer;
+        }
+    }
+
+    /// B-2026-10-18-7 — pattern bindings (a `for`, `match` arm, `if let`,
+    /// `while let`, closure parameter) shadow any local of the same name for
+    /// their scope, so their uses read the type the checker gave them at the
+    /// use rather than that local's. Returns what to put back.
+    fn shadow_locals(&mut self, names: &[String]) -> Vec<(String, Option<Type>)> {
+        names
+            .iter()
+            .map(|n| (n.clone(), self.local_types.remove(n)))
+            .collect()
+    }
+
+    fn unshadow_locals(&mut self, shadowed: Vec<(String, Option<Type>)>) {
+        for (n, prev) in shadowed {
+            match prev {
+                Some(t) => self.local_types.insert(n, t),
+                None => self.local_types.remove(&n),
+            };
         }
     }
 
@@ -1184,7 +1210,9 @@ impl<'a> UseClassifier<'a> {
                     Mode::Reading
                 };
                 self.walk_expr(value, scrut_mode);
+                let shadowed = self.shadow_locals(&pattern.binding_names());
                 self.walk_block(then_block, mode);
+                self.unshadow_locals(shadowed);
                 if let Some(eb) = else_branch {
                     self.walk_expr(eb, mode);
                 }
@@ -1229,6 +1257,7 @@ impl<'a> UseClassifier<'a> {
                 // removing ones that were never true.
                 let mut any_arm_moves_its_binding = false;
                 for arm in arms {
+                    let shadowed = self.shadow_locals(&arm.pattern.binding_names());
                     if let Some(g) = &arm.guard {
                         self.walk_expr(g, Mode::Reading);
                     }
@@ -1236,6 +1265,7 @@ impl<'a> UseClassifier<'a> {
                     self.note_closure_locals(&arm.pattern);
                     self.arm_consumed_names.push(HashSet::new());
                     self.walk_expr(&arm.body, mode);
+                    self.unshadow_locals(shadowed);
                     let consumed = self.arm_consumed_names.pop().unwrap_or_default();
                     if bound.iter().any(|n| consumed.contains(n.as_str())) {
                         any_arm_moves_its_binding = true;
@@ -1270,7 +1300,9 @@ impl<'a> UseClassifier<'a> {
                     Mode::Reading
                 };
                 self.walk_expr(value, scrut_mode);
+                let shadowed = self.shadow_locals(&pattern.binding_names());
                 self.walk_block(body, Mode::Reading);
+                self.unshadow_locals(shadowed);
             }
             ExprKind::For {
                 iterable,
@@ -1301,7 +1333,9 @@ impl<'a> UseClassifier<'a> {
                     Mode::Reading
                 };
                 self.walk_expr(iterable, mode);
+                let shadowed = self.shadow_locals(&pattern.binding_names());
                 self.walk_block(body, Mode::Reading);
+                self.unshadow_locals(shadowed);
             }
             ExprKind::Loop { body, .. } => {
                 self.walk_block(body, Mode::Reading);
@@ -1380,7 +1414,13 @@ impl<'a> UseClassifier<'a> {
                     Vec::new()
                 };
                 self.task_moved_captures.push(moved);
+                let param_names: Vec<String> = params
+                    .iter()
+                    .flat_map(|p| p.pattern.binding_names())
+                    .collect();
+                let shadowed = self.shadow_locals(&param_names);
                 self.walk_expr(body, Mode::Reading);
+                self.unshadow_locals(shadowed);
                 self.task_moved_captures.pop();
                 self.escaping_closure_depth -= u32::from(escaping);
                 self.closure_local_stack.pop();
