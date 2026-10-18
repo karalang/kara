@@ -1212,6 +1212,10 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "autograd"],
         include_str!("../runtime/stdlib/autograd.kara"),
     ),
+    (
+        &["std", "path"],
+        include_str!("../runtime/stdlib/path.kara"),
+    ),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first

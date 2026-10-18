@@ -1,0 +1,179 @@
+// `std.path`: lexical operations on paths held as text
+// (docs/library/path.md; B-2026-10-15-15).
+//
+// Every function here works on the text alone. None of them touches the file
+// system, so none follows a symbolic link or checks that a path exists. The
+// separator is `/`.
+//
+// An import splices only the functions it names into the program, so each
+// function here is self-contained: none calls another.
+
+/// Whether the path starts at the root.
+pub fn is_absolute(p: Str) -> bool {
+    p.starts_with("/")
+}
+
+/// The path without its last component: `"a/b/c.txt"` gives `"a/b"`, `"a"`
+/// gives `""` and `"/a"` gives `"/"`. `None` for the root and for an empty
+/// path. Trailing separators are ignored.
+pub fn parent(p: Str) -> Option[Str] {
+    let mut end = p.len();
+    while end > 1 and p.slice(0, end).ends_with("/") {
+        end = end - 1;
+    }
+    let t = p.slice(0, end);
+    if t.is_empty() or t == "/" {
+        return None;
+    }
+    match t.rfind("/") {
+        Some(i) => {
+            let mut head = i + 1;
+            while head > 1 and t.slice(0, head).ends_with("/") {
+                head = head - 1;
+            }
+            Some(t.slice(0, head))
+        }
+        None => Some(t.slice(0, 0)),
+    }
+}
+
+/// The last component: `"a/b/c.txt"` gives `"c.txt"`. `None` when there is
+/// none, or when it is `.` or `..`. Trailing separators are ignored.
+pub fn file_name(p: Str) -> Option[Str] {
+    let mut end = p.len();
+    while end > 1 and p.slice(0, end).ends_with("/") {
+        end = end - 1;
+    }
+    let t = p.slice(0, end);
+    let name = match t.rfind("/") {
+        Some(i) => t.slice(i + 1, t.len()),
+        None => t,
+    };
+    if name.is_empty() or name == "." or name == ".." {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// The file name after its last `.`: `"c.tar.gz"` gives `"gz"`. `None` when
+/// there is no file name, no `.`, or only a leading one (`".bashrc"`).
+pub fn extension(p: Str) -> Option[Str] {
+    let mut end = p.len();
+    while end > 1 and p.slice(0, end).ends_with("/") {
+        end = end - 1;
+    }
+    let t = p.slice(0, end);
+    let name = match t.rfind("/") {
+        Some(i) => t.slice(i + 1, t.len()),
+        None => t,
+    };
+    if name.is_empty() or name == "." or name == ".." {
+        return None;
+    }
+    match name.rfind(".") {
+        Some(0) | None => None,
+        Some(i) => Some(name.slice(i + 1, name.len())),
+    }
+}
+
+/// The file name before its last `.`: `"c.tar.gz"` gives `"c.tar"`, and
+/// `".bashrc"` gives itself. `None` when there is no file name.
+pub fn stem(p: Str) -> Option[Str] {
+    let mut end = p.len();
+    while end > 1 and p.slice(0, end).ends_with("/") {
+        end = end - 1;
+    }
+    let t = p.slice(0, end);
+    let name = match t.rfind("/") {
+        Some(i) => t.slice(i + 1, t.len()),
+        None => t,
+    };
+    if name.is_empty() or name == "." or name == ".." {
+        return None;
+    }
+    match name.rfind(".") {
+        Some(0) | None => Some(name),
+        Some(i) => Some(name.slice(0, i)),
+    }
+}
+
+/// `b` appended to `a` with one separator between them. An absolute `b`
+/// replaces `a`, and `..` in `b` is kept, so a joined path can name a place
+/// outside `a` (docs/library/path.md).
+pub fn join(a: Str, b: Str) -> String {
+    if b.starts_with("/") or a.is_empty() {
+        return b.to_string();
+    }
+    let mut out = a.to_string();
+    if not a.ends_with("/") {
+        out.push_str("/");
+    }
+    out.push_str(b);
+    out
+}
+
+/// The components, each a view into the path: a leading `/` is one, empty
+/// components and `.` are dropped except a `.` that starts a relative path,
+/// and `..` is kept.
+pub fn components(p: Str) -> Vec[Str] {
+    let abs = p.starts_with("/");
+    let mut out: Vec[Str] = Vec.new();
+    if abs {
+        out.push(p.slice(0, 1));
+    }
+    let mut at_start = true;
+    for c in p.split("/") {
+        if c.is_empty() {
+            continue;
+        }
+        let keep_dot = at_start and not abs;
+        at_start = false;
+        if c == "." and not keep_dot {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The path with `.` and repeated separators removed and each `..` taking
+/// away the component before it, worked out on the text: `"a/./b/../c"`
+/// gives `"a/c"`. A leading `..` of a relative path stays, a `..` at the root
+/// is dropped, and an empty result is `"."`. Through a symbolic link this can
+/// name a different file than the file system would (docs/library/path.md).
+pub fn normalize(p: Str) -> String {
+    let abs = p.starts_with("/");
+    let mut parts: Vec[Str] = Vec.new();
+    for c in p.split("/") {
+        if c.is_empty() or c == "." {
+            continue;
+        }
+        if c == ".." {
+            if parts.len() > 0 and parts[parts.len() - 1] != ".." {
+                let _ = parts.pop();
+                continue;
+            }
+            if abs {
+                continue;
+            }
+        }
+        parts.push(c);
+    }
+    let mut out = String.new();
+    if abs {
+        out.push_str("/");
+    }
+    let mut first = true;
+    for c in parts.iter() {
+        if not first {
+            out.push_str("/");
+        }
+        first = false;
+        out.push_str(c);
+    }
+    if out.is_empty() {
+        out.push_str(".");
+    }
+    out
+}

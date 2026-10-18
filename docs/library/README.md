@@ -8,6 +8,7 @@ This directory specifies the standard library's public API: its types, functions
 | [collections.md](collections.md) | `Array`, `Vec`, `Slice`, `Map`, `Set`, `SortedMap`, `SortedSet`, `VecDeque`, `PriorityQueue`, `from` constructors, fallible allocation, hashing |
 | [iterators.md](iterators.md) | Iterator adaptors and terminal methods, `FromIterator` |
 | [strings.md](strings.md) | `String` and `Str` methods, normalization, UTF-8 conversion, `CStr` and `CString` |
+| [path.md](path.md) | `std.path`: lexical path functions on `Str` |
 | [io.md](io.md) | Standard streams, files, buffered I/O, TCP, process exit |
 | [regex.md](regex.md) | Regular expressions: `Regex`, `Match`, `Captures` |
 | [concurrency.md](concurrency.md) | Channels, `TaskGroup`, `Mutex`, atomics |
@@ -71,6 +72,7 @@ Everything else is imported from a `std.*` module:
 | `std.iter` | `DoubleEndedIterator`, `Extend`, the adapter structs |
 | `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |
 | `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
+| `std.path` | `parent`, `file_name`, `extension`, `stem`, `join`, `normalize`, `is_absolute`, `components` |
 | `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Backend`, `Record`, `json_backend`, `text_backend` |
 | `std.secret` | `Secret`, `ConstantTimeEq`, `Zeroize` |
 

@@ -3824,3 +3824,46 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-15-15 — `std.path`: the lexical path functions, imported item
+// by item, on both MIR backends.
+#[test]
+fn mir_std_path_is_lexical() {
+    const SRC: &str = r#"import std.path.{parent, file_name, extension, stem, join, normalize, is_absolute, components};
+fn show(o: Option[Str]) -> String {
+    match o {
+        Some(s) => f"[{s}]",
+        None => "none",
+    }
+}
+fn main() {
+    for p in ["a/b/c.txt", "a", "/a", "/", "", "a/b/", "a//b", "../x", "dir/.bashrc", "f.tar.gz", "f.", "a/.."].iter() {
+        println(f"{p}: {show(parent(p))} {show(file_name(p))} {show(extension(p))} {show(stem(p))} {is_absolute(p)}");
+    }
+    println(join("a", "b"));
+    println(join("a/", "b"));
+    println(join("a", "/etc"));
+    println(join("", "b"));
+    println(join("a", "../../x"));
+    for p in ["a/./b/../c", "/../a", "../../a/..", "a/b/../..", "/", "", ".//x//"].iter() {
+        println(f"{p} -> {normalize(p)}");
+    }
+    for p in ["/usr//lib/./x", "./a/b", "a/../b", "."].iter() {
+        let cs = components(p);
+        let mut line = String.new();
+        for c in cs.iter() {
+            line.push_str(f"<{c}>");
+        }
+        println(f"{p}: {line}");
+    }
+}
+"#;
+    let want = "a/b/c.txt: [a/b] [c.txt] [txt] [c] false\na: [] [a] none [a] false\n/a: [/] [a] none [a] true\n/: none none none none true\n: none none none none false\na/b/: [a] [b] none [b] false\na//b: [a] [b] none [b] false\n../x: [..] [x] none [x] false\ndir/.bashrc: [dir] [.bashrc] none [.bashrc] false\nf.tar.gz: [] [f.tar.gz] [gz] [f.tar] false\nf.: [] [f.] [] [f] false\na/..: [a] none none none false\na/b\na/b\n/etc\nb\na/../../x\na/./b/../c -> a/c\n/../a -> /a\n../../a/.. -> ../..\na/b/../.. -> .\n/ -> /\n -> .\n.//x// -> x\n/usr//lib/./x: </><usr><lib><x>\n./a/b: <.><a><b>\na/../b: <a><..><b>\n.: <.>\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
