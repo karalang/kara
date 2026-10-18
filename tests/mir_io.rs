@@ -1458,3 +1458,50 @@ fn main() {
         assert_eq!(built, interp);
     }
 }
+
+/// B-2026-10-15-44 — a `BufReader` over a child's stdout or stderr and a
+/// `BufWriter` over its stdin (docs/library/io.md § Buffered I/O), on both
+/// backends: `lines`, `read_line` and `read_to_string` through a small
+/// buffer, and a writer whose drop closes the child's stdin.
+const PIPE_BUFFERS: &str = r#"
+fn feed(child: ref Child) {
+    let w = BufWriter.new(child.stdin().unwrap());
+    let _ = w.write_all("zeta\nalpha\n".bytes());
+    let _ = w.write_all("mid\n".bytes());
+}
+
+fn main() {
+    let c = Command.new("sh").arg("-c").arg("printf 'a\nbb\n'; printf 'e1\ne2\n' >&2")
+        .stdout(Stdio.piped()).stderr(Stdio.piped()).spawn().unwrap();
+    for line in BufReader.new(c.stdout().unwrap()).lines() {
+        println(f"out [{line.unwrap()}]");
+    }
+    for line in BufReader.new(c.stderr().unwrap()).lines() {
+        println(f"err [{line.unwrap()}]");
+    }
+    println(f"sh {c.wait().unwrap().success()}");
+    let sort = Command.new("sort").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
+    feed(sort);
+    let r = BufReader.with_capacity(sort.stdout().unwrap(), 4);
+    let mut first = String.new();
+    let n = r.read_line(mut first).unwrap();
+    print(f"first {n} {first}");
+    let mut rest = String.new();
+    let _ = r.read_to_string(mut rest);
+    print(rest);
+    println(f"sort {sort.wait().unwrap().success()}");
+}
+"#;
+
+#[test]
+fn buffered_io_over_a_childs_pipes() {
+    let dir = Scratch::new("pipe-buffers");
+    let (interp, built) = interp_and_build(dir.path(), PIPE_BUFFERS);
+    assert_eq!(
+        interp,
+        "out [a]\nout [bb]\nerr [e1]\nerr [e2]\nsh true\nfirst 6 alpha\nmid\nzeta\nsort true\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}

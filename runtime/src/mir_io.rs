@@ -215,10 +215,11 @@ fn open_options(flags: i64) -> std::io::Result<std::fs::OpenOptions> {
     Ok(o)
 }
 
-/// A `BufReader` or `BufWriter` over the `File` its constructor took.
+/// A `BufReader` or `BufWriter` over the `File` or the child's pipe its
+/// constructor took.
 pub enum KaracBuf {
-    Reader(std::io::BufReader<std::fs::File>),
-    Writer(std::io::BufWriter<std::fs::File>),
+    Reader(std::io::BufReader<Box<dyn std::io::Read>>),
+    Writer(std::io::BufWriter<Box<dyn std::io::Write>>),
 }
 
 /// Appends `b` to the `String` at `s`, growing its buffer into a fresh
@@ -280,7 +281,8 @@ pub(crate) unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 
 
 /// `BufReader.new` / `with_capacity` (op 0) and `BufWriter.new` /
 /// `with_capacity` (op 1) over the `File` at `handle`, which they take
-/// (`len` the capacity, `<= 0` for the default); then, on the buffered
+/// (`len` the capacity, `<= 0` for the default), and the two over a child's
+/// pipe (ops 10 and 11, B-2026-10-15-44); then, on the buffered
 /// handle at `handle`: `read_line` (2) and `read_to_string` (3), appending
 /// to the `String` at `ptr`; `read` (4) into `ptr[..len]`; a `LinesIter`'s
 /// `next` (5), the line without its `\n` / `\r\n` as a fresh `String` at
@@ -301,15 +303,23 @@ pub unsafe extern "C" fn karac_mir_buf(
     msg: *mut RawVec,
 ) -> i32 {
     use std::io::{BufRead, Read, Write};
-    if op <= 1 {
-        // SAFETY: a live handle from `karac_runtime_file_open` & co., which
-        // this takes.
-        let file = unsafe { crate::file::take_file(handle.cast()) };
+    if op <= 1 || op >= 10 {
         let cap = usize::try_from(len).ok().filter(|&n| n > 0).unwrap_or(8192);
-        let buf = if op == 0 {
-            KaracBuf::Reader(std::io::BufReader::with_capacity(cap, file))
+        let buf = if op >= 10 {
+            // SAFETY: a live pipe from `karac_mir_child`, which this takes.
+            match unsafe { crate::mir_process::take_pipe(handle) } {
+                Ok(r) => KaracBuf::Reader(std::io::BufReader::with_capacity(cap, r)),
+                Err(w) => KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, w)),
+            }
         } else {
-            KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, file))
+            // SAFETY: a live handle from `karac_runtime_file_open` & co.,
+            // which this takes.
+            let file = unsafe { crate::file::take_file(handle.cast()) };
+            if op == 0 {
+                KaracBuf::Reader(std::io::BufReader::with_capacity(cap, Box::new(file)))
+            } else {
+                KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, Box::new(file)))
+            }
         };
         // SAFETY: the caller's contract.
         unsafe { value.write(Box::into_raw(Box::new(buf)) as i64) };

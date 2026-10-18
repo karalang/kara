@@ -226,6 +226,14 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
+    /// Whether `t` is one of a child's pipes.
+    fn is_pipe(&self, t: Ty) -> bool {
+        self.tys
+            .tcx()
+            .adt_of(t)
+            .is_some_and(|(a, _)| matches!(&*a.name, "ChildStdout" | "ChildStderr" | "ChildStdin"))
+    }
+
     /// `BufReader` / `BufWriter` and a `LinesIter`'s `next`, through
     /// `karac_mir_buf(op, handle, ptr, len, value, msg)`, as the
     /// interpreter's `buf_method`. A `LinesIter` is its reader's handle,
@@ -257,11 +265,17 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             _ => return Ok(None),
         };
+        // Over a child's pipe rather than a `File` (B-2026-10-15-44).
+        let op = if op <= 1 && self.is_pipe(self.operand_type(&args[0])?) {
+            10 + op
+        } else {
+            op
+        };
         let null = self.ptr_ty().const_null();
         let zero = self.i64(0);
         let i32t = self.llcx.i32_type();
         let opv = i32t.const_int(op, false);
-        if op <= 1 {
+        if op <= 1 || op >= 10 {
             // The `File` moves in and the runtime takes it, so nothing
             // drops it here.
             let f = self.operand_ptr(&args[0])?;

@@ -4026,21 +4026,47 @@ impl<'a> Interp<'a> {
         ret: Ty,
     ) -> R<Value> {
         if let ("new" | "with_capacity", [file, rest @ ..]) = (method, args.as_slice()) {
-            let id = self.chan_id(Some(file), name)?;
-            let f = usize::try_from(id - 1)
-                .ok()
-                .and_then(|i| self.files.get_mut(i))
-                .and_then(Option::take)
-                .ok_or_else(|| Stop::Error(format!("{name} of a closed file")))?;
             let cap = match rest {
                 [Value::Int(n)] if *n > 0 => *n as usize,
                 _ => 8192,
             };
-            self.bufs.push(Some(if base == "BufReader" {
-                Buf::Reader(std::io::BufReader::with_capacity(cap, f))
+            // `BufReader[ChildStdout].new`: over a child's pipe rather than
+            // a `File` (B-2026-10-15-44).
+            let piped = ["ChildStdout", "ChildStderr", "ChildStdin"]
+                .iter()
+                .any(|p| name.starts_with(&format!("{base}[{p}]")));
+            let reader = base == "BufReader";
+            let buf = if piped {
+                let id = self.handle_id(file, name)?;
+                match (reader, self.procs.take_pipe(id)) {
+                    (true, Some(Pipe::Out(o))) => {
+                        Buf::Reader(std::io::BufReader::with_capacity(cap, Box::new(o)))
+                    }
+                    (true, Some(Pipe::Err(e))) => {
+                        Buf::Reader(std::io::BufReader::with_capacity(cap, Box::new(e)))
+                    }
+                    (false, Some(Pipe::In(Some(i)))) => {
+                        Buf::Writer(std::io::BufWriter::with_capacity(cap, Box::new(i)))
+                    }
+                    (_, None | Some(Pipe::In(None))) => {
+                        return err(format!("{name} of a closed pipe"))
+                    }
+                    _ => return err(format!("{name} of a pipe of the other direction")),
+                }
             } else {
-                Buf::Writer(std::io::BufWriter::with_capacity(cap, f))
-            }));
+                let id = self.chan_id(Some(file), name)?;
+                let f = usize::try_from(id - 1)
+                    .ok()
+                    .and_then(|i| self.files.get_mut(i))
+                    .and_then(Option::take)
+                    .ok_or_else(|| Stop::Error(format!("{name} of a closed file")))?;
+                if reader {
+                    Buf::Reader(std::io::BufReader::with_capacity(cap, Box::new(f)))
+                } else {
+                    Buf::Writer(std::io::BufWriter::with_capacity(cap, Box::new(f)))
+                }
+            };
+            self.bufs.push(Some(buf));
             return Ok(Value::Agg(vec![Value::Int(self.bufs.len() as i128)]));
         }
         let id = self.chan_id(args.first(), name)?;
@@ -11678,10 +11704,11 @@ fn cmp_keys(xs: &[Value], ys: &[Value]) -> std::cmp::Ordering {
     xs.len().cmp(&ys.len())
 }
 
-/// A `BufReader` or `BufWriter` over the `File` its constructor took.
+/// A `BufReader` or `BufWriter` over the `File` or the child's pipe its
+/// constructor took.
 enum Buf {
-    Reader(std::io::BufReader<std::fs::File>),
-    Writer(std::io::BufWriter<std::fs::File>),
+    Reader(std::io::BufReader<Box<dyn std::io::Read>>),
+    Writer(std::io::BufWriter<Box<dyn std::io::Write>>),
 }
 
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).

@@ -127,7 +127,7 @@ The equivalence is in behaviour, not effects: `File.open` has `reads(FileSystem)
 
 A file updated in place opens with `File.options().read(true).write(true).open(p)`, so a mistyped path is `NotFound` rather than a new empty file; add `.create(true)` to create it when it is absent. A lock file is `File.options().write(true).create_new(true).open(p)`: only one opener can create it. Reads and writes at an offset that leave the cursor alone (`pread` / `pwrite`) and advisory locks are deferred ([deferred.md](../deferred.md#positional-file-io-and-advisory-locking)).
 
-**Buffered I/O** (in `std.io`). `BufReader[R]` and `BufWriter[W]` wrap an open `File` with an in-memory buffer, so that many small reads or writes cost few system calls. Construction touches no file, so the constructors have no effect.
+**Buffered I/O** (in `std.io`). `BufReader[R]` and `BufWriter[W]` wrap an open `File`, or a child process's pipe (`ChildStdout` or `ChildStderr` for a `BufReader`, `ChildStdin` for a `BufWriter`; [Processes](#processes)), with an in-memory buffer, so that many small reads or writes cost few system calls. Construction touches no file, so the constructors have no effect.
 
 | Method | Signature |
 |---|---|
@@ -324,7 +324,7 @@ impl ChildStdin {
 }
 ```
 
-The pipe handles read and write bytes as `File` does. `read` waits for at least one byte and returns 0 when the child has closed its end. `read_to_end` and `read_to_string` append everything up to end of file and return the count. `read_to_string` fails with `InvalidUtf8` when the bytes are not UTF-8, and leaves `buf` unchanged when it does. Each pipe is its own resource, so reading one child's stdout does not conflict with writing another child's stdin. Dropping a `ChildStdin` closes the pipe, which the child reads as end of file. `close` does the same thing explicitly. Closing twice is `Ok`, and a write after closing fails with `InvalidInput`.
+The pipe handles read and write bytes as `File` does, and a `BufReader` or `BufWriter` takes one as it takes a `File`: `BufReader.new(child.stdout().unwrap()).lines()` reads a child's output line by line. `read` waits for at least one byte and returns 0 when the child has closed its end. `read_to_end` and `read_to_string` append everything up to end of file and return the count. `read_to_string` fails with `InvalidUtf8` when the bytes are not UTF-8, and leaves `buf` unchanged when it does. Each pipe is its own resource, so reading one child's stdout does not conflict with writing another child's stdin. Dropping a `ChildStdin` closes the pipe, which the child reads as end of file. `close` does the same thing explicitly. Closing twice is `Ok`, and a write after closing fails with `InvalidInput`.
 
 A child that writes more than a pipe holds (64 KiB on Linux) blocks until the parent reads. A parent that writes to a child's stdin and only then reads its stdout can deadlock with it. Use `output` or `wait_with_output` to read both streams of a child together, or write and read from separate tasks.
 

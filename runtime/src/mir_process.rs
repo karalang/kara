@@ -29,6 +29,37 @@ enum Pipe {
     In(Option<ChildStdin>),
 }
 
+/// A closed stdin pipe given to a `BufWriter`: every write fails, as a
+/// write to the pipe itself does.
+struct ClosedPipe;
+
+impl Write for ClosedPipe {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    }
+}
+
+/// The stream of the pipe at `handle`, which this takes (B-2026-10-15-44:
+/// `BufReader.new(child.stdout().unwrap())`): a stdout or stderr pipe as a
+/// reader, a stdin pipe as a writer.
+///
+/// # Safety
+/// `handle` came from [`karac_mir_child`] and is not used again.
+pub(crate) unsafe fn take_pipe(
+    handle: *mut std::ffi::c_void,
+) -> Result<Box<dyn Read>, Box<dyn Write>> {
+    // SAFETY: the caller's contract.
+    match *unsafe { Box::from_raw(handle.cast::<Pipe>()) } {
+        Pipe::Out(o) => Ok(Box::new(o)),
+        Pipe::Err(e) => Ok(Box::new(e)),
+        Pipe::In(Some(w)) => Err(Box::new(w)),
+        Pipe::In(None) => Err(Box::new(ClosedPipe)),
+    }
+}
+
 /// An `EnvVar` as compiled code lays it out: `op` 0 sets `key`, 1 removes
 /// it, 2 clears the environment.
 #[repr(C)]
