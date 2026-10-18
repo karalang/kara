@@ -7498,3 +7498,11 @@ fn rows_the_library_check_settles() {
     accepted("map-get-kept-in-a-tuple-local", "fn main() {\n    let mut m: Map[String, i64] = Map.new();\n    m.insert(String.from(\"a\"), 1);\n    let t = (m.get(\"a\"), 5);\n    match t {\n        (Some(i), k) => println(f\"{*i + k}\"),\n        _ => println(\"none\"),\n    }\n}\n");
     accepted("any-closure-then-move-the-element", "struct D { name: String, n: i64 }\nfn main() {\n    let skip: Vec[String] = vec![\"b\".to_string()];\n    let all = vec![D { name: \"a\".to_string(), n: 1 }, D { name: \"b\".to_string(), n: 2 }];\n    let mut kept: Vec[D] = Vec.new();\n    for d in all.into_iter() {\n        let redo = skip.iter().any(|s| s == d.name);\n        if redo {\n            continue;\n        }\n        kept.push(d);\n    }\n    println(f\"{kept.len()} {kept[0].name}\");\n}\n");
 }
+
+/// The library surface the spec gives: `values()` is an iterator of
+/// `ref V` (B-2026-10-13-1), `split` yields `Str` views (B-2026-10-12-7),
+/// and `Map.get_mut` exists (B-2026-10-12-3).
+#[test]
+fn the_spec_library_surface_checks() {
+    accepted("values-max-split-views-get-mut", "fn main() {\n    let mut counts: Map[i64, i64] = Map.new();\n    counts.insert(1, 3);\n    counts.insert(2, 7);\n    let best = *counts.values().max().unwrap();\n    let line = \"a,b,c\";\n    let parts: Vec[Str] = line.split(\",\").collect();\n    let mut m: Map[i64, Vec[i64]] = Map.new(); m.insert(3, vec![1]);\n    match m.get_mut(3) { Some(list) => list.push(2), None => {} }\n    println(f\"{best} {parts.len()} {m[3].len()}\");\n}\n");
+}
