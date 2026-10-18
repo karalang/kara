@@ -287,9 +287,7 @@ fn rewrite_struct_literal(e: &mut Expr, structs: &StructFields) {
         return;
     }
     let base = base.clone();
-    if !generic {
-        BASES.with(|b| b.borrow_mut().push((e.span, (*base).clone())));
-    }
+    BASES.with(|b| b.borrow_mut().push((e.span, (*base).clone())));
     for (i, fname) in missing.into_iter().enumerate() {
         // DISTINCT synthetic spans, one per copied field — the crate's
         // `offset + i`, `length: 0` convention (`collect_synth_span`).

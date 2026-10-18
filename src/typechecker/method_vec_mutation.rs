@@ -127,7 +127,10 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     ExprKind::Identifier(n) => n == "None",
                     // A literal into a `Str` slot is a `Str` (B-2026-10-14-68).
-                    ExprKind::StringLit(_) => super::exprs::is_str_view(&elem),
+                    ExprKind::StringLit(_) => super::exprs::is_str_view(&resolve_type_var_top(
+                        &elem,
+                        &self.env.substitutions,
+                    )),
                     ExprKind::Call { callee, .. } => match &callee.kind {
                         ExprKind::Identifier(n) => ctor(n),
                         ExprKind::Path { segments, .. } => segments.last().is_some_and(|n| ctor(n)),
@@ -144,12 +147,6 @@ impl<'a> super::TypeChecker<'a> {
                             && matches!(&elem, Type::Tuple(_))
                             && es.iter().any(super::exprs::is_bare_collect)
                     }
-                    // B-2026-10-14-68 — a string literal into a `Str`
-                    // element is a `Str` (design.md § String literals).
-                    ExprKind::StringLit(_) => super::exprs::is_str_view(&resolve_type_var_top(
-                        &elem,
-                        &self.env.substitutions,
-                    )),
                     _ => false,
                 };
                 // B-2026-10-14-10 — a tuple literal into a slot with a `ref`

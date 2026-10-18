@@ -4109,7 +4109,7 @@ fn main() {
 
 /// B-2026-10-15-50: a variant is constructed through a type alias of its enum.
 #[test]
-fn mir_variant_constructed_through_a_type_alias() {
+fn mir_variant_constructed_through_a_type_alias_in_a_result() {
     const SRC: &str = r#"enum NetE { A, B(i32) }
 type OldE = NetE;
 

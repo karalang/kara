@@ -7248,7 +7248,7 @@ fn main() {
     println(f"{d.a}");
 }
 "#,
-        "expected 'D', found 'E'",
+        "must be a 'D', found 'E'",
     );
 }
 
@@ -7327,7 +7327,7 @@ fn a_bitwise_operation_on_mixed_integer_types_is_refused() {
     rejected(
         "bitwise-mixed-width",
         "fn main() {\n    let a: u8 = 12;\n    let b: u32 = 10;\n    println(f\"{a | b}\");\n}\n",
-        "cast the 'u8' operand up to 'u32'",
+        "cannot mix integer types 'u8' and 'u32' in a bitwise operation",
     );
 }
 
