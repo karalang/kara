@@ -303,7 +303,7 @@ fn parse_command(line: ref String) -> Result[Command, BrokerError] {
     let bad = BrokerError.BadCommand(line.clone());
     let n = parts.len();
     match parts[0] {
-        "connect" if n == 3 => match i64.parse(parts[2]) {
+        "connect" if n == 3 => match i64.parse(parts[2]).ok() {
             Some(cap) if cap > 0 => Ok(Command.Connect(parts[1].clone(), cap)),
             _ => Err(BrokerError.BadCapacity(parts[2].clone())),
         },

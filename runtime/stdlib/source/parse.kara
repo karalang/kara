@@ -1,0 +1,93 @@
+// `ParseError` and the `Result` of a number type's `parse`, as Kāra
+// (docs/library/core-types.md § Parsing; B-2026-10-12-6).
+//
+// The number natives answer `Option[T]`; the MIR builder hands that answer
+// and the input to one of the `parse_result_*` functions below, which says
+// what went wrong when there is no number. Only a failed parse reads the
+// input again.
+
+/// Why a number type's `parse` found no number.
+enum ParseError {
+    /// The input is empty.
+    Empty,
+    /// The input holds a character that cannot appear in a number of this type.
+    InvalidDigit,
+    /// The value is above the type's maximum.
+    Overflow,
+    /// The value is below the type's minimum.
+    Underflow,
+    /// Any other malformed input.
+    Invalid,
+}
+
+impl Display for ParseError {
+    fn to_string(ref self) -> String {
+        match self {
+            ParseError.Empty => "cannot parse a number from an empty string",
+            ParseError.InvalidDigit => "invalid digit found in string",
+            ParseError.Overflow => "number too large to fit in target type",
+            ParseError.Underflow => "number too small to fit in target type",
+            ParseError.Invalid => "invalid number",
+        }
+    }
+}
+
+/// An integer type's `parse`: `o` is the native's answer for `s`.
+fn parse_result_int[T](o: own Option[T], s: Str, signed: bool) -> Result[T, ParseError] {
+    match o {
+        Some(n) => Ok(n),
+        None => Err(parse_int_error(s, signed)),
+    }
+}
+
+/// A float type's `parse`: `o` is the native's answer for `s`.
+fn parse_result_float[T](o: own Option[T], s: Str) -> Result[T, ParseError] {
+    match o {
+        Some(n) => Ok(n),
+        None => {
+            if s.is_empty() {
+                Err(ParseError.Empty)
+            } else {
+                Err(ParseError.Invalid)
+            }
+        }
+    }
+}
+
+/// Why `s` holds no integer of a type that fits: an empty input, a
+/// character that is not a digit, or digits past the type's range.
+fn parse_int_error(s: Str, signed: bool) -> ParseError {
+    if s.is_empty() {
+        return ParseError.Empty;
+    }
+    let mut negative = false;
+    let mut digits = 0;
+    let mut first = true;
+    for c in s.chars() {
+        if first and (c == '+' or c == '-') {
+            negative = c == '-';
+        } else if c < '0' or c > '9' {
+            return ParseError.InvalidDigit;
+        } else {
+            digits += 1;
+        }
+        first = false;
+    }
+    if digits == 0 {
+        ParseError.InvalidDigit
+    } else if negative {
+        if signed {
+            ParseError.Underflow
+        } else {
+            let mut zero = true;
+            for c in s.chars() {
+                if c >= '1' and c <= '9' {
+                    zero = false;
+                }
+            }
+            if zero { ParseError.Invalid } else { ParseError.Underflow }
+        }
+    } else {
+        ParseError.Overflow
+    }
+}

@@ -1,21 +1,21 @@
 fn main() {
-            match i64.parse("42") {
+            match i64.parse("42").ok() {
                 Some(n) => println(n),
                 None => println(-1),
             }
-            match i64.parse("not a number") {
+            match i64.parse("not a number").ok() {
                 Some(n) => println(n),
                 None => println(-1),
             }
-            match i64.parse("-7") {
+            match i64.parse("-7").ok() {
                 Some(n) => println(n),
                 None => println(-1),
             }
-            match i64.parse("  100  ") {
+            match i64.parse("  100  ").ok() {
                 Some(n) => println(n),
                 None => println(-1),
             }
-            match i64.parse("") {
+            match i64.parse("").ok() {
                 Some(n) => println(n),
                 None => println(-1),
             }

@@ -155,11 +155,11 @@ fn parse_log(kind: own SensorKind, path: ref String, text: ref String) -> Result
         if parts.len() != 2 {
             return Err(PipelineError.BadLine(path.to_string(), line_no, line));
         }
-        let ts = match i64.parse(parts[0].trim()) {
+        let ts = match i64.parse(parts[0].trim()).ok() {
             Some(n) => n,
             None => return Err(PipelineError.BadLine(path.to_string(), line_no, line)),
         };
-        let value = match i64.parse(parts[1].trim()) {
+        let value = match i64.parse(parts[1].trim()).ok() {
             Some(n) => n,
             None => return Err(PipelineError.BadLine(path.to_string(), line_no, line)),
         };

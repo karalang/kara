@@ -61,7 +61,7 @@ fn join_from(parts: ref Vec[String], start: i64, sep: ref String) -> String {
 }
 
 fn parse_id(word: ref String) -> Result[i64, TodoError] {
-    match i64.parse(word) {
+    match i64.parse(word).ok() {
         Some(n) => Ok(n),
         None => Err(TodoError.BadArgs(f"'{word}' is not a valid id")),
     }

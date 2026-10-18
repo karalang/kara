@@ -92,7 +92,7 @@ fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
     if tok == "#" {
         return None;
     }
-    let v = match i64.parse(tok) {
+    let v = match i64.parse(tok).ok() {
         Some(x) => x,
         None => 0,
     };

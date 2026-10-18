@@ -5580,3 +5580,100 @@ fn map_get_mut_lends_the_value_to_change() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn number_parse_returns_a_result_with_a_parse_error() {
+    // B-2026-10-12-6: docs/library/core-types.md gives every number type
+    // `fn parse(s: Str) -> Result[Self, ParseError]`, and `ParseError`
+    // says why there is no number.
+    let src = "fn show(r: Result[i64, ParseError]) -> String {\n\
+         \x20   match r {\n\
+         \x20       Ok(n) => f\"ok {n}\",\n\
+         \x20       Err(e) => f\"err {e}\",\n\
+         \x20   }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let line = \" 42 \";\n\
+         \x20   match i64.parse(line.trim()) {\n\
+         \x20       Ok(n) => println(f\"You guessed {n}\"),\n\
+         \x20       Err(e) => println(f\"not a number: {e}\"),\n\
+         \x20   }\n\
+         \x20   println(show(i64.parse(\"\")));\n\
+         \x20   println(show(i64.parse(\"4x\")));\n\
+         \x20   println(show(i64.parse(\"99999999999999999999\")));\n\
+         \x20   println(show(i64.parse(\"-99999999999999999999\")));\n\
+         \x20   println(show(i64.parse(\"-\")));\n\
+         \x20   let u = u8.parse(\"300\");\n\
+         \x20   let v = u8.parse(\"-3\");\n\
+         \x20   println(f\"{u.is_err()} {v.is_err()} {u8.parse(\"7\").unwrap()}\");\n\
+         \x20   match u8.parse(\"-3\") { Ok(_) => println(\"?\"), Err(e) => println(f\"{e}\") }\n\
+         \x20   let f = f64.parse(\"2.5\");\n\
+         \x20   println(f\"{f.unwrap()} {f64.parse(\"x\").is_err()} {f64.parse(\"\").is_err()}\");\n\
+         \x20   let s = String.from(\"123\");\n\
+         \x20   let n: i64 = i64.parse(s.as_str()).unwrap_or(0);\n\
+         \x20   println(f\"{n} {i64.parse(\"8\").ok().unwrap()}\");\n\
+         }\n";
+    let (dir, path) = fixture("parse-result", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = "You guessed 42\n\
+                err cannot parse a number from an empty string\n\
+                err invalid digit found in string\n\
+                err number too large to fit in target type\n\
+                err number too small to fit in target type\n\
+                err invalid digit found in string\n\
+                true true 7\n\
+                number too small to fit in target type\n\
+                2.5 true true\n\
+                123 8\n";
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    // The `Option` spellings written before are fixed with `.ok()`.
+    rejected_then_fixed_by(
+        "parse-some-arm",
+        "fn main() {\n\
+             match i64.parse(\"5\") {\n\
+                 Some(n) => println(f\"{n}\"),\n\
+                 None => println(\"none\"),\n\
+             }\n\
+         }\n",
+        "`.ok()` on the scrutinee",
+        "i64.parse(\"5\").ok()",
+    );
+    rejected_then_fixed_by(
+        "parse-question-in-option-fn",
+        "fn twice(s: Str) -> Option[i64] {\n\
+             let n = i64.parse(s)?;\n\
+             Some(n * 2)\n\
+         }\n\
+         fn main() { println(f\"{twice(\"4\").unwrap()}\"); }\n",
+        "`.ok()?`",
+        "i64.parse(s).ok()?",
+    );
+    rejected_then_fixed_by(
+        "parse-into-option",
+        "fn main() {\n\
+             let n: Option[i64] = i64.parse(\"3\");\n\
+             println(f\"{n.unwrap()}\");\n\
+         }\n",
+        "`.ok()` turns the `Result` into an `Option`",
+        "i64.parse(\"3\").ok()",
+    );
+}

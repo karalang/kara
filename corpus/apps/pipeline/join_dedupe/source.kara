@@ -159,7 +159,7 @@ fn split_fields(line: ref String, want: i64) -> Result[Vec[String], RowError] {
 fn parse_contact(line: ref String) -> Result[Contact, RowError] {
     let f = split_fields(line, 5)?;
     let id_text = f[0].trim();
-    let id = match i64.parse(id_text) {
+    let id = match i64.parse(id_text).ok() {
         Some(n) => n,
         None => return Err(RowError.BadId(id_text)),
     };

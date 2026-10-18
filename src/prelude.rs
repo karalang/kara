@@ -821,6 +821,10 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/ordering.kara",
         include_str!("../runtime/stdlib/source/ordering.kara"),
     ),
+    (
+        "source/parse.kara",
+        include_str!("../runtime/stdlib/source/parse.kara"),
+    ),
     // Already all Kāra (a `Vec`-backed heap), so a copy of the baked file is
     // appended: the checker then skips the baked copy of the struct and its
     // `impl`, and the program's copy is the one MIR lowers. The copy's

@@ -107,7 +107,7 @@ fn build_dashboard(profile: Profile, orders: Vec[Order], notifs: Vec[Notificatio
 // The compiler infers: reads(Env), reads(UserDB), reads(OrderDB), reads(NotifDB), writes(Stdio)
 fn main() -> Result[(), DbError] {
     let args = env.args();
-    let user_id = match u64.parse(args.get(1).unwrap_or("1")) {
+    let user_id = match u64.parse(args.get(1).unwrap_or("1")).ok() {
         Some(id) => id,
         // Default rather than fail: the point of this demo is the effect
         // analysis below, not argument parsing. (It also keeps the demo out of

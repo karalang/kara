@@ -143,7 +143,7 @@ fn parse_line(line: ref String) -> Result[LogEntry, ParseError] {
     if fields.len() != 5 {
         return Err(ParseError.WrongFieldCount(fields.len()));
     }
-    let sequence = match i64.parse(fields[0].trim()) {
+    let sequence = match i64.parse(fields[0].trim()).ok() {
         Some(n) => n,
         None => return Err(ParseError.BadNumber(fields[0].clone())),
     };
@@ -151,7 +151,7 @@ fn parse_line(line: ref String) -> Result[LogEntry, ParseError] {
         Some(l) => l,
         None => return Err(ParseError.UnknownLevel(fields[1].clone())),
     };
-    let latency_ms = match i64.parse(fields[3].trim()) {
+    let latency_ms = match i64.parse(fields[3].trim()).ok() {
         Some(n) => n,
         None => return Err(ParseError.BadNumber(fields[3].clone())),
     };

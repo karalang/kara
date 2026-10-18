@@ -896,16 +896,16 @@ impl Deserializer for JsonDeserializer {
     fn deserialize_i64(mut ref self) -> Result[i64, DeserializeError] {
         let text = self.number()?;
         match i64.parse(text) {
-            Some(v) => Ok(v),
-            None => Err(self.fail(f"`{text}` is not an integer")),
+            Ok(v) => Ok(v),
+            Err(_) => Err(self.fail(f"`{text}` is not an integer")),
         }
     }
 
     fn deserialize_u64(mut ref self) -> Result[u64, DeserializeError] {
         let text = self.number()?;
         match u64.parse(text) {
-            Some(v) => Ok(v),
-            None => Err(self.fail(f"`{text}` is not an unsigned integer")),
+            Ok(v) => Ok(v),
+            Err(_) => Err(self.fail(f"`{text}` is not an unsigned integer")),
         }
     }
 
@@ -917,8 +917,8 @@ impl Deserializer for JsonDeserializer {
         }
         let text = self.number()?;
         match f64.parse(text) {
-            Some(v) => Ok(v),
-            None => Err(self.fail(f"`{text}` is not a number")),
+            Ok(v) => Ok(v),
+            Err(_) => Err(self.fail(f"`{text}` is not a number")),
         }
     }
 

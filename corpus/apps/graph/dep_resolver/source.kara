@@ -17,7 +17,7 @@ impl Version {
         }
         let mut nums: Vec[i64] = Vec.new();
         for p in parts {
-            match i64.parse(p.trim()) {
+            match i64.parse(p.trim()).ok() {
                 Some(n) => nums.push(n),
                 None => return Err(f"bad version '{text}'"),
             }

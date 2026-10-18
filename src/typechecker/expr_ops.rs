@@ -4579,7 +4579,31 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 Type::Error
             }
-            ("Result", "Option") | ("Option", "Result") => {
+            // `?` on a `Result` in a function returning an `Option`
+            // (B-2026-10-12-6, `i64.parse(s)?`): `.ok()?` drops the error.
+            ("Result", "Option") => {
+                let at = span.offset + span.length.saturating_sub(1);
+                self.type_error_with_fix_it(
+                    format!(
+                        "'?' cannot mix `Result` and `Option`: operand is '{}', function \
+                         returns '{}'; `.ok()?` turns the `Result` into an `Option` first",
+                        type_display(&inner_ty),
+                        type_display(&return_ty)
+                    ),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                    FixIt {
+                        span: Span {
+                            offset: at,
+                            length: 0,
+                            ..*span
+                        },
+                        replacement: ".ok()".to_string(),
+                    },
+                );
+                Type::Error
+            }
+            ("Option", "Result") => {
                 self.type_error(
                     format!(
                         "'?' cannot mix `Result` and `Option`: operand is '{}', function returns '{}'",

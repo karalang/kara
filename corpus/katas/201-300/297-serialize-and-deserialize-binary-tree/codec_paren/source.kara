@@ -113,7 +113,7 @@ fn de_paren_range(b: ref Slice[u8], lo: i64, hi: i64) -> Option[TreeNode] {
         digits.push(b[k] as char);
         k = k + 1;
     }
-    let v = match i64.parse(digits) { Some(x) => x, None => 0 };
+    let v = match i64.parse(digits).ok() { Some(x) => x, None => 0 };
 
     let mut l: Option[TreeNode] = None;
     let mut r: Option[TreeNode] = None;

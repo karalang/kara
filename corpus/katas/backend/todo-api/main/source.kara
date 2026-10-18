@@ -162,7 +162,7 @@ fn handle(req: Request) -> Response {
         // GET /todos/:id
         if p.starts_with("/todos/") {
             let rest = p.substring(7);
-            match i64.parse(rest) {
+            match i64.parse(rest).ok() {
                 Some(id) => {
                     match find_index_by_id(id) {
                         Some(idx) => {
@@ -230,7 +230,7 @@ fn handle(req: Request) -> Response {
     if m == "PUT" {
         if p.starts_with("/todos/") {
             let rest = p.substring(7);
-            match i64.parse(rest) {
+            match i64.parse(rest).ok() {
                 Some(id) => {
                     match find_index_by_id(id) {
                         Some(idx) => {
@@ -272,7 +272,7 @@ fn handle(req: Request) -> Response {
     if m == "DELETE" {
         if p.starts_with("/todos/") {
             let rest = p.substring(7);
-            match i64.parse(rest) {
+            match i64.parse(rest).ok() {
                 Some(id) => {
                     match find_index_by_id(id) {
                         Some(idx) => {

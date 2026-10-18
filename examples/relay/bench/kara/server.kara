@@ -90,7 +90,7 @@ fn clen_for(headers: ref String, needle: String) -> i64 {
             let toks = lines[0].split(' ');
             let mut i: i64 = 0;
             while i < toks.len() {
-                match i64.parse(toks[i]) {
+                match i64.parse(toks[i]).ok() {
                     Some(v) => { return v; }
                     None => {}
                 }

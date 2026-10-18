@@ -309,7 +309,7 @@ fn describe(decision: ref Decision) -> String {
 }
 
 fn parse_num(text: ref String, field: own String) -> Result[i64, ParseError] {
-    match i64.parse(text) {
+    match i64.parse(text).ok() {
         Some(n) => Ok(n),
         None => Err(ParseError.BadNumber { field, text: text.clone() }),
     }

@@ -1886,7 +1886,11 @@ impl<'a> super::TypeChecker<'a> {
                 self.scrutinee_tuple_parts_borrowed = Some(parts);
             }
         }
+        let prev_ok = self
+            .current_scrutinee_ok_fix
+            .replace((scrutinee.span, ty.clone()));
         self.check_pattern_against(pattern, ty, mode);
+        self.current_scrutinee_ok_fix = prev_ok;
         self.scrutinee_tuple_parts_borrowed = prev_parts;
         // §4.6: a binding into a `for` element that `.into_iter()` would make
         // owned is fixed by the same `.into_iter()`.
@@ -2062,16 +2066,39 @@ impl<'a> super::TypeChecker<'a> {
         expected: &Type,
         span: &Span,
     ) {
-        self.type_error(
-            format!(
-                "pattern `{ctor_disp}` is an enum-variant pattern, but the \
-                 scrutinee has type `{ty}` — `{ty}` is not an enum with a \
-                 `{variant_name}` variant",
-                ty = type_display(expected),
-            ),
-            *span,
-            TypeErrorKind::PatternScrutineeMismatch,
+        let message = format!(
+            "pattern `{ctor_disp}` is an enum-variant pattern, but the \
+             scrutinee has type `{ty}` — `{ty}` is not an enum with a \
+             `{variant_name}` variant",
+            ty = type_display(expected),
         );
+        // An `Option` pattern over a whole `Result` scrutinee
+        // (`match i64.parse(s) { Some(n) => .., None => .. }`,
+        // B-2026-10-12-6): `.ok()` on the scrutinee keeps every arm's
+        // meaning. Offered once per scrutinee.
+        if matches!(variant_name, "Some" | "None")
+            && matches!(expected, Type::Named { name, .. } if name == "Result")
+        {
+            if let Some((scrut, ty)) = self.current_scrutinee_ok_fix.clone() {
+                if &ty == expected && self.scrutinees_given_ok.insert(SpanKey::from_span(&scrut)) {
+                    self.type_error_with_fix_it(
+                        format!("{message}; `.ok()` on the scrutinee makes it an `Option`"),
+                        *span,
+                        TypeErrorKind::PatternScrutineeMismatch,
+                        crate::typechecker::FixIt {
+                            span: Span {
+                                offset: scrut.offset + scrut.length,
+                                length: 0,
+                                ..scrut
+                            },
+                            replacement: ".ok()".to_string(),
+                        },
+                    );
+                    return;
+                }
+            }
+        }
+        self.type_error(message, *span, TypeErrorKind::PatternScrutineeMismatch);
     }
 
     /// Resolve + validate a range pattern's bounds (design.md § Range

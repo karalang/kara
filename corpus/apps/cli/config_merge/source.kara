@@ -118,7 +118,7 @@ fn parse_bool(text: ref String) -> Option[bool] {
 fn coerce(key: own String, raw: String, kind: ref Kind, layer: own String) -> Result[Value, ConfigError] {
     let text = raw.trim();
     match kind {
-        Kind.Int { min, max } => match i64.parse(text) {
+        Kind.Int { min, max } => match i64.parse(text).ok() {
             None => Err(ConfigError.BadInt { layer, key, raw: text }),
             Some(n) => {
                 if n < *min or n > *max {

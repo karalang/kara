@@ -5520,7 +5520,14 @@ impl<'a> super::TypeChecker<'a> {
         let Type::Named { name, args: targs } = expected else {
             return None;
         };
-        if name != "Option" || targs.len() != 1 {
+        // On the library, `Result[T, ParseError]` names the target as well,
+        // and is what `T.parse(s)` gives (B-2026-10-12-6).
+        let result_target = name == "Result"
+            && targs.len() == 2
+            && self
+                .library_parse_result(&type_display(&targs[0]))
+                .is_some_and(|r| &r == expected);
+        if !result_target && (name != "Option" || targs.len() != 1) {
             return None;
         }
         let t_name = match &targs[0] {

@@ -110,7 +110,7 @@ fn parse_currency(line: i64, s: ref String) -> Result[Currency, PipelineError] {
 }
 
 fn parse_int(line: i64, s: ref String) -> Result[i64, PipelineError] {
-    match i64.parse(s.trim()) {
+    match i64.parse(s.trim()).ok() {
         Some(n) if n >= 0 => Ok(n),
         _ => Err(PipelineError.BadNumber(line, s.clone())),
     }

@@ -235,8 +235,8 @@ fn parse_fixed(text: ref String) -> Option[i64] {
     if parts.len() != 2 or parts[1].len() != 2 {
         return None;
     }
-    let whole = i64.parse(parts[0])?;
-    let frac = i64.parse(parts[1])?;
+    let whole = i64.parse(parts[0]).ok()?;
+    let frac = i64.parse(parts[1]).ok()?;
     let v = whole * 100 + frac;
     if negative { Some(-v) } else { Some(v) }
 }
@@ -246,7 +246,7 @@ fn parse_line(line_no: i64, line: ref String) -> Result[Event, ParseError] {
     if fields.len() != 3 {
         return Err(ParseError.FieldCount(line_no));
     }
-    let ts = match i64.parse(fields[0]) {
+    let ts = match i64.parse(fields[0]).ok() {
         Some(t) => t,
         None => return Err(ParseError.BadTimestamp(line_no, fields[0].clone())),
     };

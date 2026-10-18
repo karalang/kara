@@ -283,7 +283,7 @@ fn transform(obj: ref SortedMap[String, JsonValue]) -> Result[JsonValue, Vec[Str
     let mut out: SortedMap[String, JsonValue] = SortedMap.new();
     out.insert("schema", JsonValue.Num("2"));
     match obj.get("id") {
-        Some(JsonValue.Num(text)) => match i64.parse(text) {
+        Some(JsonValue.Num(text)) => match i64.parse(text).ok() {
             Some(n) if n > 0 => { out.insert("user_id", JsonValue.Num(n.to_string())); }
             _ => errors.push("field 'id' must be a positive integer".to_string()),
         },
@@ -334,7 +334,7 @@ fn transform(obj: ref SortedMap[String, JsonValue]) -> Result[JsonValue, Vec[Str
     out.insert("tags", JsonValue.Arr(tag_values));
     match obj.get("age") {
         None | Some(JsonValue.Null) => { out.insert("age", JsonValue.Null); }
-        Some(JsonValue.Num(text)) => match i64.parse(text) {
+        Some(JsonValue.Num(text)) => match i64.parse(text).ok() {
             Some(n) if n >= 0 and n <= 150 => { out.insert("age", JsonValue.Num(n.to_string())); }
             _ => errors.push(f"field 'age' must be an integer in 0..150, got {text}"),
         },

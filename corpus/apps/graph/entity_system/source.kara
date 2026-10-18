@@ -81,7 +81,7 @@ fn template(kind: ref String) -> Option[Template] {
 }
 
 fn parse_number(text: ref String) -> Result[i64, SetupError] {
-    match i64.parse(text) {
+    match i64.parse(text).ok() {
         Some(n) => Ok(n),
         None => Err(SetupError.BadNumber(text.clone())),
     }

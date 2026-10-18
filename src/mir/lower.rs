@@ -11844,6 +11844,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let t = self.expr_ty(e)?;
                 return self.type_param_call(e, t, method, args, dest);
             }
+            if let ("parse", [a]) = (method, args) {
+                let t = self.expr_ty(e)?;
+                if self.parse_result_call(owner, &a.value, t, dest.clone())? {
+                    return Ok(());
+                }
+            }
             // `i64.parse(s)`, `f64.parse(s)`: a library function of a
             // primitive type, named after it. Copy arguments go by value,
             // the rest by reference.
@@ -12079,6 +12085,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 && matches!(self.strip_ty(rt), HK::Str | HK::StaticStr)
             {
                 let et = self.expr_ty(e)?;
+                // Into a `Result[i64, ParseError]`, the library's `parse`
+                // (B-2026-10-12-6).
+                let tcx = self.tys().tcx();
+                let ok = tcx
+                    .adt_of(et)
+                    .and_then(|(a, _)| a.variants.iter().position(|v| v.name == "Ok"));
+                if let Some(nt) = ok.and_then(|i| tcx.field_ty(et, Some(i as u32), 0)) {
+                    let owner = self.tys().display(nt);
+                    if self.parse_result_call(&owner, object, et, dest.clone())? {
+                        return Ok(());
+                    }
+                }
                 let tcx = self.tys().tcx();
                 let some = tcx
                     .adt_of(et)
@@ -14087,6 +14105,70 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// `T.parse(s)` as `docs/library/core-types.md` gives it, into `dest`
+    /// of type `Result[T, ParseError]` (B-2026-10-12-6): the native's
+    /// `Option[T]` and `s` go to the library's `parse_result_int` or
+    /// `parse_result_float`, which names the error. `false` when `dest`
+    /// is not a `Result` (the program's own `Option` reading) or the
+    /// library has no helper for `owner`.
+    fn parse_result_call(&mut self, owner: &str, s: &'a Expr, rt: Ty, dest: Place) -> R<bool> {
+        let (helper, signed) = match owner {
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => ("parse_result_int", Some(true)),
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => ("parse_result_int", Some(false)),
+            "f64" => ("parse_result_float", None),
+            _ => return Ok(false),
+        };
+        let tcx = self.tys().tcx();
+        let Some(ok) = tcx
+            .adt_of(rt)
+            .filter(|(a, _)| a.variants.iter().any(|v| v.name == "Err"))
+            .and_then(|(a, _)| a.variants.iter().position(|v| v.name == "Ok"))
+        else {
+            return Ok(false);
+        };
+        let Some(nt) = tcx.field_ty(rt, Some(ok as u32), 0) else {
+            return Ok(false);
+        };
+        let Some(d) = self.lcx.defs.lookup(0, helper) else {
+            return Ok(false);
+        };
+        let f = self.lcx.fns[&d].f;
+        let inst_args = vec![nt];
+        let opt_t = self.callee_param_ty(&f.params[0], &inst_args)?;
+        let str_t = self.callee_param_ty(&f.params[1], &inst_args)?;
+        // The input once, read by both calls.
+        let op = self.arg_operand(s, str_t)?;
+        let sl = self.temp(str_t);
+        self.assign(Place::local(sl), Rvalue::Use(op));
+        let o = self.temp(opt_t);
+        self.call_native(
+            &format!("{owner}.parse"),
+            vec![Operand::Copy(Place::local(sl))],
+            Place::local(o),
+        );
+        let mut ops = vec![
+            Operand::Move(Place::local(o)),
+            Operand::Copy(Place::local(sl)),
+        ];
+        if let Some(signed) = signed {
+            ops.push(bool_const(self.tys().bool(), signed));
+        }
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(true)
+    }
+
     fn builtin_method(
         &mut self,
         e: &'a Expr,
@@ -15106,6 +15188,8 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "vec_extend_deque",
     "vec_extend_map",
     "vec_extend_sorted_map",
+    "parse_result_int",
+    "parse_result_float",
 ];
 
 /// The names the library text `lib` declares at its top level.

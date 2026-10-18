@@ -2411,6 +2411,13 @@ pub struct TypeChecker<'a> {
     /// pipeline, whose natives hand out clones of the entry where the spec
     /// says `(ref K, ref V)`: a `Copy` part binds as a view so `*k` reads it.
     pub(super) current_scrutinee_clone_view: bool,
+    /// The span and type of the scrutinee whose patterns are being checked,
+    /// so an `Option` pattern over a `Result` scrutinee can offer `.ok()`
+    /// on it (B-2026-10-12-6).
+    pub(super) current_scrutinee_ok_fix: Option<(Span, Type)>,
+    /// Scrutinees already given that `.ok()` fix, so a `match` with a
+    /// `Some` and a `None` arm gets one edit, not two.
+    pub(super) scrutinees_given_ok: FxHashSet<SpanKey>,
     /// v2 core (strict commands only): while checking the parts of a
     /// pattern over a `shared` value or a type with a `Drop` body, a
     /// description of that type. A plain binding of a non-`Copy` part there
@@ -3260,6 +3267,8 @@ impl<'a> TypeChecker<'a> {
             scrutinee_tuple_parts_borrowed: None,
             current_scrutinee_mut_self: false,
             current_scrutinee_clone_view: false,
+            current_scrutinee_ok_fix: None,
+            scrutinees_given_ok: FxHashSet::default(),
             core_no_move_out: Vec::new(),
             core_shorthand_field: false,
             core_shared_depth: 0,
@@ -5745,6 +5754,23 @@ impl<'a> TypeChecker<'a> {
 
     /// `.collect()` or `.cloned().collect()` when `found` is a library
     /// iterator whose items are `expected`'s `Vec` element, or borrow it.
+    /// Whether `found` is a `Result[T, E]` where `expected` is `Option[T]`,
+    /// so `.ok()` gives the wanted value (B-2026-10-12-6).
+    pub(crate) fn result_where_option_wanted(&self, expected: &Type, found: &Type) -> bool {
+        let subs = &self.env.substitutions;
+        let expected = inference::resolve_type_var_top(expected, subs);
+        let found = inference::resolve_type_var_top(found, subs);
+        match (&expected, &found) {
+            (Type::Named { name: o, args: oa }, Type::Named { name: r, args: ra })
+                if o == "Option" && r == "Result" && oa.len() == 1 && ra.len() == 2 =>
+            {
+                inference::resolve_type_var_top(&oa[0], subs)
+                    == inference::resolve_type_var_top(&ra[0], subs)
+            }
+            _ => false,
+        }
+    }
+
     fn collect_fix_for(&self, expected: &Type, found: &Type) -> Option<&'static str> {
         if !self.library_methods_from_source {
             return None;
@@ -6208,6 +6234,36 @@ impl<'a> TypeChecker<'a> {
                         length: 0,
                     },
                     replacement: fix.to_string(),
+                }),
+                class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                expected: Some(type_display(expected)),
+                got: Some(type_display(found)),
+            });
+            return false;
+        }
+        // A `Result` where an `Option` of its value is wanted (`let n:
+        // Option[i64] = i64.parse(s)`, B-2026-10-12-6): `.ok()` keeps the
+        // value and drops the error, which is what the `Option` held before.
+        if self.result_where_option_wanted(expected, found) {
+            let message = format!(
+                "expected '{}', found '{}': `.ok()` turns the `Result` into an `Option`, \
+                 dropping the error",
+                type_display(expected),
+                type_display(found),
+            );
+            self.errors.push(TypeError {
+                message,
+                span,
+                kind: TypeErrorKind::TypeMismatch,
+                lint_name: None,
+                fix_it: Some(FixIt {
+                    span: Span {
+                        line: span.line,
+                        column: span.column,
+                        offset: span.offset + span.length,
+                        length: 0,
+                    },
+                    replacement: ".ok()".to_string(),
                 }),
                 class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                 expected: Some(type_display(expected)),

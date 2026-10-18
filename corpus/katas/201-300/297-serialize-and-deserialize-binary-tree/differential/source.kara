@@ -76,7 +76,7 @@ fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
     if tok == "#" {
         return None;
     }
-    let v = match i64.parse(tok) {
+    let v = match i64.parse(tok).ok() {
         Some(x) => x,
         None => 0,
     };
@@ -144,7 +144,7 @@ fn deserialize_level(s: ref String) -> Option[TreeNode] {
     if tokens.len() == 0 or tokens[0] == "#" {
         return None;
     }
-    let root_val = match i64.parse(tokens[0]) {
+    let root_val = match i64.parse(tokens[0]).ok() {
         Some(x) => x,
         None => 0,
     };
@@ -161,7 +161,7 @@ fn deserialize_level(s: ref String) -> Option[TreeNode] {
                     let tok = ref tokens[i];
                     i = i + 1;
                     if tok != "#" {
-                        let v = match i64.parse(tok) { Some(x) => x, None => 0 };
+                        let v = match i64.parse(tok).ok() { Some(x) => x, None => 0 };
                         let child = TreeNode { val: v, left: None, right: None };
                         parent.left = Some(child);
                         q.push_back(child);
@@ -171,7 +171,7 @@ fn deserialize_level(s: ref String) -> Option[TreeNode] {
                     let tok = ref tokens[i];
                     i = i + 1;
                     if tok != "#" {
-                        let v = match i64.parse(tok) { Some(x) => x, None => 0 };
+                        let v = match i64.parse(tok).ok() { Some(x) => x, None => 0 };
                         let child = TreeNode { val: v, left: None, right: None };
                         parent.right = Some(child);
                         q.push_back(child);
@@ -248,7 +248,7 @@ fn de_paren_range(b: ref Slice[u8], lo: i64, hi: i64) -> Option[TreeNode] {
         digits.push(b[k] as char);
         k = k + 1;
     }
-    let v = match i64.parse(digits) { Some(x) => x, None => 0 };
+    let v = match i64.parse(digits).ok() { Some(x) => x, None => 0 };
 
     let mut l: Option[TreeNode] = None;
     let mut r: Option[TreeNode] = None;

@@ -272,6 +272,19 @@ impl<'a> super::TypeChecker<'a> {
                 // bits as an i64 and prints garbage. Phase-8 floor for the
                 // self-hosting lexer's float literals (f32.parse is deferred —
                 // its narrower payload width needs its own runtime path).
+                // B-2026-10-12-6: on the library, a number type's `parse` is
+                // `Result[Self, ParseError]` (docs/library/core-types.md §
+                // Parsing). The error type is the library's, named through
+                // its helper's signature, so a program's own `ParseError`
+                // does not capture it.
+                if method == "parse" {
+                    if let Some(ty) = self.library_parse_result(type_name.as_str()) {
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        return Some(ty);
+                    }
+                }
                 if method == "parse" && type_name == "f64" {
                     for arg in args {
                         self.infer_expr(&arg.value);
@@ -690,6 +703,32 @@ impl<'a> super::TypeChecker<'a> {
     /// The type `T.default()` builds when `T` names a scalar, `String` or a
     /// standard collection (B-2026-10-13-27), with fresh variables for a
     /// collection's element types.
+    /// `Result[T, ParseError]` for `T.parse(s)` on the library, where `T`
+    /// is a number type with a native parse: the error type is the second
+    /// argument of the library helper's result (B-2026-10-12-6). `None`
+    /// off the library, or for a type the helpers do not cover.
+    pub(super) fn library_parse_result(&self, type_name: &str) -> Option<Type> {
+        if !self.library_methods_from_source {
+            return None;
+        }
+        let helper = match type_name {
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+            | "u128" | "usize" => "parse_result_int",
+            "f64" => "parse_result_float",
+            _ => return None,
+        };
+        let Type::Named { name, args } = &self.env.functions.get(helper)?.return_type else {
+            return None;
+        };
+        if name != "Result" || args.len() != 2 {
+            return None;
+        }
+        Some(Type::Named {
+            name: "Result".to_string(),
+            args: vec![self.primitive_type(type_name)?, args[1].clone()],
+        })
+    }
+
     pub(super) fn builtin_default_type(&mut self, type_name: &str) -> Option<Type> {
         if let Some(t) = self.primitive_type(type_name) {
             return matches!(

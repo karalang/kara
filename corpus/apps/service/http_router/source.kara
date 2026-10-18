@@ -159,7 +159,7 @@ fn parse_form(body: ref String) -> Result[Map[String, String], ApiError] {
 
 fn param_id(ctx: ref RouteCtx, key: String) -> Result[i64, ApiError] {
     let raw = ctx.params.get(key).unwrap_or("");
-    match i64.parse(raw) {
+    match i64.parse(raw).ok() {
         Some(id) => Ok(id),
         None => Err(ApiError.BadRequest(f"invalid id '{raw}'")),
     }
