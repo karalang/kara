@@ -1,0 +1,1889 @@
+// mini_shadow: Linux account files and passwords, as shadow 4.13,
+// Linux-PAM's pam_unix, libxcrypt, OpenSSL and Apache's htpasswd
+// handle them:
+// - `pwck -r [-q]`, which checks /etc/passwd, /etc/shadow and
+//   /etc/group under a root for broken, duplicate and orphaned entries,
+//   missing groups, home directories and shells, and changes dated in
+//   the future;
+// - `chage -l [-i]` and chage's -d, -E, -I, -m, -M and -W, with its
+//   date parsing, and `passwd -S [-a]`, -l, -u, -d, -e, -n, -x, -w and
+//   -i, rewriting the shadow file as they do, with their messages,
+//   usage text and exit codes;
+// - crypt() for MD5 ($1$), SHA-256 ($5$) and SHA-512 ($6$) with
+//   rounds, `openssl passwd -1/-apr1/-5/-6`, and `htpasswd -vb` over
+//   apr1, {SHA} and crypt hashes;
+// - pam_unix's login decision: the password, then the account's
+//   expiry, forced changes, inactivity and expiry warnings.
+//
+// Today is 2026-10-15. expected.out is the output of mini_shadow.py,
+// the same program in Python, which real.py checks against the real
+// pwck, chage, passwd, openssl and crypt().
+
+const TODAY: i64 = 20741;
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    let b = to_bytes(s);
+    let p = to_bytes(pat);
+    if p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_with(s: Str, pat: Str) -> bool {
+    let b = to_bytes(s);
+    let p = to_bytes(pat);
+    if p.len() > b.len() {
+        return false;
+    }
+    let off = b.len() - p.len();
+    for k in 0..p.len() {
+        if b[off + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+// The text before the first `c`, or all of it.
+fn before(s: Str, c: u8) -> String {
+    let i = find_byte(s, c);
+    if i < 0 { s.to_string() } else { slice(s, 0, i) }
+}
+
+fn is_int(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return false;
+    }
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn to_int(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+// A number as getlong reads it: an optional minus and digits.
+fn parse_long(s: Str) -> Option[i64] {
+    if starts_with(s, "-") and is_int(slice_from(s, 1)) {
+        return Some(-to_int(slice_from(s, 1)));
+    }
+    if is_int(s) {
+        return Some(to_int(s));
+    }
+    None
+}
+
+// A command line split as sh splits it, for the single quotes the jobs use.
+fn shell_words(line: Str) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut words: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut have = false;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\'' {
+            i += 1;
+            while b[i] != b'\'' {
+                cur.push(b[i]);
+                i += 1;
+            }
+            have = true;
+            i += 1;
+        } else if c == b' ' {
+            if have {
+                words.push(from_bytes(cur));
+                cur = Vec.new();
+            }
+            have = false;
+            i += 1;
+        } else {
+            cur.push(c);
+            have = true;
+            i += 1;
+        }
+    }
+    if have {
+        words.push(from_bytes(cur));
+    }
+    words
+}
+
+// ------------------------------------------------------------ dates
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+fn iso_date(days: i64) -> String {
+    let (y, m, d) = civil_from_days(days);
+    f"{y:04}-{m:02}-{d:02}"
+}
+
+fn long_date(days: i64) -> String {
+    let (y, m, d) = civil_from_days(days);
+    let months = split_on("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", b' ');
+    f"{months[m - 1]} {d:02}, {y}"
+}
+
+fn show_date(days: i64, iso: bool) -> String {
+    if iso { iso_date(days) } else { long_date(days) }
+}
+
+// A date as chage's strtoday reads it: a day number, or YYYY-MM-DD,
+// which mktime normalizes (2026-02-30 is March 2).
+fn str_to_day(s: Str) -> Option[i64] {
+    if let Some(n) = parse_long(s) {
+        return Some(n);
+    }
+    let p = split_on(s, b'-');
+    if p.len() != 3 or not (is_int(p[0]) and is_int(p[1]) and is_int(p[2])) {
+        return None;
+    }
+    let m0 = to_int(p[1]) - 1;
+    let y = to_int(p[0]) + m0 / 12;
+    let m = m0 % 12 + 1;
+    Some(days_from_civil(y, m, 1) + to_int(p[2]) - 1)
+}
+
+// ------------------------------------------------------------ MD5 (RFC 1321)
+
+const MD5_S: Array[i64, 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+const MD5_K: Array[u32, 64] = [
+    0xd76aa478u32, 0xe8c7b756u32, 0x242070dbu32, 0xc1bdceeeu32, 0xf57c0fafu32, 0x4787c62au32, 0xa8304613u32, 0xfd469501u32,
+    0x698098d8u32, 0x8b44f7afu32, 0xffff5bb1u32, 0x895cd7beu32, 0x6b901122u32, 0xfd987193u32, 0xa679438eu32, 0x49b40821u32,
+    0xf61e2562u32, 0xc040b340u32, 0x265e5a51u32, 0xe9b6c7aau32, 0xd62f105du32, 0x02441453u32, 0xd8a1e681u32, 0xe7d3fbc8u32,
+    0x21e1cde6u32, 0xc33707d6u32, 0xf4d50d87u32, 0x455a14edu32, 0xa9e3e905u32, 0xfcefa3f8u32, 0x676f02d9u32, 0x8d2a4c8au32,
+    0xfffa3942u32, 0x8771f681u32, 0x6d9d6122u32, 0xfde5380cu32, 0xa4beea44u32, 0x4bdecfa9u32, 0xf6bb4b60u32, 0xbebfbc70u32,
+    0x289b7ec6u32, 0xeaa127fau32, 0xd4ef3085u32, 0x04881d05u32, 0xd9d4d039u32, 0xe6db99e5u32, 0x1fa27cf8u32, 0xc4ac5665u32,
+    0xf4292244u32, 0x432aff97u32, 0xab9423a7u32, 0xfc93a039u32, 0x655b59c3u32, 0x8f0ccc92u32, 0xffeff47du32, 0x85845dd1u32,
+    0x6fa87e4fu32, 0xfe2ce6e0u32, 0xa3014314u32, 0x4e0811a1u32, 0xf7537e82u32, 0xbd3af235u32, 0x2ad7d2bbu32, 0xeb86d391u32,
+];
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+fn le32(b: ref Vec[u8], i: i64) -> u32 {
+    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+
+fn le64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    let mut k: i64 = 7;
+    while k >= 0 {
+        v = (v << 8) | (b[i + k] as u64);
+        k -= 1;
+    }
+    v
+}
+
+fn push_le32(out: mut ref Vec[u8], x: u32) {
+    for k in 0..4 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+    }
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+fn md5(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, false);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32] {
+        h.push(x);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        for i in 0..64 {
+            let mut f: u32 = 0;
+            let mut g: i64 = 0;
+            if i < 16 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                g = i;
+            } else if i < 32 {
+                f = (d & b) | ((d ^ 0xFFFFFFFFu32) & c);
+                g = (5 * i + 1) % 16;
+            } else if i < 48 {
+                f = b ^ c ^ d;
+                g = (3 * i + 5) % 16;
+            } else {
+                f = c ^ (b | (d ^ 0xFFFFFFFFu32));
+                g = (7 * i) % 16;
+            }
+            let x = a.wrapping_add(f).wrapping_add(MD5_K[i]).wrapping_add(le32(m, blk + 4 * g));
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(x.rotate_left(MD5_S[i] as u32));
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_le32(mut out, x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ SHA-1 and SHA-2 (FIPS 180-4)
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let mut f: u32 = 0;
+            let mut k: u32 = 0;
+            if t < 20 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                k = 0x5A827999u32;
+            } else if t < 40 {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1u32;
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCu32;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6u32;
+            }
+            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[t]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// SHA-256, or SHA-224 with its own initial values and a shorter result.
+fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    if is224 {
+        for x in [0xc1059ed8u32, 0x367cd507u32, 0x3070dd17u32, 0xf70e5939u32, 0xffc00b31u32, 0x68581511u32, 0x64f98fa7u32, 0xbefa4fa4u32] {
+            h.push(x);
+        }
+    } else {
+        for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+            h.push(x);
+        }
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u32] = h.clone();
+        for t in 0..64 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFu32) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is224 { 7 } else { 8 };
+    for i in 0..n {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SHA384_IV: Array[u64, 8] = [
+    0xcbbb9d5dc1059ed8u64, 0x629a292a367cd507u64, 0x9159015a3070dd17u64, 0x152fecd8f70e5939u64,
+    0x67332667ffc00b31u64, 0x8eb44a8768581511u64, 0xdb0c2e0d64f98fa7u64, 0x47b5481dbefa4fa4u64,
+];
+
+// SHA-512, or SHA-384 with its own initial values and a shorter result.
+fn sha512_family(msg: ref Vec[u8], is384: bool) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if is384 { SHA384_IV[i] } else { SHA512_IV[i] });
+    }
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        for t in 16..80 {
+            let s0 = w[t - 15].rotate_right(1) ^ w[t - 15].rotate_right(8) ^ (w[t - 15] >> 7u64);
+            let s1 = w[t - 2].rotate_right(19) ^ w[t - 2].rotate_right(61) ^ (w[t - 2] >> 6u64);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u64] = h.clone();
+        for t in 0..80 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is384 { 6 } else { 8 };
+    for i in 0..n {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+const B64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(b: ref Vec[u8]) -> String {
+    let alpha = to_bytes(B64_ALPHABET);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let n = b.len() - i;
+        let x0 = b[i] as i64;
+        let x1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let x2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let v = (x0 << 16) | (x1 << 8) | x2;
+        out.push(alpha[(v >> 18) & 63]);
+        out.push(alpha[(v >> 12) & 63]);
+        out.push(if n > 1 { alpha[(v >> 6) & 63] } else { b'=' });
+        out.push(if n > 2 { alpha[v & 63] } else { b'=' });
+        i += 3;
+    }
+    from_bytes(out)
+}
+
+
+// ------------------------------------------------------------ crypt
+
+const ITOA64: Str = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+// Three bytes as `n` characters of crypt's base 64, low bits first.
+fn b64_24(out: mut ref String, b2: u8, b1: u8, b0: u8, n: i64) {
+    let alpha = to_bytes(ITOA64);
+    let mut w = ((b2 as i64) << 16) | ((b1 as i64) << 8) | (b0 as i64);
+    let mut v: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        v.push(alpha[w & 63]);
+        w = w >> 6;
+    }
+    out.push_str(from_bytes(v));
+}
+
+fn cat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+    out
+}
+
+fn append(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+fn head(b: ref Vec[u8], n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..n {
+        out.push(b[i]);
+    }
+    out
+}
+
+// The FreeBSD MD5 crypt, for $1$ and Apache's $apr1$.
+fn md5_crypt(password: Str, salt_text: Str, magic: Str) -> String {
+    let pw = to_bytes(password);
+    let mut salt = to_bytes(salt_text);
+    if salt.len() > 8 {
+        salt = head(salt, 8);
+    }
+    let mut final = md5(cat(cat(pw, salt), pw));
+    let mut ctx = cat(cat(pw, to_bytes(magic)), salt);
+    let mut i = pw.len();
+    while i > 0 {
+        ctx = cat(ctx, head(final, if i < 16 { i } else { 16 }));
+        i -= 16;
+    }
+    i = pw.len();
+    while i != 0 {
+        if i & 1 != 0 {
+            ctx.push(0);
+        } else {
+            ctx.push(pw[0]);
+        }
+        i = i >> 1;
+    }
+    final = md5(ctx);
+    for r in 0..1000 {
+        let mut c: Vec[u8] = Vec.new();
+        if r & 1 != 0 {
+            append(mut c, pw);
+        } else {
+            append(mut c, final);
+        }
+        if r % 3 != 0 {
+            append(mut c, salt);
+        }
+        if r % 7 != 0 {
+            append(mut c, pw);
+        }
+        if r & 1 != 0 {
+            append(mut c, final);
+        } else {
+            append(mut c, pw);
+        }
+        final = md5(c);
+    }
+    let f = final;
+    let mut out = f"{magic}{from_bytes(salt)}$";
+    b64_24(mut out, f[0], f[6], f[12], 4);
+    b64_24(mut out, f[1], f[7], f[13], 4);
+    b64_24(mut out, f[2], f[8], f[14], 4);
+    b64_24(mut out, f[3], f[9], f[15], 4);
+    b64_24(mut out, f[4], f[10], f[5], 4);
+    b64_24(mut out, 0, 0, f[11], 2);
+    out
+}
+
+fn sha(kind: i64, b: ref Vec[u8]) -> Vec[u8] {
+    if kind == 5 { sha256_family(b, false) } else { sha512_family(b, false) }
+}
+
+// `d` repeated, then cut, to `n` bytes.
+fn repeat_to(d: ref Vec[u8], n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..n {
+        out.push(d[i % d.len()]);
+    }
+    out
+}
+
+const ORDER256: Array[i64, 30] = [0, 10, 20, 21, 1, 11, 12, 22, 2, 3, 13, 23, 24, 4, 14, 15, 25, 5, 6, 16, 26, 27, 7, 17, 18, 28, 8, 9, 19, 29];
+
+const ORDER512: Array[i64, 63] = [
+    0, 21, 42, 22, 43, 1, 44, 2, 23, 3, 24, 45, 25, 46, 4, 47, 5, 26, 6, 27, 48,
+    28, 49, 7, 50, 8, 29, 9, 30, 51, 31, 52, 10, 53, 11, 32, 12, 33, 54, 34, 55, 13,
+    56, 14, 35, 15, 36, 57, 37, 58, 16, 59, 17, 38, 18, 39, 60, 40, 61, 19, 62, 20, 41,
+];
+
+// Ulrich Drepper's SHA-crypt, for $5$ and $6$.
+fn sha_crypt(kind: i64, password: Str, salt_text: Str, rounds: i64, show_rounds: bool) -> String {
+    let pw = to_bytes(password);
+    let mut salt = to_bytes(salt_text);
+    if salt.len() > 16 {
+        salt = head(salt, 16);
+    }
+    let b = sha(kind, cat(cat(pw, salt), pw));
+    let mut a = cat(cat(pw, salt), repeat_to(b, pw.len()));
+    let mut i = pw.len();
+    while i > 0 {
+        a = if i & 1 != 0 { cat(a, b) } else { cat(a, pw) };
+        i = i >> 1;
+    }
+    let a = sha(kind, a);
+    let mut pp: Vec[u8] = Vec.new();
+    for _ in 0..pw.len() {
+        append(mut pp, pw);
+    }
+    let p = repeat_to(sha(kind, pp), pw.len());
+    let mut ss: Vec[u8] = Vec.new();
+    for _ in 0..16 + (a[0] as i64) {
+        append(mut ss, salt);
+    }
+    let s = repeat_to(sha(kind, ss), salt.len());
+    let mut c = a;
+    for r in 0..rounds {
+        let mut x: Vec[u8] = Vec.new();
+        if r & 1 != 0 {
+            append(mut x, p);
+        } else {
+            append(mut x, c);
+        }
+        if r % 3 != 0 {
+            append(mut x, s);
+        }
+        if r % 7 != 0 {
+            append(mut x, p);
+        }
+        if r & 1 != 0 {
+            append(mut x, c);
+        } else {
+            append(mut x, p);
+        }
+        c = sha(kind, x);
+    }
+    let mut out = f"${kind}$";
+    if show_rounds {
+        out.push_str(f"rounds={rounds}$");
+    }
+    out.push_str(from_bytes(salt));
+    out.push_str("$");
+    if kind == 5 {
+        let mut k: i64 = 0;
+        while k < 30 {
+            b64_24(mut out, c[ORDER256[k]], c[ORDER256[k + 1]], c[ORDER256[k + 2]], 4);
+            k += 3;
+        }
+        b64_24(mut out, 0, c[31], c[30], 3);
+    } else {
+        let mut k: i64 = 0;
+        while k < 63 {
+            b64_24(mut out, c[ORDER512[k]], c[ORDER512[k + 1]], c[ORDER512[k + 2]], 4);
+            k += 3;
+        }
+        b64_24(mut out, 0, 0, c[63], 2);
+    }
+    out
+}
+
+// crypt() as libxcrypt does it for the methods here; "*0" on a setting
+// it refuses.
+fn crypt(pw: Str, setting: Str) -> String {
+    if starts_with(setting, "$1$") {
+        return md5_crypt(pw, before(slice_from(setting, 3), b'$'), "$1$");
+    }
+    if starts_with(setting, "$5$") or starts_with(setting, "$6$") {
+        let kind: i64 = if starts_with(setting, "$5$") { 5 } else { 6 };
+        let mut rest = slice_from(setting, 3);
+        let mut rounds: i64 = 5000;
+        let mut show = false;
+        if starts_with(rest, "rounds=") {
+            let tail = slice_from(rest, 7);
+            let num = before(tail, b'$');
+            if not is_int(num) or num.len() > 10 or to_int(num) < 1000 or to_int(num) > 999999999 {
+                return "*0".to_string();
+            }
+            rounds = to_int(num);
+            show = true;
+            rest = if find_byte(tail, b'$') < 0 { String.new() } else { slice_from(tail, num.len() + 1) };
+        }
+        return sha_crypt(kind, pw, before(rest, b'$'), rounds, show);
+    }
+    "*0".to_string()
+}
+
+// ------------------------------------------------------------ account files
+
+// One line of /etc/passwd; `ok` when it has seven fields and numeric ids.
+struct Pw {
+    line: String,
+    ok: bool,
+    name: String,
+    passwd: String,
+    gid: i64,
+    home: String,
+    shell: String,
+}
+
+fn parse_pw(line: Str) -> Pw {
+    let f = split_on(line, b':');
+    let ok = f.len() == 7 and f[0].len() > 0 and is_int(f[2]) and is_int(f[3]);
+    if not ok {
+        return Pw { line: line.to_string(), ok: false, name: String.new(), passwd: String.new(), gid: 0, home: String.new(), shell: String.new() };
+    }
+    Pw { line: line.to_string(), ok: true, name: f[0].clone(), passwd: f[1].clone(), gid: to_int(f[3]), home: f[5].clone(), shell: f[6].clone() }
+}
+
+// One line of /etc/shadow; numbers that are empty are -1.
+struct Sp {
+    line: String,
+    ok: bool,
+    name: String,
+    passwd: String,
+    lstchg: i64,
+    min: i64,
+    max: i64,
+    warn: i64,
+    inact: i64,
+    expire: i64,
+    flag: String,
+}
+
+fn opt_num(s: Str) -> i64 {
+    if s.len() == 0 { -1 } else { to_int(s) }
+}
+
+fn parse_sp(line: Str) -> Sp {
+    let f = split_on(line, b':');
+    let mut ok = f.len() == 9 and f[0].len() > 0;
+    if ok {
+        for k in 2..8 {
+            if f[k].len() > 0 and not is_int(f[k]) {
+                ok = false;
+            }
+        }
+    }
+    if not ok {
+        return Sp { line: line.to_string(), ok: false, name: String.new(), passwd: String.new(), lstchg: -1, min: -1, max: -1, warn: -1, inact: -1, expire: -1, flag: String.new() };
+    }
+    Sp {
+        line: line.to_string(),
+        ok: true,
+        name: f[0].clone(),
+        passwd: f[1].clone(),
+        lstchg: opt_num(f[2]),
+        min: opt_num(f[3]),
+        max: opt_num(f[4]),
+        warn: opt_num(f[5]),
+        inact: opt_num(f[6]),
+        expire: opt_num(f[7]),
+        flag: f[8].clone(),
+    }
+}
+
+fn num_field(n: i64) -> String {
+    if n < 0 { String.new() } else { f"{n}" }
+}
+
+fn sp_text(s: ref Sp) -> String {
+    f"{s.name}:{s.passwd}:{num_field(s.lstchg)}:{num_field(s.min)}:{num_field(s.max)}:{num_field(s.warn)}:{num_field(s.inact)}:{num_field(s.expire)}:{s.flag}"
+}
+
+fn read_lines(path: Str) -> Vec[String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => lines_of(t),
+        Err(_) => Vec.new(),
+    }
+}
+
+fn load_pw(root: Str) -> Vec[Pw] {
+    let mut v: Vec[Pw] = Vec.new();
+    for l in read_lines(f"{root}/etc/passwd") {
+        v.push(parse_pw(l));
+    }
+    v
+}
+
+fn load_sp(root: Str) -> Vec[Sp] {
+    let mut v: Vec[Sp] = Vec.new();
+    for l in read_lines(f"{root}/etc/shadow") {
+        v.push(parse_sp(l));
+    }
+    v
+}
+
+fn save_sp(root: Str, sps: ref Vec[Sp]) {
+    let mut text = String.new();
+    for i in 0..sps.len() {
+        text.push_str(sps[i].line);
+        text.push_str("\n");
+    }
+    let path = f"{root}/etc/shadow";
+    let _ = fs.write(path, text);
+}
+
+// The index of the first well-formed entry for `name`, or -1.
+fn find_pw(pws: ref Vec[Pw], name: Str) -> i64 {
+    for i in 0..pws.len() {
+        if pws[i].ok and pws[i].name == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn find_sp(sps: ref Vec[Sp], name: Str) -> i64 {
+    for i in 0..sps.len() {
+        if sps[i].ok and sps[i].name == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn exists(root: Str, path: Str) -> bool {
+    fs.symlink_metadata(f"{root}{path}").is_ok()
+}
+
+struct Job {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+// ------------------------------------------------------------ pwck
+
+fn pwck(job: mut ref Job, args: ref Vec[String]) {
+    let mut root = String.new();
+    let mut quiet = false;
+    let mut i: i64 = 0;
+    while i < args.len() {
+        if args[i] == "-R" {
+            root = args[i + 1].clone();
+            i += 2;
+            continue;
+        }
+        if args[i] == "-q" {
+            quiet = true;
+        }
+        i += 1;
+    }
+    let pws = load_pw(root);
+    let sps = load_sp(root);
+    let mut gids: Vec[i64] = Vec.new();
+    for l in read_lines(f"{root}/etc/group") {
+        let f = split_on(l, b':');
+        if f.len() == 4 and is_int(f[2]) {
+            gids.push(to_int(f[2]));
+        }
+    }
+    let mut errors: i64 = 0;
+    for k in 0..pws.len() {
+        let p = ref pws[k];
+        if not p.ok {
+            job.out.push_str(f"invalid password file entry\ndelete line '{p.line}'? No\n");
+            errors += 1;
+            continue;
+        }
+        let mut dup = false;
+        for j in 0..pws.len() {
+            if j != k and pws[j].ok and pws[j].name == p.name {
+                dup = true;
+            }
+        }
+        if dup {
+            job.out.push_str(f"duplicate password entry\ndelete line '{p.line}'? No\n");
+            errors += 1;
+        } else {
+            if not quiet and not gids.contains(p.gid) {
+                job.out.push_str(f"user '{p.name}': no group {p.gid}\n");
+                errors += 1;
+            }
+            if not quiet and not exists(root, p.home) {
+                job.out.push_str(f"user '{p.name}': directory '{p.home}' does not exist\n");
+                errors += 1;
+            }
+            if not quiet and p.shell.len() > 0 and not exists(root, p.shell) {
+                job.out.push_str(f"user '{p.name}': program '{p.shell}' does not exist\n");
+            }
+        }
+        if find_sp(sps, p.name) < 0 {
+            job.out.push_str(f"no matching password file entry in /etc/shadow\nadd user '{p.name}' in /etc/shadow? No\n");
+            errors += 1;
+        }
+    }
+    for k in 0..sps.len() {
+        let s = ref sps[k];
+        if not s.ok {
+            job.out.push_str(f"invalid shadow password file entry\ndelete line '{s.line}'? No\n");
+            errors += 1;
+            continue;
+        }
+        let mut dup = false;
+        for j in 0..sps.len() {
+            if j != k and sps[j].ok and sps[j].name == s.name {
+                dup = true;
+            }
+        }
+        if dup {
+            job.out.push_str(f"duplicate shadow password entry\ndelete line '{s.line}'? No\n");
+            errors += 1;
+            continue;
+        }
+        if find_pw(pws, s.name) < 0 {
+            job.out.push_str(f"no matching password file entry in /etc/passwd\ndelete line '{s.line}'? No\n");
+            errors += 1;
+            continue;
+        }
+        if not quiet and s.lstchg > TODAY {
+            job.out.push_str(f"user {s.name}: last password change in the future\n");
+        }
+    }
+    job.out.push_str("pwck: no changes\n");
+    if errors > 0 {
+        job.status = 2;
+    }
+}
+
+// ------------------------------------------------------------ chage
+
+// The aging fields an option sets; -1 in `set` means "not given".
+struct Aging {
+    lstchg: i64,
+    min: i64,
+    max: i64,
+    warn: i64,
+    inact: i64,
+    expire: i64,
+}
+
+fn no_change() -> Aging {
+    Aging { lstchg: -2, min: -2, max: -2, warn: -2, inact: -2, expire: -2 }
+}
+
+// Applies each field that was given (-2 means not given).
+fn apply(s: mut ref Sp, a: ref Aging) {
+    if a.lstchg != -2 {
+        s.lstchg = a.lstchg;
+    }
+    if a.min != -2 {
+        s.min = a.min;
+    }
+    if a.max != -2 {
+        s.max = a.max;
+    }
+    if a.warn != -2 {
+        s.warn = a.warn;
+    }
+    if a.inact != -2 {
+        s.inact = a.inact;
+    }
+    if a.expire != -2 {
+        s.expire = a.expire;
+    }
+    s.line = sp_text(s);
+}
+
+fn chage(job: mut ref Job, args: ref Vec[String]) {
+    let mut root = String.new();
+    let mut listing = false;
+    let mut iso = false;
+    let mut set = no_change();
+    let mut login = String.new();
+    let mut have_login = false;
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let a = args[i].clone();
+        if a == "-R" {
+            root = args[i + 1].clone();
+            i += 2;
+        } else if a == "-l" {
+            listing = true;
+            i += 1;
+        } else if a == "-i" {
+            iso = true;
+            i += 1;
+        } else if a == "-d" or a == "-E" {
+            let v = match str_to_day(args[i + 1]) {
+                Some(v) => v,
+                None => {
+                    job.err.push_str(f"chage: invalid date '{args[i + 1]}'\n");
+                    job.err.push_str(chage_usage());
+                    job.status = 2;
+                    return;
+                }
+            };
+            if a == "-d" {
+                set.lstchg = v;
+            } else {
+                set.expire = v;
+            }
+            i += 2;
+        } else if a == "-I" or a == "-m" or a == "-M" or a == "-W" {
+            let v = match parse_long(args[i + 1]) {
+                Some(v) => v,
+                None => {
+                    job.err.push_str(f"chage: invalid numeric argument '{args[i + 1]}'\n");
+                    job.err.push_str(chage_usage());
+                    job.status = 2;
+                    return;
+                }
+            };
+            if a == "-I" {
+                set.inact = v;
+            } else if a == "-m" {
+                set.min = v;
+            } else if a == "-M" {
+                set.max = v;
+            } else {
+                set.warn = v;
+            }
+            i += 2;
+        } else {
+            login = a;
+            have_login = true;
+            i += 1;
+        }
+    }
+    if not have_login {
+        job.err.push_str(chage_usage());
+        job.status = 2;
+        return;
+    }
+    let pws = load_pw(root);
+    let mut sps = load_sp(root);
+    if find_pw(pws, login) < 0 {
+        job.err.push_str(f"chage: user '{login}' does not exist in /etc/passwd\n");
+        job.status = 1;
+        return;
+    }
+    let k = find_sp(sps, login);
+    if listing {
+        let mut lst: i64 = -1;
+        let mut mn: i64 = -1;
+        let mut mx: i64 = -1;
+        let mut wn: i64 = -1;
+        let mut ina: i64 = -1;
+        let mut exp: i64 = -1;
+        if k >= 0 {
+            let s = ref sps[k];
+            lst = s.lstchg;
+            mn = s.min;
+            mx = s.max;
+            wn = s.warn;
+            ina = s.inact;
+            exp = s.expire;
+        }
+        let mut out = "Last password change\t\t\t\t\t: ".to_string();
+        if lst < 0 {
+            out.push_str("never\n");
+        } else if lst == 0 {
+            out.push_str("password must be changed\n");
+        } else {
+            out.push_str(f"{show_date(lst, iso)}\n");
+        }
+        out.push_str("Password expires\t\t\t\t\t: ");
+        if lst == 0 {
+            out.push_str("password must be changed\n");
+        } else if lst < 0 or mx >= 10000 or mx < 0 {
+            out.push_str("never\n");
+        } else {
+            out.push_str(f"{show_date(lst + mx, iso)}\n");
+        }
+        out.push_str("Password inactive\t\t\t\t\t: ");
+        if lst == 0 {
+            out.push_str("password must be changed\n");
+        } else if lst < 0 or ina < 0 or mx >= 10000 or mx < 0 {
+            out.push_str("never\n");
+        } else {
+            out.push_str(f"{show_date(lst + mx + ina, iso)}\n");
+        }
+        out.push_str("Account expires\t\t\t\t\t\t: ");
+        if exp < 0 {
+            out.push_str("never\n");
+        } else {
+            out.push_str(f"{show_date(exp, iso)}\n");
+        }
+        out.push_str(f"Minimum number of days between password change\t\t: {mn}\n");
+        out.push_str(f"Maximum number of days between password change\t\t: {mx}\n");
+        out.push_str(f"Number of days of warning before password expires\t: {wn}\n");
+        job.out.push_str(out);
+        return;
+    }
+    apply(mut sps[k], set);
+    save_sp(root, sps);
+}
+
+// ------------------------------------------------------------ passwd
+
+fn pw_status(p: Str) -> String {
+    if starts_with(p, "!") or starts_with(p, "*") {
+        "L".to_string()
+    } else if p.len() == 0 {
+        "NP".to_string()
+    } else {
+        "P".to_string()
+    }
+}
+
+fn status_line(p: ref Pw, sps: ref Vec[Sp]) -> String {
+    let k = find_sp(sps, p.name);
+    if k < 0 {
+        return f"{p.name} {pw_status(p.passwd)}\n";
+    }
+    let s = ref sps[k];
+    if s.lstchg < 0 {
+        return f"{p.name} {pw_status(s.passwd)}\n";
+    }
+    f"{p.name} {pw_status(s.passwd)} {iso_date(s.lstchg)} {s.min} {s.max} {s.warn} {s.inact}\n"
+}
+
+fn passwd(job: mut ref Job, args: ref Vec[String]) {
+    let mut root = String.new();
+    let mut action = String.new();
+    let mut all_users = false;
+    let mut login = String.new();
+    let mut have_login = false;
+    let mut set = no_change();
+    let mut i: i64 = 0;
+    while i < args.len() {
+        let a = args[i].clone();
+        if a == "-R" {
+            root = args[i + 1].clone();
+            i += 2;
+        } else if a == "-n" or a == "-x" or a == "-w" or a == "-i" {
+            let v = match parse_long(args[i + 1]) {
+                Some(v) => v,
+                None => {
+                    job.err.push_str(f"passwd: invalid numeric argument '{args[i + 1]}'\n");
+                    job.err.push_str(passwd_usage());
+                    job.status = 6;
+                    return;
+                }
+            };
+            if a == "-n" {
+                set.min = v;
+            } else if a == "-x" {
+                set.max = v;
+            } else if a == "-w" {
+                set.warn = v;
+            } else {
+                set.inact = v;
+            }
+            i += 2;
+        } else if a == "-a" {
+            all_users = true;
+            i += 1;
+        } else if a == "-S" or a == "-l" or a == "-u" or a == "-d" or a == "-e" {
+            action = a;
+            i += 1;
+        } else {
+            login = a;
+            have_login = true;
+            i += 1;
+        }
+    }
+    let pws = load_pw(root);
+    let mut sps = load_sp(root);
+    if action == "-S" and all_users {
+        for k in 0..pws.len() {
+            if pws[k].ok {
+                job.out.push_str(status_line(pws[k], sps));
+            }
+        }
+        return;
+    }
+    if not have_login {
+        job.err.push_str(passwd_usage());
+        job.status = 2;
+        return;
+    }
+    let pk = find_pw(pws, login);
+    if pk < 0 {
+        job.err.push_str(f"passwd: user '{login}' does not exist\n");
+        job.status = 1;
+        return;
+    }
+    if action == "-S" {
+        job.out.push_str(status_line(pws[pk], sps));
+        return;
+    }
+    let k = find_sp(sps, login);
+    let old = sps[k].passwd.clone();
+    if action == "-l" {
+        if not starts_with(old, "!") {
+            sps[k].passwd = f"!{old}";
+        }
+    } else if action == "-u" {
+        if starts_with(old, "!") {
+            if old.len() == 1 {
+                job.err.push_str("passwd: unlocking the password would result in a passwordless account.\n");
+                job.err.push_str("You should set a password with usermod -p to unlock the password of this account.\n");
+                job.status = 3;
+                return;
+            }
+            sps[k].passwd = slice_from(old, 1);
+        }
+    } else if action == "-d" {
+        sps[k].passwd = String.new();
+    } else if action == "-e" {
+        set.lstchg = 0;
+    }
+    apply(mut sps[k], set);
+    save_sp(root, sps);
+    job.out.push_str("passwd: password changed.\n");
+}
+
+// ------------------------------------------------------------ login
+
+fn refuse(job: mut ref Job, msg: Str) {
+    job.out.push_str(msg);
+    job.out.push_str("\n");
+    job.status = 1;
+}
+
+// pam_unix: the password, then the account's aging, as of TODAY.
+fn login(job: mut ref Job, args: ref Vec[String]) {
+    let root = args[0].clone();
+    let user = args[1].clone();
+    let password = args[2].clone();
+    let pws = load_pw(root);
+    let sps = load_sp(root);
+    let pk = find_pw(pws, user);
+    if pk < 0 {
+        refuse(mut job, "Login incorrect");
+        return;
+    }
+    let p = ref pws[pk];
+    let mut k = find_sp(sps, user);
+    let mut hashed = p.passwd.clone();
+    if p.passwd == "x" {
+        if k < 0 {
+            refuse(mut job, "Login incorrect");
+            return;
+        }
+        hashed = sps[k].passwd.clone();
+    } else {
+        k = -1;
+    }
+    if hashed.len() > 0 {
+        if starts_with(hashed, "$y$") {
+            job.err.push_str("login: yescrypt hashes are not supported\n");
+            refuse(mut job, "Login incorrect");
+            return;
+        }
+        if crypt(password, hashed) != hashed {
+            refuse(mut job, "Login incorrect");
+            return;
+        }
+    }
+    if k >= 0 {
+        let s = ref sps[k];
+        if s.expire >= 0 and TODAY >= s.expire {
+            refuse(mut job, "Your account has expired; please contact your system administrator.");
+            return;
+        }
+        if s.lstchg == 0 {
+            refuse(mut job, "You are required to change your password immediately (administrator enforced).");
+            return;
+        }
+        let age = TODAY - s.lstchg;
+        if s.lstchg > 0 and s.max >= 0 and s.inact >= 0 and age > s.max + s.inact {
+            refuse(mut job, "Your account has expired; please contact your system administrator.");
+            return;
+        }
+        if s.lstchg > 0 and s.max >= 0 and age > s.max {
+            refuse(mut job, "You are required to change your password immediately (password expired).");
+            return;
+        }
+        if s.lstchg > 0 and s.max >= 0 and s.warn >= 0 and age > s.max - s.warn {
+            let left = s.lstchg + s.max - TODAY;
+            let unit = if left == 1 { "day" } else { "days" };
+            job.out.push_str(f"Warning: your password will expire in {left} {unit}.\n");
+        }
+    }
+    if ends_with(p.shell, "/nologin") {
+        refuse(mut job, "This account is currently not available.");
+        return;
+    }
+    job.out.push_str(f"Welcome, {user} (home {p.home}, shell {p.shell})\n");
+}
+
+// ------------------------------------------------------------ openssl and htpasswd
+
+// openssl passwd -1|-apr1|-5|-6 -salt SALT PASSWORD
+fn openssl(job: mut ref Job, args: ref Vec[String]) {
+    let kind = args[1].clone();
+    let salt = args[3].clone();
+    let pw = args[4].clone();
+    if kind == "-1" {
+        job.out.push_str(f"{md5_crypt(pw, salt, "$1$")}\n");
+    } else if kind == "-apr1" {
+        job.out.push_str(f"{md5_crypt(pw, salt, "$apr1$")}\n");
+    } else if salt.len() == 0 {
+        job.out.push_str("<NULL>\n");
+    } else {
+        let k: i64 = if kind == "-5" { 5 } else { 6 };
+        job.out.push_str(f"{sha_crypt(k, pw, salt, 5000, false)}\n");
+    }
+}
+
+// htpasswd -vb FILE USER PASSWORD
+fn htpasswd(job: mut ref Job, args: ref Vec[String]) {
+    let user = args[2].clone();
+    let pw = args[3].clone();
+    for line in read_lines(args[1]) {
+        let colon = find_byte(line, b':');
+        if starts_with(line, "#") or colon < 0 {
+            continue;
+        }
+        if slice(line, 0, colon) != user {
+            continue;
+        }
+        let hashed = slice_from(line, colon + 1);
+        if starts_with(hashed, "$2y$") {
+            job.err.push_str("htpasswd: bcrypt hashes are not supported\n");
+            job.status = 3;
+            return;
+        }
+        let good = if starts_with(hashed, "$apr1$") {
+            md5_crypt(pw, before(slice_from(hashed, 6), b'$'), "$apr1$") == hashed
+        } else if starts_with(hashed, "{SHA}") {
+            f"{{SHA}}{b64_encode(sha1(to_bytes(pw)))}" == hashed
+        } else {
+            crypt(pw, hashed) == hashed
+        };
+        if good {
+            job.err.push_str(f"Password for user {user} correct.\n");
+        } else {
+            job.err.push_str("password verification failed\n");
+            job.status = 3;
+        }
+        return;
+    }
+    job.err.push_str(f"User {user} not found\n");
+    job.status = 6;
+}
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("d root\n");
+    s.push_str("d home/alice\n");
+    s.push_str("d home/bob\n");
+    s.push_str("d home/carol\n");
+    s.push_str("d home/dave\n");
+    s.push_str("d home/erin\n");
+    s.push_str("d home/frank\n");
+    s.push_str("d home/gina\n");
+    s.push_str("d home/henry\n");
+    s.push_str("d home/judy\n");
+    s.push_str("d home/kim\n");
+    s.push_str("d home/liam\n");
+    s.push_str("d usr/sbin\n");
+    s.push_str("f bin/bash\n");
+    s.push_str("f bin/sh\n");
+    s.push_str("f usr/sbin/nologin\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("root:x:0:0:root:/root:/bin/bash\n");
+    s.push_str("daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n");
+    s.push_str("alice:x:1000:1000:Alice Liddell,,,:/home/alice:/bin/bash\n");
+    s.push_str("bob:x:1001:1001:Bob Builder:/home/bob:/bin/bash\n");
+    s.push_str("carol:x:1002:1002::/home/carol:/bin/sh\n");
+    s.push_str("dave:x:1003:1003::/home/dave:/bin/bash\n");
+    s.push_str("erin:x:1004:1004::/home/erin:/bin/bash\n");
+    s.push_str("frank:x:1005:1005::/home/frank:/bin/bash\n");
+    s.push_str("gina:x:1006:1006::/home/gina:/bin/bash\n");
+    s.push_str("henry:x:1007:1007::/home/henry:/bin/sh\n");
+    s.push_str("ivan:x:1008:1008:batch jobs:/home/ivan:/usr/sbin/nologin\n");
+    s.push_str("judy:x:1009:1009::/home/judy:/bin/bash\n");
+    s.push_str("kim:x:1010:1010::/home/kim:/bin/zsh\n");
+    s.push_str("liam:$1$Mn3vC8$WSq/FlpGHh0pPei.eEdY0/:1011:1011::/home/liam:/bin/sh\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("root:$6$rounds=1000$Rr0tS4lt$svsnhawktjKHBncB4Cf30ODH.vnalpMr7qoNw4FguG3B06mmLJ7tLmPVj0rfVAzm1KHbOuOJJjY/8jofw9V4C.:20400:0:99999:7:::\n");
+    s.push_str("daemon:*:20400:0:99999:7:::\n");
+    s.push_str("alice:$6$rounds=1000$Wq3vB7xk$DqbVzyjGkh2tPAmRTUMflyIlGFZJzuTKgmx4hewa.HwDZl6NEE02.QKvEY/yZVt8H/lTM2Ejk5gVJb71z7GLN.:20706:0:90:7:14::\n");
+    s.push_str("bob:$5$rounds=1000$Nf8sKe2p$TDzeg2Al9So/ul20/v0XlKrGi82uJzgTD45p4wR9R02:20656:1:90:7:::\n");
+    s.push_str("carol:$1$Hx9bQ2$Yda4efbbBnCJrfotRyDEQ0:0:0:99999:7:::\n");
+    s.push_str("dave:$6$rounds=1200$Dt5mZ0aQ$xZvL6GNEQyojIrwN.92XE11TIseS0aiiZhiekPaZwppEHeP98zOGMlZczLBmEEfD49Gc6fobsGZjUYr.YGe4U/:20641:0:90:7:30::\n");
+    s.push_str("erin:$5$rounds=1000$Jz1cR4yT$P5Pv6oSZ/Y8ZMOfc1wM1eu3VcDDzMrcQqG9xGzyL622:20541:0:90:7:14::\n");
+    s.push_str("frank:$1$Pk7wL2nV$J8YBgG2oyU/fh3mWWI4oz1:20700:0:99999:7::20730:\n");
+    s.push_str("gina:!$6$rounds=1000$Gt4hY6uE$txKVgub/AaINMjRPpmepO.uFh2HiCcuwst7AaKLH9oZruJTT7I4NMnluUty/hduPkTYkL6hrEN4K1VupcE4zk/:20600:0:99999:7:::\n");
+    s.push_str("henry::20650:0:99999:7:::\n");
+    s.push_str("ivan:*:20500:0:99999:7:::\n");
+    s.push_str("judy:$y$j9T$F5Jx5fExrKuPp53xLKQ..1$X3DX6M94c7o.9agCG9G317fhZg9SqC.5i5rd.RhAtQ7:20720:0:99999:7:::\n");
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("root:x:0:\n");
+    s.push_str("daemon:x:1:\n");
+    s.push_str("sudo:x:27:alice\n");
+    s.push_str("alice:x:1000:\n");
+    s.push_str("bob:x:1001:\n");
+    s.push_str("carol:x:1002:\n");
+    s.push_str("dave:x:1003:\n");
+    s.push_str("erin:x:1004:\n");
+    s.push_str("frank:x:1005:\n");
+    s.push_str("gina:x:1006:\n");
+    s.push_str("henry:x:1007:\n");
+    s.push_str("ivan:x:1008:\n");
+    s.push_str("judy:x:1009:\n");
+    s.push_str("kim:x:1010:\n");
+    s.push_str("liam:x:1011:\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("d root\n");
+    s.push_str("d home/ok\n");
+    s.push_str("d srv\n");
+    s.push_str("f bin/bash\n");
+    s.push_str("f bin/sh\n");
+    s
+}
+
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("root:x:0:0:root:/root:/bin/bash\n");
+    s.push_str("ok:x:1000:1000::/home/ok:/bin/bash\n");
+    s.push_str("truncated:x:1001:1001\n");
+    s.push_str("ok:x:1002:1000::/home/ok:/bin/bash\n");
+    s.push_str("badid:x:12a:1003::/srv:/bin/sh\n");
+    s.push_str("nogroup:x:1004:4444::/srv:/bin/sh\n");
+    s.push_str("nohome:x:1005:1000::/home/nohome:/bin/sh\n");
+    s.push_str("noshell:x:1006:1000::/srv:/bin/fish\n");
+    s.push_str("noshadow:x:1007:1000::/srv:/bin/sh\n");
+    s.push_str("\n");
+    s.push_str("future:x:1008:1000::/srv:/bin/sh\n");
+    s
+}
+
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("root:*:20400:0:99999:7:::\n");
+    s.push_str("ok:*:20400:0:99999:7:::\n");
+    s.push_str("nogroup:*:20400:0:99999:7:::\n");
+    s.push_str("nohome:*:20400:0:99999:7:::\n");
+    s.push_str("noshell:*:20400:0:99999:7:::\n");
+    s.push_str("orphan:*:20400:0:99999:7:::\n");
+    s.push_str("future:*:22000:0:99999:7:::\n");
+    s.push_str("badid:*:20400:0:99999:7:::\n");
+    s.push_str("torn:*:20400\n");
+    s
+}
+
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("root:x:0:\n");
+    s.push_str("ok:x:1000:\n");
+    s
+}
+
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("# web users\n");
+    s.push_str("alice:$apr1$Qw8eRt2y$WLyBSzyA4kwtMrJzO7vuF.\n");
+    s.push_str("bob:{SHA}5en6G6MezRroT3XKqkdPOmY/BfQ=\n");
+    s.push_str("carol:$1$Hx9bQ2$Yda4efbbBnCJrfotRyDEQ0\n");
+    s.push_str("dave:$6$rounds=1000$Wq3vB7xk$DqbVzyjGkh2tPAmRTUMflyIlGFZJzuTKgmx4hewa.HwDZl6NEE02.QKvEY/yZVt8H/lTM2Ejk5gVJb71z7GLN.\n");
+    s.push_str("erin:$2y$05$ReB5QpX1rhd7cAHP0KX4vO0mOnlQhB/tdTyR8D8PY0ezM8B0yWk6m\n");
+    s.push_str("frank:plaintext\n");
+    s
+}
+
+fn file_9() -> String {
+    let mut s = String.new();
+    s.push_str("# Account files: today is 2026-10-15, day 20741.\n");
+    s.push_str("pwck -r -R data/sys\n");
+    s.push_str("pwck -r -q -R data/sys\n");
+    s.push_str("pwck -r -R data/broken\n");
+    s.push_str("pwck -r -q -R data/broken\n");
+    s.push_str("# Aging.\n");
+    s.push_str("chage -R data/sys -l alice\n");
+    s.push_str("chage -R data/sys -l bob\n");
+    s.push_str("chage -R data/sys -l carol\n");
+    s.push_str("chage -R data/sys -l -i dave\n");
+    s.push_str("chage -R data/sys -l frank\n");
+    s.push_str("chage -R data/sys -l henry\n");
+    s.push_str("chage -R data/sys -l zed\n");
+    s.push_str("chage -R data/sys -l kim\n");
+    s.push_str("passwd -R data/sys -S alice\n");
+    s.push_str("passwd -R data/sys -S kim\n");
+    s.push_str("passwd -R data/sys -S liam\n");
+    s.push_str("passwd -R data/sys -S zed\n");
+    s.push_str("passwd -R data/sys -S -a\n");
+    s.push_str("# Logging in.\n");
+    s.push_str("login data/sys root rootpw\n");
+    s.push_str("login data/sys alice wonderland\n");
+    s.push_str("login data/sys carol wrongpass\n");
+    s.push_str("login data/sys bob builder42\n");
+    s.push_str("login data/sys carol pa55word\n");
+    s.push_str("login data/sys dave hunter2\n");
+    s.push_str("login data/sys erin letmein\n");
+    s.push_str("login data/sys frank s3cret\n");
+    s.push_str("login data/sys gina opensesame\n");
+    s.push_str("login data/sys henry anything\n");
+    s.push_str("login data/sys ivan x\n");
+    s.push_str("login data/sys daemon x\n");
+    s.push_str("login data/sys judy secret\n");
+    s.push_str("login data/sys kim x\n");
+    s.push_str("login data/sys liam tiger\n");
+    s.push_str("login data/sys zed x\n");
+    s.push_str("# Hashes.\n");
+    s.push_str("openssl passwd -1 -salt Hx9bQ2 pa55word\n");
+    s.push_str("openssl passwd -apr1 -salt Qw8eRt2y apache\n");
+    s.push_str("openssl passwd -1 -salt abcdefghijk long\n");
+    s.push_str("openssl passwd -5 -salt '' empty\n");
+    s.push_str("crypt builder42 '$5$rounds=1000$Nf8sKe2p$'\n");
+    s.push_str("crypt 'Hello world!' '$5$rounds=1000$saltstringsaltstring'\n");
+    s.push_str("crypt pw '$6$rounds=10$tiny'\n");
+    s.push_str("crypt pw '$1$abc'\n");
+    s.push_str("crypt pw '$9$what'\n");
+    s.push_str("# htpasswd files.\n");
+    s.push_str("htpasswd -vb data/htpasswd alice apache\n");
+    s.push_str("htpasswd -vb data/htpasswd alice wrong\n");
+    s.push_str("htpasswd -vb data/htpasswd bob secret\n");
+    s.push_str("htpasswd -vb data/htpasswd carol pa55word\n");
+    s.push_str("htpasswd -vb data/htpasswd dave wonderland\n");
+    s.push_str("htpasswd -vb data/htpasswd erin x\n");
+    s.push_str("htpasswd -vb data/htpasswd frank plaintext\n");
+    s.push_str("htpasswd -vb data/htpasswd zed x\n");
+    s.push_str("# Changing aging and locks.\n");
+    s.push_str("chage -R data/sys -d 2026-10-01 -M 60 -W 10 alice\n");
+    s.push_str("chage -R data/sys -l alice\n");
+    s.push_str("chage -R data/sys -E 2026-12-31 -I 5 bob\n");
+    s.push_str("chage -R data/sys -l bob\n");
+    s.push_str("chage -R data/sys -E -1 frank\n");
+    s.push_str("login data/sys frank s3cret\n");
+    s.push_str("chage -R data/sys -d 0 alice\n");
+    s.push_str("login data/sys alice wonderland\n");
+    s.push_str("chage -R data/sys -d 2026-02-30 -m 3 dave\n");
+    s.push_str("chage -R data/sys -l dave\n");
+    s.push_str("chage -R data/sys -M x alice\n");
+    s.push_str("chage -R data/sys -d garbage alice\n");
+    s.push_str("chage -R data/sys -m 5 zed\n");
+    s.push_str("passwd -R data/sys -l bob\n");
+    s.push_str("passwd -R data/sys -S bob\n");
+    s.push_str("login data/sys bob builder42\n");
+    s.push_str("passwd -R data/sys -u bob\n");
+    s.push_str("passwd -R data/sys -u ivan\n");
+    s.push_str("passwd -R data/sys -d carol\n");
+    s.push_str("passwd -R data/sys -S carol\n");
+    s.push_str("login data/sys carol whatever\n");
+    s.push_str("passwd -R data/sys -e erin\n");
+    s.push_str("passwd -R data/sys -S erin\n");
+    s.push_str("passwd -R data/sys -n 2 -x 45 -w 3 -i 9 root\n");
+    s.push_str("passwd -R data/sys -S root\n");
+    s.push_str("passwd -R data/sys -x many root\n");
+    s.push_str("passwd -R data/sys -l zed\n");
+    s.push_str("cat data/sys/etc/shadow\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("sys/layout.txt".to_string(), file_0()));
+    v.push(("sys/etc/passwd".to_string(), file_1()));
+    v.push(("sys/etc/shadow".to_string(), file_2()));
+    v.push(("sys/etc/group".to_string(), file_3()));
+    v.push(("broken/layout.txt".to_string(), file_4()));
+    v.push(("broken/etc/passwd".to_string(), file_5()));
+    v.push(("broken/etc/shadow".to_string(), file_6()));
+    v.push(("broken/etc/group".to_string(), file_7()));
+    v.push(("htpasswd".to_string(), file_8()));
+    v.push(("jobs.txt".to_string(), file_9()));
+    v
+}
+
+// The usage message shadow 4.13 prints after an error.
+fn chage_usage() -> String {
+    let mut s = String.new();
+    s.push_str("Usage: chage [options] LOGIN\n");
+    s.push_str("\n");
+    s.push_str("Options:\n");
+    s.push_str("  -d, --lastday LAST_DAY        set date of last password change to LAST_DAY\n");
+    s.push_str("  -E, --expiredate EXPIRE_DATE  set account expiration date to EXPIRE_DATE\n");
+    s.push_str("  -h, --help                    display this help message and exit\n");
+    s.push_str("  -i, --iso8601                 use YYYY-MM-DD when printing dates\n");
+    s.push_str("  -I, --inactive INACTIVE       set password inactive after expiration\n");
+    s.push_str("                                to INACTIVE\n");
+    s.push_str("  -l, --list                    show account aging information\n");
+    s.push_str("  -m, --mindays MIN_DAYS        set minimum number of days before password\n");
+    s.push_str("                                change to MIN_DAYS\n");
+    s.push_str("  -M, --maxdays MAX_DAYS        set maximum number of days before password\n");
+    s.push_str("                                change to MAX_DAYS\n");
+    s.push_str("  -R, --root CHROOT_DIR         directory to chroot into\n");
+    s.push_str("  -W, --warndays WARN_DAYS      set expiration warning days to WARN_DAYS\n");
+    s.push_str("\n");
+    s
+}
+
+// The usage message shadow 4.13 prints after an error.
+fn passwd_usage() -> String {
+    let mut s = String.new();
+    s.push_str("Usage: passwd [options] [LOGIN]\n");
+    s.push_str("\n");
+    s.push_str("Options:\n");
+    s.push_str("  -a, --all                     report password status on all accounts\n");
+    s.push_str("  -d, --delete                  delete the password for the named account\n");
+    s.push_str("  -e, --expire                  force expire the password for the named account\n");
+    s.push_str("  -h, --help                    display this help message and exit\n");
+    s.push_str("  -k, --keep-tokens             change password only if expired\n");
+    s.push_str("  -i, --inactive INACTIVE       set password inactive after expiration\n");
+    s.push_str("                                to INACTIVE\n");
+    s.push_str("  -l, --lock                    lock the password of the named account\n");
+    s.push_str("  -n, --mindays MIN_DAYS        set minimum number of days before password\n");
+    s.push_str("                                change to MIN_DAYS\n");
+    s.push_str("  -q, --quiet                   quiet mode\n");
+    s.push_str("  -r, --repository REPOSITORY   change password in REPOSITORY repository\n");
+    s.push_str("  -R, --root CHROOT_DIR         directory to chroot into\n");
+    s.push_str("  -S, --status                  report password status on the named account\n");
+    s.push_str("  -u, --unlock                  unlock the password of the named account\n");
+    s.push_str("  -w, --warndays WARN_DAYS      set expiration warning days to WARN_DAYS\n");
+    s.push_str("  -x, --maxdays MAX_DAYS        set maximum number of days before password\n");
+    s.push_str("                                change to MAX_DAYS\n");
+    s.push_str("\n");
+    s
+}
+
+
+fn write_data() -> Result[(), String] {
+    for (name, text) in data_files().into_iter() {
+        let path = f"data/{name}";
+        let cut = path.len() - before(reverse(path), b'/').len() - 1;
+        let dir = slice(path, 0, cut);
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn reverse(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        v.push(b[i]);
+        i -= 1;
+    }
+    from_bytes(v)
+}
+
+// The directories and empty programs pwck looks for in each root.
+fn build_roots() -> Result[(), String] {
+    for r in ["sys", "broken"] {
+        for line in read_lines(f"data/{r}/layout.txt") {
+            let w = split_on(line, b' ');
+            let full = f"data/{r}/{w[1]}";
+            if w[0] == "d" {
+                if let Err(e) = fs.create_dir_all(full.clone()) {
+                    return Err(f"cannot create {full}: {e}");
+                }
+            } else {
+                let cut = full.len() - before(reverse(full), b'/').len() - 1;
+                let dir = slice(full, 0, cut);
+                if let Err(e) = fs.create_dir_all(dir.clone()) {
+                    return Err(f"cannot create {dir}: {e}");
+                }
+                if let Err(e) = fs.write(full.clone(), "".to_string()) {
+                    return Err(f"cannot write {full}: {e}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn run_line(job: mut ref Job, line: Str) {
+    let w = shell_words(line);
+    let args: Vec[String] = w[1..].to_vec();
+    if w[0] == "pwck" {
+        pwck(mut job, args);
+    } else if w[0] == "chage" {
+        chage(mut job, args);
+    } else if w[0] == "passwd" {
+        passwd(mut job, args);
+    } else if w[0] == "login" {
+        login(mut job, args);
+    } else if w[0] == "openssl" {
+        openssl(mut job, args);
+    } else if w[0] == "crypt" {
+        job.out.push_str(f"{crypt(args[0], args[1])}\n");
+    } else if w[0] == "htpasswd" {
+        htpasswd(mut job, args);
+    } else if w[0] == "cat" {
+        job.out.push_str(fs.read_to_string(args[0].clone()).unwrap_or(String.new()));
+    }
+}
+
+fn run() -> Result[(), String] {
+    if fs.symlink_metadata("data".to_string()).is_ok() {
+        if let Err(e) = fs.remove_dir_all("data".to_string()) {
+            return Err(f"cannot remove data: {e}");
+        }
+    }
+    write_data()?;
+    build_roots()?;
+    for line in read_lines("data/jobs.txt") {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let mut job = Job { out: String.new(), err: String.new(), status: 0 };
+        run_line(mut job, line);
+        let mut out = f"$ {line}\n";
+        out.push_str(job.out);
+        out.push_str(job.err);
+        if job.status != 0 {
+            out.push_str(f"[exit status {job.status}]\n");
+        }
+        println(out);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}

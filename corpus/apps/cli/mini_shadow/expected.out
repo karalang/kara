@@ -1,0 +1,450 @@
+$ pwck -r -R data/sys
+user 'ivan': directory '/home/ivan' does not exist
+user 'kim': program '/bin/zsh' does not exist
+no matching password file entry in /etc/shadow
+add user 'kim' in /etc/shadow? No
+no matching password file entry in /etc/shadow
+add user 'liam' in /etc/shadow? No
+pwck: no changes
+[exit status 2]
+
+$ pwck -r -q -R data/sys
+no matching password file entry in /etc/shadow
+add user 'kim' in /etc/shadow? No
+no matching password file entry in /etc/shadow
+add user 'liam' in /etc/shadow? No
+pwck: no changes
+[exit status 2]
+
+$ pwck -r -R data/broken
+duplicate password entry
+delete line 'ok:x:1000:1000::/home/ok:/bin/bash'? No
+invalid password file entry
+delete line 'truncated:x:1001:1001'? No
+duplicate password entry
+delete line 'ok:x:1002:1000::/home/ok:/bin/bash'? No
+invalid password file entry
+delete line 'badid:x:12a:1003::/srv:/bin/sh'? No
+user 'nogroup': no group 4444
+user 'nohome': directory '/home/nohome' does not exist
+user 'noshell': program '/bin/fish' does not exist
+no matching password file entry in /etc/shadow
+add user 'noshadow' in /etc/shadow? No
+invalid password file entry
+delete line ''? No
+no matching password file entry in /etc/passwd
+delete line 'orphan:*:20400:0:99999:7:::'? No
+user future: last password change in the future
+no matching password file entry in /etc/passwd
+delete line 'badid:*:20400:0:99999:7:::'? No
+invalid shadow password file entry
+delete line 'torn:*:20400'? No
+pwck: no changes
+[exit status 2]
+
+$ pwck -r -q -R data/broken
+duplicate password entry
+delete line 'ok:x:1000:1000::/home/ok:/bin/bash'? No
+invalid password file entry
+delete line 'truncated:x:1001:1001'? No
+duplicate password entry
+delete line 'ok:x:1002:1000::/home/ok:/bin/bash'? No
+invalid password file entry
+delete line 'badid:x:12a:1003::/srv:/bin/sh'? No
+no matching password file entry in /etc/shadow
+add user 'noshadow' in /etc/shadow? No
+invalid password file entry
+delete line ''? No
+no matching password file entry in /etc/passwd
+delete line 'orphan:*:20400:0:99999:7:::'? No
+no matching password file entry in /etc/passwd
+delete line 'badid:*:20400:0:99999:7:::'? No
+invalid shadow password file entry
+delete line 'torn:*:20400'? No
+pwck: no changes
+[exit status 2]
+
+$ chage -R data/sys -l alice
+Last password change					: Sep 10, 2026
+Password expires					: Dec 09, 2026
+Password inactive					: Dec 23, 2026
+Account expires						: never
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 90
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -l bob
+Last password change					: Jul 22, 2026
+Password expires					: Oct 20, 2026
+Password inactive					: never
+Account expires						: never
+Minimum number of days between password change		: 1
+Maximum number of days between password change		: 90
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -l carol
+Last password change					: password must be changed
+Password expires					: password must be changed
+Password inactive					: password must be changed
+Account expires						: never
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 99999
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -l -i dave
+Last password change					: 2026-07-07
+Password expires					: 2026-10-05
+Password inactive					: 2026-11-04
+Account expires						: never
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 90
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -l frank
+Last password change					: Sep 04, 2026
+Password expires					: never
+Password inactive					: never
+Account expires						: Oct 04, 2026
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 99999
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -l henry
+Last password change					: Jul 16, 2026
+Password expires					: never
+Password inactive					: never
+Account expires						: never
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 99999
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -l zed
+chage: user 'zed' does not exist in /etc/passwd
+[exit status 1]
+
+$ chage -R data/sys -l kim
+Last password change					: never
+Password expires					: never
+Password inactive					: never
+Account expires						: never
+Minimum number of days between password change		: -1
+Maximum number of days between password change		: -1
+Number of days of warning before password expires	: -1
+
+$ passwd -R data/sys -S alice
+alice P 2026-09-10 0 90 7 14
+
+$ passwd -R data/sys -S kim
+kim P
+
+$ passwd -R data/sys -S liam
+liam P
+
+$ passwd -R data/sys -S zed
+passwd: user 'zed' does not exist
+[exit status 1]
+
+$ passwd -R data/sys -S -a
+root P 2025-11-08 0 99999 7 -1
+daemon L 2025-11-08 0 99999 7 -1
+alice P 2026-09-10 0 90 7 14
+bob P 2026-07-22 1 90 7 -1
+carol P 1970-01-01 0 99999 7 -1
+dave P 2026-07-07 0 90 7 30
+erin P 2026-03-29 0 90 7 14
+frank P 2026-09-04 0 99999 7 -1
+gina L 2026-05-27 0 99999 7 -1
+henry NP 2026-07-16 0 99999 7 -1
+ivan L 2026-02-16 0 99999 7 -1
+judy P 2026-09-24 0 99999 7 -1
+kim P
+liam P
+
+$ login data/sys root rootpw
+Welcome, root (home /root, shell /bin/bash)
+
+$ login data/sys alice wonderland
+Welcome, alice (home /home/alice, shell /bin/bash)
+
+$ login data/sys carol wrongpass
+Login incorrect
+[exit status 1]
+
+$ login data/sys bob builder42
+Warning: your password will expire in 5 days.
+Welcome, bob (home /home/bob, shell /bin/bash)
+
+$ login data/sys carol pa55word
+You are required to change your password immediately (administrator enforced).
+[exit status 1]
+
+$ login data/sys dave hunter2
+You are required to change your password immediately (password expired).
+[exit status 1]
+
+$ login data/sys erin letmein
+Your account has expired; please contact your system administrator.
+[exit status 1]
+
+$ login data/sys frank s3cret
+Your account has expired; please contact your system administrator.
+[exit status 1]
+
+$ login data/sys gina opensesame
+Login incorrect
+[exit status 1]
+
+$ login data/sys henry anything
+Welcome, henry (home /home/henry, shell /bin/sh)
+
+$ login data/sys ivan x
+Login incorrect
+[exit status 1]
+
+$ login data/sys daemon x
+Login incorrect
+[exit status 1]
+
+$ login data/sys judy secret
+Login incorrect
+login: yescrypt hashes are not supported
+[exit status 1]
+
+$ login data/sys kim x
+Login incorrect
+[exit status 1]
+
+$ login data/sys liam tiger
+Welcome, liam (home /home/liam, shell /bin/sh)
+
+$ login data/sys zed x
+Login incorrect
+[exit status 1]
+
+$ openssl passwd -1 -salt Hx9bQ2 pa55word
+$1$Hx9bQ2$Yda4efbbBnCJrfotRyDEQ0
+
+$ openssl passwd -apr1 -salt Qw8eRt2y apache
+$apr1$Qw8eRt2y$WLyBSzyA4kwtMrJzO7vuF.
+
+$ openssl passwd -1 -salt abcdefghijk long
+$1$abcdefgh$2qosXWYSxPZIeZNsDR9pk/
+
+$ openssl passwd -5 -salt '' empty
+<NULL>
+
+$ crypt builder42 '$5$rounds=1000$Nf8sKe2p$'
+$5$rounds=1000$Nf8sKe2p$TDzeg2Al9So/ul20/v0XlKrGi82uJzgTD45p4wR9R02
+
+$ crypt 'Hello world!' '$5$rounds=1000$saltstringsaltstring'
+$5$rounds=1000$saltstringsaltst$cSv7nWzgUjd5.cVg4yn64CGOTkcQl1wXTNvW1OSLbZ0
+
+$ crypt pw '$6$rounds=10$tiny'
+*0
+
+$ crypt pw '$1$abc'
+$1$abc$Kb85XxsXB.VXinPhbS4431
+
+$ crypt pw '$9$what'
+*0
+
+$ htpasswd -vb data/htpasswd alice apache
+Password for user alice correct.
+
+$ htpasswd -vb data/htpasswd alice wrong
+password verification failed
+[exit status 3]
+
+$ htpasswd -vb data/htpasswd bob secret
+Password for user bob correct.
+
+$ htpasswd -vb data/htpasswd carol pa55word
+Password for user carol correct.
+
+$ htpasswd -vb data/htpasswd dave wonderland
+Password for user dave correct.
+
+$ htpasswd -vb data/htpasswd erin x
+htpasswd: bcrypt hashes are not supported
+[exit status 3]
+
+$ htpasswd -vb data/htpasswd frank plaintext
+password verification failed
+[exit status 3]
+
+$ htpasswd -vb data/htpasswd zed x
+User zed not found
+[exit status 6]
+
+$ chage -R data/sys -d 2026-10-01 -M 60 -W 10 alice
+
+$ chage -R data/sys -l alice
+Last password change					: Oct 01, 2026
+Password expires					: Nov 30, 2026
+Password inactive					: Dec 14, 2026
+Account expires						: never
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 60
+Number of days of warning before password expires	: 10
+
+$ chage -R data/sys -E 2026-12-31 -I 5 bob
+
+$ chage -R data/sys -l bob
+Last password change					: Jul 22, 2026
+Password expires					: Oct 20, 2026
+Password inactive					: Oct 25, 2026
+Account expires						: Dec 31, 2026
+Minimum number of days between password change		: 1
+Maximum number of days between password change		: 90
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -E -1 frank
+
+$ login data/sys frank s3cret
+Welcome, frank (home /home/frank, shell /bin/bash)
+
+$ chage -R data/sys -d 0 alice
+
+$ login data/sys alice wonderland
+You are required to change your password immediately (administrator enforced).
+[exit status 1]
+
+$ chage -R data/sys -d 2026-02-30 -m 3 dave
+
+$ chage -R data/sys -l dave
+Last password change					: Mar 02, 2026
+Password expires					: May 31, 2026
+Password inactive					: Jun 30, 2026
+Account expires						: never
+Minimum number of days between password change		: 3
+Maximum number of days between password change		: 90
+Number of days of warning before password expires	: 7
+
+$ chage -R data/sys -M x alice
+chage: invalid numeric argument 'x'
+Usage: chage [options] LOGIN
+
+Options:
+  -d, --lastday LAST_DAY        set date of last password change to LAST_DAY
+  -E, --expiredate EXPIRE_DATE  set account expiration date to EXPIRE_DATE
+  -h, --help                    display this help message and exit
+  -i, --iso8601                 use YYYY-MM-DD when printing dates
+  -I, --inactive INACTIVE       set password inactive after expiration
+                                to INACTIVE
+  -l, --list                    show account aging information
+  -m, --mindays MIN_DAYS        set minimum number of days before password
+                                change to MIN_DAYS
+  -M, --maxdays MAX_DAYS        set maximum number of days before password
+                                change to MAX_DAYS
+  -R, --root CHROOT_DIR         directory to chroot into
+  -W, --warndays WARN_DAYS      set expiration warning days to WARN_DAYS
+
+[exit status 2]
+
+$ chage -R data/sys -d garbage alice
+chage: invalid date 'garbage'
+Usage: chage [options] LOGIN
+
+Options:
+  -d, --lastday LAST_DAY        set date of last password change to LAST_DAY
+  -E, --expiredate EXPIRE_DATE  set account expiration date to EXPIRE_DATE
+  -h, --help                    display this help message and exit
+  -i, --iso8601                 use YYYY-MM-DD when printing dates
+  -I, --inactive INACTIVE       set password inactive after expiration
+                                to INACTIVE
+  -l, --list                    show account aging information
+  -m, --mindays MIN_DAYS        set minimum number of days before password
+                                change to MIN_DAYS
+  -M, --maxdays MAX_DAYS        set maximum number of days before password
+                                change to MAX_DAYS
+  -R, --root CHROOT_DIR         directory to chroot into
+  -W, --warndays WARN_DAYS      set expiration warning days to WARN_DAYS
+
+[exit status 2]
+
+$ chage -R data/sys -m 5 zed
+chage: user 'zed' does not exist in /etc/passwd
+[exit status 1]
+
+$ passwd -R data/sys -l bob
+passwd: password changed.
+
+$ passwd -R data/sys -S bob
+bob L 2026-07-22 1 90 7 5
+
+$ login data/sys bob builder42
+Login incorrect
+[exit status 1]
+
+$ passwd -R data/sys -u bob
+passwd: password changed.
+
+$ passwd -R data/sys -u ivan
+passwd: password changed.
+
+$ passwd -R data/sys -d carol
+passwd: password changed.
+
+$ passwd -R data/sys -S carol
+carol NP 1970-01-01 0 99999 7 -1
+
+$ login data/sys carol whatever
+You are required to change your password immediately (administrator enforced).
+[exit status 1]
+
+$ passwd -R data/sys -e erin
+passwd: password changed.
+
+$ passwd -R data/sys -S erin
+erin P 1970-01-01 0 90 7 14
+
+$ passwd -R data/sys -n 2 -x 45 -w 3 -i 9 root
+passwd: password changed.
+
+$ passwd -R data/sys -S root
+root P 2025-11-08 2 45 3 9
+
+$ passwd -R data/sys -x many root
+passwd: invalid numeric argument 'many'
+Usage: passwd [options] [LOGIN]
+
+Options:
+  -a, --all                     report password status on all accounts
+  -d, --delete                  delete the password for the named account
+  -e, --expire                  force expire the password for the named account
+  -h, --help                    display this help message and exit
+  -k, --keep-tokens             change password only if expired
+  -i, --inactive INACTIVE       set password inactive after expiration
+                                to INACTIVE
+  -l, --lock                    lock the password of the named account
+  -n, --mindays MIN_DAYS        set minimum number of days before password
+                                change to MIN_DAYS
+  -q, --quiet                   quiet mode
+  -r, --repository REPOSITORY   change password in REPOSITORY repository
+  -R, --root CHROOT_DIR         directory to chroot into
+  -S, --status                  report password status on the named account
+  -u, --unlock                  unlock the password of the named account
+  -w, --warndays WARN_DAYS      set expiration warning days to WARN_DAYS
+  -x, --maxdays MAX_DAYS        set maximum number of days before password
+                                change to MAX_DAYS
+
+[exit status 6]
+
+$ passwd -R data/sys -l zed
+passwd: user 'zed' does not exist
+[exit status 1]
+
+$ cat data/sys/etc/shadow
+root:$6$rounds=1000$Rr0tS4lt$svsnhawktjKHBncB4Cf30ODH.vnalpMr7qoNw4FguG3B06mmLJ7tLmPVj0rfVAzm1KHbOuOJJjY/8jofw9V4C.:20400:2:45:3:9::
+daemon:*:20400:0:99999:7:::
+alice:$6$rounds=1000$Wq3vB7xk$DqbVzyjGkh2tPAmRTUMflyIlGFZJzuTKgmx4hewa.HwDZl6NEE02.QKvEY/yZVt8H/lTM2Ejk5gVJb71z7GLN.:0:0:60:10:14::
+bob:$5$rounds=1000$Nf8sKe2p$TDzeg2Al9So/ul20/v0XlKrGi82uJzgTD45p4wR9R02:20656:1:90:7:5:20818:
+carol::0:0:99999:7:::
+dave:$6$rounds=1200$Dt5mZ0aQ$xZvL6GNEQyojIrwN.92XE11TIseS0aiiZhiekPaZwppEHeP98zOGMlZczLBmEEfD49Gc6fobsGZjUYr.YGe4U/:20514:3:90:7:30::
+erin:$5$rounds=1000$Jz1cR4yT$P5Pv6oSZ/Y8ZMOfc1wM1eu3VcDDzMrcQqG9xGzyL622:0:0:90:7:14::
+frank:$1$Pk7wL2nV$J8YBgG2oyU/fh3mWWI4oz1:20700:0:99999:7:::
+gina:!$6$rounds=1000$Gt4hY6uE$txKVgub/AaINMjRPpmepO.uFh2HiCcuwst7AaKLH9oZruJTT7I4NMnluUty/hduPkTYkL6hrEN4K1VupcE4zk/:20600:0:99999:7:::
+henry::20650:0:99999:7:::
+ivan:*:20500:0:99999:7:::
+judy:$y$j9T$F5Jx5fExrKuPp53xLKQ..1$X3DX6M94c7o.9agCG9G317fhZg9SqC.5i5rd.RhAtQ7:20720:0:99999:7:::
+
