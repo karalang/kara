@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 265 |
 | false-positive | 210 |
 | other | 173 |
-| perf | 170 |
+| perf | 171 |
 | diagnostics | 164 |
 | crash | 122 |
 | soundness | 111 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2922 |
+| codegen | 2923 |
 | interp | 941 |
 | typecheck | 450 |
 | other | 115 |
 | ownership | 109 |
+| runtime | 76 |
 | cli | 76 |
-| runtime | 75 |
 | parser | 68 |
 | autopar | 59 |
 | resolver | 42 |
@@ -208,6 +208,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-6 | 2026-10-18 | typecheck | low | An `if` whose one branch is a string literal and whose other branch is a `Str` is refused, `let a = if c { "-" } else { name.as_str() };` failing `karac check` and the MIR typecheck with "if/else branches have incompatible types: 'String' and 'StringSlice'" (either branch order); design.md § String literals says a literal takes `Str` the way an integer literal takes its expected type, and B-2026-10-15-52 made an integer literal branch take its sibling's type, but a string literal branch still does not | — |
 | B-2026-10-18-7 | 2026-10-18 | ownership | medium | `karac check` refuses `for p in 0..4 { let a = p + 1; let b = p + 2; }` with "value 'p' moved here, used again here" when an earlier binding named `p`, already out of scope, was a `Vec[i64]`: the range loop's `p` is treated as non-Copy; with no earlier `p`, or with `let p = 3` in place of the loop, it passes | — |
 | B-2026-10-18-8 | 2026-10-18 | lexer | low | The lexer rejects the `\xHH` escape in string, f-string and char literals (`"A\x42C"` is `error[parse]: Unknown escape sequence: \x`), although design.md § Literals lists `\xHH` (a hex byte) among the escapes of text literals | — |
+| B-2026-10-18-9 | 2026-10-18 | codegen+runtime | medium | `Vec.binary_search` on the MIR compiled backend is O(n) per call, not O(log n): `karac_mir_bsearch` (runtime/src/mir.rs) builds a fresh `Vec<usize>` of the indices 0..n on every call and binary-searches that; kata 699's bench spends 64% of its instructions there and runs 2.6x slower than legacy | — |
 
 ### Relocated
 
