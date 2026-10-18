@@ -3187,3 +3187,66 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_concrete_impl_on_a_generic_type_keeps_its_args() {
+    // B-2026-09-27-115 / B-2026-10-01-48: inside `impl G[R]` the checker
+    // erased `self` to the bare `G`, so a payload binding was the declared
+    // `T` (`t.id`, `v.len()` and `let w = v` were refused) and `self.n()`
+    // missed the methods registered on `G1[String]`. The receiver rebind,
+    // forward and hand-back spellings each drop the payload once.
+    let src = r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+enum G[T] { X(T), Z }
+impl G[R] {
+    fn peek(ref self) -> i64 { match self { G.X(t) => t.id, G.Z => -1 } }
+    fn reb(own self) -> i64 {
+        let e = self;
+        match e { G.X(t) => { return t.id; } G.Z => { return 0; } }
+    }
+    fn fwd(own self) -> i64 { self.reb() + 100 }
+    fn id(own self) -> G[R] { return self }
+}
+enum G1[T] { A(T), B }
+impl G1[String] {
+    fn n(ref self) -> i64 {
+        match self { G1.A(v) => { return v.len() as i64; } G1.B => { return -1; } }
+    }
+    fn twice(ref self) -> i64 { self.n() * 2 }
+    fn m(own self) -> i64 {
+        match self { G1.A(v) => { let w = v; println(w); return 5; } G1.B => { return 0; } }
+    }
+}
+struct Bx[T] { v: T }
+impl Bx[String] {
+    fn n(ref self) -> i64 { self.v.len() as i64 }
+    fn twice(ref self) -> i64 { self.n() * 2 }
+}
+fn main() {
+    let h: G1[String] = G1.A("abc".to_string());
+    let z: G1[String] = G1.B;
+    println(f"{h.n()} {h.twice()} {z.twice()}");
+    let c: G1[String] = G1.A(f"s-{1}");
+    println(f"r={c.m()}");
+    let b = Bx { v: "hey".to_string() };
+    println(f"{b.n()} {b.twice()}");
+    let a: G[R] = G.X(R { id: 1, name: "a".to_string() });
+    println(f"{a.reb()}");
+    let e: G[R] = G.X(R { id: 2, name: "e".to_string() });
+    println(f"{e.fwd()}");
+    let d = G.X(R { id: 3, name: "d".to_string() }).id();
+    println(f"{d.peek()}");
+    let y: G[R] = G.Z;
+    println(f"{y.fwd()}");
+}
+"#;
+    let want = "3 6 -2\ns-1\nr=5\n3 6\ndrop a\n1\ndrop e\n102\n3\n100\ndrop d\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

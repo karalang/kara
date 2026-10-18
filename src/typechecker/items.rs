@@ -3755,6 +3755,33 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     lowered.clone()
                 }
+                // B-2026-09-27-115 / B-2026-10-01-48 — a CONCRETE impl on a
+                // user generic type (`impl G[String]`, `impl Bx[R]`) keeps
+                // its args on the v2 pipelines. There is no impl param for
+                // the erasure to protect, and the body needs them: erased to
+                // `G`, a payload binding is the declared `T` (no `len`, no
+                // field, `let w = v` cannot infer it) and `self.n()` misses
+                // the methods registered on `G[String]`. Legacy codegen's
+                // receiver protocol double-frees the spellings this makes
+                // reachable, so the legacy pipeline keeps the erasure.
+                Type::Named { name, args }
+                    if (self.cli_lint_overrides.strict_core
+                        || self.library_methods_from_source)
+                        && !args.is_empty()
+                        && args.iter().all(type_is_fully_concrete)
+                        && (self
+                            .env
+                            .enums
+                            .get(name)
+                            .is_some_and(|e| e.generic_params.len() == args.len())
+                            || self
+                                .env
+                                .structs
+                                .get(name)
+                                .is_some_and(|s| s.generic_params.len() == args.len())) =>
+                {
+                    lowered.clone()
+                }
                 _ => Type::Named {
                     name: type_name.clone(),
                     args: Vec::new(),
