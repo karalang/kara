@@ -13818,7 +13818,8 @@ fn test_fixed_array_read_methods_are_modelled() {
 #[test]
 fn test_absent_fixed_array_methods_rejected_with_iter_hint() {
     // B-2026-07-17-19: methods the backends don't run on a fixed array
-    // (`to_vec`/`rev`/typos) are rejected, not silently typed Error; a direct
+    // (`rev`/typos) are rejected (`to_vec` is a Slice method an Array has,
+    // B-2026-10-15-60), not silently typed Error; a direct
     // iterator adaptor gets the actionable `.iter()` hint (arrays are iterable).
     // `to_vec` left this list with B-2026-10-15-60: an array reaches
     // `Slice[T]`'s read methods (design.md § Method resolution), and both v2
