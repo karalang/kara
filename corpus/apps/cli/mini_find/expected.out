@@ -1,0 +1,651 @@
+$ find data/proj
+data/proj
+data/proj/.git
+data/proj/.git/HEAD
+data/proj/.git/config
+data/proj/.git/refs
+data/proj/Makefile
+data/proj/README.md
+data/proj/broken
+data/proj/build
+data/proj/build/app
+data/proj/build/cache
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/docs
+data/proj/docs/Empty.txt
+data/proj/docs/guide.txt
+data/proj/docs/img
+data/proj/docs/img/logo.png
+data/proj/docs/img/photo.png
+data/proj/docs/notes.TXT
+data/proj/docs-link
+data/proj/latest
+data/proj/scripts
+data/proj/scripts/deploy.sh
+data/proj/scripts/test.sh
+data/proj/space name.txt
+data/proj/src
+data/proj/src/Version.h
+data/proj/src/main.c
+data/proj/src/old
+data/proj/src/old/legacy.c
+data/proj/src/readme-link
+data/proj/src/util.c
+data/proj/src/util.h
+data/proj/tmp
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj -maxdepth 1
+data/proj
+data/proj/.git
+data/proj/Makefile
+data/proj/README.md
+data/proj/broken
+data/proj/build
+data/proj/docs
+data/proj/docs-link
+data/proj/latest
+data/proj/scripts
+data/proj/space name.txt
+data/proj/src
+data/proj/tmp
+
+$ find data/proj/src/ -maxdepth 1
+data/proj/src/
+data/proj/src/Version.h
+data/proj/src/main.c
+data/proj/src/old
+data/proj/src/readme-link
+data/proj/src/util.c
+data/proj/src/util.h
+
+$ find data/proj//docs -maxdepth 1 -name img
+data/proj//docs/img
+
+$ find data/proj/src data/proj/docs -maxdepth 0
+data/proj/src
+data/proj/docs
+
+$ find data/proj/missing data/proj/Makefile
+data/proj/Makefile
+find: 'data/proj/missing': No such file or directory
+[exit status 1]
+
+$ find data/proj -mindepth 2 -maxdepth 2 -type d
+data/proj/.git/refs
+data/proj/build/cache
+data/proj/docs/img
+data/proj/src/old
+
+$ find data/proj -depth -type d
+data/proj/.git/refs
+data/proj/.git
+data/proj/build/cache
+data/proj/build
+data/proj/docs/img
+data/proj/docs
+data/proj/scripts
+data/proj/src/old
+data/proj/src
+data/proj/tmp
+data/proj
+
+$ find data/proj -name '*.c'
+data/proj/src/main.c
+data/proj/src/old/legacy.c
+data/proj/src/util.c
+
+$ find data/proj -iname '*.txt'
+data/proj/docs/Empty.txt
+data/proj/docs/guide.txt
+data/proj/docs/notes.TXT
+data/proj/space name.txt
+
+$ find data/proj -name '[A-Z]*'
+data/proj/.git/HEAD
+data/proj/Makefile
+data/proj/README.md
+data/proj/docs/Empty.txt
+data/proj/src/Version.h
+
+$ find data/proj -name '[!a-z]*' -maxdepth 1
+data/proj/.git
+data/proj/Makefile
+data/proj/README.md
+
+$ find data/proj -name '*[0-9]*' -o -name '\.*'
+data/proj/.git
+
+$ find data/proj -name 'space name.txt' -o -name '*\**'
+data/proj/space name.txt
+
+$ find data/proj -path '*/src/*' -name '*.h'
+data/proj/src/Version.h
+data/proj/src/util.h
+
+$ find data/proj -ipath '*/DOCS/*.png'
+data/proj/docs/img/logo.png
+data/proj/docs/img/photo.png
+
+$ find data/proj -wholename 'data/proj/b*'
+data/proj/broken
+data/proj/build
+data/proj/build/app
+data/proj/build/cache
+data/proj/build/main.o
+data/proj/build/util.o
+
+$ find data/proj -lname '*.md'
+data/proj/src/readme-link
+
+$ find data/proj -ilname 'DOC*'
+data/proj/docs-link
+
+$ find data/proj -type d
+data/proj
+data/proj/.git
+data/proj/.git/refs
+data/proj/build
+data/proj/build/cache
+data/proj/docs
+data/proj/docs/img
+data/proj/scripts
+data/proj/src
+data/proj/src/old
+data/proj/tmp
+
+$ find data/proj -type l -printf '%p -> %l\n'
+data/proj/broken -> missing.txt
+data/proj/docs-link -> docs
+data/proj/latest -> build/app
+data/proj/src/readme-link -> ../README.md
+
+$ find data/proj -type f,l -name '*e*'
+data/proj/Makefile
+data/proj/broken
+data/proj/docs/guide.txt
+data/proj/docs/notes.TXT
+data/proj/latest
+data/proj/scripts/deploy.sh
+data/proj/scripts/test.sh
+data/proj/space name.txt
+data/proj/src/Version.h
+data/proj/src/old/legacy.c
+data/proj/src/readme-link
+
+$ find data/proj -xtype l
+data/proj/broken
+
+$ find data/proj -xtype d
+data/proj
+data/proj/.git
+data/proj/.git/refs
+data/proj/build
+data/proj/build/cache
+data/proj/docs
+data/proj/docs/img
+data/proj/docs-link
+data/proj/scripts
+data/proj/src
+data/proj/src/old
+data/proj/tmp
+
+$ find -L data/proj -type l
+data/proj/broken
+
+$ find -L data/proj -name '*.png'
+data/proj/docs/img/logo.png
+data/proj/docs/img/photo.png
+data/proj/docs-link/img/logo.png
+data/proj/docs-link/img/photo.png
+
+$ find -L data/proj -maxdepth 1 -printf '%y%Y %p\n'
+dd data/proj
+dd data/proj/.git
+ff data/proj/Makefile
+ff data/proj/README.md
+lN data/proj/broken
+dd data/proj/build
+dd data/proj/docs
+dd data/proj/docs-link
+ff data/proj/latest
+dd data/proj/scripts
+ff data/proj/space name.txt
+dd data/proj/src
+dd data/proj/tmp
+
+$ find data/proj -maxdepth 1 -printf '%y%Y %p\n'
+dd data/proj
+dd data/proj/.git
+ff data/proj/Makefile
+ff data/proj/README.md
+lN data/proj/broken
+dd data/proj/build
+dd data/proj/docs
+ld data/proj/docs-link
+lf data/proj/latest
+dd data/proj/scripts
+ff data/proj/space name.txt
+dd data/proj/src
+dd data/proj/tmp
+
+$ find -H data/proj/docs-link -name '*.png'
+data/proj/docs-link/img/logo.png
+data/proj/docs-link/img/photo.png
+
+$ find data/proj/docs-link -name '*.png'
+
+$ find data/proj -type f -size +2k -printf '%s %p\n'
+5321 data/proj/build/app
+2600 data/proj/build/util.o
+3075 data/proj/docs/guide.txt
+2100 data/proj/docs/img/logo.png
+1048577 data/proj/docs/img/photo.png
+4100 data/proj/src/old/legacy.c
+2049 data/proj/src/util.c
+
+$ find data/proj -type f -size -1k
+data/proj/docs/Empty.txt
+data/proj/tmp/b.tmp
+
+$ find data/proj -type f -size 1
+data/proj/.git/HEAD
+data/proj/.git/config
+data/proj/Makefile
+data/proj/scripts/deploy.sh
+data/proj/scripts/test.sh
+data/proj/space name.txt
+data/proj/src/util.h
+data/proj/tmp/a.tmp
+
+$ find data/proj -type f -size 2 -o -type f -size 1M
+data/proj/.git/HEAD
+data/proj/.git/config
+data/proj/Makefile
+data/proj/README.md
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/docs/guide.txt
+data/proj/docs/img/logo.png
+data/proj/docs/notes.TXT
+data/proj/scripts/deploy.sh
+data/proj/scripts/test.sh
+data/proj/space name.txt
+data/proj/src/Version.h
+data/proj/src/main.c
+data/proj/src/old/legacy.c
+data/proj/src/util.c
+data/proj/src/util.h
+data/proj/tmp/a.tmp
+
+$ find data/proj -type f -size +1M
+data/proj/docs/img/photo.png
+
+$ find data/proj -type f -size -600c -size +100c -printf '%6s %f\n'
+   180 config
+   388 Makefile
+   220 deploy.sh
+   150 test.sh
+   513 Version.h
+   512 util.h
+
+$ find data/proj -type f -size 3075c
+data/proj/docs/guide.txt
+
+$ find data/proj -empty
+data/proj/.git/refs
+data/proj/build/cache
+data/proj/docs/Empty.txt
+data/proj/tmp/b.tmp
+
+$ find data/proj -empty -type f
+data/proj/docs/Empty.txt
+data/proj/tmp/b.tmp
+
+$ find data/proj -perm -4000
+data/proj/scripts/deploy.sh
+
+$ find data/proj -perm /o+w
+data/proj/broken
+data/proj/docs-link
+data/proj/latest
+data/proj/src/readme-link
+data/proj/tmp
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj -type f -perm 644 -name '*.h'
+data/proj/src/util.h
+
+$ find data/proj -type f -perm -u=x
+data/proj/build/app
+data/proj/scripts/deploy.sh
+data/proj/scripts/test.sh
+
+$ find data/proj -perm /1000
+data/proj/tmp
+
+$ find data/proj -type f ! -perm -u=w
+data/proj/docs/notes.TXT
+data/proj/src/Version.h
+
+$ find data/proj -perm -g=s,u=s -o -perm -1777
+data/proj/tmp
+
+$ find data/proj -type f -perm /g=w,o=w -printf '%m %M %p\n'
+666 -rw-rw-rw- data/proj/tmp/a.tmp
+666 -rw-rw-rw- data/proj/tmp/b.tmp
+
+$ find data/proj -type f -mtime 0
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/space name.txt
+data/proj/src/Version.h
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj -type f -mtime -2 -mtime +0
+data/proj/.git/HEAD
+data/proj/README.md
+data/proj/src/main.c
+
+$ find data/proj -type f -mtime +30
+data/proj/src/old/legacy.c
+
+$ find data/proj -type f -mmin -60
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/space name.txt
+
+$ find data/proj -type f -mmin +30 -mmin -46
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+
+$ find data/proj -type f -mmin 31
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+
+$ find data/proj -type f -newer data/proj/src/util.c
+data/proj/.git/HEAD
+data/proj/README.md
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/space name.txt
+data/proj/src/Version.h
+data/proj/src/main.c
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj ! -type l -newermt '2026-10-13 18:00'
+data/proj
+data/proj/.git
+data/proj/.git/HEAD
+data/proj/.git/refs
+data/proj/README.md
+data/proj/build
+data/proj/build/app
+data/proj/build/cache
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/space name.txt
+data/proj/src/Version.h
+data/proj/tmp
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj -type f -newermt 2026-10-14 ! -newermt '2026-10-15 09:00:00'
+data/proj/.git/HEAD
+data/proj/README.md
+data/proj/src/Version.h
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj -daystart -type f -mtime 0
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/space name.txt
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj -daystart -type f -mtime 1
+data/proj/.git/HEAD
+data/proj/README.md
+data/proj/src/Version.h
+
+$ find data/proj/docs -type f -printf '%-12f|%6s|%TY-%Tm-%Td %TH:%TM|%t\n'
+Empty.txt   |     0|2026-10-11 12:00|Sun Oct 11 12:00:00.0000000000 2026
+guide.txt   |  3075|2026-10-11 11:59|Sun Oct 11 11:59:00.0000000000 2026
+logo.png    |  2100|2026-10-03 07:55|Sat Oct  3 07:55:00.0000000000 2026
+photo.png   |1048577|2026-10-03 07:56|Sat Oct  3 07:56:00.0000000000 2026
+notes.TXT   |   640|2026-10-02 16:20|Fri Oct  2 16:20:00.0000000000 2026
+
+$ find data/proj/src -type f -printf '%T@ %Tj %Ta %Tb %TD %TF %Tk %Tr %TT %TS %f\n'
+1792020600.0000000000 287 Wed Oct 10/14/26 2026-10-14 23 11:30:00 PM 23:30:00.0000000000 00.0000000000 Version.h
+1791913510.0000000000 286 Tue Oct 10/13/26 2026-10-13 17 05:45:10 PM 17:45:10.0000000000 10.0000000000 main.c
+1786774500.0000000000 227 Sat Aug 08/15/26 2026-08-15  6 06:15:00 AM 06:15:00.0000000000 00.0000000000 legacy.c
+1791795600.0000000000 285 Mon Oct 10/12/26 2026-10-12  9 09:00:00 AM 09:00:00.0000000000 00.0000000000 util.c
+1790845200.0000000000 274 Thu Oct 10/01/26 2026-10-01  9 09:00:00 AM 09:00:00.0000000000 00.0000000000 util.h
+
+$ find data/proj \( -name '*.c' -o -name '*.h' \) -printf '%f\n'
+Version.h
+main.c
+legacy.c
+util.c
+util.h
+
+$ find data/proj -name .git -prune -o -type f -print
+data/proj/Makefile
+data/proj/README.md
+data/proj/build/app
+data/proj/build/main.o
+data/proj/build/util.o
+data/proj/docs/Empty.txt
+data/proj/docs/guide.txt
+data/proj/docs/img/logo.png
+data/proj/docs/img/photo.png
+data/proj/docs/notes.TXT
+data/proj/scripts/deploy.sh
+data/proj/scripts/test.sh
+data/proj/space name.txt
+data/proj/src/Version.h
+data/proj/src/main.c
+data/proj/src/old/legacy.c
+data/proj/src/util.c
+data/proj/src/util.h
+data/proj/tmp/a.tmp
+data/proj/tmp/b.tmp
+
+$ find data/proj -name .git -prune -o -name build -prune -o -name '*.o' -print
+
+$ find data/proj -type d \( -name .git -o -name tmp \) -prune -o -type d -print
+data/proj
+data/proj/build
+data/proj/build/cache
+data/proj/docs
+data/proj/docs/img
+data/proj/scripts
+data/proj/src
+data/proj/src/old
+
+$ find data/proj -name '*.md' , -name '*.sh' -printf 'script %f\n'
+script deploy.sh
+script test.sh
+
+$ find data/proj -type f -name '*.c' -print -quit
+data/proj/src/main.c
+
+$ find data/proj -false -o -name Makefile
+data/proj/Makefile
+
+$ find data/proj -not -type d -not -type f
+data/proj/broken
+data/proj/docs-link
+data/proj/latest
+data/proj/src/readme-link
+
+$ find data/proj ! \( -type d -o -name '*.*' \)
+data/proj/.git/HEAD
+data/proj/.git/config
+data/proj/Makefile
+data/proj/broken
+data/proj/build/app
+data/proj/docs-link
+data/proj/latest
+data/proj/src/readme-link
+
+$ find data/proj -name '*.o' -a -true
+data/proj/build/main.o
+data/proj/build/util.o
+
+$ find data/proj -maxdepth 1 -name 'M*' -printf 'one %f\n' -printf 'two %f\n'
+one Makefile
+two Makefile
+
+$ find data/proj/src -printf '%d %y %m %M %f %h %P\n'
+0 d 755 drwxr-xr-x src data/proj 
+1 f 444 -r--r--r-- Version.h data/proj/src Version.h
+1 f 644 -rw-r--r-- main.c data/proj/src main.c
+1 d 700 drwx------ old data/proj/src old
+2 f 600 -rw------- legacy.c data/proj/src/old old/legacy.c
+1 l 777 lrwxrwxrwx readme-link data/proj/src readme-link
+1 f 644 -rw-r--r-- util.c data/proj/src util.c
+1 f 644 -rw-r--r-- util.h data/proj/src util.h
+
+$ find data/proj/scripts -type f -printf '[%-10f][%5d][%.4f][%-6m][%3s]\n'
+[deploy.sh ][    1][depl][4755  ][220]
+[test.sh   ][    1][test][750   ][150]
+
+$ find data/proj/tmp -printf '%p\t%m\\%%\101\n'
+data/proj/tmp	1777\%A
+data/proj/tmp/a.tmp	666\%A
+data/proj/tmp/b.tmp	666\%A
+
+$ find data/proj/tmp -printf '%f\c ignored\n'
+tmpa.tmpb.tmp
+$ find data/proj -maxdepth 0 -printf 'x\qy %j\n'
+x\qy %j
+find: warning: unrecognized escape `\q'
+find: warning: unrecognized format directive `%j'
+
+$ find data/proj/build -name '*.o' -delete -print
+data/proj/build/main.o
+data/proj/build/util.o
+
+$ find data/proj/build
+data/proj/build
+data/proj/build/app
+data/proj/build/cache
+
+$ find data/proj/tmp -type f -delete
+
+$ find data/proj/src -name old -delete
+find: cannot delete 'data/proj/src/old': Directory not empty
+[exit status 1]
+
+$ find data/proj/docs/img -delete
+
+$ find data/proj/docs -maxdepth 1
+data/proj/docs
+data/proj/docs/Empty.txt
+data/proj/docs/guide.txt
+data/proj/docs/notes.TXT
+
+$ reset
+
+$ find data/proj/build -maxdepth 1 -name '*.o'
+data/proj/build/main.o
+data/proj/build/util.o
+
+$ find data/proj -foo
+find: unknown predicate `-foo'
+[exit status 1]
+
+$ find data/proj -name
+find: missing argument to `-name'
+[exit status 1]
+
+$ find data/proj -name a extra
+find: paths must precede expression: `extra'
+[exit status 1]
+
+$ find data/proj -type q
+find: Unknown argument to -type: q
+[exit status 1]
+
+$ find data/proj -type f,
+find: Last file type in list argument to -type is missing, i.e., list is ending on: ','
+[exit status 1]
+
+$ find data/proj -size 3q
+find: invalid -size type `q'
+[exit status 1]
+
+$ find data/proj -size +1.5k
+find: Invalid argument `+1.5k' to -size
+[exit status 1]
+
+$ find data/proj -perm abc
+find: invalid mode 'abc'
+[exit status 1]
+
+$ find data/proj -maxdepth x
+find: Expected a positive decimal integer argument to -maxdepth, but got 'x'
+[exit status 1]
+
+$ find data/proj -mindepth -1
+find: Expected a positive decimal integer argument to -mindepth, but got '-1'
+[exit status 1]
+
+$ find data/proj -mtime x
+find: invalid argument `x' to `-mtime'
+[exit status 1]
+
+$ find data/proj -newermt garbage
+find: I cannot figure out how to interpret 'garbage' as a date or time
+[exit status 1]
+
+$ find data/proj -newer data/proj/nope
+find: 'data/proj/nope': No such file or directory
+[exit status 1]
+
+$ find data/proj \(
+find: invalid expression; expected to find a ')' but didn't see one. Perhaps you need an extra predicate after '('
+[exit status 1]
+
+$ find data/proj -name x \)
+find: you have too many ')'
+[exit status 1]
+
+$ find data/proj \( \)
+find: invalid expression; empty parentheses are not allowed.
+[exit status 1]
+
+$ find data/proj !
+find: expected an expression after '!'
+[exit status 1]
+
+$ find data/proj -o -name x
+find: invalid expression; you have used a binary operator '-o' with nothing before it.
+[exit status 1]
+
+$ find data/proj -name a -o
+find: expected an expression after '-o'
+[exit status 1]
+
+$ find data/proj -delete -prune
+find: The -delete action automatically turns on -depth, but -prune does nothing when -depth is in effect.  If you want to carry on anyway, just explicitly use the -depth option.
+[exit status 1]
+
+$ find data/proj -printf 'oops %'
+find: error: % at end of format string
+[exit status 1]
+

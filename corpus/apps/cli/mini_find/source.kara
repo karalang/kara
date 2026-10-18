@@ -1,0 +1,1817 @@
+// mini_find: GNU find 4.9, written from its manual and checked against
+// it run by run:
+// - the -H, -L and -P link modes, several start paths, and the walk in
+//   pre-order, or post-order with -depth or -delete;
+// - -maxdepth, -mindepth, -daystart, and the tests -name, -iname,
+//   -path, -ipath, -wholename, -lname, -ilname, -type and -xtype with
+//   lists, -size with its units and rounding, -empty, -perm in its
+//   exact, -all and /any forms with octal or symbolic modes, -mtime,
+//   -mmin, -newer and -newermt;
+// - the operators ( ), !, -not, -a, -o and the comma, and the actions
+//   -print, -printf, -prune, -quit and -delete, with -print added when
+//   an expression has no action;
+// - -printf's directives with widths and precision, its time fields
+//   and its escapes;
+// - find's messages and exit status for bad expressions and missing
+//   files.
+//
+// It builds data/proj from data/manifest.txt, sets every mode and
+// time, and runs data/jobs.txt. Its "now" is 2026-10-15 12:00:00 UTC.
+// Directories are listed in sorted order where find uses readdir's.
+// expected.out is the output of mini_find.py, the same program in
+// Python, which real.py checks against the real find.
+//
+// Workarounds: none. mini_find.orig.kara is the first draft; the
+// changes from it are three `own` parameters and two renamed structs.
+
+const NOW_MS: i64 = 1792065600000;
+const DAY_MS: i64 = 86400000;
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_octal(c: u8) -> bool {
+    c >= b'0' and c <= b'7'
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'A' and c <= b'Z' { c + 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+fn upper_byte(c: u8) -> u8 {
+    if c >= b'a' and c <= b'z' { c - 32 } else { c }
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join_from(parts: ref Vec[String], from: i64, sep: Str) -> String {
+    let mut out = String.new();
+    for i in from..parts.len() {
+        if i > from {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    let b = to_bytes(s);
+    let p = to_bytes(pat);
+    if p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_with_byte(s: Str, c: u8) -> bool {
+    let b = to_bytes(s);
+    b.len() > 0 and b[b.len() - 1] == c
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn last_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[b.len() - 1] } else { 0 }
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_int(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return false;
+    }
+    for i in 0..b.len() {
+        if not is_digit(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// The value of a string of decimal digits.
+fn to_int(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        n = n * 10 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+fn char_str(c: u8) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    v.push(c);
+    from_bytes(v)
+}
+
+fn two(n: i64) -> String {
+    f"{n:02}"
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// A command line split as sh splits it: single quotes, double quotes
+// with their four escapes, and backslashes.
+fn shell_words(line: Str) -> Vec[String] {
+    let b = to_bytes(line);
+    let mut words: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut have = false;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\'' {
+            i += 1;
+            while b[i] != b'\'' {
+                cur.push(b[i]);
+                i += 1;
+            }
+            have = true;
+            i += 1;
+        } else if c == b'"' {
+            i += 1;
+            while b[i] != b'"' {
+                if b[i] == b'\\' and (b[i + 1] == b'"' or b[i + 1] == b'\\' or b[i + 1] == b'$' or b[i + 1] == b'`') {
+                    i += 1;
+                }
+                cur.push(b[i]);
+                i += 1;
+            }
+            have = true;
+            i += 1;
+        } else if c == b'\\' {
+            cur.push(b[i + 1]);
+            have = true;
+            i += 2;
+        } else if c == b' ' {
+            if have {
+                words.push(from_bytes(cur));
+                cur = Vec.new();
+            }
+            have = false;
+            i += 1;
+        } else {
+            cur.push(c);
+            have = true;
+            i += 1;
+        }
+    }
+    if have {
+        words.push(from_bytes(cur));
+    }
+    words
+}
+
+fn pad_to(s: Str, width: i64, left: bool, prec: i64) -> String {
+    let mut t = s.to_string();
+    if prec >= 0 and t.len() > prec {
+        t = slice(t, 0, prec);
+    }
+    if t.len() >= width {
+        return t;
+    }
+    let mut fill = String.new();
+    for _ in 0..width - t.len() {
+        fill.push_str(" ");
+    }
+    if left {
+        t.push_str(fill);
+        t
+    } else {
+        fill.push_str(t);
+        fill
+    }
+}
+
+// ------------------------------------------------------------ dates
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+fn month_name(m: i64) -> String {
+    let names = split_on("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", b' ');
+    names[m - 1].clone()
+}
+
+// Day 0, 1970-01-01, was a Thursday.
+fn day_name(days: i64) -> String {
+    let names = split_on("Thu Fri Sat Sun Mon Tue Wed", b' ');
+    names[((days % 7) + 7) % 7].clone()
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    if a >= 0 { a / b } else { (a - b + 1) / b }
+}
+
+// "2026-10-14", "2026-10-14 08:00" or "2026-10-14T08:00:00", in UTC.
+fn parse_stamp(s: Str) -> Option[i64] {
+    let b = to_bytes(s);
+    if b.len() < 10 or b[4] != b'-' or b[7] != b'-' {
+        return None;
+    }
+    let y = slice(s, 0, 4);
+    let mo = slice(s, 5, 7);
+    let d = slice(s, 8, 10);
+    if not (is_int(y) and is_int(mo) and is_int(d)) {
+        return None;
+    }
+    let mut hh = "0".to_string();
+    let mut mm = "0".to_string();
+    let mut ss = "0".to_string();
+    if b.len() > 10 {
+        let n = b.len() - 10;
+        if (b[10] != b' ' and b[10] != b'T') or (n != 6 and n != 9) or b[13] != b':' {
+            return None;
+        }
+        hh = slice(s, 11, 13);
+        mm = slice(s, 14, 16);
+        if n == 9 {
+            if b[16] != b':' {
+                return None;
+            }
+            ss = slice(s, 17, 19);
+        }
+        if not (is_int(hh) and is_int(mm) and is_int(ss)) {
+            return None;
+        }
+    }
+    let (yv, mov, dv) = (to_int(y), to_int(mo), to_int(d));
+    let (hv, mv, sv) = (to_int(hh), to_int(mm), to_int(ss));
+    if mov < 1 or mov > 12 or dv < 1 or dv > 31 or hv > 23 or mv > 59 or sv > 59 {
+        return None;
+    }
+    Some(((days_from_civil(yv, mov, dv) * 24 + hv) * 60 + mv) * 60000 + sv * 1000)
+}
+
+// One of -printf's %T fields; None for a letter it does not know.
+fn time_part(ms: i64, c: u8) -> Option[String] {
+    let secs = floor_div(ms, 1000);
+    let frac = f"{ms - secs * 1000:03}0000000";
+    let days = floor_div(secs, 86400);
+    let sod = secs - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    let h = sod / 3600;
+    let mi = sod % 3600 / 60;
+    let s = sod % 60;
+    if c == b'Y' {
+        Some(f"{y}")
+    } else if c == b'm' {
+        Some(two(m))
+    } else if c == b'd' {
+        Some(two(d))
+    } else if c == b'H' {
+        Some(two(h))
+    } else if c == b'M' {
+        Some(two(mi))
+    } else if c == b'S' {
+        Some(f"{two(s)}.{frac}")
+    } else if c == b'T' {
+        Some(f"{two(h)}:{two(mi)}:{two(s)}.{frac}")
+    } else if c == b'@' {
+        Some(f"{secs}.{frac}")
+    } else if c == b'j' {
+        Some(f"{days - days_from_civil(y, 1, 1) + 1:03}")
+    } else if c == b'a' {
+        Some(day_name(days))
+    } else if c == b'b' {
+        Some(month_name(m))
+    } else if c == b'D' {
+        Some(f"{two(m)}/{two(d)}/{two(y % 100)}")
+    } else if c == b'F' {
+        Some(f"{y}-{two(m)}-{two(d)}")
+    } else if c == b'k' {
+        Some(f"{h:2}")
+    } else if c == b'r' {
+        let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+        let half = if h < 12 { "AM" } else { "PM" };
+        Some(f"{two(h12)}:{two(mi)}:{two(s)} {half}")
+    } else {
+        None
+    }
+}
+
+// %t: ctime's layout, with find's fraction of a second.
+fn ctime(ms: i64) -> String {
+    let days = floor_div(floor_div(ms, 1000), 86400);
+    let (y, m, d) = civil_from_days(days);
+    let clock = time_part(ms, b'T').unwrap_or(String.new());
+    f"{day_name(days)} {month_name(m)} {d:2} {clock} {y}"
+}
+
+// ------------------------------------------------------------ the tree
+
+// A file's made-up contents: letters, with a newline every 40 bytes.
+fn content(path: Str, size: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let seed = path.len();
+    for i in 0..size {
+        if i % 40 == 39 {
+            out.push(b'\n');
+        } else {
+            out.push((97 + (i * 7 + seed) % 26) as u8);
+        }
+    }
+    from_bytes(out)
+}
+
+fn octal(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut n: i64 = 0;
+    for i in 0..b.len() {
+        n = n * 8 + (b[i] - b'0') as i64;
+    }
+    n
+}
+
+struct Stamp {
+    path: String,
+    mode: i64,
+    ms: i64,
+}
+
+fn build_tree() -> Result[(), String] {
+    let root = "data/proj";
+    if fs.symlink_metadata(root.to_string()).is_ok() {
+        if let Err(e) = fs.remove_dir_all(root.to_string()) {
+            return Err(f"cannot remove {root}: {e}");
+        }
+    }
+    let text = match fs.read_to_string("data/manifest.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/manifest.txt: {e}"),
+    };
+    let mut stamps: Vec[Stamp] = Vec.new();
+    for line in lines_of(text) {
+        let e = split_on(line, b' ');
+        if e[0] == "d" {
+            let path = if e[3] == "." { root.to_string() } else { f"{root}/{join_from(e, 3, " ")}" };
+            if let Err(err) = fs.create_dir(path.clone()) {
+                return Err(f"cannot create {path}: {err}");
+            }
+            stamps.push(Stamp { path: path, mode: octal(e[1]), ms: parse_stamp(e[2]).unwrap_or(0) });
+        } else if e[0] == "f" {
+            let path = f"{root}/{join_from(e, 4, " ")}";
+            if let Err(err) = fs.write(path.clone(), content(path, to_int(e[3]))) {
+                return Err(f"cannot write {path}: {err}");
+            }
+            stamps.push(Stamp { path: path, mode: octal(e[1]), ms: parse_stamp(e[2]).unwrap_or(0) });
+        } else {
+            let link = f"{root}/{e[2]}";
+            if let Err(err) = fs.symlink(e[1].clone(), link.clone()) {
+                return Err(f"cannot link {link}: {err}");
+            }
+        }
+    }
+    // Deepest first, so a directory's time is set after its entries;
+    // the time before the mode, since setting it opens the file.
+    let mut i = stamps.len() - 1;
+    while i >= 0 {
+        let s = ref stamps[i];
+        if let Err(err) = fs.set_modified(s.path.clone(), s.ms) {
+            return Err(f"cannot set the time of {s.path}: {err}");
+        }
+        if let Err(err) = fs.set_permissions(s.path.clone(), s.mode) {
+            return Err(f"cannot set the mode of {s.path}: {err}");
+        }
+        i -= 1;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ status
+
+#[derive(Copy, Clone)]
+struct Info {
+    kind: u8,
+    size: i64,
+    mtime: i64,
+    mode: i64,
+}
+
+// What stat (follow) or lstat says about a path.
+fn info(path: Str, follow: bool) -> Option[Info] {
+    let r = if follow { fs.metadata(path.to_string()) } else { fs.symlink_metadata(path.to_string()) };
+    match r {
+        Ok(m) => {
+            let kind = if m.is_symlink { b'l' } else if m.is_dir { b'd' } else { b'f' };
+            Some(Info { kind: kind, size: m.len, mtime: m.modified_ms, mode: m.mode })
+        }
+        Err(_) => None,
+    }
+}
+
+fn read_link(path: Str) -> String {
+    fs.read_link(path.to_string()).unwrap_or(String.new())
+}
+
+// ------------------------------------------------------------ patterns
+
+// fnmatch as find uses it: no special leading dot, and `*` matches `/`.
+fn wild(p: ref Vec[u8], i0: i64, s: ref Vec[u8], j0: i64) -> bool {
+    let mut i = i0;
+    let mut j = j0;
+    while i < p.len() {
+        let c = p[i];
+        if c == b'*' {
+            while i < p.len() and p[i] == b'*' {
+                i += 1;
+            }
+            if i == p.len() {
+                return true;
+            }
+            for k in j..s.len() + 1 {
+                if wild(p, i, s, k) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if j == s.len() {
+            return false;
+        }
+        if c == b'?' {
+            i += 1;
+            j += 1;
+        } else if c == b'[' {
+            let (ok, next) = bracket(p, i, s[j]);
+            if next < 0 {
+                // An unclosed `[` is itself.
+                if s[j] != b'[' {
+                    return false;
+                }
+                i += 1;
+                j += 1;
+            } else if not ok {
+                return false;
+            } else {
+                i = next;
+                j += 1;
+            }
+        } else {
+            let mut want = c;
+            if c == b'\\' and i + 1 < p.len() {
+                i += 1;
+                want = p[i];
+            }
+            if s[j] != want {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    j == s.len()
+}
+
+// Matches one byte against the class at p[i]: whether it matched, and
+// the index after the class, or -1 if the class is not closed.
+fn bracket(p: ref Vec[u8], i: i64, ch: u8) -> (bool, i64) {
+    let mut k = i + 1;
+    let mut neg = false;
+    if k < p.len() and (p[k] == b'!' or p[k] == b'^') {
+        neg = true;
+        k += 1;
+    }
+    let mut found = false;
+    let mut first = true;
+    while k < p.len() and (first or p[k] != b']') {
+        first = false;
+        let mut lo = p[k];
+        if lo == b'\\' and k + 1 < p.len() {
+            k += 1;
+            lo = p[k];
+        }
+        if k + 2 < p.len() and p[k + 1] == b'-' and p[k + 2] != b']' {
+            if ch >= lo and ch <= p[k + 2] {
+                found = true;
+            }
+            k += 3;
+        } else {
+            if ch == lo {
+                found = true;
+            }
+            k += 1;
+        }
+    }
+    if k >= p.len() {
+        return (false, -1);
+    }
+    (found != neg, k + 1)
+}
+
+fn matches(pat: Str, s: Str, fold: bool) -> bool {
+    if fold {
+        wild(to_bytes(lower(pat)), 0, to_bytes(lower(s)), 0)
+    } else {
+        wild(to_bytes(pat), 0, to_bytes(s), 0)
+    }
+}
+
+// ------------------------------------------------------------ modes
+
+fn who_bits(c: u8) -> i64 {
+    if c == b'u' {
+        0o4700
+    } else if c == b'g' {
+        0o2070
+    } else if c == b'o' {
+        0o1007
+    } else if c == b'a' {
+        0o7777
+    } else {
+        0
+    }
+}
+
+fn perm_bits(c: u8) -> i64 {
+    if c == b'r' {
+        0o444
+    } else if c == b'w' {
+        0o222
+    } else if c == b'x' {
+        0o111
+    } else if c == b's' {
+        0o6000
+    } else if c == b't' {
+        0o1000
+    } else {
+        0
+    }
+}
+
+// An octal mode, or chmod's symbolic clauses applied to 0.
+fn parse_mode(s: Str) -> Option[i64] {
+    let b = to_bytes(s);
+    let mut all_octal = b.len() > 0;
+    for i in 0..b.len() {
+        if not is_octal(b[i]) {
+            all_octal = false;
+        }
+    }
+    if all_octal {
+        let v = octal(s);
+        return if v <= 0o7777 { Some(v) } else { None };
+    }
+    let mut mode: i64 = 0;
+    for clause in split_on(s, b',') {
+        let c = to_bytes(clause);
+        let mut i: i64 = 0;
+        let mut who: i64 = 0;
+        while i < c.len() and who_bits(c[i]) != 0 {
+            who = who | who_bits(c[i]);
+            i += 1;
+        }
+        if who == 0 {
+            who = 0o7777;
+        }
+        if i == c.len() {
+            return None;
+        }
+        while i < c.len() {
+            let op = c[i];
+            if op != b'+' and op != b'-' and op != b'=' {
+                return None;
+            }
+            i += 1;
+            let mut bits: i64 = 0;
+            while i < c.len() and perm_bits(c[i]) != 0 {
+                bits = bits | perm_bits(c[i]);
+                i += 1;
+            }
+            bits = bits & who;
+            if op == b'+' {
+                mode = mode | bits;
+            } else if op == b'-' {
+                mode = mode & (0o7777 - bits);
+            } else {
+                mode = (mode & (0o7777 - who)) | bits;
+            }
+        }
+    }
+    Some(mode)
+}
+
+// ls's ten-character mode, as %M prints it.
+fn mode_string(kind: u8, mode: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    out.push(if kind == b'd' { b'd' } else if kind == b'l' { b'l' } else { b'-' });
+    let shifts = [6, 3, 0];
+    let specials = [0o4000, 0o2000, 0o1000];
+    for k in 0..3 {
+        let bits = mode >> shifts[k];
+        out.push(if bits & 4 != 0 { b'r' } else { b'-' });
+        out.push(if bits & 2 != 0 { b'w' } else { b'-' });
+        let x = bits & 1 != 0;
+        let ch = if k == 2 { b't' } else { b's' };
+        if mode & specials[k] != 0 {
+            out.push(if x { ch } else { upper_byte(ch) });
+        } else {
+            out.push(if x { b'x' } else { b'-' });
+        }
+    }
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ expressions
+
+const K_AND: i64 = 0;
+const K_OR: i64 = 1;
+const K_NOT: i64 = 2;
+const K_COMMA: i64 = 3;
+const K_TRUE: i64 = 4;
+const K_FALSE: i64 = 5;
+const K_NAME: i64 = 6;
+const K_PATH: i64 = 7;
+const K_LNAME: i64 = 8;
+const K_TYPE: i64 = 9;
+const K_XTYPE: i64 = 10;
+const K_SIZE: i64 = 11;
+const K_MTIME: i64 = 12;
+const K_MMIN: i64 = 13;
+const K_PERM: i64 = 14;
+const K_NEWER: i64 = 15;
+const K_EMPTY: i64 = 16;
+const K_PRINTF: i64 = 17;
+const K_PRUNE: i64 = 18;
+const K_QUIT: i64 = 19;
+const K_DELETE: i64 = 20;
+
+// One node of a parsed expression. Operators point at their operands
+// by index; `s`, `n`, `cmp` and `unit` hold a test's argument.
+struct Node {
+    kind: i64,
+    a: i64,
+    b: i64,
+    s: String,
+    n: i64,
+    cmp: i64,
+    unit: i64,
+    fold: bool,
+}
+
+fn node(kind: i64) -> Node {
+    Node { kind: kind, a: -1, b: -1, s: String.new(), n: 0, cmp: 0, unit: 0, fold: false }
+}
+
+fn op_node(kind: i64, a: i64, b: i64) -> Node {
+    let mut n = node(kind);
+    n.a = a;
+    n.b = b;
+    n
+}
+
+fn str_node(kind: i64, s: own String) -> Node {
+    let mut n = node(kind);
+    n.s = s;
+    n
+}
+
+fn num_node(kind: i64, num: i64, cmp: i64) -> Node {
+    let mut n = node(kind);
+    n.n = num;
+    n.cmp = cmp;
+    n
+}
+
+struct Cmd {
+    args: Vec[String],
+    pos: i64,
+    nodes: Vec[Node],
+    follow: u8,
+    maxdepth: i64,
+    mindepth: i64,
+    depth_first: bool,
+    depth_given: bool,
+    daystart: bool,
+    has_action: bool,
+    has_prune: bool,
+    has_delete: bool,
+    warn: String,
+}
+
+fn add(p: mut ref Cmd, n: own Node) -> i64 {
+    p.nodes.push(n);
+    p.nodes.len() - 1
+}
+
+fn at_end(p: ref Cmd) -> bool {
+    p.pos >= p.args.len()
+}
+
+fn peek_is(p: ref Cmd, s: Str) -> bool {
+    p.pos < p.args.len() and p.args[p.pos] == s
+}
+
+// No operand follows: the end, or a `)` or `,`.
+fn no_operand(p: ref Cmd) -> bool {
+    at_end(p) or peek_is(p, ")") or peek_is(p, ",")
+}
+
+fn need(p: mut ref Cmd, name: Str) -> Result[String, String] {
+    if at_end(p) {
+        return Err(f"missing argument to `{name}'");
+    }
+    let a = p.args[p.pos].clone();
+    p.pos += 1;
+    Ok(a)
+}
+
+// comma < -o < -a < ! < a primary.
+fn parse_comma(p: mut ref Cmd) -> Result[i64, String] {
+    let mut left = parse_or(mut p)?;
+    while peek_is(p, ",") {
+        p.pos += 1;
+        if at_end(p) {
+            return Err("expected an expression after ','".to_string());
+        }
+        let right = parse_or(mut p)?;
+        left = add(mut p, op_node(K_COMMA, left, right));
+    }
+    Ok(left)
+}
+
+fn parse_or(p: mut ref Cmd) -> Result[i64, String] {
+    let mut left = parse_and(mut p)?;
+    while peek_is(p, "-o") or peek_is(p, "-or") {
+        let op = p.args[p.pos].clone();
+        p.pos += 1;
+        if no_operand(p) {
+            return Err(f"expected an expression after '{op}'");
+        }
+        let right = parse_and(mut p)?;
+        left = add(mut p, op_node(K_OR, left, right));
+    }
+    Ok(left)
+}
+
+fn parse_and(p: mut ref Cmd) -> Result[i64, String] {
+    let mut left = parse_not(mut p)?;
+    loop {
+        if no_operand(p) or peek_is(p, "-o") or peek_is(p, "-or") {
+            return Ok(left);
+        }
+        if peek_is(p, "-a") or peek_is(p, "-and") {
+            let op = p.args[p.pos].clone();
+            p.pos += 1;
+            if no_operand(p) {
+                return Err(f"expected an expression after '{op}'");
+            }
+        }
+        let right = parse_not(mut p)?;
+        left = add(mut p, op_node(K_AND, left, right));
+    }
+}
+
+fn parse_not(p: mut ref Cmd) -> Result[i64, String] {
+    if peek_is(p, "!") or peek_is(p, "-not") {
+        let op = p.args[p.pos].clone();
+        p.pos += 1;
+        if no_operand(p) {
+            return Err(f"expected an expression after '{op}'");
+        }
+        let inner = parse_not(mut p)?;
+        return Ok(add(mut p, op_node(K_NOT, inner, -1)));
+    }
+    parse_primary(mut p)
+}
+
+fn no_paren() -> String {
+    "invalid expression; expected to find a ')' but didn't see one. Perhaps you need an extra predicate after '('".to_string()
+}
+
+// A leading + or -, as -size, -mtime and -mmin take: (cmp, the rest).
+fn sign(arg: Str) -> (i64, String) {
+    let c = first_byte(arg);
+    if c == b'+' {
+        (1, slice_from(arg, 1))
+    } else if c == b'-' {
+        (-1, slice_from(arg, 1))
+    } else {
+        (0, arg.to_string())
+    }
+}
+
+fn size_unit(c: u8) -> i64 {
+    if c == b'c' {
+        1
+    } else if c == b'w' {
+        2
+    } else if c == b'b' {
+        512
+    } else if c == b'k' {
+        1024
+    } else if c == b'M' {
+        1048576
+    } else if c == b'G' {
+        1073741824
+    } else {
+        0
+    }
+}
+
+fn parse_primary(p: mut ref Cmd) -> Result[i64, String] {
+    let a = p.args[p.pos].clone();
+    p.pos += 1;
+    if a == "(" {
+        if peek_is(p, ")") {
+            return Err("invalid expression; empty parentheses are not allowed.".to_string());
+        }
+        if at_end(p) {
+            return Err(no_paren());
+        }
+        let e = parse_comma(mut p)?;
+        if not peek_is(p, ")") {
+            return Err(no_paren());
+        }
+        p.pos += 1;
+        return Ok(e);
+    }
+    if a == "-o" or a == "-or" or a == "-a" or a == "-and" or a == "," {
+        return Err(f"invalid expression; you have used a binary operator '{a}' with nothing before it.");
+    }
+    if a == ")" {
+        return Err("you have too many ')'".to_string());
+    }
+    if not starts_with(a, "-") or a == "-" {
+        return Err(f"paths must precede expression: `{a}'");
+    }
+    if a == "-name" or a == "-iname" or a == "-path" or a == "-ipath" or a == "-wholename" or a == "-iwholename" or a == "-lname" or a == "-ilname" {
+        let kind = if a == "-name" or a == "-iname" { K_NAME } else if a == "-lname" or a == "-ilname" { K_LNAME } else { K_PATH };
+        let mut n = str_node(kind, need(mut p, a)?);
+        n.fold = starts_with(a, "-i");
+        return Ok(add(mut p, n));
+    }
+    if a == "-type" or a == "-xtype" {
+        let arg = need(mut p, a)?;
+        let b = to_bytes(arg);
+        let mut types = String.new();
+        for i in 0..b.len() {
+            let c = b[i];
+            if i % 2 == 1 {
+                if c != b',' {
+                    return Err(f"Must separate multiple arguments to {a} using: ','");
+                }
+                if i == b.len() - 1 {
+                    return Err(f"Last file type in list argument to {a} is missing, i.e., list is ending on: ','");
+                }
+            } else if c == b'f' or c == b'd' or c == b'l' {
+                types.push_str(char_str(c));
+            } else {
+                return Err(f"Unknown argument to {a}: {char_str(c)}");
+            }
+        }
+        let kind = if a == "-type" { K_TYPE } else { K_XTYPE };
+        return Ok(add(mut p, str_node(kind, types)));
+    }
+    if a == "-size" {
+        let arg = need(mut p, a)?;
+        let (cmp, rest) = sign(arg);
+        let mut num = rest;
+        let mut unit: i64 = 512;
+        let u = last_byte(num);
+        if num.len() > 0 and not is_digit(u) {
+            unit = size_unit(u);
+            if unit == 0 {
+                return Err(f"invalid -size type `{char_str(u)}'");
+            }
+            num = slice(num, 0, num.len() - 1);
+        }
+        if not is_int(num) {
+            return Err(f"Invalid argument `{arg}' to -size");
+        }
+        let mut n = num_node(K_SIZE, to_int(num), cmp);
+        n.unit = unit;
+        return Ok(add(mut p, n));
+    }
+    if a == "-mtime" or a == "-mmin" {
+        let arg = need(mut p, a)?;
+        let (cmp, num) = sign(arg);
+        if not is_int(num) {
+            return Err(f"invalid argument `{arg}' to `{a}'");
+        }
+        let kind = if a == "-mtime" { K_MTIME } else { K_MMIN };
+        return Ok(add(mut p, num_node(kind, to_int(num), cmp)));
+    }
+    if a == "-perm" {
+        let arg = need(mut p, a)?;
+        let c = first_byte(arg);
+        let cmp = if c == b'-' { -1 } else if c == b'/' { 1 } else { 0 };
+        let m = if cmp != 0 { slice_from(arg, 1) } else { arg.clone() };
+        let mode = match parse_mode(m) {
+            Some(v) => v,
+            None => return Err(f"invalid mode '{arg}'"),
+        };
+        return Ok(add(mut p, num_node(K_PERM, mode, cmp)));
+    }
+    if a == "-newer" {
+        let arg = need(mut p, a)?;
+        let i = match info(arg, p.follow != b'P') {
+            Some(i) => i,
+            None => return Err(f"'{arg}': No such file or directory"),
+        };
+        return Ok(add(mut p, num_node(K_NEWER, i.mtime, 0)));
+    }
+    if a == "-newermt" {
+        let arg = need(mut p, a)?;
+        let ms = match parse_stamp(arg) {
+            Some(v) => v,
+            None => return Err(f"I cannot figure out how to interpret '{arg}' as a date or time"),
+        };
+        return Ok(add(mut p, num_node(K_NEWER, ms, 0)));
+    }
+    if a == "-maxdepth" or a == "-mindepth" {
+        let arg = need(mut p, a)?;
+        if not is_int(arg) {
+            return Err(f"Expected a positive decimal integer argument to {a}, but got '{arg}'");
+        }
+        if a == "-maxdepth" {
+            p.maxdepth = to_int(arg);
+        } else {
+            p.mindepth = to_int(arg);
+        }
+        return Ok(add(mut p, node(K_TRUE)));
+    }
+    if a == "-depth" or a == "-d" {
+        p.depth_first = true;
+        p.depth_given = true;
+        return Ok(add(mut p, node(K_TRUE)));
+    }
+    if a == "-daystart" {
+        p.daystart = true;
+        return Ok(add(mut p, node(K_TRUE)));
+    }
+    if a == "-true" {
+        return Ok(add(mut p, node(K_TRUE)));
+    }
+    if a == "-false" {
+        return Ok(add(mut p, node(K_FALSE)));
+    }
+    if a == "-empty" {
+        return Ok(add(mut p, node(K_EMPTY)));
+    }
+    if a == "-print" {
+        p.has_action = true;
+        return Ok(add(mut p, str_node(K_PRINTF, "%p\n".to_string())));
+    }
+    if a == "-printf" {
+        p.has_action = true;
+        let f = need(mut p, a)?;
+        check_format(mut p, f)?;
+        return Ok(add(mut p, str_node(K_PRINTF, f)));
+    }
+    if a == "-prune" {
+        p.has_prune = true;
+        return Ok(add(mut p, node(K_PRUNE)));
+    }
+    if a == "-quit" {
+        return Ok(add(mut p, node(K_QUIT)));
+    }
+    if a == "-delete" {
+        p.has_action = true;
+        p.has_delete = true;
+        p.depth_first = true;
+        return Ok(add(mut p, node(K_DELETE)));
+    }
+    Err(f"unknown predicate `{a}'")
+}
+
+// Warns once about each unknown escape or directive, as find does
+// while it parses the format.
+fn check_format(p: mut ref Cmd, f: ref String) -> Result[(), String] {
+    let b = to_bytes(f);
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' and i + 1 < b.len() {
+            let e = b[i + 1];
+            if not has_byte("\\abfnrtvc", e) and not is_octal(e) {
+                p.warn.push_str(f"find: warning: unrecognized escape `\\{char_str(e)}'\n");
+            }
+            i += 2;
+        } else if c == b'%' {
+            i += 1;
+            while i < b.len() and (b[i] == b'-' or b[i] == b'.' or is_digit(b[i])) {
+                i += 1;
+            }
+            if i >= b.len() {
+                return Err("error: % at end of format string".to_string());
+            }
+            let d = b[i];
+            if d == b'T' {
+                i += 1;
+            } else if not has_byte("pPfhdyYlmMst%", d) {
+                p.warn.push_str(f"find: warning: unrecognized format directive `%{char_str(d)}'\n");
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ evaluation
+
+// What the walk needs from the parse.
+struct Cfg {
+    follow: u8,
+    maxdepth: i64,
+    mindepth: i64,
+    depth_first: bool,
+    daystart: bool,
+}
+
+struct Job {
+    out: String,
+    err: String,
+    status: i64,
+    quit: bool,
+}
+
+struct Item {
+    path: String,
+    root: String,
+    depth: i64,
+    // As find sees it (lstat, or stat when following), and lstat.
+    info: Info,
+    link: Info,
+    prune: bool,
+}
+
+// %f: the last component, with a start path's trailing slash kept.
+fn base_name(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut end = b.len();
+    while end > 1 and b[end - 1] == b'/' {
+        end -= 1;
+    }
+    let s = byte_str(b, 0, end);
+    let i = rfind_byte(s, b'/');
+    let mut f = if i >= 0 { slice_from(s, i + 1) } else { s.clone() };
+    if end < b.len() and f != "/" {
+        f.push_str("/");
+    }
+    f
+}
+
+fn name_of(path: Str) -> String {
+    let f = base_name(path);
+    if f.len() > 1 and ends_with_byte(f, b'/') {
+        slice(f, 0, f.len() - 1)
+    } else {
+        f
+    }
+}
+
+// %h: everything before the last component.
+fn dir_name(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut end = b.len();
+    while end > 1 and b[end - 1] == b'/' {
+        end -= 1;
+    }
+    let s = byte_str(b, 0, end);
+    let i = rfind_byte(s, b'/');
+    if i < 0 {
+        ".".to_string()
+    } else if i == 0 {
+        "/".to_string()
+    } else {
+        slice(s, 0, i)
+    }
+}
+
+// -xtype: stat where find uses lstat, and lstat where it uses stat.
+fn other_type(cfg: ref Cfg, e: ref Item) -> u8 {
+    if cfg.follow == b'L' or (cfg.follow == b'H' and e.depth == 0) {
+        return e.link.kind;
+    }
+    if e.link.kind != b'l' {
+        return e.link.kind;
+    }
+    match info(e.path, true) {
+        Some(t) => t.kind,
+        None => b'l',
+    }
+}
+
+fn is_empty(e: ref Item) -> bool {
+    if e.info.kind == b'f' {
+        return e.info.size == 0;
+    }
+    if e.info.kind == b'd' {
+        return match fs.read_dir(e.path.clone()) {
+            Ok(names) => names.len() == 0,
+            Err(_) => false,
+        };
+    }
+    false
+}
+
+fn compare(cmp: i64, have: i64, want: i64) -> bool {
+    if cmp > 0 {
+        have > want
+    } else if cmp < 0 {
+        have < want
+    } else {
+        have == want
+    }
+}
+
+fn eval_node(nodes: ref Vec[Node], cfg: ref Cfg, k: i64, e: mut ref Item, job: mut ref Job) -> bool {
+    let n = ref nodes[k];
+    let kind = n.kind;
+    if kind == K_AND {
+        return eval_node(nodes, cfg, n.a, mut e, mut job) and not job.quit and eval_node(nodes, cfg, n.b, mut e, mut job);
+    }
+    if kind == K_OR {
+        return eval_node(nodes, cfg, n.a, mut e, mut job) or (not job.quit and eval_node(nodes, cfg, n.b, mut e, mut job));
+    }
+    if kind == K_COMMA {
+        eval_node(nodes, cfg, n.a, mut e, mut job);
+        return not job.quit and eval_node(nodes, cfg, n.b, mut e, mut job);
+    }
+    if kind == K_NOT {
+        return not eval_node(nodes, cfg, n.a, mut e, mut job);
+    }
+    if kind == K_TRUE {
+        return true;
+    }
+    if kind == K_FALSE {
+        return false;
+    }
+    if kind == K_NAME {
+        return matches(n.s, name_of(e.path), n.fold);
+    }
+    if kind == K_PATH {
+        return matches(n.s, e.path, n.fold);
+    }
+    if kind == K_LNAME {
+        return e.link.kind == b'l' and matches(n.s, read_link(e.path), n.fold);
+    }
+    if kind == K_TYPE {
+        return has_byte(n.s, e.info.kind);
+    }
+    if kind == K_XTYPE {
+        return has_byte(n.s, other_type(cfg, e));
+    }
+    if kind == K_SIZE {
+        // Sizes in units, rounded up.
+        let units = if n.unit == 1 { e.info.size } else { (e.info.size + n.unit - 1) / n.unit };
+        return compare(n.cmp, units, n.n);
+    }
+    if kind == K_MTIME {
+        let now = if cfg.daystart { (NOW_MS / DAY_MS + 1) * DAY_MS } else { NOW_MS };
+        // Whole days, rounded down.
+        return compare(n.cmp, floor_div(now - e.info.mtime, DAY_MS), n.n);
+    }
+    if kind == K_MMIN {
+        // Minutes are not rounded: +30 is more than 30 minutes, and 30
+        // is more than 29 and at most 30.
+        let age = NOW_MS - e.info.mtime;
+        if n.cmp > 0 {
+            return age > n.n * 60000;
+        }
+        if n.cmp < 0 {
+            return age < n.n * 60000;
+        }
+        return age > (n.n - 1) * 60000 and age <= n.n * 60000;
+    }
+    if kind == K_PERM {
+        let m = e.info.mode;
+        if n.cmp == 0 {
+            return m == n.n;
+        }
+        if n.cmp < 0 {
+            return m & n.n == n.n;
+        }
+        return n.n == 0 or m & n.n != 0;
+    }
+    if kind == K_NEWER {
+        return e.info.mtime > n.n;
+    }
+    if kind == K_EMPTY {
+        return is_empty(e);
+    }
+    if kind == K_PRINTF {
+        let text = render(n.s, e);
+        job.out.push_str(text);
+        return true;
+    }
+    if kind == K_PRUNE {
+        if not cfg.depth_first {
+            e.prune = true;
+        }
+        return true;
+    }
+    if kind == K_QUIT {
+        job.quit = true;
+        return true;
+    }
+    delete(e, mut job)
+}
+
+fn delete(e: ref Item, job: mut ref Job) -> bool {
+    if e.link.kind == b'd' {
+        let names = fs.read_dir(e.path.clone()).unwrap_or(Vec.new());
+        if names.len() > 0 {
+            job.err.push_str(f"find: cannot delete '{e.path}': Directory not empty\n");
+            job.status = 1;
+            return false;
+        }
+        if let Err(err) = fs.remove_dir(e.path.clone()) {
+            job.err.push_str(f"find: cannot delete '{e.path}': {err}\n");
+            job.status = 1;
+            return false;
+        }
+    } else if let Err(err) = fs.remove_file(e.path.clone()) {
+        job.err.push_str(f"find: cannot delete '{e.path}': {err}\n");
+        job.status = 1;
+        return false;
+    }
+    true
+}
+
+fn escape(c: u8) -> u8 {
+    if c == b'a' {
+        7
+    } else if c == b'b' {
+        8
+    } else if c == b'f' {
+        12
+    } else if c == b'n' {
+        10
+    } else if c == b'r' {
+        13
+    } else if c == b't' {
+        9
+    } else if c == b'v' {
+        11
+    } else {
+        c
+    }
+}
+
+fn render(fmt: Str, e: ref Item) -> String {
+    let b = to_bytes(fmt);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' and i + 1 < b.len() {
+            let x = b[i + 1];
+            if x == b'c' {
+                return out;
+            }
+            if is_octal(x) {
+                let mut j = i + 1;
+                let mut v: i64 = 0;
+                while j < b.len() and j < i + 4 and is_octal(b[j]) {
+                    v = v * 8 + (b[j] - b'0') as i64;
+                    j += 1;
+                }
+                out.push_str(char_str(v as u8));
+                i = j;
+                continue;
+            }
+            if has_byte("\\abfnrtv", x) {
+                out.push_str(char_str(escape(x)));
+            } else {
+                out.push_str("\\");
+                out.push_str(char_str(x));
+            }
+            i += 2;
+            continue;
+        }
+        if c != b'%' {
+            out.push_str(char_str(c));
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let mut left = false;
+        if b[i] == b'-' {
+            left = true;
+            i += 1;
+        }
+        let mut width: i64 = 0;
+        while is_digit(b[i]) {
+            width = width * 10 + (b[i] - b'0') as i64;
+            i += 1;
+        }
+        let mut prec: i64 = -1;
+        if b[i] == b'.' {
+            i += 1;
+            prec = 0;
+            while is_digit(b[i]) {
+                prec = prec * 10 + (b[i] - b'0') as i64;
+                i += 1;
+            }
+        }
+        let d = b[i];
+        i += 1;
+        if d == b'%' {
+            out.push_str("%");
+            continue;
+        }
+        if d == b'T' {
+            let t = time_part(e.info.mtime, b[i]).unwrap_or("?".to_string());
+            i += 1;
+            out.push_str(pad_to(t, width, left, prec));
+            continue;
+        }
+        match directive(d, e) {
+            Some(v) => out.push_str(pad_to(v, width, left, prec)),
+            None => {
+                out.push_str("%");
+                out.push_str(char_str(d));
+            }
+        }
+    }
+    out
+}
+
+fn directive(d: u8, e: ref Item) -> Option[String] {
+    if d == b'p' {
+        Some(e.path.clone())
+    } else if d == b'P' {
+        if e.path == e.root {
+            Some(String.new())
+        } else if ends_with_byte(e.root, b'/') {
+            Some(slice_from(e.path, e.root.len()))
+        } else {
+            Some(slice_from(e.path, e.root.len() + 1))
+        }
+    } else if d == b'f' {
+        Some(base_name(e.path))
+    } else if d == b'h' {
+        Some(dir_name(e.path))
+    } else if d == b'd' {
+        Some(f"{e.depth}")
+    } else if d == b'y' {
+        Some(char_str(e.info.kind))
+    } else if d == b'Y' {
+        if e.link.kind != b'l' {
+            Some(char_str(e.link.kind))
+        } else {
+            match info(e.path, true) {
+                Some(t) => Some(char_str(t.kind)),
+                None => Some("N".to_string()),
+            }
+        }
+    } else if d == b'l' {
+        Some(if e.link.kind == b'l' { read_link(e.path) } else { String.new() })
+    } else if d == b'm' {
+        Some(f"{e.info.mode:o}")
+    } else if d == b'M' {
+        Some(mode_string(e.info.kind, e.info.mode))
+    } else if d == b's' {
+        Some(f"{e.info.size}")
+    } else if d == b't' {
+        Some(ctime(e.info.mtime))
+    } else {
+        None
+    }
+}
+
+// ------------------------------------------------------------ the walk
+
+fn visit(nodes: ref Vec[Node], cfg: ref Cfg, top: i64, path: own String, root: Str, depth: i64, job: mut ref Job) {
+    let follow = cfg.follow == b'L' or (cfg.follow == b'H' and depth == 0);
+    let li = match info(path, false) {
+        Some(i) => i,
+        None => {
+            job.err.push_str(f"find: '{path}': No such file or directory\n");
+            job.status = 1;
+            return;
+        }
+    };
+    let mut i = li;
+    if follow and li.kind == b'l' {
+        if let Some(t) = info(path, true) {
+            i = t;
+        }
+    }
+    let mut e = Item { path: path, root: root.to_string(), depth: depth, info: i, link: li, prune: false };
+    let evaluate = depth >= cfg.mindepth;
+    if evaluate and not cfg.depth_first {
+        eval_node(nodes, cfg, top, mut e, mut job);
+        if job.quit {
+            return;
+        }
+    }
+    if i.kind == b'd' and not e.prune and (cfg.maxdepth < 0 or depth < cfg.maxdepth) {
+        let names = fs.read_dir(e.path.clone()).unwrap_or(Vec.new());
+        for name in names.into_iter() {
+            let child = if ends_with_byte(e.path, b'/') { f"{e.path}{name}" } else { f"{e.path}/{name}" };
+            visit(nodes, cfg, top, child, root, depth + 1, mut job);
+            if job.quit {
+                return;
+            }
+        }
+    }
+    if evaluate and cfg.depth_first {
+        eval_node(nodes, cfg, top, mut e, mut job);
+    }
+}
+
+fn is_path_word(a: Str) -> bool {
+    not (starts_with(a, "-") and a != "-") and a != "(" and a != "!" and a != ","
+}
+
+fn find(job: mut ref Job, args: ref Vec[String]) {
+    let mut follow = b'P';
+    let mut k: i64 = 0;
+    while k < args.len() and (args[k] == "-H" or args[k] == "-L" or args[k] == "-P") {
+        follow = to_bytes(args[k])[1];
+        k += 1;
+    }
+    let mut paths: Vec[String] = Vec.new();
+    while k < args.len() and is_path_word(args[k]) {
+        paths.push(args[k].clone());
+        k += 1;
+    }
+    let rest: Vec[String] = args[k..].to_vec();
+    let mut p = Cmd {
+        args: rest,
+        pos: 0,
+        nodes: Vec.new(),
+        follow: follow,
+        maxdepth: -1,
+        mindepth: 0,
+        depth_first: false,
+        depth_given: false,
+        daystart: false,
+        has_action: false,
+        has_prune: false,
+        has_delete: false,
+        warn: String.new(),
+    };
+    let parsed = parse_all(mut p);
+    job.err.push_str(p.warn);
+    let mut top = match parsed {
+        Ok(t) => t,
+        Err(msg) => {
+            job.err.push_str(f"find: {msg}\n");
+            job.status = 1;
+            return;
+        }
+    };
+    if not p.has_action {
+        let pr = add(mut p, str_node(K_PRINTF, "%p\n".to_string()));
+        top = if top < 0 { pr } else { add(mut p, op_node(K_AND, top, pr)) };
+    }
+    if paths.len() == 0 {
+        paths.push(".".to_string());
+    }
+    let cfg = Cfg { follow: p.follow, maxdepth: p.maxdepth, mindepth: p.mindepth, depth_first: p.depth_first, daystart: p.daystart };
+    for path in paths.into_iter() {
+        let root = path.clone();
+        visit(p.nodes, cfg, top, path, root, 0, mut job);
+        if job.quit {
+            break;
+        }
+    }
+}
+
+// The whole expression, or -1 when there is none.
+fn parse_all(p: mut ref Cmd) -> Result[i64, String] {
+    let mut top: i64 = -1;
+    if not at_end(p) {
+        top = parse_comma(mut p)?;
+        if not at_end(p) {
+            if peek_is(p, ")") {
+                return Err("you have too many ')'".to_string());
+            }
+            return Err(f"paths must precede expression: `{p.args[p.pos]}'");
+        }
+    }
+    if p.has_delete and p.has_prune and not p.depth_given {
+        return Err("The -delete action automatically turns on -depth, but -prune does nothing when -depth is in effect.  If you want to carry on anyway, just explicitly use the -depth option.".to_string());
+    }
+    Ok(top)
+}
+
+// ------------------------------------------------------------ the data
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("d 0755 2026-10-14T08:00:00 .\n");
+    s.push_str("f 0644 2026-10-14T07:59:00 1210 README.md\n");
+    s.push_str("f 0644 2026-10-10T10:00:00 388 Makefile\n");
+    s.push_str("f 0644 2026-10-15T11:58:30 96 space name.txt\n");
+    s.push_str("d 0755 2026-10-13T18:00:00 src\n");
+    s.push_str("f 0644 2026-10-13T17:45:10 734 src/main.c\n");
+    s.push_str("f 0644 2026-10-12T09:00:00 2049 src/util.c\n");
+    s.push_str("f 0644 2026-10-01T09:00:00 512 src/util.h\n");
+    s.push_str("f 0444 2026-10-14T23:30:00 513 src/Version.h\n");
+    s.push_str("d 0700 2026-09-01T00:00:00 src/old\n");
+    s.push_str("f 0600 2026-08-15T06:15:00 4100 src/old/legacy.c\n");
+    s.push_str("d 0755 2026-10-15T11:30:00 build\n");
+    s.push_str("f 0755 2026-10-15T11:29:59 5321 build/app\n");
+    s.push_str("f 0644 2026-10-15T11:29:40 1900 build/main.o\n");
+    s.push_str("f 0644 2026-10-15T11:29:41 2600 build/util.o\n");
+    s.push_str("d 0755 2026-10-15T11:20:00 build/cache\n");
+    s.push_str("d 0755 2026-10-11T12:00:00 docs\n");
+    s.push_str("f 0644 2026-10-11T11:59:00 3075 docs/guide.txt\n");
+    s.push_str("f 0444 2026-10-02T16:20:00 640 docs/notes.TXT\n");
+    s.push_str("f 0644 2026-10-11T12:00:00 0 docs/Empty.txt\n");
+    s.push_str("d 0755 2026-10-03T08:00:00 docs/img\n");
+    s.push_str("f 0644 2026-10-03T07:55:00 2100 docs/img/logo.png\n");
+    s.push_str("f 0644 2026-10-03T07:56:00 1048577 docs/img/photo.png\n");
+    s.push_str("d 0755 2026-10-09T14:00:00 scripts\n");
+    s.push_str("f 4755 2026-10-09T13:00:00 220 scripts/deploy.sh\n");
+    s.push_str("f 0750 2026-10-09T14:00:00 150 scripts/test.sh\n");
+    s.push_str("d 0755 2026-10-14T08:00:00 .git\n");
+    s.push_str("f 0644 2026-10-14T08:00:00 23 .git/HEAD\n");
+    s.push_str("f 0644 2026-09-20T10:00:00 180 .git/config\n");
+    s.push_str("d 0755 2026-10-14T08:00:00 .git/refs\n");
+    s.push_str("d 1777 2026-10-15T09:00:00 tmp\n");
+    s.push_str("f 0666 2026-10-15T08:59:00 10 tmp/a.tmp\n");
+    s.push_str("f 0666 2026-10-15T09:00:00 0 tmp/b.tmp\n");
+    s.push_str("l build/app latest\n");
+    s.push_str("l docs docs-link\n");
+    s.push_str("l missing.txt broken\n");
+    s.push_str("l ../README.md src/readme-link\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("# Listing the tree.\n");
+    s.push_str("find data/proj\n");
+    s.push_str("find data/proj -maxdepth 1\n");
+    s.push_str("find data/proj/src/ -maxdepth 1\n");
+    s.push_str("find data/proj//docs -maxdepth 1 -name img\n");
+    s.push_str("find data/proj/src data/proj/docs -maxdepth 0\n");
+    s.push_str("find data/proj/missing data/proj/Makefile\n");
+    s.push_str("find data/proj -mindepth 2 -maxdepth 2 -type d\n");
+    s.push_str("find data/proj -depth -type d\n");
+    s.push_str("# Names and paths.\n");
+    s.push_str("find data/proj -name '*.c'\n");
+    s.push_str("find data/proj -iname '*.txt'\n");
+    s.push_str("find data/proj -name '[A-Z]*'\n");
+    s.push_str("find data/proj -name '[!a-z]*' -maxdepth 1\n");
+    s.push_str("find data/proj -name '*[0-9]*' -o -name '\\.*'\n");
+    s.push_str("find data/proj -name 'space name.txt' -o -name '*\\**'\n");
+    s.push_str("find data/proj -path '*/src/*' -name '*.h'\n");
+    s.push_str("find data/proj -ipath '*/DOCS/*.png'\n");
+    s.push_str("find data/proj -wholename 'data/proj/b*'\n");
+    s.push_str("find data/proj -lname '*.md'\n");
+    s.push_str("find data/proj -ilname 'DOC*'\n");
+    s.push_str("# Types and links.\n");
+    s.push_str("find data/proj -type d\n");
+    s.push_str("find data/proj -type l -printf '%p -> %l\\n'\n");
+    s.push_str("find data/proj -type f,l -name '*e*'\n");
+    s.push_str("find data/proj -xtype l\n");
+    s.push_str("find data/proj -xtype d\n");
+    s.push_str("find -L data/proj -type l\n");
+    s.push_str("find -L data/proj -name '*.png'\n");
+    s.push_str("find -L data/proj -maxdepth 1 -printf '%y%Y %p\\n'\n");
+    s.push_str("find data/proj -maxdepth 1 -printf '%y%Y %p\\n'\n");
+    s.push_str("find -H data/proj/docs-link -name '*.png'\n");
+    s.push_str("find data/proj/docs-link -name '*.png'\n");
+    s.push_str("# Sizes.\n");
+    s.push_str("find data/proj -type f -size +2k -printf '%s %p\\n'\n");
+    s.push_str("find data/proj -type f -size -1k\n");
+    s.push_str("find data/proj -type f -size 1\n");
+    s.push_str("find data/proj -type f -size 2 -o -type f -size 1M\n");
+    s.push_str("find data/proj -type f -size +1M\n");
+    s.push_str("find data/proj -type f -size -600c -size +100c -printf '%6s %f\\n'\n");
+    s.push_str("find data/proj -type f -size 3075c\n");
+    s.push_str("find data/proj -empty\n");
+    s.push_str("find data/proj -empty -type f\n");
+    s.push_str("# Modes.\n");
+    s.push_str("find data/proj -perm -4000\n");
+    s.push_str("find data/proj -perm /o+w\n");
+    s.push_str("find data/proj -type f -perm 644 -name '*.h'\n");
+    s.push_str("find data/proj -type f -perm -u=x\n");
+    s.push_str("find data/proj -perm /1000\n");
+    s.push_str("find data/proj -type f ! -perm -u=w\n");
+    s.push_str("find data/proj -perm -g=s,u=s -o -perm -1777\n");
+    s.push_str("find data/proj -type f -perm /g=w,o=w -printf '%m %M %p\\n'\n");
+    s.push_str("# Times; now is 2026-10-15 12:00:00 UTC.\n");
+    s.push_str("find data/proj -type f -mtime 0\n");
+    s.push_str("find data/proj -type f -mtime -2 -mtime +0\n");
+    s.push_str("find data/proj -type f -mtime +30\n");
+    s.push_str("find data/proj -type f -mmin -60\n");
+    s.push_str("find data/proj -type f -mmin +30 -mmin -46\n");
+    s.push_str("find data/proj -type f -mmin 31\n");
+    s.push_str("find data/proj -type f -newer data/proj/src/util.c\n");
+    s.push_str("find data/proj ! -type l -newermt '2026-10-13 18:00'\n");
+    s.push_str("find data/proj -type f -newermt 2026-10-14 ! -newermt '2026-10-15 09:00:00'\n");
+    s.push_str("find data/proj -daystart -type f -mtime 0\n");
+    s.push_str("find data/proj -daystart -type f -mtime 1\n");
+    s.push_str("find data/proj/docs -type f -printf '%-12f|%6s|%TY-%Tm-%Td %TH:%TM|%t\\n'\n");
+    s.push_str("find data/proj/src -type f -printf '%T@ %Tj %Ta %Tb %TD %TF %Tk %Tr %TT %TS %f\\n'\n");
+    s.push_str("# Operators and actions.\n");
+    s.push_str("find data/proj \\( -name '*.c' -o -name '*.h' \\) -printf '%f\\n'\n");
+    s.push_str("find data/proj -name .git -prune -o -type f -print\n");
+    s.push_str("find data/proj -name .git -prune -o -name build -prune -o -name '*.o' -print\n");
+    s.push_str("find data/proj -type d \\( -name .git -o -name tmp \\) -prune -o -type d -print\n");
+    s.push_str("find data/proj -name '*.md' , -name '*.sh' -printf 'script %f\\n'\n");
+    s.push_str("find data/proj -type f -name '*.c' -print -quit\n");
+    s.push_str("find data/proj -false -o -name Makefile\n");
+    s.push_str("find data/proj -not -type d -not -type f\n");
+    s.push_str("find data/proj ! \\( -type d -o -name '*.*' \\)\n");
+    s.push_str("find data/proj -name '*.o' -a -true\n");
+    s.push_str("find data/proj -maxdepth 1 -name 'M*' -printf 'one %f\\n' -printf 'two %f\\n'\n");
+    s.push_str("find data/proj/src -printf '%d %y %m %M %f %h %P\\n'\n");
+    s.push_str("find data/proj/scripts -type f -printf '[%-10f][%5d][%.4f][%-6m][%3s]\\n'\n");
+    s.push_str("find data/proj/tmp -printf '%p\\t%m\\\\%%\\101\\n'\n");
+    s.push_str("find data/proj/tmp -printf '%f\\c ignored\\n'\n");
+    s.push_str("find data/proj -maxdepth 0 -printf 'x\\qy %j\\n'\n");
+    s.push_str("# Deleting.\n");
+    s.push_str("find data/proj/build -name '*.o' -delete -print\n");
+    s.push_str("find data/proj/build\n");
+    s.push_str("find data/proj/tmp -type f -delete\n");
+    s.push_str("find data/proj/src -name old -delete\n");
+    s.push_str("find data/proj/docs/img -delete\n");
+    s.push_str("find data/proj/docs -maxdepth 1\n");
+    s.push_str("reset\n");
+    s.push_str("find data/proj/build -maxdepth 1 -name '*.o'\n");
+    s.push_str("# Mistakes.\n");
+    s.push_str("find data/proj -foo\n");
+    s.push_str("find data/proj -name\n");
+    s.push_str("find data/proj -name a extra\n");
+    s.push_str("find data/proj -type q\n");
+    s.push_str("find data/proj -type f,\n");
+    s.push_str("find data/proj -size 3q\n");
+    s.push_str("find data/proj -size +1.5k\n");
+    s.push_str("find data/proj -perm abc\n");
+    s.push_str("find data/proj -maxdepth x\n");
+    s.push_str("find data/proj -mindepth -1\n");
+    s.push_str("find data/proj -mtime x\n");
+    s.push_str("find data/proj -newermt garbage\n");
+    s.push_str("find data/proj -newer data/proj/nope\n");
+    s.push_str("find data/proj \\(\n");
+    s.push_str("find data/proj -name x \\)\n");
+    s.push_str("find data/proj \\( \\)\n");
+    s.push_str("find data/proj !\n");
+    s.push_str("find data/proj -o -name x\n");
+    s.push_str("find data/proj -name a -o\n");
+    s.push_str("find data/proj -delete -prune\n");
+    s.push_str("find data/proj -printf 'oops %'\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("manifest.txt".to_string(), file_0()));
+    v.push(("jobs.txt".to_string(), file_1()));
+    v
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for (name, text) in data_files().into_iter() {
+        let path = f"data/{name}";
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    build_tree()?;
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.txt: {e}"),
+    };
+    for line in lines_of(text) {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let mut job = Job { out: String.new(), err: String.new(), status: 0, quit: false };
+        let w = shell_words(line);
+        if w[0] == "find" {
+            let args: Vec[String] = w[1..].to_vec();
+            find(mut job, args);
+        } else if w[0] == "reset" {
+            build_tree()?;
+        }
+        let mut out = f"$ {line}\n";
+        out.push_str(job.out);
+        out.push_str(job.err);
+        if job.status != 0 {
+            out.push_str(f"[exit status {job.status}]\n");
+        }
+        println(out);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
