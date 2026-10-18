@@ -48,7 +48,7 @@ impl Excel {
             Some(names) => {
                 let mut total = 0;
                 for range in names.iter() {
-                    let ends = range.split(":");
+                    let ends: Vec[Str] = range.split(":").collect();
                     let first = ref ends[0];
                     let last = ref ends[ends.len() - 1];
                     let left = first.chars().next().unwrap() as i64 - 'A' as i64;

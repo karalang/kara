@@ -208,7 +208,7 @@ fn main() {
             }
             println(f"extracted {extracted}");
             match fs.read_to_string("x_src_main.kara") {
-                Ok(t) => println(f"x_src_main.kara line 2: [{t.lines()[1]}]"),
+                Ok(t) => println(f"x_src_main.kara line 2: [{t.lines().nth(1).unwrap()}]"),
                 Err(_) => println("cannot read back"),
             }
         }

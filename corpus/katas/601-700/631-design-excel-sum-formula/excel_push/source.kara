@@ -43,9 +43,9 @@ impl Excel {
         self.forget(at);
         let mut reads: Map[i64, i64] = Map.new();
         for range in numbers.iter() {
-            let ends = range.split(":");
-            let (top, left) = self.position(ends[0]);
-            let (bottom, right) = self.position(ends[ends.len() - 1]);
+            let ends: Vec[Str] = range.split(":").collect();
+            let (top, left) = self.position(ends[0].to_string());
+            let (bottom, right) = self.position(ends[ends.len() - 1].to_string());
             for r in top..bottom + 1 {
                 for c in left..right + 1 {
                     let source = r * self.width + c;

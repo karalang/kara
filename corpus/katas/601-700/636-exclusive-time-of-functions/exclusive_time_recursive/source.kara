@@ -13,7 +13,7 @@ struct Event {
 }
 
 fn parse(log: String) -> Event {
-    let parts = log.split(":");
+    let parts: Vec[Str] = log.split(":").collect();
     Event { id: i64.parse(parts[0]).unwrap(), start: parts[1] == "start", time: i64.parse(parts[2]).unwrap() }
 }
 
@@ -25,7 +25,7 @@ fn call(events: Vec[Event], at: i64, total: mut ref Vec[i64]) -> (i64, i64) {
     let mut next = at + 1;
     let mut inner = 0;
     while events[next].start {
-        let (after, length) = call(events, next, total);
+        let (after, length) = call(events, next, mut total);
         inner += length;
         next = after;
     }

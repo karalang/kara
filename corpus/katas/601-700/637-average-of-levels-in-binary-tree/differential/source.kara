@@ -45,8 +45,8 @@ fn visit_depths(node: Option[TreeNode], depth: i64, sums: mut ref Vec[i64], coun
         }
         sums[depth] += n.val;
         counts[depth] += 1;
-        visit_depths(n.left, depth + 1, sums, counts);
-        visit_depths(n.right, depth + 1, sums, counts);
+        visit_depths(n.left, depth + 1, mut sums, mut counts);
+        visit_depths(n.right, depth + 1, mut sums, mut counts);
     }
 }
 
@@ -169,8 +169,8 @@ fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
 fn paths(node: Option[TreeNode], path: String, out: mut ref Vec[(String, i64)]) {
     if let Some(n) = node {
         out.push((path.clone(), n.val));
-        paths(n.left, f"{path}L", out);
-        paths(n.right, f"{path}R", out);
+        paths(n.left, f"{path}L", mut out);
+        paths(n.right, f"{path}R", mut out);
     }
 }
 

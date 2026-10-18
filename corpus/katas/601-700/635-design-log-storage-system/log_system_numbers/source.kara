@@ -37,7 +37,7 @@ impl LogSystem {
 // The six fields of a timestamp, year first.
 fn fields(timestamp: String) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
-    for part in timestamp.split(":").iter() {
+    for part in timestamp.split(":") {
         out.push(i64.parse(part).unwrap());
     }
     out

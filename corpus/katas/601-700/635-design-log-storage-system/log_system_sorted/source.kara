@@ -29,7 +29,7 @@ impl LogSystem {
         let low = f"{start.slice(0, n)}{floor.slice(n, 19)}";
         let high = f"{end.slice(0, n)}{ceiling.slice(n, 19)}";
         let mut ids: Vec[i64] = Vec.new();
-        for (_, at) in self.logs.range_inclusive(low, high).iter() {
+        for (_, at) in self.logs.range_inclusive(low, high) {
             for id in at.iter() {
                 ids.push(*id);
             }

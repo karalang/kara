@@ -15,7 +15,7 @@ fn exclusive_time(n: i64, logs: Vec[String]) -> Vec[i64] {
     let mut total = vec![0; n];
     let mut stack: Vec[Frame] = Vec.new();
     for log in logs.iter() {
-        let parts = log.split(":");
+        let parts: Vec[Str] = log.split(":").collect();
         let id = i64.parse(parts[0]).unwrap();
         let t = i64.parse(parts[2]).unwrap();
         if parts[1] == "start" {

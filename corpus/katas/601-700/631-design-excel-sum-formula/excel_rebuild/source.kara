@@ -37,9 +37,9 @@ impl Excel {
         let at = self.cell(row, column);
         let mut reads: Vec[i64] = Vec.new();
         for range in numbers.iter() {
-            let ends = range.split(":");
-            let (top, left) = self.position(ends[0]);
-            let (bottom, right) = self.position(ends[ends.len() - 1]);
+            let ends: Vec[Str] = range.split(":").collect();
+            let (top, left) = self.position(ends[0].to_string());
+            let (bottom, right) = self.position(ends[ends.len() - 1].to_string());
             for r in top..bottom + 1 {
                 for c in left..right + 1 {
                     reads.push(r * self.width + c);

@@ -154,7 +154,7 @@ impl LinkedTwitter {
 
     fn post_tweet(mut ref self, user: i64, tweet: i64) {
         self.clock += 1;
-        let next = self.heads.get(user);
+        let next = self.heads.get(user).cloned();
         self.heads.insert(user, LinkedNode { time: self.clock, tweet, next });
     }
 

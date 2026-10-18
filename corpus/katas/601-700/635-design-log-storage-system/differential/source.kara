@@ -79,7 +79,7 @@ impl LogSystem_numbers {
 // The six fields of a timestamp, year first.
 fn fields_numbers(timestamp: String) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
-    for part in timestamp.split(":").iter() {
+    for part in timestamp.split(":") {
         out.push(i64.parse(part).unwrap());
     }
     out
@@ -192,7 +192,7 @@ impl LogSystem_sorted {
         let low = f"{start.slice(0, n)}{floor.slice(n, 19)}";
         let high = f"{end.slice(0, n)}{ceiling.slice(n, 19)}";
         let mut ids: Vec[i64] = Vec.new();
-        for (_, at) in self.logs.range_inclusive(low, high).iter() {
+        for (_, at) in self.logs.range_inclusive(low, high) {
             for id in at.iter() {
                 ids.push(*id);
             }
@@ -245,7 +245,7 @@ fn random_time(seed: mut ref i64) -> String {
 // A timestamp as a count of seconds from the start of 2000 in a
 // calendar of 12 months of 31 days each.
 fn seconds(timestamp: String) -> i64 {
-    let parts = timestamp.split(":");
+    let parts: Vec[Str] = timestamp.split(":").collect();
     let mut f: Vec[i64] = Vec.new();
     for part in parts.iter() {
         f.push(i64.parse(part).unwrap());

@@ -49,7 +49,7 @@ fn parse_tasks(text: Str) -> Result[Vec[Task], String] {
         if t.is_empty() or t.starts_with("#") {
             continue;
         }
-        let parts: Vec[String] = t.split("|").iter().map(|p| p.trim().to_string()).collect();
+        let parts: Vec[String] = t.split("|").map(|p| p.trim().to_string()).collect();
         if parts.len() < 3 {
             return Err(f"line {line_no}: want name | deps | command");
         }
@@ -274,7 +274,7 @@ fn main() {
         };
         match run_task(t, input) {
             Ok(r) => {
-                let first = r.stdout.lines().iter().next().map(|l| l.trim().to_string()).unwrap_or(String.new());
+                let first = r.stdout.lines().next().map(|l| l.trim().to_string()).unwrap_or(String.new());
                 println(f"[{r.status}] {t.name} exit={r.code} lines={count_lines(r.stdout)} stderr={r.stderr_lines} first=[{first}]");
                 if r.code != 0 {
                     failed.insert(t.name.clone());

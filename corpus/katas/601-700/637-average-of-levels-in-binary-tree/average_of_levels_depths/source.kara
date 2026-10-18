@@ -19,8 +19,8 @@ fn visit(node: Option[TreeNode], depth: i64, sums: mut ref Vec[i64], counts: mut
         }
         sums[depth] += n.val;
         counts[depth] += 1;
-        visit(n.left, depth + 1, sums, counts);
-        visit(n.right, depth + 1, sums, counts);
+        visit(n.left, depth + 1, mut sums, mut counts);
+        visit(n.right, depth + 1, mut sums, mut counts);
     }
 }
 

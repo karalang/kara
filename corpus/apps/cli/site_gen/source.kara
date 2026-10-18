@@ -71,7 +71,7 @@ fn inline(text: Str, links: mut ref Vec[String]) -> String {
             if j + 1 < n {
                 let mut inner = String.new();
                 for k in i + 2..j { inner.push(cs[k]); }
-                out.push_str(f"<strong>{inline(inner, links)}</strong>");
+                out.push_str(f"<strong>{inline(inner, mut links)}</strong>");
                 i = j + 2;
                 continue;
             }
@@ -82,7 +82,7 @@ fn inline(text: Str, links: mut ref Vec[String]) -> String {
             if j < n and j > i + 1 {
                 let mut inner = String.new();
                 for k in i + 1..j { inner.push(cs[k]); }
-                out.push_str(f"<em>{inline(inner, links)}</em>");
+                out.push_str(f"<em>{inline(inner, mut links)}</em>");
                 i = j + 1;
                 continue;
             }
@@ -99,7 +99,7 @@ fn inline(text: Str, links: mut ref Vec[String]) -> String {
                     let mut href = String.new();
                     for x in j + 2..k { href.push(cs[x]); }
                     links.push(href.clone());
-                    out.push_str(f"<a href=\"{escape(href)}\">{inline(label, links)}</a>");
+                    out.push_str(f"<a href=\"{escape(href)}\">{inline(label, mut links)}</a>");
                     i = k + 1;
                     continue;
                 }

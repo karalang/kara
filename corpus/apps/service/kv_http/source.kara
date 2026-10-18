@@ -81,7 +81,7 @@ fn parse_requests(raw: Str) -> Result[Vec[Request], String] {
         for l in head.split("\r\n") {
             lines.push(l.to_string());
         }
-        let first: Vec[String] = lines[0].split(" ").iter().map(|p| p.to_string()).collect();
+        let first: Vec[String] = lines[0].split(" ").map(|p| p.to_string()).collect();
         if first.len() != 3 or not first[2].starts_with("HTTP/1.") {
             return Err(f"bad request line [{lines[0]}]");
         }
@@ -106,7 +106,7 @@ fn parse_requests(raw: Str) -> Result[Vec[Request], String] {
         };
         let body_start = head_end + 4;
         let len = match header_value(req, "content-length") {
-            Some(v) => match i64.parse(v) {
+            Some(v) => match i64.parse(v).ok() {
                 Some(n) => n,
                 None => return Err(f"bad content-length [{v}]"),
             },
@@ -268,7 +268,7 @@ fn exchange(listener: ref TcpListener, addr: Str, store: mut ref Store, label: S
                 Ok(raw) => match parse_requests(raw) {
                     Ok(reqs) => {
                         for r in reqs.iter() {
-                            out.push_str(render(handle(store, r)));
+                            out.push_str(render(handle(mut store, r)));
                         }
                     }
                     Err(e) => out.push_str(render(error_reply(400, e))),

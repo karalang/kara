@@ -96,7 +96,7 @@ fn check_rule(rule: ref Rule, attrs: ref SortedMap[String, String]) -> Option[St
             None => Some(f"no {attr}"),
         },
         Rule.AtLeast { attr, min } => match attrs.get(attr) {
-            Some(v) => match i64.parse(v) {
+            Some(v) => match i64.parse(v).ok() {
                 Some(n) => if n >= *min { None } else { Some(f"{attr}={n} < {min}") },
                 None => Some(f"{attr} not a number"),
             },
@@ -186,7 +186,7 @@ fn run(cfg: ref Config, input: Str, out_path: Str) -> Result[Vec[Decision], Stri
         if line.trim().is_empty() {
             continue;
         }
-        let parsed: Result[EvalRequest, DeserializeError] = Json.deserialize(line);
+        let parsed: Result[EvalRequest, DeserializeError] = Json.deserialize(line.to_string());
         match parsed {
             Ok(req) => {
                 let d = evaluate(cfg, req);
@@ -293,6 +293,6 @@ fn main() {
         i += 1;
     }
     let back = fs.read_to_string("decisions.v2.jsonl").unwrap_or(String.new());
-    let lines: Vec[String] = back.lines();
+    let lines: Vec[String] = back.lines().map(|p| p.to_string()).collect();
     println(f"decisions.v2.jsonl: {lines.len()} lines, first {lines[0]}");
 }

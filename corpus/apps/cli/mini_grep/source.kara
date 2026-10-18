@@ -252,7 +252,7 @@ fn emit(n: ref Node, prog: mut ref Vec[Inst]) {
         Node.Eol => prog.push(Inst.AtEol),
         Node.Cat(items) => {
             for it in items.iter() {
-                emit(it, prog);
+                emit(it, mut prog);
             }
         }
         Node.Alt(arms) => {
@@ -263,13 +263,13 @@ fn emit(n: ref Node, prog: mut ref Vec[Inst]) {
                 if i + 1 < arms.len() {
                     let split = prog.len();
                     prog.push(Inst.Split(split + 1, -1));
-                    emit(arms[i], prog);
+                    emit(arms[i], mut prog);
                     jumps.push(prog.len());
                     prog.push(Inst.Jmp(-1));
                     let next = prog.len();
                     prog[split] = Inst.Split(split + 1, next);
                 } else {
-                    emit(arms[i], prog);
+                    emit(arms[i], mut prog);
                 }
                 i += 1;
             }
@@ -280,13 +280,13 @@ fn emit(n: ref Node, prog: mut ref Vec[Inst]) {
         }
         Node.Repeat(inner, lo, hi, greedy) => {
             for _ in 0..*lo {
-                emit(inner, prog);
+                emit(inner, mut prog);
             }
             if hi < 0 {
                 // L: split body, out; body; jmp L
                 let l = prog.len();
                 prog.push(Inst.Split(-1, -1));
-                emit(inner, prog);
+                emit(inner, mut prog);
                 prog.push(Inst.Jmp(l));
                 let out = prog.len();
                 prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
@@ -295,7 +295,7 @@ fn emit(n: ref Node, prog: mut ref Vec[Inst]) {
                 for _ in *lo..*hi {
                     holes.push(prog.len());
                     prog.push(Inst.Split(-1, -1));
-                    emit(inner, prog);
+                    emit(inner, mut prog);
                 }
                 let out = prog.len();
                 for h in holes.iter() {
@@ -342,15 +342,15 @@ fn add(prog: ref Vec[Inst], list: mut ref Vec[Thread], seen: mut ref Vec[i64], s
     }
     seen[pc] = step;
     match prog[pc] {
-        Inst.Jmp(t) => add(prog, list, seen, step, t, start, at, len),
+        Inst.Jmp(t) => add(prog, mut list, mut seen, step, t, start, at, len),
         Inst.Split(a, b) => {
-            add(prog, list, seen, step, a, start, at, len);
-            add(prog, list, seen, step, b, start, at, len);
+            add(prog, mut list, mut seen, step, a, start, at, len);
+            add(prog, mut list, mut seen, step, b, start, at, len);
         }
-        Inst.AtBol => if at == 0 { add(prog, list, seen, step, pc + 1, start, at, len); },
-        Inst.AtEol => if at == len { add(prog, list, seen, step, pc + 1, start, at, len); },
-        Inst.Save(0) => add(prog, list, seen, step, pc + 1, at, at, len),
-        Inst.Save(_) => add(prog, list, seen, step, pc + 1, start, at, len),
+        Inst.AtBol => if at == 0 { add(prog, mut list, mut seen, step, pc + 1, start, at, len); },
+        Inst.AtEol => if at == len { add(prog, mut list, mut seen, step, pc + 1, start, at, len); },
+        Inst.Save(0) => add(prog, mut list, mut seen, step, pc + 1, at, at, len),
+        Inst.Save(_) => add(prog, mut list, mut seen, step, pc + 1, start, at, len),
         _ => list.push(Thread { pc: pc, start: start }),
     }
 }
@@ -437,7 +437,7 @@ fn expand(paths: ref Vec[String]) -> Vec[String] {
                     }
                 }
                 found.sort();
-                out.append(mut found);
+                out.extend(mem.take(mut found));
             }
             Err(_) => out.push(p.clone()),
         }
@@ -499,7 +499,7 @@ fn grep(args: ref Vec[String]) -> i64 {
                 continue;
             }
         };
-        let lines: Vec[String] = text.lines();
+        let lines: Vec[String] = text.lines().map(|p| p.to_string()).collect();
         let mut hits: Vec[bool] = Vec.new();
         let mut n_hits = 0;
         for l in lines.iter() {
@@ -616,7 +616,7 @@ fn main() {
     ];
     for c in cmds.iter() {
         println(f"$ grep {c}");
-        let args: Vec[String] = c.split_whitespace();
+        let args: Vec[String] = c.split_whitespace().map(|p| p.to_string()).collect();
         let st = grep(args);
         println(f"(exit {st})");
     }

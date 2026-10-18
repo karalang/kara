@@ -34,7 +34,7 @@ enum Reply { Simple(String), Error(String), Int(i64), Bulk(Option[String]), Many
 struct Store { items: SortedMap[String, Item], now: i64, log: String, records: i64 }
 
 fn to_int(s: Str) -> Option[i64] {
-    match i64.parse(s) {
+    match i64.parse(s).ok() {
         Some(n) => Some(n),
         None => None,
     }
@@ -76,7 +76,7 @@ fn encode(r: ref Reply, out: mut ref String) {
         Reply.Many(items) => {
             out.push_str(f"*{items.len()}\r\n");
             for it in items.iter() {
-                encode(it, out);
+                encode(it, mut out);
             }
         }
     }
@@ -691,7 +691,7 @@ fn session(listener: ref TcpListener, store: mut ref Store, label: Str, cmds: re
     match listener.accept() {
         Ok(conn) => {
             let out = match read_all(conn) {
-                Ok(raw) => serve(store, raw),
+                Ok(raw) => serve(mut store, raw),
                 Err(e) => f"-ERR {e}\r\n",
             };
             match conn.write_all(out.bytes()) {
@@ -758,7 +758,7 @@ fn resp_session(listener: ref TcpListener, store: mut ref Store, label: Str, lin
         cmds.push(c);
     }
     wire.push_str(extra);
-    session(listener, store, label, cmds, wire);
+    session(listener, mut store, label, cmds, wire);
 }
 
 fn restart() -> Result[Store, String] {

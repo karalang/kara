@@ -10,7 +10,7 @@ fn exclusive_time_star(n: i64, logs: Vec[String]) -> Vec[i64] {
     let mut stack: Vec[i64] = Vec.new();
     let mut prev = 0;
     for log in logs.iter() {
-        let parts = log.split(":");
+        let parts: Vec[Str] = log.split(":").collect();
         let id = i64.parse(parts[0]).unwrap();
         let t = i64.parse(parts[2]).unwrap();
         if parts[1] == "start" {
@@ -40,7 +40,7 @@ fn exclusive_time_frames(n: i64, logs: Vec[String]) -> Vec[i64] {
     let mut total = vec![0; n];
     let mut stack: Vec[Frame_frames] = Vec.new();
     for log in logs.iter() {
-        let parts = log.split(":");
+        let parts: Vec[Str] = log.split(":").collect();
         let id = i64.parse(parts[0]).unwrap();
         let t = i64.parse(parts[2]).unwrap();
         if parts[1] == "start" {
@@ -67,7 +67,7 @@ struct Event_recursive {
 }
 
 fn parse_recursive(log: String) -> Event_recursive {
-    let parts = log.split(":");
+    let parts: Vec[Str] = log.split(":").collect();
     Event_recursive { id: i64.parse(parts[0]).unwrap(), start: parts[1] == "start", time: i64.parse(parts[2]).unwrap() }
 }
 
@@ -79,7 +79,7 @@ fn call_recursive(events: Vec[Event_recursive], at: i64, total: mut ref Vec[i64]
     let mut next = at + 1;
     let mut inner = 0;
     while events[next].start {
-        let (after, length) = call_recursive(events, next, total);
+        let (after, length) = call_recursive(events, next, mut total);
         inner += length;
         next = after;
     }
@@ -115,7 +115,7 @@ fn exclusive_time_pairs(n: i64, logs: Vec[String]) -> Vec[i64] {
     let mut calls: Vec[Call_pairs] = Vec.new();
     let mut open: Vec[i64] = Vec.new();
     for log in logs.iter() {
-        let parts = log.split(":");
+        let parts: Vec[Str] = log.split(":").collect();
         let t = i64.parse(parts[2]).unwrap();
         if parts[1] == "start" {
             let id = i64.parse(parts[0]).unwrap();
@@ -176,7 +176,7 @@ fn random_logs(n: i64, calls: i64, gap: i64, seed: mut ref i64) -> Vec[String] {
 }
 
 fn field(log: String, i: i64) -> String {
-    let parts = log.split(":");
+    let parts: Vec[Str] = log.split(":").collect();
     parts[i].clone()
 }
 

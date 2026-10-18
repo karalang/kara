@@ -275,7 +275,7 @@ fn main() {
             shifted.push(moved);
         }
         let mut more = nums.clone();
-        more.append(random_lists(1, mut seed));
+        more.extend(random_lists(1, mut seed));
         for which in 0..4 {
             let got = answer(which, nums);
             let moved = answer(which, shifted);

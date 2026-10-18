@@ -139,7 +139,7 @@ impl JsonReader {
             }
         }
         let text: String = self.chars[start..self.at].iter().collect();
-        match f64.parse(text) {
+        match f64.parse(text).ok() {
             Some(x) => Ok(JVal.Num(x)),
             None => {
                 self.at = start;
@@ -260,7 +260,7 @@ fn write_json(v: ref JVal, out: mut ref String) {
                 out.push_str(f"{x}");
             }
         }
-        JVal.Text(s) => quote(s, out),
+        JVal.Text(s) => quote(s, mut out),
         JVal.Arr(items) => {
             out.push('[');
             let mut first = true;
@@ -269,7 +269,7 @@ fn write_json(v: ref JVal, out: mut ref String) {
                     out.push(',');
                 }
                 first = false;
-                write_json(it, out);
+                write_json(it, mut out);
             }
             out.push(']');
         }
@@ -281,9 +281,9 @@ fn write_json(v: ref JVal, out: mut ref String) {
                     out.push(',');
                 }
                 first = false;
-                quote(k, out);
+                quote(k, mut out);
                 out.push(':');
-                write_json(it, out);
+                write_json(it, mut out);
             }
             out.push('}');
         }
@@ -420,7 +420,7 @@ fn ok_json(status: i64, v: ref JVal) -> HttpResp {
 }
 
 fn id_param(params: ref Vec[String]) -> Result[i64, HttpResp] {
-    match i64.parse(params[0]) {
+    match i64.parse(params[0]).ok() {
         Some(n) => Ok(n),
         None => Err(error(400, f"bad id '{params[0]}'")),
     }
@@ -554,7 +554,7 @@ fn dispatch(routes: ref Vec[Route], st: mut ref State, r: ref HttpReq) -> HttpRe
         match match_route(rt.pattern, path) {
             Some(params) => {
                 if rt.method == r.method {
-                    return (rt.handler)(st, r, params);
+                    return (rt.handler)(mut st, r, params);
                 }
                 allowed.push(rt.method.clone());
             }
@@ -578,7 +578,7 @@ fn handle(routes: ref Vec[Route], middleware: ref Vec[Fn(ref HttpReq) -> Option[
         }
         i += 1;
     }
-    dispatch(routes, st, r)
+    dispatch(routes, mut st, r)
 }
 
 fn parse_requests(raw: Str) -> Result[Vec[HttpReq], String] {
@@ -591,13 +591,13 @@ fn parse_requests(raw: Str) -> Result[Vec[HttpReq], String] {
             None => return Err("incomplete request head".to_string()),
         };
         let head = rest[0..head_end];
-        let all_lines = head.split("\r\n");
+        let all_lines: Vec[Str] = head.split("\r\n").collect();
         let mut lines = all_lines.iter();
         let first = match lines.next() {
             Some(l) => l.to_string(),
             None => return Err("empty request".to_string()),
         };
-        let parts: Vec[String] = first.split(" ").iter().map(|s| s.to_string()).collect();
+        let parts: Vec[String] = first.split(" ").map(|s| s.to_string()).collect();
         if parts.len() != 3 {
             return Err(f"bad request line '{first}'");
         }
@@ -609,7 +609,7 @@ fn parse_requests(raw: Str) -> Result[Vec[HttpReq], String] {
                     let k = l[0..i].trim().to_string();
                     let v = l[i + 1..l.len()].trim().to_string();
                     if k.to_lowercase() == "content-length" {
-                        length = match i64.parse(v) {
+                        length = match i64.parse(v).ok() {
                             Some(n) => n,
                             None => return Err(f"bad Content-Length '{v}'"),
                         };
@@ -685,7 +685,7 @@ fn serve_conn(srv: mut ref App, st: mut ref State, raw: Str) -> String {
     let mut out = String.new();
     for r in reqs.iter() {
         srv.next_request += 1;
-        let resp = handle(srv.routes, srv.middleware, st, r);
+        let resp = handle(srv.routes, srv.middleware, mut st, r);
         st.log.push(f"#{srv.next_request} {r.method} {r.path} -> {resp.status} ({resp.body.len()} bytes)");
         out.push_str(render(resp, srv.next_request));
     }
@@ -761,7 +761,7 @@ fn session(listener: ref TcpListener, srv: mut ref App, st: mut ref State, label
     match listener.accept() {
         Ok(conn) => {
             let out = match read_all(conn) {
-                Ok(raw) => serve_conn(srv, st, raw),
+                Ok(raw) => serve_conn(mut srv, mut st, raw),
                 Err(e) => render(error(400, e), 0),
             };
             match conn.write_all(out.bytes()) {
