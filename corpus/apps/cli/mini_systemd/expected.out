@@ -1,0 +1,189 @@
+$ systemctl cat webapp.service
+# /etc/systemd/system/webapp.service
+# The shop's API, run by the admin.
+[Unit]
+Description=Shop API (%n)
+Requires=postgresql.service
+Wants=redis.service metrics-agent.service
+After=postgresql.service redis.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=shop
+ExecStart=/srv/shop/bin/api --port 8080
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/webapp.service.d/10-env.conf
+[Service]
+Environment=RUST_LOG=info
+
+# /etc/systemd/system/webapp.service.d/20-limits.conf
+[Unit]
+# Drop the soft dependency on redis; the cache is optional now.
+Wants=
+Wants=metrics-agent.service network-online.target
+
+$ systemctl show webapp.service
+Id=webapp.service
+Description=Shop API (webapp.service)
+LoadState=loaded
+FragmentPath=/etc/systemd/system/webapp.service
+DropInPaths=/etc/systemd/system/webapp.service.d/10-env.conf /etc/systemd/system/webapp.service.d/20-limits.conf
+Requires=postgresql.service
+Wants=metrics-agent.service network-online.target
+Conflicts=
+Before=
+After=postgresql.service redis.service network-online.target
+ExecStart=/srv/shop/bin/api --port 8080
+User=shop
+Environment=RUST_LOG=info
+ActiveState=inactive
+UnitFileState=disabled
+
+$ systemctl show getty@tty2.service
+Id=getty@tty2.service
+Description=Getty on tty2
+LoadState=loaded
+FragmentPath=/usr/lib/systemd/system/getty@.service
+DropInPaths=
+Requires=
+Wants=
+Conflicts=
+Before=
+After=systemd-user-sessions.service
+ExecStart=-/sbin/agetty -o '-p -- \\u' --noclear tty2 $TERM
+User=root
+Environment=
+ActiveState=inactive
+UnitFileState=disabled
+
+$ systemctl show missing.service
+Id=missing.service
+LoadState=not-found
+ActiveState=inactive
+
+$ systemctl enable postgresql.service
+Created symlink /etc/systemd/system/multi-user.target.wants/postgresql.service → /usr/lib/systemd/system/postgresql.service.
+
+$ systemctl enable redis.service
+Created symlink /etc/systemd/system/multi-user.target.wants/redis.service → /usr/lib/systemd/system/redis.service.
+
+$ systemctl enable webapp.service
+Created symlink /etc/systemd/system/multi-user.target.wants/webapp.service → /etc/systemd/system/webapp.service.
+
+$ systemctl enable nginx.service
+Created symlink /etc/systemd/system/multi-user.target.wants/nginx.service → /usr/lib/systemd/system/nginx.service.
+
+$ systemctl enable getty@tty3.service
+Created symlink /etc/systemd/system/getty.target.wants/getty@tty3.service → /usr/lib/systemd/system/getty@.service.
+
+$ systemctl enable getty@.service
+Created symlink /etc/systemd/system/getty.target.wants/getty@tty1.service → /usr/lib/systemd/system/getty@.service.
+
+$ systemctl enable metrics-agent.service
+The unit files have no installation config (WantedBy=, RequiredBy=, Also=,
+Alias= settings in the [Install] section, and DefaultInstance= for template
+units). This means they are not meant to be enabled or disabled using systemctl.
+
+$ systemctl disable nginx.service
+Removed "/etc/systemd/system/multi-user.target.wants/nginx.service".
+
+$ systemctl list-dependencies multi-user.target
+multi-user.target
+○ ├─basic.target
+○ │ └─sysinit.target
+○ │   ├─local-fs.target
+○ │   └─systemd-journald.service
+○ ├─postgresql.service
+○ ├─redis.service
+○ └─webapp.service
+
+$ systemctl start multi-user.target
+  Found ordering cycle on metrics-agent.service/start
+  Found dependency on webapp.service/start
+  Found dependency on metrics-agent.service/start
+  Job metrics-agent.service/start deleted to break ordering cycle starting with metrics-agent.service/start
+  Reached target Local File Systems.
+  Reached target Network.
+  Reached target Network is Online.
+  Starting PostgreSQL database server...
+  Started PostgreSQL database server.
+  Starting Redis in-memory data store...
+  Started Redis in-memory data store.
+  Reached target System Initialization.
+  Reached target Basic System.
+  Reached target Multi-User System.
+  Starting Journal Service...
+  Started Journal Service.
+  Starting Shop API (webapp.service)...
+  Started Shop API (webapp.service).
+
+$ systemctl list-units
+UNIT                     LOAD   ACTIVE SUB     DESCRIPTION
+basic.target             loaded active active  Basic System
+local-fs.target          loaded active active  Local File Systems
+multi-user.target        loaded active active  Multi-User System
+network-online.target    loaded active active  Network is Online
+network.target           loaded active active  Network
+postgresql.service       loaded active running PostgreSQL database server
+redis.service            loaded active running Redis in-memory data store
+sysinit.target           loaded active active  System Initialization
+systemd-journald.service loaded active running Journal Service
+webapp.service           loaded active running Shop API (webapp.service)
+10 loaded units listed.
+
+$ systemctl start backup.service
+  Starting Mount the backup disk...
+  broken-mount.service: Main process exited, code=exited, status=1/FAILURE
+  broken-mount.service: Failed with result 'exit-code'.
+  Failed to start Mount the backup disk.
+  Dependency failed for Nightly backup.
+A dependency job for backup.service failed. See 'journalctl -xe' for details.
+
+$ systemctl start loop-a.service
+  Found ordering cycle on loop-a.service/start
+  Found dependency on loop-b.service/start
+  Found dependency on loop-a.service/start
+  Unable to break cycle starting with loop-a.service/start
+Failed to start loop-a.service: Transaction order is cyclic. See system logs for details.
+
+$ systemctl start rescue.target
+  Stopped target Multi-User System.
+  Reached target Rescue Mode.
+
+$ systemctl list-units
+UNIT                     LOAD   ACTIVE SUB     DESCRIPTION
+basic.target             loaded active active  Basic System
+broken-mount.service     loaded failed failed  Mount the backup disk
+local-fs.target          loaded active active  Local File Systems
+network-online.target    loaded active active  Network is Online
+network.target           loaded active active  Network
+postgresql.service       loaded active running PostgreSQL database server
+redis.service            loaded active running Redis in-memory data store
+rescue.target            loaded active active  Rescue Mode
+sysinit.target           loaded active active  System Initialization
+systemd-journald.service loaded active running Journal Service
+webapp.service           loaded active running Shop API (webapp.service)
+11 loaded units listed.
+
+$ systemctl stop postgresql.service
+  Stopping Shop API (webapp.service)...
+  Stopped Shop API (webapp.service).
+  Stopping PostgreSQL database server...
+  Stopped PostgreSQL database server.
+
+$ systemctl list-units
+UNIT                     LOAD   ACTIVE SUB     DESCRIPTION
+basic.target             loaded active active  Basic System
+broken-mount.service     loaded failed failed  Mount the backup disk
+local-fs.target          loaded active active  Local File Systems
+network-online.target    loaded active active  Network is Online
+network.target           loaded active active  Network
+redis.service            loaded active running Redis in-memory data store
+rescue.target            loaded active active  Rescue Mode
+sysinit.target           loaded active active  System Initialization
+systemd-journald.service loaded active running Journal Service
+9 loaded units listed.
+

@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 274 |
 | codegen-gap | 265 |
-| false-positive | 207 |
+| false-positive | 208 |
 | other | 173 |
 | perf | 170 |
 | diagnostics | 164 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 941 |
 | typecheck | 449 |
 | other | 115 |
-| ownership | 107 |
+| ownership | 108 |
 | cli | 76 |
 | runtime | 75 |
 | parser | 68 |
@@ -206,6 +206,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-2 | 2026-10-18 | typecheck | medium | A `const` whose initializer is an integer literal above i64::MAX panics `karac check` (and `karac __mir-run`): `const BIG: i128 = 18446744073709551615;` reaches `narrow_literal_to_i64` from `eval_const_expr` with "internal error: 128-bit integer literal ... reached an i64-only consumer (B-2026-08-19-8 stage 5)". The same literal in a `let`, in a match pattern, or the same value spelled `(1 << 64) - 1` all work | — |
 | B-2026-10-18-3 | 2026-10-18 | ownership | medium | Inside a loop, `karac check` refuses an owned loop-local value moved by a METHOD call in each of two exclusive branches, `if c { s.link(it); } else { s.link(it); }`, with "value 'it' was moved into a container (moved at line N), used again here", when `link(mut ref self, it: own It)` pushes it into a field. The same code outside a loop, or with a free function `take(mut v, it)` inside the loop, passes; __mir-run runs the refused program correctly | — |
 | B-2026-10-18-4 | 2026-10-18 | codegen | high | A function declared `-> i64` whose result is a `ref i64` from a call, `fn f(m: ref Map[String, i64], k: Str) -> i64 { m.get(k).unwrap_or(0) }` (or `v.first().unwrap_or(0)`, tail or `return`), returns the reference's ADDRESS on `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir`, printing 94742809522920 where `karac __mir-run` prints 5: the built MIR assigns the `ref i64` result straight to the `i64` return slot with no copy out | — |
+| B-2026-10-18-5 | 2026-10-18 | ownership | low | A slice of a String taken inside a match arm and immediately copied, `let dir = match o { Some(i) => path[..i].to_string(), None => ".".to_string() };`, leaves `karac check` treating the slice borrow as live, so a later move of `path` is refused with "cannot move `path` while a slice borrow into it is still live"; the same slice outside a match, or in an if/else, passes | — |
 
 ### Relocated
 

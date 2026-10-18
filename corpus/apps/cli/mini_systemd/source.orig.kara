@@ -1,0 +1,1196 @@
+// mini_systemd: the service manager's unit loading and job engine, as
+// systemctl shows it:
+// - unit files from /etc/systemd/system (admin) over /usr/lib/systemd/system
+//   (vendor), template units (`getty@.service`) with DefaultInstance and
+//   the %n %N %p %i %% specifiers;
+// - drop-ins in `<unit>.d/*.conf` from both directories, applied in file
+//   name order, the admin copy winning on the same name, and list settings
+//   that an empty assignment (`Wants=`) resets;
+// - `systemctl cat`, `show`, `enable` / `disable` (the `.wants/` links,
+//   written as files that hold the target path), and `list-dependencies`;
+// - `start`: the transaction over Requires= and Wants=, Conflicts= in both
+//   directions, After=/Before= ordering, an ordering cycle broken by
+//   deleting a non-required job (or the start refused when every job in it
+//   is required), dependency failure along Requires= + After=, oneshot and
+//   failing services; `stop`, which stops what requires the unit first;
+//   and `list-units`.
+//
+// The run writes the unit files into data/ first. expected.out is the
+// output of mini_systemd.py, the same jobs run in Python.
+
+const ADMIN: Str = "data/etc/systemd/system/";
+const VENDOR: Str = "data/usr/lib/systemd/system/";
+const NO_INSTALL: Str = "The unit files have no installation config (WantedBy=, RequiredBy=, Also=,\nAlias= settings in the [Install] section, and DefaultInstance= for template\nunits). This means they are not meant to be enabled or disabled using systemctl.";
+
+fn is_list(k: Str) -> bool {
+    k == "Requires" or k == "Wants" or k == "After" or k == "Before" or k == "Conflicts" or k == "WantedBy" or k == "Environment"
+}
+
+// ------------------------------------------------------------ strings
+
+fn index_of(s: Str, c: u8) -> Option[i64] {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        if b[i] == c {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn last_index_of(s: Str, c: u8) -> Option[i64] {
+    let b = s.bytes();
+    let mut i = b.len();
+    while i > 0 {
+        i -= 1;
+        if b[i] == c {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn words(s: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in s.split(" ") {
+        if not w.is_empty() {
+            out.push(w);
+        }
+    }
+    out
+}
+
+fn contains(v: ref Vec[String], s: Str) -> bool {
+    for x in v {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn join(v: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(v[i].as_str());
+    }
+    out
+}
+
+fn pad(s: Str, w: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < w {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn shown(path: Str) -> String {
+    path["data".len()..].to_string()
+}
+
+// ------------------------------------------------------------ files
+
+fn exists(p: Str) -> bool {
+    match fs.metadata(p.to_string()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    }
+}
+
+fn listdir(d: Str) -> Vec[String] {
+    let mut names = match fs.read_dir(d.to_string()) {
+        Ok(v) => v,
+        Err(_) => Vec.new(),
+    };
+    names.sort();
+    names
+}
+
+fn read_file(p: Str) -> String {
+    match fs.read_to_string(p.to_string()) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+// ------------------------------------------------------------ units
+
+#[derive(Clone)]
+struct Unit {
+    name: String,
+    found: bool,
+    fragment: String,
+    dropins: Vec[String],
+    scalars: Map[String, String],
+    lists: Map[String, Vec[String]],
+    has_install: bool,
+    template: Option[String],
+    instance: String,
+}
+
+impl Unit {
+    fn get(self, k: Str) -> String {
+        match self.scalars.get(k) {
+            Some(v) => v.clone(),
+            None => String.new(),
+        }
+    }
+
+    fn list(self, k: Str) -> Vec[String] {
+        match self.lists.get(k) {
+            Some(v) => v.clone(),
+            None => Vec.new(),
+        }
+    }
+
+    fn desc(self) -> String {
+        let d = self.get("Description");
+        if d.is_empty() { self.name.clone() } else { d }
+    }
+
+    fn kind(self) -> String {
+        match last_index_of(self.name.as_str(), b'.') {
+            Some(i) => self.name[i + 1..].to_string(),
+            None => String.new(),
+        }
+    }
+
+    fn parse_into(mut ref self, text: Str) {
+        for raw in text.split("\n") {
+            let line = raw.trim();
+            if line.is_empty() or line.starts_with("#") or line.starts_with(";") {
+                continue;
+            }
+            if line.starts_with("[") and line.ends_with("]") {
+                if line == "[Install]" {
+                    self.has_install = true;
+                }
+                continue;
+            }
+            let eq = match index_of(line.as_str(), b'=') {
+                Some(i) => i,
+                None => continue,
+            };
+            let k = line[..eq].trim();
+            let v = line[eq + 1..].trim();
+            if is_list(k.as_str()) {
+                if v.is_empty() {
+                    self.lists[k] = Vec.new();
+                } else {
+                    let mut cur = self.list(k.as_str());
+                    if k == "Environment" {
+                        cur.push(v);
+                    } else {
+                        for w in words(v.as_str()) {
+                            cur.push(w);
+                        }
+                    }
+                    self.lists[k] = cur;
+                }
+            } else {
+                self.scalars[k] = v;
+            }
+        }
+    }
+}
+
+// (template file name, instance) for an instance name like getty@tty2.service.
+fn split_name(name: Str) -> (Option[String], String) {
+    let dot = match last_index_of(name, b'.') {
+        Some(i) => i,
+        None => return (None, String.new()),
+    };
+    let stem = name[..dot];
+    let suffix = name[dot + 1..];
+    match index_of(stem, b'@') {
+        Some(at) => {
+            if at + 1 < stem.len() {
+                (Some(f"{stem[..at]}@.{suffix}"), stem[at + 1..].to_string())
+            } else {
+                (None, String.new())
+            }
+        }
+        None => (None, String.new()),
+    }
+}
+
+fn specifiers(s: Str, u: ref Unit) -> String {
+    let dot = last_index_of(u.name.as_str(), b'.').unwrap_or(u.name.len());
+    let stem = u.name[..dot].to_string();
+    let prefix = match index_of(stem.as_str(), b'@') {
+        Some(at) => stem[..at].to_string(),
+        None => stem.clone(),
+    };
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' and i + 1 < b.len() {
+            out.push_str(s[start..i]);
+            let c = b[i + 1];
+            if c == b'n' {
+                out.push_str(u.name.as_str());
+            } else if c == b'N' {
+                out.push_str(stem.as_str());
+            } else if c == b'p' {
+                out.push_str(prefix.as_str());
+            } else if c == b'i' {
+                out.push_str(u.instance.as_str());
+            } else if c == b'%' {
+                out.push_str("%");
+            } else {
+                out.push_str(s[i..i + 2]);
+            }
+            i += 2;
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(s[start..]);
+    out
+}
+
+fn load(name: Str) -> Unit {
+    let (template, inst) = split_name(name);
+    let mut u = Unit {
+        name: name.to_string(),
+        found: false,
+        fragment: String.new(),
+        dropins: Vec.new(),
+        scalars: Map.new(),
+        lists: Map.new(),
+        has_install: false,
+        template: template.clone(),
+        instance: inst,
+    };
+    for d in [ADMIN, VENDOR] {
+        if u.fragment.is_empty() and exists(f"{d}{name}".as_str()) {
+            u.fragment = f"{d}{name}";
+        }
+    }
+    if let Some(t) = template.clone() {
+        for d in [ADMIN, VENDOR] {
+            if u.fragment.is_empty() and exists(f"{d}{t}".as_str()) {
+                u.fragment = f"{d}{t}";
+            }
+        }
+    }
+    if u.fragment.is_empty() {
+        return u;
+    }
+    u.found = true;
+    let text = read_file(u.fragment.as_str());
+    u.parse_into(text.as_str());
+    // Drop-ins by file name: the instance's over the template's, the
+    // admin's over the vendor's.
+    let mut names: Vec[String] = Vec.new();
+    if let Some(t) = template {
+        names.push(t);
+    }
+    names.push(name.to_string());
+    let mut confs: SortedMap[String, String] = SortedMap.new();
+    for d in [VENDOR, ADMIN] {
+        for n in names {
+            for f in listdir(f"{d}{n}.d".as_str()) {
+                if f.ends_with(".conf") {
+                    confs.insert(f.clone(), f"{d}{n}.d/{f}");
+                }
+            }
+        }
+    }
+    for (_, p) in confs {
+        u.dropins.push(p.clone());
+        let text = read_file(p.as_str());
+        u.parse_into(text.as_str());
+    }
+    let mut wants = u.list("Wants");
+    for f in listdir(f"{ADMIN}{name}.wants".as_str()) {
+        wants.push(f);
+    }
+    u.lists["Wants".to_string()] = wants;
+    let d = specifiers(u.get("Description").as_str(), u);
+    u.scalars["Description".to_string()] = d;
+    if u.scalars.contains_key("ExecStart") {
+        let e = specifiers(u.get("ExecStart").as_str(), u);
+        u.scalars["ExecStart".to_string()] = e;
+    }
+    u
+}
+
+fn links_to(name: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for d in listdir(ADMIN) {
+        let p = f"{ADMIN}{d}/{name}";
+        if d.ends_with(".wants") and exists(p.as_str()) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn unit_file_state(u: ref Unit) -> Str {
+    if not links_to(u.name.as_str()).is_empty() {
+        "enabled"
+    } else if not u.has_install {
+        "static"
+    } else {
+        "disabled"
+    }
+}
+
+// ------------------------------------------------------------ systemctl
+
+struct System {
+    state: SortedMap[String, String],
+}
+
+impl System {
+    fn active(self, n: Str) -> bool {
+        match self.state.get(n) {
+            Some(s) => s == "active",
+            None => false,
+        }
+    }
+
+    fn state_of(self, n: Str) -> String {
+        match self.state.get(n) {
+            Some(s) => s.clone(),
+            None => "inactive".to_string(),
+        }
+    }
+}
+
+fn journal(msg: String) {
+    println(f"  {msg}");
+}
+
+fn cmd_cat(name: Str) {
+    let u = load(name);
+    if not u.found {
+        println(f"No files found for {name}.");
+        return;
+    }
+    let mut parts: Vec[String] = Vec.new();
+    parts.push(u.fragment.clone());
+    for p in u.dropins {
+        parts.push(p.clone());
+    }
+    for i in 0..parts.len() {
+        if i > 0 {
+            println("");
+        }
+        println(f"# {shown(parts[i].as_str())}");
+        let text = read_file(parts[i].as_str());
+        println(text.trim_end_matches("\n"));
+    }
+}
+
+fn cmd_show(sys: ref System, name: Str) {
+    let u = load(name);
+    println(f"Id={name}");
+    if not u.found {
+        println("LoadState=not-found");
+        println("ActiveState=inactive");
+        return;
+    }
+    println(f"Description={u.desc()}");
+    println("LoadState=loaded");
+    println(f"FragmentPath={shown(u.fragment.as_str())}");
+    let mut drop: Vec[String] = Vec.new();
+    for p in u.dropins {
+        drop.push(shown(p.as_str()));
+    }
+    println(f"DropInPaths={join(drop)}");
+    for k in ["Requires", "Wants", "Conflicts", "Before", "After"] {
+        println(f"{k}={join(u.list(k))}");
+    }
+    if u.kind() == "service" {
+        println(f"ExecStart={u.get("ExecStart")}");
+        let user = u.get("User");
+        println(f"User={if user.is_empty() { "root".to_string() } else { user }}");
+        println(f"Environment={join(u.list("Environment"))}");
+    }
+    println(f"ActiveState={sys.state_of(name)}");
+    println(f"UnitFileState={unit_file_state(u)}");
+}
+
+fn cmd_enable(name: Str) {
+    let u = load(name);
+    if not u.found {
+        println(f"Failed to enable unit: Unit file {name} does not exist.");
+        return;
+    }
+    let mut link = name.to_string();
+    let dot = last_index_of(name, b'.').unwrap_or(name.len());
+    let stem = name[..dot];
+    if stem.ends_with("@") {
+        let di = u.get("DefaultInstance");
+        if di.is_empty() {
+            println(NO_INSTALL);
+            return;
+        }
+        link = f"{stem}{di}.{name[dot + 1..]}";
+    }
+    let targets = u.list("WantedBy");
+    if targets.is_empty() {
+        println(NO_INSTALL);
+        return;
+    }
+    for t in targets {
+        let dir = f"{ADMIN}{t}.wants";
+        let path = f"{dir}/{link}";
+        if exists(path.as_str()) {
+            continue;
+        }
+        let _ = fs.create_dir_all(dir);
+        let _ = fs.write(path.clone(), f"{shown(u.fragment.as_str())}\n");
+        println(f"Created symlink {shown(path.as_str())} → {shown(u.fragment.as_str())}.");
+    }
+}
+
+fn cmd_disable(name: Str) {
+    for p in links_to(name) {
+        let _ = fs.remove_file(p.clone());
+        println(f"Removed \"{shown(p.as_str())}\".");
+    }
+}
+
+fn deps_of(u: ref Unit) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for d in u.list("Requires") {
+        if not contains(out, d.as_str()) {
+            out.push(d);
+        }
+    }
+    for d in u.list("Wants") {
+        if not contains(out, d.as_str()) {
+            out.push(d);
+        }
+    }
+    out.sort();
+    out
+}
+
+fn walk(sys: ref System, n: Str, prefix: Str, path: ref Vec[String]) {
+    let kids = deps_of(load(n));
+    for i in 0..kids.len() {
+        let k = kids[i].as_str();
+        let last = i == kids.len() - 1;
+        let dot = if sys.active(k) { "●" } else { "○" };
+        let branch = if last { "└─" } else { "├─" };
+        println(f"{dot} {prefix}{branch}{k}");
+        if k.ends_with(".target") and not contains(path, k) {
+            let mut deeper = path.clone();
+            deeper.push(k.to_string());
+            let next = if last { f"{prefix}  " } else { f"{prefix}│ " };
+            walk(sys, k, next.as_str(), deeper);
+        }
+    }
+}
+
+fn cmd_list_deps(sys: ref System, name: Str) {
+    println(name);
+    let mut path: Vec[String] = Vec.new();
+    path.push(name.to_string());
+    walk(sys, name, "", path);
+}
+
+fn conflicts_of(sys: ref System, name: Str) -> Vec[String] {
+    let mut out = load(name).list("Conflicts");
+    for (other, _) in sys.state {
+        if contains(load(other.as_str()).list("Conflicts"), name) and not contains(out, other.as_str()) {
+            out.push(other.clone());
+        }
+    }
+    out
+}
+
+// The jobs that must run before n: its After= and every job with Before=n.
+fn before(units: ref Map[String, Unit], jobs: ref Vec[String], n: Str) -> Vec[String] {
+    let u = units[n.to_string()].clone();
+    let mut out: Vec[String] = Vec.new();
+    for d in u.list("After") {
+        if contains(jobs, d.as_str()) and d != n and not contains(out, d.as_str()) {
+            out.push(d);
+        }
+    }
+    for m in jobs {
+        if m != n and contains(units[m.clone()].list("Before"), n) and not contains(out, m.as_str()) {
+            out.push(m.clone());
+        }
+    }
+    out.sort();
+    out
+}
+
+// Depth-first over the ordering graph; leaves the first cycle found in `cycle`.
+fn dfs(befores: ref Map[String, Vec[String]], n: Str, color: mut ref Map[String, i64], stack: mut ref Vec[String], cycle: mut ref Vec[String]) {
+    color[n.to_string()] = 1;
+    stack.push(n.to_string());
+    for d in befores[n.to_string()] {
+        if not cycle.is_empty() {
+            return;
+        }
+        let c: i64 = color.get(d.as_str()).unwrap_or(0);
+        if c == 1 {
+            let mut on = false;
+            for s in stack {
+                if s == d {
+                    on = true;
+                }
+                if on {
+                    cycle.push(s.clone());
+                }
+            }
+            return;
+        }
+        if c == 0 {
+            dfs(befores, d.as_str(), color, stack, cycle);
+        }
+    }
+    let _ = stack.pop();
+    color[n.to_string()] = 2;
+}
+
+fn cmd_start(sys: mut ref System, name: Str) {
+    println(f"$ systemctl start {name}");
+    let root = load(name);
+    if not root.found {
+        println(f"Failed to start {name}: Unit {name} not found.");
+        return;
+    }
+    let mut units: Map[String, Unit] = Map.new();
+    let mut order_seen: Vec[String] = Vec.new();
+    units[name.to_string()] = root;
+    order_seen.push(name.to_string());
+    let mut required: Vec[String] = Vec.new();
+    required.push(name.to_string());
+    let mut queue: Vec[String] = Vec.new();
+    queue.push(name.to_string());
+    let mut qi = 0;
+    while qi < queue.len() {
+        let n = queue[qi].clone();
+        qi += 1;
+        let u = units[n.clone()].clone();
+        for kind in ["Requires", "Wants"] {
+            let hard = kind == "Requires" and contains(required, n.as_str());
+            for d in u.list(kind) {
+                if units.contains_key(d.as_str()) {
+                    if hard and not contains(required, d.as_str()) {
+                        required.push(d.clone());
+                    }
+                    continue;
+                }
+                let du = load(d.as_str());
+                if not du.found {
+                    if hard {
+                        println(f"Failed to start {name}: Unit {d} not found.");
+                        return;
+                    }
+                    continue;
+                }
+                units[d.clone()] = du;
+                order_seen.push(d.clone());
+                if hard {
+                    required.push(d.clone());
+                }
+                queue.push(d);
+            }
+        }
+    }
+    let mut jobs: Vec[String] = Vec.new();
+    for n in order_seen {
+        if not sys.active(n.as_str()) {
+            jobs.push(n.clone());
+        }
+    }
+    jobs.sort();
+    let mut stops: Vec[String] = Vec.new();
+    for n in order_seen {
+        for c in conflicts_of(sys, n.as_str()) {
+            if sys.active(c.as_str()) and not contains(stops, c.as_str()) {
+                stops.push(c);
+            }
+        }
+    }
+    stops.sort();
+
+    loop {
+        let mut befores: Map[String, Vec[String]] = Map.new();
+        for n in jobs {
+            befores[n.clone()] = before(units, jobs, n.as_str());
+        }
+        let mut color: Map[String, i64] = Map.new();
+        let mut stack: Vec[String] = Vec.new();
+        let mut cycle: Vec[String] = Vec.new();
+        for n in jobs {
+            if not color.contains_key(n.as_str()) and cycle.is_empty() {
+                dfs(befores, n.as_str(), color, stack, cycle);
+            }
+        }
+        if cycle.is_empty() {
+            break;
+        }
+        let head = cycle[0].clone();
+        journal(f"Found ordering cycle on {head}/start");
+        for i in 1..cycle.len() {
+            journal(f"Found dependency on {cycle[i]}/start");
+        }
+        journal(f"Found dependency on {head}/start");
+        let mut victim: Option[String] = None;
+        for c in cycle {
+            if victim.is_none() and not contains(required, c.as_str()) {
+                victim = Some(c.clone());
+            }
+        }
+        match victim {
+            Some(v) => {
+                journal(f"Job {v}/start deleted to break ordering cycle starting with {head}/start");
+                let mut kept: Vec[String] = Vec.new();
+                for j in jobs {
+                    if j != v {
+                        kept.push(j.clone());
+                    }
+                }
+                jobs = kept;
+            }
+            None => {
+                journal(f"Unable to break cycle starting with {head}/start");
+                println(f"Failed to start {name}: Transaction order is cyclic. See system logs for details.");
+                return;
+            }
+        }
+    }
+
+    for s in stops {
+        let su = load(s.as_str());
+        if su.kind() == "target" {
+            journal(f"Stopped target {su.desc()}.");
+        } else {
+            journal(f"Stopping {su.desc()}...");
+            journal(f"Stopped {su.desc()}.");
+        }
+        let _ = sys.state.remove(s.as_str());
+    }
+
+    let mut order: Vec[String] = Vec.new();
+    while order.len() < jobs.len() {
+        let mut next: Option[String] = None;
+        for n in jobs {
+            if next.is_some() or contains(order, n.as_str()) {
+                continue;
+            }
+            let mut ready = true;
+            for d in before(units, jobs, n.as_str()) {
+                if not contains(order, d.as_str()) {
+                    ready = false;
+                }
+            }
+            if ready {
+                next = Some(n.clone());
+            }
+        }
+        match next {
+            Some(n) => order.push(n),
+            None => break,
+        }
+    }
+
+    let mut result: Map[String, String] = Map.new();
+    for n in order {
+        let u = units[n.clone()].clone();
+        let mut dep_failed = false;
+        for d in u.list("Requires") {
+            let r = match result.get(d.as_str()) {
+                Some(r) => r.clone(),
+                None => String.new(),
+            };
+            if (r == "failed" or r == "dependency") and contains(u.list("After"), d.as_str()) {
+                dep_failed = true;
+            }
+        }
+        if dep_failed {
+            journal(f"Dependency failed for {u.desc()}.");
+            result[n.clone()] = "dependency".to_string();
+            continue;
+        }
+        if u.kind() == "target" {
+            journal(f"Reached target {u.desc()}.");
+            sys.state[n.clone()] = "active".to_string();
+            result[n.clone()] = "done".to_string();
+            continue;
+        }
+        journal(f"Starting {u.desc()}...");
+        if contains(words(u.get("ExecStart").as_str()), "--fail") {
+            journal(f"{n}: Main process exited, code=exited, status=1/FAILURE");
+            journal(f"{n}: Failed with result 'exit-code'.");
+            journal(f"Failed to start {u.desc()}.");
+            sys.state[n.clone()] = "failed".to_string();
+            result[n.clone()] = "failed".to_string();
+            continue;
+        }
+        if u.get("Type") == "oneshot" {
+            journal(f"Finished {u.desc()}.");
+        } else {
+            journal(f"Started {u.desc()}.");
+        }
+        sys.state[n.clone()] = "active".to_string();
+        result[n.clone()] = "done".to_string();
+    }
+    let r = match result.get(name) {
+        Some(r) => r.clone(),
+        None => "done".to_string(),
+    };
+    if r == "dependency" {
+        println(f"A dependency job for {name} failed. See 'journalctl -xe' for details.");
+    } else if r == "failed" {
+        println(f"Job for {name} failed because the control process exited with error code.");
+    }
+}
+
+fn cmd_stop(sys: mut ref System, name: Str) {
+    println(f"$ systemctl stop {name}");
+    let mut stop: Vec[String] = Vec.new();
+    stop.push(name.to_string());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut add: Vec[String] = Vec.new();
+        for (n, _) in sys.state {
+            if sys.active(n.as_str()) and not contains(stop, n.as_str()) and not contains(add, n.as_str()) {
+                for r in load(n.as_str()).list("Requires") {
+                    if contains(stop, r.as_str()) and not contains(add, n.as_str()) {
+                        add.push(n.clone());
+                    }
+                }
+            }
+        }
+        for n in add {
+            stop.push(n);
+            changed = true;
+        }
+    }
+    let mut live: Vec[String] = Vec.new();
+    for n in stop {
+        if sys.active(n.as_str()) {
+            live.push(n.clone());
+        }
+    }
+    live.sort();
+    let mut done: Vec[String] = Vec.new();
+    while done.len() < live.len() {
+        // A unit stops after every unit ordered after it.
+        let mut next: Option[String] = None;
+        for n in live {
+            if next.is_some() or contains(done, n.as_str()) {
+                continue;
+            }
+            let mut ready = true;
+            for m in live {
+                if m != n and not contains(done, m.as_str()) and contains(load(m.as_str()).list("After"), n.as_str()) {
+                    ready = false;
+                }
+            }
+            if ready {
+                next = Some(n.clone());
+            }
+        }
+        let n = match next {
+            Some(n) => n,
+            None => break,
+        };
+        done.push(n.clone());
+        let u = load(n.as_str());
+        if u.kind() == "target" {
+            journal(f"Stopped target {u.desc()}.");
+        } else {
+            journal(f"Stopping {u.desc()}...");
+            journal(f"Stopped {u.desc()}.");
+        }
+        let _ = sys.state.remove(n.as_str());
+    }
+}
+
+fn cmd_list_units(sys: ref System) {
+    let mut w = "UNIT".len();
+    for (n, _) in sys.state {
+        if n.len() > w {
+            w = n.len();
+        }
+    }
+    println(f"{pad("UNIT", w)} LOAD   ACTIVE SUB     DESCRIPTION");
+    let mut count = 0;
+    for (n, st) in sys.state {
+        let u = load(n.as_str());
+        let sub = if st == "failed" {
+            "failed"
+        } else if u.kind() == "target" {
+            "active"
+        } else if u.get("Type") == "oneshot" {
+            "exited"
+        } else {
+            "running"
+        };
+        println(f"{pad(n.as_str(), w)} loaded {pad(st.as_str(), 6)} {pad(sub, 7)} {u.desc()}");
+        count += 1;
+    }
+    println(f"{count} loaded units listed.");
+}
+
+// ------------------------------------------------------------ the data
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Basic System\n");
+    s.push_str("Requires=sysinit.target\n");
+    s.push_str("After=sysinit.target\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=System Initialization\n");
+    s.push_str("Wants=systemd-journald.service local-fs.target\n");
+    s.push_str("After=local-fs.target\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Local File Systems\n");
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Network\n");
+    s.push_str("After=network-pre.target\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Network is Online\n");
+    s.push_str("Requires=network.target\n");
+    s.push_str("After=network.target\n");
+    s
+}
+
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Multi-User System\n");
+    s.push_str("Requires=basic.target\n");
+    s.push_str("Conflicts=rescue.target\n");
+    s.push_str("After=basic.target rescue.target\n");
+    s
+}
+
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Rescue Mode\n");
+    s.push_str("Requires=sysinit.target\n");
+    s.push_str("After=sysinit.target\n");
+    s
+}
+
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Journal Service\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("Type=notify\n");
+    s.push_str("ExecStart=/usr/lib/systemd/systemd-journald\n");
+    s
+}
+
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=PostgreSQL database server\n");
+    s.push_str("After=network.target\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("Type=notify\n");
+    s.push_str("User=postgres\n");
+    s.push_str("ExecStart=/usr/bin/postgres -D /var/lib/postgres/data\n");
+    s.push_str("\n");
+    s.push_str("[Install]\n");
+    s.push_str("WantedBy=multi-user.target\n");
+    s
+}
+
+fn file_9() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Redis in-memory data store\n");
+    s.push_str("After=network.target\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("ExecStart=/usr/bin/redis-server /etc/redis/redis.conf\n");
+    s.push_str("\n");
+    s.push_str("[Install]\n");
+    s.push_str("WantedBy=multi-user.target\n");
+    s
+}
+
+fn file_10() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=A high performance web server and a reverse proxy server\n");
+    s.push_str("After=network.target\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("Type=forking\n");
+    s.push_str("ExecStart=/usr/sbin/nginx -g 'daemon on; master_process on;'\n");
+    s.push_str("\n");
+    s.push_str("[Install]\n");
+    s.push_str("WantedBy=multi-user.target\n");
+    s
+}
+
+fn file_11() -> String {
+    let mut s = String.new();
+    s.push_str("# The shop's API, run by the admin.\n");
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Shop API (%n)\n");
+    s.push_str("Requires=postgresql.service\n");
+    s.push_str("Wants=redis.service metrics-agent.service\n");
+    s.push_str("After=postgresql.service redis.service network-online.target\n");
+    s.push_str("Wants=network-online.target\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("User=shop\n");
+    s.push_str("ExecStart=/srv/shop/bin/api --port 8080\n");
+    s.push_str("\n");
+    s.push_str("[Install]\n");
+    s.push_str("WantedBy=multi-user.target\n");
+    s
+}
+
+fn file_12() -> String {
+    let mut s = String.new();
+    s.push_str("[Service]\n");
+    s.push_str("Environment=RUST_LOG=info\n");
+    s
+}
+
+fn file_13() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("# Drop the soft dependency on redis; the cache is optional now.\n");
+    s.push_str("Wants=\n");
+    s.push_str("Wants=metrics-agent.service network-online.target\n");
+    s
+}
+
+fn file_14() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Metrics agent\n");
+    s.push_str("# The agent reports on the API, so it starts after it ...\n");
+    s.push_str("After=webapp.service\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("ExecStart=/usr/bin/metrics-agent --fail\n");
+    s
+}
+
+fn file_15() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("# ... and the admin also put it before it, which makes a cycle.\n");
+    s.push_str("Before=webapp.service\n");
+    s
+}
+
+fn file_16() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Getty on %i\n");
+    s.push_str("After=systemd-user-sessions.service\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("ExecStart=-/sbin/agetty -o '-p -- \\\\u' --noclear %i $TERM\n");
+    s.push_str("\n");
+    s.push_str("[Install]\n");
+    s.push_str("WantedBy=getty.target\n");
+    s.push_str("DefaultInstance=tty1\n");
+    s
+}
+
+fn file_17() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Login Prompts\n");
+    s
+}
+
+fn file_18() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Nightly backup\n");
+    s.push_str("Requires=postgresql.service broken-mount.service\n");
+    s.push_str("After=postgresql.service broken-mount.service\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("Type=oneshot\n");
+    s.push_str("ExecStart=/usr/local/bin/backup\n");
+    s
+}
+
+fn file_19() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Mount the backup disk\n");
+    s.push_str("\n");
+    s.push_str("[Service]\n");
+    s.push_str("Type=oneshot\n");
+    s.push_str("ExecStart=/usr/bin/mount-backup --fail\n");
+    s
+}
+
+fn file_20() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Loop A\n");
+    s.push_str("Requires=loop-b.service\n");
+    s.push_str("After=loop-b.service\n");
+    s
+}
+
+fn file_21() -> String {
+    let mut s = String.new();
+    s.push_str("[Unit]\n");
+    s.push_str("Description=Loop B\n");
+    s.push_str("Requires=loop-a.service\n");
+    s.push_str("After=loop-a.service\n");
+    s
+}
+
+fn file_22() -> String {
+    let mut s = String.new();
+    s.push_str("# systemctl commands, one per line\n");
+    s.push_str("cat webapp.service\n");
+    s.push_str("show webapp.service\n");
+    s.push_str("show getty@tty2.service\n");
+    s.push_str("show missing.service\n");
+    s.push_str("enable postgresql.service\n");
+    s.push_str("enable redis.service\n");
+    s.push_str("enable webapp.service\n");
+    s.push_str("enable nginx.service\n");
+    s.push_str("enable getty@tty3.service\n");
+    s.push_str("enable getty@.service\n");
+    s.push_str("enable metrics-agent.service\n");
+    s.push_str("disable nginx.service\n");
+    s.push_str("list-dependencies multi-user.target\n");
+    s.push_str("start multi-user.target\n");
+    s.push_str("list-units\n");
+    s.push_str("start backup.service\n");
+    s.push_str("start loop-a.service\n");
+    s.push_str("start rescue.target\n");
+    s.push_str("list-units\n");
+    s.push_str("stop postgresql.service\n");
+    s.push_str("list-units\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("usr/lib/systemd/system/basic.target".to_string(), file_0()));
+    v.push(("usr/lib/systemd/system/sysinit.target".to_string(), file_1()));
+    v.push(("usr/lib/systemd/system/local-fs.target".to_string(), file_2()));
+    v.push(("usr/lib/systemd/system/network.target".to_string(), file_3()));
+    v.push(("usr/lib/systemd/system/network-online.target".to_string(), file_4()));
+    v.push(("usr/lib/systemd/system/multi-user.target".to_string(), file_5()));
+    v.push(("usr/lib/systemd/system/rescue.target".to_string(), file_6()));
+    v.push(("usr/lib/systemd/system/systemd-journald.service".to_string(), file_7()));
+    v.push(("usr/lib/systemd/system/postgresql.service".to_string(), file_8()));
+    v.push(("usr/lib/systemd/system/redis.service".to_string(), file_9()));
+    v.push(("usr/lib/systemd/system/nginx.service".to_string(), file_10()));
+    v.push(("etc/systemd/system/webapp.service".to_string(), file_11()));
+    v.push(("etc/systemd/system/webapp.service.d/10-env.conf".to_string(), file_12()));
+    v.push(("etc/systemd/system/webapp.service.d/20-limits.conf".to_string(), file_13()));
+    v.push(("etc/systemd/system/metrics-agent.service".to_string(), file_14()));
+    v.push(("etc/systemd/system/metrics-agent.service.d/override.conf".to_string(), file_15()));
+    v.push(("usr/lib/systemd/system/getty@.service".to_string(), file_16()));
+    v.push(("usr/lib/systemd/system/getty.target".to_string(), file_17()));
+    v.push(("etc/systemd/system/backup.service".to_string(), file_18()));
+    v.push(("etc/systemd/system/broken-mount.service".to_string(), file_19()));
+    v.push(("etc/systemd/system/loop-a.service".to_string(), file_20()));
+    v.push(("etc/systemd/system/loop-b.service".to_string(), file_21()));
+    v.push(("jobs.txt".to_string(), file_22()));
+    v
+}
+
+fn write_data() -> Result[(), String] {
+    let _ = fs.remove_dir_all("data".to_string());
+    for (name, text) in data_files() {
+        let path = f"data/{name}";
+        let dir = match last_index_of(path.as_str(), b'/') {
+            Some(i) => path[..i].to_string(),
+            None => ".".to_string(),
+        };
+        if let Err(e) = fs.create_dir_all(dir) {
+            return Err(f"{e}");
+        }
+        if let Err(e) = fs.write(path, text) {
+            return Err(f"{e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut sys = System { state: SortedMap.new() };
+    for line in read_file("data/jobs.txt").split("\n") {
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        let parts = words(line.as_str());
+        let cmd = parts[0].clone();
+        let arg = if parts.len() > 1 { parts[1].clone() } else { String.new() };
+        if cmd != "start" and cmd != "stop" {
+            println(f"$ systemctl {line}");
+        }
+        if cmd == "cat" {
+            cmd_cat(arg.as_str());
+        } else if cmd == "show" {
+            cmd_show(sys, arg.as_str());
+        } else if cmd == "enable" {
+            cmd_enable(arg.as_str());
+        } else if cmd == "disable" {
+            cmd_disable(arg.as_str());
+        } else if cmd == "list-dependencies" {
+            cmd_list_deps(sys, arg.as_str());
+        } else if cmd == "start" {
+            cmd_start(sys, arg.as_str());
+        } else if cmd == "stop" {
+            cmd_stop(sys, arg.as_str());
+        } else if cmd == "list-units" {
+            cmd_list_units(sys);
+        }
+        println("");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(f"error: {e}");
+    }
+}
