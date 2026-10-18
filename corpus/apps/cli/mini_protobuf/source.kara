@@ -1,0 +1,4494 @@
+// mini_protobuf: Protocol Buffers without generated code, as a gRPC
+// gateway or a debugging tool needs them. It reads .proto files (proto2
+// and proto3: packages, nested messages and enums, oneofs, maps, proto3
+// optional, field options), and for each job in data/jobs.tsv it encodes
+// a message written in text format to the binary wire format, decodes a
+// binary message and prints it as text or JSON, reads JSON into a message,
+// re-encodes a binary message, or dumps a message it has no schema for,
+// field by field, as `protoc --decode_raw` does.
+//
+// The behaviour is Python's protobuf library (upb underneath): the text
+// format printer and parser follow text_format.py, with its tokenizer,
+// error messages and positions; JSON follows json_format.py, including
+// json.loads's own errors; the wire codec accepts and rejects what upb
+// does, keeps unknown fields, and orders map entries as upb's
+// deterministic serializer does.
+
+const T_DOUBLE: i64 = 1;
+const T_FLOAT: i64 = 2;
+const T_INT64: i64 = 3;
+const T_UINT64: i64 = 4;
+const T_INT32: i64 = 5;
+const T_FIXED64: i64 = 6;
+const T_FIXED32: i64 = 7;
+const T_BOOL: i64 = 8;
+const T_STRING: i64 = 9;
+const T_MESSAGE: i64 = 11;
+const T_BYTES: i64 = 12;
+const T_UINT32: i64 = 13;
+const T_ENUM: i64 = 14;
+const T_SFIXED32: i64 = 15;
+const T_SFIXED64: i64 = 16;
+const T_SINT32: i64 = 17;
+const T_SINT64: i64 = 18;
+
+const OPTIONAL: i64 = 1;
+const REQUIRED: i64 = 2;
+const REPEATED: i64 = 3;
+
+// ------------------------------------------------------------- bytes
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+fn copy_range(d: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in start..end {
+        v.push(d[i]);
+    }
+    v
+}
+
+fn append(out: mut ref Vec[i64], d: ref Vec[i64]) {
+    for i in 0..d.len() {
+        out.push(d[i]);
+    }
+}
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn push_str(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn same_bytes(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn text_of(d: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..d.len() {
+        out.push(d[i] as u8);
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex2(v: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    out.push(digits[(v >> 4) & 15]);
+    out.push(digits[v & 15]);
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(v: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(v >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_utf8(out: mut ref Vec[i64], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp);
+    } else if cp < 0x800 {
+        out.push(0xC0 | (cp >> 6));
+        out.push(0x80 | (cp & 0x3F));
+    } else if cp < 0x10000 {
+        out.push(0xE0 | (cp >> 12));
+        out.push(0x80 | ((cp >> 6) & 0x3F));
+        out.push(0x80 | (cp & 0x3F));
+    } else {
+        out.push(0xF0 | (cp >> 18));
+        out.push(0x80 | ((cp >> 12) & 0x3F));
+        out.push(0x80 | ((cp >> 6) & 0x3F));
+        out.push(0x80 | (cp & 0x3F));
+    }
+}
+
+fn utf8_of(cps: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..cps.len() {
+        push_utf8(mut out, cps[i]);
+    }
+    out
+}
+
+// Valid UTF-8 as code points.
+fn codepoints(b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] & 0x3F) << 6) | (b[i + 2] & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] & 0x3F) << 12) | ((b[i + 2] & 0x3F) << 6) | (b[i + 3] & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+// Where CPython's UTF-8 decoder stops on `b`, as the text of its
+// UnicodeDecodeError, or "" for valid UTF-8.
+fn utf8_error(b: ref Vec[i64]) -> String {
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            i += 1;
+            continue;
+        }
+        let mut need = 0;
+        let mut lo = 0x80;
+        let mut hi = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            } else if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            } else if c == 0xF4 {
+                hi = 0x8F;
+            }
+        } else {
+            return f"'utf-8' codec can't decode byte 0x{hex2(c)} in position {i}: invalid start byte";
+        }
+        let mut k = 1;
+        while k <= need {
+            if i + k >= n {
+                if k == 1 {
+                    return f"'utf-8' codec can't decode byte 0x{hex2(c)} in position {i}: unexpected end of data";
+                }
+                return f"'utf-8' codec can't decode bytes in position {i}-{i + k - 1}: unexpected end of data";
+            }
+            let d = b[i + k];
+            let ok = if k == 1 { d >= lo and d <= hi } else { d >= 0x80 and d <= 0xBF };
+            if not ok {
+                if k == 1 {
+                    return f"'utf-8' codec can't decode byte 0x{hex2(c)} in position {i}: invalid continuation byte";
+                }
+                return f"'utf-8' codec can't decode bytes in position {i}-{i + k - 1}: invalid continuation byte";
+            }
+            k += 1;
+        }
+        i += need + 1;
+    }
+    "".to_string()
+}
+
+// Python's repr of a str of code points, for error messages.
+fn py_repr(s: ref Vec[i64]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..s.len() {
+        if s[i] == 39 {
+            has_single = true;
+        } else if s[i] == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    let mut out: Vec[i64] = Vec.new();
+    out.push(quote);
+    for i in 0..s.len() {
+        let c = s[i];
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_str(mut out, "\\t");
+        } else if c == 10 {
+            push_str(mut out, "\\n");
+        } else if c == 13 {
+            push_str(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F or (c >= 0x80 and c <= 0xA0) {
+            push_str(mut out, "\\x");
+            push_str(mut out, hex2(c));
+        } else {
+            push_utf8(mut out, c);
+        }
+    }
+    out.push(quote);
+    text_of(out)
+}
+
+fn repr_text(s: ref String) -> String {
+    py_repr(codepoints(bytes_of(s)))
+}
+
+// text_encoding.CEscape: printable ASCII as is, the usual escapes, and
+// three-digit octal for the rest; bytes at or above 0x80 are octal too
+// unless they are text (as_utf8).
+fn c_escape(d: ref Vec[i64], as_utf8: bool) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..d.len() {
+        let c = d[i];
+        if c == 9 {
+            push_str(mut out, "\\t");
+        } else if c == 10 {
+            push_str(mut out, "\\n");
+        } else if c == 13 {
+            push_str(mut out, "\\r");
+        } else if c == 34 {
+            push_str(mut out, "\\\"");
+        } else if c == 39 {
+            push_str(mut out, "\\'");
+        } else if c == 92 {
+            push_str(mut out, "\\\\");
+        } else if c >= 32 and c < 127 {
+            out.push(c);
+        } else if c >= 128 and as_utf8 {
+            out.push(c);
+        } else {
+            out.push(92);
+            out.push(48 + ((c >> 6) & 7));
+            out.push(48 + ((c >> 3) & 7));
+            out.push(48 + (c & 7));
+        }
+    }
+    text_of(out)
+}
+
+fn b64_encode(d: ref Vec[i64]) -> String {
+    let alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < d.len() {
+        let rest = d.len() - i;
+        let b0 = d[i];
+        let b1 = if rest > 1 { d[i + 1] } else { 0 };
+        let b2 = if rest > 2 { d[i + 2] } else { 0 };
+        out.push(alpha[b0 >> 2]);
+        out.push(alpha[((b0 & 3) << 4) | (b1 >> 4)]);
+        if rest > 1 {
+            out.push(alpha[((b1 & 15) << 2) | (b2 >> 6)]);
+        } else {
+            out.push(b'=');
+        }
+        if rest > 2 {
+            out.push(alpha[b2 & 63]);
+        } else {
+            out.push(b'=');
+        }
+        i += 3;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn b64_value(c: i64) -> i64 {
+    if c >= 65 and c <= 90 {
+        c - 65
+    } else if c >= 97 and c <= 122 {
+        c - 71
+    } else if c >= 48 and c <= 57 {
+        c + 4
+    } else if c == 43 {
+        62
+    } else if c == 47 {
+        63
+    } else {
+        -1
+    }
+}
+
+// binascii.a2b_base64 outside strict mode, after urlsafe_b64decode has
+// mapped - and _ to + and /: characters off the alphabet are skipped, and
+// padding ends the data once a group has two characters or more.
+fn b64_decode(text: ref Vec[i64]) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut quad = 0;
+    let mut acc = 0;
+    let mut pads = 0;
+    let mut chars = 0;
+    for i in 0..text.len() {
+        let mut c = text[i];
+        if c == 45 {
+            c = 43;
+        } else if c == 95 {
+            c = 47;
+        }
+        if c == 61 {
+            pads += 1;
+            if quad >= 2 and quad + pads >= 4 {
+                return Ok(out);
+            }
+            continue;
+        }
+        let v = b64_value(c);
+        if v < 0 {
+            continue;
+        }
+        pads = 0;
+        chars += 1;
+        acc = (acc << 6) | v;
+        quad += 1;
+        if quad == 2 {
+            out.push((acc >> 4) & 255);
+        } else if quad == 3 {
+            out.push((acc >> 2) & 255);
+        } else if quad == 4 {
+            out.push(acc & 255);
+            quad = 0;
+            acc = 0;
+        }
+    }
+    if quad == 1 {
+        return Err(f"Invalid base64-encoded string: number of data characters ({chars}) cannot be 1 more than a multiple of 4");
+    }
+    if quad != 0 {
+        return Err("Incorrect padding".to_string());
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------- schema
+
+// Named FieldDesc, not Field: a program's own `Field` breaks the protobuf
+// library the v2 build appends (kara B-2026-10-18-45). Rename it back
+// when that is fixed.
+struct FieldDesc {
+    name: String,
+    json: String,
+    number: i64,
+    label: i64,
+    typ: i64,
+    type_name: String,
+    target: i64,
+    oneof: i64,
+    packed: i64,
+    default: String,
+    has_default: bool,
+}
+
+struct MsgType {
+    full: String,
+    name: String,
+    fields: Vec[FieldDesc],
+    oneofs: Vec[String],
+    map_entry: bool,
+    proto3: bool,
+    // The field indexes in field-number order.
+    order: Vec[i64],
+}
+
+struct EnumType {
+    full: String,
+    names: Vec[String],
+    numbers: Vec[i64],
+    closed: bool,
+}
+
+struct Schema {
+    msgs: Vec[MsgType],
+    enums: Vec[EnumType],
+}
+
+impl Schema {
+    fn find_msg(ref self, full: ref String) -> i64 {
+        for i in 0..self.msgs.len() {
+            if self.msgs[i].full == *full {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn find_enum(ref self, full: ref String) -> i64 {
+        for i in 0..self.enums.len() {
+            if self.enums[i].full == *full {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn field(ref self, m: i64, f: i64) -> ref FieldDesc {
+        ref self.msgs[m].fields[f]
+    }
+
+    fn has_presence(ref self, m: i64, f: i64) -> bool {
+        let fd = ref self.msgs[m].fields[f];
+        if fd.label == REPEATED {
+            return false;
+        }
+        fd.typ == T_MESSAGE or fd.oneof >= 0 or not self.msgs[m].proto3
+    }
+
+    fn is_map(ref self, m: i64, f: i64) -> bool {
+        let fd = ref self.msgs[m].fields[f];
+        fd.label == REPEATED and fd.typ == T_MESSAGE and self.msgs[fd.target].map_entry
+    }
+
+    fn is_packed(ref self, m: i64, f: i64) -> bool {
+        let fd = ref self.msgs[m].fields[f];
+        if fd.label != REPEATED or fd.typ == T_STRING or fd.typ == T_BYTES or fd.typ == T_MESSAGE {
+            return false;
+        }
+        if self.msgs[m].proto3 { fd.packed != 0 } else { fd.packed == 1 }
+    }
+
+    fn enum_name(ref self, e: i64, number: i64) -> Option[String] {
+        let et = ref self.enums[e];
+        for i in 0..et.numbers.len() {
+            if et.numbers[i] == number {
+                return Some(et.names[i].clone());
+            }
+        }
+        None
+    }
+
+    fn enum_number(ref self, e: i64, name: ref String) -> Option[i64] {
+        let et = ref self.enums[e];
+        for i in 0..et.names.len() {
+            if et.names[i] == *name {
+                return Some(et.numbers[i]);
+            }
+        }
+        None
+    }
+
+    fn field_by_name(ref self, m: i64, name: ref String) -> i64 {
+        let fs = ref self.msgs[m].fields;
+        for i in 0..fs.len() {
+            if fs[i].name == *name {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn field_by_number(ref self, m: i64, number: i64) -> i64 {
+        let fs = ref self.msgs[m].fields;
+        for i in 0..fs.len() {
+            if fs[i].number == number {
+                return i;
+            }
+        }
+        -1
+    }
+}
+
+// descriptor.py's _ToJsonName: underscores dropped, the next letter
+// capitalized.
+fn json_name(name: ref String) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    let mut up = false;
+    for b in name.bytes() {
+        let c = b as i64;
+        if c == 95 {
+            up = true;
+        } else if up {
+            out.push(if c >= 97 and c <= 122 { c - 32 } else { c });
+            up = false;
+        } else {
+            out.push(c);
+        }
+    }
+    text_of(out)
+}
+
+// ------------------------------------------------------------- .proto
+
+fn is_ident_start(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn is_alnum(c: i64) -> bool {
+    is_ident_start(c) or is_digit(c)
+}
+
+// Identifiers (dots included, so a qualified name is one token), numbers,
+// strings and single characters; whitespace and both comment forms are
+// dropped.
+fn proto_tokens(t: ref Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = t.len();
+    let mut i = 0;
+    while i < n {
+        let c = t[i];
+        if c == 32 or c == 9 or c == 10 or c == 13 {
+            i += 1;
+        } else if c == 47 and i + 1 < n and t[i + 1] == 47 {
+            while i < n and t[i] != 10 {
+                i += 1;
+            }
+        } else if c == 47 and i + 1 < n and t[i + 1] == 42 {
+            i += 2;
+            while i + 1 < n and not (t[i] == 42 and t[i + 1] == 47) {
+                i += 1;
+            }
+            i += 2;
+        } else if is_ident_start(c) {
+            let s = i;
+            while i < n and (is_alnum(t[i]) or t[i] == 46) {
+                i += 1;
+            }
+            out.push(text_of(copy_range(t, s, i)));
+        } else if is_digit(c) or (c == 45 and i + 1 < n and is_digit(t[i + 1])) {
+            let s = i;
+            i += 1;
+            while i < n and (is_alnum(t[i]) or t[i] == 46 or t[i] == 43 or t[i] == 45) {
+                i += 1;
+            }
+            out.push(text_of(copy_range(t, s, i)));
+        } else if c == 34 {
+            let s = i;
+            i += 1;
+            while i < n and t[i] != 34 {
+                if t[i] == 92 {
+                    i += 1;
+                }
+                i += 1;
+            }
+            i += 1;
+            out.push(text_of(copy_range(t, s, i)));
+        } else {
+            out.push(text_of(copy_range(t, i, i + 1)));
+            i += 1;
+        }
+    }
+    out
+}
+
+fn scalar_type(name: ref String) -> i64 {
+    let names: Vec[Str] = "double float int64 uint64 int32 fixed64 fixed32 bool string - - bytes uint32 - sfixed32 sfixed64 sint32 sint64".split(" ").collect();
+    for i in 0..names.len() {
+        if names[i] != "-" and *name == names[i] {
+            return i + 1;
+        }
+    }
+    0
+}
+
+struct Pending {
+    msg: i64,
+    field: i64,
+    typ: String,
+    scope: String,
+}
+
+struct ProtoParser {
+    t: Vec[String],
+    i: i64,
+    package: String,
+    proto3: bool,
+    msgs: Vec[MsgType],
+    enums: Vec[EnumType],
+    pending: Vec[Pending],
+}
+
+fn new_field(name: own String, number: i64, label: i64) -> FieldDesc {
+    let json = json_name(name);
+    FieldDesc {
+        name,
+        json,
+        number,
+        label,
+        typ: 0,
+        type_name: String.new(),
+        target: -1,
+        oneof: -1,
+        packed: -1,
+        default: String.new(),
+        has_default: false,
+    }
+}
+
+fn unquote(tok: ref String) -> String {
+    let b = bytes_of(tok);
+    if b.len() >= 2 and b[0] == 34 {
+        return text_of(copy_range(b, 1, b.len() - 1));
+    }
+    tok.clone()
+}
+
+fn to_int(tok: ref String) -> i64 {
+    i64.parse(tok.clone()).unwrap_or(0)
+}
+
+fn camel(name: ref String) -> String {
+    let mut out = String.new();
+    for part in name.split("_") {
+        let b = bytes_of(part.to_string());
+        if b.len() > 0 {
+            let mut first = b[0];
+            if first >= 97 and first <= 122 {
+                first -= 32;
+            }
+            let mut w: Vec[i64] = Vec.new();
+            w.push(first);
+            for k in 1..b.len() {
+                w.push(b[k]);
+            }
+            out.push_str(text_of(w));
+        }
+    }
+    out
+}
+
+impl ProtoParser {
+    fn peek(ref self) -> String {
+        if self.i < self.t.len() { self.t[self.i].clone() } else { String.new() }
+    }
+
+    fn next(mut ref self) -> String {
+        let tok = self.peek();
+        self.i += 1;
+        tok
+    }
+
+    fn skip_statement(mut ref self) {
+        while self.i < self.t.len() and self.t[self.i] != ";" {
+            self.i += 1;
+        }
+        self.i += 1;
+    }
+
+    fn prefix(ref self) -> String {
+        if self.package.len() > 0 { f".{self.package}" } else { String.new() }
+    }
+
+    fn parse(mut ref self) {
+        while self.i < self.t.len() {
+            let tok = self.next();
+            if tok == "syntax" {
+                self.next();
+                let v = self.next();
+                self.proto3 = unquote(v) == "proto3";
+                self.next();
+            } else if tok == "package" {
+                self.package = self.next();
+                self.next();
+            } else if tok == "option" or tok == "import" {
+                self.skip_statement();
+            } else if tok == "message" {
+                let scope = self.prefix();
+                self.message(scope);
+            } else if tok == "enum" {
+                let scope = self.prefix();
+                self.enumeration(scope);
+            }
+        }
+    }
+
+    // `[name = value, ...]` after a field, as a list of pairs.
+    fn options(mut ref self) -> Vec[(String, String)] {
+        let mut out: Vec[(String, String)] = Vec.new();
+        if self.peek() == "[" {
+            self.next();
+            loop {
+                let key = self.next();
+                self.next();
+                let val = self.next();
+                out.push((key, unquote(val)));
+                if self.next() == "]" {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn enumeration(mut ref self, scope: ref String) {
+        let name = self.next();
+        let mut e = EnumType { full: f"{scope}.{name}", names: Vec.new(), numbers: Vec.new(), closed: not self.proto3 };
+        self.next();
+        while self.peek() != "}" {
+            let n = self.next();
+            if n == "option" or n == "reserved" {
+                self.skip_statement();
+                continue;
+            }
+            self.next();
+            let v = self.next();
+            e.names.push(n);
+            e.numbers.push(to_int(v));
+            self.options();
+            self.next();
+        }
+        self.next();
+        self.enums.push(e);
+    }
+
+    fn add_message(mut ref self, full: own String, name: own String) -> i64 {
+        self.msgs.push(MsgType {
+            full,
+            name,
+            fields: Vec.new(),
+            oneofs: Vec.new(),
+            map_entry: false,
+            proto3: self.proto3,
+            order: Vec.new(),
+        });
+        self.msgs.len() - 1
+    }
+
+    fn typed(mut ref self, m: i64, f: i64, typ: ref String, scope: ref String) {
+        let st = scalar_type(typ);
+        if st > 0 {
+            self.msgs[m].fields[f].typ = st;
+        } else {
+            self.pending.push(Pending { msg: m, field: f, typ: typ.clone(), scope: scope.clone() });
+        }
+    }
+
+    fn message(mut ref self, scope: ref String) {
+        let name = self.next();
+        let full = f"{scope}.{name}";
+        let m = self.add_message(full.clone(), name);
+        self.next();
+        let mut synthetic: Vec[i64] = Vec.new();
+        while self.peek() != "}" {
+            let tok = self.peek();
+            if tok == "message" {
+                self.next();
+                self.message(full);
+            } else if tok == "enum" {
+                self.next();
+                self.enumeration(full);
+            } else if tok == "reserved" or tok == "option" or tok == "extensions" {
+                self.skip_statement();
+            } else if tok == "oneof" {
+                self.next();
+                let index = self.msgs[m].oneofs.len();
+                let oname = self.next();
+                self.msgs[m].oneofs.push(oname);
+                self.next();
+                while self.peek() != "}" {
+                    let f = self.field(m, full, false);
+                    self.msgs[m].fields[f].oneof = index;
+                }
+                self.next();
+            } else if tok == "map" {
+                self.next();
+                self.next();
+                let key = self.next();
+                self.next();
+                let val = self.next();
+                self.next();
+                let fname = self.next();
+                self.next();
+                let number = to_int(self.next());
+                self.options();
+                self.next();
+                let ename = f"{camel(fname)}Entry";
+                let efull = f"{full}.{ename}";
+                let e = self.add_message(efull.clone(), ename);
+                self.msgs[e].map_entry = true;
+                self.msgs[e].fields.push(new_field("key".to_string(), 1, OPTIONAL));
+                self.typed(e, 0, key, efull);
+                self.msgs[e].fields.push(new_field("value".to_string(), 2, OPTIONAL));
+                self.typed(e, 1, val, efull);
+                self.msgs[m].fields.push(new_field(fname, number, REPEATED));
+                let f = self.msgs[m].fields.len() - 1;
+                self.typed(m, f, efull, full);
+            } else {
+                let f = self.field(m, full, true);
+                if self.msgs[m].fields[f].oneof == -2 {
+                    synthetic.push(f);
+                }
+            }
+        }
+        self.next();
+        for f in synthetic {
+            let fname = self.msgs[m].fields[f].name.clone();
+            self.msgs[m].fields[f].oneof = self.msgs[m].oneofs.len();
+            self.msgs[m].oneofs.push(f"_{fname}");
+        }
+    }
+
+    // A field; a proto3 `optional` one comes back with oneof -2, for the
+    // synthetic oneof its message adds after the real ones.
+    fn field(mut ref self, m: i64, scope: ref String, outside_oneof: bool) -> i64 {
+        let mut label = OPTIONAL;
+        let mut explicit = false;
+        let first = self.peek();
+        if first == "optional" or first == "required" or first == "repeated" {
+            self.next();
+            explicit = true;
+            label = if first == "required" { REQUIRED } else if first == "repeated" { REPEATED } else { OPTIONAL };
+        }
+        let typ = self.next();
+        let name = self.next();
+        self.next();
+        let number = to_int(self.next());
+        let opts = self.options();
+        self.next();
+        self.msgs[m].fields.push(new_field(name, number, label));
+        let f = self.msgs[m].fields.len() - 1;
+        self.typed(m, f, typ, scope);
+        for (k, v) in opts.into_iter() {
+            if k == "default" {
+                self.msgs[m].fields[f].default = v;
+                self.msgs[m].fields[f].has_default = true;
+            } else if k == "json_name" {
+                self.msgs[m].fields[f].json = v;
+            } else if k == "packed" {
+                self.msgs[m].fields[f].packed = if v == "true" { 1 } else { 0 };
+            }
+        }
+        if self.proto3 and explicit and label == OPTIONAL and outside_oneof {
+            self.msgs[m].fields[f].oneof = -2;
+        }
+        f
+    }
+
+    fn known(ref self, full: ref String) -> bool {
+        for m in 0..self.msgs.len() {
+            if self.msgs[m].full == *full {
+                return true;
+            }
+        }
+        for e in 0..self.enums.len() {
+            if self.enums[e].full == *full {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn known_prefix(ref self, p: ref String) -> bool {
+        let dotted = f"{p}.";
+        for m in 0..self.msgs.len() {
+            if self.msgs[m].full.starts_with(dotted) {
+                return true;
+            }
+        }
+        for e in 0..self.enums.len() {
+            if self.enums[e].full.starts_with(dotted) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // protoc's scoping: the first part of a name is looked up from the
+    // innermost scope outwards, then the rest is taken from there.
+    fn resolve(mut ref self) {
+        for k in 0..self.pending.len() {
+            let typ = self.pending[k].typ.clone();
+            let mut full = String.new();
+            if typ.starts_with(".") {
+                full = typ.clone();
+            } else {
+                let parts: Vec[Str] = typ.split(".").collect();
+                let first = parts[0].to_string();
+                let mut s = self.pending[k].scope.clone();
+                loop {
+                    let cand = f"{s}.{first}";
+                    if self.known(cand) or self.known_prefix(cand) {
+                        full = f"{s}.{typ}";
+                        break;
+                    }
+                    if s.len() == 0 {
+                        break;
+                    }
+                    s = match s.rfind(".") {
+                        Some(p) => s.substring(0, p),
+                        None => String.new(),
+                    };
+                }
+            }
+            let m = self.pending[k].msg;
+            let f = self.pending[k].field;
+            let mut target = -1;
+            let mut kind = T_MESSAGE;
+            for i in 0..self.msgs.len() {
+                if self.msgs[i].full == full {
+                    target = i;
+                }
+            }
+            if target < 0 {
+                kind = T_ENUM;
+                for i in 0..self.enums.len() {
+                    if self.enums[i].full == full {
+                        target = i;
+                    }
+                }
+            }
+            self.msgs[m].fields[f].typ = kind;
+            self.msgs[m].fields[f].target = target;
+            self.msgs[m].fields[f].type_name = full;
+        }
+        for m in 0..self.msgs.len() {
+            let n = self.msgs[m].fields.len();
+            let mut order: Vec[i64] = Vec.new();
+            for f in 0..n {
+                let mut at = order.len();
+                while at > 0 and self.msgs[m].fields[order[at - 1]].number > self.msgs[m].fields[f].number {
+                    at -= 1;
+                }
+                order.insert(at, f);
+            }
+            self.msgs[m].order = order;
+        }
+    }
+}
+
+fn load_schema(path: ref String) -> Result[Schema, String] {
+    let text = match fs.read_to_string(f"data/{path}") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    let mut p = ProtoParser {
+        t: proto_tokens(bytes_of(text)),
+        i: 0,
+        package: String.new(),
+        proto3: false,
+        msgs: Vec.new(),
+        enums: Vec.new(),
+        pending: Vec.new(),
+    };
+    p.parse();
+    p.resolve();
+    Ok(Schema { msgs: p.msgs, enums: p.enums })
+}
+
+// ------------------------------------------------------------- messages
+
+// One field's values. Which list is used depends on the field's type:
+// integers, enums and bools in `ints`, floats and doubles in `reals`,
+// strings and bytes in `bytes`, messages (as arena indexes) in `msgs`.
+struct Slot {
+    has: bool,
+    ints: Vec[i128],
+    reals: Vec[f64],
+    bytes: Vec[Vec[i64]],
+    msgs: Vec[i64],
+}
+
+// A message: its type, a slot per field, and the unknown fields' bytes in
+// the order they came.
+struct MsgData {
+    ty: i64,
+    slots: Vec[Slot],
+    unknown: Vec[i64],
+}
+
+// Every message of one job; a sub-message is an index into `ms`.
+struct Store {
+    ms: Vec[MsgData],
+}
+
+const K_INT: i64 = 0;
+const K_REAL: i64 = 1;
+const K_BYTES: i64 = 2;
+const K_MSG: i64 = 3;
+
+fn kind_of(typ: i64) -> i64 {
+    if typ == T_DOUBLE or typ == T_FLOAT {
+        K_REAL
+    } else if typ == T_STRING or typ == T_BYTES {
+        K_BYTES
+    } else if typ == T_MESSAGE {
+        K_MSG
+    } else {
+        K_INT
+    }
+}
+
+fn empty_slot() -> Slot {
+    Slot { has: false, ints: Vec.new(), reals: Vec.new(), bytes: Vec.new(), msgs: Vec.new() }
+}
+
+fn mask64() -> i128 {
+    ((1 as i128) << 64) - 1
+}
+
+impl Store {
+    fn new_msg(mut ref self, s: ref Schema, ty: i64) -> i64 {
+        let mut slots: Vec[Slot] = Vec.new();
+        for i in 0..s.msgs[ty].fields.len() {
+            slots.push(empty_slot());
+        }
+        self.ms.push(MsgData { ty, slots, unknown: Vec.new() });
+        self.ms.len() - 1
+    }
+
+    fn count(ref self, s: ref Schema, m: i64, f: i64) -> i64 {
+        let typ = s.msgs[self.ms[m].ty].fields[f].typ;
+        let sl = ref self.ms[m].slots[f];
+        let k = kind_of(typ);
+        if k == K_INT {
+            sl.ints.len()
+        } else if k == K_REAL {
+            sl.reals.len()
+        } else if k == K_BYTES {
+            sl.bytes.len()
+        } else {
+            sl.msgs.len()
+        }
+    }
+
+    // Whether a field is set, as ListFields counts it: a repeated field
+    // with elements, or a singular one that is present.
+    fn is_set(ref self, s: ref Schema, m: i64, f: i64) -> bool {
+        let fd = ref s.msgs[self.ms[m].ty].fields[f];
+        if fd.label == REPEATED {
+            self.count(s, m, f) > 0
+        } else {
+            self.ms[m].slots[f].has
+        }
+    }
+
+    fn clear(mut ref self, m: i64, f: i64) {
+        self.ms[m].slots[f] = empty_slot();
+    }
+
+    // Setting one member of a oneof clears the others.
+    fn touch(mut ref self, s: ref Schema, m: i64, f: i64) {
+        let ty = self.ms[m].ty;
+        let o = s.msgs[ty].fields[f].oneof;
+        if o < 0 {
+            return;
+        }
+        for g in 0..s.msgs[ty].fields.len() {
+            if g != f and s.msgs[ty].fields[g].oneof == o {
+                self.clear(m, g);
+            }
+        }
+    }
+
+    fn which_oneof(ref self, s: ref Schema, m: i64, o: i64) -> i64 {
+        let ty = self.ms[m].ty;
+        for g in 0..s.msgs[ty].fields.len() {
+            if s.msgs[ty].fields[g].oneof == o and self.ms[m].slots[g].has {
+                return g;
+            }
+        }
+        -1
+    }
+
+    // FieldDesc values, singular or repeated. A singular field without
+    // presence that takes its default value is unset.
+    fn put_int(mut ref self, s: ref Schema, m: i64, f: i64, v: i128) {
+        if s.msgs[self.ms[m].ty].fields[f].label == REPEATED {
+            self.ms[m].slots[f].ints.push(v);
+            return;
+        }
+        self.touch(s, m, f);
+        self.clear(m, f);
+        if v != 0 or s.has_presence(self.ms[m].ty, f) {
+            self.ms[m].slots[f].ints.push(v);
+            self.ms[m].slots[f].has = true;
+        }
+    }
+
+    fn put_real(mut ref self, s: ref Schema, m: i64, f: i64, v: f64) {
+        if s.msgs[self.ms[m].ty].fields[f].label == REPEATED {
+            self.ms[m].slots[f].reals.push(v);
+            return;
+        }
+        self.touch(s, m, f);
+        self.clear(m, f);
+        if v.to_bits() != 0 or s.has_presence(self.ms[m].ty, f) {
+            self.ms[m].slots[f].reals.push(v);
+            self.ms[m].slots[f].has = true;
+        }
+    }
+
+    fn put_bytes(mut ref self, s: ref Schema, m: i64, f: i64, v: own Vec[i64]) {
+        if s.msgs[self.ms[m].ty].fields[f].label == REPEATED {
+            self.ms[m].slots[f].bytes.push(v);
+            return;
+        }
+        self.touch(s, m, f);
+        self.clear(m, f);
+        if v.len() > 0 or s.has_presence(self.ms[m].ty, f) {
+            self.ms[m].slots[f].bytes.push(v);
+            self.ms[m].slots[f].has = true;
+        }
+    }
+
+    // The singular sub-message of field f, made if it isn't there yet.
+    fn sub(mut ref self, s: ref Schema, m: i64, f: i64) -> i64 {
+        if self.ms[m].slots[f].has {
+            return self.ms[m].slots[f].msgs[0];
+        }
+        self.touch(s, m, f);
+        let target = s.msgs[self.ms[m].ty].fields[f].target;
+        let sub = self.new_msg(s, target);
+        self.ms[m].slots[f].msgs.push(sub);
+        self.ms[m].slots[f].has = true;
+        sub
+    }
+
+    fn push_msg(mut ref self, s: ref Schema, m: i64, f: i64) -> i64 {
+        let target = s.msgs[self.ms[m].ty].fields[f].target;
+        let sub = self.new_msg(s, target);
+        self.ms[m].slots[f].msgs.push(sub);
+        sub
+    }
+
+    // An entry for map field f: entries are kept one per key, a new one
+    // replacing an old one in its place. A missing message value is an
+    // empty message.
+    fn new_entry(mut ref self, s: ref Schema, m: i64, f: i64) -> i64 {
+        let target = s.msgs[self.ms[m].ty].fields[f].target;
+        self.new_msg(s, target)
+    }
+
+    fn map_put(mut ref self, s: ref Schema, m: i64, f: i64, e: i64) {
+        let et = self.ms[e].ty;
+        if s.msgs[et].fields[1].typ == T_MESSAGE and not self.ms[e].slots[1].has {
+            self.sub(s, e, 1);
+        }
+        let n = self.ms[m].slots[f].msgs.len();
+        for i in 0..n {
+            let old = self.ms[m].slots[f].msgs[i];
+            if self.same_key(s, old, e) {
+                self.ms[m].slots[f].msgs[i] = e;
+                return;
+            }
+        }
+        self.ms[m].slots[f].msgs.push(e);
+    }
+
+    fn key_int(ref self, e: i64) -> i128 {
+        let sl = ref self.ms[e].slots[0];
+        if sl.ints.len() > 0 { sl.ints[0] } else { 0 }
+    }
+
+    fn key_bytes(ref self, e: i64) -> Vec[i64] {
+        let sl = ref self.ms[e].slots[0];
+        if sl.bytes.len() > 0 { sl.bytes[0].clone() } else { Vec.new() }
+    }
+
+    fn same_key(ref self, s: ref Schema, a: i64, b: i64) -> bool {
+        if s.msgs[self.ms[a].ty].fields[0].typ == T_STRING {
+            same_bytes(self.key_bytes(a), self.key_bytes(b))
+        } else {
+            self.key_int(a) == self.key_int(b)
+        }
+    }
+
+    // Map entries in key order, as Python's sorted() puts the keys.
+    fn sorted_entries(ref self, s: ref Schema, m: i64, f: i64) -> Vec[i64] {
+        let mut out = self.ms[m].slots[f].msgs.clone();
+        let is_str = s.msgs[s.msgs[self.ms[m].ty].fields[f].target].fields[0].typ == T_STRING;
+        let mut k = 1;
+        while k < out.len() {
+            let cur = out[k];
+            let mut j = k;
+            while j > 0 and self.key_less(is_str, cur, out[j - 1]) {
+                out[j] = out[j - 1];
+                j -= 1;
+            }
+            out[j] = cur;
+            k += 1;
+        }
+        out
+    }
+
+    fn key_less(ref self, is_str: bool, a: i64, b: i64) -> bool {
+        if is_str {
+            compare_bytes(self.key_bytes(a), self.key_bytes(b)) < 0
+        } else {
+            self.key_int(a) < self.key_int(b)
+        }
+    }
+
+    // The order upb's deterministic serializer writes map entries in:
+    // string keys ascending by bytes, except that of two keys where one is
+    // a prefix of the other the longer comes first; integer keys
+    // descending by their 64-bit pattern.
+    fn wire_entries(ref self, s: ref Schema, m: i64, f: i64) -> Vec[i64] {
+        let mut out = self.ms[m].slots[f].msgs.clone();
+        let is_str = s.msgs[s.msgs[self.ms[m].ty].fields[f].target].fields[0].typ == T_STRING;
+        let mut k = 1;
+        while k < out.len() {
+            let cur = out[k];
+            let mut j = k;
+            while j > 0 and self.wire_before(is_str, cur, out[j - 1]) {
+                out[j] = out[j - 1];
+                j -= 1;
+            }
+            out[j] = cur;
+            k += 1;
+        }
+        out
+    }
+
+    fn wire_before(ref self, is_str: bool, a: i64, b: i64) -> bool {
+        if is_str {
+            let x = self.key_bytes(a);
+            let y = self.key_bytes(b);
+            let n = if x.len() < y.len() { x.len() } else { y.len() };
+            for i in 0..n {
+                if x[i] != y[i] {
+                    return x[i] < y[i];
+                }
+            }
+            x.len() > y.len()
+        } else {
+            (self.key_int(a) & mask64()) > (self.key_int(b) & mask64())
+        }
+    }
+}
+
+fn compare_bytes(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+    }
+    a.len() - b.len()
+}
+
+// ------------------------------------------------------------- wire
+
+const CORRUPT: i64 = 0;
+const BAD_UTF8: i64 = 1;
+
+fn read_varint(d: ref Vec[i64], start: i64, end: i64) -> Option[(i128, i64)] {
+    let mut v: i128 = 0;
+    let mut shift = 0;
+    let mut i = start;
+    loop {
+        if i >= end {
+            return None;
+        }
+        let b = d[i];
+        i += 1;
+        if shift < 64 {
+            v = v | (((b & 0x7F) as i128) << shift);
+        }
+        if b < 128 {
+            return Some((v & mask64(), i));
+        }
+        shift += 7;
+        if shift >= 70 {
+            return None;
+        }
+    }
+}
+
+fn read_le(d: ref Vec[i64], start: i64, n: i64) -> i128 {
+    let mut v: i128 = 0;
+    let mut k = n - 1;
+    while k >= 0 {
+        v = (v << 8) | (d[start + k] as i128);
+        k -= 1;
+    }
+    v
+}
+
+fn signed32(raw: i128) -> i128 {
+    let x = raw & 0xFFFFFFFF;
+    if x >= 0x80000000 { x - 0x100000000 } else { x }
+}
+
+fn signed64(raw: i128) -> i128 {
+    let x = raw & mask64();
+    if x >= ((1 as i128) << 63) { x - ((1 as i128) << 64) } else { x }
+}
+
+fn zigzag_decode(x: i128) -> i128 {
+    (x >> 1) ^ (0 - (x & 1))
+}
+
+// The value of a varint or fixed field of type typ from its raw bits.
+fn int_value(typ: i64, raw: i128) -> i128 {
+    if typ == T_INT32 or typ == T_ENUM or typ == T_SFIXED32 {
+        signed32(raw)
+    } else if typ == T_INT64 or typ == T_SFIXED64 {
+        signed64(raw)
+    } else if typ == T_UINT32 or typ == T_FIXED32 {
+        raw & 0xFFFFFFFF
+    } else if typ == T_SINT32 {
+        signed32(zigzag_decode(raw & 0xFFFFFFFF))
+    } else if typ == T_SINT64 {
+        signed64(zigzag_decode(raw & mask64()))
+    } else if typ == T_BOOL {
+        if raw != 0 { 1 } else { 0 }
+    } else {
+        raw & mask64()
+    }
+}
+
+fn real_value(typ: i64, raw: i128) -> f64 {
+    if typ == T_FLOAT {
+        (((raw & 0xFFFFFFFF) as i64).bits_as_f32()) as f64
+    } else {
+        (signed64(raw) as i64).bits_as_f64()
+    }
+}
+
+// The wire type a field's values take unpacked.
+fn wire_type_of(typ: i64) -> i64 {
+    if typ == T_DOUBLE or typ == T_FIXED64 or typ == T_SFIXED64 {
+        1
+    } else if typ == T_FLOAT or typ == T_FIXED32 or typ == T_SFIXED32 {
+        5
+    } else if typ == T_STRING or typ == T_BYTES or typ == T_MESSAGE {
+        2
+    } else {
+        0
+    }
+}
+
+// Skips the body of a group whose start tag had field number `num`,
+// returning the position after its end tag.
+fn skip_group(d: ref Vec[i64], start: i64, end: i64, num: i128) -> Result[i64, i64] {
+    let mut pos = start;
+    while pos < end {
+        let (tag, p) = match read_varint(d, pos, end) {
+            Some(t) => t,
+            None => return Err(CORRUPT),
+        };
+        pos = p;
+        let wt = (tag & 7) as i64;
+        if wt == 4 {
+            if (tag >> 3) == num {
+                return Ok(pos);
+            }
+            return Err(CORRUPT);
+        }
+        pos = skip_value(d, pos, end, wt, tag >> 3)?;
+    }
+    Err(CORRUPT)
+}
+
+fn skip_value(d: ref Vec[i64], start: i64, end: i64, wt: i64, num: i128) -> Result[i64, i64] {
+    if wt == 0 {
+        match read_varint(d, start, end) {
+            Some((_, p)) => Ok(p),
+            None => Err(CORRUPT),
+        }
+    } else if wt == 1 or wt == 5 {
+        let n = if wt == 1 { 8 } else { 4 };
+        if end - start < n { Err(CORRUPT) } else { Ok(start + n) }
+    } else if wt == 2 {
+        let (len, p) = match read_varint(d, start, end) {
+            Some(t) => t,
+            None => return Err(CORRUPT),
+        };
+        if len > ((end - p) as i128) {
+            return Err(CORRUPT);
+        }
+        Ok(p + (len as i64))
+    } else if wt == 3 {
+        skip_group(d, start, end, num)
+    } else {
+        Err(CORRUPT)
+    }
+}
+
+fn push_varint(out: mut ref Vec[i64], v: i128) {
+    let mut n = v & mask64();
+    loop {
+        let b = (n & 0x7F) as i64;
+        n = n >> 7;
+        if n != 0 {
+            out.push(b | 0x80);
+        } else {
+            out.push(b);
+            return;
+        }
+    }
+}
+
+fn push_le(out: mut ref Vec[i64], v: i128, n: i64) {
+    let mut x = v;
+    for k in 0..n {
+        out.push((x & 0xFF) as i64);
+        x = x >> 8;
+    }
+}
+
+fn push_tag(out: mut ref Vec[i64], num: i64, wt: i64) {
+    push_varint(mut out, ((num << 3) | wt) as i128);
+}
+
+// upb's decoder over d[start..end] into message m. Inside a group,
+// `group` is its field number and the end tag ends the message.
+fn decode_msg(a: mut ref Store, s: ref Schema, d: ref Vec[i64], start: i64, end: i64, m: i64, group: i128) -> Result[i64, i64] {
+    let ty = a.ms[m].ty;
+    let mut pos = start;
+    while pos < end {
+        let fstart = pos;
+        let (tag, p) = match read_varint(d, pos, end) {
+            Some(t) => t,
+            None => return Err(CORRUPT),
+        };
+        pos = p;
+        let wt = (tag & 7) as i64;
+        let num = tag >> 3;
+        if wt == 4 {
+            if group >= 0 and num == group {
+                return Ok(pos);
+            }
+            return Err(CORRUPT);
+        }
+        let vstart = pos;
+        pos = skip_value(d, pos, end, wt, num)?;
+        let f = if num < 0x20000000 { s.field_by_number(ty, num as i64) } else { -1 };
+        if f < 0 {
+            append(mut a.ms[m].unknown, copy_range(d, fstart, pos));
+            continue;
+        }
+        let typ = s.msgs[ty].fields[f].typ;
+        let want = wire_type_of(typ);
+        let repeated = s.msgs[ty].fields[f].label == REPEATED;
+        if wt == want {
+            if want == 2 {
+                let (len, body) = read_varint(d, vstart, end).unwrap();
+                let lend = body + (len as i64);
+                if typ == T_MESSAGE {
+                    if s.is_map(ty, f) {
+                        let e = a.new_entry(s, m, f);
+                        decode_msg(mut a, s, d, body, lend, e, -1)?;
+                        a.map_put(s, m, f, e);
+                    } else if repeated {
+                        let sub = a.push_msg(s, m, f);
+                        decode_msg(mut a, s, d, body, lend, sub, -1)?;
+                    } else {
+                        let sub = a.sub(s, m, f);
+                        decode_msg(mut a, s, d, body, lend, sub, -1)?;
+                    }
+                } else {
+                    let v = copy_range(d, body, lend);
+                    if typ == T_STRING and s.msgs[ty].proto3 and utf8_error(v).len() > 0 {
+                        return Err(BAD_UTF8);
+                    }
+                    a.put_bytes(s, m, f, v);
+                }
+            } else {
+                let raw = if want == 0 {
+                    read_varint(d, vstart, end).unwrap().0
+                } else {
+                    read_le(d, vstart, if want == 1 { 8 } else { 4 })
+                };
+                if not store_raw(mut a, s, m, f, raw) {
+                    append(mut a.ms[m].unknown, copy_range(d, fstart, pos));
+                }
+            }
+        } else if wt == 2 and repeated and want != 2 {
+            let (len, body) = read_varint(d, vstart, end).unwrap();
+            let lend = body + (len as i64);
+            let mut q = body;
+            while q < lend {
+                let mut raw: i128 = 0;
+                if want == 0 {
+                    let (v, nq) = match read_varint(d, q, lend) {
+                        Some(t) => t,
+                        None => return Err(CORRUPT),
+                    };
+                    raw = v;
+                    q = nq;
+                } else {
+                    let n = if want == 1 { 8 } else { 4 };
+                    if lend - q < n {
+                        return Err(CORRUPT);
+                    }
+                    raw = read_le(d, q, n);
+                    q += n;
+                }
+                if not store_raw(mut a, s, m, f, raw) {
+                    push_tag(mut a.ms[m].unknown, num as i64, 0);
+                    push_varint(mut a.ms[m].unknown, raw);
+                }
+            }
+        } else {
+            append(mut a.ms[m].unknown, copy_range(d, fstart, pos));
+        }
+    }
+    if group >= 0 {
+        return Err(CORRUPT);
+    }
+    Ok(pos)
+}
+
+// Stores a varint or fixed value; false for a closed enum's unknown value,
+// which belongs with the unknown fields.
+fn store_raw(a: mut ref Store, s: ref Schema, m: i64, f: i64, raw: i128) -> bool {
+    let ty = a.ms[m].ty;
+    let typ = s.msgs[ty].fields[f].typ;
+    if kind_of(typ) == K_REAL {
+        a.put_real(s, m, f, real_value(typ, raw));
+        return true;
+    }
+    let v = int_value(typ, raw);
+    if typ == T_ENUM {
+        let e = s.msgs[ty].fields[f].target;
+        if s.enums[e].closed and s.enum_name(e, v as i64).is_none() {
+            return false;
+        }
+    }
+    a.put_int(s, m, f, v);
+    true
+}
+
+fn decode_error(s: ref Schema, ty: i64, code: i64) -> String {
+    let why = if code == BAD_UTF8 { "String field had bad UTF-8" } else { "Wire format was corrupt" };
+    f"DecodeError: Error parsing message with type '{s.msgs[ty].full.substring(1, s.msgs[ty].full.len())}': {why}"
+}
+
+// ------------------------------------------------------------- encoding
+
+fn zigzag_encode(v: i128) -> i128 {
+    if v >= 0 { v * 2 } else { (0 - v) * 2 - 1 }
+}
+
+fn encode_value(a: ref Store, s: ref Schema, typ: i64, sl: ref Slot, i: i64, out: mut ref Vec[i64]) {
+    if typ == T_DOUBLE {
+        push_le(mut out, sl.reals[i].to_bits() as i128, 8);
+    } else if typ == T_FLOAT {
+        push_le(mut out, sl.reals[i].to_bits32() as i128, 4);
+    } else if typ == T_FIXED64 or typ == T_SFIXED64 {
+        push_le(mut out, sl.ints[i] & mask64(), 8);
+    } else if typ == T_FIXED32 or typ == T_SFIXED32 {
+        push_le(mut out, sl.ints[i] & 0xFFFFFFFF, 4);
+    } else if typ == T_SINT32 or typ == T_SINT64 {
+        push_varint(mut out, zigzag_encode(sl.ints[i]));
+    } else if typ == T_STRING or typ == T_BYTES {
+        push_varint(mut out, sl.bytes[i].len() as i128);
+        append(mut out, sl.bytes[i]);
+    } else if typ == T_MESSAGE {
+        let body = encode_msg(a, s, sl.msgs[i]);
+        push_varint(mut out, body.len() as i128);
+        append(mut out, body);
+    } else {
+        push_varint(mut out, sl.ints[i]);
+    }
+}
+
+fn slot_len(typ: i64, sl: ref Slot) -> i64 {
+    let k = kind_of(typ);
+    if k == K_INT {
+        sl.ints.len()
+    } else if k == K_REAL {
+        sl.reals.len()
+    } else if k == K_BYTES {
+        sl.bytes.len()
+    } else {
+        sl.msgs.len()
+    }
+}
+
+// SerializeToString(deterministic=True): fields in number order, packed
+// where the field is, map entries with both key and value in upb's order,
+// then the unknown fields as they came.
+fn encode_msg(a: ref Store, s: ref Schema, m: i64) -> Vec[i64] {
+    let ty = a.ms[m].ty;
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..s.msgs[ty].order.len() {
+        let f = s.msgs[ty].order[k];
+        let fd = ref s.msgs[ty].fields[f];
+        let sl = ref a.ms[m].slots[f];
+        let n = slot_len(fd.typ, sl);
+        let wt = wire_type_of(fd.typ);
+        if s.is_map(ty, f) {
+            let entries = a.wire_entries(s, m, f);
+            for e in entries {
+                let et = a.ms[e].ty;
+                let mut body: Vec[i64] = Vec.new();
+                for j in 0..2 {
+                    let efd = ref s.msgs[et].fields[j];
+                    push_tag(mut body, j + 1, wire_type_of(efd.typ));
+                    let esl = ref a.ms[e].slots[j];
+                    if slot_len(efd.typ, esl) > 0 {
+                        encode_value(a, s, efd.typ, esl, 0, mut body);
+                    } else {
+                        // An unset key or value is written as its default.
+                        let mut z = empty_slot();
+                        let kz = kind_of(efd.typ);
+                        if kz == K_INT {
+                            z.ints.push(0);
+                        } else if kz == K_REAL {
+                            z.reals.push(0.0);
+                        } else {
+                            z.bytes.push(Vec.new());
+                        }
+                        encode_value(a, s, efd.typ, z, 0, mut body);
+                    }
+                }
+                push_tag(mut out, fd.number, 2);
+                push_varint(mut out, body.len() as i128);
+                append(mut out, body);
+            }
+        } else if fd.label == REPEATED and s.is_packed(ty, f) {
+            if n > 0 {
+                let mut body: Vec[i64] = Vec.new();
+                for i in 0..n {
+                    encode_value(a, s, fd.typ, sl, i, mut body);
+                }
+                push_tag(mut out, fd.number, 2);
+                push_varint(mut out, body.len() as i128);
+                append(mut out, body);
+            }
+        } else if fd.label == REPEATED or sl.has {
+            for i in 0..n {
+                push_tag(mut out, fd.number, wt);
+                encode_value(a, s, fd.typ, sl, i, mut out);
+            }
+        }
+    }
+    append(mut out, a.ms[m].unknown);
+    out
+}
+
+// The required fields that are not set, as the paths EncodeError lists:
+// this message's own first, then those inside its sub-messages.
+fn missing_required(a: ref Store, s: ref Schema, m: i64, prefix: ref String, out: mut ref Vec[String]) {
+    let ty = a.ms[m].ty;
+    let fs = ref s.msgs[ty].fields;
+    for f in 0..fs.len() {
+        if fs[f].label == REQUIRED and not a.ms[m].slots[f].has {
+            out.push(f"{prefix}{fs[f].name}");
+        }
+    }
+    for f in 0..fs.len() {
+        if fs[f].typ != T_MESSAGE or s.is_map(ty, f) {
+            continue;
+        }
+        let sl = ref a.ms[m].slots[f];
+        if fs[f].label == REPEATED {
+            for i in 0..sl.msgs.len() {
+                missing_required(a, s, sl.msgs[i], f"{prefix}{fs[f].name}[{i}].", mut out);
+            }
+        } else if sl.has {
+            missing_required(a, s, sl.msgs[0], f"{prefix}{fs[f].name}.", mut out);
+        }
+    }
+}
+
+fn serialize(a: ref Store, s: ref Schema, m: i64) -> Result[Vec[i64], String] {
+    let mut missing: Vec[String] = Vec.new();
+    missing_required(a, s, m, String.new(), mut missing);
+    if missing.len() > 0 {
+        let ty = a.ms[m].ty;
+        let full = s.msgs[ty].full.substring(1, s.msgs[ty].full.len());
+        let mut list = String.new();
+        for i in 0..missing.len() {
+            if i > 0 {
+                list.push_str(",");
+            }
+            list.push_str(missing[i]);
+        }
+        return Err(f"EncodeError: Message {full} is missing required fields: {list}");
+    }
+    Ok(encode_msg(a, s, m))
+}
+
+// ------------------------------------------------------------- floats
+
+// The exact decimal value of a positive finite double as its digits and
+// the power of ten of the last one.
+fn exact_decimal(x: f64) -> (Vec[i64], i64) {
+    let bits = x.to_bits() as i64;
+    let e = (bits >> 52) & 0x7FF;
+    let mut mant = bits & 0xFFFFFFFFFFFFF;
+    let mut e2 = 0;
+    if e == 0 {
+        e2 = -1074;
+    } else {
+        mant = mant | 0x10000000000000;
+        e2 = e - 1075;
+    }
+    while e2 < 0 and mant % 2 == 0 {
+        mant = mant / 2;
+        e2 += 1;
+    }
+    // Little-endian decimal digits of the integer part of the product.
+    let mut n: Vec[i64] = Vec.new();
+    let mut t = mant;
+    while t > 0 {
+        n.push(t % 10);
+        t = t / 10;
+    }
+    let factor = if e2 >= 0 { 2 } else { 5 };
+    let times = if e2 >= 0 { e2 } else { 0 - e2 };
+    for k in 0..times {
+        let mut carry = 0;
+        for i in 0..n.len() {
+            let v = n[i] * factor + carry;
+            n[i] = v % 10;
+            carry = v / 10;
+        }
+        while carry > 0 {
+            n.push(carry % 10);
+            carry = carry / 10;
+        }
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    let mut i = n.len() - 1;
+    while i >= 0 {
+        digits.push(n[i]);
+        i -= 1;
+    }
+    (digits, if e2 >= 0 { 0 } else { e2 })
+}
+
+// float('{0:.{p}g}'.format(x)) for a positive finite x: the exact value
+// rounded half to even at p significant digits.
+fn round_sig(x: f64, p: i64) -> f64 {
+    let (d, dexp) = exact_decimal(x);
+    let mut point = d.len() - 1 + dexp;
+    let mut kept: Vec[i64] = Vec.new();
+    for i in 0..p {
+        kept.push(if i < d.len() { d[i] } else { 0 });
+    }
+    if d.len() > p {
+        let first = d[p];
+        let mut rest = false;
+        for i in (p + 1)..d.len() {
+            if d[i] != 0 {
+                rest = true;
+            }
+        }
+        let up = first > 5 or (first == 5 and (rest or kept[p - 1] % 2 == 1));
+        if up {
+            let mut i = p - 1;
+            loop {
+                if i < 0 {
+                    kept.insert(0, 1);
+                    kept.pop();
+                    point += 1;
+                    break;
+                }
+                if kept[i] == 9 {
+                    kept[i] = 0;
+                    i -= 1;
+                } else {
+                    kept[i] += 1;
+                    break;
+                }
+            }
+        }
+    }
+    let mut text: Vec[i64] = Vec.new();
+    text.push(48 + kept[0]);
+    text.push(46);
+    for i in 1..kept.len() {
+        text.push(48 + kept[i]);
+    }
+    push_str(mut text, f"e{point}");
+    f64.parse(text_of(text)).unwrap()
+}
+
+// type_checkers.ToShortestFloat: the fewest digits, from 6 up, that read
+// back as the same 32-bit float.
+fn shortest_float(x: f64) -> f64 {
+    if x == 0.0 or x != x or x == 1.0 / 0.0 or x == -1.0 / 0.0 {
+        return x;
+    }
+    let neg = x < 0.0;
+    let ax = if neg { 0.0 - x } else { x };
+    let mut p = 6;
+    let mut r = round_sig(ax, p);
+    while r.to_bits32() != ax.to_bits32() {
+        p += 1;
+        r = round_sig(ax, p);
+    }
+    if neg { 0.0 - r } else { r }
+}
+
+fn repr_double(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn repr_float(x: f64) -> String {
+    repr_double(shortest_float(x))
+}
+
+// ------------------------------------------------------------- text out
+
+fn spaces(out: mut ref Vec[i64], n: i64) {
+    for i in 0..n {
+        out.push(32);
+    }
+}
+
+fn scalar_text(s: ref Schema, fd: ref FieldDesc, sl: ref Slot, i: i64) -> String {
+    let t = fd.typ;
+    if t == T_DOUBLE {
+        repr_double(sl.reals[i])
+    } else if t == T_FLOAT {
+        repr_float(sl.reals[i])
+    } else if t == T_STRING {
+        f"\"{c_escape(sl.bytes[i], true)}\""
+    } else if t == T_BYTES {
+        f"\"{c_escape(sl.bytes[i], false)}\""
+    } else if t == T_BOOL {
+        if sl.ints[i] != 0 { "true".to_string() } else { "false".to_string() }
+    } else if t == T_ENUM {
+        match s.enum_name(fd.target, sl.ints[i] as i64) {
+            Some(n) => n,
+            None => f"{sl.ints[i]}",
+        }
+    } else {
+        f"{sl.ints[i]}"
+    }
+}
+
+// text_format.MessageToString: set fields in number order, map entries
+// sorted by key.
+fn print_text(a: ref Store, s: ref Schema, m: i64, indent: i64, out: mut ref Vec[i64]) {
+    let ty = a.ms[m].ty;
+    for k in 0..s.msgs[ty].order.len() {
+        let f = s.msgs[ty].order[k];
+        if not a.is_set(s, m, f) {
+            continue;
+        }
+        let fd = ref s.msgs[ty].fields[f];
+        let sl = ref a.ms[m].slots[f];
+        if fd.typ == T_MESSAGE {
+            let subs = if s.is_map(ty, f) { a.sorted_entries(s, m, f) } else { sl.msgs.clone() };
+            for sub in subs {
+                spaces(mut out, indent);
+                push_str(mut out, f"{fd.name} {{\n");
+                print_text(a, s, sub, indent + 2, mut out);
+                spaces(mut out, indent);
+                push_str(mut out, "}\n");
+            }
+        } else {
+            for i in 0..slot_len(fd.typ, sl) {
+                spaces(mut out, indent);
+                push_str(mut out, f"{fd.name}: {scalar_text(s, fd, sl, i)}\n");
+            }
+        }
+    }
+}
+
+// decoder._DecodeUnknownFieldSet over d[start..end], printing what it
+// reads when `print` is set: None where Python raises. A group ends at
+// any end tag, which its caller then checks.
+fn unknown_set(d: ref Vec[i64], start: i64, end: i64, indent: i64, out: mut ref Vec[i64], print: bool) -> Option[i64] {
+    let mut pos = start;
+    while pos < end {
+        let mut q = pos;
+        loop {
+            if q >= end {
+                return None;
+            }
+            if d[q] < 128 {
+                break;
+            }
+            q += 1;
+        }
+        q += 1;
+        let (tag, _) = read_varint(d, pos, q)?;
+        pos = q;
+        let wt = (tag & 7) as i64;
+        let num = tag >> 3;
+        if wt == 4 {
+            return Some(pos);
+        }
+        if wt == 0 {
+            let (v, p) = read_varint(d, pos, end)?;
+            pos = p;
+            if print {
+                spaces(mut out, indent);
+                push_str(mut out, f"{num}: {v}\n");
+            }
+        } else if wt == 1 or wt == 5 {
+            let n = if wt == 1 { 8 } else { 4 };
+            if pos + n > end {
+                return None;
+            }
+            let v = read_le(d, pos, n);
+            pos += n;
+            if print {
+                spaces(mut out, indent);
+                push_str(mut out, f"{num}: {v}\n");
+            }
+        } else if wt == 2 {
+            let (size, p) = read_varint(d, pos, end)?;
+            if size > ((end - p) as i128) {
+                return None;
+            }
+            let dend = p + (size as i64);
+            pos = dend;
+            if print {
+                let mut scratch: Vec[i64] = Vec.new();
+                let nested = match unknown_set(d, p, dend, 0, mut scratch, false) {
+                    Some(r) => r == dend,
+                    None => false,
+                };
+                spaces(mut out, indent);
+                if nested {
+                    push_str(mut out, f"{num} {{\n");
+                    let _ = unknown_set(d, p, dend, indent + 2, mut out, true);
+                    spaces(mut out, indent);
+                    push_str(mut out, "}\n");
+                } else {
+                    push_str(mut out, f"{num}: \"{c_escape(copy_range(d, p, dend), false)}\"\n");
+                }
+            }
+        } else if wt == 3 {
+            if print {
+                spaces(mut out, indent);
+                push_str(mut out, f"{num} {{\n");
+            }
+            let r = unknown_set(d, pos, end, indent + 2, mut out, print)?;
+            let mut end_tag: Vec[i64] = Vec.new();
+            push_varint(mut end_tag, (num << 3) | 4);
+            let n = end_tag.len();
+            if r - n < start or not same_bytes(copy_range(d, r - n, r), end_tag) {
+                return None;
+            }
+            pos = r;
+            if print {
+                spaces(mut out, indent);
+                push_str(mut out, "}\n");
+            }
+        } else {
+            return None;
+        }
+    }
+    Some(pos)
+}
+
+// ------------------------------------------------------------- text in
+
+// text_format.Tokenizer over the text's lines, as code points.
+struct Tokenizer {
+    lines: Vec[Vec[i64]],
+    next_line: i64,
+    line: i64,
+    column: i64,
+    current: Vec[i64],
+    more: bool,
+    token: Vec[i64],
+    prev_line: i64,
+    prev_column: i64,
+}
+
+fn is_space(c: i64) -> bool {
+    c == 32 or (c >= 9 and c <= 13) or (c >= 0x1C and c <= 0x1F)
+}
+
+fn is_word(c: i64) -> bool {
+    is_alnum(c) or c >= 0x80
+}
+
+fn is_ident_rest(c: i64) -> bool {
+    is_alnum(c) or c == 43 or c == 45
+}
+
+fn new_tokenizer(text: ref Vec[i64]) -> Tokenizer {
+    let mut lines: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for i in 0..text.len() {
+        if text[i] == 10 {
+            lines.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(text[i]);
+        }
+    }
+    lines.push(cur);
+    let mut t = Tokenizer {
+        lines,
+        next_line: 0,
+        line: -1,
+        column: 0,
+        current: Vec.new(),
+        more: true,
+        token: Vec.new(),
+        prev_line: 0,
+        prev_column: 0,
+    };
+    t.skip_whitespace();
+    t.next_token();
+    t
+}
+
+impl Tokenizer {
+    fn pop_line(mut ref self) {
+        while self.current.len() <= self.column {
+            if self.next_line >= self.lines.len() {
+                self.current = Vec.new();
+                self.more = false;
+                return;
+            }
+            self.current = self.lines[self.next_line].clone();
+            self.next_line += 1;
+            self.line += 1;
+            self.column = 0;
+        }
+    }
+
+    // (\s|(#.*$))+ at the column.
+    fn skip_whitespace(mut ref self) {
+        loop {
+            self.pop_line();
+            let start = self.column;
+            let mut i = start;
+            let n = self.current.len();
+            while i < n {
+                if is_space(self.current[i]) {
+                    i += 1;
+                } else if self.current[i] == 35 {
+                    i = n;
+                } else {
+                    break;
+                }
+            }
+            if i == start {
+                return;
+            }
+            self.column = i;
+        }
+    }
+
+    fn at(ref self, i: i64) -> i64 {
+        if i < self.current.len() { self.current[i] } else { -1 }
+    }
+
+    // The length of the token the regular expression matches at i.
+    fn match_len(ref self, i: i64) -> i64 {
+        let c = self.at(i);
+        let n = self.current.len();
+        if is_ident_start(c) {
+            let mut j = i + 1;
+            while j < n and is_ident_rest(self.current[j]) {
+                j += 1;
+            }
+            return j - i;
+        }
+        if is_digit(c) or c == 43 or c == 45 or (c == 46 and is_digit(self.at(i + 1))) {
+            let mut j = if c == 46 { i + 2 } else { i + 1 };
+            while j < n and (is_ident_rest(self.current[j]) or self.current[j] == 46) {
+                j += 1;
+            }
+            return j - i;
+        }
+        if c == 34 or c == 39 {
+            let mut j = i + 1;
+            while j < n {
+                let d = self.current[j];
+                if d == c {
+                    return j + 1 - i;
+                }
+                if d == 92 {
+                    if j + 1 >= n {
+                        return n - i;
+                    }
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            }
+            return n - i;
+        }
+        1
+    }
+
+    fn next_token(mut ref self) {
+        self.prev_line = self.line;
+        self.prev_column = self.column;
+        self.column += self.token.len();
+        self.skip_whitespace();
+        if not self.more {
+            self.token = Vec.new();
+            return;
+        }
+        let len = self.match_len(self.column);
+        self.token = copy_range(self.current, self.column, self.column + len);
+    }
+
+    fn at_end(ref self) -> bool {
+        self.token.len() == 0
+    }
+
+    fn token_text(ref self) -> String {
+        text_of(utf8_of(self.token))
+    }
+
+    fn looking_at(ref self, t: Str) -> bool {
+        self.token_text() == t
+    }
+
+    fn try_consume(mut ref self, t: Str) -> bool {
+        if self.looking_at(t) {
+            self.next_token();
+            return true;
+        }
+        false
+    }
+
+    // An error at the current token, quoting its line.
+    fn error(ref self, msg: ref String) -> String {
+        f"ParseError: {self.line + 1}:{self.column + 1} : '{text_of(utf8_of(self.current))}': {msg}"
+    }
+
+    fn prev_error(ref self, msg: ref String) -> String {
+        f"ParseError: {self.prev_line + 1}:{self.prev_column + 1} : {msg}"
+    }
+
+    fn consume(mut ref self, t: Str) -> Result[(), String] {
+        if not self.try_consume(t) {
+            return Err(self.error(f"Expected \"{t}\"."));
+        }
+        Ok(())
+    }
+
+    fn consume_identifier(mut ref self) -> Result[String, String] {
+        let c = if self.token.len() > 0 { self.token[0] } else { -1 };
+        if not (is_ident_start(c) or c >= 0x80) {
+            return Err(self.error("Expected identifier.".to_string()));
+        }
+        let t = self.token_text();
+        self.next_token();
+        Ok(t)
+    }
+
+    fn consume_identifier_or_number(mut ref self) -> Result[String, String] {
+        let c = if self.token.len() > 0 { self.token[0] } else { -1 };
+        if not is_word(c) {
+            return Err(self.error(f"Expected identifier or number, got {self.token_text()}."));
+        }
+        let t = self.token_text();
+        self.next_token();
+        Ok(t)
+    }
+
+    fn single_string(mut ref self) -> Result[Vec[i64], String] {
+        let t = self.token.clone();
+        if t.len() < 1 or (t[0] != 34 and t[0] != 39) {
+            return Err(self.error(f"Expected string but found: {py_repr(t)}"));
+        }
+        if t.len() < 2 or t[t.len() - 1] != t[0] {
+            return Err(self.error(f"String missing ending quote: {py_repr(t)}"));
+        }
+        let v = match c_unescape(copy_range(t, 1, t.len() - 1)) {
+            Ok(v) => v,
+            Err(e) => return Err(self.error(e)),
+        };
+        self.next_token();
+        Ok(v)
+    }
+
+    fn consume_bytes(mut ref self) -> Result[Vec[i64], String] {
+        let mut out = self.single_string()?;
+        while self.token.len() > 0 and (self.token[0] == 34 or self.token[0] == 39) {
+            let more = self.single_string()?;
+            append(mut out, more);
+        }
+        Ok(out)
+    }
+
+    fn consume_string(mut ref self) -> Result[Vec[i64], String] {
+        let b = self.consume_bytes()?;
+        let e = utf8_error(b);
+        if e.len() > 0 {
+            return Err(self.error(f"Couldn't parse string: {e}"));
+        }
+        Ok(b)
+    }
+}
+
+fn octal_value(c: i64) -> i64 {
+    if c >= 48 and c <= 55 { c - 48 } else { -1 }
+}
+
+fn hex_digit(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+// text_encoding.CUnescape: the C escapes, \x with one or two hex digits,
+// \u and \U as UTF-8, and other characters as their UTF-8 bytes.
+fn c_unescape(t: ref Vec[i64]) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = t.len();
+    let mut i = 0;
+    while i < n {
+        let c = t[i];
+        if c != 92 {
+            push_utf8(mut out, c);
+            i += 1;
+            continue;
+        }
+        if i + 1 >= n {
+            return Err("\\ at end of string".to_string());
+        }
+        let e = t[i + 1];
+        i += 2;
+        if e == 110 {
+            out.push(10);
+        } else if e == 116 {
+            out.push(9);
+        } else if e == 114 {
+            out.push(13);
+        } else if e == 97 {
+            out.push(7);
+        } else if e == 98 {
+            out.push(8);
+        } else if e == 102 {
+            out.push(12);
+        } else if e == 118 {
+            out.push(11);
+        } else if e == 92 or e == 39 or e == 34 {
+            out.push(e);
+        } else if octal_value(e) >= 0 {
+            let mut v = octal_value(e);
+            let mut k = 0;
+            while k < 2 and i < n and octal_value(t[i]) >= 0 {
+                v = v * 8 + octal_value(t[i]);
+                i += 1;
+                k += 1;
+            }
+            out.push(v & 255);
+        } else if e == 120 {
+            let mut v = 0;
+            let mut k = 0;
+            while k < 2 and i < n and hex_digit(t[i]) >= 0 {
+                v = v * 16 + hex_digit(t[i]);
+                i += 1;
+                k += 1;
+            }
+            if k == 0 {
+                return Err(f"'unicodeescape' codec can't decode bytes in position {i - 2}-{i - 1}: truncated \\xXX escape");
+            }
+            out.push(v);
+        } else if e == 117 or e == 85 {
+            let want = if e == 117 { 4 } else { 8 };
+            let mut v = 0;
+            for k in 0..want {
+                if i >= n or hex_digit(t[i]) < 0 {
+                    return Err(f"'rawunicodeescape' codec can't decode bytes: truncated \\{if e == 117 { "u" } else { "U" }}XXXX");
+                }
+                v = v * 16 + hex_digit(t[i]);
+                i += 1;
+            }
+            push_utf8(mut out, v);
+        } else {
+            out.push(92);
+            push_utf8(mut out, e);
+        }
+    }
+    Ok(out)
+}
+
+// int(text, 0), after text_format has turned a C octal (0 and more
+// digits) into 0o when `c_octal` is set: None where Python raises.
+fn py_int(t: ref Vec[i64], c_octal: bool) -> Option[i128] {
+    let n = t.len();
+    let mut i = 0;
+    let mut neg = false;
+    if c_octal {
+        let j = if n > 0 and t[0] == 45 { 1 } else { 0 };
+        let mut all = n - j >= 2 and t[j] == 48;
+        for k in (j + 1)..n {
+            if not is_digit(t[k]) {
+                all = false;
+            }
+        }
+        if all {
+            let mut v: i128 = 0;
+            for k in (j + 1)..n {
+                if t[k] > 55 {
+                    return None;
+                }
+                v = v * 8 + ((t[k] - 48) as i128);
+            }
+            return Some(if j == 1 { 0 - v } else { v });
+        }
+    }
+    if i < n and (t[i] == 43 or t[i] == 45) {
+        neg = t[i] == 45;
+        i += 1;
+    }
+    if i >= n {
+        return None;
+    }
+    let mut base = 10;
+    let mut last_us = true;
+    if t[i] == 48 and i + 1 < n and (t[i + 1] == 120 or t[i + 1] == 88 or t[i + 1] == 111 or t[i + 1] == 79 or t[i + 1] == 98 or t[i + 1] == 66) {
+        let p = t[i + 1];
+        base = if p == 120 or p == 88 { 16 } else if p == 111 or p == 79 { 8 } else { 2 };
+        i += 2;
+        if i < n and t[i] == 95 {
+            i += 1;
+        }
+    } else if t[i] == 48 {
+        // A decimal with a leading zero is all zeros.
+        for k in i..n {
+            if t[k] == 95 {
+                if last_us {
+                    return None;
+                }
+                last_us = true;
+            } else if t[k] == 48 {
+                last_us = false;
+            } else {
+                return None;
+            }
+        }
+        return if last_us { None } else { Some(0) };
+    }
+    let mut v: i128 = 0;
+    for k in i..n {
+        let c = t[k];
+        if c == 95 {
+            if last_us {
+                return None;
+            }
+            last_us = true;
+            continue;
+        }
+        let d = hex_digit(c);
+        if d < 0 or d >= base {
+            return None;
+        }
+        if v > ((1 as i128) << 100) {
+            return None;
+        }
+        v = v * (base as i128) + (d as i128);
+        last_us = false;
+    }
+    if last_us {
+        return None;
+    }
+    Some(if neg { 0 - v } else { v })
+}
+
+// Python's float('nan'): the quiet NaN with the sign bit clear (0.0 / 0.0
+// is the hardware's default NaN, which on x86 has it set).
+fn quiet_nan(neg: bool) -> f64 {
+    let bits: i64 = 0x7FF8000000000000;
+    if neg { (bits | (1 << 63)).bits_as_f64() } else { bits.bits_as_f64() }
+}
+
+// float(text): Python's grammar, underscores between digits included.
+fn py_float(t: ref Vec[i64]) -> Option[f64] {
+    let mut clean: Vec[i64] = Vec.new();
+    for i in 0..t.len() {
+        let c = t[i];
+        if c == 95 {
+            if i == 0 or i + 1 >= t.len() or not is_digit(t[i - 1]) or not is_digit(t[i + 1]) {
+                return None;
+            }
+        } else {
+            clean.push(c);
+        }
+    }
+    let low = text_of(clean).to_lowercase();
+    let body = if low.starts_with("-") or low.starts_with("+") { low.substring(1, low.len()) } else { low.clone() };
+    if body == "inf" or body == "infinity" or body == "nan" {
+        let neg = low.starts_with("-");
+        if body == "nan" {
+            return Some(quiet_nan(neg));
+        }
+        return Some(if neg { -1.0 / 0.0 } else { 1.0 / 0.0 });
+    }
+    // Digits, an optional point and an optional exponent, nothing else.
+    let b = bytes_of(body);
+    let mut i = 0;
+    let mut digits = 0;
+    while i < b.len() and is_digit(b[i]) {
+        i += 1;
+        digits += 1;
+    }
+    if i < b.len() and b[i] == 46 {
+        i += 1;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
+        return None;
+    }
+    if i < b.len() and b[i] == 101 {
+        i += 1;
+        if i < b.len() and (b[i] == 43 or b[i] == 45) {
+            i += 1;
+        }
+        let s = i;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+        }
+        if i == s {
+            return None;
+        }
+    }
+    if i != b.len() {
+        return None;
+    }
+    match f64.parse(low) {
+        Ok(x) => Some(x),
+        Err(_) => None,
+    }
+}
+
+// text_format.ParseFloat.
+fn parse_text_float(t: ref Vec[i64]) -> Result[f64, String] {
+    let text = text_of(utf8_of(t));
+    let b = bytes_of(text);
+    let mut i = 0;
+    if i < b.len() and b[i] == 45 {
+        i += 1;
+    }
+    if i + 1 < b.len() and b[i] == 48 and is_digit(b[i + 1]) {
+        return Err(f"Invalid octal float: {text}");
+    }
+    match py_float(t) {
+        Some(x) => return Ok(x),
+        None => {}
+    }
+    let low = text.to_lowercase();
+    let inf_body = if low.starts_with("-") { low.substring(1, low.len()) } else { low.clone() };
+    if inf_body == "inf" or inf_body == "inff" or inf_body == "infinity" or inf_body == "infinityf" {
+        return Ok(if low.starts_with("-") { -1.0 / 0.0 } else { 1.0 / 0.0 });
+    }
+    if low == "nan" or low == "nanf" {
+        return Ok(quiet_nan(false));
+    }
+    let mut stripped = t.clone();
+    while stripped.len() > 0 and (stripped[stripped.len() - 1] == 102 or stripped[stripped.len() - 1] == 70) {
+        stripped.pop();
+    }
+    match py_float(stripped) {
+        Some(x) => Ok(x),
+        None => Err(f"Couldn't parse float: {text}"),
+    }
+}
+
+fn int_range(typ: i64) -> (i128, i128) {
+    if typ == T_INT32 or typ == T_SINT32 or typ == T_SFIXED32 or typ == T_ENUM {
+        (0 - 0x80000000, 0x7FFFFFFF)
+    } else if typ == T_UINT32 or typ == T_FIXED32 {
+        (0, 0xFFFFFFFF)
+    } else if typ == T_UINT64 or typ == T_FIXED64 {
+        (0, mask64())
+    } else {
+        (0 - ((1 as i128) << 63), ((1 as i128) << 63) - 1)
+    }
+}
+
+fn full_name(s: ref String) -> String {
+    s.substring(1, s.len())
+}
+
+struct TextParser {
+    tok: Tokenizer,
+}
+
+impl TextParser {
+    fn merge_message(mut ref self, a: mut ref Store, s: ref Schema, m: i64, end: Str) -> Result[(), String] {
+        while not self.tok.try_consume(end) {
+            if self.tok.at_end() {
+                return Err(self.tok.prev_error(f"Expected \"{end}\"."));
+            }
+            self.merge_field(mut a, s, m)?;
+        }
+        Ok(())
+    }
+
+    fn merge_field(mut ref self, a: mut ref Store, s: ref Schema, m: i64) -> Result[(), String] {
+        let ty = a.ms[m].ty;
+        let full = full_name(s.msgs[ty].full);
+        if self.tok.try_consume("[") {
+            let mut name = self.tok.consume_identifier()?;
+            while self.tok.try_consume(".") {
+                let part = self.tok.consume_identifier()?;
+                name = f"{name}.{part}";
+            }
+            return Err(self.tok.prev_error(f"Message type \"{full}\" does not have extensions."));
+        }
+        let name = self.tok.consume_identifier_or_number()?;
+        let f = s.field_by_name(ty, name);
+        if f < 0 {
+            return Err(self.tok.prev_error(f"Message type \"{full}\" has no field named \"{name}\"."));
+        }
+        let fd = ref s.msgs[ty].fields[f];
+        if fd.oneof >= 0 {
+            let which = a.which_oneof(s, m, fd.oneof);
+            if which >= 0 and which != f {
+                let other = s.msgs[ty].fields[which].name.clone();
+                let oname = s.msgs[ty].oneofs[fd.oneof].clone();
+                return Err(self.tok.prev_error(f"Field \"{fd.name}\" is specified along with field \"{other}\", another member of oneof \"{oname}\" for message type \"{full}\"."));
+            }
+        }
+        let is_msg = fd.typ == T_MESSAGE;
+        if is_msg {
+            self.tok.try_consume(":");
+        } else {
+            self.tok.consume(":")?;
+        }
+        if fd.label == REPEATED and self.tok.try_consume("[") {
+            if not self.tok.try_consume("]") {
+                loop {
+                    self.merge_value(mut a, s, m, f)?;
+                    if self.tok.try_consume("]") {
+                        break;
+                    }
+                    self.tok.consume(",")?;
+                }
+            }
+        } else {
+            self.merge_value(mut a, s, m, f)?;
+        }
+        if not self.tok.try_consume(",") {
+            self.tok.try_consume(";");
+        }
+        Ok(())
+    }
+
+    fn merge_value(mut ref self, a: mut ref Store, s: ref Schema, m: i64, f: i64) -> Result[(), String] {
+        let ty = a.ms[m].ty;
+        let fd = ref s.msgs[ty].fields[f];
+        if fd.typ == T_MESSAGE {
+            let end = if self.tok.try_consume("<") {
+                ">"
+            } else {
+                self.tok.consume("{")?;
+                "}"
+            };
+            if s.is_map(ty, f) {
+                let e = a.new_entry(s, m, f);
+                self.merge_message(mut a, s, e, end)?;
+                a.map_put(s, m, f, e);
+            } else if fd.label == REPEATED {
+                let sub = a.push_msg(s, m, f);
+                self.merge_message(mut a, s, sub, end)?;
+            } else {
+                if a.ms[m].slots[f].has {
+                    return Err(self.tok.prev_error(f"Message type \"{full_name(s.msgs[ty].full)}\" should not have multiple \"{fd.name}\" fields."));
+                }
+                let sub = a.sub(s, m, f);
+                self.merge_message(mut a, s, sub, end)?;
+            }
+            return Ok(());
+        }
+        let k = kind_of(fd.typ);
+        let mut iv: i128 = 0;
+        let mut rv: f64 = 0.0;
+        let mut bv: Vec[i64] = Vec.new();
+        if fd.typ == T_FLOAT or fd.typ == T_DOUBLE {
+            let x = match parse_text_float(self.tok.token) {
+                Ok(x) => x,
+                Err(e) => return Err(self.tok.error(e)),
+            };
+            rv = if fd.typ == T_FLOAT { (x as f32) as f64 } else { x };
+            self.tok.next_token();
+        } else if fd.typ == T_BOOL {
+            let t = self.tok.token_text();
+            if t == "true" or t == "t" or t == "1" or t == "True" {
+                iv = 1;
+            } else if t == "false" or t == "f" or t == "0" or t == "False" {
+                iv = 0;
+            } else {
+                return Err(self.tok.error("Expected \"true\" or \"false\".".to_string()));
+            }
+            self.tok.next_token();
+        } else if fd.typ == T_STRING {
+            bv = self.tok.consume_string()?;
+        } else if fd.typ == T_BYTES {
+            bv = self.tok.consume_bytes()?;
+        } else if fd.typ == T_ENUM {
+            let t = self.tok.token_text();
+            let et = ref s.enums[fd.target];
+            match py_int(self.tok.token, false) {
+                Some(n) => {
+                    if et.closed and s.enum_name(fd.target, n as i64).is_none() {
+                        return Err(self.tok.error(f"Enum type \"{full_name(et.full)}\" has no value with number {n}."));
+                    }
+                    iv = n;
+                }
+                None => match s.enum_number(fd.target, t) {
+                    Some(n) => iv = n as i128,
+                    None => return Err(self.tok.error(f"Enum type \"{full_name(et.full)}\" has no value named {t}.")),
+                },
+            }
+            self.tok.next_token();
+        } else {
+            let t = self.tok.token_text();
+            let n = match py_int(self.tok.token, true) {
+                Some(n) => n,
+                None => return Err(self.tok.error(f"Couldn't parse integer: {t}")),
+            };
+            let (lo, hi) = int_range(fd.typ);
+            if n < lo or n > hi {
+                return Err(self.tok.error(f"Value out of range: {n}"));
+            }
+            iv = n;
+            self.tok.next_token();
+        }
+        if fd.label != REPEATED {
+            let sl = ref a.ms[m].slots[f];
+            let dup = if s.has_presence(ty, f) { sl.has } else { slot_len(fd.typ, sl) > 0 };
+            if dup {
+                return Err(self.tok.prev_error(f"Message type \"{full_name(s.msgs[ty].full)}\" should not have multiple \"{fd.name}\" fields."));
+            }
+        }
+        if k == K_REAL {
+            a.put_real(s, m, f, rv);
+        } else if k == K_BYTES {
+            a.put_bytes(s, m, f, bv);
+        } else {
+            a.put_int(s, m, f, iv);
+        }
+        Ok(())
+    }
+}
+
+fn parse_text(a: mut ref Store, s: ref Schema, m: i64, text: ref Vec[i64]) -> Result[(), String] {
+    let mut p = TextParser { tok: new_tokenizer(text) };
+    while not p.tok.at_end() {
+        p.merge_field(mut a, s, m)?;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------- json in
+
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(Vec[i64]),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+struct Member {
+    key: Vec[i64],
+    val: J,
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    text_of(copy_range(s, start, end))
+}
+
+// json.loads, as the C scanner in Modules/_json.c reads code points, with
+// json_format's hook refusing a repeated key once its object is read.
+struct Scanner {
+    s: Vec[i64],
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    fn fail(ref self, msg: Str, pos: i64) -> String {
+        let mut line = 1;
+        let mut last = -1;
+        for i in 0..pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+        }
+        f"{msg}: line {line} column {pos - last} (char {pos})"
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), String] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(text), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(quiet_nan(false)), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    fn match_number(ref self, start: i64) -> Result[(J, i64), String] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return Ok((J.Float(f64.parse(text).unwrap()), idx));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        for k in 0..4 {
+            let d = hex_digit(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+        }
+        Some(v)
+    }
+
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), String] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), String] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                members.push(Member { key, val });
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        for i in 0..members.len() {
+            for j in 0..i {
+                if same_bytes(members[i].key, members[j].key) {
+                    return Err(f"Failed to load JSON: duplicate key {text_of(utf8_of(members[i].key))}.");
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), String] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+fn loads(text: ref Vec[i64]) -> Result[J, String] {
+    let sc = Scanner { s: text.clone() };
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+// ------------------------------------------------------------- json out
+
+// json.dumps(indent=2, sort_keys=True), ensure_ascii on.
+fn json_str(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    out.push(34);
+    for c in s {
+        if c == 34 {
+            push_str(mut out, "\\\"");
+        } else if c == 92 {
+            push_str(mut out, "\\\\");
+        } else if c == 10 {
+            push_str(mut out, "\\n");
+        } else if c == 13 {
+            push_str(mut out, "\\r");
+        } else if c == 9 {
+            push_str(mut out, "\\t");
+        } else if c == 8 {
+            push_str(mut out, "\\b");
+        } else if c == 12 {
+            push_str(mut out, "\\f");
+        } else if c < 0x20 or c > 0x7E {
+            if c >= 0x10000 {
+                let n = c - 0x10000;
+                push_str(mut out, f"\\u{hex_n(0xD800 | ((n >> 10) & 0x3FF), 4)}\\u{hex_n(0xDC00 | (n & 0x3FF), 4)}");
+            } else {
+                push_str(mut out, f"\\u{hex_n(c, 4)}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(34);
+}
+
+fn newline(out: mut ref Vec[i64], level: i64) {
+    out.push(10);
+    spaces(mut out, level * 2);
+}
+
+fn dump(v: ref J, level: i64, out: mut ref Vec[i64]) {
+    match v {
+        J.Null => push_str(mut out, "null"),
+        J.Bool(b) => push_str(mut out, if b { "true" } else { "false" }),
+        J.Int(digits) => push_str(mut out, digits),
+        J.Float(x) => push_str(mut out, f"{x}"),
+        J.Str(s) => json_str(s, mut out),
+        J.Arr(items) => {
+            if items.len() == 0 {
+                push_str(mut out, "[]");
+                return;
+            }
+            out.push(91);
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push(44);
+                }
+                newline(mut out, level + 1);
+                dump(items[i], level + 1, mut out);
+            }
+            newline(mut out, level);
+            out.push(93);
+        }
+        J.Obj(members) => {
+            if members.len() == 0 {
+                push_str(mut out, "{}");
+                return;
+            }
+            let mut order: Vec[i64] = Vec.new();
+            for i in 0..members.len() {
+                let mut at = order.len();
+                while at > 0 and compare_bytes(members[order[at - 1]].key, members[i].key) > 0 {
+                    at -= 1;
+                }
+                order.insert(at, i);
+            }
+            out.push(123);
+            for k in 0..order.len() {
+                if k > 0 {
+                    out.push(44);
+                }
+                newline(mut out, level + 1);
+                let m = ref members[order[k]];
+                json_str(m.key, mut out);
+                push_str(mut out, ": ");
+                dump(m.val, level + 1, mut out);
+            }
+            newline(mut out, level);
+            out.push(125);
+        }
+    }
+}
+
+struct JsonOpts {
+    names: bool,
+    defaults: bool,
+    ints: bool,
+}
+
+fn ascii_cps(s: ref String) -> Vec[i64] {
+    codepoints(bytes_of(s))
+}
+
+fn is_int64(typ: i64) -> bool {
+    typ == T_INT64 or typ == T_UINT64 or typ == T_SINT64 or typ == T_FIXED64 or typ == T_SFIXED64
+}
+
+// _FieldToJsonObject for element i of a slot.
+fn json_value(a: ref Store, s: ref Schema, o: ref JsonOpts, fd: ref FieldDesc, sl: ref Slot, i: i64) -> J {
+    let t = fd.typ;
+    if t == T_MESSAGE {
+        json_message(a, s, o, sl.msgs[i])
+    } else if t == T_ENUM {
+        let v = sl.ints[i];
+        if o.ints {
+            return J.Int(f"{v}");
+        }
+        match s.enum_name(fd.target, v as i64) {
+            Some(n) => J.Str(ascii_cps(n)),
+            None => J.Int(f"{v}"),
+        }
+    } else if t == T_STRING {
+        J.Str(codepoints(sl.bytes[i]))
+    } else if t == T_BYTES {
+        J.Str(ascii_cps(b64_encode(sl.bytes[i])))
+    } else if t == T_BOOL {
+        J.Bool(sl.ints[i] != 0)
+    } else if is_int64(t) {
+        J.Str(ascii_cps(f"{sl.ints[i]}"))
+    } else if t == T_FLOAT or t == T_DOUBLE {
+        let x = sl.reals[i];
+        if x != x {
+            J.Str(ascii_cps("NaN".to_string()))
+        } else if x == 1.0 / 0.0 {
+            J.Str(ascii_cps("Infinity".to_string()))
+        } else if x == -1.0 / 0.0 {
+            J.Str(ascii_cps("-Infinity".to_string()))
+        } else if t == T_FLOAT {
+            J.Float(shortest_float(x))
+        } else {
+            J.Float(x)
+        }
+    } else {
+        J.Int(f"{sl.ints[i]}")
+    }
+}
+
+fn json_name_of(o: ref JsonOpts, fd: ref FieldDesc) -> Vec[i64] {
+    ascii_cps(if o.names { fd.name.clone() } else { fd.json.clone() })
+}
+
+// The default a field without presence shows with
+// always_print_fields_with_no_presence.
+fn default_slot(typ: i64) -> Slot {
+    let mut z = empty_slot();
+    let k = kind_of(typ);
+    if k == K_INT {
+        z.ints.push(0);
+    } else if k == K_REAL {
+        z.reals.push(0.0);
+    } else if k == K_BYTES {
+        z.bytes.push(Vec.new());
+    }
+    z
+}
+
+fn json_message(a: ref Store, s: ref Schema, o: ref JsonOpts, m: i64) -> J {
+    let ty = a.ms[m].ty;
+    let mut members: Vec[Member] = Vec.new();
+    for k in 0..s.msgs[ty].order.len() {
+        let f = s.msgs[ty].order[k];
+        if not a.is_set(s, m, f) {
+            continue;
+        }
+        let fd = ref s.msgs[ty].fields[f];
+        let sl = ref a.ms[m].slots[f];
+        let name = json_name_of(o, fd);
+        if s.is_map(ty, f) {
+            let mut entries: Vec[Member] = Vec.new();
+            for e in sl.msgs.clone() {
+                let et = a.ms[e].ty;
+                let kfd = ref s.msgs[et].fields[0];
+                let key = if kfd.typ == T_STRING {
+                    codepoints(a.key_bytes(e))
+                } else if kfd.typ == T_BOOL {
+                    ascii_cps(if a.key_int(e) != 0 { "true".to_string() } else { "false".to_string() })
+                } else {
+                    ascii_cps(f"{a.key_int(e)}")
+                };
+                let vfd = ref s.msgs[et].fields[1];
+                let vsl = ref a.ms[e].slots[1];
+                let val = if slot_len(vfd.typ, vsl) > 0 {
+                    json_value(a, s, o, vfd, vsl, 0)
+                } else {
+                    json_value(a, s, o, vfd, default_slot(vfd.typ), 0)
+                };
+                entries.push(Member { key, val });
+            }
+            members.push(Member { key: name, val: J.Obj(entries) });
+        } else if fd.label == REPEATED {
+            let mut items: Vec[J] = Vec.new();
+            for i in 0..slot_len(fd.typ, sl) {
+                items.push(json_value(a, s, o, fd, sl, i));
+            }
+            members.push(Member { key: name, val: J.Arr(items) });
+        } else {
+            members.push(Member { key: name, val: json_value(a, s, o, fd, sl, 0) });
+        }
+    }
+    if o.defaults {
+        let fs = ref s.msgs[ty].fields;
+        for f in 0..fs.len() {
+            if s.has_presence(ty, f) {
+                continue;
+            }
+            let name = json_name_of(o, fs[f]);
+            let mut seen = false;
+            for mb in members {
+                if same_bytes(mb.key, name) {
+                    seen = true;
+                }
+            }
+            if seen {
+                continue;
+            }
+            if s.is_map(ty, f) {
+                members.push(Member { key: name, val: J.Obj(Vec.new()) });
+            } else if fs[f].label == REPEATED {
+                members.push(Member { key: name, val: J.Arr(Vec.new()) });
+            } else {
+                members.push(Member { key: name, val: json_value(a, s, o, fs[f], default_slot(fs[f].typ), 0) });
+            }
+        }
+    }
+    J.Obj(members)
+}
+
+// ------------------------------------------------------------- json in
+
+// A ParseError, or a ValueError or TypeError that json_format names the
+// field around without the path.
+struct JErr {
+    parse: bool,
+    msg: String,
+}
+
+fn perr(msg: own String) -> JErr {
+    JErr { parse: true, msg }
+}
+
+fn verr(msg: own String) -> JErr {
+    JErr { parse: false, msg }
+}
+
+fn py_type(v: ref J) -> String {
+    match v {
+        J.Null => "NoneType".to_string(),
+        J.Bool(_) => "bool".to_string(),
+        J.Int(_) => "int".to_string(),
+        J.Float(_) => "float".to_string(),
+        J.Str(_) => "str".to_string(),
+        J.Arr(_) => "list".to_string(),
+        J.Obj(_) => "dict".to_string(),
+    }
+}
+
+fn str_of(cps: ref Vec[i64]) -> String {
+    text_of(utf8_of(cps))
+}
+
+fn int_text(t: ref String) -> i128 {
+    let b = bytes_of(t);
+    let mut v: i128 = 0;
+    let mut neg = false;
+    for c in b {
+        if c == 45 {
+            neg = true;
+        } else {
+            v = v * 10 + ((c - 48) as i128);
+        }
+    }
+    if neg { 0 - v } else { v }
+}
+
+// The integer a float holds exactly, or None when it has a fraction.
+fn float_int(x: f64) -> Option[i128] {
+    if x == 0.0 {
+        return Some(0);
+    }
+    let neg = x < 0.0;
+    let ax = if neg { 0.0 - x } else { x };
+    let (d, dexp) = exact_decimal(ax);
+    let mut keep = d.len();
+    if dexp < 0 {
+        let drop = 0 - dexp;
+        if drop > d.len() {
+            return None;
+        }
+        for i in (d.len() - drop)..d.len() {
+            if d[i] != 0 {
+                return None;
+            }
+        }
+        keep = d.len() - drop;
+    }
+    let mut v: i128 = 0;
+    for i in 0..keep {
+        v = v * 10 + (d[i] as i128);
+    }
+    if dexp > 0 {
+        for i in 0..dexp {
+            v = v * 10;
+        }
+    }
+    Some(if neg { 0 - v } else { v })
+}
+
+// Python's int(str) in base 10.
+fn py_int10(cps: ref Vec[i64]) -> Option[i128] {
+    let mut t: Vec[i64] = Vec.new();
+    for c in cps {
+        t.push(c);
+    }
+    while t.len() > 0 and is_space(t[0]) {
+        t.remove(0);
+    }
+    while t.len() > 0 and is_space(t[t.len() - 1]) {
+        t.pop();
+    }
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == 43 or t[i] == 45) {
+        neg = t[i] == 45;
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v: i128 = 0;
+    let mut last_us = true;
+    for k in i..t.len() {
+        if t[k] == 95 {
+            if last_us {
+                return None;
+            }
+            last_us = true;
+        } else if is_digit(t[k]) {
+            if v > ((1 as i128) << 100) {
+                return None;
+            }
+            v = v * 10 + ((t[k] - 48) as i128);
+            last_us = false;
+        } else {
+            return None;
+        }
+    }
+    if last_us {
+        return None;
+    }
+    Some(if neg { 0 - v } else { v })
+}
+
+// _ConvertInteger.
+fn json_integer(v: ref J) -> Result[i128, JErr] {
+    match v {
+        J.Float(x) => match float_int(x) {
+            Some(n) => Ok(n),
+            None => Err(perr(f"Couldn't parse integer: {repr_double(x)}")),
+        },
+        J.Str(cps) => {
+            if cps.contains(32) {
+                return Err(perr(f"Couldn't parse integer: \"{str_of(cps)}\""));
+            }
+            match py_int10(cps) {
+                Some(n) => Ok(n),
+                None => match py_float(utf8_of(cps)) {
+                    Some(x) => match float_int(x) {
+                        Some(n) => Ok(n),
+                        None => Err(perr(f"Couldn't parse non-integer string: \"{str_of(cps)}\"")),
+                    },
+                    None => Err(verr(f"invalid literal for int() with base 10: {py_repr(cps)}")),
+                },
+            }
+        }
+        J.Bool(b) => Err(perr(f"Bool value {if b { "True" } else { "False" }} is not acceptable for integer field")),
+        J.Int(t) => Ok(int_text(t)),
+        _ => Err(verr(f"int() argument must be a string, a bytes-like object or a real number, not '{py_type(v)}'")),
+    }
+}
+
+const FLOAT_MAX: f64 = 3.4028234663852886e+38;
+
+// _ConvertFloat.
+fn json_float(v: ref J, is_float: bool) -> Result[f64, JErr] {
+    match v {
+        J.Float(x) => {
+            if x != x {
+                return Err(perr("Couldn't parse NaN, use quoted \"NaN\" instead".to_string()));
+            }
+            if x == 1.0 / 0.0 {
+                return Err(perr("Couldn't parse Infinity or value too large, use quoted \"Infinity\" instead".to_string()));
+            }
+            if x == -1.0 / 0.0 {
+                return Err(perr("Couldn't parse -Infinity or value too small, use quoted \"-Infinity\" instead".to_string()));
+            }
+            if is_float and x > FLOAT_MAX {
+                return Err(perr("Float value too large".to_string()));
+            }
+            if is_float and x < 0.0 - FLOAT_MAX {
+                return Err(perr("Float value too small".to_string()));
+            }
+            Ok(x)
+        }
+        J.Int(t) => Ok(f64.parse(t).unwrap()),
+        J.Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
+        J.Str(cps) => {
+            let text = str_of(cps);
+            if text == "nan" {
+                return Err(perr("Couldn't parse float \"nan\", use \"NaN\" instead".to_string()));
+            }
+            match py_float(utf8_of(cps)) {
+                Some(x) => Ok(x),
+                None => Err(perr(f"Couldn't parse float: {text}")),
+            }
+        }
+        _ => Err(verr(f"float() argument must be a string or a real number, not '{py_type(v)}'")),
+    }
+}
+
+fn json_text(v: ref J) -> String {
+    match v {
+        J.Str(cps) => str_of(cps),
+        J.Int(t) => t.clone(),
+        J.Float(x) => repr_double(x),
+        J.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        J.Null => "None".to_string(),
+        _ => "...".to_string(),
+    }
+}
+
+// _ConvertScalarFieldValue: the value for field fd, an int in `.0`, a
+// float in `.1` or bytes in `.2`.
+fn json_scalar(s: ref Schema, fd: ref FieldDesc, v: ref J, path: ref String, require_str: bool) -> Result[(i128, f64, Vec[i64]), JErr] {
+    let t = fd.typ;
+    let k = kind_of(t);
+    let r: Result[(i128, f64, Vec[i64]), JErr] = if t == T_ENUM {
+        let et = ref s.enums[fd.target];
+        let by_name = match v {
+            J.Str(cps) => s.enum_number(fd.target, str_of(cps)),
+            _ => None,
+        };
+        match by_name {
+            Some(n) => Ok((n as i128, 0.0, Vec.new())),
+            None => {
+                let number: Option[i128] = match v {
+                    J.Int(t) => Some(int_text(t)),
+                    J.Float(x) => Some(x as i64 as i128),
+                    J.Bool(b) => Some(if b { 1 } else { 0 }),
+                    J.Str(cps) => py_int10(cps),
+                    _ => None,
+                };
+                match number {
+                    None => Err(perr(f"Invalid enum value {json_text(v)} for enum type {full_name(et.full)}")),
+                    Some(n) => {
+                        if s.enum_name(fd.target, n as i64).is_none() and et.closed {
+                            Err(perr(f"Invalid enum value {json_text(v)} for enum type {full_name(et.full)}"))
+                        } else {
+                            Ok((n, 0.0, Vec.new()))
+                        }
+                    }
+                }
+            }
+        }
+    } else if k == K_INT and t != T_BOOL {
+        match json_integer(v) {
+            Ok(n) => Ok((n, 0.0, Vec.new())),
+            Err(e) => Err(e),
+        }
+    } else if k == K_REAL {
+        match json_float(v, t == T_FLOAT) {
+            Ok(x) => Ok((0, x, Vec.new())),
+            Err(e) => Err(e),
+        }
+    } else if t == T_BOOL {
+        if require_str {
+            let text = json_text(v);
+            if text == "true" {
+                Ok((1, 0.0, Vec.new()))
+            } else if text == "false" {
+                Ok((0, 0.0, Vec.new()))
+            } else {
+                Err(perr(f"Expected \"true\" or \"false\", not {text}"))
+            }
+        } else {
+            match v {
+                J.Bool(b) => Ok((if b { 1 } else { 0 }, 0.0, Vec.new())),
+                _ => Err(perr("Expected true or false without quotes".to_string())),
+            }
+        }
+    } else if t == T_BYTES {
+        match v {
+            J.Str(cps) => {
+                let mut text = utf8_of(cps);
+                let pad = 4 - text.len() % 4;
+                for i in 0..pad {
+                    text.push(61);
+                }
+                match b64_decode(text) {
+                    Ok(b) => Ok((0, 0.0, b)),
+                    Err(e) => Err(verr(e)),
+                }
+            }
+            _ => Err(verr(f"'{py_type(v)}' object has no attribute 'encode'")),
+        }
+    } else {
+        match v {
+            J.Str(cps) => {
+                for c in cps {
+                    if c >= 0xD800 and c <= 0xDFFF {
+                        return Err(perr(f"Unpaired surrogate at {path}"));
+                    }
+                }
+                Ok((0, 0.0, utf8_of(cps)))
+            }
+            _ => Err(verr(f"expected string or bytes-like object, got '{py_type(v)}'")),
+        }
+    };
+    match r {
+        Ok(x) => Ok(x),
+        Err(e) => {
+            if e.parse {
+                Err(perr(f"{e.msg} at {path}"))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+// The setattr or append that follows: integers are range checked, floats
+// rounded to 32 bits.
+fn json_store(a: mut ref Store, s: ref Schema, m: i64, f: i64, val: own (i128, f64, Vec[i64])) -> Result[(), JErr] {
+    let ty = a.ms[m].ty;
+    let typ = s.msgs[ty].fields[f].typ;
+    let k = kind_of(typ);
+    let (n, x, b) = val;
+    if k == K_INT {
+        if typ != T_BOOL {
+            let (lo, hi) = int_range(typ);
+            if n < lo or n > hi {
+                return Err(verr(f"Value out of range: {n}"));
+            }
+        }
+        a.put_int(s, m, f, n);
+    } else if k == K_REAL {
+        a.put_real(s, m, f, if typ == T_FLOAT { (x as f32) as f64 } else { x });
+    } else {
+        a.put_bytes(s, m, f, b);
+    }
+    Ok(())
+}
+
+fn py_list_repr(names: ref Vec[String]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..names.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(repr_text(names[i]));
+    }
+    out.push_str("]");
+    out
+}
+
+// json_format._Parser.ConvertMessage for a regular message.
+fn json_merge(a: mut ref Store, s: ref Schema, js: ref J, m: i64, path: ref String) -> Result[(), JErr] {
+    let ty = a.ms[m].ty;
+    let full = full_name(s.msgs[ty].full);
+    let members = match js {
+        J.Obj(ms) => ms,
+        _ => return Err(perr(f"Message type \"{full}\" cannot be read from a JSON {py_type(js)} at {path}")),
+    };
+    let mut names: Vec[String] = Vec.new();
+    for mb in members {
+        let name = str_of(mb.key);
+        let mut f = -1;
+        let fs = ref s.msgs[ty].fields;
+        for i in 0..fs.len() {
+            if fs[i].json == name {
+                f = i;
+                break;
+            }
+        }
+        if f < 0 {
+            f = s.field_by_name(ty, name);
+        }
+        if f < 0 {
+            let mut all: Vec[String] = Vec.new();
+            for i in 0..fs.len() {
+                all.push(fs[i].json.clone());
+            }
+            return Err(perr(f"Message type \"{full}\" has no field named \"{name}\" at \"{path}\".\n Available Fields(except extensions): \"{py_list_repr(all)}\""));
+        }
+        let in_oneof = fs[f].oneof >= 0;
+        match json_field(mut a, s, mb.val, m, f, name, path, mut names) {
+            Ok(()) => {}
+            Err(e) => {
+                if e.parse and in_oneof {
+                    return Err(e);
+                }
+                return Err(perr(f"Failed to parse {name} field: {e.msg}."));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn json_field(a: mut ref Store, s: ref Schema, v: ref J, m: i64, f: i64, name: ref String, path: ref String, names: mut ref Vec[String]) -> Result[(), JErr] {
+    let ty = a.ms[m].ty;
+    let full = full_name(s.msgs[ty].full);
+    let fd = ref s.msgs[ty].fields[f];
+    if names.contains(name) {
+        return Err(perr(f"Message type \"{full}\" should not have multiple \"{name}\" fields at \"{path}\"."));
+    }
+    names.push(name.clone());
+    let is_null = match v {
+        J.Null => true,
+        _ => false,
+    };
+    if fd.oneof >= 0 and not is_null {
+        let oname = s.msgs[ty].oneofs[fd.oneof].clone();
+        if names.contains(oname) {
+            return Err(perr(f"Message type \"{full}\" should not have multiple \"{oname}\" oneof fields at \"{path}\"."));
+        }
+        names.push(oname);
+    }
+    if is_null {
+        a.clear(m, f);
+        return Ok(());
+    }
+    let fpath = f"{path}.{name}";
+    if s.is_map(ty, f) {
+        a.clear(m, f);
+        let entries = match v {
+            J.Obj(ms) => ms,
+            _ => return Err(perr(f"Map field {fd.name} must be in a dict which is {json_text(v)} at {fpath}")),
+        };
+        let et = fd.target;
+        let kfd = ref s.msgs[et].fields[0];
+        let vfd = ref s.msgs[et].fields[1];
+        for mb in entries {
+            let key = json_scalar(s, kfd, J.Str(mb.key.clone()), f"{fpath}.key", true)?;
+            let e = a.new_entry(s, m, f);
+            let key_text = if kfd.typ == T_STRING { text_of(key.2) } else if kfd.typ == T_BOOL { if key.0 != 0 { "True".to_string() } else { "False".to_string() } } else { f"{key.0}" };
+            json_store(mut a, s, e, 0, key)?;
+            let epath = f"{fpath}[{key_text}]";
+            if vfd.typ == T_MESSAGE {
+                let sub = a.sub(s, e, 1);
+                json_merge(mut a, s, mb.val, sub, epath)?;
+            } else {
+                let val = json_scalar(s, vfd, mb.val, epath, false)?;
+                json_store(mut a, s, e, 1, val)?;
+            }
+            a.map_put(s, m, f, e);
+        }
+        return Ok(());
+    }
+    if fd.label == REPEATED {
+        a.clear(m, f);
+        let items = match v {
+            J.Arr(xs) => xs,
+            _ => return Err(perr(f"repeated field {name} must be in [] which is {json_text(v)} at {path}")),
+        };
+        for i in 0..items.len() {
+            let ipath = f"{path}.{name}[{i}]";
+            match items[i] {
+                J.Null => return Err(perr(f"null is not allowed to be used as an element in a repeated field at {ipath}")),
+                _ => {}
+            }
+            if fd.typ == T_MESSAGE {
+                let sub = a.push_msg(s, m, f);
+                json_merge(mut a, s, items[i], sub, ipath)?;
+            } else {
+                let val = json_scalar(s, fd, items[i], ipath, false)?;
+                json_store(mut a, s, m, f, val)?;
+            }
+        }
+        return Ok(());
+    }
+    if fd.typ == T_MESSAGE {
+        let sub = a.sub(s, m, f);
+        return json_merge(mut a, s, v, sub, fpath);
+    }
+    let val = json_scalar(s, fd, v, fpath, false)?;
+    json_store(mut a, s, m, f, val)
+}
+
+// ------------------------------------------------------------- jobs
+
+fn read_file(name: ref String) -> Result[Vec[i64], String] {
+    match fs.read_bytes(f"data/{name}") {
+        Ok(b) => {
+            let mut v: Vec[i64] = Vec.new();
+            for x in b {
+                v.push(x as i64);
+            }
+            Ok(v)
+        }
+        Err(e) => Err(f"cannot read {name}: {e}"),
+    }
+}
+
+fn hexdump(b: ref Vec[i64]) -> String {
+    let mut out = f"  {b.len()} bytes";
+    let mut i = 0;
+    while i < b.len() {
+        out.push_str("\n   ");
+        let mut k = i;
+        while k < i + 24 and k < b.len() {
+            out.push_str(f" {hex2(b[k])}");
+            k += 1;
+        }
+        i += 24;
+    }
+    out
+}
+
+fn indented(text: ref Vec[i64]) -> String {
+    if text.len() == 0 {
+        return "  (empty)".to_string();
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut start = true;
+    let mut end = text.len();
+    while end > 0 and text[end - 1] == 10 {
+        end -= 1;
+    }
+    for i in 0..end {
+        if start {
+            push_str(mut out, "  ");
+            start = false;
+        }
+        out.push(text[i]);
+        if text[i] == 10 {
+            start = true;
+        }
+    }
+    text_of(out)
+}
+
+struct Job {
+    schema: Schema,
+    arena: Store,
+    root: i64,
+}
+
+fn start_job(proto: ref String, name: ref String) -> Result[Job, String] {
+    let s = load_schema(proto)?;
+    let ty = s.find_msg(f".{name}");
+    if ty < 0 {
+        return Err(f"KeyError: \"Couldn't find message {name}\"");
+    }
+    let mut a = Store { ms: Vec.new() };
+    let root = a.new_msg(s, ty);
+    Ok(Job { schema: s, arena: a, root })
+}
+
+fn decode_into(j: mut ref Job, file: ref String) -> Result[Vec[i64], String] {
+    let d = read_file(file)?;
+    let ty = j.arena.ms[j.root].ty;
+    match decode_msg(mut j.arena, j.schema, d, 0, d.len(), j.root, -1) {
+        Ok(_) => Ok(d),
+        Err(code) => Err(decode_error(j.schema, ty, code)),
+    }
+}
+
+fn text_into(j: mut ref Job, file: ref String) -> Result[(), String] {
+    let t = read_file(file)?;
+    parse_text(mut j.arena, j.schema, j.root, codepoints(t))
+}
+
+fn text_of_job(j: ref Job) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    print_text(j.arena, j.schema, j.root, 0, mut out);
+    indented(out)
+}
+
+fn run(f: ref Vec[String]) -> Result[String, String] {
+    let kind = f[0].clone();
+    if kind == "raw" {
+        let mut j = start_job("empty.proto".to_string(), "empty.Empty".to_string())?;
+        let d = decode_into(mut j, f[1])?;
+        let mut out: Vec[i64] = Vec.new();
+        let _ = unknown_set(d, 0, d.len(), 0, mut out, true);
+        return Ok(indented(out));
+    }
+    let mut j = start_job(f[1], f[2])?;
+    if kind == "encode" {
+        text_into(mut j, f[3])?;
+        let b = serialize(j.arena, j.schema, j.root)?;
+        return Ok(hexdump(b));
+    }
+    if kind == "text" {
+        text_into(mut j, f[3])?;
+        return Ok(text_of_job(j));
+    }
+    if kind == "decode" {
+        decode_into(mut j, f[3])?;
+        return Ok(text_of_job(j));
+    }
+    if kind == "json" {
+        decode_into(mut j, f[3])?;
+        let mut o = JsonOpts { names: false, defaults: false, ints: false };
+        for i in 4..f.len() {
+            if f[i] == "names" {
+                o.names = true;
+            } else if f[i] == "defaults" {
+                o.defaults = true;
+            } else if f[i] == "ints" {
+                o.ints = true;
+            }
+        }
+        let js = json_message(j.arena, j.schema, o, j.root);
+        let mut out: Vec[i64] = Vec.new();
+        dump(js, 0, mut out);
+        return Ok(indented(out));
+    }
+    if kind == "fromjson" {
+        let t = read_file(f[3])?;
+        let js = match loads(codepoints(t)) {
+            Ok(v) => v,
+            Err(e) => return Err(f"ParseError: Failed to load JSON: {e}."),
+        };
+        let ty = j.arena.ms[j.root].ty;
+        let path = j.schema.msgs[ty].name.clone();
+        if let Err(e) = json_merge(mut j.arena, j.schema, js, j.root, path) {
+            return Err(f"ParseError: {e.msg}");
+        }
+        return Ok(text_of_job(j));
+    }
+    if kind == "roundtrip" {
+        let d = decode_into(mut j, f[3])?;
+        let b = serialize(j.arena, j.schema, j.root)?;
+        if same_bytes(b, d) {
+            return Ok(f"  same {b.len()} bytes");
+        }
+        return Ok(f"  changed:\n{hexdump(b)}");
+    }
+    Err(f"ValueError: {kind}")
+}
+
+// ------------------------------------------------------------- main
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    for job in jobs.lines() {
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
+        println(f"== {f.join(" ")}");
+        match run(f) {
+            Ok(out) => println(out),
+            Err(e) => println(f"  {e}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("// The address book from the protobuf tutorial.\n");
+    t.push_str("syntax = \"proto3\";\n");
+    t.push_str("\n");
+    t.push_str("package tutorial;\n");
+    t.push_str("\n");
+    t.push_str("option java_package = \"com.example.tutorial.protos\";\n");
+    t.push_str("option java_outer_classname = \"AddressBookProtos\";\n");
+    t.push_str("\n");
+    t.push_str("message Person {\n");
+    t.push_str("  string name = 1;\n");
+    t.push_str("  int32 id = 2;  // Unique ID number for this person.\n");
+    t.push_str("  string email = 3;\n");
+    t.push_str("\n");
+    t.push_str("  enum PhoneType {\n");
+    t.push_str("    PHONE_TYPE_UNSPECIFIED = 0;\n");
+    t.push_str("    PHONE_TYPE_MOBILE = 1;\n");
+    t.push_str("    PHONE_TYPE_HOME = 2;\n");
+    t.push_str("    PHONE_TYPE_WORK = 3;\n");
+    t.push_str("  }\n");
+    t.push_str("\n");
+    t.push_str("  message PhoneNumber {\n");
+    t.push_str("    string number = 1;\n");
+    t.push_str("    PhoneType type = 2;\n");
+    t.push_str("  }\n");
+    t.push_str("\n");
+    t.push_str("  repeated PhoneNumber phones = 4;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("// Our address book file is just one of these.\n");
+    t.push_str("message AddressBook {\n");
+    t.push_str("  repeated Person people = 1;\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "addressbook.proto".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"ratio\": 1e39}");
+    v.push(DataFile { path: "bad-big-float.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"i32\": true}");
+    v.push(DataFile { path: "bad-bool-int.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"flag\": \"true\"}");
+    v.push(DataFile { path: "bad-bool.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("flag: yes\n");
+    v.push(DataFile { path: "bad-bool.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"i32\": 1, \"displayLabel\": \"x\", \"label\": \"y\"}");
+    v.push(DataFile { path: "bad-both.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("point {\n");
+    t.push_str("  x: 1\n");
+    v.push(DataFile { path: "bad-brace.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("id: \"x\"\n");
+    t.push_str("status: 9\n");
+    v.push(DataFile { path: "bad-closed-enum.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("i32 5\n");
+    v.push(DataFile { path: "bad-colon.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"i32\": 1, \"i32\": 2}");
+    v.push(DataFile { path: "bad-dup.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "bad-empty.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("08012c");
+    v.push(DataFile { path: "bad-endgroup.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("{\"severity\": \"FATAL\"}");
+    v.push(DataFile { path: "bad-enum.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("severity: FATAL\n");
+    v.push(DataFile { path: "bad-enum.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[telemetry.v1.ext]: 1\n");
+    v.push(DataFile { path: "bad-ext.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("i32: 1\n");
+    t.push_str("labell: \"x\"\n");
+    v.push(DataFile { path: "bad-field.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("ratio: 1.5.5\n");
+    v.push(DataFile { path: "bad-float.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("+4");
+    v.push(DataFile { path: "bad-group-mismatch.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("2b0801");
+    v.push(DataFile { path: "bad-group.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("f32: 0xG1\n");
+    v.push(DataFile { path: "bad-hex.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"i32\": 1.5}");
+    v.push(DataFile { path: "bad-int.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("i64: 12abc\n");
+    v.push(DataFile { path: "bad-int.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"i64\": \"12 34\"}");
+    v.push(DataFile { path: "bad-intstr.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0a036162");
+    v.push(DataFile { path: "bad-length.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("counts: [1, 2\n");
+    v.push(DataFile { path: "bad-list.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"byId\": {\"x\": {}}}");
+    v.push(DataFile { path: "bad-map-key.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("point { x: 1 }\n");
+    t.push_str("point { y: 2 }\n");
+    v.push(DataFile { path: "bad-msg-twice.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"ratio\": \"nan\"}");
+    v.push(DataFile { path: "bad-nan.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"point\": {\"x\": \"left\"}}");
+    v.push(DataFile { path: "bad-nested.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"tags\": [\"a\", null]}");
+    v.push(DataFile { path: "bad-null-elem.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("value: 012.5\n");
+    v.push(DataFile { path: "bad-octal.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"text\": \"a\", \"point\": {}}");
+    v.push(DataFile { path: "bad-oneof.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("text: \"a\"\n");
+    t.push_str("point { x: 1 }\n");
+    v.push(DataFile { path: "bad-oneof.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("label: \"unterminated\n");
+    v.push(DataFile { path: "bad-quote.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"u32\": -1}");
+    v.push(DataFile { path: "bad-range.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("i32: 3000000000\n");
+    v.push(DataFile { path: "bad-range.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("i32: \"5\"\n");
+    v.push(DataFile { path: "bad-string-int.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("ba0103090000");
+    v.push(DataFile { path: "bad-submsg.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("{\"i32\": 1,}");
+    v.push(DataFile { path: "bad-syntax.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("i32: 1\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "bad-token.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0a460a0c416461204c6f76656c61636510970e1a0f616461406578616d706c652e6f726722140a10");
+    v.push(DataFile { path: "bad-truncated.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("i32: 1\n");
+    t.push_str("i32: 2\n");
+    v.push(DataFile { path: "bad-twice.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("u64: -1\n");
+    v.push(DataFile { path: "bad-uint.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"i32\": 1, \"nope\": 2}");
+    v.push(DataFile { path: "bad-unknown.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("7202c328");
+    v.push(DataFile { path: "bad-utf8.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("label: \"ok\\377\"\n");
+    v.push(DataFile { path: "bad-utf8.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("10ffffffffffffffffffff01");
+    v.push(DataFile { path: "bad-varint.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("08011600");
+    v.push(DataFile { path: "bad-wiretype.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0a0b656467652d30312e667261120f0801720566697273748a0103010203121a080272067365636f6e64a201050a0161");
+    t.push_str("1002a201050a017a100112001a0b0a03656e76120470726f641a140a06726567696f6e120a65752d63656e7472616c22");
+    t.push_str("00c03ec0843d");
+    v.push(DataFile { path: "batch.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("host: \"edge-01.fra\"\n");
+    t.push_str("seq: 1000000\n");
+    t.push_str("samples { i32: 1 label: \"first\" counts: [1, 2, 3] }\n");
+    t.push_str("samples { i32: 2 label: \"second\" attrs { key: \"z\" value: 1 } attrs { key: \"a\" value: 2 } }\n");
+    t.push_str("samples { }\n");
+    t.push_str("labels { key: \"region\" value: \"eu-central\" }\n");
+    t.push_str("labels { key: \"env\" value: \"prod\" }\n");
+    t.push_str("origin { }\n");
+    v.push(DataFile { path: "batch.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0a2a484d0a054c696e757351010203040506070810b10f5a0708011203616263650000803f6a0015010000001201ff");
+    v.push(DataFile { path: "book-unknown.bin".to_string(), hex: true, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("syntax = \"proto3\";\n");
+    t.push_str("package empty;\n");
+    t.push_str("message Empty {}\n");
+    v.push(DataFile { path: "empty.proto".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("encode\taddressbook.proto\ttutorial.AddressBook\tpeople.txtpb\n");
+    t.push_str("text\taddressbook.proto\ttutorial.AddressBook\tpeople.txtpb\n");
+    t.push_str("encode\ttelemetry.proto\ttelemetry.v1.Sample\tsample.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tsample.txtpb\n");
+    t.push_str("encode\ttelemetry.proto\ttelemetry.v1.Sample\tsample2.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tsample2.txtpb\n");
+    t.push_str("encode\ttelemetry.proto\ttelemetry.v1.Batch\tbatch.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Batch\tbatch.txtpb\n");
+    t.push_str("encode\tlegacy.proto\tshop.legacy.Order\torder.txtpb\n");
+    t.push_str("text\tlegacy.proto\tshop.legacy.Order\torder.txtpb\n");
+    t.push_str("encode\tlegacy.proto\tshop.legacy.Order\torder-defaults.txtpb\n");
+    t.push_str("text\tlegacy.proto\tshop.legacy.Order\torder-defaults.txtpb\n");
+    t.push_str("encode\tlegacy.proto\tshop.legacy.Order\torder-missing.txtpb\n");
+    t.push_str("text\tlegacy.proto\tshop.legacy.Order\torder-missing.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-field.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-enum.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-range.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-uint.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-int.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-float.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-bool.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-colon.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-brace.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-twice.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-oneof.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-quote.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-octal.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-list.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-ext.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-msg-twice.txtpb\n");
+    t.push_str("text\tlegacy.proto\tshop.legacy.Order\tbad-closed-enum.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-string-int.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-token.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-utf8.txtpb\n");
+    t.push_str("text\ttelemetry.proto\ttelemetry.v1.Sample\tbad-hex.txtpb\n");
+    t.push_str("decode\taddressbook.proto\ttutorial.AddressBook\tpeople.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tsample.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tsample2.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Batch\tbatch.bin\n");
+    t.push_str("decode\tlegacy.proto\tshop.legacy.Order\torder.bin\n");
+    t.push_str("decode\tlegacy.proto\tshop.legacy.Order\torder-defaults.bin\n");
+    t.push_str("decode\taddressbook.proto\ttutorial.Person\tperson-unknown.bin\n");
+    t.push_str("decode\taddressbook.proto\ttutorial.AddressBook\tbook-unknown.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tsample-odd.bin\n");
+    t.push_str("decode\tlegacy.proto\tshop.legacy.Order\torder-odd.bin\n");
+    t.push_str("json\taddressbook.proto\ttutorial.AddressBook\tpeople.bin\n");
+    t.push_str("json\ttelemetry.proto\ttelemetry.v1.Sample\tsample.bin\n");
+    t.push_str("json\ttelemetry.proto\ttelemetry.v1.Sample\tsample2.bin\n");
+    t.push_str("json\ttelemetry.proto\ttelemetry.v1.Batch\tbatch.bin\n");
+    t.push_str("json\tlegacy.proto\tshop.legacy.Order\torder.bin\n");
+    t.push_str("json\ttelemetry.proto\ttelemetry.v1.Sample\tsample.bin\tnames\n");
+    t.push_str("json\ttelemetry.proto\ttelemetry.v1.Sample\tsample.bin\tints\n");
+    t.push_str("json\taddressbook.proto\ttutorial.AddressBook\tpeople.bin\tdefaults\n");
+    t.push_str("json\tlegacy.proto\tshop.legacy.Order\torder-defaults.bin\tdefaults\tnames\n");
+    t.push_str("json\ttelemetry.proto\ttelemetry.v1.Sample\tsample-odd.bin\n");
+    t.push_str("json\tlegacy.proto\tshop.legacy.Order\torder-odd.bin\n");
+    t.push_str("roundtrip\taddressbook.proto\ttutorial.Person\tperson-unknown.bin\n");
+    t.push_str("roundtrip\taddressbook.proto\ttutorial.AddressBook\tbook-unknown.bin\n");
+    t.push_str("roundtrip\ttelemetry.proto\ttelemetry.v1.Sample\tsample-odd.bin\n");
+    t.push_str("roundtrip\tlegacy.proto\tshop.legacy.Order\torder-odd.bin\n");
+    t.push_str("roundtrip\taddressbook.proto\ttutorial.AddressBook\tpeople.bin\n");
+    t.push_str("roundtrip\ttelemetry.proto\ttelemetry.v1.Sample\tsample.bin\n");
+    t.push_str("roundtrip\tlegacy.proto\tshop.legacy.Order\torder.bin\n");
+    t.push_str("raw\traw-mixed.bin\n");
+    t.push_str("raw\traw-people.bin\n");
+    t.push_str("raw\tsample.bin\n");
+    t.push_str("raw\tbatch.bin\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tsample.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tsample-names.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-unknown.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-syntax.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-dup.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-both.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-oneof.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-int.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-intstr.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-bool.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-enum.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-nan.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-big-float.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-nested.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-map-key.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-bool-int.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-range.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-null-elem.json\n");
+    t.push_str("fromjson\ttelemetry.proto\ttelemetry.v1.Sample\tbad-empty.json\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-wiretype.bin\n");
+    t.push_str("decode\taddressbook.proto\ttutorial.AddressBook\tbad-truncated.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-varint.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-length.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-group.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-endgroup.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-utf8.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-submsg.bin\n");
+    t.push_str("decode\ttelemetry.proto\ttelemetry.v1.Sample\tbad-group-mismatch.bin\n");
+    t.push_str("raw\tbad-varint.bin\n");
+    t.push_str("raw\tbad-group-mismatch.bin\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("// An order service's proto2 schema: required fields, defaults, closed\n");
+    t.push_str("// enums, unpacked and packed repeated fields.\n");
+    t.push_str("syntax = \"proto2\";\n");
+    t.push_str("\n");
+    t.push_str("package shop.legacy;\n");
+    t.push_str("\n");
+    t.push_str("message Customer {\n");
+    t.push_str("  required string name = 1;\n");
+    t.push_str("  optional string email = 2;\n");
+    t.push_str("  optional bool vip = 3 [default = false];\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("message Order {\n");
+    t.push_str("  enum Status {\n");
+    t.push_str("    PENDING = 1;\n");
+    t.push_str("    SHIPPED = 2;\n");
+    t.push_str("    CANCELLED = 3;\n");
+    t.push_str("  }\n");
+    t.push_str("\n");
+    t.push_str("  required string id = 1;\n");
+    t.push_str("  optional int32 quantity = 2 [default = 1];\n");
+    t.push_str("  repeated int32 lines = 3;\n");
+    t.push_str("  repeated int32 packed_lines = 4 [packed = true];\n");
+    t.push_str("  optional Status status = 5 [default = PENDING];\n");
+    t.push_str("  optional Customer customer = 6;\n");
+    t.push_str("  optional double total = 7 [default = 0.5];\n");
+    t.push_str("  repeated string notes = 8;\n");
+    t.push_str("  optional bytes token = 9;\n");
+    t.push_str("  optional sint64 balance = 10 [default = -10];\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "legacy.proto".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0a0d4f52442d323032342d303030321001");
+    v.push(DataFile { path: "order-defaults.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("# Fields left at their defaults, and one set to them explicitly.\n");
+    t.push_str("id: \"ORD-2024-0002\"\n");
+    t.push_str("quantity: 1\n");
+    v.push(DataFile { path: "order-defaults.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("quantity: 2\n");
+    t.push_str("customer { email: \"nobody@example.com\" }\n");
+    v.push(DataFile { path: "order-missing.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0a054f52442d581a020102200328072802320712056140622e63");
+    v.push(DataFile { path: "order-odd.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0a0d4f52442d323032342d303030311003180a1814181e22030a141e280232100a0c477261636520486f707065721801");
+    t.push_str("395c8fc2f528fc4d40420d6c6561766520617420646f6f72420766726167696c654a02cafe5001");
+    v.push(DataFile { path: "order.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("id: \"ORD-2024-0001\"\n");
+    t.push_str("quantity: 3\n");
+    t.push_str("lines: [10, 20, 30]\n");
+    t.push_str("packed_lines: [10, 20, 30]\n");
+    t.push_str("status: SHIPPED\n");
+    t.push_str("customer { name: \"Grace Hopper\" vip: true }\n");
+    t.push_str("total: 59.97\n");
+    t.push_str("notes: \"leave at door\"\n");
+    t.push_str("notes: \"fragile\"\n");
+    t.push_str("token: \"\\xca\\xfe\"\n");
+    t.push_str("balance: -1\n");
+    v.push(DataFile { path: "order.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0a460a0c416461204c6f76656c61636510970e1a0f616461406578616d706c652e6f726722140a102b34342032302037");
+    t.push_str("39343620303031381002220c0a083535352d3031303010010a220a0c4a6f73c3a9204d617274c3ad102a22100a0c3037");
+    t.push_str("3730302039303034363110030a180a06ce96cf89ceae1a0e7a6f65406578616d706c652e6772");
+    v.push(DataFile { path: "people.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("# An address book with three people.\n");
+    t.push_str("people {\n");
+    t.push_str("  name: \"Ada Lovelace\"\n");
+    t.push_str("  id: 1815\n");
+    t.push_str("  email: \"ada@example.org\"\n");
+    t.push_str("  phones { number: \"+44 20 7946 0018\" type: PHONE_TYPE_HOME }\n");
+    t.push_str("  phones { number: \"555-0100\" type: PHONE_TYPE_MOBILE }\n");
+    t.push_str("}\n");
+    t.push_str("people {\n");
+    t.push_str("  name: \"José Martí\"\n");
+    t.push_str("  id: 42\n");
+    t.push_str("  phones: { number: \"07700 900461\", type: 3 }\n");
+    t.push_str("}\n");
+    t.push_str("people <\n");
+    t.push_str("  name: 'Ζωή'\n");
+    t.push_str("  email: \"zoe@example.gr\";\n");
+    t.push_str(">\n");
+    v.push(DataFile { path: "people.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("484d0a054c696e757351010203040506070810b10f5a0708011203616263650000803f6a001501000000");
+    v.push(DataFile { path: "person-unknown.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("089601150102030419000102030405060722002203080110220268692b0805333801342c3202c3a93a080a0612046465");
+    t.push_str("6570000142010c4a018052040b10010c5a030d010262041a056162f8ffffff0fffffffffffffffffff01");
+    v.push(DataFile { path: "raw-mixed.bin".to_string(), hex: true, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("0a460a0c416461204c6f76656c61636510970e1a0f616461406578616d706c652e6f726722140a102b34342032302037");
+    t.push_str("39343620303031381002220c0a083535352d3031303010010a220a0c4a6f73c3a9204d617274c3ad102a22100a0c3037");
+    t.push_str("3730302039303034363110030a180a06ce96cf89ceae1a0e7a6f65406578616d706c652e6772");
+    v.push(DataFile { path: "raw-people.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("{\"label\": \"by proto name\", \"by_id\": {\"1\": {\"x\": 1}}, \"s64\": \"-5\",\n");
+    t.push_str(" \"text\": null, \"severity\": 3, \"i32\": null}\n");
+    v.push(DataFile { path: "sample-names.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("8801058a010b06f9ffffffffffffffff018801080801088280808000ba010909000000000000f03fba01091100000000");
+    t.push_str("00000040b2010a6c617465722077696e735809188580808020a201050a016b1001a201050a016b1002a201021003");
+    v.push(DataFile { path: "sample-odd.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("08c0bbf8ffffffffffff01108080808080808080800118ffffffff0f20ffffffffffffffffff01280130feffffffffff");
+    t.push_str("ffffff013defbeadde4140420f00000000004d0000008051c8ffffffffffffff580165cdcccc3d697b14ae47e17a64bf");
+    t.push_str("7216656467652d303120226e6f72746822207261636b09377a070001ff6162630a8001038a011101feffffffffffffff");
+    t.push_str("ff01ac0200f0a204920120000000000000e03f000000205fa002420000000000000080000000000000f07f9a0101619a");
+    t.push_str("0103622063a201070a03637075105da201080a046469736b1064a201100a036d656d1080e0ffffffffffffff01a80100");
+    t.push_str("b201177265626f6f7465642061742030333a303020c3a974c3a9c20103020204");
+    v.push(DataFile { path: "sample.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"i32\": -7,\n");
+    t.push_str("  \"i64\": \"-9007199254740993\",\n");
+    t.push_str("  \"u32\": 4000000000,\n");
+    t.push_str("  \"u64\": \"18446744073709551615\",\n");
+    t.push_str("  \"s32\": \"12\",\n");
+    t.push_str("  \"sf64\": 1e3,\n");
+    t.push_str("  \"flag\": false,\n");
+    t.push_str("  \"ratio\": \"Infinity\",\n");
+    t.push_str("  \"value\": 6.02214076e23,\n");
+    t.push_str("  \"displayLabel\": \"caf\\u00e9 \\ud83d\\ude80\",\n");
+    t.push_str("  \"blob\": \"SGVsbG8gd29ybGQ_-w\",\n");
+    t.push_str("  \"severity\": \"ERROR\",\n");
+    t.push_str("  \"counts\": [1, 2.0, \"3\"],\n");
+    t.push_str("  \"readings\": [\"NaN\", -1.25, \"-Infinity\"],\n");
+    t.push_str("  \"tags\": [],\n");
+    t.push_str("  \"attrs\": {\"zone\": \"17\", \"b\": -2},\n");
+    t.push_str("  \"retries\": 0,\n");
+    t.push_str("  \"point\": {\"x\": 0.5},\n");
+    t.push_str("  \"history\": [1, \"WARN\"],\n");
+    t.push_str("  \"byId\": {\"10\": {\"y\": 2}, \"-3\": {}}\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "sample.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# Every scalar type, written several ways.\n");
+    t.push_str("i32: -123456\n");
+    t.push_str("i64: -9223372036854775808\n");
+    t.push_str("u32: 4294967295\n");
+    t.push_str("u64: 18446744073709551615\n");
+    t.push_str("s32: -1\n");
+    t.push_str("s64: 0x7fffffffffffffff\n");
+    t.push_str("f32: 0xDEADBEEF\n");
+    t.push_str("f64: 1_000_000\n");
+    t.push_str("sf32: -2147483648\n");
+    t.push_str("sf64: -070\n");
+    t.push_str("flag: true\n");
+    t.push_str("ratio: 0.1\n");
+    t.push_str("value: -2.5e-3\n");
+    t.push_str("label: \"edge-01 \\\"north\\\" \" 'rack\\t7'\n");
+    t.push_str("blob: \"\\x00\\001\\377abc\\n\"\n");
+    t.push_str("severity: WARN\n");
+    t.push_str("counts: [1, -2, 300, 0]\n");
+    t.push_str("counts: 70000\n");
+    t.push_str("readings: [0.5, 1e10, -0.0, inf]\n");
+    t.push_str("tags: \"a\"\n");
+    t.push_str("tags: \"b c\"\n");
+    t.push_str("attrs { key: \"cpu\" value: 93 }\n");
+    t.push_str("attrs { key: \"mem\" value: -4096 }\n");
+    t.push_str("attrs { key: \"disk\" value: 100 }\n");
+    t.push_str("retries: 0\n");
+    t.push_str("text: \"rebooted at 03:00 \\u00e9t\\u00e9\"\n");
+    t.push_str("history: [INFO, 2, ERROR]\n");
+    v.push(DataFile { path: "sample.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("580165ffff7f7f6959f3f8c21f6ea501800109920120000000000000f87f000000000000f0ff00008054346f9d4192d5");
+    t.push_str("4d06cff08044ba011209000000000000f83f1100000000000000c0c2010107ca010d08ffffffffffffffffff011200ca");
+    t.push_str("010d0807120909000000000000d03fca010d08031209110000000000000840");
+    v.push(DataFile { path: "sample2.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("# The other member of the oneof, a map of messages, an unknown enum\n");
+    t.push_str("# number, and float edge values.\n");
+    t.push_str("point { x: 1.5 y: -2 }\n");
+    t.push_str("by_id { key: 7 value { x: 0.25 } }\n");
+    t.push_str("by_id { key: -1 value { } }\n");
+    t.push_str("by_id { key: 3 value { y: 3 } }\n");
+    t.push_str("severity: 9\n");
+    t.push_str("ratio: 3.4028234663852886e+38\n");
+    t.push_str("value: 1e-300\n");
+    t.push_str("readings: [nan, -inf, 123456789.125, 1e+22]\n");
+    t.push_str("history: 7\n");
+    t.push_str("flag: True\n");
+    v.push(DataFile { path: "sample2.txtpb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("/*\n");
+    t.push_str(" * Metrics from a fleet of edge devices: every scalar type, packed and\n");
+    t.push_str(" * unpacked repeated fields, maps, a oneof, proto3 optional, and a field\n");
+    t.push_str(" * with its own JSON name.\n");
+    t.push_str(" */\n");
+    t.push_str("syntax = \"proto3\";\n");
+    t.push_str("\n");
+    t.push_str("package telemetry.v1;\n");
+    t.push_str("\n");
+    t.push_str("enum Severity {\n");
+    t.push_str("  SEVERITY_UNSPECIFIED = 0;\n");
+    t.push_str("  DEBUG = 1;\n");
+    t.push_str("  INFO = 2;\n");
+    t.push_str("  WARN = 3;\n");
+    t.push_str("  ERROR = 4;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("message Point {\n");
+    t.push_str("  double x = 1;\n");
+    t.push_str("  double y = 2;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("message Sample {\n");
+    t.push_str("  int32 i32 = 1;\n");
+    t.push_str("  int64 i64 = 2;\n");
+    t.push_str("  uint32 u32 = 3;\n");
+    t.push_str("  uint64 u64 = 4;\n");
+    t.push_str("  sint32 s32 = 5;\n");
+    t.push_str("  sint64 s64 = 6;\n");
+    t.push_str("  fixed32 f32 = 7;\n");
+    t.push_str("  fixed64 f64 = 8;\n");
+    t.push_str("  sfixed32 sf32 = 9;\n");
+    t.push_str("  sfixed64 sf64 = 10;\n");
+    t.push_str("  bool flag = 11;\n");
+    t.push_str("  float ratio = 12;\n");
+    t.push_str("  double value = 13;\n");
+    t.push_str("  string label = 14 [json_name = \"displayLabel\"];\n");
+    t.push_str("  bytes blob = 15;\n");
+    t.push_str("  Severity severity = 16;\n");
+    t.push_str("  repeated int32 counts = 17;\n");
+    t.push_str("  repeated double readings = 18;\n");
+    t.push_str("  repeated string tags = 19;\n");
+    t.push_str("  map<string, int64> attrs = 20;\n");
+    t.push_str("  optional int32 retries = 21;\n");
+    t.push_str("  oneof payload {\n");
+    t.push_str("    string text = 22;\n");
+    t.push_str("    Point point = 23;\n");
+    t.push_str("  }\n");
+    t.push_str("  repeated Severity history = 24;\n");
+    t.push_str("  map<int32, Point> by_id = 25;\n");
+    t.push_str("  reserved 26 to 30;\n");
+    t.push_str("  reserved \"legacy_id\";\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("message Batch {\n");
+    t.push_str("  string host = 1;\n");
+    t.push_str("  repeated Sample samples = 2;\n");
+    t.push_str("  uint64 seq = 1000;\n");
+    t.push_str("  map<string, string> labels = 3;\n");
+    t.push_str("  Point origin = 4;\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "telemetry.proto".to_string(), hex: false, body: t });
+}

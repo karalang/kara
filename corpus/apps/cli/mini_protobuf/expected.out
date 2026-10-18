@@ -1,0 +1,1063 @@
+== encode addressbook.proto tutorial.AddressBook people.txtpb
+  134 bytes
+    0a 46 0a 0c 41 64 61 20 4c 6f 76 65 6c 61 63 65 10 97 0e 1a 0f 61 64 61
+    40 65 78 61 6d 70 6c 65 2e 6f 72 67 22 14 0a 10 2b 34 34 20 32 30 20 37
+    39 34 36 20 30 30 31 38 10 02 22 0c 0a 08 35 35 35 2d 30 31 30 30 10 01
+    0a 22 0a 0c 4a 6f 73 c3 a9 20 4d 61 72 74 c3 ad 10 2a 22 10 0a 0c 30 37
+    37 30 30 20 39 30 30 34 36 31 10 03 0a 18 0a 06 ce 96 cf 89 ce ae 1a 0e
+    7a 6f 65 40 65 78 61 6d 70 6c 65 2e 67 72
+== text addressbook.proto tutorial.AddressBook people.txtpb
+  people {
+    name: "Ada Lovelace"
+    id: 1815
+    email: "ada@example.org"
+    phones {
+      number: "+44 20 7946 0018"
+      type: PHONE_TYPE_HOME
+    }
+    phones {
+      number: "555-0100"
+      type: PHONE_TYPE_MOBILE
+    }
+  }
+  people {
+    name: "José Martí"
+    id: 42
+    phones {
+      number: "07700 900461"
+      type: PHONE_TYPE_WORK
+    }
+  }
+  people {
+    name: "Ζωή"
+    email: "zoe@example.gr"
+  }
+== encode telemetry.proto telemetry.v1.Sample sample.txtpb
+  272 bytes
+    08 c0 bb f8 ff ff ff ff ff ff 01 10 80 80 80 80 80 80 80 80 80 01 18 ff
+    ff ff ff 0f 20 ff ff ff ff ff ff ff ff ff 01 28 01 30 fe ff ff ff ff ff
+    ff ff ff 01 3d ef be ad de 41 40 42 0f 00 00 00 00 00 4d 00 00 00 80 51
+    c8 ff ff ff ff ff ff ff 58 01 65 cd cc cc 3d 69 7b 14 ae 47 e1 7a 64 bf
+    72 16 65 64 67 65 2d 30 31 20 22 6e 6f 72 74 68 22 20 72 61 63 6b 09 37
+    7a 07 00 01 ff 61 62 63 0a 80 01 03 8a 01 11 01 fe ff ff ff ff ff ff ff
+    ff 01 ac 02 00 f0 a2 04 92 01 20 00 00 00 00 00 00 e0 3f 00 00 00 20 5f
+    a0 02 42 00 00 00 00 00 00 00 80 00 00 00 00 00 00 f0 7f 9a 01 01 61 9a
+    01 03 62 20 63 a2 01 07 0a 03 63 70 75 10 5d a2 01 08 0a 04 64 69 73 6b
+    10 64 a2 01 10 0a 03 6d 65 6d 10 80 e0 ff ff ff ff ff ff ff 01 a8 01 00
+    b2 01 17 72 65 62 6f 6f 74 65 64 20 61 74 20 30 33 3a 30 30 20 c3 a9 74
+    c3 a9 c2 01 03 02 02 04
+== text telemetry.proto telemetry.v1.Sample sample.txtpb
+  i32: -123456
+  i64: -9223372036854775808
+  u32: 4294967295
+  u64: 18446744073709551615
+  s32: -1
+  s64: 9223372036854775807
+  f32: 3735928559
+  f64: 1000000
+  sf32: -2147483648
+  sf64: -56
+  flag: true
+  ratio: 0.1
+  value: -0.0025
+  label: "edge-01 \"north\" rack\t7"
+  blob: "\000\001\377abc\n"
+  severity: WARN
+  counts: 1
+  counts: -2
+  counts: 300
+  counts: 0
+  counts: 70000
+  readings: 0.5
+  readings: 10000000000.0
+  readings: -0.0
+  readings: inf
+  tags: "a"
+  tags: "b c"
+  attrs {
+    key: "cpu"
+    value: 93
+  }
+  attrs {
+    key: "disk"
+    value: 100
+  }
+  attrs {
+    key: "mem"
+    value: -4096
+  }
+  retries: 0
+  text: "rebooted at 03:00 été"
+  history: INFO
+  history: INFO
+  history: ERROR
+== encode telemetry.proto telemetry.v1.Sample sample2.txtpb
+  127 bytes
+    58 01 65 ff ff 7f 7f 69 59 f3 f8 c2 1f 6e a5 01 80 01 09 92 01 20 00 00
+    00 00 00 00 f8 7f 00 00 00 00 00 00 f0 ff 00 00 80 54 34 6f 9d 41 92 d5
+    4d 06 cf f0 80 44 ba 01 12 09 00 00 00 00 00 00 f8 3f 11 00 00 00 00 00
+    00 00 c0 c2 01 01 07 ca 01 0d 08 ff ff ff ff ff ff ff ff ff 01 12 00 ca
+    01 0d 08 07 12 09 09 00 00 00 00 00 00 d0 3f ca 01 0d 08 03 12 09 11 00
+    00 00 00 00 00 08 40
+== text telemetry.proto telemetry.v1.Sample sample2.txtpb
+  flag: true
+  ratio: 3.4028235e+38
+  value: 1e-300
+  severity: 9
+  readings: nan
+  readings: -inf
+  readings: 123456789.125
+  readings: 1e+22
+  point {
+    x: 1.5
+    y: -2.0
+  }
+  history: 7
+  by_id {
+    key: -1
+    value {
+    }
+  }
+  by_id {
+    key: 3
+    value {
+      y: 3.0
+    }
+  }
+  by_id {
+    key: 7
+    value {
+      x: 0.25
+    }
+  }
+== encode telemetry.proto telemetry.v1.Batch batch.txtpb
+  102 bytes
+    0a 0b 65 64 67 65 2d 30 31 2e 66 72 61 12 0f 08 01 72 05 66 69 72 73 74
+    8a 01 03 01 02 03 12 1a 08 02 72 06 73 65 63 6f 6e 64 a2 01 05 0a 01 61
+    10 02 a2 01 05 0a 01 7a 10 01 12 00 1a 0b 0a 03 65 6e 76 12 04 70 72 6f
+    64 1a 14 0a 06 72 65 67 69 6f 6e 12 0a 65 75 2d 63 65 6e 74 72 61 6c 22
+    00 c0 3e c0 84 3d
+== text telemetry.proto telemetry.v1.Batch batch.txtpb
+  host: "edge-01.fra"
+  samples {
+    i32: 1
+    label: "first"
+    counts: 1
+    counts: 2
+    counts: 3
+  }
+  samples {
+    i32: 2
+    label: "second"
+    attrs {
+      key: "a"
+      value: 2
+    }
+    attrs {
+      key: "z"
+      value: 1
+    }
+  }
+  samples {
+  }
+  labels {
+    key: "env"
+    value: "prod"
+  }
+  labels {
+    key: "region"
+    value: "eu-central"
+  }
+  origin {
+  }
+  seq: 1000000
+== encode legacy.proto shop.legacy.Order order.txtpb
+  87 bytes
+    0a 0d 4f 52 44 2d 32 30 32 34 2d 30 30 30 31 10 03 18 0a 18 14 18 1e 22
+    03 0a 14 1e 28 02 32 10 0a 0c 47 72 61 63 65 20 48 6f 70 70 65 72 18 01
+    39 5c 8f c2 f5 28 fc 4d 40 42 0d 6c 65 61 76 65 20 61 74 20 64 6f 6f 72
+    42 07 66 72 61 67 69 6c 65 4a 02 ca fe 50 01
+== text legacy.proto shop.legacy.Order order.txtpb
+  id: "ORD-2024-0001"
+  quantity: 3
+  lines: 10
+  lines: 20
+  lines: 30
+  packed_lines: 10
+  packed_lines: 20
+  packed_lines: 30
+  status: SHIPPED
+  customer {
+    name: "Grace Hopper"
+    vip: true
+  }
+  total: 59.97
+  notes: "leave at door"
+  notes: "fragile"
+  token: "\312\376"
+  balance: -1
+== encode legacy.proto shop.legacy.Order order-defaults.txtpb
+  17 bytes
+    0a 0d 4f 52 44 2d 32 30 32 34 2d 30 30 30 32 10 01
+== text legacy.proto shop.legacy.Order order-defaults.txtpb
+  id: "ORD-2024-0002"
+  quantity: 1
+== encode legacy.proto shop.legacy.Order order-missing.txtpb
+  EncodeError: Message shop.legacy.Order is missing required fields: id,customer.name
+== text legacy.proto shop.legacy.Order order-missing.txtpb
+  quantity: 2
+  customer {
+    email: "nobody@example.com"
+  }
+== text telemetry.proto telemetry.v1.Sample bad-field.txtpb
+  ParseError: 2:1 : Message type "telemetry.v1.Sample" has no field named "labell".
+== text telemetry.proto telemetry.v1.Sample bad-enum.txtpb
+  ParseError: 1:11 : 'severity: FATAL': Enum type "telemetry.v1.Severity" has no value named FATAL.
+== text telemetry.proto telemetry.v1.Sample bad-range.txtpb
+  ParseError: 1:6 : 'i32: 3000000000': Value out of range: 3000000000
+== text telemetry.proto telemetry.v1.Sample bad-uint.txtpb
+  ParseError: 1:6 : 'u64: -1': Value out of range: -1
+== text telemetry.proto telemetry.v1.Sample bad-int.txtpb
+  ParseError: 1:6 : 'i64: 12abc': Couldn't parse integer: 12abc
+== text telemetry.proto telemetry.v1.Sample bad-float.txtpb
+  ParseError: 1:8 : 'ratio: 1.5.5': Couldn't parse float: 1.5.5
+== text telemetry.proto telemetry.v1.Sample bad-bool.txtpb
+  ParseError: 1:7 : 'flag: yes': Expected "true" or "false".
+== text telemetry.proto telemetry.v1.Sample bad-colon.txtpb
+  ParseError: 1:5 : 'i32 5': Expected ":".
+== text telemetry.proto telemetry.v1.Sample bad-brace.txtpb
+  ParseError: 2:6 : Expected "}".
+== text telemetry.proto telemetry.v1.Sample bad-twice.txtpb
+  ParseError: 2:6 : Message type "telemetry.v1.Sample" should not have multiple "i32" fields.
+== text telemetry.proto telemetry.v1.Sample bad-oneof.txtpb
+  ParseError: 2:1 : Field "point" is specified along with field "text", another member of oneof "payload" for message type "telemetry.v1.Sample".
+== text telemetry.proto telemetry.v1.Sample bad-quote.txtpb
+  ParseError: 1:8 : 'label: "unterminated': String missing ending quote: '"unterminated'
+== text telemetry.proto telemetry.v1.Sample bad-octal.txtpb
+  ParseError: 1:8 : 'value: 012.5': Invalid octal float: 012.5
+== text telemetry.proto telemetry.v1.Sample bad-list.txtpb
+  ParseError: 2:1 : '': Expected ",".
+== text telemetry.proto telemetry.v1.Sample bad-ext.txtpb
+  ParseError: 1:15 : Message type "telemetry.v1.Sample" does not have extensions.
+== text telemetry.proto telemetry.v1.Sample bad-msg-twice.txtpb
+  ParseError: 2:7 : Message type "telemetry.v1.Sample" should not have multiple "point" fields.
+== text legacy.proto shop.legacy.Order bad-closed-enum.txtpb
+  ParseError: 2:9 : 'status: 9': Enum type "shop.legacy.Order.Status" has no value with number 9.
+== text telemetry.proto telemetry.v1.Sample bad-string-int.txtpb
+  ParseError: 1:6 : 'i32: "5"': Couldn't parse integer: "5"
+== text telemetry.proto telemetry.v1.Sample bad-token.txtpb
+  ParseError: 2:1 : '}': Expected identifier or number, got }.
+== text telemetry.proto telemetry.v1.Sample bad-utf8.txtpb
+  ParseError: 2:1 : '': Couldn't parse string: 'utf-8' codec can't decode byte 0xff in position 2: invalid start byte
+== text telemetry.proto telemetry.v1.Sample bad-hex.txtpb
+  ParseError: 1:6 : 'f32: 0xG1': Couldn't parse integer: 0xG1
+== decode addressbook.proto tutorial.AddressBook people.bin
+  people {
+    name: "Ada Lovelace"
+    id: 1815
+    email: "ada@example.org"
+    phones {
+      number: "+44 20 7946 0018"
+      type: PHONE_TYPE_HOME
+    }
+    phones {
+      number: "555-0100"
+      type: PHONE_TYPE_MOBILE
+    }
+  }
+  people {
+    name: "José Martí"
+    id: 42
+    phones {
+      number: "07700 900461"
+      type: PHONE_TYPE_WORK
+    }
+  }
+  people {
+    name: "Ζωή"
+    email: "zoe@example.gr"
+  }
+== decode telemetry.proto telemetry.v1.Sample sample.bin
+  i32: -123456
+  i64: -9223372036854775808
+  u32: 4294967295
+  u64: 18446744073709551615
+  s32: -1
+  s64: 9223372036854775807
+  f32: 3735928559
+  f64: 1000000
+  sf32: -2147483648
+  sf64: -56
+  flag: true
+  ratio: 0.1
+  value: -0.0025
+  label: "edge-01 \"north\" rack\t7"
+  blob: "\000\001\377abc\n"
+  severity: WARN
+  counts: 1
+  counts: -2
+  counts: 300
+  counts: 0
+  counts: 70000
+  readings: 0.5
+  readings: 10000000000.0
+  readings: -0.0
+  readings: inf
+  tags: "a"
+  tags: "b c"
+  attrs {
+    key: "cpu"
+    value: 93
+  }
+  attrs {
+    key: "disk"
+    value: 100
+  }
+  attrs {
+    key: "mem"
+    value: -4096
+  }
+  retries: 0
+  text: "rebooted at 03:00 été"
+  history: INFO
+  history: INFO
+  history: ERROR
+== decode telemetry.proto telemetry.v1.Sample sample2.bin
+  flag: true
+  ratio: 3.4028235e+38
+  value: 1e-300
+  severity: 9
+  readings: nan
+  readings: -inf
+  readings: 123456789.125
+  readings: 1e+22
+  point {
+    x: 1.5
+    y: -2.0
+  }
+  history: 7
+  by_id {
+    key: -1
+    value {
+    }
+  }
+  by_id {
+    key: 3
+    value {
+      y: 3.0
+    }
+  }
+  by_id {
+    key: 7
+    value {
+      x: 0.25
+    }
+  }
+== decode telemetry.proto telemetry.v1.Batch batch.bin
+  host: "edge-01.fra"
+  samples {
+    i32: 1
+    label: "first"
+    counts: 1
+    counts: 2
+    counts: 3
+  }
+  samples {
+    i32: 2
+    label: "second"
+    attrs {
+      key: "a"
+      value: 2
+    }
+    attrs {
+      key: "z"
+      value: 1
+    }
+  }
+  samples {
+  }
+  labels {
+    key: "env"
+    value: "prod"
+  }
+  labels {
+    key: "region"
+    value: "eu-central"
+  }
+  origin {
+  }
+  seq: 1000000
+== decode legacy.proto shop.legacy.Order order.bin
+  id: "ORD-2024-0001"
+  quantity: 3
+  lines: 10
+  lines: 20
+  lines: 30
+  packed_lines: 10
+  packed_lines: 20
+  packed_lines: 30
+  status: SHIPPED
+  customer {
+    name: "Grace Hopper"
+    vip: true
+  }
+  total: 59.97
+  notes: "leave at door"
+  notes: "fragile"
+  token: "\312\376"
+  balance: -1
+== decode legacy.proto shop.legacy.Order order-defaults.bin
+  id: "ORD-2024-0002"
+  quantity: 1
+== decode addressbook.proto tutorial.Person person-unknown.bin
+  name: "Linus"
+  id: 1969
+== decode addressbook.proto tutorial.AddressBook book-unknown.bin
+  people {
+    name: "Linus"
+    id: 1969
+  }
+== decode telemetry.proto telemetry.v1.Sample sample-odd.bin
+  i32: 2
+  u32: 5
+  flag: true
+  counts: 5
+  counts: 6
+  counts: -7
+  counts: 8
+  attrs {
+    value: 3
+  }
+  attrs {
+    key: "k"
+    value: 2
+  }
+  text: "later wins"
+== decode legacy.proto shop.legacy.Order order-odd.bin
+  id: "ORD-X"
+  lines: 1
+  lines: 2
+  packed_lines: 3
+  status: SHIPPED
+  customer {
+    email: "a@b.c"
+  }
+== json addressbook.proto tutorial.AddressBook people.bin
+  {
+    "people": [
+      {
+        "email": "ada@example.org",
+        "id": 1815,
+        "name": "Ada Lovelace",
+        "phones": [
+          {
+            "number": "+44 20 7946 0018",
+            "type": "PHONE_TYPE_HOME"
+          },
+          {
+            "number": "555-0100",
+            "type": "PHONE_TYPE_MOBILE"
+          }
+        ]
+      },
+      {
+        "id": 42,
+        "name": "Jos\u00e9 Mart\u00ed",
+        "phones": [
+          {
+            "number": "07700 900461",
+            "type": "PHONE_TYPE_WORK"
+          }
+        ]
+      },
+      {
+        "email": "zoe@example.gr",
+        "name": "\u0396\u03c9\u03ae"
+      }
+    ]
+  }
+== json telemetry.proto telemetry.v1.Sample sample.bin
+  {
+    "attrs": {
+      "cpu": "93",
+      "disk": "100",
+      "mem": "-4096"
+    },
+    "blob": "AAH/YWJjCg==",
+    "counts": [
+      1,
+      -2,
+      300,
+      0,
+      70000
+    ],
+    "displayLabel": "edge-01 \"north\" rack\t7",
+    "f32": 3735928559,
+    "f64": "1000000",
+    "flag": true,
+    "history": [
+      "INFO",
+      "INFO",
+      "ERROR"
+    ],
+    "i32": -123456,
+    "i64": "-9223372036854775808",
+    "ratio": 0.1,
+    "readings": [
+      0.5,
+      10000000000.0,
+      -0.0,
+      "Infinity"
+    ],
+    "retries": 0,
+    "s32": -1,
+    "s64": "9223372036854775807",
+    "severity": "WARN",
+    "sf32": -2147483648,
+    "sf64": "-56",
+    "tags": [
+      "a",
+      "b c"
+    ],
+    "text": "rebooted at 03:00 \u00e9t\u00e9",
+    "u32": 4294967295,
+    "u64": "18446744073709551615",
+    "value": -0.0025
+  }
+== json telemetry.proto telemetry.v1.Sample sample2.bin
+  {
+    "byId": {
+      "-1": {},
+      "3": {
+        "y": 3.0
+      },
+      "7": {
+        "x": 0.25
+      }
+    },
+    "flag": true,
+    "history": [
+      7
+    ],
+    "point": {
+      "x": 1.5,
+      "y": -2.0
+    },
+    "ratio": 3.4028235e+38,
+    "readings": [
+      "NaN",
+      "-Infinity",
+      123456789.125,
+      1e+22
+    ],
+    "severity": 9,
+    "value": 1e-300
+  }
+== json telemetry.proto telemetry.v1.Batch batch.bin
+  {
+    "host": "edge-01.fra",
+    "labels": {
+      "env": "prod",
+      "region": "eu-central"
+    },
+    "origin": {},
+    "samples": [
+      {
+        "counts": [
+          1,
+          2,
+          3
+        ],
+        "displayLabel": "first",
+        "i32": 1
+      },
+      {
+        "attrs": {
+          "a": "2",
+          "z": "1"
+        },
+        "displayLabel": "second",
+        "i32": 2
+      },
+      {}
+    ],
+    "seq": "1000000"
+  }
+== json legacy.proto shop.legacy.Order order.bin
+  {
+    "balance": "-1",
+    "customer": {
+      "name": "Grace Hopper",
+      "vip": true
+    },
+    "id": "ORD-2024-0001",
+    "lines": [
+      10,
+      20,
+      30
+    ],
+    "notes": [
+      "leave at door",
+      "fragile"
+    ],
+    "packedLines": [
+      10,
+      20,
+      30
+    ],
+    "quantity": 3,
+    "status": "SHIPPED",
+    "token": "yv4=",
+    "total": 59.97
+  }
+== json telemetry.proto telemetry.v1.Sample sample.bin names
+  {
+    "attrs": {
+      "cpu": "93",
+      "disk": "100",
+      "mem": "-4096"
+    },
+    "blob": "AAH/YWJjCg==",
+    "counts": [
+      1,
+      -2,
+      300,
+      0,
+      70000
+    ],
+    "f32": 3735928559,
+    "f64": "1000000",
+    "flag": true,
+    "history": [
+      "INFO",
+      "INFO",
+      "ERROR"
+    ],
+    "i32": -123456,
+    "i64": "-9223372036854775808",
+    "label": "edge-01 \"north\" rack\t7",
+    "ratio": 0.1,
+    "readings": [
+      0.5,
+      10000000000.0,
+      -0.0,
+      "Infinity"
+    ],
+    "retries": 0,
+    "s32": -1,
+    "s64": "9223372036854775807",
+    "severity": "WARN",
+    "sf32": -2147483648,
+    "sf64": "-56",
+    "tags": [
+      "a",
+      "b c"
+    ],
+    "text": "rebooted at 03:00 \u00e9t\u00e9",
+    "u32": 4294967295,
+    "u64": "18446744073709551615",
+    "value": -0.0025
+  }
+== json telemetry.proto telemetry.v1.Sample sample.bin ints
+  {
+    "attrs": {
+      "cpu": "93",
+      "disk": "100",
+      "mem": "-4096"
+    },
+    "blob": "AAH/YWJjCg==",
+    "counts": [
+      1,
+      -2,
+      300,
+      0,
+      70000
+    ],
+    "displayLabel": "edge-01 \"north\" rack\t7",
+    "f32": 3735928559,
+    "f64": "1000000",
+    "flag": true,
+    "history": [
+      2,
+      2,
+      4
+    ],
+    "i32": -123456,
+    "i64": "-9223372036854775808",
+    "ratio": 0.1,
+    "readings": [
+      0.5,
+      10000000000.0,
+      -0.0,
+      "Infinity"
+    ],
+    "retries": 0,
+    "s32": -1,
+    "s64": "9223372036854775807",
+    "severity": 3,
+    "sf32": -2147483648,
+    "sf64": "-56",
+    "tags": [
+      "a",
+      "b c"
+    ],
+    "text": "rebooted at 03:00 \u00e9t\u00e9",
+    "u32": 4294967295,
+    "u64": "18446744073709551615",
+    "value": -0.0025
+  }
+== json addressbook.proto tutorial.AddressBook people.bin defaults
+  {
+    "people": [
+      {
+        "email": "ada@example.org",
+        "id": 1815,
+        "name": "Ada Lovelace",
+        "phones": [
+          {
+            "number": "+44 20 7946 0018",
+            "type": "PHONE_TYPE_HOME"
+          },
+          {
+            "number": "555-0100",
+            "type": "PHONE_TYPE_MOBILE"
+          }
+        ]
+      },
+      {
+        "email": "",
+        "id": 42,
+        "name": "Jos\u00e9 Mart\u00ed",
+        "phones": [
+          {
+            "number": "07700 900461",
+            "type": "PHONE_TYPE_WORK"
+          }
+        ]
+      },
+      {
+        "email": "zoe@example.gr",
+        "id": 0,
+        "name": "\u0396\u03c9\u03ae",
+        "phones": []
+      }
+    ]
+  }
+== json legacy.proto shop.legacy.Order order-defaults.bin defaults names
+  {
+    "id": "ORD-2024-0002",
+    "lines": [],
+    "notes": [],
+    "packed_lines": [],
+    "quantity": 1
+  }
+== json telemetry.proto telemetry.v1.Sample sample-odd.bin
+  {
+    "attrs": {
+      "": "3",
+      "k": "2"
+    },
+    "counts": [
+      5,
+      6,
+      -7,
+      8
+    ],
+    "flag": true,
+    "i32": 2,
+    "text": "later wins",
+    "u32": 5
+  }
+== json legacy.proto shop.legacy.Order order-odd.bin
+  {
+    "customer": {
+      "email": "a@b.c"
+    },
+    "id": "ORD-X",
+    "lines": [
+      1,
+      2
+    ],
+    "packedLines": [
+      3
+    ],
+    "status": "SHIPPED"
+  }
+== roundtrip addressbook.proto tutorial.Person person-unknown.bin
+  changed:
+  42 bytes
+    0a 05 4c 69 6e 75 73 10 b1 0f 48 4d 51 01 02 03 04 05 06 07 08 5a 07 08
+    01 12 03 61 62 63 65 00 00 80 3f 6a 00 15 01 00 00 00
+== roundtrip addressbook.proto tutorial.AddressBook book-unknown.bin
+  changed:
+  47 bytes
+    0a 2a 0a 05 4c 69 6e 75 73 10 b1 0f 48 4d 51 01 02 03 04 05 06 07 08 5a
+    07 08 01 12 03 61 62 63 65 00 00 80 3f 6a 00 15 01 00 00 00 12 01 ff
+== roundtrip telemetry.proto telemetry.v1.Sample sample-odd.bin
+  changed:
+  50 bytes
+    08 02 18 05 58 01 8a 01 0d 05 06 f9 ff ff ff ff ff ff ff ff 01 08 a2 01
+    05 0a 01 6b 10 02 a2 01 04 0a 00 10 03 b2 01 0a 6c 61 74 65 72 20 77 69
+    6e 73
+== roundtrip legacy.proto shop.legacy.Order order-odd.bin
+  EncodeError: Message shop.legacy.Order is missing required fields: customer.name
+== roundtrip addressbook.proto tutorial.AddressBook people.bin
+  same 134 bytes
+== roundtrip telemetry.proto telemetry.v1.Sample sample.bin
+  same 272 bytes
+== roundtrip legacy.proto shop.legacy.Order order.bin
+  same 87 bytes
+== raw raw-mixed.bin
+  1: 150
+  2: 67305985
+  3: 506097522914230528
+  4 {
+  }
+  4: "\010\001\020"
+  4 {
+    13: 105
+  }
+  5 {
+    1: 5
+    6 {
+      7: 1
+    }
+  }
+  6: "\303\251"
+  7 {
+    1 {
+      2: "deep"
+    }
+  }
+  0: 1
+  8 {
+  }
+  9: "\200"
+  10 {
+    1 {
+      2: 1
+    }
+  }
+  11: "\r\001\002"
+  12: "\032\005ab"
+  536870911: 18446744073709551615
+== raw raw-people.bin
+  1 {
+    1: "Ada Lovelace"
+    2: 1815
+    3: "ada@example.org"
+    4 {
+      1: "+44 20 7946 0018"
+      2: 2
+    }
+    4 {
+      1: "555-0100"
+      2: 1
+    }
+  }
+  1 {
+    1: "Jos\303\251 Mart\303\255"
+    2: 42
+    4 {
+      1: "07700 900461"
+      2: 3
+    }
+  }
+  1 {
+    1: "\316\226\317\211\316\256"
+    3: "zoe@example.gr"
+  }
+== raw sample.bin
+  1: 18446744073709428160
+  2: 9223372036854775808
+  3: 4294967295
+  4: 18446744073709551615
+  5: 1
+  6: 18446744073709551614
+  7: 3735928559
+  8: 1000000
+  9: 2147483648
+  10: 18446744073709551560
+  11: 1
+  12: 1036831949
+  13: 13791283066904122491
+  14: "edge-01 \"north\" rack\t7"
+  15: "\000\001\377abc\n"
+  16: 3
+  17: "\001\376\377\377\377\377\377\377\377\377\001\254\002\000\360\242\004"
+  18 {
+    0: 0
+    0: 0
+    0: 0
+    1020: 0
+    0: 0
+    4: 95
+    36: 66
+    0: 0
+    0: 0
+    0: 0
+    0: 0
+    0: 0
+    0: 0
+    0: 16368
+  }
+  19: "a"
+  19: "b c"
+  20 {
+    1: "cpu"
+    2: 93
+  }
+  20 {
+    1: "disk"
+    2: 100
+  }
+  20 {
+    1: "mem"
+    2: 18446744073709547520
+  }
+  21: 0
+  22: "rebooted at 03:00 \303\251t\303\251"
+  24: "\002\002\004"
+== raw batch.bin
+  1: "edge-01.fra"
+  2 {
+    1: 1
+    14: "first"
+    17: "\001\002\003"
+  }
+  2 {
+    1: 2
+    14: "second"
+    20 {
+      1: "a"
+      2: 2
+    }
+    20 {
+      1: "z"
+      2: 1
+    }
+  }
+  2 {
+  }
+  3 {
+    1: "env"
+    2: "prod"
+  }
+  3 {
+    1: "region"
+    2: "eu-central"
+  }
+  4 {
+  }
+  1000: 1000000
+== fromjson telemetry.proto telemetry.v1.Sample sample.json
+  i32: -7
+  i64: -9007199254740993
+  u32: 4000000000
+  u64: 18446744073709551615
+  s32: 12
+  sf64: 1000
+  ratio: inf
+  value: 6.02214076e+23
+  label: "café 🚀"
+  blob: "Hello world?\373"
+  severity: ERROR
+  counts: 1
+  counts: 2
+  counts: 3
+  readings: nan
+  readings: -1.25
+  readings: -inf
+  attrs {
+    key: "b"
+    value: -2
+  }
+  attrs {
+    key: "zone"
+    value: 17
+  }
+  retries: 0
+  point {
+    x: 0.5
+  }
+  history: DEBUG
+  history: WARN
+  by_id {
+    key: -3
+    value {
+    }
+  }
+  by_id {
+    key: 10
+    value {
+      y: 2.0
+    }
+  }
+== fromjson telemetry.proto telemetry.v1.Sample sample-names.json
+  s64: -5
+  label: "by proto name"
+  severity: WARN
+  by_id {
+    key: 1
+    value {
+      x: 1.0
+    }
+  }
+== fromjson telemetry.proto telemetry.v1.Sample bad-unknown.json
+  ParseError: Message type "telemetry.v1.Sample" has no field named "nope" at "Sample".
+ Available Fields(except extensions): "['i32', 'i64', 'u32', 'u64', 's32', 's64', 'f32', 'f64', 'sf32', 'sf64', 'flag', 'ratio', 'value', 'displayLabel', 'blob', 'severity', 'counts', 'readings', 'tags', 'attrs', 'retries', 'text', 'point', 'history', 'byId']"
+== fromjson telemetry.proto telemetry.v1.Sample bad-syntax.json
+  ParseError: Failed to load JSON: Illegal trailing comma before end of object: line 1 column 10 (char 9).
+== fromjson telemetry.proto telemetry.v1.Sample bad-dup.json
+  ParseError: Failed to load JSON: Failed to load JSON: duplicate key i32..
+== fromjson telemetry.proto telemetry.v1.Sample bad-both.json
+  i32: 1
+  label: "y"
+== fromjson telemetry.proto telemetry.v1.Sample bad-oneof.json
+  ParseError: Message type "telemetry.v1.Sample" should not have multiple "payload" oneof fields at "Sample".
+== fromjson telemetry.proto telemetry.v1.Sample bad-int.json
+  ParseError: Failed to parse i32 field: Couldn't parse integer: 1.5 at Sample.i32.
+== fromjson telemetry.proto telemetry.v1.Sample bad-intstr.json
+  ParseError: Failed to parse i64 field: Couldn't parse integer: "12 34" at Sample.i64.
+== fromjson telemetry.proto telemetry.v1.Sample bad-bool.json
+  ParseError: Failed to parse flag field: Expected true or false without quotes at Sample.flag.
+== fromjson telemetry.proto telemetry.v1.Sample bad-enum.json
+  ParseError: Failed to parse severity field: Invalid enum value FATAL for enum type telemetry.v1.Severity at Sample.severity.
+== fromjson telemetry.proto telemetry.v1.Sample bad-nan.json
+  ParseError: Failed to parse ratio field: Couldn't parse float "nan", use "NaN" instead at Sample.ratio.
+== fromjson telemetry.proto telemetry.v1.Sample bad-big-float.json
+  ParseError: Failed to parse ratio field: Float value too large at Sample.ratio.
+== fromjson telemetry.proto telemetry.v1.Sample bad-nested.json
+  ParseError: Failed to parse x field: Couldn't parse float: left at Sample.point.x.
+== fromjson telemetry.proto telemetry.v1.Sample bad-map-key.json
+  ParseError: Failed to parse byId field: invalid literal for int() with base 10: 'x'.
+== fromjson telemetry.proto telemetry.v1.Sample bad-bool-int.json
+  ParseError: Failed to parse i32 field: Bool value True is not acceptable for integer field at Sample.i32.
+== fromjson telemetry.proto telemetry.v1.Sample bad-range.json
+  ParseError: Failed to parse u32 field: Value out of range: -1.
+== fromjson telemetry.proto telemetry.v1.Sample bad-null-elem.json
+  ParseError: Failed to parse tags field: null is not allowed to be used as an element in a repeated field at Sample.tags[1].
+== fromjson telemetry.proto telemetry.v1.Sample bad-empty.json
+  ParseError: Failed to load JSON: Expecting value: line 1 column 1 (char 0).
+== decode telemetry.proto telemetry.v1.Sample bad-wiretype.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': Wire format was corrupt
+== decode addressbook.proto tutorial.AddressBook bad-truncated.bin
+  DecodeError: Error parsing message with type 'tutorial.AddressBook': Wire format was corrupt
+== decode telemetry.proto telemetry.v1.Sample bad-varint.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': Wire format was corrupt
+== decode telemetry.proto telemetry.v1.Sample bad-length.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': Wire format was corrupt
+== decode telemetry.proto telemetry.v1.Sample bad-group.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': Wire format was corrupt
+== decode telemetry.proto telemetry.v1.Sample bad-endgroup.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': Wire format was corrupt
+== decode telemetry.proto telemetry.v1.Sample bad-utf8.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': String field had bad UTF-8
+== decode telemetry.proto telemetry.v1.Sample bad-submsg.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': Wire format was corrupt
+== decode telemetry.proto telemetry.v1.Sample bad-group-mismatch.bin
+  DecodeError: Error parsing message with type 'telemetry.v1.Sample': Wire format was corrupt
+== raw bad-varint.bin
+  DecodeError: Error parsing message with type 'empty.Empty': Wire format was corrupt
+== raw bad-group-mismatch.bin
+  DecodeError: Error parsing message with type 'empty.Empty': Wire format was corrupt
