@@ -11,7 +11,7 @@ struct Version {
 
 impl Version {
     fn parse(text: ref String) -> Result[Version, String] {
-        let parts = text.split(".");
+        let parts: Vec[Str] = text.split(".").collect();
         if parts.len() != 3 {
             return Err(f"bad version '{text}'");
         }
@@ -146,22 +146,22 @@ fn join(items: ref Vec[String], sep: String) -> String {
 
 fn parse_dep(text: String) -> Result[Dep, String] {
     let t = text.trim();
-    let pieces = t.split(" ");
+    let pieces: Vec[Str] = t.split(" ").collect();
     if pieces.len() != 2 {
         return Err(f"bad dependency '{t}'");
     }
-    let constraint = Constraint.parse(pieces[1])?;
+    let constraint = Constraint.parse(pieces[1].to_string())?;
     Ok(Dep { name: pieces[0].clone(), constraint })
 }
 
 // Line format: `name version` or `name version: dep constraint, dep constraint`
 fn parse_release(line: String) -> Result[Release, String] {
-    let halves = line.split(":");
-    let head = halves[0].trim().split(" ");
+    let halves: Vec[Str] = line.split(":").collect();
+    let head: Vec[Str] = halves[0].trim().split(" ").collect();
     if head.len() != 2 {
         return Err(f"bad release header '{line}'");
     }
-    let version = Version.parse(head[1])?;
+    let version = Version.parse(head[1].to_string())?;
     let mut deps: Vec[Dep] = Vec.new();
     if halves.len() > 1 {
         for item in halves[1].split(",") {
@@ -187,7 +187,7 @@ impl Resolver {
             if t.is_empty() or t.starts_with("#") {
                 continue;
             }
-            releases.push(parse_release(t)?);
+            releases.push(parse_release(t.to_string())?);
         }
         Ok(Resolver { releases, chosen: Map.new() })
     }

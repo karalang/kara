@@ -2,7 +2,7 @@
 fn main() {
     // Interior empty piece (",,") plus a single-char and multi-char piece.
     let s: String = "a,bb,,ccc";
-    let parts: Vec[String] = s.split(",");
+    let parts: Vec[String] = s.split(",").map(|p| p.to_string()).collect();
     println(parts.len());
     for p in parts {
         println(p);

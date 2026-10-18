@@ -4,10 +4,11 @@ fn main() {
     let mut i: i64 = 0;
     let mut total: i64 = 0;
     while i < 1000 {
-        let call_fields = make_csv().split(',');
+        let csv = make_csv();
+        let call_fields: Vec[Str] = csv.split(",").collect();
         total = total + call_fields.len();
         for f in call_fields { total = total + f.len(); }
-        let lit_fields = "p,qq,rrr".split(',');
+        let lit_fields: Vec[Str] = "p,qq,rrr".split(",").collect();
         total = total + lit_fields.len();
         i = i + 1;
     }

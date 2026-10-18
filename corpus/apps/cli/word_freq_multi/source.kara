@@ -192,7 +192,7 @@ fn tokenize(text: ref String) -> Vec[String] {
     for piece in normalize(text).split(" ") {
         let word = piece.trim();
         if not word.is_empty() {
-            tokens.push(word);
+            tokens.push(word.to_string());
         }
     }
     tokens

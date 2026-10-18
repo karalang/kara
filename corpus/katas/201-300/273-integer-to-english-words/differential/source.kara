@@ -248,7 +248,7 @@ fn vocabulary() -> Set[String] {
 // doubled space, so the one condition covers all three shapes of join bug.
 fn shape_ok(s: String, v: ref Set[String]) -> bool {
     if s == "" { return false; }
-    let toks = s.split(" ");
+    let toks: Vec[Str] = s.split(" ").collect();
     let mut i = 0;
     while i < toks.len() {
         if toks[i] == "" { return false; }

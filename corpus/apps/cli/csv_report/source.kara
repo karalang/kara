@@ -161,7 +161,7 @@ fn parse_month(date: ref String) -> Option[String] {
 
 fn parse_price(text: ref String) -> Option[i64] {
     let cleaned = text.replace(",", "");
-    let parts = cleaned.split(".");
+    let parts: Vec[Str] = cleaned.split(".").collect();
     let dollars = i64.parse(parts[0]).ok()?;
     if dollars < 0 { return None; }
     if parts.len() == 1 { return Some(dollars * 100); }
@@ -176,26 +176,26 @@ fn parse_sale(rec: ref RawRecord) -> Result[Sale, RowError] {
         return Err(FieldCount { line: rec.line, got: rec.fields.len() });
     }
     let date = rec.fields[0].trim();
-    let month = match parse_month(date) {
+    let month = match parse_month(date.to_string()) {
         Some(m) => m,
-        None => return Err(BadDate { line: rec.line, text: date }),
+        None => return Err(BadDate { line: rec.line, text: date.to_string() }),
     };
     let region = rec.fields[1].trim();
     if region.is_empty() { return Err(EmptyRegion { line: rec.line }); }
     let qty_text = rec.fields[3].trim();
     let quantity = match i64.parse(qty_text).ok() {
         Some(q) if q > 0 => q,
-        _ => return Err(BadQuantity { line: rec.line, text: qty_text }),
+        _ => return Err(BadQuantity { line: rec.line, text: qty_text.to_string() }),
     };
     let price_text = rec.fields[4].trim();
-    let price_cents = match parse_price(price_text) {
+    let price_cents = match parse_price(price_text.to_string()) {
         Some(p) => p,
-        None => return Err(BadPrice { line: rec.line, text: price_text }),
+        None => return Err(BadPrice { line: rec.line, text: price_text.to_string() }),
     };
     Ok(Sale {
-        region: region,
+        region: region.to_string(),
         month: month,
-        product: rec.fields[2].trim(),
+        product: rec.fields[2].trim().to_string(),
         quantity: quantity,
         price_cents: price_cents,
     })

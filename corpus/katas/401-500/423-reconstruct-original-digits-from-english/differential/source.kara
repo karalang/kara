@@ -44,7 +44,7 @@ fn original_digits_unique(s: Str) -> String {
 // ---- peel: original_digits_peel.kara
 
 fn original_digits_peel(s: Str) -> String {
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[Str] = "zero one two three four five six seven eight nine".split_whitespace().collect();
     let mut letters = vec![0; 26];
     for b in s.bytes() {
         letters[(b - b'a') as i64] += 1;
@@ -111,7 +111,7 @@ fn search(d: i64, letters: mut ref Vec[i64], need: ref Vec[Vec[i64]], last: ref 
 }
 
 fn original_digits_search(s: Str) -> String {
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[Str] = "zero one two three four five six seven eight nine".split_whitespace().collect();
     let mut need: Vec[Vec[i64]] = Vec.new();
     // last[c]: the largest digit whose word has letter c, or -1.
     let mut last = vec![-1; 26];
@@ -145,7 +145,7 @@ fn gcd(a: i64, b: i64) -> i64 {
 }
 
 fn original_digits_solve(s: Str) -> String {
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[Str] = "zero one two three four five six seven eight nine".split_whitespace().collect();
     let mut letters = vec![0; 26];
     for b in s.bytes() {
         letters[(b - b'a') as i64] += 1;
@@ -271,7 +271,7 @@ fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
 }
 
 fn main() {
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[String] = "zero one two three four five six seven eight nine".split_whitespace().map(|p| p.to_string()).collect();
     let mut seed: i64 = 4230;
     let mut checks: i64 = 0;
     let mut failures = vec![0; 6];

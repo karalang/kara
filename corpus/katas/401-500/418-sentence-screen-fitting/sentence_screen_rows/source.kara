@@ -37,7 +37,7 @@ fn step(seed: mut ref i64) -> i64 {
 }
 
 fn show(text: Str, rows: i64, cols: i64) {
-    let sentence = text.split_whitespace();
+    let sentence: Vec[String] = text.split_whitespace().map(|p| p.to_string()).collect();
     println(f"\"{text}\" on {rows}x{cols}: {words_typing(sentence, rows, cols)}");
 }
 

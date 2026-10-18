@@ -163,7 +163,7 @@ fn days_in_month(year: i64, month: i64) -> i64 {
 }
 
 fn parse_date(raw: ref String) -> Result[Date, RejectReason] {
-    let parts = raw.split("-");
+    let parts: Vec[Str] = raw.split("-").collect();
     if parts.len() != 3 {
         return Err(RejectReason.BadDate(raw.to_string()));
     }
@@ -186,35 +186,35 @@ fn parse_date(raw: ref String) -> Result[Date, RejectReason] {
 }
 
 fn parse_order(line: ref String, line_no: i64) -> Result[Order, RejectReason] {
-    let cols = line.split(",");
+    let cols: Vec[Str] = line.split(",").collect();
     if cols.len() != 6 {
         return Err(RejectReason.WrongColumnCount(6, cols.len()));
     }
-    let id = parse_int("order_id", cols[0])?;
-    let customer_id = parse_int("customer_id", cols[1])?;
-    let date = parse_date(cols[2])?;
-    let quantity = parse_int("quantity", cols[4])?;
-    let unit_cents = parse_int("unit_cents", cols[5])?;
+    let id = parse_int("order_id", cols[0].to_string())?;
+    let customer_id = parse_int("customer_id", cols[1].to_string())?;
+    let date = parse_date(cols[2].to_string())?;
+    let quantity = parse_int("quantity", cols[4].to_string())?;
+    let unit_cents = parse_int("unit_cents", cols[5].to_string())?;
     if quantity < 0 {
         return Err(RejectReason.NegativeQuantity(quantity));
     }
     if quantity == 0 {
         return Err(RejectReason.ZeroQuantity);
     }
-    Ok(Order { id, line: line_no, customer_id, date, sku: cols[3].trim(), quantity, unit_cents })
+    Ok(Order { id, line: line_no, customer_id, date, sku: cols[3].trim().to_string(), quantity, unit_cents })
 }
 
 fn parse_customer(line: ref String) -> Result[Customer, RejectReason] {
-    let cols = line.split(",");
+    let cols: Vec[Str] = line.split(",").collect();
     if cols.len() != 3 {
         return Err(RejectReason.WrongColumnCount(3, cols.len()));
     }
-    let id = parse_int("customer_id", cols[0])?;
-    let tier = match Tier.parse(cols[2].trim()) {
+    let id = parse_int("customer_id", cols[0].to_string())?;
+    let tier = match Tier.parse(cols[2].trim().to_string()) {
         Some(t) => t,
-        None => return Err(RejectReason.UnknownTier(cols[2].trim())),
+        None => return Err(RejectReason.UnknownTier(cols[2].trim().to_string())),
     };
-    Ok(Customer { id, name: cols[1].trim(), tier })
+    Ok(Customer { id, name: cols[1].trim().to_string(), tier })
 }
 
 fn load_orders(path: String) -> Result[(Vec[Order], Vec[Reject]), IoError] {
@@ -227,7 +227,7 @@ fn load_orders(path: String) -> Result[(Vec[Order], Vec[Reject]), IoError] {
         if line_no == 1 or line.trim().is_empty() {
             continue;
         }
-        match parse_order(line, line_no) {
+        match parse_order(line.to_string(), line_no) {
             Ok(o) => good.push(o),
             Err(r) => bad.push(Reject { file: path.to_string(), line: line_no, reason: r }),
         }
@@ -245,7 +245,7 @@ fn load_customers(path: String) -> Result[(Vec[Customer], Vec[Reject]), IoError]
         if line_no == 1 or line.trim().is_empty() {
             continue;
         }
-        match parse_customer(line) {
+        match parse_customer(line.to_string()) {
             Ok(c) => good.push(c),
             Err(r) => bad.push(Reject { file: path.to_string(), line: line_no, reason: r }),
         }

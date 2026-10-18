@@ -257,13 +257,13 @@ fn optional_string(obj: ref SortedMap[String, JsonValue], key: String, errors: m
 
 // v1 "street, city, postcode[, country]" -> v2 nested address object.
 fn split_address(raw: ref String) -> Result[JsonValue, String] {
-    let parts = raw.split(",");
+    let parts: Vec[Str] = raw.split(",").collect();
     if parts.len() < 3 or parts.len() > 4 {
         return Err(f"field 'addr' must have 3 or 4 comma-separated parts, got {parts.len()}");
     }
     let mut addr: SortedMap[String, JsonValue] = SortedMap.new();
-    addr.insert("street", JsonValue.Str(parts[0].trim()));
-    addr.insert("city", JsonValue.Str(parts[1].trim()));
+    addr.insert("street", JsonValue.Str(parts[0].trim().to_string()));
+    addr.insert("city", JsonValue.Str(parts[1].trim().to_string()));
     addr.insert("postcode", JsonValue.Str(parts[2].trim().to_uppercase()));
     let country = if parts.len() == 4 { parts[3].trim().to_uppercase() } else { "GB".to_string() };
     addr.insert("country", JsonValue.Str(country));
@@ -291,7 +291,7 @@ fn transform(obj: ref SortedMap[String, JsonValue]) -> Result[JsonValue, Vec[Str
         None => errors.push("missing required field 'id'".to_string()),
     }
     match obj.get("full_name") {
-        Some(JsonValue.Str(name)) if name.trim().len() > 0 => { out.insert("display_name", JsonValue.Str(name.trim())); }
+        Some(JsonValue.Str(name)) if name.trim().len() > 0 => { out.insert("display_name", JsonValue.Str(name.trim().to_string())); }
         Some(_) => errors.push("field 'full_name' must be a non-empty string".to_string()),
         None => errors.push("missing required field 'full_name'".to_string()),
     }

@@ -63,7 +63,7 @@ enum Command {
 // ---------------------------------------------------------------- topics
 
 fn validate_topic(topic: ref String) -> Result[Vec[String], BrokerError] {
-    let segs = topic.split(".");
+    let segs: Vec[String] = topic.split(".").map(|p| p.to_string()).collect();
     for seg in segs.iter() {
         if seg.is_empty() or seg.contains("*") or seg.contains("#") {
             return Err(BrokerError.BadTopic(topic.clone()));
@@ -73,7 +73,7 @@ fn validate_topic(topic: ref String) -> Result[Vec[String], BrokerError] {
 }
 
 fn validate_pattern(pattern: ref String) -> Result[Vec[String], BrokerError] {
-    let segs = pattern.split(".");
+    let segs: Vec[String] = pattern.split(".").map(|p| p.to_string()).collect();
     let last = segs.len() - 1;
     for (i, seg) in segs.iter().enumerate() {
         let wildcard = seg == "*" or seg == "#";
@@ -107,8 +107,8 @@ fn segments_match(pattern: ref Vec[String], topic: ref Vec[String], pi: i64, ti:
 }
 
 fn topic_matches(pattern: ref String, topic: ref String) -> bool {
-    let p = pattern.split(".");
-    let t = topic.split(".");
+    let p: Vec[String] = pattern.split(".").map(|p| p.to_string()).collect();
+    let t: Vec[String] = topic.split(".").map(|p| p.to_string()).collect();
     segments_match(p, t, 0, 0)
 }
 
@@ -299,7 +299,7 @@ impl Broker {
 // ---------------------------------------------------------------- parsing
 
 fn parse_command(line: ref String) -> Result[Command, BrokerError] {
-    let parts = line.split(" ");
+    let parts: Vec[String] = line.split(" ").map(|p| p.to_string()).collect();
     let bad = BrokerError.BadCommand(line.clone());
     let n = parts.len();
     match parts[0] {
@@ -383,7 +383,7 @@ fn main() {
             continue;
         }
         step += 1;
-        match broker.execute(line) {
+        match broker.execute(line.to_string()) {
             Ok(log) => {
                 for entry in log.iter() {
                     println(f"[{step}] {entry}");

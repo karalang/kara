@@ -178,7 +178,7 @@ fn run(script: Str) {
     let mut counts: Map[String, i64] = Map.new();
     let mut answers: Vec[String] = Vec.new();
     for step in script.split(", ") {
-        let words = step.split(" ");
+        let words: Vec[Str] = step.split(" ").collect();
         let key = if words.len() > 1 { words[1].clone() } else { String.new() };
         apply(mut ds, words[0], key, mut counts, mut answers);
     }

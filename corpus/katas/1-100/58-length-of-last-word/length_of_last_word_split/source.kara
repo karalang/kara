@@ -14,7 +14,7 @@
 // natural "words, then last" phrasing and an independent cross-check.
 
 fn length_of_last_word(s: ref String) -> i64 {
-    let words = s.split(" ");
+    let words: Vec[Str] = s.split(" ").collect();
     let mut last_len = 0;
     for w in words.iter() {
         // Consecutive / leading / trailing spaces produce empty pieces;

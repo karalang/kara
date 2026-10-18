@@ -1,6 +1,6 @@
 
         fn first_word(s: String) -> Option[String] {
-            let words = s.split(" ");
+            let words: Vec[Str] = s.split(" ").collect();
             if words.len() > 0 { Some(words[0].clone()) } else { None }
         }
         fn main() {

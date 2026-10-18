@@ -2282,6 +2282,7 @@ impl<'a> super::TypeChecker<'a> {
         // B-2026-08-08-2 — this function's `frozen` parameters, saved and
         // restored on the same terms as the flag above so a nested item walk
         // (an impl method, a trait default body) does not inherit them.
+        let saved_iter_lets = std::mem::take(&mut self.iter_lets);
         let saved_frozen_params = std::mem::replace(
             &mut self.current_fn_frozen_params,
             f.params
@@ -2352,6 +2353,8 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+        self.offer_iter_let_fixes();
+        self.iter_lets = saved_iter_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_ref_params = saved_ref_params;
@@ -6977,15 +6980,36 @@ impl<'a> super::TypeChecker<'a> {
 
     /// v2 core §5.2: whether `ty` holds a reference (a view).
     pub(super) fn core_is_view(&self, ty: &Type) -> bool {
+        self.core_is_view_in(ty, 0)
+    }
+
+    /// [`Self::core_is_view`], `depth` struct declarations in. A `Str` is a
+    /// view, and so is a struct holding one (a `split` iterator over the
+    /// text it cuts, B-2026-10-12-7).
+    fn core_is_view_in(&self, ty: &Type, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
         match ty {
             Type::TypeVar(id) => self
                 .env
                 .substitutions
                 .get(id)
-                .is_some_and(|t| self.core_is_view(t)),
+                .is_some_and(|t| self.core_is_view_in(t, depth)),
             Type::Ref(_) | Type::MutRef(_) => true,
-            Type::Named { args, .. } => args.iter().any(|t| self.core_is_view(t)),
-            Type::Tuple(ts) => ts.iter().any(|t| self.core_is_view(t)),
+            Type::Named { name, args } if name == "StringSlice" && args.is_empty() => true,
+            Type::Named { name, args } => {
+                args.iter().any(|t| self.core_is_view_in(t, depth))
+                    || self.env.structs.get(name).is_some_and(|info| {
+                        !info.is_shared
+                            && !info.is_par
+                            && info
+                                .fields
+                                .iter()
+                                .any(|(_, t, _)| self.core_is_view_in(t, depth + 1))
+                    })
+            }
+            Type::Tuple(ts) => ts.iter().any(|t| self.core_is_view_in(t, depth)),
             _ => false,
         }
     }
@@ -7033,6 +7057,11 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 if entry || self.core_iterator_lends_its_source(object, method) {
                     return self.core_view_temp_origin(object);
+                }
+                // A string literal's text is static: a view of it borrows
+                // nothing that dies.
+                if matches!(object.kind, ExprKind::StringLit(_)) {
+                    return None;
                 }
                 if self.core_expr_is_temp(object) {
                     return Some(object.span);
@@ -7878,6 +7907,13 @@ impl<'a> super::TypeChecker<'a> {
                         {
                             expected_ty = (**inner).clone();
                         }
+                    }
+                }
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    if ty.is_none() {
+                        self.note_iter_let(name, pattern.span, &value.span, &expected_ty);
+                    } else {
+                        self.iter_lets.remove(name.as_str());
                     }
                 }
                 // design.md § "The index operator (`expr[i]`)" — a `let`

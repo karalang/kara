@@ -69,7 +69,7 @@ impl Metrics {
 fn request_path(bytes: own Vec[u8]) -> String {
     match String.from_utf8(bytes) {
         Result.Ok(line) => {
-            let parts = line.split(' ');
+            let parts: Vec[Str] = line.split(" ").collect();
             if parts.len() >= 2 {
                 return parts[1].clone();
             }

@@ -11,8 +11,7 @@ fn main() {
         let d = c.trim().to_string().to_uppercase();
         total = total + (d.len() as i64);
         let e = "x,y,z".to_string();
-        let parts = e.to_uppercase().split(",");
-        for p in parts { total = total + (p.len() as i64); }
+        for p in e.to_uppercase().split(",") { total = total + (p.len() as i64); }
         let r = Rec { name: "field-string-value".to_string() };
         let u = r.name.to_uppercase();
         total = total + (u.len() as i64) + (r.name.len() as i64);

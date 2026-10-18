@@ -374,7 +374,7 @@ fn main() {
         }
         revenue += p.discounted_spend();
         for note in p.fallbacks {
-            let parts = note.split(":");
+            let parts: Vec[Str] = note.split(":").collect();
             let backend = parts[0].clone();
             let current = fallback_counts.get(backend) ?? 0;
             fallback_counts.insert(backend, current + 1);

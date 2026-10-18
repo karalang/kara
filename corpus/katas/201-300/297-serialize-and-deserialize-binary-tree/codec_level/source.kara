@@ -95,7 +95,7 @@ fn deserialize_level(s: ref String) -> Option[TreeNode] {
     if s.len() == 0 {
         return None;
     }
-    let tokens = s.split(",");
+    let tokens: Vec[Str] = s.split(",").collect();
     if tokens.len() == 0 or tokens[0] == "#" {
         return None;
     }

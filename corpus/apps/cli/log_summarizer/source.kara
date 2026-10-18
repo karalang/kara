@@ -139,7 +139,7 @@ fn generate_log(spec: ref ServiceSpec) -> String {
 }
 
 fn parse_line(line: ref String) -> Result[LogEntry, ParseError] {
-    let fields = line.split("|");
+    let fields: Vec[Str] = line.split("|").collect();
     if fields.len() != 5 {
         return Err(ParseError.WrongFieldCount(fields.len()));
     }
@@ -147,7 +147,7 @@ fn parse_line(line: ref String) -> Result[LogEntry, ParseError] {
         Some(n) => n,
         None => return Err(ParseError.BadNumber(fields[0].clone())),
     };
-    let level = match Level.parse(fields[1].trim()) {
+    let level = match Level.parse(fields[1].trim().to_string()) {
         Some(l) => l,
         None => return Err(ParseError.UnknownLevel(fields[1].clone())),
     };
@@ -158,9 +158,9 @@ fn parse_line(line: ref String) -> Result[LogEntry, ParseError] {
     Ok(LogEntry {
         sequence: sequence,
         level: level,
-        component: fields[2].trim(),
+        component: fields[2].trim().to_string(),
         latency_ms: latency_ms,
-        message: fields[4].trim(),
+        message: fields[4].trim().to_string(),
     })
 }
 
@@ -179,7 +179,7 @@ fn parse_log(service: own String, text: ref String) -> ParsedLog {
             continue;
         }
         line_no = line_no + 1;
-        match parse_line(line) {
+        match parse_line(line.to_string()) {
             Ok(entry) => entries.push(entry),
             Err(e) => problems.push(f"{service}.log:{line_no}: {e}"),
         }

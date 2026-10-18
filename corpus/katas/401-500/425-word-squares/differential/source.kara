@@ -257,9 +257,9 @@ fn well_formed(lines: ref Vec[String], words: ref Vec[String]) -> bool {
         if i > 0 and lines[i - 1] >= lines[i] {
             return false;
         }
-        let rows = lines[i].split("/");
+        let rows: Vec[Str] = lines[i].split("/").collect();
         for row in rows {
-            if not words.contains(row) {
+            if not words.contains(row.to_string()) {
                 return false;
             }
         }

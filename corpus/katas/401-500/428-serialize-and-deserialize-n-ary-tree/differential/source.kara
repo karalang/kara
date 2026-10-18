@@ -59,7 +59,7 @@ fn deserialize_counts(data: Str) -> Option[Node] {
     if data.len() == 0 {
         return None;
     }
-    let words = data.split(" ");
+    let words: Vec[String] = data.split(" ").map(|p| p.to_string()).collect();
     let mut at = 0;
     Some(read_counts(words, mut at))
 }
@@ -157,7 +157,7 @@ fn deserialize_markers(data: Str) -> Option[Node] {
     if data.len() == 0 {
         return None;
     }
-    let words = data.split(" ");
+    let words: Vec[String] = data.split(" ").map(|p| p.to_string()).collect();
     let mut at = 0;
     Some(read_markers(words, mut at))
 }
@@ -217,7 +217,7 @@ fn deserialize_levels(data: Str) -> Option[Node] {
     if data.len() == 0 {
         return None;
     }
-    let words = data.split(" ");
+    let words: Vec[Str] = data.split(" ").collect();
     let mut vals: Vec[i64] = vec![i64.parse(words[0]).unwrap()];
     let mut kids: Vec[Vec[i64]] = vec![Vec.new()];
     // words[1] is the null after the root; then each node's children in

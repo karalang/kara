@@ -21,7 +21,7 @@ fn parse_tree(tokens: ref Vec[String], pos: mut ref i64) -> bool {
 }
 
 fn is_valid_serialization(preorder: ref String) -> bool {
-    let tokens = preorder.split(",");
+    let tokens: Vec[String] = preorder.split(",").map(|p| p.to_string()).collect();
     let mut pos = 0;
     return parse_tree(tokens, mut pos) and pos == tokens.len();
 }

@@ -151,17 +151,17 @@ fn parse_log(kind: own SensorKind, path: ref String, text: ref String) -> Result
         if line.is_empty() or line_no == 1 {
             continue;
         }
-        let parts = line.split(",");
+        let parts: Vec[Str] = line.split(",").collect();
         if parts.len() != 2 {
-            return Err(PipelineError.BadLine(path.to_string(), line_no, line));
+            return Err(PipelineError.BadLine(path.to_string(), line_no, line.to_string()));
         }
         let ts = match i64.parse(parts[0].trim()).ok() {
             Some(n) => n,
-            None => return Err(PipelineError.BadLine(path.to_string(), line_no, line)),
+            None => return Err(PipelineError.BadLine(path.to_string(), line_no, line.to_string())),
         };
         let value = match i64.parse(parts[1].trim()).ok() {
             Some(n) => n,
-            None => return Err(PipelineError.BadLine(path.to_string(), line_no, line)),
+            None => return Err(PipelineError.BadLine(path.to_string(), line_no, line.to_string())),
         };
         if ts <= last_ts {
             return Err(PipelineError.OutOfOrder(path.to_string(), line_no));

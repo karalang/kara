@@ -1,22 +1,22 @@
 fn main() {
             let csv = "a,b,c";
-            let parts = csv.split(',');
+            let parts: Vec[Str] = csv.split(",").collect();
             let n = parts.len();
             println(f"{n}");
             println(parts[0]);
             println(parts[2]);
 
             let path = "x::y::z";
-            let seg = path.split("::");
+            let seg: Vec[Str] = path.split("::").collect();
             let sn = seg.len();
             println(f"{sn}");
 
             let edges = ",lead,trail,";
-            let en = edges.split(',').len();
+            let en = edges.split(",").count();
             println(f"{en}");
 
             let whole = "nosep";
-            let one = whole.split(',');
+            let one: Vec[Str] = whole.split(",").collect();
             let on = one.len();
             println(f"{on}");
             println(one[0]);

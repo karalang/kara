@@ -653,6 +653,29 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A char literal where a `Str` is wanted (`s.split(',')`, whose
+    /// separator is a `Str`, B-2026-10-12-7): reported, with the same text
+    /// as a string literal for `karac fix`.
+    fn char_literal_for_str(&mut self, expr: &Expr, expected: &Type) -> bool {
+        let (ExprKind::CharLit(c), Type::Named { name, args }) = (&expr.kind, expected) else {
+            return false;
+        };
+        if name != "StringSlice" || !args.is_empty() || !self.library_methods_from_source {
+            return false;
+        }
+        let lit = format!("{:?}", c.to_string());
+        self.type_error_with_fix_it(
+            format!("expected 'Str', found 'char': write it as the string literal {lit}"),
+            expr.span,
+            TypeErrorKind::TypeMismatch,
+            FixIt {
+                span: expr.span,
+                replacement: lit,
+            },
+        );
+        true
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         self.note_view_lent_into_ref(expr, expected, false);
         if let Some(ty) = self.lend_borrowed_receiver(expr, expected) {
@@ -660,6 +683,9 @@ impl<'a> super::TypeChecker<'a> {
         }
         if let Some(ty) = self.d5_give_away(expr, expected) {
             return ty;
+        }
+        if self.char_literal_for_str(expr, expected) {
+            return expected.clone();
         }
         let mut ty = self.check_expr_inner(expr, expected);
         // A value stored into a `weak` slot keeps its own type in typed HIR.
@@ -2892,7 +2918,9 @@ impl<'a> super::TypeChecker<'a> {
                 // design.md § Strings: at a call boundary a `String` passes
                 // as a `Str` parameter, borrowed. Elsewhere `as_str()` is
                 // written, so the coercion lives here, not in assignability.
-                let arg_ty = if is_str_view(param_ty) {
+                let arg_ty = if self.char_literal_for_str(&arg.value, param_ty) {
+                    param_ty.clone()
+                } else if is_str_view(param_ty) {
                     let t = self.infer_expr(&arg.value);
                     if !is_string_place_type(&t) {
                         self.check_assignable(param_ty, &t, arg.value.span);
@@ -6717,6 +6745,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.frozen_param_use_spans
                         .insert(SpanKey::from_span(&expr.span));
                 }
+                if self.iter_lets.contains_key(name.as_str()) {
+                    self.iter_let_uses
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                }
                 let ty = self.resolve_identifier_type(name, &expr.span);
                 // B-2026-08-19-17 (b) — a bare variant name that two or more
                 // USER enums declare is rejected rather than silently resolved
@@ -7638,7 +7670,20 @@ impl<'a> super::TypeChecker<'a> {
                     // own arm above so an upstream failure does not cascade
                     // into a second diagnostic.
                     other => {
-                        if !contains_type_var(other) {
+                        let iter_let = self.iter_let_of(object, other);
+                        let reported = iter_let.is_some_and(|name| {
+                            self.report_iter_let_use(
+                                &name,
+                                None,
+                                format!(
+                                    "'{}' does not support indexing with []",
+                                    type_display(other)
+                                ),
+                                expr.span,
+                                TypeErrorKind::TypeNotIndexable,
+                            )
+                        });
+                        if !reported && !contains_type_var(other) {
                             self.type_error(
                                 format!(
                                     "'{}' does not support indexing with []\n  \

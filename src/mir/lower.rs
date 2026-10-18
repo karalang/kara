@@ -15909,7 +15909,9 @@ fn main() {
     let sl = v.as_slice();
     let w = sl.to_vec();
     println(f"{w} {v.binary_search(1)} {v.binary_search(3)}");
-    println(f"{"cab".sorted()} {"  x ".trim_start()} {"ab-c".strip_prefix("ab")} {"a b  c".split_whitespace()} {"aaa".replacen("a", "b", 2)} {"x\ny".lines()} {"héllo".char_count()}");
+    let ws: Vec[Str] = "a b  c".split_whitespace().collect();
+    let ls: Vec[Str] = "x\ny".lines().collect();
+    println(f"{"cab".sorted()} {"  x ".trim_start()} {"ab-c".strip_prefix("ab")} {ws} {"aaa".replacen("a", "b", 2)} {ls} {"héllo".char_count()}");
     let mut a: Set[i64] = Set.new(); a.insert(1); a.insert(2); a.insert(3);
     let mut b: Set[i64] = Set.new(); b.insert(2); b.insert(3); b.insert(4);
     let mut u: Vec[i64] = Vec.new();

@@ -44,7 +44,7 @@ fn step(seed: mut ref i64) -> i64 {
 fn main() {
     let blocks = 20000;
     let calls = 100000;
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[Str] = "zero one two three four five six seven eight nine".split_whitespace().collect();
     let mut seed: i64 = 423;
     // One text of 20,000 blocks, each the words of 1 to 8 random digits
     // with its letters shuffled; ends[b] is where block b ends.

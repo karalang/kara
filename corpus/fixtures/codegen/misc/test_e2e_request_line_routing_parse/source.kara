@@ -1,6 +1,6 @@
 
 fn classify(line: String) -> i64 {
-    let parts = line.split(' ');
+    let parts: Vec[Str] = line.split(" ").collect();
     if parts.len() >= 2 {
         let path = parts[1].clone();
         if path.starts_with("/api") { return 1; }

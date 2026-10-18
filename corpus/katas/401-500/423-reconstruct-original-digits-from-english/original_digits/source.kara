@@ -58,7 +58,7 @@ fn main() {
     show("rofuhteonree");
     // 2,000 random strings: 1 to 30 digits from 0 to 9, their English
     // words concatenated and then shuffled.
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[Str] = "zero one two three four five six seven eight nine".split_whitespace().collect();
     let mut seed: i64 = 423;
     let mut letters = 0;
     let mut checksum: i64 = 0;

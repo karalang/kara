@@ -120,11 +120,11 @@ fn parse_discount(line: i64, s: ref String) -> Result[Discount, PipelineError] {
     if s == "none" {
         return Ok(Discount.NoDiscount);
     }
-    let parts = s.split(":");
+    let parts: Vec[Str] = s.split(":").collect();
     if parts.len() != 2 {
         return Err(PipelineError.BadRecord(line, "discount"));
     }
-    let amount = parse_int(line, parts[1])?;
+    let amount = parse_int(line, parts[1].to_string())?;
     if parts[0] == "pct" {
         Ok(Discount.Percent(amount))
     } else if parts[0] == "bogo" {
@@ -274,7 +274,7 @@ fn parse_orders(text: String, rejects: mut ref Vec[String]) -> Vec[Order] {
         if line.is_empty() or line.starts_with("#") {
             continue;
         }
-        match parse_record(line_no, line, mut orders) {
+        match parse_record(line_no, line.to_string(), mut orders) {
             Ok(()) => {}
             Err(e) => rejects.push(e.to_string()),
         }
@@ -283,13 +283,13 @@ fn parse_orders(text: String, rejects: mut ref Vec[String]) -> Vec[Order] {
 }
 
 fn parse_record(line_no: i64, line: String, orders: mut ref Vec[Order]) -> Result[(), PipelineError] {
-    let f = line.split("|");
+    let f: Vec[Str] = line.split("|").collect();
     if f[0] == "ORDER" {
         if f.len() != 5 {
             return Err(PipelineError.BadRecord(line_no, "ORDER"));
         }
-        let region = parse_region(line_no, f[3])?;
-        let currency = parse_currency(line_no, f[4])?;
+        let region = parse_region(line_no, f[3].to_string())?;
+        let currency = parse_currency(line_no, f[4].to_string())?;
         orders.push(Order { id: f[1].clone(), customer: f[2].clone(), region, currency, items: Vec.new() });
         return Ok(());
     }
@@ -302,10 +302,10 @@ fn parse_record(line_no: i64, line: String, orders: mut ref Vec[Order]) -> Resul
     let item = LineItem {
         sku: f[1].clone(),
         description: f[2].clone(),
-        category: parse_category(line_no, f[3])?,
-        unit_price: parse_int(line_no, f[4])?,
-        quantity: parse_int(line_no, f[5])?,
-        discount: parse_discount(line_no, f[6])?,
+        category: parse_category(line_no, f[3].to_string())?,
+        unit_price: parse_int(line_no, f[4].to_string())?,
+        quantity: parse_int(line_no, f[5].to_string())?,
+        discount: parse_discount(line_no, f[6].to_string())?,
     };
     let last = orders.len() - 1;
     orders[last].items.push(item);
@@ -389,8 +389,8 @@ fn main() -> Result[(), IoError] {
     }
     println("Tax collected by currency/region:");
     for (key, tax) in tax_by_region {
-        let parts = key.split("|");
-        let cur = parse_currency(0, parts[0]).unwrap();
+        let parts: Vec[Str] = key.split("|").collect();
+        let cur = parse_currency(0, parts[0].to_string()).unwrap();
         println(f"  {pad_right(key.clone(), 12)}{pad_left(format_money(tax, cur), 16)}");
     }
     println(f"Rejected records: {rejects.len()}");

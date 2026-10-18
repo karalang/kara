@@ -85,9 +85,9 @@ fn clen_for(headers: ref String, needle: String) -> i64 {
     match headers.find(needle) {
         Some(pos) => {
             let rest = headers.substring(pos + mlen, headers.len());
-            let lines = rest.split("\r\n");
+            let lines: Vec[Str] = rest.split("\r\n").collect();
             if lines.len() < 1 { return -1; }
-            let toks = lines[0].split(' ');
+            let toks: Vec[Str] = lines[0].split(" ").collect();
             let mut i: i64 = 0;
             while i < toks.len() {
                 match i64.parse(toks[i]).ok() {

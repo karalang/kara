@@ -231,7 +231,7 @@ fn pad_left(s: own String, width: i64) -> String {
 fn parse_fixed(text: ref String) -> Option[i64] {
     let negative = text.starts_with("-");
     let body = if negative { text.substring(1) } else { text.clone() };
-    let parts = body.split(".");
+    let parts: Vec[Str] = body.split(".").collect();
     if parts.len() != 2 or parts[1].len() != 2 {
         return None;
     }
@@ -242,7 +242,7 @@ fn parse_fixed(text: ref String) -> Option[i64] {
 }
 
 fn parse_line(line_no: i64, line: ref String) -> Result[Event, ParseError] {
-    let fields = line.split(",");
+    let fields: Vec[Str] = line.split(",").collect();
     if fields.len() != 3 {
         return Err(ParseError.FieldCount(line_no));
     }
@@ -250,7 +250,7 @@ fn parse_line(line_no: i64, line: ref String) -> Result[Event, ParseError] {
         Some(t) => t,
         None => return Err(ParseError.BadTimestamp(line_no, fields[0].clone())),
     };
-    let value = match parse_fixed(fields[2]) {
+    let value = match parse_fixed(fields[2].to_string()) {
         Some(v) => v,
         None => return Err(ParseError.BadValue(line_no, fields[2].clone())),
     };
@@ -290,13 +290,13 @@ fn synthesize(sensor: String, seed: i64, base: i64, count: i64) -> String {
 fn load_stream(name: String, content: String) -> Vec[Event] {
     let mut events: Vec[Event] = Vec.new();
     let mut errors = 0;
-    let lines = content.split("\n");
+    let lines: Vec[Str] = content.split("\n").collect();
     for i in 1..lines.len() {
         let line = lines[i].trim();
         if line.is_empty() {
             continue;
         }
-        match parse_line(i, line) {
+        match parse_line(i, line.to_string()) {
             Ok(ev) => events.push(ev),
             Err(e) => {
                 errors += 1;

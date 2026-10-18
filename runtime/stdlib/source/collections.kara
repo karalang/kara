@@ -571,6 +571,202 @@ impl StringSlice {
     fn chars(self) -> StrViewChars {
         StrViewChars { s: self, pos: 0, back: self.len() }
     }
+
+    /// The pieces between the occurrences of `sep`, front to back, each a
+    /// view into the text (docs/library/strings.md, B-2026-10-12-7). Text
+    /// with no `sep` is one piece; an empty `sep` matches at both ends and
+    /// between every pair of chars.
+    fn split(self, sep: Str) -> StrSplit {
+        let pos = if sep.is_empty() { -1 } else { 0 };
+        StrSplit { s: self, sep: sep, pos: pos, done: false }
+    }
+
+    /// The lines, each a view without its `\n` or `\r\n`; a final line
+    /// end starts no empty line.
+    fn lines(self) -> StrLines {
+        StrLines { s: self, pos: 0 }
+    }
+
+    /// The runs of non-whitespace chars, each a view into the text.
+    fn split_whitespace(self) -> StrWords {
+        StrWords { s: self, pos: 0 }
+    }
+
+    /// The text without leading and trailing whitespace, a view into it.
+    fn trim(self) -> Str {
+        self.trim_start().trim_end()
+    }
+
+    /// The text without leading whitespace, a view into it.
+    fn trim_start(self) -> Str {
+        let n = self.len();
+        let mut at = 0;
+        while at < n {
+            let c = self.char_at_byte(at);
+            if not c.is_whitespace() {
+                break;
+            }
+            at = at + c.len_utf8();
+        }
+        self.slice(at, n)
+    }
+
+    /// The text without trailing whitespace, a view into it.
+    fn trim_end(self) -> Str {
+        let mut end = self.len();
+        while end > 0 {
+            let c = self.char_before_byte(end);
+            if not c.is_whitespace() {
+                break;
+            }
+            end = end - c.len_utf8();
+        }
+        self.slice(0, end)
+    }
+}
+
+impl String {
+    /// `split` of the text as a `Str`: each piece is a view into `self`.
+    fn split(ref self, sep: Str) -> StrSplit {
+        self.as_str().split(sep)
+    }
+
+    /// `lines` of the text as a `Str`: each line is a view into `self`.
+    fn lines(ref self) -> StrLines {
+        self.as_str().lines()
+    }
+
+    /// `split_whitespace` of the text as a `Str`.
+    fn split_whitespace(ref self) -> StrWords {
+        self.as_str().split_whitespace()
+    }
+
+    /// `trim` of the text as a `Str`: a view into `self`.
+    fn trim(ref self) -> Str {
+        self.as_str().trim()
+    }
+
+    /// `trim_start` of the text as a `Str`: a view into `self`.
+    fn trim_start(ref self) -> Str {
+        self.as_str().trim_start()
+    }
+
+    /// `trim_end` of the text as a `Str`: a view into `self`.
+    fn trim_end(ref self) -> Str {
+        self.as_str().trim_end()
+    }
+}
+
+/// The pieces of a `Str` between the occurrences of a separator: `split`.
+/// `pos` is the byte the next piece starts at; with an empty separator it
+/// starts at -1, for the empty piece before the first char.
+struct StrSplit {
+    s: Str,
+    sep: Str,
+    pos: i64,
+    done: bool,
+}
+
+impl Iterator for StrSplit {
+    type Item = Str;
+
+    fn next(mut ref self) -> Option[Str] {
+        if self.done {
+            return None;
+        }
+        let n = self.s.len();
+        if self.sep.is_empty() {
+            if self.pos < 0 {
+                self.pos = 0;
+                return Some(self.s.slice(0, 0));
+            }
+            if self.pos >= n {
+                self.done = true;
+                return Some(self.s.slice(n, n));
+            }
+            let at = self.pos;
+            self.pos = at + self.s.char_at_byte(at).len_utf8();
+            return Some(self.s.slice(at, self.pos));
+        }
+        let at = self.pos;
+        match self.s.find_at_byte(self.sep, at) {
+            Some(i) => {
+                self.pos = i + self.sep.len();
+                Some(self.s.slice(at, i))
+            }
+            None => {
+                self.done = true;
+                Some(self.s.slice(at, n))
+            }
+        }
+    }
+}
+
+/// The lines of a `Str`: `lines`. `pos` is the byte the next line starts at.
+struct StrLines {
+    s: Str,
+    pos: i64,
+}
+
+impl Iterator for StrLines {
+    type Item = Str;
+
+    fn next(mut ref self) -> Option[Str] {
+        let n = self.s.len();
+        if self.pos >= n {
+            return None;
+        }
+        let at = self.pos;
+        match self.s.find_at_byte("\n", at) {
+            Some(i) => {
+                self.pos = i + 1;
+                // A `\r\n` ends the line too; a lone `\r` is text.
+                let mut end = i;
+                if end > at and self.s.char_before_byte(end) == '\r' {
+                    end = end - 1;
+                }
+                Some(self.s.slice(at, end))
+            }
+            None => {
+                self.pos = n;
+                Some(self.s.slice(at, n))
+            }
+        }
+    }
+}
+
+/// The runs of non-whitespace chars of a `Str`: `split_whitespace`. `pos`
+/// is the byte the search for the next run starts at.
+struct StrWords {
+    s: Str,
+    pos: i64,
+}
+
+impl Iterator for StrWords {
+    type Item = Str;
+
+    fn next(mut ref self) -> Option[Str] {
+        let n = self.s.len();
+        while self.pos < n {
+            let c = self.s.char_at_byte(self.pos);
+            if not c.is_whitespace() {
+                break;
+            }
+            self.pos = self.pos + c.len_utf8();
+        }
+        if self.pos >= n {
+            return None;
+        }
+        let at = self.pos;
+        while self.pos < n {
+            let c = self.s.char_at_byte(self.pos);
+            if c.is_whitespace() {
+                break;
+            }
+            self.pos = self.pos + c.len_utf8();
+        }
+        Some(self.s.slice(at, self.pos))
+    }
 }
 
 impl[T] FromIterator[T] for Vec[T] {

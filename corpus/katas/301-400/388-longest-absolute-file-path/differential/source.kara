@@ -231,7 +231,7 @@ fn main() {
     for _ in 0..2000 {
         let entries = step(mut seed) % 30 + 1;
         let built = listing(mut seed, entries);
-        let lines = built.text.split("\n");
+        let lines: Vec[Str] = built.text.split("\n").collect();
         let mut rooted = String.from("root");
         let mut no_files = String.new();
         for line in lines.iter() {

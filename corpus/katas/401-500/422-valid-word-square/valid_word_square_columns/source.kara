@@ -32,7 +32,7 @@ fn step(seed: mut ref i64) -> i64 {
 }
 
 fn show(text: Str) {
-    let words = text.split_whitespace();
+    let words: Vec[String] = text.split_whitespace().map(|p| p.to_string()).collect();
     println(f"\"{text}\": {valid_word_square(words)}");
 }
 

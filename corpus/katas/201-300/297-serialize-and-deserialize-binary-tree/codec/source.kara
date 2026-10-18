@@ -105,7 +105,7 @@ fn deserialize(s: ref String) -> Option[TreeNode] {
     if s.len() == 0 {
         return None;
     }
-    let tokens = s.split(",");
+    let tokens: Vec[String] = s.split(",").map(|p| p.to_string()).collect();
     let mut i = 0;
     return de_at(tokens, mut i);
 }

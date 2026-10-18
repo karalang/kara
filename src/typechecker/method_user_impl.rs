@@ -22,7 +22,7 @@ use crate::token::Span;
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::substitute_type_params;
 use super::types::{method_callee_type_name, type_display, IntSize, SubstValue, Type};
-use super::TypeErrorKind;
+use super::{FixIt, TypeErrorKind};
 use crate::typechecker::type_to_concrete_or_param_name;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
@@ -121,6 +121,16 @@ impl<'a> super::TypeChecker<'a> {
             {
                 ("String".to_string(), 1, Type::Char)
             }
+            // `find_at_byte(needle, from)`: the first `needle` at or after
+            // byte `from`, the step of the library's splitters.
+            (Type::Str, "find_at_byte") => {
+                return self.library_find_at_byte(args, span);
+            }
+            (Type::Named { name, args: targs }, "find_at_byte")
+                if name == "StringSlice" && targs.is_empty() =>
+            {
+                return self.library_find_at_byte(args, span);
+            }
             (Type::Char, "len_utf8") => ("char".to_string(), 0, Type::Int(IntSize::I64)),
             _ => return None,
         };
@@ -136,6 +146,35 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.record_method_callee(SpanKey::from_span(span), format!("{owner}.{method}"));
         Some(ret)
+    }
+
+    /// `s.find_at_byte(needle, from) -> Option[i64]`, a native of the MIR
+    /// backends typed on the library pipeline only.
+    fn library_find_at_byte(&mut self, args: &[CallArg], span: &Span) -> Option<Type> {
+        if args.len() != 2 {
+            self.type_error(
+                "'find_at_byte' takes 2 argument(s)".to_string(),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+        }
+        let str_view = Type::Named {
+            name: "StringSlice".to_string(),
+            args: Vec::new(),
+        };
+        for (i, arg) in args.iter().enumerate() {
+            let want = if i == 0 {
+                str_view.clone()
+            } else {
+                Type::Int(IntSize::I64)
+            };
+            self.check_expr(&arg.value, &want);
+        }
+        self.record_method_callee(SpanKey::from_span(span), "String.find_at_byte".to_string());
+        Some(Type::Named {
+            name: "Option".to_string(),
+            args: vec![Type::Int(IntSize::I64)],
+        })
     }
 
     fn array_user_impl_declares(&self, method: &str) -> bool {
@@ -1282,6 +1321,55 @@ impl<'a> super::TypeChecker<'a> {
                     || is_baked_stdlib_type)
                     && !self.type_has_comptime_derive(&type_name)
                 {
+                    // A `Vec` method on a name bound to a library iterator
+                    // (`let parts = s.split(","); parts.len()`): collect it
+                    // where it is bound (B-2026-10-12-7).
+                    if VEC_ONLY_METHODS.contains(&method) {
+                        if let Some(name) = self.iter_let_of(object, receiver_for_lookup) {
+                            let msg = format!("no method '{method}' on type '{type_name}'");
+                            if self.report_iter_let_use(
+                                &name,
+                                None,
+                                msg,
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                            ) {
+                                for arg in args {
+                                    self.infer_expr(&arg.value);
+                                }
+                                return Type::Error;
+                            }
+                        }
+                    }
+                    // `len()` on an iterator that is not a bound name
+                    // (`s.split(",").len()`): `count()` walks it.
+                    if method == "len"
+                        && args.is_empty()
+                        && self.library_iter_item_type(receiver_for_lookup).is_some()
+                    {
+                        let from = object.span.offset + object.span.length;
+                        let to = span.offset + span.length;
+                        if to > from {
+                            self.type_error_with_fix_it(
+                                format!(
+                                    "no method 'len' on type '{type_name}', an iterator: \
+                                     `count()` walks it and counts the items"
+                                ),
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                                FixIt {
+                                    span: Span {
+                                        line: object.span.line,
+                                        column: object.span.column,
+                                        offset: from,
+                                        length: to - from,
+                                    },
+                                    replacement: ".count()".to_string(),
+                                },
+                            );
+                            return Type::Error;
+                        }
+                    }
                     let mut msg = format!("no method '{}' on type '{}'", method, type_name);
                     // Iterator adaptors/terminals (`map`/`filter`/`collect`/…)
                     // are not methods on a `Vec`/`VecDeque` directly — they live
@@ -1318,3 +1406,10 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 }
+
+/// `Vec` methods an iterator lacks: one of them called on a name bound to a
+/// library iterator means a `Vec` was wanted.
+const VEC_ONLY_METHODS: &[&str] = &[
+    "len", "is_empty", "iter", "get", "first", "last", "pop", "push", "join", "sort", "reverse",
+    "contains", "swap", "truncate", "remove", "insert", "concat",
+];

@@ -45,7 +45,7 @@ fn deserialize(data: Str) -> Option[Node] {
     if data.len() == 0 {
         return None;
     }
-    let words = data.split(" ");
+    let words: Vec[String] = data.split(" ").map(|p| p.to_string()).collect();
     let mut at = 0;
     Some(read(words, mut at))
 }

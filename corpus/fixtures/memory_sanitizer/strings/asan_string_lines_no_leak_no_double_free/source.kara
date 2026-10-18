@@ -4,7 +4,7 @@ fn main() {
     let mut total: i64 = 0;
     while i < 1000 {
         let text = "first-line-payload-aaaaaaaaaaaaaaaa\r\n\r\nthird-line-payload-bbbbbbbbbbbbbbbb\n";
-        let ls = text.lines();
+        let ls: Vec[Str] = text.lines().collect();
         total = total + ls.len();
         for l in ls { total = total + l.len(); }
         i = i + 1;

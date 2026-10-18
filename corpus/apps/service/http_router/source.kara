@@ -148,11 +148,11 @@ fn parse_form(body: ref String) -> Result[Map[String, String], ApiError] {
     let mut fields: Map[String, String] = Map.new();
     if body.trim().is_empty() { return Ok(fields); }
     for pair in body.split("&") {
-        let kv = pair.split("=");
+        let kv: Vec[Str] = pair.split("=").collect();
         if kv.len() != 2 or kv[0].trim().is_empty() {
             return Err(ApiError.BadRequest(f"malformed field '{pair}'"));
         }
-        fields.insert(kv[0].trim(), kv[1].trim());
+        fields.insert(kv[0].trim().to_string(), kv[1].trim().to_string());
     }
     Ok(fields)
 }

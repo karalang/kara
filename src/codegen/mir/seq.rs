@@ -382,6 +382,41 @@ impl<'ctx> Cx<'ctx, '_> {
                 // The runtime sets the message: the bounds, or the cut char.
                 self.abort_on(r, "index out of bounds")?;
             }
+            // A splitter's step (runtime/stdlib/source/collections.kara):
+            // the first `needle` at or after byte `from`, as an offset into
+            // the whole text. The library passes `from <= len`.
+            ("find_at_byte", [s, needle, from]) => {
+                let (sp, sn) = self.str_parts(s)?;
+                let (np, nn) = self.str_parts(needle)?;
+                let from = self.int_arg(from)?;
+                // SAFETY: `from` is within the text, so the pointer stays
+                // inside it or one past its end.
+                let p = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(self.llcx.i8_type(), sp, &[from], "")
+                        .map_err(e)?
+                };
+                let n = self.builder.build_int_sub(sn, from, "").map_err(e)?;
+                let at = self.rt_int(
+                    "str_find",
+                    &[
+                        p.into(),
+                        n.into(),
+                        np.into(),
+                        nn.into(),
+                        self.i64(u64::MAX).into(),
+                    ],
+                    64,
+                )?;
+                let found = self.non_negative(at)?;
+                let shifted = self.builder.build_int_add(at, from, "").map_err(e)?;
+                let at = self
+                    .builder
+                    .build_select(found, shifted, at, "")
+                    .map_err(e)?
+                    .into_int_value();
+                self.store_opt_int(dest, at)?;
+            }
             ("char_at_byte", [s, i]) => {
                 let (p, n) = self.str_parts(s)?;
                 let i = self.int_arg(i)?;

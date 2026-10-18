@@ -42,7 +42,7 @@ fn search(d: i64, letters: mut ref Vec[i64], need: ref Vec[Vec[i64]], last: ref 
 }
 
 fn original_digits(s: Str) -> String {
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[Str] = "zero one two three four five six seven eight nine".split_whitespace().collect();
     let mut need: Vec[Vec[i64]] = Vec.new();
     // last[c]: the largest digit whose word has letter c, or -1.
     let mut last = vec![-1; 26];
@@ -93,7 +93,7 @@ fn main() {
     show("rofuhteonree");
     // 2,000 random strings: 1 to 30 digits from 0 to 9, their English
     // words concatenated and then shuffled.
-    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let names: Vec[Str] = "zero one two three four five six seven eight nine".split_whitespace().collect();
     let mut seed: i64 = 423;
     let mut letters = 0;
     let mut checksum: i64 = 0;

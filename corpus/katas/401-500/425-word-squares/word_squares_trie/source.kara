@@ -74,7 +74,7 @@ fn lines(squares: ref Vec[Vec[String]]) -> Vec[String] {
 }
 
 fn show(text: Str) {
-    let words = text.split_whitespace();
+    let words: Vec[String] = text.split_whitespace().map(|p| p.to_string()).collect();
     let found = lines(word_squares(words));
     println(f"\"{text}\": {found.len()} [{found.join(", ")}]");
 }

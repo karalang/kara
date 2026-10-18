@@ -5677,3 +5677,147 @@ fn number_parse_returns_a_result_with_a_parse_error() {
         "i64.parse(\"3\").ok()",
     );
 }
+
+#[test]
+fn splitters_are_lazy_iterators_of_str_views() {
+    // B-2026-10-12-7: docs/library/strings.md gives `split`, `lines` and
+    // `split_whitespace` as lazy iterators of `Str` views, with Rust's
+    // pieces: empty pieces kept by `split`, `\r\n` ends by `lines`.
+    let src = "fn show(label: Str, parts: Vec[Str]) {\n\
+         \x20   let mut out = String.new();\n\
+         \x20   for p in parts {\n\
+         \x20       out.push_str(\"[\");\n\
+         \x20       out.push_str(p);\n\
+         \x20       out.push_str(\"]\");\n\
+         \x20   }\n\
+         \x20   println(f\"{label}: {out}\");\n\
+         }\n\
+         fn main() {\n\
+         \x20   let line = \"a,b,,c\".to_string();\n\
+         \x20   show(\"comma\", line.split(\",\").collect());\n\
+         \x20   show(\"empty\", \"\".split(\",\").collect());\n\
+         \x20   show(\"edges\", \",a,\".split(\",\").collect());\n\
+         \x20   show(\"multi\", \"a::b::::c\".split(\"::\").collect());\n\
+         \x20   show(\"emptysep\", \"h\u{e9}y\".split(\"\").collect());\n\
+         \x20   show(\"lines\", \"one\\ntwo\\r\\nthree\\n\".lines().collect());\n\
+         \x20   show(\"ws\", \"  the  quick\\tbrown\\n fox \".split_whitespace().collect());\n\
+         \x20   let n = line.split(\",\").count();\n\
+         \x20   let owned: Vec[String] = line.split(\",\").map(|p| p.to_string()).collect();\n\
+         \x20   let total: i64 = \"1 2 3 40\".split_whitespace().map(|w| i64.parse(w).unwrap()).sum();\n\
+         \x20   println(f\"{n} {owned[3]} {total}\");\n\
+         \x20   for kv in \"x=1;y=2\".split(\";\") {\n\
+         \x20       let parts: Vec[Str] = kv.split(\"=\").collect();\n\
+         \x20       match parts[0] {\n\
+         \x20           \"x\" => println(f\"x is {parts[1]}\"),\n\
+         \x20           other => println(f\"{other} -> {parts[1]}\"),\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n";
+    let (dir, path) = fixture("splitters", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = "comma: [a][b][][c]\n\
+                empty: []\n\
+                edges: [][a][]\n\
+                multi: [a][b][][c]\n\
+                emptysep: [][h][\u{e9}][y][]\n\
+                lines: [one][two][three]\n\
+                ws: [the][quick][brown][fox]\n\
+                4 c 46\n\
+                x is 1\n\
+                y -> 2\n";
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    // The `Vec` spellings written before are collected where they are bound.
+    rejected_then_fixed_by(
+        "split-bound-then-indexed",
+        "fn main() {\n\
+             let parts = \"a b\".split(\" \");\n\
+             println(f\"{parts.len()} {parts[1]}\");\n\
+         }\n",
+        "`parts` is an iterator",
+        "let parts: Vec[Str] = \"a b\".split(\" \").collect();",
+    );
+    rejected_then_fixed_by(
+        "split-bound-then-lent-as-strings",
+        "fn first(v: ref Vec[String]) -> String { v[0].clone() }\n\
+         fn main() {\n\
+             let parts = \"a b\".split(\" \");\n\
+             println(f\"{parts.len()} {first(parts)}\");\n\
+         }\n",
+        "`parts` is used as a `Vec[String]`",
+        "let parts: Vec[String] = \"a b\".split(\" \").map(|p| p.to_string()).collect();",
+    );
+    rejected_then_fixed_by(
+        "split-returned-as-strings",
+        "fn words(s: Str) -> Vec[String] {\n\
+             s.split(\" \")\n\
+         }\n\
+         fn main() { println(f\"{words(\"a b\").len()}\"); }\n",
+        "an iterator: collect its items",
+        "s.split(\" \").map(|p| p.to_string()).collect()",
+    );
+    rejected_then_fixed_by(
+        "split-len",
+        "fn main() { println(f\"{\"a,b\".split(\",\").len()}\"); }\n",
+        "`count()` walks it",
+        "\"a,b\".split(\",\").count()",
+    );
+    rejected_then_fixed_by(
+        "split-char-separator",
+        "fn main() {\n\
+             let n = \"a,b\".split(',').count();\n\
+             println(f\"{n}\");\n\
+         }\n",
+        "write it as the string literal",
+        "split(\",\")",
+    );
+    // `trim` is a view too, so a split of it borrows the text, not a copy.
+    accepted(
+        "split-of-trim",
+        "fn main() {\n\
+             let line = \"  a b  \".to_string();\n\
+             let parts: Vec[Str] = line.trim().split(\" \").collect();\n\
+             println(f\"{parts.len()} [{line.trim_start()}] [{line.trim_end()}]\");\n\
+         }\n",
+    );
+    // A splitter over a temporary would read freed text once the `let`
+    // ends (core-semantics §5.5), so check refuses it.
+    rejected(
+        "split-of-a-temporary",
+        "fn main() {\n\
+             let e = \"x,y\".to_string();\n\
+             let parts = e.to_uppercase().split(\",\");\n\
+             for p in parts { println(p); }\n\
+         }\n",
+        "a reference to a temporary outlives its statement",
+    );
+    rejected_then_fixed_by(
+        "split-piece-to-string-param",
+        "fn shout(s: String) -> String { s.to_uppercase() }\n\
+         fn main() {\n\
+             for w in \"a b\".split(\" \") {\n\
+                 println(shout(w));\n\
+             }\n\
+         }\n",
+        "`.to_string()` copies the text",
+        "shout(w.to_string())",
+    );
+}

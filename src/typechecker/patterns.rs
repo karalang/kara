@@ -2266,7 +2266,8 @@ impl<'a> super::TypeChecker<'a> {
             LiteralPattern::String(_) => {
                 // A string literal is a `Str` where a `Str` is expected
                 // (design.md § String literals), patterns included: `match
-                // s.as_str() { "Year" => .. }` (B-2026-10-14-43).
+                // s.as_str() { "Year" => .. }` (B-2026-10-14-43) and a `match` on a
+                // piece of `split` (B-2026-10-12-7).
                 if matches!(expected, Type::Str) || super::exprs::is_str_view(expected) {
                     return;
                 }

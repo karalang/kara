@@ -1199,6 +1199,22 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Char(c))
             }
+            // A splitter's step (runtime/stdlib/source/collections.kara):
+            // the byte offset of the first `needle` at or after byte
+            // `from`, without copying the text that follows.
+            ("String", "find_at_byte") => {
+                let [recv, needle, Value::Int(from)] = args.as_slice() else {
+                    return err(format!("{name} takes a receiver, a needle and an index"));
+                };
+                let from = *from;
+                let needle = self.str_ref(needle)?.to_string();
+                let s = self.str_ref(recv)?;
+                let at = usize::try_from(from)
+                    .ok()
+                    .and_then(|f| s.get(f..).and_then(|t| t.find(&needle)).map(|i| i + f))
+                    .map(|b| Value::Int(b as i128));
+                self.option(ret, at)
+            }
             // The back step of the same cursor: the char ending at byte `i`.
             ("String", "char_before_byte") => {
                 let [recv, Value::Int(i)] = args.as_slice() else {

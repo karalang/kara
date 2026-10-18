@@ -88,11 +88,11 @@ fn parse_number(text: ref String) -> Result[i64, SetupError] {
 }
 
 fn parse_order(line: ref String) -> Result[SpawnOrder, SetupError] {
-    let parts = line.split(" ");
+    let parts: Vec[Str] = line.split(" ").collect();
     if parts.len() != 5 {
         return Err(SetupError.BadLine(line.clone()));
     }
-    let tick = parse_number(parts[0])?;
+    let tick = parse_number(parts[0].to_string())?;
     let team = match parts[1] {
         "red" => Team.Red,
         "blue" => Team.Blue,
@@ -102,8 +102,8 @@ fn parse_order(line: ref String) -> Result[SpawnOrder, SetupError] {
     if template(kind).is_none() {
         return Err(SetupError.UnknownKind(kind));
     }
-    let x = parse_number(parts[3])?;
-    let y = parse_number(parts[4])?;
+    let x = parse_number(parts[3].to_string())?;
+    let y = parse_number(parts[4].to_string())?;
     Ok(SpawnOrder { tick, team, kind, pos: Pos { x, y } })
 }
 
@@ -357,7 +357,7 @@ fn roster() -> Vec[String] {
     let spec = "0 red knight 0 0;0 red archer 1 4;0 red tower 2 2;0 blue raider 12 1;"
         + "0 blue brute 10 6;0 blue scout 8 3;0 blue beacon 14 8;3 red squire 0 5;"
         + "4 blue raider 15 2;6 green knight 1 1;7 red dragon 3 3;x red knight 1 1;8 blue scout";
-    spec.split(";")
+    spec.split(";").map(|p| p.to_string()).collect()
 }
 
 fn main() {

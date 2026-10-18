@@ -248,7 +248,7 @@ fn arg(words: ref Vec[String], i: i64, line: i64) -> Result[String, ScriptError]
 }
 
 fn parse_line(line: i64, text: String) -> Result[Command, ScriptError] {
-    let words = text.split(" ");
+    let words: Vec[String] = text.split(" ").map(|p| p.to_string()).collect();
     let cmd = words[0].clone();
     if cmd == "get" {
         Ok(Command.Get(arg(words, 1, line)?))
@@ -279,7 +279,7 @@ fn parse_script(source: String) -> (Vec[Command], Vec[ScriptError]) {
         if text.is_empty() or text.starts_with("#") {
             continue;
         }
-        match parse_line(line_no, text) {
+        match parse_line(line_no, text.to_string()) {
             Ok(c) => commands.push(c),
             Err(e) => errors.push(e),
         }

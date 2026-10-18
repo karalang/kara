@@ -77,7 +77,7 @@ fn normalize_name(raw: ref String) -> String {
         if not out.is_empty() {
             out.push_str(" ");
         }
-        out.push_str(title_case(word));
+        out.push_str(title_case(word.to_string()));
     }
     out
 }
@@ -91,36 +91,36 @@ fn canonical_domain(domain: ref String) -> String {
 
 fn normalize_email(raw: ref String) -> Result[String, RowError] {
     let cleaned = raw.trim().to_lowercase();
-    let parts = cleaned.split("@");
+    let parts: Vec[Str] = cleaned.split("@").collect();
     if parts.len() != 2 {
-        return Err(RowError.BadEmail(raw.trim()));
+        return Err(RowError.BadEmail(raw.trim().to_string()));
     }
-    let domain = canonical_domain(parts[1]);
+    let domain = canonical_domain(parts[1].to_string());
     if not domain.contains(".") {
-        return Err(RowError.BadEmail(raw.trim()));
+        return Err(RowError.BadEmail(raw.trim().to_string()));
     }
-    let tagged = parts[0].split("+");
+    let tagged: Vec[Str] = parts[0].split("+").collect();
     let mut local = tagged[0].to_string();
     if domain == "gmail.com" {
         local = local.replace(".", "");
     }
     if local.is_empty() {
-        return Err(RowError.BadEmail(raw.trim()));
+        return Err(RowError.BadEmail(raw.trim().to_string()));
     }
     Ok(local + "@" + domain)
 }
 
 fn parse_date(raw: ref String) -> Result[i64, RowError] {
     let text = raw.trim();
-    let parts = text.split("-");
+    let parts: Vec[Str] = text.split("-").collect();
     if parts.len() != 3 {
-        return Err(RowError.BadDate(text));
+        return Err(RowError.BadDate(text.to_string()));
     }
     let y = i64.parse(parts[0]) ?? -1;
     let m = i64.parse(parts[1]) ?? -1;
     let d = i64.parse(parts[2]) ?? -1;
     if y < 1900 or m < 1 or m > 12 or d < 1 or d > 31 {
-        return Err(RowError.BadDate(text));
+        return Err(RowError.BadDate(text.to_string()));
     }
     Ok(y * 10000 + m * 100 + d)
 }
@@ -149,7 +149,7 @@ fn parse_channel(raw: ref String) -> Result[Source, RowError] {
 // ---------- parsing ----------
 
 fn split_fields(line: ref String, want: i64) -> Result[Vec[String], RowError] {
-    let fields = line.split(",");
+    let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();
     if fields.len() != want {
         return Err(RowError.FieldCount(want, fields.len()));
     }
@@ -161,7 +161,7 @@ fn parse_contact(line: ref String) -> Result[Contact, RowError] {
     let id_text = f[0].trim();
     let id = match i64.parse(id_text).ok() {
         Some(n) => n,
-        None => return Err(RowError.BadId(id_text)),
+        None => return Err(RowError.BadId(id_text.to_string())),
     };
     let email = normalize_email(f[2])?;
     let updated = parse_date(f[4])?;
@@ -170,7 +170,7 @@ fn parse_contact(line: ref String) -> Result[Contact, RowError] {
         id,
         name: normalize_name(f[1]),
         email,
-        company: if company.is_empty() { "-".to_string() } else { company },
+        company: if company.is_empty() { "-".to_string() } else { company.to_string() },
         updated,
     })
 }

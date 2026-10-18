@@ -57,7 +57,7 @@ impl Document {
         if name.is_empty() {
             return Err(DiffError.EmptyName);
         }
-        let mut lines = text.split("\n");
+        let mut lines: Vec[String] = text.split("\n").map(|p| p.to_string()).collect();
         // A trailing newline produces one empty trailing piece; drop it.
         if lines.len() > 0 and lines[lines.len() - 1].is_empty() {
             lines.pop();

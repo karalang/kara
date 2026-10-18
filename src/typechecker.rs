@@ -730,6 +730,25 @@ pub struct FixIt {
     pub replacement: String,
 }
 
+/// An unannotated `let` bound to a library iterator (see
+/// `TypeChecker::iter_lets`).
+#[derive(Debug, Clone)]
+pub(crate) struct IterLet {
+    /// The iterator's type, so a later binding of the same name is told
+    /// apart.
+    ty: Type,
+    /// The bound name; `: Vec[T]` goes at its end.
+    name: Span,
+    /// Where `.collect()` goes: the end of the initializer.
+    init_end: Span,
+    /// Whether it is used as a `Vec`, so the fix is offered at the end of
+    /// the function.
+    used: bool,
+    /// The element a use wants when it is not the item (`String` pieces
+    /// of a `Str` iterator); one such use decides for every use.
+    want: Option<Type>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeErrorKind {
     TypeMismatch,
@@ -3123,6 +3142,12 @@ pub struct TypeChecker<'a> {
     /// The spans of the `recv` calls typed `Option[T]` on the MIR pipeline
     /// (B-2026-10-15-11): an error at one of them gets a `.unwrap()` fix.
     pub(super) option_recv_spans: FxHashSet<SpanKey>,
+    /// `let x = <library iterator>` with no annotation, by name: where
+    /// `karac fix` writes `: Vec[T]` and `.collect()` when `x` is used as a
+    /// `Vec` (B-2026-10-12-7).
+    pub(super) iter_lets: FxHashMap<String, IterLet>,
+    /// The spans of identifiers that read an [`IterLet`] binding.
+    pub(super) iter_let_uses: FxHashMap<SpanKey, String>,
     /// The type of a value just checked into a `weak` slot, for typed HIR
     /// (B-2026-10-13-23).
     pub(super) weak_store_actual: Option<Type>,
@@ -3412,6 +3437,8 @@ impl<'a> TypeChecker<'a> {
             compiling_stdlib: false,
             library_methods_from_source: false,
             option_recv_spans: FxHashSet::default(),
+            iter_lets: FxHashMap::default(),
+            iter_let_uses: FxHashMap::default(),
             weak_store_actual: None,
             baked_impls: FxHashSet::default(),
             reported_uninferrable_empty_literal: false,
@@ -5771,21 +5798,16 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn collect_fix_for(&self, expected: &Type, found: &Type) -> Option<&'static str> {
+    /// The `Item` of `found` when it is a library iterator (one the
+    /// library's Kāra source declares), resolved.
+    fn library_iter_item_type(&self, found: &Type) -> Option<Type> {
         if !self.library_methods_from_source {
             return None;
         }
-        let (
-            Type::Named {
-                name: vec,
-                args: elem,
-            },
-            Type::Named { name, args },
-        ) = (expected, found)
-        else {
+        let Type::Named { name, args } = found else {
             return None;
         };
-        if vec != "Vec" || elem.len() != 1 || name == "Vec" {
+        if name == "Vec" {
             return None;
         }
         let item = self.resolve_assoc_projections(&Type::AssocProjection {
@@ -5794,16 +5816,178 @@ impl<'a> TypeChecker<'a> {
             args: Vec::new(),
             receiver_args: args.clone(),
         });
-        let elem = inference::resolve_type_var_top(&elem[0], &self.env.substitutions);
         match inference::resolve_type_var_top(&item, &self.env.substitutions) {
             Type::AssocProjection { .. } => None,
-            Type::Ref(t)
-                if inference::resolve_type_var_top(&t, &self.env.substitutions) == elem =>
-            {
+            t => Some(t),
+        }
+    }
+
+    /// What turns an iterator of `item` into a `Vec[elem]`: `.collect()`,
+    /// `.cloned().collect()` for borrowed items, and an owned copy of each
+    /// piece for `Str` items where `String` ones are wanted.
+    fn collect_suffix(&self, item: &Type, elem: &Type) -> Option<&'static str> {
+        let subs = &self.env.substitutions;
+        let elem = inference::resolve_type_var_top(elem, subs);
+        match item {
+            Type::Ref(t) if inference::resolve_type_var_top(t, subs) == elem => {
                 Some(".cloned().collect()")
             }
-            t if t == elem => Some(".collect()"),
+            t if *t == elem => Some(".collect()"),
+            Type::Named { name, args } if name == "StringSlice" && args.is_empty() => {
+                (elem == Type::Str).then_some(".map(|p| p.to_string()).collect()")
+            }
             _ => None,
+        }
+    }
+
+    /// `.collect()` or `.cloned().collect()` when `found` is a library
+    /// iterator whose items are `expected`'s `Vec` element, or borrow it.
+    fn collect_fix_for(&self, expected: &Type, found: &Type) -> Option<&'static str> {
+        let expected = match expected {
+            Type::Ref(t) => t,
+            t => t,
+        };
+        let Type::Named {
+            name: vec,
+            args: elem,
+        } = expected
+        else {
+            return None;
+        };
+        if vec != "Vec" || elem.len() != 1 {
+            return None;
+        }
+        let item = self.library_iter_item_type(found)?;
+        self.collect_suffix(&item, &elem[0])
+    }
+
+    /// The element type as source spells it in a `Vec[..]` annotation.
+    fn vec_elem_source(t: &Type) -> String {
+        match t {
+            Type::Named { name, args } if name == "StringSlice" && args.is_empty() => {
+                "Str".to_string()
+            }
+            Type::Ref(t) => format!("ref {}", Self::vec_elem_source(t)),
+            t => type_display(t),
+        }
+    }
+
+    /// Note `let name = value` with no annotation: an iterator bound here
+    /// may be fixed into a `Vec` at its first use as one.
+    pub(super) fn note_iter_let(&mut self, name: &str, name_span: Span, value: &Span, ty: &Type) {
+        if self.library_iter_item_type(ty).is_none() {
+            self.iter_lets.remove(name);
+            return;
+        }
+        let end = |s: &Span| Span {
+            line: s.line,
+            column: s.column,
+            offset: s.offset + s.length,
+            length: 0,
+        };
+        self.iter_lets.insert(
+            name.to_string(),
+            IterLet {
+                ty: ty.clone(),
+                name: name_span,
+                init_end: end(value),
+                used: false,
+                want: None,
+            },
+        );
+    }
+
+    /// The [`IterLet`] `object` reads, when it is a bare name bound to one.
+    pub(super) fn iter_let_of(&self, object: &Expr, ty: &Type) -> Option<String> {
+        let ExprKind::Identifier(n) = &object.kind else {
+            return None;
+        };
+        let rec = self.iter_lets.get(n.as_str())?;
+        (rec.ty == *ty).then(|| n.clone())
+    }
+
+    /// Report `message` at `span`, a use of the iterator binding `name` as
+    /// a `Vec` (of `elem`, when the use says), and note the use: the end of
+    /// the function offers the fix that collects it where it is bound
+    /// ([`Self::offer_iter_let_fixes`]). Returns false, reporting nothing,
+    /// when no collect fits.
+    pub(super) fn report_iter_let_use(
+        &mut self,
+        name: &str,
+        elem: Option<&Type>,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+    ) -> bool {
+        let Some(rec) = self.iter_lets.get(name) else {
+            return false;
+        };
+        let Some(item) = self.library_iter_item_type(&rec.ty) else {
+            return false;
+        };
+        let elem = elem.cloned().unwrap_or_else(|| item.clone());
+        if self.collect_suffix(&item, &elem).is_none() {
+            return false;
+        }
+        if let Some(rec) = self.iter_lets.get_mut(name) {
+            rec.used = true;
+            if elem != item {
+                rec.want = Some(elem);
+            }
+        }
+        self.type_error(
+            format!(
+                "{message}\n  `{name}` is an iterator, bound without collecting it into \
+                 a `Vec`"
+            ),
+            span,
+            kind,
+        );
+        true
+    }
+
+    /// For each iterator binding of the function just checked that is used
+    /// as a `Vec`: the fix that collects it where it is bound, `.collect()`
+    /// (or its kin) on the initializer and `: Vec[T]` on the name.
+    pub(super) fn offer_iter_let_fixes(&mut self) {
+        let mut recs: Vec<(String, IterLet)> =
+            self.iter_lets.drain().filter(|(_, r)| r.used).collect();
+        recs.sort_by_key(|(_, r)| r.name.offset);
+        for (name, rec) in recs {
+            let Some(item) = self.library_iter_item_type(&rec.ty) else {
+                continue;
+            };
+            let elem = rec.want.clone().unwrap_or_else(|| item.clone());
+            let Some(suffix) = self.collect_suffix(&item, &elem) else {
+                continue;
+            };
+            let vec = format!("Vec[{}]", Self::vec_elem_source(&elem));
+            self.type_error_with_fix_it(
+                format!(
+                    "`{name}` is used as a `{vec}`: collect the iterator into one with \
+                     `{suffix}`"
+                ),
+                rec.init_end,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: rec.init_end,
+                    replacement: suffix.to_string(),
+                },
+            );
+            self.type_error_with_fix_it(
+                format!("`{name}` is used as a `{vec}`: declare it as one"),
+                rec.name,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: Span {
+                        line: rec.name.line,
+                        column: rec.name.column + rec.name.length,
+                        offset: rec.name.offset + rec.name.length,
+                        length: 0,
+                    },
+                    replacement: format!(": {vec}"),
+                },
+            );
         }
     }
 
@@ -6214,6 +6398,67 @@ impl<'a> TypeChecker<'a> {
         // An iterator where a `Vec` of its items is wanted (`let ks: Vec[K] =
         // m.keys()`, docs/library: `keys` lends each key): collect it,
         // cloning each borrowed item.
+        // A `Str` where a `String` is wanted (a piece of `split` handed to a
+        // `String` parameter, B-2026-10-12-7): `.to_string()` copies it.
+        if self.library_methods_from_source {
+            let want = match expected {
+                Type::Ref(t) => t.as_ref(),
+                t => t,
+            };
+            let is_view = matches!(
+                inference::resolve_type_var_top(found, &self.env.substitutions),
+                Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
+            );
+            if *want == Type::Str && is_view {
+                self.type_error_with_fix_it(
+                    format!(
+                        "expected '{}', found 'Str': `.to_string()` copies the text into a \
+                         `String`",
+                        type_display(expected)
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    FixIt {
+                        span: Span {
+                            line: span.line,
+                            column: span.column,
+                            offset: span.offset + span.length,
+                            length: 0,
+                        },
+                        replacement: ".to_string()".to_string(),
+                    },
+                );
+                return false;
+            }
+        }
+        if let Some(name) = self.iter_let_uses.get(&SpanKey::from_span(&span)).cloned() {
+            let elem = match expected {
+                Type::Ref(t) => t.as_ref(),
+                t => t,
+            };
+            if let Type::Named { name: vec, args } = elem {
+                if vec == "Vec"
+                    && args.len() == 1
+                    && self.collect_fix_for(expected, found).is_some()
+                {
+                    let elem = args[0].clone();
+                    let message = format!(
+                        "expected '{}', found '{}'",
+                        type_display(expected),
+                        type_display(found),
+                    );
+                    if self.report_iter_let_use(
+                        &name,
+                        Some(&elem),
+                        message,
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                    ) {
+                        return false;
+                    }
+                }
+            }
+        }
         if let Some(fix) = self.collect_fix_for(expected, found) {
             let message = format!(
                 "expected '{}', found '{}', an iterator: collect its items into a \

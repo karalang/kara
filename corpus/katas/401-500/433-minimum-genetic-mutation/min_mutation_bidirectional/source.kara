@@ -67,7 +67,7 @@ fn bank_of(genes: Str) -> Vec[String] {
     if genes.len() == 0 {
         return Vec.new();
     }
-    genes.split(" ")
+    genes.split(" ").map(|p| p.to_string()).collect()
 }
 
 fn next_random(seed: mut ref i64) -> i64 {
