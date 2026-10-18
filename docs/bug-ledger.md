@@ -191,7 +191,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-35 | 2026-10-18 | typecheck | medium | After the parse→Result and lazy split/lines change (a0ca700228, acd593fc77), `karac fix` leaves four common call shapes unmigrated: `.ok_or(..)` on a parse Result, `s.split(..)[i]` / `s.lines()[0]` indexing, and `Vec[String]` from `split(..).filter(..).collect()` | — |
 | B-2026-10-18-36 | 2026-10-18 | ownership | medium | `karac check` accepts walking a lazy `split` iterator inside an outer loop (`for g in given` where `given = a.split(",")` is moved on the first outer pass); MIR's move check refuses it, while legacy `karac run` re-walks it and prints `x` and `y` | — |
 | B-2026-10-18-37 | 2026-10-18 | interp+codegen | medium | On MIR, `Ok(s.split_whitespace().map(|p| p.to_string()).collect())` as the tail of a `Result[Vec[String], String]` fn does not lower (`UnsolvedParam("C")`); check passes | — |
-| B-2026-10-18-38 | 2026-10-18 | typecheck | medium | A string literal passed to a view parameter is treated as a temporary: `fn tail(line: Str) -> Str { line }` then `let g = tail("abc");` is refused with 'a reference to a temporary outlives its statement (core-semantics.md §5.5)', though a literal is static text (§5.1) | — |
 | B-2026-10-18-39 | 2026-10-18 | typecheck | low | `Map.get_mut(k)` with a `Str` key on a `Map[String, V]` is refused ("expected 'ref String', found 'Str'"), though `get`, `remove` and `contains_key` take a `Str` there | — |
 | B-2026-10-18-40 | 2026-10-18 | interp+codegen | medium | On MIR, `let mut out = s; out = " " + out;` with `s` a bare (borrowed) `String` param builds invalid MIR ("assigning String to _3 of type ref String"); check passes | — |
 | B-2026-10-18-41 | 2026-10-18 | interp+codegen | medium | On MIR, `match it.value { V.List(q) => q.push(..) }` with `it` from `m.get_mut(k).unwrap()` is refused by the borrow checker ("mutable borrow of (*_16) through a shared reference [E0517]"); check passes | — |
@@ -4174,6 +4173,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-18-31 | runtime+cli | high | The v2 ASan lane (`karac __mir-llvm-asan`) cannot see a leak: `karac_mir_run_main` runs `main` on `big_stack`, an mmap'd stack it switches to by hand… | 3c8e763161 |
 | B-2026-10-18-33 | interp+codegen | medium | On MIR, `char.try_from(x)` with `x` a `ref i64` from `for x in v.iter()` is refused ("char.try_from expects an integer codepoint, got `ref i64`"); ch… | afe886a96d |
 | B-2026-10-18-34 | codegen | low | After B-2026-10-13-34, `i64.parse(t[0..2])` on the MIR compiled backend still makes two out-of-line runtime calls per parse (`karac_mir_str_view`, th… | 6ed87399e4 |
+| B-2026-10-18-38 | typecheck | medium | A string literal passed to a view parameter is treated as a temporary: `fn tail(line: Str) -> Str { line }` then `let g = tail("abc");` is refused wi… | e3120f62bd |
 
 </details>
 
