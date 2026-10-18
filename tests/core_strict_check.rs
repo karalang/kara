@@ -6576,6 +6576,21 @@ fn app_rows_of_2026_10_14() {
              match first(w) { Some(s) => println(s), None => println(\"none\") }\n\
          }\n",
     );
+    // The assignment form (flag_eval): the element is stored in an
+    // `Option[ref Flag]` declared outside the loop.
+    accepted(
+        "assign-walked-element",
+        "struct Flag { name: String, on: bool }\n\
+         fn find(flags: ref Vec[Flag], name: Str) -> bool {\n\
+             let mut found: Option[ref Flag] = None;\n\
+             for f in flags.iter() { if f.name == name { found = Some(f); } }\n\
+             match found { Some(f) => f.on, None => false }\n\
+         }\n\
+         fn main() {\n\
+             let flags = vec![Flag { name: \"a\".to_string(), on: true }];\n\
+             println(f\"{find(flags, \"a\")} {find(flags, \"c\")}\");\n\
+         }\n",
+    );
     rejected(
         "return-walked-local",
         "fn bad() -> Option[ref String] {\n\
