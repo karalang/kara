@@ -102,6 +102,27 @@ impl std::fmt::Display for OwnershipMode {
 /// conservative `false` — and because this call's own method is always present
 /// in the string-keyed map, the fallback can never turn a genuine move into a
 /// borrow; it only rescues the unambiguous all-borrow case.
+/// The lowercase aliases of the ambient resources (design.md § I/O):
+/// `fs.write(p, c)` calls `FileSystem.write`. Mirrors the typechecker's
+/// identifier-receiver dispatch and codegen's `ambient_resource_for_alias`.
+pub(crate) const AMBIENT_ALIASES: &[(&str, &str)] = &[
+    ("env", "Env"),
+    ("clock", "Clock"),
+    ("rand", "RandomSource"),
+    ("stdin", "Stdin"),
+    ("stdout", "Stdout"),
+    ("stderr", "Stderr"),
+    ("fs", "FileSystem"),
+];
+
+/// The ambient resource an alias receiver names, `fs` → `FileSystem`.
+pub(crate) fn ambient_resource_for_alias(alias: &str) -> Option<&'static str> {
+    AMBIENT_ALIASES
+        .iter()
+        .find(|(a, _)| *a == alias)
+        .map(|(_, r)| *r)
+}
+
 pub(crate) fn arg_is_borrow_by_method_name(
     method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
     method: &str,
@@ -3716,9 +3737,13 @@ fn collect_method_param_modes_into(
                 let Some(target_name) = impl_target_name(&impl_block.target_type) else {
                     continue;
                 };
+                // An ambient resource's methods take no `self` and are called
+                // through its lowercase alias, `fs.write(p, c)`
+                // (B-2026-10-14-53); see `ambient_resource_for_alias`.
+                let ambient = AMBIENT_ALIASES.iter().any(|(_, r)| *r == target_name);
                 for impl_item in &impl_block.items {
                     if let ImplItem::Method(method) = impl_item {
-                        if method.self_param.is_some() {
+                        if method.self_param.is_some() || ambient {
                             map.insert(
                                 format!("{target_name}.{}", method.name),
                                 param_modes_from_signature(&method.params),

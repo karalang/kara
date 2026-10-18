@@ -211,6 +211,20 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return Some(sig.return_type);
                 }
+                // B-2026-10-14-55: the library declares every method an
+                // ambient resource has, so any other name is a typo, not a
+                // call to type later.
+                if self.library_methods_from_source {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    self.type_error(
+                        format!("no method '{method}' on '{resource}' (the `{mod_name}` resource)"),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    return Some(Type::Error);
+                }
             }
         }
 

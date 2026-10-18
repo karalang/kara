@@ -6461,7 +6461,14 @@ impl<'a> super::TypeChecker<'a> {
         // canonical linked-list link, and `let cur = self.head;` there copies
         // a handle, not a node. Without this the lint's own claim would be
         // false at three sites in `examples/tangle`.
-        if self.copy_is_only_an_rc_retain(ty) || matches!(ty, Type::Function { .. }) {
+        //
+        // Not under the strict commands (B-2026-10-14-62): design.md § Function
+        // values makes a function value move-only, so `let h = r.h` through a
+        // borrow is a move out of it; a stored `Fn` is called in place,
+        // `(r.h)(x)`.
+        if self.copy_is_only_an_rc_retain(ty)
+            || (matches!(ty, Type::Function { .. }) && !self.cli_lint_overrides.strict_core)
+        {
             return;
         }
         // An unsubstituted type parameter is not known to copy: a `T: Copy`

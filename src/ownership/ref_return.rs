@@ -994,6 +994,29 @@ fn ref_place_shape(
     }
 }
 
+/// The place a `for` iterable walks by borrow, when it does: `p.iter()`,
+/// `p.keys()`, `p.values()`, any of them under `.enumerate()` or `.rev()`.
+/// `into_iter`, `drain` and every other method are not borrowing walks.
+fn borrowed_walk_place(e: &Expr) -> Option<&Expr> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &e.kind
+    else {
+        return None;
+    };
+    if !args.is_empty() {
+        return None;
+    }
+    match method.as_str() {
+        "iter" | "keys" | "values" => Some(object),
+        "enumerate" | "rev" => borrowed_walk_place(object),
+        _ => None,
+    }
+}
+
 /// Where a local's value comes from, for [`collect_core_ref_locals`].
 enum CoreDef<'e> {
     /// `let x = e` or `x = e`.
@@ -1123,7 +1146,18 @@ fn core_defs_in_expr<'e>(
                 }
             }
         }
-        ExprKind::For { pattern, .. } => poisoned.extend(pattern.binding_names()),
+        // A `for` over a borrowing walk of a place lends each element of it
+        // (B-2026-10-14-60): `for (k, it) in v.iter()` with `v: ref Vec[..]`.
+        ExprKind::For {
+            pattern, iterable, ..
+        } => match borrowed_walk_place(iterable) {
+            Some(place) => {
+                for n in pattern.binding_names() {
+                    defs.entry(n).or_default().push(CoreDef::Projection(place));
+                }
+            }
+            None => poisoned.extend(pattern.binding_names()),
+        },
         _ => {}
     }
     for_each_subblock(e, &mut |b| core_defs_in_block(b, defs, poisoned));

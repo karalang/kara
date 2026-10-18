@@ -137,7 +137,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 // through call-arg-into-borrow) ride on Slice 2's conflict
                 // detector.
                 if let Some((source, _)) = Self::slice_creation_source(value) {
-                    if self.place_expr_root(source).is_none() {
+                    // A place under `self` is no temporary either
+                    // (B-2026-10-14-51): `let s = self.bytes[a..b];`.
+                    if self.place_expr_root(source).is_none() && !place_rooted_at_self(source) {
                         self.errors.push(OwnershipError {
                             message: "slice from temporary value escapes the enclosing statement"
                                 .to_string(),
@@ -471,5 +473,17 @@ impl super::OwnershipChecker<'_> {
         };
         matches!(ty, Type::Named { name, .. } if name == "Map" || name == "SortedMap")
             .then_some((object.as_ref(), index.as_ref()))
+    }
+}
+
+/// `self`, or a field / index / tuple projection of it: a place the method
+/// borrows, never a temporary.
+fn place_rooted_at_self(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::SelfValue => true,
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::TupleIndex { object, .. } => place_rooted_at_self(object),
+        _ => false,
     }
 }

@@ -149,7 +149,19 @@ impl<'a> super::OwnershipChecker<'a> {
                 return matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef);
             }
         }
-        if let ExprKind::MethodCall { method, .. } = &method_call.kind {
+        if let ExprKind::MethodCall { object, method, .. } = &method_call.kind {
+            // `fs.write(p, c)`: an ambient resource call is typed through its
+            // alias and records no callee key; its modes are the resource's
+            // own declaration (B-2026-10-14-53). A local named `fs` would have
+            // recorded a key above.
+            if let ExprKind::Identifier(alias) = &object.kind {
+                if let Some(m) = crate::ownership::ambient_resource_for_alias(alias)
+                    .and_then(|r| self.method_param_modes.get(&format!("{r}.{method}")))
+                    .and_then(|modes| modes.get(arg_index))
+                {
+                    return matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef);
+                }
+            }
             return crate::ownership::arg_is_borrow_by_method_name(
                 &self.method_param_modes,
                 method,

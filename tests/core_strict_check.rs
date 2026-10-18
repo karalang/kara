@@ -6546,3 +6546,115 @@ fn a_string_literal_takes_the_str_type_of_its_context() {
         "match arms have incompatible types",
     );
 }
+
+/// The app rows of 2026-10-14: programs `karac check` refused or let through
+/// while every MIR backend agreed with the spec.
+#[test]
+fn app_rows_of_2026_10_14() {
+    // B-2026-10-14-53: `fs.write` borrows its arguments (`Str` parameters).
+    accepted(
+        "fs-write-borrows",
+        "fn main() {\n\
+             let out = \"hello\".to_string();\n\
+             let r = fs.write(\"o.txt\".to_string(), out);\n\
+             println(f\"{out.len()} {r.is_ok()}\");\n\
+         }\n",
+    );
+    // B-2026-10-14-60: an element of a borrowing walk of a `ref` parameter
+    // is returned as a borrow of it.
+    accepted(
+        "return-walked-element",
+        "fn pick(v: ref Vec[(String, i64)], name: Str) -> Option[ref i64] {\n\
+             for (k, it) in v.iter() { if k == name { return Some(it); } }\n\
+             None\n\
+         }\n\
+         fn first(v: ref Vec[String]) -> Option[ref String] { for s in v.iter() { return Some(s); } None }\n\
+         fn main() {\n\
+             let v: Vec[(String, i64)] = [(\"a\".to_string(), 1), (\"b\".to_string(), 2)];\n\
+             match pick(v, \"b\") { Some(x) => println(f\"{*x}\"), None => println(\"none\") }\n\
+             let w: Vec[String] = [\"q\".to_string()];\n\
+             match first(w) { Some(s) => println(s), None => println(\"none\") }\n\
+         }\n",
+    );
+    rejected(
+        "return-walked-local",
+        "fn bad() -> Option[ref String] {\n\
+             let v: Vec[String] = vec![\"q\".to_string()];\n\
+             for s in v.iter() { return Some(s); }\n\
+             None\n\
+         }\n\
+         fn main() { match bad() { Some(s) => println(s), None => println(\"none\") } }\n",
+        "borrows function-local storage",
+    );
+    // B-2026-10-14-51: a range view of a field is a view of `self`, not of a
+    // temporary.
+    accepted(
+        "self-field-view-let",
+        "struct Cursor { bytes: Vec[u8], at: i64 }\n\
+         impl Cursor {\n\
+             fn peek(ref self, n: i64) -> Slice[u8] {\n\
+                 let s = self.bytes[self.at..self.at + n];\n\
+                 s\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let c = Cursor { bytes: vec![1u8, 2u8, 3u8], at: 0 };\n\
+             println(f\"{c.peek(2).len()}\");\n\
+         }\n",
+    );
+    // B-2026-10-14-55: an unknown method on an ambient resource.
+    rejected(
+        "ambient-unknown-method",
+        "fn main() { let r = fs.bogus_op(\"x\".to_string()); println(\"ran\"); }\n",
+        "no method 'bogus_op' on 'FileSystem'",
+    );
+    // B-2026-10-14-62: a stored function value is called in place, not
+    // moved out of a borrow.
+    rejected_with(
+        "fn-field-move",
+        "struct R { h: Fn(i64) -> i64 }\n\
+         fn dbl(x: i64) -> i64 { x * 2 }\n\
+         fn main() {\n\
+             let rs = vec![R { h: dbl }];\n\
+             let mut t = 0;\n\
+             for r in rs.iter() { let h = r.h; t += h(1000); }\n\
+             println(t);\n\
+         }\n",
+        "cannot move a non-`Copy` value out of a borrowed place",
+    );
+    accepted(
+        "fn-field-call-in-place",
+        "struct R { h: Fn(i64) -> i64 }\n\
+         fn dbl(x: i64) -> i64 { x * 2 }\n\
+         fn main() {\n\
+             let rs = vec![R { h: dbl }];\n\
+             let mut t = 0;\n\
+             for r in rs.iter() { t += (r.h)(1000); }\n\
+             println(t);\n\
+         }\n",
+    );
+    // B-2026-10-14-70: a chained field receiver runs on every MIR backend.
+    accepted(
+        "chained-field-receiver",
+        "struct Env { to: Vec[String] }\n\
+         struct S { env: Env }\n\
+         impl S {\n\
+             fn add(mut ref self, a: Str) -> i64 {\n\
+                 self.env.to.push(a.to_string());\n\
+                 self.env.to.len()\n\
+             }\n\
+         }\n\
+         fn main() { let mut s = S { env: Env { to: Vec.new() } }; println(s.add(\"x\")); }\n",
+    );
+    // Views at lookup: `m[k]` reads a `String`-keyed map by a `Str`.
+    accepted(
+        "map-index-by-view",
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m.insert(\"ab\".to_string(), 3);\n\
+             for name in \"x/ab\".split(\"/\") {\n\
+                 if m.contains_key(name) { println(m[name]); }\n\
+             }\n\
+         }\n",
+    );
+}
