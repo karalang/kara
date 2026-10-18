@@ -2117,7 +2117,9 @@ pub unsafe extern "C" fn karac_mir_parse_int128(
     out: *mut u8,
 ) -> u8 {
     // SAFETY: the caller's contract.
-    let text = String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned();
+    let Ok(text) = std::str::from_utf8(unsafe { bytes(ptr, len) }) else {
+        return 0;
+    };
     let text = text.trim();
     if !(2..=36).contains(&radix) {
         return 0;
@@ -2133,6 +2135,46 @@ pub unsafe extern "C" fn karac_mir_parse_int128(
     // SAFETY: the caller's contract.
     unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, 16) };
     1
+}
+
+/// A radix-10 integer of at most 18 digits, with an optional sign and
+/// ASCII whitespace around it, read in place: it cannot overflow an `i64`,
+/// and the text is all ASCII, so `str::trim` would have cut the same
+/// bytes. `None` sends every other text to the `from_str_radix` path,
+/// which gives the verdict on it (B-2026-10-13-34).
+fn short_decimal(raw: &[u8], radix: i64) -> Option<(bool, i128)> {
+    if radix != 10 {
+        return None;
+    }
+    let mut b = raw;
+    while let [first, rest @ ..] = b {
+        if !first.is_ascii_whitespace() {
+            break;
+        }
+        b = rest;
+    }
+    while let [rest @ .., last] = b {
+        if !last.is_ascii_whitespace() {
+            break;
+        }
+        b = rest;
+    }
+    let (neg, digits) = match b.first() {
+        Some(b'-') => (true, &b[1..]),
+        Some(b'+') => (false, &b[1..]),
+        _ => (false, b),
+    };
+    if digits.is_empty() || digits.len() > 18 {
+        return None;
+    }
+    let mut n: i64 = 0;
+    for &d in digits {
+        if !d.is_ascii_digit() {
+            return None;
+        }
+        n = n * 10 + (d - b'0') as i64;
+    }
+    Some((neg, if neg { -(n as i128) } else { n as i128 }))
 }
 
 /// `T.parse(s)` / `T.from_str_radix(s, radix)` for an integer of `bits`
@@ -2151,19 +2193,38 @@ pub unsafe extern "C" fn karac_mir_parse_int(
     out: *mut i64,
 ) -> u8 {
     // SAFETY: the caller's contract.
-    let text = String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned();
-    let text = text.trim();
-    if !(2..=36).contains(&radix) || (signed == 0 && text.starts_with('-')) {
+    let raw = unsafe { bytes(ptr, len) };
+    if !(2..=36).contains(&radix) {
         return 0;
     }
-    let Ok(n) = i128::from_str_radix(text, radix as u32) else {
-        return 0;
+    let n = match short_decimal(raw, radix) {
+        Some((true, _)) if signed == 0 => return 0,
+        Some((_, n)) => n,
+        None => {
+            // Invalid UTF-8 cannot parse, so it fails here rather than
+            // through a lossy, allocated copy (B-2026-10-13-34).
+            let Ok(text) = std::str::from_utf8(raw) else {
+                return 0;
+            };
+            let text = text.trim();
+            if signed == 0 && text.starts_with('-') {
+                return 0;
+            }
+            match i128::from_str_radix(text, radix as u32) {
+                Ok(n) => n,
+                Err(_) => return 0,
+            }
+        }
     };
-    let fits = if signed != 0 {
-        let half = 1i128 << (bits - 1);
-        (-half..half).contains(&n)
-    } else {
-        n >= 0 && n < (1i128 << bits)
+    let fits = match (bits, signed != 0) {
+        // The common widths, without the variable 128-bit shifts.
+        (64, true) => i64::try_from(n).is_ok(),
+        (64, false) => u64::try_from(n).is_ok(),
+        (_, true) => {
+            let half = 1i128 << (bits - 1);
+            (-half..half).contains(&n)
+        }
+        (_, false) => n >= 0 && n < (1i128 << bits),
     };
     if !fits {
         return 0;
@@ -2180,7 +2241,9 @@ pub unsafe extern "C" fn karac_mir_parse_int(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_parse_f64(ptr: *const u8, len: usize, out: *mut f64) -> u8 {
     // SAFETY: the caller's contract.
-    let text = String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned();
+    let Ok(text) = std::str::from_utf8(unsafe { bytes(ptr, len) }) else {
+        return 0;
+    };
     match text.trim().parse::<f64>() {
         Ok(v) => {
             // SAFETY: the caller's contract.
@@ -2888,8 +2951,87 @@ pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
 mod tests {
     use super::{
         karac_mir_fmt_begin, karac_mir_fmt_char, karac_mir_fmt_end_string, karac_mir_fmt_i64,
-        karac_mir_fmt_str, karac_mir_fmt_u64, merge_sort, RawVec,
+        karac_mir_fmt_str, karac_mir_fmt_u64, karac_mir_parse_int, merge_sort, RawVec,
     };
+
+    /// `karac_mir_parse_int` on `text`, as an i64 of `bits` bits.
+    fn parse(text: &[u8], radix: i64, bits: u32, signed: bool) -> Option<i64> {
+        let mut out = 0i64;
+        // SAFETY: `text` is readable and `out` writable.
+        let ok = unsafe {
+            karac_mir_parse_int(
+                text.as_ptr(),
+                text.len(),
+                radix,
+                bits,
+                signed as u8,
+                &mut out,
+            )
+        };
+        (ok != 0).then_some(out)
+    }
+
+    // The in-place radix-10 path gives the verdict the i128 path gave
+    // (B-2026-10-13-34): signs, trimming, junk, 18 and 19 digits, bounds.
+    #[test]
+    fn parse_int_short_decimal_agrees_with_from_str_radix() {
+        let cases: &[&[u8]] = &[
+            b"0",
+            b"12",
+            b"-12",
+            b"+7",
+            b" 12",
+            b"12\n",
+            b"",
+            b"-",
+            b"+",
+            b"1_0",
+            b"12a",
+            b"--1",
+            b"+-1",
+            b"999999999999999999",
+            b"-999999999999999999",
+            b"9223372036854775807",
+            b"-9223372036854775808",
+            b"9223372036854775808",
+            b"127",
+            b"128",
+            b"-128",
+            b"-129",
+            b"255",
+            b"256",
+            b"-0",
+            b"\xff1",
+            b"\xe0\x80",
+            b" -0 ",
+            b"\x0b12",
+            b"12\x0c",
+            b"\t+5\r\n",
+            b"\xc2\xa012",
+            b"1 2",
+        ];
+        for &t in cases {
+            for (bits, signed) in [(64, true), (8, true), (8, false), (64, false)] {
+                let want = std::str::from_utf8(t).ok().and_then(|s| {
+                    let s = s.trim();
+                    if !signed && s.starts_with('-') {
+                        return None;
+                    }
+                    let n = s.parse::<i128>().ok()?;
+                    let fits = if signed {
+                        let half = 1i128 << (bits - 1);
+                        (-half..half).contains(&n)
+                    } else {
+                        n >= 0 && n < (1i128 << bits)
+                    };
+                    fits.then_some(n as i64)
+                });
+                assert_eq!(parse(t, 10, bits, signed), want, "{:?} {bits} {signed}", t);
+            }
+        }
+        assert_eq!(parse(b"ff", 16, 64, true), Some(255));
+        assert_eq!(parse(b"12", 1, 64, true), None);
+    }
 
     fn end_string() -> String {
         let mut out = RawVec {
