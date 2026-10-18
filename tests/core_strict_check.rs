@@ -5513,6 +5513,56 @@ fn deref_of_an_item_of_a_named_iter_is_accepted_and_runs() {
 }
 
 #[test]
+fn deref_of_an_item_of_a_named_iter_is_accepted_and_runs() {
+    // B-2026-10-13-6: `let mut it = c.iter();` is the same lent iterator
+    // `c.iter()` is, so `*k` reads a `Copy` item its `next()` gives, as the
+    // MIR backends already ran it. A name rebound to another iterator loses
+    // that: a range's items are values.
+    let src = "fn main() {\n\
+         \x20   let w = vec![4, 6, 9];\n\
+         \x20   let mut it = w.iter();\n\
+         \x20   let Some(k) = it.next() else { return; };\n\
+         \x20   let mut c: VecDeque[i64] = VecDeque.new();\n\
+         \x20   c.push_back(5);\n\
+         \x20   c.push_back(7);\n\
+         \x20   let mut ci = c.iter();\n\
+         \x20   let mut sum = 0;\n\
+         \x20   while let Some(x) = ci.next() {\n\
+         \x20       sum += *x;\n\
+         \x20   }\n\
+         \x20   println(f\"{*k} {sum}\");\n\
+         }\n";
+    let (dir, path) = fixture("named-iter-deref", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "4 12\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = "fn main() {\n\
+         \x20   let w = vec![4, 6, 9];\n\
+         \x20   let it = w.iter();\n\
+         \x20   let mut it = (0..3).into_iter();\n\
+         \x20   let Some(k) = it.next() else { return; };\n\
+         \x20   println(f\"{*k}\");\n\
+         }\n";
+    let (dir, path) = fixture("named-iter-rebound", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must refuse: {err}");
+    assert!(err.contains("unary '*' requires"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_conditional_impl_bound_is_checked_at_a_generic_call() {
     // B-2026-10-13-5: `impl[T: Show] Show for Wrap[T]` makes `Wrap[X]` a
     // `Show` only when `X` is one, so `print_it(Wrap { v: Plain { .. } })`
@@ -6563,7 +6613,7 @@ fn iter_on_an_iterator_is_dropped() {
 }
 
 /// design.md § String literals: a literal is a `Str` wherever one is
-/// expected, which includes a branch beside a `Str` view (B-2026-10-15-38)
+/// expected, which includes a branch beside a `Str` view (B-2026-10-15-54)
 /// and a `Vec[Str]` push (B-2026-10-14-68).
 #[test]
 fn a_string_literal_takes_the_str_type_of_its_context() {
