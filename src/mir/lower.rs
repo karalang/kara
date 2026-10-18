@@ -4723,6 +4723,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.diverge(TerminatorKind::Unreachable);
             return Ok(());
         }
+        // B-2026-10-18-4 — a call that returns a `ref T` of a `Copy` (or
+        // handle) `T`, stored into a `T` slot (`-> i64` returning
+        // `m.get(k).unwrap_or(0)`): the slot takes the value read through
+        // the reference (core semantics §5.10), not the reference itself,
+        // which a compiled backend stored as an address.
+        if matches!(e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. }) {
+            let dt = self.place_type(&dest);
+            let et = self.expr_ty(e)?;
+            if matches!(self.tys().tcx().kind(et), HK::Ref(i) | HK::MutRef(i) if i == dt)
+                && (self.is_copy(dt) || self.is_handle(dt))
+            {
+                let op = self.owned_operand(e, dt)?;
+                self.assign(dest, Rvalue::Use(op));
+                return Ok(());
+            }
+        }
         // A strong handle or an `Option` of one, made by a call, a
         // constructor or a branch, stored into a `weak` slot: made in a
         // temporary of its own type, then downgraded by `assign` as a

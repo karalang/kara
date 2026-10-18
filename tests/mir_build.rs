@@ -3351,3 +3351,42 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_returned_ref_of_a_copy_value_is_read_into_the_slot() {
+    // B-2026-10-18-4: `fn f(..) -> i64 { m.get(k).unwrap_or(0) }` assigned
+    // the call's `ref i64` straight into the `i64` return slot, so the
+    // compiled backends returned the reference's address. Tail, `return`
+    // and a branch tail.
+    let src = r#"
+fn get_or_zero(m: ref Map[String, i64], k: Str) -> i64 {
+    m.get(k).unwrap_or(0)
+}
+fn first_or_zero(v: ref Vec[i64]) -> i64 {
+    return v.first().unwrap_or(0);
+}
+fn pick(m: ref Map[String, i64], k: Str, c: bool) -> i64 {
+    if c { m.get(k).unwrap_or(0) } else { match m.get("b") { Some(x) => *x, None => -1 } }
+}
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a".to_string(), 5);
+    m.insert("b".to_string(), 8);
+    println(f"{get_or_zero(m, "a")} {get_or_zero(m, "z")}");
+    let v: Vec[i64] = vec![4, 2];
+    let e: Vec[i64] = Vec.new();
+    println(f"{first_or_zero(v)} {first_or_zero(e)}");
+    println(f"{pick(m, "a", true)} {pick(m, "a", false)}");
+    let x: i64 = m.get("a").unwrap_or(0);
+    println(f"{x}");
+}
+"#;
+    let want = "5 0\n4 0\n5 8\n5\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
