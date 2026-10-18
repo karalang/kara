@@ -1,0 +1,221 @@
+// LeetCode #719: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random numbers.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn smallest_distance_pair_star(nums: Vec[i64], k: i64) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut lo = 0;
+    let mut hi = sorted[n - 1] - sorted[0];
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let mut count = 0;
+        let mut left = 0;
+        for right in 0..n {
+            while sorted[right] - sorted[left] > mid {
+                left += 1;
+            }
+            count += right - left;
+        }
+        if count >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- bisect arm -----------------------------------------------------
+
+fn first_above_bisect(sorted: Vec[i64], from: i64, x: i64) -> i64 {
+    let mut lo = from;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] > x {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn smallest_distance_pair_bisect(nums: Vec[i64], k: i64) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut lo = 0;
+    let mut hi = sorted[n - 1] - sorted[0];
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let mut count = 0;
+        for i in 0..n {
+            count += first_above_bisect(sorted, i + 1, sorted[i] + mid) - (i + 1);
+        }
+        if count >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- pairs arm ------------------------------------------------------
+
+fn smallest_distance_pair_pairs(nums: Vec[i64], k: i64) -> i64 {
+    let mut distances: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            let d = nums[i] - nums[j];
+            distances.push(if d < 0 { -d } else { d });
+        }
+    }
+    distances.sort();
+    distances[k - 1]
+}
+
+// ---- heap arm -------------------------------------------------------
+
+fn smallest_distance_pair_heap(nums: Vec[i64], k: i64) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for i in 0..n - 1 {
+        heap.push((sorted[i + 1] - sorted[i], i, i + 1));
+    }
+    let mut d = 0;
+    for _ in 0..k {
+        let (dist, i, j) = heap.pop().unwrap();
+        d = dist;
+        if j + 1 < n {
+            heap.push((sorted[j + 1] - sorted[i], i, j + 1));
+        }
+    }
+    d
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn distance(which: i64, nums: Vec[i64], k: i64) -> i64 {
+    if which == 0 {
+        smallest_distance_pair_star(nums, k)
+    } else if which == 1 {
+        smallest_distance_pair_bisect(nums, k)
+    } else if which == 2 {
+        smallest_distance_pair_pairs(nums, k)
+    } else {
+        smallest_distance_pair_heap(nums, k)
+    }
+}
+
+fn gap(a: i64, b: i64) -> i64 {
+    if a > b { a - b } else { b - a }
+}
+
+// The definition: the least distance of any pair that at least k pairs
+// are no further apart than, counted pair by pair for every candidate.
+fn definition(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = -1;
+    for i in 0..n {
+        for j in i + 1..n {
+            let d = gap(nums[i], nums[j]);
+            let mut within = 0;
+            for p in 0..n {
+                for q in p + 1..n {
+                    if gap(nums[p], nums[q]) <= d {
+                        within += 1;
+                    }
+                }
+            }
+            if within >= k and (best == -1 or d < best) {
+                best = d;
+            }
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 7190;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut zero = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 2 to 12 numbers from 0 to at most 20, so equal distances and
+        // equal numbers are common.
+        let n = 2 + next_random(mut seed) % 11;
+        let top = next_random(mut seed) % 21;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % (top + 1));
+        }
+        let pairs = n * (n - 1) / 2;
+        let k = 1 + next_random(mut seed) % pairs;
+        let want = definition(nums.clone(), k);
+        if want == 0 {
+            zero += 1;
+        }
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let mut doubled: Vec[i64] = Vec.new();
+        let mut low = nums[0];
+        let mut high = nums[0];
+        for x in nums.iter() {
+            doubled.push(2 * *x);
+            if *x < low {
+                low = *x;
+            }
+            if *x > high {
+                high = *x;
+            }
+        }
+        for which in 0..arms {
+            let got = distance(which, nums.clone(), k);
+            // P1: the definition's distance.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the numbers reversed, the same distance.
+            checks += 1;
+            if distance(which, reversed.clone(), k) != got {
+                fails[1] += 1;
+            }
+            // P3: the numbers doubled, the distance doubled.
+            checks += 1;
+            if distance(which, doubled.clone(), k) != 2 * got {
+                fails[2] += 1;
+            }
+            // P4: no smaller than the (k - 1)-th, and the last is the
+            // largest number less the smallest.
+            checks += 1;
+            let below = if k > 1 { distance(which, nums.clone(), k - 1) } else { 0 };
+            if below > got or distance(which, nums.clone(), pairs) != high - low {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} arrays ({zero} with a distance of 0), {arms} arms, {checks} checks, {total} failures");
+}

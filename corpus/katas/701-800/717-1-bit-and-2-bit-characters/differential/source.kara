@@ -1,0 +1,198 @@
+// LeetCode #717: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random bits.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn is_one_bit_character_star(bits: Vec[i64]) -> bool {
+    let n = bits.len();
+    let mut i = 0;
+    while i < n - 1 {
+        i += bits[i] + 1;
+    }
+    i == n - 1
+}
+
+// ---- ones arm -------------------------------------------------------
+
+fn is_one_bit_character_ones(bits: Vec[i64]) -> bool {
+    let mut ones = 0;
+    let mut i = bits.len() - 2;
+    while i >= 0 and bits[i] == 1 {
+        ones += 1;
+        i -= 1;
+    }
+    ones % 2 == 0
+}
+
+// ---- reach arm ------------------------------------------------------
+
+fn is_one_bit_character_reach(bits: Vec[i64]) -> bool {
+    let n = bits.len();
+    let mut start: Vec[bool] = Vec.new();
+    for _ in 0..n + 1 {
+        start.push(false);
+    }
+    start[0] = true;
+    for i in 0..n {
+        if start[i] {
+            if bits[i] == 0 {
+                start[i + 1] = true;
+            } else if i + 2 <= n {
+                start[i + 2] = true;
+            }
+        }
+    }
+    start[n - 1]
+}
+
+// ---- decode arm -----------------------------------------------------
+
+fn is_one_bit_character_decode(bits: Vec[i64]) -> bool {
+    let mut chars: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < bits.len() {
+        if bits[i] == 0 {
+            chars.push("0");
+            i += 1;
+        } else {
+            chars.push(if bits[i + 1] == 0 { "10" } else { "11" });
+            i += 2;
+        }
+    }
+    chars[chars.len() - 1] == "0"
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, bits: Vec[i64]) -> bool {
+    if which == 0 {
+        is_one_bit_character_star(bits)
+    } else if which == 1 {
+        is_one_bit_character_ones(bits)
+    } else if which == 2 {
+        is_one_bit_character_reach(bits)
+    } else {
+        is_one_bit_character_decode(bits)
+    }
+}
+
+// The definition: every way to cut the bits into pieces of one or two
+// bits, one cut mask at a time; a cutting counts when every piece is a
+// character, 0, 10 or 11. The answer is whether a counted cutting ends
+// in a one-bit piece.
+fn definition(bits: Vec[i64]) -> bool {
+    let n = bits.len();
+    let mut found = false;
+    for mask in 0..(1 << (n - 1)) {
+        // Bit i of the mask set: a cut after bit i.
+        let mut start = 0;
+        let mut good = true;
+        let mut last = 0;
+        for i in 0..n {
+            let cut = i == n - 1 or (mask >> i) & 1 == 1;
+            if cut {
+                let size = i - start + 1;
+                if size == 1 {
+                    if bits[start] != 0 {
+                        good = false;
+                    }
+                } else if size == 2 {
+                    if bits[start] != 1 {
+                        good = false;
+                    }
+                } else {
+                    good = false;
+                }
+                last = size;
+                start = i + 1;
+            }
+        }
+        if good and last == 1 {
+            found = true;
+        }
+    }
+    found
+}
+
+fn main() {
+    let mut seed = 7170;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut yes = 0;
+    let cases = 3000;
+    for t in 0..cases {
+        // 1 to 14 bits ending in 0, from three densities of ones.
+        let n = 1 + next_random(mut seed) % 14;
+        let mut bits: Vec[i64] = Vec.new();
+        for _ in 0..n - 1 {
+            bits.push(if next_random(mut seed) % 4 <= t % 3 { 1 } else { 0 });
+        }
+        bits.push(0);
+        let want = definition(bits.clone());
+        if want {
+            yes += 1;
+        }
+        let mut after_zero: Vec[i64] = [0];
+        after_zero.extend(bits.clone());
+        let mut after_pair: Vec[i64] = [1, next_random(mut seed) % 2];
+        after_pair.extend(bits.clone());
+        // A string built from random characters, whose last one is
+        // known.
+        let mut built: Vec[i64] = Vec.new();
+        let k = 1 + next_random(mut seed) % 7;
+        let mut last_one_bit = false;
+        for _ in 0..k {
+            let c = next_random(mut seed) % 3;
+            if c == 0 {
+                built.push(0);
+            } else {
+                built.push(1);
+                built.push(c - 1);
+            }
+            last_one_bit = c == 0;
+        }
+        if not last_one_bit {
+            // It must end in 0, so its last character is 10.
+            built[built.len() - 1] = 0;
+        }
+        for which in 0..arms {
+            let got = answer(which, bits.clone());
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: a 0 in front, the same answer.
+            checks += 1;
+            if answer(which, after_zero.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: a two-bit character in front, the same answer.
+            checks += 1;
+            if answer(which, after_pair.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: built from characters, the answer is whether the last
+            // one is 0.
+            checks += 1;
+            if answer(which, built.clone()) != last_one_bit {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} strings ({yes} one-bit endings), {arms} arms, {checks} checks, {total} failures");
+}

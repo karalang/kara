@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/719-find-k-th-smallest-pair-distance/bench/find_k_th_smallest_pair_distance.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "a73d3c10a"
+extracted_src = "f781947c"
+model_rev = "583cfb0d"
+model_src = "f781947c"

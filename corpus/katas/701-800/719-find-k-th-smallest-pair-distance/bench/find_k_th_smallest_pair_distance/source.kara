@@ -1,0 +1,64 @@
+// LeetCode #719: Find K-th Smallest Pair Distance -- binary search on
+// the distance.
+//
+// Sort the numbers. For a distance d, the pairs at most d apart can be
+// counted in one pass with two pointers: for each right end, move the
+// left end on while it is more than d below. The answer is the least d
+// with at least k such pairs, found by binary search between 0 and the
+// largest distance. O(n log n + n log W), W the largest distance.
+
+fn smallest_distance_pair(nums: Vec[i64], k: i64) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut lo = 0;
+    let mut hi = sorted[n - 1] - sorted[0];
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let mut count = 0;
+        let mut left = 0;
+        for right in 0..n {
+            while sorted[right] - sorted[left] > mid {
+                left += 1;
+            }
+            count += right - left;
+        }
+        if count >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 40 random arrays of 5,000 numbers from 0 to 10^6, made once.
+    let mut seed: i64 = 719;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..40 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..5000 {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 1000001);
+        }
+        arrays.push(nums);
+    }
+    // 25 rounds of one query per array, each with its own k, every
+    // answer summed.
+    let pairs = 5000 * 4999 / 2;
+    let mut sum = 0;
+    for round in 0..25 {
+        for a in 0..40 {
+            let k = 1 + (round * 7919 + a * 104729) % pairs;
+            sum += smallest_distance_pair(arrays[a], k);
+        }
+    }
+    println(f"25 rounds of 40 arrays of 5000 numbers: sum {sum}");
+}

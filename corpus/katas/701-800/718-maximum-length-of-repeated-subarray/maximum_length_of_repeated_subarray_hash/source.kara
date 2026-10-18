@@ -1,0 +1,138 @@
+// LeetCode #718: Maximum Length of Repeated Subarray -- binary search on
+// the length, with rolling hashes.
+//
+// If a common subarray of length L exists, so does one of every shorter
+// length, so the longest length can be found by binary search. A length
+// is tested by hashing every window of nums1 that long into a map from
+// hash to its start, rolling the hash along nums2, and comparing the
+// numbers whenever a hash is found, so a collision never counts.
+// O((m + n) log min(m, n)) expected.
+
+let BASE: i64 = 113;
+let MODULUS: i64 = 1000000007;
+
+// The hash of every window of `nums` of length `size`, in order.
+fn window_hashes(nums: Vec[i64], size: i64) -> Vec[i64] {
+    let mut power = 1;
+    for _ in 0..size - 1 {
+        power = power * BASE % MODULUS;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut h = 0;
+    for i in 0..nums.len() {
+        if i >= size {
+            h = (h - (nums[i - size] + 1) * power % MODULUS + MODULUS) % MODULUS;
+        }
+        h = (h * BASE + nums[i] + 1) % MODULUS;
+        if i >= size - 1 {
+            out.push(h);
+        }
+    }
+    out
+}
+
+fn shares_length(nums1: Vec[i64], nums2: Vec[i64], size: i64) -> bool {
+    let mut starts: Map[i64, Vec[i64]] = Map.new();
+    let first = window_hashes(nums1, size);
+    for a in 0..first.len() {
+        let h = first[a];
+        if starts.contains_key(h) {
+            starts[h].push(a);
+        } else {
+            starts.insert(h, [a]);
+        }
+    }
+    let second = window_hashes(nums2, size);
+    for b in 0..second.len() {
+        if let Some(candidates) = starts.get(second[b]) {
+            for a in candidates.iter() {
+                let mut same = true;
+                for k in 0..size {
+                    if nums1[*a + k] != nums2[b + k] {
+                        same = false;
+                        break;
+                    }
+                }
+                if same {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn find_length(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    // The longest length known to be shared is lo; hi + 1 is known not
+    // to be.
+    let mut lo = 0;
+    let mut hi = if nums1.len() < nums2.len() { nums1.len() } else { nums2.len() };
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if shares_length(nums1, nums2, mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(seed: mut ref i64, n: i64, values: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % values);
+    }
+    nums
+}
+
+fn show(nums1: Vec[i64], nums2: Vec[i64]) {
+    println(f"{nums1}, {nums2} -> {find_length(nums1, nums2)}");
+}
+
+fn main() {
+    show([1, 2, 3, 2, 1], [3, 2, 1, 4, 7]);
+    show([0, 0, 0, 0, 0], [0, 0, 0, 0, 0]);
+    show([1], [1]);
+    show([1], [2]);
+    show([1, 2, 3], [4, 5, 6]);
+    show([1, 2, 3, 4], [3, 4, 1, 2]);
+    show([5, 1, 2, 3], [1, 2, 3, 5]);
+    show([1, 2, 1, 2, 1], [2, 1, 2, 1, 2]);
+    let mut seed: i64 = 718;
+    let a = random_nums(mut seed, 1000, 101);
+    println(f"1000 numbers against themselves: {find_length(a, a)}");
+    let mut reversed = a.clone();
+    reversed.reverse();
+    println(f"1000 numbers against their reverse: {find_length(a, reversed)}");
+    let b = random_nums(mut seed, 1000, 101);
+    println(f"two 1000-number arrays, values to 100: {find_length(a, b)}");
+    let c = random_nums(mut seed, 1000, 2);
+    let d = random_nums(mut seed, 1000, 2);
+    println(f"two 1000-number arrays, values 0 and 1: {find_length(c, d)}");
+    // A planted run of 300 inside two random arrays.
+    let mut e = random_nums(mut seed, 1000, 101);
+    let mut f = random_nums(mut seed, 1000, 101);
+    for k in 0..300 {
+        e[200 + k] = 7 * k % 101;
+        f[650 + k] = 7 * k % 101;
+    }
+    println(f"a planted run of 300: {find_length(e, f)}");
+    let mut sum = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 30;
+        let n = 1 + next_random(mut seed) % 30;
+        let values = 1 + next_random(mut seed) % 4;
+        let x = random_nums(mut seed, m, values);
+        let y = random_nums(mut seed, n, values);
+        sum = (sum * 131 + find_length(x, y)) % 1000000007;
+    }
+    println(f"300 random pairs: checksum {sum}");
+}

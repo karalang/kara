@@ -1,0 +1,275 @@
+// LeetCode #718: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random arrays.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn find_length_star(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut run: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        run.push(0);
+    }
+    let mut best = 0;
+    for i in 1..m + 1 {
+        let mut j = n;
+        while j >= 1 {
+            if nums1[i - 1] == nums2[j - 1] {
+                run[j] = run[j - 1] + 1;
+                if run[j] > best {
+                    best = run[j];
+                }
+            } else {
+                run[j] = 0;
+            }
+            j -= 1;
+        }
+    }
+    best
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn find_length_table(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut run: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n + 1 {
+            row.push(0);
+        }
+        run.push(row);
+    }
+    let mut best = 0;
+    let mut i = m - 1;
+    while i >= 0 {
+        let mut j = n - 1;
+        while j >= 0 {
+            if nums1[i] == nums2[j] {
+                run[i][j] = run[i + 1][j + 1] + 1;
+                if run[i][j] > best {
+                    best = run[i][j];
+                }
+            }
+            j -= 1;
+        }
+        i -= 1;
+    }
+    best
+}
+
+// ---- diagonal arm ---------------------------------------------------
+
+fn find_length_diagonal(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut best = 0;
+    for shift in 1 - m..n {
+        // The overlap: i from max(0, -shift) while both are in range.
+        let mut i = if shift < 0 { -shift } else { 0 };
+        let mut run = 0;
+        while i < m and i + shift < n {
+            if nums1[i] == nums2[i + shift] {
+                run += 1;
+                if run > best {
+                    best = run;
+                }
+            } else {
+                run = 0;
+            }
+            i += 1;
+        }
+    }
+    best
+}
+
+// ---- hash arm -------------------------------------------------------
+
+let BASE: i64 = 113;
+let MODULUS: i64 = 1000000007;
+
+// The hash of every window of `nums` of length `size`, in order.
+fn window_hashes_hash(nums: Vec[i64], size: i64) -> Vec[i64] {
+    let mut power = 1;
+    for _ in 0..size - 1 {
+        power = power * BASE % MODULUS;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut h = 0;
+    for i in 0..nums.len() {
+        if i >= size {
+            h = (h - (nums[i - size] + 1) * power % MODULUS + MODULUS) % MODULUS;
+        }
+        h = (h * BASE + nums[i] + 1) % MODULUS;
+        if i >= size - 1 {
+            out.push(h);
+        }
+    }
+    out
+}
+
+fn shares_length_hash(nums1: Vec[i64], nums2: Vec[i64], size: i64) -> bool {
+    let mut starts: Map[i64, Vec[i64]] = Map.new();
+    let first = window_hashes_hash(nums1, size);
+    for a in 0..first.len() {
+        let h = first[a];
+        if starts.contains_key(h) {
+            starts[h].push(a);
+        } else {
+            starts.insert(h, [a]);
+        }
+    }
+    let second = window_hashes_hash(nums2, size);
+    for b in 0..second.len() {
+        if let Some(candidates) = starts.get(second[b]) {
+            for a in candidates.iter() {
+                let mut same = true;
+                for k in 0..size {
+                    if nums1[*a + k] != nums2[b + k] {
+                        same = false;
+                        break;
+                    }
+                }
+                if same {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn find_length_hash(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    // The longest length known to be shared is lo; hi + 1 is known not
+    // to be.
+    let mut lo = 0;
+    let mut hi = if nums1.len() < nums2.len() { nums1.len() } else { nums2.len() };
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if shares_length_hash(nums1, nums2, mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn length(which: i64, nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    if which == 0 {
+        find_length_star(nums1, nums2)
+    } else if which == 1 {
+        find_length_table(nums1, nums2)
+    } else if which == 2 {
+        find_length_diagonal(nums1, nums2)
+    } else {
+        find_length_hash(nums1, nums2)
+    }
+}
+
+// The definition: every start in nums1, every start in nums2 and every
+// length that fits both, compared number by number.
+fn definition(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 0..nums1.len() {
+        for j in 0..nums2.len() {
+            let mut size = 1;
+            while i + size <= nums1.len() and j + size <= nums2.len() {
+                let mut same = true;
+                for k in 0..size {
+                    if nums1[i + k] != nums2[j + k] {
+                        same = false;
+                    }
+                }
+                if same and size > best {
+                    best = size;
+                }
+                size += 1;
+            }
+        }
+    }
+    best
+}
+
+fn random_nums(seed: mut ref i64, n: i64, values: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % values);
+    }
+    nums
+}
+
+fn main() {
+    let mut seed = 7180;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut longest = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 12 numbers each, from 1 to 4 values, so runs are common.
+        let values = 1 + next_random(mut seed) % 4;
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        let a = random_nums(mut seed, m, values);
+        let b = random_nums(mut seed, n, values);
+        let want = definition(a.clone(), b.clone());
+        if want > longest {
+            longest = want;
+        }
+        let mut ra = a.clone();
+        ra.reverse();
+        let mut rb = b.clone();
+        rb.reverse();
+        // nums1 copied into nums2 at a random place.
+        let at = next_random(mut seed) % (n + 1);
+        let mut holding: Vec[i64] = Vec.new();
+        for k in 0..at {
+            holding.push(b[k]);
+        }
+        holding.extend(a.clone());
+        for k in at..n {
+            holding.push(b[k]);
+        }
+        for which in 0..arms {
+            let got = length(which, a.clone(), b.clone());
+            // P1: the definition's length.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the arrays swapped, the same length.
+            checks += 1;
+            if length(which, b.clone(), a.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: both arrays reversed, the same length.
+            checks += 1;
+            if length(which, ra.clone(), rb.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: nums2 holding a copy of nums1, all of nums1.
+            checks += 1;
+            if length(which, a.clone(), holding.clone()) != m {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} pairs (longest {longest}), {arms} arms, {checks} checks, {total} failures");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/717-1-bit-and-2-bit-characters/one_bit_and_two_bit_characters_reach.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "a73d3c10a"
+extracted_src = "3e9dd345"
+model_rev = "583cfb0d"
+model_src = "3e9dd345"

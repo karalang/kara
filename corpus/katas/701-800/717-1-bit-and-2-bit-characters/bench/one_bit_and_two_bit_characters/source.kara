@@ -1,0 +1,53 @@
+// LeetCode #717: 1-bit and 2-bit Characters -- read from the start.
+//
+// The code is prefix-free: a 0 is a whole character and a 1 starts a
+// two-bit one. So the bits decode one way only, from the front: step
+// past one bit on a 0 and two on a 1. The last character is one bit
+// exactly when a step lands on the last bit. O(n).
+
+fn is_one_bit_character(bits: Vec[i64]) -> bool {
+    let n = bits.len();
+    let mut i = 0;
+    while i < n - 1 {
+        i += bits[i] + 1;
+    }
+    i == n - 1
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 random strings of 10,000 bits ending in 0, a quarter, a half
+    // or three quarters ones, made once.
+    let mut seed: i64 = 717;
+    let mut strings: Vec[Vec[i64]] = Vec.new();
+    for s in 0..100 {
+        let density = 1 + s % 3;
+        let mut bits: Vec[i64] = Vec.new();
+        for _ in 0..9999 {
+            bits.push(if next_random(mut seed) % 4 < density { 1 } else { 0 });
+        }
+        bits.push(0);
+        strings.push(bits);
+    }
+    // 400 rounds, each flipping one bit of every string before reading
+    // them all, every one-bit ending counted.
+    let mut yes = 0;
+    for round in 0..400 {
+        for bits in strings.iter_mut() {
+            let at = (round * 997) % 9999;
+            bits[at] = 1 - bits[at];
+        }
+        for bits in strings.iter() {
+            if is_one_bit_character(bits) {
+                yes += 1;
+            }
+        }
+    }
+    println(f"400 rounds of 100 strings of 10000 bits: {yes} one-bit endings");
+}

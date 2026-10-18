@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/717-1-bit-and-2-bit-characters/bench/one_bit_and_two_bit_characters.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "a73d3c10a"
+extracted_src = "dfa5cc6b"
+model_rev = "583cfb0d"
+model_src = "dfa5cc6b"

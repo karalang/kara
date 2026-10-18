@@ -1,0 +1,11 @@
+[1, 0, 0] -> true
+[1, 1, 1, 0] -> false
+[0] -> true
+[1, 0] -> false
+[0, 0] -> true
+[1, 1, 0] -> true
+[0, 1, 0] -> false
+[1, 1, 1, 1, 0] -> true
+[0, 1, 1, 1, 0] -> false
+1 to 1000 bits, all ones but the last: 500 one-bit endings
+2000 random strings: 1352 one-bit endings, checksum 206152694

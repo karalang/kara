@@ -1,0 +1,14 @@
+[1, 2, 3, 2, 1], [3, 2, 1, 4, 7] -> 3
+[0, 0, 0, 0, 0], [0, 0, 0, 0, 0] -> 5
+[1], [1] -> 1
+[1], [2] -> 0
+[1, 2, 3], [4, 5, 6] -> 0
+[1, 2, 3, 4], [3, 4, 1, 2] -> 2
+[5, 1, 2, 3], [1, 2, 3, 5] -> 3
+[1, 2, 1, 2, 1], [2, 1, 2, 1, 2] -> 4
+1000 numbers against themselves: 1000
+1000 numbers against their reverse: 3
+two 1000-number arrays, values to 100: 3
+two 1000-number arrays, values 0 and 1: 19
+a planted run of 300: 300
+300 random pairs: checksum 603089451

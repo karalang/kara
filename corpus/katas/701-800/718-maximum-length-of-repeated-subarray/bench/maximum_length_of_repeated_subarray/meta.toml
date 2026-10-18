@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/718-maximum-length-of-repeated-subarray/bench/maximum_length_of_repeated_subarray.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "a73d3c10a"
+extracted_src = "8ad13f6c"
+model_rev = "583cfb0d"
+model_src = "8ad13f6c"
