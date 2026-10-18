@@ -1702,8 +1702,29 @@ impl<'a> super::TypeChecker<'a> {
         if traits.is_empty() {
             return false;
         }
+        // Open only until the derive has run: the re-check after expansion
+        // sees the generated `impl`, and the surface is closed again
+        // (B-2026-10-15-45).
         traits.iter().any(|t| {
             self.is_comptime_derive_fn(&format!("derive_{}", crate::comptime::to_snake_case(t)))
+                && !self.program_has_trait_impl(t, type_name)
+        })
+    }
+
+    /// Whether the program holds `impl <trait_name> for <type_name>`.
+    fn program_has_trait_impl(&self, trait_name: &str, type_name: &str) -> bool {
+        self.program.items.iter().any(|it| {
+            let Item::ImplBlock(b) = it else {
+                return false;
+            };
+            let trait_ok = b
+                .trait_name
+                .as_ref()
+                .and_then(|p| p.segments.last())
+                .is_some_and(|n| n == trait_name);
+            let type_ok = matches!(&b.target_type.kind, TypeKind::Path(p)
+                if p.segments.last().is_some_and(|n| n == type_name));
+            trait_ok && type_ok
         })
     }
 

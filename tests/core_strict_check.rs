@@ -7217,3 +7217,52 @@ fn main() {
 "#,
     );
 }
+
+/// B-2026-10-15-45: a derive opens a type's method surface only until it
+/// has run. A method the derive did not generate is refused, and the
+/// derived serialization still checks.
+#[test]
+fn a_derive_closes_the_method_surface_once_it_has_run() {
+    rejected(
+        "derive-unknown-method",
+        r#"
+#[derive(Serialize)]
+struct R { code: i64 }
+fn main() {
+    let r = R { code: 3 };
+    println(f"{r.code()}");
+}
+"#,
+        "no method 'code' on type 'R'",
+    );
+    accepted(
+        "derive-serialize-json",
+        r#"
+#[derive(Serialize)]
+struct R { code: i64 }
+fn main() {
+    let r = R { code: 3 };
+    println(Json.serialize(r));
+}
+"#,
+    );
+}
+
+/// B-2026-10-15-5: the I/O library's unit results are `Result[(), IoError]`,
+/// so a user helper of that type shares an `if` with `fs.write`.
+#[test]
+fn an_io_unit_result_is_the_unit_type() {
+    accepted(
+        "io-unit-result",
+        r#"
+fn append_file(path: Str, text: Str) -> Result[(), IoError] {
+    fs.write(path, text)
+}
+fn main() {
+    let r: Result[(), IoError] = fs.write("y.txt", "a");
+    let r2 = if r.is_ok() { append_file("y.txt", "b") } else { fs.write("y.txt", "c") };
+    println(f"{r.is_ok()} {r2.is_ok()}");
+}
+"#,
+    );
+}
