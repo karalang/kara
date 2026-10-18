@@ -7218,7 +7218,12 @@ impl<'a> super::TypeChecker<'a> {
                         .as_ref()
                         .and_then(|p| p.get(i))
                         .is_some_and(|t| self.core_is_view(t));
-                    if into_view && self.core_expr_is_temp(v) {
+                    // A string literal lent to a view parameter is static
+                    // text (§5.1), not a temporary: `tail("abc")` (B-2026-10-18-38).
+                    if into_view
+                        && !matches!(v.kind, ExprKind::StringLit(_))
+                        && self.core_expr_is_temp(v)
+                    {
                         return Some(v.span);
                     }
                     if self.core_node_is_view(v) == Some(true) {

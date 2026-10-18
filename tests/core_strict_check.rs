@@ -6889,6 +6889,29 @@ fn app_rows_of_2026_10_15() {
     );
 }
 
+/// B-2026-10-18-38: a string literal lent to a view parameter is static
+/// text (§5.1), so a result that keeps it is fine; an f-string is still a
+/// temporary.
+#[test]
+fn string_literal_argument_to_a_view_parameter_is_not_a_temporary() {
+    let prog = |arg: &str| {
+        format!(
+            "fn tail(line: Str) -> Str {{ line }}\n\
+             fn main() {{\n\
+                 let n = 1;\n\
+                 let g = tail({arg});\n\
+                 println(f\"{{g}}{{n}}\");\n\
+             }}\n"
+        )
+    };
+    accepted("literal-into-view-param-kept", &prog("\"abc\""));
+    rejected(
+        "fstring-into-view-param-kept",
+        &prog("f\"a{n}\""),
+        "a reference to a temporary outlives its statement",
+    );
+}
+
 /// B-2026-10-15-14: `mut ref place` borrows a place for writing; a `let`
 /// annotation never borrows, and its fix writes the operator.
 #[test]
