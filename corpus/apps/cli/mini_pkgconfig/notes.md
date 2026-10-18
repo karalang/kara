@@ -97,9 +97,11 @@ Author errors:
 
 Compiler gaps:
 - B-2026-10-18-10: the client struct was called `Client`, and
-  `karac check` found none of its methods, because it sends every
+  `karac check` found none of its methods, because it sent every
   method call on a type named `Client`, `Response`, `HttpError` or
-  `RequestBuilder` to the library's HTTP types. It became `PkgClient`.
+  `RequestBuilder` to the library's HTTP types. It was `PkgClient`
+  until 0bfc3a3d8d fixed that; it is `Client` again (karac at
+  3e44636e6c).
 - B-2026-10-15-15: there is no `rfind`. `last_index` finds the last
   slash or dot.
 

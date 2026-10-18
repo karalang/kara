@@ -16,9 +16,6 @@
 // oracle.py.
 //
 // Workarounds:
-// - B-2026-10-18-10: a struct named `Client` has none of its methods
-//   found, because `karac check` dispatches that name to the library's
-//   HTTP client; the client struct is `PkgClient`.
 // - B-2026-10-15-15: there is no `rfind`; `last_index` finds the last
 //   slash or dot.
 
@@ -1032,7 +1029,7 @@ fn determine_prefix(filename: Str) -> Option[String] {
 
 // ------------------------------------------------------------ the client
 
-// PkgClient flags.
+// Client flags.
 const F_SEARCH_PRIVATE: i64 = 1;
 const F_MERGE_PRIVATE: i64 = 2;
 const F_ITER_PRIVATE: i64 = 4;
@@ -1065,7 +1062,7 @@ enum Visit {
     Uninstalled,
 }
 
-struct PkgClient {
+struct Client {
     pkgs: Vec[Pkg],
     cache: Vec[i64],
     builtins: Vec[i64],
@@ -1105,8 +1102,8 @@ fn builtin_pkg(name: Str) -> Pkg {
     p
 }
 
-fn new_client() -> PkgClient {
-    let mut c = PkgClient {
+fn new_client() -> Client {
+    let mut c = Client {
         pkgs: Vec.new(),
         cache: Vec.new(),
         builtins: Vec.new(),
@@ -1130,7 +1127,7 @@ fn new_client() -> PkgClient {
     c
 }
 
-impl PkgClient {
+impl Client {
     fn error(mut ref self, msg: Str) {
         if self.errors_to == 1 {
             self.out.push_str(msg);
@@ -1871,7 +1868,7 @@ fn getenv(env: ref Vec[(String, String)], name: Str) -> Option[String] {
 // The rest of main(), once the options are read: everything that needs
 // the client, which sends its errors where the options say.
 struct Run {
-    c: PkgClient,
+    c: Client,
     want: i64,
     fragment_filter: Option[String],
     maxdepth: i64,
@@ -2163,7 +2160,7 @@ impl Run {
     }
 }
 
-fn io_of(c: ref PkgClient, status: i64) -> Io {
+fn io_of(c: ref Client, status: i64) -> Io {
     Io { out: c.out.clone(), err: c.err.clone(), status: status }
 }
 
