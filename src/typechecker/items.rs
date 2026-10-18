@@ -5977,12 +5977,26 @@ impl<'a> super::TypeChecker<'a> {
         if method != "next" || !args.is_empty() {
             return false;
         }
+        // B-2026-10-13-6: the iterator first bound to a name.
+        if let ExprKind::Identifier(n) = &object.kind {
+            return self.local_scope.is_lent_iter(n);
+        }
+        self.core_iter_call(object)
+    }
+
+    /// Is `value` `c.iter()` on a core collection, whose items are `ref T`?
+    /// Under `karac check` and on the MIR pipeline only, as
+    /// [`Self::core_iter_next_scrutinee`].
+    pub(super) fn core_iter_call(&self, value: &Expr) -> bool {
+        if !self.library_methods_from_source && !self.cli_lint_overrides.strict_core {
+            return false;
+        }
         let ExprKind::MethodCall {
             object: collection,
             method: iter,
             args: iter_args,
             ..
-        } = &object.kind
+        } = &value.kind
         else {
             return false;
         };
@@ -7989,6 +8003,13 @@ impl<'a> super::TypeChecker<'a> {
                         if copy {
                             self.local_scope.mark_view(&name);
                         }
+                    }
+                }
+                // B-2026-10-13-6: `let mut it = c.iter();` keeps the view
+                // its items are, for a later `it.next()`.
+                if self.core_iter_call(value) {
+                    if let PatternKind::Binding(n) = &pattern.kind {
+                        self.local_scope.mark_lent_iter(n);
                     }
                 }
                 if ref_copy {

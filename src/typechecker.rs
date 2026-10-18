@@ -568,6 +568,10 @@ pub(super) struct LocalTypeScope {
     /// `scopes` so a later `insert` of the same name (a shadowing `let`)
     /// clears the mark, and a pop drops it with its scope.
     views: Vec<FxHashSet<String>>,
+    /// B-2026-10-13-6 — per scope, the names bound to `c.iter()` on a core
+    /// collection, whose `next()` items are views as that call's are.
+    /// Cleared like `views` by a shadowing `insert`.
+    lent_iters: Vec<FxHashSet<String>>,
 }
 
 impl LocalTypeScope {
@@ -575,21 +579,27 @@ impl LocalTypeScope {
         LocalTypeScope {
             scopes: vec![FxHashMap::default()],
             views: vec![Default::default()],
+            lent_iters: vec![Default::default()],
         }
     }
 
     pub(super) fn push(&mut self) {
         self.scopes.push(FxHashMap::default());
         self.views.push(Default::default());
+        self.lent_iters.push(Default::default());
     }
 
     pub(super) fn pop(&mut self) {
         self.scopes.pop();
         self.views.pop();
+        self.lent_iters.pop();
     }
 
     pub(super) fn insert(&mut self, name: String, ty: Type) {
         if let Some(v) = self.views.last_mut() {
+            v.remove(name.as_str());
+        }
+        if let Some(v) = self.lent_iters.last_mut() {
             v.remove(name.as_str());
         }
         if let Some(scope) = self.scopes.last_mut() {
@@ -611,6 +621,26 @@ impl LocalTypeScope {
         for (scope, views) in self.scopes.iter().zip(self.views.iter()).rev() {
             if scope.contains_key(name) {
                 return views.contains(name);
+            }
+        }
+        false
+    }
+
+    /// Mark `name`, already bound in the innermost scope, as an iterator
+    /// lent by a core collection's `iter()`.
+    pub(super) fn mark_lent_iter(&mut self, name: &str) {
+        if self.scopes.last().is_some_and(|s| s.contains_key(name)) {
+            if let Some(v) = self.lent_iters.last_mut() {
+                v.insert(name.to_string());
+            }
+        }
+    }
+
+    /// Does `name` resolve to a binding marked by [`Self::mark_lent_iter`]?
+    pub(super) fn is_lent_iter(&self, name: &str) -> bool {
+        for (scope, iters) in self.scopes.iter().zip(self.lent_iters.iter()).rev() {
+            if scope.contains_key(name) {
+                return iters.contains(name);
             }
         }
         false
