@@ -92,17 +92,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 734 |
+| miscompile | 735 |
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 274 |
 | codegen-gap | 265 |
-| false-positive | 206 |
+| false-positive | 207 |
 | other | 173 |
 | perf | 170 |
 | diagnostics | 164 |
-| crash | 121 |
+| crash | 122 |
 | soundness | 111 |
 | use-after-free | 91 |
 
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2921 |
+| codegen | 2922 |
 | interp | 941 |
-| typecheck | 448 |
+| typecheck | 449 |
 | other | 115 |
-| ownership | 106 |
+| ownership | 107 |
 | cli | 76 |
 | runtime | 75 |
 | parser | 68 |
@@ -203,6 +203,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
 | B-2026-10-18-1 | 2026-10-18 | typecheck+interp+codegen | low | In generic code `T.Output` reads one `Output` per type, so a type with two operator impls (`impl Add for V { type Output = V }` and `impl Mul for V { type Output = i64 }`) gives `sum2[T: Add](a: own T, b: own T) -> T.Output` the `i64` of `Mul`: `sum2(V { x: 7 }, V { x: 8 }).x` is refused with "no field 'x' on type 'i64'" | — |
+| B-2026-10-18-2 | 2026-10-18 | typecheck | medium | A `const` whose initializer is an integer literal above i64::MAX panics `karac check` (and `karac __mir-run`): `const BIG: i128 = 18446744073709551615;` reaches `narrow_literal_to_i64` from `eval_const_expr` with "internal error: 128-bit integer literal ... reached an i64-only consumer (B-2026-08-19-8 stage 5)". The same literal in a `let`, in a match pattern, or the same value spelled `(1 << 64) - 1` all work | — |
+| B-2026-10-18-3 | 2026-10-18 | ownership | medium | Inside a loop, `karac check` refuses an owned loop-local value moved by a METHOD call in each of two exclusive branches, `if c { s.link(it); } else { s.link(it); }`, with "value 'it' was moved into a container (moved at line N), used again here", when `link(mut ref self, it: own It)` pushes it into a field. The same code outside a loop, or with a free function `take(mut v, it)` inside the loop, passes; __mir-run runs the refused program correctly | — |
+| B-2026-10-18-4 | 2026-10-18 | codegen | high | A function declared `-> i64` whose result is a `ref i64` from a call, `fn f(m: ref Map[String, i64], k: Str) -> i64 { m.get(k).unwrap_or(0) }` (or `v.first().unwrap_or(0)`, tail or `return`), returns the reference's ADDRESS on `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir`, printing 94742809522920 where `karac __mir-run` prints 5: the built MIR assigns the `ref i64` result straight to the `i64` return slot with no copy out | — |
 
 ### Relocated
 

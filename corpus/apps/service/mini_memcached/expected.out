@@ -1,0 +1,297 @@
+mini_memcached: listening on 127.0.0.1:47747, 2048 bytes of memory
+=== basics (t+0)
+> version
+< VERSION 1.6.21
+> set user:1 0 0 5
+>   alice
+< STORED
+> get user:1
+< VALUE user:1 0 5
+<   alice
+< END
+> add user:1 0 0 3
+>   bob
+< NOT_STORED
+> add user:2 7 0 3
+>   bob
+< STORED
+> get user:1 user:2 user:3
+< VALUE user:1 0 5
+<   alice
+< VALUE user:2 7 3
+<   bob
+< END
+> replace user:3 0 0 1
+>   x
+< NOT_STORED
+> replace user:2 9 0 5
+>   carol
+< STORED
+> gets user:2
+< VALUE user:2 9 5 3
+<   carol
+< END
+> append user:1 0 0 6
+>   -smith
+< STORED
+> prepend user:1 0 0 3
+>   dr.
+< STORED
+> get user:1
+< VALUE user:1 0 14
+<   dr.alice-smith
+< END
+> delete user:2
+< DELETED
+> delete user:2
+< NOT_FOUND
+> get user:2
+< END
+--- client sent 295 bytes, server read 295, client got 260
+=== cas (t+0)
+> gets user:1
+< VALUE user:1 0 14 5
+<   dr.alice-smith
+< END
+> cas user:1 0 0 3 4
+>   eve
+< EXISTS
+> cas user:1 0 0 3 5
+>   eve
+< STORED
+> gets user:1
+< VALUE user:1 0 3 6
+<   eve
+< END
+> cas user:9 0 0 3 1
+>   eve
+< NOT_FOUND
+> set n 0 0 2 noreply
+>   41
+  (noreply: STORED)
+> incr n 1
+< 42
+> gets n
+< VALUE n 0 2 8
+<   42
+< END
+> cas n 0 0 2 9 noreply
+>   99
+  (noreply: EXISTS)
+> get n
+< VALUE n 0 2
+<   42
+< END
+--- client sent 178 bytes, server read 178, client got 149
+=== counters (t+0)
+> set hits 0 0 1
+>   9
+< STORED
+> incr hits 1
+< 10
+> incr hits 90
+< 100
+> decr hits 7
+< 93
+> decr hits 1000
+< 0
+> set big 0 0 20
+>   18446744073709551615
+< STORED
+> incr big 2
+< 1
+> incr hits abc
+< CLIENT_ERROR invalid numeric delta argument
+> incr user:1 1
+< CLIENT_ERROR cannot increment or decrement non-numeric value
+> incr nope 1
+< NOT_FOUND
+> decr nope 1
+< NOT_FOUND
+> get hits big
+< VALUE hits 0 1
+<   0
+< VALUE big 0 1
+<   1
+< END
+--- client sent 195 bytes, server read 195, client got 206
+=== expiry (t+0)
+> set short 0 10 2
+>   ok
+< STORED
+> set long 0 3600 2
+>   ok
+< STORED
+> set forever 0 0 2
+>   ok
+< STORED
+> set gone 0 -1 2
+>   ok
+< STORED
+> set abs 0 1760000030 2
+>   ok
+< STORED
+> set past 0 1759999000 2
+>   ok
+< STORED
+> get short long forever gone abs past
+< VALUE short 0 2
+<   ok
+< VALUE long 0 2
+<   ok
+< VALUE forever 0 2
+<   ok
+< VALUE abs 0 2
+<   ok
+< END
+> touch long 5
+< TOUCHED
+> touch missing 5
+< NOT_FOUND
+--- client sent 215 bytes, server read 215, client got 156
+=== later (t+20)
+> get short long forever abs
+< VALUE forever 0 2
+<   ok
+< VALUE abs 0 2
+<   ok
+< END
+> gat 100 forever
+< VALUE forever 0 2
+<   ok
+< END
+> gats 0 forever
+< VALUE forever 0 2 18
+<   ok
+< END
+--- client sent 61 bytes, server read 61, client got 106
+=== much later (t+60)
+> get long abs forever
+< VALUE forever 0 2
+<   ok
+< END
+> flush_all 10
+< OK
+> get forever
+< VALUE forever 0 2
+<   ok
+< END
+--- client sent 49 bytes, server read 49, client got 60
+=== after the flush (t+75)
+> get forever user:1 n
+< END
+> set fresh 0 0 3
+>   new
+< STORED
+> get fresh
+< VALUE fresh 0 3
+<   new
+< END
+--- client sent 55 bytes, server read 55, client got 40
+=== eviction (t+75)
+> flush_all
+< OK
+> set k0 0 0 200
+>   aaaaaaaaaaaaaaaaaaaa...(200 bytes)
+< STORED
+> set k1 0 0 200
+>   bbbbbbbbbbbbbbbbbbbb...(200 bytes)
+< STORED
+> set k2 0 0 200
+>   cccccccccccccccccccc...(200 bytes)
+< STORED
+> set k3 0 0 200
+>   dddddddddddddddddddd...(200 bytes)
+< STORED
+> set k4 0 0 200
+>   eeeeeeeeeeeeeeeeeeee...(200 bytes)
+< STORED
+> set k5 0 0 200
+>   ffffffffffffffffffff...(200 bytes)
+< STORED
+> set k6 0 0 200
+>   gggggggggggggggggggg...(200 bytes)
+< STORED
+> set k7 0 0 200
+>   hhhhhhhhhhhhhhhhhhhh...(200 bytes)
+< STORED
+> get k0
+< VALUE k0 0 200
+<   aaaaaaaaaaaaaaaaaaaa...(200 bytes)
+< END
+> set k8 0 0 200
+>   iiiiiiiiiiiiiiiiiiii...(200 bytes)
+< STORED
+> set k9 0 0 200
+>   jjjjjjjjjjjjjjjjjjjj...(200 bytes)
+< STORED
+> get k0 k1 k2 k3
+< VALUE k0 0 200
+<   aaaaaaaaaaaaaaaaaaaa...(200 bytes)
+< VALUE k3 0 200
+<   dddddddddddddddddddd...(200 bytes)
+< END
+> set huge 0 0 3000
+>   xxxxxxxxxxxxxxxxxxxx...(3000 bytes)
+< SERVER_ERROR object too large for cache
+> get huge
+< END
+--- client sent 5247 bytes, server read 5247, client got 794
+=== errors (t+75)
+> set k 0 0 3
+>   abc
+< CLIENT_ERROR bad data chunk
+> 
+< ERROR
+> get
+< ERROR
+> frobnicate now
+< ERROR
+> set bad 0 zero 2
+< CLIENT_ERROR bad command line format
+> hi
+< ERROR
+> set toolong 0 0
+< ERROR
+> get kkkkkkkkkkkkkkkk...(255 bytes)
+< CLIENT_ERROR bad command line format
+> delete k0 0
+< DELETED
+> verbosity 1
+< OK
+> incr
+< ERROR
+--- client sent 368 bytes, server read 368, client got 160
+=== stats (t+75)
+> stats
+< STAT time 1760000075
+< STAT total_connections 10
+< STAT cmd_get 37
+< STAT cmd_set 31
+< STAT cmd_flush 2
+< STAT cmd_touch 4
+< STAT get_hits 23
+< STAT get_misses 14
+< STAT get_expired 5
+< STAT delete_misses 1
+< STAT delete_hits 2
+< STAT incr_misses 1
+< STAT incr_hits 4
+< STAT decr_misses 1
+< STAT decr_hits 2
+< STAT cas_misses 1
+< STAT cas_hits 1
+< STAT cas_badval 2
+< STAT touch_hits 3
+< STAT touch_misses 1
+< STAT limit_maxbytes 2048
+< STAT bytes 1750
+< STAT curr_items 7
+< STAT total_items 32
+< STAT evictions 2
+< STAT reclaimed 0
+< END
+> quit
+  (connection closed by quit)
+--- client sent 24 bytes, server read 13, client got 514
+mini_memcached: 7 items, 1750 bytes

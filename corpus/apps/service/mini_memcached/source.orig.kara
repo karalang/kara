@@ -1,0 +1,818 @@
+// mini_memcached: a memcached server speaking the text protocol over a
+// real TCP socket, as memcached 1.6 answers it:
+// - set, add, replace, append, prepend and cas, with flags, noreply,
+//   and the data block's length checked against its `\r\n`;
+// - get, gets, gat and gats over several keys, delete, touch, incr and
+//   decr with 64-bit wraparound and the floor at zero;
+// - expiry as memcached reads exptime: relative up to 30 days, an
+//   absolute Unix time beyond that, negative for already expired;
+// - flush_all, now or after a delay, and LRU eviction when the memory
+//   limit is reached, with objects too large for the cache refused;
+// - memcached's ERROR, CLIENT_ERROR and SERVER_ERROR replies, what it
+//   does with the bytes that follow them, quit, version and stats.
+//
+// Each session is one client connection on 127.0.0.1:47747: the client
+// writes its commands, the server reads them, answers, and closes, and
+// the client reads the reply. The clock is virtual and moves between
+// sessions. expected.out is the output of mini_memcached.py, the same
+// server fed the same bytes.
+
+const START: i64 = 1760000000;
+const PROCESS_STARTED: i64 = START - 2;
+const REALTIME_MAXDELTA: i64 = 60 * 60 * 24 * 30;
+const LIMIT: i64 = 2048;
+const OVERHEAD: i64 = 48;
+const KEY_MAX: i64 = 250;
+const ADDR: Str = "127.0.0.1:47747";
+
+fn from_bytes(v: ref Vec[u8]) -> String {
+    String.from_utf8(v.clone()).unwrap_or("?".to_string())
+}
+
+fn slice_vec(v: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let end = if to > v.len() { v.len() } else { to };
+    for i in from..end {
+        out.push(v[i]);
+    }
+    out
+}
+
+// A line or a data block as the transcript shows it.
+fn show(b: ref Vec[u8]) -> String {
+    let mut s = from_bytes(b);
+    if s.len() > 60 {
+        s = f"{s[..20]}...({s.len()} bytes)";
+    }
+    s.replace("\r", "\\r").replace("\n", "\\n")
+}
+
+// A decimal in [lo, hi], or None.
+fn parse_num(s: Str, lo: i128, hi: i128) -> Option[i128] {
+    let b = s.bytes();
+    let start = if b.len() > 0 and b[0] == b'-' { 1 } else { 0 };
+    if b.len() == start or b.len() - start > 30 {
+        return None;
+    }
+    let mut v: i128 = 0;
+    for i in start..b.len() {
+        if b[i] < b'0' or b[i] > b'9' {
+            return None;
+        }
+        v = v * 10 + (b[i] - b'0') as i128;
+    }
+    if start == 1 {
+        v = -v;
+    }
+    if v < lo or v > hi {
+        return None;
+    }
+    Some(v)
+}
+
+const U64_MAX: i128 = 18446744073709551615;
+const I32_MIN: i128 = -2147483648;
+const I32_MAX: i128 = 2147483647;
+const U32_MAX: i128 = 4294967295;
+
+#[derive(Clone)]
+struct Item {
+    key: String,
+    flags: i64,
+    exptime: i64,
+    data: Vec[u8],
+    cas: i64,
+    time: i64,
+}
+
+impl Item {
+    fn size(self) -> i64 {
+        OVERHEAD + self.key.len() + self.data.len()
+    }
+}
+
+const STAT_NAMES: Array[Str, 18] = ["cmd_get", "cmd_set", "cmd_flush", "cmd_touch", "get_hits", "get_misses",
+    "get_expired", "delete_misses", "delete_hits", "incr_misses", "incr_hits",
+    "decr_misses", "decr_hits", "cas_misses", "cas_hits", "cas_badval",
+    "touch_hits", "touch_misses"];
+
+struct Cache {
+    now: i64,
+    items: Map[String, Item],
+    lru: Vec[String],
+    next_cas: i64,
+    oldest_live: i64,
+    bytes: i64,
+    stats: Map[String, i64],
+    connections: i64,
+}
+
+impl Cache {
+    fn new() -> Cache {
+        Cache {
+            now: 2,
+            items: Map.new(),
+            lru: Vec.new(),
+            next_cas: 1,
+            oldest_live: 0,
+            bytes: 0,
+            stats: Map.new(),
+            connections: 0,
+        }
+    }
+
+    fn count(mut ref self, name: Str) {
+        let n: i64 = self.stats.get(name).unwrap_or(0);
+        self.stats.insert(name.to_string(), n + 1);
+    }
+
+    fn stat(self, name: Str) -> i64 {
+        self.stats.get(name).unwrap_or(0)
+    }
+
+    fn realtime(self, exptime0: i64) -> i64 {
+        let exptime = if exptime0 < 0 { REALTIME_MAXDELTA + 1 } else { exptime0 };
+        if exptime == 0 {
+            return 0;
+        }
+        if exptime > REALTIME_MAXDELTA {
+            if exptime <= PROCESS_STARTED {
+                return 1;
+            }
+            return exptime - PROCESS_STARTED;
+        }
+        exptime + self.now
+    }
+
+    // Why an item may no longer be served: "expired", "flushed" or "".
+    fn dead(self, it: ref Item) -> String {
+        if it.exptime != 0 and it.exptime <= self.now {
+            return "expired".to_string();
+        }
+        if self.oldest_live != 0 and self.oldest_live <= self.now and it.time < self.oldest_live {
+            return "flushed".to_string();
+        }
+        String.new()
+    }
+
+    fn unlink(mut ref self, key: Str) {
+        if let Some(it) = self.items.remove(key) {
+            self.bytes -= it.size();
+        }
+        let mut i = 0;
+        while i < self.lru.len() {
+            if self.lru[i] == key {
+                self.lru.remove(i);
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    fn bump(mut ref self, key: Str) {
+        let mut i = 0;
+        while i < self.lru.len() {
+            if self.lru[i] == key {
+                let k = self.lru.remove(i);
+                self.lru.push(k);
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    // The live item for a key; a dead one is unlinked on the way.
+    fn find(mut ref self, key: Str) -> Option[Item] {
+        let it = match self.items.get(key) {
+            Some(it) => it.clone(),
+            None => return None,
+        };
+        let why = self.dead(it);
+        if not why.is_empty() {
+            if why == "expired" {
+                self.count("get_expired");
+            }
+            self.unlink(key);
+            return None;
+        }
+        Some(it)
+    }
+
+    fn link(mut ref self, it0: own Item) {
+        let mut it = it0;
+        if self.items.contains_key(it.key.as_str()) {
+            self.unlink(it.key.as_str());
+        }
+        while self.bytes + it.size() > LIMIT and not self.lru.is_empty() {
+            let victim = self.lru[0].clone();
+            let dead = match self.items.get(victim.as_str()) {
+                Some(v) => not self.dead(v).is_empty(),
+                None => false,
+            };
+            if dead {
+                self.count("reclaimed");
+            } else {
+                self.count("evictions");
+            }
+            self.unlink(victim.as_str());
+        }
+        it.cas = self.next_cas;
+        self.next_cas += 1;
+        it.time = self.now;
+        self.bytes += it.size();
+        self.lru.push(it.key.clone());
+        self.count("total_items");
+        self.items.insert(it.key.clone(), it);
+    }
+
+    fn set_exptime(mut ref self, key: Str, exptime: i64) {
+        if let Some(it) = self.items.get_mut(key) {
+            it.exptime = exptime;
+        }
+    }
+}
+
+// ------------------------------------------------------------ the protocol
+
+struct Conn {
+    reply: Vec[u8],
+    log: Vec[String],
+}
+
+impl Conn {
+    fn say(mut ref self, line: Str) {
+        self.reply.extend_from_slice(line.bytes());
+        self.reply.extend_from_slice("\r\n".bytes());
+        self.log.push(f"< {show(line.bytes().to_vec())}");
+    }
+
+    fn answer(mut ref self, noreply: bool, line: Str) {
+        if noreply {
+            self.log.push(f"  (noreply: {line})");
+        } else {
+            self.say(line);
+        }
+    }
+}
+
+fn is_storage(cmd: Str) -> bool {
+    cmd == "set" or cmd == "add" or cmd == "replace" or cmd == "append" or cmd == "prepend" or cmd == "cas"
+}
+
+fn new_item(key: Str, flags: i64, exptime: i64, data: own Vec[u8], now: i64) -> Item {
+    Item { key: key.to_string(), flags: flags, exptime: exptime, data: data, cas: 0, time: now }
+}
+
+// Handles one connection's bytes. Returns how many bytes it read.
+fn serve(cache: mut ref Cache, data: ref Vec[u8], c: mut ref Conn) -> i64 {
+    let mut pos = 0;
+    while pos < data.len() {
+        let mut nl = pos;
+        while nl < data.len() and data[nl] != b'\n' {
+            nl += 1;
+        }
+        if nl >= data.len() {
+            break;
+        }
+        let mut line = slice_vec(data, pos, nl);
+        pos = nl + 1;
+        if line.len() > 0 and line[line.len() - 1] == b'\r' {
+            line.pop();
+        }
+        c.log.push(f"> {show(line)}");
+        let text = from_bytes(line);
+        let toks = text.split_whitespace();
+        if toks.is_empty() {
+            c.say("ERROR");
+            continue;
+        }
+        let cmd = toks[0].clone();
+        let noreply = toks[toks.len() - 1] == "noreply";
+        let last = if noreply { toks.len() - 1 } else { toks.len() };
+        let mut args: Vec[String] = Vec.new();
+        for i in 1..last {
+            args.push(toks[i].clone());
+        }
+
+        if is_storage(cmd.as_str()) {
+            let need = if cmd == "cas" { 5 } else { 4 };
+            if args.len() != need {
+                c.say("ERROR");
+                continue;
+            }
+            let key = args[0].clone();
+            let flags = parse_num(args[1].as_str(), 0, U32_MAX);
+            let exptime = parse_num(args[2].as_str(), I32_MIN, I32_MAX);
+            let vlen = parse_num(args[3].as_str(), I32_MIN, I32_MAX);
+            let casv = if cmd == "cas" { parse_num(args[4].as_str(), 0, U64_MAX) } else { Some(0) };
+            if key.len() > KEY_MAX or flags.is_none() or exptime.is_none() or vlen.is_none() or casv.is_none() or vlen.unwrap() < 0 {
+                c.say("CLIENT_ERROR bad command line format");
+                continue;
+            }
+            let n = vlen.unwrap() as i64;
+            let block = slice_vec(data, pos, pos + n + 2);
+            pos += n + 2;
+            c.log.push(f">   {show(slice_vec(block, 0, n))}");
+            if OVERHEAD + key.len() + n > LIMIT {
+                c.say("SERVER_ERROR object too large for cache");
+                continue;
+            }
+            if block.len() != n + 2 or block[n] != b'\r' or block[n + 1] != b'\n' {
+                c.say("CLIENT_ERROR bad data chunk");
+                continue;
+            }
+            let value = slice_vec(block, 0, n);
+            cache.count("cmd_set");
+            let old = cache.find(key.as_str());
+            let new = new_item(key.as_str(), flags.unwrap() as i64, cache.realtime(exptime.unwrap() as i64), value.clone(), cache.now);
+            if cmd == "set" {
+                cache.link(new);
+                c.answer(noreply, "STORED");
+            } else if cmd == "add" {
+                if old.is_some() {
+                    cache.bump(key.as_str());
+                    c.answer(noreply, "NOT_STORED");
+                } else {
+                    cache.link(new);
+                    c.answer(noreply, "STORED");
+                }
+            } else if cmd == "replace" {
+                if old.is_none() {
+                    c.answer(noreply, "NOT_STORED");
+                } else {
+                    cache.link(new);
+                    c.answer(noreply, "STORED");
+                }
+            } else if cmd == "append" or cmd == "prepend" {
+                match old {
+                    None => c.answer(noreply, "NOT_STORED"),
+                    Some(o) => {
+                        let mut joined: Vec[u8] = Vec.new();
+                        if cmd == "append" {
+                            joined.extend_from_slice(o.data.as_slice());
+                            joined.extend_from_slice(value.as_slice());
+                        } else {
+                            joined.extend_from_slice(value.as_slice());
+                            joined.extend_from_slice(o.data.as_slice());
+                        }
+                        cache.link(new_item(key.as_str(), o.flags, o.exptime, joined, cache.now));
+                        c.answer(noreply, "STORED");
+                    }
+                }
+            } else {
+                match old {
+                    None => {
+                        cache.count("cas_misses");
+                        c.answer(noreply, "NOT_FOUND");
+                    }
+                    Some(o) => {
+                        if o.cas as i128 != casv.unwrap() {
+                            cache.count("cas_badval");
+                            c.answer(noreply, "EXISTS");
+                        } else {
+                            cache.count("cas_hits");
+                            cache.link(new);
+                            c.answer(noreply, "STORED");
+                        }
+                    }
+                }
+            }
+        } else if cmd == "get" or cmd == "gets" or cmd == "gat" or cmd == "gats" {
+            let touch = cmd == "gat" or cmd == "gats";
+            let mut keys: Vec[String] = Vec.new();
+            for i in 1..toks.len() {
+                keys.push(toks[i].clone());
+            }
+            let mut exptime: i64 = 0;
+            if touch {
+                if keys.is_empty() {
+                    c.say("ERROR");
+                    continue;
+                }
+                match parse_num(keys[0].as_str(), I32_MIN, I32_MAX) {
+                    Some(e) => exptime = e as i64,
+                    None => {
+                        c.say("CLIENT_ERROR invalid exptime argument");
+                        continue;
+                    }
+                }
+                keys.remove(0);
+            }
+            if keys.is_empty() {
+                c.say("ERROR");
+                continue;
+            }
+            if keys.iter().any(|k| k.len() > KEY_MAX) {
+                c.say("CLIENT_ERROR bad command line format");
+                continue;
+            }
+            for k in keys {
+                cache.count(if touch { "cmd_touch" } else { "cmd_get" });
+                let it = match cache.find(k.as_str()) {
+                    Some(it) => it,
+                    None => {
+                        cache.count(if touch { "touch_misses" } else { "get_misses" });
+                        continue;
+                    }
+                };
+                cache.count(if touch { "touch_hits" } else { "get_hits" });
+                if touch {
+                    let e = cache.realtime(exptime);
+                    cache.set_exptime(k.as_str(), e);
+                }
+                cache.bump(k.as_str());
+                let mut head = f"VALUE {k} {it.flags} {it.data.len()}";
+                if cmd == "gets" or cmd == "gats" {
+                    head.push_str(f" {it.cas}");
+                }
+                c.say(head.as_str());
+                c.reply.extend_from_slice(it.data.as_slice());
+                c.reply.extend_from_slice("\r\n".bytes());
+                c.log.push(f"<   {show(it.data)}");
+            }
+            c.say("END");
+        } else if cmd == "delete" {
+            if args.len() == 2 and args[1] == "0" {
+                args.pop();
+            }
+            if args.len() != 1 {
+                c.say("CLIENT_ERROR bad command line format.  Usage: delete <key> [noreply]");
+                continue;
+            }
+            if cache.find(args[0].as_str()).is_some() {
+                cache.unlink(args[0].as_str());
+                cache.count("delete_hits");
+                c.answer(noreply, "DELETED");
+            } else {
+                cache.count("delete_misses");
+                c.answer(noreply, "NOT_FOUND");
+            }
+        } else if cmd == "incr" or cmd == "decr" {
+            if args.len() != 2 {
+                c.say("ERROR");
+                continue;
+            }
+            let delta = match parse_num(args[1].as_str(), 0, U64_MAX) {
+                Some(d) => d,
+                None => {
+                    c.say("CLIENT_ERROR invalid numeric delta argument");
+                    continue;
+                }
+            };
+            let it = match cache.find(args[0].as_str()) {
+                Some(it) => it,
+                None => {
+                    cache.count(f"{cmd}_misses".as_str());
+                    c.answer(noreply, "NOT_FOUND");
+                    continue;
+                }
+            };
+            let cur = if it.data.len() <= 20 { parse_num(from_bytes(it.data).as_str(), 0, U64_MAX) } else { None };
+            let n = match cur {
+                Some(n) => n,
+                None => {
+                    c.say("CLIENT_ERROR cannot increment or decrement non-numeric value");
+                    continue;
+                }
+            };
+            cache.count(f"{cmd}_hits".as_str());
+            let v = if cmd == "incr" {
+                (n + delta) % (U64_MAX + 1)
+            } else if n > delta {
+                n - delta
+            } else {
+                0
+            };
+            let text = f"{v}";
+            cache.link(new_item(it.key.as_str(), it.flags, it.exptime, text.bytes().to_vec(), cache.now));
+            c.answer(noreply, text.as_str());
+        } else if cmd == "touch" {
+            if args.len() != 2 {
+                c.say("ERROR");
+                continue;
+            }
+            let exptime = match parse_num(args[1].as_str(), I32_MIN, I32_MAX) {
+                Some(e) => e as i64,
+                None => {
+                    c.say("CLIENT_ERROR invalid exptime argument");
+                    continue;
+                }
+            };
+            cache.count("cmd_touch");
+            if cache.find(args[0].as_str()).is_none() {
+                cache.count("touch_misses");
+                c.answer(noreply, "NOT_FOUND");
+            } else {
+                cache.count("touch_hits");
+                let e = cache.realtime(exptime);
+                cache.set_exptime(args[0].as_str(), e);
+                cache.bump(args[0].as_str());
+                c.answer(noreply, "TOUCHED");
+            }
+        } else if cmd == "flush_all" {
+            let delay = if args.is_empty() { Some(0) } else { parse_num(args[0].as_str(), 0, I32_MAX) };
+            let d = match delay {
+                Some(d) => d as i64,
+                None => {
+                    c.say("CLIENT_ERROR bad command line format");
+                    continue;
+                }
+            };
+            cache.count("cmd_flush");
+            if d == 0 {
+                let keys = cache.lru.clone();
+                for k in keys {
+                    cache.unlink(k.as_str());
+                }
+                cache.oldest_live = 0;
+            } else {
+                cache.oldest_live = cache.realtime(d);
+            }
+            c.answer(noreply, "OK");
+        } else if cmd == "version" {
+            c.say("VERSION 1.6.21");
+        } else if cmd == "verbosity" {
+            c.answer(noreply, "OK");
+        } else if cmd == "stats" {
+            c.say(f"STAT time {PROCESS_STARTED + cache.now}".as_str());
+            c.say(f"STAT total_connections {cache.connections}".as_str());
+            for name in STAT_NAMES {
+                c.say(f"STAT {name} {cache.stat(name)}".as_str());
+            }
+            c.say(f"STAT limit_maxbytes {LIMIT}".as_str());
+            c.say(f"STAT bytes {cache.bytes}".as_str());
+            c.say(f"STAT curr_items {cache.items.len()}".as_str());
+            c.say(f"STAT total_items {cache.stat("total_items")}".as_str());
+            c.say(f"STAT evictions {cache.stat("evictions")}".as_str());
+            c.say(f"STAT reclaimed {cache.stat("reclaimed")}".as_str());
+            c.say("END");
+        } else if cmd == "quit" {
+            c.log.push("  (connection closed by quit)".to_string());
+            break;
+        } else {
+            c.say("ERROR");
+        }
+    }
+    pos
+}
+
+// ------------------------------------------------------------ data files (gen_kara.py)
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("=== basics\n");
+    s.push_str("version\n");
+    s.push_str("set user:1 0 0 5\n");
+    s.push_str("alice\n");
+    s.push_str("get user:1\n");
+    s.push_str("add user:1 0 0 3\n");
+    s.push_str("bob\n");
+    s.push_str("add user:2 7 0 3\n");
+    s.push_str("bob\n");
+    s.push_str("get user:1 user:2 user:3\n");
+    s.push_str("replace user:3 0 0 1\n");
+    s.push_str("x\n");
+    s.push_str("replace user:2 9 0 5\n");
+    s.push_str("carol\n");
+    s.push_str("gets user:2\n");
+    s.push_str("append user:1 0 0 6\n");
+    s.push_str("-smith\n");
+    s.push_str("prepend user:1 0 0 3\n");
+    s.push_str("dr.\n");
+    s.push_str("get user:1\n");
+    s.push_str("delete user:2\n");
+    s.push_str("delete user:2\n");
+    s.push_str("get user:2\n");
+    s.push_str("=== cas\n");
+    s.push_str("gets user:1\n");
+    s.push_str("cas user:1 0 0 3 4\n");
+    s.push_str("eve\n");
+    s.push_str("cas user:1 0 0 3 5\n");
+    s.push_str("eve\n");
+    s.push_str("gets user:1\n");
+    s.push_str("cas user:9 0 0 3 1\n");
+    s.push_str("eve\n");
+    s.push_str("set n 0 0 2 noreply\n");
+    s.push_str("41\n");
+    s.push_str("incr n 1\n");
+    s.push_str("gets n\n");
+    s.push_str("cas n 0 0 2 9 noreply\n");
+    s.push_str("99\n");
+    s.push_str("get n\n");
+    s.push_str("=== counters\n");
+    s.push_str("set hits 0 0 1\n");
+    s.push_str("9\n");
+    s.push_str("incr hits 1\n");
+    s.push_str("incr hits 90\n");
+    s.push_str("decr hits 7\n");
+    s.push_str("decr hits 1000\n");
+    s.push_str("set big 0 0 20\n");
+    s.push_str("18446744073709551615\n");
+    s.push_str("incr big 2\n");
+    s.push_str("incr hits abc\n");
+    s.push_str("incr user:1 1\n");
+    s.push_str("incr nope 1\n");
+    s.push_str("decr nope 1\n");
+    s.push_str("get hits big\n");
+    s.push_str("=== expiry\n");
+    s.push_str("set short 0 10 2\n");
+    s.push_str("ok\n");
+    s.push_str("set long 0 3600 2\n");
+    s.push_str("ok\n");
+    s.push_str("set forever 0 0 2\n");
+    s.push_str("ok\n");
+    s.push_str("set gone 0 -1 2\n");
+    s.push_str("ok\n");
+    s.push_str("set abs 0 1760000030 2\n");
+    s.push_str("ok\n");
+    s.push_str("set past 0 1759999000 2\n");
+    s.push_str("ok\n");
+    s.push_str("get short long forever gone abs past\n");
+    s.push_str("touch long 5\n");
+    s.push_str("touch missing 5\n");
+    s.push_str("=== later\n");
+    s.push_str("@advance 20\n");
+    s.push_str("get short long forever abs\n");
+    s.push_str("gat 100 forever\n");
+    s.push_str("gats 0 forever\n");
+    s.push_str("=== much later\n");
+    s.push_str("@advance 40\n");
+    s.push_str("get long abs forever\n");
+    s.push_str("flush_all 10\n");
+    s.push_str("get forever\n");
+    s.push_str("=== after the flush\n");
+    s.push_str("@advance 15\n");
+    s.push_str("get forever user:1 n\n");
+    s.push_str("set fresh 0 0 3\n");
+    s.push_str("new\n");
+    s.push_str("get fresh\n");
+    s.push_str("=== eviction\n");
+    s.push_str("flush_all\n");
+    s.push_str("set k0 0 0 200\n");
+    s.push_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    s.push_str("set k1 0 0 200\n");
+    s.push_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
+    s.push_str("set k2 0 0 200\n");
+    s.push_str("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n");
+    s.push_str("set k3 0 0 200\n");
+    s.push_str("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n");
+    s.push_str("set k4 0 0 200\n");
+    s.push_str("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n");
+    s.push_str("set k5 0 0 200\n");
+    s.push_str("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n");
+    s.push_str("set k6 0 0 200\n");
+    s.push_str("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\n");
+    s.push_str("set k7 0 0 200\n");
+    s.push_str("hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh\n");
+    s.push_str("get k0\n");
+    s.push_str("set k8 0 0 200\n");
+    s.push_str("iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii\n");
+    s.push_str("set k9 0 0 200\n");
+    s.push_str("jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj\n");
+    s.push_str("get k0 k1 k2 k3\n");
+    s.push_str("set huge 0 0 3000\n");
+    s.push_str("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+    s.push_str("get huge\n");
+    s.push_str("=== errors\n");
+    s.push_str("set k 0 0 3\n");
+    s.push_str("abcd\n");
+    s.push_str("get\n");
+    s.push_str("frobnicate now\n");
+    s.push_str("set bad 0 zero 2\n");
+    s.push_str("hi\n");
+    s.push_str("set toolong 0 0\n");
+    s.push_str("get kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\n");
+    s.push_str("delete k0 0\n");
+    s.push_str("verbosity 1\n");
+    s.push_str("incr\n");
+    s.push_str("=== stats\n");
+    s.push_str("stats\n");
+    s.push_str("quit\n");
+    s.push_str("get fresh\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("sessions.txt".to_string(), file_0()));
+    v
+}
+
+// ------------------------------------------------------------ the sockets
+
+fn read_all(conn: ref TcpStream) -> Vec[u8] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 4096] = [0u8; 4096];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    bytes
+}
+
+struct Session {
+    name: String,
+    advance: i64,
+    lines: Vec[String],
+}
+
+fn read_sessions(text: Str) -> Vec[Session] {
+    let mut sessions: Vec[Session] = Vec.new();
+    for line in text.split("\n") {
+        if line.starts_with("=== ") {
+            sessions.push(Session { name: line[4..].to_string(), advance: 0, lines: Vec.new() });
+        } else if line.starts_with("@advance ") {
+            let n = sessions.len() - 1;
+            sessions[n].advance = i64.parse(line[9..]).unwrap_or(0);
+        } else if not sessions.is_empty() {
+            let n = sessions.len() - 1;
+            if not line.is_empty() or not sessions[n].lines.is_empty() {
+                sessions[n].lines.push(line.clone());
+            }
+        }
+    }
+    sessions
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"{e}");
+    }
+    for (name, text) in data_files() {
+        if let Err(e) = fs.write(f"data/{name}", text) {
+            return Err(f"{e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let text = match fs.read_to_string("data/sessions.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"{e}"),
+    };
+    let listener = match TcpListener.bind(ADDR) {
+        Ok(l) => l,
+        Err(e) => return Err(f"cannot bind {ADDR}: {e}"),
+    };
+    let mut cache = Cache.new();
+    println(f"mini_memcached: listening on {ADDR}, {LIMIT} bytes of memory");
+    for s in read_sessions(text.as_str()) {
+        let mut lines = s.lines.clone();
+        while not lines.is_empty() and lines[lines.len() - 1].is_empty() {
+            lines.pop();
+        }
+        cache.now += s.advance;
+        cache.connections += 1;
+        let mut payload: Vec[u8] = Vec.new();
+        for l in lines {
+            payload.extend_from_slice(l.bytes());
+            payload.extend_from_slice("\r\n".bytes());
+        }
+        println(f"=== {s.name} (t+{cache.now - 2})");
+        let client = match TcpStream.connect(ADDR) {
+            Ok(c) => c,
+            Err(e) => return Err(f"connect: {e}"),
+        };
+        if let Err(e) = client.write_all(payload.as_slice()) {
+            return Err(f"client write: {e}");
+        }
+        if let Err(e) = client.shutdown_write() {
+            return Err(f"shutdown: {e}");
+        }
+        let mut c = Conn { reply: Vec.new(), log: Vec.new() };
+        let mut used = 0;
+        {
+            let conn = match listener.accept() {
+                Ok(conn) => conn,
+                Err(e) => return Err(f"accept: {e}"),
+            };
+            let received = read_all(conn);
+            used = serve(mut cache, received, mut c);
+            if let Err(e) = conn.write_all(c.reply.as_slice()) {
+                return Err(f"server write: {e}");
+            }
+        }
+        let got = read_all(client);
+        for l in c.log {
+            println(l);
+        }
+        println(f"--- client sent {payload.len()} bytes, server read {used}, client got {got.len()}");
+    }
+    println(f"mini_memcached: {cache.items.len()} items, {cache.bytes} bytes");
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
