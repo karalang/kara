@@ -1602,8 +1602,12 @@ impl<'a> super::TypeChecker<'a> {
                         // check mode can type as written: `Some(([4, 5], 7))`
                         // against `Option[(Array[i64, 2], i64)]` synthesised
                         // its tuple as `(Vec[i64], i64)`.
+                        // B-2026-10-14-68: and a tuple holding a string
+                        // literal where the slot has a `Str` view:
+                        // `Some(("a", "b"))` into `Option[(Str, Str)]`.
                         let payload_needs_slot =
-                            Self::literal_needs_array_slot(&args[0].value, &slot);
+                            Self::literal_needs_array_slot(&args[0].value, &slot)
+                                || tuple_literal_has_str_slot(&args[0].value, &slot);
                         if payload_is_inferred_ctor
                             || payload_is_unsuffixed_int
                             || payload_needs_slot
@@ -1704,6 +1708,7 @@ impl<'a> super::TypeChecker<'a> {
                     elem_is_inferred_ctor(e)
                         || Self::literal_needs_array_slot(e, slot)
                         || (matches!(e.kind, ExprKind::StringLit(_)) && is_str_view(slot))
+                        || tuple_literal_has_str_slot(e, slot)
                         || (library
                             && !matches!(slot, Type::Ref(_) | Type::MutRef(_))
                             && matches!(
@@ -9488,6 +9493,20 @@ fn assoc_eq_bound_is_comparable(ty: &Type) -> bool {
 }
 
 /// `Str` (`StringSlice`), the string view a `String` argument passes as.
+/// A tuple literal with a string literal (at any depth of nested tuple
+/// literals) whose slot in `slot` is a `Str` view.
+fn tuple_literal_has_str_slot(e: &Expr, slot: &Type) -> bool {
+    match (&e.kind, slot) {
+        (ExprKind::Tuple(items), Type::Tuple(slots)) if items.len() == slots.len() => {
+            items.iter().zip(slots).any(|(e, s)| match &e.kind {
+                ExprKind::StringLit(_) => is_str_view(s),
+                _ => tuple_literal_has_str_slot(e, s),
+            })
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn is_str_view(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
 }

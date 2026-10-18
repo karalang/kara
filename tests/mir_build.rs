@@ -4134,3 +4134,26 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-14-68: a string literal in a tuple inside `Some` / `Ok` takes
+/// the `Str` its slot names.
+#[test]
+fn mir_str_literal_in_a_tuple_payload() {
+    const SRC: &str = r#"fn g() -> Option[(Str, Str)] { Some(("a", "b")) }
+fn h() -> Result[(Str, (i64, Str)), String] { Ok(("c", (1, "d"))) }
+
+fn main() {
+    let (x, y) = g().unwrap();
+    let (z, (n, w)) = h().unwrap();
+    println(f"{x}{y}{z}{n}{w}");
+}
+"#;
+    let want = "abc1d\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
