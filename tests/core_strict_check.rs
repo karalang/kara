@@ -8335,3 +8335,103 @@ fn map_index_read_takes_a_str_key() {
         "3\n",
     );
 }
+
+/// B-2026-10-14-53: a `ref String` parameter of an ambient builtin
+/// (`fs.write`'s path and contents, `env.var`, `fs.read_dir`) borrows its
+/// argument. Check only: the programs touch the file system.
+#[test]
+fn ambient_builtin_ref_string_params_borrow() {
+    accepted(
+        "fs-write-env-var-borrow",
+        r#"fn main() {
+    let out = "hello".to_string();
+    match fs.write("o.txt".to_string(), out) {
+        Ok(_) => println(f"{out.len()}"),
+        Err(_) => println("err"),
+    }
+    let o2 = "x".to_string();
+    let r = fs.write("p.txt".to_string(), o2);
+    println(f"{o2.len()} {r.is_ok()}");
+    let name = "HOME".to_string();
+    match env.var(name) {
+        Ok(_) => println("set"),
+        Err(_) => println("unset"),
+    }
+    println(f"asked for {name}");
+}
+"#,
+    );
+    accepted(
+        "fs-write-path-read-dir-borrow",
+        r#"fn main() {
+    let path = "x.txt".to_string();
+    match fs.write(path, "abc".to_string()) {
+        Ok(_) => println("ok"),
+        Err(_) => println("err"),
+    }
+    println(f"{path}");
+    let dir = ".".to_string();
+    let names = match fs.read_dir(dir) {
+        Ok(ns) => ns.len(),
+        Err(e) => {
+            println(f"cannot list {dir}: {e}");
+            0
+        }
+    };
+    println(f"{names > 0} {dir}");
+}
+"#,
+    );
+}
+
+/// B-2026-10-15-32: a pattern that binds nothing leaves its owned scrutinee
+/// whole on that path (core-semantics.md §4.6).
+#[test]
+fn a_path_that_binds_nothing_keeps_the_scrutinee() {
+    accepted_and_runs(
+        "bind-nothing-keeps-scrutinee",
+        r#"enum V { Text(String), Int(i64) }
+fn show(v: ref V) -> String {
+    match v {
+        V.Text(s) => s.clone(),
+        V.Int(i) => f"{i}",
+    }
+}
+fn describe(v: own V) -> String {
+    match v {
+        V.Text(s) => s,
+        V.Int(_) => show(v),
+    }
+}
+fn first_text(v: own V) -> String {
+    if let V.Text(s) = v {
+        return s;
+    }
+    show(v)
+}
+fn main() {
+    println(describe(V.Text("a".to_string())));
+    println(describe(V.Int(7)));
+    println(first_text(V.Text("b".to_string())));
+    println(first_text(V.Int(8)));
+}
+"#,
+        "a\n7\nb\n8\n",
+    );
+}
+
+/// B-2026-10-15-102: the string literal after `??` on an `Option[Str]` is a
+/// `Str`.
+#[test]
+fn nil_coalesce_literal_fallback_of_a_str_option() {
+    accepted_and_runs(
+        "str-option-coalesce-literal",
+        r#"fn main() {
+    let opt: Option[Str] = None;
+    let s = opt ?? "";
+    println(f"[{s}]");
+}
+"#,
+        "[]\n",
+    );
+}
