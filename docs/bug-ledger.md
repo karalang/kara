@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 274 |
 | codegen-gap | 265 |
-| false-positive | 205 |
+| false-positive | 206 |
 | other | 173 |
 | perf | 170 |
 | diagnostics | 164 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2920 |
-| interp | 940 |
-| typecheck | 447 |
+| codegen | 2921 |
+| interp | 941 |
+| typecheck | 448 |
 | other | 115 |
 | ownership | 106 |
 | cli | 76 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -194,7 +194,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-32 | 2026-10-15 | ownership | medium | `karac check` treats a pattern binding as moving its owned scrutinee on EVERY path: `match v { V.Text(s) => s, V.Int(_) => show(v) }` and `if let V.Text(s) = v { return s; } show(v)` are refused with "value 'v' moved here, used again here ... (a binding in that pattern moves its part out)" at the use in the arm or path where nothing was bound, though core-semantics.md §4.6 says a plain binding moves its part "on that path". All four running surfaces accept both | — |
 | B-2026-10-15-36 | 2026-10-15 | codegen | low | On the MIR compiled backend, `best[i] = best[i].max(x)` in an inner loop reloads the `Vec`'s data pointer and length and loads and stores `best[i]` through memory on every step: kata 651's bench runs 1.90-2.07 s on `karac build --mir` against 0.59-0.67 s on legacy `karac build`, 0.41-0.50 s in C and 0.66-0.69 s in Rust; the same loop with the running max in a local runs 0.72 s | — |
 | B-2026-10-15-38 | 2026-10-15 | ownership | low | `karac check` takes `f64.parse(t.text)` (and `i64.parse(t.text)`) as a MOVE of the field `t.text`, so a later `out.push(t)` is refused with "value 't.text' moved here, used again here"; the same call on a local String (`f64.parse(text)` then `T { text: text, .. }`) is accepted, the spec gives `parse(s: Str)` a borrowed parameter, and all four running surfaces run the program | — |
-| B-2026-10-15-44 | 2026-10-15 | interp+codegen | low | std.process on v2: a child's pipes cannot be wrapped in a BufReader / BufWriter (no read_line or lines over ChildStdout) | — |
 | B-2026-10-15-45 | 2026-10-15 | typecheck | medium | karac check in library mode accepts a call to a method that does not exist on a #[derive(Serialize)] struct; the build then fails | — |
 | B-2026-10-15-55 | 2026-10-15 | codegen+runtime | medium | On the MIR compiled backend, `starts_with`, `contains`, `ends_with` and String `<` each call out to the runtime (`karac_mir_str_test`) where legacy inlines a length test and memcmp. Kata 677's bench makes 48.2M such calls, 45% of its instructions are their own cost (3.73G against legacy's 2.16G), and it runs at about 1.5 times legacy, the M2 bar | — |
 | B-2026-10-15-56 | 2026-10-15 | codegen+runtime | low | On the MIR compiled backend, the first allocation of a pushed `Vec` (`karac_mir_vec_reserve`) and every `Vec` clone (`karac_mir_vec_alloc`) are out-of-line runtime calls costing some 40 to 70 instructions each beyond the allocator, so kata 679's bench, which builds millions of two- to four-element `Vec[f64]`, runs 17.1G instructions against legacy's 12.9G: 1.5x legacy, at the M2 bar | — |
@@ -203,7 +202,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
-| B-2026-10-15-76 | 2026-10-15 | typecheck+interp+codegen | medium | The arithmetic operator traits have no associated `Output`: runtime/stdlib/sub.kara declares `fn sub(own self, rhs: own Self) -> Self` (add, mul and div likewise), so `impl Sub for Instant { type Output = Duration; .. }` from design.md § Operator Traits cannot be written and `later - earlier` cannot yield a `Duration` | — |
+| B-2026-10-18-1 | 2026-10-18 | typecheck+interp+codegen | low | In generic code `T.Output` reads one `Output` per type, so a type with two operator impls (`impl Add for V { type Output = V }` and `impl Mul for V { type Output = i64 }`) gives `sum2[T: Add](a: own T, b: own T) -> T.Output` the `i64` of `Mul`: `sum2(V { x: 7 }, V { x: 8 }).x` is refused with "no field 'x' on type 'i64'" | — |
 
 ### Relocated
 
@@ -4095,6 +4094,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-41 | typecheck+resolver | medium | A user `struct Range` captures every range literal: with `struct Range { lo: i64, hi: i64 }` in scope, `for i in 0..v.len() { v[i] }` fails `karac ch… | 4b44ad05f9 |
 | B-2026-10-15-42 | codegen | low | A user type named like a library type the I/O library returns (`struct IoError { . | 4b44ad05f9 |
 | B-2026-10-15-43 | parser | medium | A LOCAL NAMED `seq` OR `par` IN CONDITION POSITION PARSES AS A `seq {}` / `par {}` BLOCK, so `let seq = true; let q = if seq { 3 } else { 4 };` fails… | 85dccd703c |
+| B-2026-10-15-44 | interp+codegen | low | std.process on v2: a child's pipes cannot be wrapped in a BufReader / BufWriter (no read_line or lines over ChildStdout) | 1ebf8c4b97 |
 | B-2026-10-15-46 | parser | medium | AN EMPTY BODY AFTER AN UPPERCASE NAME IN A CONDITION PARSES AS AN EMPTY STRUCT LITERAL, so `if c == EOL { } else { . | 5361e20a4d |
 | B-2026-10-15-47 | typecheck | low | A STRUCT UPDATE WHOSE BASE IS A CALL (`Dialect { quoting: Q, ..excel() }`) IS REFUSED BY `karac check` AND EVERY MIR SURFACE, and the error says the… | c3c31bc2c3 |
 | B-2026-10-15-48 | interp+codegen | medium | A user struct named like a library type with a special drop (`Mutex`, `Atomic`, `OnceLock`, `Arena`, `Pool`, `File`) gets that type's drop on both MI… | cba3787150 |
@@ -4113,6 +4113,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-73 | parser | low | An unsuffixed `i128::MIN`, `-170141183460469231731687303715884105728`, is refused at parse with advice to add a `u128` suffix, although `let w: i128… | 6ab90a56b2 |
 | B-2026-10-15-74 | codegen | low | `u128.rotate_left` / `rotate_right` (and `i128`) are not lowered on the compiled v2 backends: `__mir-llvm-run` stops with ``native `u128.rotate_right… | a7b4e322d3 |
 | B-2026-10-15-75 | codegen | low | Under `KARAC_MIR_COROUTINES=1`, a task body that passes `mut buf` to a suspending call (`conn.read(mut buf)`) gets a coroutine resume function whose… | 26fef25bc8 |
+| B-2026-10-15-76 | typecheck+interp+codegen | medium | The arithmetic operator traits have no associated `Output`: runtime/stdlib/sub.kara declares `fn sub(own self, rhs: own Self) -> Self` (add, mul and… | 7d0f145978 |
 | B-2026-10-17-1 | typecheck | medium | An unsuffixed integer literal beside an arithmetic operator is promoted to its narrow peer's type WITHOUT a range check, so `300 + y` and `y * 1000`… | ea28ab5c28 |
 
 </details>
