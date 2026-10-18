@@ -1,0 +1,183 @@
+// LeetCode #736: Parse Lisp Expression -- straight off the text.
+//
+// No tokens and no tree: evaluate by recursion while reading the bytes
+// of the text, each call reading one expression and leaving the place
+// just after it. The assignments in force are one list, newest last,
+// that a let cuts back to its own start when it is done; a name is
+// looked up from the newest end. O(n) bytes read.
+
+fn read_word(text: Slice[u8], pos: mut ref i64) -> String {
+    let start = *pos;
+    while *pos < text.len() and text[*pos] != b' ' and text[*pos] != b')' {
+        *pos += 1;
+    }
+    let mut word = String.new();
+    for i in start..*pos {
+        word.push(text[i] as char);
+    }
+    word
+}
+
+fn read_number(text: Slice[u8], pos: mut ref i64) -> i64 {
+    let mut sign = 1;
+    if text[*pos] == b'-' {
+        sign = -1;
+        *pos += 1;
+    }
+    let mut n = 0;
+    while *pos < text.len() and text[*pos] >= b'0' and text[*pos] <= b'9' {
+        n = n * 10 + (text[*pos] - b'0') as i64;
+        *pos += 1;
+    }
+    sign * n
+}
+
+fn eval_at(text: Slice[u8], pos: mut ref i64, env: mut ref Vec[(String, i64)]) -> i64 {
+    let c = text[*pos];
+    if c == b'-' or (c >= b'0' and c <= b'9') {
+        return read_number(text, mut pos);
+    }
+    if c != b'(' {
+        let name = read_word(text, mut pos);
+        let mut i = env.len();
+        while i > 0 {
+            i -= 1;
+            if env[i].0 == name {
+                return env[i].1;
+            }
+        }
+        return 0;
+    }
+    *pos += 1;
+    let op = read_word(text, mut pos);
+    *pos += 1;
+    let mut value = 0;
+    if op == "add" or op == "mult" {
+        let a = eval_at(text, mut pos, mut env);
+        *pos += 1;
+        let b = eval_at(text, mut pos, mut env);
+        value = if op == "add" { a + b } else { a * b };
+    } else {
+        let start = env.len();
+        loop {
+            let c = text[*pos];
+            if c != b'(' and c != b'-' and (c < b'0' or c > b'9') {
+                let mark = *pos;
+                let name = read_word(text, mut pos);
+                if text[*pos] == b' ' {
+                    *pos += 1;
+                    let v = eval_at(text, mut pos, mut env);
+                    *pos += 1;
+                    env.push((name, v));
+                    continue;
+                }
+                *pos = mark;
+            }
+            value = eval_at(text, mut pos, mut env);
+            break;
+        }
+        env.truncate(start);
+    }
+    *pos += 1;
+    value
+}
+
+fn evaluate(expression: String) -> i64 {
+    let mut pos = 0;
+    let mut env: Vec[(String, i64)] = Vec.new();
+    eval_at(expression.bytes(), mut pos, mut env)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random expression of at most `depth` levels of forms, using only
+// the variables in `names`, which are those assigned around it.
+fn random_expr(seed: mut ref i64, depth: i64, names: Vec[String]) -> String {
+    let kinds = if depth == 0 { 2 } else { 5 };
+    let kind = next_random(mut seed) % kinds;
+    if kind == 0 or (kind == 1 and names.len() == 0) {
+        return f"{next_random(mut seed) % 21 - 10}";
+    }
+    if kind == 1 {
+        return names[next_random(mut seed) % names.len()].clone();
+    }
+    if kind == 2 or kind == 3 {
+        let a = random_expr(mut seed, depth - 1, names);
+        let b = random_expr(mut seed, depth - 1, names);
+        let op = if kind == 2 { "add" } else { "mult" };
+        return f"({op} {a} {b})";
+    }
+    let pool = ["x", "y", "z", "a1", "b2"];
+    let mut inner = names.clone();
+    let mut text = "(let".to_string();
+    let count = 1 + next_random(mut seed) % 3;
+    for _ in 0..count {
+        let name = pool[next_random(mut seed) % 5].to_string();
+        let v = random_expr(mut seed, depth - 1, inner);
+        text = f"{text} {name} {v}";
+        if not inner.contains(name) {
+            inner.push(name);
+        }
+    }
+    let body = random_expr(mut seed, depth - 1, inner);
+    f"{text} {body})"
+}
+
+fn show(e: String) {
+    println(f"{e} -> {evaluate(e.clone())}");
+}
+
+fn main() {
+    show("(let x 2 (mult x (let x 3 y 4 (add x y))))".to_string());
+    show("(let x 3 x 2 x)".to_string());
+    show("(let x 1 y 2 x (add x y) (add x y))".to_string());
+    show("(add 1 2)".to_string());
+    show("(mult 3 (add 2 3))".to_string());
+    show("(let a1 3 b2 (add a1 1) b2)".to_string());
+    show("(let x 2 (add (let x 3 (let x 4 x)) x))".to_string());
+    show("(let x -2 y x y)".to_string());
+    show("(mult -3 (add 4 -6))".to_string());
+    show("-7".to_string());
+    // 80 lets, each inside the last, each variable one more than the
+    // one before.
+    let mut deep = "(let v0 1".to_string();
+    for i in 1..80 {
+        deep = f"{deep} (let v{i} (add v{i - 1} 1)";
+    }
+    deep = f"{deep} v79";
+    for _ in 0..80 {
+        deep = f"{deep})";
+    }
+    println(f"80 nested lets, {deep.len()} characters -> {evaluate(deep)}");
+    let mut chain = "150".to_string();
+    let mut k = 149;
+    while k > 0 {
+        chain = f"(add {k} {chain})";
+        k -= 1;
+    }
+    println(f"adds of 1 to 150, {chain.len()} characters -> {evaluate(chain)}");
+    let mut doubling = "(let x 1".to_string();
+    for _ in 0..30 {
+        doubling = f"{doubling} (let x (add x x)";
+    }
+    doubling = f"{doubling} x";
+    for _ in 0..31 {
+        doubling = f"{doubling})";
+    }
+    println(f"x doubled in 30 lets that each hide the last, {doubling.len()} characters -> {evaluate(doubling)}");
+    let mut seed: i64 = 736;
+    let mut sum = 0;
+    let mut chars = 0;
+    for _ in 0..300 {
+        let e = random_expr(mut seed, 1 + next_random(mut seed) % 3, Vec.new());
+        chars += e.len();
+        let v = evaluate(e);
+        sum = (sum * 131 + (v % 1000000007 + 1000000007) % 1000000007) % 1000000007;
+    }
+    println(f"300 random expressions, {chars} characters: checksum {sum}");
+}

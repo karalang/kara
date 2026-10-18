@@ -1,0 +1,82 @@
+// LeetCode #740: Delete and Earn -- a sorted map of totals.
+//
+// Total each value's copies in a `SortedMap`, which then gives the
+// values in order with nothing between them, and run the same choice
+// over its entries: best[k] is the larger of best[k - 1] and the k-th
+// value's total plus the best before its neighbour, which is best[k -
+// 2] when the values are adjacent and best[k - 1] otherwise.
+
+fn delete_and_earn(nums: Vec[i64]) -> i64 {
+    let mut worth: SortedMap[i64, i64] = SortedMap.new();
+    for x in nums.iter() {
+        let before = worth.get(*x).unwrap_or(0);
+        worth.insert(*x, before + *x);
+    }
+    let mut values: Vec[i64] = Vec.new();
+    let mut best: Vec[i64] = Vec.new();
+    for (v, w) in worth.iter() {
+        let k = values.len();
+        let prev = if k == 0 { 0 } else { best[k - 1] };
+        let before = if k > 0 and values[k - 1] == *v - 1 {
+            if k >= 2 { best[k - 2] } else { 0 }
+        } else {
+            prev
+        };
+        let here = if before + *w > prev { before + *w } else { prev };
+        values.push(*v);
+        best.push(here);
+    }
+    if best.len() == 0 { 0 } else { best[best.len() - 1] }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {delete_and_earn(nums)}");
+}
+
+fn main() {
+    show([3, 4, 2]);
+    show([2, 2, 3, 3, 3, 4]);
+    show([1]);
+    show([5, 5, 5, 5]);
+    show([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    show([10, 1, 9, 2, 8, 3]);
+    show([1, 1, 1, 2, 4, 5, 5, 5, 6]);
+    show([3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9]);
+    let mut seed: i64 = 740;
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..20000 {
+        random.push(1 + next_random(mut seed) % 10000);
+    }
+    println(f"20000 random numbers up to 10000 -> {delete_and_earn(random)}");
+    let mut every: Vec[i64] = Vec.new();
+    for v in 1..10001 {
+        every.push(v);
+    }
+    println(f"every number from 1 to 10000 once -> {delete_and_earn(every)}");
+    let mut crowded: Vec[i64] = Vec.new();
+    for _ in 0..20000 {
+        crowded.push(1 + next_random(mut seed) % 50);
+    }
+    println(f"20000 random numbers up to 50 -> {delete_and_earn(crowded)}");
+    let mut sum = 0;
+    let mut most = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let range = 1 + next_random(mut seed) % 10;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % range);
+        }
+        let got = delete_and_earn(nums);
+        most += got;
+        sum = (sum * 131 + got + 1) % 1000000007;
+    }
+    println(f"300 random short lists: {most} points in all, checksum {sum}");
+}

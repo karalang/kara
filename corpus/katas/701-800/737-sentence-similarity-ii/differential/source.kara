@@ -1,0 +1,406 @@
+// LeetCode #737: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random sentences.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn find_star(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut y = x;
+    while parent[y] != root {
+        let next = parent[y];
+        parent[y] = root;
+        y = next;
+    }
+    root
+}
+
+fn number_star(ids: mut ref Map[String, i64], parent: mut ref Vec[i64], size: mut ref Vec[i64], w: String) -> i64 {
+    match ids.get(w) {
+        Some(i) => {
+            return *i;
+        }
+        None => {}
+    }
+    let i = parent.len();
+    ids.insert(w.clone(), i);
+    parent.push(i);
+    size.push(1);
+    i
+}
+
+fn are_sentences_similar_two_star(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut ids: Map[String, i64] = Map.new();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    for p in pairs.iter() {
+        let a = number_star(mut ids, mut parent, mut size, p.0.clone());
+        let b = number_star(mut ids, mut parent, mut size, p.1.clone());
+        let ra = find_star(mut parent, a);
+        let rb = find_star(mut parent, b);
+        if ra != rb {
+            if size[ra] < size[rb] {
+                parent[ra] = rb;
+                size[rb] += size[ra];
+            } else {
+                parent[rb] = ra;
+                size[ra] += size[rb];
+            }
+        }
+    }
+    for i in 0..sentence1.len() {
+        if sentence1[i] == sentence2[i] {
+            continue;
+        }
+        let a = match ids.get(sentence1[i].clone()) {
+            Some(k) => *k,
+            None => {
+                return false;
+            }
+        };
+        let b = match ids.get(sentence2[i].clone()) {
+            Some(k) => *k,
+            None => {
+                return false;
+            }
+        };
+        if find_star(mut parent, a) != find_star(mut parent, b) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- components arm -------------------------------------------------
+
+fn are_sentences_similar_two_components(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut graph: Map[String, Vec[String]] = Map.new();
+    let mut order: Vec[String] = Vec.new();
+    for p in pairs.iter() {
+        for w in [p.0.clone(), p.1.clone()] {
+            if not graph.contains_key(w) {
+                graph.insert(w.clone(), Vec.new());
+                order.push(w.clone());
+            }
+        }
+        graph.get_mut(p.0.clone()).unwrap().push(p.1.clone());
+        graph.get_mut(p.1.clone()).unwrap().push(p.0.clone());
+    }
+    let mut label: Map[String, i64] = Map.new();
+    let mut next = 0;
+    for start in order.iter() {
+        if label.contains_key(start.clone()) {
+            continue;
+        }
+        label.insert(start.clone(), next);
+        let mut queue: VecDeque[String] = VecDeque.new();
+        queue.push_back(start.clone());
+        while let Some(w) = queue.pop_front() {
+            for v in graph.get(w).unwrap().iter() {
+                if not label.contains_key(v.clone()) {
+                    label.insert(v.clone(), next);
+                    queue.push_back(v.clone());
+                }
+            }
+        }
+        next += 1;
+    }
+    for i in 0..sentence1.len() {
+        if sentence1[i] == sentence2[i] {
+            continue;
+        }
+        let a = label.get(sentence1[i].clone());
+        let b = label.get(sentence2[i].clone());
+        if a.is_none() or b.is_none() or a != b {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- search arm -----------------------------------------------------
+
+fn are_sentences_similar_two_search(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut graph: Map[String, Vec[String]] = Map.new();
+    for p in pairs.iter() {
+        graph.entry(p.0.clone()).or_insert(Vec.new()).push(p.1.clone());
+        graph.entry(p.1.clone()).or_insert(Vec.new()).push(p.0.clone());
+    }
+    for i in 0..sentence1.len() {
+        let from = sentence1[i].clone();
+        let to = sentence2[i].clone();
+        if from == to {
+            continue;
+        }
+        if not graph.contains_key(from) or not graph.contains_key(to) {
+            return false;
+        }
+        let mut seen: Set[String] = Set.new();
+        let mut stack: Vec[String] = Vec.new();
+        seen.insert(from.clone());
+        stack.push(from);
+        let mut found = false;
+        while let Some(w) = stack.pop() {
+            if w == to {
+                found = true;
+                break;
+            }
+            for v in graph.get(w).unwrap().iter() {
+                if not seen.contains(v.clone()) {
+                    seen.insert(v.clone());
+                    stack.push(v.clone());
+                }
+            }
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- relax arm ------------------------------------------------------
+
+fn are_sentences_similar_two_relax(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut ids: Map[String, i64] = Map.new();
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for p in pairs.iter() {
+        if not ids.contains_key(p.0.clone()) {
+            let k = ids.len();
+            ids.insert(p.0.clone(), k);
+        }
+        if not ids.contains_key(p.1.clone()) {
+            let k = ids.len();
+            ids.insert(p.1.clone(), k);
+        }
+        edges.push((*ids.get(p.0.clone()).unwrap(), *ids.get(p.1.clone()).unwrap()));
+    }
+    let mut label: Vec[i64] = Vec.new();
+    for k in 0..ids.len() {
+        label.push(k);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for e in edges.iter() {
+            let low = if label[e.0] < label[e.1] { label[e.0] } else { label[e.1] };
+            if label[e.0] != low or label[e.1] != low {
+                label[e.0] = low;
+                label[e.1] = low;
+                changed = true;
+            }
+        }
+    }
+    for i in 0..sentence1.len() {
+        if sentence1[i] == sentence2[i] {
+            continue;
+        }
+        match (ids.get(sentence1[i].clone()), ids.get(sentence2[i].clone())) {
+            (Some(a), Some(b)) => {
+                if label[*a] != label[*b] {
+                    return false;
+                }
+            }
+            _ => {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn similar_with(which: i64, a: Vec[String], b: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if which == 0 {
+        are_sentences_similar_two_star(a, b, pairs)
+    } else if which == 1 {
+        are_sentences_similar_two_components(a, b, pairs)
+    } else if which == 2 {
+        are_sentences_similar_two_search(a, b, pairs)
+    } else {
+        are_sentences_similar_two_relax(a, b, pairs)
+    }
+}
+
+fn index_of(names: mut ref Vec[String], w: String) -> i64 {
+    for k in 0..names.len() {
+        if names[k] == w {
+            return k;
+        }
+    }
+    names.push(w.clone());
+    names.len() - 1
+}
+
+// The definition, as the problem states it: similarity is the smallest
+// relation holding every pair that is reflexive, symmetric and
+// transitive. Number every word that appears, mark each word similar to
+// itself and both ways round for each pair, close the table under
+// transitivity by Floyd and Warshall's triple loop, and look each place
+// up in it.
+fn definition(a: Vec[String], b: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut names: Vec[String] = Vec.new();
+    for p in pairs.iter() {
+        index_of(mut names, p.0.clone());
+        index_of(mut names, p.1.clone());
+    }
+    for w in a.iter() {
+        index_of(mut names, w.clone());
+    }
+    for w in b.iter() {
+        index_of(mut names, w.clone());
+    }
+    let n = names.len();
+    let mut near: Vec[Vec[bool]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[bool] = Vec.new();
+        for j in 0..n {
+            row.push(i == j);
+        }
+        near.push(row);
+    }
+    for p in pairs.iter() {
+        let i = index_of(mut names, p.0.clone());
+        let j = index_of(mut names, p.1.clone());
+        near[i][j] = true;
+        near[j][i] = true;
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                if near[i][k] and near[k][j] {
+                    near[i][j] = true;
+                }
+            }
+        }
+    }
+    for i in 0..a.len() {
+        let x = index_of(mut names, a[i].clone());
+        let y = index_of(mut names, b[i].clone());
+        if not near[x][y] {
+            return false;
+        }
+    }
+    true
+}
+
+fn word(k: i64) -> String {
+    f"w{k}"
+}
+
+fn main() {
+    let mut seed = 7370;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut similar = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 6 words of 8, 0 to 8 pairs; each word of the second
+        // sentence is the first's word, a word from a pair, or any word,
+        // and one case in ten has an extra word.
+        let n = 1 + next_random(mut seed) % 6;
+        let np = next_random(mut seed) % 9;
+        let mut pairs: Vec[(String, String)] = Vec.new();
+        for _ in 0..np {
+            pairs.push((word(next_random(mut seed) % 8), word(next_random(mut seed) % 8)));
+        }
+        let mut a: Vec[String] = Vec.new();
+        let mut b: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let x = next_random(mut seed) % 8;
+            a.push(word(x));
+            let pick = next_random(mut seed) % 3;
+            if pick == 0 or np == 0 {
+                b.push(word(x));
+            } else if pick == 1 {
+                let p = next_random(mut seed) % np;
+                if next_random(mut seed) % 2 == 0 {
+                    b.push(pairs[p].1.clone());
+                } else {
+                    b.push(pairs[p].0.clone());
+                }
+            } else {
+                b.push(word(next_random(mut seed) % 8));
+            }
+        }
+        if next_random(mut seed) % 10 == 0 {
+            b.push(word(0));
+        }
+        let want = definition(a, b, pairs);
+        if want {
+            similar += 1;
+        }
+        let mut flipped: Vec[(String, String)] = Vec.new();
+        let mut k = pairs.len();
+        while k > 0 {
+            k -= 1;
+            flipped.push((pairs[k].1.clone(), pairs[k].0.clone()));
+        }
+        for which in 0..arms {
+            let got = similar_with(which, a, b, pairs);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the two sentences the other way round, the same answer.
+            checks += 1;
+            if similar_with(which, b, a, pairs) != got {
+                fails[1] += 1;
+            }
+            // P3: every pair written the other way round, and the pairs
+            // in the reverse order, the same answer.
+            checks += 1;
+            if similar_with(which, a, b, flipped) != got {
+                fails[2] += 1;
+            }
+            // P4: with the same number of words, similar exactly when
+            // every place alone, as one-word sentences, is similar.
+            if a.len() == b.len() {
+                checks += 1;
+                let mut each = true;
+                for i in 0..a.len() {
+                    if not similar_with(which, [a[i].clone()], [b[i].clone()], pairs) {
+                        each = false;
+                    }
+                }
+                if each != got {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} cases ({similar} similar), {arms} arms, {checks} checks, {total} failures");
+}

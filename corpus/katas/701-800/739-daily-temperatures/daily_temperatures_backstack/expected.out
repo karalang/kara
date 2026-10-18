@@ -1,0 +1,12 @@
+[73, 74, 75, 71, 69, 72, 76, 73] -> [1, 1, 4, 2, 1, 1, 0, 0]
+[30, 40, 50, 60] -> [1, 1, 1, 0]
+[30, 60, 90] -> [1, 1, 0]
+[50] -> [0]
+[55, 55, 55, 55] -> [0, 0, 0, 0]
+[100, 90, 80, 70, 60, 50, 40, 30] -> [0, 0, 0, 0, 0, 0, 0, 0]
+[60, 50, 50, 40, 70, 30, 30, 80] -> [4, 3, 2, 1, 3, 2, 1, 0]
+[30, 100, 30, 100, 30, 100] -> [1, 0, 1, 0, 1, 0]
+100000 random days -> 1437 with no warmer day, checksum 665293616
+99999 days cooling and then a hot one -> 1 with no warmer day, checksum 628531661
+100000 days rising from 30 to 100 again and again -> 1409 with no warmer day, checksum 932483059
+300 random short runs: 1265 days waited in all, checksum 843575263

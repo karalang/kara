@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/736-parse-lisp-expression/bench/parse_lisp_expression.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "1d96cab83"
+extracted_src = "6c71e83b"
+model_rev = "583cfb0d"
+model_src = "6c71e83b"

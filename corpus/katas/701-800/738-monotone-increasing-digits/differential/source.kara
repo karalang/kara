@@ -1,0 +1,292 @@
+// LeetCode #738: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random numbers.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn monotone_increasing_digits_star(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut x = n;
+    while x > 0 {
+        digits.push(x % 10);
+        x /= 10;
+    }
+    digits.reverse();
+    let mut i = 0;
+    while i + 1 < digits.len() and digits[i] <= digits[i + 1] {
+        i += 1;
+    }
+    if i + 1 < digits.len() {
+        while i > 0 and digits[i - 1] == digits[i] {
+            i -= 1;
+        }
+        digits[i] -= 1;
+        for j in i + 1..digits.len() {
+            digits[j] = 9;
+        }
+    }
+    let mut out = 0;
+    for d in digits.iter() {
+        out = out * 10 + *d;
+    }
+    out
+}
+
+// ---- arith arm ------------------------------------------------------
+
+fn monotone_increasing_digits_arith(n: i64) -> i64 {
+    let mut x = n;
+    let mut p = 1;
+    while p * 10 <= x {
+        let here = (x / p) % 10;
+        let left = (x / (p * 10)) % 10;
+        if left > here {
+            x = (x / (p * 10)) * (p * 10) - 1;
+        }
+        p *= 10;
+    }
+    x
+}
+
+// ---- build arm ------------------------------------------------------
+
+fn monotone_increasing_digits_build(n: i64) -> i64 {
+    let mut places = 1;
+    let mut x = n;
+    while x >= 10 {
+        places += 1;
+        x /= 10;
+    }
+    let mut prefix = 0;
+    let mut low = 0;
+    for k in 0..places {
+        let rest = places - k - 1;
+        let mut d = 9;
+        while d > low {
+            let mut finish = prefix * 10 + d;
+            for _ in 0..rest {
+                finish = finish * 10 + d;
+            }
+            if finish <= n {
+                break;
+            }
+            d -= 1;
+        }
+        prefix = prefix * 10 + d;
+        low = d;
+    }
+    prefix
+}
+
+// ---- fromright arm --------------------------------------------------
+
+fn monotone_increasing_digits_fromright(n: i64) -> i64 {
+    let mut digits: Vec[u8] = Vec.new();
+    for b in n.to_string().bytes() {
+        digits.push(b);
+    }
+    let mut nines = digits.len();
+    let mut i = digits.len();
+    while i > 1 {
+        i -= 1;
+        if digits[i - 1] > digits[i] {
+            digits[i - 1] -= 1;
+            nines = i;
+        }
+    }
+    for j in nines..digits.len() {
+        digits[j] = b'9';
+    }
+    let mut out = 0;
+    for b in digits.iter() {
+        out = out * 10 + (*b - b'0') as i64;
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        monotone_increasing_digits_star(n)
+    } else if which == 1 {
+        monotone_increasing_digits_arith(n)
+    } else if which == 2 {
+        monotone_increasing_digits_build(n)
+    } else {
+        monotone_increasing_digits_fromright(n)
+    }
+}
+
+// Each digit no larger than the one after it, read off the decimal
+// text.
+fn is_monotone(n: i64) -> bool {
+    let text = n.to_string();
+    let b = text.bytes();
+    for i in 1..b.len() {
+        if b[i - 1] > b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// Every number with monotone digits up to ten digits long: one is a
+// choice of how many times to use each digit 1 to 9, written in order,
+// so count up through those choices.
+fn all_monotone() -> Vec[i64] {
+    let mut out: Vec[i64] = [0];
+    let mut counts = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    loop {
+        // the next choice: add one to the first count that can grow
+        // with at most ten digits in all, and clear the counts before it
+        let mut used = 0;
+        for c in counts.iter() {
+            used += *c;
+        }
+        let mut k = 0;
+        while k < 9 {
+            if used - counts_before(counts, k) + 1 <= 10 {
+                break;
+            }
+            k += 1;
+        }
+        if k == 9 {
+            break;
+        }
+        for j in 0..k {
+            counts[j] = 0;
+        }
+        counts[k] += 1;
+        let mut v = 0;
+        for d in 0..9 {
+            for _ in 0..counts[d] {
+                v = v * 10 + d + 1;
+            }
+        }
+        out.push(v);
+    }
+    out.sort();
+    out
+}
+
+// How many digits the counts before place k hold.
+fn counts_before(counts: Vec[i64], k: i64) -> i64 {
+    let mut s = 0;
+    for j in 0..k {
+        s += counts[j];
+    }
+    s
+}
+
+// The definition, as the problem states it: the largest number with
+// monotone digits that is no greater than n, looked up in the sorted
+// list of all of them.
+fn definition(table: Vec[i64], n: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = table.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if table[mid] <= n {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    table[lo - 1]
+}
+
+fn main() {
+    let table = all_monotone();
+    // The list holds exactly the monotone numbers: the digit test
+    // agrees with it on every number below 100,000.
+    let mut listed = 0;
+    for v in table.iter() {
+        if *v < 100000 {
+            listed += 1;
+        }
+    }
+    let mut tested = 0;
+    for n in 0..100000 {
+        if is_monotone(n) {
+            tested += 1;
+        }
+    }
+    println(f"{table.len()} monotone numbers listed, {listed} below 100000, digit test finds {tested}");
+    let mut seed = 7380;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut kept = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // a third random numbers of 1 to 9 digits, a third a listed
+        // number moved up or down a little, a third numbers made of
+        // runs of one or two digits
+        let kind = next_random(mut seed) % 3;
+        let mut n = 0;
+        if kind == 0 {
+            let digits = 1 + next_random(mut seed) % 9;
+            for _ in 0..digits {
+                n = n * 10 + next_random(mut seed) % 10;
+            }
+        } else if kind == 1 {
+            let v = table[(next_random(mut seed) * 32768 + next_random(mut seed)) % table.len()];
+            n = v + next_random(mut seed) % 21 - 10;
+        } else {
+            let digits = 1 + next_random(mut seed) % 9;
+            let a = next_random(mut seed) % 10;
+            let b = next_random(mut seed) % 10;
+            for _ in 0..digits {
+                n = n * 10 + if next_random(mut seed) % 4 == 0 { b } else { a };
+            }
+        }
+        if n < 0 {
+            n = 0;
+        }
+        if n >= 1000000000 {
+            n = n % 1000000000;
+        }
+        let want = definition(table, n);
+        if want == n {
+            kept += 1;
+        }
+        for which in 0..arms {
+            let got = answer_with(which, n);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the answer has monotone digits and is between 0 and n.
+            checks += 1;
+            if not is_monotone(got) or got < 0 or got > n {
+                fails[1] += 1;
+            }
+            // P3: the answer for n + 1 is no smaller.
+            checks += 1;
+            if answer_with(which, n + 1) < got {
+                fails[2] += 1;
+            }
+            // P4: the answer is its own answer, and n is its own answer
+            // exactly when its digits are monotone.
+            checks += 1;
+            if answer_with(which, got) != got or (got == n) != is_monotone(n) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} numbers ({kept} already monotone), {arms} arms, {checks} checks, {total} failures");
+}

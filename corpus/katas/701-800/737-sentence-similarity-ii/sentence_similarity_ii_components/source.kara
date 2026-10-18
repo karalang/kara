@@ -1,0 +1,192 @@
+// LeetCode #737: Sentence Similarity II -- components labelled once.
+//
+// Build the graph of the pairs, a map from each word to the words it is
+// paired with, and label its connected components once, by a breadth
+// first search from every word not yet labelled. Two words are similar
+// when they are equal or carry the same label. O(p + n) map operations.
+
+fn are_sentences_similar_two(sentence1: Vec[String], sentence2: Vec[String], pairs: Vec[(String, String)]) -> bool {
+    if sentence1.len() != sentence2.len() {
+        return false;
+    }
+    let mut graph: Map[String, Vec[String]] = Map.new();
+    let mut order: Vec[String] = Vec.new();
+    for p in pairs.iter() {
+        for w in [p.0.clone(), p.1.clone()] {
+            if not graph.contains_key(w) {
+                graph.insert(w.clone(), Vec.new());
+                order.push(w.clone());
+            }
+        }
+        graph.get_mut(p.0.clone()).unwrap().push(p.1.clone());
+        graph.get_mut(p.1.clone()).unwrap().push(p.0.clone());
+    }
+    let mut label: Map[String, i64] = Map.new();
+    let mut next = 0;
+    for start in order.iter() {
+        if label.contains_key(start.clone()) {
+            continue;
+        }
+        label.insert(start.clone(), next);
+        let mut queue: VecDeque[String] = VecDeque.new();
+        queue.push_back(start.clone());
+        while let Some(w) = queue.pop_front() {
+            for v in graph.get(w).unwrap().iter() {
+                if not label.contains_key(v.clone()) {
+                    label.insert(v.clone(), next);
+                    queue.push_back(v.clone());
+                }
+            }
+        }
+        next += 1;
+    }
+    for i in 0..sentence1.len() {
+        if sentence1[i] == sentence2[i] {
+            continue;
+        }
+        let a = label.get(sentence1[i].clone());
+        let b = label.get(sentence2[i].clone());
+        if a.is_none() or b.is_none() or a != b {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn words(text: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in text.split(" ") {
+        if w.len() > 0 {
+            out.push(w.to_string());
+        }
+    }
+    out
+}
+
+fn pairs_of(text: String) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    let w = words(text);
+    let mut i = 0;
+    while i + 1 < w.len() {
+        out.push((w[i].clone(), w[i + 1].clone()));
+        i += 2;
+    }
+    out
+}
+
+fn show(a: String, b: String, p: String) {
+    let s1 = words(a);
+    let s2 = words(b);
+    let pairs = pairs_of(p);
+    let shown = f"{s1} and {s2} with {pairs}";
+    println(f"{shown} -> {are_sentences_similar_two(s1, s2, pairs)}");
+}
+
+fn word(k: i64) -> String {
+    f"w{k}"
+}
+
+fn main() {
+    show("great acting skills".to_string(), "fine drama talent".to_string(), "great good fine good drama acting skills talent".to_string());
+    show("I love leetcode".to_string(), "I love onepiece".to_string(), "manga onepiece platform anime leetcode platform anime manga".to_string());
+    show("I love leetcode".to_string(), "I love onepiece".to_string(), "manga hunterXhunter platform anime leetcode platform anime manga".to_string());
+    show("a".to_string(), "c".to_string(), "a b b c".to_string());
+    show("a".to_string(), "c".to_string(), "a b c d".to_string());
+    show("great".to_string(), "great".to_string(), "".to_string());
+    show("great".to_string(), "doubleplus good".to_string(), "great doubleplus".to_string());
+    show("x y".to_string(), "y x".to_string(), "x z z y".to_string());
+    // A chain of 1000 words, each paired with the next, given in a
+    // shuffled order.
+    let mut seed: i64 = 737;
+    let mut chain: Vec[(String, String)] = Vec.new();
+    for k in 0..999 {
+        chain.push((word(k), word(k + 1)));
+    }
+    for k in 0..999 {
+        let j = k + next_random(mut seed) % (999 - k);
+        let t = chain[k].clone();
+        chain[k] = chain[j].clone();
+        chain[j] = t;
+    }
+    println(f"the two ends of a chain of 1000 words -> {are_sentences_similar_two([word(0)], [word(999)], chain.clone())}");
+    chain.remove(500);
+    println(f"the same with one pair of the chain left out -> {are_sentences_similar_two([word(0)], [word(999)], chain)}");
+    // 2000 pairs over 3000 words; each word of the second sentence is
+    // reached from the first's by a walk of up to 5 steps along pairs.
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    let mut near: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..3000 {
+        near.push(Vec.new());
+    }
+    for _ in 0..2000 {
+        let a = next_random(mut seed) % 3000;
+        let b = next_random(mut seed) % 3000;
+        pairs.push((word(a), word(b)));
+        near[a].push(b);
+        near[b].push(a);
+    }
+    let mut s1: Vec[String] = Vec.new();
+    let mut s2: Vec[String] = Vec.new();
+    for _ in 0..1000 {
+        let start = next_random(mut seed) % 3000;
+        let mut at = start;
+        for _ in 0..next_random(mut seed) % 6 {
+            if near[at].len() > 0 {
+                at = near[at][next_random(mut seed) % near[at].len()];
+            }
+        }
+        s1.push(word(start));
+        s2.push(word(at));
+    }
+    println(f"1000 words, each joined to its counterpart by up to 5 pairs -> {are_sentences_similar_two(s1.clone(), s2.clone(), pairs.clone())}");
+    let mut changed = s2.clone();
+    changed[999] = "nowhere".to_string();
+    println(f"the same with the last word changed -> {are_sentences_similar_two(s1.clone(), changed, pairs.clone())}");
+    println(f"the same with the pairs left out -> {are_sentences_similar_two(s1.clone(), s2.clone(), Vec.new())}");
+    let mut shorter = s2.clone();
+    shorter.pop();
+    println(f"the same one word short -> {are_sentences_similar_two(s1, shorter, pairs)}");
+    let mut yes = 0;
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 6;
+        let np = next_random(mut seed) % 7;
+        let mut ps: Vec[(String, String)] = Vec.new();
+        for _ in 0..np {
+            ps.push((word(next_random(mut seed) % 8), word(next_random(mut seed) % 8)));
+        }
+        let mut a: Vec[String] = Vec.new();
+        let mut b: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let x = next_random(mut seed) % 8;
+            a.push(word(x));
+            let pick = next_random(mut seed) % 3;
+            if pick == 0 or np == 0 {
+                b.push(word(x));
+            } else if pick == 1 {
+                let p = next_random(mut seed) % np;
+                if next_random(mut seed) % 2 == 0 {
+                    b.push(ps[p].0.clone());
+                } else {
+                    b.push(ps[p].1.clone());
+                }
+            } else {
+                b.push(word(next_random(mut seed) % 8));
+            }
+        }
+        if next_random(mut seed) % 10 == 0 {
+            b.push(word(0));
+        }
+        let v = if are_sentences_similar_two(a, b, ps) { 1 } else { 0 };
+        yes += v;
+        sum = (sum * 131 + v + 1) % 1000000007;
+    }
+    println(f"300 random cases: {yes} similar, checksum {sum}");
+}

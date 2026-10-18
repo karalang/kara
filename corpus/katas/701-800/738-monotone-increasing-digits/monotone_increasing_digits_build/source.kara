@@ -1,0 +1,87 @@
+// LeetCode #738: Monotone Increasing Digits -- digit by digit from the
+// left.
+//
+// Choose the answer's digits from the left, each as large as it can be:
+// a digit d is possible when the digits chosen so far, then d, then d
+// again in every place left, make a number no greater than n, since
+// that is the smallest way to finish with d. O(9 d) for d digits.
+
+fn monotone_increasing_digits(n: i64) -> i64 {
+    let mut places = 1;
+    let mut x = n;
+    while x >= 10 {
+        places += 1;
+        x /= 10;
+    }
+    let mut prefix = 0;
+    let mut low = 0;
+    for k in 0..places {
+        let rest = places - k - 1;
+        let mut d = 9;
+        while d > low {
+            let mut finish = prefix * 10 + d;
+            for _ in 0..rest {
+                finish = finish * 10 + d;
+            }
+            if finish <= n {
+                break;
+            }
+            d -= 1;
+        }
+        prefix = prefix * 10 + d;
+        low = d;
+    }
+    prefix
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n} -> {monotone_increasing_digits(n)}");
+}
+
+fn main() {
+    show(10);
+    show(1234);
+    show(332);
+    show(0);
+    show(9);
+    show(120);
+    show(100);
+    show(1000000000);
+    show(999999999);
+    show(111111110);
+    show(123454321);
+    show(668841);
+    show(77777);
+    show(101010101);
+    let mut seed: i64 = 738;
+    let mut sum = 0;
+    let mut kept = 0;
+    for _ in 0..10000 {
+        let digits = 1 + next_random(mut seed) % 10;
+        let mut n = 0;
+        for _ in 0..digits {
+            n = n * 10 + next_random(mut seed) % 10;
+        }
+        if n > 1000000000 {
+            n = n % 1000000001;
+        }
+        let m = monotone_increasing_digits(n);
+        if m == n {
+            kept += 1;
+        }
+        sum = (sum * 131 + m % 1000003 + 1) % 1000000007;
+    }
+    println(f"10000 random numbers: {kept} already monotone, checksum {sum}");
+    let mut total = 0;
+    for n in 0..100000 {
+        total += monotone_increasing_digits(n);
+    }
+    println(f"0 to 99999: answers sum to {total}");
+}

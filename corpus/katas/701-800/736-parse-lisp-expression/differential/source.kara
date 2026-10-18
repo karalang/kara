@@ -1,0 +1,564 @@
+// LeetCode #736: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random expressions.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn tokenize_star(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c == '(' or c == ')' or c == ' ' {
+            if word.len() > 0 {
+                tokens.push(word);
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn lookup_star(scopes: Vec[Map[String, i64]], name: String) -> i64 {
+    let mut i = scopes.len();
+    while i > 0 {
+        i -= 1;
+        match scopes[i].get(name) {
+            Some(v) => {
+                return *v;
+            }
+            None => {}
+        }
+    }
+    0
+}
+
+fn eval_star(tokens: Vec[String], pos: mut ref i64, scopes: mut ref Vec[Map[String, i64]]) -> i64 {
+    let t = tokens[*pos].clone();
+    *pos += 1;
+    if t != "(" {
+        let first = t.bytes()[0];
+        if first == b'-' or (first >= b'0' and first <= b'9') {
+            return i64.parse(t).unwrap();
+        }
+        return lookup_star(scopes, t);
+    }
+    let op = tokens[*pos].clone();
+    *pos += 1;
+    let mut value = 0;
+    if op == "add" {
+        let a = eval_star(tokens, mut pos, mut scopes);
+        let b = eval_star(tokens, mut pos, mut scopes);
+        value = a + b;
+    } else if op == "mult" {
+        let a = eval_star(tokens, mut pos, mut scopes);
+        let b = eval_star(tokens, mut pos, mut scopes);
+        value = a * b;
+    } else {
+        scopes.push(Map.new());
+        loop {
+            // A name followed by anything but the closing parenthesis
+            // is assigned; otherwise this is the let's last expression.
+            let name = tokens[*pos].clone();
+            if name != "(" and tokens[*pos + 1] != ")" {
+                *pos += 1;
+                let v = eval_star(tokens, mut pos, mut scopes);
+                let last = scopes.len() - 1;
+                scopes[last].insert(name, v);
+            } else {
+                value = eval_star(tokens, mut pos, mut scopes);
+                break;
+            }
+        }
+        scopes.pop();
+    }
+    *pos += 1;
+    value
+}
+
+fn evaluate_star(expression: String) -> i64 {
+    let tokens = tokenize_star(expression);
+    let mut pos = 0;
+    let mut scopes: Vec[Map[String, i64]] = Vec.new();
+    eval_star(tokens, mut pos, mut scopes)
+}
+
+// ---- tree arm -------------------------------------------------------
+
+shared enum Expr_tree {
+    Num(i64),
+    Var(String),
+    Add(Expr_tree, Expr_tree),
+    Mult(Expr_tree, Expr_tree),
+    Let(Vec[(String, Expr_tree)], Expr_tree),
+}
+
+fn word_at_tree(text: Slice[u8], pos: mut ref i64) -> String {
+    let start = *pos;
+    while *pos < text.len() and text[*pos] != b' ' and text[*pos] != b')' {
+        *pos += 1;
+    }
+    let mut word = String.new();
+    for i in start..*pos {
+        word.push(text[i] as char);
+    }
+    word
+}
+
+fn parse_tree(text: Slice[u8], pos: mut ref i64) -> Expr_tree {
+    if text[*pos] != b'(' {
+        let first = text[*pos];
+        let word = word_at_tree(text, mut pos);
+        if first == b'-' or (first >= b'0' and first <= b'9') {
+            return Expr_tree.Num(i64.parse(word).unwrap());
+        }
+        return Expr_tree.Var(word);
+    }
+    *pos += 1;
+    let op = word_at_tree(text, mut pos);
+    *pos += 1;
+    let mut e = Expr_tree.Num(0);
+    if op == "add" or op == "mult" {
+        let a = parse_tree(text, mut pos);
+        *pos += 1;
+        let b = parse_tree(text, mut pos);
+        e = if op == "add" { Expr_tree.Add(a, b) } else { Expr_tree.Mult(a, b) };
+    } else {
+        let mut assigns: Vec[(String, Expr_tree)] = Vec.new();
+        loop {
+            if text[*pos] != b'(' {
+                let mark = *pos;
+                let name = word_at_tree(text, mut pos);
+                if text[*pos] == b' ' {
+                    *pos += 1;
+                    let v = parse_tree(text, mut pos);
+                    *pos += 1;
+                    assigns.push((name, v));
+                    continue;
+                }
+                *pos = mark;
+            }
+            let body = parse_tree(text, mut pos);
+            e = Expr_tree.Let(assigns, body);
+            break;
+        }
+    }
+    *pos += 1;
+    e
+}
+
+fn value_of_tree(e: Expr_tree, env: mut ref Vec[(String, i64)]) -> i64 {
+    match e {
+        Expr_tree.Num(n) => n,
+        Expr_tree.Var(name) => {
+            let mut i = env.len();
+            while i > 0 {
+                i -= 1;
+                if env[i].0 == name {
+                    return env[i].1;
+                }
+            }
+            0
+        }
+        Expr_tree.Add(a, b) => value_of_tree(a, mut env) + value_of_tree(b, mut env),
+        Expr_tree.Mult(a, b) => value_of_tree(a, mut env) * value_of_tree(b, mut env),
+        Expr_tree.Let(assigns, body) => {
+            let start = env.len();
+            for a in assigns.iter() {
+                let v = value_of_tree(a.1, mut env);
+                env.push((a.0.clone(), v));
+            }
+            let v = value_of_tree(body, mut env);
+            env.truncate(start);
+            v
+        }
+    }
+}
+
+fn evaluate_tree(expression: String) -> i64 {
+    let text = expression.bytes();
+    let mut pos = 0;
+    let tree = parse_tree(text, mut pos);
+    let mut env: Vec[(String, i64)] = Vec.new();
+    value_of_tree(tree, mut env)
+}
+
+// ---- flat arm -------------------------------------------------------
+
+fn read_word_flat(text: Slice[u8], pos: mut ref i64) -> String {
+    let start = *pos;
+    while *pos < text.len() and text[*pos] != b' ' and text[*pos] != b')' {
+        *pos += 1;
+    }
+    let mut word = String.new();
+    for i in start..*pos {
+        word.push(text[i] as char);
+    }
+    word
+}
+
+fn read_number_flat(text: Slice[u8], pos: mut ref i64) -> i64 {
+    let mut sign = 1;
+    if text[*pos] == b'-' {
+        sign = -1;
+        *pos += 1;
+    }
+    let mut n = 0;
+    while *pos < text.len() and text[*pos] >= b'0' and text[*pos] <= b'9' {
+        n = n * 10 + (text[*pos] - b'0') as i64;
+        *pos += 1;
+    }
+    sign * n
+}
+
+fn eval_at_flat(text: Slice[u8], pos: mut ref i64, env: mut ref Vec[(String, i64)]) -> i64 {
+    let c = text[*pos];
+    if c == b'-' or (c >= b'0' and c <= b'9') {
+        return read_number_flat(text, mut pos);
+    }
+    if c != b'(' {
+        let name = read_word_flat(text, mut pos);
+        let mut i = env.len();
+        while i > 0 {
+            i -= 1;
+            if env[i].0 == name {
+                return env[i].1;
+            }
+        }
+        return 0;
+    }
+    *pos += 1;
+    let op = read_word_flat(text, mut pos);
+    *pos += 1;
+    let mut value = 0;
+    if op == "add" or op == "mult" {
+        let a = eval_at_flat(text, mut pos, mut env);
+        *pos += 1;
+        let b = eval_at_flat(text, mut pos, mut env);
+        value = if op == "add" { a + b } else { a * b };
+    } else {
+        let start = env.len();
+        loop {
+            let c = text[*pos];
+            if c != b'(' and c != b'-' and (c < b'0' or c > b'9') {
+                let mark = *pos;
+                let name = read_word_flat(text, mut pos);
+                if text[*pos] == b' ' {
+                    *pos += 1;
+                    let v = eval_at_flat(text, mut pos, mut env);
+                    *pos += 1;
+                    env.push((name, v));
+                    continue;
+                }
+                *pos = mark;
+            }
+            value = eval_at_flat(text, mut pos, mut env);
+            break;
+        }
+        env.truncate(start);
+    }
+    *pos += 1;
+    value
+}
+
+fn evaluate_flat(expression: String) -> i64 {
+    let mut pos = 0;
+    let mut env: Vec[(String, i64)] = Vec.new();
+    eval_at_flat(expression.bytes(), mut pos, mut env)
+}
+
+// ---- iterative arm --------------------------------------------------
+
+struct Form_iterative {
+    op: String,
+    args: Vec[i64],
+    pending: String,
+    start: i64,
+}
+
+fn split_tokens_iterative(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c == '(' or c == ')' or c == ' ' {
+            if word.len() > 0 {
+                tokens.push(word);
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn evaluate_iterative(expression: String) -> i64 {
+    let tokens = split_tokens_iterative(expression);
+    let mut env: Vec[(String, i64)] = Vec.new();
+    let mut stack: Vec[Form_iterative] = Vec.new();
+    let mut i = 0;
+    let mut answer = 0;
+    while i < tokens.len() {
+        let t = tokens[i].clone();
+        i += 1;
+        if t == "(" {
+            stack.push(Form_iterative { op: tokens[i].clone(), args: Vec.new(), pending: String.new(), start: env.len() });
+            i += 1;
+            continue;
+        }
+        let top = stack.len() - 1;
+        if top >= 0 and stack[top].op == "let" and stack[top].pending.len() == 0 and t != ")" and tokens[i] != ")" {
+            stack[top].pending = t;
+            continue;
+        }
+        let mut value = 0;
+        if t == ")" {
+            let form = stack.pop().unwrap();
+            if form.op == "add" {
+                value = form.args[0] + form.args[1];
+            } else if form.op == "mult" {
+                value = form.args[0] * form.args[1];
+            } else {
+                value = form.args[0];
+                env.truncate(form.start);
+            }
+        } else {
+            let first = t.bytes()[0];
+            if first == b'-' or (first >= b'0' and first <= b'9') {
+                value = i64.parse(t).unwrap();
+            } else {
+                let mut k = env.len();
+                while k > 0 {
+                    k -= 1;
+                    if env[k].0 == t {
+                        value = env[k].1;
+                        break;
+                    }
+                }
+            }
+        }
+        if stack.len() == 0 {
+            answer = value;
+        } else {
+            let top = stack.len() - 1;
+            if stack[top].pending.len() > 0 {
+                let name = stack[top].pending.clone();
+                env.push((name, value));
+                stack[top].pending = String.new();
+            } else {
+                stack[top].args.push(value);
+            }
+        }
+    }
+    answer
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn evaluate_with(which: i64, e: String) -> i64 {
+    if which == 0 {
+        evaluate_star(e)
+    } else if which == 1 {
+        evaluate_tree(e)
+    } else if which == 2 {
+        evaluate_flat(e)
+    } else {
+        evaluate_iterative(e)
+    }
+}
+
+// The definition, as the problem states it: the text cut into tokens at
+// spaces once each parenthesis has spaces round it. A let's items are
+// found first, by skipping each whole; all but the last pair names with
+// values, and the let gives its own copy of the assignments around it
+// each name in turn before it takes the value of its last item.
+fn def_eval(tokens: Vec[String], pos: mut ref i64, env: Map[String, i64]) -> i64 {
+    let t = tokens[*pos].clone();
+    *pos += 1;
+    if t != "(" {
+        match i64.parse(t.clone()) {
+            Ok(n) => {
+                return n;
+            }
+            Err(_) => {}
+        }
+        return match env.get(t) {
+            Some(v) => *v,
+            None => 0,
+        };
+    }
+    let op = tokens[*pos].clone();
+    *pos += 1;
+    let mut value = 0;
+    if op == "add" or op == "mult" {
+        let a = def_eval(tokens, mut pos, env);
+        let b = def_eval(tokens, mut pos, env);
+        value = if op == "add" { a + b } else { a * b };
+    } else {
+        // The let's items, each a token or a parenthesized group: names
+        // and values in turn, and the last expression.
+        let mut starts: Vec[i64] = Vec.new();
+        let mut at = *pos;
+        while tokens[at] != ")" {
+            starts.push(at);
+            at = skip(tokens, at);
+        }
+        let mut mine = env.clone();
+        let mut k = 0;
+        while k + 1 < starts.len() {
+            let mut p = starts[k + 1];
+            let v = def_eval(tokens, mut p, mine);
+            mine.insert(tokens[starts[k]].clone(), v);
+            k += 2;
+        }
+        let mut p = starts[starts.len() - 1];
+        value = def_eval(tokens, mut p, mine);
+        *pos = at;
+    }
+    *pos += 1;
+    value
+}
+
+// The place just past the item that starts at `at`.
+fn skip(tokens: Vec[String], at: i64) -> i64 {
+    if tokens[at] != "(" {
+        return at + 1;
+    }
+    let mut depth = 0;
+    let mut i = at;
+    loop {
+        if tokens[i] == "(" {
+            depth += 1;
+        } else if tokens[i] == ")" {
+            depth -= 1;
+        }
+        i += 1;
+        if depth == 0 {
+            return i;
+        }
+    }
+}
+
+fn definition(e: String) -> i64 {
+    let spaced = e.replace("(", " ( ").replace(")", " ) ");
+    let mut tokens: Vec[String] = Vec.new();
+    for w in spaced.split(" ") {
+        if w.len() > 0 {
+            tokens.push(w.to_string());
+        }
+    }
+    let mut pos = 0;
+    def_eval(tokens, mut pos, Map.new())
+}
+
+// A random expression of at most `depth` levels of forms, using only
+// the variables in `names`, which are those assigned around it; every
+// variable it assigns has `suffix` on the end of its name.
+fn random_expr(seed: mut ref i64, depth: i64, names: Vec[String], suffix: String) -> String {
+    let kinds = if depth == 0 { 2 } else { 5 };
+    let kind = next_random(mut seed) % kinds;
+    if kind == 0 or (kind == 1 and names.len() == 0) {
+        return f"{next_random(mut seed) % 21 - 10}";
+    }
+    if kind == 1 {
+        return names[next_random(mut seed) % names.len()].clone();
+    }
+    if kind == 2 or kind == 3 {
+        let a = random_expr(mut seed, depth - 1, names, suffix);
+        let b = random_expr(mut seed, depth - 1, names, suffix);
+        let op = if kind == 2 { "add" } else { "mult" };
+        return f"({op} {a} {b})";
+    }
+    let pool = ["x", "y", "z", "a1", "b2"];
+    let mut inner = names.clone();
+    let mut text = "(let".to_string();
+    let count = 1 + next_random(mut seed) % 3;
+    for _ in 0..count {
+        let name = f"{pool[next_random(mut seed) % 5]}{suffix}";
+        let v = random_expr(mut seed, depth - 1, inner, suffix);
+        text = f"{text} {name} {v}";
+        if not inner.contains(name) {
+            inner.push(name);
+        }
+    }
+    let body = random_expr(mut seed, depth - 1, inner, suffix);
+    f"{text} {body})"
+}
+
+fn main() {
+    let mut seed = 7360;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut chars = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // An expression of up to 3 levels that may use x and y, inside
+        // a let that assigns them; the same again with every variable
+        // renamed; and two expressions of up to 2 levels to combine.
+        let depth = next_random(mut seed) % 4;
+        let x = next_random(mut seed) % 21 - 10;
+        let y = next_random(mut seed) % 21 - 10;
+        let mut copy = seed;
+        let e = random_expr(mut seed, depth, ["x".to_string(), "y".to_string()], "".to_string());
+        let renamed = random_expr(mut copy, depth, ["xq".to_string(), "yq".to_string()], "q".to_string());
+        let a = random_expr(mut seed, 1 + next_random(mut seed) % 2, Vec.new(), "".to_string());
+        let b = random_expr(mut seed, 1 + next_random(mut seed) % 2, Vec.new(), "".to_string());
+        let whole = f"(let x {x} y {y} {e})";
+        chars += whole.len();
+        let want = definition(whole.clone());
+        for which in 0..arms {
+            let got = evaluate_with(which, whole.clone());
+            // P1: the definition's value.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every variable renamed, the same value.
+            checks += 1;
+            if evaluate_with(which, f"(let xq {x} yq {y} {renamed})") != got {
+                fails[1] += 1;
+            }
+            // P3: y assigned in a let of its own inside x's, the same
+            // value.
+            checks += 1;
+            if evaluate_with(which, f"(let x {x} (let y {y} {e}))") != got {
+                fails[2] += 1;
+            }
+            // P4: an add and a mult of two expressions take the sum and
+            // the product of their values.
+            checks += 1;
+            let va = evaluate_with(which, a.clone());
+            let vb = evaluate_with(which, b.clone());
+            if evaluate_with(which, f"(add {a} {b})") != va + vb or evaluate_with(which, f"(mult {a} {b})") != va * vb {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} expressions ({chars} characters), {arms} arms, {checks} checks, {total} failures");
+}

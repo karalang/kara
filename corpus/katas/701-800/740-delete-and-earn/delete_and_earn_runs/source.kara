@@ -1,0 +1,100 @@
+// LeetCode #740: Delete and Earn -- runs of present values.
+//
+// Values with a missing value between them never interfere, so split
+// the values that appear into runs of consecutive ones and solve each
+// run on its own: in a run, choose values no two of them adjacent for
+// the most points, by the same take-or-leave walk. The answer is the
+// sum over the runs. O(n + m).
+
+fn best_of_run(points: Vec[i64], from: i64, to: i64) -> i64 {
+    let mut take = 0;
+    let mut skip = 0;
+    for v in from..to {
+        let taken = skip + points[v];
+        skip = if take > skip { take } else { skip };
+        take = taken;
+    }
+    if take > skip { take } else { skip }
+}
+
+fn delete_and_earn(nums: Vec[i64]) -> i64 {
+    let mut top = 0;
+    for x in nums.iter() {
+        if *x > top {
+            top = *x;
+        }
+    }
+    let mut points: Vec[i64] = Vec.new();
+    for _ in 0..top + 2 {
+        points.push(0);
+    }
+    for x in nums.iter() {
+        points[*x] += *x;
+    }
+    let mut total = 0;
+    let mut v = 1;
+    while v <= top {
+        if points[v] == 0 {
+            v += 1;
+        } else {
+            let start = v;
+            while points[v] > 0 {
+                v += 1;
+            }
+            total += best_of_run(points, start, v);
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {delete_and_earn(nums)}");
+}
+
+fn main() {
+    show([3, 4, 2]);
+    show([2, 2, 3, 3, 3, 4]);
+    show([1]);
+    show([5, 5, 5, 5]);
+    show([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    show([10, 1, 9, 2, 8, 3]);
+    show([1, 1, 1, 2, 4, 5, 5, 5, 6]);
+    show([3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9]);
+    let mut seed: i64 = 740;
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..20000 {
+        random.push(1 + next_random(mut seed) % 10000);
+    }
+    println(f"20000 random numbers up to 10000 -> {delete_and_earn(random)}");
+    let mut every: Vec[i64] = Vec.new();
+    for v in 1..10001 {
+        every.push(v);
+    }
+    println(f"every number from 1 to 10000 once -> {delete_and_earn(every)}");
+    let mut crowded: Vec[i64] = Vec.new();
+    for _ in 0..20000 {
+        crowded.push(1 + next_random(mut seed) % 50);
+    }
+    println(f"20000 random numbers up to 50 -> {delete_and_earn(crowded)}");
+    let mut sum = 0;
+    let mut most = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let range = 1 + next_random(mut seed) % 10;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % range);
+        }
+        let got = delete_and_earn(nums);
+        most += got;
+        sum = (sum * 131 + got + 1) % 1000000007;
+    }
+    println(f"300 random short lists: {most} points in all, checksum {sum}");
+}

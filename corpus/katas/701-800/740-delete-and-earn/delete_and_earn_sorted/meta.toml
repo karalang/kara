@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/740-delete-and-earn/delete_and_earn_sorted.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "1d96cab83"
+extracted_src = "40fc18ea"
+model_rev = "583cfb0d"
+model_src = "40fc18ea"

@@ -1,0 +1,199 @@
+// LeetCode #736: Parse Lisp Expression -- a syntax tree, then evaluated.
+//
+// Parse the text first into a tree, a `shared enum` with one variant
+// for each form, the let holding its assignments in order and its last
+// expression; then evaluate the tree, keeping the assignments in force
+// in one list, newest last, that a let cuts back to its own start when
+// it is done. O(n) to parse, each name looked up through the list.
+
+shared enum Expr {
+    Num(i64),
+    Var(String),
+    Add(Expr, Expr),
+    Mult(Expr, Expr),
+    Let(Vec[(String, Expr)], Expr),
+}
+
+fn word_at(text: Slice[u8], pos: mut ref i64) -> String {
+    let start = *pos;
+    while *pos < text.len() and text[*pos] != b' ' and text[*pos] != b')' {
+        *pos += 1;
+    }
+    let mut word = String.new();
+    for i in start..*pos {
+        word.push(text[i] as char);
+    }
+    word
+}
+
+fn parse(text: Slice[u8], pos: mut ref i64) -> Expr {
+    if text[*pos] != b'(' {
+        let first = text[*pos];
+        let word = word_at(text, mut pos);
+        if first == b'-' or (first >= b'0' and first <= b'9') {
+            return Expr.Num(i64.parse(word).unwrap());
+        }
+        return Expr.Var(word);
+    }
+    *pos += 1;
+    let op = word_at(text, mut pos);
+    *pos += 1;
+    let mut e = Expr.Num(0);
+    if op == "add" or op == "mult" {
+        let a = parse(text, mut pos);
+        *pos += 1;
+        let b = parse(text, mut pos);
+        e = if op == "add" { Expr.Add(a, b) } else { Expr.Mult(a, b) };
+    } else {
+        let mut assigns: Vec[(String, Expr)] = Vec.new();
+        loop {
+            if text[*pos] != b'(' {
+                let mark = *pos;
+                let name = word_at(text, mut pos);
+                if text[*pos] == b' ' {
+                    *pos += 1;
+                    let v = parse(text, mut pos);
+                    *pos += 1;
+                    assigns.push((name, v));
+                    continue;
+                }
+                *pos = mark;
+            }
+            let body = parse(text, mut pos);
+            e = Expr.Let(assigns, body);
+            break;
+        }
+    }
+    *pos += 1;
+    e
+}
+
+fn value_of(e: Expr, env: mut ref Vec[(String, i64)]) -> i64 {
+    match e {
+        Expr.Num(n) => n,
+        Expr.Var(name) => {
+            let mut i = env.len();
+            while i > 0 {
+                i -= 1;
+                if env[i].0 == name {
+                    return env[i].1;
+                }
+            }
+            0
+        }
+        Expr.Add(a, b) => value_of(a, mut env) + value_of(b, mut env),
+        Expr.Mult(a, b) => value_of(a, mut env) * value_of(b, mut env),
+        Expr.Let(assigns, body) => {
+            let start = env.len();
+            for a in assigns.iter() {
+                let v = value_of(a.1, mut env);
+                env.push((a.0.clone(), v));
+            }
+            let v = value_of(body, mut env);
+            env.truncate(start);
+            v
+        }
+    }
+}
+
+fn evaluate(expression: String) -> i64 {
+    let text = expression.bytes();
+    let mut pos = 0;
+    let tree = parse(text, mut pos);
+    let mut env: Vec[(String, i64)] = Vec.new();
+    value_of(tree, mut env)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random expression of at most `depth` levels of forms, using only
+// the variables in `names`, which are those assigned around it.
+fn random_expr(seed: mut ref i64, depth: i64, names: Vec[String]) -> String {
+    let kinds = if depth == 0 { 2 } else { 5 };
+    let kind = next_random(mut seed) % kinds;
+    if kind == 0 or (kind == 1 and names.len() == 0) {
+        return f"{next_random(mut seed) % 21 - 10}";
+    }
+    if kind == 1 {
+        return names[next_random(mut seed) % names.len()].clone();
+    }
+    if kind == 2 or kind == 3 {
+        let a = random_expr(mut seed, depth - 1, names);
+        let b = random_expr(mut seed, depth - 1, names);
+        let op = if kind == 2 { "add" } else { "mult" };
+        return f"({op} {a} {b})";
+    }
+    let pool = ["x", "y", "z", "a1", "b2"];
+    let mut inner = names.clone();
+    let mut text = "(let".to_string();
+    let count = 1 + next_random(mut seed) % 3;
+    for _ in 0..count {
+        let name = pool[next_random(mut seed) % 5].to_string();
+        let v = random_expr(mut seed, depth - 1, inner);
+        text = f"{text} {name} {v}";
+        if not inner.contains(name) {
+            inner.push(name);
+        }
+    }
+    let body = random_expr(mut seed, depth - 1, inner);
+    f"{text} {body})"
+}
+
+fn show(e: String) {
+    println(f"{e} -> {evaluate(e.clone())}");
+}
+
+fn main() {
+    show("(let x 2 (mult x (let x 3 y 4 (add x y))))".to_string());
+    show("(let x 3 x 2 x)".to_string());
+    show("(let x 1 y 2 x (add x y) (add x y))".to_string());
+    show("(add 1 2)".to_string());
+    show("(mult 3 (add 2 3))".to_string());
+    show("(let a1 3 b2 (add a1 1) b2)".to_string());
+    show("(let x 2 (add (let x 3 (let x 4 x)) x))".to_string());
+    show("(let x -2 y x y)".to_string());
+    show("(mult -3 (add 4 -6))".to_string());
+    show("-7".to_string());
+    // 80 lets, each inside the last, each variable one more than the
+    // one before.
+    let mut deep = "(let v0 1".to_string();
+    for i in 1..80 {
+        deep = f"{deep} (let v{i} (add v{i - 1} 1)";
+    }
+    deep = f"{deep} v79";
+    for _ in 0..80 {
+        deep = f"{deep})";
+    }
+    println(f"80 nested lets, {deep.len()} characters -> {evaluate(deep)}");
+    let mut chain = "150".to_string();
+    let mut k = 149;
+    while k > 0 {
+        chain = f"(add {k} {chain})";
+        k -= 1;
+    }
+    println(f"adds of 1 to 150, {chain.len()} characters -> {evaluate(chain)}");
+    let mut doubling = "(let x 1".to_string();
+    for _ in 0..30 {
+        doubling = f"{doubling} (let x (add x x)";
+    }
+    doubling = f"{doubling} x";
+    for _ in 0..31 {
+        doubling = f"{doubling})";
+    }
+    println(f"x doubled in 30 lets that each hide the last, {doubling.len()} characters -> {evaluate(doubling)}");
+    let mut seed: i64 = 736;
+    let mut sum = 0;
+    let mut chars = 0;
+    for _ in 0..300 {
+        let e = random_expr(mut seed, 1 + next_random(mut seed) % 3, Vec.new());
+        chars += e.len();
+        let v = evaluate(e);
+        sum = (sum * 131 + (v % 1000000007 + 1000000007) % 1000000007) % 1000000007;
+    }
+    println(f"300 random expressions, {chars} characters: checksum {sum}");
+}

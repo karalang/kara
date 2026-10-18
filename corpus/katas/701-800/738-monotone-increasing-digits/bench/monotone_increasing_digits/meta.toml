@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/738-monotone-increasing-digits/bench/monotone_increasing_digits.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "1d96cab83"
+extracted_src = "1b7c351d"
+model_rev = "583cfb0d"
+model_src = "1b7c351d"

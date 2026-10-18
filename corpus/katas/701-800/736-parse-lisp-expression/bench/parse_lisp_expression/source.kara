@@ -1,0 +1,159 @@
+// LeetCode #736: Parse Lisp Expression -- tokens, recursion and a stack
+// of scopes.
+//
+// An expression is an integer, a variable, or one of `(add e1 e2)`,
+// `(mult e1 e2)` and `(let v1 e1 v2 e2 ... vn en expr)`, where a let
+// assigns each variable in turn, later ones seeing earlier ones, and
+// takes the value of its last expression; a variable has the value of
+// its innermost assignment. Split the text into tokens, then evaluate
+// by recursion, keeping one map of assignments for each let that is
+// open. O(n) tokens, each name looked up through the open lets.
+
+fn tokenize(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c == '(' or c == ')' or c == ' ' {
+            if word.len() > 0 {
+                tokens.push(word);
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn lookup(scopes: Vec[Map[String, i64]], name: String) -> i64 {
+    let mut i = scopes.len();
+    while i > 0 {
+        i -= 1;
+        match scopes[i].get(name) {
+            Some(v) => {
+                return *v;
+            }
+            None => {}
+        }
+    }
+    0
+}
+
+fn eval(tokens: Vec[String], pos: mut ref i64, scopes: mut ref Vec[Map[String, i64]]) -> i64 {
+    let t = tokens[*pos].clone();
+    *pos += 1;
+    if t != "(" {
+        let first = t.bytes()[0];
+        if first == b'-' or (first >= b'0' and first <= b'9') {
+            return i64.parse(t).unwrap();
+        }
+        return lookup(scopes, t);
+    }
+    let op = tokens[*pos].clone();
+    *pos += 1;
+    let mut value = 0;
+    if op == "add" {
+        let a = eval(tokens, mut pos, mut scopes);
+        let b = eval(tokens, mut pos, mut scopes);
+        value = a + b;
+    } else if op == "mult" {
+        let a = eval(tokens, mut pos, mut scopes);
+        let b = eval(tokens, mut pos, mut scopes);
+        value = a * b;
+    } else {
+        scopes.push(Map.new());
+        loop {
+            // A name followed by anything but the closing parenthesis
+            // is assigned; otherwise this is the let's last expression.
+            let name = tokens[*pos].clone();
+            if name != "(" and tokens[*pos + 1] != ")" {
+                *pos += 1;
+                let v = eval(tokens, mut pos, mut scopes);
+                let last = scopes.len() - 1;
+                scopes[last].insert(name, v);
+            } else {
+                value = eval(tokens, mut pos, mut scopes);
+                break;
+            }
+        }
+        scopes.pop();
+    }
+    *pos += 1;
+    value
+}
+
+fn evaluate(expression: String) -> i64 {
+    let tokens = tokenize(expression);
+    let mut pos = 0;
+    let mut scopes: Vec[Map[String, i64]] = Vec.new();
+    eval(tokens, mut pos, mut scopes)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random expression of at most `depth` levels of forms, using only
+// the variables in `names`; a mult takes a number from -2 to 2 as its
+// second operand, so that values stay small at any depth.
+fn random_expr(seed: mut ref i64, depth: i64, names: Vec[String]) -> String {
+    let kinds = if depth == 0 { 2 } else { 5 };
+    let kind = next_random(mut seed) % kinds;
+    if kind == 0 or (kind == 1 and names.len() == 0) {
+        return f"{next_random(mut seed) % 21 - 10}";
+    }
+    if kind == 1 {
+        return names[next_random(mut seed) % names.len()].clone();
+    }
+    if kind == 2 {
+        let a = random_expr(mut seed, depth - 1, names);
+        let b = random_expr(mut seed, depth - 1, names);
+        return f"(add {a} {b})";
+    }
+    if kind == 3 {
+        let a = random_expr(mut seed, depth - 1, names);
+        return f"(mult {a} {next_random(mut seed) % 5 - 2})";
+    }
+    let pool = ["x", "y", "z", "a1", "b2"];
+    let mut inner = names.clone();
+    let mut text = "(let".to_string();
+    let count = 1 + next_random(mut seed) % 3;
+    for _ in 0..count {
+        let name = pool[next_random(mut seed) % 5].to_string();
+        let v = random_expr(mut seed, depth - 1, inner);
+        text = f"{text} {name} {v}";
+        if not inner.contains(name) {
+            inner.push(name);
+        }
+    }
+    let body = random_expr(mut seed, depth - 1, inner);
+    f"{text} {body})"
+}
+
+fn main() {
+    let mut seed: i64 = 736;
+    let mut exprs: Vec[String] = Vec.new();
+    let mut chars = 0;
+    while exprs.len() < 1000 {
+        let e = random_expr(mut seed, 8, Vec.new());
+        if e.len() >= 500 and e.len() <= 2000 {
+            chars += e.len();
+            exprs.push(e);
+        }
+    }
+    let mut sum = 0;
+    for _ in 0..40 {
+        for e in exprs.iter() {
+            let v = evaluate(e);
+            sum = (sum * 31 + (v % 1000000007 + 1000000007) % 1000000007) % 1000000007;
+        }
+    }
+    println(f"40 rounds of 1000 expressions of {chars} characters in all: checksum {sum}");
+}

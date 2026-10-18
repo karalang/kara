@@ -1,0 +1,58 @@
+// LeetCode #738: Monotone Increasing Digits -- one drop, then nines.
+//
+// A number has monotone increasing digits when each digit is no larger
+// than the one after it. Return the largest such number no greater
+// than n. Find the first place where a digit is larger than the next;
+// lower that digit by one, step back over the equal digits before it
+// so that the lowered digit is the first of them, and make every digit
+// after it a 9. O(d) for d digits.
+
+fn monotone_increasing_digits(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut x = n;
+    while x > 0 {
+        digits.push(x % 10);
+        x /= 10;
+    }
+    digits.reverse();
+    let mut i = 0;
+    while i + 1 < digits.len() and digits[i] <= digits[i + 1] {
+        i += 1;
+    }
+    if i + 1 < digits.len() {
+        while i > 0 and digits[i - 1] == digits[i] {
+            i -= 1;
+        }
+        digits[i] -= 1;
+        for j in i + 1..digits.len() {
+            digits[j] = 9;
+        }
+    }
+    let mut out = 0;
+    for d in digits.iter() {
+        out = out * 10 + *d;
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 3,000,000 random numbers from 0 to 1,000,000,000, each made from
+    // two draws, and the answers summed.
+    let mut seed: i64 = 738;
+    let mut total = 0;
+    let mut kept = 0;
+    for _ in 0..3000000 {
+        let n = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001;
+        let m = monotone_increasing_digits(n);
+        if m == n {
+            kept += 1;
+        }
+        total += m;
+    }
+    println(f"3000000 random numbers: {kept} already monotone, answers sum to {total}");
+}

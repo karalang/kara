@@ -1,0 +1,98 @@
+// LeetCode #739: Daily Temperatures -- a stack of warmer days, from the
+// right.
+//
+// Walk the days from the last, keeping a stack of the later days that
+// could still answer an earlier one: each is warmer than every day
+// above it. For a day, drop the days on top that are no warmer, since
+// this day hides them from everything before it; the top, if any, is
+// its answer. Then push the day. O(n).
+
+fn daily_temperatures(temperatures: Vec[i64]) -> Vec[i64] {
+    let n = temperatures.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        answer.push(0);
+    }
+    let mut ahead: Vec[i64] = Vec.new();
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        while ahead.len() > 0 and temperatures[ahead[ahead.len() - 1]] <= temperatures[i] {
+            ahead.pop();
+        }
+        if ahead.len() > 0 {
+            answer[i] = ahead[ahead.len() - 1] - i;
+        }
+        ahead.push(i);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(temperatures: Vec[i64]) {
+    println(f"{temperatures} -> {daily_temperatures(temperatures)}");
+}
+
+fn digest(what: String, temperatures: Vec[i64]) {
+    let answer = daily_temperatures(temperatures);
+    let mut sum = 0;
+    let mut zeros = 0;
+    for i in 0..answer.len() {
+        sum = (sum * 131 + answer[i] + 1) % 1000000007;
+        if answer[i] == 0 {
+            zeros += 1;
+        }
+    }
+    println(f"{what} -> {zeros} with no warmer day, checksum {sum}");
+}
+
+fn main() {
+    show([73, 74, 75, 71, 69, 72, 76, 73]);
+    show([30, 40, 50, 60]);
+    show([30, 60, 90]);
+    show([50]);
+    show([55, 55, 55, 55]);
+    show([100, 90, 80, 70, 60, 50, 40, 30]);
+    show([60, 50, 50, 40, 70, 30, 30, 80]);
+    show([30, 100, 30, 100, 30, 100]);
+    let mut seed: i64 = 739;
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..100000 {
+        random.push(30 + next_random(mut seed) % 71);
+    }
+    digest("100000 random days".to_string(), random);
+    let mut falling: Vec[i64] = Vec.new();
+    for i in 0..99999 {
+        falling.push(99 - i * 70 / 99999);
+    }
+    falling.push(100);
+    digest("99999 days cooling and then a hot one".to_string(), falling);
+    let mut saw: Vec[i64] = Vec.new();
+    for i in 0..100000 {
+        saw.push(30 + i % 71);
+    }
+    digest("100000 days rising from 30 to 100 again and again".to_string(), saw);
+    let mut sum = 0;
+    let mut waits = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let range = 1 + next_random(mut seed) % 6;
+        let mut days: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            days.push(30 + next_random(mut seed) % range);
+        }
+        let answer = daily_temperatures(days);
+        for a in answer.iter() {
+            waits += *a;
+            sum = (sum * 131 + *a + 1) % 1000000007;
+        }
+        sum = (sum * 131 + 7) % 1000000007;
+    }
+    println(f"300 random short runs: {waits} days waited in all, checksum {sum}");
+}

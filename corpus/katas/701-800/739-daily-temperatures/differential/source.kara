@@ -1,0 +1,234 @@
+// LeetCode #739: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random days.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn daily_temperatures_star(temperatures: Vec[i64]) -> Vec[i64] {
+    let n = temperatures.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        answer.push(0);
+    }
+    let mut waiting: Vec[i64] = Vec.new();
+    for i in 0..n {
+        while waiting.len() > 0 and temperatures[waiting[waiting.len() - 1]] < temperatures[i] {
+            let j = waiting.pop().unwrap();
+            answer[j] = i - j;
+        }
+        waiting.push(i);
+    }
+    answer
+}
+
+// ---- jump arm -------------------------------------------------------
+
+fn daily_temperatures_jump(temperatures: Vec[i64]) -> Vec[i64] {
+    let n = temperatures.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        answer.push(0);
+    }
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        let mut j = i + 1;
+        while j < n and temperatures[j] <= temperatures[i] {
+            if answer[j] == 0 {
+                j = n;
+            } else {
+                j += answer[j];
+            }
+        }
+        if j < n {
+            answer[i] = j - i;
+        }
+    }
+    answer
+}
+
+// ---- nearest arm ----------------------------------------------------
+
+fn daily_temperatures_nearest(temperatures: Vec[i64]) -> Vec[i64] {
+    let n = temperatures.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        answer.push(0);
+    }
+    let mut nearest: Vec[i64] = Vec.new();
+    for _ in 0..101 {
+        nearest.push(n);
+    }
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        let mut best = n;
+        for t in temperatures[i] + 1..101 {
+            if nearest[t] < best {
+                best = nearest[t];
+            }
+        }
+        if best < n {
+            answer[i] = best - i;
+        }
+        nearest[temperatures[i]] = i;
+    }
+    answer
+}
+
+// ---- backstack arm --------------------------------------------------
+
+fn daily_temperatures_backstack(temperatures: Vec[i64]) -> Vec[i64] {
+    let n = temperatures.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        answer.push(0);
+    }
+    let mut ahead: Vec[i64] = Vec.new();
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        while ahead.len() > 0 and temperatures[ahead[ahead.len() - 1]] <= temperatures[i] {
+            ahead.pop();
+        }
+        if ahead.len() > 0 {
+            answer[i] = ahead[ahead.len() - 1] - i;
+        }
+        ahead.push(i);
+    }
+    answer
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, temperatures: Vec[i64]) -> Vec[i64] {
+    if which == 0 {
+        daily_temperatures_star(temperatures)
+    } else if which == 1 {
+        daily_temperatures_jump(temperatures)
+    } else if which == 2 {
+        daily_temperatures_nearest(temperatures)
+    } else {
+        daily_temperatures_backstack(temperatures)
+    }
+}
+
+// The definition, as the problem states it: for each day, look at the
+// days after it in turn for the first warmer one.
+fn definition(temperatures: Vec[i64]) -> Vec[i64] {
+    let n = temperatures.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut wait = 0;
+        for j in i + 1..n {
+            if temperatures[j] > temperatures[i] {
+                wait = j - i;
+                break;
+            }
+        }
+        answer.push(wait);
+    }
+    answer
+}
+
+fn main() {
+    let mut seed = 7390;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut zeros = 0;
+    let mut days = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 40 days, each from 30 to 30 + r for a random r from 0
+        // to 35, so that one case in ten or so holds few temperatures
+        // and many equal days
+        let n = 1 + next_random(mut seed) % 40;
+        let r = next_random(mut seed) % 36;
+        let mut t: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            t.push(30 + next_random(mut seed) % (r + 1));
+        }
+        let want = definition(t);
+        days += n;
+        for w in want.iter() {
+            if *w == 0 {
+                zeros += 1;
+            }
+        }
+        // every temperature doubled less 30, from 30 to 100 still and
+        // in the same order
+        let mut stretched: Vec[i64] = Vec.new();
+        for x in t.iter() {
+            stretched.push(*x * 2 - 30);
+        }
+        // a day of 100 added at the end, warmer than every day before
+        let mut hot = t.clone();
+        hot.push(100);
+        let k = n / 2;
+        let mut front: Vec[i64] = Vec.new();
+        for i in 0..k {
+            front.push(t[i]);
+        }
+        for which in 0..arms {
+            let got = answer_with(which, t);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: temperatures changed in a way that keeps their order
+            // give the same answer.
+            checks += 1;
+            if answer_with(which, stretched) != got {
+                fails[1] += 1;
+            }
+            // P3: with a hotter day added at the end, every day that had
+            // no warmer day waits for it, and the rest wait as before.
+            checks += 1;
+            let after = answer_with(which, hot);
+            let mut same = after.len() == n + 1 and after[n] == 0;
+            if same {
+                for i in 0..n {
+                    let w = if got[i] == 0 { n - i } else { got[i] };
+                    if after[i] != w {
+                        same = false;
+                    }
+                }
+            }
+            if not same {
+                fails[2] += 1;
+            }
+            // P4: on the first half of the days alone, a day keeps its
+            // answer when its warmer day is in that half, and has none
+            // otherwise.
+            checks += 1;
+            let part = answer_with(which, front);
+            let mut agree = part.len() == k;
+            if agree {
+                for i in 0..k {
+                    let w = if i + got[i] < k { got[i] } else { 0 };
+                    if part[i] != w {
+                        agree = false;
+                    }
+                }
+            }
+            if not agree {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} cases ({days} days, {zeros} with no warmer day), {arms} arms, {checks} checks, {total} failures");
+}

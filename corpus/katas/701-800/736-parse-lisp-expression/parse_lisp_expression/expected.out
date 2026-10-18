@@ -1,0 +1,14 @@
+(let x 2 (mult x (let x 3 y 4 (add x y)))) -> 14
+(let x 3 x 2 x) -> 2
+(let x 1 y 2 x (add x y) (add x y)) -> 5
+(add 1 2) -> 3
+(mult 3 (add 2 3)) -> 15
+(let a1 3 b2 (add a1 1) b2) -> 4
+(let x 2 (add (let x 3 (let x 4 x)) x)) -> 6
+(let x -2 y x y) -> -2
+(mult -3 (add 4 -6)) -> 6
+-7 -> -7
+80 nested lets, 1733 characters -> 80
+adds of 1 to 150, 1385 characters -> 11325
+x doubled in 30 lets that each hide the last, 551 characters -> 1073741824
+300 random expressions, 6056 characters: checksum 590515881
