@@ -1381,6 +1381,14 @@ impl<'a> Lcx<'a> {
         let (name, args) = match tcx.kind(base) {
             HK::Adt { def, args } | HK::Shared { def, args } => (self.def_name(def), args),
             HK::Intrinsic { kind, args } => (kind.name().to_string(), args),
+            // B-2026-10-15-76 — every operator impl of a number or `bool` has
+            // `Output = Self` (design.md § Operator traits), the typechecker's
+            // `resolve_assoc_projections` twin.
+            HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool
+                if &*tcx.resolve_name(assoc) == "Output" =>
+            {
+                return Ok(base);
+            }
             _ => {
                 return Err(format!(
                     "an associated type of `{}`",
@@ -3581,7 +3589,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if let Some((tr, m)) = user_operator_trait(compound_binop(&op)) {
             let tt = self.expr_ty(target)?;
             let (_, tb) = self.strip_ty_full(tt);
-            if let Some((d, args)) = self.user_impl_method(tb, tr, m) {
+            if let Some((d, args)) = self.user_operator_method(tb, tr, m, value)? {
                 let tmp = self.temp(tb);
                 self.user_operator_call(target, Some(value), d, args, Place::local(tmp))?;
                 let place = self.expr_place(target, true)?;
@@ -5711,7 +5719,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // its `add` (design.md § Operator traits).
         if let Some((tr, m)) = user_operator_trait(bin) {
             let (_, lbase) = self.strip_ty_full(lt0);
-            if let Some((d, args)) = self.user_impl_method(lbase, tr, m) {
+            if let Some((d, args)) = self.user_operator_method(lbase, tr, m, right)? {
                 return self.user_operator_call(left, Some(right), d, args, dest);
             }
         }
@@ -6854,14 +6862,53 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn user_impl_method(&self, t: Ty, tr: &str, method: &str) -> Option<(DefId, Vec<Ty>)> {
+        self.nth_impl_method(t, tr, method, 0)
+    }
+
+    /// `method` of the `n`th impl of `tr` for `t`'s type, in source order.
+    fn nth_impl_method(&self, t: Ty, tr: &str, method: &str, n: usize) -> Option<(DefId, Vec<Ty>)> {
         let (adt, args) = self.tys().tcx().adt_of(t)?;
         let mut path = self.lcx.defs.table.get(adt.def).path.segments.clone();
-        path.push(format!("impl {tr}#0"));
+        path.push(format!("impl {tr}#{n}"));
         path.push(method.to_string());
         let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
         let d = self.lcx.lowered_def(d)?;
         let item = self.lcx.fns.get(&d)?;
         Some((d, item.impl_args(&args)?))
+    }
+
+    /// B-2026-10-15-76 — the operator method `a <op> right` calls on `t`:
+    /// of the impls of `tr` for `t`'s type (`impl Mul for Duration`, `impl
+    /// Mul[i64] for Duration`), the one whose `rhs` is `right`'s type, as the
+    /// typechecker chose it; the first when only one exists or none fits.
+    fn user_operator_method(
+        &mut self,
+        t: Ty,
+        tr: &str,
+        method: &str,
+        right: &'a Expr,
+    ) -> R<Option<(DefId, Vec<Ty>)>> {
+        let Some(first) = self.user_impl_method(t, tr, method) else {
+            return Ok(None);
+        };
+        if self.nth_impl_method(t, tr, method, 1).is_none() {
+            return Ok(Some(first));
+        }
+        let rt = self.expr_ty(right)?;
+        let (_, rt) = self.strip_ty_full(rt);
+        let mut n = 0;
+        while let Some((d, args)) = self.nth_impl_method(t, tr, method, n) {
+            let f = self.lcx.fns[&d].f;
+            if let Some(p) = f.params.first() {
+                let pt = self.callee_param_ty(p, &args)?;
+                let (_, pt) = self.strip_ty_full(pt);
+                if pt == rt {
+                    return Ok(Some((d, args)));
+                }
+            }
+            n += 1;
+        }
+        Ok(Some(first))
     }
 
     /// `dbg(x)` where `x` names a place: the argument.

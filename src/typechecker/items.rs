@@ -4137,11 +4137,91 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        self.check_operator_output(imp, &gp);
+
         self.enclosing_bounds = saved_bounds;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.current_impl_target = saved_impl_target;
         self.current_concrete_impl_target = saved_concrete_impl_target;
         self.lint_override_stack.pop();
+    }
+
+    /// B-2026-10-15-76 — in an impl of an operator trait, `type Output` is
+    /// the operator's result type (design.md § Operator traits), so the
+    /// operator method must return it: `impl Sub for Instant { type Output
+    /// = Duration; fn sub(..) -> Instant }` is refused rather than letting
+    /// `a - b` be an `Instant` and `T.Output` a `Duration`.
+    fn check_operator_output(&mut self, imp: &ImplBlock, gp: &[String]) {
+        let Some(tr) = imp.trait_name.as_ref().and_then(|p| p.segments.last()) else {
+            return;
+        };
+        let method = match tr.as_str() {
+            "Neg" => "neg",
+            "Not" => "not",
+            _ => match [
+                "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr",
+            ]
+            .iter()
+            .position(|t| t == tr)
+            {
+                Some(i) => [
+                    "add", "sub", "mul", "div", "rem", "bitand", "bitor", "bitxor", "shl", "shr",
+                ][i],
+                None => return,
+            },
+        };
+        let output = imp.items.iter().find_map(|i| match i {
+            ImplItem::AssocType(b) if b.name == "Output" && b.generic_params.is_none() => Some(b),
+            _ => None,
+        });
+        let func = imp.items.iter().find_map(|i| match i {
+            ImplItem::Method(f) if f.name == method => Some(f),
+            _ => None,
+        });
+        let (Some(output), Some(func)) = (output, func) else {
+            return;
+        };
+        let Some(ret) = &func.return_type else {
+            return;
+        };
+        let (errors, warnings) = (self.errors.len(), self.warnings.len());
+        // `Self` as written, with the impl's own parameters (`W[T]`).
+        let target = self.lower_type_expr(&imp.target_type, gp);
+        fn own_self(t: Type, target: &Type) -> Type {
+            match t {
+                Type::Named { name, args } if name == "Self" && args.is_empty() => target.clone(),
+                Type::TypeParam(p) if p == "Self" => target.clone(),
+                Type::Named { name, args } => Type::Named {
+                    name,
+                    args: args.into_iter().map(|a| own_self(a, target)).collect(),
+                },
+                Type::Tuple(ts) => {
+                    Type::Tuple(ts.into_iter().map(|a| own_self(a, target)).collect())
+                }
+                t => t,
+            }
+        }
+        let declared = own_self(self.lower_type_expr(&output.ty, gp), &target);
+        let returned = own_self(self.lower_type_expr(ret, gp), &target);
+        // Lowering the two again reports nothing new: the binding and the
+        // method were checked above.
+        self.errors.truncate(errors);
+        self.warnings.truncate(warnings);
+        if matches!(returned, Type::AssocProjection { .. })
+            || super::types::types_compatible(&returned, &declared)
+        {
+            return;
+        }
+        self.type_error(
+            format!(
+                "`{method}` returns `{}`, but this impl's `type Output` is `{}`: the result of \
+                 the operator is its `Output`, so the two must agree",
+                type_display(&returned),
+                type_display(&declared),
+            ),
+            ret.span,
+            TypeErrorKind::TypeMismatch,
+        );
     }
 
     fn check_const_decl(&mut self, c: &ConstDecl) {

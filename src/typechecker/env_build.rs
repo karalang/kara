@@ -3028,6 +3028,21 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // The impl block's check lowers these again and reports what is
+        // wrong with them, so this lowering reports nothing.
+        let (errors, warnings) = (self.errors.len(), self.warnings.len());
+        let own_assoc: Vec<(String, Type)> = imp
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ImplItem::AssocType(b) if b.generic_params.is_none() => {
+                    Some((b.name.clone(), self.lower_type_expr(&b.ty, &impl_gp_names)))
+                }
+                _ => None,
+            })
+            .collect();
+        self.errors.truncate(errors);
+        self.warnings.truncate(warnings);
         let info = ImplInfo {
             target_type: type_name,
             do_not_recommend: imp.do_not_recommend,
@@ -3052,10 +3067,14 @@ impl<'a> super::TypeChecker<'a> {
                     && e.target_args == info.target_args
             }) {
                 self.env.impls[i] = info;
+                self.env.impl_own_assoc_types.insert(i, own_assoc);
                 return;
             }
         }
-        self.env.add_impl(info);
+        let i = self.env.add_impl(info);
+        if !own_assoc.is_empty() {
+            self.env.impl_own_assoc_types.insert(i, own_assoc);
+        }
     }
 
     /// Theme-4 overlap detection. Returns `Some(..)` iff registering an impl

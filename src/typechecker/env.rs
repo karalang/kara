@@ -461,6 +461,12 @@ pub struct TypeEnv {
     /// the entry's `gat_params` zipped with the projection's own `args`) are
     /// substituted in one pass. GAT slice 5.
     pub impl_assoc_types: FxHashMap<(String, String), ImplAssocTypeEntry>,
+    /// B-2026-10-15-76 — each source impl's own non-generic associated type
+    /// bindings, keyed by its index in `impls`. `impl_assoc_types` keeps one
+    /// binding per `(type, name)`, so a type's `impl Add` and `impl Mul`
+    /// share one `Output` there; an operator call reads the `Output` of the
+    /// impl it calls from here.
+    pub impl_own_assoc_types: FxHashMap<usize, Vec<(String, Type)>>,
     /// Names of functions declared with `#[compiler_builtin]` in stdlib
     /// source (CR-202 slice 2). The signature still lives in `functions`
     /// — the entry here marks the function as having its body replaced by
@@ -531,6 +537,7 @@ impl TypeEnv {
             impls: Vec::new(),
             impls_by_trait: FxHashMap::default(),
             impl_assoc_types: FxHashMap::default(),
+            impl_own_assoc_types: FxHashMap::default(),
             compiler_builtins: FxHashSet::default(),
             must_use_functions: FxHashMap::default(),
             next_type_var: 0,

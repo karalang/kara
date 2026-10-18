@@ -27,9 +27,10 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
+use super::env::FunctionSig;
 use super::inference::{resolve_type_var_top, resolve_type_vars};
 use super::types::{
-    float_width_rank, is_integer, is_numeric, is_prelude_type_or_module_name,
+    float_width_rank, impl_args_match, is_integer, is_numeric, is_prelude_type_or_module_name,
     is_string_concat_operand, strip_refinement, type_display, types_compatible, ConstArg, DimArg,
     IntSize, SubstValue, Type, UIntSize, VariantTypeInfo,
 };
@@ -2473,21 +2474,69 @@ impl<'a> super::TypeChecker<'a> {
             Type::Shared(name) => (name.clone(), Vec::new()),
             _ => return None,
         };
-        let sig = self
-            .env
-            .find_impl(tr, &name, &args)?
-            .methods
-            .get(method)?
-            .clone();
+        let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &left, right_ty)?;
         self.user_operator_calls
             .insert(SpanKey::from_span(span), format!("{name}.{method}"));
-        let subst = |t: &Type| self.subst_operator_self(t, &left, &name);
+        let subst = |t: &Type| self.subst_operator_self_in(t, &left, &name, Some(at));
         let ret = subst(&sig.return_type);
         if let Some(rhs) = sig.params.first() {
             let rhs = subst(rhs);
             self.check_assignable(&rhs, right_ty, right.span);
         }
         Some(ret)
+    }
+
+    /// B-2026-10-15-76 — the `method` of the impl of `tr` for `name[args]`
+    /// whose `Rhs` is the right operand's type. A type may implement one
+    /// operator trait several times with different right-hand types
+    /// (`impl Mul for Duration` and `impl Mul[i64] for Duration`, design.md
+    /// § Operator traits), so the right operand picks the impl: one whose
+    /// `rhs` is exactly its type, else one it is compatible with, else the
+    /// first, which then reports the mismatch.
+    fn operator_impl_for_rhs(
+        &self,
+        tr: &str,
+        method: &str,
+        name: &str,
+        args: &[Type],
+        left: &Type,
+        right_ty: &Type,
+    ) -> Option<(FunctionSig, usize)> {
+        let sigs: Vec<(&FunctionSig, usize)> = self
+            .env
+            .impls_by_trait
+            .get(tr)?
+            .iter()
+            .map(|&i| (&self.env.impls[i], i))
+            .filter(|(imp, _)| imp.target_type == name && impl_args_match(&imp.target_args, args))
+            .filter_map(|(imp, i)| Some((imp.methods.get(method)?, i)))
+            .collect();
+        if sigs.len() > 1 {
+            let peel = |t: &Type| -> Type {
+                let mut t = resolve_type_var_top(t, &self.env.substitutions);
+                while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                    t = resolve_type_var_top(&inner, &self.env.substitutions);
+                }
+                t
+            };
+            let right = peel(right_ty);
+            let rhs = |(s, i): &(&FunctionSig, usize)| {
+                s.params
+                    .first()
+                    .map(|p| peel(&self.subst_operator_self_in(p, left, name, Some(*i))))
+            };
+            let pick = sigs
+                .iter()
+                .find(|c| rhs(c).is_some_and(|r| r == right))
+                .or_else(|| {
+                    sigs.iter()
+                        .find(|c| rhs(c).is_some_and(|r| types_compatible(&r, &right)))
+                });
+            if let Some((s, i)) = pick {
+                return Some(((*s).clone(), *i));
+            }
+        }
+        sigs.first().map(|(s, i)| ((*s).clone(), *i))
     }
 
     /// B-2026-10-14-33 — `-a` / `~a` on a user type with an `impl Neg` /
@@ -2513,15 +2562,10 @@ impl<'a> super::TypeChecker<'a> {
             Type::Shared(name) => (name.clone(), Vec::new()),
             _ => return None,
         };
-        let sig = self
-            .env
-            .find_impl(tr, &name, &args)?
-            .methods
-            .get(method)?
-            .clone();
+        let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &operand, &operand)?;
         self.user_operator_calls
             .insert(SpanKey::from_span(span), format!("{name}.{method}"));
-        Some(self.subst_operator_self(&sig.return_type, &operand, &name))
+        Some(self.subst_operator_self_in(&sig.return_type, &operand, &name, Some(at)))
     }
 
     /// B-2026-10-14-37 — `c[k]` on a user type with an `impl Index` (a read)
@@ -2610,28 +2654,40 @@ impl<'a> super::TypeChecker<'a> {
     /// `Self` and `Self.Assoc` in an operator impl's signature, read at the
     /// left operand's type `left` (named `name`).
     fn subst_operator_self(&self, t: &Type, left: &Type, name: &str) -> Type {
+        self.subst_operator_self_in(t, left, name, None)
+    }
+
+    /// [`Self::subst_operator_self`], reading `Self.X` from the impl at
+    /// index `imp` first (B-2026-10-15-76): a type's `impl Add` and `impl
+    /// Mul` each have their own `Output`.
+    fn subst_operator_self_in(
+        &self,
+        t: &Type,
+        left: &Type,
+        name: &str,
+        imp: Option<usize>,
+    ) -> Type {
+        let recur = |a: &Type| self.subst_operator_self_in(a, left, name, imp);
         match t {
             Type::Named { name: n, args } if n == "Self" && args.is_empty() => left.clone(),
-            Type::AssocProjection { param, assoc, .. } if param == "Self" => self
-                .env
-                .impl_assoc_types
-                .get(&(name.to_string(), assoc.clone()))
-                .filter(|e| e.gat_params.is_empty())
-                .map(|e| e.ty.clone())
+            Type::AssocProjection { param, assoc, .. } if param == "Self" => imp
+                .and_then(|i| self.env.impl_own_assoc_types.get(&i))
+                .and_then(|own| own.iter().find(|(n, _)| n == assoc))
+                .map(|(_, ty)| recur(ty))
+                .or_else(|| {
+                    self.env
+                        .impl_assoc_types
+                        .get(&(name.to_string(), assoc.clone()))
+                        .filter(|e| e.gat_params.is_empty())
+                        .map(|e| e.ty.clone())
+                })
                 .unwrap_or_else(|| t.clone()),
             Type::Named { name: n, args } => Type::Named {
                 name: n.clone(),
-                args: args
-                    .iter()
-                    .map(|a| self.subst_operator_self(a, left, name))
-                    .collect(),
+                args: args.iter().map(recur).collect(),
             },
-            Type::Tuple(ts) => Type::Tuple(
-                ts.iter()
-                    .map(|a| self.subst_operator_self(a, left, name))
-                    .collect(),
-            ),
-            Type::Ref(i) => Type::Ref(Box::new(self.subst_operator_self(i, left, name))),
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(recur).collect()),
+            Type::Ref(i) => Type::Ref(Box::new(recur(i))),
             other => other.clone(),
         }
     }

@@ -1365,6 +1365,96 @@ fn main() {
     }
 }
 
+// B-2026-10-15-76 — an operator impl's `Output` is the operator's result
+// type and `Rhs` picks the impl (design.md § Operator traits): `Instant -
+// Instant` is a `Duration`, `Instant + Duration` an `Instant`, `Duration *
+// i64` and `Duration * Duration` call different impls, a type's `impl Add`
+// and `impl Mul` each keep their own `Output`, and `T.Output` at a number is
+// the number.
+#[test]
+fn mir_operator_impls_take_their_output_and_rhs() {
+    const SRC: &str = r#"struct Duration {
+    ns: i64,
+}
+
+struct Instant {
+    ns: i64,
+}
+
+impl Sub for Instant {
+    type Output = Duration;
+    fn sub(own self, rhs: own Instant) -> Duration {
+        Duration { ns: self.ns - rhs.ns }
+    }
+}
+
+impl Add[Duration] for Instant {
+    type Output = Instant;
+    fn add(own self, rhs: own Duration) -> Instant {
+        Instant { ns: self.ns + rhs.ns }
+    }
+}
+
+impl Mul for Duration {
+    type Output = Duration;
+    fn mul(own self, rhs: own Duration) -> Self.Output {
+        Duration { ns: self.ns * rhs.ns }
+    }
+}
+
+impl Mul[i64] for Duration {
+    type Output = Duration;
+    fn mul(own self, rhs: own i64) -> Duration {
+        Duration { ns: self.ns * rhs }
+    }
+}
+
+struct V {
+    x: i64,
+}
+
+impl Add for V {
+    type Output = V;
+    fn add(own self, rhs: own V) -> Self.Output {
+        V { x: self.x + rhs.x }
+    }
+}
+
+impl Mul for V {
+    type Output = i64;
+    fn mul(own self, rhs: own V) -> Self.Output {
+        self.x * rhs.x
+    }
+}
+
+fn sum2[T: Add](a: own T, b: own T) -> T.Output {
+    a + b
+}
+
+fn main() {
+    let later = Instant { ns: 50 };
+    let d = later - Instant { ns: 20 };
+    let dn = d.ns;
+    let mut t = Instant { ns: 1 } + d;
+    t += Duration { ns: 4 };
+    let e = Duration { ns: 3 } * 4;
+    let f = Duration { ns: 5 } * Duration { ns: 6 };
+    println(f"{dn} {t.ns} {e.ns} {f.ns}");
+    let v = V { x: 2 } + V { x: 3 };
+    let n = V { x: 2 } * V { x: 3 };
+    println(f"{v.x} {n} {sum2(3, 4)} {sum2(1.5, 2.0)}");
+}
+"#;
+    let want = "30 35 12 30\n5 6 7 3.5\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 // B-2026-10-14-31: `if let` / `while let` on a bare `None` take the
 // payload's type from the body. The compiled backend panicked in
 // src/codegen/mir/body.rs on the `()` payload typed HIR used to give it.

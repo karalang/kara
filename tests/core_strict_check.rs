@@ -4470,6 +4470,34 @@ fn legacy_channel_spellings_are_fixed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// B-2026-10-15-76 — an operator impl's `type Output` is the operator's
+/// result type, so a method returning something else is refused rather than
+/// letting `a - b` and `T.Output` disagree.
+#[test]
+fn an_operator_method_must_return_its_impls_output() {
+    let (dir, path) = fixture(
+        "operator-output",
+        "struct Duration { ns: i64 }\n\
+         struct Instant { ns: i64 }\n\
+         impl Sub for Instant {\n\
+             type Output = Duration;\n\
+             fn sub(own self, rhs: own Instant) -> Instant { Instant { ns: self.ns - rhs.ns } }\n\
+         }\n\
+         fn main() {\n\
+             let d = Instant { ns: 5 } - Instant { ns: 2 };\n\
+             println(d.ns);\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "the mismatch must be refused: {err}");
+    assert!(
+        err.contains("`sub` returns `Instant`, but this impl's `type Output` is `Duration`"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A group passed in borrowed outlives the call, so a task spawned into it
 /// takes the function's locals by move rather than borrowing them past
 /// their scope (core-semantics.md §9.5; B-2026-10-15-11): using one after

@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use super::const_eval::{const_value_to_array_size, const_value_type};
 use super::inference::substitute_type_params;
 use super::types::{
-    type_display, ConstArg, DimArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
+    is_numeric, type_display, ConstArg, DimArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 use crate::ast::narrow_literal_to_i64;
@@ -1404,6 +1404,16 @@ impl<'a> super::TypeChecker<'a> {
                     // contains further projections (e.g., when the
                     // template's RHS itself references an assoc type).
                     self.resolve_assoc_projections(&substituted)
+                } else if let Some(t) = self
+                    .primitive_type(param)
+                    .filter(|t| assoc == "Output" && (is_numeric(t) || *t == Type::Bool))
+                {
+                    // B-2026-10-15-76 — a number's (or `bool`'s) operator
+                    // impls all have `Output = Self` (design.md § Operator
+                    // traits, "Mixed numeric types"), and it implements no
+                    // other trait with an `Output`, so `T.Output` at `i64`
+                    // is `i64`.
+                    t
                 } else {
                     Type::AssocProjection {
                         param: param.clone(),
