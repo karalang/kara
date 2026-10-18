@@ -1,0 +1,8 @@
+put(1, 1), put(2, 2), get(1), get(3), put(2, 1), get(2), remove(2), get(2): [null, null, 1, -1, null, 1, null, -1]
+get(0), put(0, 0), put(1000000, 1000000), get(0), get(1000000), put(0, 7), get(0): [-1, null, null, 0, 1000000, null, 7]
+remove(5), get(5), put(5, 9), remove(5), remove(5), get(5), put(5, 3), get(5): [null, -1, null, null, null, -1, null, 3]
+put(0, 10), put(1009, 20), put(2018, 30), remove(1009), get(0), get(1009), get(2018), put(1009, 40), get(1009): [null, null, null, null, 10, -1, 30, null, 40]
+10000 calls on keys below 1000001: checksum 183233409
+10000 calls on keys below 100: checksum 437679367
+5000 put, odd ones removed, 2500 read: checksum 886195587
+300 random sequences: checksum 346260738

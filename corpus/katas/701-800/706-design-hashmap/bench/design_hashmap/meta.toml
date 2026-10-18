@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/706-design-hashmap/bench/design_hashmap.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "ffe92ee37"
+extracted_src = "61dcd02a"
+model_rev = "583cfb0d"
+model_src = "61dcd02a"

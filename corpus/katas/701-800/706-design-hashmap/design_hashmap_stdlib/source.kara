@@ -1,0 +1,150 @@
+// LeetCode #706: Design HashMap -- the standard library's.
+//
+// The stdlib `Map`, a hash map, with the three calls passed through.
+// Nothing here walks the map, so its per-run iteration order never
+// shows. O(1) expected for each.
+
+struct MyHashMap {
+    mut entries: Map[i64, i64],
+}
+
+impl MyHashMap {
+    fn new() -> MyHashMap {
+        MyHashMap { entries: Map.new() }
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        self.entries.insert(key, value);
+    }
+
+    fn get(self, key: i64) -> i64 {
+        self.entries.get(key) ?? -1
+    }
+
+    fn remove(mut ref self, key: i64) {
+        self.entries.remove(key);
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The calls `ops` names in order, 0 for `put`, 1 for `get` and 2 for
+// `remove`, each on the key and value beside it; what each returns,
+// `None` for `put` and `remove`.
+fn run(ops: Vec[i64], keys: Vec[i64], values: Vec[i64]) -> Vec[Option[i64]] {
+    let mut map = MyHashMap.new();
+    let mut out: Vec[Option[i64]] = Vec.new();
+    for i in 0..ops.len() {
+        if ops[i] == 0 {
+            map.put(keys[i], values[i]);
+            out.push(None);
+        } else if ops[i] == 1 {
+            out.push(Some(map.get(keys[i])));
+        } else {
+            map.remove(keys[i]);
+            out.push(None);
+        }
+    }
+    out
+}
+
+fn show(ops: Vec[i64], keys: Vec[i64], values: Vec[i64]) {
+    let mut calls: Vec[String] = Vec.new();
+    for i in 0..ops.len() {
+        if ops[i] == 0 {
+            calls.push(f"put({keys[i]}, {values[i]})");
+        } else if ops[i] == 1 {
+            calls.push(f"get({keys[i]})");
+        } else {
+            calls.push(f"remove({keys[i]})");
+        }
+    }
+    // Answers as LeetCode prints them, `null` for a call with none.
+    let mut shown: Vec[String] = Vec.new();
+    for a in run(ops, keys, values).iter() {
+        match a {
+            Some(v) => shown.push(f"{v}"),
+            None => shown.push("null"),
+        }
+    }
+    println(f"{calls.join(", ")}: [{shown.join(", ")}]");
+}
+
+// `n` random calls on keys below `top`, with values up to 1,000,000: a
+// third of them each kind.
+fn random_calls(n: i64, top: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64], Vec[i64]) {
+    let mut ops: Vec[i64] = Vec.new();
+    let mut keys: Vec[i64] = Vec.new();
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        ops.push(next_random(mut seed) % 3);
+        keys.push((next_random(mut seed) * 32768 + next_random(mut seed)) % top);
+        values.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 1000001);
+    }
+    (ops, keys, values)
+}
+
+fn checksum(answers: Vec[Option[i64]]) -> i64 {
+    let mut sum = 0;
+    for a in answers.iter() {
+        let v = match a {
+            Some(x) => *x + 1,
+            None => 1000002,
+        };
+        sum = (sum * 31 + v) % 1000000007;
+    }
+    sum
+}
+
+fn main() {
+    // The LeetCode example.
+    show([0, 0, 1, 1, 0, 1, 2, 1], [1, 2, 1, 3, 2, 2, 2, 2], [1, 2, 0, 0, 1, 0, 0, 0]);
+    // The smallest and largest keys and values; a key put twice; a
+    // removal of a key never put and a key removed twice and put back.
+    show([1, 0, 0, 1, 1, 0, 1], [0, 0, 1000000, 0, 1000000, 0, 0], [0, 0, 1000000, 0, 0, 7, 0]);
+    show([2, 1, 0, 2, 2, 1, 0, 1], [5, 5, 5, 5, 5, 5, 5, 5], [0, 0, 9, 0, 0, 0, 3, 0]);
+    // Keys that share a remainder by 1,009: 0, 1,009, 2,018.
+    show([0, 0, 0, 2, 1, 1, 1, 0, 1], [0, 1009, 2018, 1009, 0, 1009, 2018, 1009, 1009], [10, 20, 30, 0, 0, 0, 0, 40, 0]);
+    // The problem's most, 10,000 calls: on keys up to 1,000,000, and on
+    // keys below 100, so most are repeats; and 5,000 keys put, the odd
+    // ones removed, then all read.
+    let mut seed: i64 = 706;
+    for top in [1000001, 100] {
+        let (ops, keys, values) = random_calls(10000, top, mut seed);
+        println(f"10000 calls on keys below {top}: checksum {checksum(run(ops, keys, values))}");
+    }
+    let mut ops: Vec[i64] = Vec.new();
+    let mut keys: Vec[i64] = Vec.new();
+    let mut values: Vec[i64] = Vec.new();
+    for k in 0..5000 {
+        ops.push(0);
+        keys.push(k);
+        values.push(k * 200);
+    }
+    for k in 0..2500 {
+        ops.push(2);
+        keys.push(2 * k + 1);
+        values.push(0);
+    }
+    for k in 0..2500 {
+        ops.push(1);
+        keys.push(2 * k + next_random(mut seed) % 2);
+        values.push(0);
+    }
+    println(f"5000 put, odd ones removed, 2500 read: checksum {checksum(run(ops, keys, values))}");
+    // 300 random sequences of 1 to 200 calls on keys below a random 1
+    // to 3,000.
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 200;
+        let top = 1 + next_random(mut seed) % 3000;
+        let (ops, keys, values) = random_calls(n, top, mut seed);
+        sum = (sum * 31 + checksum(run(ops, keys, values))) % 1000000007;
+    }
+    println(f"300 random sequences: checksum {sum}");
+}

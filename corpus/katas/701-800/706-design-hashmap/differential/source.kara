@@ -1,0 +1,382 @@
+// LeetCode #706: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random calls.
+
+// ---- star arm -------------------------------------------------------
+
+struct MapChained {
+    mut buckets: Vec[Vec[(i64, i64)]],
+}
+
+impl MapChained {
+    fn new() -> MapChained {
+        let mut buckets: Vec[Vec[(i64, i64)]] = Vec.new();
+        for _ in 0..1009 {
+            buckets.push(Vec.new());
+        }
+        MapChained { buckets: buckets }
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        let b = key % 1009;
+        for i in 0..self.buckets[b].len() {
+            if self.buckets[b][i].0 == key {
+                self.buckets[b][i] = (key, value);
+                return;
+            }
+        }
+        self.buckets[b].push((key, value));
+    }
+
+    fn get(self, key: i64) -> i64 {
+        for (k, v) in self.buckets[key % 1009].iter() {
+            if *k == key {
+                return *v;
+            }
+        }
+        -1
+    }
+
+    fn remove(mut ref self, key: i64) {
+        let b = key % 1009;
+        for i in 0..self.buckets[b].len() {
+            if self.buckets[b][i].0 == key {
+                self.buckets[b].swap_remove(i);
+                return;
+            }
+        }
+    }
+}
+
+// ---- paged arm ------------------------------------------------------
+
+struct MapPaged {
+    mut pages: Vec[Vec[i64]],
+}
+
+impl MapPaged {
+    fn new() -> MapPaged {
+        let mut pages: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..1001 {
+            pages.push(Vec.new());
+        }
+        MapPaged { pages: pages }
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        let p = key / 1000;
+        if self.pages[p].is_empty() {
+            self.pages[p] = Vec.filled(1000, -1);
+        }
+        self.pages[p][key % 1000] = value;
+    }
+
+    fn get(self, key: i64) -> i64 {
+        let p = key / 1000;
+        if self.pages[p].is_empty() {
+            return -1;
+        }
+        self.pages[p][key % 1000]
+    }
+
+    fn remove(mut ref self, key: i64) {
+        let p = key / 1000;
+        if not self.pages[p].is_empty() {
+            self.pages[p][key % 1000] = -1;
+        }
+    }
+}
+
+// ---- probing arm ----------------------------------------------------
+
+struct MapProbing {
+    mut keys: Vec[i64],
+    mut values: Vec[i64],
+    mut used: i64,
+}
+
+// A slot never held a key, and a slot whose key was removed.
+const EMPTY: i64 = -1;
+const GONE: i64 = -2;
+
+impl MapProbing {
+    fn new() -> MapProbing {
+        MapProbing { keys: Vec.filled(16, EMPTY), values: Vec.filled(16, 0), used: 0 }
+    }
+
+    // Where `key` sits, or else the first tombstone or empty slot on its
+    // path, where it would go.
+    fn find(self, key: i64) -> i64 {
+        let n = self.keys.len();
+        let mut at = (key * 2654435761) % n;
+        let mut free = -1;
+        loop {
+            let k = self.keys[at];
+            if k == key {
+                return at;
+            }
+            if k == EMPTY {
+                return if free >= 0 { free } else { at };
+            }
+            if k == GONE and free < 0 {
+                free = at;
+            }
+            at = (at + 1) % n;
+        }
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        let at = self.find(key);
+        if self.keys[at] == EMPTY {
+            self.used += 1;
+        }
+        self.keys[at] = key;
+        self.values[at] = value;
+        if 2 * self.used > self.keys.len() {
+            self.grow();
+        }
+    }
+
+    fn get(self, key: i64) -> i64 {
+        let at = self.find(key);
+        if self.keys[at] == key { self.values[at] } else { -1 }
+    }
+
+    fn remove(mut ref self, key: i64) {
+        let at = self.find(key);
+        if self.keys[at] == key {
+            self.keys[at] = GONE;
+        }
+    }
+
+    fn grow(mut ref self) {
+        let old_keys = self.keys.clone();
+        let old_values = self.values.clone();
+        let n = 2 * old_keys.len();
+        self.keys = Vec.filled(n, EMPTY);
+        self.values = Vec.filled(n, 0);
+        self.used = 0;
+        for i in 0..old_keys.len() {
+            if old_keys[i] >= 0 {
+                self.put(old_keys[i], old_values[i]);
+            }
+        }
+    }
+}
+
+// ---- stdlib arm -----------------------------------------------------
+
+struct MapStd {
+    mut entries: Map[i64, i64],
+}
+
+impl MapStd {
+    fn new() -> MapStd {
+        MapStd { entries: Map.new() }
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        self.entries.insert(key, value);
+    }
+
+    fn get(self, key: i64) -> i64 {
+        self.entries.get(key) ?? -1
+    }
+
+    fn remove(mut ref self, key: i64) {
+        self.entries.remove(key);
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The calls in order, 0 `put`, 1 `get`, 2 `remove`; each answer the
+// value `get` returned, or -2 for a call with none.
+fn run(which: i64, ops: Vec[i64], keys: Vec[i64], values: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if which == 0 {
+        let mut m = MapChained.new();
+        for i in 0..ops.len() {
+            if ops[i] == 0 {
+                m.put(keys[i], values[i]);
+                out.push(-2);
+            } else if ops[i] == 1 {
+                out.push(m.get(keys[i]));
+            } else {
+                m.remove(keys[i]);
+                out.push(-2);
+            }
+        }
+    } else if which == 1 {
+        let mut m = MapPaged.new();
+        for i in 0..ops.len() {
+            if ops[i] == 0 {
+                m.put(keys[i], values[i]);
+                out.push(-2);
+            } else if ops[i] == 1 {
+                out.push(m.get(keys[i]));
+            } else {
+                m.remove(keys[i]);
+                out.push(-2);
+            }
+        }
+    } else if which == 2 {
+        let mut m = MapProbing.new();
+        for i in 0..ops.len() {
+            if ops[i] == 0 {
+                m.put(keys[i], values[i]);
+                out.push(-2);
+            } else if ops[i] == 1 {
+                out.push(m.get(keys[i]));
+            } else {
+                m.remove(keys[i]);
+                out.push(-2);
+            }
+        }
+    } else {
+        let mut m = MapStd.new();
+        for i in 0..ops.len() {
+            if ops[i] == 0 {
+                m.put(keys[i], values[i]);
+                out.push(-2);
+            } else if ops[i] == 1 {
+                out.push(m.get(keys[i]));
+            } else {
+                m.remove(keys[i]);
+                out.push(-2);
+            }
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: the calls so far, read back from the newest for the
+// last `put` or `remove` of the key.
+fn definition(ops: Vec[i64], keys: Vec[i64], values: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..ops.len() {
+        if ops[i] != 1 {
+            out.push(-2);
+            continue;
+        }
+        let mut answer = -1;
+        let mut j = i;
+        while j > 0 {
+            j -= 1;
+            if keys[j] == keys[i] and ops[j] != 1 {
+                answer = if ops[j] == 0 { values[j] } else { -1 };
+                break;
+            }
+        }
+        out.push(answer);
+    }
+    out
+}
+
+// Key number `k` of a case: itself, or spread so keys share a remainder
+// by 1,009 or a page of 1,000, or counted down from the largest key.
+fn spread(k: i64, mode: i64) -> i64 {
+    if mode == 0 {
+        k
+    } else if mode == 1 {
+        k * 1009
+    } else if mode == 2 {
+        k * 1000 % 1000001
+    } else {
+        1000000 - k
+    }
+}
+
+fn main() {
+    let mut seed = 7060;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut found = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // 1 to 60 calls on key numbers below a random 1 to 200, spread
+        // one of four ways, with values from 0 to 1,000,000.
+        let n = 1 + next_random(mut seed) % 60;
+        let top = 1 + next_random(mut seed) % 200;
+        let mode = next_random(mut seed) % 4;
+        let mut ops: Vec[i64] = Vec.new();
+        let mut keys: Vec[i64] = Vec.new();
+        let mut values: Vec[i64] = Vec.new();
+        let mut mirrored: Vec[i64] = Vec.new();
+        let mut flipped: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let op = next_random(mut seed) % 3;
+            let key = spread(next_random(mut seed) % top, mode);
+            let value = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000001;
+            ops.push(op);
+            keys.push(key);
+            values.push(value);
+            mirrored.push(1000000 - key);
+            flipped.push(1000000 - value);
+        }
+        // The same calls, then `get` for every key number below `top`.
+        let mut full_ops = ops.clone();
+        let mut full_keys = keys.clone();
+        let mut full_values = values.clone();
+        for k in 0..top {
+            full_ops.push(1);
+            full_keys.push(spread(k, mode));
+            full_values.push(0);
+        }
+        let want = definition(ops, keys, values);
+        let want_full = definition(full_ops, full_keys, full_values);
+        for a in want.iter() {
+            if *a >= 0 {
+                found += 1;
+            }
+        }
+        for which in 0..arms {
+            let got = run(which, ops, keys, values);
+            // P1: the definition's answers.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every key k replaced by 1,000,000 - k, the same answers.
+            checks += 1;
+            if run(which, ops, mirrored, values) != got {
+                fails[1] += 1;
+            }
+            // P3: every value v replaced by 1,000,000 - v, every value
+            // read back the same way and every miss still a miss.
+            checks += 1;
+            let back = run(which, ops, keys, flipped);
+            let mut off = false;
+            for i in 0..n {
+                let expect = if got[i] >= 0 { 1000000 - got[i] } else { got[i] };
+                if back[i] != expect {
+                    off = true;
+                }
+            }
+            if off {
+                fails[2] += 1;
+            }
+            // P4: afterwards, every key number below `top` reads back what
+            // the definition says.
+            checks += 1;
+            if run(which, full_ops, full_keys, full_values) != want_full {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} sequences ({found} reads found), {arms} arms, {checks} checks, {total} failures");
+}
