@@ -367,10 +367,11 @@ impl<'a> UseClassifier<'a> {
     /// commands only.
     fn core_pattern_moves(&self, scrutinee: &Expr) -> bool {
         crate::ownership::core_rules()
-            && self
+            && (self
                 .tc
                 .core_moving_scrutinees
                 .contains_key(&SpanKey::from_span(&scrutinee.span))
+                || builds_a_temporary(scrutinee))
     }
 
     fn is_borrow_typed_expr(&self, expr: &Expr) -> bool {
@@ -535,7 +536,7 @@ impl<'a> UseClassifier<'a> {
                 // `let ref name @ PATTERN = rhs` borrows the RHS
                 // (design.md § @ Bindings) — read, not consume. Mirrors
                 // the `block_stmt` Let-arm gate in the legacy walker.
-                let mut rhs_mode = self.let_rhs_mode(pattern);
+                let mut rhs_mode = self.let_rhs_mode(pattern, value);
                 // `let p: mut ref P = w.p;` reads `w.p`: check's error with a
                 // fix that writes the borrow operator is the one offered, as
                 // the ownership twin does (B-2026-10-15-14).
@@ -615,7 +616,7 @@ impl<'a> UseClassifier<'a> {
                 ..
             } => {
                 // Same `ref name @` borrow gate as the Let arm above.
-                let rhs_mode = self.let_rhs_mode(pattern);
+                let rhs_mode = self.let_rhs_mode(pattern, value);
                 self.walk_expr(value, rhs_mode);
                 self.walk_block(else_block, Mode::Reading);
             }
@@ -2051,11 +2052,15 @@ impl<'a> UseClassifier<'a> {
     /// A `let` reads its initializer when its pattern only borrows: a
     /// `ref name @ PATTERN`, or (v2 core, §4.6) bindings that are all
     /// `ref` / `mut ref`.
-    fn let_rhs_mode(&self, pattern: &Pattern) -> Mode {
-        if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })
-            || (crate::ownership::core_rules()
-                && !pattern.binding_names().is_empty()
-                && !self.pattern_binds_anything(pattern))
+    /// A tuple, array or struct literal is a temporary built by value, so it
+    /// is consumed whatever the pattern binds (`let (ref a, ref b) = (x, y);`
+    /// moves `x` and `y`).
+    fn let_rhs_mode(&self, pattern: &Pattern, value: &Expr) -> Mode {
+        if !(crate::ownership::core_rules() && builds_a_temporary(value))
+            && (matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })
+                || (crate::ownership::core_rules()
+                    && !pattern.binding_names().is_empty()
+                    && !self.pattern_binds_anything(pattern)))
         {
             Mode::Reading
         } else {
@@ -2311,6 +2316,17 @@ fn place_has_element_index(expr: &Expr, fresh: &rustc_hash::FxHashSet<SpanKey>) 
         }
         _ => false,
     }
+}
+
+/// v2 core §4.6: a scrutinee written as a tuple, array or struct literal
+/// (`match (a, b) { .. }`) is a temporary built by value, so its operands
+/// move into it whatever the patterns bind: a `ref` binding borrows the
+/// temporary, not `a` and `b` (B-2026-10-15-70).
+fn builds_a_temporary(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::Tuple(_) | ExprKind::ArrayLiteral(_) | ExprKind::StructLiteral { .. }
+    )
 }
 
 #[cfg(test)]

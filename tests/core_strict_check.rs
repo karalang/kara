@@ -7414,6 +7414,27 @@ fn an_assignment_through_a_read_only_slice_is_refused() {
     );
 }
 
+/// B-2026-10-15-70: `match (a, b)` builds a tuple by value, so `a` and `b`
+/// move into it even when every binding is `ref`; inside a loop that is a
+/// move on every iteration.
+#[test]
+fn a_tuple_scrutinee_moves_its_operands() {
+    rejected(
+        "tuple-scrutinee-in-a-loop",
+        "struct D { n: i64 }\nfn main() {\n    let mut a: Option[D] = Some(D { n: 1 });\n    let b: Option[String] = Some(\"x\".to_string());\n    for _ in 0..3 {\n        match (a, b) {\n            (Some(mut ref d), Some(ref s)) => {\n                d.n += 1;\n                println(f\"{d.n} {s}\");\n            }\n            _ => println(\"none\"),\n        }\n    }\n}\n",
+        "value 'a' is moved inside a loop",
+    );
+    rejected(
+        "tuple-scrutinee-then-used",
+        "struct D { n: i64 }\nfn main() {\n    let a: Option[D] = Some(D { n: 1 });\n    let b: i64 = 2;\n    match (a, b) {\n        (Some(_), _) => println(\"some\"),\n        _ => println(\"none\"),\n    }\n    match a { Some(d) => println(f\"{d.n}\"), None => {} }\n}\n",
+        "value 'a' moved here, used again here",
+    );
+    accepted(
+        "tuple-scrutinee-of-copies",
+        "fn main() {\n    let a: i64 = 1;\n    let b: Option[i64] = Some(2);\n    for _ in 0..2 {\n        match (a, b) {\n            (1, Some(ref n)) => println(f\"{n}\"),\n            _ => println(\"other\"),\n        }\n    }\n    println(f\"{a}\");\n}\n",
+    );
+}
+
 /// B-2026-10-15-71: an `if` or `match` lent to a `ref T` parameter is a
 /// temporary, so an arm that is a field of a borrowed struct moves out of
 /// the borrow, as the same `if` in a `let` does; `ref two.a` lends it.
