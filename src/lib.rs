@@ -227,6 +227,18 @@ pub fn parse(source: &str) -> ParseResult {
     parser.parse()
 }
 
+/// Like [`parse`], with every span's offset moved up by `base`: text parsed
+/// apart from the program it joins (a gated library module) keeps offsets of
+/// its own, so a diagnostic in it can be told from one in the program
+/// (B-2026-10-15-107). Lines and columns stay the text's own.
+pub fn parse_at_offset(source: &str, base: usize) -> ParseResult {
+    let mut tokens = tokenize(source);
+    for t in &mut tokens {
+        t.span.offset += base;
+    }
+    Parser::new(tokens).parse()
+}
+
 /// Like [`parse`], but for ITEM-ONLY contexts (module files loaded via
 /// `mod`, comptime `ast.item` quotes): top-level statements are a parse
 /// error instead of synthesizing a script-mode `fn main()`.

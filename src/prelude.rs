@@ -1337,10 +1337,15 @@ pub fn stdlib_variance(name: &str) -> Option<&'static [Variance]> {
 /// [`STDLIB_PROGRAMS`] (lazy, cached, panics on parse failure — a broken
 /// baked source is a compiler bug, not user error), keyed by module path
 /// instead of file name.
+///
+/// Each module's spans start at [`gated_span_base`] of its index, past any
+/// program text, so its items keep offsets of their own once spliced into a
+/// program and a diagnostic in one is known to be the module's
+/// (B-2026-10-15-107): parsed from 0, they shared the program's offsets.
 pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, Program)>> = LazyLock::new(|| {
     let mut out = Vec::with_capacity(GATED_STDLIB_SOURCES.len());
-    for &(path, src) in GATED_STDLIB_SOURCES {
-        let parsed = crate::parse(src);
+    for (i, &(path, src)) in GATED_STDLIB_SOURCES.iter().enumerate() {
+        let parsed = crate::parse_at_offset(src, gated_span_base(i));
         if !parsed.errors.is_empty() {
             let msgs = parsed
                 .errors
@@ -1359,6 +1364,21 @@ pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, Program)>> = LazyLo
     }
     out
 });
+
+/// Where the spans of the [`GATED_STDLIB_SOURCES`] entry at `index` start: a
+/// quarter of the address range up, with room for a 16 MiB module each.
+pub fn gated_span_base(index: usize) -> usize {
+    usize::MAX / 4 + index * (1 << 24)
+}
+
+/// The gated module whose text a span at `offset` lies in, with that
+/// module's span base.
+pub fn gated_module_at(offset: usize) -> Option<(&'static [&'static str], usize)> {
+    let i = offset.checked_sub(gated_span_base(0))? >> 24;
+    let (path, src) = GATED_STDLIB_SOURCES.get(i)?;
+    let base = gated_span_base(i);
+    (offset - base <= src.len()).then_some((*path, base))
+}
 
 /// Synthetic-module payloads for the gated stdlib: `(module path, items)`
 /// per [`GATED_STDLIB_SOURCES`] entry, with `stdlib_origin = true` flipped
@@ -1594,11 +1614,12 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
     // or build a type the import did not list (`sha256` running `Sha256`).
     // Names are read off the items' source text, which over-includes at
     // worst; the loop runs to a fixed point.
-    let src = GATED_STDLIB_SOURCES
+    let (src, base) = GATED_STDLIB_SOURCES
         .iter()
-        .find(|(p, _)| p.len() == path.len() && p.iter().zip(path).all(|(a, b)| *a == b))
-        .map(|(_, s)| *s)
-        .unwrap_or("");
+        .enumerate()
+        .find(|(_, (p, _))| p.len() == path.len() && p.iter().zip(path).all(|(a, b)| *a == b))
+        .map(|(i, (_, s))| (*s, gated_span_base(i)))
+        .unwrap_or(("", 0));
     let module_item_name = |item: &Item| -> Option<String> {
         match item {
             Item::Function(f) => Some(f.name.clone()),
@@ -1625,7 +1646,7 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         }
     }
     while let Some(item) = pending.pop() {
-        for name in names_in_item_source(&item, src) {
+        for name in names_in_item_source(&item, src, base) {
             if !included.insert(name.clone()) {
                 continue;
             }
@@ -1761,12 +1782,12 @@ pub fn is_gated_module_type(name: &str) -> bool {
 }
 
 /// The identifiers in `item`'s source text, read from the extent of its
-/// spans within `src` (its module's source).
-fn names_in_item_source(item: &Item, src: &str) -> Vec<String> {
+/// spans within `src` (its module's source, whose spans start at `base`).
+fn names_in_item_source(item: &Item, src: &str, base: usize) -> Vec<String> {
     let (mut lo, mut hi) = (usize::MAX, 0);
     crate::span_visitor::visit_item_spans(item, &mut |sp| {
-        lo = lo.min(sp.offset);
-        hi = hi.max(sp.offset + sp.length);
+        lo = lo.min(sp.offset.saturating_sub(base));
+        hi = hi.max((sp.offset + sp.length).saturating_sub(base));
     });
     let Some(text) = src.get(lo..hi.min(src.len())) else {
         return Vec::new();
@@ -2546,6 +2567,40 @@ pub fn prelude_visibility() -> Visibility {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B-2026-10-15-107: a spliced gated item keeps spans of its own module,
+    /// past the program's text, so no diagnostic in it reads as the
+    /// program's, however long the program is.
+    #[test]
+    fn spliced_library_module_items_keep_their_spans() {
+        let pad = "// padding\n".repeat(400);
+        let src = format!(
+            "import std.path.{{is_absolute, join}};\n{pad}fn main() {{ println(join(\"a\", \"b\")); }}\n"
+        );
+        let mut parsed = crate::parse(&src);
+        expand_gated_stdlib_imports(&mut parsed.program);
+        let mut spliced = 0;
+        for item in &parsed.program.items {
+            let mut lo = usize::MAX;
+            crate::span_visitor::visit_item_spans(item, &mut |sp| lo = lo.min(sp.offset));
+            if let Item::Function(f) = item {
+                if f.name == "main" {
+                    assert!(lo < src.len());
+                    assert_eq!(gated_module_at(lo), None);
+                    continue;
+                }
+            }
+            if lo == usize::MAX {
+                continue;
+            }
+            spliced += 1;
+            assert!(lo > src.len(), "a spliced item at {lo}");
+            let (path, base) = gated_module_at(lo).expect("a gated module's span");
+            assert_eq!(path, &["std", "path"]);
+            assert!(lo >= base);
+        }
+        assert!(spliced >= 2, "{spliced} items spliced");
+    }
     use crate::ast::{EnumDef, Item, VariantKind};
 
     /// Find the `EnumDef` for `name` among the items of the parsed stdlib

@@ -1930,6 +1930,7 @@ pub(super) fn run_multi_file_late_phases(
         library_len: None,
         library_fns: std::collections::HashSet::new(),
         renames: Vec::new(),
+        gated_imports: Vec::new(),
     };
     pipeline.resolve();
     if pipeline.has_resolve_errors() {

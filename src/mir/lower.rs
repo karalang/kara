@@ -621,8 +621,13 @@ fn d5_params() -> bool {
     crate::d5_params::on()
 }
 
+/// A span's line and column, after the library module it lies in when it
+/// lies in a gated one (`std.path:13:20`, B-2026-10-15-107).
 fn at(span: Span) -> String {
-    format!("{}:{}", span.line, span.column)
+    match crate::prelude::gated_module_at(span.offset) {
+        Some((path, _)) => format!("{}:{}:{}", path.join("."), span.line, span.column),
+        None => format!("{}:{}", span.line, span.column),
+    }
 }
 
 /// A type error stopping the pipeline, at its line and column as the build

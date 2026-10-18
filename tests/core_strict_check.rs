@@ -4892,6 +4892,31 @@ fn main() {
     );
 }
 
+/// B-2026-10-15-107: an error in a spliced library module's item is
+/// reported by `karac check`, as the build stops on it, at the program's
+/// import of the module and naming where in the module it is. The error here
+/// is a module-private helper colliding with the program's own item
+/// (PREDICTS B-2026-10-18-54: once a helper stays private to its module,
+/// this program checks and the fixture needs another trigger).
+#[test]
+fn an_error_in_a_library_module_is_reported_at_its_import() {
+    let src = "import std.uuid.{v4};\n\
+               fn uuid_hex(x: i64) -> i64 { x }\n\
+               fn main() { println(f\"{v4().len()} {uuid_hex(3)}\"); }\n";
+    let (dir, path) = fixture("library-module-error", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(
+        err.contains(":1:1: 'uuid_hex' is already defined")
+            && err.contains("(in the library module `std.uuid` at 5:1, imported here)"),
+        "{err}"
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert!(!out.status.success(), "the build stops on it too");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.

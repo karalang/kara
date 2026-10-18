@@ -1095,6 +1095,10 @@ struct Pipeline {
     /// The appended library's function names, as the effect checker keys
     /// them (`f`, `Type.method`, `Trait.method`), kept out of the report.
     pub(super) library_fns: std::collections::HashSet<String>,
+    /// The program's imports of gated library modules (`std.path`), as the
+    /// dotted path and the import's span, read before the splice removes
+    /// them: an error in a spliced item is reported there (B-2026-10-15-107).
+    gated_imports: Vec<(String, crate::token::Span)>,
 }
 
 impl Pipeline {
@@ -1122,6 +1126,7 @@ impl Pipeline {
             library_len: None,
             library_fns: std::collections::HashSet::new(),
             renames: Vec::new(),
+            gated_imports: Vec::new(),
         }
     }
 
@@ -1203,10 +1208,18 @@ impl Pipeline {
     }
 
     /// Drop every diagnostic that lies in the appended library text.
+    ///
+    /// A gated module's spliced items have spans of their own, past any
+    /// program text ([`crate::prelude::gated_span_base`]). A resolve or type
+    /// error in one stops the build, so it is reported, at the program's
+    /// import of the module and naming where in the module it is
+    /// (B-2026-10-15-107); the module's other diagnostics are dropped like
+    /// the appended library's.
     fn drop_library_diagnostics(&mut self) {
-        let Some(n) = self.library_len else {
-            return;
-        };
+        self.relocate_gated_module_errors();
+        let n = self
+            .library_len
+            .unwrap_or_else(|| crate::prelude::gated_span_base(0));
         let user = |s: &crate::token::Span| s.offset < n;
         // A parse error in the library is kept: the library is fixed text,
         // so one means the library is broken, and the check of the user's
@@ -1235,6 +1248,40 @@ impl Pipeline {
         }
         // A `comptime` error is kept wherever it points: a derive body in the
         // library raises it about the user's type.
+    }
+
+    /// Move each resolve or type error in a gated module's item to the
+    /// program's import of that module ([`Self::drop_library_diagnostics`]).
+    fn relocate_gated_module_errors(&mut self) {
+        let imports = &self.gated_imports;
+        let relocate = |span: &mut crate::token::Span, message: &mut String| {
+            let Some((path, _)) = crate::prelude::gated_module_at(span.offset) else {
+                return;
+            };
+            let module = path.join(".");
+            let Some((_, site)) = imports
+                .iter()
+                .find(|(p, _)| *p == module)
+                .or(imports.first())
+            else {
+                return;
+            };
+            *message = format!(
+                "{message} (in the library module `{module}` at {}:{}, imported here)",
+                span.line, span.column
+            );
+            *span = *site;
+        };
+        if let Some(r) = self.resolved.as_mut() {
+            for e in &mut r.errors {
+                relocate(&mut e.span, &mut e.message);
+            }
+        }
+        if let Some(t) = self.typed.as_mut() {
+            for e in &mut t.errors {
+                relocate(&mut e.span, &mut e.message);
+            }
+        }
     }
 
     /// Report the v2 core rules as errors — see `strict_core`. Call after
@@ -1301,6 +1348,18 @@ impl Pipeline {
         if self.strict_core {
             crate::question_chain::postfix_question(&mut self.parsed.program);
         }
+        self.gated_imports = self
+            .parsed
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Import(imp) if crate::prelude::is_gated_stdlib_module(&imp.path) => {
+                    Some((imp.path.join("."), imp.span))
+                }
+                _ => None,
+            })
+            .collect();
         let (target_tombstones, schema_diags) = if self.library_len.is_some() {
             crate::desugar::with_collect_through_from_iterator(|| {
                 crate::prepare_for_resolve(&mut self.parsed.program)

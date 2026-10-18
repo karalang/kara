@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 281 |
 | codegen-gap | 273 |
-| false-positive | 235 |
+| false-positive | 236 |
 | perf | 175 |
 | other | 175 |
 | diagnostics | 168 |
@@ -119,7 +119,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 78 |
 | parser | 69 |
 | autopar | 59 |
-| resolver | 45 |
+| resolver | 46 |
 | effect | 32 |
 | lexer | 12 |
 ## Current state
@@ -167,6 +167,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-51 | 2026-10-18 | codegen | medium | The MIR pre-size pass (`src/mir/presize.rs`) reserves room only for a `while i < n` counting loop, not a `for` loop: `let mut v: Vec[i64] = Vec.new(); for _ in 0..26 { v.push(0); }` allocates four times (4, 8, 16, 32 elements) under `karac build --mir` where the `while` spelling and legacy `karac build` allocate once (26), so kata 748's bench, which builds a 26-slot count this way per word, is 3.3x legacy | — |
 | B-2026-10-18-52 | 2026-10-18 | codegen | medium | A bare list literal used only to be walked or read, `for step in [1, 9] { .. }` or `let steps = [1, 9]; steps[0] + steps[1]`, heap-allocates a `Vec` every time it is evaluated under `karac build --mir`, where legacy `karac build` keeps it on the stack (B-2026-10-02-70's fix): 1,000,008 allocations against 9 for a million evaluations, so kata 752's bench, which walks `[1, 9]` four times per visited lock setting, is 2.5x legacy | — |
 | B-2026-10-18-53 | 2026-10-18 | interp+codegen | high | `opt ?? ""` with `opt: Option[ref String]` (a `Map[String, String].get(k)`) takes the literal fallback as the reference itself rather than a reference to it: when `opt` is `None`, the first read of the result crashes on every MIR surface, `deref of non-reference Box` under `__mir-run` and a SEGV at address 0x8 under `build --mir` and `__mir-llvm-asan`; `karac check` passes it and suggests exactly this spelling for the empty default, and `.unwrap_or("")` is right | — |
+| B-2026-10-18-54 | 2026-10-18 | resolver | low | A gated library module's private helper collides with a program's own item of the same name: `import std.uuid.{v4};` beside a program's `fn uuid_hex(x: i64) -> i64` is refused with "'uuid_hex' is already defined in this scope", because the splice copies `v4`'s non-`pub` helper `uuid_hex` into the program's scope | — |
 | B-2026-10-19-1 | 2026-10-19 | typecheck | low | An unsolved `Vec.new()` is not pinned by a `Slice[T]` parameter: `fs.write_bytes(path, Vec.new())` and `take(Vec.new())` against `fn take(b: ref Slice[u8])` are refused with "expected 'Slice[u8]', found 'Vec[?T0]'"; B-2026-10-06-124 made a `Vec[T]` slot pin it, the Vec-to-Slice coercion slot was left out | — |
 | B-2026-10-19-2 | 2026-10-19 | typecheck | low | String has no pop() or truncate(): `s.pop()` and `s.truncate(n)` are refused with "no method 'pop'/'truncate' on type 'String'" | — |
 | B-2026-10-19-3 | 2026-10-19 | typecheck | low | `x.powf(y)` on an `f64` is refused with only "no method 'powf' on type 'f64'": the error does not point to Kāra's `pow`, and docs/library lists none of the float math methods | — |
