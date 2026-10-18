@@ -1,0 +1,2578 @@
+// mini_rrule: iCalendar recurrence rules (RFC 5545 section 3.3.10),
+// ported from dateutil 2.9.0's rrule module, the expander under
+// icalendar, recurring_ical_events, Odoo's calendar and many schedulers.
+// - rrulestr's parser: DTSTART, RRULE, RDATE, EXRULE and EXDATE lines,
+//   with the unfold, forceset and compatible options and every error it
+//   raises, word for word;
+// - rrule's expansion: all seven frequencies with INTERVAL, COUNT, UNTIL,
+//   WKST and every BYxxx part (BYSETPOS, BYMONTH, BYMONTHDAY, BYYEARDAY,
+//   BYWEEKNO, BYDAY with ordinals, BYHOUR, BYMINUTE, BYSECOND, and
+//   dateutil's BYEASTER), worked a period at a time over day masks as
+//   dateutil does;
+// - rruleset's merge of rules and dates minus exclusion rules and dates;
+// - the queries: after, before, between, xafter, membership, indexing,
+//   count, and str() back to rule text.
+//
+// The run writes data/rules/*.rrule, each a recurrence, a `--` line and
+// queries; expected.out is what oracle.py prints running them with the
+// real dateutil.
+
+// ------------------------------------------------------------ calendar
+
+const YEARLY: i64 = 0;
+const MONTHLY: i64 = 1;
+const WEEKLY: i64 = 2;
+const DAILY: i64 = 3;
+const HOURLY: i64 = 4;
+const MINUTELY: i64 = 5;
+const SECONDLY: i64 = 6;
+const MAXYEAR: i64 = 9999;
+
+// Python's floor division and modulo.
+fn fdiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn fmod(a: i64, b: i64) -> i64 {
+    a - fdiv(a, b) * b
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = if a < 0 { -a } else { a };
+    let mut y = if b < 0 { -b } else { b };
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        if is_leap(y) { 29 } else { 28 }
+    } else if m == 4 or m == 6 or m == 9 or m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let p = y - 1;
+    p * 365 + p / 4 - p / 100 + p / 400
+}
+
+fn days_before_month(y: i64, m: i64) -> i64 {
+    let mut n = 0;
+    for k in 1..m {
+        n += days_in_month(y, k);
+    }
+    n
+}
+
+// The proleptic Gregorian ordinal, 0001-01-01 being day 1.
+fn to_ordinal(y: i64, m: i64, d: i64) -> i64 {
+    days_before_year(y) + days_before_month(y, m) + d
+}
+
+struct Ymd {
+    y: i64,
+    m: i64,
+    d: i64,
+}
+
+fn from_ordinal(n: i64) -> Ymd {
+    let mut y = (n - 1) / 366 + 1;
+    while days_before_year(y + 1) < n {
+        y += 1;
+    }
+    let mut left = n - days_before_year(y);
+    let mut m = 1;
+    while left > days_in_month(y, m) {
+        left -= days_in_month(y, m);
+        m += 1;
+    }
+    Ymd { y: y, m: m, d: left }
+}
+
+// Monday is 0.
+fn weekday_of(ord: i64) -> i64 {
+    (ord + 6) % 7
+}
+
+fn easter_ordinal(y: i64) -> i64 {
+    let g = y % 19;
+    let c = y / 100;
+    let h = (c - c / 4 - (8 * c + 13) / 25 + 19 * g + 15) % 30;
+    let i = h - (h / 28) * (1 - (h / 28) * (29 / (h + 1)) * ((21 - g) / 11));
+    let j = (y + y / 4 + i + 2 - c + c / 4) % 7;
+    let p = i - j;
+    let d = 1 + (p + 27 + (p + 6) / 40) % 31;
+    let m = 3 + (p + 26) / 30;
+    to_ordinal(y, m, d)
+}
+
+// A date-time is seconds from the start of ordinal day 0.
+fn make_dt(ord: i64, secs: i64) -> i64 {
+    ord * 86400 + secs
+}
+
+fn pad(n: i64, w: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < w {
+        s = f"0{s}";
+    }
+    s
+}
+
+struct Parts {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+}
+
+fn split_dt(t: i64) -> Parts {
+    let ymd = from_ordinal(t / 86400);
+    let secs = t % 86400;
+    Parts { y: ymd.y, mo: ymd.m, d: ymd.d, h: secs / 3600, mi: secs / 60 % 60, s: secs % 60 }
+}
+
+// str(datetime): 1997-09-02 09:00:00
+fn fmt_dt(t: i64) -> String {
+    let p = split_dt(t);
+    f"{pad(p.y, 4)}-{pad(p.mo, 2)}-{pad(p.d, 2)} {pad(p.h, 2)}:{pad(p.mi, 2)}:{pad(p.s, 2)}"
+}
+
+// strftime('%Y%m%dT%H%M%S')
+fn fmt_compact(t: i64) -> String {
+    let p = split_dt(t);
+    f"{pad(p.y, 4)}{pad(p.mo, 2)}{pad(p.d, 2)}T{pad(p.h, 2)}{pad(p.mi, 2)}{pad(p.s, 2)}"
+}
+
+fn all_digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|b| *b >= b'0' and *b <= b'9')
+}
+
+fn bad_dt(s: Str) -> Result[i64, String] {
+    Err(f"Unknown string format: {s}")
+}
+
+// The two forms the rules use: 19970902 and 19970902T090000.
+fn parse_dt(s: Str) -> Result[i64, String] {
+    let (date, time) = if s.len() == 8 {
+        (s, "000000")
+    } else if s.len() == 15 and s.bytes()[8] == b'T' {
+        (s[0..8], s[9..15])
+    } else {
+        return bad_dt(s);
+    };
+    if not all_digits(date) or not all_digits(time) {
+        return bad_dt(s);
+    }
+    let y = i64.parse(date[0..4]).unwrap_or(0);
+    let m = i64.parse(date[4..6]).unwrap_or(0);
+    let d = i64.parse(date[6..8]).unwrap_or(0);
+    let h = i64.parse(time[0..2]).unwrap_or(0);
+    let mi = i64.parse(time[2..4]).unwrap_or(0);
+    let sec = i64.parse(time[4..6]).unwrap_or(0);
+    if y < 1 or m < 1 or m > 12 or d < 1 or d > days_in_month(y, m) or h > 23 or mi > 59 or sec > 59 {
+        return bad_dt(s);
+    }
+    Ok(make_dt(to_ordinal(y, m, d), h * 3600 + mi * 60 + sec))
+}
+
+fn contains(v: ref Vec[i64], x: i64) -> bool {
+    for e in v {
+        if e == x {
+            return true;
+        }
+    }
+    false
+}
+
+// sorted(set(v))
+fn sorted_set(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in v {
+        if not contains(out, x) {
+            out.push(x);
+        }
+    }
+    out.sort();
+    out
+}
+
+fn join_ints(v: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v {
+        parts.push(f"{x}");
+    }
+    parts.join(",")
+}
+
+const DAY_NAMES: Array[Str, 7] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+
+fn day_index(s: Str) -> Option[i64] {
+    for i in 0..7 {
+        if DAY_NAMES[i] == s {
+            return Some(i);
+        }
+    }
+    None
+}
+
+// ------------------------------------------------------------ the rule
+
+// What rrule() was given, as rrulestr's handlers leave it.
+struct RuleArgs {
+    freq: Option[i64],
+    interval: i64,
+    wkst: Option[i64],
+    count: Option[i64],
+    until: Option[i64],
+    bysetpos: Option[Vec[i64]],
+    bymonth: Option[Vec[i64]],
+    bymonthday: Option[Vec[i64]],
+    byyearday: Option[Vec[i64]],
+    byeaster: Option[Vec[i64]],
+    byweekno: Option[Vec[i64]],
+    // BYDAY entries: weekday and n, n being 0 for none.
+    byday_w: Option[Vec[i64]],
+    byday_n: Vec[i64],
+    byhour: Option[Vec[i64]],
+    byminute: Option[Vec[i64]],
+    bysecond: Option[Vec[i64]],
+}
+
+#[derive(Clone)]
+struct Rule {
+    dtstart: i64,
+    freq: i64,
+    interval: i64,
+    wkst: i64,
+    count: Option[i64],
+    until: Option[i64],
+    bysetpos: Vec[i64],
+    bymonth: Vec[i64],
+    byyearday: Vec[i64],
+    byeaster: Vec[i64],
+    bymonthday: Vec[i64],
+    bynmonthday: Vec[i64],
+    byweekno: Vec[i64],
+    byweekday: Vec[i64],
+    bynweekday_w: Vec[i64],
+    bynweekday_n: Vec[i64],
+    byhour: Vec[i64],
+    byminute: Vec[i64],
+    bysecond: Vec[i64],
+    // Seconds of the day, sorted, for frequencies coarser than HOURLY.
+    timeset: Vec[i64],
+    // The BYxxx parts str() prints, in its order.
+    original: Vec[String],
+}
+
+// rrule.__construct_byset: the BYxxx values reachable from `start` when
+// stepping by `interval` at the same level as FREQ.
+fn construct_byset(start: i64, byxxx: ref Vec[i64], base: i64, interval: i64) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    let g = gcd(interval, base);
+    for num in byxxx {
+        if (g == 1 or fmod(num - start, g) == 0) and not contains(out, num) {
+            out.push(num);
+        }
+    }
+    if out.is_empty() {
+        return Err("Invalid rrule byxxx generates an empty set.".to_string());
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn new_rule(dtstart: i64, a: own RuleArgs) -> Result[Rule, String] {
+    let p = split_dt(dtstart);
+    let start_ord = dtstart / 86400;
+    let freq = a.freq.unwrap_or(YEARLY);
+    let mut original: Vec[String] = Vec.new();
+    let mut r = Rule {
+        dtstart: dtstart,
+        freq: freq,
+        interval: a.interval,
+        wkst: a.wkst.unwrap_or(0),
+        count: a.count,
+        until: a.until,
+        bysetpos: Vec.new(),
+        bymonth: Vec.new(),
+        byyearday: Vec.new(),
+        byeaster: Vec.new(),
+        bymonthday: Vec.new(),
+        bynmonthday: Vec.new(),
+        byweekno: Vec.new(),
+        byweekday: Vec.new(),
+        bynweekday_w: Vec.new(),
+        bynweekday_n: Vec.new(),
+        byhour: Vec.new(),
+        byminute: Vec.new(),
+        bysecond: Vec.new(),
+        timeset: Vec.new(),
+        original: Vec.new(),
+    };
+    let mut s_setpos = String.new();
+    if let Some(v) = a.bysetpos {
+        for pos in v {
+            if pos == 0 or not (-366 <= pos and pos <= 366) {
+                return Err("bysetpos must be between 1 and 366, or between -366 and -1".to_string());
+            }
+        }
+        s_setpos = join_ints(v);
+        r.bysetpos = v.clone();
+    }
+    let mut bymonth = a.bymonth.clone();
+    let mut bymonthday = a.bymonthday.clone();
+    let mut byweekday = a.byday_w.clone();
+    let mut byday_n = a.byday_n.clone();
+    let mut month_default = false;
+    let mut mday_default = false;
+    let mut wday_default = false;
+    if a.byweekno.is_none() and a.byyearday.is_none() and bymonthday.is_none()
+        and byweekday.is_none() and a.byeaster.is_none() {
+        if freq == YEARLY {
+            if bymonth.is_none() {
+                bymonth = Some(vec![p.mo]);
+                month_default = true;
+            }
+            bymonthday = Some(vec![p.d]);
+            mday_default = true;
+        } else if freq == MONTHLY {
+            bymonthday = Some(vec![p.d]);
+            mday_default = true;
+        } else if freq == WEEKLY {
+            byweekday = Some(vec![weekday_of(start_ord)]);
+            byday_n = vec![0];
+            wday_default = true;
+        }
+    }
+    let mut s_month = String.new();
+    if let Some(v) = bymonth {
+        r.bymonth = sorted_set(v);
+        if not month_default {
+            s_month = join_ints(r.bymonth);
+        }
+    }
+    let mut s_yday = String.new();
+    if let Some(v) = a.byyearday {
+        r.byyearday = sorted_set(v);
+        s_yday = join_ints(r.byyearday);
+    }
+    let mut s_easter = String.new();
+    if let Some(v) = a.byeaster {
+        let mut e = v.clone();
+        e.sort();
+        s_easter = join_ints(e);
+        r.byeaster = e;
+    }
+    let mut s_mday = String.new();
+    if let Some(v) = bymonthday {
+        let u = sorted_set(v);
+        for x in u {
+            if x > 0 {
+                r.bymonthday.push(x);
+            }
+        }
+        for x in u {
+            if x < 0 {
+                r.bynmonthday.push(x);
+            }
+        }
+        if not mday_default {
+            let mut both = r.bymonthday.clone();
+            for x in r.bynmonthday {
+                both.push(x);
+            }
+            s_mday = join_ints(both);
+        }
+    }
+    let mut s_weekno = String.new();
+    if let Some(v) = a.byweekno {
+        r.byweekno = sorted_set(v);
+        s_weekno = join_ints(r.byweekno);
+    }
+    let mut s_wday = String.new();
+    if let Some(ws) = byweekday {
+        let mut plain: Vec[i64] = Vec.new();
+        // n-weekdays as w * 1000 + n, sorted the way (w, n) tuples sort.
+        let mut nth: Vec[i64] = Vec.new();
+        for k in 0..ws.len() {
+            let w = ws[k];
+            let n = byday_n[k];
+            if n == 0 or freq > MONTHLY {
+                if not contains(plain, w) {
+                    plain.push(w);
+                }
+            } else {
+                let key = w * 1000 + n;
+                if not contains(nth, key) {
+                    nth.push(key);
+                }
+            }
+        }
+        plain.sort();
+        nth.sort();
+        let mut names: Vec[String] = Vec.new();
+        for w in plain {
+            r.byweekday.push(w);
+            names.push(DAY_NAMES[w].to_string());
+        }
+        for key in nth {
+            let w = fdiv(key + 500, 1000);
+            let n = key - w * 1000;
+            r.bynweekday_w.push(w);
+            r.bynweekday_n.push(n);
+            let sign = if n > 0 { "+" } else { "" };
+            names.push(f"{sign}{n}{DAY_NAMES[w]}");
+        }
+        if not wday_default {
+            s_wday = names.join(",");
+        }
+    }
+    let mut s_hour = String.new();
+    match a.byhour {
+        None => {
+            if freq < HOURLY {
+                r.byhour = vec![p.h];
+            }
+        }
+        Some(v) => {
+            r.byhour = if freq == HOURLY {
+                construct_byset(p.h, v, 24, r.interval)?
+            } else {
+                sorted_set(v)
+            };
+            s_hour = join_ints(r.byhour);
+        }
+    }
+    let mut s_minute = String.new();
+    match a.byminute {
+        None => {
+            if freq < MINUTELY {
+                r.byminute = vec![p.mi];
+            }
+        }
+        Some(v) => {
+            r.byminute = if freq == MINUTELY {
+                construct_byset(p.mi, v, 60, r.interval)?
+            } else {
+                sorted_set(v)
+            };
+            s_minute = join_ints(r.byminute);
+        }
+    }
+    let mut s_second = String.new();
+    match a.bysecond {
+        None => {
+            if freq < SECONDLY {
+                r.bysecond = vec![p.s];
+            }
+        }
+        Some(v) => {
+            r.bysecond = if freq == SECONDLY {
+                construct_byset(p.s, v, 60, r.interval)?
+            } else {
+                sorted_set(v)
+            };
+            s_second = join_ints(r.bysecond);
+        }
+    }
+    if freq < HOURLY {
+        for h in r.byhour {
+            for m in r.byminute {
+                for s in r.bysecond {
+                    r.timeset.push(h * 3600 + m * 60 + s);
+                }
+            }
+        }
+        r.timeset.sort();
+    }
+    let labels = ["BYSETPOS", "BYMONTH", "BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYDAY",
+                  "BYHOUR", "BYMINUTE", "BYSECOND", "BYEASTER"];
+    let values = [s_setpos, s_month, s_mday, s_yday, s_weekno, s_wday, s_hour, s_minute,
+                  s_second, s_easter];
+    for k in 0..10 {
+        if not values[k].is_empty() {
+            original.push(f"{labels[k]}={values[k]}");
+        }
+    }
+    r.original = original;
+    Ok(r)
+}
+
+const FREQ_NAMES: Array[Str, 7] = ["YEARLY", "MONTHLY", "WEEKLY", "DAILY", "HOURLY", "MINUTELY", "SECONDLY"];
+
+// rrule.__str__
+fn rule_str(r: ref Rule) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    parts.push(f"FREQ={FREQ_NAMES[r.freq]}");
+    if r.interval != 1 {
+        parts.push(f"INTERVAL={r.interval}");
+    }
+    if r.wkst != 0 {
+        parts.push(f"WKST={DAY_NAMES[r.wkst]}");
+    }
+    if let Some(c) = r.count {
+        parts.push(f"COUNT={c}");
+    }
+    if let Some(u) = r.until {
+        parts.push(f"UNTIL={fmt_compact(u)}");
+    }
+    for o in r.original {
+        parts.push(o.clone());
+    }
+    f"DTSTART:{fmt_compact(r.dtstart)}\nRRULE:{parts.join(";")}"
+}
+
+// ------------------------------------------------------------ expansion
+
+// _iterinfo: the masks for the year being expanded. Every mask is 7 days
+// longer than the year, for weekly periods that cross into the next one.
+struct Info {
+    lastyear: i64,
+    lastmonth: i64,
+    yearlen: i64,
+    nextyearlen: i64,
+    yearordinal: i64,
+    yearweekday: i64,
+    mmask: Vec[i64],
+    mdaymask: Vec[i64],
+    nmdaymask: Vec[i64],
+    wdaymask: Vec[i64],
+    mrange: Vec[i64],
+    wnomask: Vec[i64],
+    has_wnomask: bool,
+    nwdaymask: Vec[i64],
+    has_nwdaymask: bool,
+    eastermask: Vec[i64],
+}
+
+fn new_info() -> Info {
+    Info {
+        lastyear: -1,
+        lastmonth: -1,
+        yearlen: 0,
+        nextyearlen: 0,
+        yearordinal: 0,
+        yearweekday: 0,
+        mmask: Vec.new(),
+        mdaymask: Vec.new(),
+        nmdaymask: Vec.new(),
+        wdaymask: Vec.new(),
+        mrange: Vec.new(),
+        wnomask: Vec.new(),
+        has_wnomask: false,
+        nwdaymask: Vec.new(),
+        has_nwdaymask: false,
+        eastermask: Vec.new(),
+    }
+}
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+impl Info {
+    fn rebuild(mut ref self, rr: ref Rule, year: i64, month: i64) {
+        let mut month = month;
+        if year != self.lastyear {
+            self.yearlen = if is_leap(year) { 366 } else { 365 };
+            self.nextyearlen = if is_leap(year + 1) { 366 } else { 365 };
+            self.yearordinal = to_ordinal(year, 1, 1);
+            self.yearweekday = weekday_of(self.yearordinal);
+            self.mmask = Vec.new();
+            self.mdaymask = Vec.new();
+            self.nmdaymask = Vec.new();
+            self.wdaymask = Vec.new();
+            for i in 0..self.yearlen + 7 {
+                let ymd = from_ordinal(self.yearordinal + i);
+                self.mmask.push(ymd.m);
+                self.mdaymask.push(ymd.d);
+                self.nmdaymask.push(ymd.d - days_in_month(ymd.y, ymd.m) - 1);
+            }
+            // WDAYMASK[wday:] is 385 entries long at the least.
+            for i in 0..385 {
+                self.wdaymask.push((self.yearweekday + i) % 7);
+            }
+            self.mrange = vec![0];
+            for m in 1..13 {
+                let last = self.mrange[m - 1];
+                self.mrange.push(last + days_in_month(year, m));
+            }
+            self.has_wnomask = not rr.byweekno.is_empty();
+            if self.has_wnomask {
+                self.build_wnomask(rr, year);
+            }
+        }
+        if not rr.bynweekday_w.is_empty() and (month != self.lastmonth or year != self.lastyear) {
+            let mut firsts: Vec[i64] = Vec.new();
+            let mut lasts: Vec[i64] = Vec.new();
+            if rr.freq == YEARLY {
+                if not rr.bymonth.is_empty() {
+                    for m in rr.bymonth {
+                        month = m;
+                        firsts.push(self.mrange[m - 1]);
+                        lasts.push(self.mrange[m]);
+                    }
+                } else {
+                    firsts.push(0);
+                    lasts.push(self.yearlen);
+                }
+            } else if rr.freq == MONTHLY {
+                firsts.push(self.mrange[month - 1]);
+                lasts.push(self.mrange[month]);
+            }
+            if not firsts.is_empty() {
+                self.nwdaymask = zeros(self.yearlen);
+                self.has_nwdaymask = true;
+                for k in 0..firsts.len() {
+                    let first = firsts[k];
+                    let last = lasts[k] - 1;
+                    for j in 0..rr.bynweekday_w.len() {
+                        let wday = rr.bynweekday_w[j];
+                        let n = rr.bynweekday_n[j];
+                        let mut i = 0;
+                        if n < 0 {
+                            i = last + (n + 1) * 7;
+                            i -= fmod(self.wdaymask[i] - wday, 7);
+                        } else {
+                            i = first + (n - 1) * 7;
+                            i += fmod(7 - self.wdaymask[i] + wday, 7);
+                        }
+                        if first <= i and i <= last {
+                            self.nwdaymask[i] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        if not rr.byeaster.is_empty() {
+            self.eastermask = zeros(self.yearlen + 7);
+            let eyday = easter_ordinal(year) - self.yearordinal;
+            for offset in rr.byeaster {
+                self.eastermask[eyday + offset] = 1;
+            }
+        }
+        self.lastyear = year;
+        self.lastmonth = month;
+    }
+
+    fn build_wnomask(mut ref self, rr: ref Rule, year: i64) {
+        self.wnomask = zeros(self.yearlen + 7);
+        let firstwkst = fmod(7 - self.yearweekday + rr.wkst, 7);
+        let mut no1wkst = firstwkst;
+        let mut wyearlen = 0;
+        if no1wkst >= 4 {
+            no1wkst = 0;
+            wyearlen = self.yearlen + fmod(self.yearweekday - rr.wkst, 7);
+        } else {
+            wyearlen = self.yearlen - no1wkst;
+        }
+        let numweeks = fdiv(wyearlen, 7) + fdiv(fmod(wyearlen, 7), 4);
+        for n0 in rr.byweekno {
+            let mut n = n0;
+            if n < 0 {
+                n += numweeks + 1;
+            }
+            if not (0 < n and n <= numweeks) {
+                continue;
+            }
+            let mut i = no1wkst;
+            if n > 1 {
+                i = no1wkst + (n - 1) * 7;
+                if no1wkst != firstwkst {
+                    i -= 7 - firstwkst;
+                }
+            }
+            for _ in 0..7 {
+                self.wnomask[i] = 1;
+                i += 1;
+                if self.wdaymask[i] == rr.wkst {
+                    break;
+                }
+            }
+        }
+        if contains(rr.byweekno, 1) {
+            let mut i = no1wkst + numweeks * 7;
+            if no1wkst != firstwkst {
+                i -= 7 - firstwkst;
+            }
+            if i < self.yearlen {
+                for _ in 0..7 {
+                    self.wnomask[i] = 1;
+                    i += 1;
+                    if self.wdaymask[i] == rr.wkst {
+                        break;
+                    }
+                }
+            }
+        }
+        if no1wkst != 0 {
+            let mut lnumweeks = -1;
+            if not contains(rr.byweekno, -1) {
+                let lyearweekday = weekday_of(to_ordinal(year - 1, 1, 1));
+                let mut lno1wkst = fmod(7 - lyearweekday + rr.wkst, 7);
+                let lyearlen = if is_leap(year - 1) { 366 } else { 365 };
+                if lno1wkst >= 4 {
+                    lno1wkst = 0;
+                    lnumweeks = 52 + fdiv(fmod(lyearlen + fmod(lyearweekday - rr.wkst, 7), 7), 4);
+                } else {
+                    lnumweeks = 52 + fdiv(fmod(self.yearlen - no1wkst, 7), 4);
+                }
+            }
+            if contains(rr.byweekno, lnumweeks) {
+                for i in 0..no1wkst {
+                    self.wnomask[i] = 1;
+                }
+            }
+        }
+    }
+}
+
+// rrule._iter, a period at a time: each step expands one year, month,
+// week, day or time and leaves its occurrences in `buf`.
+struct RuleIter {
+    rr: Rule,
+    ii: Info,
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    weekday: i64,
+    timeset: Vec[i64],
+    count: Option[i64],
+    done: bool,
+    err: Option[String],
+    buf: Vec[i64],
+    at: i64,
+}
+
+fn rule_iter(rr: ref Rule) -> RuleIter {
+    let p = split_dt(rr.dtstart);
+    let mut it = RuleIter {
+        rr: rr.clone(),
+        ii: new_info(),
+        year: p.y,
+        month: p.mo,
+        day: p.d,
+        hour: p.h,
+        minute: p.mi,
+        second: p.s,
+        weekday: weekday_of(rr.dtstart / 86400),
+        timeset: Vec.new(),
+        count: rr.count,
+        done: false,
+        err: None,
+        buf: Vec.new(),
+        at: 0,
+    };
+    it.ii.rebuild(rr, p.y, p.mo);
+    if rr.freq < HOURLY {
+        it.timeset = rr.timeset.clone();
+    } else if (not rr.byhour.is_empty() and not contains(rr.byhour, p.h))
+        or (rr.freq >= MINUTELY and not rr.byminute.is_empty() and not contains(rr.byminute, p.mi))
+        or (rr.freq >= SECONDLY and not rr.bysecond.is_empty() and not contains(rr.bysecond, p.s)) {
+        it.timeset = Vec.new();
+    } else {
+        it.timeset = it.gettimeset();
+    }
+    it
+}
+
+impl RuleIter {
+    fn gettimeset(ref self) -> Vec[i64] {
+        let mut t: Vec[i64] = Vec.new();
+        let h = self.hour * 3600;
+        if self.rr.freq == HOURLY {
+            for m in self.rr.byminute {
+                for s in self.rr.bysecond {
+                    t.push(h + m * 60 + s);
+                }
+            }
+        } else if self.rr.freq == MINUTELY {
+            for s in self.rr.bysecond {
+                t.push(h + self.minute * 60 + s);
+            }
+        } else {
+            t.push(h + self.minute * 60 + self.second);
+        }
+        t.sort();
+        t
+    }
+
+    fn next(mut ref self) -> Result[Option[i64], String] {
+        while self.at >= self.buf.len() {
+            if self.done {
+                if let Some(e) = self.err {
+                    return Err(e.clone());
+                }
+                return Ok(None);
+            }
+            self.buf = Vec.new();
+            self.at = 0;
+            self.step();
+        }
+        let t = self.buf[self.at];
+        self.at += 1;
+        Ok(Some(t))
+    }
+
+    // Takes one occurrence; false once COUNT or UNTIL ends the rule.
+    fn emit(mut ref self, res: i64) -> bool {
+        if let Some(u) = self.rr.until {
+            if res > u {
+                self.done = true;
+                return false;
+            }
+        }
+        if res >= self.rr.dtstart {
+            if let Some(c) = self.count {
+                if c - 1 < 0 {
+                    self.done = true;
+                    return false;
+                }
+                self.count = Some(c - 1);
+            }
+            self.buf.push(res);
+        }
+        true
+    }
+
+    fn keep(ref self, i: i64) -> bool {
+        let rr = ref self.rr;
+        let ii = ref self.ii;
+        if not rr.bymonth.is_empty() and not contains(rr.bymonth, ii.mmask[i]) {
+            return false;
+        }
+        if not rr.byweekno.is_empty() and ii.wnomask[i] == 0 {
+            return false;
+        }
+        if not rr.byweekday.is_empty() and not contains(rr.byweekday, ii.wdaymask[i]) {
+            return false;
+        }
+        if ii.has_nwdaymask and ii.nwdaymask[i] == 0 {
+            return false;
+        }
+        if not rr.byeaster.is_empty() and ii.eastermask[i] == 0 {
+            return false;
+        }
+        if (not rr.bymonthday.is_empty() or not rr.bynmonthday.is_empty())
+            and not contains(rr.bymonthday, ii.mdaymask[i])
+            and not contains(rr.bynmonthday, ii.nmdaymask[i]) {
+            return false;
+        }
+        if not rr.byyearday.is_empty() {
+            let out = if i < ii.yearlen {
+                not contains(rr.byyearday, i + 1) and not contains(rr.byyearday, -ii.yearlen + i)
+            } else {
+                not contains(rr.byyearday, i + 1 - ii.yearlen)
+                    and not contains(rr.byyearday, -ii.nextyearlen + i - ii.yearlen)
+            };
+            if out {
+                return false;
+            }
+        }
+        true
+    }
+
+    // The day indexes of this period, before filtering.
+    fn dayset(ref self) -> Vec[i64] {
+        let mut v: Vec[i64] = Vec.new();
+        let freq = self.rr.freq;
+        if freq == YEARLY {
+            for i in 0..self.ii.yearlen {
+                v.push(i);
+            }
+        } else if freq == MONTHLY {
+            for i in self.ii.mrange[self.month - 1]..self.ii.mrange[self.month] {
+                v.push(i);
+            }
+        } else if freq == WEEKLY {
+            let mut i = to_ordinal(self.year, self.month, self.day) - self.ii.yearordinal;
+            for _ in 0..7 {
+                v.push(i);
+                i += 1;
+                if self.ii.wdaymask[i] == self.rr.wkst {
+                    break;
+                }
+            }
+        } else {
+            v.push(to_ordinal(self.year, self.month, self.day) - self.ii.yearordinal);
+        }
+        v
+    }
+
+    fn step(mut ref self) {
+        let all = self.dayset();
+        let mut days: Vec[i64] = Vec.new();
+        let mut filtered = false;
+        for i in all {
+            if self.keep(i) {
+                days.push(i);
+            } else {
+                filtered = true;
+            }
+        }
+        let tlen = self.timeset.len();
+        if not self.rr.bysetpos.is_empty() and tlen > 0 {
+            let mut poslist: Vec[i64] = Vec.new();
+            for pos in self.rr.bysetpos.clone() {
+                let (daypos, timepos) = if pos < 0 {
+                    (fdiv(pos, tlen), fmod(pos, tlen))
+                } else {
+                    (fdiv(pos - 1, tlen), fmod(pos - 1, tlen))
+                };
+                let idx = if daypos < 0 { days.len() + daypos } else { daypos };
+                if idx >= 0 and idx < days.len() {
+                    let res = make_dt(self.ii.yearordinal + days[idx], self.timeset[timepos]);
+                    if not contains(poslist, res) {
+                        poslist.push(res);
+                    }
+                }
+            }
+            poslist.sort();
+            for res in poslist {
+                if not self.emit(res) {
+                    return;
+                }
+            }
+        } else {
+            for i in days {
+                for t in self.timeset.clone() {
+                    if not self.emit(make_dt(self.ii.yearordinal + i, t)) {
+                        return;
+                    }
+                }
+            }
+        }
+        self.advance(filtered);
+    }
+
+    fn mod_distance(ref self, value: i64, byxxx: ref Vec[i64], base: i64) -> (i64, i64) {
+        let mut acc = 0;
+        let mut v = value;
+        for _ in 0..base {
+            let s = v + self.rr.interval;
+            acc += fdiv(s, base);
+            v = fmod(s, base);
+            if contains(byxxx, v) {
+                return (acc, v);
+            }
+        }
+        (acc, v)
+    }
+
+    // The frequency and interval step at the end of each period.
+    fn advance(mut ref self, filtered: bool) {
+        let freq = self.rr.freq;
+        let interval = self.rr.interval;
+        let mut fixday = false;
+        if freq == YEARLY {
+            self.year += interval;
+            if self.year > MAXYEAR {
+                self.done = true;
+                return;
+            }
+            let rr = self.rr.clone();
+            self.ii.rebuild(rr, self.year, self.month);
+        } else if freq == MONTHLY {
+            self.month += interval;
+            if self.month > 12 {
+                let div = fdiv(self.month, 12);
+                self.month = fmod(self.month, 12);
+                self.year += div;
+                if self.month == 0 {
+                    self.month = 12;
+                    self.year -= 1;
+                }
+                if self.year > MAXYEAR {
+                    self.done = true;
+                    return;
+                }
+            }
+            let rr = self.rr.clone();
+            self.ii.rebuild(rr, self.year, self.month);
+        } else if freq == WEEKLY {
+            let wkst = self.rr.wkst;
+            if wkst > self.weekday {
+                self.day += -(self.weekday + 1 + (6 - wkst)) + interval * 7;
+            } else {
+                self.day += -(self.weekday - wkst) + interval * 7;
+            }
+            self.weekday = wkst;
+            fixday = true;
+        } else if freq == DAILY {
+            self.day += interval;
+            fixday = true;
+        } else if freq == HOURLY {
+            if filtered {
+                self.hour += fdiv(23 - self.hour, interval) * interval;
+            }
+            let mut ndays = 0;
+            if not self.rr.byhour.is_empty() {
+                let byhour = self.rr.byhour.clone();
+                let (nd, h) = self.mod_distance(self.hour, byhour, 24);
+                ndays = nd;
+                self.hour = h;
+            } else {
+                ndays = fdiv(self.hour + interval, 24);
+                self.hour = fmod(self.hour + interval, 24);
+            }
+            if ndays != 0 {
+                self.day += ndays;
+                fixday = true;
+            }
+            self.timeset = self.gettimeset();
+        } else if freq == MINUTELY {
+            if filtered {
+                self.minute += fdiv(1439 - (self.hour * 60 + self.minute), interval) * interval;
+            }
+            let mut valid = false;
+            let rep_rate = 24 * 60;
+            for _ in 0..rep_rate / gcd(interval, rep_rate) {
+                let mut nhours = 0;
+                if not self.rr.byminute.is_empty() {
+                    let byminute = self.rr.byminute.clone();
+                    let (nh, m) = self.mod_distance(self.minute, byminute, 60);
+                    nhours = nh;
+                    self.minute = m;
+                } else {
+                    nhours = fdiv(self.minute + interval, 60);
+                    self.minute = fmod(self.minute + interval, 60);
+                }
+                let div = fdiv(self.hour + nhours, 24);
+                self.hour = fmod(self.hour + nhours, 24);
+                if div != 0 {
+                    self.day += div;
+                    fixday = true;
+                }
+                if self.rr.byhour.is_empty() or contains(self.rr.byhour, self.hour) {
+                    valid = true;
+                    break;
+                }
+            }
+            if not valid {
+                self.fail("Invalid combination of interval and byhour resulting in empty rule.");
+                return;
+            }
+            self.timeset = self.gettimeset();
+        } else {
+            if filtered {
+                self.second += fdiv(86399 - (self.hour * 3600 + self.minute * 60 + self.second), interval) * interval;
+            }
+            let rep_rate = 24 * 3600;
+            let mut valid = false;
+            for _ in 0..rep_rate / gcd(interval, rep_rate) {
+                let mut nminutes = 0;
+                if not self.rr.bysecond.is_empty() {
+                    let bysecond = self.rr.bysecond.clone();
+                    let (nm, s) = self.mod_distance(self.second, bysecond, 60);
+                    nminutes = nm;
+                    self.second = s;
+                } else {
+                    nminutes = fdiv(self.second + interval, 60);
+                    self.second = fmod(self.second + interval, 60);
+                }
+                let div = fdiv(self.minute + nminutes, 60);
+                self.minute = fmod(self.minute + nminutes, 60);
+                if div != 0 {
+                    self.hour += div;
+                    let d2 = fdiv(self.hour, 24);
+                    self.hour = fmod(self.hour, 24);
+                    if d2 != 0 {
+                        self.day += d2;
+                        fixday = true;
+                    }
+                }
+                if (self.rr.byhour.is_empty() or contains(self.rr.byhour, self.hour))
+                    and (self.rr.byminute.is_empty() or contains(self.rr.byminute, self.minute))
+                    and (self.rr.bysecond.is_empty() or contains(self.rr.bysecond, self.second)) {
+                    valid = true;
+                    break;
+                }
+            }
+            if not valid {
+                self.fail("Invalid combination of interval, byhour and byminute resulting in empty rule.");
+                return;
+            }
+            self.timeset = self.gettimeset();
+        }
+        if fixday and self.day > 28 {
+            let mut dim = days_in_month(self.year, self.month);
+            if self.day > dim {
+                while self.day > dim {
+                    self.day -= dim;
+                    self.month += 1;
+                    if self.month == 13 {
+                        self.month = 1;
+                        self.year += 1;
+                        if self.year > MAXYEAR {
+                            self.done = true;
+                            return;
+                        }
+                    }
+                    dim = days_in_month(self.year, self.month);
+                }
+                let rr = self.rr.clone();
+                self.ii.rebuild(rr, self.year, self.month);
+            }
+        }
+    }
+
+    fn fail(mut ref self, msg: Str) {
+        self.done = true;
+        self.err = Some(msg.to_string());
+    }
+}
+
+// ------------------------------------------------------------ sets
+
+// A rule or a set: the inclusion rules and dates, the exclusion rules and
+// dates. A lone rule is a set of one rule, which expands the same.
+struct Recur {
+    is_set: bool,
+    rrules: Vec[Rule],
+    rdates: Vec[i64],
+    exrules: Vec[Rule],
+    exdates: Vec[i64],
+}
+
+// One input to the merge, with the value it is waiting to give.
+struct Source {
+    dates: Vec[i64],
+    di: i64,
+    is_rule: bool,
+    it: RuleIter,
+    head: Option[i64],
+}
+
+fn empty_rule() -> Rule {
+    Rule {
+        dtstart: 0, freq: DAILY, interval: 1, wkst: 0, count: Some(0), until: None,
+        bysetpos: Vec.new(), bymonth: Vec.new(), byyearday: Vec.new(), byeaster: Vec.new(),
+        bymonthday: Vec.new(), bynmonthday: Vec.new(), byweekno: Vec.new(), byweekday: Vec.new(),
+        bynweekday_w: Vec.new(), bynweekday_n: Vec.new(), byhour: Vec.new(), byminute: Vec.new(),
+        bysecond: Vec.new(), timeset: Vec.new(), original: Vec.new(),
+    }
+}
+
+fn sorted_copy(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out = v.clone();
+    out.sort();
+    out
+}
+
+fn date_source(dates: ref Vec[i64]) -> Source {
+    Source { dates: sorted_copy(dates), di: 0, is_rule: false, it: rule_iter(empty_rule()), head: None }
+}
+
+fn rule_source(r: ref Rule) -> Source {
+    Source { dates: Vec.new(), di: 0, is_rule: true, it: rule_iter(r), head: None }
+}
+
+impl Source {
+    fn pull(mut ref self) -> Result[(), String] {
+        if self.is_rule {
+            self.head = self.it.next()?;
+        } else if self.di < self.dates.len() {
+            self.head = Some(self.dates[self.di]);
+            self.di += 1;
+        } else {
+            self.head = None;
+        }
+        Ok(())
+    }
+}
+
+// rruleset._iter
+struct Stream {
+    inc: Vec[Source],
+    exc: Vec[Source],
+    started: bool,
+    last: Option[i64],
+    // The source whose head was yielded and has to move on first.
+    pending: i64,
+}
+
+fn stream(r: ref Recur) -> Stream {
+    let mut inc: Vec[Source] = Vec.new();
+    inc.push(date_source(r.rdates));
+    for x in r.rrules {
+        inc.push(rule_source(x));
+    }
+    let mut exc: Vec[Source] = Vec.new();
+    exc.push(date_source(r.exdates));
+    for x in r.exrules {
+        exc.push(rule_source(x));
+    }
+    Stream { inc: inc, exc: exc, started: false, last: None, pending: -1 }
+}
+
+impl Stream {
+    fn next(mut ref self) -> Result[Option[i64], String] {
+        if not self.started {
+            self.started = true;
+            for k in 0..self.inc.len() {
+                self.inc[k].pull()?;
+            }
+            for k in 0..self.exc.len() {
+                self.exc[k].pull()?;
+            }
+        }
+        loop {
+            if self.pending >= 0 {
+                let k = self.pending;
+                self.pending = -1;
+                self.inc[k].pull()?;
+            }
+            let mut best: i64 = -1;
+            for k in 0..self.inc.len() {
+                if let Some(t) = self.inc[k].head {
+                    if best < 0 {
+                        best = k;
+                    } else if let Some(b) = self.inc[best].head {
+                        if t < b {
+                            best = k;
+                        }
+                    }
+                }
+            }
+            if best < 0 {
+                return Ok(None);
+            }
+            let t = self.inc[best].head.unwrap_or(0);
+            self.pending = best;
+            if let Some(l) = self.last {
+                if l == t {
+                    continue;
+                }
+            }
+            self.last = Some(t);
+            let mut excluded = false;
+            for k in 0..self.exc.len() {
+                loop {
+                    match self.exc[k].head {
+                        Some(e) => {
+                            if e < t {
+                                self.exc[k].pull()?;
+                            } else {
+                                if e == t {
+                                    excluded = true;
+                                }
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            }
+            if not excluded {
+                return Ok(Some(t));
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ rrulestr
+
+fn bad_unpack(got: i64) -> String {
+    if got < 2 {
+        f"not enough values to unpack (expected 2, got {got})"
+    } else {
+        f"too many values to unpack (expected 2, got {got})"
+    }
+}
+
+fn parse_int(s: Str) -> Option[i64] {
+    let digits = if s.starts_with("+") or s.starts_with("-") { s[1..] } else { s };
+    if not all_digits(digits) {
+        return None;
+    }
+    let v = i64.parse(digits).ok()?;
+    if s.starts_with("-") { Some(-v) } else { Some(v) }
+}
+
+fn parse_int_list(s: Str) -> Option[Vec[i64]] {
+    let mut v: Vec[i64] = Vec.new();
+    for x in s.split(",") {
+        v.push(parse_int(x)?);
+    }
+    Some(v)
+}
+
+fn new_args() -> RuleArgs {
+    RuleArgs {
+        freq: None, interval: 1, wkst: None, count: None, until: None, bysetpos: None,
+        bymonth: None, bymonthday: None, byyearday: None, byeaster: None, byweekno: None,
+        byday_w: None, byday_n: Vec.new(), byhour: None, byminute: None, bysecond: None,
+    }
+}
+
+// _handle_BYWEEKDAY: +1MO or MO(+1). false is the ValueError rrulestr
+// reports as invalid.
+fn parse_byday(value: Str, a: mut ref RuleArgs) -> bool {
+    let mut ws: Vec[i64] = Vec.new();
+    let mut ns: Vec[i64] = Vec.new();
+    for wday in value.split(",") {
+        let mut w = wday;
+        let mut n: i64 = 0;
+        if wday.contains("(") {
+            let splt: Vec[Str] = wday.split("(").collect();
+            w = splt[0];
+            let inner = splt[1];
+            if inner.len() == 0 {
+                return false;
+            }
+            n = match parse_int(inner[0..inner.len() - 1]) {
+                Some(x) => x,
+                None => return false,
+            };
+            if n == 0 {
+                return false;
+            }
+        } else if wday.len() > 0 {
+            let b = wday.bytes();
+            // Python's loop stops on the last index even without a break.
+            let mut i = 0;
+            while i < b.len() - 1 and (b[i] == b'+' or b[i] == b'-' or (b[i] >= b'0' and b[i] <= b'9')) {
+                i += 1;
+            }
+            let num = wday[0..i];
+            w = wday[i..];
+            if num.len() > 0 {
+                n = match parse_int(num) {
+                    Some(x) => x,
+                    None => return false,
+                };
+                if n == 0 {
+                    return false;
+                }
+            }
+        } else {
+            return false;
+        }
+        match day_index(w) {
+            Some(d) => {
+                ws.push(d);
+                ns.push(n);
+            }
+            None => return false,
+        }
+    }
+    a.byday_w = Some(ws);
+    a.byday_n = ns;
+    true
+}
+
+fn handle(a: mut ref RuleArgs, name: Str, value: Str) -> Result[bool, String] {
+    let ok = if name == "INTERVAL" {
+        match parse_int(value) {
+            Some(v) => { a.interval = v; true }
+            None => false,
+        }
+    } else if name == "COUNT" {
+        match parse_int(value) {
+            Some(v) => { a.count = Some(v); true }
+            None => false,
+        }
+    } else if name == "FREQ" {
+        let mut f: i64 = -1;
+        for k in 0..7 {
+            if FREQ_NAMES[k] == value {
+                f = k;
+            }
+        }
+        if f < 0 { false } else { a.freq = Some(f); true }
+    } else if name == "UNTIL" {
+        match parse_dt(value) {
+            Ok(t) => { a.until = Some(t); true }
+            Err(_) => false,
+        }
+    } else if name == "WKST" {
+        match day_index(value) {
+            Some(d) => { a.wkst = Some(d); true }
+            None => false,
+        }
+    } else if name == "BYDAY" or name == "BYWEEKDAY" {
+        parse_byday(value, mut a)
+    } else {
+        let list = parse_int_list(value);
+        let ok = list.is_some();
+        let l = list.unwrap_or(Vec.new());
+        if name == "BYSETPOS" {
+            a.bysetpos = Some(l);
+        } else if name == "BYMONTH" {
+            a.bymonth = Some(l);
+        } else if name == "BYMONTHDAY" {
+            a.bymonthday = Some(l);
+        } else if name == "BYYEARDAY" {
+            a.byyearday = Some(l);
+        } else if name == "BYEASTER" {
+            a.byeaster = Some(l);
+        } else if name == "BYWEEKNO" {
+            a.byweekno = Some(l);
+        } else if name == "BYHOUR" {
+            a.byhour = Some(l);
+        } else if name == "BYMINUTE" {
+            a.byminute = Some(l);
+        } else if name == "BYSECOND" {
+            a.bysecond = Some(l);
+        } else {
+            return Err(f"unknown parameter '{name}'");
+        }
+        ok
+    };
+    Ok(ok)
+}
+
+// _parse_rfc_rrule
+fn parse_rrule(line: Str, dtstart: Option[i64]) -> Result[Rule, String] {
+    let mut value = line;
+    if line.contains(":") {
+        let parts: Vec[Str] = line.split(":").collect();
+        if parts.len() != 2 {
+            return Err(bad_unpack(parts.len()));
+        }
+        if parts[0] != "RRULE" {
+            return Err("unknown parameter name".to_string());
+        }
+        value = parts[1];
+    }
+    let mut a = new_args();
+    for pair in value.split(";") {
+        let nv: Vec[Str] = pair.split("=").collect();
+        if nv.len() != 2 {
+            return Err(bad_unpack(nv.len()));
+        }
+        if not handle(mut a, nv[0], nv[1])? {
+            return Err(f"invalid '{nv[0]}': {nv[1]}");
+        }
+    }
+    match dtstart {
+        Some(t) => new_rule(t, a),
+        None => Err("no DTSTART: the rule would start now".to_string()),
+    }
+}
+
+// _parse_date_value, with no time zones.
+fn parse_date_value(value: Str, parms: ref Vec[Str]) -> Result[Vec[i64], String] {
+    let mut found = false;
+    for parm in parms {
+        if parm.starts_with("TZID=") {
+            continue;
+        }
+        if parm != "VALUE=DATE-TIME" and parm != "VALUE=DATE" {
+            return Err(f"unsupported parm: {parm}");
+        }
+        if found {
+            return Err(f"Duplicate value parameter found in: {parm}");
+        }
+        found = true;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for d in value.split(",") {
+        out.push(parse_dt(d)?);
+    }
+    Ok(out)
+}
+
+struct Options {
+    unfold: bool,
+    forceset: bool,
+    compatible: bool,
+}
+
+// _parse_rfc
+fn rrulestr(src: Str, o: ref Options) -> Result[Recur, String] {
+    let forceset = o.forceset or o.compatible;
+    let unfold = o.unfold or o.compatible;
+    let s = src.to_uppercase();
+    if s.trim().is_empty() {
+        return Err("empty string".to_string());
+    }
+    let mut lines: Vec[String] = Vec.new();
+    if unfold {
+        for raw in s.lines() {
+            let line = raw.trim_end();
+            if line.is_empty() {
+                continue;
+            }
+            if lines.len() > 0 and line.starts_with(" ") {
+                let k = lines.len() - 1;
+                lines[k].push_str(line[1..]);
+            } else {
+                lines.push(line.to_string());
+            }
+        }
+    } else {
+        for w in s.split_whitespace() {
+            lines.push(w.to_string());
+        }
+    }
+    let mut rrulevals: Vec[String] = Vec.new();
+    let mut rdatevals: Vec[String] = Vec.new();
+    let mut exrulevals: Vec[String] = Vec.new();
+    let mut exdates: Vec[i64] = Vec.new();
+    let mut dtstart: Option[i64] = None;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let (name0, value) = match line.find(":") {
+            Some(c) => (line[0..c], line[c + 1..]),
+            None => ("RRULE", line.as_str()),
+        };
+        let mut parms: Vec[Str] = name0.split(";").collect();
+        let name = parms.remove(0);
+        if name == "RRULE" {
+            if parms.len() > 0 {
+                return Err(f"unsupported RRULE parm: {parms[0]}");
+            }
+            rrulevals.push(value.to_string());
+        } else if name == "RDATE" {
+            for parm in parms {
+                if parm != "VALUE=DATE-TIME" {
+                    return Err(f"unsupported RDATE parm: {parm}");
+                }
+            }
+            rdatevals.push(value.to_string());
+        } else if name == "EXRULE" {
+            if parms.len() > 0 {
+                return Err(f"unsupported EXRULE parm: {parms[0]}");
+            }
+            exrulevals.push(value.to_string());
+        } else if name == "EXDATE" {
+            for d in parse_date_value(value, parms)? {
+                exdates.push(d);
+            }
+        } else if name == "DTSTART" {
+            let vals = parse_date_value(value, parms)?;
+            if vals.len() != 1 {
+                return Err(f"Multiple DTSTART values specified:{value}");
+            }
+            dtstart = Some(vals[0]);
+        } else {
+            return Err(f"unsupported property: {name}");
+        }
+    }
+    let is_set = forceset or rrulevals.len() > 1 or rdatevals.len() > 0
+        or exrulevals.len() > 0 or exdates.len() > 0;
+    let mut r = Recur { is_set: is_set, rrules: Vec.new(), rdates: Vec.new(), exrules: Vec.new(), exdates: exdates };
+    if not is_set {
+        r.rrules.push(parse_rrule(rrulevals[0], dtstart)?);
+        return Ok(r);
+    }
+    for v in rrulevals {
+        r.rrules.push(parse_rrule(v, dtstart)?);
+    }
+    for v in rdatevals {
+        for d in v.split(",") {
+            r.rdates.push(parse_dt(d)?);
+        }
+    }
+    for v in exrulevals {
+        r.exrules.push(parse_rrule(v, dtstart)?);
+    }
+    if o.compatible {
+        if let Some(t) = dtstart {
+            r.rdates.push(t);
+        }
+    }
+    Ok(r)
+}
+
+// ------------------------------------------------------------ queries
+
+fn show_list(v: ref Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if v.is_empty() {
+        out.push("  []".to_string());
+    }
+    for t in v {
+        out.push(f"  {fmt_dt(t)}");
+    }
+    out
+}
+
+fn show_opt(v: Option[i64]) -> Vec[String] {
+    match v {
+        Some(t) => vec![f"  {fmt_dt(t)}"],
+        None => vec!["  None".to_string()],
+    }
+}
+
+fn take(r: ref Recur, limit: i64) -> Result[Vec[i64], String] {
+    let mut s = stream(r);
+    let mut out: Vec[i64] = Vec.new();
+    while limit < 0 or out.len() < limit {
+        match s.next()? {
+            Some(t) => out.push(t),
+            None => break,
+        }
+    }
+    Ok(out)
+}
+
+fn query(r: ref Recur, q: Str) -> Result[Vec[String], String] {
+    let w: Vec[Str] = q.split_whitespace().collect();
+    let inc = w[w.len() - 1] == "inc";
+    let op = w[0];
+    if op == "all" {
+        return Ok(show_list(take(r, -1)?));
+    }
+    if op == "list" {
+        return Ok(show_list(take(r, parse_int(w[1]).unwrap_or(0))?));
+    }
+    if op == "count" {
+        let n = take(r, -1)?.len();
+        return Ok(vec![f"  {n}"]);
+    }
+    if op == "str" {
+        let text = if r.is_set { "<rruleset>".to_string() } else { rule_str(r.rrules[0]) };
+        let mut out: Vec[String] = Vec.new();
+        for l in text.lines() {
+            out.push(f"  {l}");
+        }
+        return Ok(out);
+    }
+    if op == "at" {
+        let k = parse_int(w[1]).unwrap_or(0);
+        let v = if k >= 0 { take(r, k + 1)? } else { take(r, -1)? };
+        let idx = if k < 0 { v.len() + k } else { k };
+        if idx < 0 or idx >= v.len() {
+            return Ok(vec!["  error: index out of range".to_string()]);
+        }
+        return Ok(show_opt(Some(v[idx])));
+    }
+    let a = parse_dt(w[1])?;
+    let mut s = stream(r);
+    if op == "after" {
+        while let Some(t) = s.next()? {
+            if (inc and t >= a) or (not inc and t > a) {
+                return Ok(show_opt(Some(t)));
+            }
+        }
+        return Ok(show_opt(None));
+    }
+    if op == "before" {
+        let mut last: Option[i64] = None;
+        while let Some(t) = s.next()? {
+            if (inc and t > a) or (not inc and t >= a) {
+                break;
+            }
+            last = Some(t);
+        }
+        return Ok(show_opt(last));
+    }
+    if op == "in" {
+        while let Some(t) = s.next()? {
+            if t == a {
+                return Ok(vec!["  True".to_string()]);
+            }
+            if t > a {
+                break;
+            }
+        }
+        return Ok(vec!["  False".to_string()]);
+    }
+    if op == "between" {
+        let b = parse_dt(w[2])?;
+        let mut out: Vec[i64] = Vec.new();
+        while let Some(t) = s.next()? {
+            if (inc and t > b) or (not inc and t >= b) {
+                break;
+            }
+            if out.is_empty() {
+                if (inc and t >= a) or (not inc and t > a) {
+                    out.push(t);
+                }
+            } else {
+                out.push(t);
+            }
+        }
+        return Ok(show_list(out));
+    }
+    if op == "xafter" {
+        let n = parse_int(w[2]).unwrap_or(0);
+        let mut out: Vec[i64] = Vec.new();
+        while let Some(t) = s.next()? {
+            if (inc and t >= a) or (not inc and t > a) {
+                if out.len() >= n {
+                    break;
+                }
+                out.push(t);
+            }
+        }
+        return Ok(show_list(out));
+    }
+    Err(f"bad query {q}")
+}
+
+fn run_file(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let lines: Vec[Str] = text.split("\n").collect();
+    let mut first = 0;
+    let mut o = Options { unfold: false, forceset: false, compatible: false };
+    if lines[0].starts_with("@") {
+        for w in lines[0][1..].split_whitespace() {
+            if w == "unfold" {
+                o.unfold = true;
+            } else if w == "forceset" {
+                o.forceset = true;
+            } else if w == "compatible" {
+                o.compatible = true;
+            }
+        }
+        first = 1;
+    }
+    let mut cut = first;
+    while lines[cut] != "--" {
+        cut += 1;
+    }
+    let mut src: Vec[String] = Vec.new();
+    for k in first..cut {
+        src.push(lines[k].to_string());
+    }
+    let r = match rrulestr(src.join("\n"), o) {
+        Ok(r) => r,
+        Err(e) => {
+            out.push(f"  error: {e}");
+            return out;
+        }
+    };
+    out.push(if r.is_set { "  set".to_string() } else { "  rule".to_string() });
+    for k in cut + 1..lines.len() {
+        let q = lines[k];
+        if q.is_empty() {
+            continue;
+        }
+        out.push(f"> {q}");
+        match query(r, q) {
+            Ok(v) => {
+                for l in v.into_iter() {
+                    out.push(l);
+                }
+            }
+            Err(e) => out.push(f"  error: {e}"),
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ main
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/rules".to_string()) {
+        return Err(f"cannot create data/rules: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let listing = match fs.read_dir("data/rules".to_string()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln(f"cannot list data/rules: {e}");
+            return;
+        }
+    };
+    let mut names: Vec[String] = Vec.new();
+    for n in listing {
+        names.push(n.clone());
+    }
+    names.sort();
+    for name in names {
+        println(f"== {name}");
+        match fs.read_to_string(f"data/rules/{name}") {
+            Ok(text) => println(run_file(text).join("\n")),
+            Err(e) => println(f"  cannot read: {e}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=10\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    t.push_str("count\n");
+    v.push(DataFile { path: "rules/001-daily-10.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;UNTIL=19971224T000000\n");
+    t.push_str("--\n");
+    t.push_str("count\n");
+    t.push_str("list 3\n");
+    t.push_str("before 19971224T000000\n");
+    t.push_str("at -1\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/002-daily-until.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;INTERVAL=2\n");
+    t.push_str("--\n");
+    t.push_str("list 6\n");
+    t.push_str("after 19971231T000000\n");
+    t.push_str("between 19971001 19971010\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/003-every-other-day.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;INTERVAL=10;COUNT=5\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/004-every-10-days-5.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19980101T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;UNTIL=20000131T140000;BYMONTH=1;BYDAY=SU,MO,TU,WE,TH,FR,SA\n");
+    t.push_str("--\n");
+    t.push_str("count\n");
+    t.push_str("list 3\n");
+    t.push_str("at 31\n");
+    t.push_str("at -1\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/005-january-3-years-yearly.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19980101T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;UNTIL=20000131T140000;BYMONTH=1\n");
+    t.push_str("--\n");
+    t.push_str("count\n");
+    t.push_str("at 31\n");
+    t.push_str("at -1\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/006-january-3-years-daily.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=10\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/007-weekly-10.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;UNTIL=19971224T000000\n");
+    t.push_str("--\n");
+    t.push_str("count\n");
+    t.push_str("at -1\n");
+    v.push(DataFile { path: "rules/008-weekly-until.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;INTERVAL=2;WKST=SU\n");
+    t.push_str("--\n");
+    t.push_str("list 8\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/009-every-other-week.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;UNTIL=19971007T000000;WKST=SU;BYDAY=TU,TH\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/010-weekly-tu-th-until.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=10;WKST=SU;BYDAY=TU,TH\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/011-weekly-tu-th-count.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970901T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;INTERVAL=2;UNTIL=19971224T000000;WKST=SU;BYDAY=MO,WE,FR\n");
+    t.push_str("--\n");
+    t.push_str("count\n");
+    t.push_str("list 6\n");
+    t.push_str("at -1\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/012-mo-we-fri-other-week.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=8;WKST=SU;BYDAY=TU,TH\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/013-tu-th-other-week-8.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970905T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=10;BYDAY=1FR\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/014-first-friday-10.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970905T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;UNTIL=19971224T000000;BYDAY=1FR\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/015-first-friday-until.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970907T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;INTERVAL=2;COUNT=10;BYDAY=1SU,-1SU\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/016-first-last-sunday-other-month.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970922T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=6;BYDAY=-2MO\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/017-second-to-last-monday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970928T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYMONTHDAY=-3\n");
+    t.push_str("--\n");
+    t.push_str("list 6\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/018-third-to-last-day.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=10;BYMONTHDAY=2,15\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/019-2nd-and-15th.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970930T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=10;BYMONTHDAY=1,-1\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/020-first-and-last-day.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970910T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;INTERVAL=18;COUNT=10;BYMONTHDAY=10,11,12,13,14,15\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/021-every-18-months-10th-to-15th.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;INTERVAL=2;BYDAY=TU\n");
+    t.push_str("--\n");
+    t.push_str("list 18\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/022-tuesday-other-month.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970610T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=10;BYMONTH=6,7\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/023-june-july-yearly.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970310T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;INTERVAL=2;COUNT=10;BYMONTH=1,2,3\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/024-every-other-year-jan-feb-mar.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970101T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;INTERVAL=3;COUNT=10;BYYEARDAY=1,100,200\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/025-every-third-year-yeardays.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970519T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;BYDAY=20MO\n");
+    t.push_str("--\n");
+    t.push_str("list 3\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/026-20th-monday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970512T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;BYWEEKNO=20;BYDAY=MO\n");
+    t.push_str("--\n");
+    t.push_str("list 3\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/027-monday-of-week-20.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970313T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=TH\n");
+    t.push_str("--\n");
+    t.push_str("list 11\n");
+    v.push(DataFile { path: "rules/028-thursdays-in-march.rrule".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("DTSTART:19970605T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;BYDAY=TH;BYMONTH=6,7,8\n");
+    t.push_str("--\n");
+    t.push_str("list 39\n");
+    v.push(DataFile { path: "rules/029-thursdays-in-summer.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("EXDATE:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYDAY=FR;BYMONTHDAY=13\n");
+    t.push_str("--\n");
+    t.push_str("list 5\n");
+    v.push(DataFile { path: "rules/030-friday-13th.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970913T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYDAY=SA;BYMONTHDAY=7,8,9,10,11,12,13\n");
+    t.push_str("--\n");
+    t.push_str("list 10\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/031-saturday-after-first-sunday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19961105T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;INTERVAL=4;BYMONTH=11;BYDAY=TU;BYMONTHDAY=2,3,4,5,6,7,8\n");
+    t.push_str("--\n");
+    t.push_str("list 3\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/032-us-election-day.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970904T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=3;BYDAY=TU,WE,TH;BYSETPOS=3\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/033-third-tue-wed-thu.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970929T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-2\n");
+    t.push_str("--\n");
+    t.push_str("list 7\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/034-second-to-last-weekday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=HOURLY;INTERVAL=3;UNTIL=19970902T170000\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/035-every-3-hours-until.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MINUTELY;INTERVAL=15;COUNT=6\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/036-every-15-minutes-6.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MINUTELY;INTERVAL=90;COUNT=4\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/037-every-90-minutes-4.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,20,40\n");
+    t.push_str("--\n");
+    t.push_str("list 26\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/038-every-20-minutes-byhour.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MINUTELY;INTERVAL=20;BYHOUR=9,10,11,12,13,14,15,16\n");
+    t.push_str("--\n");
+    t.push_str("list 26\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/039-every-20-minutes-minutely.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970805T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=4;BYDAY=TU,SU;WKST=MO\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/040-wkst-monday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970805T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=4;BYDAY=TU,SU;WKST=SU\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/041-wkst-sunday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20070115T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYMONTHDAY=15,30;COUNT=5\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/042-feb-30-ignored.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20141231T000000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=7\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/043-monthly-31st-skips.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20000229T120000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=4\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/044-leap-day-yearly.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19960101T000000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=6;BYYEARDAY=60,-306\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/045-leap-day-by-yearday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970101T000000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=4;BYYEARDAY=-1\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/046-last-day-of-year.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970101T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=3;BYWEEKNO=53;BYDAY=MO\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/047-week-53.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970101T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=6;BYWEEKNO=-1;BYDAY=MO,SU\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/048-last-week.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970101T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=8;BYWEEKNO=1\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/049-week-1-crosses-year.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970101T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=6;BYWEEKNO=1;BYDAY=SU,SA;WKST=SU\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/050-week-1-wkst-sunday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19981225T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=12;BYWEEKNO=52,53\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/051-week-52-53-daily.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970101T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=6;BYEASTER=0\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/052-easter-sunday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20200101T100000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=12;BYEASTER=-2,1,39,50\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/053-easter-holidays.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T080000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=4;BYEASTER=-1,6;BYDAY=SA\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/054-easter-saturdays-near.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T180000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=8;BYMONTH=5,11;BYDAY=-1MO,4TH\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/055-yearly-nth-weekday-by-month.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20231201T170000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=4;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/056-yearly-setpos-last-workday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T080000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=6;BYDAY=MO;BYHOUR=8,16;BYSETPOS=1,-1,2\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/057-monthly-setpos-times.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240304T000000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=5;BYDAY=MO,FR;BYHOUR=9,12,15;BYMINUTE=30;BYSETPOS=-2,4\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/058-weekly-setpos-negative-times.rrule".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T170000\n");
+    t.push_str("RRULE:FREQ=HOURLY;INTERVAL=4;BYHOUR=1,2,5,7,13,21;COUNT=9\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/059-hourly-byhour-construct.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240105T200000\n");
+    t.push_str("RRULE:FREQ=HOURLY;INTERVAL=5;BYDAY=MO;COUNT=8\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/060-hourly-filtered-by-weekday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T000700\n");
+    t.push_str("RRULE:FREQ=MINUTELY;INTERVAL=10;BYMINUTE=7,17,27,50;COUNT=6\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/061-minutely-byminute-construct.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T224500\n");
+    t.push_str("RRULE:FREQ=MINUTELY;INTERVAL=25;BYHOUR=23,0;COUNT=8\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/062-minutely-byhour-night.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T235958\n");
+    t.push_str("RRULE:FREQ=SECONDLY;INTERVAL=7;COUNT=5\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/063-secondly-small.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T120000\n");
+    t.push_str("RRULE:FREQ=SECONDLY;INTERVAL=15;BYSECOND=0,30;BYMINUTE=0,1;COUNT=6\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/064-secondly-bysecond.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T060000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=6;BYHOUR=6,18;BYMINUTE=0,30;BYSECOND=15\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/065-daily-bysecond-timeset.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20230101T000000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=4;BYMONTH=2;BYMONTHDAY=-1,-29\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/066-yearly-bymonthday-negative-february.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20241230T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=6;BYDAY=MO,WE,FR;BYYEARDAY=1,2,3,-1,-2,363,364,365\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/067-weekly-cross-year.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20231115T100000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;INTERVAL=5;COUNT=6\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/068-monthly-interval-wrap.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240131T233000\n");
+    t.push_str("RRULE:FREQ=DAILY;INTERVAL=29;COUNT=8\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/069-yearly-many-months-daily-time.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240102T093000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR\n");
+    t.push_str("--\n");
+    t.push_str("after 20240105T093000\n");
+    t.push_str("after 20240105T093000 inc\n");
+    t.push_str("before 20240108T093000\n");
+    t.push_str("before 20240108T093000 inc\n");
+    t.push_str("between 20240110 20240117\n");
+    t.push_str("between 20240110T093000 20240117T093000 inc\n");
+    t.push_str("in 20240110T093000\n");
+    t.push_str("in 20240113T093000\n");
+    t.push_str("at 0\n");
+    t.push_str("at 9\n");
+    t.push_str("xafter 20240301 4\n");
+    t.push_str("xafter 20240301T093000 3 inc\n");
+    v.push(DataFile { path: "rules/070-standup-weekdays.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240115T000000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYMONTHDAY=15,-1;BYDAY=MO,TU,WE,TH,FR\n");
+    t.push_str("--\n");
+    t.push_str("list 8\n");
+    t.push_str("between 20240601 20241231\n");
+    t.push_str("after 20240831\n");
+    v.push(DataFile { path: "rules/071-payday-15th-and-last.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240131T080000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYMONTHDAY=-1;UNTIL=20241231T235959\n");
+    t.push_str("--\n");
+    t.push_str("count\n");
+    t.push_str("all\n");
+    t.push_str("at 3\n");
+    t.push_str("at 12\n");
+    t.push_str("at -12\n");
+    t.push_str("at -13\n");
+    t.push_str("in 20240229T080000\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/072-billing-until-count.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=10\n");
+    t.push_str("EXDATE:19970904T090000,19970906T090000\n");
+    t.push_str("EXDATE:19970910T090000\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("count\n");
+    t.push_str("in 19970904T090000\n");
+    v.push(DataFile { path: "rules/073-set-exdate.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T100000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=4\n");
+    t.push_str("RDATE:20240103T150000,20240101T100000\n");
+    t.push_str("RDATE:20231225T100000\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("after 20240101T100000\n");
+    t.push_str("before 20240101T100000\n");
+    v.push(DataFile { path: "rules/074-set-rdate.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=21\n");
+    t.push_str("EXRULE:FREQ=WEEKLY;BYDAY=SA,SU\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("count\n");
+    v.push(DataFile { path: "rules/075-set-exrule.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=4;BYDAY=MO\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=4;BYDAY=MO,TH;BYHOUR=9,14\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("count\n");
+    t.push_str("at -2\n");
+    v.push(DataFile { path: "rules/076-set-two-rrules.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T000000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=6\n");
+    t.push_str("EXDATE;VALUE=DATE:20240102,20240105\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/077-set-exdate-date-value.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("@ forceset\n");
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=YEARLY;COUNT=3\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("count\n");
+    v.push(DataFile { path: "rules/078-set-forceset.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("@ compatible\n");
+    t.push_str("DTSTART:20240103T120000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;COUNT=3;BYDAY=FR\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/079-set-compatible-adds-dtstart.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T080000\n");
+    t.push_str("RRULE:FREQ=DAILY\n");
+    t.push_str("EXRULE:FREQ=DAILY;INTERVAL=3\n");
+    t.push_str("EXDATE:20240105T080000\n");
+    t.push_str("--\n");
+    t.push_str("list 6\n");
+    t.push_str("after 20240201\n");
+    t.push_str("between 20240301 20240310\n");
+    t.push_str("at 4\n");
+    v.push(DataFile { path: "rules/080-set-exrule-infinite.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("@ unfold\n");
+    t.push_str("DTSTART:20240101T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;COUNT=4;\n");
+    t.push_str(" BYDAY=MO;BYSETPOS=2\n");
+    t.push_str("\n");
+    t.push_str("EXDATE:20240212T090000\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/081-unfold-continued.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("dtstart:20240301T070000\n");
+    t.push_str("rrule:freq=weekly;count=3;byday=sa;wkst=su\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/082-lowercase-rule.rrule".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("DTSTART:20240301T070000 FREQ=DAILY;INTERVAL=3;COUNT=3\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/083-bare-rule-line.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=FORTNIGHTLY;COUNT=3\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/084-err-freq.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=TEN\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/085-err-count.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=3;BYFORTNIGHT=2\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/086-err-unknown-part.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=WEEKLY;BYDAY=MO,XX\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/087-err-byday.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYDAY=0MO\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/088-err-byday-zero.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYDAY=MO,,TU\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/089-err-byday-empty.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYDAY=MO;BYSETPOS=0\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/090-err-bysetpos.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=MONTHLY;BYDAY=MO;BYSETPOS=400\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/091-err-bysetpos-range.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;UNTIL=NEVER\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/092-err-until.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/093-err-no-equals.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T170000\n");
+    t.push_str("RRULE:FREQ=HOURLY;INTERVAL=4;BYHOUR=2,6\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/094-err-empty-byset.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY\n");
+    t.push_str("ATTENDEE:MAILTO:A@EXAMPLE.COM\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/095-err-property.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE;X-NAME=1:FREQ=DAILY\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/096-err-rrule-parm.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY\n");
+    t.push_str("RDATE;VALUE=PERIOD:19970903T090000\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/097-err-rdate-parm.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY\n");
+    t.push_str("EXDATE;FOO=BAR:19970903T090000\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/098-err-exdate-parm.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101,20240102\n");
+    t.push_str("RRULE:FREQ=DAILY\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/099-err-two-dtstarts.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=2\n");
+    t.push_str("RRULE:FOO:BAR\n");
+    t.push_str("--\n");
+    t.push_str("all\n");
+    v.push(DataFile { path: "rules/100-err-unknown-name-in-rrule.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:19970902T090000\n");
+    t.push_str("RRULE:FREQ=DAILY;COUNT=3\n");
+    t.push_str("--\n");
+    t.push_str("at 3\n");
+    t.push_str("at -4\n");
+    t.push_str("at 2\n");
+    t.push_str("at -3\n");
+    v.push(DataFile { path: "rules/101-err-index.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T000000\n");
+    t.push_str("RRULE:FREQ=MINUTELY;INTERVAL=120;BYHOUR=3\n");
+    t.push_str("--\n");
+    t.push_str("list 2\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/102-err-minutely-empty.rrule".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DTSTART:20240101T000000\n");
+    t.push_str("RRULE:FREQ=MINUTELY;INTERVAL=60;BYHOUR=3;BYMINUTE=0\n");
+    t.push_str("--\n");
+    t.push_str("list 3\n");
+    t.push_str("str\n");
+    v.push(DataFile { path: "rules/103-minutely-hour-skip.rrule".to_string(), hex: false, body: t });
+}
