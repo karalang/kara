@@ -1,0 +1,2715 @@
+// mini_re: Python 3.13's re module. The parser is a port of
+// Lib/re/_parser.py, with its error messages and positions; the compiler
+// turns the parsed pattern into a program for a backtracking matcher that
+// follows Modules/_sre/sre_lib.h: alternatives in order, greedy, lazy and
+// possessive repeats with sre's zero-width protection, atomic groups,
+// lookahead and fixed-width lookbehind, backreferences and conditionals.
+// On top of it are search, match, fullmatch, findall, finditer, sub with
+// replacement templates, and split, with the empty-match rules Python has
+// had since 3.7.
+//
+// The jobs come from data/cases.tsv: unit cases, and patterns run over an
+// access log, an application log, an INI-style config and a small
+// program to tokenize.
+//
+// Text is handled as code points, so positions count characters. \d is
+// Unicode's decimal digits and \s Python's whitespace, from tables; \w is
+// `char.is_alphanumeric()` or `_`, which agrees with Python's isalnum on
+// letters, digits and CJK but not on every combining mark. Case folding
+// is the simple lowercase mapping, without sre's extra folds for
+// characters such as the Kelvin sign.
+
+// ------------------------------------------------------------ errors
+
+struct ReErr {
+    kind: String,
+    msg: String,
+    pos: i64,
+}
+
+fn re_error(msg: own String, pos: i64) -> ReErr {
+    ReErr { kind: "error".to_string(), msg: msg, pos: pos }
+}
+
+fn other_error(kind: Str, msg: own String) -> ReErr {
+    ReErr { kind: kind.to_string(), msg: msg, pos: -1 }
+}
+
+fn err_text(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        if e.pos >= 0 {
+            return f"error: {e.msg} at position {e.pos}";
+        }
+        return f"error: {e.msg}";
+    }
+    f"{e.kind}: {e.msg}"
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+// ------------------------------------------------------- parsed form
+
+// The categories of \d \D \s \S \w \W.
+fn cat_digit() -> i64 { 0 }
+fn cat_not_digit() -> i64 { 1 }
+fn cat_space() -> i64 { 2 }
+fn cat_not_space() -> i64 { 3 }
+fn cat_word() -> i64 { 4 }
+fn cat_not_word() -> i64 { 5 }
+
+// The positions ^ $ \A \Z \b \B and the forms the compiler turns them
+// into under MULTILINE.
+fn at_beginning() -> i64 { 0 }
+fn at_beginning_line() -> i64 { 1 }
+fn at_beginning_string() -> i64 { 2 }
+fn at_end() -> i64 { 3 }
+fn at_end_line() -> i64 { 4 }
+fn at_end_string() -> i64 { 5 }
+fn at_boundary() -> i64 { 6 }
+fn at_non_boundary() -> i64 { 7 }
+
+#[derive(Clone)]
+enum Item {
+    Lit(i64),
+    Range(i64, i64),
+    Cat(i64),
+}
+
+enum Node {
+    Lit(i64),
+    NotLit(i64),
+    Any,
+    In(Vec[Item], bool),
+    At(i64),
+    Branch(Vec[Vec[Node]]),
+    // group (0: none), flags turned on, flags turned off, contents
+    Group(i64, i64, i64, Vec[Node]),
+    // 0 greedy, 1 lazy, 2 possessive; min; max; the item repeated
+    Repeat(i64, i64, i64, Vec[Node]),
+    Atomic(Vec[Node]),
+    // direction (1 ahead, -1 behind), negative, contents
+    Assert(i64, bool, Vec[Node]),
+    GroupRef(i64),
+    // group, yes branch, no branch
+    Exists(i64, Vec[Node], Vec[Node]),
+    Failure,
+}
+
+fn is_repeat(n: ref Node) -> bool {
+    match n {
+        Node.Repeat(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+fn is_at(n: ref Node) -> bool {
+    match n {
+        Node.At(_) => true,
+        _ => false,
+    }
+}
+
+fn flag_i() -> i64 { 2 }
+fn flag_l() -> i64 { 4 }
+fn flag_m() -> i64 { 8 }
+fn flag_s() -> i64 { 16 }
+fn flag_u() -> i64 { 32 }
+fn flag_x() -> i64 { 64 }
+fn flag_a() -> i64 { 256 }
+fn type_flags() -> i64 { 4 | 32 | 256 }
+fn maxrepeat() -> i64 { 4294967295 }
+fn maxgroups() -> i64 { 1073741823 }
+fn maxwidth() -> i64 { 1 << 62 }
+
+fn flag_value(c: i64) -> i64 {
+    match c {
+        105 => 2,
+        76 => 4,
+        109 => 8,
+        115 => 16,
+        120 => 64,
+        97 => 256,
+        117 => 32,
+        _ => 0,
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// One token: nothing at the end of the pattern (n 0), a character (n 1),
+// or a backslash and the character after it (n 2).
+#[derive(Copy, Clone)]
+struct T {
+    n: i64,
+    a: i64,
+    b: i64,
+}
+
+fn tok_none() -> T {
+    T { n: 0, a: 0, b: 0 }
+}
+
+fn tok_is(t: T, c: i64) -> bool {
+    t.n == 1 and t.a == c
+}
+
+fn tok_text(t: T) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    if t.n >= 1 {
+        v.push(t.a);
+    }
+    if t.n == 2 {
+        v.push(t.b);
+    }
+    v
+}
+
+fn is_ascii_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_oct(c: i64) -> bool {
+    c >= 48 and c <= 55
+}
+
+fn is_dec(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn digits_value(s: ref Vec[i64], start: i64, base: i64) -> i64 {
+    let mut v = 0;
+    let mut i = start;
+    while i < s.len() {
+        let c = s[i];
+        let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 };
+        v = v * base + d;
+        i += 1;
+    }
+    v
+}
+
+// str.isidentifier, near enough: a letter or underscore, then letters,
+// digits and underscores.
+fn is_identifier(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < name.len() {
+        let c = name[i];
+        let ok = if c == 95 {
+            true
+        } else if i == 0 {
+            match as_char(c) {
+                Some(ch) => ch.is_alphabetic(),
+                None => false,
+            }
+        } else {
+            is_word(c, false)
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_ascii_decimal(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    for c in name {
+        if not is_dec(c) {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tokenizer {
+    s: Vec[i64],
+    index: i64,
+    next: T,
+}
+
+impl Tokenizer {
+    fn advance(mut ref self) -> Result[(), ReErr] {
+        let index = self.index;
+        if index >= self.s.len() {
+            self.next = tok_none();
+            return Ok(());
+        }
+        let c = self.s[index];
+        if c == 92 {
+            if index + 1 >= self.s.len() {
+                return Err(re_error("bad escape (end of pattern)".to_string(), self.s.len() - 1));
+            }
+            self.next = T { n: 2, a: 92, b: self.s[index + 1] };
+            self.index = index + 2;
+        } else {
+            self.next = T { n: 1, a: c, b: 0 };
+            self.index = index + 1;
+        }
+        Ok(())
+    }
+
+    fn get(mut ref self) -> Result[T, ReErr] {
+        let t = self.next;
+        self.advance()?;
+        Ok(t)
+    }
+
+    fn take(mut ref self, c: i64) -> Result[bool, ReErr] {
+        if tok_is(self.next, c) {
+            self.advance()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn tell(ref self) -> i64 {
+        self.index - self.next.n
+    }
+
+    fn seek(mut ref self, index: i64) -> Result[(), ReErr] {
+        self.index = index;
+        self.advance()
+    }
+
+    fn error(ref self, msg: own String, offset: i64) -> ReErr {
+        re_error(msg, self.tell() - offset)
+    }
+
+    // getwhile: up to n characters of a kind (0 octal, 1 decimal, 2 hex).
+    fn getwhile(mut ref self, n: i64, kind: i64, out: mut ref Vec[i64]) -> Result[(), ReErr] {
+        let mut k = 0;
+        while k < n {
+            let t = self.next;
+            if t.n != 1 {
+                break;
+            }
+            let ok = if kind == 0 { is_oct(t.a) } else if kind == 1 { is_dec(t.a) } else { is_hex(t.a) };
+            if not ok {
+                break;
+            }
+            out.push(t.a);
+            self.advance()?;
+            k += 1;
+        }
+        Ok(())
+    }
+
+    fn getuntil(mut ref self, terminator: i64, name: Str) -> Result[Vec[i64], ReErr] {
+        let mut result: Vec[i64] = Vec.new();
+        loop {
+            let c = self.next;
+            self.advance()?;
+            if c.n == 0 {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 0));
+                }
+                let term = to_string(vec_of(terminator));
+                return Err(self.error(f"missing {term}, unterminated name", result.len()));
+            }
+            if tok_is(c, terminator) {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 1));
+                }
+                break;
+            }
+            push_all(mut result, tok_text(c));
+        }
+        Ok(result)
+    }
+
+    fn checkgroupname(ref self, name: ref Vec[i64], offset: i64) -> Result[(), ReErr] {
+        if not is_identifier(name) {
+            return Err(self.error(f"bad character in group name {repr_of(name)}", name.len() + offset));
+        }
+        Ok(())
+    }
+}
+
+fn vec_of(c: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(c);
+    v
+}
+
+fn new_tokenizer(s: ref Vec[i64]) -> Result[Tokenizer, ReErr] {
+    let mut t = Tokenizer { s: s.clone(), index: 0, next: tok_none() };
+    t.advance()?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ parser
+
+#[derive(Clone)]
+struct Width {
+    lo: i64,
+    hi: i64,
+}
+
+struct ParseState {
+    flags: i64,
+    names: Vec[(Vec[i64], i64)],
+    // per group: whether it is closed, and its width
+    closed: Vec[bool],
+    widths: Vec[Width],
+    lookbehind_groups: i64,
+    // conditional references by number, in order: (group, position)
+    refpos: Vec[(i64, i64)],
+}
+
+impl ParseState {
+    fn groups(ref self) -> i64 {
+        self.closed.len()
+    }
+
+    fn group_of(ref self, name: ref Vec[i64]) -> i64 {
+        for (n, g) in self.names.iter() {
+            if same(n, name) {
+                return *g;
+            }
+        }
+        -1
+    }
+
+    fn checkgroup(ref self, gid: i64) -> bool {
+        gid < self.groups() and self.closed[gid]
+    }
+
+    fn checklookbehindgroup(ref self, gid: i64, src: ref Tokenizer) -> Result[(), ReErr] {
+        if self.lookbehind_groups >= 0 {
+            if not self.checkgroup(gid) {
+                return Err(src.error("cannot refer to an open group".to_string(), 0));
+            }
+            if gid >= self.lookbehind_groups {
+                return Err(src.error("cannot refer to group defined in the same lookbehind subpattern".to_string(), 0));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn add_width(a: i64, b: i64) -> i64 {
+    if a >= maxwidth() - b { maxwidth() } else { a + b }
+}
+
+fn mul_width(a: i64, n: i64) -> i64 {
+    if a == 0 or n == 0 {
+        0
+    } else if a >= maxwidth() / n {
+        maxwidth()
+    } else {
+        a * n
+    }
+}
+
+// SubPattern.getwidth.
+fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
+    let mut lo = 0;
+    let mut hi = 0;
+    for n in p.iter() {
+        match n {
+            Node.Branch(items) => {
+                let mut i = maxwidth();
+                let mut j = 0;
+                for item in items.iter() {
+                    let w = width_of(widths, item);
+                    if w.lo < i {
+                        i = w.lo;
+                    }
+                    if w.hi > j {
+                        j = w.hi;
+                    }
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Atomic(body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Group(_, _, _, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Repeat(_, min, max, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, mul_width(w.lo, *min));
+                if *max == maxrepeat() and w.hi > 0 {
+                    hi = maxwidth();
+                } else {
+                    hi = add_width(hi, mul_width(w.hi, *max));
+                }
+            }
+            Node.GroupRef(g) => {
+                let w = ref widths[*g];
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Exists(_, yes, no) => {
+                let wy = width_of(widths, yes);
+                let mut i = wy.lo;
+                let mut j = wy.hi;
+                if no.len() > 0 {
+                    let wn = width_of(widths, no);
+                    if wn.lo < i {
+                        i = wn.lo;
+                    }
+                    if wn.hi > j {
+                        j = wn.hi;
+                    }
+                } else {
+                    i = 0;
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Lit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.NotLit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.Any => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.In(_, _) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            _ => {}
+        }
+    }
+    Width { lo: lo, hi: hi }
+}
+
+fn category_of(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        100 => 0,
+        68 => 1,
+        115 => 2,
+        83 => 3,
+        119 => 4,
+        87 => 5,
+        _ => -1,
+    }
+}
+
+fn escape_value(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        97 => 7,
+        98 => 8,
+        102 => 12,
+        110 => 10,
+        114 => 13,
+        116 => 9,
+        118 => 11,
+        92 => 92,
+        _ => -1,
+    }
+}
+
+// \x, \u and \U: the escape text so far, and the code point.
+fn hex_escape(src: mut ref Tokenizer, t: T, esc: mut ref Vec[i64]) -> Result[i64, ReErr] {
+    let n = if t.b == 120 { 2 } else if t.b == 117 { 4 } else { 8 };
+    src.getwhile(n, 2, mut esc)?;
+    if esc.len() != n + 2 {
+        return Err(src.error(f"incomplete escape {to_string(esc)}", esc.len()));
+    }
+    let c = digits_value(esc, 2, 16);
+    if c > 0x10FFFF {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(c)
+}
+
+// _class_escape: an escape inside [...], a literal or a category.
+fn class_escape(src: mut ref Tokenizer, t: T) -> Result[Item, ReErr] {
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Item.Lit(e));
+    }
+    let cat = category_of(t);
+    if cat >= 0 {
+        return Ok(Item.Cat(cat));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Item.Lit(v));
+    }
+    if is_oct(c) {
+        src.getwhile(2, 0, mut esc)?;
+        let v = digits_value(esc, 1, 8);
+        if v > 0o377 {
+            return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+        }
+        return Ok(Item.Lit(v));
+    }
+    if is_dec(c) or is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Item.Lit(c))
+}
+
+// _escape: an escape outside a set.
+fn escape(src: mut ref Tokenizer, t: T, st: ref ParseState) -> Result[Node, ReErr] {
+    let cat = category_of(t);
+    if cat >= 0 {
+        let mut items: Vec[Item] = Vec.new();
+        items.push(Item.Cat(cat));
+        return Ok(Node.In(items, false));
+    }
+    match t.b {
+        65 => return Ok(Node.At(at_beginning_string())),
+        98 => return Ok(Node.At(at_boundary())),
+        66 => return Ok(Node.At(at_non_boundary())),
+        90 => return Ok(Node.At(at_end_string())),
+        _ => {}
+    }
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Node.Lit(e));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Node.Lit(v));
+    }
+    if c == 48 {
+        src.getwhile(2, 0, mut esc)?;
+        return Ok(Node.Lit(digits_value(esc, 1, 8)));
+    }
+    if is_dec(c) {
+        // an octal escape or a group reference
+        let nt = src.next;
+        if nt.n == 1 and is_dec(nt.a) {
+            esc.push(nt.a);
+            src.advance()?;
+            let nt2 = src.next;
+            if is_oct(esc[1]) and is_oct(esc[2]) and nt2.n == 1 and is_oct(nt2.a) {
+                esc.push(nt2.a);
+                src.advance()?;
+                let v = digits_value(esc, 1, 8);
+                if v > 0o377 {
+                    return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+                }
+                return Ok(Node.Lit(v));
+            }
+        }
+        let group = digits_value(esc, 1, 10);
+        if group < st.groups() {
+            if not st.checkgroup(group) {
+                return Err(src.error("cannot refer to an open group".to_string(), esc.len()));
+            }
+            st.checklookbehindgroup(group, src)?;
+            return Ok(Node.GroupRef(group));
+        }
+        return Err(src.error(f"invalid group reference {group}", esc.len() - 1));
+    }
+    if is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Node.Lit(c))
+}
+
+fn parse_sub(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64) -> Result[Vec[Node], ReErr] {
+    let mut items: Vec[Vec[Node]] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let first = nested == 0 and items.len() == 0;
+        let item = parse_seq(mut src, mut st, verbose, nested + 1, first)?;
+        items.push(item);
+        if not src.take(124)? {
+            break;
+        }
+        if nested == 0 {
+            verbose = (st.flags & flag_x()) != 0;
+        }
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().unwrap());
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node.Branch(items));
+    Ok(out)
+}
+
+// _parse_flags: None (as Err-free Ok(None)) for global flags, else the
+// flags turned on and off.
+fn parse_flags(src: mut ref Tokenizer, st: mut ref ParseState, first_char: T) -> Result[Option[(i64, i64)], ReErr] {
+    let mut ch = first_char;
+    let mut add = 0;
+    let mut del = 0;
+    if not tok_is(ch, 45) {
+        loop {
+            let flag = flag_value(ch.a);
+            if ch.a == 76 {
+                return Err(src.error("bad inline flags: cannot use 'L' flag with a str pattern".to_string(), 0));
+            }
+            add = add | flag;
+            if (flag & type_flags()) != 0 and (add & type_flags()) != flag {
+                return Err(src.error("bad inline flags: flags 'a', 'u' and 'L' are incompatible".to_string(), 0));
+            }
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing -, : or )".to_string(), 0));
+            }
+            if tok_is(ch, 41) or tok_is(ch, 45) or tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing -, : or )" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if tok_is(ch, 41) {
+        st.flags = st.flags | add;
+        return Ok(None);
+    }
+    if tok_is(ch, 45) {
+        ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("missing flag".to_string(), 0));
+        }
+        if ch.n != 1 or flag_value(ch.a) == 0 {
+            let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing flag" };
+            return Err(src.error(msg.to_string(), ch.n));
+        }
+        loop {
+            let flag = flag_value(ch.a);
+            if (flag & type_flags()) != 0 {
+                return Err(src.error("bad inline flags: cannot turn off flags 'a', 'u' and 'L'".to_string(), 0));
+            }
+            del = del | flag;
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing :".to_string(), 0));
+            }
+            if tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing :" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if (add & del) != 0 {
+        return Err(src.error("bad inline flags: flag turned on and off".to_string(), 1));
+    }
+    Ok(Some((add, del)))
+}
+
+fn is_alpha(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr] {
+    let here = src.tell() - 1;
+    let mut set: Vec[Item] = Vec.new();
+    let negate = src.take(94)?;
+    loop {
+        let this = src.get()?;
+        if this.n == 0 {
+            return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+        }
+        if tok_is(this, 93) and set.len() > 0 {
+            break;
+        }
+        let code1 = if this.n == 2 { class_escape(mut src, this)? } else { Item.Lit(this.a) };
+        if src.take(45)? {
+            let that = src.get()?;
+            if that.n == 0 {
+                return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+            }
+            if tok_is(that, 93) {
+                set.push(code1);
+                set.push(Item.Lit(45));
+                break;
+            }
+            let code2 = if that.n == 2 { class_escape(mut src, that)? } else { Item.Lit(that.a) };
+            let text = f"{to_string(tok_text(this))}-{to_string(tok_text(that))}";
+            let offset = this.n + 1 + that.n;
+            let lo = match code1 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            let hi = match code2 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            if lo < 0 or hi < 0 or hi < lo {
+                return Err(src.error(f"bad character range {text}", offset));
+            }
+            set.push(Item.Range(lo, hi));
+        } else {
+            set.push(code1);
+        }
+    }
+    if set.len() == 1 {
+        let only = ref set[0];
+        if let Item.Lit(c) = only {
+            if negate {
+                out.push(Node.NotLit(*c));
+            } else {
+                out.push(Node.Lit(*c));
+            }
+            return Ok(());
+        }
+    }
+    out.push(Node.In(set, negate));
+    Ok(())
+}
+
+// The quantifier just read (its first character is `this`), applied to
+// the last item. Returns false when `{` turned out to be a literal.
+fn parse_repeat(src: mut ref Tokenizer, this: T, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let here = src.tell();
+    let mut min = 0;
+    let mut max = maxrepeat();
+    if tok_is(this, 63) {
+        max = 1;
+    } else if tok_is(this, 43) {
+        min = 1;
+    } else if tok_is(this, 123) {
+        if tok_is(src.next, 125) {
+            out.push(Node.Lit(123));
+            return Ok(false);
+        }
+        let mut lo: Vec[i64] = Vec.new();
+        let mut hi: Vec[i64] = Vec.new();
+        while src.next.n == 1 and is_dec(src.next.a) {
+            lo.push(src.get()?.a);
+        }
+        if src.take(44)? {
+            while src.next.n == 1 and is_dec(src.next.a) {
+                hi.push(src.get()?.a);
+            }
+        } else {
+            hi = lo.clone();
+        }
+        if not src.take(125)? {
+            out.push(Node.Lit(123));
+            src.seek(here)?;
+            return Ok(false);
+        }
+        if lo.len() > 0 {
+            if lo.len() > 10 or digits_value(lo, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            min = digits_value(lo, 0, 10);
+        }
+        if hi.len() > 0 {
+            if hi.len() > 10 or digits_value(hi, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            max = digits_value(hi, 0, 10);
+            if max < min {
+                return Err(src.error("min repeat greater than max repeat".to_string(), src.tell() - here));
+            }
+        }
+    }
+    if out.len() == 0 or is_at(out[out.len() - 1]) {
+        return Err(src.error("nothing to repeat".to_string(), src.tell() - here + 1));
+    }
+    if is_repeat(out[out.len() - 1]) {
+        return Err(src.error("multiple repeat".to_string(), src.tell() - here + 1));
+    }
+    let last = out.pop().unwrap();
+    let mut body: Vec[Node] = Vec.new();
+    match last {
+        Node.Group(0, 0, 0, p) => body = p,
+        other => body.push(other),
+    }
+    let kind = if src.take(63)? { 1 } else if src.take(43)? { 2 } else { 0 };
+    out.push(Node.Repeat(kind, min, max, body));
+    Ok(true)
+}
+
+fn parse_seq(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64, first: bool) -> Result[Vec[Node], ReErr] {
+    let mut out: Vec[Node] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let this = src.next;
+        if this.n == 0 or tok_is(this, 124) or tok_is(this, 41) {
+            break;
+        }
+        src.advance()?;
+        if verbose {
+            if this.n == 1 and (this.a == 32 or (this.a >= 9 and this.a <= 13)) {
+                continue;
+            }
+            if tok_is(this, 35) {
+                loop {
+                    let t = src.get()?;
+                    if t.n == 0 or tok_is(t, 10) {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        if this.n == 2 {
+            let node = escape(mut src, this, st)?;
+            out.push(node);
+            continue;
+        }
+        let c = this.a;
+        if c == 91 {
+            parse_set(mut src, mut out)?;
+        } else if c == 42 or c == 43 or c == 63 or c == 123 {
+            parse_repeat(mut src, this, mut out)?;
+        } else if c == 46 {
+            out.push(Node.Any);
+        } else if c == 94 {
+            out.push(Node.At(at_beginning()));
+        } else if c == 36 {
+            out.push(Node.At(at_end()));
+        } else if c == 40 {
+            if parse_group(mut src, mut st, mut verbose, nested, first, mut out)? {
+                continue;
+            }
+        } else {
+            out.push(Node.Lit(c));
+        }
+    }
+    Ok(out)
+}
+
+// `(` and what follows. Returns true for a construct that adds nothing
+// (a comment, global flags).
+fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref bool, nested: i64, first: bool, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let start = src.tell() - 1;
+    let mut capture = true;
+    let mut atomic = false;
+    let mut name: Vec[i64] = Vec.new();
+    let mut named = false;
+    let mut add = 0;
+    let mut del = 0;
+    if src.take(63)? {
+        let ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("unexpected end of pattern".to_string(), 0));
+        }
+        if tok_is(ch, 80) {
+            if src.take(60)? {
+                name = src.getuntil(62, "group name")?;
+                src.checkgroupname(name, 1)?;
+                named = true;
+            } else if src.take(61)? {
+                let ref_name = src.getuntil(41, "group name")?;
+                src.checkgroupname(ref_name, 1)?;
+                let gid = st.group_of(ref_name);
+                if gid < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(ref_name)}", ref_name.len() + 1));
+                }
+                if not st.checkgroup(gid) {
+                    return Err(src.error("cannot refer to an open group".to_string(), ref_name.len() + 1));
+                }
+                st.checklookbehindgroup(gid, src)?;
+                out.push(Node.GroupRef(gid));
+                return Ok(true);
+            } else {
+                let c2 = src.get()?;
+                if c2.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                return Err(src.error(f"unknown extension ?P{to_string(tok_text(c2))}", c2.n + 2));
+            }
+        } else if tok_is(ch, 58) {
+            capture = false;
+        } else if tok_is(ch, 35) {
+            loop {
+                if src.next.n == 0 {
+                    return Err(src.error("missing ), unterminated comment".to_string(), src.tell() - start));
+                }
+                if tok_is(src.get()?, 41) {
+                    break;
+                }
+            }
+            return Ok(true);
+        } else if tok_is(ch, 61) or tok_is(ch, 33) or tok_is(ch, 60) {
+            let mut kind = ch;
+            let mut dir = 1;
+            let mut outer_lookbehind = 0;
+            if tok_is(ch, 60) {
+                kind = src.get()?;
+                if kind.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                if not (tok_is(kind, 61) or tok_is(kind, 33)) {
+                    return Err(src.error(f"unknown extension ?<{to_string(tok_text(kind))}", kind.n + 2));
+                }
+                dir = -1;
+                outer_lookbehind = st.lookbehind_groups;
+                if outer_lookbehind < 0 {
+                    st.lookbehind_groups = st.groups();
+                }
+            }
+            let p = parse_sub(mut src, mut st, *verbose, nested + 1)?;
+            if dir < 0 and outer_lookbehind < 0 {
+                st.lookbehind_groups = -1;
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            if tok_is(kind, 61) {
+                out.push(Node.Assert(dir, false, p));
+            } else if p.len() > 0 {
+                out.push(Node.Assert(dir, true, p));
+            } else {
+                out.push(Node.Failure);
+            }
+            return Ok(true);
+        } else if tok_is(ch, 40) {
+            let condname = src.getuntil(41, "group name")?;
+            let mut condgroup = 0;
+            if not is_ascii_decimal(condname) {
+                src.checkgroupname(condname, 1)?;
+                condgroup = st.group_of(condname);
+                if condgroup < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(condname)}", condname.len() + 1));
+                }
+            } else {
+                if condname.len() > 10 {
+                    return Err(src.error(f"invalid group reference {to_string(condname)}", condname.len() + 1));
+                }
+                condgroup = digits_value(condname, 0, 10);
+                if condgroup == 0 {
+                    return Err(src.error("bad group number".to_string(), condname.len() + 1));
+                }
+                if condgroup >= maxgroups() {
+                    return Err(src.error(f"invalid group reference {condgroup}", condname.len() + 1));
+                }
+                let mut seen = false;
+                for (g, _) in st.refpos.iter() {
+                    if *g == condgroup {
+                        seen = true;
+                    }
+                }
+                if not seen {
+                    st.refpos.push((condgroup, src.tell() - condname.len() - 1));
+                }
+            }
+            st.checklookbehindgroup(condgroup, src)?;
+            let yes = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+            let mut no: Vec[Node] = Vec.new();
+            if src.take(124)? {
+                no = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+                if tok_is(src.next, 124) {
+                    return Err(src.error("conditional backref with more than two branches".to_string(), 0));
+                }
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            out.push(Node.Exists(condgroup, yes, no));
+            return Ok(true);
+        } else if tok_is(ch, 62) {
+            capture = false;
+            atomic = true;
+        } else if (ch.n == 1 and flag_value(ch.a) != 0) or tok_is(ch, 45) {
+            match parse_flags(mut src, mut st, ch)? {
+                None => {
+                    if not first or out.len() > 0 {
+                        return Err(src.error("global flags not at the start of the expression".to_string(), src.tell() - start));
+                    }
+                    *verbose = (st.flags & flag_x()) != 0;
+                    return Ok(true);
+                }
+                Some((a, d)) => {
+                    add = a;
+                    del = d;
+                    capture = false;
+                }
+            }
+        } else {
+            return Err(src.error(f"unknown extension ?{to_string(tok_text(ch))}", ch.n + 1));
+        }
+    }
+    let mut group = 0;
+    if capture {
+        group = st.groups();
+        st.closed.push(false);
+        st.widths.push(Width { lo: 0, hi: 0 });
+        if named {
+            let was = st.group_of(name);
+            if was >= 0 {
+                return Err(src.error(f"redefinition of group name {repr_of(name)} as group {group}; was group {was}", name.len() + 1));
+            }
+            st.names.push((name.clone(), group));
+        }
+    }
+    let sub_verbose = (*verbose or (add & flag_x()) != 0) and (del & flag_x()) == 0;
+    let p = parse_sub(mut src, mut st, sub_verbose, nested + 1)?;
+    if not src.take(41)? {
+        return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+    }
+    if group > 0 {
+        let w = width_of(st.widths, p);
+        st.widths[group] = w;
+        st.closed[group] = true;
+    }
+    if atomic {
+        out.push(Node.Atomic(p));
+    } else {
+        out.push(Node.Group(group, add, del, p));
+    }
+    Ok(false)
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    flags: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+    widths: Vec[Width],
+}
+
+fn parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
+    let mut src = new_tokenizer(pattern)?;
+    let mut st = ParseState {
+        flags: flags,
+        names: Vec.new(),
+        closed: Vec.new(),
+        widths: Vec.new(),
+        lookbehind_groups: -1,
+        refpos: Vec.new(),
+    };
+    // group 0 is the whole match
+    st.closed.push(true);
+    st.widths.push(Width { lo: 0, hi: 0 });
+    let nodes = parse_sub(mut src, mut st, (flags & flag_x()) != 0, 0)?;
+    if (st.flags & flag_a()) != 0 and (st.flags & flag_u()) != 0 {
+        return Err(other_error("ValueError", "ASCII and UNICODE flags are incompatible".to_string()));
+    }
+    if src.next.n != 0 {
+        return Err(src.error("unbalanced parenthesis".to_string(), 0));
+    }
+    for (g, pos) in st.refpos.iter() {
+        if *g >= st.groups() {
+            return Err(re_error(f"invalid group reference {*g}", *pos));
+        }
+    }
+    let groups = st.groups() - 1;
+    Ok(Parsed { nodes: nodes, flags: st.flags, groups: groups, names: st.names, widths: st.widths })
+}
+
+// ---------------------------------------------------------- compiler
+
+enum Op {
+    // character (lowered when case-insensitive), case-insensitive, ASCII
+    Lit(i64, bool, bool),
+    NotLit(i64, bool, bool),
+    Any,
+    AnyAll,
+    // set, case-insensitive, ASCII-only categories
+    In(i64, bool, bool),
+    // anchor kind, ASCII-only word boundary
+    At(i64, bool),
+    Mark(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    // repeat register, the Until it starts at
+    RepInit(i64, i64),
+    // register, min, max, greedy, body, exit
+    Until(i64, i64, i64, bool, i64, i64),
+    Ref(i64, bool, bool),
+    // lookbehind width (-1 for lookahead), negative, sub-program, next
+    Look(i64, bool, i64, i64),
+    Atomic(i64, i64),
+    Exists(i64, i64),
+    Fail,
+    Succeed,
+    Match,
+}
+
+struct Program {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+}
+
+struct CharSet {
+    items: Vec[Item],
+    negate: bool,
+}
+
+fn combine(flags: i64, add: i64, del: i64) -> i64 {
+    let mut f = flags;
+    if (add & type_flags()) != 0 {
+        f = f & (0x7FFFFFFF ^ type_flags());
+    }
+    (f | add) & (0x7FFFFFFF ^ del)
+}
+
+struct Compiler {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+}
+
+impl Compiler {
+    fn emit(mut ref self, op: own Op) -> i64 {
+        self.ops.push(op);
+        self.ops.len() - 1
+    }
+
+    fn here(ref self) -> i64 {
+        self.ops.len()
+    }
+
+    fn compile(mut ref self, p: ref Parsed, nodes: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let icase = (flags & flag_i()) != 0;
+        let ascii = (flags & flag_a()) != 0;
+        for n in nodes.iter() {
+            match n {
+                Node.Lit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.Lit(v, icase, ascii));
+                }
+                Node.NotLit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.NotLit(v, icase, ascii));
+                }
+                Node.Any => {
+                    if (flags & flag_s()) != 0 {
+                        self.emit(Op.AnyAll);
+                    } else {
+                        self.emit(Op.Any);
+                    }
+                }
+                Node.In(items, negate) => {
+                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    let idx = self.sets.len() - 1;
+                    self.emit(Op.In(idx, icase, ascii));
+                }
+                Node.At(kind) => {
+                    let mut k = *kind;
+                    if (flags & flag_m()) != 0 {
+                        if k == at_beginning() {
+                            k = at_beginning_line();
+                        } else if k == at_end() {
+                            k = at_end_line();
+                        }
+                    }
+                    self.emit(Op.At(k, ascii));
+                }
+                Node.Branch(items) => {
+                    let mut ends: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < items.len() {
+                        if i + 1 < items.len() {
+                            let split = self.emit(Op.Fail);
+                            self.compile(p, items[i], flags)?;
+                            ends.push(self.emit(Op.Fail));
+                            let next = self.here();
+                            self.ops[split] = Op.Split(split + 1, next);
+                        } else {
+                            self.compile(p, items[i], flags)?;
+                        }
+                        i += 1;
+                    }
+                    let end = self.here();
+                    for at in ends {
+                        self.ops[at] = Op.Jmp(end);
+                    }
+                }
+                Node.Group(g, add, off, body) => {
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g));
+                    }
+                    self.compile(p, body, combine(flags, *add, *off))?;
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g + 1));
+                    }
+                }
+                Node.Repeat(kind, min, max, body) => {
+                    if *kind == 2 {
+                        let at = self.emit(Op.Fail);
+                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.emit(Op.Succeed);
+                        let next = self.here();
+                        self.ops[at] = Op.Atomic(at + 1, next);
+                    } else {
+                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                    }
+                }
+                Node.Atomic(body) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Atomic(at + 1, next);
+                }
+                Node.Assert(dir, negative, body) => {
+                    let mut width = -1;
+                    if *dir < 0 {
+                        let w = width_of(p.widths, body);
+                        if w.lo != w.hi {
+                            return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
+                        }
+                        width = w.lo;
+                    }
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                }
+                Node.GroupRef(g) => {
+                    self.emit(Op.Ref(*g, icase, ascii));
+                }
+                Node.Exists(g, yes, no) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, yes, flags)?;
+                    if no.len() > 0 {
+                        let jump = self.emit(Op.Fail);
+                        let no_pc = self.here();
+                        self.compile(p, no, flags)?;
+                        let end = self.here();
+                        self.ops[jump] = Op.Jmp(end);
+                        self.ops[at] = Op.Exists(*g, no_pc);
+                    } else {
+                        let end = self.here();
+                        self.ops[at] = Op.Exists(*g, end);
+                    }
+                }
+                Node.Failure => {
+                    self.emit(Op.Fail);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_repeat(mut ref self, p: ref Parsed, min: i64, max: i64, greedy: bool, body: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let r = self.repeats;
+        self.repeats += 1;
+        let init = self.emit(Op.Fail);
+        self.compile(p, body, flags)?;
+        let until = self.emit(Op.Fail);
+        self.ops[init] = Op.RepInit(r, until);
+        self.ops[until] = Op.Until(r, min, max, greedy, init + 1, until + 1);
+        Ok(())
+    }
+}
+
+fn compile(pattern: ref Vec[i64], flags: i64) -> Result[Program, ReErr] {
+    let p = parse(pattern, flags)?;
+    let mut c = Compiler { ops: Vec.new(), sets: Vec.new(), repeats: 0 };
+    c.compile(p, p.nodes, p.flags)?;
+    c.emit(Op.Match);
+    Ok(Program { ops: c.ops, sets: c.sets, repeats: c.repeats, groups: p.groups, names: p.names })
+}
+
+// ----------------------------------------------------------- matcher
+
+struct Undo {
+    kind: i64,
+    idx: i64,
+    old: i64,
+}
+
+struct Choice {
+    pc: i64,
+    pos: i64,
+    trail: i64,
+    // 0: resume at pc; 1: a lazy repeat's Until, after its tail failed
+    mode: i64,
+}
+
+struct Matcher {
+    s: Vec[i64],
+    marks: Vec[i64],
+    counts: Vec[i64],
+    lasts: Vec[i64],
+    lastindex: i64,
+    trail: Vec[Undo],
+    start: i64,
+    must_advance: bool,
+    match_all: bool,
+}
+
+impl Matcher {
+    fn set_mark(mut ref self, slot: i64, v: i64) {
+        self.trail.push(Undo { kind: 0, idx: slot, old: self.marks[slot] });
+        self.marks[slot] = v;
+    }
+
+    fn set_count(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 1, idx: r, old: self.counts[r] });
+        self.counts[r] = v;
+    }
+
+    fn set_last(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 2, idx: r, old: self.lasts[r] });
+        self.lasts[r] = v;
+    }
+
+    fn set_lastindex(mut ref self, v: i64) {
+        self.trail.push(Undo { kind: 3, idx: 0, old: self.lastindex });
+        self.lastindex = v;
+    }
+
+    fn undo_to(mut ref self, len: i64) {
+        while self.trail.len() > len {
+            let u = self.trail.pop().unwrap();
+            if u.kind == 0 {
+                self.marks[u.idx] = u.old;
+            } else if u.kind == 1 {
+                self.counts[u.idx] = u.old;
+            } else if u.kind == 2 {
+                self.lasts[u.idx] = u.old;
+            } else {
+                self.lastindex = u.old;
+            }
+        }
+    }
+
+    // A group that has both marks, the end not before the start.
+    fn group_span(ref self, g: i64) -> (i64, i64) {
+        let a = self.marks[2 * g];
+        let b = self.marks[2 * g + 1];
+        if a < 0 or b < 0 or b < a {
+            return (-1, -1);
+        }
+        (a, b)
+    }
+
+    fn at(ref self, kind: i64, ascii: bool, pos: i64) -> bool {
+        let n = self.s.len();
+        if kind == 0 or kind == 2 {
+            return pos == 0;
+        }
+        if kind == 1 {
+            return pos == 0 or self.s[pos - 1] == 10;
+        }
+        if kind == 3 {
+            return pos == n or (pos == n - 1 and self.s[pos] == 10);
+        }
+        if kind == 4 {
+            return pos == n or self.s[pos] == 10;
+        }
+        if kind == 5 {
+            return pos == n;
+        }
+        if n == 0 {
+            return false;
+        }
+        let before = pos > 0 and is_word(self.s[pos - 1], ascii);
+        let after = pos < n and is_word(self.s[pos], ascii);
+        if kind == 6 { before != after } else { before == after }
+    }
+
+    // Runs the program from pc at pos, backtracking through its own
+    // choices only. Returns where it succeeded, or -1.
+    fn run(mut ref self, prog: ref Program, pc0: i64, pos0: i64, top: bool) -> i64 {
+        let base = self.trail.len();
+        let mut choices: Vec[Choice] = Vec.new();
+        let mut pc = pc0;
+        let mut pos = pos0;
+        let mut mode = 0;
+        loop {
+            let mut ok = true;
+            let op = ref prog.ops[pc];
+            if mode == 1 {
+                // a lazy repeat whose tail failed: try one more item
+                mode = 0;
+                ok = false;
+                if let Op.Until(r, _, max, _, body, _) = op {
+                    let count = self.counts[*r] + 1;
+                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
+                        self.set_count(*r, count);
+                        self.set_last(*r, pos);
+                        pc = *body;
+                        ok = true;
+                    }
+                }
+                if ok {
+                    continue;
+                }
+            } else {
+                match op {
+                    Op.Lit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.NotLit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Any => {
+                        if pos < self.s.len() and self.s[pos] != 10 {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.AnyAll => {
+                        if pos < self.s.len() {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.In(set, icase, ascii) => {
+                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.At(kind, ascii) => {
+                        if self.at(*kind, *ascii, pos) {
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Mark(slot) => {
+                        self.set_mark(*slot, pos);
+                        if (*slot & 1) == 1 {
+                            self.set_lastindex(*slot / 2);
+                        }
+                        pc += 1;
+                    }
+                    Op.Split(a, b) => {
+                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = *a;
+                    }
+                    Op.Jmp(a) => pc = *a,
+                    Op.RepInit(r, until) => {
+                        self.set_count(*r, -1);
+                        self.set_last(*r, -1);
+                        pc = *until;
+                    }
+                    Op.Until(r, min, max, greedy, body, exit) => {
+                        let count = self.counts[*r] + 1;
+                        if count < *min {
+                            self.set_count(*r, count);
+                            pc = *body;
+                        } else if *greedy {
+                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
+                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(*r, count);
+                                self.set_last(*r, pos);
+                                pc = *body;
+                            } else {
+                                pc = *exit;
+                            }
+                        } else {
+                            choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
+                            pc = *exit;
+                        }
+                    }
+                    Op.Ref(g, icase, ascii) => {
+                        let (a, b) = self.group_span(*g);
+                        if a < 0 {
+                            ok = false;
+                        } else {
+                            let len = b - a;
+                            if pos + len > self.s.len() {
+                                ok = false;
+                            } else {
+                                let mut k = 0;
+                                while k < len {
+                                    let x = self.s[a + k];
+                                    let y = self.s[pos + k];
+                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    if not eq {
+                                        ok = false;
+                                        break;
+                                    }
+                                    k += 1;
+                                }
+                                if ok {
+                                    pos += len;
+                                    pc += 1;
+                                }
+                            }
+                        }
+                    }
+                    Op.Look(width, negative, sub, next) => {
+                        let mark = self.trail.len();
+                        let from = if *width < 0 { pos } else { pos - *width };
+                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
+                        if *negative {
+                            self.undo_to(mark);
+                            if found {
+                                ok = false;
+                            } else {
+                                pc = *next;
+                            }
+                        } else if found {
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Atomic(sub, next) => {
+                        let end = self.run(prog, *sub, pos, false);
+                        if end >= 0 {
+                            pos = end;
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Exists(g, no) => {
+                        let (a, _) = self.group_span(*g);
+                        if a >= 0 {
+                            pc += 1;
+                        } else {
+                            pc = *no;
+                        }
+                    }
+                    Op.Fail => ok = false,
+                    Op.Succeed => return pos,
+                    Op.Match => {
+                        if top and ((self.match_all and pos != self.s.len()) or (self.must_advance and pos == self.start)) {
+                            ok = false;
+                        } else {
+                            return pos;
+                        }
+                    }
+                }
+            }
+            if not ok {
+                match choices.pop() {
+                    Some(ch) => {
+                        self.undo_to(ch.trail);
+                        pc = ch.pc;
+                        pos = ch.pos;
+                        mode = ch.mode;
+                    }
+                    None => {
+                        self.undo_to(base);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
+    for item in set.items.iter() {
+        let hit = match item {
+            Item.Lit(l) => c == *l,
+            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Cat(k) => {
+                let kind = *k;
+                if kind == 0 {
+                    if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
+                } else if kind == 1 {
+                    if ascii { not (c >= 48 and c <= 57) } else { not is_decimal(c) }
+                } else if kind == 2 {
+                    is_space(c, ascii)
+                } else if kind == 3 {
+                    not is_space(c, ascii)
+                } else if kind == 4 {
+                    is_word(c, ascii)
+                } else {
+                    not is_word(c, ascii)
+                }
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    false
+}
+
+// Under IGNORECASE sre lowercases the set when it compiles it and tests
+// the lowercased character; a character is in the lowered set if it, or
+// its uppercase, is in the set and lowers to it.
+fn in_set(set: ref CharSet, c: i64, icase: bool, ascii: bool) -> bool {
+    let mut hit = false;
+    if icase {
+        let lo = lower(c, ascii);
+        if lower(lo, ascii) == lo and in_items(set, lo, ascii) {
+            hit = true;
+        }
+        let up = upper(lo, ascii);
+        if not hit and lower(up, ascii) == lo and in_items(set, up, ascii) {
+            hit = true;
+        }
+    } else {
+        hit = in_items(set, c, ascii);
+    }
+    hit != set.negate
+}
+
+// ------------------------------------------------------- the module
+
+struct Found {
+    start: i64,
+    end: i64,
+    // group spans, (-1, -1) when a group did not take part
+    spans: Vec[(i64, i64)],
+    lastindex: i64,
+}
+
+fn new_matcher(prog: ref Program, s: ref Vec[i64]) -> Matcher {
+    let mut marks: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 * (prog.groups + 1) {
+        marks.push(-1);
+        k += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut lasts: Vec[i64] = Vec.new();
+    k = 0;
+    while k < prog.repeats {
+        counts.push(-1);
+        lasts.push(-1);
+        k += 1;
+    }
+    Matcher {
+        s: s.clone(),
+        marks: marks,
+        counts: counts,
+        lasts: lasts,
+        lastindex: -1,
+        trail: Vec.new(),
+        start: 0,
+        must_advance: false,
+        match_all: false,
+    }
+}
+
+// sre_search from `from` (or one attempt there for match and
+// fullmatch: mode 1 and 2).
+fn find(m: mut ref Matcher, prog: ref Program, from: i64, must_advance: bool, mode: i64) -> Option[Found] {
+    let mut start = from;
+    while start <= m.s.len() {
+        let mut k = 0;
+        while k < m.marks.len() {
+            m.marks[k] = -1;
+            k += 1;
+        }
+        m.lastindex = -1;
+        m.trail.clear();
+        m.start = start;
+        m.must_advance = must_advance and start == from;
+        m.match_all = mode == 2;
+        let end = m.run(prog, 0, start, true);
+        if end >= 0 {
+            let mut spans: Vec[(i64, i64)] = Vec.new();
+            let mut g = 1;
+            while g <= prog.groups {
+                spans.push(m.group_span(g));
+                g += 1;
+            }
+            return Some(Found { start: start, end: end, spans: spans, lastindex: m.lastindex });
+        }
+        if mode != 0 {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+
+// All the matches finditer gives: each search starts where the last
+// match ended, and must move on past an empty one.
+fn all_matches(prog: ref Program, s: ref Vec[i64], limit: i64) -> Vec[Found] {
+    let mut m = new_matcher(prog, s);
+    let mut out: Vec[Found] = Vec.new();
+    let mut pos = 0;
+    let mut must_advance = false;
+    while pos <= s.len() and (limit == 0 or out.len() < limit) {
+        match find(mut m, prog, pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn group_text(s: ref Vec[i64], span: (i64, i64), out: mut ref Vec[i64]) {
+    let (a, b) = span;
+    if a < 0 {
+        push_ascii(mut out, "None");
+    } else {
+        str_repr(slice(s, a, b), mut out);
+    }
+}
+
+fn span_text(span: (i64, i64)) -> String {
+    let (a, b) = span;
+    f"({a}, {b})"
+}
+
+fn show_match(prog: ref Program, s: ref Vec[i64], found: ref Option[Found], out: mut ref Vec[i64]) {
+    let m = match found {
+        Some(m) => m,
+        None => {
+            push_ascii(mut out, "  None\n");
+            return;
+        }
+    };
+    push_ascii(mut out, f"  span={span_text((m.start, m.end))} match=");
+    str_repr(slice(s, m.start, m.end), mut out);
+    out.push(10);
+    if prog.groups > 0 {
+        push_ascii(mut out, "  groups=(");
+        let mut g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            group_text(s, m.spans[g], mut out);
+            g += 1;
+        }
+        if m.spans.len() == 1 {
+            push_ascii(mut out, ",");
+        }
+        push_ascii(mut out, ")\n  spans=[");
+        g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            push_ascii(mut out, span_text(m.spans[g]));
+            g += 1;
+        }
+        push_ascii(mut out, "]\n");
+    }
+    if prog.names.len() > 0 {
+        push_ascii(mut out, "  named=");
+        group_dict(prog, s, m, mut out);
+        out.push(10);
+    }
+}
+
+fn group_dict(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    out.push(123);
+    let mut k = 0;
+    while k < prog.names.len() {
+        if k > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (name, g) = ref prog.names[k];
+        str_repr(name, mut out);
+        push_ascii(mut out, ": ");
+        group_text(s, m.spans[g - 1], mut out);
+        k += 1;
+    }
+    out.push(125);
+}
+
+// findall's item: the match, the one group, or a tuple of the groups,
+// with '' for a group that did not take part.
+fn findall_item(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    if prog.groups == 0 {
+        str_repr(slice(s, m.start, m.end), mut out);
+        return;
+    }
+    if prog.groups > 1 {
+        out.push(40);
+    }
+    let mut g = 0;
+    while g < m.spans.len() {
+        if g > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (a, b) = m.spans[g];
+        if a < 0 {
+            push_ascii(mut out, "''");
+        } else {
+            str_repr(slice(s, a, b), mut out);
+        }
+        g += 1;
+    }
+    if prog.groups > 1 {
+        out.push(41);
+    }
+}
+
+// A replacement template: literal text and group numbers.
+enum Piece {
+    Text(Vec[i64]),
+    Group(i64),
+}
+
+// _parser.parse_template.
+fn parse_template(repl: ref Vec[i64], prog: ref Program) -> Result[Vec[Piece], ReErr] {
+    let mut s = new_tokenizer(repl)?;
+    let mut pieces: Vec[Piece] = Vec.new();
+    let mut literal: Vec[i64] = Vec.new();
+    loop {
+        let this = s.get()?;
+        if this.n == 0 {
+            break;
+        }
+        if this.n == 1 {
+            literal.push(this.a);
+            continue;
+        }
+        let c = this.b;
+        let mut index = -1;
+        let mut offset = 0;
+        if c == 103 {
+            if not s.take(60)? {
+                return Err(s.error("missing <".to_string(), 0));
+            }
+            let name = s.getuntil(62, "group name")?;
+            if not is_ascii_decimal(name) {
+                s.checkgroupname(name, 1)?;
+                let mut found = -1;
+                for (n, g) in prog.names.iter() {
+                    if same(n, name) {
+                        found = *g;
+                    }
+                }
+                if found < 0 {
+                    return Err(other_error("IndexError", f"unknown group name {repr_of(name)}"));
+                }
+                index = found;
+            } else {
+                if name.len() > 10 or digits_value(name, 0, 10) >= maxgroups() {
+                    return Err(s.error(f"invalid group reference {to_string(name)}", name.len() + 1));
+                }
+                index = digits_value(name, 0, 10);
+            }
+            offset = name.len() + 1;
+        } else if c == 48 {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_oct(s.next.a) {
+                text.push(s.get()?.a);
+                if s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                }
+            }
+            literal.push(digits_value(text, 1, 8) & 0xFF);
+            continue;
+        } else if is_dec(c) {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_dec(s.next.a) {
+                text.push(s.get()?.a);
+                if is_oct(c) and is_oct(text[2]) and s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                    let v = digits_value(text, 1, 8);
+                    if v > 0o377 {
+                        return Err(s.error(f"octal escape value {to_string(text)} outside of range 0-0o377", text.len()));
+                    }
+                    literal.push(v);
+                    continue;
+                }
+            }
+            index = digits_value(text, 1, 10);
+            offset = text.len() - 1;
+        } else {
+            let e = escape_value(this);
+            if e >= 0 {
+                literal.push(e);
+            } else if is_ascii_letter(c) {
+                return Err(s.error(f"bad escape {to_string(tok_text(this))}", 2));
+            } else {
+                literal.push(92);
+                literal.push(c);
+            }
+            continue;
+        }
+        if index > prog.groups {
+            return Err(s.error(f"invalid group reference {index}", offset));
+        }
+        pieces.push(Piece.Text(literal));
+        literal = Vec.new();
+        pieces.push(Piece.Group(index));
+    }
+    pieces.push(Piece.Text(literal));
+    Ok(pieces)
+}
+
+fn expand(pieces: ref Vec[Piece], s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    for piece in pieces.iter() {
+        match piece {
+            Piece.Text(t) => push_all(mut out, t),
+            Piece.Group(g) => {
+                let (a, b) = if *g == 0 { (m.start, m.end) } else { m.spans[*g - 1] };
+                if a >= 0 {
+                    push_all(mut out, slice(s, a, b));
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------- jobs
+
+fn flags_of(field: ref String) -> i64 {
+    let mut f = 0;
+    if field == "-" {
+        return 0;
+    }
+    for b in field.bytes() {
+        f = f | flag_value(b as i64);
+    }
+    f
+}
+
+fn unescape(s: ref String) -> Vec[i64] {
+    let c = codepoints(s.bytes());
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == 92 and i + 1 < c.len() and (c[i + 1] == 110 or c[i + 1] == 116 or c[i + 1] == 92) {
+            let n = c[i + 1];
+            out.push(if n == 110 { 10 } else if n == 116 { 9 } else { 92 });
+            i += 2;
+        } else {
+            out.push(c[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn subject(field: ref String) -> Result[Vec[i64], ReErr] {
+    if field.starts_with("@") {
+        let c = codepoints(field.bytes());
+        let name = to_string(slice(c, 1, c.len()));
+        return match fs.read_to_string(f"data/{name}") {
+            Ok(t) => Ok(codepoints(t.bytes())),
+            Err(e) => Err(other_error("FileNotFoundError", f"{e}")),
+        };
+    }
+    Ok(unescape(field))
+}
+
+fn run_case(f: ref Vec[String], out: mut ref Vec[i64]) -> Result[(), ReErr] {
+    let op = f[0].clone();
+    let prog = compile(codepoints(f[1].bytes()), flags_of(f[2]))?;
+    let s = subject(f[3])?;
+    if op == "compile" {
+        push_ascii(mut out, f"  groups={prog.groups} groupindex=");
+        out.push(123);
+        let mut k = 0;
+        while k < prog.names.len() {
+            if k > 0 {
+                push_ascii(mut out, ", ");
+            }
+            let (name, g) = ref prog.names[k];
+            str_repr(name, mut out);
+            push_ascii(mut out, f": {g}");
+            k += 1;
+        }
+        push_ascii(mut out, "}\n");
+    } else if op == "search" or op == "match" or op == "fullmatch" {
+        let mode = if op == "search" { 0 } else if op == "match" { 1 } else { 2 };
+        let mut m = new_matcher(prog, s);
+        let found = find(mut m, prog, 0, false, mode);
+        show_match(prog, s, found, mut out);
+    } else if op == "findall" {
+        push_ascii(mut out, "  [");
+        let ms = all_matches(prog, s, 0);
+        let mut k = 0;
+        while k < ms.len() {
+            if k > 0 {
+                push_ascii(mut out, ", ");
+            }
+            findall_item(prog, s, ms[k], mut out);
+            k += 1;
+        }
+        push_ascii(mut out, "]\n");
+    } else if op == "finditer" {
+        let ms = all_matches(prog, s, 0);
+        for m in ms.iter() {
+            push_ascii(mut out, f"  {span_text((m.start, m.end))} ");
+            if prog.names.len() > 0 {
+                group_dict(prog, s, m, mut out);
+            } else {
+                str_repr(slice(s, m.start, m.end), mut out);
+                push_ascii(mut out, " (");
+                let mut g = 0;
+                while g < m.spans.len() {
+                    if g > 0 {
+                        push_ascii(mut out, ", ");
+                    }
+                    group_text(s, m.spans[g], mut out);
+                    g += 1;
+                }
+                if m.spans.len() == 1 {
+                    push_ascii(mut out, ",");
+                }
+                push_ascii(mut out, ")");
+            }
+            out.push(10);
+        }
+    } else if op == "sub" {
+        let count = if f.len() > 5 { i64.parse(f[5].clone()).unwrap_or(0) } else { 0 };
+        let pieces = parse_template(codepoints(f[4].bytes()), prog)?;
+        let ms = all_matches(prog, s, count);
+        let mut result: Vec[i64] = Vec.new();
+        let mut i = 0;
+        for m in ms.iter() {
+            push_all(mut result, slice(s, i, m.start));
+            expand(pieces, s, m, mut result);
+            i = m.end;
+        }
+        push_all(mut result, slice(s, i, s.len()));
+        push_ascii(mut out, "  (");
+        str_repr(result, mut out);
+        push_ascii(mut out, f", {ms.len()})\n");
+    } else if op == "split" {
+        let maxsplit = if f.len() > 4 { i64.parse(f[4].clone()).unwrap_or(0) } else { 0 };
+        push_ascii(mut out, "  [");
+        let mut last = 0;
+        let ms = all_matches(prog, s, maxsplit);
+        for m in ms.iter() {
+            str_repr(slice(s, last, m.start), mut out);
+            for span in m.spans.iter() {
+                push_ascii(mut out, ", ");
+                group_text(s, *span, mut out);
+            }
+            push_ascii(mut out, ", ");
+            last = m.end;
+        }
+        str_repr(slice(s, last, s.len()), mut out);
+        push_ascii(mut out, "]\n");
+    } else if op == "tokens" {
+        let mut line = 1;
+        let ms = all_matches(prog, s, 0);
+        for m in ms.iter() {
+            let mut kind = "None".to_string();
+            for (name, g) in prog.names.iter() {
+                if *g == m.lastindex {
+                    kind = to_string(name);
+                }
+            }
+            if kind == "NEWLINE" {
+                line += 1;
+            } else if kind != "SKIP" and kind != "COMMENT" {
+                push_ascii(mut out, f"  {line} {kind} ");
+                str_repr(slice(s, m.start, m.end), mut out);
+                push_ascii(mut out, f" lastindex={m.lastindex}\n");
+            }
+        }
+    }
+    Ok(())
+}
+
+// --------------------------------------------------------------- data
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let cases = match fs.read_to_string("data/cases.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read cases.tsv: {e}");
+            return;
+        }
+    };
+    for case in cases.lines() {
+        let f: Vec[String] = case.split("\t").map(|p| p.to_string()).collect();
+        println(f"== {f.join(" | ")}");
+        let mut out: Vec[i64] = Vec.new();
+        match run_case(f, mut out) {
+            Ok(()) => print(to_string(out)),
+            Err(e) => {
+                print(to_string(out));
+                println(f"  {err_text(e)}");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------- data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("203.0.113.7 - - [09/Mar/2024:17:42:05 +0000] \"GET /menu HTTP/1.1\" 200 5120 \"-\" \"curl/8.5.0\"\n");
+    t.push_str("198.51.100.23 - ana [09/Mar/2024:17:42:06 +0000] \"POST /orders HTTP/1.1\" 201 312 \"https://cafe.example/menu\" \"Mozilla/5.0 (X11; Linux x86_64)\"\n");
+    t.push_str("192.0.2.44 - - [09/Mar/2024:17:42:07 +0000] \"GET /orders/9 HTTP/1.1\" 404 0 \"-\" \"Mozilla/5.0\"\n");
+    t.push_str("203.0.113.7 - - [09/Mar/2024:17:42:08 +0000] \"DELETE /orders/7 HTTP/2.0\" 204 - \"-\" \"curl/8.5.0\"\n");
+    t.push_str("10.0.0.5 - boø [09/Mar/2024:17:42:09 +0000] \"GET /search?q=cr%C3%A8me&page=2 HTTP/1.1\" 200 2048 \"-\" \"Mozilla/5.0\"\n");
+    t.push_str("garbage line without the usual fields\n");
+    t.push_str("2001:db8::1 - - [09/Mar/2024:17:42:10 +0000] \"GET /healthz HTTP/1.1\" 500 91 \"-\" \"kube-probe/1.29\"\n");
+    v.push(DataFile { path: "access.log".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("2024-03-09 17:42:05,123 INFO  [main] server started on port 8443\n");
+    t.push_str("2024-03-09 17:42:06,004 WARN  [pool-2] slow query took 1532ms: SELECT * FROM orders WHERE id = 42\n");
+    t.push_str("2024-03-09 17:42:07,500 ERROR [pool-1] payment failed for user=ana@example.com card=4111-1111-1111-1111\n");
+    t.push_str("2024-03-09 17:42:07,501 ERROR [pool-1] Traceback (most recent call last):\n");
+    t.push_str("2024-03-09 17:42:08,000 DEBUG [main] cache hit ratio 0.93\n");
+    t.push_str("2024-03-09 17:42:09,010 INFO  [http] GET /menu from 203.0.113.7 in 12ms\n");
+    t.push_str("2024-03-09 17:42:10,000 ERROR [pool-3] lost connection to db-2.internal:5432 (retry 3/5)\n");
+    t.push_str("contact: Zoë <zoe.k@cafe.example>, ops@cafe.example; bad: foo@, @bar.com\n");
+    v.push(DataFile { path: "app.log".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("total := price * (1 + rate_2) - 3.50\n");
+    t.push_str("IF total >= 100 THEN discount := 0.1; ENDIF\n");
+    t.push_str("name := 'O''Brien'  # a comment\n");
+    t.push_str("x := y <> z\n");
+    v.push(DataFile { path: "calc.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("search\tcat\t-\tconcatenate\n");
+    t.push_str("search\tCat\t-\tconcatenate\n");
+    t.push_str("search\tCat\ti\tconCATenate\n");
+    t.push_str("match\tcon\t-\tconcatenate\n");
+    t.push_str("match\tcat\t-\tconcatenate\n");
+    t.push_str("fullmatch\tcon\\w+\t-\tconcatenate\n");
+    t.push_str("fullmatch\tcon\\w+\t-\tconcatenate!\n");
+    t.push_str("search\ta.c\t-\ta\\nc abc\n");
+    t.push_str("search\ta.c\ts\ta\\nc abc\n");
+    t.push_str("findall\t[aeiou]\t-\tregular expression\n");
+    t.push_str("findall\t[^aeiou\\s]+\t-\tregular expression\n");
+    t.push_str("findall\t[a-cx-z]\t-\tabcdwxyz\n");
+    t.push_str("findall\t[-a]\t-\ta-b-c\n");
+    t.push_str("findall\t[a-]\t-\ta-b-c\n");
+    t.push_str("findall\t[]a]\t-\ta]b]\n");
+    t.push_str("findall\t[\\]\\-\\\\]\t-\ta]b-c\\\\d\n");
+    t.push_str("findall\t\\d+\t-\torder 42 of 1000, item ٣٤\n");
+    t.push_str("findall\t\\d+\ta\torder 42 of 1000, item ٣٤\n");
+    t.push_str("findall\t\\w+\t-\tnaïve café 東京 x_1\n");
+    t.push_str("findall\t\\w+\ta\tnaïve café 東京 x_1\n");
+    t.push_str("findall\t\\s+\t-\ta b\\tc\\n d\n");
+    t.push_str("findall\t\\S+\t-\t a b\\tc\\n d \n");
+    t.push_str("findall\t\\D+\t-\ta1b22c\n");
+    t.push_str("findall\t\\W+\t-\ta, b; c!\n");
+    t.push_str("findall\t[\\d.]+\t-\tv1.2.3 and 4.5\n");
+    t.push_str("findall\t[\\w.-]+@[\\w-]+\\.[\\w.]+\t-\t@app.log\n");
+    t.push_str("findall\t\\x41é\\101\\t\t-\tAéA\\t\n");
+    t.push_str("findall\t[\\x41-\\x43]\t-\tABCD\n");
+    t.push_str("search\t^b\t-\ta\\nb\n");
+    t.push_str("search\t^b\tm\ta\\nb\n");
+    t.push_str("findall\t^\\w+\tm\tone two\\nthree four\\nfive\n");
+    t.push_str("findall\t\\w+$\tm\tone two\\nthree four\\nfive\n");
+    t.push_str("findall\t\\w+$\t-\tone two\\nthree four\\n\n");
+    t.push_str("search\tfour$\t-\tthree four\\n\n");
+    t.push_str("search\tfour\\Z\t-\tthree four\\n\n");
+    t.push_str("search\t\\Athree\tm\tx\\nthree\n");
+    t.push_str("findall\t\\bcat\\b\t-\tcat concat cat's bobcat\n");
+    t.push_str("findall\t\\Bcat\\B\t-\tcat concat concatenate\n");
+    t.push_str("findall\t\\b\\w\t-\thello big world\n");
+    t.push_str("findall\t$\t-\ta\\nb\\n\n");
+    t.push_str("findall\t$\tm\ta\\nb\\n\n");
+    t.push_str("findall\t^\tm\ta\\nb\\n\n");
+    t.push_str("search\tab*\t-\tabbbc\n");
+    t.push_str("search\tab*?\t-\tabbbc\n");
+    t.push_str("search\tab+?\t-\tabbbc\n");
+    t.push_str("search\tab??\t-\tabbbc\n");
+    t.push_str("search\ta{2}\t-\taaaa\n");
+    t.push_str("search\ta{2,}\t-\taaaa\n");
+    t.push_str("search\ta{,2}\t-\taaaa\n");
+    t.push_str("search\ta{1,3}?\t-\taaaa\n");
+    t.push_str("search\ta{3,5}\t-\taa aaaaaaa\n");
+    t.push_str("findall\t\\d{2,3}\t-\t1 12 123 1234 12345\n");
+    t.push_str("findall\tx{0}y\t-\txy y\n");
+    t.push_str("search\ta{,}\t-\taaa\n");
+    t.push_str("search\ta{x}\t-\ta{x}\n");
+    t.push_str("search\ta{1,x}\t-\ta{1,x}\n");
+    t.push_str("search\ta*+a\t-\taaaa\n");
+    t.push_str("search\ta++b\t-\taaab\n");
+    t.push_str("search\t(?>a+)b\t-\taaab\n");
+    t.push_str("search\t(?>a+)a\t-\taaaa\n");
+    t.push_str("search\t(?>x|xy)z\t-\txyz\n");
+    t.push_str("search\t(?:x|xy)z\t-\txyz\n");
+    t.push_str("search\t\\d?+\\d\t-\t12\n");
+    t.push_str("search\t<.*>\t-\t<a><b>\n");
+    t.push_str("search\t<.*?>\t-\t<a><b>\n");
+    t.push_str("findall\t<[^>]*>\t-\t<a href='x'>link</a>\n");
+    t.push_str("search\t(\\w+)@(\\w+)\\.com\t-\tmail ana@example.com now\n");
+    t.push_str("search\t(?P<user>\\w+)@(?P<host>[\\w.]+)\t-\tmail ana@example.com now\n");
+    t.push_str("search\t(a)|(b)\t-\tb\n");
+    t.push_str("search\t(a)(b)?\t-\tac\n");
+    t.push_str("search\t(a|b)*c\t-\tabac\n");
+    t.push_str("search\t(a*)*b\t-\taab\n");
+    t.push_str("search\t(a*)+b\t-\taab\n");
+    t.push_str("search\t(a|)*b\t-\taab\n");
+    t.push_str("search\t(a?)*?b\t-\taab\n");
+    t.push_str("search\t((a)|b)+\t-\tab\n");
+    t.push_str("search\t(?:(\\d)\\.)+\t-\t1.2.3.x\n");
+    t.push_str("search\t(\\w)(\\w)?(\\w)?\t-\tab\n");
+    t.push_str("search\t(?P<a>x)(?P<b>y)?(?P<c>z)\t-\txz\n");
+    t.push_str("search\t(\\w+) \\1\t-\thello hello world\n");
+    t.push_str("search\t(?P<w>\\w+) (?P=w)\t-\tthe the cat\n");
+    t.push_str("search\t(a)\\1\ti\taA\n");
+    t.push_str("search\t(\\w+)\\s+\\1\\b\t-\tthis is is it\n");
+    t.push_str("search\t(a)?\\1\t-\tb\n");
+    t.push_str("search\t(a)?(?(1)b|c)\t-\tab\n");
+    t.push_str("search\t(a)?(?(1)b|c)\t-\tc\n");
+    t.push_str("search\t(?P<q>')?\\w+(?(q)')\t-\t'word' and word\n");
+    t.push_str("findall\t(<)?\\w+@\\w+\\.\\w+(?(1)>|$)\t-\t<a@b.cd> e@f.gh\n");
+    t.push_str("search\t(?#a comment)abc\t-\txabc\n");
+    t.push_str("findall\t\\w+(?=,)\t-\ta, b, c\n");
+    t.push_str("findall\t\\w+(?!,)\\b\t-\ta, b, c\n");
+    t.push_str("findall\t(?<=\\$)\\d+\t-\t$10 and 20 and $30\n");
+    t.push_str("findall\t(?<!\\$)\\b\\d+\t-\t$10 and 20 and $30\n");
+    t.push_str("search\t(?<=ab)c\t-\tabc\n");
+    t.push_str("search\t(?<=a|b)c\t-\tbc\n");
+    t.push_str("search\t(?<=(a))c\t-\tac\n");
+    t.push_str("search\t(?=(\\w+))\\w\t-\tword\n");
+    t.push_str("findall\t(?=(\\d\\d))\t-\t12345\n");
+    t.push_str("search\t^(?!.*password).*$\t-\tuser=ana token=x\n");
+    t.push_str("search\t^(?!.*password).*$\t-\tuser=ana password=x\n");
+    t.push_str("search\t(?<=\\bfoo)bar\t-\tfoobar\n");
+    t.push_str("findall\t(?i)cafe\t-\tCAFE Cafe cafe\n");
+    t.push_str("findall\t(?i:ca)fe\t-\tCAFE Cafe cafe CAfe\n");
+    t.push_str("findall\t(?-i:ca)fe\ti\tCAFE Cafe cafe caFE\n");
+    t.push_str("findall\t[a-z]+\ti\tHello WORLD\n");
+    t.push_str("findall\t[^a-z]+\ti\tHello WORLD\n");
+    t.push_str("findall\té\ti\tÉ é e\n");
+    t.push_str("findall\t(?x) \\d+ # digits\\n  \\. \\d*\t-\t1.5 2. 3\n");
+    t.push_str("findall\t(?x)a\\ b [ ]c\t-\ta b c ab c\n");
+    t.push_str("findall\t(?m)^\\w\t-\ta\\nb\n");
+    t.push_str("findall\t(?s).\t-\ta\\nb\n");
+    t.push_str("findall\t(?a)\\w+\t-\tcafé\n");
+    t.push_str("findall\t(?im)^x\t-\tX\\nx\n");
+    t.push_str("search\ta(?i)b\t-\taB\n");
+    t.push_str("search\t(?u)\\w\ta\tx\n");
+    t.push_str("search\tcat|category\t-\tcategory\n");
+    t.push_str("search\tcategory|cat\t-\tcategory\n");
+    t.push_str("search\t(cat|category)s?\\b\t-\tcategorys\n");
+    t.push_str("findall\ta|b|\t-\tabc\n");
+    t.push_str("search\t|a\t-\ta\n");
+    t.push_str("findall\t(\\d+)-(\\d+)|(\\w+)\t-\t10-20 ab 3-4\n");
+    t.push_str("findall\tx*\t-\tabxd\n");
+    t.push_str("sub\tx*\t-\tabxd\t-\n");
+    t.push_str("split\tx*\t-\tabxd\n");
+    t.push_str("split\t\t-\tabc\n");
+    t.push_str("findall\t\\b\t-\tab cd\n");
+    t.push_str("sub\t\\b\t-\tab cd\t|\n");
+    t.push_str("findall\ta??\t-\taa\n");
+    t.push_str("finditer\t\\w*\t-\tab, c\n");
+    t.push_str("sub\t(\\w+)@(\\w+)\t-\tana@ex bo@ex\t\\2:\\1\n");
+    t.push_str("sub\t(?P<y>\\d{4})-(?P<m>\\d\\d)\t-\t2024-03 and 1999-12\t\\g<m>/\\g<y>\n");
+    t.push_str("sub\t\\d\t-\ta1b2c3\t<\\g<0>>\n");
+    t.push_str("sub\t\\s+\t-\ta  b \\t c\t \n");
+    t.push_str("sub\to\t-\tfoo boo\t0\t2\n");
+    t.push_str("sub\t(a)|b\t-\tab\t[\\1]\n");
+    t.push_str("sub\t,\t-\ta,b\t\\n\n");
+    t.push_str("sub\t,\t-\ta,b\t\\\\\n");
+    t.push_str("sub\t,\t-\ta,b\t\\&\n");
+    t.push_str("sub\t,\t-\ta,b\t\\g<1>\n");
+    t.push_str("sub\t(a)\t-\ta\t\\2\n");
+    t.push_str("sub\t(a)\t-\ta\t\\q\n");
+    t.push_str("sub\t(?P<x>a)\t-\ta\t\\g<y>\n");
+    t.push_str("sub\t(?P<x>a)\t-\ta\t\\g<x\n");
+    t.push_str("sub\t(a)\t-\ta\t\\10\n");
+    t.push_str("sub\t(a)\t-\ta\t\\g<-1>\n");
+    t.push_str("sub\t(?P<x>a)\t-\ta\t\\g<1x>\n");
+    t.push_str("sub\ta\t-\taaa\t\t0\n");
+    t.push_str("sub\t(\\w+) (\\w+)\t-\thello world\t\\2 \\1\n");
+    t.push_str("sub\t[\\w.]+@[\\w.]+\t-\t@app.log\t<email>\n");
+    t.push_str("sub\t\\b(\\d{4})-\\d{4}-\\d{4}-(\\d{4})\\b\t-\t@app.log\t\\1-****-****-\\2\n");
+    t.push_str("sub\t(?m)^(\\S+ \\S+) (\\w+)\\s+\t-\t@app.log\t\\2 \\1 \n");
+    t.push_str("split\t,\\s*\t-\ta, b,c ,d\n");
+    t.push_str("split\t(,)\\s*\t-\ta, b,c\n");
+    t.push_str("split\t(,)|(;)\t-\ta,b;c\n");
+    t.push_str("split\t\\s+\t-\t a b  c \n");
+    t.push_str("split\t\\W+\t-\tWords, words, words.\t1\n");
+    t.push_str("split\t[:=]\t-\ta=b:c\t5\n");
+    t.push_str("split\tx\t-\t\n");
+    t.push_str("split\tx*\t-\t\n");
+    t.push_str("split\t(?m)^\t-\ta\\nb\\nc\n");
+    t.push_str("split\t\\n\t-\t@hosts.conf\n");
+    t.push_str("finditer\t(?P<ip>[\\d.:a-f]+) - (?P<user>\\S+) \\[(?P<ts>[^\\]]+)\\] \"(?P<method>[A-Z]+) (?P<path>\\S+) (?P<proto>[^\"]+)\" (?P<status>\\d{3}) (?P<bytes>\\d+|-)\tm\t@access.log\n");
+    t.push_str("finditer\t(?m)^(?P<date>\\d{4}-\\d\\d-\\d\\d) (?P<time>[\\d:,]+) (?P<level>[A-Z]+)\\s+\\[(?P<thread>[^\\]]+)\\] (?P<msg>.*)$\t-\t@app.log\n");
+    t.push_str("finditer\t(?m)^\\s*(?P<key>[\\w.]+)\\s*=\\s*(?P<value>.*?)\\s*$\t-\t@hosts.conf\n");
+    t.push_str("finditer\t(?m)^\\[(?P<section>[^\\]]*)\\]$\t-\t@hosts.conf\n");
+    t.push_str("findall\t(\\w[\\w.-]*):(\\d+)\t-\t@hosts.conf\n");
+    t.push_str("findall\t(?P<scheme>\\w+)://(?P<host>[^:/]+)(?::(?P<port>\\d+))?\t-\t@hosts.conf\n");
+    t.push_str("findall\t\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b\t-\t@access.log\n");
+    t.push_str("findall\t\"[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*\"\t-\tsay \"hi \\\"there\\\"\" and \"x\"\n");
+    t.push_str("findall\t'(?:[^']|'')*'\t-\t@calc.txt\n");
+    t.push_str("tokens\t(?P<NUMBER>\\d+(?:\\.\\d*)?)|(?P<ASSIGN>:=)|(?P<END>;)|(?P<ID>[A-Za-z_]\\w*)|(?P<OP>[+\\-*/()]|<>|>=|<=|[<>=])|(?P<STRING>'(?:[^']|'')*')|(?P<COMMENT>\\#.*)|(?P<NEWLINE>\\n)|(?P<SKIP>[ \\t]+)|(?P<MISMATCH>.)\t-\t@calc.txt\n");
+    t.push_str("tokens\t(?P<num>\\d+)|(?P<word>[a-z]+)|(?P<other>.)\t-\tab12+c\n");
+    t.push_str("search\t(a+)+b\t-\taaaaaaaaaaaaaaaaaaaaab\n");
+    t.push_str("search\t(x+x+)+y\t-\txxxxxxxxxxy\n");
+    t.push_str("search\t^(\\w+\\s?)*$\t-\ta few words here\n");
+    t.push_str("fullmatch\t(?:\\d+\\.){3}\\d+\t-\t192.168.0.1\n");
+    t.push_str("fullmatch\t[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\t-\tfirst.last+tag@sub.example.co\n");
+    t.push_str("fullmatch\t(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?\t-\t23:59:60\n");
+    t.push_str("fullmatch\t(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?\t-\t07:05\n");
+    t.push_str("fullmatch\tv?(\\d+)\\.(\\d+)\\.(\\d+)(?:-([\\w.]+))?(?:\\+([\\w.]+))?\t-\tv1.2.3-rc.1+build.5\n");
+    t.push_str("compile\t(a)(?P<n>b)(?:c)(d)\t-\t\n");
+    t.push_str("compile\t*a\t-\t\n");
+    t.push_str("compile\ta**\t-\t\n");
+    t.push_str("compile\ta{2}{3}\t-\t\n");
+    t.push_str("compile\ta(?\t-\t\n");
+    t.push_str("compile\t(a\t-\t\n");
+    t.push_str("compile\ta)\t-\t\n");
+    t.push_str("compile\t[a\t-\t\n");
+    t.push_str("compile\t[z-a]\t-\t\n");
+    t.push_str("compile\ta\\q\t-\t\n");
+    t.push_str("compile\t\\2(a)\t-\t\n");
+    t.push_str("compile\t(a\\1)\t-\t\n");
+    t.push_str("compile\t(?P<1a>x)\t-\t\n");
+    t.push_str("compile\t(?P<a>x)(?P<a>y)\t-\t\n");
+    t.push_str("compile\t(?P=b)\t-\t\n");
+    t.push_str("compile\t(?P<a>x\t-\t\n");
+    t.push_str("compile\t(?<x>a)\t-\t\n");
+    t.push_str("compile\t(?Px)\t-\t\n");
+    t.push_str("compile\t(?<=a+)b\t-\t\n");
+    t.push_str("compile\t(?<=a|bc)d\t-\t\n");
+    t.push_str("compile\ta{3,2}\t-\t\n");
+    t.push_str("compile\tx(?i)y\t-\t\n");
+    t.push_str("compile\t(?z)\t-\t\n");
+    t.push_str("compile\t\\x4\t-\t\n");
+    t.push_str("compile\t\\u12\t-\t\n");
+    t.push_str("compile\t[\\d-z]\t-\t\n");
+    t.push_str("compile\t(?(2)a|b)(x)\t-\t\n");
+    t.push_str("compile\t(?(1)a|b|c)(x)\t-\t\n");
+    t.push_str("compile\t\\\\\t-\t\n");
+    t.push_str("compile\ta\\\\\t-\t\n");
+    t.push_str("compile\ta\\\t-\t\n");
+    t.push_str("compile\t(?P<ünï>x)\t-\t\n");
+    t.push_str("compile\t()+\t-\t\n");
+    v.push(DataFile { path: "cases.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# hosts and ports\n");
+    t.push_str("[db]\n");
+    t.push_str("primary = db-1.internal:5432\n");
+    t.push_str("replica=db-2.internal:5432\n");
+    t.push_str("  timeout   =  2.5s\n");
+    t.push_str("[cache]\n");
+    t.push_str("url = redis://cache.internal:6379/0\n");
+    t.push_str("; old = memcached://cache.internal:11211\n");
+    t.push_str("[empty]\n");
+    v.push(DataFile { path: "hosts.conf".to_string(), hex: false, body: t });
+}

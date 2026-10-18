@@ -1,0 +1,535 @@
+== search | cat | - | concatenate
+  span=(3, 6) match='cat'
+== search | Cat | - | concatenate
+  None
+== search | Cat | i | conCATenate
+  span=(3, 6) match='CAT'
+== match | con | - | concatenate
+  span=(0, 3) match='con'
+== match | cat | - | concatenate
+  None
+== fullmatch | con\w+ | - | concatenate
+  span=(0, 11) match='concatenate'
+== fullmatch | con\w+ | - | concatenate!
+  None
+== search | a.c | - | a\nc abc
+  span=(4, 7) match='abc'
+== search | a.c | s | a\nc abc
+  span=(0, 3) match='a\nc'
+== findall | [aeiou] | - | regular expression
+  ['e', 'u', 'a', 'e', 'e', 'i', 'o']
+== findall | [^aeiou\s]+ | - | regular expression
+  ['r', 'g', 'l', 'r', 'xpr', 'ss', 'n']
+== findall | [a-cx-z] | - | abcdwxyz
+  ['a', 'b', 'c', 'x', 'y', 'z']
+== findall | [-a] | - | a-b-c
+  ['a', '-', '-']
+== findall | [a-] | - | a-b-c
+  ['a', '-', '-']
+== findall | []a] | - | a]b]
+  ['a', ']', ']']
+== findall | [\]\-\\] | - | a]b-c\\d
+  [']', '-', '\\']
+== findall | \d+ | - | order 42 of 1000, item ٣٤
+  ['42', '1000', '٣٤']
+== findall | \d+ | a | order 42 of 1000, item ٣٤
+  ['42', '1000']
+== findall | \w+ | - | naïve café 東京 x_1
+  ['naïve', 'café', '東京', 'x_1']
+== findall | \w+ | a | naïve café 東京 x_1
+  ['na', 've', 'caf', 'x_1']
+== findall | \s+ | - | a b\tc\n d
+  [' ', '\t', '\n ']
+== findall | \S+ | - |  a b\tc\n d 
+  ['a', 'b', 'c', 'd']
+== findall | \D+ | - | a1b22c
+  ['a', 'b', 'c']
+== findall | \W+ | - | a, b; c!
+  [', ', '; ', '!']
+== findall | [\d.]+ | - | v1.2.3 and 4.5
+  ['1.2.3', '4.5']
+== findall | [\w.-]+@[\w-]+\.[\w.]+ | - | @app.log
+  ['ana@example.com', 'zoe.k@cafe.example', 'ops@cafe.example']
+== findall | \x41é\101\t | - | AéA\t
+  ['AéA\t']
+== findall | [\x41-\x43] | - | ABCD
+  ['A', 'B', 'C']
+== search | ^b | - | a\nb
+  None
+== search | ^b | m | a\nb
+  span=(2, 3) match='b'
+== findall | ^\w+ | m | one two\nthree four\nfive
+  ['one', 'three', 'five']
+== findall | \w+$ | m | one two\nthree four\nfive
+  ['two', 'four', 'five']
+== findall | \w+$ | - | one two\nthree four\n
+  ['four']
+== search | four$ | - | three four\n
+  span=(6, 10) match='four'
+== search | four\Z | - | three four\n
+  None
+== search | \Athree | m | x\nthree
+  None
+== findall | \bcat\b | - | cat concat cat's bobcat
+  ['cat', 'cat']
+== findall | \Bcat\B | - | cat concat concatenate
+  ['cat']
+== findall | \b\w | - | hello big world
+  ['h', 'b', 'w']
+== findall | $ | - | a\nb\n
+  ['', '']
+== findall | $ | m | a\nb\n
+  ['', '', '']
+== findall | ^ | m | a\nb\n
+  ['', '', '']
+== search | ab* | - | abbbc
+  span=(0, 4) match='abbb'
+== search | ab*? | - | abbbc
+  span=(0, 1) match='a'
+== search | ab+? | - | abbbc
+  span=(0, 2) match='ab'
+== search | ab?? | - | abbbc
+  span=(0, 1) match='a'
+== search | a{2} | - | aaaa
+  span=(0, 2) match='aa'
+== search | a{2,} | - | aaaa
+  span=(0, 4) match='aaaa'
+== search | a{,2} | - | aaaa
+  span=(0, 2) match='aa'
+== search | a{1,3}? | - | aaaa
+  span=(0, 1) match='a'
+== search | a{3,5} | - | aa aaaaaaa
+  span=(3, 8) match='aaaaa'
+== findall | \d{2,3} | - | 1 12 123 1234 12345
+  ['12', '123', '123', '123', '45']
+== findall | x{0}y | - | xy y
+  ['y', 'y']
+== search | a{,} | - | aaa
+  span=(0, 3) match='aaa'
+== search | a{x} | - | a{x}
+  span=(0, 4) match='a{x}'
+== search | a{1,x} | - | a{1,x}
+  span=(0, 6) match='a{1,x}'
+== search | a*+a | - | aaaa
+  None
+== search | a++b | - | aaab
+  span=(0, 4) match='aaab'
+== search | (?>a+)b | - | aaab
+  span=(0, 4) match='aaab'
+== search | (?>a+)a | - | aaaa
+  None
+== search | (?>x|xy)z | - | xyz
+  None
+== search | (?:x|xy)z | - | xyz
+  span=(0, 3) match='xyz'
+== search | \d?+\d | - | 12
+  span=(0, 2) match='12'
+== search | <.*> | - | <a><b>
+  span=(0, 6) match='<a><b>'
+== search | <.*?> | - | <a><b>
+  span=(0, 3) match='<a>'
+== findall | <[^>]*> | - | <a href='x'>link</a>
+  ["<a href='x'>", '</a>']
+== search | (\w+)@(\w+)\.com | - | mail ana@example.com now
+  span=(5, 20) match='ana@example.com'
+  groups=('ana', 'example')
+  spans=[(5, 8), (9, 16)]
+== search | (?P<user>\w+)@(?P<host>[\w.]+) | - | mail ana@example.com now
+  span=(5, 20) match='ana@example.com'
+  groups=('ana', 'example.com')
+  spans=[(5, 8), (9, 20)]
+  named={'user': 'ana', 'host': 'example.com'}
+== search | (a)|(b) | - | b
+  span=(0, 1) match='b'
+  groups=(None, 'b')
+  spans=[(-1, -1), (0, 1)]
+== search | (a)(b)? | - | ac
+  span=(0, 1) match='a'
+  groups=('a', None)
+  spans=[(0, 1), (-1, -1)]
+== search | (a|b)*c | - | abac
+  span=(0, 4) match='abac'
+  groups=('a',)
+  spans=[(2, 3)]
+== search | (a*)*b | - | aab
+  span=(0, 3) match='aab'
+  groups=('',)
+  spans=[(2, 2)]
+== search | (a*)+b | - | aab
+  span=(0, 3) match='aab'
+  groups=('',)
+  spans=[(2, 2)]
+== search | (a|)*b | - | aab
+  span=(0, 3) match='aab'
+  groups=('',)
+  spans=[(2, 2)]
+== search | (a?)*?b | - | aab
+  span=(0, 3) match='aab'
+  groups=('a',)
+  spans=[(1, 2)]
+== search | ((a)|b)+ | - | ab
+  span=(0, 2) match='ab'
+  groups=('b', 'a')
+  spans=[(1, 2), (0, 1)]
+== search | (?:(\d)\.)+ | - | 1.2.3.x
+  span=(0, 6) match='1.2.3.'
+  groups=('3',)
+  spans=[(4, 5)]
+== search | (\w)(\w)?(\w)? | - | ab
+  span=(0, 2) match='ab'
+  groups=('a', 'b', None)
+  spans=[(0, 1), (1, 2), (-1, -1)]
+== search | (?P<a>x)(?P<b>y)?(?P<c>z) | - | xz
+  span=(0, 2) match='xz'
+  groups=('x', None, 'z')
+  spans=[(0, 1), (-1, -1), (1, 2)]
+  named={'a': 'x', 'b': None, 'c': 'z'}
+== search | (\w+) \1 | - | hello hello world
+  span=(0, 11) match='hello hello'
+  groups=('hello',)
+  spans=[(0, 5)]
+== search | (?P<w>\w+) (?P=w) | - | the the cat
+  span=(0, 7) match='the the'
+  groups=('the',)
+  spans=[(0, 3)]
+  named={'w': 'the'}
+== search | (a)\1 | i | aA
+  span=(0, 2) match='aA'
+  groups=('a',)
+  spans=[(0, 1)]
+== search | (\w+)\s+\1\b | - | this is is it
+  span=(2, 7) match='is is'
+  groups=('is',)
+  spans=[(2, 4)]
+== search | (a)?\1 | - | b
+  None
+== search | (a)?(?(1)b|c) | - | ab
+  span=(0, 2) match='ab'
+  groups=('a',)
+  spans=[(0, 1)]
+== search | (a)?(?(1)b|c) | - | c
+  span=(0, 1) match='c'
+  groups=(None,)
+  spans=[(-1, -1)]
+== search | (?P<q>')?\w+(?(q)') | - | 'word' and word
+  span=(0, 6) match="'word'"
+  groups=("'",)
+  spans=[(0, 1)]
+  named={'q': "'"}
+== findall | (<)?\w+@\w+\.\w+(?(1)>|$) | - | <a@b.cd> e@f.gh
+  ['<', '']
+== search | (?#a comment)abc | - | xabc
+  span=(1, 4) match='abc'
+== findall | \w+(?=,) | - | a, b, c
+  ['a', 'b']
+== findall | \w+(?!,)\b | - | a, b, c
+  ['c']
+== findall | (?<=\$)\d+ | - | $10 and 20 and $30
+  ['10', '30']
+== findall | (?<!\$)\b\d+ | - | $10 and 20 and $30
+  ['20']
+== search | (?<=ab)c | - | abc
+  span=(2, 3) match='c'
+== search | (?<=a|b)c | - | bc
+  span=(1, 2) match='c'
+== search | (?<=(a))c | - | ac
+  span=(1, 2) match='c'
+  groups=('a',)
+  spans=[(0, 1)]
+== search | (?=(\w+))\w | - | word
+  span=(0, 1) match='w'
+  groups=('word',)
+  spans=[(0, 4)]
+== findall | (?=(\d\d)) | - | 12345
+  ['12', '23', '34', '45']
+== search | ^(?!.*password).*$ | - | user=ana token=x
+  span=(0, 16) match='user=ana token=x'
+== search | ^(?!.*password).*$ | - | user=ana password=x
+  None
+== search | (?<=\bfoo)bar | - | foobar
+  span=(3, 6) match='bar'
+== findall | (?i)cafe | - | CAFE Cafe cafe
+  ['CAFE', 'Cafe', 'cafe']
+== findall | (?i:ca)fe | - | CAFE Cafe cafe CAfe
+  ['Cafe', 'cafe', 'CAfe']
+== findall | (?-i:ca)fe | i | CAFE Cafe cafe caFE
+  ['cafe', 'caFE']
+== findall | [a-z]+ | i | Hello WORLD
+  ['Hello', 'WORLD']
+== findall | [^a-z]+ | i | Hello WORLD
+  [' ']
+== findall | é | i | É é e
+  ['É', 'é']
+== findall | (?x) \d+ # digits\n  \. \d* | - | 1.5 2. 3
+  ['1', '5', '2', '3']
+== findall | (?x)a\ b [ ]c | - | a b c ab c
+  ['a b c']
+== findall | (?m)^\w | - | a\nb
+  ['a', 'b']
+== findall | (?s). | - | a\nb
+  ['a', '\n', 'b']
+== findall | (?a)\w+ | - | café
+  ['caf']
+== findall | (?im)^x | - | X\nx
+  ['X', 'x']
+== search | a(?i)b | - | aB
+  error: global flags not at the start of the expression at position 1
+== search | (?u)\w | a | x
+  ValueError: ASCII and UNICODE flags are incompatible
+== search | cat|category | - | category
+  span=(0, 3) match='cat'
+== search | category|cat | - | category
+  span=(0, 8) match='category'
+== search | (cat|category)s?\b | - | categorys
+  span=(0, 9) match='categorys'
+  groups=('category',)
+  spans=[(0, 8)]
+== findall | a|b| | - | abc
+  ['a', 'b', '', '']
+== search | |a | - | a
+  span=(0, 0) match=''
+== findall | (\d+)-(\d+)|(\w+) | - | 10-20 ab 3-4
+  [('10', '20', ''), ('', '', 'ab'), ('3', '4', '')]
+== findall | x* | - | abxd
+  ['', '', 'x', '', '']
+== sub | x* | - | abxd | -
+  ('-a-b--d-', 5)
+== split | x* | - | abxd
+  ['', 'a', 'b', '', 'd', '']
+== split |  | - | abc
+  ['', 'a', 'b', 'c', '']
+== findall | \b | - | ab cd
+  ['', '', '', '']
+== sub | \b | - | ab cd | |
+  ('|ab| |cd|', 4)
+== findall | a?? | - | aa
+  ['', 'a', '', 'a', '']
+== finditer | \w* | - | ab, c
+  (0, 2) 'ab' ()
+  (2, 2) '' ()
+  (3, 3) '' ()
+  (4, 5) 'c' ()
+  (5, 5) '' ()
+== sub | (\w+)@(\w+) | - | ana@ex bo@ex | \2:\1
+  ('ex:ana ex:bo', 2)
+== sub | (?P<y>\d{4})-(?P<m>\d\d) | - | 2024-03 and 1999-12 | \g<m>/\g<y>
+  ('03/2024 and 12/1999', 2)
+== sub | \d | - | a1b2c3 | <\g<0>>
+  ('a<1>b<2>c<3>', 3)
+== sub | \s+ | - | a  b \t c |  
+  ('a b c', 2)
+== sub | o | - | foo boo | 0 | 2
+  ('f00 boo', 2)
+== sub | (a)|b | - | ab | [\1]
+  ('[a][]', 2)
+== sub | , | - | a,b | \n
+  ('a\nb', 1)
+== sub | , | - | a,b | \\
+  ('a\\b', 1)
+== sub | , | - | a,b | \&
+  ('a\\&b', 1)
+== sub | , | - | a,b | \g<1>
+  error: invalid group reference 1 at position 3
+== sub | (a) | - | a | \2
+  error: invalid group reference 2 at position 1
+== sub | (a) | - | a | \q
+  error: bad escape \q at position 0
+== sub | (?P<x>a) | - | a | \g<y>
+  IndexError: unknown group name 'y'
+== sub | (?P<x>a) | - | a | \g<x
+  error: missing >, unterminated name at position 3
+== sub | (a) | - | a | \10
+  error: invalid group reference 10 at position 1
+== sub | (a) | - | a | \g<-1>
+  error: bad character in group name '-1' at position 3
+== sub | (?P<x>a) | - | a | \g<1x>
+  error: bad character in group name '1x' at position 3
+== sub | a | - | aaa |  | 0
+  ('', 3)
+== sub | (\w+) (\w+) | - | hello world | \2 \1
+  ('world hello', 1)
+== sub | [\w.]+@[\w.]+ | - | @app.log | <email>
+  ('2024-03-09 17:42:05,123 INFO  [main] server started on port 8443\n2024-03-09 17:42:06,004 WARN  [pool-2] slow query took 1532ms: SELECT * FROM orders WHERE id = 42\n2024-03-09 17:42:07,500 ERROR [pool-1] payment failed for user=<email> card=4111-1111-1111-1111\n2024-03-09 17:42:07,501 ERROR [pool-1] Traceback (most recent call last):\n2024-03-09 17:42:08,000 DEBUG [main] cache hit ratio 0.93\n2024-03-09 17:42:09,010 INFO  [http] GET /menu from 203.0.113.7 in 12ms\n2024-03-09 17:42:10,000 ERROR [pool-3] lost connection to db-2.internal:5432 (retry 3/5)\ncontact: Zoë <<email>>, <email>; bad: foo@, @bar.com\n', 3)
+== sub | \b(\d{4})-\d{4}-\d{4}-(\d{4})\b | - | @app.log | \1-****-****-\2
+  ('2024-03-09 17:42:05,123 INFO  [main] server started on port 8443\n2024-03-09 17:42:06,004 WARN  [pool-2] slow query took 1532ms: SELECT * FROM orders WHERE id = 42\n2024-03-09 17:42:07,500 ERROR [pool-1] payment failed for user=ana@example.com card=4111-****-****-1111\n2024-03-09 17:42:07,501 ERROR [pool-1] Traceback (most recent call last):\n2024-03-09 17:42:08,000 DEBUG [main] cache hit ratio 0.93\n2024-03-09 17:42:09,010 INFO  [http] GET /menu from 203.0.113.7 in 12ms\n2024-03-09 17:42:10,000 ERROR [pool-3] lost connection to db-2.internal:5432 (retry 3/5)\ncontact: Zoë <zoe.k@cafe.example>, ops@cafe.example; bad: foo@, @bar.com\n', 1)
+== sub | (?m)^(\S+ \S+) (\w+)\s+ | - | @app.log | \2 \1 
+  ('INFO 2024-03-09 17:42:05,123 [main] server started on port 8443\nWARN 2024-03-09 17:42:06,004 [pool-2] slow query took 1532ms: SELECT * FROM orders WHERE id = 42\nERROR 2024-03-09 17:42:07,500 [pool-1] payment failed for user=ana@example.com card=4111-1111-1111-1111\nERROR 2024-03-09 17:42:07,501 [pool-1] Traceback (most recent call last):\nDEBUG 2024-03-09 17:42:08,000 [main] cache hit ratio 0.93\nINFO 2024-03-09 17:42:09,010 [http] GET /menu from 203.0.113.7 in 12ms\nERROR 2024-03-09 17:42:10,000 [pool-3] lost connection to db-2.internal:5432 (retry 3/5)\ncontact: Zoë <zoe.k@cafe.example>, ops@cafe.example; bad: foo@, @bar.com\n', 7)
+== split | ,\s* | - | a, b,c ,d
+  ['a', 'b', 'c ', 'd']
+== split | (,)\s* | - | a, b,c
+  ['a', ',', 'b', ',', 'c']
+== split | (,)|(;) | - | a,b;c
+  ['a', ',', None, 'b', None, ';', 'c']
+== split | \s+ | - |  a b  c 
+  ['', 'a', 'b', 'c', '']
+== split | \W+ | - | Words, words, words. | 1
+  ['Words', 'words, words.']
+== split | [:=] | - | a=b:c | 5
+  ['a', 'b', 'c']
+== split | x | - | 
+  ['']
+== split | x* | - | 
+  ['', '']
+== split | (?m)^ | - | a\nb\nc
+  ['', 'a\n', 'b\n', 'c']
+== split | \n | - | @hosts.conf
+  ['# hosts and ports', '[db]', 'primary = db-1.internal:5432', 'replica=db-2.internal:5432', '  timeout   =  2.5s', '[cache]', 'url = redis://cache.internal:6379/0', '; old = memcached://cache.internal:11211', '[empty]', '']
+== finditer | (?P<ip>[\d.:a-f]+) - (?P<user>\S+) \[(?P<ts>[^\]]+)\] "(?P<method>[A-Z]+) (?P<path>\S+) (?P<proto>[^"]+)" (?P<status>\d{3}) (?P<bytes>\d+|-) | m | @access.log
+  (0, 74) {'ip': '203.0.113.7', 'user': '-', 'ts': '09/Mar/2024:17:42:05 +0000', 'method': 'GET', 'path': '/menu', 'proto': 'HTTP/1.1', 'status': '200', 'bytes': '5120'}
+  (92, 172) {'ip': '198.51.100.23', 'user': 'ana', 'ts': '09/Mar/2024:17:42:06 +0000', 'method': 'POST', 'path': '/orders', 'proto': 'HTTP/1.1', 'status': '201', 'bytes': '312'}
+  (235, 309) {'ip': '192.0.2.44', 'user': '-', 'ts': '09/Mar/2024:17:42:07 +0000', 'method': 'GET', 'path': '/orders/9', 'proto': 'HTTP/1.1', 'status': '404', 'bytes': '0'}
+  (328, 406) {'ip': '203.0.113.7', 'user': '-', 'ts': '09/Mar/2024:17:42:08 +0000', 'method': 'DELETE', 'path': '/orders/7', 'proto': 'HTTP/2.0', 'status': '204', 'bytes': '-'}
+  (424, 519) {'ip': '10.0.0.5', 'user': 'boø', 'ts': '09/Mar/2024:17:42:09 +0000', 'method': 'GET', 'path': '/search?q=cr%C3%A8me&page=2', 'proto': 'HTTP/1.1', 'status': '200', 'bytes': '2048'}
+  (576, 651) {'ip': '2001:db8::1', 'user': '-', 'ts': '09/Mar/2024:17:42:10 +0000', 'method': 'GET', 'path': '/healthz', 'proto': 'HTTP/1.1', 'status': '500', 'bytes': '91'}
+== finditer | (?m)^(?P<date>\d{4}-\d\d-\d\d) (?P<time>[\d:,]+) (?P<level>[A-Z]+)\s+\[(?P<thread>[^\]]+)\] (?P<msg>.*)$ | - | @app.log
+  (0, 64) {'date': '2024-03-09', 'time': '17:42:05,123', 'level': 'INFO', 'thread': 'main', 'msg': 'server started on port 8443'}
+  (65, 162) {'date': '2024-03-09', 'time': '17:42:06,004', 'level': 'WARN', 'thread': 'pool-2', 'msg': 'slow query took 1532ms: SELECT * FROM orders WHERE id = 42'}
+  (163, 266) {'date': '2024-03-09', 'time': '17:42:07,500', 'level': 'ERROR', 'thread': 'pool-1', 'msg': 'payment failed for user=ana@example.com card=4111-1111-1111-1111'}
+  (267, 340) {'date': '2024-03-09', 'time': '17:42:07,501', 'level': 'ERROR', 'thread': 'pool-1', 'msg': 'Traceback (most recent call last):'}
+  (341, 398) {'date': '2024-03-09', 'time': '17:42:08,000', 'level': 'DEBUG', 'thread': 'main', 'msg': 'cache hit ratio 0.93'}
+  (399, 470) {'date': '2024-03-09', 'time': '17:42:09,010', 'level': 'INFO', 'thread': 'http', 'msg': 'GET /menu from 203.0.113.7 in 12ms'}
+  (471, 559) {'date': '2024-03-09', 'time': '17:42:10,000', 'level': 'ERROR', 'thread': 'pool-3', 'msg': 'lost connection to db-2.internal:5432 (retry 3/5)'}
+== finditer | (?m)^\s*(?P<key>[\w.]+)\s*=\s*(?P<value>.*?)\s*$ | - | @hosts.conf
+  (23, 51) {'key': 'primary', 'value': 'db-1.internal:5432'}
+  (52, 78) {'key': 'replica', 'value': 'db-2.internal:5432'}
+  (79, 98) {'key': 'timeout', 'value': '2.5s'}
+  (107, 142) {'key': 'url', 'value': 'redis://cache.internal:6379/0'}
+== finditer | (?m)^\[(?P<section>[^\]]*)\]$ | - | @hosts.conf
+  (18, 22) {'section': 'db'}
+  (99, 106) {'section': 'cache'}
+  (184, 191) {'section': 'empty'}
+== findall | (\w[\w.-]*):(\d+) | - | @hosts.conf
+  [('db-1.internal', '5432'), ('db-2.internal', '5432'), ('cache.internal', '6379'), ('cache.internal', '11211')]
+== findall | (?P<scheme>\w+)://(?P<host>[^:/]+)(?::(?P<port>\d+))? | - | @hosts.conf
+  [('redis', 'cache.internal', '6379'), ('memcached', 'cache.internal', '11211')]
+== findall | \b(?:\d{1,3}\.){3}\d{1,3}\b | - | @access.log
+  ['203.0.113.7', '198.51.100.23', '192.0.2.44', '203.0.113.7', '10.0.0.5']
+== findall | "[^"\\]*(?:\\.[^"\\]*)*" | - | say "hi \"there\"" and "x"
+  ['"hi \\"there\\""', '"x"']
+== findall | '(?:[^']|'')*' | - | @calc.txt
+  ["'O''Brien'"]
+== tokens | (?P<NUMBER>\d+(?:\.\d*)?)|(?P<ASSIGN>:=)|(?P<END>;)|(?P<ID>[A-Za-z_]\w*)|(?P<OP>[+\-*/()]|<>|>=|<=|[<>=])|(?P<STRING>'(?:[^']|'')*')|(?P<COMMENT>\#.*)|(?P<NEWLINE>\n)|(?P<SKIP>[ \t]+)|(?P<MISMATCH>.) | - | @calc.txt
+  1 ID 'total' lastindex=4
+  1 ASSIGN ':=' lastindex=2
+  1 ID 'price' lastindex=4
+  1 OP '*' lastindex=5
+  1 OP '(' lastindex=5
+  1 NUMBER '1' lastindex=1
+  1 OP '+' lastindex=5
+  1 ID 'rate_2' lastindex=4
+  1 OP ')' lastindex=5
+  1 OP '-' lastindex=5
+  1 NUMBER '3.50' lastindex=1
+  2 ID 'IF' lastindex=4
+  2 ID 'total' lastindex=4
+  2 OP '>=' lastindex=5
+  2 NUMBER '100' lastindex=1
+  2 ID 'THEN' lastindex=4
+  2 ID 'discount' lastindex=4
+  2 ASSIGN ':=' lastindex=2
+  2 NUMBER '0.1' lastindex=1
+  2 END ';' lastindex=3
+  2 ID 'ENDIF' lastindex=4
+  3 ID 'name' lastindex=4
+  3 ASSIGN ':=' lastindex=2
+  3 STRING "'O''Brien'" lastindex=6
+  4 ID 'x' lastindex=4
+  4 ASSIGN ':=' lastindex=2
+  4 ID 'y' lastindex=4
+  4 OP '<>' lastindex=5
+  4 ID 'z' lastindex=4
+== tokens | (?P<num>\d+)|(?P<word>[a-z]+)|(?P<other>.) | - | ab12+c
+  1 word 'ab' lastindex=2
+  1 num '12' lastindex=1
+  1 other '+' lastindex=3
+  1 word 'c' lastindex=2
+== search | (a+)+b | - | aaaaaaaaaaaaaaaaaaaaab
+  span=(0, 22) match='aaaaaaaaaaaaaaaaaaaaab'
+  groups=('aaaaaaaaaaaaaaaaaaaaa',)
+  spans=[(0, 21)]
+== search | (x+x+)+y | - | xxxxxxxxxxy
+  span=(0, 11) match='xxxxxxxxxxy'
+  groups=('xxxxxxxxxx',)
+  spans=[(0, 10)]
+== search | ^(\w+\s?)*$ | - | a few words here
+  span=(0, 16) match='a few words here'
+  groups=('here',)
+  spans=[(12, 16)]
+== fullmatch | (?:\d+\.){3}\d+ | - | 192.168.0.1
+  span=(0, 11) match='192.168.0.1'
+== fullmatch | [A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,} | - | first.last+tag@sub.example.co
+  span=(0, 29) match='first.last+tag@sub.example.co'
+== fullmatch | (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)? | - | 23:59:60
+  None
+== fullmatch | (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)? | - | 07:05
+  span=(0, 5) match='07:05'
+== fullmatch | v?(\d+)\.(\d+)\.(\d+)(?:-([\w.]+))?(?:\+([\w.]+))? | - | v1.2.3-rc.1+build.5
+  span=(0, 19) match='v1.2.3-rc.1+build.5'
+  groups=('1', '2', '3', 'rc.1', 'build.5')
+  spans=[(1, 2), (3, 4), (5, 6), (7, 11), (12, 19)]
+== compile | (a)(?P<n>b)(?:c)(d) | - | 
+  groups=3 groupindex={'n': 2}
+== compile | *a | - | 
+  error: nothing to repeat at position 0
+== compile | a** | - | 
+  error: multiple repeat at position 2
+== compile | a{2}{3} | - | 
+  error: multiple repeat at position 4
+== compile | a(? | - | 
+  error: unexpected end of pattern at position 3
+== compile | (a | - | 
+  error: missing ), unterminated subpattern at position 0
+== compile | a) | - | 
+  error: unbalanced parenthesis at position 1
+== compile | [a | - | 
+  error: unterminated character set at position 0
+== compile | [z-a] | - | 
+  error: bad character range z-a at position 1
+== compile | a\q | - | 
+  error: bad escape \q at position 1
+== compile | \2(a) | - | 
+  error: invalid group reference 2 at position 1
+== compile | (a\1) | - | 
+  error: cannot refer to an open group at position 2
+== compile | (?P<1a>x) | - | 
+  error: bad character in group name '1a' at position 4
+== compile | (?P<a>x)(?P<a>y) | - | 
+  error: redefinition of group name 'a' as group 2; was group 1 at position 12
+== compile | (?P=b) | - | 
+  error: unknown group name 'b' at position 4
+== compile | (?P<a>x | - | 
+  error: missing ), unterminated subpattern at position 0
+== compile | (?<x>a) | - | 
+  error: unknown extension ?<x at position 1
+== compile | (?Px) | - | 
+  error: unknown extension ?Px at position 1
+== compile | (?<=a+)b | - | 
+  error: look-behind requires fixed-width pattern
+== compile | (?<=a|bc)d | - | 
+  error: look-behind requires fixed-width pattern
+== compile | a{3,2} | - | 
+  error: min repeat greater than max repeat at position 2
+== compile | x(?i)y | - | 
+  error: global flags not at the start of the expression at position 1
+== compile | (?z) | - | 
+  error: unknown extension ?z at position 1
+== compile | \x4 | - | 
+  error: incomplete escape \x4 at position 0
+== compile | \u12 | - | 
+  error: incomplete escape \u12 at position 0
+== compile | [\d-z] | - | 
+  error: bad character range \d-z at position 1
+== compile | (?(2)a|b)(x) | - | 
+  error: invalid group reference 2 at position 3
+== compile | (?(1)a|b|c)(x) | - | 
+  error: conditional backref with more than two branches at position 8
+== compile | \\ | - | 
+  groups=0 groupindex={}
+== compile | a\\ | - | 
+  groups=0 groupindex={}
+== compile | a\ | - | 
+  error: bad escape (end of pattern) at position 1
+== compile | (?P<ünï>x) | - | 
+  groups=1 groupindex={'ünï': 1}
+== compile | ()+ | - | 
+  groups=1 groupindex={}
