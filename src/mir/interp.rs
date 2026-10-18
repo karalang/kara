@@ -6151,6 +6151,22 @@ impl<'a> Interp<'a> {
                 Err(e) => self.io_err(ret, e),
             };
         }
+        // A path and a number: the mode or the time (B-2026-10-15-59).
+        if method == "set_permissions" || method == "set_modified" {
+            let (path, n) = match args.as_slice() {
+                [p, Value::Int(n)] => (self.string_at(p)?, *n as i64),
+                _ => return err(format!("{name}: wrong arguments")),
+            };
+            let res = if method == "set_permissions" {
+                crate::mir::fs::set_permissions(&path, n)
+            } else {
+                crate::mir::fs::set_modified(&path, n)
+            };
+            return match res {
+                Ok(()) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+                Err(e) => self.io_err(ret, e),
+            };
+        }
         let paths = args
             .iter()
             .map(|a| self.string_at(a))
@@ -6159,18 +6175,26 @@ impl<'a> Interp<'a> {
             ("write", [path, text]) => std::fs::write(path, text).map(|()| None),
             ("read_to_string" | "read_lines", [path]) => std::fs::read_to_string(path).map(Some),
             ("exists", [path]) => return Ok(Value::Bool(std::fs::metadata(path).is_ok())),
-            ("metadata", [path]) => match crate::mir::fs::metadata(path) {
-                Ok(m) => {
-                    let v = Value::Agg(vec![
-                        Value::Int(m[0] as i128),
-                        Value::Bool(m[1] != 0),
-                        Value::Bool(m[2] != 0),
-                        Value::Int(m[3] as i128),
-                    ]);
-                    return self.variant_named(ret, None, "Ok", vec![v]);
+            ("metadata" | "symlink_metadata", [path]) => {
+                match crate::mir::fs::metadata(path, method == "metadata") {
+                    Ok(m) => {
+                        // `Metadata { len, is_file, is_dir, modified_ms,
+                        // is_symlink, mode }`.
+                        let v = Value::Agg(vec![
+                            Value::Int(m[0] as i128),
+                            Value::Bool(m[1] != 0),
+                            Value::Bool(m[2] != 0),
+                            Value::Int(m[3] as i128),
+                            Value::Bool(m[4] != 0),
+                            Value::Int(m[5] as i128),
+                        ]);
+                        return self.variant_named(ret, None, "Ok", vec![v]);
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
-            },
+            }
+            ("symlink", [target, link]) => crate::mir::fs::symlink(target, link).map(|()| None),
+            ("read_link", [path]) => crate::mir::fs::read_link(path).map(Some),
             ("read_dir", [path]) => match crate::mir::fs::read_dir(path) {
                 Ok(names) => {
                     let names = names
@@ -11617,6 +11641,11 @@ const FS_METHODS: &[&str] = &[
     "copy",
     "read_bytes",
     "write_bytes",
+    "symlink",
+    "read_link",
+    "symlink_metadata",
+    "set_permissions",
+    "set_modified",
 ];
 
 const VEC_MORE_METHODS: &[&str] = &[

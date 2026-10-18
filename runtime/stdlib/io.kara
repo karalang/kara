@@ -157,13 +157,48 @@ impl FileSystem {
     fn write_bytes(path: Str, content: Slice[u8]) -> Result[(), IoError] with writes(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
+
+    // Links, modes and times, for tools that restore what an archive
+    // records (B-2026-10-15-59).
+    #[compiler_builtin]
+    fn symlink(target: Str, link: Str) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn read_link(path: Str) -> Result[String, IoError] with reads(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn symlink_metadata(path: Str) -> Result[Metadata, IoError] with reads(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn set_permissions(path: Str, mode: i64) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
+
+    #[compiler_builtin]
+    fn set_modified(path: Str, ms: i64) -> Result[(), IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
 }
 
-// What `fs.metadata(path)` returns (it follows symbolic links): the size
-// in bytes, the kind, and the modification time in milliseconds since the
-// Unix epoch. Fields will be added, so build one only by calling
-// `metadata`.
-struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64 }
+// What `fs.metadata(path)` (which follows symbolic links) and
+// `fs.symlink_metadata(path)` (which does not) return: the size in bytes,
+// the kind, the modification time in milliseconds since the Unix epoch,
+// and the mode's permission bits. Fields will be added, so build one only
+// by calling `metadata`.
+struct Metadata {
+    len: i64,
+    is_file: bool,
+    is_dir: bool,
+    modified_ms: i64,
+    is_symlink: bool,
+    mode: i64,
+}
 
 // Phase 8 `File` handle slice F1 (2026-05-26): stateful file I/O. The
 // struct body is empty by design — like `Map[K,V]` / `Sender[T]` /

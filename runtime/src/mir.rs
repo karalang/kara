@@ -1390,12 +1390,16 @@ extern "C" {
 /// `metadata(path)` (4), `read_dir(path)` (5), `create_dir` (6),
 /// `create_dir_all` (7), `remove_file` (8), `remove_dir` (9),
 /// `remove_dir_all` (10), `rename(path, text)` (11), `copy(path, text)`
-/// (12), `read_bytes(path)` (13) and `write_bytes(path, text)` (14), on the
-/// real file system (docs/library/io.md § Files). Returns -1
+/// (12), `read_bytes(path)` (13), `write_bytes(path, text)` (14),
+/// `symlink(path, text)` (15, the target and the link), `read_link(path)`
+/// (16), `symlink_metadata(path)` (17), `set_permissions(path, value[0])`
+/// (18) and `set_modified(path, value[0])` (19), on the real file system
+/// (docs/library/io.md § Files). Returns -1
 /// on success, with the text read as a `String` (or the lines or entry
 /// names as a `Vec[String]`) at `out`, `copy`'s byte count at `value[0]`,
-/// or `metadata`'s size, is-file, is-dir and modification time (ms since
-/// the Unix epoch) at `value[0..4]`; `exists` returns 1 or 0. Otherwise the
+/// or `metadata`'s size, is-file, is-dir, modification time (ms since
+/// the Unix epoch), is-symlink and mode at `value[0..6]`; `exists` returns
+/// 1 or 0. Otherwise the
 /// code of the failure's `IoError` variant (`NotFound`, `PermissionDenied`,
 /// `AlreadyExists`, `UnexpectedEof`, `InvalidUtf8`, `Interrupted`, `Other`,
 /// `InvalidInput`, `Unsupported`: codegen's `IO_ERRORS`), with `Other`'s
@@ -1403,7 +1407,7 @@ extern "C" {
 ///
 /// # Safety
 /// Each pointer is readable for its length; `out` is writable for a
-/// `String` or `Vec`, and `value` for four `i64`s.
+/// `String` or `Vec`, and `value` for six `i64`s.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_fs(
     op: i32,
@@ -1441,9 +1445,9 @@ pub unsafe extern "C" fn karac_mir_fs(
             }
         }),
         3 => return std::fs::metadata(&path).is_ok() as i32,
-        4 => fs_metadata(&path).map(|m| {
+        4 | 17 => fs_metadata(&path, op == 4).map(|m| {
             for (i, w) in m.iter().enumerate() {
-                // SAFETY: `value` is writable for four `i64`s.
+                // SAFETY: `value` is writable for six `i64`s.
                 unsafe { *value.add(i) = *w };
             }
         }),
@@ -1461,6 +1465,14 @@ pub unsafe extern "C" fn karac_mir_fs(
         // SAFETY: `out` is writable for a `Vec[u8]`.
         13 => std::fs::read(&path).map(|b| unsafe { string_of(out, &b) }),
         14 => std::fs::write(&path, text),
+        // Links, modes and times (B-2026-10-15-59).
+        15 => fs_symlink(&path, &to()),
+        // SAFETY: `out` is writable for a `String`.
+        16 => fs_read_link(&path).map(|t| unsafe { string_of(out, t.as_bytes()) }),
+        // SAFETY: `value[0]` holds the mode or the time.
+        18 => fs_set_permissions(&path, unsafe { *value }),
+        // SAFETY: as above.
+        19 => fs_set_modified(&path, unsafe { *value }),
         // SAFETY: `value` is writable for an `i64`.
         _ => std::fs::copy(&path, to()).map(|n| unsafe { *value = n as i64 }),
     };
@@ -1485,15 +1497,140 @@ pub unsafe extern "C" fn karac_mir_fs(
     }
 }
 
-/// `fs.metadata`: size, is-file, is-dir, modification time in ms since the
-/// Unix epoch; follows symbolic links.
-fn fs_metadata(path: &str) -> std::io::Result<[i64; 4]> {
-    let m = std::fs::metadata(path)?;
+/// `fs.metadata` (`follow`) or `fs.symlink_metadata`: size, is-file,
+/// is-dir, modification time in ms since the Unix epoch, is-symlink and
+/// the mode's permission bits. The interpreter's twin is src/mir/fs.rs.
+fn fs_metadata(path: &str, follow: bool) -> std::io::Result<[i64; 6]> {
+    let m = if follow {
+        std::fs::metadata(path)?
+    } else {
+        std::fs::symlink_metadata(path)?
+    };
     let ms = match m.modified()?.duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_millis() as i64,
         Err(e) => -(e.duration().as_millis() as i64),
     };
-    Ok([m.len() as i64, m.is_file() as i64, m.is_dir() as i64, ms])
+    Ok([
+        m.len() as i64,
+        m.is_file() as i64,
+        m.is_dir() as i64,
+        ms,
+        m.file_type().is_symlink() as i64,
+        fs_mode(&m),
+    ])
+}
+
+/// The permission bits (`0o7777`): the Unix mode, or one made from the
+/// read-only flag elsewhere (`0o666` / `0o444`, `0o777` / `0o555` for a
+/// directory).
+fn fs_mode(m: &std::fs::Metadata) -> i64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        i64::from(m.permissions().mode() & 0o7777)
+    }
+    #[cfg(not(unix))]
+    {
+        let all = if m.is_dir() { 0o777 } else { 0o666 };
+        if m.permissions().readonly() {
+            all & !0o222
+        } else {
+            all
+        }
+    }
+}
+
+/// `fs.set_permissions`: a mode outside `0..=0o7777` is `InvalidInput`;
+/// without Unix modes only the owner's write bit counts.
+fn fs_set_permissions(path: &str, mode: i64) -> std::io::Result<()> {
+    if !(0..=0o7777).contains(&mode) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a mode is 0 to 0o7777",
+        ));
+    }
+    #[cfg(unix)]
+    let p = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::Permissions::from_mode(mode as u32)
+    };
+    #[cfg(not(unix))]
+    let p = {
+        let mut p = std::fs::metadata(path)?.permissions();
+        p.set_readonly(mode & 0o200 == 0);
+        p
+    };
+    std::fs::set_permissions(path, p)
+}
+
+/// `fs.set_modified`: the modification time to `ms` since the Unix epoch,
+/// leaving the access time; opens the file to set it.
+fn fs_set_modified(path: &str, ms: i64) -> std::io::Result<()> {
+    let d = std::time::Duration::from_millis(ms.unsigned_abs());
+    let t = if ms >= 0 {
+        std::time::UNIX_EPOCH.checked_add(d)
+    } else {
+        std::time::UNIX_EPOCH.checked_sub(d)
+    }
+    .ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "the time is out of range")
+    })?;
+    #[cfg(windows)]
+    let f = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS so a
+        // directory opens too.
+        std::fs::OpenOptions::new()
+            .access_mode(0x100)
+            .custom_flags(0x0200_0000)
+            .open(path)?
+    };
+    #[cfg(not(windows))]
+    let f = std::fs::File::open(path)?;
+    f.set_modified(t)
+}
+
+/// `fs.symlink(target, link)`; a directory link on Windows when the target
+/// is a directory, `Unsupported` where there are no links.
+fn fs_symlink(target: &str, link: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        let at = std::path::Path::new(link)
+            .parent()
+            .unwrap_or(std::path::Path::new(""))
+            .join(target);
+        if at.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "symbolic links are not supported here",
+        ))
+    }
+}
+
+/// `fs.read_link`: the stored target; one that is not UTF-8 is an
+/// `InvalidData` error.
+fn fs_read_link(path: &str) -> std::io::Result<String> {
+    std::fs::read_link(path)?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a link target is not UTF-8",
+            )
+        })
 }
 
 /// `fs.read_dir`: the entry names sorted byte-wise; a name that is not

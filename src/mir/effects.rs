@@ -850,14 +850,15 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         (
             "fs" | "FileSystem",
             "write" | "append" | "remove" | "create_dir" | "create_dir_all" | "remove_file"
-            | "remove_dir" | "remove_dir_all" | "rename" | "write_bytes",
+            | "remove_dir" | "remove_dir_all" | "rename" | "write_bytes" | "symlink"
+            | "set_permissions" | "set_modified",
         ) => {
             vec![(Writes, "FileSystem", None), (Blocks, "", None), HEAP]
         }
         (
             "fs" | "FileSystem",
             "read_to_string" | "read" | "read_lines" | "exists" | "metadata" | "read_dir"
-            | "read_bytes",
+            | "read_bytes" | "read_link" | "symlink_metadata",
         ) => {
             vec![(Reads, "FileSystem", None), (Blocks, "", None), HEAP]
         }

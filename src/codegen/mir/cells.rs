@@ -474,13 +474,27 @@ impl<'ctx> Cx<'ctx, '_> {
             "copy" => 12,
             "read_bytes" => 13,
             "write_bytes" => 14,
+            "symlink" => 15,
+            "read_link" => 16,
+            "symlink_metadata" => 17,
+            "set_permissions" => 18,
+            "set_modified" => 19,
             _ => return Ok(None),
         };
         let dty = self.place_type(dest)?;
         let (pp, pn) = self.str_parts(&args[0])?;
+        let value = self.entry_slot(48, "fs.value")?;
         let (tp, tn) = match args.get(1) {
             // `write_bytes`' content is a `Slice[u8]` (B-2026-10-15-28).
             Some(t) if op == 14 => self.view_of(t)?,
+            // The mode or the time goes in through `value[0]`
+            // (B-2026-10-15-59).
+            Some(t) if op == 18 || op == 19 => {
+                let n = self.operand_ptr(t)?;
+                let n = self.load_i64(n)?;
+                self.store(value, n.into())?;
+                (self.ptr_ty().const_null(), self.i64(0))
+            }
             Some(t) => self.str_parts(t)?,
             None => (self.ptr_ty().const_null(), self.i64(0)),
         };
@@ -489,7 +503,6 @@ impl<'ctx> Cx<'ctx, '_> {
                 .intern(TyKind::Intrinsic(crate::mir::ty::IntrinsicTy::String)),
             "fs",
         )?;
-        let value = self.entry_slot(32, "fs.value")?;
         let i32t = self.llcx.i32_type();
         let code = self.rt_int(
             "fs",
@@ -534,18 +547,19 @@ impl<'ctx> Cx<'ctx, '_> {
             cx.store_tag(d, dty, ok)?;
             let at = cx.offset(d, ok_off)?;
             match op {
-                1 | 2 | 5 | 13 => cx.copy(at, out, okt)?,
+                1 | 2 | 5 | 13 | 16 => cx.copy(at, out, okt)?,
                 12 => {
                     let n = cx.load_i64(value)?;
                     cx.store(at, n.into())?;
                 }
-                4 => {
-                    // `Metadata { len, is_file, is_dir, modified_ms }`.
-                    for i in 0..4u32 {
+                4 | 17 => {
+                    // `Metadata { len, is_file, is_dir, modified_ms,
+                    // is_symlink, mode }`.
+                    for i in 0..6u32 {
                         let w = cx.offset(value, 8 * i as u64)?;
                         let w = cx.load_i64(w)?;
                         let f = cx.offset(at, cx.field_offset(okt, None, i)?)?;
-                        let v: inkwell::values::BasicValueEnum = if i == 1 || i == 2 {
+                        let v: inkwell::values::BasicValueEnum = if matches!(i, 1 | 2 | 4) {
                             cx.builder
                                 .build_int_truncate(w, cx.llcx.i8_type(), "")
                                 .map_err(e)?

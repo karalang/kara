@@ -55,6 +55,12 @@ fn fs.copy(from: Str, to: Str) -> Result[i64, IoError] with reads(FileSystem) wr
 
 fn fs.read_bytes(path: Str) -> Result[Vec[u8], IoError] with reads(FileSystem) blocks
 fn fs.write_bytes(path: Str, content: Slice[u8]) -> Result[(), IoError] with writes(FileSystem) blocks
+
+fn fs.symlink(target: Str, link: Str) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.read_link(path: Str) -> Result[String, IoError] with reads(FileSystem) blocks
+fn fs.symlink_metadata(path: Str) -> Result[Metadata, IoError] with reads(FileSystem) blocks
+fn fs.set_permissions(path: Str, mode: i64) -> Result[(), IoError] with writes(FileSystem) blocks
+fn fs.set_modified(path: Str, ms: i64) -> Result[(), IoError] with writes(FileSystem) blocks
 ```
 
 `read_bytes` and `write_bytes` are the byte forms of `read_to_string` and `write`: the whole file as bytes, with no UTF-8 check.
@@ -63,13 +69,19 @@ fn fs.write_bytes(path: Str, content: Slice[u8]) -> Result[(), IoError] with wri
 
 **`exists` returns `false` on any error**, a permission error included, so it cannot tell "absent" from "cannot look". A tool that must know the difference calls `metadata` and matches `NotFound`.
 
-**`metadata`** follows symbolic links and returns:
+**`metadata`** follows symbolic links and returns a `Metadata` (in `std.io`, and in the prelude):
 
 ```kara
-struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64 }
+struct Metadata { len: i64, is_file: bool, is_dir: bool, modified_ms: i64, is_symlink: bool, mode: i64 }
 ```
 
-`len` is the size in bytes and `modified_ms` the last modification time in milliseconds since the Unix epoch (negative before it). Fields will be added, so build a `Metadata` only by calling `metadata`, and read its fields by name rather than destructuring the whole struct.
+`len` is the size in bytes and `modified_ms` the last modification time in milliseconds since the Unix epoch (negative before it). `mode` is the permission bits, `0` to `0o7777` (the file-type bits are not included). On Windows, which has no Unix modes, `mode` is made from the read-only flag: `0o666` or `0o444` for a file, `0o777` or `0o555` for a directory. Fields will be added, so build a `Metadata` only by calling `metadata`, and read its fields by name rather than destructuring the whole struct.
+
+**`symlink_metadata`** is `metadata` without following a symbolic link: for a link it describes the link itself, with `is_symlink` true and `is_file` and `is_dir` false. `metadata` follows links, so its `is_symlink` is always false.
+
+**`symlink(target, link)`** creates `link` as a symbolic link to `target`. The target is stored exactly as given, need not exist, and if relative is resolved from the link's directory, not the current one. On Windows, creating a link needs Developer Mode or administrator rights (otherwise `PermissionDenied`), and the link is a directory link if the target is an existing directory. Where the platform has no symbolic links the call fails with `Unsupported`. **`read_link`** returns the stored target; a target that is not valid UTF-8 fails with `InvalidUtf8`.
+
+**`set_permissions(path, mode)`** sets the permission bits; a mode outside `0..=0o7777` fails with `InvalidInput`. On Windows only the owner-write bit (`0o200`) is used: without it the file becomes read-only. **`set_modified(path, ms)`** sets the modification time and leaves the access time unchanged. Both follow symbolic links. `set_modified` opens the file to change it, so on Unix the file must be readable (a directory, listable). A tool that restores an archive therefore sets the time before it removes read permission.
 
 **`read_dir`** returns the names of the entries (not paths), without `.` and `..`, **sorted byte-wise on their UTF-8 names**, so a program lists a directory the same way on every OS. A name that is not valid UTF-8 makes the call fail with `InvalidUtf8`.
 

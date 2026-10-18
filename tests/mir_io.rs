@@ -1274,6 +1274,75 @@ fn file_system_natives_match_the_interpreter() {
     }
 }
 
+/// Links, modes and times (docs/library/io.md § Files, B-2026-10-15-59):
+/// `symlink` and `read_link`, `symlink_metadata` against `metadata` on a
+/// link, a dangling link and a file, `Metadata.mode` after
+/// `set_permissions` (and its `InvalidInput` range), and `set_modified` on
+/// a file and a directory, read back through `modified_ms`.
+const FS_LINKS: &str = r#"
+fn show(r: Result[(), IoError]) -> String {
+    match r { Ok(_) => "ok".to_string(), Err(e) => match e { IoError.NotFound => "notfound".to_string(), IoError.AlreadyExists => "exists".to_string(), IoError.InvalidInput => "invalid".to_string(), _ => "other".to_string() } }
+}
+fn kind(m: Metadata) -> String {
+    f"{m.len} file={m.is_file} dir={m.is_dir} link={m.is_symlink}"
+}
+fn main() {
+    fs.create_dir("DIR/t").unwrap();
+    fs.write("DIR/t/a.txt", "hello").unwrap();
+    println(show(fs.symlink("a.txt", "DIR/t/l")));
+    println(show(fs.symlink("a.txt", "DIR/t/l")));
+    println(fs.read_link("DIR/t/l").unwrap());
+    match fs.read_link("DIR/t/a.txt") { Ok(_) => println("?"), Err(IoError.InvalidInput) => println("not a link"), Err(_) => println("other") }
+    println(kind(fs.metadata("DIR/t/l").unwrap()));
+    match fs.symlink_metadata("DIR/t/l") { Ok(m) => println(f"file={m.is_file} dir={m.is_dir} link={m.is_symlink}"), Err(_) => println("err") }
+    println(kind(fs.symlink_metadata("DIR/t/a.txt").unwrap()));
+    println(show(fs.symlink("missing", "DIR/t/d")));
+    println(f"{fs.exists("DIR/t/d")}");
+    match fs.metadata("DIR/t/d") { Ok(_) => println("?"), Err(IoError.NotFound) => println("dangling"), Err(_) => println("other") }
+    match fs.symlink_metadata("DIR/t/d") { Ok(m) => println(f"link={m.is_symlink}"), Err(_) => println("err") }
+    println(fs.read_link("DIR/t/d").unwrap());
+    println(show(fs.set_permissions("DIR/t/a.txt", 0o755)));
+    println(f"{fs.metadata("DIR/t/a.txt").unwrap().mode == 0o755}");
+    println(show(fs.set_permissions("DIR/t/a.txt", 0o640)));
+    let m = fs.metadata("DIR/t/a.txt").unwrap().mode;
+    println(f"{m == 0o640} {m}");
+    println(show(fs.set_permissions("DIR/t/a.txt", -1)));
+    println(show(fs.set_permissions("DIR/t/a.txt", 0o10000)));
+    println(show(fs.set_permissions("DIR/t/nope", 0o644)));
+    println(show(fs.set_modified("DIR/t/a.txt", 1759311000123)));
+    println(fs.metadata("DIR/t/a.txt").unwrap().modified_ms);
+    println(show(fs.set_modified("DIR/t/a.txt", -5000)));
+    println(fs.metadata("DIR/t/a.txt").unwrap().modified_ms);
+    println(show(fs.set_modified("DIR/t", 1000)));
+    println(fs.metadata("DIR/t").unwrap().modified_ms);
+    println(show(fs.set_modified("DIR/t/nope", 0)));
+    println(show(fs.set_permissions("DIR/t", 0o700)));
+    println(fs.metadata("DIR/t").unwrap().mode);
+    println(show(fs.remove_file("DIR/t/l")));
+    println(f"{fs.exists("DIR/t/l")} {fs.exists("DIR/t/a.txt")}");
+    println(show(fs.remove_dir_all("DIR/t")));
+}
+"#;
+
+#[cfg(unix)]
+#[test]
+fn file_system_links_modes_and_times_match_the_interpreter() {
+    let dir = Scratch::new("fslinks");
+    let src = FS_LINKS.replace("DIR", &dir.path().to_string_lossy());
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(
+        interp,
+        "ok\nexists\na.txt\nnot a link\n5 file=true dir=false link=false\n\
+         file=false dir=false link=true\n5 file=true dir=false link=false\nok\nfalse\n\
+         dangling\nlink=true\nmissing\nok\ntrue\nok\ntrue 416\ninvalid\ninvalid\n\
+         notfound\nok\n1759311000123\nok\n-5000\nok\n1000\nnotfound\nok\n448\nok\n\
+         false true\nok\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
 /// docs/library/concurrency.md's channel and `TaskGroup` surface
 /// (B-2026-10-15-9, B-2026-10-15-11): `channel(cap)`, `send` returning
 /// `Result[(), SendError[T]]`, `recv` returning `Option[T]` (`None` once

@@ -243,6 +243,9 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // What `File.options()` builds (docs/library/io.md § Files,
     // B-2026-10-15-28).
     "OpenOptions",
+    // What `fs.metadata` / `fs.symlink_metadata` return, so a helper can
+    // take one (B-2026-10-15-59).
+    "Metadata",
     // Phase 8 `BufReader[R]` — buffered reader wrapper (Standard I/O
     // follow-up). `BufReader.new(reader)` / `.with_capacity(reader, cap)`
     // wrap a `File`; `read_line` / `read_to_string` / `read` amortize
@@ -1640,7 +1643,14 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
     (&["std", "uuid"], &[], &["v4"]),
     (
         &["std", "io"],
-        &["File", "OpenOptions", "SeekFrom", "BufReader", "BufWriter"],
+        &[
+            "File",
+            "OpenOptions",
+            "SeekFrom",
+            "BufReader",
+            "BufWriter",
+            "Metadata",
+        ],
         &[],
     ),
     (
