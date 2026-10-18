@@ -22,7 +22,6 @@ use super::types::{
     type_display, type_is_fully_concrete, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo,
 };
 use super::{ConstEvalError, CoreLent, FixIt, LocalTypeScope, TypeErrorKind};
-use crate::ast::narrow_literal_to_i64;
 
 impl<'a> super::TypeChecker<'a> {
     /// `prelude_shadow` (B-2026-08-27-15) — warn when a user declaration takes
@@ -1378,7 +1377,16 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 };
-                integer_to_const_value(narrow_literal_to_i64(*n), &ty, &expr.span)
+                // The literal is the full i128 value, except that an
+                // unsigned-suffixed magnitude past the signed half is carried
+                // as its wrapped bit pattern (B-2026-10-18-2).
+                match sfx {
+                    Some(IntSuffix::U64 | IntSuffix::Usize) if *n < 0 => {
+                        integer_to_const_value(i128::from(*n as i64 as u64), &ty, &expr.span)
+                    }
+                    Some(IntSuffix::U128) if *n < 0 => Ok(ConstValue::U128(*n as u128)),
+                    _ => integer_to_const_value(*n, &ty, &expr.span),
+                }
             }
             // B-2026-08-12-10 — FLOAT literals. Previously unhandled, so
             // `let b: PositivePrice = 2.5;` over `f64 where self > 0.0` fell to
@@ -2656,7 +2664,9 @@ impl<'a> super::TypeChecker<'a> {
         visiting: &mut Vec<&'e str>,
     ) -> Option<i64> {
         match &expr.kind {
-            ExprKind::Integer(v, _) => Some(narrow_literal_to_i64(*v)),
+            // Past i64 is out of the discriminant surface: `None`, reported
+            // at the call site, not a panic (B-2026-10-18-2).
+            ExprKind::Integer(v, _) => i64::try_from(*v).ok(),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,

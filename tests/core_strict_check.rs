@@ -4723,6 +4723,37 @@ fn main() {
     );
 }
 
+/// B-2026-10-18-2: a `const` initialized by an integer literal past i64
+/// checks instead of panicking the evaluator, and an enum discriminant past
+/// i64 is the non-constant-discriminant error.
+#[test]
+fn check_const_literals_past_i64() {
+    accepted(
+        "const-past-i64",
+        r#"
+const BIG: i128 = 18446744073709551615;
+const UU: u64 = 18446744073709551615;
+const WW: u64 = 18446744073709551615u64;
+const XX: u128 = 340282366920938463463374607431768211455u128;
+fn main() {
+    println(f"{BIG} {UU} {WW} {XX}");
+}
+"#,
+    );
+    let (dir, path) = fixture(
+        "discriminant-past-i64",
+        "#[repr(i64)]\nenum Ee { Aa = 9223372036854775808, Bb = 1 }\nfn main() { println(\"x\"); }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(
+        err.contains("E_NON_CONSTANT_DISCRIMINANT") && !err.contains("panicked"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// B-2026-10-18-10: a program's own `Client`, `Response`, `HttpError` or
 /// `RequestBuilder` is its own type, so its methods are found; an error
 /// names it as written.

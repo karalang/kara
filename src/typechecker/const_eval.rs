@@ -327,12 +327,12 @@ pub(super) fn infer_operand_target_ty(left: &Expr, right: &Expr) -> Option<Type>
 /// Pack a literal integer `n` into a `ConstValue` of `target_ty`, returning
 /// `OutOfRange` if the value doesn't fit the target's bit width.
 pub(super) fn integer_to_const_value(
-    n: i64,
+    n: i128,
     target_ty: &Type,
     span: &Span,
 ) -> Result<ConstValue, ConstEvalError> {
     let out_of_range = |target: &Type| ConstEvalError::OutOfRange {
-        value: n as i128,
+        value: n,
         target_ty: target.clone(),
         span: *span,
     };
@@ -346,14 +346,13 @@ pub(super) fn integer_to_const_value(
         Type::Int(IntSize::I32) => i32::try_from(n)
             .map(ConstValue::I32)
             .map_err(|_| out_of_range(target_ty)),
-        Type::Int(IntSize::I64) => Ok(ConstValue::I64(n)),
-        Type::Int(IntSize::Isize) => Ok(ConstValue::Isize(n)),
-        // Const generics slice 2b: AST `ExprKind::Integer(i64, _)`
-        // already bounds the literal to i64 at parse time, so `n as
-        // i128` is the full source-level value. Widening of the
-        // `Integer` carrier to i128 bits is future work; pre-widening
-        // this is exact for all current source-level literals.
-        Type::Int(IntSize::I128) => Ok(ConstValue::I128(n as i128)),
+        Type::Int(IntSize::I64) => i64::try_from(n)
+            .map(ConstValue::I64)
+            .map_err(|_| out_of_range(target_ty)),
+        Type::Int(IntSize::Isize) => i64::try_from(n)
+            .map(ConstValue::Isize)
+            .map_err(|_| out_of_range(target_ty)),
+        Type::Int(IntSize::I128) => Ok(ConstValue::I128(n)),
         Type::UInt(UIntSize::U8) => u8::try_from(n)
             .map(ConstValue::U8)
             .map_err(|_| out_of_range(target_ty)),
@@ -374,7 +373,9 @@ pub(super) fn integer_to_const_value(
             .map_err(|_| out_of_range(target_ty)),
         // Non-integer target — caller's responsibility; the evaluator's
         // dispatch should never route a non-int target here, but be safe.
-        _ => Ok(ConstValue::I64(n)),
+        _ => i64::try_from(n)
+            .map(ConstValue::I64)
+            .map_err(|_| out_of_range(target_ty)),
     }
 }
 

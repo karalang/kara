@@ -2749,6 +2749,45 @@ fn mir_unsuffixed_literals_past_i64_agree_on_both_backends() {
     }
 }
 
+/// A `const` initialized by an integer literal past i64 takes the literal's
+/// full value, suffixed or not, and one out of range for its type is an
+/// error rather than a panic of the checker (B-2026-10-18-2).
+#[test]
+fn mir_const_literals_past_i64() {
+    const SRC: &str = "const BIG: i128 = 18446744073709551615;\n\
+        const UU: u64 = 18446744073709551615;\n\
+        const WW: u64 = 18446744073709551615u64;\n\
+        const HH: i128 = 9223372036854775808;\n\
+        const XX: u128 = 340282366920938463463374607431768211455u128;\n\
+        const MM: i128 = -170141183460469231731687303715884105728;\n\
+        fn main() {\n    println(f\"{BIG} {UU} {WW} {HH} {XX} {MM}\");\n    \
+        println(f\"{BIG - 1} {UU / 2}\");\n}\n";
+    let want = "18446744073709551615 18446744073709551615 18446744073709551615 \
+        9223372036854775808 340282366920938463463374607431768211455 \
+        -170141183460469231731687303715884105728\n\
+        18446744073709551614 9223372036854775807\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    for (src, msg) in [
+        (
+            "const BB: i64 = 9223372036854775808;\nfn main() { println(f\"{BB}\"); }\n",
+            "integer literal 9223372036854775808 out of range for 'i64'",
+        ),
+        (
+            "const BB: u64 = 18446744073709551616;\nfn main() { println(f\"{BB}\"); }\n",
+            "integer literal 18446744073709551616 out of range for 'u64'",
+        ),
+    ] {
+        let err = karac::mir::lower::build_source(src).err().expect("refused");
+        assert!(err.contains(msg), "{err}");
+    }
+}
+
 /// An unsuffixed `i128::MIN` is legal where the type is `i128` and refused
 /// as out of range for `i64` where nothing gives it a type
 /// (B-2026-10-15-73).
