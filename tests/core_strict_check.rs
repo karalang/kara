@@ -7266,3 +7266,41 @@ fn main() {
 "#,
     );
 }
+
+/// B-2026-10-15-47: the base of a struct update must have the literal's type.
+#[test]
+fn a_struct_update_base_of_another_type_is_refused() {
+    rejected(
+        "spread-base-type",
+        r#"
+struct D { a: i64, c: bool }
+struct E { a: i64, c: bool }
+
+fn other() -> E { E { a: 1, c: true } }
+
+fn main() {
+    let d = D { a: 5, ..other() };
+    println(f"{d.a}");
+}
+"#,
+        "expected 'D', found 'E'",
+    );
+}
+
+/// B-2026-10-14-53: `fs.read_dir` borrows its path, as the other file-system
+/// calls do, so the path is still usable in the error arm.
+#[test]
+fn read_dir_borrows_its_path() {
+    accepted(
+        "read-dir-borrows",
+        r#"
+fn main() {
+    let full = "data".to_string();
+    match fs.read_dir(full) {
+        Ok(v) => println(f"{v.len()}"),
+        Err(e) => println(f"cannot list {full}: {e}"),
+    }
+}
+"#,
+    );
+}

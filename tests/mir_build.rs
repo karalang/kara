@@ -3960,3 +3960,42 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-15-47: a struct update whose base is a call evaluates the base
+/// once, after the listed fields, and copies the rest from it.
+#[test]
+fn mir_struct_update_from_a_call() {
+    const SRC: &str = r#"struct D { a: i64, name: String, c: bool }
+
+fn base() -> D {
+    println("base");
+    D { a: 1, name: "b".to_string(), c: true }
+}
+
+fn five() -> i64 {
+    println("five");
+    5
+}
+
+struct H { d: D }
+
+fn main() {
+    let d = D { a: five(), ..base() };
+    println(f"{d.a} {d.name} {d.c}");
+    let e = D { c: false, ..base() };
+    println(f"{e.a} {e.name} {e.c}");
+    let h = H { d: D { a: 2, ..base() } };
+    println(f"{h.d.a} {h.d.name}");
+    let v = [D { a: 9, ..base() }, D { name: "x".to_string(), ..base() }];
+    println(f"{v[0].a} {v[1].name} {v[1].a}");
+}
+"#;
+    let want = "five\nbase\n5 b true\nbase\n1 b false\nbase\n2 b\nbase\nbase\n9 x 1\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
