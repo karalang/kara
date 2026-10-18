@@ -1,0 +1,16 @@
+source = "tests/mir_tasks.rs::mir_tasks_run_a_recursive_coroutine"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = ["closure", "drop", "par", "post-m1:par"]
+class = "c"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = "class c: v2 order unreviewed against core §7"
+bucket = "c-unreviewed"
+classified_with = "ec489d962"
+extracted_src = "f83ff96b"

@@ -1,0 +1,335 @@
+// LeetCode #698: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random problems.
+
+// ---- star arm ----------------------------------------------------------
+
+fn place_star(nums: Vec[i64], i: i64, buckets: mut ref Vec[i64], target: i64) -> bool {
+    if i == nums.len() {
+        return true;
+    }
+    for b in 0..buckets.len() {
+        if buckets[b] + nums[i] > target {
+            continue;
+        }
+        let mut seen = false;
+        for c in 0..b {
+            if buckets[c] == buckets[b] {
+                seen = true;
+            }
+        }
+        if seen {
+            continue;
+        }
+        buckets[b] += nums[i];
+        if place_star(nums, i + 1, buckets, target) {
+            return true;
+        }
+        buckets[b] -= nums[i];
+    }
+    false
+}
+
+fn can_partition_k_subsets_star(nums: Vec[i64], k: i64) -> bool {
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    if total % k != 0 {
+        return false;
+    }
+    let target = total / k;
+    let mut sorted = nums.clone();
+    sorted.sort_by(|a, b| b.cmp(a));
+    if sorted[0] > target {
+        return false;
+    }
+    let mut buckets: Vec[i64] = vec![0; k];
+    place_star(sorted, 0, mut buckets, target)
+}
+
+// ---- fill arm ----------------------------------------------------------
+
+fn fill_fill(nums: Vec[i64], used: mut ref Vec[bool], start: i64, left: i64, sum: i64, target: i64) -> bool {
+    if left == 1 {
+        return true;
+    }
+    if sum == target {
+        return fill_fill(nums, used, 0, left - 1, 0, target);
+    }
+    if sum == 0 {
+        // A new subset: its first value is the first one not used.
+        let mut first = 0;
+        while used[first] {
+            first += 1;
+        }
+        used[first] = true;
+        let ok = fill_fill(nums, used, first + 1, left, nums[first], target);
+        used[first] = false;
+        return ok;
+    }
+    let mut i = start;
+    while i < nums.len() {
+        if not used[i] and sum + nums[i] <= target {
+            used[i] = true;
+            if fill_fill(nums, used, i + 1, left, sum + nums[i], target) {
+                return true;
+            }
+            used[i] = false;
+            // An equal value would fail the same way.
+            while i + 1 < nums.len() and nums[i + 1] == nums[i] {
+                i += 1;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn can_partition_k_subsets_fill(nums: Vec[i64], k: i64) -> bool {
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    if total % k != 0 {
+        return false;
+    }
+    let target = total / k;
+    let mut sorted = nums.clone();
+    sorted.sort_by(|a, b| b.cmp(a));
+    if sorted[0] > target {
+        return false;
+    }
+    let mut used: Vec[bool] = vec![false; sorted.len()];
+    fill_fill(sorted, mut used, 0, k, 0, target)
+}
+
+// ---- memo arm ----------------------------------------------------------
+
+fn search_memo(nums: Vec[i64], mask: i64, sum: i64, target: i64, failed: mut ref Vec[bool]) -> bool {
+    let n = nums.len();
+    if mask == (1 << n) - 1 {
+        return true;
+    }
+    if failed[mask] {
+        return false;
+    }
+    let room = target - sum % target;
+    for i in 0..n {
+        if mask & (1 << i) == 0 and nums[i] <= room {
+            if search_memo(nums, mask | (1 << i), sum + nums[i], target, failed) {
+                return true;
+            }
+        }
+    }
+    failed[mask] = true;
+    false
+}
+
+fn can_partition_k_subsets_memo(nums: Vec[i64], k: i64) -> bool {
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    if total % k != 0 {
+        return false;
+    }
+    let mut failed: Vec[bool] = vec![false; 1 << nums.len()];
+    search_memo(nums, 0, 0, total / k, mut failed)
+}
+
+// ---- dp arm ------------------------------------------------------------
+
+fn can_partition_k_subsets_dp(nums: Vec[i64], k: i64) -> bool {
+    let n = nums.len();
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    if total % k != 0 {
+        return false;
+    }
+    let target = total / k;
+    let size = 1 << n;
+    let mut fill: Vec[i64] = vec![-1; size];
+    fill[0] = 0;
+    for mask in 0..size {
+        if fill[mask] < 0 {
+            continue;
+        }
+        for i in 0..n {
+            let next = mask | (1 << i);
+            if next != mask and fill[next] < 0 and fill[mask] + nums[i] <= target {
+                fill[next] = (fill[mask] + nums[i]) % target;
+            }
+        }
+    }
+    fill[size - 1] == 0
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, nums: Vec[i64], k: i64) -> bool {
+    if which == 0 {
+        can_partition_k_subsets_star(nums, k)
+    } else if which == 1 {
+        can_partition_k_subsets_fill(nums, k)
+    } else if which == 2 {
+        can_partition_k_subsets_memo(nums, k)
+    } else {
+        can_partition_k_subsets_dp(nums, k)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Can the values not in `taken` be cut into `left` subsets, each one of
+// the subsets in `good`? The lowest value not taken has to be in one of
+// them, so only those subsets are tried.
+fn cover(good: Vec[i64], n: i64, taken: i64, left: i64) -> bool {
+    if left == 0 {
+        return taken == (1 << n) - 1;
+    }
+    let mut low = 0;
+    while low < n and taken & (1 << low) != 0 {
+        low += 1;
+    }
+    if low == n {
+        return false;
+    }
+    for s in good.iter() {
+        if *s & (1 << low) != 0 and *s & taken == 0 {
+            if cover(good, n, taken | *s, left - 1) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// The definition: a split is k subsets that use every value once and
+// each sum to the same amount, which must be total / k. List every
+// subset with that sum, then look for k of them that do not overlap and
+// cover all the values.
+fn definition(nums: Vec[i64], k: i64) -> bool {
+    let n = nums.len();
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    if total % k != 0 {
+        return false;
+    }
+    let mut good: Vec[i64] = Vec.new();
+    for s in 1..(1 << n) {
+        let mut sum = 0;
+        for i in 0..n {
+            if s & (1 << i) != 0 {
+                sum += nums[i];
+            }
+        }
+        if sum == total / k {
+            good.push(s);
+        }
+    }
+    cover(good, n, 0, k)
+}
+
+fn main() {
+    let mut seed = 6980;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut yes = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        let k = 1 + next_random(mut seed) % 4;
+        let mut nums: Vec[i64] = Vec.new();
+        if next_random(mut seed) % 2 == 0 {
+            // k groups, each a random split of one target into up to
+            // 10 / k values; then perhaps one unit moved between values.
+            let target = 2 + next_random(mut seed) % 15;
+            for _ in 0..k {
+                let g = 1 + next_random(mut seed) % (10 / k);
+                let mut left = target;
+                for _ in 0..g - 1 {
+                    if left > 1 {
+                        let part = 1 + next_random(mut seed) % (left - 1);
+                        nums.push(part);
+                        left -= part;
+                    }
+                }
+                nums.push(left);
+            }
+            let n = nums.len();
+            if n >= 2 and next_random(mut seed) % 2 == 0 {
+                let i = next_random(mut seed) % n;
+                let j = (i + 1 + next_random(mut seed) % (n - 1)) % n;
+                if nums[j] > 1 {
+                    nums[i] += 1;
+                    nums[j] -= 1;
+                }
+            }
+        } else {
+            // 1 to 10 values from 1 to up to 12.
+            let n = 1 + next_random(mut seed) % 10;
+            let top = 1 + next_random(mut seed) % 12;
+            for _ in 0..n {
+                nums.push(1 + next_random(mut seed) % top);
+            }
+        }
+        let n = nums.len();
+        let mut total = 0;
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut doubled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            total += nums[i];
+            reversed.push(nums[n - 1 - i]);
+            doubled.push(2 * nums[i]);
+        }
+        let want = definition(nums, k);
+        if want {
+            yes += 1;
+        }
+        for which in 0..arms {
+            let got = answer(which, nums, k);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the values in reverse order, the same answer.
+            checks += 1;
+            if answer(which, reversed, k) != got {
+                fails[1] += 1;
+            }
+            // P3: every value doubled, the same answer.
+            checks += 1;
+            if answer(which, doubled, k) != got {
+                fails[2] += 1;
+            }
+            // P4: when k divides the total, one more value equal to the
+            // share, in one more subset, the same answer.
+            if total % k == 0 {
+                let mut longer = nums.clone();
+                longer.push(total / k);
+                checks += 1;
+                if answer(which, longer, k + 1) != got {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total_fails = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total_fails += fails[p];
+    }
+    println(f"{report}{cases} problems ({yes} can be split), {arms} arms, {checks} checks, {total_fails} failures");
+}

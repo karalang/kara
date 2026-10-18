@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/698-partition-to-k-equal-sum-subsets/bench/can_partition_k_subsets.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "ec489d962"
+extracted_src = "e30641d5"
+model_rev = "583cfb0d"
+model_src = "e30641d5"

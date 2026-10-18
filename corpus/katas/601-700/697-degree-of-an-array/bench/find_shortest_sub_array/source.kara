@@ -1,0 +1,64 @@
+// LeetCode #697: Degree of an Array -- bench program for the table arm.
+//
+// 40 arrays of 50,000 values are built once, array k drawing its values
+// from 0 up to 1 + 1250 k, so the first holds one value 50,000 times and
+// the last nearly every value once; then in each of 20 rounds every
+// array's shortest subarray with its degree is found with the table arm,
+// and the answers go into a checksum.
+
+fn find_shortest_sub_array(nums: Vec[i64]) -> i64 {
+    let size = 50000;
+    let mut count: Vec[i64] = vec![0; size];
+    let mut first: Vec[i64] = vec![-1; size];
+    let mut last: Vec[i64] = vec![0; size];
+    for i in 0..nums.len() {
+        let x = nums[i];
+        if first[x] < 0 {
+            first[x] = i;
+        }
+        last[x] = i;
+        count[x] += 1;
+    }
+    let mut degree = 0;
+    let mut best = nums.len();
+    for x in 0..size {
+        if count[x] == 0 {
+            continue;
+        }
+        let span = last[x] - first[x] + 1;
+        if count[x] > degree or (count[x] == degree and span < best) {
+            degree = count[x];
+            best = span;
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 697;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for k in 0..40 {
+        let range = 1 + 1250 * k;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..50000 {
+            nums.push((next_random(mut seed) * 65536 + next_random(mut seed)) % range);
+        }
+        arrays.push(nums);
+    }
+    let rounds = 20;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..rounds {
+        for nums in arrays.iter() {
+            let r = find_shortest_sub_array(nums);
+            total += r;
+            checksum = (checksum * 31 + r) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 40 arrays of 50000: shortest spans sum to {total}, checksum {checksum}");
+}

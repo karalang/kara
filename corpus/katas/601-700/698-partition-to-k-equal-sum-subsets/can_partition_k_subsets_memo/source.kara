@@ -1,0 +1,134 @@
+// LeetCode #698: Partition to K Equal Sum Subsets -- used sets remembered.
+//
+// The same search as filling one subset at a time, but the state is just
+// the set of values used so far, kept as a bitmask: the sum of the used
+// values says how many subsets are full and how much the open one holds.
+// Whether a set can be finished depends on nothing else, so each set
+// that fails is marked and never searched again. O(n 2^n) time and
+// O(2^n) space.
+
+fn search(nums: Vec[i64], mask: i64, sum: i64, target: i64, failed: mut ref Vec[bool]) -> bool {
+    let n = nums.len();
+    if mask == (1 << n) - 1 {
+        return true;
+    }
+    if failed[mask] {
+        return false;
+    }
+    let room = target - sum % target;
+    for i in 0..n {
+        if mask & (1 << i) == 0 and nums[i] <= room {
+            if search(nums, mask | (1 << i), sum + nums[i], target, failed) {
+                return true;
+            }
+        }
+    }
+    failed[mask] = true;
+    false
+}
+
+fn can_partition_k_subsets(nums: Vec[i64], k: i64) -> bool {
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    if total % k != 0 {
+        return false;
+    }
+    let mut failed: Vec[bool] = vec![false; 1 << nums.len()];
+    search(nums, 0, 0, total / k, mut failed)
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn yes_no(b: bool) -> String {
+    if b { "yes" } else { "no" }
+}
+
+// A problem that can be split: k groups, each a random split of one
+// target into up to 16 / k values, the groups mixed together; then, half
+// the time, d moved from one value to another, which keeps the total but
+// may leave no way to split it.
+fn random_problem(seed: mut ref i64) -> (Vec[i64], i64) {
+    let k = 1 + next_random(mut seed) % 6;
+    let target = 16 + next_random(mut seed) % 9985;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..k {
+        let g = 1 + next_random(mut seed) % (16 / k);
+        let mut left = target;
+        for _ in 0..g - 1 {
+            let part = 1 + next_random(mut seed) % (target / g);
+            nums.push(part);
+            left -= part;
+        }
+        nums.push(left);
+    }
+    let n = nums.len();
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        let t = nums[i];
+        nums[i] = nums[j];
+        nums[j] = t;
+    }
+    if n >= 2 and next_random(mut seed) % 2 == 0 {
+        let i = next_random(mut seed) % n;
+        let j = (i + 1 + next_random(mut seed) % (n - 1)) % n;
+        let most = (nums[j] - 1).min(10000 - nums[i]);
+        if most >= 1 {
+            let d = 1 + next_random(mut seed) % most;
+            nums[i] += d;
+            nums[j] -= d;
+        }
+    }
+    (nums, k)
+}
+
+fn main() {
+    // The two LeetCode examples.
+    println(f"example 1: {yes_no(can_partition_k_subsets(vec![4, 3, 2, 3, 5, 2, 1], 4))}");
+    println(f"example 2: {yes_no(can_partition_k_subsets(vec![1, 2, 3, 4], 3))}");
+    // One subset; sixteen equal values into sixteen; a total k does not
+    // divide; a value larger than its share.
+    let one = can_partition_k_subsets(vec![5, 1, 9], 1);
+    let sixteen = can_partition_k_subsets(vec![7; 16], 16);
+    let indivisible = can_partition_k_subsets(vec![1, 1, 1, 1, 1], 2);
+    let too_big = can_partition_k_subsets(vec![9, 1, 1, 1], 2);
+    println(f"one subset: {yes_no(one)}, sixteen of 7: {yes_no(sixteen)}, odd total: {yes_no(indivisible)}, too big: {yes_no(too_big)}");
+    // Shares that add up but do not split: the total and every value
+    // allow it, and still no way works.
+    let a = can_partition_k_subsets(vec![2, 2, 2, 2, 3, 4, 5], 4);
+    let b = can_partition_k_subsets(vec![3, 3, 10, 2, 6, 5, 10, 6, 8, 3, 2, 1, 6, 10, 7, 2], 6);
+    let c = can_partition_k_subsets(vec![10, 10, 10, 7, 7, 7, 7, 7, 7, 6, 6, 6], 3);
+    let d = can_partition_k_subsets(vec![1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4], 4);
+    println(f"[2,2,2,2,3,4,5] in 4: {yes_no(a)}, sixteen in 6: {yes_no(b)}, twelve in 3: {yes_no(c)}, 1 to 4 four times in 4: {yes_no(d)}");
+    // Sixteen values near the largest the problem allows, in 8 pairs of
+    // 19,998: 9,997 would need a 10,001, so no split; with 9,998 in its
+    // place, one 10,000 is its partner.
+    let mut big = vec![9999; 16];
+    big[0] = 9997;
+    big[1] = 10000;
+    big[2] = 10000;
+    let e = can_partition_k_subsets(big, 8);
+    big[0] = 9998;
+    big[2] = 9999;
+    let f = can_partition_k_subsets(big, 8);
+    println(f"9997 among 9999s in 8: {yes_no(e)}, 9998 instead: {yes_no(f)}");
+    // 300 random problems, about half of them altered, with a checksum.
+    let mut seed = 698;
+    let mut yes = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let (nums, k) = random_problem(mut seed);
+        let r = can_partition_k_subsets(nums, k);
+        if r {
+            yes += 1;
+        }
+        checksum = (checksum * 3 + (if r { 1 } else { 0 }) + nums.len()) % 1000000007;
+    }
+    println(f"300 random problems: {yes} can be split, checksum {checksum}");
+}

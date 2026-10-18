@@ -1,0 +1,5 @@
+example 1: 2
+example 2: 6
+one: 1, all distinct: 1, tied: 8, ends: 7
+one value 50000 times: 50000, every value once: 1, mirrored: 2
+100 random arrays: shortest spans sum to 498394, checksum 335867345

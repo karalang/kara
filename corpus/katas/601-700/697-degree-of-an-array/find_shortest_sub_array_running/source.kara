@@ -1,0 +1,80 @@
+// LeetCode #697: Degree of an Array -- the answer kept as it goes.
+//
+// One pass, no second walk: as each value is counted, its span so far is
+// the place now less its first place, plus one. When its count passes
+// the degree seen so far, it becomes the degree and its span the answer;
+// when it equals the degree, the shorter span wins. The answer at the
+// end is the answer for the whole array. O(n) time, O(d) space.
+
+fn find_shortest_sub_array(nums: Vec[i64]) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    let mut first: Map[i64, i64] = Map.new();
+    let mut degree = 0;
+    let mut best = 0;
+    for i in 0..nums.len() {
+        let x = nums[i];
+        if not first.contains_key(x) {
+            first.insert(x, i);
+        }
+        let c = match count.get(x) {
+            Some(c) => *c + 1,
+            None => 1,
+        };
+        count.insert(x, c);
+        let span = i - *first.get(x).unwrap() + 1;
+        if c > degree {
+            degree = c;
+            best = span;
+        } else if c == degree and span < best {
+            best = span;
+        }
+    }
+    best
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The two LeetCode examples.
+    println(f"example 1: {find_shortest_sub_array(vec![1, 2, 2, 3, 1])}");
+    println(f"example 2: {find_shortest_sub_array(vec![1, 2, 2, 3, 1, 4, 2])}");
+    // One element; every value once; two values tied for the degree with
+    // different spans; the largest value at both ends.
+    let one = find_shortest_sub_array(vec![7]);
+    let distinct = find_shortest_sub_array(vec![5, 4, 3, 2, 1]);
+    let tied = find_shortest_sub_array(vec![1, 2, 1, 3, 3, 4, 2, 5, 2, 1]);
+    let ends = find_shortest_sub_array(vec![49999, 0, 1, 0, 2, 49999, 49999]);
+    println(f"one: {one}, all distinct: {distinct}, tied: {tied}, ends: {ends}");
+    // 50,000 copies of one value; 0 to 49,999 once each; 0 to 24,999 twice
+    // over, the second time in reverse, so the middle pair is the answer.
+    let same = find_shortest_sub_array(vec![3; 50000]);
+    let mut every: Vec[i64] = Vec.new();
+    let mut mirror: Vec[i64] = Vec.new();
+    for i in 0..50000 {
+        every.push(i);
+        mirror.push(if i < 25000 { i } else { 49999 - i });
+    }
+    println(f"one value 50000 times: {same}, every value once: {find_shortest_sub_array(every)}, mirrored: {find_shortest_sub_array(mirror)}");
+    // 100 random arrays of up to 20,000 values from up to 1 to 50,000
+    // distinct values, with a checksum.
+    let mut seed = 697;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..100 {
+        let n = 1 + next_random(mut seed) % 20000;
+        let range = 1 + (next_random(mut seed) * 65536 + next_random(mut seed)) % 50000;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push((next_random(mut seed) * 65536 + next_random(mut seed)) % range);
+        }
+        let r = find_shortest_sub_array(nums);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"100 random arrays: shortest spans sum to {total}, checksum {checksum}");
+}

@@ -1,0 +1,13 @@
+drop 0
+y 1 1
+drop 1
+y 2 2
+drop 2
+drop 0
+x 1 1
+drop 1
+x 2 2
+drop 2
+x 3 3
+drop 3
+sum 9

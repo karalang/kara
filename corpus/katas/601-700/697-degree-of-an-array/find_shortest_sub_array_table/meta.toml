@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/697-degree-of-an-array/find_shortest_sub_array_table.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "ec489d962"
+extracted_src = "3c8544c3"
+model_rev = "583cfb0d"
+model_src = "3c8544c3"

@@ -1,0 +1,92 @@
+// LeetCode #698: Partition to K Equal Sum Subsets -- bench program for
+// the bottom-up arm.
+//
+// 100 problems of 16 values are built once: k is 1, 2, 4, 8 or 16, the
+// values are k random splits of one target, and in half of the problems
+// one amount is moved between two values. Then in each of 2 rounds every
+// problem is answered with the arm that visits all 65,536 sets, and the
+// answers go into a checksum.
+
+fn can_partition_k_subsets(nums: Vec[i64], k: i64) -> bool {
+    let n = nums.len();
+    let mut total = 0;
+    for x in nums.iter() {
+        total += *x;
+    }
+    if total % k != 0 {
+        return false;
+    }
+    let target = total / k;
+    let size = 1 << n;
+    let mut fill: Vec[i64] = vec![-1; size];
+    fill[0] = 0;
+    for mask in 0..size {
+        if fill[mask] < 0 {
+            continue;
+        }
+        for i in 0..n {
+            let next = mask | (1 << i);
+            if next != mask and fill[next] < 0 and fill[mask] + nums[i] <= target {
+                fill[next] = (fill[mask] + nums[i]) % target;
+            }
+        }
+    }
+    fill[size - 1] == 0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 698;
+    let mut problems: Vec[Vec[i64]] = Vec.new();
+    let mut ks: Vec[i64] = Vec.new();
+    for p in 0..100 {
+        let k = 1 << (p % 5);
+        let g = 16 / k;
+        let target = 16 + next_random(mut seed) % 9985;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..k {
+            let mut left = target;
+            for _ in 0..g - 1 {
+                let part = 1 + next_random(mut seed) % (target / g);
+                nums.push(part);
+                left -= part;
+            }
+            nums.push(left);
+        }
+        for i in 0..16 {
+            let j = i + next_random(mut seed) % (16 - i);
+            let t = nums[i];
+            nums[i] = nums[j];
+            nums[j] = t;
+        }
+        if p % 2 == 1 {
+            let i = next_random(mut seed) % 16;
+            let j = (i + 1 + next_random(mut seed) % 15) % 16;
+            let most = (nums[j] - 1).min(10000 - nums[i]);
+            if most >= 1 {
+                let d = 1 + next_random(mut seed) % most;
+                nums[i] += d;
+                nums[j] -= d;
+            }
+        }
+        problems.push(nums);
+        ks.push(k);
+    }
+    let rounds = 2;
+    let mut yes = 0;
+    let mut checksum = 0;
+    for _ in 0..rounds {
+        for p in 0..problems.len() {
+            let r = can_partition_k_subsets(problems[p], ks[p]);
+            if r {
+                yes += 1;
+            }
+            checksum = (checksum * 3 + (if r { 1 } else { 0 }) + p) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 100 problems of 16 values: {yes} answers yes, checksum {checksum}");
+}

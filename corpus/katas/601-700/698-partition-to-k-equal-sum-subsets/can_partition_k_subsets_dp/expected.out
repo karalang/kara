@@ -1,0 +1,6 @@
+example 1: yes
+example 2: no
+one subset: yes, sixteen of 7: yes, odd total: no, too big: no
+[2,2,2,2,3,4,5] in 4: no, sixteen in 6: no, twelve in 3: yes, 1 to 4 four times in 4: yes
+9997 among 9999s in 8: no, 9998 instead: yes
+300 random problems: 224 can be split, checksum 314317261

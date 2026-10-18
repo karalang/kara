@@ -1,0 +1,17 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn count(n: i64, label: Str) -> i64 {
+    let r = R { id: n };
+    sleep_ms(5);
+    if n == 0 { return 0; }
+    let a = count(n - 1, label);
+    println(f"{label} {n} {r.id}");
+    a + n
+}
+fn main() {
+    let group = TaskGroup.new();
+    let x = group.spawn(|| count(3, "x"));
+    let y = group.spawn(|| count(2, "y"));
+    println(f"sum {x.join() + y.join()}");
+}
