@@ -875,8 +875,19 @@ impl<'a> super::TypeChecker<'a> {
                 .items
                 .iter()
                 .filter_map(|it| match it {
-                    Item::StructDef(s) if !s.stdlib_origin => Some(s.name.as_str()),
-                    Item::EnumDef(e) if !e.stdlib_origin => Some(e.name.as_str()),
+                    // A type an import spliced from a gated `std.*` module
+                    // shadows a baked one as a user type does (`std.encoding`'s
+                    // `DecodeError`; B-2026-10-15-17).
+                    Item::StructDef(s)
+                        if !s.stdlib_origin || crate::prelude::is_gated_module_type(&s.name) =>
+                    {
+                        Some(s.name.as_str())
+                    }
+                    Item::EnumDef(e)
+                        if !e.stdlib_origin || crate::prelude::is_gated_module_type(&e.name) =>
+                    {
+                        Some(e.name.as_str())
+                    }
                     // The v2 `std.net`'s `type TcpError = NetError` replaces
                     // the baked `enum TcpError` (B-2026-10-15-18).
                     Item::TypeAlias(a) => Some(a.name.as_str()),

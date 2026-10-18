@@ -147,6 +147,7 @@ pub(super) fn build_super_program_for_run(tree: &ProgramTree) -> Program {
             }
         }
     }
+    crate::prelude::dedup_spliced_items(&mut items);
     Program {
         items,
         ..Program::default()

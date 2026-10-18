@@ -1216,6 +1216,10 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "path"],
         include_str!("../runtime/stdlib/path.kara"),
     ),
+    (
+        &["std", "encoding"],
+        include_str!("../runtime/stdlib/std_encoding.kara"),
+    ),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -1534,6 +1538,82 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         out.push(cloned);
     }
 
+    // The module's own functions and types that the spliced items name are
+    // spliced too, under their own names, so a function may call a helper
+    // or build a type the import did not list (`sha256` running `Sha256`).
+    // Names are read off the items' source text, which over-includes at
+    // worst; the loop runs to a fixed point.
+    let src = GATED_STDLIB_SOURCES
+        .iter()
+        .find(|(p, _)| p.len() == path.len() && p.iter().zip(path).all(|(a, b)| *a == b))
+        .map(|(_, s)| *s)
+        .unwrap_or("");
+    let module_item_name = |item: &Item| -> Option<String> {
+        match item {
+            Item::Function(f) => Some(f.name.clone()),
+            Item::StructDef(s) => Some(s.name.clone()),
+            Item::EnumDef(e) => Some(e.name.clone()),
+            _ => None,
+        }
+    };
+    let mut included: std::collections::HashSet<String> = items
+        .iter()
+        .filter(|ii| ii.alias.is_none())
+        .map(|ii| ii.name.clone())
+        .collect();
+    let mut pending: Vec<Item> = out.clone();
+    for item in &program.items {
+        if let Item::ImplBlock(imp) = item {
+            let target = match &imp.target_type.kind {
+                crate::ast::TypeKind::Path(p) => p.segments.last().cloned(),
+                _ => None,
+            };
+            if target.is_some_and(|t| spliced_type_names.contains(&t)) {
+                pending.push(item.clone());
+            }
+        }
+    }
+    while let Some(item) = pending.pop() {
+        for name in names_in_item_source(&item, src) {
+            if !included.insert(name.clone()) {
+                continue;
+            }
+            let Some(found) = program
+                .items
+                .iter()
+                .find(|it| module_item_name(it).as_deref() == Some(name.as_str()))
+            else {
+                continue;
+            };
+            let mut cloned = found.clone();
+            match &mut cloned {
+                Item::Function(f) => f.stdlib_origin = true,
+                Item::StructDef(s) => {
+                    s.stdlib_origin = true;
+                    spliced_type_names.insert(s.name.clone());
+                }
+                Item::EnumDef(e) => {
+                    e.stdlib_origin = true;
+                    spliced_type_names.insert(e.name.clone());
+                }
+                _ => {}
+            }
+            if matches!(cloned, Item::StructDef(_) | Item::EnumDef(_)) {
+                for imp_item in &program.items {
+                    if let Item::ImplBlock(imp) = imp_item {
+                        if matches!(&imp.target_type.kind,
+                            crate::ast::TypeKind::Path(p) if p.segments.last() == Some(&name))
+                        {
+                            pending.push(imp_item.clone());
+                        }
+                    }
+                }
+            }
+            pending.push(cloned.clone());
+            out.push(cloned);
+        }
+    }
+
     // Auto-splice `impl` blocks for the struct/enum types spliced above.
     // A gated module's type (`std.web.time.Duration`) carries its methods
     // in an `impl Duration { ... }` block, which is not itself a
@@ -1616,6 +1696,67 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
     }
 
     Some(out)
+}
+
+/// Whether a gated `std.*` module declares a struct or enum named `name`.
+pub fn is_gated_module_type(name: &str) -> bool {
+    GATED_STDLIB_PROGRAMS.iter().any(|(_, program)| {
+        program.items.iter().any(|it| match it {
+            Item::StructDef(s) => s.name == name,
+            Item::EnumDef(e) => e.name == name,
+            _ => false,
+        })
+    })
+}
+
+/// The identifiers in `item`'s source text, read from the extent of its
+/// spans within `src` (its module's source).
+fn names_in_item_source(item: &Item, src: &str) -> Vec<String> {
+    let (mut lo, mut hi) = (usize::MAX, 0);
+    crate::span_visitor::visit_item_spans(item, &mut |sp| {
+        lo = lo.min(sp.offset);
+        hi = hi.max(sp.offset + sp.length);
+    });
+    let Some(text) = src.get(lo..hi.min(src.len())) else {
+        return Vec::new();
+    };
+    crate::tokenize(text)
+        .into_iter()
+        .filter_map(|t| match t.token {
+            crate::token::Token::Identifier { name, .. } => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Removes the second and later copies of a library item that several
+/// gated imports spliced (a helper both name, or a type imported by one and
+/// reached by another's function): functions and types by name, `impl`
+/// blocks by their source position and target.
+pub fn dedup_spliced_items(items: &mut Vec<Item>) {
+    let mut seen: std::collections::HashSet<(u8, String)> = std::collections::HashSet::new();
+    items.retain(|it| {
+        let key = match it {
+            Item::Function(f) if f.stdlib_origin => (0, f.name.clone()),
+            Item::StructDef(s) if s.stdlib_origin => (1, s.name.clone()),
+            Item::EnumDef(e) if e.stdlib_origin => (1, e.name.clone()),
+            Item::ImplBlock(b)
+                if b.items
+                    .iter()
+                    .any(|m| matches!(m, crate::ast::ImplItem::Method(m) if m.stdlib_origin)) =>
+            {
+                // The offset alone is relative to its own module, so two
+                // modules' impls can share one; the target type and trait
+                // tell them apart.
+                (
+                    2,
+                    format!("{}|{:?}|{:?}", b.span.offset, b.target_type, b.trait_name),
+                )
+            }
+            _ => return true,
+        };
+        seen.insert(key)
+    });
 }
 
 /// Single-file-mode gated-import expansion (see
@@ -1832,6 +1973,7 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
         }
     }
     program.items.extend(appended);
+    dedup_spliced_items(&mut program.items);
 }
 
 /// A baked-stdlib method's stability annotations: the `#[unstable]` payload

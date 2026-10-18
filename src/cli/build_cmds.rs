@@ -1874,6 +1874,7 @@ pub(super) fn run_multi_file_late_phases(
             }
         }
     }
+    crate::prelude::dedup_spliced_items(&mut super_items);
 
     let super_program = Program {
         items: super_items,

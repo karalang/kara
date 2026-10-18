@@ -3867,3 +3867,41 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-15-17: `std.encoding` against RFC 4648's test vectors, with the
+/// strict-decoding errors, identical on the MIR interpreter and both opt levels.
+#[test]
+fn mir_std_encoding_round_trips_rfc4648() {
+    const SRC: &str = r#"import std.encoding.{base64_encode, base64_decode, base64url_encode, base64url_decode, hex_encode, hex_decode, DecodeError};
+fn show(r: Result[Vec[u8], DecodeError]) -> String {
+    match r {
+        Ok(v) => f"ok:{String.from_utf8(v.as_slice()).unwrap_or("?".to_string())}",
+        Err(e) => f"err:{e}",
+    }
+}
+fn main() {
+    for s in ["", "f", "fo", "foo", "foob", "fooba", "foobar"].iter() {
+        let e = base64_encode(s.bytes());
+        let u = base64url_encode(s.bytes());
+        println(f"[{s}] {e} {u} {show(base64_decode(e.as_str()))} {show(base64url_decode(u.as_str()))} {hex_encode(s.bytes())}");
+    }
+    println(base64_encode([251u8, 255u8, 191u8].as_slice()));
+    println(base64url_encode([251u8, 255u8, 191u8].as_slice()));
+    println(show(base64_decode("Zm9v!mFy")));
+    println(show(base64_decode("Zm9vYg")));
+    println(show(base64_decode("Zm9vYh==")));
+    println(show(base64url_decode("Zm9vYg==")));
+    println(show(hex_decode("666F6f")));
+    println(show(hex_decode("666")));
+    println(show(hex_decode("6x")));
+}
+"#;
+    let want = "[]   ok: ok: \n[f] Zg== Zg ok:f ok:f 66\n[fo] Zm8= Zm8 ok:fo ok:fo 666f\n[foo] Zm9v Zm9v ok:foo ok:foo 666f6f\n[foob] Zm9vYg== Zm9vYg ok:foob ok:foob 666f6f62\n[fooba] Zm9vYmE= Zm9vYmE ok:fooba ok:fooba 666f6f6261\n[foobar] Zm9vYmFy Zm9vYmFy ok:foobar ok:foobar 666f6f626172\n+/+/\n-_-_\nerr:invalid byte at offset 4\nerr:invalid length\nerr:invalid byte at offset 5\nok:foob\nok:foo\nerr:invalid length\nerr:invalid byte at offset 1\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

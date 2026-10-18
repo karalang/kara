@@ -1,0 +1,170 @@
+// `std.encoding`: Base64 and hex (docs/library/encoding.md; B-2026-10-15-17).
+
+/// Why a decode found no bytes.
+#[non_exhaustive]
+pub enum DecodeError {
+    /// The character at this byte offset of the text cannot appear there.
+    InvalidByte(i64),
+    /// The text's length cannot hold whole bytes, or its padding is wrong.
+    InvalidLength,
+}
+
+impl Display for DecodeError {
+    fn to_string(ref self) -> String {
+        match self {
+            DecodeError.InvalidByte(at) => f"invalid byte at offset {at}",
+            DecodeError.InvalidLength => "invalid length",
+        }
+    }
+}
+
+/// `data` in Base64 over `alphabet`, padded with `=` when `pad`.
+fn base64_encode_with(data: Slice[u8], alphabet: Str, pad: bool) -> String {
+    let n = data.len();
+    let mut out = String.with_capacity((n + 2) / 3 * 4);
+    let mut i = 0;
+    while i < n {
+        let left = n - i;
+        let b0 = data[i] as i64;
+        let b1 = if left > 1 { data[i + 1] as i64 } else { 0 };
+        let b2 = if left > 2 { data[i + 2] as i64 } else { 0 };
+        let v = (b0 << 16) | (b1 << 8) | b2;
+        let mut k = 0;
+        while k < 4 {
+            let x = (v >> (18 - 6 * k)) & 63;
+            if k <= left {
+                out.push_str(alphabet.slice(x, x + 1));
+            } else if pad {
+                out.push_str("=");
+            }
+            k = k + 1;
+        }
+        i = i + 3;
+    }
+    out
+}
+
+/// The six bits a Base64 character stands for, or -1.
+fn base64_value(c: u8, url: bool) -> i64 {
+    let c = c as i64;
+    if c >= 65 and c <= 90 {
+        c - 65
+    } else if c >= 97 and c <= 122 {
+        c - 71
+    } else if c >= 48 and c <= 57 {
+        c + 4
+    } else if (url and c == 45) or (not url and c == 43) {
+        62
+    } else if (url and c == 95) or (not url and c == 47) {
+        63
+    } else {
+        -1
+    }
+}
+
+/// Base64 `text` over the standard (`url` false) or URL-safe alphabet.
+/// Padding is required when `pad_required`, and otherwise allowed.
+fn base64_decode_with(text: Str, url: bool, pad_required: bool) -> Result[Vec[u8], DecodeError] {
+    let bs = text.bytes();
+    let mut n = bs.len();
+    let mut pads = 0;
+    while n > 0 and bs[n - 1] == 61 {
+        n = n - 1;
+        pads = pads + 1;
+    }
+    if pads > 2 {
+        return Err(DecodeError.InvalidByte(n + 2));
+    }
+    if n % 4 == 1 {
+        return Err(DecodeError.InvalidLength);
+    }
+    if (pad_required or pads > 0) and (n + pads) % 4 != 0 {
+        return Err(DecodeError.InvalidLength);
+    }
+    let mut out: Vec[u8] = Vec.with_capacity(n / 4 * 3 + 2);
+    let mut acc = 0;
+    let mut bits = 0;
+    let mut i = 0;
+    while i < n {
+        let v = base64_value(bs[i], url);
+        if v < 0 {
+            return Err(DecodeError.InvalidByte(i));
+        }
+        acc = (acc << 6) | v;
+        bits = bits + 6;
+        if bits >= 8 {
+            bits = bits - 8;
+            out.push(((acc >> bits) & 255) as u8);
+            acc = acc & ((1 << bits) - 1);
+        }
+        i = i + 1;
+    }
+    if acc != 0 {
+        return Err(DecodeError.InvalidByte(n - 1));
+    }
+    Ok(out)
+}
+
+/// `data` in standard Base64 (RFC 4648 §4), padded with `=`.
+pub fn base64_encode(data: Slice[u8]) -> String {
+    base64_encode_with(data, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", true)
+}
+
+/// Standard Base64 text back to bytes. The padding is required, and any
+/// character outside the alphabet is an error.
+pub fn base64_decode(text: Str) -> Result[Vec[u8], DecodeError] {
+    base64_decode_with(text, false, true)
+}
+
+/// `data` in URL-safe Base64 (RFC 4648 §5), without padding.
+pub fn base64url_encode(data: Slice[u8]) -> String {
+    base64_encode_with(data, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", false)
+}
+
+/// URL-safe Base64 text back to bytes, with or without padding.
+pub fn base64url_decode(text: Str) -> Result[Vec[u8], DecodeError] {
+    base64_decode_with(text, true, false)
+}
+
+/// `data` as lowercase hex, two digits a byte.
+pub fn hex_encode(data: Slice[u8]) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.with_capacity(data.len() * 2);
+    for b in data.iter() {
+        let v = *b as i64;
+        out.push_str(digits.slice(v >> 4, (v >> 4) + 1));
+        out.push_str(digits.slice(v & 15, (v & 15) + 1));
+    }
+    out
+}
+
+/// Hex text, in either case, back to bytes.
+pub fn hex_decode(text: Str) -> Result[Vec[u8], DecodeError] {
+    let bs = text.bytes();
+    let n = bs.len();
+    if n % 2 != 0 {
+        return Err(DecodeError.InvalidLength);
+    }
+    let mut out: Vec[u8] = Vec.with_capacity(n / 2);
+    let mut i = 0;
+    let mut hi = 0;
+    while i < n {
+        let c = bs[i] as i64;
+        let v = if c >= 48 and c <= 57 {
+            c - 48
+        } else if c >= 97 and c <= 102 {
+            c - 87
+        } else if c >= 65 and c <= 70 {
+            c - 55
+        } else {
+            return Err(DecodeError.InvalidByte(i));
+        };
+        if i % 2 == 0 {
+            hi = v;
+        } else {
+            out.push(((hi << 4) | v) as u8);
+        }
+        i = i + 1;
+    }
+    Ok(out)
+}
