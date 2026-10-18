@@ -1,0 +1,80 @@
+// LeetCode #710: Random Pick with Blacklist -- the r-th allowed number,
+// by binary search.
+//
+// The rank arm, which needs no hash map, so it is the same algorithm in
+// all five languages: sort the blacklist; the r-th allowed number is
+// r + i, where i is the first index whose blacklisted number has more
+// than r allowed numbers below it. O(log B) per pick.
+
+struct Solution {
+    bound: i64,
+    black: Vec[i64],
+    mut seed: i64,
+}
+
+impl Solution {
+    fn new(n: i64, blacklist: Vec[i64], seed: i64) -> Solution {
+        let mut black = blacklist.clone();
+        black.sort();
+        Solution { bound: n - black.len(), black: black, seed: seed }
+    }
+
+    // The allowed number a draw of r stands for.
+    fn pick_from(ref self, r: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.black.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.black[mid] - mid > r {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        r + lo
+    }
+
+    fn pick(mut ref self) -> i64 {
+        let r = random_below(mut self.seed, self.bound);
+        self.pick_from(r)
+    }
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_below(seed: mut ref i64, bound: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % bound
+}
+
+fn main() {
+    // 100,000 different numbers below 1,000,000,000, one in each block
+    // of 10,000, shuffled, made once.
+    let n = 1000000000;
+    let mut seed: i64 = 710;
+    let mut blacklist: Vec[i64] = Vec.new();
+    for i in 0..100000 {
+        blacklist.push(i * 10000 + random_below(mut seed, 10000));
+    }
+    let mut i = 99999;
+    while i > 0 {
+        let j = random_below(mut seed, i + 1);
+        blacklist.swap(i, j);
+        i -= 1;
+    }
+    // Five rounds, each building a picker and making 1,000,000 picks.
+    let mut sum = 0;
+    for round in 0..5 {
+        let mut s = Solution.new(n, blacklist, 1 + round);
+        for _ in 0..1000000 {
+            sum += s.pick();
+        }
+    }
+    println(f"5 rounds of 1000000 picks, 100000 of 1000000000 blacklisted: sum {sum}");
+}

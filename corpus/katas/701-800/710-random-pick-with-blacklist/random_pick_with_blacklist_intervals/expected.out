@@ -1,0 +1,14 @@
+n = 7, 3 blacklisted, every draw a different allowed number; 7 picks: 0 not allowed, 3 seen, counts 17427
+n = 7, 3 blacklisted, every draw a different allowed number; 10000 picks: 0 not allowed, 4 seen, counts 526000955
+n = 1, 0 blacklisted, every draw a different allowed number; 100 picks: 0 not allowed, 1 seen, counts 100
+n = 2, 1 blacklisted, every draw a different allowed number; 100 picks: 0 not allowed, 1 seen, counts 100
+n = 2, 1 blacklisted, every draw a different allowed number; 100 picks: 0 not allowed, 1 seen, counts 100
+n = 10, 0 blacklisted, every draw a different allowed number; 10000 picks: 0 not allowed, 10 seen, counts 639423995
+n = 10, 9 blacklisted, every draw a different allowed number; 1000 picks: 0 not allowed, 1 seen, counts 1000
+n = 10, 5 blacklisted, every draw a different allowed number; 1000 picks: 0 not allowed, 5 seen, counts 255889906
+n = 10, 5 blacklisted, every draw a different allowed number; 1000 picks: 0 not allowed, 5 seen, counts 728219329
+n = 1000000000, 2 blacklisted, 1001 draws, each allowed, all different; 20000 picks: 0 not allowed, 20000 seen, counts 531687154
+n = 1000000000, 100000 blacklisted, 100996 draws, each allowed, all different; 20000 picks: 0 not allowed, 20000 seen, counts 531687154
+n = 200000, 100000 blacklisted, every draw a different allowed number; 20000 picks: 0 not allowed, 18059 seen, counts 363089255
+n = 300000, 299990 blacklisted, every draw a different allowed number; 20000 picks: 0 not allowed, 10 seen, counts 463346118
+300 random cases: checksum 671931089

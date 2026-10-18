@@ -1,0 +1,401 @@
+// LeetCode #710: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random blacklists.
+
+// ---- ★ arm ----------------------------------------------------------
+
+struct SolStar {
+    bound: i64,
+    remap: Map[i64, i64],
+    mut seed: i64,
+}
+
+impl SolStar {
+    fn new(n: i64, blacklist: Vec[i64], seed: i64) -> SolStar {
+        let bound = n - blacklist.len();
+        let mut high: Set[i64] = Set.new();
+        for b in blacklist.iter() {
+            if *b >= bound {
+                high.insert(*b);
+            }
+        }
+        // Hand each blacklisted number below bound the next allowed
+        // number down from the top.
+        let mut remap: Map[i64, i64] = Map.new();
+        let mut last = n - 1;
+        for b in blacklist.iter() {
+            if *b < bound {
+                while high.contains(last) {
+                    last -= 1;
+                }
+                remap.insert(*b, last);
+                last -= 1;
+            }
+        }
+        SolStar { bound: bound, remap: remap, seed: seed }
+    }
+
+    // The allowed number a draw of r stands for.
+    fn pick_from(ref self, r: i64) -> i64 {
+        match self.remap.get(r) {
+            Some(x) => x,
+            None => r,
+        }
+    }
+
+    fn pick(mut ref self) -> i64 {
+        let r = random_below(mut self.seed, self.bound);
+        self.pick_from(r)
+    }
+}
+
+// ---- rank arm -------------------------------------------------------
+
+struct SolRank {
+    bound: i64,
+    black: Vec[i64],
+    mut seed: i64,
+}
+
+impl SolRank {
+    fn new(n: i64, blacklist: Vec[i64], seed: i64) -> SolRank {
+        let mut black = blacklist.clone();
+        black.sort();
+        SolRank { bound: n - black.len(), black: black, seed: seed }
+    }
+
+    // The allowed number a draw of r stands for.
+    fn pick_from(ref self, r: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.black.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.black[mid] - mid > r {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        r + lo
+    }
+
+    fn pick(mut ref self) -> i64 {
+        let r = random_below(mut self.seed, self.bound);
+        self.pick_from(r)
+    }
+}
+
+// ---- intervals arm --------------------------------------------------
+
+struct SolIntervals {
+    bound: i64,
+    starts: Vec[i64],
+    before: Vec[i64],
+    mut seed: i64,
+}
+
+impl SolIntervals {
+    fn new(n: i64, blacklist: Vec[i64], seed: i64) -> SolIntervals {
+        let mut black = blacklist.clone();
+        black.sort();
+        let mut starts: Vec[i64] = Vec.new();
+        let mut before: Vec[i64] = Vec.new();
+        let mut next = 0;
+        let mut count = 0;
+        for b in black.iter() {
+            if *b > next {
+                starts.push(next);
+                before.push(count);
+                count += *b - next;
+            }
+            next = *b + 1;
+        }
+        if next < n {
+            starts.push(next);
+            before.push(count);
+        }
+        SolIntervals {
+            bound: n - black.len(),
+            starts: starts,
+            before: before,
+            seed: seed,
+        }
+    }
+
+    // The allowed number a draw of r stands for.
+    fn pick_from(ref self, r: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.starts.len() - 1;
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2;
+            if self.before[mid] <= r {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        self.starts[lo] + r - self.before[lo]
+    }
+
+    fn pick(mut ref self) -> i64 {
+        let r = random_below(mut self.seed, self.bound);
+        self.pick_from(r)
+    }
+}
+
+// ---- remap-vec arm --------------------------------------------------
+
+struct SolRemapVec {
+    bound: i64,
+    from: Vec[i64],
+    to: Vec[i64],
+    mut seed: i64,
+}
+
+impl SolRemapVec {
+    fn new(n: i64, blacklist: Vec[i64], seed: i64) -> SolRemapVec {
+        let mut black = blacklist.clone();
+        black.sort();
+        let bound = n - black.len();
+        // The blacklisted numbers at or above bound start at index
+        // `split`; skip them while walking up from bound.
+        let mut split = 0;
+        while split < black.len() and black[split] < bound {
+            split += 1;
+        }
+        let mut from: Vec[i64] = Vec.new();
+        let mut to: Vec[i64] = Vec.new();
+        let mut high = split;
+        let mut x = bound;
+        for i in 0..split {
+            while high < black.len() and black[high] == x {
+                high += 1;
+                x += 1;
+            }
+            from.push(black[i]);
+            to.push(x);
+            x += 1;
+        }
+        SolRemapVec { bound: bound, from: from, to: to, seed: seed }
+    }
+
+    // The allowed number a draw of r stands for.
+    fn pick_from(ref self, r: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.from.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.from[mid] < r {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo < self.from.len() and self.from[lo] == r {
+            self.to[lo]
+        } else {
+            r
+        }
+    }
+
+    fn pick(mut ref self) -> i64 {
+        let r = random_below(mut self.seed, self.bound);
+        self.pick_from(r)
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_below(seed: mut ref i64, bound: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % bound
+}
+
+// Arms 0 and 3 remap; arms 1 and 2 give the r-th allowed number.
+fn pick_all(which: i64, n: i64, blacklist: Vec[i64]) -> Vec[i64] {
+    let bound = n - blacklist.len();
+    let mut out: Vec[i64] = Vec.new();
+    if which == 0 {
+        let s = SolStar.new(n, blacklist, 1);
+        for r in 0..bound {
+            out.push(s.pick_from(r));
+        }
+    } else if which == 1 {
+        let s = SolRank.new(n, blacklist, 1);
+        for r in 0..bound {
+            out.push(s.pick_from(r));
+        }
+    } else if which == 2 {
+        let s = SolIntervals.new(n, blacklist, 1);
+        for r in 0..bound {
+            out.push(s.pick_from(r));
+        }
+    } else {
+        let s = SolRemapVec.new(n, blacklist, 1);
+        for r in 0..bound {
+            out.push(s.pick_from(r));
+        }
+    }
+    out
+}
+
+fn pick_seq(which: i64, n: i64, blacklist: Vec[i64], seed: i64,
+            count: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if which == 0 {
+        let mut s = SolStar.new(n, blacklist, seed);
+        for _ in 0..count {
+            out.push(s.pick());
+        }
+    } else if which == 1 {
+        let mut s = SolRank.new(n, blacklist, seed);
+        for _ in 0..count {
+            out.push(s.pick());
+        }
+    } else if which == 2 {
+        let mut s = SolIntervals.new(n, blacklist, seed);
+        for _ in 0..count {
+            out.push(s.pick());
+        }
+    } else {
+        let mut s = SolRemapVec.new(n, blacklist, seed);
+        for _ in 0..count {
+            out.push(s.pick());
+        }
+    }
+    out
+}
+
+// The definition: the numbers from 0 to n - 1 not on the blacklist, in
+// order, found by testing each against every blacklisted number.
+fn definition(n: i64, blacklist: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in 0..n {
+        let mut listed = false;
+        for b in blacklist.iter() {
+            if *b == x {
+                listed = true;
+            }
+        }
+        if not listed {
+            out.push(x);
+        }
+    }
+    out
+}
+
+fn sorted(v: Vec[i64]) -> Vec[i64] {
+    let mut w = v.clone();
+    w.sort();
+    w
+}
+
+fn main() {
+    let mut seed = 7100;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut draws = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        let n = if next_random(mut seed) % 4 == 0 {
+            1 + next_random(mut seed) % 200
+        } else {
+            1 + next_random(mut seed) % 40
+        };
+        // A blacklist of a random size, drawn at random, or a run at
+        // the bottom, the top or the middle.
+        let count = next_random(mut seed) % n;
+        let mode = next_random(mut seed) % 4;
+        let mut blacklist: Vec[i64] = Vec.new();
+        if mode == 0 {
+            let mut taken: Vec[bool] = Vec.new();
+            for _ in 0..n {
+                taken.push(false);
+            }
+            while blacklist.len() < count {
+                let x = random_below(mut seed, n);
+                if not taken[x] {
+                    taken[x] = true;
+                    blacklist.push(x);
+                }
+            }
+        } else {
+            let start = if mode == 1 { 0 } else if mode == 2 { n - count } else {
+                (n - count) / 2
+            };
+            for x in start..start + count {
+                blacklist.push(x);
+            }
+            // Reversed half the time, so the order varies too.
+            if next_random(mut seed) % 2 == 0 {
+                blacklist.reverse();
+            }
+        }
+        let want = definition(n, blacklist.clone());
+        let bound = want.len();
+        draws += bound;
+        let mut reversed = blacklist.clone();
+        reversed.reverse();
+        let pick_seed = next_random(mut seed);
+        for which in 0..arms {
+            let got = pick_all(which, n, blacklist.clone());
+            // P1: every draw, once each, gives every allowed number.
+            checks += 1;
+            if sorted(got.clone()) != want {
+                fails[0] += 1;
+            }
+            // P2: `pick` gives what its own draws stand for.
+            checks += 1;
+            let seq = pick_seq(which, n, blacklist.clone(), pick_seed, 20);
+            let mut s2 = pick_seed;
+            let mut same = true;
+            for i in 0..20 {
+                let r = random_below(mut s2, bound);
+                if got.len() != bound or seq[i] != got[r] {
+                    same = false;
+                }
+            }
+            if not same {
+                fails[1] += 1;
+            }
+            // P3: the arm's own rule. A remap leaves an allowed draw as
+            // it is; the r-th allowed number is the definition's r-th.
+            checks += 1;
+            let mut rule = got.len() == bound;
+            for r in 0..got.len() {
+                if which == 1 or which == 2 {
+                    if got[r] != want[r] {
+                        rule = false;
+                    }
+                } else if r < bound and not blacklist.contains(r) {
+                    if got[r] != r {
+                        rule = false;
+                    }
+                }
+            }
+            if not rule {
+                fails[2] += 1;
+            }
+            // P4: the blacklist in reverse order covers the same.
+            checks += 1;
+            if sorted(pick_all(which, n, reversed.clone())) != want {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} cases ({draws} draws), {arms} arms, {checks} checks, {total} failures");
+}
