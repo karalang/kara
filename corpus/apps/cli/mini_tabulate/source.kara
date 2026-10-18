@@ -1,0 +1,5030 @@
+// mini_tabulate: python-tabulate 0.10.0, the table printer behind many
+// command-line tools, ported from tabulate/__init__.py: all 37 table
+// formats, column type inference, number formatting, alignment, ANSI
+// colour codes and hyperlinks, multiline cells, wrapping to a column width,
+// separating lines, indexes, and the `tabulate` command-line tool.
+//
+// The run writes the tables of the data section into data/ and runs every
+// job of data/jobs.jsonl: a table job calls tabulate() on a JSON table with
+// the job's keyword arguments, a format job formats numbers the way
+// tabulate's floatfmt does, and a cli job runs the command-line tool.
+// Widths count code points, as tabulate does without the optional wcwidth.
+
+// ------------------------------------------------------------ characters
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    if a >= b {
+        return Vec.new();
+    }
+    v[a..b].to_vec()
+}
+
+fn width(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(' ');
+    }
+    s
+}
+
+fn repeat(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// str.isspace, which str.strip, str.split and float() use.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(v, lo, hi))
+}
+
+fn py_rstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut hi = v.len();
+    while hi > 0 and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(v, 0, hi))
+}
+
+fn ascii_lower(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(char.try_from(c as i64 + 32).unwrap_or(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// str.rfind(c), in code points.
+fn rfind(v: ref Vec[char], c: char) -> i64 {
+    let mut k = v.len() - 1;
+    while k >= 0 {
+        if v[k] == c {
+            return k;
+        }
+        k -= 1;
+    }
+    -1
+}
+
+// `needle in hay`
+fn contains_seq(hay: ref Vec[char], needle: ref Vec[char]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        let mut ok = true;
+        for k in 0..needle.len() {
+            if hay[i + k] != needle[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// str.splitlines()
+fn line_break(c: char) -> bool {
+    c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}' or c == '\u{1c}' or c == '\u{1d}' or c == '\u{1e}'
+        or c == '\u{85}' or c == '\u{2028}' or c == '\u{2029}'
+}
+
+fn splitlines(s: ref String) -> Vec[String] {
+    let v = chars(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        if line_break(c) {
+            out.push(cur);
+            cur = String.new();
+            if c == '\r' and i + 1 < v.len() and v[i + 1] == '\n' {
+                i += 1;
+            }
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// re.split("[\r\n]", s)
+fn split_rn(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == '\r' or c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn has_line_break(s: ref String) -> bool {
+    s.contains("\n") or s.contains("\r")
+}
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < n {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) {
+        return false;
+    }
+    true
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let single = s.contains("'");
+    let double = s.contains("\"");
+    let q = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if printable(o) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+// s.encode("unicode_escape").decode()
+fn unicode_escape(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if o >= 0x20 and o < 0x7f {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out
+}
+
+fn hex_value(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+// s.encode("utf-8").decode("unicode_escape"), for the escapes above.
+fn unicode_unescape(s: ref String) -> String {
+    let v = chars(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] != '\\' or i + 1 >= v.len() {
+            out.push(v[i]);
+            i += 1;
+            continue;
+        }
+        let e = v[i + 1];
+        let n = if e == 'x' { 2 } else if e == 'u' { 4 } else if e == 'U' { 8 } else { 0 };
+        if n > 0 {
+            let mut code = 0;
+            for k in 0..n {
+                code = code * 16 + hex_value(v[i + 2 + k]);
+            }
+            out.push(char.try_from(code).unwrap_or('?'));
+            i += 2 + n;
+        } else {
+            if e == 't' {
+                out.push('\t');
+            } else if e == 'n' {
+                out.push('\n');
+            } else if e == 'r' {
+                out.push('\r');
+            } else {
+                out.push(e);
+            }
+            i += 2;
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ JSON
+
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[JValue]),
+    Obj(Vec[(String, JValue)]),
+}
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[JValue, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut m: Vec[(String, JValue)] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(JValue.Obj(m));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(f"expected ':' at {self.at}");
+                }
+                let v = self.value()?;
+                m.push((k, v));
+                self.ws();
+                if self.eat("}") {
+                    return Ok(JValue.Obj(m));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(JValue.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(JValue.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(JValue.Str(self.string()?));
+        }
+        if self.eat("true") {
+            return Ok(JValue.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(JValue.Bool(false));
+        }
+        if self.eat("null") {
+            return Ok(JValue.Null);
+        }
+        self.number()
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.b[self.at];
+            self.at += 1;
+            let d = if c >= b'0' and c <= b'9' {
+                c - b'0'
+            } else if c >= b'a' and c <= b'f' {
+                c - b'a' + 10
+            } else {
+                c - b'A' + 10
+            };
+            v = v * 16 + d as u32;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.eat("\"") {
+            return Err(f"expected string at {self.at}");
+        }
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.at >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.b[self.at];
+            self.at += 1;
+            if e == b'n' {
+                out.push(10);
+            } else if e == b't' {
+                out.push(9);
+            } else if e == b'r' {
+                out.push(13);
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(String.from_utf8(out).unwrap_or("?".to_string()))
+    }
+
+    fn number(mut ref self) -> Result[JValue, String] {
+        let start = self.at;
+        let mut float = false;
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c >= b'0' and c <= b'9' {
+                self.at += 1;
+            } else if c == b'-' or c == b'+' {
+                self.at += 1;
+            } else if c == b'.' or c == b'e' or c == b'E' {
+                float = true;
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        let t = String.from_utf8(self.b[start..self.at].to_vec()).unwrap_or(String.new());
+        if t.is_empty() {
+            return Err(f"bad value at {start}");
+        }
+        if float {
+            return match f64.parse(t) {
+                Ok(f) => Ok(JValue.Float(f)),
+                Err(_) => Err(f"bad number {t}"),
+            };
+        }
+        match i64.parse(t) {
+            Ok(i) => Ok(JValue.Int(i)),
+            Err(_) => Err(f"bad number {t}"),
+        }
+    }
+}
+
+fn parse_json(t: ref String) -> Result[JValue, String] {
+    let mut r = JsonReader { b: t.bytes().to_vec(), at: 0 };
+    r.value()
+}
+
+fn get(o: ref JValue, key: Str) -> Option[JValue] {
+    if let JValue.Obj(items) = o {
+        for (k, v) in items.iter() {
+            if k == key {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+// ------------------------------------------------------------ cells
+
+// A table value: what a JSON scalar is in Python.
+#[derive(Clone)]
+enum Cell {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+}
+
+fn cell_of(j: ref JValue) -> Result[Cell, String] {
+    match j {
+        JValue.Null => Ok(Cell.Nil),
+        JValue.Bool(b) => Ok(Cell.Bool(*b)),
+        JValue.Int(i) => Ok(Cell.Int(*i)),
+        JValue.Float(f) => Ok(Cell.Float(*f)),
+        JValue.Str(s) => Ok(Cell.Str(s.clone())),
+        _ => Err("a table cell must be a scalar".to_string()),
+    }
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "inf".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-inf".to_string();
+    }
+    if x == 0.0 {
+        return if x.to_bits() >> 63 == 1 { "-0.0".to_string() } else { "0.0".to_string() };
+    }
+    f"{x}"
+}
+
+// str(value)
+fn cell_str(c: ref Cell) -> String {
+    match c {
+        Cell.Nil => "None".to_string(),
+        Cell.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Cell.Int(i) => i.to_string(),
+        Cell.Float(f) => float_repr(*f),
+        Cell.Str(s) => s.clone(),
+    }
+}
+
+fn is_nil(c: ref Cell) -> bool {
+    match c {
+        Cell.Nil => true,
+        _ => false,
+    }
+}
+
+fn is_empty_str(c: ref Cell) -> bool {
+    match c {
+        Cell.Str(s) => s.is_empty(),
+        _ => false,
+    }
+}
+
+// ------------------------------------------------------------ Python's int() and float()
+
+// The digits of s[lo..hi] with Python's underscores: each '_' sits between
+// two digits. None if anything else is there.
+fn digits_with_underscores(v: ref Vec[char], lo: i64, hi: i64) -> Option[String] {
+    let mut out = String.new();
+    for k in lo..hi {
+        let c = v[k];
+        if is_digit(c) {
+            out.push(c);
+        } else if c == '_' and k > lo and k + 1 < hi and is_digit(v[k - 1]) and is_digit(v[k + 1]) {
+            continue;
+        } else {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+// Can int(s) convert it?
+fn py_int_ok(s: ref String) -> bool {
+    let v = chars(py_strip(s));
+    let mut i = 0;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        i += 1;
+    }
+    if i >= v.len() {
+        return false;
+    }
+    match digits_with_underscores(v, i, v.len()) {
+        Some(d) => not d.is_empty(),
+        None => false,
+    }
+}
+
+// float(s), or None where it raises.
+fn py_float(s: ref String) -> Option[f64] {
+    let v = chars(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    let rest = ascii_lower(text(slice(v, i, v.len())));
+    if rest == "inf" or rest == "infinity" {
+        return Some(if neg { -1.0 / 0.0 } else { 1.0 / 0.0 });
+    }
+    if rest == "nan" {
+        return Some(0.0 / 0.0);
+    }
+    let n = v.len();
+    let mut k = i;
+    while k < n and (is_digit(v[k]) or v[k] == '_') {
+        k += 1;
+    }
+    let int_part = digits_with_underscores(v, i, k)?;
+    let mut frac_part = String.new();
+    if k < n and v[k] == '.' {
+        let f0 = k + 1;
+        k += 1;
+        while k < n and (is_digit(v[k]) or v[k] == '_') {
+            k += 1;
+        }
+        frac_part = digits_with_underscores(v, f0, k)?;
+    }
+    if int_part.is_empty() and frac_part.is_empty() {
+        return None;
+    }
+    let mut exp_part = "0".to_string();
+    if k < n and (v[k] == 'e' or v[k] == 'E') {
+        k += 1;
+        let mut sign = String.new();
+        if k < n and (v[k] == '+' or v[k] == '-') {
+            sign.push(v[k]);
+            k += 1;
+        }
+        let e0 = k;
+        while k < n and (is_digit(v[k]) or v[k] == '_') {
+            k += 1;
+        }
+        let e = digits_with_underscores(v, e0, k)?;
+        if e.is_empty() {
+            return None;
+        }
+        exp_part = f"{sign}{e}";
+    }
+    if k != n {
+        return None;
+    }
+    let ip = if int_part.is_empty() { "0".to_string() } else { int_part };
+    let fp = if frac_part.is_empty() { "0".to_string() } else { frac_part };
+    let sign = if neg { "-" } else { "" };
+    let lit = f"{sign}{ip}.{fp}e{exp_part}";
+    match f64.parse(lit) {
+        Ok(x) => Some(x),
+        Err(_) => None,
+    }
+}
+
+fn is_inf_or_nan(x: f64) -> bool {
+    x != x or x == 1.0 / 0.0 or x == -1.0 / 0.0
+}
+
+// ------------------------------------------------------------ ANSI escape codes
+
+// One match of tabulate's _ansi_codes: a CSI sequence, or an OSC 8
+// hyperlink whose link text (submatch 4) is text_lo..text_hi.
+struct Ansi {
+    end: i64,
+    text_lo: i64,
+    text_hi: i64,
+}
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() or c == '_'
+}
+
+fn ansi_at(v: ref Vec[char], i: i64) -> Option[Ansi] {
+    let n = v.len();
+    if i + 1 >= n or v[i] != '\u{1b}' {
+        return None;
+    }
+    if v[i + 1] == '[' {
+        let mut k = i + 2;
+        while k < n and v[k] >= '\u{30}' and v[k] <= '\u{3f}' {
+            k += 1;
+        }
+        while k < n and v[k] >= '\u{20}' and v[k] <= '\u{2f}' {
+            k += 1;
+        }
+        if k < n and v[k] >= '\u{40}' and v[k] <= '\u{7e}' {
+            return Some(Ansi { end: k + 1, text_lo: -1, text_hi: -1 });
+        }
+    }
+    // ESC ] 8 ; (\w+=\w+:?)* ; URI ESC \ TEXT ESC ] 8 ; ; ESC \
+    if v[i + 1] != ']' or i + 3 >= n or v[i + 2] != '8' or v[i + 3] != ';' {
+        return None;
+    }
+    let mut k = i + 4;
+    loop {
+        let save = k;
+        let mut j = k;
+        while j < n and is_word(v[j]) {
+            j += 1;
+        }
+        if j == k or j >= n or v[j] != '=' {
+            k = save;
+            break;
+        }
+        j += 1;
+        let w0 = j;
+        while j < n and is_word(v[j]) {
+            j += 1;
+        }
+        if j == w0 {
+            k = save;
+            break;
+        }
+        if j < n and v[j] == ':' {
+            j += 1;
+        }
+        k = j;
+    }
+    if k >= n or v[k] != ';' {
+        return None;
+    }
+    k += 1;
+    let uri0 = k;
+    while k < n and v[k] != '\u{1b}' {
+        k += 1;
+    }
+    if k == uri0 or k + 1 >= n or v[k + 1] != '\\' {
+        return None;
+    }
+    k += 2;
+    let t0 = k;
+    while k < n and v[k] != '\u{1b}' {
+        k += 1;
+    }
+    if k == t0 {
+        return None;
+    }
+    let t1 = k;
+    let close = chars("\u{1b}]8;;\u{1b}\\");
+    for c in close.iter() {
+        if k >= n or v[k] != *c {
+            return None;
+        }
+        k += 1;
+    }
+    Some(Ansi { end: k, text_lo: t0, text_hi: t1 })
+}
+
+// _ansi_codes.search(s): the first match at or after `from`, as (start, match).
+fn ansi_search(v: ref Vec[char], from: i64) -> Option[(i64, Ansi)] {
+    let mut i = from;
+    while i < v.len() {
+        if let Some(m) = ansi_at(v, i) {
+            return Some((i, m));
+        }
+        i += 1;
+    }
+    None
+}
+
+// The matched texts of _ansi_codes.finditer(s), in order.
+fn ansi_codes(v: ref Vec[char]) -> Vec[Vec[char]] {
+    let mut out: Vec[Vec[char]] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        match ansi_at(v, i) {
+            Some(m) => {
+                out.push(slice(v, i, m.end));
+                i = m.end;
+            }
+            None => {
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+// _strip_ansi: codes removed, hyperlinks replaced by their text.
+fn strip_ansi_v(v: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        match ansi_at(v, i) {
+            Some(m) => {
+                if m.text_lo >= 0 {
+                    for k in m.text_lo..m.text_hi {
+                        out.push(v[k]);
+                    }
+                }
+                i = m.end;
+            }
+            None => {
+                out.push(v[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn strip_ansi(s: ref String) -> String {
+    text(strip_ansi_v(chars(s)))
+}
+
+fn has_ansi(s: ref String) -> bool {
+    ansi_search(chars(s), 0).is_some()
+}
+
+fn visible_width(s: ref String) -> i64 {
+    strip_ansi_v(chars(s)).len()
+}
+
+// ------------------------------------------------------------ format specs
+
+fn value_error(msg: ref String) -> String {
+    f"ValueError: {msg}"
+}
+
+struct Spec {
+    fill: char,
+    align: char,
+    sign: char,
+    no_neg_0: bool,
+    alternate: bool,
+    width: i64,
+    // 0 none, 1 ',' every 3, 2 '_' every 3, 3 '_' every 4
+    sep: i64,
+    precision: i64,
+    kind: char,
+}
+
+fn is_align(c: char) -> bool {
+    c == '<' or c == '>' or c == '=' or c == '^'
+}
+
+// A presentation type in an error message.
+fn code_text(c: char) -> String {
+    let o = c as i64;
+    if o > 32 and o < 128 {
+        f"'{c}'"
+    } else {
+        f"'\\x{o:x}'"
+    }
+}
+
+fn unknown_code(c: char, tname: Str) -> String {
+    value_error(f"Unknown format code {code_text(c)} for object of type '{tname}'")
+}
+
+fn both_seps() -> String {
+    value_error("Cannot specify both ',' and '_'.")
+}
+
+// The digits at sp[pos..]: (value, digit count, position after them).
+fn spec_integer(sp: ref Vec[char], pos: i64) -> Result[(i64, i64, i64), String] {
+    let mut acc = 0;
+    let mut n = 0;
+    let mut p = pos;
+    while p < sp.len() and is_digit(sp[p]) {
+        let d = sp[p] as i64 - 48;
+        if acc > (9223372036854775807 - d) / 10 {
+            return Err(value_error("Too many decimal digits in format string"));
+        }
+        acc = acc * 10 + d;
+        n += 1;
+        p += 1;
+    }
+    Ok((acc, n, p))
+}
+
+// parse_internal_render_format_spec in Python/formatter_unicode.c.
+fn parse_spec(sp: ref Vec[char], tname: Str, default_type: char, default_align: char) -> Result[Spec, String] {
+    let mut f = Spec {
+        fill: ' ',
+        align: default_align,
+        sign: '\u{0}',
+        no_neg_0: false,
+        alternate: false,
+        width: -1,
+        sep: 0,
+        precision: -1,
+        kind: default_type,
+    };
+    let end = sp.len();
+    let mut pos = 0;
+    let mut fill_given = false;
+    let mut align_given = false;
+    if end - pos >= 2 and is_align(sp[pos + 1]) {
+        f.align = sp[pos + 1];
+        f.fill = sp[pos];
+        fill_given = true;
+        align_given = true;
+        pos += 2;
+    } else if end - pos >= 1 and is_align(sp[pos]) {
+        f.align = sp[pos];
+        align_given = true;
+        pos += 1;
+    }
+    if pos < end and (sp[pos] == ' ' or sp[pos] == '+' or sp[pos] == '-') {
+        f.sign = sp[pos];
+        pos += 1;
+    }
+    if pos < end and sp[pos] == 'z' {
+        f.no_neg_0 = true;
+        pos += 1;
+    }
+    if pos < end and sp[pos] == '#' {
+        f.alternate = true;
+        pos += 1;
+    }
+    if not fill_given and pos < end and sp[pos] == '0' {
+        f.fill = '0';
+        if not align_given and default_align == '>' {
+            f.align = '=';
+        }
+        pos += 1;
+    }
+    let (w, width_digits, after_width) = spec_integer(sp, pos)?;
+    pos = after_width;
+    if width_digits > 0 {
+        f.width = w;
+    }
+    if pos < end and sp[pos] == ',' {
+        f.sep = 1;
+        pos += 1;
+    }
+    if pos < end and sp[pos] == '_' {
+        if f.sep != 0 {
+            return Err(both_seps());
+        }
+        f.sep = 2;
+        pos += 1;
+    }
+    if pos < end and sp[pos] == ',' and f.sep == 2 {
+        return Err(both_seps());
+    }
+    if pos < end and sp[pos] == '.' {
+        pos += 1;
+        let (precision, precision_digits, after_precision) = spec_integer(sp, pos)?;
+        pos = after_precision;
+        if precision_digits == 0 {
+            return Err(value_error("Format specifier missing precision"));
+        }
+        f.precision = precision;
+    }
+    if end - pos > 1 {
+        return Err(value_error(f"Invalid format specifier '{text(sp)}' for object of type '{tname}'"));
+    }
+    if end - pos == 1 {
+        f.kind = sp[pos];
+    }
+    if f.sep != 0 {
+        let t = f.kind;
+        let grouped = t == 'd' or t == 'e' or t == 'f' or t == 'g' or t == 'E' or t == 'G' or t == '%' or t == 'F' or t == '\u{0}';
+        let radix = t == 'b' or t == 'o' or t == 'x' or t == 'X';
+        if radix and f.sep == 2 {
+            f.sep = 3;
+        } else if not grouped {
+            let which = if f.sep == 1 { "," } else { "_" };
+            return Err(value_error(f"Cannot specify '{which}' with {code_text(t)}."));
+        }
+    }
+    Ok(f)
+}
+
+fn fill_run(c: char, n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(c);
+    }
+    s
+}
+
+// body padded to the spec's width (body is n code points long).
+fn pad_to(body: ref String, n: i64, w: i64, align: char, fill: char) -> String {
+    let total = if w > n { w } else { n };
+    let left = if align == '>' {
+        total - n
+    } else if align == '^' {
+        (total - n) / 2
+    } else {
+        0
+    };
+    f"{fill_run(fill, left)}{body}{fill_run(fill, total - n - left)}"
+}
+
+// _PyUnicode_InsertThousandsGrouping: digits in groups of g, zero-filled
+// out to min_width (which counts the separators).
+fn group_digits(d: ref String, min_width: i64, g: i64, sep: char) -> String {
+    let cs = chars(d);
+    let mut remaining = cs.len();
+    let mut pos = cs.len();
+    let mut m = min_width;
+    let mut groups: Vec[String] = Vec.new();
+    let mut done = false;
+    while not done {
+        let mut l = remaining;
+        if m > l {
+            l = m;
+        }
+        if l < 1 {
+            l = 1;
+        }
+        if l > g {
+            l = g;
+        }
+        let n_zeros = if l > remaining { l - remaining } else { 0 };
+        let n_chars = if remaining < l { remaining } else { l };
+        groups.push(f"{fill_run('0', n_zeros)}{text(slice(cs, pos - n_chars, pos))}");
+        pos -= n_chars;
+        remaining -= n_chars;
+        m -= l;
+        if remaining <= 0 and m <= 0 {
+            done = true;
+        } else {
+            m -= 1;
+        }
+    }
+    let mut out = String.new();
+    let mut k = groups.len() - 1;
+    while k >= 0 {
+        out.push_str(groups[k]);
+        if k > 0 {
+            out.push(sep);
+        }
+        k -= 1;
+    }
+    out
+}
+
+// calc_number_spec + fill_number: sign, prefix, digits (grouped here) and
+// the remainder (a fraction, exponent or '%'), padded per the spec.
+fn fill_number(sign: ref String, prefix: ref String, digits: ref String, remainder: ref String, f: ref Spec) -> String {
+    let n_sign = width(sign);
+    let n_prefix = width(prefix);
+    let n_rem = width(remainder);
+    let grouped = if f.sep == 0 {
+        digits.clone()
+    } else {
+        let min_width = if f.fill == '0' and f.align == '=' {
+            f.width - n_sign - n_prefix - n_rem
+        } else {
+            0
+        };
+        let sep = if f.sep == 1 { ',' } else { '_' };
+        let g = if f.sep == 3 { 4 } else { 3 };
+        group_digits(digits, min_width, g, sep)
+    };
+    let n = n_sign + n_prefix + width(grouped) + n_rem;
+    let padding = if f.width > n { f.width - n } else { 0 };
+    if f.align == '=' {
+        f"{sign}{prefix}{fill_run(f.fill, padding)}{grouped}{remainder}"
+    } else {
+        pad_to(f"{sign}{prefix}{grouped}{remainder}", n, f.width, f.align, f.fill)
+    }
+}
+
+fn sign_text(negative: bool, f: ref Spec) -> String {
+    if negative {
+        "-".to_string()
+    } else if f.sign == '+' {
+        "+".to_string()
+    } else if f.sign == ' ' {
+        " ".to_string()
+    } else {
+        String.new()
+    }
+}
+
+// n in the given base, with lower- or upper-case letters.
+fn to_base(n: u64, base: u64, upper: bool) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        let d = (m % base) as i64;
+        let c = if d < 10 { 48 + d } else if upper { 55 + d } else { 87 + d };
+        rev.push(char.try_from(c).unwrap_or('?'));
+        m = m / base;
+    }
+    rev.reverse();
+    text(rev)
+}
+
+// format(v, spec) for an int: format_long_internal, or
+// format_float_internal on float(v) for the float types.
+fn format_int(v: i64, spec: ref String) -> Result[String, String] {
+    let sp = chars(spec);
+    if sp.is_empty() {
+        return Ok(v.to_string());
+    }
+    let f = parse_spec(sp, "int", 'd', '>')?;
+    let t = f.kind;
+    if t == 'e' or t == 'E' or t == 'f' or t == 'F' or t == 'g' or t == 'G' or t == '%' {
+        return Ok(format_float_spec(v as f64, f));
+    }
+    if not (t == 'b' or t == 'c' or t == 'd' or t == 'o' or t == 'x' or t == 'X' or t == 'n') {
+        return Err(unknown_code(t, "int"));
+    }
+    if f.precision != -1 {
+        return Err(value_error("Precision not allowed in integer format specifier"));
+    }
+    if f.no_neg_0 {
+        return Err(value_error("Negative zero coercion (z) not allowed in integer format specifier"));
+    }
+    if t == 'c' {
+        if f.sign != '\u{0}' {
+            return Err(value_error("Sign not allowed with integer format specifier 'c'"));
+        }
+        if f.alternate {
+            return Err(value_error("Alternate form (#) not allowed with integer format specifier 'c'"));
+        }
+        if v < 0 or v > 0x10ffff {
+            return Err("OverflowError: %c arg not in range(0x110000)".to_string());
+        }
+        let mut one = String.new();
+        one.push(char.try_from(v).unwrap_or('?'));
+        return Ok(fill_number("", "", "", one, f));
+    }
+    let base: u64 = if t == 'b' {
+        2
+    } else if t == 'o' {
+        8
+    } else if t == 'x' or t == 'X' {
+        16
+    } else {
+        10
+    };
+    let prefix = if not f.alternate or base == 10 {
+        String.new()
+    } else if t == 'b' {
+        "0b".to_string()
+    } else if t == 'o' {
+        "0o".to_string()
+    } else if t == 'x' {
+        "0x".to_string()
+    } else {
+        "0X".to_string()
+    };
+    let a: u64 = if v < 0 { ((0 - (v + 1)) as u64) + 1 } else { v as u64 };
+    let digits = to_base(a, base, t == 'X');
+    Ok(fill_number(sign_text(v < 0, f), prefix, digits, "", f))
+}
+
+// format(True, spec): bool's own str() for an empty spec, an int otherwise.
+fn format_bool(b: bool, spec: ref String) -> Result[String, String] {
+    if spec.is_empty() {
+        return Ok(if b { "True".to_string() } else { "False".to_string() });
+    }
+    format_int(if b { 1 } else { 0 }, spec)
+}
+
+// ------------------------------------------------------------ floats
+
+// The exact decimal value of a positive finite x: big-endian digits d
+// (no leading zero) and an exponent e, with x == d * 10^e.
+fn exact_decimal(x: f64) -> (Vec[i64], i64) {
+    let bits = x.to_bits() as i64;
+    let e = (bits >> 52) & 0x7FF;
+    let mut mant = bits & 0xFFFFFFFFFFFFF;
+    let mut e2 = 0;
+    if e == 0 {
+        e2 = -1074;
+    } else {
+        mant = mant | 0x10000000000000;
+        e2 = e - 1075;
+    }
+    while e2 < 0 and mant % 2 == 0 {
+        mant = mant / 2;
+        e2 += 1;
+    }
+    // Little-endian decimal digits of mant * 2^e2 (or * 5^-e2).
+    let mut n: Vec[i64] = Vec.new();
+    let mut t = mant;
+    while t > 0 {
+        n.push(t % 10);
+        t = t / 10;
+    }
+    let factor = if e2 >= 0 { 2 } else { 5 };
+    let times = if e2 >= 0 { e2 } else { 0 - e2 };
+    for _ in 0..times {
+        let mut carry = 0;
+        for i in 0..n.len() {
+            let v = n[i] * factor + carry;
+            n[i] = v % 10;
+            carry = v / 10;
+        }
+        while carry > 0 {
+            n.push(carry % 10);
+            carry = carry / 10;
+        }
+    }
+    n.reverse();
+    (n, if e2 >= 0 { 0 } else { e2 })
+}
+
+// The first `keep` digits of d (zero-padded), rounded half to even on the
+// rest. When the rounding carries out, the result has keep + 1 digits.
+fn round_digits(d: ref Vec[i64], keep: i64) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    for i in 0..keep {
+        r.push(if i < d.len() { d[i] } else { 0 });
+    }
+    if keep < 0 or keep >= d.len() {
+        return r;
+    }
+    let first = d[keep];
+    let mut rest = false;
+    for i in (keep + 1)..d.len() {
+        if d[i] != 0 {
+            rest = true;
+        }
+    }
+    let odd = keep > 0 and r[keep - 1] % 2 == 1;
+    let up = first > 5 or (first == 5 and (rest or odd));
+    if not up {
+        return r;
+    }
+    let mut i = keep - 1;
+    while i >= 0 {
+        if r[i] == 9 {
+            r[i] = 0;
+            i -= 1;
+        } else {
+            r[i] += 1;
+            return r;
+        }
+    }
+    r.insert(0, 1);
+    r
+}
+
+fn digit_text(d: ref Vec[i64], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    for i in lo..hi {
+        s.push(char.try_from(48 + d[i]).unwrap_or('?'));
+    }
+    s
+}
+
+// x >= 0 to `precision` places ('f').
+fn fixed_text(x: f64, precision: i64, alt: bool) -> String {
+    let mut n: Vec[i64] = Vec.new();
+    if x != 0.0 {
+        let (d, e) = exact_decimal(x);
+        let keep = d.len() + e + precision;
+        if keep >= 0 {
+            n = round_digits(d, keep);
+        }
+    }
+    // n is round(x * 10^precision); give it precision + 1 digits at least.
+    while n.len() < precision + 1 {
+        n.insert(0, 0);
+    }
+    let mut lead = 0;
+    while lead < n.len() - precision - 1 and n[lead] == 0 {
+        lead += 1;
+    }
+    let point = n.len() - precision;
+    let mut s = digit_text(n, lead, point);
+    if precision > 0 {
+        s.push('.');
+        s.push_str(digit_text(n, point, n.len()));
+    } else if alt {
+        s.push('.');
+    }
+    s
+}
+
+// x >= 0 rounded to p significant digits: (exactly p digits, the decimal
+// exponent of the first).
+fn significant(x: f64, p: i64) -> (Vec[i64], i64) {
+    if x == 0.0 {
+        let mut z: Vec[i64] = Vec.new();
+        for _ in 0..p {
+            z.push(0);
+        }
+        return (z, 0);
+    }
+    let (d, e) = exact_decimal(x);
+    let mut exp = d.len() + e - 1;
+    let mut r = round_digits(d, p);
+    if r.len() > p {
+        r.pop();
+        exp += 1;
+    }
+    (r, exp)
+}
+
+fn exp_text(e: i64, upper: bool) -> String {
+    let mark = if upper { 'E' } else { 'e' };
+    let sign = if e < 0 { '-' } else { '+' };
+    let a = if e < 0 { -e } else { e };
+    if a < 10 {
+        f"{mark}{sign}0{a}"
+    } else {
+        f"{mark}{sign}{a}"
+    }
+}
+
+// PyOS_double_to_string of x >= 0 for the types e, f, g and r.
+fn float_body(x: f64, t: char, precision: i64, alt: bool, add_dot_0: bool) -> String {
+    let upper = t == 'E' or t == 'F' or t == 'G';
+    if x != x {
+        return if upper { "NAN".to_string() } else { "nan".to_string() };
+    }
+    if x == 1.0 / 0.0 {
+        return if upper { "INF".to_string() } else { "inf".to_string() };
+    }
+    if t == 'f' or t == 'F' {
+        return fixed_text(x, precision, alt);
+    }
+    if t == 'r' {
+        let mut s = float_repr(x);
+        if alt and not s.contains(".") {
+            s = match s.find("e") {
+                Some(k) => f"{s[0..k]}.{s[k..]}",
+                None => f"{s}.",
+            };
+        }
+        return s;
+    }
+    if t == 'e' or t == 'E' {
+        let (d, e) = significant(x, precision + 1);
+        let mut s = digit_text(d, 0, 1);
+        if precision > 0 or alt {
+            s.push('.');
+        }
+        s.push_str(digit_text(d, 1, d.len()));
+        s.push_str(exp_text(e, upper));
+        return s;
+    }
+    // 'g'
+    let p = if precision == 0 { 1 } else { precision };
+    let (d, e) = significant(x, p);
+    let mut n = d.len();
+    if not alt {
+        while n > 1 and d[n - 1] == 0 {
+            n -= 1;
+        }
+    }
+    let decpt = e + 1;
+    let limit = if add_dot_0 { p - 1 } else { p };
+    let mut s = String.new();
+    if decpt <= -4 or decpt > limit {
+        s.push_str(digit_text(d, 0, 1));
+        if n > 1 or alt {
+            s.push('.');
+        }
+        s.push_str(digit_text(d, 1, n));
+        s.push_str(exp_text(e, upper));
+        return s;
+    }
+    if decpt <= 0 {
+        s.push_str("0.");
+        for _ in 0..(0 - decpt) {
+            s.push('0');
+        }
+        s.push_str(digit_text(d, 0, n));
+    } else if decpt >= n {
+        s.push_str(digit_text(d, 0, n));
+        for _ in 0..(decpt - n) {
+            s.push('0');
+        }
+        if alt {
+            s.push('.');
+        }
+    } else {
+        s.push_str(digit_text(d, 0, decpt));
+        s.push('.');
+        s.push_str(digit_text(d, decpt, n));
+    }
+    if add_dot_0 and not s.contains(".") {
+        s.push_str(".0");
+    }
+    s
+}
+
+fn all_zero_digits(s: ref String) -> bool {
+    for c in s.chars() {
+        if c >= '1' and c <= '9' {
+            return false;
+        }
+        if c == 'e' or c == 'E' {
+            break;
+        }
+    }
+    true
+}
+
+// format_float_internal in Python/formatter_unicode.c.
+fn format_float_spec(x: f64, f: ref Spec) -> String {
+    let mut t = f.kind;
+    let mut precision = f.precision;
+    let mut default_precision = 6;
+    let mut add_dot_0 = false;
+    let mut pct = false;
+    if t == '\u{0}' {
+        add_dot_0 = true;
+        t = 'r';
+        default_precision = 0;
+    }
+    if t == 'n' {
+        t = 'g';
+    }
+    let mut val = x;
+    if t == '%' {
+        t = 'f';
+        val = val * 100.0;
+        pct = true;
+    }
+    if precision < 0 {
+        precision = default_precision;
+    } else if t == 'r' {
+        t = 'g';
+    }
+    let mut negative = val.to_bits() >> 63 == 1 and val == val;
+    let a = if negative { 0.0 - val } else { val };
+    let body = chars(float_body(a, t, precision, f.alternate, add_dot_0));
+    if negative and f.no_neg_0 and val == val and val != -1.0 / 0.0 and all_zero_digits(text(body)) {
+        negative = false;
+    }
+    let mut k = 0;
+    while k < body.len() and is_digit(body[k]) {
+        k += 1;
+    }
+    let mut rem = text(slice(body, k, body.len()));
+    if pct {
+        rem.push('%');
+    }
+    fill_number(sign_text(negative, f), "", text(slice(body, 0, k)), rem, f)
+}
+
+// format(x, spec) for a float.
+fn format_float(x: f64, spec: ref String) -> Result[String, String] {
+    let f = parse_spec(chars(spec), "float", '\u{0}', '>')?;
+    let t = f.kind;
+    if not (t == '\u{0}' or t == 'e' or t == 'E' or t == 'f' or t == 'F' or t == 'g' or t == 'G' or t == 'n' or t == '%') {
+        return Err(unknown_code(t, "float"));
+    }
+    Ok(format_float_spec(x, f))
+}
+
+// ------------------------------------------------------------ column types
+
+// _more_generic's order: NoneType < bool < int < float < bytes < str.
+const T_NONE: i64 = 0;
+const T_BOOL: i64 = 1;
+const T_INT: i64 = 2;
+const T_FLOAT: i64 = 3;
+const T_STR: i64 = 5;
+
+// `$` at k: the end, or just before a final newline.
+fn at_end(v: ref Vec[char], k: i64) -> bool {
+    k == v.len() or (k == v.len() - 1 and v[k] == '\n')
+}
+
+// What may follow the integer part: (\.[0-9]*)?$ or, without one,
+// (\.[0-9]+)?$.
+fn fraction_then_end(v: ref Vec[char], k: i64, need_digit: bool) -> bool {
+    if at_end(v, k) {
+        return true;
+    }
+    if k >= v.len() or v[k] != '.' {
+        return false;
+    }
+    let mut j = k + 1;
+    while j < v.len() and is_digit(v[j]) {
+        j += 1;
+    }
+    if need_digit and j == k + 1 {
+        return false;
+    }
+    at_end(v, j)
+}
+
+// _float_with_thousands_separators:
+// ^(([+-]?[0-9]{1,3})(?:,([0-9]{3}))*)?(?(1)\.[0-9]*|\.[0-9]+)?$
+fn thousands(s: ref String) -> bool {
+    let v = chars(s);
+    let n = v.len();
+    let mut starts: Vec[i64] = Vec.new();
+    if n > 0 and (v[0] == '+' or v[0] == '-') {
+        starts.push(1);
+    }
+    starts.push(0);
+    for start in starts.iter() {
+        for d in 1..4 {
+            let mut ok = start + d <= n;
+            if ok {
+                for k in *start..(start + d) {
+                    if not is_digit(v[k]) {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                continue;
+            }
+            let mut e = start + d;
+            loop {
+                if fraction_then_end(v, e, false) {
+                    return true;
+                }
+                if e + 3 < n and v[e] == ',' and is_digit(v[e + 1]) and is_digit(v[e + 2]) and is_digit(v[e + 3]) {
+                    e += 4;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    fraction_then_end(v, 0, true)
+}
+
+// _isnumber
+fn is_number(c: ref Cell) -> bool {
+    match c {
+        Cell.Int(_) => true,
+        Cell.Float(_) => true,
+        Cell.Bool(_) => true,
+        Cell.Nil => false,
+        Cell.Str(s) => match py_float(s) {
+            Some(x) => {
+                if is_inf_or_nan(x) {
+                    let l = ascii_lower(s);
+                    l == "inf" or l == "-inf" or l == "nan"
+                } else {
+                    true
+                }
+            }
+            None => false,
+        },
+    }
+}
+
+// _isint
+fn is_int(c: ref Cell) -> bool {
+    match c {
+        Cell.Int(_) => true,
+        Cell.Str(s) => py_int_ok(s),
+        _ => false,
+    }
+}
+
+// _isbool
+fn is_bool(c: ref Cell) -> bool {
+    match c {
+        Cell.Bool(_) => true,
+        Cell.Str(s) => s == "True" or s == "False",
+        _ => false,
+    }
+}
+
+// _type
+fn type_of(cell: ref Cell, has_invisible: bool, numparse: bool) -> i64 {
+    let c = match cell {
+        Cell.Str(s) => if has_invisible { Cell.Str(strip_ansi(s)) } else { cell.clone() },
+        _ => cell.clone(),
+    };
+    if is_nil(c) or is_empty_str(c) {
+        return T_NONE;
+    }
+    if is_bool(c) {
+        return T_BOOL;
+    }
+    let text_thousands = match c {
+        Cell.Str(ref s) => thousands(s),
+        _ => false,
+    };
+    let has_point = match c {
+        Cell.Str(ref s) => s.contains("."),
+        _ => false,
+    };
+    if numparse and (is_int(c) or (text_thousands and not has_point)) {
+        return T_INT;
+    }
+    if numparse and (is_number(c) or text_thousands) {
+        return T_FLOAT;
+    }
+    T_STR
+}
+
+// float(v) for a value of a float column; None where it raises.
+fn float_of(c: ref Cell) -> Option[f64] {
+    match c {
+        Cell.Int(i) => Some(*i as f64),
+        Cell.Float(f) => Some(*f),
+        Cell.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Cell.Str(s) => py_float(s),
+        Cell.Nil => None,
+    }
+}
+
+// The colored-number branch of _format for an int column: in
+// val.encode("unicode_escape"), the regex
+// (\\[xX]+[0-9a-fA-F]+\[\d+[mM]+)([0-9.]+)(\\.*)$ picks out a coloured
+// number, which gets intfmt; everything before the match is dropped.
+fn colored_int(s: ref String, intfmt: ref String) -> Result[String, String] {
+    let v = chars(unicode_escape(s));
+    let n = v.len();
+    for i in 0..n {
+        if v[i] != '\\' {
+            continue;
+        }
+        let mut k = i + 1;
+        let x0 = k;
+        while k < n and (v[k] == 'x' or v[k] == 'X') {
+            k += 1;
+        }
+        if k == x0 {
+            continue;
+        }
+        let h0 = k;
+        while k < n and hex_value(v[k]) >= 0 {
+            k += 1;
+        }
+        if k == h0 or k >= n or v[k] != '[' {
+            continue;
+        }
+        k += 1;
+        let d0 = k;
+        while k < n and is_digit(v[k]) {
+            k += 1;
+        }
+        if k == d0 {
+            continue;
+        }
+        let m0 = k;
+        while k < n and (v[k] == 'm' or v[k] == 'M') {
+            k += 1;
+        }
+        if k == m0 {
+            continue;
+        }
+        let g2 = k;
+        while k < n and (is_digit(v[k]) or v[k] == '.') {
+            k += 1;
+        }
+        if k == g2 or k >= n or v[k] != '\\' {
+            continue;
+        }
+        let digits = text(slice(v, g2, k));
+        if digits.contains(".") {
+            return Ok(s.clone());
+        }
+        let num = match i64.parse(digits) {
+            Ok(x) => x,
+            Err(_) => return Ok(s.clone()),
+        };
+        let formatted = format_int(num, intfmt)?;
+        let val_new = f"{text(slice(v, i, g2))}{formatted}{text(slice(v, k, n))}";
+        return Ok(unicode_unescape(val_new));
+    }
+    Ok(s.clone())
+}
+
+// _format
+fn format_cell(val: ref Cell, valtype: i64, floatfmt: ref String, intfmt: ref String, missingval: ref String, has_invisible: bool) -> Result[String, String] {
+    if is_nil(val) {
+        return Ok(missingval.clone());
+    }
+    if is_empty_str(val) {
+        return Ok(String.new());
+    }
+    if valtype == T_STR {
+        return Ok(cell_str(val));
+    }
+    if valtype == T_INT {
+        return match val {
+            Cell.Str(s) => colored_int(s, intfmt),
+            Cell.Int(i) => format_int(*i, intfmt),
+            Cell.Bool(b) => format_bool(*b, intfmt),
+            _ => Ok(cell_str(val)),
+        };
+    }
+    if valtype == T_FLOAT {
+        if has_invisible {
+            if let Cell.Str(s) = val {
+                let raw = strip_ansi(s);
+                return match py_float(raw) {
+                    Some(x) => match format_float(x, floatfmt) {
+                        Ok(f) => Ok(s.replace(raw, f)),
+                        Err(_) => Ok(s.clone()),
+                    },
+                    None => Ok(s.clone()),
+                };
+            }
+        }
+        let v = match val {
+            Cell.Str(s) => if s.contains(",") { Cell.Str(s.replace(",", "")) } else { val.clone() },
+            _ => val.clone(),
+        };
+        return match float_of(v) {
+            Some(x) => match format_float(x, floatfmt) {
+                Ok(f) => Ok(f),
+                Err(_) => Ok(cell_str(v)),
+            },
+            None => Ok(cell_str(v)),
+        };
+    }
+    Ok(cell_str(val))
+}
+
+// _afterpoint
+fn afterpoint(s: ref String) -> i64 {
+    let c = Cell.Str(s.clone());
+    if not (is_number(c) or thousands(s)) {
+        return -1;
+    }
+    if is_int(c) {
+        return -1;
+    }
+    let v = chars(s);
+    let mut pos = rfind(v, '.');
+    if pos < 0 {
+        pos = rfind(chars(ascii_lower(s)), 'e');
+    }
+    if pos >= 0 { v.len() - pos - 1 } else { -1 }
+}
+
+// ------------------------------------------------------------ alignment
+
+// "{0:>%ds}" (flush right), "{0:<%ds}" and "{0:^%ds}".
+fn pad_left(w: i64, s: ref String) -> String {
+    let n = width(s);
+    if n >= w { s.clone() } else { f"{spaces(w - n)}{s}" }
+}
+
+fn pad_right(w: i64, s: ref String) -> String {
+    let n = width(s);
+    if n >= w { s.clone() } else { f"{s}{spaces(w - n)}" }
+}
+
+fn pad_both(w: i64, s: ref String) -> String {
+    let n = width(s);
+    if n >= w {
+        return s.clone();
+    }
+    let left = (w - n) / 2;
+    f"{spaces(left)}{s}{spaces(w - n - left)}"
+}
+
+// 0 flush right (_padleft), 1 flush left, 2 centre, 3 none.
+fn pad_with(kind: i64, w: i64, s: ref String) -> String {
+    if kind == 0 {
+        pad_left(w, s)
+    } else if kind == 1 {
+        pad_right(w, s)
+    } else if kind == 2 {
+        pad_both(w, s)
+    } else {
+        s.clone()
+    }
+}
+
+fn align_is(a: ref Option[String], name: Str) -> bool {
+    match a {
+        Some(s) => s == name,
+        None => false,
+    }
+}
+
+fn align_falsy(a: ref Option[String]) -> bool {
+    match a {
+        Some(s) => s.is_empty(),
+        None => true,
+    }
+}
+
+fn line_width(s: ref String, has_invisible: bool) -> i64 {
+    if has_invisible { visible_width(s) } else { width(s) }
+}
+
+// _choose_width_fn's function.
+fn cell_width(s: ref String, has_invisible: bool, is_multiline: bool) -> i64 {
+    if not is_multiline {
+        return line_width(s, has_invisible);
+    }
+    let mut m = 0;
+    let mut first = true;
+    for l in split_rn(s).iter() {
+        let w = line_width(l, has_invisible);
+        if first or w > m {
+            m = w;
+        }
+        first = false;
+    }
+    m
+}
+
+// _align_column
+fn align_column(input: ref Vec[String], alignment: ref Option[String], minwidth: i64, has_invisible: bool, is_multiline: bool, preserve_whitespace: bool) -> Vec[String] {
+    let mut strings: Vec[String] = Vec.new();
+    let mut kind = 1;
+    if align_is(alignment, "decimal") {
+        let mut decimals: Vec[i64] = Vec.new();
+        let mut maxd = -1;
+        let mut first = true;
+        for s in input.iter() {
+            let d = if has_invisible { afterpoint(strip_ansi(s)) } else { afterpoint(s) };
+            if first or d > maxd {
+                maxd = d;
+            }
+            first = false;
+            decimals.push(d);
+        }
+        for i in 0..input.len() {
+            strings.push(f"{input[i]}{spaces(maxd - decimals[i])}");
+        }
+        kind = 0;
+    } else if align_falsy(alignment) {
+        strings = input.clone();
+        kind = 3;
+    } else {
+        for s in input.iter() {
+            strings.push(if preserve_whitespace { s.clone() } else { py_strip(s) });
+        }
+        kind = if align_is(alignment, "right") { 0 } else if align_is(alignment, "center") { 2 } else { 1 };
+    }
+    let mut maxwidth = minwidth;
+    let mut s_widths: Vec[Vec[i64]] = Vec.new();
+    for s in strings.iter() {
+        let mut ws: Vec[i64] = Vec.new();
+        if is_multiline {
+            for l in split_rn(s).iter() {
+                ws.push(line_width(l, has_invisible));
+            }
+        } else {
+            ws.push(line_width(s, has_invisible));
+        }
+        s_widths.push(ws);
+    }
+    let mut big = 0;
+    let mut first = true;
+    for ws in s_widths.iter() {
+        for w in ws.iter() {
+            if first or *w > big {
+                big = *w;
+            }
+            first = false;
+        }
+    }
+    if big > maxwidth {
+        maxwidth = big;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..strings.len() {
+        let ms = strings[i].clone();
+        if is_multiline {
+            let lines = splitlines(ms);
+            let mut padded: Vec[String] = Vec.new();
+            if not has_invisible {
+                for l in lines.iter() {
+                    padded.push(pad_with(kind, maxwidth, l));
+                }
+            } else {
+                let lens = split_rn(ms);
+                let mut k = 0;
+                while k < lines.len() and k < lens.len() and k < s_widths[i].len() {
+                    let w = maxwidth - (s_widths[i][k] - width(lens[k]));
+                    padded.push(pad_with(kind, w, lines[k]));
+                    k += 1;
+                }
+            }
+            out.push(padded.join("\n"));
+        } else if not has_invisible {
+            out.push(pad_with(kind, maxwidth, ms));
+        } else {
+            let w = maxwidth - (s_widths[i][0] - width(ms));
+            out.push(pad_with(kind, w, ms));
+        }
+    }
+    out
+}
+
+// _align_header
+fn align_header(header: ref String, alignment: ref Option[String], w: i64, visible: i64, is_multiline: bool, has_invisible: bool) -> String {
+    if is_multiline {
+        let mut padded: Vec[String] = Vec.new();
+        for h in split_rn(header).iter() {
+            padded.push(align_header(h, alignment, w, cell_width(h, has_invisible, true), false, has_invisible));
+        }
+        return padded.join("\n");
+    }
+    let wid = w + width(header) - visible;
+    if align_is(alignment, "left") {
+        pad_right(wid, header)
+    } else if align_is(alignment, "center") {
+        pad_both(wid, header)
+    } else if align_falsy(alignment) {
+        header.clone()
+    } else {
+        pad_left(wid, header)
+    }
+}
+
+// ------------------------------------------------------------ wrapping
+
+// textwrap's _whitespace.
+fn is_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\u{b}' or c == '\u{c}' or c == '\r'
+}
+
+fn is_letter(c: char) -> bool {
+    is_word(c) and not is_digit(c)
+}
+
+fn is_word_punct(c: char) -> bool {
+    is_word(c) or c == '!' or c == '"' or c == '\'' or c == '&' or c == '.' or c == ',' or c == '?'
+}
+
+fn is_blank(v: ref Vec[char]) -> bool {
+    v.iter().all(|c| py_space(*c))
+}
+
+// The em-dash alternative of wordsep_re, tried at i: the end of the dashes.
+fn em_dash_at(t: ref Vec[char], i: i64) -> Option[i64] {
+    if i == 0 or not is_word_punct(t[i - 1]) {
+        return None;
+    }
+    let mut k = i;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    if k - i >= 2 and k < t.len() and is_word(t[k]) {
+        Some(k)
+    } else {
+        None
+    }
+}
+
+// (?=-{2,}\w) at j.
+fn dashes_then_word(t: ref Vec[char], j: i64) -> bool {
+    let mut k = j;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    k - j >= 2 and k < t.len() and is_word(t[k])
+}
+
+// The word alternative of wordsep_re, tried at a non-space i.
+fn word_end(t: ref Vec[char], i: i64) -> i64 {
+    let n = t.len();
+    let mut j = i + 1;
+    loop {
+        if j < n and t[j] == '-' {
+            let behind = (j >= 2 and is_letter(t[j - 2]) and is_letter(t[j - 1]))
+                or (j >= 3 and is_letter(t[j - 3]) and t[j - 2] == '-' and is_letter(t[j - 1]));
+            let ahead = j + 1 < n and is_letter(t[j + 1])
+                and ((j + 2 < n and is_letter(t[j + 2])) or (j + 3 < n and t[j + 2] == '-' and is_letter(t[j + 3])));
+            if behind and ahead {
+                return j + 1;
+            }
+        }
+        if j == n or is_ws(t[j]) {
+            return j;
+        }
+        if is_word_punct(t[j - 1]) and dashes_then_word(t, j) {
+            return j;
+        }
+        j += 1;
+    }
+}
+
+fn vlen(v: ref Vec[char]) -> i64 {
+    strip_ansi_v(v).len()
+}
+
+fn concat(parts: ref Vec[Vec[char]]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for p in parts.iter() {
+        for c in p.iter() {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+// tabulate's _CustomTextWrap: textwrap.TextWrapper with lengths that skip
+// colour codes, and colours carried from one wrapped line to the next.
+struct Wrap {
+    width: i64,
+    break_long_words: bool,
+    break_on_hyphens: bool,
+    active: Vec[Vec[char]],
+}
+
+impl Wrap {
+    // _munge_whitespace (expandtabs, then whitespace to spaces) and _split.
+    fn chunks(ref self, line: ref String) -> Vec[Vec[char]] {
+        let mut t: Vec[char] = Vec.new();
+        let mut col = 0;
+        for c in line.chars() {
+            if c == '\t' {
+                let incr = 8 - col % 8;
+                for _ in 0..incr {
+                    t.push(' ');
+                }
+                col += incr;
+            } else if c == '\n' or c == '\r' {
+                t.push(c);
+                col = 0;
+            } else {
+                t.push(c);
+                col += 1;
+            }
+        }
+        for i in 0..t.len() {
+            if is_ws(t[i]) {
+                t[i] = ' ';
+            }
+        }
+        let n = t.len();
+        let mut out: Vec[Vec[char]] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            let mut end = i;
+            if is_ws(t[i]) {
+                while end < n and is_ws(t[end]) {
+                    end += 1;
+                }
+            } else if not self.break_on_hyphens {
+                while end < n and not is_ws(t[end]) {
+                    end += 1;
+                }
+            } else {
+                end = match em_dash_at(t, i) {
+                    Some(e) => e,
+                    None => word_end(t, i),
+                };
+            }
+            out.push(slice(t, i, end));
+            i = end;
+        }
+        out
+    }
+
+    // _update_lines
+    fn update_lines(mut ref self, lines: mut ref Vec[String], new_line: ref Vec[char]) {
+        let codes = ansi_codes(new_line);
+        let mut line = concat(self.active);
+        for c in new_line.iter() {
+            line.push(*c);
+        }
+        let reset = chars("\u{1b}[0m");
+        for code in codes.iter() {
+            if *code != reset {
+                self.active.push(code.clone());
+            } else {
+                self.active.clear();
+            }
+        }
+        if not self.active.is_empty() {
+            for c in reset.iter() {
+                line.push(*c);
+            }
+        }
+        lines.push(text(line));
+    }
+
+    // _handle_long_word
+    fn handle_long_word(ref self, rev: mut ref Vec[Vec[char]], cur_line: mut ref Vec[Vec[char]], cur_len: i64, w: i64) {
+        let space_left = if w < 1 { 1 } else { w - cur_len };
+        if self.break_long_words and space_left > 0 {
+            let last = rev.len() - 1;
+            let chunk = rev[last].clone();
+            let stripped = strip_ansi_v(chunk);
+            let mut i = 1;
+            while i <= stripped.len() and vlen(slice(stripped, 0, i)) <= space_left {
+                i += 1;
+            }
+            let mut total_escape_len = 0;
+            let mut last_group = 0;
+            if ansi_search(chunk, 0).is_some() {
+                for group in ansi_codes(chunk).iter() {
+                    let escape_len = group.len();
+                    if contains_seq(slice(chunk, last_group, i + total_escape_len + escape_len - 1), group) {
+                        total_escape_len += escape_len;
+                        let rest = slice(chunk, last_group, chunk.len());
+                        if let Some((at, m)) = ansi_search(rest, 0) {
+                            last_group += m.end;
+                            let _ = at;
+                        }
+                    }
+                }
+            }
+            let cut = i + total_escape_len - 1;
+            cur_line.push(slice(chunk, 0, cut));
+            rev[last] = slice(chunk, cut, chunk.len());
+        } else if cur_line.is_empty() {
+            cur_line.push(rev.pop().unwrap());
+        }
+    }
+
+    // _wrap_chunks, with max_lines None.
+    fn wrap(mut ref self, line: ref String) -> Result[Vec[String], String] {
+        let mut lines: Vec[String] = Vec.new();
+        if self.width <= 0 {
+            return Err(value_error(f"invalid width {self.width} (must be > 0)"));
+        }
+        let mut rev = self.chunks(line);
+        rev.reverse();
+        while not rev.is_empty() {
+            let mut cur_line: Vec[Vec[char]] = Vec.new();
+            let mut cur_len = 0;
+            let w = self.width;
+            if is_blank(rev[rev.len() - 1]) and not lines.is_empty() {
+                rev.pop();
+            }
+            while not rev.is_empty() {
+                let l = vlen(rev[rev.len() - 1]);
+                if cur_len + l <= w {
+                    cur_line.push(rev.pop().unwrap());
+                    cur_len += l;
+                } else {
+                    break;
+                }
+            }
+            if not rev.is_empty() and vlen(rev[rev.len() - 1]) > w {
+                self.handle_long_word(mut rev, mut cur_line, cur_len, w);
+                cur_len = 0;
+                for c in cur_line.iter() {
+                    cur_len += vlen(c);
+                }
+            }
+            if not cur_line.is_empty() and is_blank(cur_line[cur_line.len() - 1]) {
+                cur_len -= vlen(cur_line[cur_line.len() - 1]);
+                cur_line.pop();
+            }
+            if not cur_line.is_empty() {
+                let joined = concat(cur_line);
+                self.update_lines(mut lines, joined);
+            }
+        }
+        Ok(lines)
+    }
+}
+
+// ------------------------------------------------------------ table formats
+
+// A TableFormat's line: None, a Line(begin, hline, sep, end), or one of the
+// functions of colwidths and colaligns.
+#[derive(Clone)]
+enum LineFmt {
+    NoLine,
+    Plain(String, String, String, String),
+    PipeColons,
+    GridColons,
+    HtmlBegin,
+    LatexBegin(bool, bool),
+    AsciidocAbove,
+}
+
+// A TableFormat's row: a DataRow(begin, sep, end) or one of the functions
+// of cell values, colwidths and colaligns.
+#[derive(Clone)]
+enum RowFmt {
+    Plain(String, String, String),
+    Mediawiki(String),
+    Moin(String, String),
+    Html(String, bool),
+    Latex(bool),
+    Textile,
+    Asciidoc(bool),
+}
+
+#[derive(Clone)]
+struct TableFormat {
+    lineabove: LineFmt,
+    linebelowheader: LineFmt,
+    linebetweenrows: LineFmt,
+    linebelow: LineFmt,
+    headerrow: RowFmt,
+    datarow: RowFmt,
+    padding: i64,
+    hide: Vec[String],
+}
+
+fn ln(a: Str, b: Str, c: Str, d: Str) -> LineFmt {
+    LineFmt.Plain(a.to_string(), b.to_string(), c.to_string(), d.to_string())
+}
+
+fn dr(a: Str, b: Str, c: Str) -> RowFmt {
+    RowFmt.Plain(a.to_string(), b.to_string(), c.to_string())
+}
+
+fn hide(names: ref Vec[Str]) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for n in names.iter() {
+        v.push(n.to_string());
+    }
+    v
+}
+
+// The box-drawn grids and outlines: corner and edge characters for the top,
+// the header rule, the rules between rows, the bottom and the verticals.
+fn boxed(top: Array[Str, 4], head: Array[Str, 4], mid: Array[Str, 4], bottom: Array[Str, 4], v: Str, between: bool) -> TableFormat {
+    TableFormat {
+        lineabove: ln(top[0], top[1], top[2], top[3]),
+        linebelowheader: ln(head[0], head[1], head[2], head[3]),
+        linebetweenrows: if between { ln(mid[0], mid[1], mid[2], mid[3]) } else { LineFmt.NoLine },
+        linebelow: ln(bottom[0], bottom[1], bottom[2], bottom[3]),
+        headerrow: dr(v, v, v),
+        datarow: dr(v, v, v),
+        padding: 1,
+        hide: Vec.new(),
+    }
+}
+
+fn plain_rows(lineabove: own LineFmt, linebelowheader: own LineFmt, linebelow: own LineFmt, headerrow: own RowFmt, datarow: own RowFmt, padding: i64, hidden: Vec[Str]) -> TableFormat {
+    TableFormat {
+        lineabove: lineabove,
+        linebelowheader: linebelowheader,
+        linebetweenrows: LineFmt.NoLine,
+        linebelow: linebelow,
+        headerrow: headerrow,
+        datarow: datarow,
+        padding: padding,
+        hide: hide(hidden),
+    }
+}
+
+fn grid_family(name: ref String) -> Option[TableFormat] {
+    let between = name.ends_with("_grid");
+    if not between and not name.ends_with("_outline") {
+        return None;
+    }
+    let style = if between { name.replace("_grid", "") } else { name.replace("_outline", "") };
+    if style == "simple" {
+        return Some(boxed(["┌", "─", "┬", "┐"], ["├", "─", "┼", "┤"], ["├", "─", "┼", "┤"], ["└", "─", "┴", "┘"], "│", between));
+    }
+    if style == "rounded" {
+        return Some(boxed(["╭", "─", "┬", "╮"], ["├", "─", "┼", "┤"], ["├", "─", "┼", "┤"], ["╰", "─", "┴", "╯"], "│", between));
+    }
+    if style == "heavy" {
+        return Some(boxed(["┏", "━", "┳", "┓"], ["┣", "━", "╋", "┫"], ["┣", "━", "╋", "┫"], ["┗", "━", "┻", "┛"], "┃", between));
+    }
+    if style == "mixed" {
+        return Some(boxed(["┍", "━", "┯", "┑"], ["┝", "━", "┿", "┥"], ["├", "─", "┼", "┤"], ["┕", "━", "┷", "┙"], "│", between));
+    }
+    if style == "double" {
+        return Some(boxed(["╔", "═", "╦", "╗"], ["╠", "═", "╬", "╣"], ["╠", "═", "╬", "╣"], ["╚", "═", "╩", "╝"], "║", between));
+    }
+    if style == "fancy" {
+        return Some(boxed(["╒", "═", "╤", "╕"], ["╞", "═", "╪", "╡"], ["├", "─", "┼", "┤"], ["╘", "═", "╧", "╛"], "│", between));
+    }
+    None
+}
+
+// _table_formats.get(name, _table_formats["simple"])
+fn table_format(name: ref String) -> TableFormat {
+    if name == "plain" {
+        return plain_rows(LineFmt.NoLine, LineFmt.NoLine, LineFmt.NoLine, dr("", "  ", ""), dr("", "  ", ""), 0, Vec.new());
+    }
+    if name == "grid" or name == "outline" {
+        return boxed(["+", "-", "+", "+"], ["+", "=", "+", "+"], ["+", "-", "+", "+"], ["+", "-", "+", "+"], "|", name == "grid");
+    }
+    if name == "colon_grid" {
+        let mut f = boxed(["+", "-", "+", "+"], ["+", "=", "+", "+"], ["+", "-", "+", "+"], ["+", "-", "+", "+"], "|", true);
+        f.linebelowheader = LineFmt.GridColons;
+        return f;
+    }
+    if let Some(f) = grid_family(name) {
+        return f;
+    }
+    if name == "github" {
+        return plain_rows(ln("|", "-", "|", "|"), ln("|", "-", "|", "|"), LineFmt.NoLine, dr("|", "|", "|"), dr("|", "|", "|"), 1, vec!["lineabove"]);
+    }
+    if name == "pipe" {
+        return plain_rows(LineFmt.PipeColons, LineFmt.PipeColons, LineFmt.NoLine, dr("|", "|", "|"), dr("|", "|", "|"), 1, vec!["lineabove"]);
+    }
+    if name == "orgtbl" {
+        return plain_rows(LineFmt.NoLine, ln("|", "-", "+", "|"), LineFmt.NoLine, dr("|", "|", "|"), dr("|", "|", "|"), 1, Vec.new());
+    }
+    if name == "jira" {
+        return plain_rows(LineFmt.NoLine, LineFmt.NoLine, LineFmt.NoLine, dr("||", "||", "||"), dr("|", "|", "|"), 1, Vec.new());
+    }
+    if name == "presto" {
+        return plain_rows(LineFmt.NoLine, ln("", "-", "+", ""), LineFmt.NoLine, dr("", "|", ""), dr("", "|", ""), 1, Vec.new());
+    }
+    if name == "pretty" {
+        return plain_rows(ln("+", "-", "+", "+"), ln("+", "-", "+", "+"), ln("+", "-", "+", "+"), dr("|", "|", "|"), dr("|", "|", "|"), 1, Vec.new());
+    }
+    if name == "psql" {
+        return plain_rows(ln("+", "-", "+", "+"), ln("|", "-", "+", "|"), ln("+", "-", "+", "+"), dr("|", "|", "|"), dr("|", "|", "|"), 1, Vec.new());
+    }
+    if name == "rst" {
+        return plain_rows(ln("", "=", "  ", ""), ln("", "=", "  ", ""), ln("", "=", "  ", ""), dr("", "  ", ""), dr("", "  ", ""), 0, Vec.new());
+    }
+    if name == "mediawiki" {
+        return TableFormat {
+            lineabove: ln("{| class=\"wikitable\" style=\"text-align: left;\"", "", "", "\n|+ <!-- caption -->\n|-"),
+            linebelowheader: ln("|-", "", "", ""),
+            linebetweenrows: ln("|-", "", "", ""),
+            linebelow: ln("|}", "", "", ""),
+            headerrow: RowFmt.Mediawiki("!".to_string()),
+            datarow: RowFmt.Mediawiki("|".to_string()),
+            padding: 0,
+            hide: Vec.new(),
+        };
+    }
+    if name == "moinmoin" {
+        return plain_rows(LineFmt.NoLine, LineFmt.NoLine, LineFmt.NoLine, RowFmt.Moin("||".to_string(), "'''".to_string()), RowFmt.Moin("||".to_string(), String.new()), 1, Vec.new());
+    }
+    if name == "youtrack" {
+        return plain_rows(LineFmt.NoLine, LineFmt.NoLine, LineFmt.NoLine, dr("|| ", " || ", " || "), dr("| ", " | ", " |"), 1, Vec.new());
+    }
+    if name == "html" or name == "unsafehtml" {
+        let unsafe_ = name == "unsafehtml";
+        return plain_rows(LineFmt.HtmlBegin, LineFmt.NoLine, ln("</tbody>\n</table>", "", "", ""), RowFmt.Html("th".to_string(), unsafe_), RowFmt.Html("td".to_string(), unsafe_), 0, vec!["lineabove"]);
+    }
+    if name == "latex" or name == "latex_raw" {
+        let esc = name == "latex";
+        return plain_rows(LineFmt.LatexBegin(false, false), ln("\\hline", "", "", ""), ln("\\hline\n\\end{tabular}", "", "", ""), RowFmt.Latex(esc), RowFmt.Latex(esc), 1, Vec.new());
+    }
+    if name == "latex_booktabs" {
+        return plain_rows(LineFmt.LatexBegin(true, false), ln("\\midrule", "", "", ""), ln("\\bottomrule\n\\end{tabular}", "", "", ""), RowFmt.Latex(true), RowFmt.Latex(true), 1, Vec.new());
+    }
+    if name == "latex_longtable" {
+        return plain_rows(LineFmt.LatexBegin(false, true), ln("\\hline\n\\endhead", "", "", ""), ln("\\hline\n\\end{longtable}", "", "", ""), RowFmt.Latex(true), RowFmt.Latex(true), 1, Vec.new());
+    }
+    if name == "tsv" {
+        return plain_rows(LineFmt.NoLine, LineFmt.NoLine, LineFmt.NoLine, dr("", "\t", ""), dr("", "\t", ""), 0, Vec.new());
+    }
+    if name == "textile" {
+        return plain_rows(LineFmt.NoLine, LineFmt.NoLine, LineFmt.NoLine, dr("|_. ", "|_.", "|"), RowFmt.Textile, 1, Vec.new());
+    }
+    if name == "asciidoc" {
+        return plain_rows(LineFmt.AsciidocAbove, LineFmt.NoLine, ln("|====", "", "", ""), RowFmt.Asciidoc(true), RowFmt.Asciidoc(false), 1, vec!["lineabove"]);
+    }
+    plain_rows(ln("", "-", "  ", ""), ln("", "-", "  ", ""), ln("", "-", "  ", ""), dr("", "  ", ""), dr("", "  ", ""), 0, vec!["lineabove", "linebelow"])
+}
+
+const FORMAT_NAMES: Array[Str, 37] = [
+    "asciidoc", "colon_grid", "double_grid", "double_outline", "fancy_grid", "fancy_outline",
+    "github", "grid", "heavy_grid", "heavy_outline", "html", "jira", "latex", "latex_booktabs",
+    "latex_longtable", "latex_raw", "mediawiki", "mixed_grid", "mixed_outline", "moinmoin",
+    "orgtbl", "outline", "pipe", "plain", "presto", "pretty", "psql", "rounded_grid",
+    "rounded_outline", "rst", "simple", "simple_grid", "simple_outline", "textile", "tsv",
+    "unsafehtml", "youtrack",
+];
+
+fn is_format(name: ref String) -> bool {
+    for f in FORMAT_NAMES.iter() {
+        if name == *f {
+            return true;
+        }
+    }
+    false
+}
+
+// multiline_formats: the formats that fold a multiline cell into lines.
+fn folds_lines(name: ref String) -> bool {
+    if not is_format(name) {
+        return false;
+    }
+    not (name == "mediawiki" or name == "moinmoin" or name == "youtrack" or name == "html"
+        or name == "unsafehtml" or name.starts_with("latex") or name == "tsv" or name == "textile"
+        or name == "asciidoc")
+}
+
+fn line_present(f: ref LineFmt) -> bool {
+    match f {
+        LineFmt.NoLine => false,
+        _ => true,
+    }
+}
+
+fn align_name(a: ref Option[String]) -> String {
+    match a {
+        Some(s) => s.clone(),
+        None => String.new(),
+    }
+}
+
+// The dict lookups like alignment.get(a, default) of the row functions.
+fn align_attr(a: ref Option[String], left: Str, right: Str, center: Str, decimal: Str, other: Str) -> String {
+    let n = align_name(a);
+    if n == "left" {
+        left.to_string()
+    } else if n == "right" {
+        right.to_string()
+    } else if n == "center" {
+        center.to_string()
+    } else if n == "decimal" {
+        decimal.to_string()
+    } else {
+        other.to_string()
+    }
+}
+
+fn dashes(c: ref String, n: i64) -> String {
+    repeat(c, n)
+}
+
+// _asciidoc_row's make_header_line
+fn asciidoc_header(is_header: bool, colwidths: ref Vec[i64], colaligns: ref Vec[Option[String]]) -> Result[String, String] {
+    let mut marks: Vec[String] = Vec.new();
+    for a in colaligns.iter() {
+        let n = align_name(a);
+        let m = if n == "left" { "<" } else if n == "right" or n == "decimal" { ">" } else if n == "center" { "^" } else { "" };
+        if m.is_empty() {
+            let key = match a {
+                Some(s) => repr_str(s),
+                None => "None".to_string(),
+            };
+            return Err(f"KeyError: {key}");
+        }
+        marks.push(m.to_string());
+    }
+    let mut specs: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < colwidths.len() and i < marks.len() {
+        specs.push(f"{marks[i]}{colwidths[i]}");
+        i += 1;
+    }
+    let mut parts: Vec[String] = Vec.new();
+    parts.push("cols=\"".to_string() + specs.join(",") + "\"");
+    if is_header {
+        parts.push("options=\"header\"".to_string());
+    }
+    Ok("[".to_string() + parts.join(",") + "]\n|====")
+}
+
+// _build_line
+fn build_line(colwidths: ref Vec[i64], colaligns: ref Vec[Option[String]], f: ref LineFmt) -> Result[String, String] {
+    match f {
+        LineFmt.NoLine => Ok(String.new()),
+        LineFmt.Plain(begin, fill, sep, end) => {
+            let mut cells: Vec[String] = Vec.new();
+            for w in colwidths.iter() {
+                cells.push(repeat(fill, *w));
+            }
+            Ok(py_rstrip(begin.clone() + cells.join(sep.clone()) + end.clone()))
+        }
+        LineFmt.PipeColons => {
+            let mut segs: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < colwidths.len() and (colaligns.is_empty() or i < colaligns.len()) {
+                let w = colwidths[i];
+                let a = if colaligns.is_empty() { String.new() } else { align_name(colaligns[i]) };
+                let one = dashes("-", w - 1);
+                let two = dashes("-", w - 2);
+                segs.push(if a == "right" or a == "decimal" {
+                    f"{one}:"
+                } else if a == "center" {
+                    f":{two}:"
+                } else if a == "left" {
+                    f":{one}"
+                } else {
+                    dashes("-", w)
+                });
+                i += 1;
+            }
+            Ok("|".to_string() + segs.join("|") + "|")
+        }
+        LineFmt.GridColons => {
+            let mut segs: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < colwidths.len() and (colaligns.is_empty() or i < colaligns.len()) {
+                let w = colwidths[i];
+                let a = if colaligns.is_empty() { String.new() } else { align_name(colaligns[i]) };
+                let one = dashes("=", w - 1);
+                let two = dashes("=", w - 2);
+                segs.push(if a == "right" {
+                    f"{one}:"
+                } else if a == "center" {
+                    f":{two}:"
+                } else if a == "left" {
+                    f":{one}"
+                } else {
+                    dashes("=", w)
+                });
+                i += 1;
+            }
+            Ok("+".to_string() + segs.join("+") + "+")
+        }
+        LineFmt.HtmlBegin => Ok("<table>\n<tbody>".to_string()),
+        LineFmt.LatexBegin(booktabs, longtable) => {
+            let mut spec = String.new();
+            for a in colaligns.iter() {
+                spec.push_str(align_attr(a, "l", "r", "c", "r", "l"));
+            }
+            let begin = if *longtable { "\\begin{longtable}{" } else { "\\begin{tabular}{" };
+            let rule = if *booktabs { "\\toprule" } else { "\\hline" };
+            Ok(begin.to_string() + spec + "}\n" + rule)
+        }
+        LineFmt.AsciidocAbove => asciidoc_header(false, colwidths, colaligns),
+    }
+}
+
+// html.escape(s)
+fn html_escape(s: ref String) -> String {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#x27;")
+}
+
+// LATEX_ESCAPE_RULES
+fn latex_escape(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '&' {
+            out.push_str("\\&");
+        } else if c == '%' {
+            out.push_str("\\%");
+        } else if c == '$' {
+            out.push_str("\\$");
+        } else if c == '#' {
+            out.push_str("\\#");
+        } else if c == '_' {
+            out.push_str("\\_");
+        } else if c == '^' {
+            out.push_str("\\^{}");
+        } else if c == '{' {
+            out.push_str("\\{");
+        } else if c == '}' {
+            out.push_str("\\}");
+        } else if c == '~' {
+            out.push_str("\\textasciitilde{}");
+        } else if c == '\\' {
+            out.push_str("\\textbackslash{}");
+        } else if c == '<' {
+            out.push_str("\\ensuremath{<}");
+        } else if c == '>' {
+            out.push_str("\\ensuremath{>}");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// _build_row
+fn build_row(cells: ref Vec[String], colwidths: ref Vec[i64], colaligns: ref Vec[Option[String]], f: ref RowFmt) -> Result[String, String] {
+    match f {
+        RowFmt.Plain(begin, sep, end) => Ok(py_rstrip(begin.clone() + cells.join(sep.clone()) + end.clone())),
+        RowFmt.Mediawiki(sep) => {
+            let mut vals: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < cells.len() and i < colaligns.len() {
+                let attr = align_attr(colaligns[i], "", "style=\"text-align: right;\"| ", "style=\"text-align: center;\"| ", "style=\"text-align: right;\"| ", "");
+                vals.push(f" {attr}{cells[i]} ");
+                i += 1;
+            }
+            let colsep = f"{sep}{sep}";
+            Ok(py_rstrip(f"{sep}{vals.join(colsep)}"))
+        }
+        RowFmt.Textile => {
+            let mut vals: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < colaligns.len() and i < cells.len() {
+                let attr = align_attr(colaligns[i], "<.", ">.", "=.", ">.", "");
+                let v = if i == 0 { f"{cells[i]} " } else { cells[i].clone() };
+                vals.push(f"{attr}{v}");
+                i += 1;
+            }
+            Ok("|".to_string() + vals.join("|") + "|")
+        }
+        RowFmt.Html(tag, unsafe_) => {
+            let mut vals = String.new();
+            let mut i = 0;
+            while i < cells.len() and i < colaligns.len() {
+                let attr = align_attr(colaligns[i], "", " style=\"text-align: right;\"", " style=\"text-align: center;\"", " style=\"text-align: right;\"", "");
+                let c = if *unsafe_ { cells[i].clone() } else { html_escape(cells[i]) };
+                vals.push_str(f"<{tag}{attr}>{c}</{tag}>");
+                i += 1;
+            }
+            let row = f"<tr>{py_rstrip(vals)}</tr>";
+            if tag == "th" {
+                Ok(f"<table>\n<thead>\n{row}\n</thead>\n<tbody>")
+            } else {
+                Ok(row)
+            }
+        }
+        RowFmt.Moin(celltag, header) => {
+            let mut out = String.new();
+            let mut i = 0;
+            while i < cells.len() and i < colaligns.len() {
+                let attr = align_attr(colaligns[i], "", "<style=\"text-align: right;\">", "<style=\"text-align: center;\">", "<style=\"text-align: right;\">", "");
+                out.push_str(f"{celltag}{attr} {header}{cells[i]}{header} ");
+                i += 1;
+            }
+            out.push_str("||");
+            Ok(out)
+        }
+        RowFmt.Latex(escape) => {
+            let mut vals: Vec[String] = Vec.new();
+            for c in cells.iter() {
+                vals.push(if *escape { latex_escape(c) } else { c.clone() });
+            }
+            Ok(py_rstrip(vals.join("&") + "\\\\"))
+        }
+        RowFmt.Asciidoc(is_header) => {
+            let data = "|".to_string() + cells.join("|");
+            if *is_header {
+                Ok(f"{asciidoc_header(true, colwidths, colaligns)?}\n{data}")
+            } else {
+                Ok(data)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ options
+
+#[derive(Clone)]
+enum Headers {
+    Default,
+    FirstRow,
+    Keys,
+    List(Vec[JValue]),
+    Dict(Vec[(String, JValue)]),
+}
+
+#[derive(Clone)]
+enum ShowIndex {
+    Default,
+    Always,
+    Never,
+    Flag(bool),
+    List(Vec[Cell]),
+    Other,
+}
+
+// A str option, or a list of them, one per column.
+#[derive(Clone)]
+enum StrList {
+    One(String),
+    Many(Vec[String]),
+}
+
+#[derive(Clone)]
+enum Widths {
+    Absent,
+    Scalar(i64),
+    List(Vec[Option[i64]]),
+}
+
+#[derive(Clone)]
+enum NumParse {
+    Flag(bool),
+    List(Vec[i64]),
+}
+
+#[derive(Clone)]
+enum RowAlign {
+    Absent,
+    One(String),
+    List(Vec[Option[String]]),
+}
+
+// tabulate()'s keyword arguments.
+#[derive(Clone)]
+struct Opts {
+    headers: Headers,
+    tablefmt: String,
+    floatfmt: StrList,
+    intfmt: StrList,
+    numalign: Option[String],
+    stralign: Option[String],
+    missingval: StrList,
+    showindex: ShowIndex,
+    disable_numparse: NumParse,
+    colglobalalign: Option[String],
+    colalign: Option[Vec[Option[String]]],
+    preserve_whitespace: bool,
+    maxcolwidths: Widths,
+    headersglobalalign: Option[String],
+    headersalign: Option[Vec[Option[String]]],
+    rowalign: RowAlign,
+    maxheadercolwidths: Widths,
+    break_long_words: bool,
+    break_on_hyphens: bool,
+}
+
+fn default_opts() -> Opts {
+    Opts {
+        headers: Headers.Default,
+        tablefmt: "simple".to_string(),
+        floatfmt: StrList.One("g".to_string()),
+        intfmt: StrList.One(String.new()),
+        numalign: Some("default".to_string()),
+        stralign: Some("default".to_string()),
+        missingval: StrList.One(String.new()),
+        showindex: ShowIndex.Default,
+        disable_numparse: NumParse.Flag(false),
+        colglobalalign: None,
+        colalign: None,
+        preserve_whitespace: false,
+        maxcolwidths: Widths.Absent,
+        headersglobalalign: None,
+        headersalign: None,
+        rowalign: RowAlign.Absent,
+        maxheadercolwidths: Widths.Absent,
+        break_long_words: true,
+        break_on_hyphens: true,
+    }
+}
+
+fn json_str(j: ref JValue) -> Option[String] {
+    match j {
+        JValue.Str(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn json_bool(j: ref JValue) -> bool {
+    match j {
+        JValue.Bool(b) => *b,
+        JValue.Int(i) => *i != 0,
+        _ => false,
+    }
+}
+
+fn str_list(j: ref JValue) -> StrList {
+    match j {
+        JValue.List(items) => {
+            let mut v: Vec[String] = Vec.new();
+            for x in items.iter() {
+                v.push(json_str(x).unwrap_or(String.new()));
+            }
+            StrList.Many(v)
+        }
+        _ => StrList.One(json_str(j).unwrap_or(String.new())),
+    }
+}
+
+fn opt_list(j: ref JValue) -> Option[Vec[Option[String]]] {
+    match j {
+        JValue.List(items) => {
+            let mut v: Vec[Option[String]] = Vec.new();
+            for x in items.iter() {
+                v.push(json_str(x));
+            }
+            Some(v)
+        }
+        _ => None,
+    }
+}
+
+fn widths_of(j: ref JValue) -> Widths {
+    match j {
+        JValue.Int(i) => Widths.Scalar(*i),
+        JValue.List(items) => {
+            let mut v: Vec[Option[i64]] = Vec.new();
+            for x in items.iter() {
+                v.push(match x {
+                    JValue.Int(i) => Some(*i),
+                    _ => None,
+                });
+            }
+            Widths.List(v)
+        }
+        _ => Widths.Absent,
+    }
+}
+
+fn opts_of(job: ref JValue) -> Result[Opts, String] {
+    let mut o = default_opts();
+    if let JValue.Obj(items) = job {
+        for (k, v) in items.iter() {
+            if k == "table" {
+                continue;
+            } else if k == "headers" {
+                o.headers = match v {
+                    JValue.Str(s) => if s == "firstrow" { Headers.FirstRow } else if s == "keys" { Headers.Keys } else { return Err(f"headers {s}"); },
+                    JValue.List(items) => Headers.List(items.clone()),
+                    JValue.Obj(items) => Headers.Dict(items.clone()),
+                    _ => Headers.Default,
+                };
+            } else if k == "tablefmt" {
+                o.tablefmt = json_str(v).unwrap_or("simple".to_string());
+            } else if k == "floatfmt" {
+                o.floatfmt = str_list(v);
+            } else if k == "intfmt" {
+                o.intfmt = str_list(v);
+            } else if k == "numalign" {
+                o.numalign = json_str(v);
+            } else if k == "stralign" {
+                o.stralign = json_str(v);
+            } else if k == "missingval" {
+                o.missingval = str_list(v);
+            } else if k == "showindex" {
+                o.showindex = match v {
+                    JValue.Str(s) => if s == "default" { ShowIndex.Default } else if s == "always" { ShowIndex.Always } else if s == "never" { ShowIndex.Never } else { ShowIndex.Other },
+                    JValue.Bool(b) => ShowIndex.Flag(*b),
+                    JValue.List(items) => {
+                        let mut cells: Vec[Cell] = Vec.new();
+                        for x in items.iter() {
+                            cells.push(cell_of(x)?);
+                        }
+                        ShowIndex.List(cells)
+                    }
+                    _ => ShowIndex.Flag(false),
+                };
+            } else if k == "disable_numparse" {
+                o.disable_numparse = match v {
+                    JValue.List(items) => {
+                        let mut idx: Vec[i64] = Vec.new();
+                        for x in items.iter() {
+                            if let JValue.Int(i) = x {
+                                idx.push(*i);
+                            }
+                        }
+                        NumParse.List(idx)
+                    }
+                    _ => NumParse.Flag(json_bool(v)),
+                };
+            } else if k == "colglobalalign" {
+                o.colglobalalign = json_str(v);
+            } else if k == "colalign" {
+                o.colalign = opt_list(v);
+            } else if k == "preserve_whitespace" {
+                o.preserve_whitespace = json_bool(v);
+            } else if k == "maxcolwidths" {
+                o.maxcolwidths = widths_of(v);
+            } else if k == "headersglobalalign" {
+                o.headersglobalalign = json_str(v);
+            } else if k == "headersalign" {
+                o.headersalign = opt_list(v);
+            } else if k == "rowalign" {
+                o.rowalign = match v {
+                    JValue.Str(s) => RowAlign.One(s.clone()),
+                    JValue.List(_) => RowAlign.List(opt_list(v).unwrap_or(Vec.new())),
+                    _ => RowAlign.Absent,
+                };
+            } else if k == "maxheadercolwidths" {
+                o.maxheadercolwidths = widths_of(v);
+            } else if k == "break_long_words" {
+                o.break_long_words = json_bool(v);
+            } else if k == "break_on_hyphens" {
+                o.break_on_hyphens = json_bool(v);
+            } else {
+                return Err(f"unknown option {k}");
+            }
+        }
+    }
+    Ok(o)
+}
+
+// ------------------------------------------------------------ normalizing the data
+
+fn json_text(j: ref JValue) -> Result[String, String] {
+    Ok(cell_str(cell_of(j)?))
+}
+
+fn cells_of(j: ref JValue) -> Result[Vec[Cell], String] {
+    match j {
+        JValue.List(items) => {
+            let mut row: Vec[Cell] = Vec.new();
+            for x in items.iter() {
+                row.push(cell_of(x)?);
+            }
+            Ok(row)
+        }
+        _ => Err("TypeError: a row must be a list".to_string()),
+    }
+}
+
+fn obj_get(items: ref Vec[(String, JValue)], key: ref String) -> Option[JValue] {
+    for (k, v) in items.iter() {
+        if k == key {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn is_sep_value(c: ref Cell) -> bool {
+    match c {
+        Cell.Str(s) => py_strip(s) == "\u{1}",
+        _ => false,
+    }
+}
+
+// _is_separating_line
+fn is_sep_row(row: ref Vec[Cell]) -> bool {
+    (row.len() >= 1 and is_sep_value(row[0])) or (row.len() >= 2 and is_sep_value(row[1]))
+}
+
+// _prepend_row_index
+fn prepend_index(rows: own Vec[Vec[Cell]], index: ref Vec[Cell]) -> Result[Vec[Vec[Cell]], String] {
+    if index.len() != rows.len() {
+        return Err(value_error(f"index must be as long as the number of data rows: len(index)={index.len()} len(rows)={rows.len()}"));
+    }
+    let mut out: Vec[Vec[Cell]] = Vec.new();
+    let mut k = 0;
+    for row in rows.into_iter() {
+        if is_sep_row(row) {
+            out.push(row);
+            continue;
+        }
+        let mut r: Vec[Cell] = Vec.new();
+        r.push(index[k].clone());
+        k += 1;
+        for c in row.iter() {
+            r.push(c.clone());
+        }
+        out.push(r);
+    }
+    Ok(out)
+}
+
+// _normalize_tabular_data: (rows, headers, headers_pad).
+fn normalize(data: ref JValue, headers: ref Headers, showindex: ref ShowIndex) -> Result[(Vec[Vec[Cell]], Vec[String], i64), String] {
+    let mut rows: Vec[Vec[Cell]] = Vec.new();
+    let mut firstrow = false;
+    let mut hs: Vec[String] = Vec.new();
+    match headers {
+        Headers.FirstRow => {
+            firstrow = true;
+        }
+        Headers.List(items) => {
+            for x in items.iter() {
+                hs.push(json_text(x)?);
+            }
+        }
+        Headers.Dict(items) => {
+            for (k, _) in items.iter() {
+                hs.push(k.clone());
+            }
+        }
+        _ => {}
+    }
+    let keys_wanted = match headers {
+        Headers.Keys => true,
+        _ => false,
+    };
+    match data {
+        JValue.Obj(columns) => {
+            // A dict of iterables: the columns, transposed with zip_longest.
+            let mut longest = 0;
+            for (k, col) in columns.iter() {
+                match col {
+                    JValue.List(items) => {
+                        if items.len() > longest {
+                            longest = items.len();
+                        }
+                    }
+                    _ => return Err(f"TypeError: column {k} is not a list"),
+                }
+                if keys_wanted {
+                    hs.push(k.clone());
+                }
+            }
+            for i in 0..longest {
+                let mut row: Vec[Cell] = Vec.new();
+                for (_, col) in columns.iter() {
+                    if let JValue.List(items) = col {
+                        row.push(if i < items.len() { cell_of(items[i])? } else { Cell.Nil });
+                    }
+                }
+                rows.push(row);
+            }
+        }
+        JValue.List(items) => {
+            let dicts = not items.is_empty() and match items[0] {
+                JValue.Obj(_) => true,
+                _ => false,
+            };
+            if dicts {
+                let mut keys: Vec[String] = Vec.new();
+                let mut first: Vec[(String, JValue)] = Vec.new();
+                let mut start = 0;
+                if firstrow {
+                    if let JValue.Obj(f) = items[0] {
+                        first = f.clone();
+                        for (k, _) in f.iter() {
+                            keys.push(k.clone());
+                        }
+                    }
+                    start = 1;
+                }
+                for i in start..items.len() {
+                    if let JValue.Obj(r) = items[i] {
+                        for (k, _) in r.iter() {
+                            if not keys.contains(k) {
+                                keys.push(k.clone());
+                            }
+                        }
+                    } else {
+                        return Err("AttributeError: a row of a list of dicts is not a dict".to_string());
+                    }
+                }
+                match headers {
+                    Headers.Keys => {
+                        hs = keys.clone();
+                    }
+                    Headers.Dict(map) => {
+                        hs = Vec.new();
+                        for k in keys.iter() {
+                            hs.push(match obj_get(map, k) {
+                                Some(v) => json_text(v)?,
+                                None => k.clone(),
+                            });
+                        }
+                    }
+                    Headers.FirstRow => {
+                        hs = Vec.new();
+                        if items.len() > 1 {
+                            for k in keys.iter() {
+                                hs.push(match obj_get(first, k) {
+                                    Some(v) => json_text(v)?,
+                                    None => k.clone(),
+                                });
+                            }
+                        }
+                        firstrow = false;
+                    }
+                    Headers.List(l) => {
+                        if not l.is_empty() {
+                            return Err(value_error("headers for a list of dicts is not a dict or a keyword"));
+                        }
+                    }
+                    _ => {}
+                }
+                for i in start..items.len() {
+                    if let JValue.Obj(r) = items[i] {
+                        let mut row: Vec[Cell] = Vec.new();
+                        for k in keys.iter() {
+                            row.push(match obj_get(r, k) {
+                                Some(v) => cell_of(v)?,
+                                None => Cell.Nil,
+                            });
+                        }
+                        rows.push(row);
+                    }
+                }
+            } else {
+                for x in items.iter() {
+                    rows.push(cells_of(x)?);
+                }
+                if keys_wanted and not rows.is_empty() {
+                    for i in 0..rows[0].len() {
+                        hs.push(i.to_string());
+                    }
+                }
+            }
+        }
+        _ => return Err("TypeError: To build a table python-tabulate requires two-dimensional data".to_string()),
+    }
+    if firstrow {
+        if not rows.is_empty() {
+            for c in rows[0].iter() {
+                hs.push(cell_str(c));
+            }
+            rows.remove(0);
+        }
+    }
+    match showindex {
+        ShowIndex.List(index) => {
+            rows = prepend_index(rows, index)?;
+        }
+        ShowIndex.Always => {
+            let mut index: Vec[Cell] = Vec.new();
+            for i in 0..rows.len() {
+                index.push(Cell.Int(i));
+            }
+            rows = prepend_index(rows, index)?;
+        }
+        ShowIndex.Flag(b) => {
+            if *b {
+                let mut index: Vec[Cell] = Vec.new();
+                for i in 0..rows.len() {
+                    index.push(Cell.Int(i));
+                }
+                rows = prepend_index(rows, index)?;
+            }
+        }
+        _ => {}
+    }
+    let mut pad = 0;
+    if not hs.is_empty() and not rows.is_empty() {
+        if rows[0].len() > hs.len() {
+            pad = rows[0].len() - hs.len();
+        }
+        let mut padded: Vec[String] = Vec.new();
+        for _ in 0..pad {
+            padded.push(String.new());
+        }
+        for h in hs.iter() {
+            padded.push(h.clone());
+        }
+        hs = padded;
+    }
+    Ok((rows, hs, pad))
+}
+
+// _expand_numparse
+fn expand_numparse(d: ref NumParse, n: i64) -> Result[Vec[bool], String] {
+    match d {
+        NumParse.Flag(b) => {
+            let mut v: Vec[bool] = Vec.new();
+            for _ in 0..n {
+                v.push(not *b);
+            }
+            Ok(v)
+        }
+        NumParse.List(idx) => {
+            let mut v: Vec[bool] = Vec.new();
+            for _ in 0..n {
+                v.push(true);
+            }
+            for i in idx.iter() {
+                let k = if *i < 0 { *i + n } else { *i };
+                if k < 0 or k >= n {
+                    return Err("IndexError: list assignment index out of range".to_string());
+                }
+                v[k] = false;
+            }
+            Ok(v)
+        }
+    }
+}
+
+fn expand_widths(w: ref Widths, n: i64) -> Vec[Option[i64]] {
+    let mut v: Vec[Option[i64]] = Vec.new();
+    match w {
+        Widths.Scalar(x) => {
+            for _ in 0..n {
+                v.push(Some(*x));
+            }
+        }
+        Widths.List(l) => {
+            for x in l.iter() {
+                v.push(*x);
+            }
+            while v.len() < n {
+                v.push(None);
+            }
+        }
+        Widths.Absent => {}
+    }
+    v
+}
+
+// _wrap_text_to_colwidths
+fn wrap_rows(rows: ref Vec[Vec[Cell]], widths: ref Vec[Option[i64]], numparses: ref Vec[bool], missingval: ref StrList, o: ref Opts) -> Result[Vec[Vec[Cell]], String] {
+    let mut result: Vec[Vec[Cell]] = Vec.new();
+    for row in rows.iter() {
+        let mut new_row: Vec[Cell] = Vec.new();
+        let mut j = 0;
+        while j < row.len() and j < widths.len() and j < numparses.len() {
+            let cell = row[j].clone();
+            let np = numparses[j];
+            j += 1;
+            if is_number(cell) and np {
+                new_row.push(cell);
+                continue;
+            }
+            let w = match widths[j - 1] {
+                Some(w) => w,
+                None => {
+                    new_row.push(cell);
+                    continue;
+                }
+            };
+            let casted = if is_nil(cell) {
+                match missingval {
+                    StrList.One(s) => s.clone(),
+                    StrList.Many(_) => return Err("AttributeError: 'list' object has no attribute 'splitlines'".to_string()),
+                }
+            } else if is_empty_str(cell) or is_number(cell) {
+                cell_str(cell)
+            } else {
+                // str(_type(cell, numparse)(cell)): numparse lands in has_invisible.
+                let t = type_of(cell, np, true);
+                if t == T_NONE {
+                    return Err("TypeError: NoneType takes no arguments".to_string());
+                } else if t == T_BOOL {
+                    match cell {
+                        Cell.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+                        _ => "True".to_string(),
+                    }
+                } else if t == T_INT {
+                    return Err(value_error(f"invalid literal for int() with base 10: {repr_str(cell_str(cell))}"));
+                } else if t == T_FLOAT {
+                    return Err(value_error(f"could not convert string to float: {repr_str(cell_str(cell))}"));
+                } else {
+                    cell_str(cell)
+                }
+            };
+            let mut wrapper = Wrap { width: w, break_long_words: o.break_long_words, break_on_hyphens: o.break_on_hyphens, active: Vec.new() };
+            let mut wrapped: Vec[String] = Vec.new();
+            for line in splitlines(casted).iter() {
+                if py_strip(line) != "" {
+                    wrapped.push(wrapper.wrap(line)?.join("\n"));
+                }
+            }
+            new_row.push(Cell.Str(wrapped.join("\n")));
+        }
+        result.push(new_row);
+    }
+    Ok(result)
+}
+
+fn per_column(s: ref StrList, n: i64, default: Str) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    match s {
+        StrList.One(x) => {
+            for _ in 0..n {
+                v.push(x.clone());
+            }
+        }
+        StrList.Many(l) => {
+            for x in l.iter() {
+                v.push(x.clone());
+            }
+            while v.len() < n {
+                v.push(default.to_string());
+            }
+        }
+    }
+    v
+}
+
+// ------------------------------------------------------------ tabulate()
+
+fn tabulate(data: ref JValue, o: ref Opts) -> Result[String, String] {
+    let (all_rows, hs0, headers_pad) = normalize(data, o.headers, o.showindex)?;
+    let mut headers = hs0;
+    let mut rows: Vec[Vec[Cell]] = Vec.new();
+    let mut seps: Vec[i64] = Vec.new();
+    for i in 0..all_rows.len() {
+        if is_sep_row(all_rows[i]) {
+            seps.push(i);
+        } else {
+            rows.push(all_rows[i].clone());
+        }
+    }
+    match o.maxcolwidths {
+        Widths.Absent => {}
+        _ => {
+            let n = if rows.is_empty() { 0 } else { rows[0].len() };
+            let widths = expand_widths(o.maxcolwidths, n);
+            let numparses = expand_numparse(o.disable_numparse, n)?;
+            rows = wrap_rows(rows, widths, numparses, o.missingval, o)?;
+        }
+    }
+    match o.maxheadercolwidths {
+        Widths.Absent => {}
+        _ => {
+            let n = if rows.is_empty() { headers.len() } else { rows[0].len() };
+            let widths = expand_widths(o.maxheadercolwidths, n);
+            let numparses = expand_numparse(o.disable_numparse, n)?;
+            let mut hrow: Vec[Cell] = Vec.new();
+            for h in headers.iter() {
+                hrow.push(Cell.Str(h.clone()));
+            }
+            let wrapped = wrap_rows(vec![hrow], widths, numparses, o.missingval, o)?;
+            headers = Vec.new();
+            for c in wrapped[0].iter() {
+                headers.push(cell_str(c));
+            }
+        }
+    }
+    let tablefmt = o.tablefmt.clone();
+    if tablefmt == "rst" {
+        if not headers.is_empty() and py_strip(headers[0]).is_empty() {
+            headers[0] = "..".to_string();
+        }
+        for r in rows.iter_mut() {
+            if not r.is_empty() {
+                let blank = match r[0] {
+                    Cell.Str(s) => py_strip(s).is_empty(),
+                    _ => false,
+                };
+                if blank {
+                    r[0] = Cell.Str("..".to_string());
+                }
+            }
+        }
+    }
+    let mut min_padding = 2;
+    let mut disable = o.disable_numparse.clone();
+    let mut numalign = o.numalign.clone();
+    let mut stralign = o.stralign.clone();
+    if tablefmt == "pretty" {
+        min_padding = 0;
+        disable = NumParse.Flag(true);
+        if align_is(numalign, "default") {
+            numalign = Some("center".to_string());
+        }
+        if align_is(stralign, "default") {
+            stralign = Some("center".to_string());
+        }
+    } else {
+        if align_is(numalign, "default") {
+            numalign = Some("decimal".to_string());
+        }
+        if align_is(stralign, "default") {
+            stralign = Some("left".to_string());
+        }
+    }
+    let mut colglobalalign = o.colglobalalign.clone();
+    let mut headersglobalalign = o.headersglobalalign.clone();
+    if tablefmt == "colon_grid" {
+        colglobalalign = Some("left".to_string());
+        headersglobalalign = Some("left".to_string());
+    }
+
+    // Look for ANSI codes and line breaks once, over all the text.
+    let mut parts: Vec[String] = headers.clone();
+    for r in rows.iter() {
+        for c in r.iter() {
+            parts.push(cell_str(c));
+        }
+    }
+    let plain_text = parts.join("\t");
+    let has_invisible = has_ansi(plain_text);
+    let is_multiline = folds_lines(tablefmt) and has_line_break(plain_text);
+
+    // Columns, padded out with None as zip_longest does.
+    let mut ncols = 0;
+    for r in rows.iter() {
+        if r.len() > ncols {
+            ncols = r.len();
+        }
+    }
+    let mut cols: Vec[Vec[Cell]] = Vec.new();
+    for j in 0..ncols {
+        let mut col: Vec[Cell] = Vec.new();
+        for r in rows.iter() {
+            col.push(if j < r.len() { r[j].clone() } else { Cell.Nil });
+        }
+        cols.push(col);
+    }
+    let numparses = expand_numparse(disable, ncols)?;
+    let mut coltypes: Vec[i64] = Vec.new();
+    for j in 0..ncols {
+        let mut t = T_BOOL;
+        for c in cols[j].iter() {
+            let ct = type_of(c, true, numparses[j]);
+            if ct > t {
+                t = ct;
+            }
+        }
+        coltypes.push(t);
+    }
+    let float_formats = per_column(o.floatfmt, ncols, "g");
+    let int_formats = per_column(o.intfmt, ncols, "");
+    let missing_vals = per_column(o.missingval, ncols, "");
+    let mut texts: Vec[Vec[String]] = Vec.new();
+    for j in 0..ncols {
+        let mut col: Vec[String] = Vec.new();
+        for c in cols[j].iter() {
+            col.push(format_cell(c, coltypes[j], float_formats[j], int_formats[j], missing_vals[j], has_invisible)?);
+        }
+        texts.push(col);
+    }
+
+    // Alignments: global, then per column.
+    let mut aligns: Vec[Option[String]] = Vec.new();
+    for j in 0..ncols {
+        aligns.push(if colglobalalign.is_some() {
+            colglobalalign.clone()
+        } else if coltypes[j] == T_INT or coltypes[j] == T_FLOAT {
+            numalign.clone()
+        } else {
+            stralign.clone()
+        });
+    }
+    if let Some(ca) = o.colalign {
+        for idx in 0..ca.len() {
+            if idx >= aligns.len() {
+                break;
+            }
+            if not align_is(ca[idx], "global") {
+                aligns[idx] = ca[idx].clone();
+            }
+        }
+    }
+    let mut minwidths: Vec[i64] = Vec.new();
+    if not headers.is_empty() {
+        for h in headers.iter() {
+            minwidths.push(cell_width(h, has_invisible, is_multiline) + min_padding);
+        }
+    } else {
+        for _ in 0..ncols {
+            minwidths.push(0);
+        }
+    }
+    let mut aligns_copy = aligns.clone();
+    if tablefmt == "colon_grid" {
+        aligns_copy = Vec.new();
+        for _ in 0..ncols {
+            aligns_copy.push(Some("left".to_string()));
+        }
+    }
+    let mut aligned: Vec[Vec[String]] = Vec.new();
+    let mut j = 0;
+    while j < ncols and j < minwidths.len() {
+        aligned.push(align_column(texts[j], aligns_copy[j], minwidths[j], has_invisible, is_multiline, o.preserve_whitespace));
+        j += 1;
+    }
+
+    let mut aligns_headers: Vec[Option[String]] = Vec.new();
+    let mut out_headers: Vec[String] = Vec.new();
+    let mut colwidths: Vec[i64] = Vec.new();
+    if not headers.is_empty() {
+        let mut t_cols = aligned.clone();
+        if t_cols.is_empty() {
+            for _ in 0..headers.len() {
+                t_cols.push(vec![String.new()]);
+            }
+        }
+        // `aligns_headers = aligns or ...` shares the list with aligns, so
+        // headersalign changes the column alignments the format sees too.
+        let mut shared = false;
+        match headersglobalalign {
+            Some(a) => {
+                for _ in 0..t_cols.len() {
+                    aligns_headers.push(Some(a.clone()));
+                }
+            }
+            None => {
+                if not aligns.is_empty() {
+                    aligns_headers = aligns.clone();
+                    shared = true;
+                } else {
+                    for _ in 0..headers.len() {
+                        aligns_headers.push(stralign.clone());
+                    }
+                }
+            }
+        }
+        if let Some(ha) = o.headersalign {
+            for idx in 0..ha.len() {
+                let hidx = headers_pad + idx;
+                if hidx >= aligns_headers.len() {
+                    break;
+                }
+                if align_is(ha[idx], "same") and hidx < aligns.len() {
+                    aligns_headers[hidx] = aligns[hidx].clone();
+                } else if not align_is(ha[idx], "global") {
+                    aligns_headers[hidx] = ha[idx].clone();
+                    if shared {
+                        aligns[hidx] = ha[idx].clone();
+                    }
+                }
+            }
+        }
+        let mut k = 0;
+        while k < minwidths.len() and k < t_cols.len() {
+            let mut m = minwidths[k];
+            for cl in t_cols[k].iter() {
+                let w = cell_width(cl, has_invisible, is_multiline);
+                if w > m {
+                    m = w;
+                }
+            }
+            colwidths.push(m);
+            k += 1;
+        }
+        let mut k = 0;
+        while k < headers.len() and k < aligns_headers.len() and k < colwidths.len() {
+            out_headers.push(align_header(headers[k], aligns_headers[k], colwidths[k], cell_width(headers[k], has_invisible, is_multiline), is_multiline, has_invisible));
+            k += 1;
+        }
+    } else {
+        for c in aligned.iter() {
+            let mut m = 0;
+            let mut first = true;
+            for cl in c.iter() {
+                let w = cell_width(cl, has_invisible, is_multiline);
+                if first or w > m {
+                    m = w;
+                }
+                first = false;
+            }
+            colwidths.push(m);
+        }
+    }
+    let nrows = if aligned.is_empty() { 0 } else { aligned[0].len() };
+    let mut out_rows: Vec[Option[Vec[String]]] = Vec.new();
+    for i in 0..nrows {
+        let mut r: Vec[String] = Vec.new();
+        for c in aligned.iter() {
+            r.push(c[i].clone());
+        }
+        out_rows.push(Some(r));
+    }
+    let mut rowaligns: Vec[Option[String]] = Vec.new();
+    match o.rowalign {
+        RowAlign.List(l) => {
+            for a in l.iter() {
+                rowaligns.push(a.clone());
+            }
+            while rowaligns.len() < out_rows.len() {
+                rowaligns.push(None);
+            }
+        }
+        RowAlign.One(s) => {
+            for _ in 0..out_rows.len() {
+                rowaligns.push(Some(s.clone()));
+            }
+        }
+        RowAlign.Absent => {
+            for _ in 0..out_rows.len() {
+                rowaligns.push(None);
+            }
+        }
+    }
+    for i in seps.iter() {
+        if *i <= out_rows.len() {
+            out_rows.insert(*i, None);
+        } else {
+            out_rows.push(None);
+        }
+    }
+    let fmt = table_format(tablefmt);
+    format_table(fmt, out_headers, aligns_headers, out_rows, colwidths, aligns, is_multiline, rowaligns)
+}
+
+// ------------------------------------------------------------ _format_table
+
+fn pad_cells(cells: ref Vec[String], padding: i64) -> Vec[String] {
+    let p = spaces(padding);
+    let mut out: Vec[String] = Vec.new();
+    for c in cells.iter() {
+        out.push(f"{p}{c}{p}");
+    }
+    out
+}
+
+// _align_cell_veritically
+fn align_vertically(lines: ref Vec[String], n: i64, w: i64, rowalign: ref Option[String]) -> Vec[String] {
+    let delta = n - lines.len();
+    let blank = spaces(w);
+    let mut out: Vec[String] = Vec.new();
+    let top = if align_is(rowalign, "bottom") {
+        delta
+    } else if align_is(rowalign, "center") {
+        delta / 2
+    } else {
+        0
+    };
+    for _ in 0..top {
+        out.push(blank.clone());
+    }
+    for l in lines.iter() {
+        out.push(l.clone());
+    }
+    for _ in 0..(delta - top) {
+        out.push(blank.clone());
+    }
+    out
+}
+
+struct Layout {
+    padded_widths: Vec[i64],
+    padding: i64,
+    is_multiline: bool,
+}
+
+// append_row: _append_basic_row, or _append_multiline_row for a table
+// whose cells fold into lines. None is a SEPARATING_LINE row.
+fn append_row(lines: mut ref Vec[String], cells: ref Option[Vec[String]], lay: ref Layout, colaligns: ref Vec[Option[String]], rowfmt: ref RowFmt, rowalign: ref Option[String]) -> Result[(), String] {
+    let row = match cells {
+        Some(r) => r.clone(),
+        None => {
+            // _pad_row(SEPARATING_LINE): the row is the bare "\x01".
+            if let RowFmt.Plain(begin, _, end) = rowfmt {
+                lines.push(py_rstrip(begin.clone() + "\u{1}" + end));
+                return Ok(());
+            }
+            return Err("unsupported: a separating line as the last row".to_string());
+        }
+    };
+    if not lay.is_multiline {
+        let padded = if row.is_empty() { row.clone() } else { pad_cells(row, lay.padding) };
+        lines.push(build_row(padded, lay.padded_widths, colaligns, rowfmt)?);
+        return Ok(());
+    }
+    let mut colwidths: Vec[i64] = Vec.new();
+    for w in lay.padded_widths.iter() {
+        colwidths.push(*w - 2 * lay.padding);
+    }
+    let mut cells_lines: Vec[Vec[String]] = Vec.new();
+    let mut nlines = 0;
+    for c in row.iter() {
+        let l = splitlines(c);
+        if l.len() > nlines {
+            nlines = l.len();
+        }
+        cells_lines.push(l);
+    }
+    let mut aligned: Vec[Vec[String]] = Vec.new();
+    let mut k = 0;
+    while k < cells_lines.len() and k < colwidths.len() {
+        aligned.push(align_vertically(cells_lines[k], nlines, colwidths[k], rowalign));
+        k += 1;
+    }
+    for i in 0..nlines {
+        let mut ln: Vec[String] = Vec.new();
+        for cl in aligned.iter() {
+            ln.push(cl[i].clone());
+        }
+        let padded = if ln.is_empty() { ln.clone() } else { pad_cells(ln, lay.padding) };
+        lines.push(build_row(padded, colwidths, colaligns, rowfmt)?);
+    }
+    Ok(())
+}
+
+fn format_table(fmt: own TableFormat, headers: own Vec[String], headersaligns: own Vec[Option[String]], rows: own Vec[Option[Vec[String]]], colwidths: own Vec[i64], colaligns: own Vec[Option[String]], is_multiline: bool, rowaligns: own Vec[Option[String]]) -> Result[String, String] {
+    let mut lines: Vec[String] = Vec.new();
+    let hidden = if headers.is_empty() { Vec.new() } else { fmt.hide.clone() };
+    let pad = fmt.padding;
+    let mut padded_widths: Vec[i64] = Vec.new();
+    for w in colwidths.iter() {
+        padded_widths.push(*w + 2 * pad);
+    }
+    let lay = Layout { padded_widths: padded_widths.clone(), padding: pad, is_multiline: is_multiline };
+    let no_align: Option[String] = None;
+    if line_present(fmt.lineabove) and not hidden.contains("lineabove".to_string()) {
+        lines.push(build_line(padded_widths, colaligns, fmt.lineabove)?);
+    }
+    if not headers.is_empty() {
+        append_row(mut lines, Some(headers.clone()), lay, headersaligns, fmt.headerrow, no_align)?;
+        if line_present(fmt.linebelowheader) and not hidden.contains("linebelowheader".to_string()) {
+            lines.push(build_line(padded_widths, colaligns, fmt.linebelowheader)?);
+        }
+    }
+    if not rows.is_empty() and line_present(fmt.linebetweenrows) and not hidden.contains("linebetweenrows".to_string()) {
+        let last = rows.len() - 1;
+        let mut i = 0;
+        while i < last and i < rowaligns.len() {
+            if rows[i].is_some() {
+                append_row(mut lines, rows[i], lay, colaligns, fmt.datarow, rowaligns[i])?;
+            }
+            lines.push(build_line(padded_widths, colaligns, fmt.linebetweenrows)?);
+            i += 1;
+        }
+        let ra = if rowaligns.is_empty() { None } else { rowaligns[rowaligns.len() - 1].clone() };
+        append_row(mut lines, rows[last], lay, colaligns, fmt.datarow, ra)?;
+    } else {
+        let separating = if line_present(fmt.linebetweenrows) {
+            fmt.linebetweenrows.clone()
+        } else if line_present(fmt.linebelowheader) {
+            fmt.linebelowheader.clone()
+        } else if line_present(fmt.linebelow) {
+            fmt.linebelow.clone()
+        } else if line_present(fmt.lineabove) {
+            fmt.lineabove.clone()
+        } else {
+            ln("", "", "", "")
+        };
+        for r in rows.iter() {
+            if r.is_none() {
+                lines.push(build_line(padded_widths, colaligns, separating)?);
+            } else {
+                append_row(mut lines, r, lay, colaligns, fmt.datarow, no_align)?;
+            }
+        }
+    }
+    if line_present(fmt.linebelow) and not hidden.contains("linebelow".to_string()) {
+        lines.push(build_line(padded_widths, colaligns, fmt.linebelow)?);
+    }
+    if headers.is_empty() and rows.is_empty() {
+        return Ok(String.new());
+    }
+    Ok(lines.join("\n"))
+}
+
+// ------------------------------------------------------------ the command-line tool
+
+const USAGE: Str = "Usage: tabulate [options] [FILE ...]\n\nPretty-print tabular data.\nSee also https://github.com/astanin/python-tabulate\n\nFILE                      a filename of the file with tabular data;\n                          if \"-\" or missing, read data from stdin.\n\nOptions:\n\n-h, --help                show this message\n-1, --header              use the first row of data as a table header\n-o FILE, --output FILE    print table to FILE (default: stdout)\n-s REGEXP, --sep REGEXP   use a custom column separator (default: whitespace)\n-F FPFMT, --float FPFMT   floating point number format (default: g)\n-I INTFMT, --int INTFMT   integer point number format (default: \"\")\n-f FMT, --format FMT      set output table format; supported formats:\n                          plain, simple, grid, fancy_grid, pipe, orgtbl,\n                          rst, mediawiki, html, latex, latex_raw,\n                          latex_booktabs, latex_longtable, tsv\n                          (default: simple)\n";
+
+const LONG_OPTS: Array[Str, 8] = ["help", "header", "output=", "sep=", "float=", "int=", "colalign=", "format="];
+
+// getopt.getopt(args, "h1o:s:F:I:f:", LONG_OPTS): the (option, value)
+// pairs and the arguments after them, or getopt's error.
+fn getopt(args: ref Vec[String]) -> Result[(Vec[(String, String)], Vec[String]), String] {
+    let shortopts = chars("h1o:s:F:I:f:");
+    let mut opts: Vec[(String, String)] = Vec.new();
+    let mut i = 0;
+    while i < args.len() and args[i].starts_with("-") and args[i] != "-" {
+        let a = args[i].clone();
+        i += 1;
+        if a == "--" {
+            break;
+        }
+        if a.starts_with("--") {
+            let body = a[2..].to_string();
+            let (name, value) = match body.find("=") {
+                Some(k) => (body[0..k].to_string(), Some(body[k + 1..].to_string())),
+                None => (body.clone(), None),
+            };
+            let mut found: Vec[String] = Vec.new();
+            let mut exact: Option[String] = None;
+            for o in LONG_OPTS.iter() {
+                let plain = o.replace("=", "");
+                if plain == name {
+                    exact = Some(o.to_string());
+                }
+                if plain.starts_with(name) {
+                    found.push(o.to_string());
+                }
+            }
+            let opt = match exact {
+                Some(o) => o,
+                None => {
+                    if found.is_empty() {
+                        return Err(f"option --{name} not recognized");
+                    }
+                    if found.len() > 1 {
+                        return Err(f"option --{name} not a unique prefix");
+                    }
+                    found[0].clone()
+                }
+            };
+            let takes = opt.ends_with("=");
+            let full = opt.replace("=", "");
+            if takes {
+                let v = match value {
+                    Some(v) => v,
+                    None => {
+                        if i >= args.len() {
+                            return Err(f"option --{full} requires argument");
+                        }
+                        i += 1;
+                        args[i - 1].clone()
+                    }
+                };
+                opts.push((f"--{full}", v));
+            } else {
+                if value.is_some() {
+                    return Err(f"option --{full} must not have an argument");
+                }
+                opts.push((f"--{full}", String.new()));
+            }
+            continue;
+        }
+        let cs = chars(a);
+        let mut k = 1;
+        while k < cs.len() {
+            let c = cs[k];
+            k += 1;
+            let mut at = -1;
+            for s in 0..shortopts.len() {
+                if shortopts[s] == c and c != ':' {
+                    at = s;
+                }
+            }
+            if at < 0 {
+                return Err(f"option -{c} not recognized");
+            }
+            let takes = at + 1 < shortopts.len() and shortopts[at + 1] == ':';
+            if takes {
+                let v = if k < cs.len() {
+                    let rest = text(slice(cs, k, cs.len()));
+                    k = cs.len();
+                    rest
+                } else {
+                    if i >= args.len() {
+                        return Err(f"option -{c} requires argument");
+                    }
+                    i += 1;
+                    args[i - 1].clone()
+                };
+                opts.push((f"-{c}", v));
+            } else {
+                opts.push((f"-{c}", String.new()));
+            }
+        }
+    }
+    let mut rest: Vec[String] = Vec.new();
+    while i < args.len() {
+        rest.push(args[i].clone());
+        i += 1;
+    }
+    Ok((opts, rest))
+}
+
+// re.split(sep, line) for the separators the tool is given here: the
+// default \s+, or a literal string written with regex escapes (\t, \|).
+fn split_fields(line: ref String, sep: ref String) -> Result[Vec[String], String] {
+    if sep == "\\s+" {
+        let mut out: Vec[String] = Vec.new();
+        let mut cur = String.new();
+        let mut in_space = false;
+        for c in line.chars() {
+            if py_space(c) {
+                if not in_space {
+                    out.push(cur);
+                    cur = String.new();
+                    in_space = true;
+                }
+            } else {
+                cur.push(c);
+                in_space = false;
+            }
+        }
+        out.push(cur);
+        return Ok(out);
+    }
+    let v = chars(sep);
+    let mut lit = String.new();
+    let mut k = 0;
+    while k < v.len() {
+        let c = v[k];
+        if c == '\\' and k + 1 < v.len() {
+            let e = v[k + 1];
+            lit.push(if e == 't' { '\t' } else if e == 'n' { '\n' } else { e });
+            k += 2;
+            continue;
+        }
+        if ".^$*+?{}[]|()".contains(c.to_string()) {
+            return Err(f"unsupported separator {sep}");
+        }
+        lit.push(c);
+        k += 1;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for p in line.split(lit) {
+        out.push(p.to_string());
+    }
+    Ok(out)
+}
+
+// _main, with what it prints and its exit status.
+fn run_cli(args: ref Vec[String], out: mut ref String) -> i64 {
+    let (opts, files) = match getopt(args) {
+        Ok(r) => r,
+        Err(e) => {
+            out.push_str(f"{e}\n{USAGE}\n");
+            return 2;
+        }
+    };
+    let mut o = default_opts();
+    o.headers = Headers.List(Vec.new());
+    let mut sep = "\\s+".to_string();
+    for (opt, value) in opts.iter() {
+        if opt == "-1" or opt == "--header" {
+            o.headers = Headers.FirstRow;
+        } else if opt == "-F" or opt == "--float" {
+            o.floatfmt = StrList.One(value.clone());
+        } else if opt == "-I" or opt == "--int" {
+            o.intfmt = StrList.One(value.clone());
+        } else if opt == "-C" or opt == "--colalign" {
+            let mut aligns: Vec[Option[String]] = Vec.new();
+            for w in value.split_whitespace() {
+                aligns.push(Some(w.to_string()));
+            }
+            o.colalign = Some(aligns);
+        } else if opt == "-f" or opt == "--format" {
+            if not is_format(value) {
+                out.push_str(f"{value} is not a supported table format\n{USAGE}\n");
+                return 3;
+            }
+            o.tablefmt = value.clone();
+        } else if opt == "-s" or opt == "--sep" {
+            sep = value.clone();
+        } else if opt == "-h" or opt == "--help" {
+            out.push_str(f"{USAGE}\n");
+            return 0;
+        }
+    }
+    for f in files.iter() {
+        let body = match fs.read_to_string(f.clone()) {
+            Ok(t) => t,
+            Err(e) => {
+                out.push_str(f"cannot read {f}: {e}\n");
+                return 1;
+            }
+        };
+        // fobject.readlines(), then the rows that are not blank.
+        let mut table: Vec[JValue] = Vec.new();
+        for line in body.split("\n") {
+            let l = line.to_string();
+            if py_strip(l).is_empty() {
+                continue;
+            }
+            let fields = match split_fields(py_rstrip(l), sep) {
+                Ok(v) => v,
+                Err(e) => {
+                    out.push_str(f"{e}\n");
+                    return 1;
+                }
+            };
+            let mut row: Vec[JValue] = Vec.new();
+            for x in fields.into_iter() {
+                row.push(JValue.Str(x));
+            }
+            table.push(JValue.List(row));
+        }
+        match tabulate(JValue.List(table), o) {
+            Ok(t) => {
+                out.push_str(t);
+                out.push('\n');
+            }
+            Err(e) => {
+                out.push_str(f"error: {e}\n");
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+// ------------------------------------------------------------ jobs
+
+fn run_table(job: ref JValue, name: ref String) -> String {
+    let path = f"data/tables/{name}.json";
+    let t = match fs.read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => return f"cannot read {name}: {e}",
+    };
+    let data = match parse_json(t) {
+        Ok(d) => d,
+        Err(e) => return f"bad JSON in {name}: {e}",
+    };
+    let o = match opts_of(job) {
+        Ok(o) => o,
+        Err(e) => return e,
+    };
+    match tabulate(data, o) {
+        Ok(s) => s,
+        Err(e) => f"error: {e}",
+    }
+}
+
+fn run_format(job: ref JValue) -> Vec[String] {
+    let spec = match get(job, "format") {
+        Some(JValue.Str(s)) => s,
+        _ => String.new(),
+    };
+    let mut out: Vec[String] = Vec.new();
+    if let Some(JValue.List(values)) = get(job, "values") {
+        for v in values.iter() {
+            let r = match v {
+                JValue.Int(i) => format_int(*i, spec),
+                JValue.Float(f) => format_float(*f, spec),
+                JValue.Str(s) => match py_float(s) {
+                    Some(x) => format_float(x, spec),
+                    None => Err(value_error(f"could not convert string to float: {repr_str(s)}")),
+                },
+                _ => Err("unsupported value".to_string()),
+            };
+            out.push(match r {
+                Ok(s) => f"  {s}",
+                Err(e) => f"  error: {e}",
+            });
+        }
+    }
+    out
+}
+
+fn run_job(line: ref String) -> String {
+    let job = match parse_json(line) {
+        Ok(j) => j,
+        Err(e) => return f"bad job: {e}",
+    };
+    if let Some(JValue.Str(name)) = get(job, "table") {
+        return f"{run_table(job, name)}\n";
+    }
+    if get(job, "format").is_some() {
+        let mut s = run_format(job).join("\n");
+        s.push('\n');
+        return s;
+    }
+    let mut args: Vec[String] = Vec.new();
+    if let Some(JValue.List(items)) = get(job, "cli") {
+        for x in items.iter() {
+            args.push(json_str(x).unwrap_or(String.new()));
+        }
+    }
+    let mut out = String.new();
+    let code = run_cli(args, mut out);
+    if code != 0 {
+        out.push_str(f"exit {code}\n");
+    }
+    out
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    for dir in ["data/tables", "data/text"] {
+        if let Err(e) = fs.create_dir_all(dir.to_string()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.jsonl".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.jsonl: {e}");
+            return;
+        }
+    };
+    for line in jobs.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        print(f"== {line}\n");
+        print(run_job(line.to_string()));
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"asciidoc\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"colon_grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"double_grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"double_outline\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"fancy_grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"fancy_outline\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"github\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"heavy_grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"heavy_outline\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"html\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"jira\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"latex\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"latex_booktabs\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"latex_longtable\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"latex_raw\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"mediawiki\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"mixed_grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"mixed_outline\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"moinmoin\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"orgtbl\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"outline\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"plain\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"presto\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"pretty\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"rounded_grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"rounded_outline\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"rst\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"simple_grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"simple_outline\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"textile\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"tsv\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"unsafehtml\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"youtrack\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"asciidoc\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"colon_grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"double_grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"double_outline\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"fancy_grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"fancy_outline\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"github\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"heavy_grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"heavy_outline\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"html\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"jira\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"latex\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"latex_booktabs\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"latex_longtable\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"latex_raw\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"mediawiki\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"mixed_grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"mixed_outline\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"moinmoin\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"orgtbl\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"outline\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"pipe\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"plain\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"presto\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"pretty\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"psql\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"rounded_grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"rounded_outline\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"rst\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"simple\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"simple_grid\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"simple_outline\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"textile\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"tsv\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"unsafehtml\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"tablefmt\": \"youtrack\", \"missingval\": \"?\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"fancy_grid\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"rst\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"pretty\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"orgtbl\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"plain\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"presto\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"colon_grid\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"rounded_outline\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"jira\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"github\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"html\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"latex\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"tsv\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"mediawiki\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"nosuch\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"rowalign\": \"bottom\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"rowalign\": \"center\"}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"rowalign\": [\"bottom\", \"top\", \"center\"]}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\", \"colalign\": [\"right\", \"center\", \"right\"]}\n");
+    t.push_str("{\"table\": \"releases\", \"headers\": [\"v\\nersion\", \"date\", \"notes\\n(short)\"], \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"plain\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"html\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"github\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"fancy_outline\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"latex\"}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\", \"showindex\": true}\n");
+    t.push_str("{\"table\": \"incidents\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"showindex\": \"always\"}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\"}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"disable_numparse\": true}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"disable_numparse\": [1, 3]}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\", \"numalign\": \"right\", \"stralign\": \"center\"}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\", \"numalign\": null, \"stralign\": null}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\", \"preserve_whitespace\": true}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\", \"floatfmt\": \".2f\", \"missingval\": \"N/A\"}\n");
+    t.push_str("{\"table\": \"invoice\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"invoice\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\", \"floatfmt\": \",.2f\"}\n");
+    t.push_str("{\"table\": \"invoice\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\", \"colalign\": [\"left\", \"left\", \"right\", \"decimal\", \"decimal\"]}\n");
+    t.push_str("{\"table\": \"invoice\", \"headers\": \"firstrow\", \"tablefmt\": \"github\", \"colglobalalign\": \"center\", \"colalign\": [\"global\", \"right\"]}\n");
+    t.push_str("{\"table\": \"invoice\", \"headers\": \"firstrow\", \"tablefmt\": \"rst\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"intfmt\": \",\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"floatfmt\": [\"\", \"\", \"\", \".1%\", \",.2f\"], \"intfmt\": [\"03d\", \"\", \"_\"]}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"floatfmt\": \".3e\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"floatfmt\": \"\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"floatfmt\": \".3\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"floatfmt\": \"#.4g\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"floatfmt\": \"+010.2f\", \"intfmt\": \"+\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"floatfmt\": \"z.1f\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"floatfmt\": \"d\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"intfmt\": \"x\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"intfmt\": \"#b\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"intfmt\": \".2\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"intfmt\": \",.2f\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"intfmt\": \"*^9,\"}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"tablefmt\": \"pretty\"}\n");
+    t.push_str("{\"table\": \"bigints\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\", \"intfmt\": \",\"}\n");
+    t.push_str("{\"table\": \"bigints\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\", \"floatfmt\": \".4g\"}\n");
+    t.push_str("{\"table\": \"metrics\", \"headers\": \"firstrow\", \"tablefmt\": \"rounded_grid\"}\n");
+    t.push_str("{\"table\": \"metrics\", \"headers\": \"firstrow\", \"tablefmt\": \"rounded_grid\", \"floatfmt\": \".6f\"}\n");
+    t.push_str("{\"table\": \"metrics\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\", \"floatfmt\": \",.3f\"}\n");
+    t.push_str("{\"table\": \"metrics\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\", \"floatfmt\": \".2E\"}\n");
+    t.push_str("{\"table\": \"metrics\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\", \"floatfmt\": \"n\"}\n");
+    t.push_str("{\"table\": \"metrics\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\", \"floatfmt\": \"G\"}\n");
+    t.push_str("{\"table\": \"planets\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"keys\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": [\"name\", \"radius\"], \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": [\"a\", \"b\", \"c\", \"d\", \"e\"], \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": [1, null, 2.5, true], \"tablefmt\": \"pipe\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"showindex\": true}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"showindex\": \"always\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"showindex\": \"never\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"showindex\": [\"a\", \"b\", \"c\", \"d\"], \"tablefmt\": \"github\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"showindex\": [\"a\", \"b\"]}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"showindex\": false}\n");
+    t.push_str("{\"table\": \"servers\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": {\"host\": \"Host\", \"cpu\": \"CPU\", \"healthy\": \"OK?\"}, \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": [\"x\", \"y\"]}\n");
+    t.push_str("{\"table\": \"servers\", \"headers\": \"keys\", \"showindex\": \"always\", \"tablefmt\": \"simple\"}\n");
+    t.push_str("{\"table\": \"quarters\", \"headers\": \"keys\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"quarters\", \"headers\": \"keys\", \"tablefmt\": \"psql\", \"floatfmt\": \",.0f\", \"missingval\": \"-\"}\n");
+    t.push_str("{\"table\": \"quarters\", \"headers\": \"keys\", \"tablefmt\": \"psql\", \"missingval\": [\"\", \"?\", \"??\", \"???\"]}\n");
+    t.push_str("{\"table\": \"quarters\", \"tablefmt\": \"simple\"}\n");
+    t.push_str("{\"table\": \"quarters\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\"}\n");
+    t.push_str("{\"table\": \"empty\", \"headers\": [\"a\", \"b\", \"c\"], \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"empty\", \"headers\": [\"a\", \"b\", \"c\"], \"tablefmt\": \"pipe\"}\n");
+    t.push_str("{\"table\": \"empty\", \"headers\": [\"a\", \"b\", \"c\"], \"tablefmt\": \"html\"}\n");
+    t.push_str("{\"table\": \"empty\", \"headers\": \"keys\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"empty\", \"headers\": \"firstrow\"}\n");
+    t.push_str("{\"table\": \"empty\"}\n");
+    t.push_str("{\"table\": \"onecol\", \"headers\": \"firstrow\", \"tablefmt\": \"fancy_grid\"}\n");
+    t.push_str("{\"table\": \"onecol\", \"tablefmt\": \"latex_booktabs\"}\n");
+    t.push_str("{\"table\": \"ragged\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"ragged\", \"headers\": [\"k\", \"v\"], \"tablefmt\": \"grid\", \"missingval\": \"--\"}\n");
+    t.push_str("{\"table\": \"ragged\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"cities\", \"headers\": \"firstrow\", \"tablefmt\": \"fancy_outline\"}\n");
+    t.push_str("{\"table\": \"cities\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\", \"intfmt\": \",\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\", \"headersglobalalign\": \"center\"}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\", \"headersalign\": [\"right\", \"same\", \"left\"]}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"colalign\": [\"center\", \"left\"], \"headersalign\": [\"same\", \"global\", \"center\"]}\n");
+    t.push_str("{\"table\": \"planets\", \"headers\": \"firstrow\", \"tablefmt\": \"latex\", \"headersalign\": [\"right\", \"center\"]}\n");
+    t.push_str("{\"table\": \"ragged\", \"headers\": [\"only\"], \"tablefmt\": \"grid\", \"headersalign\": [\"right\", \"center\"]}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"html\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"unsafehtml\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"latex\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"latex_raw\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"rst\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"mediawiki\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"moinmoin\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"textile\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"asciidoc\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"jira\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"youtrack\"}\n");
+    t.push_str("{\"table\": \"markup\", \"tablefmt\": \"tsv\"}\n");
+    t.push_str("{\"table\": \"markup\", \"headers\": [\"\", \"offer\", \"html\"], \"tablefmt\": \"rst\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"simple\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"pipe\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"psql\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"html\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"pretty\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"intfmt\": \",\"}\n");
+    t.push_str("{\"table\": \"status\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"maxcolwidths\": 4}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"grid\", \"maxcolwidths\": [null, 30]}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"grid\", \"maxcolwidths\": [12, 24]}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"simple\", \"maxcolwidths\": 16, \"missingval\": \"(none)\"}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"grid\", \"maxcolwidths\": [12, 24], \"break_long_words\": false}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"grid\", \"maxcolwidths\": [12, 24], \"break_on_hyphens\": false}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"fancy_grid\", \"maxcolwidths\": [20, 40], \"maxheadercolwidths\": 3}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"grid\", \"maxcolwidths\": [8], \"maxheadercolwidths\": [2, null, 3], \"rowalign\": \"bottom\"}\n");
+    t.push_str("{\"table\": \"articles\", \"headers\": \"keys\", \"tablefmt\": \"grid\", \"maxcolwidths\": [0]}\n");
+    t.push_str("{\"table\": \"flags\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\"}\n");
+    t.push_str("{\"table\": \"flags\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"maxcolwidths\": 10}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"maxcolwidths\": 3}\n");
+    t.push_str("{\"table\": \"mixed\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"maxcolwidths\": 3, \"disable_numparse\": true}\n");
+    t.push_str("{\"table\": \"numbers\", \"headers\": \"firstrow\", \"tablefmt\": \"grid\", \"maxcolwidths\": 2}\n");
+    t.push_str("{\"format\": \"g\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".3\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".0\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"#.3\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".2f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".0f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"#.0f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".25f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".3e\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"E\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"#.0e\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".2%\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"%\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"G\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"#g\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".10g\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"+,.2f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"=+15,.3f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"*^14.1f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"012.3e\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"z.1f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \" .2f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"_.1f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \",\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"_\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \">12\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"<12g\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"^12.4\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"n\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"d\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".2s\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"q\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"+-.2f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \",_f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \".f\", \"values\": [0.0, -0.0, 1.0, 0.5, 1.5, 2.5, 2.675, 0.125, 0.1, 1e-05, 123.456, 1234567.891, 1e+16, 1e+22, 12345678.0, 100000.0, 5e-324, 1.7976931348623157e+308, -273.15, 0.0001234, 9007199254740993, 7, -42]}\n");
+    t.push_str("{\"format\": \"08.2f\", \"values\": [\"inf\", \"-inf\", \"nan\", \"1e999\", \"-1_000.5\", \" 2 \"]}\n");
+    t.push_str("{\"format\": \".3g\", \"values\": [\"inf\", \"nan\", \"Infinity\", \"+inf\", \"1,000\", \"0x1\"]}\n");
+    t.push_str("{\"cli\": [\"data/text/df.txt\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"-f\", \"psql\", \"data/text/df.txt\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"-s\", \":\", \"-f\", \"grid\", \"data/text/passwd\"]}\n");
+    t.push_str("{\"cli\": [\"--header\", \"--sep=,\", \"--format\", \"pipe\", \"-F\", \".2f\", \"data/text/prices.csv\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"-s\", \",\", \"-I\", \",\", \"-f\", \"github\", \"data/text/prices.csv\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"-f\", \"simple\", \"data/text/ps.txt\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"-s\", \"\\\\t\", \"-f\", \"rst\", \"data/text/latency.tsv\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"-s\", \"\\\\|\", \"-f\", \"outline\", \"data/text/pipes.txt\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"--colalign\", \"right left center\", \"-f\", \"grid\", \"data/text/latency.tsv\"]}\n");
+    t.push_str("{\"cli\": [\"-1\", \"-f\", \"plain\", \"data/text/ps.txt\", \"data/text/df.txt\"]}\n");
+    t.push_str("{\"cli\": [\"-f\", \"nosuch\", \"data/text/df.txt\"]}\n");
+    t.push_str("{\"cli\": [\"-C\", \"right\", \"data/text/df.txt\"]}\n");
+    t.push_str("{\"cli\": [\"-h\"]}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" {\n");
+    t.push_str("  \"title\": \"Zero-downtime Postgres migrations\",\n");
+    t.push_str("  \"summary\": \"How we moved a 4 TB table to a new schema without locking writes, using triggers, a shadow table and a backfill that throttles itself on replication lag.\",\n");
+    t.push_str("  \"words\": 2140,\n");
+    t.push_str("  \"rating\": 4.75\n");
+    t.push_str(" },\n");
+    t.push_str(" {\n");
+    t.push_str("  \"title\": \"Why our p99 doubled on Tuesdays\",\n");
+    t.push_str("  \"summary\": \"A cron job, a cold cache and a load balancer that thought it knew better. A post-mortem in five acts, with graphs.\",\n");
+    t.push_str("  \"words\": 1310,\n");
+    t.push_str("  \"rating\": 4.2\n");
+    t.push_str(" },\n");
+    t.push_str(" {\n");
+    t.push_str("  \"title\": \"Supercalifragilisticexpialidocious-identifiers considered harmful\",\n");
+    t.push_str("  \"summary\": \"Long names are not documentation.\\nShort ones are not either.\",\n");
+    t.push_str("  \"words\": 640,\n");
+    t.push_str("  \"rating\": 3.9\n");
+    t.push_str(" },\n");
+    t.push_str(" {\n");
+    t.push_str("  \"title\": \"\",\n");
+    t.push_str("  \"summary\": \"\",\n");
+    t.push_str("  \"words\": null,\n");
+    t.push_str("  \"rating\": null\n");
+    t.push_str(" }\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/articles.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"what\",\n");
+    t.push_str("  \"value\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"max i64\",\n");
+    t.push_str("  9223372036854775807\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"min i64\",\n");
+    t.push_str("  -9223372036854775808\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2^53+1\",\n");
+    t.push_str("  9007199254740993\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"bytes\",\n");
+    t.push_str("  1099511627776\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"zero\",\n");
+    t.push_str("  0\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/bigints.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"city\",\n");
+    t.push_str("  \"country\",\n");
+    t.push_str("  \"population\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"Z\\u00fcrich\",\n");
+    t.push_str("  \"Schweiz\",\n");
+    t.push_str("  421878\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"S\\u00e3o Paulo\",\n");
+    t.push_str("  \"Brasil\",\n");
+    t.push_str("  11451245\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"\\u041c\\u043e\\u0441\\u043a\\u0432\\u0430\",\n");
+    t.push_str("  \"\\u0420\\u043e\\u0441\\u0441\\u0438\\u044f\",\n");
+    t.push_str("  13010112\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"\\u0391\\u03b8\\u03ae\\u03bd\\u03b1\",\n");
+    t.push_str("  \"\\u0395\\u03bb\\u03bb\\u03ac\\u03b4\\u03b1\",\n");
+    t.push_str("  643452\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"\\u6771\\u4eac\",\n");
+    t.push_str("  \"\\u65e5\\u672c\",\n");
+    t.push_str("  13960000\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/cities.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[]\n");
+    v.push(DataFile { path: "tables/empty.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"feature\",\n");
+    t.push_str("  \"enabled\",\n");
+    t.push_str("  \"rollout\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"dark-mode\",\n");
+    t.push_str("  \"False\",\n");
+    t.push_str("  \"0%\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"new-checkout\",\n");
+    t.push_str("  \"True\",\n");
+    t.push_str("  \"25%\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"legacy-api\",\n");
+    t.push_str("  false,\n");
+    t.push_str("  \"100%\"\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/flags.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"date\",\n");
+    t.push_str("  \"service\",\n");
+    t.push_str("  \"minutes\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2024-05-01\",\n");
+    t.push_str("  \"api\",\n");
+    t.push_str("  12\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2024-05-03\",\n");
+    t.push_str("  \"db\",\n");
+    t.push_str("  47\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"\\u0001\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2024-06-11\",\n");
+    t.push_str("  \"api\",\n");
+    t.push_str("  5\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2024-06-19\",\n");
+    t.push_str("  \"cdn\",\n");
+    t.push_str("  130\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"\\u0001\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2024-07-02\",\n");
+    t.push_str("  \"db\",\n");
+    t.push_str("  9\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/incidents.json".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"SKU\",\n");
+    t.push_str("  \"Item\",\n");
+    t.push_str("  \"Qty\",\n");
+    t.push_str("  \"Unit\",\n");
+    t.push_str("  \"Total\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"KB-104\",\n");
+    t.push_str("  \"Mechanical keyboard\",\n");
+    t.push_str("  2,\n");
+    t.push_str("  \"1,299.00\",\n");
+    t.push_str("  \"2,598.00\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"MS-220\",\n");
+    t.push_str("  \"Wireless mouse\",\n");
+    t.push_str("  10,\n");
+    t.push_str("  \"24.5\",\n");
+    t.push_str("  \"245\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"CB-USB-C\",\n");
+    t.push_str("  \"USB-C cable, 2 m\",\n");
+    t.push_str("  25,\n");
+    t.push_str("  \"7.99\",\n");
+    t.push_str("  \"199.75\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"DK-3\",\n");
+    t.push_str("  \"Docking station\",\n");
+    t.push_str("  1,\n");
+    t.push_str("  \"18,450.10\",\n");
+    t.push_str("  \"18,450.10\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"\",\n");
+    t.push_str("  \"Shipping\",\n");
+    t.push_str("  null,\n");
+    t.push_str("  null,\n");
+    t.push_str("  \"35\"\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/invoice.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"\",\n");
+    t.push_str("  \"50% off & free shipping\",\n");
+    t.push_str("  \"<b>bold</b>\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"costs\",\n");
+    t.push_str("  \"$5 #1 item_name\",\n");
+    t.push_str("  \"it's \\\"quoted\\\"\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"   \",\n");
+    t.push_str("  \"{braces} ~tilde^ back\\\\slash\",\n");
+    t.push_str("  \"a < b > c\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  null,\n");
+    t.push_str("  \"plain\",\n");
+    t.push_str("  \"x\"\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/markup.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"metric\",\n");
+    t.push_str("  \"value\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"rps\",\n");
+    t.push_str("  1523.333333\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"error rate\",\n");
+    t.push_str("  0.00012\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"p50\",\n");
+    t.push_str("  12.5\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"p999\",\n");
+    t.push_str("  1048.0\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"bytes out\",\n");
+    t.push_str("  98765432101.0\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"tiny\",\n");
+    t.push_str("  5e-324\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"huge\",\n");
+    t.push_str("  1.7976931348623157e+308\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"neg\",\n");
+    t.push_str("  -273.15\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/metrics.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"ints as text\",\n");
+    t.push_str("  \"floats as text\",\n");
+    t.push_str("  \"thousands\",\n");
+    t.push_str("  \"special\",\n");
+    t.push_str("  \"overflow\",\n");
+    t.push_str("  \"booleans\",\n");
+    t.push_str("  \"bool and int\",\n");
+    t.push_str("  \"odd\",\n");
+    t.push_str("  \"empty\",\n");
+    t.push_str("  \"numbers\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"12\",\n");
+    t.push_str("  \"3.5\",\n");
+    t.push_str("  \"1,234\",\n");
+    t.push_str("  \"inf\",\n");
+    t.push_str("  \"1e999\",\n");
+    t.push_str("  \"True\",\n");
+    t.push_str("  true,\n");
+    t.push_str("  \"0x10\",\n");
+    t.push_str("  \"\",\n");
+    t.push_str("  1\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"-7\",\n");
+    t.push_str("  \"1e5\",\n");
+    t.push_str("  \"12,345,678\",\n");
+    t.push_str("  \"-inf\",\n");
+    t.push_str("  \"+inf\",\n");
+    t.push_str("  \"False\",\n");
+    t.push_str("  3,\n");
+    t.push_str("  \"1__0\",\n");
+    t.push_str("  null,\n");
+    t.push_str("  2.5\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \" 42 \",\n");
+    t.push_str("  \"-0.25\",\n");
+    t.push_str("  \"1,234.5\",\n");
+    t.push_str("  \"nan\",\n");
+    t.push_str("  \"12\",\n");
+    t.push_str("  true,\n");
+    t.push_str("  \"False\",\n");
+    t.push_str("  \"_1\",\n");
+    t.push_str("  \" \",\n");
+    t.push_str("  \"3\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"1_000\",\n");
+    t.push_str("  \".5\",\n");
+    t.push_str("  \"1,23\",\n");
+    t.push_str("  \"NaN\",\n");
+    t.push_str("  \"-Infinity\",\n");
+    t.push_str("  false,\n");
+    t.push_str("  0,\n");
+    t.push_str("  \"1e\",\n");
+    t.push_str("  \"\",\n");
+    t.push_str("  -4\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"+5\",\n");
+    t.push_str("  \"5.\",\n");
+    t.push_str("  \"1000\",\n");
+    t.push_str("  \"1.5\",\n");
+    t.push_str("  \"3\",\n");
+    t.push_str("  \"True\",\n");
+    t.push_str("  -1,\n");
+    t.push_str("  \"--1\",\n");
+    t.push_str("  null,\n");
+    t.push_str("  \"5.25\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"007\",\n");
+    t.push_str("  \"1_000.5\",\n");
+    t.push_str("  \",5\",\n");
+    t.push_str("  \"2\",\n");
+    t.push_str("  \"4\",\n");
+    t.push_str("  null,\n");
+    t.push_str("  \"\",\n");
+    t.push_str("  \"1.2.3\",\n");
+    t.push_str("  \"\",\n");
+    t.push_str("  1e+100\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/mixed.json".to_string(), body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"id\",\n");
+    t.push_str("  \"name\",\n");
+    t.push_str("  \"count\",\n");
+    t.push_str("  \"ratio\",\n");
+    t.push_str("  \"amount\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  1,\n");
+    t.push_str("  \"alpha\",\n");
+    t.push_str("  1500,\n");
+    t.push_str("  0.5,\n");
+    t.push_str("  1234567.891\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  2,\n");
+    t.push_str("  \"beta\",\n");
+    t.push_str("  -42,\n");
+    t.push_str("  0.333333333333,\n");
+    t.push_str("  -0.001\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  3,\n");
+    t.push_str("  \"gamma\",\n");
+    t.push_str("  1234567890123,\n");
+    t.push_str("  1.0,\n");
+    t.push_str("  100.0\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  4,\n");
+    t.push_str("  \"delta\",\n");
+    t.push_str("  0,\n");
+    t.push_str("  12.75,\n");
+    t.push_str("  1e+21\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  5,\n");
+    t.push_str("  \"epsilon\",\n");
+    t.push_str("  7,\n");
+    t.push_str("  0.0001234,\n");
+    t.push_str("  2.675\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  6,\n");
+    t.push_str("  \"zeta\",\n");
+    t.push_str("  4611686018427387904,\n");
+    t.push_str("  1e-07,\n");
+    t.push_str("  -0.0\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/numbers.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"only\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"one\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"column\"\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/onecol.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"Planet\",\n");
+    t.push_str("  \"R (km)\",\n");
+    t.push_str("  \"mass (x 10^29 kg)\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"Sun\",\n");
+    t.push_str("  696000,\n");
+    t.push_str("  1989100000\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"Earth\",\n");
+    t.push_str("  6371,\n");
+    t.push_str("  5973.6\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"Moon\",\n");
+    t.push_str("  1737,\n");
+    t.push_str("  73.5\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"Mars\",\n");
+    t.push_str("  3390,\n");
+    t.push_str("  641.85\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/planets.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str(" \"region\": [\n");
+    t.push_str("  \"North\",\n");
+    t.push_str("  \"South\",\n");
+    t.push_str("  \"East\",\n");
+    t.push_str("  \"West\",\n");
+    t.push_str("  \"Online\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" \"Q1\": [\n");
+    t.push_str("  12034.5,\n");
+    t.push_str("  9800,\n");
+    t.push_str("  15020.25,\n");
+    t.push_str("  7710.0,\n");
+    t.push_str("  30111.75\n");
+    t.push_str(" ],\n");
+    t.push_str(" \"Q2\": [\n");
+    t.push_str("  13100.0,\n");
+    t.push_str("  10250.5,\n");
+    t.push_str("  14800,\n");
+    t.push_str("  8020.4\n");
+    t.push_str(" ],\n");
+    t.push_str(" \"Q3\": [\n");
+    t.push_str("  12950.75,\n");
+    t.push_str("  11003.0,\n");
+    t.push_str("  16210.0\n");
+    t.push_str(" ],\n");
+    t.push_str(" \"growth\": [\n");
+    t.push_str("  \"+7.6%\",\n");
+    t.push_str("  \"+12.3%\",\n");
+    t.push_str("  \"-1.5%\",\n");
+    t.push_str("  \"+4.0%\",\n");
+    t.push_str("  \"n/a\"\n");
+    t.push_str(" ]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "tables/quarters.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"a\",\n");
+    t.push_str("  1\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"b\",\n");
+    t.push_str("  2,\n");
+    t.push_str("  \"extra\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"c\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"d\",\n");
+    t.push_str("  4.5,\n");
+    t.push_str("  null,\n");
+    t.push_str("  \"more\",\n");
+    t.push_str("  9\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/ragged.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"version\",\n");
+    t.push_str("  \"date\",\n");
+    t.push_str("  \"notes\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2.4.0\",\n");
+    t.push_str("  \"2024-03-01\",\n");
+    t.push_str("  \"Adds streaming uploads\\nDrops Python 3.8\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2.3.2\",\n");
+    t.push_str("  \"2024-01-15\",\n");
+    t.push_str("  \"Fixes a crash on empty input\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2.3.1\",\n");
+    t.push_str("  \"2023-12-02\",\n");
+    t.push_str("  \"Security fix\\n(CVE-2023-0001)\\nUpgrade advised\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"2.3.0\",\n");
+    t.push_str("  \"2023-11-20\\nyanked\",\n");
+    t.push_str("  \"\"\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/releases.json".to_string(), body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" {\n");
+    t.push_str("  \"host\": \"web-01\",\n");
+    t.push_str("  \"region\": \"eu-west-1\",\n");
+    t.push_str("  \"cpu\": 0.734,\n");
+    t.push_str("  \"mem_gb\": 15.6,\n");
+    t.push_str("  \"uptime_days\": 412,\n");
+    t.push_str("  \"healthy\": true\n");
+    t.push_str(" },\n");
+    t.push_str(" {\n");
+    t.push_str("  \"host\": \"web-02\",\n");
+    t.push_str("  \"region\": \"eu-west-1\",\n");
+    t.push_str("  \"cpu\": 0.08,\n");
+    t.push_str("  \"mem_gb\": 15.6,\n");
+    t.push_str("  \"uptime_days\": 3,\n");
+    t.push_str("  \"healthy\": true,\n");
+    t.push_str("  \"note\": \"rebooted after kernel patch\"\n");
+    t.push_str(" },\n");
+    t.push_str(" {\n");
+    t.push_str("  \"host\": \"db-primary\",\n");
+    t.push_str("  \"region\": \"us-east-2\",\n");
+    t.push_str("  \"cpu\": 0.9125,\n");
+    t.push_str("  \"mem_gb\": 251.9,\n");
+    t.push_str("  \"uptime_days\": 1088,\n");
+    t.push_str("  \"healthy\": false,\n");
+    t.push_str("  \"note\": \"replication lag 41s\"\n");
+    t.push_str(" },\n");
+    t.push_str(" {\n");
+    t.push_str("  \"host\": \"cache-7\",\n");
+    t.push_str("  \"region\": \"ap-south-1\",\n");
+    t.push_str("  \"cpu\": null,\n");
+    t.push_str("  \"mem_gb\": 3.75,\n");
+    t.push_str("  \"healthy\": null\n");
+    t.push_str(" },\n");
+    t.push_str(" {\n");
+    t.push_str("  \"region\": \"us-east-2\",\n");
+    t.push_str("  \"cpu\": 0.5,\n");
+    t.push_str("  \"uptime_days\": 0,\n");
+    t.push_str("  \"host\": \"batch-3\",\n");
+    t.push_str("  \"owner\": \"data-eng\"\n");
+    t.push_str(" }\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/servers.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str(" [\n");
+    t.push_str("  \"service\",\n");
+    t.push_str("  \"state\",\n");
+    t.push_str("  \"p99 ms\",\n");
+    t.push_str("  \"link\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"api\",\n");
+    t.push_str("  \"\\u001b[32mup\\u001b[0m\",\n");
+    t.push_str("  \"\\u001b[33m412\\u001b[0m\",\n");
+    t.push_str("  \"\\u001b]8;;https://status.example.com/api\\u001b\\\\details\\u001b]8;;\\u001b\\\\\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"worker\",\n");
+    t.push_str("  \"\\u001b[1;31mdown\\u001b[0m\",\n");
+    t.push_str("  \"\\u001b[31m9001\\u001b[0m\",\n");
+    t.push_str("  \"-\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"search\",\n");
+    t.push_str("  \"\\u001b[33mdegraded\\u001b[0m\",\n");
+    t.push_str("  \"88\",\n");
+    t.push_str("  \"\\u001b[4mrunbook\\u001b[0m\"\n");
+    t.push_str(" ],\n");
+    t.push_str(" [\n");
+    t.push_str("  \"billing\",\n");
+    t.push_str("  \"up\",\n");
+    t.push_str("  \"1234567\",\n");
+    t.push_str("  \"\"\n");
+    t.push_str(" ]\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "tables/status.json".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("Filesystem      Size  Used Avail Use% Mounted on\n");
+    t.push_str("/dev/nvme0n1p2  468G  201G  244G  46% /\n");
+    t.push_str("tmpfs            16G  2.1M   16G   1% /dev/shm\n");
+    t.push_str("/dev/nvme0n1p1  511M  6.1M  505M   2% /boot/efi\n");
+    t.push_str("/dev/sdb1       3.6T  2.9T  580G  84% /srv/backup\n");
+    v.push(DataFile { path: "text/df.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("endpoint\tp50\tp95\tp99\n");
+    t.push_str("/login\t12\t48.5\t120\n");
+    t.push_str("/search\t35.25\t210\t1999.9\n");
+    t.push_str("/health\t1\t1\t2\n");
+    v.push(DataFile { path: "text/latency.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("root:x:0:0:root:/root:/bin/bash\n");
+    t.push_str("daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n");
+    t.push_str("www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n");
+    t.push_str("postgres:x:113:120:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash\n");
+    t.push_str("deploy:x:1001:1001::/home/deploy:/bin/sh\n");
+    v.push(DataFile { path: "text/passwd".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name|role|since\n");
+    t.push_str("ada|admin|2019\n");
+    t.push_str("grace||2021\n");
+    t.push_str("|guest|\n");
+    v.push(DataFile { path: "text/pipes.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("symbol,open,close,volume\n");
+    t.push_str("ACME,101.25,99.80,1203400\n");
+    t.push_str("GLOBX,5.5,5.75,98000123\n");
+    t.push_str("INITECH,0.0451,0.0449,12\n");
+    t.push_str("UMBR,1200,1250.5,4500\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "text/prices.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("  PID USER      %CPU %MEM COMMAND\n");
+    t.push_str("    1 root       0.0  0.1 /sbin/init\n");
+    t.push_str("  812 postgres   2.5  4.3 postgres\n");
+    t.push_str(" 1534 www-data  12.0  1.8 nginx\n");
+    t.push_str("23001 deploy     0.3  0.0 sleep\n");
+    v.push(DataFile { path: "text/ps.txt".to_string(), body: t });
+}
