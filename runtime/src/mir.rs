@@ -820,8 +820,10 @@ pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
         feature = "net",
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
-    if let Some(code) = big_stack::run(body) {
-        return code;
+    if !big_stack::under_sanitizer() {
+        if let Some(code) = big_stack::run(body) {
+            return code;
+        }
     }
     match std::thread::Builder::new()
         .name("main".into())
@@ -843,6 +845,16 @@ mod big_stack {
     const SIZE: usize = 1 << 30;
     /// The inaccessible low end, which an overflow faults on.
     const GUARD: usize = 1 << 16;
+
+    /// Whether AddressSanitizer is linked in, which `__mir-llvm-asan` does.
+    /// LeakSanitizer reports nothing allocated while the stack pointer is on
+    /// a stack it was not told about, so a lane run on this stack could not
+    /// see a leak (B-2026-10-18-31); there the thread path runs `main`
+    /// instead, whose stack the sanitizer knows.
+    pub(super) fn under_sanitizer() -> bool {
+        // SAFETY: a lookup of a NUL-terminated name in the loaded objects.
+        !unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"__asan_init".as_ptr()) }.is_null()
+    }
 
     /// Runs `body` on a fresh stack; `None` when none could be mapped.
     pub(super) fn run(body: extern "C" fn() -> i32) -> Option<i32> {

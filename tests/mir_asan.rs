@@ -174,3 +174,49 @@ fn mir_asan_runs_a_kara_program() {
         "a string long enough to live on the heap 3\n"
     );
 }
+
+/// The lane's canary: a Kāra program that leaks a two-node `shared` cycle
+/// must be REPORTED. `main` used to run on a hand-switched stack that
+/// LeakSanitizer does not scan, and every leak verdict was clean
+/// (B-2026-10-18-31).
+#[test]
+fn mir_asan_reports_a_leaked_shared_cycle() {
+    if !asan_available() {
+        eprintln!("skipping: no ASan-capable cc");
+        return;
+    }
+    let dir = Scratch::new();
+    let src = dir.path().join("main.kara");
+    std::fs::write(
+        &src,
+        "shared struct Node {\n\
+         \x20   val: i64,\n\
+         \x20   mut next: Option[Node],\n\
+         }\n\
+         fn main() {\n\
+         \x20   let a = Node { val: 1, next: None };\n\
+         \x20   let b = Node { val: 2, next: Some(a) };\n\
+         \x20   a.next = Some(b);\n\
+         \x20   println(f\"{a.val}\");\n\
+         }\n",
+    )
+    .expect("write source");
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("__mir-llvm-asan")
+        .arg(&src)
+        .env_remove("ASAN_OPTIONS")
+        .env_remove("LSAN_OPTIONS")
+        .output()
+        .expect("run karac");
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() == Some(3) && err.contains("Linker failed") {
+        let _ = common::link_or_skip(Err(err.into_owned()));
+        return;
+    }
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
+    assert_eq!(out.status.code(), Some(86), "leak not reported:\n{err}");
+    assert!(
+        err.contains("LeakSanitizer: detected memory leaks"),
+        "{err}"
+    );
+}
