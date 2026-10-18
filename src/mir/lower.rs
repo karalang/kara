@@ -26,7 +26,7 @@ use crate::resolver::{ResolveResult, SpanKey, SymbolId};
 use crate::token::Span;
 use crate::ty::{AdtDef, IntrinsicKind, TyKind as HK, TypeName, VariantDef};
 use crate::typechecker::types::{FloatSize, IntSize, Type, UIntSize, VariantTypeInfo};
-use crate::typechecker::TypeCheckResult;
+use crate::typechecker::{ProjTraits, TypeCheckResult};
 use crate::typed_hir::{Callee, ResolvedCall, TypedHir};
 
 use super::build::BodyBuilder;
@@ -718,7 +718,7 @@ impl<'a> Lcx<'a> {
                             let ImplItem::Method(f) = it else { return None };
                             let key = (Some(impl_span), SpanKey::from_span(&f.span));
                             let (ty, _) = self.tc.fn_self_types.get(&key)?;
-                            let hir = self.lower_legacy(ty, &[]).ok()?;
+                            let hir = self.lower_legacy(ty, &[], None).ok()?;
                             self.mir_ty(hir, &[]).ok()
                         })
                     });
@@ -1186,7 +1186,8 @@ impl<'a> Lcx<'a> {
             .get(*frame as usize)
             .cloned()
             .unwrap_or_default();
-        let hir = self.lower_legacy(ty, &params)?;
+        let projs = self.tc.node_generic_frame_proj_traits.get(*frame as usize);
+        let hir = self.lower_legacy(ty, &params, projs)?;
         let hir = self.fill_erased_target(def, hir, args);
         self.mir_ty(hir, args)
     }
@@ -1239,13 +1240,21 @@ impl<'a> Lcx<'a> {
             .get(*frame as usize)
             .cloned()
             .unwrap_or_default();
+        let projs = self.tc.node_generic_frame_proj_traits.get(*frame as usize);
         Some(
-            self.lower_legacy(ty, &params)
+            self.lower_legacy(ty, &params, projs)
                 .and_then(|hir| self.mir_ty(hir, args)),
         )
     }
 
-    fn lower_legacy(&self, ty: &Type, params: &[String]) -> Result<Ty, String> {
+    /// `projs` names the bound trait behind each `T.Assoc` in `ty`, from
+    /// the frame or impl `ty` was written in (B-2026-10-18-1).
+    fn lower_legacy(
+        &self,
+        ty: &Type,
+        params: &[String],
+        projs: Option<&ProjTraits>,
+    ) -> Result<Ty, String> {
         let defs = self.defs;
         let lookup = |name: &str| {
             let d = defs.lookup(0, name)?;
@@ -1259,9 +1268,10 @@ impl<'a> Lcx<'a> {
             }
         };
         let param = |name: &str| params.iter().position(|p| p == name).map(|i| i as u32);
+        let proj_trait = |p: &str, a: &str| projs?.get(&(p.to_string(), a.to_string())).cloned();
         self.tys
             .tcx()
-            .lower_legacy(ty, &lookup, &param)
+            .lower_legacy_full(ty, &lookup, &param, false, &proj_trait)
             .map_err(|e| format!("type {e:?}"))
     }
 
@@ -1359,7 +1369,11 @@ impl<'a> Lcx<'a> {
             HK::Ref(t) => HK::Ref(self.convert(t)?),
             HK::MutRef(t) => HK::MutRef(self.convert(t)?),
             HK::Opaque { .. } => return Err("an iterator value".into()),
-            HK::Proj { base, assoc } => return self.normalize_proj(base, assoc),
+            HK::Proj {
+                base,
+                assoc,
+                trait_,
+            } => return self.normalize_proj(base, assoc, trait_),
             HK::Error => return Err("a type that failed to check".into()),
             HK::Weak(t) => HK::Weak(self.convert(t)?),
             HK::Fn {
@@ -1386,8 +1400,16 @@ impl<'a> Lcx<'a> {
     }
 
     /// `base.assoc` at an instance: the binding of `assoc` in the impl for
-    /// `base`'s type, instantiated with `base`'s arguments.
-    fn normalize_proj(&mut self, base: Ty, assoc: crate::intern::Symbol) -> Result<Ty, String> {
+    /// `base`'s type, instantiated with `base`'s arguments. With `trait_`
+    /// (`T.Output` under `T: Add`), the binding of that trait's impl, so a
+    /// type with `impl Add` and `impl Mul` answers with the right one
+    /// (B-2026-10-18-1).
+    fn normalize_proj(
+        &mut self,
+        base: Ty,
+        assoc: crate::intern::Symbol,
+        trait_: Option<crate::intern::Symbol>,
+    ) -> Result<Ty, String> {
         let base = self.convert(base)?;
         let tcx = self.tys.tcx();
         let (name, args) = match tcx.kind(base) {
@@ -1410,8 +1432,32 @@ impl<'a> Lcx<'a> {
         };
         let assoc = tcx.resolve_name(assoc).to_string();
         let tc = self.tc;
-        let Some(bound) = tc.impl_assoc_types.get(&(name.clone(), assoc.clone())) else {
-            return Err(format!("`{name}.{assoc}`, which no impl binds"));
+        // Without a bound trait (`Self.Output`, `W[V].Output`), the one
+        // trait impl that binds `assoc` still brings its own bounds for a
+        // projection in the binding (`W[T.Output]` under `impl[T: Add]`).
+        let by_trait = match trait_ {
+            Some(t) => {
+                let key = (name.clone(), tcx.resolve_name(t).to_string(), assoc.clone());
+                tc.impl_trait_assoc_types.get(&key)
+            }
+            None => {
+                let mut it = tc
+                    .impl_trait_assoc_types
+                    .iter()
+                    .filter(|((ty, _, a), _)| *ty == name && *a == assoc)
+                    .map(|(_, v)| v);
+                match (it.next(), it.next()) {
+                    (Some(v), None) => Some(v),
+                    _ => None,
+                }
+            }
+        };
+        let (bound, projs) = match by_trait {
+            Some((bound, projs)) => (bound, Some(projs)),
+            None => match tc.impl_assoc_types.get(&(name.clone(), assoc.clone())) {
+                Some(bound) => (bound, None),
+                None => return Err(format!("`{name}.{assoc}`, which no impl binds")),
+            },
         };
         let params = tc
             .struct_info
@@ -1419,7 +1465,7 @@ impl<'a> Lcx<'a> {
             .map(|s| s.generic_params.clone())
             .or_else(|| tc.enum_info.get(&name).map(|e| e.generic_params.clone()))
             .unwrap_or_default();
-        let hir = self.lower_legacy(bound, &params)?;
+        let hir = self.lower_legacy(bound, &params, projs)?;
         let args = tcx.list(args);
         self.mir_ty(hir, &args)
     }
@@ -1511,7 +1557,7 @@ impl<'a> Lcx<'a> {
         for (i, (vname, fields)) in variants.iter().enumerate() {
             let mut fs = Vec::new();
             for (fname, fty) in fields {
-                let hir = self.lower_legacy(fty, &generics)?;
+                let hir = self.lower_legacy(fty, &generics, None)?;
                 fs.push((fname.clone(), self.convert(hir)?));
             }
             if is_enum {
@@ -3277,7 +3323,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let args = self.args.clone();
                 let t = match self
                     .lcx
-                    .lower_legacy(ty, &[])
+                    .lower_legacy(ty, &[], None)
                     .and_then(|h| self.lcx.mir_ty(h, &args))
                 {
                     Ok(t) => t,
@@ -10581,7 +10627,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let args = self.args.clone();
         match self
             .lcx
-            .lower_legacy(&ty, &[])
+            .lower_legacy(&ty, &[], None)
             .and_then(|h| self.lcx.mir_ty(h, &args))
         {
             Ok(t) => Ok(t),

@@ -235,9 +235,13 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
             .unwrap_or(&[]);
         // An inner parameter shadows an outer one of the same name.
         let param = |p: &str| names.iter().rposition(|n| n == p).map(|i| i as u32);
+        // The bound trait behind each `T.Assoc` in this frame
+        // (B-2026-10-18-1).
+        let projs = tc.node_generic_frame_proj_traits.get(frame as usize);
+        let proj_trait = |p: &str, a: &str| projs?.get(&(p.to_string(), a.to_string())).cloned();
         // A variable the checker left unsolved is unconstrained: no value of
         // its type exists, so `()` stands in for it.
-        tcx.lower_legacy_with(ty, &lookup, &param, true)
+        tcx.lower_legacy_full(ty, &lookup, &param, true, &proj_trait)
     };
     // The parameters in scope at `frame`.
     let in_frame = |frame: u32, p: &str| {

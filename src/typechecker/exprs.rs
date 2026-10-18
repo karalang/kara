@@ -3746,6 +3746,20 @@ impl<'a> super::TypeChecker<'a> {
         // rewrites the inner `T` again, nesting a spurious extra layer
         // (`Option[Option[Option[T]]]`). The projection-param rewrite is
         // the only thing `resolve_type_vars` can't do, so gate on it.
+        // B-2026-10-18-1: `T.Output` under `T: Add` is the `Output` of the
+        // solved type's own `impl Add`, read before the substitution below
+        // forgets which bound it came from. `impl_assoc_types` keeps one
+        // binding per (type, name), so a type with `impl Add` and `impl Mul`
+        // would otherwise answer with whichever impl came last.
+        let ret = match where_clause {
+            Some(wc) if !solutions.is_empty() && type_contains_assoc_projection(&ret) => self
+                .resolve_bounded_projections(
+                    &ret,
+                    &Self::bounds_by_param(None, Some(wc)),
+                    &solutions,
+                ),
+            _ => ret,
+        };
         let ret = if solutions.is_empty() || !type_contains_assoc_projection(&ret) {
             ret
         } else {
@@ -4176,6 +4190,203 @@ impl<'a> super::TypeChecker<'a> {
             Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| self.read_as_value(t)).collect()),
             _ => t.clone(),
         }
+    }
+
+    /// `ty` with each `P.Assoc` whose parameter `P` is solved, and whose
+    /// `bounds` name exactly one trait that the solved type implements with
+    /// its own binding of `Assoc`, replaced by that binding (B-2026-10-18-1).
+    /// Any other projection is left for `resolve_assoc_projections`.
+    fn resolve_bounded_projections(
+        &self,
+        ty: &Type,
+        bounds: &HashMap<String, Vec<String>>,
+        solutions: &HashMap<String, Type>,
+    ) -> Type {
+        let recur = |t: &Type| self.resolve_bounded_projections(t, bounds, solutions);
+        match ty {
+            Type::AssocProjection {
+                param, assoc, args, ..
+            } if args.is_empty() => {
+                let (Some(solved), Some(traits)) = (solutions.get(param), bounds.get(param)) else {
+                    return ty.clone();
+                };
+                let (name, solved_args) = match solved {
+                    Type::Named { name, args } => (name, args.as_slice()),
+                    Type::Shared(name) => (name, &[][..]),
+                    _ => return ty.clone(),
+                };
+                let found: Vec<(usize, &Type)> = self
+                    .env
+                    .impls
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, imp)| {
+                        imp.target_type == *name
+                            && imp.trait_name.as_ref().is_some_and(|t| traits.contains(t))
+                    })
+                    .filter_map(|(i, _)| {
+                        self.env
+                            .impl_own_assoc_types
+                            .get(&i)?
+                            .iter()
+                            .find(|(n, _)| n == assoc)
+                            .map(|(_, t)| (i, t))
+                    })
+                    .collect();
+                let [(i, bound)] = found.as_slice() else {
+                    return ty.clone();
+                };
+                let imp = &self.env.impls[*i];
+                // The impl's own parameters (`impl[T] Add for W[T]`) take the
+                // solved type's arguments: by its target's spelling when it
+                // has one, else by the type's declared parameters, as
+                // `resolve_assoc_projections` reads them.
+                let declared: Vec<Type> = if imp.target_args.is_empty() {
+                    self.env
+                        .structs
+                        .get(name)
+                        .map(|s| s.generic_params.clone())
+                        .or_else(|| self.env.enums.get(name).map(|e| e.generic_params.clone()))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(Type::TypeParam)
+                        .collect()
+                } else {
+                    imp.target_args.clone()
+                };
+                let mut inner: HashMap<String, Type> = declared
+                    .iter()
+                    .zip(solved_args)
+                    .filter_map(|(p, a)| match p {
+                        Type::TypeParam(p) => Some((p.clone(), a.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                // A projection in the binding itself (`W[T.Output]` under
+                // `impl[T: Add]`) is read through the impl's own bounds.
+                let inner_bounds =
+                    Self::bounds_by_param(imp.generic_params.as_ref(), imp.where_clause.as_ref());
+                let bound = self.resolve_bounded_projections(bound, &inner_bounds, &inner);
+                inner.insert("Self".to_string(), solved.clone());
+                let subs: HashMap<String, SubstValue> = inner
+                    .into_iter()
+                    .map(|(k, v)| (k, SubstValue::Type(v)))
+                    .collect();
+                substitute_type_params(&bound, &subs)
+            }
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(recur).collect(),
+            },
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(recur).collect()),
+            Type::Ref(t) => Type::Ref(Box::new(recur(t))),
+            Type::MutRef(t) => Type::MutRef(Box::new(recur(t))),
+            Type::Slice { element, mutable } => Type::Slice {
+                element: Box::new(recur(element)),
+                mutable: *mutable,
+            },
+            Type::Array { element, size } => Type::Array {
+                element: Box::new(recur(element)),
+                size: size.clone(),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// The trait each bounded parameter's `P.Assoc` reads through: the one
+    /// trait among `P`'s bounds (and their supertraits) that declares
+    /// `Assoc`. A name two of them declare is left out, and the builder
+    /// falls back to the solved type's only binding (B-2026-10-18-1).
+    pub(super) fn proj_traits<'b>(
+        &self,
+        bounds: impl IntoIterator<Item = (&'b String, Vec<String>)>,
+    ) -> super::ProjTraits {
+        let mut found: FxHashMap<(String, String), Option<String>> = FxHashMap::default();
+        for (param, traits) in bounds {
+            let mut seen: Vec<String> = Vec::new();
+            let mut stack = traits;
+            while let Some(t) = stack.pop() {
+                if seen.contains(&t) {
+                    continue;
+                }
+                let Some(info) = self.env.traits.get(&t) else {
+                    continue;
+                };
+                // An operator trait declares no `Output`, yet each impl of
+                // it binds one (design.md § Operator traits).
+                const OPERATORS: [&str; 12] = [
+                    "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr",
+                    "Neg", "Not",
+                ];
+                let output = OPERATORS
+                    .contains(&t.as_str())
+                    .then(|| "Output".to_string());
+                for assoc in info.assoc_types.iter().cloned().chain(output) {
+                    let slot = found.entry((param.clone(), assoc));
+                    slot.and_modify(|e| {
+                        if e.as_ref() != Some(&t) {
+                            *e = None;
+                        }
+                    })
+                    .or_insert_with(|| Some(t.clone()));
+                }
+                stack.extend(info.supertraits.iter().cloned());
+                seen.push(t);
+            }
+        }
+        found
+            .into_iter()
+            .filter_map(|(k, t)| Some((k, t?)))
+            .collect()
+    }
+
+    /// Each trait impl's own associated-type bindings by `(type, trait,
+    /// assoc)`, with the impl's [`super::ProjTraits`] (B-2026-10-18-1).
+    pub(super) fn impl_trait_assoc_types(
+        &self,
+    ) -> FxHashMap<(String, String, String), (Type, super::ProjTraits)> {
+        let mut out = FxHashMap::default();
+        for (i, imp) in self.env.impls.iter().enumerate() {
+            let (Some(tr), Some(own)) = (&imp.trait_name, self.env.impl_own_assoc_types.get(&i))
+            else {
+                continue;
+            };
+            let bounds =
+                Self::bounds_by_param(imp.generic_params.as_ref(), imp.where_clause.as_ref());
+            let projs = self.proj_traits(bounds.iter().map(|(p, t)| (p, t.clone())));
+            for (assoc, ty) in own {
+                out.insert(
+                    (imp.target_type.clone(), tr.clone(), assoc.clone()),
+                    (ty.clone(), projs.clone()),
+                );
+            }
+        }
+        out
+    }
+
+    /// Each type parameter's bound trait names, from its inline bounds and
+    /// a where clause.
+    fn bounds_by_param(
+        generics: Option<&GenericParams>,
+        where_clause: Option<&WhereClause>,
+    ) -> HashMap<String, Vec<String>> {
+        let mut out: HashMap<String, Vec<String>> = HashMap::new();
+        for p in generics.into_iter().flat_map(|g| &g.params) {
+            out.entry(p.name.clone())
+                .or_default()
+                .extend(p.bounds.iter().filter_map(|b| b.path.last().cloned()));
+        }
+        for c in where_clause.into_iter().flat_map(|w| &w.constraints) {
+            if let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = c
+            {
+                out.entry(type_name.clone())
+                    .or_default()
+                    .extend(bounds.iter().filter_map(|b| b.path.last().cloned()));
+            }
+        }
+        out
     }
 
     /// Walk a where-clause and discharge each `TypeBound { T: Trait, ... }`

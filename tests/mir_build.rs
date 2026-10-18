@@ -2788,6 +2788,42 @@ fn mir_const_literals_past_i64() {
     }
 }
 
+/// `T.Output` under `T: Add` is the `Output` of the solved type's `impl Add`
+/// even when the type has `impl Mul` and `impl Index` too, in a generic
+/// function and in a generic impl's own binding (`W[T.Output]`)
+/// (B-2026-10-18-1).
+#[test]
+fn mir_a_projection_reads_its_bound_traits_output() {
+    const SRC: &str = "struct V { x: i64 }\n\
+        impl Add for V { type Output = V; fn add(self, rhs: V) -> V { V { x: self.x + rhs.x } } }\n\
+        impl Mul for V { type Output = i64; fn mul(self, rhs: V) -> i64 { self.x * rhs.x } }\n\
+        impl Index[i64] for V { type Output = i64; fn index(ref self, i: i64) -> ref i64 { ref self.x } }\n\
+        struct W[T] { v: T }\n\
+        impl[T: Add] Add for W[T] { type Output = W[T.Output]; \
+        fn add(self, rhs: W[T]) -> W[T.Output] { W { v: self.v + rhs.v } } }\n\
+        impl[T] Mul for W[T] { type Output = bool; fn mul(self, rhs: W[T]) -> bool { true } }\n\
+        fn sum2[T: Add](a: own T, b: own T) -> T.Output { a + b }\n\
+        fn sum_let[T: Add](a: own T, b: own T) -> T.Output {\n    \
+        let r: T.Output = a + b;\n    r\n}\n\
+        fn prod2[T: Mul](a: own T, b: own T) -> T.Output { a * b }\n\
+        fn main() {\n    \
+        println(f\"{sum2(V { x: 1 }, V { x: 2 }).x}\");\n    \
+        println(f\"{sum_let(V { x: 5 }, V { x: 6 }).x}\");\n    \
+        println(f\"{prod2(V { x: 3 }, V { x: 4 })}\");\n    \
+        let w = sum2(W { v: V { x: 1 } }, W { v: V { x: 9 } });\n    \
+        println(f\"{w.v.x}\");\n    \
+        println(f\"{prod2(W { v: 1 }, W { v: 2 })}\");\n    \
+        println(f\"{sum2(3, 4)}\");\n}\n";
+    let want = "3\n11\n12\n10\ntrue\n7\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// An unsuffixed `i128::MIN` is legal where the type is `i128` and refused
 /// as out of range for `i64` where nothing gives it a type
 /// (B-2026-10-15-73).

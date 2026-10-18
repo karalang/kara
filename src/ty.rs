@@ -151,6 +151,10 @@ pub enum TyKind {
     Proj {
         base: Ty,
         assoc: Symbol,
+        /// The bound trait that declares `assoc` when `base` is a parameter
+        /// (`Add` for `T.Output` under `T: Add`), so a type with several
+        /// operator impls normalizes through the right one (B-2026-10-18-1).
+        trait_: Option<Symbol>,
     },
     /// A type that already failed to check; never reaches MIR.
     Error,
@@ -562,9 +566,14 @@ impl TyCtxt {
                 mutable,
                 pointee: self.subst(pointee, args, const_args),
             },
-            TyKind::Proj { base, assoc } => TyKind::Proj {
+            TyKind::Proj {
+                base,
+                assoc,
+                trait_,
+            } => TyKind::Proj {
                 base: self.subst(base, args, const_args),
                 assoc,
+                trait_,
             },
             _ => return ty,
         };
@@ -625,9 +634,14 @@ impl TyCtxt {
             TyKind::Ref(t) => self.ref_kind(go(t), false),
             TyKind::MutRef(t) => self.ref_kind(go(t), true),
             TyKind::Weak(t) => TyKind::Weak(go(t)),
-            TyKind::Proj { base, assoc } => TyKind::Proj {
+            TyKind::Proj {
+                base,
+                assoc,
+                trait_,
+            } => TyKind::Proj {
                 base: go(base),
                 assoc,
+                trait_,
             },
             _ => return ty,
         };
@@ -711,7 +725,7 @@ impl TyCtxt {
                 self.display(pointee, def_name)
             ),
             TyKind::Param(p) => self.resolve_name(p.name).to_string(),
-            TyKind::Proj { base, assoc } => {
+            TyKind::Proj { base, assoc, .. } => {
                 format!(
                     "{}.{}",
                     self.display(base, def_name),
@@ -926,7 +940,21 @@ impl TyCtxt {
         param: &dyn Fn(&str) -> Option<u32>,
         vars_to_unit: bool,
     ) -> Result<Ty, LowerError> {
-        let lower = |t: &Type| self.lower_legacy_with(t, lookup, param, vars_to_unit);
+        self.lower_legacy_full(ty, lookup, param, vars_to_unit, &|_, _| None)
+    }
+
+    /// [`Self::lower_legacy_with`], with `proj_trait` naming the bound trait
+    /// that declares a parameter's associated type (`("T", "Output")` ->
+    /// `Add` under `T: Add`), recorded on the projection (B-2026-10-18-1).
+    pub fn lower_legacy_full(
+        &self,
+        ty: &Type,
+        lookup: &dyn Fn(&str) -> Option<TypeName>,
+        param: &dyn Fn(&str) -> Option<u32>,
+        vars_to_unit: bool,
+        proj_trait: &dyn Fn(&str, &str) -> Option<String>,
+    ) -> Result<Ty, LowerError> {
+        let lower = |t: &Type| self.lower_legacy_full(t, lookup, param, vars_to_unit, proj_trait);
         let lower_all = |ts: &[Type]| -> Result<TyList, LowerError> {
             let tys = ts.iter().map(lower).collect::<Result<Vec<_>, _>>()?;
             Ok(self.intern_list(&tys))
@@ -1036,20 +1064,27 @@ impl TyCtxt {
                 args,
                 receiver_args,
             } if args.is_empty() => {
-                let base = if receiver_args.is_empty() && param(base).is_some() {
-                    self.intern(TyKind::Param(param_ty(base)?))
+                let (base, trait_) = if receiver_args.is_empty() && param(base).is_some() {
+                    (
+                        self.intern(TyKind::Param(param_ty(base)?)),
+                        proj_trait(base, assoc).map(|t| self.param_name(&t)),
+                    )
                 } else {
                     match lookup(base) {
-                        Some(TypeName::Adt(def)) => self.intern(TyKind::Adt {
-                            def,
-                            args: lower_all(receiver_args)?,
-                        }),
+                        Some(TypeName::Adt(def)) => (
+                            self.intern(TyKind::Adt {
+                                def,
+                                args: lower_all(receiver_args)?,
+                            }),
+                            None,
+                        ),
                         _ => return Err(LowerError::UnknownName(base.clone())),
                     }
                 };
                 TyKind::Proj {
                     base,
                     assoc: self.param_name(assoc),
+                    trait_,
                 }
             }
             Type::AssocProjection { .. } => {

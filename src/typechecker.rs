@@ -1545,6 +1545,11 @@ pub struct ImplTraitCaptures {
 /// one clone of the program and its side tables so a user-written hasher can be
 /// executed from inside `MapData`, which has no interpreter and no way to reach
 /// the live one. See that module for why a clone is the safe shape.
+/// For each `(param, assoc)`, the bound trait of `param` that declares
+/// `assoc` (`("T", "Output") -> "Add"` under `T: Add`). See
+/// `TypeCheckResult::node_generic_frame_proj_traits`.
+pub type ProjTraits = FxHashMap<(String, String), String>;
+
 #[derive(Default, Clone)]
 pub struct TypeCheckResult {
     pub errors: Vec<TypeError>,
@@ -1647,6 +1652,12 @@ pub struct TypeCheckResult {
     /// `("Tk", "Item") -> I.Item`). Generic associated types are left out.
     /// The MIR builder normalizes an instance's `Tk[Counter].Item` with it.
     pub impl_assoc_types: FxHashMap<(String, String), Type>,
+    /// `impl_assoc_types` keyed by the impl's trait too, `(type, trait,
+    /// assoc)`, with the impl's own [`ProjTraits`] for a projection in the
+    /// binding (`type Output = W[T.Output]` under `impl[T: Add]`). A type
+    /// with `impl Add` and `impl Mul` binds `Output` once per trait here
+    /// (B-2026-10-18-1).
+    pub impl_trait_assoc_types: FxHashMap<(String, String, String), (Type, ProjTraits)>,
     /// FFI union declarations (`union NAME { ... }`). Mirrors
     /// `struct_info` / `enum_info` shape. Consumed by `unsafe_lint`
     /// (slice 2a — `E_UNION_READ_REQUIRES_UNSAFE` field-read gate) and
@@ -2125,6 +2136,13 @@ pub struct TypeCheckResult {
     /// See `node_types`. Frame 0 is the empty frame (code outside any
     /// generic function).
     pub node_generic_frames: Vec<Vec<String>>,
+    /// Parallel to `node_generic_frames`: for each frame, the trait a
+    /// parameter's bounds name for each associated type they declare
+    /// (`("T", "Output") -> "Add"` under `T: Add`), so `T.Output` at an
+    /// instance reads `Add`'s binding rather than whichever impl of the
+    /// solved type bound `Output` last (B-2026-10-18-1). A name two bound
+    /// traits both declare is left out.
+    pub node_generic_frame_proj_traits: Vec<ProjTraits>,
     /// v2 typed HIR: each generic call's solved type arguments by parameter
     /// name, keyed by the call expression's `NodeId`. The NodeId twin of
     /// `call_type_subs`, keeping the full `Type` instead of a head name.
@@ -2988,6 +3006,7 @@ pub struct TypeChecker<'a> {
     /// See the public copies on `TypeCheckResult`.
     pub(super) node_types: FxHashMap<crate::ids::NodeId, (Type, u32)>,
     pub(super) node_generic_frames: Vec<Vec<String>>,
+    pub(super) node_generic_frame_proj_traits: Vec<ProjTraits>,
     pub(super) current_generic_frame: u32,
     pub(super) node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
     pub(super) fn_return_types: FxHashMap<(Option<SpanKey>, SpanKey), (Type, u32)>,
@@ -3416,6 +3435,7 @@ impl<'a> TypeChecker<'a> {
             call_type_subs: FxHashMap::default(),
             node_types: FxHashMap::default(),
             node_generic_frames: vec![Vec::new()],
+            node_generic_frame_proj_traits: vec![ProjTraits::default()],
             current_generic_frame: 0,
             node_call_subs: FxHashMap::default(),
             node_type_links: Vec::new(),
@@ -3730,6 +3750,7 @@ impl<'a> TypeChecker<'a> {
         self.discharge_deferred_call_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();
+        let impl_trait_assoc_types = self.impl_trait_assoc_types();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
@@ -3776,6 +3797,7 @@ impl<'a> TypeChecker<'a> {
                 .filter(|(_, e)| e.gat_params.is_empty())
                 .map(|(k, e)| (k.clone(), e.ty.clone()))
                 .collect(),
+            impl_trait_assoc_types,
             struct_info: self.env.structs,
             enum_info: self.env.enums,
             union_info: self.env.unions,
@@ -3827,6 +3849,9 @@ impl<'a> TypeChecker<'a> {
             call_type_subs: self.call_type_subs,
             node_types,
             node_generic_frames: std::mem::take(&mut self.node_generic_frames),
+            node_generic_frame_proj_traits: std::mem::take(
+                &mut self.node_generic_frame_proj_traits,
+            ),
             node_call_subs,
             node_method_callees: std::mem::take(&mut self.node_method_callees),
             node_call_callees: std::mem::take(&mut self.node_call_callees),

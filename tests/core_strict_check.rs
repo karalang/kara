@@ -4754,6 +4754,33 @@ fn main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// B-2026-10-18-1: `T.Output` under `T: Add` is the `Output` of the solved
+/// type's `impl Add`, not of whichever operator impl of it came last.
+#[test]
+fn check_a_projection_reads_its_bound_traits_output() {
+    accepted(
+        "projection-bound-trait",
+        r#"
+struct V { x: i64 }
+impl Add for V { type Output = V; fn add(self, rhs: V) -> V { V { x: self.x + rhs.x } } }
+impl Mul for V { type Output = i64; fn mul(self, rhs: V) -> i64 { self.x * rhs.x } }
+struct W[T] { v: T }
+impl[T: Add] Add for W[T] { type Output = W[T.Output]; fn add(self, rhs: W[T]) -> W[T.Output] { W { v: self.v + rhs.v } } }
+impl[T] Mul for W[T] { type Output = bool; fn mul(self, rhs: W[T]) -> bool { true } }
+fn sum2[T: Add](a: own T, b: own T) -> T.Output { a + b }
+fn prod2[T: Mul](a: own T, b: own T) -> T.Output { a * b }
+fn main() {
+    let v = sum2(V { x: 1 }, V { x: 2 });
+    println(f"{v.x}");
+    let p: i64 = prod2(V { x: 3 }, V { x: 4 });
+    println(f"{p}");
+    let w = sum2(W { v: V { x: 1 } }, W { v: V { x: 9 } });
+    println(f"{w.v.x}");
+}
+"#,
+    );
+}
+
 /// B-2026-10-18-10: a program's own `Client`, `Response`, `HttpError` or
 /// `RequestBuilder` is its own type, so its methods are found; an error
 /// names it as written.

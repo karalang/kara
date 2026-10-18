@@ -2087,6 +2087,14 @@ impl<'a> super::TypeChecker<'a> {
         for (name, bounds) in Self::collect_param_bounds(&f.generic_params, &f.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
+        // The frame's `T.Output` traits, read once its bounds are merged.
+        let projs = self.proj_traits(self.enclosing_bounds.iter().map(|(p, bs)| {
+            (
+                p,
+                bs.iter().filter_map(|b| b.path.last().cloned()).collect(),
+            )
+        }));
+        self.node_generic_frame_proj_traits.push(projs);
         let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
         self.enclosing_assoc_eqs
             .extend(Self::collect_assoc_eqs(&f.where_clause));
