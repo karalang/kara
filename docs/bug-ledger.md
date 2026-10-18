@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 736 |
+| miscompile | 737 |
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2927 |
-| interp | 944 |
+| codegen | 2928 |
+| interp | 945 |
 | typecheck | 454 |
 | other | 115 |
 | ownership | 110 |
@@ -210,6 +210,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-16 | 2026-10-18 | typecheck | low | `warning[must_use]` fires on `q.pop();` for a `PriorityQueue`, though its `Option` result is the removed element, the same displaced-value shape as `Vec.pop` and `VecDeque.pop_front`, which design.md § must_use exempts; the exemption's list names the standard containers one by one and does not name `PriorityQueue` | — |
 | B-2026-10-18-17 | 2026-10-18 | typecheck | low | `karac check` refuses `*self` on a `ref self` receiver (`impl Twice for i64 { fn twice(ref self) -> i64 { *self * 2 } }`, and the same for `bool` and a Copy struct) with "unary '*' requires 'ref T' .. found 'i64'", while both MIR surfaces run it; check types the receiver as `Self`, not `ref Self` | — |
 | B-2026-10-18-18 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces, a user generic type's associated function whose type arguments come only from later use is not lowered: `let mut b = Bag.new(); b.items.push(x);` inside `impl[T] Bag[T]`, or `bags.push(Bag.new())` with `bags: Vec[Bag[i64]]`, stop with "a call with no resolved callee is not lowered yet"; check passes, and writing the type on the binding works | — |
+| B-2026-10-18-19 | 2026-10-18 | interp+codegen | high | A function declared `-> i64` whose tail is `<local>.first().unwrap()` or `q.peek().unwrap()` on a LOCAL `Vec`/`PriorityQueue`, or whose `ref i64` result is stored past its referent (`out.push(s.add(v))` with `add` ending `self.top.peek().unwrap()`), fails on `karac __mir-run` too ("use of a1 after it was freed") and prints addresses on `__mir-llvm-run`, while `karac check` passes: B-2026-10-18-4's missing copy-out at the return slot, seen where the referent dies first, so a codegen-only copy would not fix it | — |
 
 ### Relocated
 
