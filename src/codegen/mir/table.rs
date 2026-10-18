@@ -92,7 +92,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let null = self.ptr_ty().const_null();
         let ptr = |f: inkwell::values::FunctionValue<'ctx>| f.as_global_value().as_pointer_value();
         if t.sorted {
-            [null, null, ptr(self.key_fn(KeyOp::Cmp, t.key))]
+            [null, null, ptr(self.key_fn(self.own_order(t.key), t.key))]
         } else {
             [
                 ptr(self.key_fn(KeyOp::Hash, t.key)),
@@ -927,7 +927,7 @@ impl<'ctx> Cx<'ctx, '_> {
         t: Table,
         op: u64,
     ) -> R<IntValue<'ctx>> {
-        let cmp = self.key_fn(KeyOp::Cmp, t.key);
+        let cmp = self.key_fn(self.own_order(t.key), t.key);
         let cmp = cmp.as_global_value().as_pointer_value();
         let sorted = self.llcx.bool_type().const_int(u64::from(t.sorted), false);
         self.mrt_i64(

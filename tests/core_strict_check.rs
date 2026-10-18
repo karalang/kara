@@ -5898,3 +5898,79 @@ fn hand_written_clone_and_default_impls_run() {
         "both derives `Clone`",
     );
 }
+
+#[test]
+fn a_hand_written_ord_orders_searches_and_sorted_containers() {
+    // B-2026-10-06-109: `is_sorted`, `binary_search`, `SortedSet` and
+    // `SortedMap` follow the type's own `cmp`, as `sort` already did, not
+    // its field order. `Rev` orders its keys descending; `Size` puts
+    // `Large` first.
+    let src = "#[derive(Clone, PartialEq, Eq)]\n\
+         struct Rev { k: i64 }\n\
+         impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(self.cmp(other)) } }\n\
+         impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.k.cmp(self.k) } }\n\
+         #[derive(Clone, Copy, PartialEq, Eq)]\n\
+         enum Size { Small, Large }\n\
+         impl PartialOrd for Size { fn partial_cmp(ref self, other: ref Size) -> Option[Ordering] { Some(self.cmp(other)) } }\n\
+         impl Ord for Size {\n\
+         \x20   fn cmp(ref self, other: ref Size) -> Ordering {\n\
+         \x20       match (self, other) {\n\
+         \x20           (Size.Large, Size.Small) => Ordering.Less,\n\
+         \x20           (Size.Small, Size.Large) => Ordering.Greater,\n\
+         \x20           _ => Ordering.Equal,\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let v = vec![Rev { k: 9 }, Rev { k: 5 }, Rev { k: 2 }];\n\
+         \x20   println(f\"is_sorted {v.is_sorted()} {vec![Rev { k: 1 }, Rev { k: 3 }].is_sorted()}\");\n\
+         \x20   println(f\"binary_search {v.binary_search(Rev { k: 2 }).unwrap()}\");\n\
+         \x20   let mut set: SortedSet[Rev] = SortedSet.new();\n\
+         \x20   for k in [2, 8, 4, 6] { set.insert(Rev { k: k }); }\n\
+         \x20   let mut s = String.new();\n\
+         \x20   for r in set.iter() { s.push_str(f\"{r.k} \"); }\n\
+         \x20   println(f\"set {s}| first {set.min().unwrap().k}\");\n\
+         \x20   let mut q = String.new();\n\
+         \x20   for r in set.range(Rev { k: 9 }, Rev { k: 4 }) { q.push_str(f\"{r.k} \"); }\n\
+         \x20   println(f\"set range {q}\");\n\
+         \x20   let mut m: SortedMap[Rev, i64] = SortedMap.new();\n\
+         \x20   for k in [5, 1, 9, 3, 7] { m.insert(Rev { k: k }, k * 10); }\n\
+         \x20   let mut t = String.new();\n\
+         \x20   for (k, x) in m.iter() { t.push_str(f\"{k.k}={x} \"); }\n\
+         \x20   println(f\"map {t}\");\n\
+         \x20   match m.floor(Rev { k: 4 }) { Some((k, _)) => println(f\"floor {k.k}\"), None => println(\"floor none\") }\n\
+         \x20   let mut sizes: SortedSet[Size] = SortedSet.new();\n\
+         \x20   sizes.insert(Size.Small);\n\
+         \x20   sizes.insert(Size.Large);\n\
+         \x20   match sizes.min().unwrap() { Size.Large => println(\"least Large\"), Size.Small => println(\"least Small\") }\n\
+         }\n";
+    let (dir, path) = fixture("hand-ord", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = "is_sorted true false\n\
+                binary_search 2\n\
+                set 8 6 4 2 | first 8\n\
+                set range 8 6 \n\
+                map 9=90 7=70 5=50 3=30 1=10 \n\
+                floor 5\n\
+                least Large\n";
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

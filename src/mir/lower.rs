@@ -9690,8 +9690,12 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `Log.set_exporter` registers receives each later event through its
     /// `export_event`.
     fn queue_for_native(&mut self, name: &str, args: &[Operand]) {
-        // A sort of elements with a user `Ord` orders them by its `cmp`.
-        if name.ends_with(".sort") || name.ends_with(".sort_unstable") {
+        // A sort of elements with a user `Ord` orders them by its `cmp`, as
+        // do the searches that assume that order (B-2026-10-06-109).
+        if [".sort", ".sort_unstable", ".is_sorted", ".binary_search"]
+            .iter()
+            .any(|m| name.ends_with(m))
+        {
             if let Some(op) = args.first() {
                 let (_, t) = self.strip_ty_full(self.operand_ty(op));
                 let elem = match self.tys().tcx().kind(t) {
@@ -9701,6 +9705,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 };
                 if let Some(e) = elem {
                     self.queue_user_cmp(e);
+                }
+            }
+        }
+        // A sorted table keeps its keys in the order of their user `cmp`.
+        if name.starts_with("SortedSet[") || name.starts_with("SortedMap[") {
+            if let Some(op) = args.first() {
+                let (_, t) = self.strip_ty_full(self.operand_ty(op));
+                if let HK::Intrinsic { args, .. } = self.tys().tcx().kind(t) {
+                    if let Some(&k) = self.tys().tcx().list(args).first() {
+                        self.queue_user_cmp(k);
+                    }
                 }
             }
         }

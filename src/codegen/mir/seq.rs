@@ -1189,7 +1189,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("binary_search", [x]) => {
                 let kp = self.key_arg_of(x, el)?;
-                let cmp = self.key_fn(KeyOp::Cmp, el);
+                let cmp = self.key_fn(self.own_order(el), el);
                 let i = self.rt_int(
                     "bsearch",
                     &[
@@ -1468,7 +1468,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("shrink_to_fit", []) if is_vec => {}
             ("is_sorted", []) => {
-                let cmp = self.key_fn(KeyOp::Cmp, el);
+                let cmp = self.key_fn(self.own_order(el), el);
                 let res = self.entry_slot(1, "sorted")?;
                 self.store(res, self.llcx.i8_type().const_int(1, false).into())?;
                 let pairs = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;

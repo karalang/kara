@@ -607,6 +607,7 @@ fn run_with(
             .map_or(0, |d| d.as_nanos() as u64)
             | 1,
         sorted_tables: Default::default(),
+        table_cmp: Default::default(),
         table_holes: Default::default(),
         deque_front: Default::default(),
         flags: Vec::new(),
@@ -928,6 +929,9 @@ struct Interp<'a> {
     rand: u64,
     /// The tables a `Vacant` entry was made from that keep key order.
     sorted_tables: rustc_hash::FxHashSet<AllocId>,
+    /// The user `Ord.cmp` body a sorted table's keys are kept in order by,
+    /// for the inserts that do not know the key type (B-2026-10-06-109).
+    table_cmp: rustc_hash::FxHashMap<AllocId, String>,
     /// The borrow flags currently held, by field address.
     flags: Vec<(Addr, Flag)>,
     /// Resumes of a pending task root.
@@ -1756,17 +1760,19 @@ impl<'a> Interp<'a> {
                 let [view, x] = args.as_slice() else {
                     return err(format!("{name} takes a receiver and a value"));
                 };
+                let el = self.vec_elem_ty(arg_tys, name)?;
                 let (base, lo, len) = self.view_of(view)?;
                 let mut x = x.clone();
                 while let Value::Ref(a) = &x {
                     x = self.slot(a)?;
                 }
-                let want = self.key_form(&x)?;
-                let mut keys = Vec::with_capacity(len as usize);
+                let mut vals = Vec::with_capacity(len as usize + 1);
                 for i in 0..len {
-                    let e = self.slot(&base.child(lo + i))?;
-                    keys.push(self.key_form(&e)?);
+                    vals.push(self.slot(&base.child(lo + i))?);
                 }
+                vals.push(x);
+                let mut keys = self.order_forms(&vals, el)?;
+                let want = keys.pop().unwrap_or(Value::Unit);
                 let found = keys
                     .binary_search_by(|k| key_order(k, &want))
                     .ok()
@@ -1898,6 +1904,26 @@ impl<'a> Interp<'a> {
                     self.drop_value(v.clone(), e)?;
                 }
                 Ok(Value::Unit)
+            }
+            ("Vec" | "Slice" | "Array", "is_sorted")
+                if self
+                    .vec_elem_ty(arg_tys, name)
+                    .is_ok_and(|el| self.user_cmp(el).is_some()) =>
+            {
+                // In the order of the elements' own `cmp` (B-2026-10-06-109).
+                let el = self.vec_elem_ty(arg_tys, name)?;
+                let Some(recv) = args.first() else {
+                    return err(format!("{name} needs a receiver"));
+                };
+                let (base, lo, len) = self.view_of(recv)?;
+                let mut vals = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    vals.push(self.slot(&base.child(lo + i))?);
+                }
+                let keys = self.order_forms(&vals, el)?;
+                Ok(Value::Bool(
+                    keys.windows(2).all(|w| !cmp_key(&w[0], &w[1]).is_gt()),
+                ))
             }
             (_, "as_slice_mut") => self.view_method(name, "as_mut_slice", args, ret),
             // B-2026-10-14-15: `chunks` and `windows` too, as on a `Slice`.
@@ -3682,7 +3708,8 @@ impl<'a> Interp<'a> {
                 };
                 let id = self.box_behind(map)?;
                 let sorted = self.sorted_tables.contains(&id);
-                let at = self.insert_at(id, key, true, sorted)?;
+                let cmp = self.table_cmp.get(&id).cloned();
+                let at = self.insert_at(id, key, true, sorted, cmp)?;
                 self.table_insert(id, at, Value::Agg(vec![key.clone(), v]), key)?;
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
@@ -5588,6 +5615,8 @@ impl<'a> Interp<'a> {
                 kv
             }
         };
+        // A sorted table of keys with a user `Ord` keeps them in its order.
+        let sorted_cmp = if sorted { self.user_cmp(key_ty) } else { None };
         match (method, &args[1..]) {
             ("len", []) => Ok(Value::Int(self.table_len(id)? as i128)),
             ("is_empty", []) => Ok(Value::Bool(self.table_len(id)? == 0)),
@@ -5639,7 +5668,7 @@ impl<'a> Interp<'a> {
                     }
                     (true, None, [val]) => {
                         let entry = Value::Agg(vec![key.clone(), val.clone()]);
-                        let at = self.insert_at(id, key, is_map, sorted)?;
+                        let at = self.insert_at(id, key, is_map, sorted, sorted_cmp.clone())?;
                         self.table_insert(id, at, entry, key)?;
                         if ret == self.tys.unit() {
                             return Ok(Value::Unit);
@@ -5651,7 +5680,7 @@ impl<'a> Interp<'a> {
                         Ok(Value::Bool(false))
                     }
                     (false, None, []) => {
-                        let at = self.insert_at(id, key, is_map, sorted)?;
+                        let at = self.insert_at(id, key, is_map, sorted, sorted_cmp.clone())?;
                         self.table_insert(id, at, key.clone(), key)?;
                         Ok(Value::Bool(true))
                     }
@@ -5773,6 +5802,10 @@ impl<'a> Interp<'a> {
                     });
                     return self.variant_named(ret, None, "Occupied", vec![at]);
                 }
+                match self.user_cmp(key_ty) {
+                    Some(cmp) if sorted => self.table_cmp.insert(id, cmp),
+                    _ => self.table_cmp.remove(&id),
+                };
                 if sorted {
                     self.sorted_tables.insert(id);
                 } else {
@@ -5793,7 +5826,7 @@ impl<'a> Interp<'a> {
                         i
                     }
                     None => {
-                        let at = self.insert_at(id, key, true, sorted)?;
+                        let at = self.insert_at(id, key, true, sorted, sorted_cmp.clone())?;
                         let v = if method == "entry_or_insert_with" {
                             let fty = *arg_tys.get(2).ok_or_else(|| {
                                 Stop::Error(format!("{name} needs its closure's type"))
@@ -5828,13 +5861,20 @@ impl<'a> Interp<'a> {
                     while let Value::Ref(a) = &v {
                         v = self.slot(a)?;
                     }
-                    self.key_form(&v)
+                    Ok(v)
                 };
                 let (lo, hi) = (bound(lo)?, bound(hi)?);
+                let slots = self.table_slots(id)?;
+                let mut vals = Vec::with_capacity(slots.len() + 2);
+                for &i in &slots {
+                    vals.push(self.entry_key(id, i, false)?);
+                }
+                vals.extend([lo, hi]);
+                let mut forms = self.order_forms(&vals, key_ty)?;
+                let hi = forms.pop().unwrap_or(Value::Unit);
+                let lo = forms.pop().unwrap_or(Value::Unit);
                 let mut picked = Vec::new();
-                for i in self.table_slots(id)? {
-                    let k = self.entry_key(id, i, false)?;
-                    let k = self.key_form(&k)?;
+                for (k, i) in forms.into_iter().zip(slots) {
                     use std::cmp::Ordering::*;
                     let below_hi = match key_order(&k, &hi) {
                         Less => true,
@@ -5866,11 +5906,11 @@ impl<'a> Interp<'a> {
                 // The least / greatest element, in place.
                 let slots = self.table_slots(id)?;
                 let n = slots.len();
-                let mut keys = Vec::with_capacity(n);
+                let mut vals = Vec::with_capacity(n);
                 for &i in &slots {
-                    let k = self.entry_key(id, i, false)?;
-                    keys.push(self.key_form(&k)?);
+                    vals.push(self.entry_key(id, i, false)?);
                 }
+                let keys = self.order_forms(&vals, key_ty)?;
                 let pick = if matches!(method, "min" | "first") {
                     (0..n).min_by(|&a, &b| key_order(&keys[a], &keys[b]))
                 } else {
@@ -5894,18 +5934,25 @@ impl<'a> Interp<'a> {
                 // at least `k`, or the first / last.
                 let slots = self.table_slots(id)?;
                 let n = slots.len();
-                let mut keys = Vec::with_capacity(n);
+                let mut vals = Vec::with_capacity(n + rest.len());
                 for &i in &slots {
-                    let k = self.entry_key(id, i, true)?;
-                    keys.push(self.key_form(&k)?);
+                    vals.push(self.entry_key(id, i, true)?);
                 }
-                let bound = |me: &mut Self, i: usize| -> R<Value> {
-                    let mut v = rest[i].clone();
-                    while let Value::Ref(a) = &v {
-                        v = me.slot(a)?;
+                // The bounds are ordered with the keys, so a user `cmp`
+                // ranks them together (B-2026-10-06-109).
+                let takes_bounds =
+                    matches!(method, "range" | "range_inclusive" | "floor" | "ceiling");
+                if takes_bounds {
+                    for v in rest {
+                        let mut v = v.clone();
+                        while let Value::Ref(a) = &v {
+                            v = self.slot(a)?;
+                        }
+                        vals.push(v);
                     }
-                    me.key_form(&v)
-                };
+                }
+                let keys = self.order_forms(&vals, key_ty)?;
+                let bound = |_: &mut Self, i: usize| -> R<Value> { Ok(keys[n + i].clone()) };
                 use std::cmp::Ordering::*;
                 let picked: Vec<usize> = match method {
                     "entries" => (0..n).collect(),
@@ -5995,9 +6042,10 @@ impl<'a> Interp<'a> {
                     }
                 }
                 if sorted {
+                    let forms = self.order_forms(&out, key_ty)?;
                     let mut keyed = Vec::with_capacity(out.len());
-                    for x in out {
-                        keyed.push((self.key_form(&x)?, x));
+                    for (f, x) in forms.into_iter().zip(out) {
+                        keyed.push((f, x));
                     }
                     keyed.sort_by(|a, b| key_order(&a.0, &b.0));
                     out = keyed.into_iter().map(|(_, x)| x).collect();
@@ -6042,10 +6090,31 @@ impl<'a> Interp<'a> {
     /// (twice) of a `Set` one.
     /// Where a new key goes: the end of an insertion-ordered table, or
     /// before the first larger key of a sorted one.
-    fn insert_at(&mut self, id: AllocId, key: &Value, is_map: bool, sorted: bool) -> R<usize> {
+    fn insert_at(
+        &mut self,
+        id: AllocId,
+        key: &Value,
+        is_map: bool,
+        sorted: bool,
+        cmp: Option<String>,
+    ) -> R<usize> {
         let n = self.vec_elems(id)?.len();
         if !sorted {
             return Ok(n);
+        }
+        if let Some(cmp) = cmp {
+            // By the key type's own `cmp` (B-2026-10-06-109).
+            let (mut lo, mut hi) = (0, n);
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                let k = self.entry_key(id, mid, is_map)?;
+                if self.call_cmp(&cmp, &k, key)? == std::cmp::Ordering::Greater {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            return Ok(lo);
         }
         // The first entry whose key is larger, by binary search: the
         // entries are in key order.
@@ -6764,6 +6833,30 @@ impl<'a> Interp<'a> {
             self.free_slot(AllocId(slot as u32));
         }
         self.ordering(&r?, ret)
+    }
+
+    /// The forms `vals` (each of type `ty`) are ordered by: their key
+    /// forms, or, when `ty` has a user `Ord.cmp`, their ranks under it
+    /// (B-2026-10-06-109). Equal values share a rank.
+    fn order_forms(&mut self, vals: &[Value], ty: Ty) -> R<Vec<Value>> {
+        let Some(cmp) = self.user_cmp(ty) else {
+            return vals.iter().map(|v| self.key_form(v)).collect();
+        };
+        let order = self.merge_order(vals.len(), &mut |me, a, b| {
+            me.call_cmp(&cmp, &vals[a], &vals[b])
+        })?;
+        let mut forms = vec![Value::Int(0); vals.len()];
+        let mut rank = 0;
+        for w in 0..order.len() {
+            if w > 0
+                && self.call_cmp(&cmp, &vals[order[w - 1]], &vals[order[w]])?
+                    != std::cmp::Ordering::Equal
+            {
+                rank += 1;
+            }
+            forms[order[w]] = Value::Int(rank);
+        }
+        Ok(forms)
     }
 
     /// Each value as a reference: a reference as is, else a scratch slot

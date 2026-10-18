@@ -175,6 +175,16 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
     }
 
+    /// The order `ty` is sorted, searched and kept in: its own `cmp` body
+    /// when it has one, else the structural order (B-2026-10-06-109).
+    pub(super) fn own_order(&self, ty: Ty) -> KeyOp {
+        if self.user_cmp_body(ty).is_some() {
+            KeyOp::User
+        } else {
+            KeyOp::Cmp
+        }
+    }
+
     /// The name of the `cmp` body of `ty` (through references), if it has
     /// one.
     pub(super) fn user_cmp_body(&self, ty: Ty) -> Option<String> {
