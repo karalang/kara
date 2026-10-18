@@ -1400,7 +1400,7 @@ fn main() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "accepted: {err}");
     assert!(
-        err.contains("mutable borrow of") && err.contains("E0516"),
+        err.contains("while it is borrowed mutably") && err.contains("E0516"),
         "{err}"
     );
 }

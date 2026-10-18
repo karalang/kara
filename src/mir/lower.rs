@@ -477,8 +477,10 @@ struct Lcx<'a> {
     /// name and its own) are declared `own`: the native keeps them.
     builtin_owns: FxHashMap<(String, String), Vec<bool>>,
     /// The library's `#[compiler_builtin]` methods declared `mut ref self`
-    /// (`BufReader.fill_buf`, whose result borrows the reader), whose
-    /// receiver is lent mutably.
+    /// that return a borrow (`BufReader.fill_buf`'s view of the reader's
+    /// buffer, B-2026-10-14-72), whose receiver is lent mutably so the
+    /// result holds the reader. The others (`TaskGroup.spawn`) write
+    /// through a shared borrow, as the library cells do.
     builtin_mut_self: FxHashSet<(String, String)>,
     defs: &'a ProgramDefs,
     res: &'a FxHashMap<NodeId, Res>,
@@ -813,7 +815,10 @@ impl<'a> Lcx<'a> {
             for it in &b.items {
                 let ImplItem::Method(f) = it else { continue };
                 let builtin = f.attributes.iter().any(|a| a.is_bare("compiler_builtin"));
-                if builtin && f.self_param == Some(ast::SelfParam::MutRef) {
+                if builtin
+                    && f.self_param == Some(ast::SelfParam::MutRef)
+                    && f.return_type.as_ref().is_some_and(type_expr_borrows)
+                {
                     self.builtin_mut_self.insert((head.clone(), f.name.clone()));
                 }
                 if builtin && f.params.iter().any(|p| p.is_own) {
@@ -14712,6 +14717,23 @@ pub fn uses_v2_library_module(src: &str) -> bool {
 /// A library method that keeps its argument (`v.push(x)`, `m.insert(k, v)`,
 /// `tx.send(x)`): the value moves in, where other non-Copy arguments (keys,
 /// needles, text) are lent.
+/// Whether a declared type holds a borrow: a reference, a `Slice` or a
+/// `Str`, at any depth (`Result[Slice[u8], IoError]`).
+fn type_expr_borrows(t: &ast::TypeExpr) -> bool {
+    match &t.kind {
+        ast::TypeKind::Ref(_) | ast::TypeKind::MutRef(_) => true,
+        ast::TypeKind::Path(p) => {
+            matches!(p.segments.last().map(String::as_str), Some("Slice" | "Str"))
+                || p.generic_args.iter().flatten().any(|g| match g {
+                    ast::GenericArg::Type(t) => type_expr_borrows(t),
+                    _ => false,
+                })
+        }
+        ast::TypeKind::Tuple(ts) => ts.iter().any(type_expr_borrows),
+        _ => false,
+    }
+}
+
 fn stores_argument(method: &str) -> bool {
     // The fallible forms (`try_append`, `try_resize`) keep what the plain
     // ones do.
