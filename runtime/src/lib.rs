@@ -324,6 +324,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_fmt_char_debug,
         mir::karac_mir_char,
         mir::karac_mir_parse_int,
+        mir::karac_mir_parse_int128,
         mir::karac_mir_parse_f64,
         mir::karac_mir_ipow,
         mir::karac_mir_arena_new,

@@ -2090,6 +2090,39 @@ const CHAR_OPS: &[&str] = &[
     "to_digit",
 ];
 
+/// `i128.parse(s)` / `u128.parse(s)` and their `from_str_radix`: 1 with
+/// the number's 16 bytes at `out` when the trimmed text is one that fits,
+/// else 0 (B-2026-10-18-11).
+///
+/// # Safety
+/// `ptr` is readable for `len` bytes; `out` is writable for 16 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_parse_int128(
+    ptr: *const u8,
+    len: usize,
+    radix: i64,
+    signed: u8,
+    out: *mut u8,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let text = String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned();
+    let text = text.trim();
+    if !(2..=36).contains(&radix) {
+        return 0;
+    }
+    let got = if signed != 0 {
+        i128::from_str_radix(text, radix as u32).map(|n| n.to_ne_bytes())
+    } else {
+        u128::from_str_radix(text, radix as u32).map(|n| n.to_ne_bytes())
+    };
+    let Ok(b) = got else {
+        return 0;
+    };
+    // SAFETY: the caller's contract.
+    unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, 16) };
+    1
+}
+
 /// `T.parse(s)` / `T.from_str_radix(s, radix)` for an integer of `bits`
 /// bits (at most 64): 1 with the number at `out` when the trimmed text is
 /// one that fits, else 0.

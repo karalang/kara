@@ -2793,6 +2793,31 @@ fn main() {
     }
 }
 
+/// `i128` / `u128` `parse` and `from_str_radix` on both backends, at and
+/// past the bounds (B-2026-10-18-11).
+#[test]
+fn mir_parses_128_bit_integers() {
+    let src = r#"
+fn main() {
+    println(f"{i128.parse("18446744073709551616").unwrap()}");
+    println(f"{i128.parse(" -170141183460469231731687303715884105728 ").unwrap()}");
+    println(f"{i128.parse("170141183460469231731687303715884105728").is_none()}");
+    println(f"{u128.parse("340282366920938463463374607431768211455").unwrap()}");
+    println(f"{u128.parse("-1").is_none()} {u128.parse("x").is_none()}");
+    println(f"{i128.from_str_radix("-ff", 16).unwrap()} {u128.from_str_radix("zz", 36).unwrap()}");
+}
+"#;
+    let want = "18446744073709551616\n-170141183460469231731687303715884105728\ntrue\n\
+                340282366920938463463374607431768211455\ntrue true\n-255 1295\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// `String.clear` empties the string, `with_capacity` reserves exactly
 /// its slots, and `binary_search` finds std's index, duplicates and an
 /// empty Vec included (B-2026-10-14-36, B-2026-10-14-14, B-2026-10-18-9).

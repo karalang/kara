@@ -533,7 +533,7 @@ impl<'ctx> Cx<'ctx, '_> {
         };
         let d = self.place_ptr(dest)?;
         let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
-        let slot = self.entry_slot(8, "parsed")?;
+        let slot = self.entry_slot(16, "parsed")?;
         let got = match self.tys.kind(pt) {
             TyKind::Float(FloatTy::F64) if base == "f64" && method == "parse" => {
                 self.rt_u8("parse_f64", &[s.into(), n.into(), slot.into()])?
@@ -557,6 +557,17 @@ impl<'ctx> Cx<'ctx, '_> {
                     ],
                 )?
             }
+            TyKind::Int(it) => {
+                let radix = match args {
+                    [_, r] => self.int_arg(r)?,
+                    _ => self.i64(10),
+                };
+                let sg = self.llcx.i8_type().const_int(u64::from(it.signed()), false);
+                self.rt_u8(
+                    "parse_int128",
+                    &[s.into(), n.into(), radix.into(), sg.into(), slot.into()],
+                )?
+            }
             _ => return Ok(None),
         };
         self.drop_moved(args)?;
@@ -572,6 +583,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .builder
                     .build_load(cx.llcx.f64_type(), slot, "")
                     .map_err(e)?,
+                TyKind::Int(it) if it.bits() > 64 => cx.load(slot, pt)?,
                 _ => {
                     let w = cx.load_i64(slot)?;
                     let it = cx.llvm_ty(pt)?.into_int_type();
