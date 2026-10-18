@@ -509,12 +509,19 @@ pub struct TypeEnv {
     /// compares structurally unless the type also implements `Eq`, so there
     /// the derive table stays the answer.
     pub(super) partial_eq_impl_dispatches: bool,
+    /// `Vec[T]` is `Ord` / `PartialOrd` when `T` is (design.md's
+    /// `impl[T: Ord] Ord for Vec[T]`, lexicographic). Set for the v2
+    /// pipelines, the MIR one and the strict check, whose backends compare
+    /// two `Vec`s; the legacy lowering has no `Vec` comparator for a
+    /// `SortedMap` key or a `<` (B-2026-10-06-92).
+    pub(super) vec_is_ord: bool,
 }
 
 impl TypeEnv {
     pub(super) fn new() -> Self {
         TypeEnv {
             partial_eq_impl_dispatches: false,
+            vec_is_ord: false,
             structs: FxHashMap::default(),
             enums: FxHashMap::default(),
             shape_param_positions: FxHashMap::default(),

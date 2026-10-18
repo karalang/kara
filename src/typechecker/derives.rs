@@ -2142,6 +2142,9 @@ impl super::env::TypeEnv {
             Type::Vector { element, .. } => self.type_supports_ord(element),
             Type::Slice { element, .. } => self.type_supports_ord(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
+            Type::Named { name, args } if self.vec_is_ord && name == "Vec" && args.len() == 1 => {
+                self.type_supports_ord(&args[0])
+            }
             Type::Named { name, .. } => {
                 if let Some(info) = self.structs.get(name) {
                     self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
@@ -2198,6 +2201,9 @@ impl super::env::TypeEnv {
             Type::Vector { element, .. } => self.type_supports_partial_ord(element),
             Type::Slice { element, .. } => self.type_supports_partial_ord(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_ord(inner),
+            Type::Named { name, args } if self.vec_is_ord && name == "Vec" && args.len() == 1 => {
+                self.type_supports_partial_ord(&args[0])
+            }
             Type::Named { name, .. } => {
                 if let Some(info) = self.structs.get(name) {
                     self.derived_partial_ord_is_lowerable(

@@ -403,9 +403,15 @@ impl<'a> super::TypeChecker<'a> {
                         if args.is_empty()
                             && matches!(name.as_str(), "F32" | "F64" | "F16" | "Bf16")
                 );
+                // B-2026-10-06-92: on the v2 pipelines a `Vec` of an `Ord`
+                // element orders lexicographically, as `sort()` does.
+                let item_is_ord_vec = self.env.vec_is_ord
+                    && matches!(item, Type::Named { name, args } if name == "Vec" && args.len() == 1)
+                    && self.type_supports_ord(item);
                 if !is_numeric(item)
                     && !matches!(item, Type::Str)
                     && !item_is_total_float_wrapper
+                    && !item_is_ord_vec
                     && !self.type_param_has_numeric_bound(item)
                 {
                     self.type_error(

@@ -6009,6 +6009,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.call_native("String.cmp", vec![lo, ro], dest);
                 Ok(())
             }
+            // B-2026-10-06-92: a `Vec` orders lexicographically, as its
+            // `Slice` does and as `==` already compares it.
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => {
+                let elem = self.tys().tcx().list(args)[0];
+                self.seq_cmp(span, l, r, t, elem, dest)
+            }
             HK::Slice { elem, .. } => self.seq_cmp(span, l, r, t, elem, dest),
             HK::Tuple(list) => {
                 let tys = self.tys().tcx().list(list);
@@ -11904,6 +11913,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if method == "cmp" && self.scalar_cmp(e, object, args, dest.clone())? {
             return Ok(());
+        }
+        if let ("cmp", [other]) = (method, args) {
+            // A `Vec`'s `cmp`: lexicographic, as its `<` (B-2026-10-06-92).
+            let ot = self.expr_ty(object)?;
+            let (_, base) = self.strip_ty_full(ot);
+            if matches!(
+                self.tys().tcx().kind(base),
+                HK::Intrinsic {
+                    kind: IntrinsicKind::Vec,
+                    ..
+                }
+            ) {
+                let lp = self.expr_place(object, false)?;
+                let rp = self.expr_place(&other.value, false)?;
+                let (lp, lt) = self.strip_refs(lp);
+                let (rp, _) = self.strip_refs(rp);
+                return self.cmp_places(e.span, lp, rp, lt, dest);
+            }
         }
         if let ("cmp", [other], false) = (method, args, self.lcx.calls.contains_key(&e.id)) {
             // A tuple's `cmp` (the checker records no callee for it).

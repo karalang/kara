@@ -3402,6 +3402,9 @@ impl<'a> TypeChecker<'a> {
     /// [`Self::new`]. See [`crate::lints::CliLintOverrides`] for the
     /// resolution rule.
     pub fn with_cli_lint_overrides(mut self, overrides: crate::lints::CliLintOverrides) -> Self {
+        if overrides.strict_core {
+            self.env.vec_is_ord = true;
+        }
         self.cli_lint_overrides = overrides;
         self
     }
@@ -3421,6 +3424,7 @@ impl<'a> TypeChecker<'a> {
     pub fn library_methods_from_source(mut self) -> Self {
         self.library_methods_from_source = true;
         self.env.partial_eq_impl_dispatches = true;
+        self.env.vec_is_ord = true;
         self
     }
 
