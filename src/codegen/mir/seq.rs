@@ -1108,17 +1108,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 [f],
             ) => {
                 let by_key = method.contains("key");
-                let (cmp, ctx) = self.sort_by_args(f, by_key, el)?;
-                self.rt(
-                    "sort_ctx",
-                    &[
-                        p.into(),
-                        n.into(),
-                        self.i64(size).into(),
-                        cmp.into(),
-                        ctx.into(),
-                    ],
-                )?;
+                self.sort_with(p, n, size, f, by_key, el)?;
                 self.drop_moved(&args[1..])?;
             }
             ("to_vec", []) => self.vec_of_clones(dest, p, n, el)?,
@@ -1317,17 +1307,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 match rest {
                     [] => self.sort_own_order(buf, n, el, size)?,
                     [f] => {
-                        let (cmp, ctx) = self.sort_by_args(f, method == "sorted_by_key", el)?;
-                        self.rt(
-                            "sort_ctx",
-                            &[
-                                buf.into(),
-                                n.into(),
-                                self.i64(size).into(),
-                                cmp.into(),
-                                ctx.into(),
-                            ],
-                        )?;
+                        self.sort_with(buf, n, size, f, method == "sorted_by_key", el)?;
                     }
                     _ => return Ok(None),
                 }

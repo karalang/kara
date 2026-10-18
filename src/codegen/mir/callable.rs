@@ -18,7 +18,8 @@ use std::collections::HashMap;
 
 use inkwell::module::Linkage;
 use inkwell::types::BasicMetadataTypeEnum;
-use inkwell::values::{BasicMetadataValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::IntPredicate;
 
 use super::{Cx, R};
 use crate::mir::{Body, Operand, Place, Ty, TyKind};
@@ -35,6 +36,24 @@ pub(super) enum Shim {
     /// `i32 (ptr ctx, ptr a, ptr b)` for a `sort_by` comparator of type
     /// `Ty`, or (`by_key`) the key order of a `sort_by_key` key function.
     SortBy { f: Ty, by_key: bool, el: Ty },
+    /// `void (ptr buf, i64 n, ptr ctx)`: the runtime's stable merge sort
+    /// (`karac_mir_sort_ctx`) over `n` elements of `size` bytes, emitted
+    /// with a direct call to that comparator so LLVM can inline it.
+    MergeSort {
+        f: Ty,
+        by_key: bool,
+        el: Ty,
+        size: u64,
+    },
+    /// `void (ptr buf, ptr tmp, i64 n, ptr ctx, i64 width, i64 limit)`: a
+    /// [`Shim::MergeSort`]'s passes of `width`, `2 * width`, ... below
+    /// `limit`, between `buf` and `tmp`, ending in `buf`.
+    MergeWidths {
+        f: Ty,
+        by_key: bool,
+        el: Ty,
+        size: u64,
+    },
     /// `i8 (ptr a, ptr b)`: the poll function of a task whose root is the
     /// resume body `resume` (`task.rs`).
     TaskPoll { resume: String, spawned: bool },
@@ -100,6 +119,34 @@ impl<'ctx> Cx<'ctx, '_> {
                     .i32_type()
                     .fn_type(&[p.into(), p.into(), p.into()], false),
             ),
+            Shim::MergeSort {
+                f, by_key, size, ..
+            } => (
+                format!(
+                    "merge_sort.{}.{}.{size}",
+                    if *by_key { "by_key" } else { "by" },
+                    self.tys.display(*f)
+                ),
+                self.llcx
+                    .void_type()
+                    .fn_type(&[p.into(), self.llcx.i64_type().into(), p.into()], false),
+            ),
+            Shim::MergeWidths {
+                f, by_key, size, ..
+            } => {
+                let i = self.llcx.i64_type();
+                (
+                    format!(
+                        "merge_widths.{}.{}.{size}",
+                        if *by_key { "by_key" } else { "by" },
+                        self.tys.display(*f)
+                    ),
+                    self.llcx.void_type().fn_type(
+                        &[p.into(), p.into(), i.into(), p.into(), i.into(), i.into()],
+                        false,
+                    ),
+                )
+            }
             Shim::TaskPoll { resume, spawned } => (
                 format!("poll.{}{resume}", if *spawned { "" } else { "root." }),
                 self.llcx.i8_type().fn_type(&[p.into(), p.into()], false),
@@ -142,6 +189,50 @@ impl<'ctx> Cx<'ctx, '_> {
                     let (ctx, a, b) = (param(0)?, param(1)?, param(2)?);
                     let o = self.sort_by_order(fty, by_key, el, ctx, a, b)?;
                     self.builder.build_return(Some(&o)).map_err(e)?;
+                }
+                Shim::MergeSort {
+                    f: fty,
+                    by_key,
+                    el,
+                    size,
+                } => {
+                    let widths = self.shim_fn(Shim::MergeWidths {
+                        f: fty,
+                        by_key,
+                        el,
+                        size,
+                    });
+                    let n = f
+                        .get_nth_param(1)
+                        .ok_or("a merge sort has no length")?
+                        .into_int_value();
+                    self.build_merge_sort(widths, param(0)?, n, param(2)?, size)?;
+                    self.builder.build_return(None).map_err(e)?;
+                }
+                Shim::MergeWidths {
+                    f: fty,
+                    by_key,
+                    el,
+                    size,
+                } => {
+                    let cmp = self.shim_fn(Shim::SortBy { f: fty, by_key, el });
+                    let int = |i: u32| -> R<IntValue<'ctx>> {
+                        Ok(f.get_nth_param(i)
+                            .ok_or("merge passes are missing a parameter")?
+                            .into_int_value())
+                    };
+                    let (n, width, limit) = (int(2)?, int(4)?, int(5)?);
+                    self.build_merge_widths(
+                        cmp,
+                        param(0)?,
+                        param(1)?,
+                        n,
+                        param(3)?,
+                        width,
+                        limit,
+                        size,
+                    )?;
+                    self.builder.build_return(None).map_err(e)?;
                 }
                 Shim::TaskPoll { resume, spawned } => {
                     self.build_task_poll(f, &resume, spawned)?;
@@ -540,5 +631,312 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         let cmp = self.shim_fn(Shim::SortBy { f: ty, by_key, el });
         Ok((cmp.as_global_value().as_pointer_value(), at))
+    }
+
+    /// `sort_by` / `sort_by_key` of the `n` elements of `el` at `buf` with
+    /// the function operand `f`: the emitted merge sort, which calls the
+    /// comparator directly (B-2026-10-13-18).
+    pub(super) fn sort_with(
+        &mut self,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        size: u64,
+        f: &Operand,
+        by_key: bool,
+        el: Ty,
+    ) -> R<()> {
+        if size == 0 {
+            // Every element is the same zero-sized value.
+            return Ok(());
+        }
+        let (_, ctx) = self.sort_by_args(f, by_key, el)?;
+        let mut ty = self.operand_type(f)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ty) {
+            ty = i;
+        }
+        let sort = self.shim_fn(Shim::MergeSort {
+            f: ty,
+            by_key,
+            el,
+            size,
+        });
+        self.builder
+            .build_call(sort, &[buf.into(), n.into(), ctx.into()], "")
+            .map_err(e)?;
+        Ok(())
+    }
+
+    /// The body of a [`Shim::MergeSort`]: bottom-up merge passes of widths
+    /// 1, 2, 4, ... between `buf` and one scratch buffer, the right element
+    /// first only when strictly less. These are `merge_passes`' comparisons
+    /// in its order (runtime/src/mir.rs), so the result is the
+    /// interpreter's even for a comparator that is not an order.
+    #[allow(clippy::too_many_arguments)]
+    fn build_merge_widths(
+        &mut self,
+        cmp: FunctionValue<'ctx>,
+        buf: PointerValue<'ctx>,
+        scratch: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        ctx: PointerValue<'ctx>,
+        width: IntValue<'ctx>,
+        limit: IntValue<'ctx>,
+        size: u64,
+    ) -> R<()> {
+        let b = &self.builder;
+        let i64t = self.llcx.i64_type();
+        let i8t = self.llcx.i8_type();
+        let p = self.ptr_ty();
+        let f = b
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or("no function")?;
+        let bb = |name: &str| self.llcx.append_basic_block(f, name);
+        let (w_head, w_body, lo_head, lo_body) = (bb("w"), bb("w.body"), bb("run"), bb("run.body"));
+        let (m_head, m_test, m_body, take_j, take_i) =
+            (bb("m"), bb("m.right"), bb("m.cmp"), bb("m.j"), bb("m.i"));
+        let (tail, w_next, finish, done) = (bb("run.tail"), bb("w.next"), bb("copy"), bb("done"));
+        let sz = i64t.const_int(size, false);
+        let one = i64t.const_int(1, false);
+        let zero = i64t.const_zero();
+        let at = |q: PointerValue<'ctx>, k: IntValue<'ctx>| -> R<PointerValue<'ctx>> {
+            let off = b.build_int_mul(k, sz, "").map_err(e)?;
+            // SAFETY of the address: `k` is below `n` (or equal, with a
+            // zero-length copy), in a buffer of `n` elements.
+            unsafe { b.build_in_bounds_gep(i8t, q, &[off], "") }.map_err(e)
+        };
+        let var =
+            |name: &str, t: inkwell::types::BasicTypeEnum<'ctx>| b.build_alloca(t, name).map_err(e);
+        let (v_src, v_dst, v_w, v_lo, v_k, v_i, v_j) = (
+            var("src", p.into())?,
+            var("dst", p.into())?,
+            var("width", i64t.into())?,
+            var("lo", i64t.into())?,
+            var("k", i64t.into())?,
+            var("i", i64t.into())?,
+            var("j", i64t.into())?,
+        );
+        let ld = |v: PointerValue<'ctx>| -> R<IntValue<'ctx>> {
+            Ok(b.build_load(i64t, v, "").map_err(e)?.into_int_value())
+        };
+        let ldp = |v: PointerValue<'ctx>| -> R<PointerValue<'ctx>> {
+            Ok(b.build_load(p, v, "").map_err(e)?.into_pointer_value())
+        };
+        let lt = |x: IntValue<'ctx>, y: IntValue<'ctx>| {
+            b.build_int_compare(IntPredicate::ULT, x, y, "").map_err(e)
+        };
+        let umin = |x: IntValue<'ctx>, y: IntValue<'ctx>| -> R<IntValue<'ctx>> {
+            let c = lt(x, y)?;
+            Ok(b.build_select(c, x, y, "").map_err(e)?.into_int_value())
+        };
+        let room = b.build_int_mul(n, sz, "").map_err(e)?;
+        b.build_store(v_src, buf).map_err(e)?;
+        b.build_store(v_dst, scratch).map_err(e)?;
+        b.build_store(v_w, width).map_err(e)?;
+        b.build_unconditional_branch(w_head).map_err(e)?;
+        // while width < limit
+        b.position_at_end(w_head);
+        let w = ld(v_w)?;
+        b.build_conditional_branch(lt(w, limit)?, w_body, finish)
+            .map_err(e)?;
+        b.position_at_end(w_body);
+        b.build_store(v_k, zero).map_err(e)?;
+        b.build_store(v_lo, zero).map_err(e)?;
+        b.build_unconditional_branch(lo_head).map_err(e)?;
+        // for lo in (0..n).step_by(2 * width)
+        b.position_at_end(lo_head);
+        let lo = ld(v_lo)?;
+        b.build_conditional_branch(lt(lo, n)?, lo_body, w_next)
+            .map_err(e)?;
+        b.position_at_end(lo_body);
+        let w = ld(v_w)?;
+        let lo = ld(v_lo)?;
+        let mid = umin(b.build_int_add(lo, w, "").map_err(e)?, n)?;
+        let w2 = b.build_int_add(w, w, "").map_err(e)?;
+        let hi = umin(b.build_int_add(lo, w2, "").map_err(e)?, n)?;
+        b.build_store(v_i, lo).map_err(e)?;
+        b.build_store(v_j, mid).map_err(e)?;
+        b.build_unconditional_branch(m_head).map_err(e)?;
+        // while i < mid && j < hi
+        b.position_at_end(m_head);
+        b.build_conditional_branch(lt(ld(v_i)?, mid)?, m_test, tail)
+            .map_err(e)?;
+        b.position_at_end(m_test);
+        b.build_conditional_branch(lt(ld(v_j)?, hi)?, m_body, tail)
+            .map_err(e)?;
+        b.position_at_end(m_body);
+        let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
+        let (i, j, k) = (ld(v_i)?, ld(v_j)?, ld(v_k)?);
+        let (pj, pi, pk) = (at(src, j)?, at(src, i)?, at(dst, k)?);
+        let o = b
+            .build_call(cmp, &[ctx.into(), pj.into(), pi.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let less = b
+            .build_int_compare(IntPredicate::SLT, o, o.get_type().const_zero(), "")
+            .map_err(e)?;
+        let k1 = b.build_int_add(k, one, "").map_err(e)?;
+        b.build_store(v_k, k1).map_err(e)?;
+        b.build_conditional_branch(less, take_j, take_i)
+            .map_err(e)?;
+        for (blk, from, v, x) in [(take_j, pj, v_j, j), (take_i, pi, v_i, i)] {
+            b.position_at_end(blk);
+            b.build_memcpy(pk, 1, from, 1, sz).map_err(e)?;
+            let x1 = b.build_int_add(x, one, "").map_err(e)?;
+            b.build_store(v, x1).map_err(e)?;
+            b.build_unconditional_branch(m_head).map_err(e)?;
+        }
+        // The rest of each run.
+        b.position_at_end(tail);
+        let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
+        let (i, j, k) = (ld(v_i)?, ld(v_j)?, ld(v_k)?);
+        let left = b.build_int_sub(mid, i, "").map_err(e)?;
+        let bytes = b.build_int_mul(left, sz, "").map_err(e)?;
+        b.build_memcpy(at(dst, k)?, 1, at(src, i)?, 1, bytes)
+            .map_err(e)?;
+        let k = b.build_int_add(k, left, "").map_err(e)?;
+        let right = b.build_int_sub(hi, j, "").map_err(e)?;
+        let bytes = b.build_int_mul(right, sz, "").map_err(e)?;
+        b.build_memcpy(at(dst, k)?, 1, at(src, j)?, 1, bytes)
+            .map_err(e)?;
+        let k = b.build_int_add(k, right, "").map_err(e)?;
+        b.build_store(v_k, k).map_err(e)?;
+        let lo = ld(v_lo)?;
+        b.build_store(v_lo, b.build_int_add(lo, w2, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(lo_head).map_err(e)?;
+        // Swap the buffers and double the width.
+        b.position_at_end(w_next);
+        let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
+        b.build_store(v_src, dst).map_err(e)?;
+        b.build_store(v_dst, src).map_err(e)?;
+        let w = ld(v_w)?;
+        b.build_store(v_w, b.build_int_add(w, w, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(w_head).map_err(e)?;
+        // The sorted elements back into `buf` when they ended in scratch.
+        b.position_at_end(finish);
+        let src = ldp(v_src)?;
+        let moved = b
+            .build_int_compare(IntPredicate::NE, src, buf, "")
+            .map_err(e)?;
+        let copy = bb("copy.back");
+        b.build_conditional_branch(moved, copy, done).map_err(e)?;
+        b.position_at_end(copy);
+        b.build_memcpy(buf, 1, src, 1, room).map_err(e)?;
+        b.build_unconditional_branch(done).map_err(e)?;
+        b.position_at_end(done);
+        Ok(())
+    }
+
+    /// The body of a [`Shim::MergeSort`]: one scratch buffer, then the
+    /// interpreter's schedule (src/mir/interp.rs `merge_order`). Past
+    /// `MERGE_BLOCK` elements, the widths below it run block by block,
+    /// then the wider passes over the whole buffer.
+    fn build_merge_sort(
+        &mut self,
+        widths: FunctionValue<'ctx>,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        ctx: PointerValue<'ctx>,
+        size: u64,
+    ) -> R<()> {
+        let i64t = self.llcx.i64_type();
+        let i8t = self.llcx.i8_type();
+        let f = self.cur_fn()?;
+        let bb = |name: &str| self.llcx.append_basic_block(f, name);
+        let (setup, small, blocks, head, each, wide, free, done) = (
+            bb("sort"),
+            bb("sort.small"),
+            bb("sort.blocks"),
+            bb("sort.block.next"),
+            bb("sort.block"),
+            bb("sort.wide"),
+            bb("sort.free"),
+            bb("sort.done"),
+        );
+        let block = i64t.const_int(crate::mir::interp::MERGE_BLOCK as u64, false);
+        let sz = i64t.const_int(size, false);
+        let one = i64t.const_int(1, false);
+        let malloc = self.libc_fn("malloc");
+        let b = &self.builder;
+        let v_b = b.build_alloca(i64t, "block").map_err(e)?;
+        let short = b
+            .build_int_compare(IntPredicate::ULT, n, i64t.const_int(2, false), "")
+            .map_err(e)?;
+        b.build_conditional_branch(short, done, setup).map_err(e)?;
+        b.position_at_end(setup);
+        let room = b.build_int_mul(n, sz, "").map_err(e)?;
+        let tmp = b
+            .build_call(malloc, &[room.into()], "scratch")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let big = b
+            .build_int_compare(IntPredicate::UGT, n, block, "")
+            .map_err(e)?;
+        b.build_conditional_branch(big, blocks, small).map_err(e)?;
+        let call = |p: PointerValue<'ctx>,
+                    t: PointerValue<'ctx>,
+                    len: IntValue<'ctx>,
+                    w: IntValue<'ctx>,
+                    lim: IntValue<'ctx>|
+         -> R<()> {
+            b.build_call(
+                widths,
+                &[
+                    p.into(),
+                    t.into(),
+                    len.into(),
+                    ctx.into(),
+                    w.into(),
+                    lim.into(),
+                ],
+                "",
+            )
+            .map_err(e)?;
+            Ok(())
+        };
+        b.position_at_end(small);
+        call(buf, tmp, n, one, n)?;
+        b.build_unconditional_branch(free).map_err(e)?;
+        // Blocks of MERGE_BLOCK, the last one short.
+        b.position_at_end(blocks);
+        b.build_store(v_b, i64t.const_zero()).map_err(e)?;
+        b.build_unconditional_branch(head).map_err(e)?;
+        b.position_at_end(head);
+        let at = b.build_load(i64t, v_b, "").map_err(e)?.into_int_value();
+        let more = b
+            .build_int_compare(IntPredicate::ULT, at, n, "")
+            .map_err(e)?;
+        b.build_conditional_branch(more, each, wide).map_err(e)?;
+        b.position_at_end(each);
+        let left = b.build_int_sub(n, at, "").map_err(e)?;
+        let fits = b
+            .build_int_compare(IntPredicate::ULT, left, block, "")
+            .map_err(e)?;
+        let len = b
+            .build_select(fits, left, block, "")
+            .map_err(e)?
+            .into_int_value();
+        let off = b.build_int_mul(at, sz, "").map_err(e)?;
+        // SAFETY of the addresses: `at < n`, in buffers of `n` elements.
+        let bp = unsafe { b.build_in_bounds_gep(i8t, buf, &[off], "") }.map_err(e)?;
+        let tp = unsafe { b.build_in_bounds_gep(i8t, tmp, &[off], "") }.map_err(e)?;
+        call(bp, tp, len, one, block)?;
+        let next = b.build_int_add(at, block, "").map_err(e)?;
+        b.build_store(v_b, next).map_err(e)?;
+        b.build_unconditional_branch(head).map_err(e)?;
+        b.position_at_end(wide);
+        call(buf, tmp, n, block, n)?;
+        b.build_unconditional_branch(free).map_err(e)?;
+        b.position_at_end(free);
+        self.free(tmp)?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        Ok(())
     }
 }

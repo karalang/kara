@@ -811,6 +811,11 @@ enum Mode {
 /// nothing refers to ([`Interp::sweep_snapshots`]).
 const SWEEP_FLOOR: usize = 1 << 20;
 
+/// The block a merge sort finishes its narrow widths in before the wide
+/// ones: [`Interp::merge_order`]'s schedule, which the compiled backend
+/// shares (runtime/src/mir.rs `MERGE_BLOCK`).
+pub const MERGE_BLOCK: usize = 1024;
+
 /// A table's removed-entry slots ([`Interp::table_holes`]).
 #[derive(Default)]
 struct Holes {
@@ -2727,6 +2732,15 @@ impl<'a> Interp<'a> {
 
     /// A stable merge sort of `0..n` under `cmp`, which may call into the
     /// program; the result lists the old index of each new position.
+    ///
+    /// Bottom-up: widths 1, 2, 4, ..., the right element first only when
+    /// strictly less. Past [`MERGE_BLOCK`] elements, every width below it
+    /// runs one block at a time before the wider passes. Those merges are
+    /// the same as a full pass would make, taken block by block so a
+    /// compiled sort stays in cache. The compiled backend runs this
+    /// schedule too (runtime/src/mir.rs `merge_passes`, and the emitted
+    /// sort in src/codegen/mir/callable.rs), so the comparator sees the
+    /// same calls in the same order on each (B-2026-10-13-18).
     fn merge_order(
         &mut self,
         n: usize,
@@ -2734,29 +2748,53 @@ impl<'a> Interp<'a> {
     ) -> R<Vec<usize>> {
         let mut order: Vec<usize> = (0..n).collect();
         let mut width = 1;
-        while width < n {
-            let mut out = Vec::with_capacity(n);
-            for lo in (0..n).step_by(2 * width) {
-                let mid = (lo + width).min(n);
-                let hi = (lo + 2 * width).min(n);
-                let (mut i, mut j) = (lo, mid);
-                while i < mid && j < hi {
-                    // The right element goes first only when strictly less.
-                    if cmp(self, order[j], order[i])?.is_lt() {
-                        out.push(order[j]);
-                        j += 1;
-                    } else {
-                        out.push(order[i]);
-                        i += 1;
-                    }
+        if n > MERGE_BLOCK {
+            for b in (0..n).step_by(MERGE_BLOCK) {
+                let end = (b + MERGE_BLOCK).min(n);
+                let mut w = 1;
+                while w < MERGE_BLOCK {
+                    let out = self.merge_pass(&order, b, end, w, cmp)?;
+                    order[b..end].copy_from_slice(&out);
+                    w *= 2;
                 }
-                out.extend_from_slice(&order[i..mid]);
-                out.extend_from_slice(&order[j..hi]);
             }
-            order = out;
+            width = MERGE_BLOCK;
+        }
+        while width < n {
+            order = self.merge_pass(&order, 0, n, width, cmp)?;
             width *= 2;
         }
         Ok(order)
+    }
+
+    /// One merge pass of width `width` over `order[from..to]`.
+    fn merge_pass(
+        &mut self,
+        order: &[usize],
+        from: usize,
+        to: usize,
+        width: usize,
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<Vec<usize>> {
+        let mut out = Vec::with_capacity(to - from);
+        for lo in (from..to).step_by(2 * width) {
+            let mid = (lo + width).min(to);
+            let hi = (lo + 2 * width).min(to);
+            let (mut i, mut j) = (lo, mid);
+            while i < mid && j < hi {
+                // The right element goes first only when strictly less.
+                if cmp(self, order[j], order[i])?.is_lt() {
+                    out.push(order[j]);
+                    j += 1;
+                } else {
+                    out.push(order[i]);
+                    i += 1;
+                }
+            }
+            out.extend_from_slice(&order[i..mid]);
+            out.extend_from_slice(&order[j..hi]);
+        }
+        Ok(out)
     }
 
     /// Reorders the elements of `id`: new position `k` takes old `order[k]`.

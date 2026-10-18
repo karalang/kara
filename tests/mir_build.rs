@@ -4628,3 +4628,60 @@ fn main() {
         }
     }
 }
+
+/// `sort_by` / `sort_by_key` run an emitted merge sort that makes the
+/// same comparator calls in the same order as the MIR interpreter,
+/// including past the 1024-element block (B-2026-10-13-18). The third
+/// sort's comparator counts and prints its calls and is not an order,
+/// so any difference in the call schedule changes the output.
+#[test]
+fn mir_build_sort_by_call_schedule_agrees_with_the_interpreter() {
+    let src = r#"
+fn make(n: i64, seed: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut s = seed;
+    let mut i = 0;
+    while i < n {
+        s = (s * 1103515245 + 12345) & 2147483647;
+        v.push((s % 97, i));
+        i += 1;
+    }
+    v
+}
+fn sum(v: ref Vec[(i64, i64)]) -> i64 {
+    let mut h = 0;
+    for (k, x) in v.iter() {
+        h = (h * 31 + k * 1000 + x) % 1000000007;
+    }
+    h
+}
+fn main() {
+    for n in [5, 1025, 3000] {
+        let mut a = make(n, n);
+        a.sort_by(|x, y| x.0.cmp(y.0));
+        let mut b = make(n, n + 1);
+        b.sort_by_key(|x| 0 - x.0);
+        let mut c = make(n, n + 2);
+        let mut calls = 0;
+        c.sort_by(|x, y| {
+            calls += 1;
+            if calls % 1000 == 0 {
+                println(f"call {calls} {x.1} {y.1}");
+            }
+            if (x.1 * 7 + y.1) % 5 < 2 { Ordering.Less } else { Ordering.Greater }
+        });
+        let s: Vec[i64] = make(n, 3).iter().map(|p| p.0).collect();
+        let mut t = s.clone();
+        t.sort_by(|x, y| y.cmp(x));
+        println(f"{n} {sum(a)} {sum(b)} {sum(c)} {calls} {t[0]} {t[n - 1]}");
+    }
+}
+"#;
+    let want = karac::mir::lower::run_source(src).expect("interp").output;
+    assert!(want.contains("call 1000 "), "{want}");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

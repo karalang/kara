@@ -1891,11 +1891,19 @@ unsafe fn merge_sort(
     }
 }
 
+/// The block a merge sort finishes its narrow widths in before the wide
+/// ones. The MIR interpreter's `merge_order` (src/mir/interp.rs
+/// `MERGE_BLOCK`) and the sort codegen emits use the same value and
+/// schedule, so a comparator sees the same calls in the same order on
+/// every backend (B-2026-10-13-18).
+const MERGE_BLOCK: usize = 1024;
+
 /// The bottom-up merge of [`merge_sort`], between `buf` and one scratch
 /// buffer: widths 1, 2, 4, ..., the right element first only when
-/// strictly less. It makes the same comparisons in the same order as the
-/// interpreter's, so even a comparator that is not an order gives the
-/// same result. `N` is the element size, or 0 for "`size`, copied".
+/// strictly less. Past [`MERGE_BLOCK`] elements, every width below it runs
+/// one block at a time (in cache) before the wider passes over the whole
+/// buffer; the merges are the ones full passes would make. `N` is the
+/// element size, or 0 for "`size`, copied".
 ///
 /// # Safety
 /// As [`merge_sort`].
@@ -1906,7 +1914,46 @@ unsafe fn merge_passes<const N: usize>(
     cmp: &mut dyn FnMut(*const u8, *const u8) -> i32,
 ) {
     let mut scratch = vec![0u8; n * size];
-    let (mut src, mut dst) = (buf, scratch.as_mut_ptr());
+    let tmp = scratch.as_mut_ptr();
+    if n <= MERGE_BLOCK {
+        // SAFETY: the caller's contract; `tmp` holds `n` elements.
+        unsafe { merge_widths::<N>(buf, tmp, n, size, 1, n, cmp) };
+        return;
+    }
+    for b in (0..n).step_by(MERGE_BLOCK) {
+        let len = MERGE_BLOCK.min(n - b);
+        // SAFETY: block `b` of both buffers, `len` elements in bounds.
+        unsafe {
+            merge_widths::<N>(
+                buf.add(b * size),
+                tmp.add(b * size),
+                len,
+                size,
+                1,
+                MERGE_BLOCK,
+                cmp,
+            )
+        };
+    }
+    // SAFETY: as above.
+    unsafe { merge_widths::<N>(buf, tmp, n, size, MERGE_BLOCK, n, cmp) };
+}
+
+/// The passes of widths `width`, `2 * width`, ... below `limit` over the
+/// `n` elements at `buf`, using `tmp` (room for `n`), ending in `buf`.
+///
+/// # Safety
+/// `buf` and `tmp` hold `n` elements of `size` bytes and do not overlap.
+unsafe fn merge_widths<const N: usize>(
+    buf: *mut u8,
+    tmp: *mut u8,
+    n: usize,
+    size: usize,
+    mut width: usize,
+    limit: usize,
+    cmp: &mut dyn FnMut(*const u8, *const u8) -> i32,
+) {
+    let (mut src, mut dst) = (buf, tmp);
     // SAFETY: every index passed is below `n`, in a buffer of `n`.
     let at = |b: *mut u8, i: usize| unsafe { b.add(i * size) };
     let put = |d: *mut u8, s: *const u8| {
@@ -1919,8 +1966,7 @@ unsafe fn merge_passes<const N: usize>(
             }
         }
     };
-    let mut width = 1;
-    while width < n {
+    while width < limit {
         let mut k = 0;
         for lo in (0..n).step_by(2 * width) {
             let mid = (lo + width).min(n);
