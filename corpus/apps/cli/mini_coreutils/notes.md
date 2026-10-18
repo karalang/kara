@@ -107,4 +107,9 @@ Compiler gaps:
 After those edits the program matched expected.out on the first run on
 both MIR surfaces.
 
+Reverted 2026-10-18, karac at 88f41325b8: B-2026-10-18-8 is fixed, so
+the data section writes `\x01`, `\x1d` and the other control bytes as
+the original did. The program still matches expected.out on all four
+backends.
+
 Written 2026-10-18 by the real-world apps thread; karac at 4c62f568f7.

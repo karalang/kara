@@ -13,10 +13,6 @@
 //
 // expected.out is GNU coreutils 9.4's output on the same files, made by
 // oracle.py.
-//
-// Workarounds:
-// - B-2026-10-18-8: the lexer rejects `\xHH` in string literals, so the
-//   data section writes control bytes as `\u{1}` rather than `\x01`.
 
 // ------------------------------------------------------------ bytes and lines
 
@@ -2715,7 +2711,7 @@ fn file_2() -> String {
 
 fn file_3() -> String {
     let mut s = String.new();
-    s.push_str("KARA\u{1}\0\u{2}\u{7f}\tv1.2\n");
+    s.push_str("KARA\x01\0\x02\x7f\tv1.2\n");
     s.push_str("café\n");
     s
 }
@@ -2878,8 +2874,8 @@ fn file_11() -> String {
     s.push_str("od\t-b\t-w8\tports.txt\n");
     s.push_str("od\t-t\ta\theader.bin\n");
     s.push_str("od\t-A\tx\t-t\tx1\tempty.txt\n");
-    s.push_str("printf\t%s\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\t\u{1d}\tod\t-A\td\t-c\n");
-    s.push_str("printf\t%s\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\t\u{1d}\tod\t-A\td\t-v\t-c\n");
+    s.push_str("printf\t%s\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\t\x1d\tod\t-A\td\t-c\n");
+    s.push_str("printf\t%s\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\t\x1d\tod\t-A\td\t-v\t-c\n");
     s.push_str("od\t-t\tx8\theader.bin\n");
     s.push_str("od\t-t\tq1\theader.bin\n");
     s.push_str("base64\tsecret.txt\n");
@@ -2887,8 +2883,8 @@ fn file_11() -> String {
     s.push_str("base64\t-w\t0\tsecret.txt\n");
     s.push_str("base64\t-d\ttoken.b64\n");
     s.push_str("base64\t-d\twrapped.b64\n");
-    s.push_str("printf\t%s\ta\t\u{1d}\tbase64\n");
-    s.push_str("printf\t%s\tab\t\u{1d}\tbase64\t\u{1d}\tbase64\t-d\n");
+    s.push_str("printf\t%s\ta\t\x1d\tbase64\n");
+    s.push_str("printf\t%s\tab\t\x1d\tbase64\t\x1d\tbase64\t-d\n");
     s.push_str("base64\t-d\tbad.b64\n");
     s.push_str("base64\tmissing.txt\n");
     s.push_str("fold\t-w\t30\tstory.txt\n");
@@ -2903,12 +2899,12 @@ fn file_11() -> String {
     s.push_str("unexpand\tindent.txt\n");
     s.push_str("unexpand\t-a\tindent.txt\n");
     s.push_str("unexpand\t-t\t4\tindent.txt\n");
-    s.push_str("expand\tnotes.txt\t\u{1d}\tunexpand\t-a\n");
+    s.push_str("expand\tnotes.txt\t\x1d\tunexpand\t-a\n");
     s.push_str("factor\t12\t97\t1\t0\t360\t1001\t65536\n");
     s.push_str("factor\t600851475143\t9999999967\t4294967297\n");
-    s.push_str("printf\t%s\\n\t84 91\t  1024\u{b}77\t\u{1d}\tfactor\n");
+    s.push_str("printf\t%s\\n\t84 91\t  1024\x0b77\t\x1d\tfactor\n");
     s.push_str("factor\t12\tx9\t15\n");
-    s.push_str("seq\t2\t12\t\u{1d}\tfactor\n");
+    s.push_str("seq\t2\t12\t\x1d\tfactor\n");
     s
 }
 
