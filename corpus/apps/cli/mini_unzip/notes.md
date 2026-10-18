@@ -41,20 +41,27 @@ The program runs the commands in `data/jobs.txt`:
   - Info-ZIP's zip-slip defences and their warnings;
   - decryption;
   - extracting a file with a bad CRC, which is written and reported.
-- `tree`, which lists what each extraction wrote, with sizes and CRCs.
+- `tree`, which lists what each extraction wrote: each file's mode bits,
+  modification time (UTC), size and CRC, and each link's target.
 
 Not supported: compression methods other than stored and deflate,
 AES encryption, multi-disk archives, `zipinfo -v`, and prompting
 (`unzip` here never asks for a password or before overwriting).
-Extraction does not restore modes or modification times, and writes a
-symbolic link as a file holding its target, because Kāra's `fs` library
-has no way to do either (B-2026-10-15-59).
+Extraction restores what Info-ZIP restores on Unix: each file's
+modification time from its DOS date and time (as UTC), its permission
+bits when it was made on Unix (without setuid, setgid and sticky), and
+symbolic links as real links. The time is set before the mode, since
+changing it opens the file. Two things are left out because these
+archives would not show them: the extended-timestamp extra field, whose
+times here equal the DOS times, and the modes and times of directories,
+which `tree` does not print because a directory unzip creates on its own
+gets the current time.
 
 **Oracle.** `expected.out` is the output of `oracle.py`, the same program
 in Python. `real.py` runs `jobs.txt` with the real Info-ZIP unzip 6.0
 and zipinfo, with `TZ=UTC`, putting each command's stdout before its
-stderr. Its output is byte-identical to `expected.out`. Its `tree` reads
-a link's target as the link's contents, the way this program writes it.
+stderr. Its output is byte-identical to `expected.out`. Its `tree` prints
+the same columns from `lstat`.
 `mk.py` shows how `data/` was built, but a rerun makes different bytes
 (Info-ZIP's encryption headers are random), so the committed `data/` is
 the input.

@@ -6,7 +6,8 @@
 //   checks, traditional PKWARE (ZipCrypto) decryption with -P, data
 //   descriptors, and zip64 sizes and end records;
 // - extraction with -d, including Info-ZIP's zip-slip defences (`..`
-//   components dropped, a leading `/` stripped) and deferred links;
+//   components dropped, a leading `/` stripped), deferred symbolic
+//   links, and each file's modification time and Unix mode restored;
 // - Info-ZIP's errors, warnings and exit codes on a bad CRC, a wrong
 //   password, a self-extractor's stub, a file that is not a zip
 //   archive, and unmatched names.
@@ -1461,6 +1462,47 @@ fn write_file(job: mut ref Job, path: Str, data: Vec[u8]) {
     }
 }
 
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+// Info-ZIP's restore on Unix: the DOS time (read as UTC, since the runs
+// use TZ=UTC), then, for an entry made on Unix, its permission bits
+// without setuid, setgid and sticky. The time goes first because
+// changing it opens the file.
+fn restore_attrs(job: mut ref Job, path: Str, e: ref Member) {
+    let y = 1980 + (e.date >> 9);
+    let days = days_from_civil(y, (e.date >> 5) & 15, e.date & 31);
+    let secs = days * 86400 + (e.time >> 11) * 3600 + ((e.time >> 5) & 63) * 60 + (e.time & 31) * 2;
+    if let Err(err) = fs.set_modified(path, secs * 1000) {
+        job.err.push_str(f"warning:  cannot set modif./access times for {path}: {err}\n");
+    }
+    if e.made_by >> 8 == 3 {
+        if let Err(err) = fs.set_permissions(path, (e.external >> 16) & 0o777) {
+            job.err.push_str(f"warning:  cannot set permissions for {path}: {err}\n");
+        }
+    }
+}
+
 struct Link {
     shown: String,
     path: String,
@@ -1527,6 +1569,7 @@ fn extract_cmd(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String], passwor
         job.out.push_str(f"{verb}{ljust(shown, 22)}  ");
         let crc = crc32(t, data);
         write_file(mut job, path, data);
+        restore_attrs(mut job, path, e);
         match st {
             Status.Good => job.out.push_str("\n"),
             Status.BadCrc => {
@@ -1543,9 +1586,11 @@ fn extract_cmd(t: ref Vec[i64], job: mut ref Job, args: ref Vec[String], passwor
         job.out.push_str("finishing deferred symbolic links:\n");
         for l in links {
             job.out.push_str(f"  {l.shown} -> {l.target}\n");
-            // no symlinks here: the link is written as a file holding
-            // its target, as Info-ZIP does where links are unsupported
-            write_file(mut job, l.path, to_bytes(l.target));
+            make_parents(l.path);
+            if let Err(e) = fs.symlink(l.target, l.path) {
+                job.err.push_str(f"error:  cannot create symlink {l.shown}: {e}\n");
+                raise_status(mut job, 2);
+            }
         }
     }
     for p in unmatched {
@@ -1599,6 +1644,21 @@ struct Row {
     line: String,
 }
 
+fn pad(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push_str(" ");
+    }
+    s
+}
+
+fn utc_stamp(secs: i64) -> String {
+    let days = if secs >= 0 { secs / 86400 } else { (secs - 86399) / 86400 };
+    let rem = secs - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    f"{y:04}-{m:02}-{d:02} {rem / 3600:02}:{(rem / 60) % 60:02}:{rem % 60:02}"
+}
+
 fn walk(t: ref Vec[i64], d: Str, rel: Str, rows: mut ref Vec[Row]) {
     let names = match fs.read_dir(d.to_string()) {
         Ok(n) => n,
@@ -1607,15 +1667,24 @@ fn walk(t: ref Vec[i64], d: Str, rel: Str, rows: mut ref Vec[Row]) {
     for n in names {
         let p = f"{d}/{n}";
         let r = if rel.len() == 0 { n.clone() } else { f"{rel}/{n}" };
-        if is_dir_path(p) {
-            rows.push(Row { key: f"{r}/", line: f"     dir            {r}/\n" });
+        // B-2026-10-14-53: check moves a String passed to the library; clone it.
+        let meta = match fs.symlink_metadata(p.clone()) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.is_symlink {
+            let target = fs.read_link(p.clone()).unwrap_or(String.new());
+            rows.push(Row { key: r.clone(), line: f"l{pad(24)}  {r} -> {target}\n" });
+        } else if meta.is_dir {
+            rows.push(Row { key: f"{r}/", line: f"d{pad(24)}       dir            {r}/\n" });
             walk(t, p, r, mut rows);
         } else {
             let data = match fs.read_bytes(p) {
                 Ok(b) => b,
                 Err(_) => Vec.new(),
             };
-            rows.push(Row { key: r.clone(), line: f"{data.len():8}  {crc32(t, data):08x}  {r}\n" });
+            let when = utc_stamp(meta.modified_ms / 1000);
+            rows.push(Row { key: r.clone(), line: f"-{meta.mode:04o} {when}  {data.len():8}  {crc32(t, data):08x}  {r}\n" });
         }
     }
 }

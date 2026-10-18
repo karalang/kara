@@ -334,15 +334,15 @@ finishing deferred symbolic links:
   out-infozip/proj/link.kara -> src/main.kara
 
 $ tree out-infozip
-     dir            proj/
-     dir            proj/docs/
-    8070  8e39a3a1  proj/docs/guide.md
-       0  00000000  proj/empty.txt
-      13  d6994ac7  proj/link.kara
-     700  b2c3aafc  proj/logo.bin
-     dir            proj/src/
-      36  1456bb1e  proj/src/main.kara
-    1534  1dab4d43  proj/src/util.kara
+d                               dir            proj/
+d                               dir            proj/docs/
+-0644 2026-10-01 09:30:12      8070  8e39a3a1  proj/docs/guide.md
+-0644 2026-10-01 09:30:12         0  00000000  proj/empty.txt
+l                          proj/link.kara -> src/main.kara
+-0644 2026-10-01 09:30:12       700  b2c3aafc  proj/logo.bin
+d                               dir            proj/src/
+-0644 2026-10-01 09:30:12        36  1456bb1e  proj/src/main.kara
+-0644 2026-10-01 09:30:12      1534  1dab4d43  proj/src/util.kara
 
 $ unzip -d out-stream stream.zip
 Archive:  stream.zip
@@ -351,10 +351,10 @@ made by zipfile
  extracting: out-stream/notes/readme.txt  
 
 $ tree out-stream
-     dir            café/
-     300  024603d5  café/naïve.txt
-     dir            notes/
-      15  c9abfe28  notes/readme.txt
+d                               dir            café/
+-0600 2026-10-02 11:45:08       300  024603d5  café/naïve.txt
+d                               dir            notes/
+-0600 2026-10-02 11:46:00        15  c9abfe28  notes/readme.txt
 
 $ unzip -d out-evil evil.zip
 Archive:  evil.zip
@@ -369,15 +369,15 @@ warning:  stripped absolute path spec from /etc/cron.d/job
 [exit status 1]
 
 $ tree out-evil
-       8  0dd7eab3  escape.txt
-     dir            etc/
-     dir            etc/cron.d/
-      18  0f0072c8  etc/cron.d/job
-       5  2c685daf  ok.txt
-     dir            sub/
-       7  fe618ff4  sub/inner.txt
-     dir            sub/tmp/
-       9  f3468515  sub/tmp/evil.sh
+-0644 2026-10-04 12:00:00         8  0dd7eab3  escape.txt
+d                               dir            etc/
+d                               dir            etc/cron.d/
+-0644 2026-10-04 12:00:00        18  0f0072c8  etc/cron.d/job
+-0644 2026-10-04 12:00:00         5  2c685daf  ok.txt
+d                               dir            sub/
+-0644 2026-10-04 12:00:00         7  fe618ff4  sub/inner.txt
+d                               dir            sub/tmp/
+-0644 2026-10-04 12:00:00         9  f3468515  sub/tmp/evil.sh
 
 $ unzip -P hunter2 -d out-secret secret.zip
 Archive:  secret.zip
@@ -385,11 +385,11 @@ Archive:  secret.zip
   inflating: out-secret/proj/docs/guide.md  
 
 $ tree out-secret
-     dir            proj/
-     dir            proj/docs/
-    8070  8e39a3a1  proj/docs/guide.md
-     dir            proj/src/
-      36  1456bb1e  proj/src/main.kara
+d                               dir            proj/
+d                               dir            proj/docs/
+-0644 2026-10-01 09:30:12      8070  8e39a3a1  proj/docs/guide.md
+d                               dir            proj/src/
+-0644 2026-10-01 09:30:12        36  1456bb1e  proj/src/main.kara
 
 $ unzip -d out-bad badcrc.zip proj/src/main.kara proj/src/util.kara
 Archive:  badcrc.zip
@@ -399,8 +399,8 @@ release 1.4
 [exit status 2]
 
 $ tree out-bad
-     dir            proj/
-     dir            proj/src/
-      36  0eaaeb15  proj/src/main.kara
-    1534  1dab4d43  proj/src/util.kara
+d                               dir            proj/
+d                               dir            proj/src/
+-0644 2026-10-01 09:30:12        36  0eaaeb15  proj/src/main.kara
+-0644 2026-10-01 09:30:12      1534  1dab4d43  proj/src/util.kara
 
