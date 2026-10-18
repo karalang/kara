@@ -593,6 +593,7 @@ fn run_with(
         channels: Vec::new(),
         files: Vec::new(),
         bufs: Vec::new(),
+        buf_windows: Default::default(),
         procs: Procs::default(),
         sockets: Sockets::default(),
         regexes: std::collections::HashMap::new(),
@@ -900,6 +901,11 @@ struct Interp<'a> {
     files: Vec<Option<std::fs::File>>,
     /// The `BufReader`s and `BufWriter`s, by id - 1; `None` once dropped.
     bufs: Vec<Option<Buf>>,
+    /// A `BufReader`'s window, by its id: the box of bytes the last
+    /// `fill_buf` returned a view of, refilled in place by the next one
+    /// (the view borrows the reader, so none is alive then) and freed with
+    /// the reader (B-2026-10-14-72).
+    buf_windows: rustc_hash::FxHashMap<i128, AllocId>,
     /// The `std.process` handles: `Stdio`s, children and their pipes.
     procs: Procs,
     sockets: Sockets,
@@ -4079,11 +4085,56 @@ impl<'a> Interp<'a> {
         let Some(Some(mut b)) = slot.and_then(|i| self.bufs.get_mut(i)).map(Option::take) else {
             return err(format!("{name} of a closed reader or writer"));
         };
+        if method == "fill_buf" {
+            use std::io::BufRead;
+            let bytes = match &mut b {
+                Buf::Reader(r) => r.fill_buf().map(<[u8]>::to_vec),
+                Buf::Writer(_) => Err(std::io::Error::other("fill_buf of a writer")),
+            };
+            if let Some(i) = slot {
+                self.bufs[i] = Some(b);
+            }
+            return match bytes {
+                Ok(bytes) => {
+                    let v = self.buf_window(id, bytes)?;
+                    self.variant_named(ret, None, "Ok", vec![v])
+                }
+                Err(e) => self.io_err(ret, e),
+            };
+        }
         let res = self.buf_op(name, method, &mut b, &args[1..], ret);
         if let Some(i) = slot {
             self.bufs[i] = Some(b);
         }
         res
+    }
+
+    /// A view of `bytes` in the window of the `BufReader` `id`, which is
+    /// made on its first `fill_buf`.
+    fn buf_window(&mut self, id: i128, bytes: Vec<u8>) -> R<Value> {
+        let len = bytes.len() as u64;
+        let elems = Value::Agg(bytes.into_iter().map(|b| Value::Int(b.into())).collect());
+        let w = match self.buf_windows.get(&id) {
+            Some(&w) => {
+                self.live(w)?.value = elems;
+                w
+            }
+            None => match self.alloc_box("Vec[u8]", elems) {
+                Value::Box(w) => {
+                    self.buf_windows.insert(id, w);
+                    w
+                }
+                other => return err(format!("a window of {other:?}")),
+            },
+        };
+        Ok(Value::Slice {
+            base: Box::new(Addr {
+                root: Root::Heap(w),
+                path: Path::new(),
+            }),
+            lo: 0,
+            len,
+        })
     }
 
     /// One call of [`Self::buf_method`] on the buffered handle `b`.
@@ -9621,6 +9672,12 @@ impl<'a> Interp<'a> {
                                 .and_then(|i| self.bufs.get_mut(i))
                             {
                                 *b = None;
+                            }
+                            if let Some(w) = self.buf_windows.remove(&id) {
+                                self.free_slot(w);
+                                if self.trace {
+                                    self.events.push(Event::Free(w));
+                                }
                             }
                             return Ok(());
                         }

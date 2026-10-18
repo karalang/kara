@@ -808,6 +808,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
             vec![(Reads, "File", Some(0)), (Blocks, "", None), HEAP]
         }
         ("BufReader", "lines" | "consume") => vec![],
+        // A view of the buffer, refilled from the file when empty
+        // (B-2026-10-14-72).
+        ("BufReader", "fill_buf") => vec![(Reads, "File", Some(0)), (Blocks, "", None)],
         ("BufWriter", "write" | "write_all" | "flush") => {
             vec![(Writes, "File", Some(0)), (Blocks, "", None)]
         }

@@ -94,21 +94,20 @@ impl[R] BufReader[R] {
 
     // Low-level peek: fill the internal buffer (if empty) from the
     // underlying reader and return its currently-buffered, not-yet-consumed
-    // bytes as a `Slice[u8]` (empty at EOF). The slice is a snapshot copy in
-    // the interpreter MVP — it does not alias the live buffer — so it stays
-    // valid across a following `consume`; re-call `fill_buf` to observe the
-    // post-consume buffer. Pair with `consume` to advance past peeked bytes.
-    // Carries `reads(FileSystem)` (it reads from the underlying reader to
-    // refill).
+    // bytes as a `Slice[u8]` (empty at EOF). The slice is a view of the
+    // reader's buffer and borrows the reader (`mut ref self`), so no read
+    // or `consume` can run while it is alive (B-2026-10-14-72). Pair with
+    // `consume` to advance past peeked bytes. Carries `reads(FileSystem)`
+    // (it reads from the underlying reader to refill).
     #[compiler_builtin]
-    fn fill_buf(ref self) -> Result[Slice[u8], IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn fill_buf(mut ref self) -> Result[Slice[u8], IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Mark `n` bytes (from a preceding `fill_buf`) as consumed so they are
     // not returned again by `fill_buf` / `read`. No I/O — advances the buffer
     // cursor only — so it carries no effect; returns Unit. Mirrors Rust's
     // `BufRead::consume`; an `n` past the buffered length is clamped.
     #[compiler_builtin]
-    fn consume(ref self, n: i64) { }
+    fn consume(mut ref self, n: i64) { }
 }
 
 impl LinesIter {

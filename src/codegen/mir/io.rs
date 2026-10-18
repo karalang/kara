@@ -256,6 +256,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("BufWriter", "write_all") => 7,
             ("BufWriter", "flush") => 8,
             ("BufReader", "consume") => 9,
+            ("BufReader", "fill_buf") => 12,
             ("BufReader", "lines") => {
                 let (at, _) = self.behind_refs(&args[0])?;
                 let h = self.load_ptr(at)?;
@@ -275,7 +276,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let zero = self.i64(0);
         let i32t = self.llcx.i32_type();
         let opv = i32t.const_int(op, false);
-        if op <= 1 || op >= 10 {
+        if op <= 1 || op == 10 || op == 11 {
             // The `File` moves in and the runtime takes it, so nothing
             // drops it here.
             let f = self.operand_ptr(&args[0])?;
@@ -336,6 +337,22 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(Some(()));
         }
         let call = [opv.into(), handle.into(), ptr.into(), len.into()];
+        if op == 12 {
+            // `fill_buf`: a view of the runtime reader's buffer, its pointer
+            // and length in `value[0..2]` (B-2026-10-14-72).
+            let value = self.entry_slot(16, "buf.view")?;
+            let msg = self.temp(
+                self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String)),
+                "io.msg",
+            )?;
+            let mut all = call.to_vec();
+            all.push(value.into());
+            all.push(msg.into());
+            let code = self.rt_int("buf", &all, 32)?;
+            self.drop_moved(args)?;
+            self.store_io_result(dest, code, value, msg)?;
+            return Ok(Some(()));
+        }
         if op != 5 {
             self.io_call("buf", &call, args, dest)?;
             return Ok(Some(()));
@@ -736,6 +753,10 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<()> {
         if matches!(self.tys.kind(okt), TyKind::Intrinsic(IntrinsicTy::String)) {
             return self.copy(q, msg, okt);
+        }
+        // A view the entry left as a pointer and a length in `value[0..2]`.
+        if matches!(self.tys.kind(okt), TyKind::Slice(_)) {
+            return self.copy(q, value, okt);
         }
         let name = self.tys.tcx().adt_of(okt).map(|(adt, _)| adt.name.clone());
         let v = self.load_i64(value)?;

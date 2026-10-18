@@ -1343,6 +1343,68 @@ fn file_system_links_modes_and_times_match_the_interpreter() {
     }
 }
 
+/// `BufReader.fill_buf` (docs/library/io.md § Buffered I/O,
+/// B-2026-10-14-72): a view of the reader's buffer, read in a scope that
+/// ends before `consume`, then the rest, then an empty view at the end.
+const FILL_BUF: &str = r#"
+fn main() {
+    fs.write("DIR/fb.txt", "HELLOWORLD").unwrap();
+    let mut r = BufReader.with_capacity(File.open("DIR/fb.txt").unwrap(), 4);
+    let n = match r.fill_buf() {
+        Ok(b) => {
+            println(f"{b.len()} {b[0]} {b[3]}");
+            b.len() - 1
+        }
+        Err(_) => 0,
+    };
+    r.consume(n);
+    match r.fill_buf() { Ok(b) => println(f"{b.len()} {b[0]}"), Err(_) => println("e") }
+    r.consume(100);
+    let mut s = String.new();
+    let _ = r.read_to_string(mut s);
+    println(s);
+    match r.fill_buf() { Ok(b) => println(f"end {b.len()}"), Err(_) => println("e") }
+}
+"#;
+
+#[test]
+fn fill_buf_views_the_readers_buffer_on_both_backends() {
+    let dir = Scratch::new("fillbuf");
+    let src = FILL_BUF.replace("DIR", &dir.path().to_string_lossy());
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(interp, "4 72 76\n1 76\nOWORLD\nend 0\n");
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
+/// The view `fill_buf` returns borrows the reader, so `consume` while it is
+/// alive is a borrow error (B-2026-10-14-72).
+#[test]
+fn consume_while_a_fill_buf_view_lives_is_a_borrow_error() {
+    let dir = Scratch::new("fillbuf_borrow");
+    let file = dir.path().join("main.kara");
+    let src = r#"
+fn main() {
+    let mut r = BufReader.new(File.open("x.txt").unwrap());
+    let b = r.fill_buf().unwrap();
+    r.consume(1);
+    println(f"{b.len()}");
+}
+"#;
+    std::fs::write(&file, src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["__mir-run", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "accepted: {err}");
+    assert!(
+        err.contains("mutable borrow of") && err.contains("E0516"),
+        "{err}"
+    );
+}
+
 /// docs/library/concurrency.md's channel and `TaskGroup` surface
 /// (B-2026-10-15-9, B-2026-10-15-11): `channel(cap)`, `send` returning
 /// `Result[(), SendError[T]]`, `recv` returning `Option[T]` (`None` once

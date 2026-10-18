@@ -201,6 +201,7 @@ pub fn lower_program_with_library<'a>(
             .collect(),
         fns: FxHashMap::default(),
         builtin_owns: FxHashMap::default(),
+        builtin_mut_self: FxHashSet::default(),
         consts: FxHashMap::default(),
         bindings: FxHashMap::default(),
         statics: FxHashMap::default(),
@@ -475,6 +476,10 @@ struct Lcx<'a> {
     /// Which arguments of each `#[compiler_builtin]` method (by its type's
     /// name and its own) are declared `own`: the native keeps them.
     builtin_owns: FxHashMap<(String, String), Vec<bool>>,
+    /// The library's `#[compiler_builtin]` methods declared `mut ref self`
+    /// (`BufReader.fill_buf`, whose result borrows the reader), whose
+    /// receiver is lent mutably.
+    builtin_mut_self: FxHashSet<(String, String)>,
     defs: &'a ProgramDefs,
     res: &'a FxHashMap<NodeId, Res>,
     node_types: FxHashMap<NodeId, Ty>,
@@ -807,9 +812,11 @@ impl<'a> Lcx<'a> {
             };
             for it in &b.items {
                 let ImplItem::Method(f) = it else { continue };
-                if f.attributes.iter().any(|a| a.is_bare("compiler_builtin"))
-                    && f.params.iter().any(|p| p.is_own)
-                {
+                let builtin = f.attributes.iter().any(|a| a.is_bare("compiler_builtin"));
+                if builtin && f.self_param == Some(ast::SelfParam::MutRef) {
+                    self.builtin_mut_self.insert((head.clone(), f.name.clone()));
+                }
+                if builtin && f.params.iter().any(|p| p.is_own) {
                     self.builtin_owns.insert(
                         (head.clone(), f.name.clone()),
                         f.params.iter().map(|p| p.is_own).collect(),
@@ -14098,8 +14105,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                             .iter()
                             .any(|c| shown.starts_with(c))
                     };
+                    let declared_mut = {
+                        let shown = self.tys().display(base);
+                        let head = shown.split('[').next().unwrap_or("").to_string();
+                        self.lcx
+                            .builtin_mut_self
+                            .contains(&(head, method.to_string()))
+                    };
                     let mutates = !interior
-                        && (crate::ast::is_mutating_collection_method(method)
+                        && (declared_mut
+                            || crate::ast::is_mutating_collection_method(method)
                             || matches!(
                                 method,
                                 "push_str"

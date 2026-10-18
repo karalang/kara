@@ -287,12 +287,15 @@ pub(crate) unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 
 /// to the `String` at `ptr`; `read` (4) into `ptr[..len]`; a `LinesIter`'s
 /// `next` (5), the line without its `\n` / `\r\n` as a fresh `String` at
 /// `msg`, or `-2` at the end; `write` (6) and `write_all` (7) of
-/// `ptr[..len]`; `flush` (8); `consume` (9) of `len` bytes.
+/// `ptr[..len]`; `flush` (8); `consume` (9) of `len` bytes; `fill_buf`
+/// (12), a view of the reader's buffer as a pointer and a length at
+/// `value[0..2]` (B-2026-10-14-72), which stays valid until the next call
+/// on the handle.
 ///
 /// # Safety
 /// `handle` is a live file handle for ops 0-1 and a live buffered handle
 /// otherwise; `ptr` holds what its op reads or writes; `value` and `msg` as
-/// [`io_code`] has them.
+/// [`io_code`] has them, with `value` writable for two `i64`s for op 12.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_buf(
     op: i32,
@@ -303,7 +306,7 @@ pub unsafe extern "C" fn karac_mir_buf(
     msg: *mut RawVec,
 ) -> i32 {
     use std::io::{BufRead, Read, Write};
-    if op <= 1 || op >= 10 {
+    if op <= 1 || op == 10 || op == 11 {
         let cap = usize::try_from(len).ok().filter(|&n| n > 0).unwrap_or(8192);
         let buf = if op >= 10 {
             // SAFETY: a live pipe from `karac_mir_child`, which this takes.
@@ -386,6 +389,17 @@ pub unsafe extern "C" fn karac_mir_buf(
             r.consume(n);
             Ok(0)
         }
+        (12, KaracBuf::Reader(r)) => match r.fill_buf() {
+            Ok(b) => {
+                // SAFETY: the caller's contract.
+                unsafe {
+                    value.write(b.as_ptr() as i64);
+                    value.add(1).write(b.len() as i64);
+                }
+                return -1;
+            }
+            Err(e) => Err(e),
+        },
         _ => Err(std::io::Error::other("a buffered handle of the other kind")),
     };
     match res {

@@ -149,8 +149,8 @@ A file updated in place opens with `File.options().read(true).write(true).open(p
 | `read_to_string` | `fn read_to_string(self, buf: mut ref String) -> Result[i64, IoError] with reads(self) blocks` |
 | `read` | `fn read(self, buf: mut Slice[u8]) -> Result[i64, IoError] with reads(self) blocks` |
 | `lines` | `fn lines(self) -> LinesIter` |
-| `fill_buf` | `fn fill_buf(self) -> Result[Slice[u8], IoError] with reads(self) blocks` |
-| `consume` | `fn consume(self, n: i64)` |
+| `fill_buf` | `fn fill_buf(mut ref self) -> Result[Slice[u8], IoError] with reads(self) blocks` |
+| `consume` | `fn consume(mut ref self, n: i64)` |
 | `BufWriter.new` | `fn new(writer: own W) -> BufWriter[W]` |
 | `BufWriter.with_capacity` | `fn with_capacity(writer: own W, cap: i64) -> BufWriter[W]` |
 | `write` | `fn write(self, buf: Slice[u8]) -> Result[i64, IoError] with writes(self) blocks` |
@@ -158,6 +158,8 @@ A file updated in place opens with `File.options().read(true).write(true).open(p
 | `flush` | `fn flush(self) -> Result[(), IoError] with writes(self) blocks` |
 
 `read_line` and `read_to_string` append to `buf` and return the number of bytes read. `lines` returns an iterator over the remaining lines; making it reads nothing, and its `next` reads from the reader and has `blocks`.
+
+`fill_buf` refills the buffer if it is empty and returns the bytes buffered but not yet consumed, without copying them (empty at the end of the input); `consume(n)` marks `n` of them read, and an `n` past the buffered length is clamped. **The slice `fill_buf` returns is a view of the reader's buffer and borrows the reader**, so a `read`, `read_line` or `consume` while the slice is alive is a borrow error; finish with the slice first, as in `let n = { let b = r.fill_buf()?; ...; b.len() }; r.consume(n);`.
 
 **Dropping a `BufWriter` flushes it and ignores any error.** Call `flush()` before the drop to see a write error. The drop has the effects of `flush`, charged to the scope where it runs ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10), item 3).
 
