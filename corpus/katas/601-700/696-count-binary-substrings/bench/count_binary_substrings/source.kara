@@ -1,0 +1,58 @@
+// LeetCode #696: Count Binary Substrings -- bench program for the ★ arm.
+//
+// 20 strings of 100,000 characters, in runs of 1 to 1 up to 1 to 40, are
+// built once; then in each of 150 rounds every string's substrings are
+// counted with the two-run-lengths arm, and the counts go into a checksum.
+
+fn count_binary_substrings(s: String) -> i64 {
+    let b = s.bytes();
+    let mut before = 0;
+    let mut current = 1;
+    let mut count = 0;
+    for i in 1..b.len() {
+        if b[i] == b[i - 1] {
+            current += 1;
+        } else {
+            count += before.min(current);
+            before = current;
+            current = 1;
+        }
+    }
+    count + before.min(current)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 696;
+    let mut strings: Vec[String] = Vec.new();
+    for k in 0..20 {
+        let longest = 1 + 2 * k;
+        let mut s = String.new();
+        let mut bit = 0;
+        while s.len() < 100000 {
+            let run = 1 + next_random(mut seed) % longest;
+            for _ in 0..run {
+                if s.len() < 100000 {
+                    s.push(if bit == 0 { '0' } else { '1' });
+                }
+            }
+            bit = 1 - bit;
+        }
+        strings.push(s);
+    }
+    let rounds = 150;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..rounds {
+        for s in strings.iter() {
+            let r = count_binary_substrings(s);
+            total += r;
+            checksum = (checksum * 31 + r) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 20 strings of 100000: {total} substrings counted, checksum {checksum}");
+}

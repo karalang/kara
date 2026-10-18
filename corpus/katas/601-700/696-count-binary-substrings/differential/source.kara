@@ -1,0 +1,206 @@
+// LeetCode #696: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random problems.
+
+// ---- star arm ----------------------------------------------------------
+
+fn count_binary_substrings_star(s: String) -> i64 {
+    let b = s.bytes();
+    let mut before = 0;
+    let mut current = 1;
+    let mut count = 0;
+    for i in 1..b.len() {
+        if b[i] == b[i - 1] {
+            current += 1;
+        } else {
+            count += before.min(current);
+            before = current;
+            current = 1;
+        }
+    }
+    count + before.min(current)
+}
+
+// ---- groups arm --------------------------------------------------------
+
+fn count_binary_substrings_groups(s: String) -> i64 {
+    let b = s.bytes();
+    let mut runs: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let mut j = i;
+        while j < b.len() and b[j] == b[i] {
+            j += 1;
+        }
+        runs.push(j - i);
+        i = j;
+    }
+    let mut count = 0;
+    for k in 1..runs.len() {
+        count += runs[k - 1].min(runs[k]);
+    }
+    count
+}
+
+// ---- center arm --------------------------------------------------------
+
+fn count_binary_substrings_center(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut count = 0;
+    for mid in 1..n {
+        if b[mid] == b[mid - 1] {
+            continue;
+        }
+        let mut left = mid - 1;
+        let mut right = mid;
+        while left >= 0 and right < n and b[left] == b[mid - 1] and b[right] == b[mid] {
+            count += 1;
+            left -= 1;
+            right += 1;
+        }
+    }
+    count
+}
+
+// ---- start arm ---------------------------------------------------------
+
+fn count_binary_substrings_start(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut count = 0;
+    for i in 0..n {
+        let mut a = 0;
+        while i + a < n and b[i + a] == b[i] {
+            a += 1;
+        }
+        if i + 2 * a > n {
+            continue;
+        }
+        let mut other = true;
+        for k in i + a..i + 2 * a {
+            if b[k] == b[i] {
+                other = false;
+                break;
+            }
+        }
+        if other {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, s: String) -> i64 {
+    if which == 0 {
+        count_binary_substrings_star(s)
+    } else if which == 1 {
+        count_binary_substrings_groups(s)
+    } else if which == 2 {
+        count_binary_substrings_center(s)
+    } else {
+        count_binary_substrings_start(s)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: go through every substring; count it when it has an
+// even length, its first half is one character throughout, and its
+// second half is the other character throughout.
+fn definition(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n + 1 {
+            let len = j - i;
+            if len % 2 != 0 {
+                continue;
+            }
+            let half = len / 2;
+            let mut ok = b[i] != b[i + half];
+            for k in i..j {
+                let want = if k < i + half { b[i] } else { b[i + half] };
+                if b[k] != want {
+                    ok = false;
+                }
+            }
+            if ok {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn main() {
+    let mut seed = 6960;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 3000;
+    for _ in 0..cases {
+        // Strings of 1 to 30 characters, some in long runs, some short.
+        let n = 1 + next_random(mut seed) % 30;
+        let stay = next_random(mut seed) % 100;
+        let mut s = String.new();
+        let mut bit = next_random(mut seed) % 2;
+        for _ in 0..n {
+            if next_random(mut seed) % 100 >= stay {
+                bit = 1 - bit;
+            }
+            s.push(if bit == 0 { '0' } else { '1' });
+        }
+        // Every character flipped; the string reversed; every character
+        // written twice.
+        let mut flipped = String.new();
+        let mut reversed = String.new();
+        let mut doubled = String.new();
+        let b = s.bytes();
+        for i in 0..n {
+            flipped.push(if b[i] == b'0' { '1' } else { '0' });
+            reversed.push(b[n - 1 - i] as char);
+            doubled.push(b[i] as char);
+            doubled.push(b[i] as char);
+        }
+        let want = definition(s);
+        for which in 0..arms {
+            let got = answer(which, s);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: 0s and 1s swapped, the same answer.
+            checks += 1;
+            if answer(which, flipped) != got {
+                fails[1] += 1;
+            }
+            // P3: read backwards, the same answer.
+            checks += 1;
+            if answer(which, reversed) != got {
+                fails[2] += 1;
+            }
+            // P4: every character written twice doubles the answer.
+            checks += 1;
+            if answer(which, doubled) != 2 * got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} strings, {arms} arms, {checks} checks, {total} failures");
+}

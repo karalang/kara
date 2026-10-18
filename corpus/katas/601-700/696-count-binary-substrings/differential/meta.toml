@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/696-count-binary-substrings/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3ed2b7714"
+extracted_src = "5947e51d"
+model_rev = "583cfb0d"
+model_src = "5947e51d"

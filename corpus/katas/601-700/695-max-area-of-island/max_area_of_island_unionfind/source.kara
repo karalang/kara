@@ -1,0 +1,146 @@
+// LeetCode #695: Max Area of Island -- union-find by size.
+//
+// Each land cell starts as its own set of size one. Joining every cell
+// to the land below it and to its right, always hanging the smaller set
+// under the larger and adding its size, leaves each island one set; the
+// largest size is the answer. O(m n alpha(m n)) time, O(m n) space.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn join(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
+    let mut x = find(parent, a);
+    let mut y = find(parent, b);
+    if x == y {
+        return;
+    }
+    if size[x] < size[y] {
+        let t = x;
+        x = y;
+        y = t;
+    }
+    parent[y] = x;
+    size[x] += size[y];
+}
+
+fn max_area_of_island(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..m * n {
+        parent.push(i);
+    }
+    let mut size: Vec[i64] = vec![1; m * n];
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                continue;
+            }
+            if r + 1 < m and grid[r + 1][c] == 1 {
+                join(mut parent, mut size, r * n + c, (r + 1) * n + c);
+            }
+            if c + 1 < n and grid[r][c + 1] == 1 {
+                join(mut parent, mut size, r * n + c, r * n + c + 1);
+            }
+        }
+    }
+    let mut best = 0;
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 1 and find(mut parent, r * n + c) == r * n + c {
+                best = best.max(size[r * n + c]);
+            }
+        }
+    }
+    best
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn grid_of(rows: ref Vec[Str]) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for row in rows.iter() {
+        let mut line: Vec[i64] = Vec.new();
+        for b in row.bytes().iter() {
+            line.push(*b as i64 - 48);
+        }
+        grid.push(line);
+    }
+    grid
+}
+
+fn main() {
+    // The two LeetCode examples.
+    let ex1 = grid_of(vec![
+        "0010000000000",
+        "0000000111000",
+        "0110100000000",
+        "0100110010100",
+        "0100110011100",
+        "0000000000100",
+        "0000000111000",
+        "0000000110000",
+    ]);
+    println(f"example 1: {max_area_of_island(ex1)}");
+    println(f"example 2: {max_area_of_island(grid_of(vec!["00000000"]))}");
+    // 50 by 50 grids: all land, a checkerboard, and a snake that runs
+    // along every other row and turns at alternate ends.
+    let mut land: Vec[Vec[i64]] = Vec.new();
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    let mut snake: Vec[Vec[i64]] = Vec.new();
+    for r in 0..50 {
+        land.push(vec![1; 50]);
+        let mut line: Vec[i64] = Vec.new();
+        let mut path: Vec[i64] = Vec.new();
+        for c in 0..50 {
+            line.push((r + c) % 2);
+            let turn = if r % 4 == 1 { c == 49 } else { c == 0 };
+            path.push(if r % 2 == 0 or turn { 1 } else { 0 });
+        }
+        board.push(line);
+        snake.push(path);
+    }
+    println(f"all land: {max_area_of_island(land)}, checkerboard: {max_area_of_island(board)}, snake: {max_area_of_island(snake)}");
+    // One column of land, one row of land, and two islands that touch
+    // only at a corner.
+    let column = grid_of(vec!["1", "1", "1", "1", "1"]);
+    let corner = grid_of(vec!["110", "110", "001"]);
+    println(f"a column: {max_area_of_island(column)}, a row: {max_area_of_island(grid_of(vec!["1111111"]))}, corners: {max_area_of_island(corner)}");
+    // 200 random grids of up to 50 by 50, land from 10 to 80 percent.
+    let mut seed = 695;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..200 {
+        let m = 1 + next_random(mut seed) % 50;
+        let n = 1 + next_random(mut seed) % 50;
+        let percent = 10 + next_random(mut seed) % 71;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                line.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+            }
+            grid.push(line);
+        }
+        let r = max_area_of_island(grid);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"200 random grids: largest areas sum to {total}, checksum {checksum}");
+}

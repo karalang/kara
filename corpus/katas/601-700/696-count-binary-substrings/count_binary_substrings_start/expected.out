@@ -1,0 +1,7 @@
+example 1: 6
+example 2: 4
+0: 0, 01: 1, 0000: 0
+000111: 3, 0001111: 3
+two blocks of 2000: 2000, 100000 alternating: 99999
+100000 in runs of up to 20: 68149
+300 random strings: 205831 substrings in all, checksum 245223434

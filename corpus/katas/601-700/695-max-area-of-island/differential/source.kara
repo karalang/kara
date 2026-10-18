@@ -1,0 +1,340 @@
+// LeetCode #695: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random problems.
+
+// ---- star arm ----------------------------------------------------------
+
+fn max_area_of_island_star(grid: Vec[Vec[i64]]) -> i64 {
+    let mut land = grid.clone();
+    let mut best = 0;
+    for r in 0..land.len() {
+        for c in 0..land[0].len() {
+            if land[r][c] == 1 {
+                best = best.max(sink_star(mut land, r, c));
+            }
+        }
+    }
+    best
+}
+
+fn sink_star(land: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    if r < 0 or c < 0 or r >= land.len() or c >= land[0].len() or land[r][c] == 0 {
+        return 0;
+    }
+    land[r][c] = 0;
+    1 + sink_star(land, r + 1, c) + sink_star(land, r - 1, c) + sink_star(land, r, c + 1) + sink_star(land, r, c - 1)
+}
+
+// ---- bfs arm -----------------------------------------------------------
+
+fn max_area_of_island_bfs(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = vec![vec![false; n]; m];
+    let dr = [1, -1, 0, 0];
+    let dc = [0, 0, 1, -1];
+    let mut best = 0;
+    for r0 in 0..m {
+        for c0 in 0..n {
+            if grid[r0][c0] == 0 or seen[r0][c0] {
+                continue;
+            }
+            let mut area = 0;
+            let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+            queue.push_back((r0, c0));
+            seen[r0][c0] = true;
+            while queue.len() > 0 {
+                let (r, c) = queue.pop_front().unwrap();
+                area += 1;
+                for d in 0..4 {
+                    let nr = r + dr[d];
+                    let nc = c + dc[d];
+                    if nr >= 0 and nc >= 0 and nr < m and nc < n and grid[nr][nc] == 1 and not seen[nr][nc] {
+                        seen[nr][nc] = true;
+                        queue.push_back((nr, nc));
+                    }
+                }
+            }
+            best = best.max(area);
+        }
+    }
+    best
+}
+
+// ---- unionfind arm -----------------------------------------------------
+
+fn find_unionfind(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn join_unionfind(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
+    let mut x = find_unionfind(parent, a);
+    let mut y = find_unionfind(parent, b);
+    if x == y {
+        return;
+    }
+    if size[x] < size[y] {
+        let t = x;
+        x = y;
+        y = t;
+    }
+    parent[y] = x;
+    size[x] += size[y];
+}
+
+fn max_area_of_island_unionfind(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..m * n {
+        parent.push(i);
+    }
+    let mut size: Vec[i64] = vec![1; m * n];
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                continue;
+            }
+            if r + 1 < m and grid[r + 1][c] == 1 {
+                join_unionfind(mut parent, mut size, r * n + c, (r + 1) * n + c);
+            }
+            if c + 1 < n and grid[r][c + 1] == 1 {
+                join_unionfind(mut parent, mut size, r * n + c, r * n + c + 1);
+            }
+        }
+    }
+    let mut best = 0;
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 1 and find_unionfind(mut parent, r * n + c) == r * n + c {
+                best = best.max(size[r * n + c]);
+            }
+        }
+    }
+    best
+}
+
+// ---- runs arm ----------------------------------------------------------
+
+fn find_runs(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn max_area_of_island_runs(grid: Vec[Vec[i64]]) -> i64 {
+    let mut parent: Vec[i64] = Vec.new();
+    let mut weight: Vec[i64] = Vec.new();
+    // The runs of the row above: (first column, last column, run number).
+    let mut above: Vec[(i64, i64, i64)] = Vec.new();
+    for row in grid.iter() {
+        let mut here: Vec[(i64, i64, i64)] = Vec.new();
+        let mut c = 0;
+        while c < row.len() {
+            if row[c] == 0 {
+                c += 1;
+                continue;
+            }
+            let start = c;
+            while c < row.len() and row[c] == 1 {
+                c += 1;
+            }
+            let id = parent.len();
+            parent.push(id);
+            weight.push(c - start);
+            for (a, b, other) in above.iter() {
+                if *a < c and start <= *b {
+                    let x = find_runs(mut parent, id);
+                    let y = find_runs(mut parent, *other);
+                    if x != y {
+                        parent[y] = x;
+                        weight[x] += weight[y];
+                    }
+                }
+            }
+            here.push((start, c - 1, id));
+        }
+        above = here;
+    }
+    let mut best = 0;
+    for i in 0..parent.len() {
+        if find_runs(mut parent, i) == i {
+            best = best.max(weight[i]);
+        }
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        max_area_of_island_star(grid)
+    } else if which == 1 {
+        max_area_of_island_bfs(grid)
+    } else if which == 2 {
+        max_area_of_island_unionfind(grid)
+    } else {
+        max_area_of_island_runs(grid)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: label every land cell with its own number, then lower
+// each label to the least of its land neighbours' until nothing changes,
+// so each island ends with one label; the answer is the most cells that
+// share a label.
+fn definition(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut label: Vec[Vec[i64]] = vec![vec![-1; n]; m];
+    for r in 0..m {
+        for c in 0..n {
+            if grid[r][c] == 1 {
+                label[r][c] = r * n + c;
+            }
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..m {
+            for c in 0..n {
+                if label[r][c] < 0 {
+                    continue;
+                }
+                let mut low = label[r][c];
+                if r > 0 and label[r - 1][c] >= 0 and label[r - 1][c] < low {
+                    low = label[r - 1][c];
+                }
+                if r + 1 < m and label[r + 1][c] >= 0 and label[r + 1][c] < low {
+                    low = label[r + 1][c];
+                }
+                if c > 0 and label[r][c - 1] >= 0 and label[r][c - 1] < low {
+                    low = label[r][c - 1];
+                }
+                if c + 1 < n and label[r][c + 1] >= 0 and label[r][c + 1] < low {
+                    low = label[r][c + 1];
+                }
+                if low < label[r][c] {
+                    label[r][c] = low;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut count: Vec[i64] = vec![0; m * n];
+    let mut best = 0;
+    for r in 0..m {
+        for c in 0..n {
+            if label[r][c] >= 0 {
+                count[label[r][c]] += 1;
+                best = best.max(count[label[r][c]]);
+            }
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed = 6950;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 3000;
+    for _ in 0..cases {
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        let percent = 20 + next_random(mut seed) % 61;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                line.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+            }
+            grid.push(line);
+        }
+        // Each row reversed; rows and columns swapped; the grid twice side
+        // by side with a column of water between.
+        let mut mirrored: Vec[Vec[i64]] = Vec.new();
+        let mut doubled: Vec[Vec[i64]] = Vec.new();
+        for r in 0..m {
+            let mut back: Vec[i64] = Vec.new();
+            let mut two: Vec[i64] = Vec.new();
+            for c in 0..n {
+                back.push(grid[r][n - 1 - c]);
+                two.push(grid[r][c]);
+            }
+            two.push(0);
+            for c in 0..n {
+                two.push(grid[r][c]);
+            }
+            mirrored.push(back);
+            doubled.push(two);
+        }
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        for c in 0..n {
+            let mut line: Vec[i64] = Vec.new();
+            for r in 0..m {
+                line.push(grid[r][c]);
+            }
+            turned.push(line);
+        }
+        let want = definition(grid);
+        for which in 0..arms {
+            let got = answer(which, grid);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the mirror image has the same largest island.
+            checks += 1;
+            if answer(which, mirrored) != got {
+                fails[1] += 1;
+            }
+            // P3: so has the grid with rows and columns swapped.
+            checks += 1;
+            if answer(which, turned) != got {
+                fails[2] += 1;
+            }
+            // P4: a second copy beside the first, water between, adds
+            // no larger island.
+            checks += 1;
+            if answer(which, doubled) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} grids, {arms} arms, {checks} checks, {total} failures");
+}
