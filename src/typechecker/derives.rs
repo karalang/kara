@@ -1251,8 +1251,9 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn validate_enum_payload_no_nested_enum(&mut self) {
         // v2 core: an enum may carry another enum as a payload
         // (`Step.Do(Command)`). One level of nesting was a limit of the
-        // legacy backend, which `karac check` no longer applies.
-        if self.cli_lint_overrides.strict_core {
+        // legacy backend, which `karac check` no longer applies, and nor
+        // does the MIR pipeline, which shares v2's layout (B-2026-10-06-86).
+        if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
             return;
         }
         // Collect enum names for the carve-out check. `shared` enums
@@ -1451,7 +1452,7 @@ impl<'a> super::TypeChecker<'a> {
     /// unsorted drain would order diagnostics differently between runs.
     pub(super) fn emit_nested_enum_inst_errors(&mut self) {
         // See `validate_enum_payload_no_nested_enum`.
-        if self.cli_lint_overrides.strict_core {
+        if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
             self.nested_enum_inst_offenders.clear();
             return;
         }

@@ -3109,3 +3109,81 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_value_enum_carries_a_value_enum_payload() {
+    // B-2026-10-06-86: the one-level enum-nesting limit was a legacy layout
+    // limit. `karac check` stopped applying it to v2 core, but the MIR
+    // pipeline still refused `enum Tok { Open(Kind) }`, a unit-only `Kind`
+    // included, and a generic enum instantiated at a value enum.
+    let src = r#"
+enum Kind { Round, Square, Curly }
+enum Tok { Open(Kind), Close(Kind) }
+enum V { Nil, Int(i64), Str(String) }
+enum Place { Global(String), Field(V, V) }
+enum Opt2[T] { No, Yes(T) }
+fn closes(a: Kind, b: Kind) -> bool {
+    match (a, b) {
+        (Kind.Round, Kind.Round) => true,
+        (Kind.Square, Kind.Square) => true,
+        (Kind.Curly, Kind.Curly) => true,
+        _ => false,
+    }
+}
+fn lex(s: Str) -> Vec[Tok] {
+    let mut out: Vec[Tok] = Vec.new();
+    for c in s.chars() {
+        match c {
+            '(' => out.push(Tok.Open(Kind.Round)),
+            ')' => out.push(Tok.Close(Kind.Round)),
+            '[' => out.push(Tok.Open(Kind.Square)),
+            ']' => out.push(Tok.Close(Kind.Square)),
+            '{' => out.push(Tok.Open(Kind.Curly)),
+            _ => out.push(Tok.Close(Kind.Curly)),
+        }
+    }
+    out
+}
+fn valid(s: Str) -> bool {
+    let mut st: Vec[Kind] = Vec.new();
+    for t in lex(s).into_iter() {
+        match t {
+            Tok.Open(k) => st.push(k),
+            Tok.Close(k) => match st.pop() {
+                Some(o) => if not closes(o, k) { return false; },
+                None => return false,
+            },
+        }
+    }
+    st.is_empty()
+}
+fn show(v: own V) -> String {
+    match v {
+        V.Nil => "nil".to_string(),
+        V.Int(n) => f"{n}",
+        V.Str(s) => s,
+    }
+}
+fn main() {
+    println(f"{valid("([]{})")} {valid("([)]")} {valid("((")}");
+    let p = Place.Field(V.Int(1), V.Str("x".to_string()));
+    match p {
+        Place.Global(n) => println(n),
+        Place.Field(a, b) => println(f"field {show(a)} {show(b)}"),
+    }
+    let q: Opt2[V] = Opt2.Yes(V.Str("deep".to_string()));
+    match q {
+        Opt2.Yes(v) => println(show(v)),
+        Opt2.No => println("no"),
+    }
+}
+"#;
+    let want = "true false false\nfield 1 x\ndeep\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
