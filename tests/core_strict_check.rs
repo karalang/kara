@@ -6511,3 +6511,38 @@ fn iter_on_an_iterator_is_dropped() {
         "for w in \"a b c\".split(\" \") {",
     );
 }
+
+/// design.md § String literals: a literal is a `Str` wherever one is
+/// expected, which includes a branch beside a `Str` view (B-2026-10-15-3)
+/// and a `Vec[Str]` push (B-2026-10-14-68).
+#[test]
+fn a_string_literal_takes_the_str_type_of_its_context() {
+    accepted(
+        "literal-beside-view",
+        "fn rest(line: Str) -> i64 {\n\
+             let (n, a) = match line.find(\" \") {\n\
+                 Some(i) => (1, line[i + 1..line.len()].trim()),\n\
+                 None => (2, \"\"),\n\
+             };\n\
+             let b = if a.is_empty() { \"-\" } else { a };\n\
+             n + b.len()\n\
+         }\n\
+         fn main() {\n\
+             let mut v: Vec[Str] = Vec.new();\n\
+             v.push(\"a\");\n\
+             println(f\"{rest(\"x y\")} {v.len()}\");\n\
+         }\n",
+    );
+    rejected_with(
+        "owned-beside-view",
+        "fn rest(line: Str) -> i64 {\n\
+             let a = match line.find(\" \") {\n\
+                 Some(i) => line[i + 1..line.len()].trim(),\n\
+                 None => line.to_uppercase(),\n\
+             };\n\
+             a.len()\n\
+         }\n\
+         fn main() { println(rest(\"x y\")); }\n",
+        "match arms have incompatible types",
+    );
+}

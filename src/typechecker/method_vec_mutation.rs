@@ -144,6 +144,12 @@ impl<'a> super::TypeChecker<'a> {
                             && matches!(&elem, Type::Tuple(_))
                             && es.iter().any(super::exprs::is_bare_collect)
                     }
+                    // B-2026-10-14-68 — a string literal into a `Str`
+                    // element is a `Str` (design.md § String literals).
+                    ExprKind::StringLit(_) => super::exprs::is_str_view(&resolve_type_var_top(
+                        &elem,
+                        &self.env.substitutions,
+                    )),
                     _ => false,
                 };
                 // B-2026-10-14-10 — a tuple literal into a slot with a `ref`

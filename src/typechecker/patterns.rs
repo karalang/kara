@@ -737,6 +737,9 @@ impl<'a> super::TypeChecker<'a> {
             self.check_exhaustiveness(&dispatch_ty, arms, *span);
         }
 
+        let bodies: Vec<Option<&Expr>> = arms.iter().map(|a| Some(&a.body)).collect();
+        self.view_string_literal_branches(&bodies, &mut arm_types);
+
         // Fold the (non-Never, non-Error) arm types into their least-upper-
         // bound. Refinement arms widen to their shared base (design.md
         // § Refinement Types > LUB rule 4) via `join_branch_types`; for
@@ -3785,5 +3788,112 @@ fn param_occurs_bare(ty: &Type, name: &str) -> bool {
             .chain(receiver_args)
             .any(|t| param_occurs_bare(t, name)),
         _ => false,
+    }
+}
+
+/// The branch type a `String` literal slot and a `Str` view slot share: the
+/// view, slot by slot through tuples. `None` when the two differ otherwise.
+fn str_view_join(a: &Type, b: &Type) -> Option<Type> {
+    match (a, b) {
+        _ if a == b => Some(a.clone()),
+        (Type::Str, v) | (v, Type::Str) if super::exprs::is_str_view(v) => Some(v.clone()),
+        (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => xs
+            .iter()
+            .zip(ys)
+            .map(|(x, y)| str_view_join(x, y))
+            .collect::<Option<Vec<_>>>()
+            .map(Type::Tuple),
+        _ => None,
+    }
+}
+
+/// True when `expr`, typed `ty`, becomes `want` by retyping string literals
+/// alone: every slot where the two differ is a literal.
+fn literal_slots_fit(expr: &Expr, ty: &Type, want: &Type) -> bool {
+    if ty == want {
+        return true;
+    }
+    match (&expr.kind, ty, want) {
+        (ExprKind::StringLit(_), Type::Str, w) => super::exprs::is_str_view(w),
+        (ExprKind::Tuple(items), Type::Tuple(ts), Type::Tuple(ws))
+            if items.len() == ts.len() && ts.len() == ws.len() =>
+        {
+            items
+                .iter()
+                .zip(ts.iter().zip(ws))
+                .all(|(e, (t, w))| literal_slots_fit(e, t, w))
+        }
+        (ExprKind::Block(b), _, _) => b
+            .final_expr
+            .as_deref()
+            .is_some_and(|f| literal_slots_fit(f, ty, want)),
+        _ => false,
+    }
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// design.md § String literals: a string literal is a `Str` wherever a
+    /// `Str` is expected, and a branch beside one that yields a `Str` view is
+    /// such a place: `match .. { Some(i) => s[i..].trim(), None => "" }`
+    /// (B-2026-10-15-3). When the branch types differ only in slots where one
+    /// branch has a view and the others a literal, the literals are retyped
+    /// to the view and every branch takes the joined type. `None` marks a
+    /// branch with no expression to retype.
+    pub(super) fn view_string_literal_branches(
+        &mut self,
+        branches: &[Option<&Expr>],
+        types: &mut [Type],
+    ) {
+        let mut want: Option<Type> = None;
+        for t in types.iter() {
+            if matches!(t, Type::Never | Type::Error) {
+                continue;
+            }
+            want = match want {
+                None => Some(t.clone()),
+                Some(w) => match str_view_join(&w, t) {
+                    Some(j) => Some(j),
+                    None => return,
+                },
+            };
+        }
+        let Some(want) = want else { return };
+        let fits = branches.iter().zip(types.iter()).all(|(e, t)| {
+            matches!(t, Type::Never | Type::Error)
+                || *t == want
+                || e.is_some_and(|e| literal_slots_fit(e, t, &want))
+        });
+        if !fits {
+            return;
+        }
+        for (e, t) in branches.iter().zip(types.iter_mut()) {
+            if matches!(t, Type::Never | Type::Error) || *t == want {
+                continue;
+            }
+            if let Some(e) = e {
+                self.retype_literal_slots(e, t, &want);
+            }
+            *t = want.clone();
+        }
+    }
+
+    fn retype_literal_slots(&mut self, expr: &Expr, ty: &Type, want: &Type) {
+        if ty == want {
+            return;
+        }
+        match (&expr.kind, ty, want) {
+            (ExprKind::Tuple(items), Type::Tuple(ts), Type::Tuple(ws)) => {
+                for (e, (t, w)) in items.iter().zip(ts.iter().zip(ws)) {
+                    self.retype_literal_slots(e, t, w);
+                }
+            }
+            (ExprKind::Block(b), _, _) => {
+                if let Some(f) = b.final_expr.as_deref() {
+                    self.retype_literal_slots(f, ty, want);
+                }
+            }
+            _ => {}
+        }
+        self.record_expr_type(&expr.span, want);
     }
 }

@@ -2926,7 +2926,10 @@ impl<'a> super::TypeChecker<'a> {
                 // written, so the coercion lives here, not in assignability.
                 let arg_ty = if self.char_literal_for_str(&arg.value, param_ty) {
                     param_ty.clone()
-                } else if is_str_view(param_ty) {
+                } else if is_str_view(param_ty) && !matches!(arg.value.kind, ExprKind::StringLit(_))
+                {
+                    // A literal falls through to `check_expr`, where it takes
+                    // the `Str` type itself (B-2026-10-14-68).
                     let t = self.infer_expr(&arg.value);
                     if !is_string_place_type(&t) {
                         self.check_assignable(param_ty, &t, arg.value.span);
@@ -7868,6 +7871,12 @@ impl<'a> super::TypeChecker<'a> {
                     if else_ty == Type::Never {
                         return then_ty;
                     }
+                    let mut tys = [then_ty, else_ty];
+                    self.view_string_literal_branches(
+                        &[then_block.final_expr.as_deref(), Some(else_expr)],
+                        &mut tys,
+                    );
+                    let [then_ty, else_ty] = tys;
                     // B-2026-10-15-52: an unsuffixed literal tail takes the
                     // other branch's numeric type, whichever branch it is in:
                     // `if c { 0 } else { y }` with `y: u128` is a `u128`.
