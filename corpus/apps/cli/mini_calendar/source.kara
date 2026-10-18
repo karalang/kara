@@ -108,7 +108,7 @@ fn timegm(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) 
 }
 
 fn day_name(d: i64) -> String {
-    let s = match d {
+    (match d {
         0 => "Monday",
         1 => "Tuesday",
         2 => "Wednesday",
@@ -116,8 +116,7 @@ fn day_name(d: i64) -> String {
         4 => "Friday",
         5 => "Saturday",
         _ => "Sunday",
-    };
-    s.to_string()
+    }).to_string()
 }
 
 fn day_abbr(d: i64) -> String {
@@ -125,7 +124,7 @@ fn day_abbr(d: i64) -> String {
 }
 
 fn month_name(m: i64) -> String {
-    let s = match m {
+    (match m {
         1 => "January",
         2 => "February",
         3 => "March",
@@ -138,8 +137,7 @@ fn month_name(m: i64) -> String {
         10 => "October",
         11 => "November",
         _ => "December",
-    };
-    s.to_string()
+    }).to_string()
 }
 
 fn month_abbr(m: i64) -> String {
@@ -409,7 +407,7 @@ impl TextCalendar {
 // ------------------------------------------------------------ HTMLCalendar
 
 fn css_day(d: i64) -> String {
-    let s = match d {
+    (match d {
         0 => "mon",
         1 => "tue",
         2 => "wed",
@@ -417,8 +415,7 @@ fn css_day(d: i64) -> String {
         4 => "fri",
         5 => "sat",
         _ => "sun",
-    };
-    s.to_string()
+    }).to_string()
 }
 
 struct HtmlCalendar {

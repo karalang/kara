@@ -66,4 +66,11 @@ Compiler gaps:
 
 After those edits the program matched expected.out on both MIR surfaces.
 
+Updated 2026-10-18, karac at cff4e969aa: B-2026-10-18-25 is fixed, and
+the parser now says a statement-position `match` ends at its `}` and
+offers a machine fix. So `mini_calendar.kara` is now exactly what
+`karac fix` makes of `mini_calendar.orig.kara`: the three `match`
+expressions in parentheses, `(match d { ... }).to_string()`. It still
+matches expected.out on all four backends.
+
 Written 2026-10-18 by the real-world apps thread; karac at 79a6c2eb9a.
