@@ -319,6 +319,15 @@ impl[K, V] Map[K, V] {
     fn values(ref self) -> MapValues[K, V] {
         MapValues { m: self, front: 0, back: self.len() }
     }
+
+    /// The value at `key`, borrowed to be changed in place.
+    fn get_mut(mut ref self, key: K) -> Option[mut ref V] {
+        if self.contains_key(key) {
+            Some(mut self[key])
+        } else {
+            None
+        }
+    }
 }
 
 /// The keys of a map, in the map's iteration order, each borrowed.
@@ -410,6 +419,15 @@ impl[K, V] SortedMap[K, V] {
     /// The values, in key order, each borrowed.
     fn values(ref self) -> SortedMapValues[K, V] {
         SortedMapValues { m: self, front: 0, back: self.len() }
+    }
+
+    /// The value at `key`, borrowed to be changed in place.
+    fn get_mut(mut ref self, key: K) -> Option[mut ref V] {
+        if self.contains_key(key) {
+            Some(mut self[key])
+        } else {
+            None
+        }
     }
 }
 

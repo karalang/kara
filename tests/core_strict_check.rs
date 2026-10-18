@@ -5537,3 +5537,46 @@ fn a_str_is_copy() {
          }\n",
     );
 }
+
+#[test]
+fn map_get_mut_lends_the_value_to_change() {
+    // B-2026-10-12-3: `Map.get_mut` and `SortedMap.get_mut`, as
+    // docs/library/collections.md gives them, return `Option[mut ref V]`.
+    let src = "struct Bag { positions: Map[i64, Vec[i64]] }\n\
+         fn main() {\n\
+         \x20   let mut b = Bag { positions: Map.new() };\n\
+         \x20   b.positions.insert(3, vec![1]);\n\
+         \x20   match b.positions.get_mut(3) {\n\
+         \x20       Some(list) => list.push(2),\n\
+         \x20       None => {}\n\
+         \x20   }\n\
+         \x20   match b.positions.get_mut(9) {\n\
+         \x20       Some(list) => list.push(7),\n\
+         \x20       None => println(\"no 9\"),\n\
+         \x20   }\n\
+         \x20   b.positions.get_mut(3).unwrap()[0] = 5;\n\
+         \x20   let mut c: Map[String, i64] = Map.new();\n\
+         \x20   c.insert(\"a\", 1);\n\
+         \x20   if let Some(n) = c.get_mut(\"a\") { *n += 41; }\n\
+         \x20   let mut s: SortedMap[i64, String] = SortedMap.new();\n\
+         \x20   s.insert(2, \"x\");\n\
+         \x20   if let Some(t) = s.get_mut(2) { t.push_str(\"yz\"); }\n\
+         \x20   let none5 = s.get_mut(5).is_none();\n\
+         \x20   println(f\"{b.positions[3][0]} {b.positions[3].len()} {c[\"a\"]} {s[2]} {none5}\");\n\
+         }\n";
+    let (dir, path) = fixture("map-get-mut", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "no 9\n5 2 42 xyz true\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
