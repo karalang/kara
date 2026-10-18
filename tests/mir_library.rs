@@ -503,7 +503,8 @@ fn main() {
 #[test]
 fn sorted_ranges_are_half_open_and_inclusive_ranges_closed() {
     // docs/library/collections.md: `range(from, to)` gives the elements (or
-    // entries) in `[from, to)`, ascending, and `range_inclusive` `[from, to]`.
+    // entries) in `[from, to)`, ascending, and `range_inclusive` `[from, to]`,
+    // as iterators (B-2026-10-06-68).
     assert_runs(
         r#"
 fn main() {
@@ -514,11 +515,14 @@ fn main() {
     println(out);
     let mut w: SortedSet[String] = SortedSet.new();
     w.insert("pear".to_string()); w.insert("apple".to_string()); w.insert("fig".to_string());
-    println(f"{w.range("b".to_string(), "g".to_string())} {s.range(20, 30).len()}");
-    println(f"{s.range_inclusive(4, 9)} {s.range(9, 4).len()}");
+    let wr: Vec[ref String] = w.range("b".to_string(), "g".to_string()).collect();
+    println(f"{wr} {s.range(20, 30).count()}");
+    let si: Vec[ref i64] = s.range_inclusive(4, 9).collect();
+    println(f"{si} {s.range(9, 4).count()}");
     let mut m: SortedMap[i64, String] = SortedMap.new();
     m.insert(3, "c".to_string()); m.insert(1, "a".to_string()); m.insert(5, "e".to_string());
-    println(f"{m.range(1, 5)} {m.range_inclusive(1, 5).len()}");
+    let mr: Vec[(ref i64, ref String)] = m.range(1, 5).collect();
+    println(f"{mr} {m.range_inclusive(1, 5).count()}");
 }
 "#,
         "4 5 7 \n[fig] 0\n[4, 5, 7, 9] 0\n[(1, a), (3, c)] 3\n",

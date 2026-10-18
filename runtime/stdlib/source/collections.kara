@@ -281,6 +281,42 @@ impl[T] SortedSet[T] {
     }
 }
 
+impl[T: Ord] SortedSet[T] {
+    /// The elements in `[from, to)`, ascending, each borrowed; none when
+    /// `from >= to`.
+    fn range(ref self, from: T, to: T) -> SortedSetIter[T] {
+        let front = self.bound_index(from, false);
+        let back = self.bound_index(to, false);
+        SortedSetIter { s: self, front, back: if back < front { front } else { back } }
+    }
+
+    /// The elements in `[from, to]`, ascending, each borrowed; none when
+    /// `from > to`.
+    fn range_inclusive(ref self, from: T, to: T) -> SortedSetIter[T] {
+        let front = self.bound_index(from, false);
+        let back = self.bound_index(to, true);
+        SortedSetIter { s: self, front, back: if back < front { front } else { back } }
+    }
+
+    /// The index of the first element `>= x` (`> x` when `past` is set),
+    /// by binary search: the elements are in order.
+    fn bound_index(ref self, x: T, past: bool) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let e = self.entry_at(mid);
+            let before = if past { e <= x } else { e < x };
+            if before {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+}
+
 /// The entries of a map, in the map's iteration order: each key and value
 /// borrowed.
 struct MapIter[K, V] {
@@ -428,6 +464,42 @@ impl[K, V] SortedMap[K, V] {
         } else {
             None
         }
+    }
+}
+
+impl[K: Ord, V] SortedMap[K, V] {
+    /// The entries with keys in `[from, to)`, ascending, each key and
+    /// value borrowed; none when `from >= to`.
+    fn range(ref self, from: K, to: K) -> SortedMapIter[K, V] {
+        let front = self.bound_index(from, false);
+        let back = self.bound_index(to, false);
+        SortedMapIter { m: self, front, back: if back < front { front } else { back } }
+    }
+
+    /// The entries with keys in `[from, to]`, ascending; none when
+    /// `from > to`.
+    fn range_inclusive(ref self, from: K, to: K) -> SortedMapIter[K, V] {
+        let front = self.bound_index(from, false);
+        let back = self.bound_index(to, true);
+        SortedMapIter { m: self, front, back: if back < front { front } else { back } }
+    }
+
+    /// The index of the first key `>= key` (`> key` when `past` is set),
+    /// by binary search: the keys are in order.
+    fn bound_index(ref self, key: K, past: bool) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let (k, _) = self.entry_at(mid);
+            let before = if past { k <= key } else { k < key };
+            if before {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
     }
 }
 

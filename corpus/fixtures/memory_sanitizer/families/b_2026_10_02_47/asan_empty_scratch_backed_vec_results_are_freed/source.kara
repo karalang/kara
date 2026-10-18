@@ -12,21 +12,21 @@ fn keys_in(lo: i64, hi: i64) -> Vec[(i64, i64)] {
     let mut m: SortedMap[i64, i64] = SortedMap.new();
     m.insert(3, 30);
     m.insert(7, 70);
-    return m.range_inclusive(lo, hi);
+    return m.range_inclusive(lo, hi).map(|(k, v)| (*k, *v)).collect();
 }
 fn main() {
     println(f"w{window(0, 10)} w{window(1, 4)} w{window(20, 30)} w{window(9, 2)} w{window(5, 5)}");
     let mut e: SortedMap[i64, i64] = SortedMap.new();
-    let r = e.range_inclusive(0, 100);
-    println(f"e{r.len()}");
+    let r = e.range_inclusive(0, 100).count();
+    println(f"e{r}");
     e.insert(1, 1);
-    let r2 = e.range_inclusive(2, 3);
-    println(f"e{r2.len()}");
+    let r2 = e.range_inclusive(2, 3).count();
+    println(f"e{r2}");
     let mut s: SortedMap[String, String] = SortedMap.new();
     s.insert("b", "bee");
     s.insert("d", "dee");
-    let none = s.range_inclusive("x", "z");
-    let some = s.range_inclusive("a", "c");
+    let none: Vec[(ref String, ref String)] = s.range_inclusive("x", "z").collect();
+    let some: Vec[(ref String, ref String)] = s.range_inclusive("a", "c").collect();
     println(f"s{none.len()} s{some.len()} {some[0].1}");
     println(f"k{keys_in(4, 6).len()} k{keys_in(0, 9).len()}");
     let mut n: Column[i64] = Column.with_capacity(3);

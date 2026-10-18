@@ -6115,3 +6115,47 @@ fn a_value_enum_carries_another_value_enum() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn sorted_ranges_are_lazy_iterators() {
+    // B-2026-10-06-68: docs/library/collections.md gives `SortedSet.range`,
+    // `SortedMap.range` and their `range_inclusive` as iterators of borrowed
+    // items, half-open and closed. They returned a `Vec`. Collecting a
+    // `SortedMapIter` into `Vec[(ref K, ref V)]` also checks the iterator
+    // methods' own generic no longer collides with the struct's `V`.
+    let src = "fn main() {\n\
+         \x20   let mut s: SortedSet[i64] = SortedSet.new();\n\
+         \x20   for x in [5, 1, 9, 3, 7] { s.insert(x); }\n\
+         \x20   let a: Vec[i64] = s.range(3, 7).cloned().collect();\n\
+         \x20   let b: Vec[ref i64] = s.range_inclusive(3, 7).collect();\n\
+         \x20   println(f\"{a} {b} {s.range(4, 2).count()} {s.range(6, 6).count()}\");\n\
+         \x20   let mut m: SortedMap[String, i64] = SortedMap.new();\n\
+         \x20   for (k, v) in [(\"b\", 2), (\"d\", 4), (\"a\", 1), (\"c\", 3)] { m.insert(k.to_string(), v); }\n\
+         \x20   for (k, v) in m.range(\"b\".to_string(), \"d\".to_string()) { println(f\"{k}={v}\"); }\n\
+         \x20   let total: i64 = m.range_inclusive(\"b\".to_string(), \"d\".to_string()).map(|(_, v)| *v).sum();\n\
+         \x20   let all: Vec[(ref String, ref i64)] = m.iter().collect();\n\
+         \x20   println(f\"{total} {s.range(1, 9).rev().next()} {all.len()}\");\n\
+         }\n";
+    let (dir, path) = fixture("sorted-range", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "[3, 5] [3, 5, 7] 0 0\nb=2\nc=3\n9 Some(7) 4\n",
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

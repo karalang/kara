@@ -186,37 +186,37 @@ trait Iterator {
     }
 
     /// The items, gathered into a collection of the type the context names.
-    /// A `ref` to a `Copy` item is read as the item (`V`).
-    fn collect[V, C: FromIterator[V]](own self) -> C {
-        let values: ItemValues[Self, V] = ItemValues { it: self };
+    /// A `ref` to a `Copy` item is read as the item (`ItemV`).
+    fn collect[ItemV, C: FromIterator[ItemV]](own self) -> C {
+        let values: ItemValues[Self, ItemV] = ItemValues { it: self };
         C.from_iter(values)
     }
 
-    /// An owned copy of each viewed item (`V` is the type a `ref V` item
+    /// An owned copy of each viewed item (`ItemV` is the type a `ref ItemV` item
     /// views).
-    fn cloned[V](own self) -> IterCloned[Self, V] {
+    fn cloned[ItemV](own self) -> IterCloned[Self, ItemV] {
         IterCloned { it: self }
     }
 
     /// The items added up; 0 if there are none. A `ref` to a `Copy` item is
-    /// read as the item (`V`).
-    fn sum[V: Default + Add[Output = V]](own self) -> V {
+    /// read as the item (`ItemV`).
+    fn sum[ItemV: Default + Add[Output = ItemV]](own self) -> ItemV {
         let mut it = self;
-        let mut acc: V = V.default();
+        let mut acc: ItemV = ItemV.default();
         while let Some(x) = it.next() {
-            let v: V = iter_read_value(x);
+            let v: ItemV = iter_read_value(x);
             acc = acc + v;
         }
         acc
     }
 
     /// The items multiplied together; 1 if there are none. A `ref` to a
-    /// `Copy` item is read as the item (`V`).
-    fn product[V: MulIdentity + Mul[Output = V]](own self) -> V {
+    /// `Copy` item is read as the item (`ItemV`).
+    fn product[ItemV: MulIdentity + Mul[Output = ItemV]](own self) -> ItemV {
         let mut it = self;
-        let mut acc: V = V.mul_identity();
+        let mut acc: ItemV = ItemV.mul_identity();
         while let Some(x) = it.next() {
-            let v: V = iter_read_value(x);
+            let v: ItemV = iter_read_value(x);
             acc = acc * v;
         }
         acc
@@ -338,11 +338,11 @@ trait Iterator {
     }
 
     /// The items combined front to back by `f`; `None` if there are none.
-    fn reduce[V](own self, f: own MutFn(own V, own V) -> V) -> Option[V] {
+    fn reduce[ItemV](own self, f: own MutFn(own ItemV, own ItemV) -> ItemV) -> Option[ItemV] {
         let mut it = self;
-        let mut acc: Option[V] = None;
+        let mut acc: Option[ItemV] = None;
         while let Some(x) = it.next() {
-            let v: V = iter_read_value(x);
+            let v: ItemV = iter_read_value(x);
             acc = match acc {
                 None => Some(v),
                 Some(a) => Some(f(a, v)),

@@ -949,13 +949,15 @@ impl<'a> super::TypeChecker<'a> {
                 ))
                 .collect();
                 // `Iterator`'s `sum`, `product`, `reduce` and `collect` read
-                // their items as values: their `V` is `T` when `Self.Item` is a
-                // `ref T` of a `Copy` `T`, and `Self.Item` otherwise
-                // (docs/library/iterators.md). `cloned` copies what a `ref V`
-                // item views.
+                // their items as values: their `ItemV` is `T` when `Self.Item`
+                // is a `ref T` of a `Copy` `T`, and `Self.Item` otherwise
+                // (docs/library/iterators.md). `cloned` copies what a `ref`
+                // item views. The parameter's name is unusual on purpose:
+                // these substitutions are keyed by name, and an iterator
+                // struct's own `V` (`SortedMapIter[K, V]`) must not take it.
                 if self.library_methods_from_source
                     && matches!(method, "sum" | "product" | "reduce" | "collect" | "cloned")
-                    && sig.generic_params.iter().any(|g| g == "V")
+                    && sig.generic_params.iter().any(|g| g == "ItemV")
                     && self.find_trait_method("Iterator", method).is_some()
                 {
                     let item = Type::AssocProjection {
@@ -966,7 +968,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     let item =
                         self.resolve_assoc_projections(&substitute_type_params(&item, &self_subs));
-                    // `cloned`'s `V` is the type a `ref V` item views,
+                    // `cloned`'s `ItemV` is the type a `ref` item views,
                     // whether or not it is `Copy`.
                     let value = match &item {
                         Type::Ref(t) | Type::MutRef(t)
@@ -978,10 +980,10 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     if !matches!(value, Type::AssocProjection { .. }) {
                         let v: HashMap<String, SubstValue> =
-                            std::iter::once(("V".to_string(), SubstValue::Type(value.clone())))
+                            std::iter::once(("ItemV".to_string(), SubstValue::Type(value.clone())))
                                 .collect();
                         self.record_node_impl_subs(span, &v);
-                        self_subs.insert("V".to_string(), SubstValue::Type(value));
+                        self_subs.insert("ItemV".to_string(), SubstValue::Type(value));
                     }
                 }
                 let params: Vec<Type> = sig

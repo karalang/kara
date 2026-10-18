@@ -2457,6 +2457,10 @@ pub struct TypeChecker<'a> {
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// See [`TypeCheckResult::core_borrowed_receivers`].
     pub(super) core_borrowed_receivers: FxHashSet<SpanKey>,
+    /// `collect` calls whose context type stores borrows
+    /// (`let v: Vec[(ref K, ref V)] = m.iter().collect()`): the lent items
+    /// are kept, not moved, so v2 core §5.10's move check skips them.
+    pub(super) core_collect_keeps_refs: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::core_for_into_iter_receivers`].
     pub(super) core_for_into_iter_receivers: FxHashMap<SpanKey, Span>,
     /// v2 core §3.7, checked per instantiation: inside a generic body, each
@@ -3301,6 +3305,7 @@ impl<'a> TypeChecker<'a> {
             core_once_calls: FxHashSet::default(),
             core_moving_scrutinees: FxHashMap::default(),
             core_borrowed_receivers: FxHashSet::default(),
+            core_collect_keeps_refs: FxHashSet::default(),
             core_for_into_iter_receivers: FxHashMap::default(),
             core_generic_moves: FxHashMap::default(),
             current_fn_core_key: None,
@@ -6935,18 +6940,19 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
-        // `collect`'s `V` is the item read as a value (`i64` for a `ref i64`
-        // item), unless the collection holds the references themselves:
-        // `let v: Vec[ref i64] = a.iter().collect()` collects `ref i64`, the
-        // `V` its `C: FromIterator[V]` bound asks for.
+        // `collect`'s `ItemV` is the item read as a value (`i64` for a
+        // `ref i64` item), unless the collection holds the references
+        // themselves: `let v: Vec[ref i64] = a.iter().collect()` collects
+        // `ref i64`, the `ItemV` its `C: FromIterator[ItemV]` bound asks for.
         for frame in node_call_subs.values_mut() {
-            let (Some(v), Some(Type::Named { args, .. })) = (frame.get("V"), frame.get("C")) else {
+            let (Some(v), Some(Type::Named { args, .. })) = (frame.get("ItemV"), frame.get("C"))
+            else {
                 continue;
             };
             if let [elem @ Type::Ref(inner)] = args.as_slice() {
                 if **inner == *v {
                     let elem = elem.clone();
-                    frame.insert("V".to_string(), elem);
+                    frame.insert("ItemV".to_string(), elem);
                 }
             }
         }

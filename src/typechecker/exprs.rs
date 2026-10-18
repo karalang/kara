@@ -687,6 +687,12 @@ impl<'a> super::TypeChecker<'a> {
         if self.char_literal_for_str(expr, expected) {
             return expected.clone();
         }
+        if let ExprKind::MethodCall { method, args, .. } = &expr.kind {
+            if method == "collect" && args.is_empty() && self.collect_target_keeps_refs(expected) {
+                self.core_collect_keeps_refs
+                    .insert(SpanKey::from_span(&expr.span));
+            }
+        }
         let mut ty = self.check_expr_inner(expr, expected);
         // A value stored into a `weak` slot keeps its own type in typed HIR.
         let weak_store = self.weak_store_actual.take();
@@ -4894,6 +4900,21 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether `collect`'s result stores borrows: its element type has a
+    /// `ref` in it (`Vec[ref String]`, `Vec[(ref K, ref V)]`).
+    fn collect_target_keeps_refs(&self, t: &Type) -> bool {
+        let subs = &self.env.substitutions;
+        fn has_ref(t: &Type, subs: &FxHashMap<crate::typechecker::TypeVarId, Type>) -> bool {
+            match resolve_type_var_top(t, subs) {
+                Type::Ref(_) | Type::MutRef(_) => true,
+                Type::Tuple(ts) => ts.iter().any(|e| has_ref(e, subs)),
+                _ => false,
+            }
+        }
+        matches!(resolve_type_var_top(t, subs),
+            Type::Named { args, .. } if args.first().is_some_and(|a| has_ref(a, subs)))
+    }
+
     /// v2 core §5.10: `collect` builds owned values, so a chain whose items
     /// are lent by the collection it walks (`v.iter().chain(w.iter())`)
     /// would move each one out of it. `.cloned()` before `collect` clones
@@ -6962,7 +6983,16 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
-                if self.cli_lint_overrides.strict_core && method == "collect" && args.is_empty() {
+                // A target that keeps the borrows (`Vec[(ref K, ref V)]`)
+                // stores the lent items rather than moving out of them.
+                if self.cli_lint_overrides.strict_core
+                    && method == "collect"
+                    && args.is_empty()
+                    && !self.collect_target_keeps_refs(&t)
+                    && !self
+                        .core_collect_keeps_refs
+                        .contains(&SpanKey::from_span(&expr.span))
+                {
                     self.check_core_collect_lent(object, "collect");
                 }
                 if self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(object) {
