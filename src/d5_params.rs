@@ -20,6 +20,15 @@ pub fn on() -> bool {
     *ON.get_or_init(|| std::env::var("KARAC_D5").map_or(true, |v| v != "0"))
 }
 
+/// A closure literal's annotated bare parameter borrows as a function's
+/// does (`|w: Vec[i64]|` reads `|w: ref Vec[i64]|`), opt-in with
+/// `KARAC_D5_CLOSURES=1` until the programs that move one are migrated to
+/// `|w: own T|`; the strict check reports such a closure at the closure.
+pub fn closures_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("KARAC_D5_CLOSURES").is_ok_and(|v| v == "1"))
+}
+
 const COPY_SCALARS: &[&str] = &[
     "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f16",
     "bf16", "f32", "f64", "bool", "char", "Vector", "Mask",
@@ -178,6 +187,25 @@ struct FnTypeParams<'a> {
 
 impl crate::span_visitor::MutVisitor for FnTypeParams<'_> {
     fn span(&mut self, _: &mut crate::token::Span) {}
+    /// A closure's annotated bare parameter borrows as a function's does:
+    /// `|w: Vec[i64]|` reads `|w: ref Vec[i64]|`, and only `|w: own T|`
+    /// owns (design.md § Function values, "Parameter modes"). Behind
+    /// [`closures_on`].
+    fn expr(&mut self, e: &mut Expr) {
+        if !closures_on() {
+            return;
+        }
+        let ExprKind::Closure { params, .. } = &mut e.kind else {
+            return;
+        };
+        for p in params {
+            if let Some(t) = &mut p.ty {
+                if !p.is_own && borrows(t, self.copy) {
+                    wrap_ref(t);
+                }
+            }
+        }
+    }
     fn type_expr(&mut self, t: &mut TypeExpr) {
         let TypeKind::FnType {
             params, own_params, ..
