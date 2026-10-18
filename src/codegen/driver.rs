@@ -1759,6 +1759,26 @@ pub(super) fn native_target_is_windows_x86_64() -> bool {
 }
 
 fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
+    create_native_target_machine_at(cpu_override, backend_optimization_level())
+}
+
+/// The host target machine with LLVM's `-O0` code generator (FastISel), for a
+/// module that runs no IR optimisation anyway. The AddressSanitizer lane
+/// needs it: SelectionDAG instruction selection is quadratic in the size of
+/// one basic block, and the ASan pass puts every alloca's shadow poisoning in
+/// the entry block, so a 500-statement function spent 80 of its 83 s there
+/// (B-2026-10-18-29).
+pub(super) fn create_unoptimized_target_machine() -> Result<TargetMachine, String> {
+    create_native_target_machine_at(
+        crate::target::target_cpu_override(),
+        OptimizationLevel::None,
+    )
+}
+
+fn create_native_target_machine_at(
+    cpu_override: Option<&str>,
+    level: OptimizationLevel,
+) -> Result<TargetMachine, String> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {}", e))?;
 
@@ -1782,7 +1802,7 @@ fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMach
             &triple,
             cpu,
             &features,
-            backend_optimization_level(),
+            level,
             // PIC, not `Default`. The link step (`link_executable_impl`)
             // invokes `cc` with no `-no-pie`, and every modern toolchain
             // defaults `cc` to producing a PIE — so the object we emit must

@@ -42,7 +42,7 @@ pub fn compile_asan_object(ir: &str, obj: &Path) -> Result<(), String> {
     let module = llcx
         .create_module_from_ir(buf)
         .map_err(|e| format!("parse IR: {}", e.to_string()))?;
-    let tm = super::create_target_machine()?;
+    let tm = super::driver::create_unoptimized_target_machine()?;
     module.set_triple(&tm.get_triple());
     module.set_data_layout(&tm.get_target_data().get_data_layout());
 
