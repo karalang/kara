@@ -4315,7 +4315,17 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         };
 
-        let r_ty = self.infer_expr(right);
+        // A string literal is a `Str` where a `Str` is expected (design.md §
+        // String literals), and the fallback of an `Option[Str]` is one:
+        // `parent(p) ?? ""`.
+        let r_ty =
+            if super::exprs::is_str_view(&resolve_type_var_top(&payload, &self.env.substitutions))
+                && matches!(right.kind, ExprKind::StringLit(_))
+            {
+                self.check_expr(right, &payload)
+            } else {
+                self.infer_expr(right)
+            };
         // `Option[ref V] ?? v` with a `Copy` `V` reads the value: the default
         // is a `V` and so is the result (design.md, `?` and `??`).
         let payload = match &payload {

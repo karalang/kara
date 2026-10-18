@@ -131,8 +131,14 @@ pub(super) fn build_super_program_for_run(tree: &ProgramTree) -> Program {
                 continue;
             }
             for imp in &m.imports {
-                let deduped: Vec<crate::ast::ImportItem> = imp
-                    .items
+                // `import std.path.*;` names every public item.
+                let named = if imp.is_wildcard && imp.items.is_empty() {
+                    crate::prelude::gated_module_public_items(&imp.path, imp.span)
+                        .unwrap_or_else(|| imp.items.clone())
+                } else {
+                    imp.items.clone()
+                };
+                let deduped: Vec<crate::ast::ImportItem> = named
                     .iter()
                     .filter(|ii| {
                         let bound = ii.alias.as_ref().unwrap_or(&ii.name);

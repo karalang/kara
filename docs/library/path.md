@@ -12,7 +12,7 @@ let out = join(dir, "app.1.log");           // "logs/2026/app.1.log", an owned S
 let clean = normalize("logs/./2026/../x");  // "logs/x"
 ```
 
-The functions are imported by name. `import std.path;` followed by `path.parent(p)` is not supported yet.
+The functions are imported by name, or all at once with `import std.path.*;`. `import std.path;` followed by `path.parent(p)` is not supported yet, and is an error.
 
 ## Functions
 

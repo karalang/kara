@@ -1438,6 +1438,14 @@ pub fn is_importable_stdlib_module(path: &[String]) -> bool {
     eq(PRELUDE_PATH_SEGMENTS) || GATED_STDLIB_SOURCES.iter().any(|(p, _)| eq(p))
 }
 
+/// Whether `path` is a gated library module (`std.path`), whose items are
+/// imported by name or by `*`.
+pub fn is_gated_stdlib_module(path: &[String]) -> bool {
+    GATED_STDLIB_SOURCES
+        .iter()
+        .any(|(p, _)| p.len() == path.len() && p.iter().zip(path).all(|(a, b)| *a == b.as_str()))
+}
+
 /// Display names of the importable `std.*` modules, for a resolver
 /// "did you mean" suggestion. Gated modules in source order, prelude last.
 pub fn importable_stdlib_module_names() -> Vec<String> {
@@ -1474,6 +1482,34 @@ pub fn importable_stdlib_module_names() -> Vec<String> {
 /// under the alias. For effect resources this matches project-mode
 /// semantics today: effect sets identify resources by the *clause
 /// string*, so `writes(Screen)` is the string "Screen" in either mode.
+/// Every public function, type, trait and effect resource of the gated
+/// module at `path`, as import items: what `import <path>.*;` names. `None`
+/// when `path` is not a gated module.
+pub fn gated_module_public_items(path: &[String], span: Span) -> Option<Vec<ImportItem>> {
+    let (_, program) = GATED_STDLIB_PROGRAMS
+        .iter()
+        .find(|(p, _)| p.as_slice() == path)?;
+    Some(
+        program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(f) if f.is_pub => Some(f.name.clone()),
+                Item::StructDef(s) if s.is_pub => Some(s.name.clone()),
+                Item::EnumDef(e) if e.is_pub => Some(e.name.clone()),
+                Item::TraitDef(t) if t.is_pub => Some(t.name.clone()),
+                Item::EffectResource(r) => Some(r.name.clone()),
+                _ => None,
+            })
+            .map(|name| ImportItem {
+                span,
+                name,
+                alias: None,
+            })
+            .collect(),
+    )
+}
+
 pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<Vec<Item>> {
     let (_, program) = GATED_STDLIB_PROGRAMS
         .iter()
@@ -1903,6 +1939,24 @@ pub fn library_module_item_error(
 
 pub fn expand_gated_stdlib_imports(program: &mut Program) {
     let mut appended: Vec<Item> = Vec::new();
+    // A program's own items and its explicit imports beat a wildcard
+    // (design.md § Wildcards).
+    let named_here: std::collections::HashSet<String> = program
+        .items
+        .iter()
+        .flat_map(|item| match item {
+            Item::Function(f) => vec![f.name.clone()],
+            Item::StructDef(s) => vec![s.name.clone()],
+            Item::EnumDef(e) => vec![e.name.clone()],
+            Item::TraitDef(t) => vec![t.name.clone()],
+            Item::Import(imp) if !imp.is_wildcard => imp
+                .items
+                .iter()
+                .map(|ii| ii.alias.clone().unwrap_or_else(|| ii.name.clone()))
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect();
     for item in &mut program.items {
         let Item::Import(imp) = item else { continue };
         if let Some((have, _)) = library_global_module(&imp.path) {
@@ -1914,6 +1968,14 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
                     .retain(|ii| ii.alias.is_some() || !have.contains(&ii.name.as_str()));
             }
             continue;
+        }
+        // `import std.path.*;` names every public item of the module.
+        if imp.is_wildcard {
+            if let Some(mut all) = gated_module_public_items(&imp.path, imp.span) {
+                all.retain(|ii| !named_here.contains(&ii.name));
+                imp.items = all;
+                imp.is_wildcard = false;
+            }
         }
         let Some(expansion) = gated_items_for_import(&imp.path, &imp.items) else {
             continue;

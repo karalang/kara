@@ -3905,3 +3905,58 @@ fn main() {
         }
     }
 }
+
+/// A wildcard import of a gated module names its public items, and the
+/// program's own `join` beats the wildcard's (design.md § Wildcards).
+#[test]
+fn mir_gated_wildcard_import_names_public_items() {
+    const SRC: &str = r#"import std.path.*;
+import std.encoding.{hex_encode};
+
+fn join(a: Str, b: Str) -> String {
+    f"{a}+{b}"
+}
+
+fn main() {
+    println(parent("a/b") ?? "none");
+    println(join("x", "y"));
+    println(normalize("a/./b/../c"));
+    println(hex_encode("A".bytes()));
+}
+"#;
+    let want = "a\nx+y\na/c\n41\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// A string literal after `??` is a `Str` when the left side is an
+/// `Option[Str]`, and stays a `String` after an `Option[String]`.
+#[test]
+fn mir_nil_coalesce_str_literal_fallback() {
+    const SRC: &str = r#"fn pick(v: Vec[String], i: i64) -> Option[Str] {
+    if i < v.len() { Some(v[i].as_str()) } else { None }
+}
+
+fn main() {
+    let v = ["x".to_string()];
+    let a = pick(v, 0) ?? "none";
+    let b = pick(v, 5) ?? "none";
+    let o: Option[String] = None;
+    let c = o ?? "owned";
+    println(f"{a} {b} {c} {c.len()}");
+}
+"#;
+    let want = "x none owned 5\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

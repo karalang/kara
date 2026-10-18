@@ -293,6 +293,27 @@ fn test_valid_std_and_user_imports_still_accepted() {
 }
 
 #[test]
+fn test_bare_gated_module_import_says_how_to_import() {
+    // `import std.path;` bound a `path` that no backend could run: check
+    // passed, and MIR and the interpreter failed on the first `path.parent`.
+    for (src, module) in [
+        ("import std.path;\nfn main() { }", "std.path"),
+        ("import std.web.net;\nfn main() { }", "std.web.net"),
+    ] {
+        let errors = resolve_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == ResolveErrorKind::UnknownModule
+                    && e.message.contains(&format!("import {module}.*;"))),
+            "expected the by-item hint for `{src}`, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    resolve_ok("import std.web.net.fetch;\nfn main() { }");
+}
+
+#[test]
 fn test_duplicate_top_level_error() {
     let errors = resolve_errors("fn foo() { }\nfn foo() { }");
     assert!(errors[0].kind == ResolveErrorKind::DuplicateDefinition);
