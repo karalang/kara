@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 279 |
 | codegen-gap | 272 |
-| false-positive | 230 |
+| false-positive | 232 |
 | other | 175 |
 | perf | 173 |
 | diagnostics | 167 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2938 |
 | interp | 953 |
-| typecheck | 472 |
+| typecheck | 474 |
 | other | 115 |
 | ownership | 113 |
 | runtime | 78 |
@@ -172,7 +172,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-106 | 2026-10-15 | typecheck | low | A bare repeat literal `[0u8; 32]` with no expected type is a `Vec[u8]` on `karac check` and every MIR surface, but design.md § Collection literals says "the repeat form `[v; n]` always builds an `Array`, and `n` must be a constant" and that `let v: Vec[i64] = [0; 8];` is an error; `fn f() -> Array[u8, 4] { let mut out = [0u8; 4]; out[0] = 1u8; out }` is refused with "expected 'Array[u8, 4]', found 'Vec[u8]'" | — |
 | B-2026-10-15-107 | 2026-10-15 | typecheck | low | A type error inside a gated library module's item (`std.path`, `std.encoding`) is not reported by `karac check`, which passes, while the MIR surfaces report it and stop: with `let bad: i64 = "s";` added to `std.path.is_absolute`, `import std.path.{is_absolute};` is "All checks passed." and `__mir-run` is "typecheck: 13:20: expected 'i64', found 'String'" (a line of path.kara, printed as if it were the user's) | — |
 | B-2026-10-15-112 | 2026-10-15 | runtime | low | `std.time.Instant` is only half the spec: it ships as `Instant.now()` with `duration_since`, `add` and `elapsed` methods, but docs/library/time-random-env.md has `Clock.now()` return an `Instant` (the library's is a `#[compiler_builtin]` returning Unix SECONDS as `i64`) and compares instants with `later - earlier` / `i + d`, which needs an `Output` on the library `Sub`/`Add` traits (`fn sub(own self, rhs: own Self) -> Self` has none) | — |
-| B-2026-10-18-1 | 2026-10-18 | typecheck+interp+codegen | low | In generic code `T.Output` reads one `Output` per type, so a type with two operator impls (`impl Add for V { type Output = V }` and `impl Mul for V { type Output = i64 }`) gives `sum2[T: Add](a: own T, b: own T) -> T.Output` the `i64` of `Mul`: `sum2(V { x: 7 }, V { x: 8 }).x` is refused with "no field 'x' on type 'i64'" | — |
 | B-2026-10-18-3 | 2026-10-18 | ownership | medium | Inside a loop, `karac check` refuses an owned loop-local value moved by a METHOD call in each of two exclusive branches, `if c { s.link(it); } else { s.link(it); }`, with "value 'it' was moved into a container (moved at line N), used again here", when `link(mut ref self, it: own It)` pushes it into a field. The same code outside a loop, or with a free function `take(mut v, it)` inside the loop, passes; __mir-run runs the refused program correctly | — |
 | B-2026-10-18-5 | 2026-10-18 | ownership | low | A slice of a String taken inside a match arm and immediately copied, `let dir = match o { Some(i) => path[..i].to_string(), None => ".".to_string() };`, leaves `karac check` treating the slice borrow as live, so a later move of `path` is refused with "cannot move `path` while a slice borrow into it is still live"; the same slice outside a match, or in an if/else, passes | — |
 | B-2026-10-18-6 | 2026-10-18 | typecheck | low | An `if` whose one branch is a string literal and whose other branch is a `Str` is refused, `let a = if c { "-" } else { name.as_str() };` failing `karac check` and the MIR typecheck with "if/else branches have incompatible types: 'String' and 'StringSlice'" (either branch order); design.md § String literals says a literal takes `Str` the way an integer literal takes its expected type, and B-2026-10-15-52 made an integer literal branch take its sibling's type, but a string literal branch still does not | — |
@@ -198,6 +197,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-40 | 2026-10-18 | interp+codegen | medium | On MIR, `let mut out = s; out = " " + out;` with `s` a bare (borrowed) `String` param builds invalid MIR ("assigning String to _3 of type ref String"); check passes | — |
 | B-2026-10-18-41 | 2026-10-18 | interp+codegen | medium | On MIR, `match it.value { V.List(q) => q.push(..) }` with `it` from `m.get_mut(k).unwrap()` is refused by the borrow checker ("mutable borrow of (*_16) through a shared reference [E0517]"); check passes | — |
 | B-2026-10-18-42 | 2026-10-18 | typecheck | low | An `if` whose branches are both unsuffixed integer literals is typed `i64` when it is a call argument, so `v.push(if c { 9 } else { 8 })` on a `Vec[u8]` is refused ("implicit coercion from 'i64' to 'u8' would narrow"), while `let x: u8 = if c { 9 } else { 8 };` passes | — |
+| B-2026-10-18-43 | 2026-10-18 | typecheck | low | `W { v: V { x: 1 } } + W { v: V { x: 9 } }` on a generic `impl[T: Add] Add for W[T]` is refused with "cannot infer type parameter 'T'; add a type annotation to this binding", on `karac check` and every MIR surface, though `sum2(W { .. }, W { .. })` through a generic `fn sum2[T: Add]` type-checks and runs | — |
+| B-2026-10-18-44 | 2026-10-18 | typecheck | low | `fn pair[T: Add](a: own T, b: own T) -> Option[T.Output] { Some(a + b) }` is refused with "expected 'Option[T.Output]', found 'Option[T.Output.Output]'": inside the generic body, `a + b` is typed `T.Output` and wrapping it in `Some` projects it again | — |
 
 ### Relocated
 
@@ -4153,6 +4154,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-110 | typecheck | medium | A string literal branch beside a `Str` view branch is refused: `match line.find(" ") { Some(i) => line[i + 1..line.len()].trim(), None => "" }` repor… | f74175cda9 |
 | B-2026-10-15-101 | typecheck | low | A struct update whose base is a BINDING of another struct type is accepted by `karac check` and every MIR surface: with `struct D { a: i64, c: bool }… | 6221300dbd |
 | B-2026-10-17-1 | typecheck | medium | An unsuffixed integer literal beside an arithmetic operator is promoted to its narrow peer's type WITHOUT a range check, so `300 + y` and `y * 1000`… | ea28ab5c28 |
+| B-2026-10-18-1 | typecheck+interp+codegen | low | In generic code `T.Output` reads one `Output` per type, so a type with two operator impls (`impl Add for V { type Output = V }` and `impl Mul for V {… | 56339e6224 |
 | B-2026-10-18-2 | typecheck | medium | A `const` whose initializer is an integer literal above i64::MAX panics `karac check` (and `karac __mir-run`): `const BIG: i128 = 1844674407370955161… | b830c8f243 |
 | B-2026-10-18-4 | codegen | high | A function declared `-> i64` whose result is a `ref i64` from a call, `fn f(m: ref Map[String, i64], k: Str) -> i64 { m.get(k).unwrap_or(0) }` (or `v… | a2fbdd9c11 |
 | B-2026-10-18-8 | lexer | low | The lexer rejects the `\xHH` escape in string, f-string and char literals (`"A\x42C"` is `error[parse]: Unknown escape sequence: \x`), although desig… | 082e3de2d8 |
