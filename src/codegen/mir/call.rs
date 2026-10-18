@@ -899,23 +899,24 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, r.into())?;
                 self.drop_moved(args)
             }
-            ("String", "with_capacity") => {
-                let d = self.place_ptr(dest)?;
-                let n = self.layout(dty)?.size;
-                self.builder
-                    .build_memset(d, 1, self.llcx.i8_type().const_zero(), self.i64(n))
-                    .map_err(e)?;
-                Ok(())
-            }
-            ("Vec", "with_capacity") => {
+            // Exactly `n` slots up front, and no elements (B-2026-10-14-14).
+            ("String" | "Vec", "with_capacity") => {
                 let n = self.int_arg(&args[0])?;
                 let ok = self.non_negative(n)?;
                 self.abort_unless(ok, "explicit panic")?;
+                let size = match self.tys.kind(dty) {
+                    TyKind::Intrinsic(IntrinsicTy::Vec(el)) => self.layout(el)?.size,
+                    _ => 1,
+                };
                 let d = self.place_ptr(dest)?;
-                self.builder
-                    .build_memset(d, 1, self.llcx.i8_type().const_zero(), self.i64(24))
-                    .map_err(e)?;
-                Ok(())
+                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                self.store(self.offset(d, 8)?, self.i64(0).into())
+            }
+            ("String", "clear") => {
+                // Bytes need no drop; a literal's borrowed bytes are left
+                // where they are, and the next push copies nothing.
+                let v = self.ref_arg(&args[0])?;
+                self.store(self.offset(v, 8)?, self.i64(0).into())
             }
             ("Vec", "from_array") => {
                 let at = self.operand_type(&args[0])?;

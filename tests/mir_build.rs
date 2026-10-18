@@ -2793,6 +2793,48 @@ fn main() {
     }
 }
 
+/// `String.clear` empties the string, `with_capacity` reserves exactly
+/// its slots, and `binary_search` finds std's index, duplicates and an
+/// empty Vec included (B-2026-10-14-36, B-2026-10-14-14, B-2026-10-18-9).
+#[test]
+fn mir_string_clear_with_capacity_and_binary_search() {
+    let src = r#"
+fn main() {
+    let mut s = String.new();
+    s.push_str("abc");
+    s.clear();
+    s.push('x');
+    let mut t = "lit".to_string();
+    t.clear();
+    t.push_str("yz");
+    println(f"{s} {s.len()} {t} {t.len()}");
+    let mut v: Vec[i64] = Vec.with_capacity(5);
+    println(f"{v.capacity()} {v.len()}");
+    v.push(1);
+    let e: Vec[i64] = Vec.with_capacity(0);
+    let mut w = String.with_capacity(3);
+    w.push_str("hello");
+    println(f"{v.capacity()} {e.capacity()} {w}");
+    let mut b: Vec[i64] = Vec.new();
+    for x in [1, 2, 2, 2, 2, 3, 5, 5, 8] { b.push(x); }
+    let mut r = 0;
+    for k in 0..10 {
+        match b.binary_search(k) { Some(i) => r = r * 10 + i, None => r = r * 10 + 9 }
+    }
+    let empty: Vec[i64] = Vec.new();
+    println(f"{r} {empty.binary_search(3).is_none()}");
+}
+"#;
+    let want = "x 1 yz 2\n5 0\n5 0 hello\n9045979989 true\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// A variant constructed through a type alias is the target's variant:
 /// `Err(OldE.B(7))`, `Older.C { code: 3 }` and `Older.A` with `type OldE =
 /// NetE` (B-2026-10-15-50).

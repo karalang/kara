@@ -916,13 +916,28 @@ pub unsafe extern "C" fn karac_mir_bsearch(
     cmp: unsafe extern "C" fn(*const u8, *const u8) -> i32,
     key: *const u8,
 ) -> i64 {
-    let idx: Vec<usize> = (0..n).collect();
-    idx.binary_search_by(|&i| {
+    let at = |i: usize| {
         // SAFETY: the caller's contract.
         let o = unsafe { cmp(buf.add(i * size), key) };
         o.cmp(&0)
-    })
-    .map_or(-1, |i| i as i64)
+    };
+    if n == 0 {
+        // An empty Vec's buffer may be null.
+        return -1;
+    }
+    if size == 0 {
+        // Every element is the same zero-sized value.
+        let idx = vec![(); n];
+        return idx.binary_search_by(|_| at(0)).map_or(-1, |i| i as i64);
+    }
+    // std's search, driven over the buffer's first `n` bytes so each probe
+    // names its index by its address, with nothing allocated per call
+    // (B-2026-10-18-9): `n * size >= n` bytes are readable.
+    // SAFETY: as above; the bytes are only addressed, never read.
+    let bytes = unsafe { std::slice::from_raw_parts(buf, n) };
+    bytes
+        .binary_search_by(|b| at((b as *const u8 as usize) - (buf as usize)))
+        .map_or(-1, |i| i as i64)
 }
 
 /// A float to an integer of `bits` bits, as `numeric_conv` converts it:
