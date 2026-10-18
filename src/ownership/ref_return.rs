@@ -107,15 +107,7 @@ impl<'a> super::OwnershipChecker<'a> {
         // v2 core §5.1: `let x = ref <place>` borrows the place, so `x` is a
         // borrow source when the place's root is one (B-2026-10-14-38).
         if super::core_rules() {
-            loop {
-                let before = ref_locals.len();
-                let mut found = HashSet::new();
-                collect_ref_place_locals(&f.body, &ref_params, &ref_locals, &mut found);
-                ref_locals.extend(found);
-                if ref_locals.len() == before {
-                    break;
-                }
-            }
+            collect_core_ref_locals(&f.body, &ref_params, &mut ref_locals);
         }
 
         // Borrowed-collection path (B-2026-07-11-30) — separate from the Tier-1
@@ -1002,50 +994,139 @@ fn ref_place_shape(
     }
 }
 
-/// Names bound by `let <name> = ref <place>;` anywhere in the block tree
-/// whose place traces to a borrow source (v2 core §5.1).
-fn collect_ref_place_locals(
-    block: &Block,
+/// Where a local's value comes from, for [`collect_core_ref_locals`].
+enum CoreDef<'e> {
+    /// `let x = e` or `x = e`.
+    Value(&'e Expr),
+    /// A pattern binding over the place `e` (`if let`, `while let`, `match`,
+    /// `let … else`): v2 core §4.6 binds a `ref` into the place.
+    Projection(&'e Expr),
+}
+
+/// v2 core §5.1 (B-2026-10-14-38, B-2026-10-14-71): the locals that hold a borrow of a `ref`
+/// parameter, so returning one is pinned. A local qualifies when every
+/// definition of its name is `ref <place>`, another such local, or a pattern
+/// binding into a place, each rooted at a `ref` parameter or a qualifying
+/// local: `let mut node = ref self.head; while let Some(n) = node.next { node
+/// = n; } node`. The greatest fixpoint, since a loop's definitions refer to
+/// each other; every chain starts at a `let`, which must be rooted, so the
+/// set is sound. A name bound any other way (a `for` element, a
+/// destructuring `let`) does not qualify.
+fn collect_core_ref_locals(
+    body: &Block,
     ref_params: &HashSet<String>,
-    ref_locals: &HashSet<String>,
-    out: &mut HashSet<String>,
+    ref_locals: &mut HashSet<String>,
 ) {
-    for stmt in &block.stmts {
-        match &stmt.kind {
-            StmtKind::Let { pattern, value, .. } => {
-                if let (
-                    PatternKind::Binding(name),
+    let mut defs: std::collections::HashMap<String, Vec<CoreDef<'_>>> =
+        std::collections::HashMap::new();
+    let mut poisoned: HashSet<String> = HashSet::new();
+    core_defs_in_block(body, &mut defs, &mut poisoned);
+    let mut set: HashSet<String> = defs
+        .keys()
+        .filter(|n| !poisoned.contains(*n) && !ref_locals.contains(*n))
+        .cloned()
+        .collect();
+    loop {
+        let all: HashSet<String> = ref_locals.union(&set).cloned().collect();
+        let before = set.len();
+        set.retain(|n| {
+            defs[n].iter().all(|d| match d {
+                CoreDef::Value(e) => match &e.kind {
                     ExprKind::Unary {
                         op: UnaryOp::Ref,
                         operand,
-                    },
-                ) = (&pattern.kind, &value.kind)
-                {
-                    if ref_place_shape(operand, ref_params, ref_locals).is_none() {
-                        out.insert(name.clone());
-                    }
-                }
-                for_each_subblock(value, &mut |b| {
-                    collect_ref_place_locals(b, ref_params, ref_locals, out)
-                });
-            }
-            StmtKind::LetElse { value, .. }
-            | StmtKind::Expr(value)
-            | StmtKind::Assign { value, .. }
-            | StmtKind::CompoundAssign { value, .. } => for_each_subblock(value, &mut |b| {
-                collect_ref_place_locals(b, ref_params, ref_locals, out)
-            }),
-            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-                collect_ref_place_locals(body, ref_params, ref_locals, out)
-            }
-            StmtKind::MultiAssign { .. } | StmtKind::LetUninit { .. } => {}
+                    } => ref_place_shape(operand, ref_params, &all).is_none(),
+                    ExprKind::Identifier(m) => ref_params.contains(m) || all.contains(m),
+                    _ => false,
+                },
+                CoreDef::Projection(e) => ref_place_shape(e, ref_params, &all).is_none(),
+            })
+        });
+        if set.len() == before {
+            break;
         }
     }
-    if let Some(e) = &block.final_expr {
-        for_each_subblock(e, &mut |b| {
-            collect_ref_place_locals(b, ref_params, ref_locals, out)
-        });
+    ref_locals.extend(set);
+}
+
+fn core_defs_in_block<'e>(
+    b: &'e Block,
+    defs: &mut std::collections::HashMap<String, Vec<CoreDef<'e>>>,
+    poisoned: &mut HashSet<String>,
+) {
+    for stmt in &b.stmts {
+        match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    defs.entry(name.clone())
+                        .or_default()
+                        .push(CoreDef::Value(value));
+                } else {
+                    poisoned.extend(pattern.binding_names());
+                }
+                core_defs_in_expr(value, defs, poisoned);
+            }
+            StmtKind::LetElse {
+                pattern,
+                value,
+                else_block,
+                ..
+            } => {
+                for n in pattern.binding_names() {
+                    defs.entry(n).or_default().push(CoreDef::Projection(value));
+                }
+                core_defs_in_expr(value, defs, poisoned);
+                core_defs_in_block(else_block, defs, poisoned);
+            }
+            StmtKind::Assign { target, value } => {
+                if let ExprKind::Identifier(name) = &target.kind {
+                    defs.entry(name.clone())
+                        .or_default()
+                        .push(CoreDef::Value(value));
+                }
+                core_defs_in_expr(value, defs, poisoned);
+            }
+            StmtKind::Expr(e) | StmtKind::CompoundAssign { value: e, .. } => {
+                core_defs_in_expr(e, defs, poisoned)
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                core_defs_in_block(body, defs, poisoned)
+            }
+            StmtKind::LetUninit { name, .. } => {
+                poisoned.insert(name.clone());
+            }
+            StmtKind::MultiAssign { .. } => {}
+        }
     }
+    if let Some(e) = &b.final_expr {
+        core_defs_in_expr(e, defs, poisoned);
+    }
+}
+
+fn core_defs_in_expr<'e>(
+    e: &'e Expr,
+    defs: &mut std::collections::HashMap<String, Vec<CoreDef<'e>>>,
+    poisoned: &mut HashSet<String>,
+) {
+    match &e.kind {
+        ExprKind::IfLet { pattern, value, .. } | ExprKind::WhileLet { pattern, value, .. } => {
+            for n in pattern.binding_names() {
+                defs.entry(n).or_default().push(CoreDef::Projection(value));
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            for arm in arms {
+                for n in arm.pattern.binding_names() {
+                    defs.entry(n)
+                        .or_default()
+                        .push(CoreDef::Projection(scrutinee));
+                }
+            }
+        }
+        ExprKind::For { pattern, .. } => poisoned.extend(pattern.binding_names()),
+        _ => {}
+    }
+    for_each_subblock(e, &mut |b| core_defs_in_block(b, defs, poisoned));
 }
 
 /// Names bound by `let <name> = <call to a ref-returning fn>;` anywhere in

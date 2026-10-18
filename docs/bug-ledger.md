@@ -98,12 +98,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 276 |
 | codegen-gap | 270 |
-| false-positive | 221 |
+| false-positive | 222 |
 | other | 174 |
 | perf | 172 |
 | diagnostics | 166 |
 | crash | 122 |
-| soundness | 111 |
+| soundness | 112 |
 | use-after-free | 91 |
 
 ### By surface
@@ -114,12 +114,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 950 |
 | typecheck | 459 |
 | other | 115 |
-| ownership | 111 |
+| ownership | 112 |
 | runtime | 77 |
 | cli | 77 |
 | parser | 69 |
 | autopar | 59 |
-| resolver | 42 |
+| resolver | 43 |
 | effect | 32 |
 | lexer | 12 |
 ## Current state
@@ -171,6 +171,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-60 | 2026-10-14 | ownership | medium | `karac check` refuses the basic find-and-return-a-reference lookup: `for (k, it) in v.iter() { if k == name { return Some(it); } }` in `fn pick(v: ref Vec[(String, i64)], name: Str) -> Option[ref i64]` (and `for s in v.iter() { return Some(s); }` into `Option[ref String]`) is "returned borrowed collection holds an element that borrows function-local storage" plus `borrow_projection_copy` "cannot move 'it'", though the element borrows the caller's `v`; the MIR backends run it | — |
 | B-2026-10-14-62 | 2026-10-14 | ownership | low | `karac check` accepts moving a stored function value out of a borrow, `for r in rs.iter() { let h = r.h; t += h(1000); }` with `h: Fn(i64) -> i64`, which design.md makes move-only; the MIR borrow checker refuses it ("move of (*_42).0 through a shared reference [E0517]") with no source location, so the error surfaces only at build | — |
 | B-2026-10-14-69 | 2026-10-14 | runtime | medium | A short `Vec` grown by `push` allocates twice on the MIR compiled backend (first block 4 elements, then 8) where legacy allocates once (8): kata 638's `Map[Vec[i64], i64]` memo bench is 2.0x legacy, 1.2x with the first block raised to 8 | — |
+| B-2026-10-14-71 | 2026-10-14 | ownership | high | `karac check` accepts a returned `ref` local that a later assignment points at an owned local: c92887c8c5 (B-2026-10-14-38) treats `x` as a borrow source when its `let x = ref <place>` is rooted at a borrowed parameter and ignores every later `x = ...`, so `let mut node = ref self.head; node = ref other; node` with `other` a local, or `if let Some(n) = local.next { node = n; }`, passes and returns a dangling reference | — |
 | B-2026-10-15-7 | 2026-10-15 | typecheck | medium | `karac check` refuses a `match v[i]` arm that only READS its binding with `==` or in an f-string: `match v[0] { Tok.Sym(t) => t == s, .. }` and `Tok.Sym(t) => println(f"{t}")` are E_INDEX_MOVE_NON_COPY ("this arm consumes `t`"), as is `Tok.Sym(ref t) => t == s`, though design.md says `==` borrows its operands and core-semantics.md §4.6 makes a binding into a borrowed place a `ref`; `t.len()` in the same position is accepted, and every MIR surface runs all of them | — |
 | B-2026-10-15-10 | 2026-10-15 | runtime | medium | Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
 | B-2026-10-15-12 | 2026-10-15 | ownership | medium | `karac check` keeps a closure's borrow of a captured value alive after the closure is gone: `let redo = skip.iter().any(|s| s == d.name); if redo { continue; } kept.push(d);` is refused with "cannot consume `d` while closure at line 8:36 captures `d.name` by `ref` (borrow still live)", though the closure was consumed by `any` on the line before; the same test written as a `for` loop passes, and every MIR surface runs the closure form | — |
@@ -191,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
+| B-2026-10-15-29 | 2026-10-15 | resolver | medium | A top-level type declared AFTER an enum that has a variant of the same name is refused as "'Heading' is already defined in this scope" by `karac check`, `__mir-run` and `__mir-llvm-run`, while the same program with the type declared BEFORE the enum is accepted and runs; so the common `enum Shape { Circle(Circle), .. }` shape works or fails depending on declaration order | — |
 | B-2026-10-18-1 | 2026-10-18 | typecheck+interp+codegen | low | In generic code `T.Output` reads one `Output` per type, so a type with two operator impls (`impl Add for V { type Output = V }` and `impl Mul for V { type Output = i64 }`) gives `sum2[T: Add](a: own T, b: own T) -> T.Output` the `i64` of `Mul`: `sum2(V { x: 7 }, V { x: 8 }).x` is refused with "no field 'x' on type 'i64'" | — |
 | B-2026-10-18-2 | 2026-10-18 | typecheck | medium | A `const` whose initializer is an integer literal above i64::MAX panics `karac check` (and `karac __mir-run`): `const BIG: i128 = 18446744073709551615;` reaches `narrow_literal_to_i64` from `eval_const_expr` with "internal error: 128-bit integer literal ... reached an i64-only consumer (B-2026-08-19-8 stage 5)". The same literal in a `let`, in a match pattern, or the same value spelled `(1 << 64) - 1` all work | — |
 | B-2026-10-18-3 | 2026-10-18 | ownership | medium | Inside a loop, `karac check` refuses an owned loop-local value moved by a METHOD call in each of two exclusive branches, `if c { s.link(it); } else { s.link(it); }`, with "value 'it' was moved into a container (moved at line N), used again here", when `link(mut ref self, it: own It)` pushes it into a field. The same code outside a loop, or with a free function `take(mut v, it)` inside the loop, passes; __mir-run runs the refused program correctly | — |

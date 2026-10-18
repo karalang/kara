@@ -6331,8 +6331,9 @@ fn a_borrow_of_a_place_rooted_at_a_borrowed_parameter_is_returned() {
     );
 }
 
-/// B-2026-10-14-38: a `ref <place>` or `ref` local rooted at an owned value
-/// still dangles.
+/// B-2026-10-14-38, B-2026-10-14-71: a `ref <place>` or `ref` local rooted at
+/// an owned value still dangles, including a `ref` local a later assignment
+/// points at one.
 #[test]
 fn a_borrow_of_an_owned_place_is_not_returned() {
     for (tag, src) in [
