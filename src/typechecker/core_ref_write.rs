@@ -124,6 +124,8 @@ struct Walk<'t, 'a> {
     prefix_errors: Vec<(Span, String, FixIt)>,
     /// Calls of removed library functions (§11.7).
     removed_calls: Vec<(Span, String)>,
+    /// Offsets of plain pattern bindings some write goes through.
+    written_pattern_bindings: FxHashSet<usize>,
     /// The callee of each call of an `OnceFn` value, for the ownership
     /// pass's E0500 wording (§9.6).
     once_calls: FxHashSet<SpanKey>,
@@ -183,6 +185,10 @@ type Binding = (String, Origin, Option<FixIt>);
 enum Origin {
     /// Not a borrow its declaration makes read-only (its type may still be).
     Owned,
+    /// A plain pattern binding at this offset: owned, as `Owned` is. A write
+    /// through it means the `ref` its move fix inserts must be `mut ref`
+    /// (B-2026-10-18-28).
+    OwnedPattern(usize),
     /// A `ref T` parameter.
     Param,
     /// The item of a bare `for` over a collection (§4.6).
@@ -267,6 +273,7 @@ impl<'a> TypeChecker<'a> {
             prefix_errors: Vec::new(),
             once_calls: FxHashSet::default(),
             removed_calls: Vec::new(),
+            written_pattern_bindings: FxHashSet::default(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
@@ -324,6 +331,14 @@ impl<'a> TypeChecker<'a> {
         let once_calls = w.once_calls;
         let read_conflicts = w.read_conflicts;
         let removed_calls = w.removed_calls;
+        // A binding the fix makes `ref` that its arm writes through must be
+        // `mut ref` instead (B-2026-10-18-28).
+        let written = w.written_pattern_bindings;
+        for edits in self.core_moving_scrutinees.values_mut() {
+            for e in edits.iter_mut().filter(|e| written.contains(&e.offset)) {
+                e.replacement = e.replacement.replace("ref ", "mut ref ");
+            }
+        }
         for (span, message) in removed_calls {
             self.type_error(message, span, TypeErrorKind::RemovedInCore);
         }
@@ -432,6 +447,8 @@ impl Walk<'_, '_> {
                         replacement: "mut ".to_string(),
                     });
                     (n, Origin::RefPattern, fix)
+                } else if origin == Origin::Owned {
+                    (n, Origin::OwnedPattern(sp.offset), fix.clone())
                 } else {
                     (n, origin, fix.clone())
                 }
@@ -1360,6 +1377,11 @@ impl Walk<'_, '_> {
     fn check_through(&mut self, place: &Expr, at: Span, action: &str) {
         let mut cur = place;
         loop {
+            if let ExprKind::Identifier(n) = &cur.kind {
+                if let Origin::OwnedPattern(at) = self.origin_of(n) {
+                    self.written_pattern_bindings.insert(at);
+                }
+            }
             match self.step(cur) {
                 Step::ReadOnly => {
                     let message = self.read_only_message(cur, action);
@@ -1443,7 +1465,7 @@ impl Walk<'_, '_> {
                  (core-semantics.md §5.9). Bind it as `mut ref {name}` from a mutable \
                  owned scrutinee"
             ),
-            Origin::Owned | Origin::MutRefPattern => format!(
+            Origin::Owned | Origin::OwnedPattern(_) | Origin::MutRefPattern => format!(
                 "`{name}` is a shared `ref`, so {action} cannot modify it \
                  (core-semantics.md §5.9). Borrow it as `mut ref` to write through it"
             ),
@@ -1455,7 +1477,7 @@ impl Walk<'_, '_> {
             ExprKind::SelfValue => self.self_read_only,
             ExprKind::Identifier(n) if n == "self" => self.self_read_only,
             ExprKind::Identifier(n) => match self.origin_of(n) {
-                Origin::Owned => false,
+                Origin::Owned | Origin::OwnedPattern(_) => false,
                 Origin::MutRefPattern => return Step::Writable,
                 _ => true,
             },

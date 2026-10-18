@@ -38,6 +38,24 @@ use super::{
     OwnershipMode, ParamUsage, ValueState,
 };
 
+/// Methods whose owned result holds nothing of a range-view receiver, so the
+/// view's borrow ends at the call (B-2026-10-18-5). An iterator is owned by
+/// type but still reads the view, which is why this is a list and not a test
+/// of the result type alone.
+const RANGE_VIEW_COPY_OUT_METHODS: &[&str] = &[
+    "to_string",
+    "to_owned",
+    "to_vec",
+    "clone",
+    "len",
+    "is_empty",
+    "contains",
+    "starts_with",
+    "ends_with",
+    "to_uppercase",
+    "to_lowercase",
+];
+
 impl<'a> super::OwnershipChecker<'a> {
     /// B-2026-08-17-17 — resolve which enclosing frame a `break` exits and,
     /// when that frame is a collecting bare-`loop` frame, snapshot the
@@ -847,6 +865,21 @@ impl<'a> super::OwnershipChecker<'a> {
                 if let Some(view_snapshot) = view_snapshot {
                     self.restore_active_borrows_to_snapshot(&view_snapshot);
                 }
+                // B-2026-10-18-5 — `path[..i].to_string()`: a method that
+                // copies an owned value out of a range view ends the view's
+                // borrow here, wherever the call sits (a `match` arm, an
+                // argument), not only as a `let`'s whole right-hand side.
+                if !range_view_write
+                    && Self::is_range_view(object)
+                    && RANGE_VIEW_COPY_OUT_METHODS.contains(&method.as_str())
+                    && self
+                        .typecheck_result
+                        .expr_types
+                        .get(&SpanKey::from_span(&expr.span))
+                        .is_some_and(crate::ownership::type_is_deeply_owned)
+                {
+                    self.end_copied_out_slice_borrow(&SpanKey::from_span(&object.span));
+                }
             }
             ExprKind::FieldAccess { object, .. } => {
                 self.check_expr_reading(object, states, param_types, param_usage);
@@ -1100,7 +1133,29 @@ impl<'a> super::OwnershipChecker<'a> {
                 body,
                 ..
             } => {
-                self.check_expr_reading(iterable, states, param_types, param_usage);
+                let before_iterable = self.snapshot_active_borrow_lens();
+                if self
+                    .typecheck_result
+                    .core_consuming_for_iterables
+                    .contains(&SpanKey::from_span(&iterable.span))
+                {
+                    self.check_expr_consuming(iterable, states, param_types, param_usage);
+                } else {
+                    self.check_expr_reading(iterable, states, param_types, param_usage);
+                }
+                // B-2026-10-18-14 — a range view in the header
+                // (`for x in v[1..].iter()`) is borrowed for the loop and
+                // released when it ends; the body still sees it.
+                let header_views: Vec<SpanKey> = self
+                    .active_borrows
+                    .iter()
+                    .flat_map(|(root, bs)| {
+                        let from = before_iterable.get(root).copied().unwrap_or(0);
+                        bs.iter().skip(from)
+                    })
+                    .filter(|b| b.kind.is_slice())
+                    .map(|b| SpanKey::from_span(&b.span))
+                    .collect();
                 let pre_uninit = snapshot_uninit(states);
                 self.define_pattern_states(pattern, states);
                 self.loop_da_stack
@@ -1108,6 +1163,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.check_block(body, states, param_types, param_usage);
                 self.loop_da_stack.pop();
                 restore_uninit_after_loop(pre_uninit, states);
+                for key in &header_views {
+                    self.end_copied_out_slice_borrow(key);
+                }
             }
             ExprKind::Loop { label, body, .. } => {
                 // B-2026-08-17-17 — a bare `loop` runs its body at least

@@ -1442,11 +1442,90 @@ impl<'a> super::TypeChecker<'a> {
                             msg.push_str(&format!(", did you mean '{}'?", suggestion));
                         }
                     }
+                    // B-2026-10-18-32: `v.clone()` on a type that does not
+                    // derive `Clone` names the derive and adds it above the
+                    // declaration.
+                    // B-2026-10-18-35: `parse` returns a `Result` now, so
+                    // the `Option` spelling `.ok_or(e)` is `.map_err(|_| e)`.
+                    if type_name == "Result" && method == "ok_or" && args.len() == 1 {
+                        let from = object.span.offset + object.span.length;
+                        let to = args[0].value.span.offset;
+                        if to > from {
+                            msg.push_str(
+                                ": a `Result` already carries an error; replace it with \
+                                 `.map_err(|_| ..)`",
+                            );
+                            self.type_error_with_fix_it(
+                                msg,
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                                FixIt {
+                                    span: Span {
+                                        line: object.span.line,
+                                        column: object.span.column,
+                                        offset: from,
+                                        length: to - from,
+                                    },
+                                    replacement: ".map_err(|_| ".to_string(),
+                                },
+                            );
+                            return Type::Error;
+                        }
+                    }
+                    if let Some(fix) = self.missing_derive_fix_it(&type_name, method, &mut msg) {
+                        self.type_error_with_fix_it(msg, *span, TypeErrorKind::NoMethodFound, fix);
+                        return Type::Error;
+                    }
                     self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                 }
                 Type::Error
             }
         }
+    }
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// The fix-it that derives the trait a missing method belongs to, on a
+    /// struct or enum this program declares (B-2026-10-18-32). Appends the
+    /// explanation to `msg`.
+    fn missing_derive_fix_it(
+        &self,
+        type_name: &str,
+        method: &str,
+        msg: &mut String,
+    ) -> Option<FixIt> {
+        let tr = match method {
+            "clone" => "Clone",
+            "eq" | "ne" => "PartialEq",
+            "partial_cmp" => "PartialOrd",
+            "cmp" => "Ord",
+            "hash" => "Hash",
+            _ => return None,
+        };
+        let decl = self.env.user_type_decl_spans.get(type_name)?;
+        let derived = match (
+            self.env.structs.get(type_name),
+            self.env.enums.get(type_name),
+        ) {
+            (Some(s), _) => &s.derived_traits,
+            (None, Some(e)) => &e.derived_traits,
+            (None, None) => return None,
+        };
+        if derived.contains(tr) {
+            return None;
+        }
+        msg.push_str(&format!(
+            ": `{type_name}` does not derive `{tr}`; add `#[derive({tr})]` to its declaration"
+        ));
+        (decl.column == 1).then(|| FixIt {
+            span: Span {
+                line: decl.line,
+                column: 1,
+                offset: decl.offset,
+                length: 0,
+            },
+            replacement: format!("#[derive({tr})]\n"),
+        })
     }
 }
 

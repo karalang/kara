@@ -1593,6 +1593,10 @@ pub struct TypeCheckResult {
     /// §1.1), so the read copies the reference and moves nothing; the
     /// pipeline drops a use-after-move whose consume site is one of these.
     pub core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// v2 core: each `for` iterable that is an iterator value held in a
+    /// local, which the loop consumes (B-2026-10-18-36): `for g in given` over
+    /// `let given = a.split(",")`.
+    pub core_consuming_for_iterables: FxHashSet<SpanKey>,
     /// v2 core (strict commands only): scrutinees whose pattern binds a
     /// non-`Copy` part by value. That moves the part out (§4.6), so the
     /// ownership pass treats the scrutinee place as consumed there.
@@ -2470,6 +2474,11 @@ pub struct TypeChecker<'a> {
     pub(super) core_shared_depth: usize,
     /// See [`TypeCheckResult::core_ref_copy_spans`].
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::core_consuming_for_iterables`].
+    pub(super) core_consuming_for_iterables: FxHashSet<SpanKey>,
+    /// The edit that copies each `Str` piece before a `collect` into a
+    /// `Vec[String]`, by the call's span (B-2026-10-18-35).
+    pub(super) collect_strings_fixes: FxHashMap<SpanKey, FixIt>,
     /// See [`TypeCheckResult::core_once_calls`].
     pub(super) core_once_calls: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
@@ -3328,6 +3337,8 @@ impl<'a> TypeChecker<'a> {
             core_shorthand_field: false,
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
+            core_consuming_for_iterables: FxHashSet::default(),
+            collect_strings_fixes: FxHashMap::default(),
             core_once_calls: FxHashSet::default(),
             core_moving_scrutinees: FxHashMap::default(),
             core_borrowed_receivers: FxHashSet::default(),
@@ -3782,6 +3793,7 @@ impl<'a> TypeChecker<'a> {
             copy_derivable_expr_spans,
             core_once_calls: std::mem::take(&mut self.core_once_calls),
             core_ref_copy_spans: self.core_ref_copy_spans,
+            core_consuming_for_iterables: self.core_consuming_for_iterables,
             core_moving_scrutinees: self.core_moving_scrutinees,
             core_borrowed_receivers: self.core_borrowed_receivers,
             core_for_into_iter_receivers: self.core_for_into_iter_receivers,

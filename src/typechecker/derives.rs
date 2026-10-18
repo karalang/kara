@@ -2096,6 +2096,19 @@ impl super::env::TypeEnv {
     /// W[T]` is a declared function, so it dispatches through the normal
     /// user-impl path and was measured working on BOTH backends. Gating it out
     /// would break code that compiles today.
+    /// A generic struct or enum that derives one of `traits` and has no
+    /// hand-written `Ord` (B-2026-10-18-15).
+    fn derives_generic(&self, name: &str, traits: &[&str]) -> bool {
+        let (params, derived) = match (self.structs.get(name), self.enums.get(name)) {
+            (Some(i), _) => (&i.generic_params, &i.derived_traits),
+            (None, Some(i)) => (&i.generic_params, &i.derived_traits),
+            (None, None) => return false,
+        };
+        !params.is_empty()
+            && traits.iter().any(|t| derived.contains(*t))
+            && !self.has_user_impl_ord(name)
+    }
+
     fn derived_ord_is_lowerable(
         &self,
         name: &str,
@@ -2144,6 +2157,14 @@ impl super::env::TypeEnv {
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
             Type::Named { name, args } if self.vec_is_ord && name == "Vec" && args.len() == 1 => {
                 self.type_supports_ord(&args[0])
+            }
+            // B-2026-10-18-15: the v2 pipeline orders a generic aggregate's
+            // derive field by field at each instance, so `Dec[String]` is
+            // `Ord` when `String` is (design.md § Derive, "Bounds propagate").
+            Type::Named { name, args }
+                if self.vec_is_ord && !args.is_empty() && self.derives_generic(name, &["Ord"]) =>
+            {
+                args.iter().all(|a| self.type_supports_ord(a))
             }
             Type::Named { name, .. } => {
                 if let Some(info) = self.structs.get(name) {
@@ -2203,6 +2224,13 @@ impl super::env::TypeEnv {
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_ord(inner),
             Type::Named { name, args } if self.vec_is_ord && name == "Vec" && args.len() == 1 => {
                 self.type_supports_partial_ord(&args[0])
+            }
+            Type::Named { name, args }
+                if self.vec_is_ord
+                    && !args.is_empty()
+                    && self.derives_generic(name, &["PartialOrd", "Ord"]) =>
+            {
+                args.iter().all(|a| self.type_supports_partial_ord(a))
             }
             Type::Named { name, .. } => {
                 if let Some(info) = self.structs.get(name) {

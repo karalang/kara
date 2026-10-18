@@ -1288,7 +1288,19 @@ impl<'a> UseClassifier<'a> {
                 // Consuming made `for x in v { } … v.len()` a use-after-
                 // move under `karac check` (B-2026-07-02-22) — the legacy
                 // state-machine walker (`expr_check.rs`) already reads.
-                self.walk_expr(iterable, Mode::Reading);
+                // An iterator value in a local is the exception: the loop
+                // consumes it (v2 core, B-2026-10-18-36).
+                let mode = if crate::ownership::core_rules()
+                    && self
+                        .tc
+                        .core_consuming_for_iterables
+                        .contains(&SpanKey::from_span(&iterable.span))
+                {
+                    Mode::Consuming
+                } else {
+                    Mode::Reading
+                };
+                self.walk_expr(iterable, mode);
                 self.walk_block(body, Mode::Reading);
             }
             ExprKind::Loop { body, .. } => {

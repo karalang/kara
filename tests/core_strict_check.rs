@@ -7596,3 +7596,464 @@ fn the_spec_library_surface_checks() {
     // B-2026-10-13-11: `peek` lends the smallest element, `Option[ref T]`.
     accepted("priority-queue-peek-lends", "fn main() {\n    let mut pq: PriorityQueue[i64] = PriorityQueue.new();\n    pq.push(3);\n    pq.push(7);\n    let top = *pq.peek().unwrap();\n    match pq.peek() { Some(x) => println(f\"{*x} {top}\"), None => {} }\n}\n");
 }
+
+/// `karac check` accepts `src`, and `__mir-run` prints exactly `want`.
+fn accepted_and_runs(tag: &str, src: &str, want: &str) {
+    accepted(tag, src);
+    let (dir, path) = fixture(tag, src);
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        want,
+        "{tag}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The apps thread's rows of 10-18 whose programs `main` now checks and runs
+/// (B-2026-10-18-3, -6, -20, -21, -22, -27): each program, its row's answer.
+#[test]
+fn apps_rows_of_10_18_check_and_run() {
+    accepted_and_runs(
+        "loop-branch-method-move",
+        r#"struct It {
+    n: i64,
+}
+
+struct Store {
+    v: Vec[It],
+}
+
+impl Store {
+    fn link(mut ref self, it: own It) {
+        self.v.push(it);
+    }
+}
+
+fn run(s: mut ref Store, cmds: ref Vec[i64]) {
+    for k in cmds {
+        let it = It { n: *k };
+        if *k == 0 {
+            s.link(it);
+        } else {
+            s.link(it);
+        }
+    }
+}
+
+fn main() {
+    let mut s = Store { v: Vec.new() };
+    run(mut s, vec![0, 1, 2]);
+    println(f"{s.v.len()}");
+}
+"#,
+        "3\n",
+    );
+    accepted_and_runs(
+        "if-literal-or-view",
+        r#"fn show(s: Str) { println(s); }
+fn main() {
+    let name = "ACCEPT".to_string();
+    let a = if name.is_empty() { "-" } else { name.as_str() };
+    show(a);
+}
+"#,
+        "ACCEPT\n",
+    );
+    accepted_and_runs(
+        "infer-t-from-item-binding",
+        r#"struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Skip1[I, T] {
+    it: I,
+    started: bool,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for Skip1[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if not self.started {
+            self.started = true;
+            self.it.next()?;
+        }
+        self.it.next()
+    }
+}
+
+fn skip1[I: Iterator[Item = T], T](it: own I) -> Skip1[I, T] {
+    Skip1 { it: it, started: false }
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    for x in skip1(VecIter { items: v, pos: 0 }) {
+        println(f"{x + 1}");
+    }
+}
+"#,
+        "3\n4\n",
+    );
+    accepted_and_runs(
+        "assign-matched-place-from-ref",
+        r#"fn main() {
+    let mut title: Option[String] = Some("a".to_string());
+    let s = "b".to_string();
+    match title {
+        Some(ref t) => title = Some(f"{t}{s}"),
+        None => {}
+    }
+    match title {
+        Some(ref t) => println(t),
+        None => {}
+    }
+}
+"#,
+        "ab\n",
+    );
+    accepted_and_runs(
+        "projection-local-in-generic-fn",
+        r#"struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+fn to_vec[I: Iterator](it: own I) -> Vec[I.Item] {
+    let mut it = it;
+    let mut out: Vec[I.Item] = Vec.new();
+    while let Some(x) = it.next() {
+        out.push(x);
+    }
+    out
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let w = to_vec(VecIter { items: v, pos: 0 });
+    println(f"{w.len()}");
+}
+"#,
+        "3\n",
+    );
+    // B-2026-10-18-21: impl parameters bind by name, not position. Check only:
+    // the MIR instance still binds them by position (B-2026-10-18-48).
+    accepted(
+        "impl-params-by-name",
+        r#"struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Tagged[I, T] {
+    it: I,
+    tag: T,
+}
+
+impl[T: Clone, I: Iterator] Iterator for Tagged[I, T] {
+    type Item = (T, I.Item);
+    fn next(mut ref self) -> Option[(T, I.Item)] {
+        let x = self.it.next()?;
+        Some((self.tag.clone(), x))
+    }
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2];
+    let mut t: Tagged[VecIter[i64], String] = Tagged { it: VecIter { items: v, pos: 0 }, tag: "a".to_string() };
+    while let Some((s, x)) = t.next() {
+        println(f"{s} {x}");
+    }
+}
+"#,
+    );
+}
+
+/// B-2026-10-18-22: a struct literal field typed by a projection of another
+/// field's parameter takes the solved type: `f: Fn(I.Item) -> I.Item` beside
+/// `it: VecIter[i64]`. Check only: the MIR builder does not lower the
+/// projection yet (B-2026-10-18-49).
+#[test]
+fn struct_literal_field_projection_is_normalized() {
+    accepted(
+        "projection-field",
+        r#"struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct MapIt[I: Iterator] {
+    it: I,
+    f: Fn(own I.Item) -> I.Item,
+}
+
+impl[I: Iterator] Iterator for MapIt[I] {
+    type Item = I.Item;
+    fn next(mut ref self) -> Option[I.Item] {
+        let x = self.it.next()?;
+        Some((self.f)(x))
+    }
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let mut m = MapIt { it: VecIter { items: v, pos: 0 }, f: |x: i64| x * 10 };
+    while let Some(x) = m.next() {
+        println(f"{x}");
+    }
+}
+"#,
+    );
+}
+
+/// B-2026-10-18-17: `*self` reads through a `ref self` receiver.
+#[test]
+fn deref_of_a_ref_self_receiver_reads_it() {
+    accepted_and_runs(
+        "deref-ref-self",
+        r#"trait Twice { fn twice(ref self) -> i64; }
+impl Twice for i64 {
+    fn twice(ref self) -> i64 { *self * 2 }
+}
+#[derive(Copy, Clone)]
+struct W { n: i64 }
+impl Twice for W {
+    fn twice(ref self) -> i64 { let w = *self; w.n * 2 }
+}
+fn main() {
+    let x: i64 = 21;
+    println(f"{x.twice()} {W { n: 4 }.twice()}");
+}
+"#,
+        "42 8\n",
+    );
+}
+
+/// B-2026-10-18-5 / -14: a range view copied out of by a method, or iterated
+/// by a `for` header, borrows its source only until the copy or the loop ends.
+#[test]
+fn range_view_borrows_end_with_the_copy_or_the_loop() {
+    accepted_and_runs(
+        "match-arm-slice-copy",
+        r#"fn last_slash(s: Str) -> Option[i64] { let b = s.bytes(); let mut i = b.len(); while i > 0 { i -= 1; if b[i] == b'/' { return Some(i); } } None }
+fn take(s: own String) -> i64 { s.len() }
+fn main() {
+    let path = "data/a/b.txt".to_string();
+    let dir = match last_slash(path.as_str()) {
+        Some(i) => path[..i].to_string(),
+        None => ".".to_string(),
+    };
+    println(dir);
+    println(f"{take(path)}");
+}
+"#,
+        "data/a\n12\n",
+    );
+    accepted_and_runs(
+        "for-header-range-view",
+        r#"fn main() {
+    let mut v: Vec[i64] = vec![1, 2, 3];
+    let mut n = 0;
+    for x in v[1..].iter() {
+        n += *x;
+    }
+    v.push(4);
+    println(f"{v.len()} {n}");
+}
+"#,
+        "4 5\n",
+    );
+    rejected(
+        "for-header-range-view-written-in-body",
+        "fn main() {\n    let mut v: Vec[i64] = vec![1, 2, 3];\n    for x in v[1..].iter() {\n        v.push(*x);\n    }\n}\n",
+        "because it is also borrowed as `Slice[T]`",
+    );
+}
+
+/// B-2026-10-18-28: the arm writes through the binding, so the move's fix
+/// binds it `mut ref`, not `ref`.
+#[test]
+fn moving_binding_written_in_its_arm_is_fixed_to_mut_ref() {
+    rejected_then_fixed_by(
+        "move-fix-mut-ref",
+        r#"struct H {
+    text: String,
+}
+
+fn main() {
+    let mut cur: Option[H] = Some(H { text: String.new() });
+    let words: Vec[String] = vec!["a".to_string(), "b".to_string()];
+    for w in words.iter() {
+        match cur {
+            Some(h) => h.text.push_str(w),
+            None => {}
+        }
+    }
+    match cur {
+        Some(mut ref h) => println(h.text),
+        None => {}
+    }
+}
+"#,
+        "bind it as `ref name`",
+        "Some(mut ref h) => h.text.push_str(w)",
+    );
+}
+
+/// B-2026-10-18-32: `clone` on a type that does not derive `Clone` says so,
+/// and `karac fix` adds the derive.
+#[test]
+fn clone_without_the_derive_is_fixed_by_deriving_it() {
+    rejected_then_fixed_by(
+        "clone-needs-derive",
+        r#"enum Value {
+    Int(i64),
+    Str(String),
+}
+
+fn main() {
+    let v = Value.Str("a".to_string());
+    let w = v.clone();
+    match w {
+        Value.Int(n) => println(f"{n}"),
+        Value.Str(s) => println(s),
+    }
+}
+"#,
+        "`Value` does not derive `Clone`",
+        "#[derive(Clone)]\nenum Value",
+    );
+}
+
+/// B-2026-10-18-15: a generic struct's derived ordering holds at an instance
+/// whose arguments are ordered (design.md § Derive, "Bounds propagate").
+#[test]
+fn derived_ord_on_a_generic_struct_orders_its_instances() {
+    accepted_and_runs(
+        "generic-derive-ord",
+        r#"#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Dec[K] { k: K, order: i64 }
+fn least[T: Ord + Clone](v: ref Vec[T]) -> T {
+    let mut best = v[0].clone();
+    for x in v.iter() { if *x < best { best = x.clone(); } }
+    best
+}
+fn main() {
+    let v: Vec[Dec[String]] = vec![Dec { k: "b".to_string(), order: 0 }, Dec { k: "a".to_string(), order: 1 }];
+    let m = least(v);
+    println(f"{m.k} {m.order}");
+    println(f"{v[0] < v[1]}");
+}
+"#,
+        "a 1\nfalse\n",
+    );
+}
+
+/// B-2026-10-18-36: `for g in given` consumes an iterator held in a local, so
+/// walking it again on a later pass of an outer loop is a move in a loop.
+#[test]
+fn for_over_an_iterator_local_consumes_it() {
+    let prog = |outer: bool| {
+        let walk =
+            "for g in given {\n        if g == \"x\" {\n            println(g);\n        }\n    }";
+        let body = if outer {
+            format!("for s in wanted.iter() {{\n        println(*s);\n        {walk}\n    }}")
+        } else {
+            walk.to_string()
+        };
+        format!(
+            "fn main() {{\n    let a = \"x,y\".to_string();\n    let given = a.split(\",\");\n    \
+             let wanted = vec![\"x\", \"y\"];\n    println(wanted.len());\n    {body}\n}}\n"
+        )
+    };
+    rejected(
+        "iterator-local-walked-in-a-loop",
+        &prog(true),
+        "moved inside a loop",
+    );
+    accepted_and_runs("iterator-local-walked-once", &prog(false), "2\nx\n");
+}
+
+/// B-2026-10-18-35: `karac fix` migrates the shapes the parse→Result and lazy
+/// `split`/`lines` change broke: `.ok_or` on a `Result`, indexing a `split` or
+/// `lines`, and collecting their pieces into a `Vec[String]`.
+#[test]
+fn fix_migrates_parse_result_and_lazy_split_shapes() {
+    let prog = |body: &str| {
+        format!(
+            "fn num(s: ref String) -> Result[i64, String] {{\n    i64.parse(s).map_err(|_| \"bad\")\n}}\n\
+             fn main() {{\n    {body}\n    match num(\"7\".to_string()) {{\n        Ok(n) => println(f\"{{n}}\"),\n        Err(e) => println(e),\n    }}\n}}\n"
+        )
+    };
+    rejected_then_fixed_by(
+        "ok-or-on-result",
+        "fn num(s: ref String) -> Result[i64, String] {\n    i64.parse(s).ok_or(\"bad\")\n}\n\
+         fn main() {\n    match num(\"7\".to_string()) {\n        Ok(n) => println(f\"{n}\"),\n        Err(e) => println(e),\n    }\n}\n",
+        "no method 'ok_or' on type 'Result'",
+        ".map_err(|_| \"bad\")",
+    );
+    rejected_then_fixed_by(
+        "split-index",
+        &prog("let line = \"GET /a HTTP/1.1\".to_string();\n    let path = line.split(\" \")[1];\n    println(path);"),
+        "does not support indexing with []",
+        "line.split(\" \").nth(1).unwrap();",
+    );
+    rejected_then_fixed_by(
+        "lines-index",
+        &prog("let text = \"a\\nb\".to_string();\n    let first = text.lines()[0];\n    println(first);"),
+        "does not support indexing with []",
+        "text.lines().nth(0).unwrap();",
+    );
+    rejected_then_fixed_by(
+        "split-collect-strings",
+        &prog("let csv = \"1,,2\".to_string();\n    let parts: Vec[String] = csv.split(\",\").filter(|p| p.len() > 0).collect();\n    println(f\"{parts.len()}\");"),
+        "FromIterator[StringSlice]",
+        ".filter(|p| p.len() > 0).map(|p| p.to_string()).collect()",
+    );
+}

@@ -1135,10 +1135,49 @@ impl<'a> super::TypeChecker<'a> {
         // the slot, don't `check_expr` against a raw metavar (which reports a
         // mismatch rather than binding). Fall back to synthesis for an unknown
         // field (already diagnosed above as an extra field).
-        for f in fields {
+        // B-2026-10-18-22: a field typed through a projection of another
+        // field's parameter (`f: Fn(I.Item) -> I.Item` beside `it: I`) is
+        // checked once the others have solved that parameter.
+        let projects = |f: &FieldInit| {
+            struct_info.fields.iter().any(|(n, t, _)| {
+                n == &f.name
+                    && struct_info
+                        .generic_params
+                        .iter()
+                        .any(|p| super::types::type_mentions_assoc_projection_on(t, p))
+            })
+        };
+        let mut ordered: Vec<&FieldInit> = fields.iter().collect();
+        ordered.sort_by_key(|f| projects(f));
+        for f in ordered {
             if let Some((_, expected_ty, _)) =
                 struct_info.fields.iter().find(|(n, _, _)| n == &f.name)
             {
+                let projected = (!param_subs.is_empty() && projects(f))
+                    .then(|| {
+                        let empty_cn = HashMap::new();
+                        let solved: HashMap<String, SubstValue> = param_subs
+                            .iter()
+                            .map(|(k, v)| {
+                                let v = match v.as_type() {
+                                    Some(t) => SubstValue::Type(resolve_type_vars(
+                                        t,
+                                        &self.env.substitutions,
+                                        &id_to_name,
+                                        &self.env.const_substitutions,
+                                        &empty_cn,
+                                    )),
+                                    None => v.clone(),
+                                };
+                                (k.clone(), v)
+                            })
+                            .collect();
+                        self.resolve_assoc_projections(&substitute_type_params(
+                            expected_ty,
+                            &solved,
+                        ))
+                    })
+                    .filter(super::types::type_is_fully_concrete);
                 // Push the param-substituted field slot into the value's
                 // `check_expr` when it is CONCRETE — i.e. a seeded expected arg
                 // (`value: T` slot resolves to `Vec[i64]`, so `Vec.new()` infers
@@ -1149,7 +1188,9 @@ impl<'a> super::TypeChecker<'a> {
                 // the historical `check_expr` against the raw declared type there
                 // (the param binds via the post-check unify below).
                 let raw = expected_ty.clone();
-                let push_ty = if param_subs.is_empty() {
+                let push_ty = if let Some(t) = &projected {
+                    t.clone()
+                } else if param_subs.is_empty() {
                     raw.clone()
                 } else {
                     let sub = substitute_type_params(&raw, &param_subs);
@@ -1216,7 +1257,9 @@ impl<'a> super::TypeChecker<'a> {
                         .get(&crate::resolver::SpanKey::from_span(&f.value.span))
                         .cloned()
                     {
-                        let slot = substitute_type_params(expected_ty, &param_subs);
+                        let slot = projected
+                            .clone()
+                            .unwrap_or_else(|| substitute_type_params(expected_ty, &param_subs));
                         let unified = unify_types(
                             &slot,
                             &actual,

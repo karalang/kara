@@ -676,6 +676,39 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// B-2026-10-18-35: `let v: Vec[String] = s.split(",").collect();` from
+    /// before `split` lent its pieces is fixed by copying each one first. The
+    /// bound is discharged later; this records the edit for it.
+    fn collect_views_into_strings_fix(&mut self, expr: &Expr, expected: &Type) {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return;
+        };
+        if method != "collect" || !args.is_empty() || !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        if !matches!(expected, Type::Named { name, args } if name == "Vec" && args.len() == 1 && args[0] == Type::Str)
+        {
+            return;
+        }
+        self.collect_strings_fixes.insert(
+            SpanKey::from_span(&expr.span),
+            FixIt {
+                span: Span {
+                    offset: object.span.offset + object.span.length,
+                    length: 0,
+                    ..object.span
+                },
+                replacement: ".map(|p| p.to_string())".to_string(),
+            },
+        );
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         self.note_view_lent_into_ref(expr, expected, false);
         if let Some(ty) = self.lend_borrowed_receiver(expr, expected) {
@@ -693,6 +726,7 @@ impl<'a> super::TypeChecker<'a> {
                     .insert(SpanKey::from_span(&expr.span));
             }
         }
+        self.collect_views_into_strings_fix(expr, expected);
         let mut ty = self.check_expr_inner(expr, expected);
         // A value stored into a `weak` slot keeps its own type in typed HIR.
         let weak_store = self.weak_store_actual.take();
@@ -4159,21 +4193,41 @@ impl<'a> super::TypeChecker<'a> {
                             .map(|a| format!("`{trait_name}[{}]`", render(a)))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        self.type_error(
-                            format!(
-                                "trait bound `{}: {}[{}]` is not satisfied; `{}` implements {}, \
-                                 not `{}[{}]`",
-                                type_name,
-                                trait_name,
-                                render(&want),
-                                type_display(&concrete),
-                                have,
-                                trait_name,
-                                render(&want),
-                            ),
-                            d.span,
-                            TypeErrorKind::TypeMismatch,
+                        let mut message = format!(
+                            "trait bound `{}: {}[{}]` is not satisfied; `{}` implements {}, \
+                             not `{}[{}]`",
+                            type_name,
+                            trait_name,
+                            render(&want),
+                            type_display(&concrete),
+                            have,
+                            trait_name,
+                            render(&want),
                         );
+                        // B-2026-10-18-35: lent pieces collected into owned
+                        // `String`s are copied first.
+                        let fix = (trait_name == "FromIterator" && render(&want) == "StringSlice")
+                            .then(|| {
+                                self.collect_strings_fixes
+                                    .get(&SpanKey::from_span(&d.span))
+                                    .cloned()
+                            })
+                            .flatten();
+                        match fix {
+                            Some(fix) => {
+                                message.push_str(
+                                    "; `.map(|p| p.to_string())` before `.collect()` copies each \
+                                     piece",
+                                );
+                                self.type_error_with_fix_it(
+                                    message,
+                                    d.span,
+                                    TypeErrorKind::TypeMismatch,
+                                    fix,
+                                );
+                            }
+                            None => self.type_error(message, d.span, TypeErrorKind::TypeMismatch),
+                        }
                     }
                 }
             }
@@ -8193,6 +8247,43 @@ impl<'a> super::TypeChecker<'a> {
                                 TypeErrorKind::TypeNotIndexable,
                             )
                         });
+                        // B-2026-10-18-35: `s.split(" ")[1]` from before
+                        // `split` went lazy reads one element: `.nth(1).unwrap()`.
+                        let nth = match (&index.kind, other) {
+                            (ExprKind::Integer(n, None), Type::Named { name, args })
+                                if self.env.has_impl("Iterator", name, args) =>
+                            {
+                                Some(n.to_string())
+                            }
+                            (ExprKind::Identifier(n), Type::Named { name, args })
+                                if self.env.has_impl("Iterator", name, args) =>
+                            {
+                                Some(n.clone())
+                            }
+                            _ => None,
+                        };
+                        let from = object.span.offset + object.span.length;
+                        let to = expr.span.offset + expr.span.length;
+                        if let (false, Some(i), true) = (reported, nth, to > from) {
+                            self.type_error_with_fix_it(
+                                format!(
+                                    "'{}' does not support indexing with []: it is a lazy \
+                                     iterator; `.nth({i}).unwrap()` reads that element",
+                                    type_display(other)
+                                ),
+                                expr.span,
+                                TypeErrorKind::TypeNotIndexable,
+                                FixIt {
+                                    span: Span {
+                                        offset: from,
+                                        length: to - from,
+                                        ..object.span
+                                    },
+                                    replacement: format!(".nth({i}).unwrap()"),
+                                },
+                            );
+                            return Type::Error;
+                        }
                         if !reported && !contains_type_var(other) {
                             self.type_error(
                                 format!(
@@ -8494,6 +8585,17 @@ impl<'a> super::TypeChecker<'a> {
                 let core_borrowed = self.cli_lint_overrides.strict_core
                     && (Self::for_iterable_is_core_collection(&iter_ty)
                         || Self::core_iter_yields_refs(iterable));
+                // An iterator value in a local is consumed by the loop, as
+                // `.into_iter()` would consume a collection (B-2026-10-18-36).
+                if self.cli_lint_overrides.strict_core
+                    && !core_borrowed
+                    && matches!(iterable.kind, ExprKind::Identifier(_))
+                    && matches!(&iter_ty, Type::Named { name, args } if self.env.has_impl("Iterator", name, args))
+                    && !self.is_copy_type_during_check(&iter_ty)
+                {
+                    self.core_consuming_for_iterables
+                        .insert(SpanKey::from_span(&iterable.span));
+                }
                 let prev_core =
                     std::mem::replace(&mut self.current_scrutinee_core_borrowed, core_borrowed);
                 self.bind_pattern_types(pattern, &elem_ty);

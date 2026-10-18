@@ -341,6 +341,9 @@ pub struct RefinementPred {
 pub struct TypeEnv {
     pub structs: FxHashMap<String, StructInfo>,
     pub enums: FxHashMap<String, EnumInfo>,
+    /// Where each user-written (non-stdlib) struct or enum is declared, for
+    /// a fix-it that adds a `#[derive(..)]` above it (B-2026-10-18-32).
+    pub user_type_decl_spans: FxHashMap<String, crate::token::Span>,
     /// Which generic-param positions of a named type are Shape-kinded
     /// (declared `...S` on the struct/enum). Sparse — only types with at
     /// least one shape-variadic param have an entry; the Vec is
@@ -524,6 +527,7 @@ impl TypeEnv {
             vec_is_ord: false,
             structs: FxHashMap::default(),
             enums: FxHashMap::default(),
+            user_type_decl_spans: FxHashMap::default(),
             shape_param_positions: FxHashMap::default(),
             unions: FxHashMap::default(),
             distinct_types: FxHashMap::default(),

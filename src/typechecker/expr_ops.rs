@@ -3831,6 +3831,9 @@ impl<'a> super::TypeChecker<'a> {
         }
         match &operand.kind {
             ExprKind::Identifier(n) => self.local_scope.is_view(n),
+            // A `ref self` / `mut ref self` receiver is a borrow too:
+            // `*self * 2` in `impl Twice for i64` (B-2026-10-18-17).
+            ExprKind::SelfValue => self.current_fn_ref_params.contains("self"),
             // `*p.0` on a view `p` (a `for p in m.iter()` item) reads the
             // part through the same borrow (B-2026-10-12-9).
             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {

@@ -83,6 +83,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     let derived_traits = extract_derived_traits(&s.attributes);
                     let must_use_message = extract_must_use_message(&s.attributes);
+                    if !s.stdlib_origin {
+                        self.env.user_type_decl_spans.insert(s.name.clone(), s.span);
+                    }
                     self.env.structs.insert(
                         s.name.clone(),
                         StructInfo {
@@ -112,6 +115,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     let derived_traits = extract_derived_traits(&e.attributes);
                     let must_use_message = extract_must_use_message(&e.attributes);
+                    if !e.stdlib_origin {
+                        self.env.user_type_decl_spans.insert(e.name.clone(), e.span);
+                    }
                     self.env.enums.insert(
                         e.name.clone(),
                         EnumInfo {
