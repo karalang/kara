@@ -7409,3 +7409,27 @@ fn a_bitwise_operation_on_mixed_integer_types_is_refused() {
         "cast the 'u8' operand up to 'u32'",
     );
 }
+
+/// design.md § Parameter modes: an annotated bare closure parameter borrows,
+/// and a body that gives it away is an error at the closure, with the `own`
+/// spelling as its fix: in the result (`|e: String| (id, e)`) and in a slot
+/// that wants the value (a struct field).
+#[test]
+fn a_closure_that_gives_away_a_bare_param_is_refused_at_the_closure() {
+    rejected_then_fixed_by(
+        "closure-give-away-tail",
+        "fn parse(id: i64, s: own String) -> Result[i64, (i64, String)] {\n    let fail = |e: String| (id, e);\n    if s.len() > 3 { Err(fail(s)) } else { Ok(1) }\n}\nfn main() {\n    match parse(4, \"hello\".to_string()) { Ok(v) => println(f\"{v}\"), Err((i, m)) => println(f\"{i} {m}\") }\n}\n",
+        "cannot give away closure parameter `e`",
+        "|e: own String|",
+    );
+    rejected_then_fixed_by(
+        "closure-give-away-field",
+        "struct P { id: i64, e: String }\nfn main() {\n    let mk = |e: String| P { id: 1, e: e };\n    println(mk(\"x\".to_string()).e);\n}\n",
+        "Take it by value with `|e: own String|`",
+        "|e: own String|",
+    );
+    accepted(
+        "closure-keeps-a-bare-param",
+        "fn main() {\n    let a = |e: String| e.len();\n    let b = |e: String| { let e = e.clone(); (1, e) };\n    let c = |e: own String| (1, e);\n    println(f\"{a(\"x\".to_string())} {b(\"y\".to_string()).1} {c(\"z\".to_string()).1}\");\n}\n",
+    );
+}

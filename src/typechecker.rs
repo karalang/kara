@@ -2740,6 +2740,9 @@ pub struct TypeChecker<'a> {
     /// written to make it owned. Feeds the give-away diagnostic in
     /// `check_expr`.
     pub(super) current_fn_d5_params: FxHashMap<String, Span>,
+    /// The names in `current_fn_d5_params` that are a closure literal's
+    /// parameters, so the give-away diagnostic spells the fix `|x: own T|`.
+    pub(super) closure_d5_params: FxHashSet<String>,
     /// Spans at which a `frozen` PARAMETER was read as a value. B-2026-08-08-11.
     ///
     /// `frozen T` lowers to `TypeKind::Ref(T)` at parse time (B-2026-08-01-33 —
@@ -3346,6 +3349,7 @@ impl<'a> TypeChecker<'a> {
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,
             current_fn_d5_params: FxHashMap::default(),
+            closure_d5_params: FxHashSet::default(),
             frozen_param_use_spans: FxHashSet::default(),
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),

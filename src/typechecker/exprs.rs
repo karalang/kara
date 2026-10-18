@@ -14,7 +14,7 @@ use crate::ast::*;
 use crate::cross_task_safe::is_cross_task_safe_with;
 use crate::resolver::SpanKey;
 use crate::token::Span;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
 use super::env::{FunctionSig, ImplInfo};
@@ -875,6 +875,11 @@ impl<'a> super::TypeChecker<'a> {
                 "the borrowed receiver `self`".to_string(),
                 "`own self`".to_string(),
             )
+        } else if self.closure_d5_params.contains(name) {
+            (
+                format!("closure parameter `{name}`"),
+                format!("`|{name}: own {shown}|`"),
+            )
         } else {
             (
                 format!("parameter `{name}`"),
@@ -904,6 +909,163 @@ impl<'a> super::TypeChecker<'a> {
             got: Some(format!("ref {shown}")),
         });
         Some(expected.clone())
+    }
+
+    /// Enter a closure literal's scope for the D5 give-away diagnostic: its
+    /// annotated bare parameters (`|e: String|`, which the strict check reads
+    /// as `|e: ref String|`) borrow as a function's bare parameters do, and
+    /// its other parameters shadow any of the enclosing function's. Returns
+    /// what [`Self::leave_closure_d5_params`] restores.
+    pub(super) fn enter_closure_d5_params(
+        &mut self,
+        params: &[ClosureParam],
+    ) -> (FxHashMap<String, Span>, FxHashSet<String>) {
+        let mut map = self.current_fn_d5_params.clone();
+        let mut names = self.closure_d5_params.clone();
+        for p in params {
+            for n in p.pattern.binding_names() {
+                map.remove(&n);
+                names.remove(&n);
+            }
+        }
+        if self.cli_lint_overrides.strict_core && crate::d5_params::on() {
+            for p in params {
+                let (Some(t), PatternKind::Binding(n)) = (&p.ty, &p.pattern.kind) else {
+                    continue;
+                };
+                if let TypeKind::Ref(inner) = &t.kind {
+                    // The D5 rewrite reuses the written type's span.
+                    if inner.span == t.span {
+                        map.insert(
+                            n.clone(),
+                            Span {
+                                length: 0,
+                                ..t.span
+                            },
+                        );
+                        names.insert(n.clone());
+                    }
+                }
+            }
+        }
+        (
+            std::mem::replace(&mut self.current_fn_d5_params, map),
+            std::mem::replace(&mut self.closure_d5_params, names),
+        )
+    }
+
+    pub(super) fn leave_closure_d5_params(
+        &mut self,
+        saved: (FxHashMap<String, Span>, FxHashSet<String>),
+    ) {
+        self.current_fn_d5_params = saved.0;
+        self.closure_d5_params = saved.1;
+    }
+
+    /// A closure with no expected type gives its result the type of its tail,
+    /// so a bare parameter in the tail (`|e: String| (id, e)`) would make the
+    /// result hold a borrow of the closure's own argument, which nothing at
+    /// the closure declares. design.md § Parameter modes: a body that moves a
+    /// borrowed parameter is an error at the closure, so it is reported here
+    /// with the `own` spelling rather than later, where the result is used.
+    pub(super) fn d5_closure_tail_gives_away(&mut self, params: &[ClosureParam], body: &Expr) {
+        if !self.cli_lint_overrides.strict_core || self.closure_d5_params.is_empty() {
+            return;
+        }
+        let ours: FxHashSet<String> = params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .filter(|n| self.closure_d5_params.contains(n))
+            .collect();
+        if ours.is_empty() {
+            return;
+        }
+        fn walk<'e>(e: &'e Expr, shadowed: &FxHashSet<String>, out: &mut Vec<(&'e Expr, String)>) {
+            match &e.kind {
+                ExprKind::Identifier(n) if !shadowed.contains(n) => out.push((e, n.clone())),
+                ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+                    for i in items {
+                        walk(i, shadowed, out);
+                    }
+                }
+                ExprKind::Call { callee, args } => {
+                    let ctor = match &callee.kind {
+                        ExprKind::Identifier(n) => n.starts_with(char::is_uppercase),
+                        ExprKind::Path { segments, .. } => segments
+                            .last()
+                            .is_some_and(|n| n.starts_with(char::is_uppercase)),
+                        _ => false,
+                    };
+                    if ctor {
+                        for a in args {
+                            walk(&a.value, shadowed, out);
+                        }
+                    }
+                }
+                ExprKind::Block(b) => {
+                    let mut inner = shadowed.clone();
+                    for st in &b.stmts {
+                        if let StmtKind::Let { pattern, .. } = &st.kind {
+                            inner.extend(pattern.binding_names());
+                        }
+                    }
+                    if let Some(t) = &b.final_expr {
+                        walk(t, &inner, out);
+                    }
+                }
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    let mut inner = shadowed.clone();
+                    for st in &then_block.stmts {
+                        if let StmtKind::Let { pattern, .. } = &st.kind {
+                            inner.extend(pattern.binding_names());
+                        }
+                    }
+                    if let Some(t) = &then_block.final_expr {
+                        walk(t, &inner, out);
+                    }
+                    if let Some(e) = else_branch {
+                        walk(e, shadowed, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        walk(body, &FxHashSet::default(), &mut found);
+        for (e, n) in found {
+            if !ours.contains(&n) {
+                continue;
+            }
+            let Some(Type::Ref(inner)) = self.local_scope.lookup(&n).cloned() else {
+                continue;
+            };
+            if !self.type_cannot_leave_a_borrowed_place(&inner) {
+                continue;
+            }
+            let shown = type_display(&inner);
+            self.errors.push(TypeError {
+                message: format!(
+                    "cannot give away closure parameter `{n}`: an annotated bare closure \
+                     parameter borrows (design.md § Parameter modes), and the closure's \
+                     result would hold it. Take it by value with `|{n}: own {shown}|`, \
+                     or hand on a copy with `.clone()`"
+                ),
+                span: e.span,
+                kind: TypeErrorKind::TypeMismatch,
+                lint_name: None,
+                fix_it: self.current_fn_d5_params.get(&n).map(|at| FixIt {
+                    span: *at,
+                    replacement: "own ".to_string(),
+                }),
+                class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                expected: Some(shown.clone()),
+                got: Some(format!("ref {shown}")),
+            });
+        }
     }
 
     /// D5 for a closure literal's annotated parameter: a bare `|s: String|`
@@ -2056,6 +2218,7 @@ impl<'a> super::TypeChecker<'a> {
                     .flat_map(|p| p.pattern.binding_names())
                     .collect();
                 self.local_scope.push();
+                let saved_d5 = self.enter_closure_d5_params(params);
                 let param_types: Vec<Type> = params
                     .iter()
                     .zip(expected_params.iter())
@@ -2151,6 +2314,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     self.check_assignable(expected_ret, &t, span);
                 }
+                self.leave_closure_d5_params(saved_d5);
                 self.local_scope.pop();
                 let actual = self.closure_type_with_capture_inference(
                     &expr.span,
@@ -8257,6 +8421,7 @@ impl<'a> super::TypeChecker<'a> {
                     .closure_param_seeds
                     .remove(&SpanKey::from_span(&expr.span));
                 self.local_scope.push();
+                let saved_d5 = self.enter_closure_d5_params(params);
                 let param_types: Vec<Type> = params
                     .iter()
                     .enumerate()
@@ -8316,6 +8481,8 @@ impl<'a> super::TypeChecker<'a> {
                     .closure_return_types
                     .pop()
                     .expect("closure return collector pushed above");
+                self.d5_closure_tail_gives_away(params, body);
+                self.leave_closure_d5_params(saved_d5);
                 self.local_scope.pop();
                 self.break_value_types = saved_break_values;
                 // Resolve any closure param inference vars the body solved
