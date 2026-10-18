@@ -1,0 +1,1507 @@
+// mini_iptables: a Linux host's packet filter, as iptables (legacy,
+// v1.8.10) and conntrack show it:
+// - iptables-restore of a saved rule set with the nat and filter tables,
+//   refused whole on an unknown option, an unknown target or a missing
+//   COMMIT, with iptables-restore's messages and the line;
+// - rules with `!` negation, CIDR sources and destinations, interfaces
+//   with `+` wildcards, and the tcp, udp, icmp, conntrack, state,
+//   multiport, limit and comment matches, loaded implicitly the way
+//   iptables loads `-m tcp` for `--dport`;
+// - targets ACCEPT, DROP, REJECT, LOG (with the kernel's log line),
+//   RETURN, user chains, DNAT, SNAT and MASQUERADE;
+// - packets traced through conntrack (NEW, ESTABLISHED, INVALID, both
+//   directions, NAT recorded on the first packet and replayed), nat
+//   PREROUTING, routing, filter INPUT/FORWARD/OUTPUT and nat POSTROUTING,
+//   with the limit match's token bucket on a virtual clock;
+// - `iptables -S`, `-L -n -v --line-numbers`, `-A`, `-I`, `-D` by rule
+//   and by number, `-N`, `-X`, `-F`, `-Z`, `-P` and their errors,
+//   `conntrack -L` and `iptables-save -c`.
+//
+// The run writes the rule files and jobs into data/ first. expected.out
+// is the output of mini_iptables.py, the same jobs run in Python.
+
+const VERSION: Str = "v1.8.10 (legacy)";
+const DATE: Str = "Sat Oct 18 02:00:00 2026";
+
+fn is_target(t: Str) -> bool {
+    t == "ACCEPT" or t == "DROP" or t == "REJECT" or t == "LOG" or t == "RETURN" or t == "DNAT" or t == "SNAT" or t == "MASQUERADE"
+}
+
+fn builtin_chains(table: Str) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    if table == "filter" {
+        v.push("INPUT".to_string());
+        v.push("FORWARD".to_string());
+        v.push("OUTPUT".to_string());
+    } else {
+        v.push("PREROUTING".to_string());
+        v.push("INPUT".to_string());
+        v.push("OUTPUT".to_string());
+        v.push("POSTROUTING".to_string());
+    }
+    v
+}
+
+struct Fail {
+    msg: String,
+    code: i64,
+}
+
+fn fail(msg: String, code: i64) -> Fail {
+    Fail { msg: msg, code: code }
+}
+
+// ------------------------------------------------------------ strings
+
+fn index_of(s: Str, c: u8) -> Option[i64] {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        if b[i] == c {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn is_digits(s: Str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    for c in s.bytes() {
+        if c < b'0' or c > b'9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn num(s: Str) -> i64 {
+    let n: i64 = i64.parse(s).unwrap_or(0);
+    n
+}
+
+fn lpad(s: Str, w: i64) -> String {
+    let mut out = String.new();
+    while out.len() + s.len() < w {
+        out.push_str(" ");
+    }
+    out.push_str(s);
+    out
+}
+
+fn rpad(s: Str, w: i64) -> String {
+    let mut out = s.to_string();
+    while out.len() < w {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn rstrip(s: Str) -> String {
+    let b = s.bytes();
+    let mut n = b.len();
+    while n > 0 and b[n - 1] == b' ' {
+        n -= 1;
+    }
+    s[..n].to_string()
+}
+
+// Words split on spaces, with "double quoted" words kept whole.
+fn tokenize(line: Str) -> Vec[String] {
+    let b = line.bytes();
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b' ' {
+            i += 1;
+        } else if b[i] == b'"' {
+            let mut j = i + 1;
+            while j < b.len() and b[j] != b'"' {
+                j += 1;
+            }
+            out.push(line[i + 1..j].to_string());
+            i = j + 1;
+        } else {
+            let mut j = i;
+            while j < b.len() and b[j] != b' ' {
+                j += 1;
+            }
+            out.push(line[i..j].to_string());
+            i = j;
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ addresses
+
+fn ip_num(s: Str) -> Option[i64] {
+    let parts = s.split(".");
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut n = 0;
+    for p in parts {
+        if not is_digits(p.as_str()) or num(p.as_str()) > 255 {
+            return None;
+        }
+        n = n * 256 + num(p.as_str());
+    }
+    Some(n)
+}
+
+fn ip_str(n: i64) -> String {
+    f"{n >> 24}.{(n >> 16) & 255}.{(n >> 8) & 255}.{n & 255}"
+}
+
+fn mask(plen: i64) -> i64 {
+    if plen == 0 { 0 } else { ((1 << 32) - 1) ^ ((1 << (32 - plen)) - 1) }
+}
+
+#[derive(Copy, Clone)]
+struct Net {
+    addr: i64,
+    plen: i64,
+}
+
+impl Net {
+    fn contains(self, ip: i64) -> bool {
+        (ip & mask(self.plen)) == self.addr
+    }
+
+    fn show(self) -> String {
+        f"{ip_str(self.addr)}/{self.plen}"
+    }
+}
+
+fn parse_net(s: Str) -> Result[Net, Fail] {
+    let (a, plen) = match index_of(s, b'/') {
+        Some(i) => (s[..i].to_string(), num(s[i + 1..])),
+        None => (s.to_string(), 32),
+    };
+    match ip_num(a.as_str()) {
+        Some(n) => Ok(Net { addr: n & mask(plen), plen: plen }),
+        None => Err(fail(f"host/network `{a}' not found", 2)),
+    }
+}
+
+fn addr(ip: i64, port: i64) -> String {
+    if port == 0 { ip_str(ip) } else { f"{ip_str(ip)}:{port}" }
+}
+
+fn route(ip: i64) -> Str {
+    if (ip >> 24) == 127 {
+        "lo"
+    } else if (ip & mask(24)) == (10 << 24) {
+        "eth1"
+    } else {
+        "eth0"
+    }
+}
+
+fn iface_addr(name: Str) -> i64 {
+    let s = if name == "lo" { "127.0.0.1" } else if name == "eth1" { "10.0.0.1" } else { "203.0.113.10" };
+    ip_num(s).unwrap_or(0)
+}
+
+fn is_local(ip: i64) -> bool {
+    let s = ip_str(ip);
+    s == "127.0.0.1" or s == "203.0.113.10" or s == "10.0.0.1"
+}
+
+// ------------------------------------------------------------ rules
+
+#[derive(Copy, Clone)]
+struct Range {
+    lo: i64,
+    hi: i64,
+}
+
+impl Range {
+    fn show(self) -> String {
+        if self.lo == self.hi { f"{self.lo}" } else { f"{self.lo}:{self.hi}" }
+    }
+
+    fn has(self, n: i64) -> bool {
+        self.lo <= n and n <= self.hi
+    }
+}
+
+fn parse_range(s: Str) -> Range {
+    match index_of(s, b':') {
+        Some(i) => Range { lo: num(s[..i]), hi: num(s[i + 1..]) },
+        None => Range { lo: num(s), hi: num(s) },
+    }
+}
+
+#[derive(Clone)]
+struct Match {
+    kind: String,
+    sport: Option[Range],
+    dport: Option[Range],
+    syn: bool,
+    icmp: i64,
+    states: Vec[String],
+    ports: Vec[Range],
+    rate: String,
+    interval: i64,
+    burst: i64,
+    credit: i64,
+    prev: i64,
+    comment: String,
+}
+
+fn new_match(kind: Str) -> Match {
+    Match {
+        kind: kind.to_string(),
+        sport: None,
+        dport: None,
+        syn: false,
+        icmp: -1,
+        states: Vec.new(),
+        ports: Vec.new(),
+        rate: String.new(),
+        interval: 0,
+        burst: 5,
+        credit: 0,
+        prev: 0,
+        comment: String.new(),
+    }
+}
+
+#[derive(Clone)]
+struct Rule {
+    src: Option[Net],
+    src_neg: bool,
+    dst: Option[Net],
+    dst_neg: bool,
+    in_if: String,
+    out_if: String,
+    proto: String,
+    matches: Vec[Match],
+    target: String,
+    goto: bool,
+    reject_with: String,
+    log_prefix: String,
+    to_addr: String,
+    to_port: i64,
+    pkts: i64,
+    bytes: i64,
+}
+
+impl Rule {
+    fn find(self, kind: Str) -> Option[i64] {
+        for i in 0..self.matches.len() {
+            if self.matches[i].kind == kind {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    // The match a port option belongs to, loaded on first use as iptables
+    // loads `-m tcp` for `--dport`.
+    fn proto_match(mut ref self) -> i64 {
+        match self.find(self.proto.as_str()) {
+            Some(i) => i,
+            None => {
+                self.matches.push(new_match(self.proto.as_str()));
+                self.matches.len() - 1
+            }
+        }
+    }
+}
+
+const STATES: Array[Str, 4] = ["INVALID", "NEW", "RELATED", "ESTABLISHED"];
+
+fn parse_rule(tokens: ref Vec[String], chains: ref Vec[String]) -> Result[Rule, Fail] {
+    let mut r = Rule {
+        src: None,
+        src_neg: false,
+        dst: None,
+        dst_neg: false,
+        in_if: String.new(),
+        out_if: String.new(),
+        proto: String.new(),
+        matches: Vec.new(),
+        target: String.new(),
+        goto: false,
+        reject_with: String.new(),
+        log_prefix: String.new(),
+        to_addr: String.new(),
+        to_port: 0,
+        pkts: 0,
+        bytes: 0,
+    };
+    let mut i = 0;
+    let mut neg = false;
+    // The -m match the following options belong to.
+    let mut cur: i64 = -1;
+    while i < tokens.len() {
+        let t = tokens[i].as_str();
+        let a = if i + 1 < tokens.len() { tokens[i + 1].clone() } else { String.new() };
+        let ckind = if cur >= 0 { r.matches[cur].kind.clone() } else { String.new() };
+        let ported = r.proto == "tcp" or r.proto == "udp";
+        if t == "!" {
+            neg = true;
+            i += 1;
+            continue;
+        }
+        if t == "-s" or t == "--source" {
+            r.src = Some(parse_net(a.as_str())?);
+            r.src_neg = neg;
+        } else if t == "-d" or t == "--destination" {
+            r.dst = Some(parse_net(a.as_str())?);
+            r.dst_neg = neg;
+        } else if t == "-i" or t == "--in-interface" {
+            r.in_if = a;
+        } else if t == "-o" or t == "--out-interface" {
+            r.out_if = a;
+        } else if t == "-p" or t == "--protocol" {
+            r.proto = a;
+        } else if t == "-m" or t == "--match" {
+            if a == "tcp" or a == "udp" or a == "icmp" {
+                cur = match r.find(a.as_str()) {
+                    Some(k) => k,
+                    None => {
+                        r.matches.push(new_match(a.as_str()));
+                        r.matches.len() - 1
+                    }
+                };
+            } else if a == "conntrack" or a == "state" or a == "multiport" or a == "limit" or a == "comment" {
+                r.matches.push(new_match(a.as_str()));
+                cur = r.matches.len() - 1;
+            } else {
+                return Err(fail(f"Couldn't load match `{a}':No such file or directory", 2));
+            }
+        } else if (t == "--dport" or t == "--destination-port") and ported {
+            let k = r.proto_match();
+            r.matches[k].dport = Some(parse_range(a.as_str()));
+        } else if (t == "--sport" or t == "--source-port") and ported {
+            let k = r.proto_match();
+            r.matches[k].sport = Some(parse_range(a.as_str()));
+        } else if t == "--syn" and r.proto == "tcp" {
+            let k = r.proto_match();
+            r.matches[k].syn = true;
+            i += 1;
+            neg = false;
+            continue;
+        } else if t == "--icmp-type" and r.proto == "icmp" {
+            let k = r.proto_match();
+            r.matches[k].icmp = if a == "echo-request" { 8 } else if a == "echo-reply" { 0 } else { num(a.as_str()) };
+        } else if (t == "--ctstate" or t == "--state") and (ckind == "conntrack" or ckind == "state") {
+            let given = a.split(",");
+            let mut states: Vec[String] = Vec.new();
+            for s in STATES {
+                for g in given {
+                    if g == s {
+                        states.push(s.to_string());
+                    }
+                }
+            }
+            r.matches[cur].states = states;
+        } else if t == "--dports" and ckind == "multiport" {
+            let mut ports: Vec[Range] = Vec.new();
+            for p in a.split(",") {
+                ports.push(parse_range(p.as_str()));
+            }
+            r.matches[cur].ports = ports;
+        } else if t == "--limit" and ckind == "limit" {
+            let slash = index_of(a.as_str(), b'/').unwrap_or(0);
+            let unit = a[slash + 1..].to_string();
+            let per = if unit == "sec" { 1000 } else if unit == "min" { 60000 } else { 3600000 };
+            r.matches[cur].rate = a.clone();
+            r.matches[cur].interval = per / num(a[..slash]);
+        } else if t == "--limit-burst" and ckind == "limit" {
+            r.matches[cur].burst = num(a.as_str());
+        } else if t == "--comment" and ckind == "comment" {
+            r.matches[cur].comment = a;
+        } else if t == "-j" or t == "--jump" or t == "-g" or t == "--goto" {
+            if not is_target(a.as_str()) and not chains.contains(a) {
+                return Err(fail(f"Couldn't load target `{a}':No such file or directory", 2));
+            }
+            r.target = a;
+            r.goto = t == "-g" or t == "--goto";
+        } else if t == "--reject-with" and r.target == "REJECT" {
+            r.reject_with = a;
+        } else if t == "--log-prefix" and r.target == "LOG" {
+            r.log_prefix = a;
+        } else if (t == "--to-destination" or t == "--to-source") and (r.target == "DNAT" or r.target == "SNAT") {
+            match index_of(a.as_str(), b':') {
+                Some(c) => {
+                    r.to_addr = a[..c].to_string();
+                    r.to_port = num(a[c + 1..]);
+                }
+                None => r.to_addr = a,
+            }
+        } else {
+            return Err(fail(f"unknown option \"{t}\"", 2));
+        }
+        neg = false;
+        i += 2;
+    }
+    if r.target == "REJECT" and r.reject_with.is_empty() {
+        r.reject_with = "icmp-port-unreachable".to_string();
+    }
+    for m in r.matches.iter_mut() {
+        if m.kind == "limit" {
+            m.credit = m.burst * m.interval;
+        }
+    }
+    Ok(r)
+}
+
+fn join(v: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(v[i].as_str());
+    }
+    out
+}
+
+fn ports_str(v: ref Vec[Range]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for p in v {
+        parts.push(p.show());
+    }
+    join(parts, ",")
+}
+
+fn to_str(r: ref Rule) -> String {
+    if r.to_port == 0 { r.to_addr.clone() } else { f"{r.to_addr}:{r.to_port}" }
+}
+
+// The rule as iptables -S prints it, after the chain name.
+fn spec(r: ref Rule) -> String {
+    let mut out: Vec[String] = Vec.new();
+    if let Some(n) = r.src {
+        if r.src_neg {
+            out.push("!".to_string());
+        }
+        out.push(f"-s {n.show()}");
+    }
+    if let Some(n) = r.dst {
+        if r.dst_neg {
+            out.push("!".to_string());
+        }
+        out.push(f"-d {n.show()}");
+    }
+    if not r.in_if.is_empty() {
+        out.push(f"-i {r.in_if}");
+    }
+    if not r.out_if.is_empty() {
+        out.push(f"-o {r.out_if}");
+    }
+    if not r.proto.is_empty() {
+        out.push(f"-p {r.proto}");
+    }
+    for m in r.matches {
+        out.push(f"-m {m.kind}");
+        let k = m.kind.as_str();
+        if k == "tcp" or k == "udp" {
+            if let Some(p) = m.sport {
+                out.push(f"--sport {p.show()}");
+            }
+            if let Some(p) = m.dport {
+                out.push(f"--dport {p.show()}");
+            }
+            if m.syn {
+                out.push("--tcp-flags FIN,SYN,RST,ACK SYN".to_string());
+            }
+        } else if k == "icmp" {
+            out.push(f"--icmp-type {m.icmp}");
+        } else if k == "conntrack" {
+            out.push(f"--ctstate {join(m.states, ",")}");
+        } else if k == "state" {
+            out.push(f"--state {join(m.states, ",")}");
+        } else if k == "multiport" {
+            out.push(f"--dports {ports_str(m.ports)}");
+        } else if k == "limit" {
+            out.push(f"--limit {m.rate}");
+            if m.burst != 5 {
+                out.push(f"--limit-burst {m.burst}");
+            }
+        } else if k == "comment" {
+            out.push(f"--comment \"{m.comment}\"");
+        }
+    }
+    if not r.target.is_empty() {
+        let flag = if r.goto { "-g" } else { "-j" };
+        out.push(f"{flag} {r.target}");
+    }
+    if r.target == "REJECT" {
+        out.push(f"--reject-with {r.reject_with}");
+    }
+    if r.target == "LOG" and not r.log_prefix.is_empty() {
+        out.push(f"--log-prefix \"{r.log_prefix}\"");
+    }
+    if r.target == "DNAT" {
+        out.push(f"--to-destination {to_str(r)}");
+    } else if r.target == "SNAT" {
+        out.push(f"--to-source {to_str(r)}");
+    }
+    join(out, " ")
+}
+
+// The trailing column of iptables -L.
+fn extras(r: ref Rule) -> String {
+    let mut out: Vec[String] = Vec.new();
+    for m in r.matches {
+        let k = m.kind.as_str();
+        if k == "tcp" or k == "udp" {
+            let mut s = k.to_string();
+            if let Some(p) = m.sport {
+                s.push_str(if p.lo == p.hi { f" spt:{p.lo}" } else { f" spts:{p.lo}:{p.hi}" }.as_str());
+            }
+            if let Some(p) = m.dport {
+                s.push_str(if p.lo == p.hi { f" dpt:{p.lo}" } else { f" dpts:{p.lo}:{p.hi}" }.as_str());
+            }
+            if m.syn {
+                s.push_str(" flags:0x17/0x02");
+            }
+            out.push(s);
+        } else if k == "icmp" {
+            out.push(f"icmptype {m.icmp}");
+        } else if k == "conntrack" {
+            out.push(f"ctstate {join(m.states, ",")}");
+        } else if k == "state" {
+            out.push(f"state {join(m.states, ",")}");
+        } else if k == "multiport" {
+            out.push(f"multiport dports {ports_str(m.ports)}");
+        } else if k == "limit" {
+            out.push(f"limit: avg {m.rate} burst {m.burst}");
+        } else if k == "comment" {
+            out.push(f"/* {m.comment} */");
+        }
+    }
+    if r.target == "REJECT" {
+        out.push(f"reject-with {r.reject_with}");
+    } else if r.target == "LOG" {
+        out.push(f"LOG flags 0 level 4 prefix \"{r.log_prefix}\"");
+    } else if r.target == "DNAT" or r.target == "SNAT" {
+        out.push(f"to:{to_str(r)}");
+    }
+    if r.goto {
+        out.push("[goto]".to_string());
+    }
+    join(out, " ")
+}
+
+// ------------------------------------------------------------ tables
+
+#[derive(Clone)]
+struct Chain {
+    name: String,
+    policy: String,
+    pkts: i64,
+    bytes: i64,
+    rules: Vec[Rule],
+}
+
+fn new_chain(name: Str, policy: Str) -> Chain {
+    Chain { name: name.to_string(), policy: policy.to_string(), pkts: 0, bytes: 0, rules: Vec.new() }
+}
+
+#[derive(Clone)]
+struct Table {
+    name: String,
+    chains: Vec[Chain],
+}
+
+impl Table {
+    fn find(self, name: Str) -> Option[i64] {
+        for i in 0..self.chains.len() {
+            if self.chains[i].name == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn names(self) -> Vec[String] {
+        let mut v: Vec[String] = Vec.new();
+        for c in self.chains {
+            v.push(c.name.clone());
+        }
+        v
+    }
+
+    fn references(self, name: Str) -> i64 {
+        let mut n = 0;
+        for c in self.chains {
+            for r in c.rules {
+                if r.target == name {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+}
+
+fn new_table(name: Str) -> Table {
+    let mut t = Table { name: name.to_string(), chains: Vec.new() };
+    for c in builtin_chains(name) {
+        t.chains.push(new_chain(c.as_str(), "ACCEPT"));
+    }
+    t
+}
+
+// ------------------------------------------------------------ restore
+
+fn read_file(p: Str) -> String {
+    match fs.read_to_string(p.to_string()) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+fn restore(tables: mut ref Vec[Table], path: Str) -> i64 {
+    let text = read_file(path);
+    let mut lines = text.split("\n");
+    if not lines.is_empty() and lines[lines.len() - 1].is_empty() {
+        let _ = lines.pop();
+    }
+    let mut staged: Vec[Table] = Vec.new();
+    let mut open = false;
+    for n in 0..lines.len() {
+        let line = lines[n].trim();
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        if line.starts_with("*") {
+            staged.push(Table { name: line[1..].to_string(), chains: Vec.new() });
+            open = true;
+            continue;
+        }
+        if line == "COMMIT" {
+            open = false;
+            continue;
+        }
+        let ti = staged.len() - 1;
+        if line.starts_with(":") {
+            let parts = line[1..].split(" ");
+            let policy = if parts[1] == "-" { "" } else { parts[1].as_str() };
+            let mut c = new_chain(parts[0].as_str(), policy);
+            let counts = parts[2].as_str();
+            let colon = index_of(counts, b':').unwrap_or(0);
+            c.pkts = num(counts[1..colon]);
+            c.bytes = num(counts[colon + 1..counts.len() - 1]);
+            staged[ti].chains.push(c);
+            continue;
+        }
+        let tokens = tokenize(line.as_str());
+        let mut rest: Vec[String] = Vec.new();
+        for k in 2..tokens.len() {
+            rest.push(tokens[k].clone());
+        }
+        match parse_rule(rest, staged[ti].names()) {
+            Ok(r) => {
+                let ci = staged[ti].find(tokens[1].as_str()).unwrap_or(0);
+                staged[ti].chains[ci].rules.push(r);
+            }
+            Err(e) => {
+                println(f"iptables-restore {VERSION}: {e.msg}");
+                println(f"Error occurred at line: {n + 1}");
+                println("Try `iptables-restore -h' or 'iptables-restore --help' for more information.");
+                return e.code;
+            }
+        }
+    }
+    if open {
+        println(f"iptables-restore: COMMIT expected at line {lines.len() + 1}");
+        return 1;
+    }
+    for t in staged.into_iter() {
+        for i in 0..tables.len() {
+            if tables[i].name == t.name {
+                tables[i] = t.clone();
+            }
+        }
+    }
+    0
+}
+
+// ------------------------------------------------------------ the iptables command
+
+fn row(numbers: bool, n: Str, c: ref Vec[String]) -> String {
+    let mut s = if numbers { f"{rpad(n, 4)} " } else { String.new() };
+    s.push_str(f"{lpad(c[0].as_str(), 5)} {lpad(c[1].as_str(), 5)} {rpad(c[2].as_str(), 10)} {rpad(c[3].as_str(), 4)} {rpad(c[4].as_str(), 3)} {rpad(c[5].as_str(), 6)} {rpad(c[6].as_str(), 6)} {rpad(c[7].as_str(), 20)} {rpad(c[8].as_str(), 20)}".as_str());
+    rstrip(s.as_str())
+}
+
+fn side_str(n: Option[Net], neg: bool) -> String {
+    match n {
+        Some(net) => if neg { f"!{net.show()}" } else { net.show() },
+        None => "0.0.0.0/0".to_string(),
+    }
+}
+
+fn list_chain(t: ref Table, ch: ref Chain, numbers: bool) {
+    if ch.policy.is_empty() {
+        println(f"Chain {ch.name} ({t.references(ch.name.as_str())} references)");
+    } else {
+        println(f"Chain {ch.name} (policy {ch.policy} {ch.pkts} packets, {ch.bytes} bytes)");
+    }
+    let mut head: Vec[String] = Vec.new();
+    for w in ["pkts", "bytes", "target", "prot", "opt", "in", "out", "source", "destination"] {
+        head.push(w.to_string());
+    }
+    println(row(numbers, "num", head));
+    for k in 0..ch.rules.len() {
+        let r = ref ch.rules[k];
+        let mut cells: Vec[String] = Vec.new();
+        cells.push(f"{r.pkts}");
+        cells.push(f"{r.bytes}");
+        cells.push(r.target.clone());
+        cells.push(if r.proto.is_empty() { "all".to_string() } else { r.proto.clone() });
+        cells.push("--".to_string());
+        cells.push(if r.in_if.is_empty() { "*".to_string() } else { r.in_if.clone() });
+        cells.push(if r.out_if.is_empty() { "*".to_string() } else { r.out_if.clone() });
+        cells.push(side_str(r.src, r.src_neg));
+        cells.push(side_str(r.dst, r.dst_neg));
+        let line = f"{row(numbers, f"{k + 1}".as_str(), cells)} {extras(r)}";
+        println(rstrip(line.as_str()));
+    }
+}
+
+fn cmd_iptables(tables: mut ref Vec[Table], argv: ref Vec[String]) -> Result[(), Fail] {
+    let mut args = argv.clone();
+    let mut tname = "filter".to_string();
+    if args.len() > 1 and args[0] == "-t" {
+        tname = args[1].clone();
+        args = args[2..].to_vec();
+    }
+    let mut ti = 0;
+    for i in 0..tables.len() {
+        if tables[i].name == tname {
+            ti = i;
+        }
+    }
+    let op = args[0].clone();
+    let rest = args[1..].to_vec();
+    if op == "-S" or op == "--list-rules" {
+        let t = ref tables[ti];
+        for c in t.chains {
+            if c.policy.is_empty() {
+                println(f"-N {c.name}");
+            } else {
+                println(f"-P {c.name} {c.policy}");
+            }
+        }
+        for c in t.chains {
+            for r in c.rules {
+                println(f"-A {c.name} {spec(r)}");
+            }
+        }
+        return Ok(());
+    }
+    if op == "-L" or op == "--list" {
+        let t = ref tables[ti];
+        let numbers = rest.contains("--line-numbers".to_string());
+        let mut first = true;
+        for c in t.chains {
+            if not rest.is_empty() and not rest[0].starts_with("-") and rest[0] != c.name {
+                continue;
+            }
+            if not first {
+                println("");
+            }
+            first = false;
+            list_chain(t, c, numbers);
+        }
+        return Ok(());
+    }
+    let name = if rest.is_empty() { String.new() } else { rest[0].clone() };
+    let found = tables[ti].find(name.as_str());
+    if op == "-A" or op == "-I" or op == "-D" {
+        let ci = match found {
+            Some(c) => c,
+            None => return Err(fail("No chain/target/match by that name.".to_string(), 1)),
+        };
+        if op == "-D" and rest.len() == 2 and is_digits(rest[1].as_str()) {
+            let n = num(rest[1].as_str());
+            if n > tables[ti].chains[ci].rules.len() {
+                return Err(fail("Index of deletion too big.".to_string(), 1));
+            }
+            let _ = tables[ti].chains[ci].rules.remove(n - 1);
+            return Ok(());
+        }
+        let mut tokens = rest[1..].to_vec();
+        let mut pos = tables[ti].chains[ci].rules.len();
+        if op == "-I" {
+            pos = 0;
+            if not tokens.is_empty() and is_digits(tokens[0].as_str()) {
+                pos = num(tokens[0].as_str()) - 1;
+                tokens = tokens[1..].to_vec();
+            }
+        }
+        let r = parse_rule(tokens, tables[ti].names())?;
+        if op == "-D" {
+            let want = spec(r);
+            for k in 0..tables[ti].chains[ci].rules.len() {
+                if spec(tables[ti].chains[ci].rules[k]) == want {
+                    let _ = tables[ti].chains[ci].rules.remove(k);
+                    return Ok(());
+                }
+            }
+            return Err(fail("Bad rule (does a matching rule exist in that chain?).".to_string(), 1));
+        }
+        tables[ti].chains[ci].rules.insert(pos, r);
+        return Ok(());
+    }
+    if op == "-N" {
+        if found.is_some() {
+            return Err(fail("Chain already exists.".to_string(), 1));
+        }
+        tables[ti].chains.push(new_chain(name.as_str(), ""));
+    } else if op == "-X" {
+        let ci = match found {
+            Some(c) => c,
+            None => return Err(fail("No chain/target/match by that name.".to_string(), 1)),
+        };
+        if not tables[ti].chains[ci].policy.is_empty() or tables[ti].references(name.as_str()) > 0 {
+            return Err(fail("Too many links.".to_string(), 1));
+        }
+        let _ = tables[ti].chains.remove(ci);
+    } else if op == "-F" or op == "-Z" {
+        for c in tables[ti].chains.iter_mut() {
+            if name.is_empty() or c.name == name {
+                if op == "-F" {
+                    c.rules = Vec.new();
+                } else {
+                    c.pkts = 0;
+                    c.bytes = 0;
+                    for r in c.rules.iter_mut() {
+                        r.pkts = 0;
+                        r.bytes = 0;
+                    }
+                }
+            }
+        }
+    } else if op == "-P" {
+        match found {
+            Some(c) => {
+                if tables[ti].chains[c].policy.is_empty() {
+                    return Err(fail("Bad built-in chain name.".to_string(), 1));
+                }
+                tables[ti].chains[c].policy = rest[1].clone();
+            }
+            None => return Err(fail("Bad built-in chain name.".to_string(), 1)),
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ packets
+
+#[derive(Clone)]
+struct Flow {
+    proto: String,
+    src: i64,
+    sport: i64,
+    dst: i64,
+    dport: i64,
+}
+
+impl Flow {
+    fn same(self, o: ref Flow) -> bool {
+        self.proto == o.proto and self.src == o.src and self.sport == o.sport and self.dst == o.dst and self.dport == o.dport
+    }
+}
+
+struct Packet {
+    time: i64,
+    iface: String,
+    proto: String,
+    src: i64,
+    sport: i64,
+    dst: i64,
+    dport: i64,
+    flags: Vec[String],
+    icmp: i64,
+    length: i64,
+}
+
+impl Packet {
+    fn flow(self) -> Flow {
+        Flow { proto: self.proto.clone(), src: self.src, sport: self.sport, dst: self.dst, dport: self.dport }
+    }
+
+    fn has_flag(self, f: Str) -> bool {
+        self.flags.contains(f.to_string())
+    }
+
+    fn show(self) -> String {
+        f"{addr(self.src, self.sport)} > {addr(self.dst, self.dport)}"
+    }
+}
+
+fn split_addr(s: Str) -> (i64, i64) {
+    match index_of(s, b':') {
+        Some(i) => (ip_num(s[..i]).unwrap_or(0), num(s[i + 1..])),
+        None => (ip_num(s).unwrap_or(0), 0),
+    }
+}
+
+fn parse_packet(tokens: ref Vec[String]) -> Packet {
+    let (src, sport) = split_addr(tokens[4].as_str());
+    let (dst, dport) = split_addr(tokens[6].as_str());
+    let mut p = Packet {
+        time: num(tokens[1][1..]),
+        iface: tokens[2].clone(),
+        proto: tokens[3].clone(),
+        src: src,
+        sport: sport,
+        dst: dst,
+        dport: dport,
+        flags: Vec.new(),
+        icmp: -1,
+        length: 0,
+    };
+    for k in 7..tokens.len() {
+        let t = tokens[k].as_str();
+        let eq = index_of(t, b'=').unwrap_or(0);
+        let key = t[..eq].to_string();
+        let v = t[eq + 1..].to_string();
+        if key == "flags" {
+            p.flags = v.split(",");
+        } else if key == "type" {
+            p.icmp = num(v.as_str());
+        } else if key == "len" {
+            p.length = num(v.as_str());
+        }
+    }
+    p
+}
+
+struct Ctx {
+    in_if: String,
+    out_if: String,
+    state: String,
+}
+
+fn if_match(want: Str, have: Str) -> bool {
+    if want.ends_with("+") {
+        have.starts_with(want[..want.len() - 1])
+    } else {
+        want == have
+    }
+}
+
+fn matches(r: mut ref Rule, p: ref Packet, ctx: ref Ctx) -> bool {
+    if let Some(n) = r.src {
+        if n.contains(p.src) == r.src_neg {
+            return false;
+        }
+    }
+    if let Some(n) = r.dst {
+        if n.contains(p.dst) == r.dst_neg {
+            return false;
+        }
+    }
+    if not r.in_if.is_empty() and not if_match(r.in_if.as_str(), ctx.in_if.as_str()) {
+        return false;
+    }
+    if not r.out_if.is_empty() and not if_match(r.out_if.as_str(), ctx.out_if.as_str()) {
+        return false;
+    }
+    if not r.proto.is_empty() and r.proto != "all" and r.proto != p.proto {
+        return false;
+    }
+    for m in r.matches.iter_mut() {
+        let k = m.kind.clone();
+        if k == "tcp" or k == "udp" {
+            if let Some(s) = m.sport {
+                if not s.has(p.sport) {
+                    return false;
+                }
+            }
+            if let Some(d) = m.dport {
+                if not d.has(p.dport) {
+                    return false;
+                }
+            }
+            if m.syn and not (p.has_flag("SYN") and not p.has_flag("ACK") and not p.has_flag("RST") and not p.has_flag("FIN")) {
+                return false;
+            }
+        } else if k == "icmp" {
+            if m.icmp != p.icmp {
+                return false;
+            }
+        } else if k == "conntrack" or k == "state" {
+            if not m.states.contains(ctx.state.clone()) {
+                return false;
+            }
+        } else if k == "multiport" {
+            let mut any = false;
+            for r in m.ports {
+                if r.has(p.dport) {
+                    any = true;
+                }
+            }
+            if not any {
+                return false;
+            }
+        } else if k == "limit" {
+            // xt_limit's token bucket, in milliseconds of credit.
+            let cap = m.burst * m.interval;
+            let credit = m.credit + p.time - m.prev;
+            m.credit = if credit < cap { credit } else { cap };
+            m.prev = p.time;
+            if m.credit < m.interval {
+                return false;
+            }
+            m.credit -= m.interval;
+        }
+    }
+    true
+}
+
+fn log_line(r: ref Rule, p: ref Packet, ctx: ref Ctx) -> String {
+    let mut s = f"{r.log_prefix}IN={ctx.in_if} OUT={ctx.out_if} SRC={ip_str(p.src)} DST={ip_str(p.dst)} LEN={p.length} PROTO={p.proto.to_uppercase()}";
+    if p.proto == "tcp" or p.proto == "udp" {
+        s.push_str(f" SPT={p.sport} DPT={p.dport}".as_str());
+    }
+    if p.proto == "tcp" {
+        s.push_str(f" {join(p.flags, " ")}".as_str());
+    }
+    if p.proto == "icmp" {
+        s.push_str(f" TYPE={p.icmp}".as_str());
+    }
+    s
+}
+
+// Runs p through a chain of table t; returns the verdict and the
+// reject-with.
+fn traverse(t: mut ref Table, chain: Str, p: mut ref Packet, ctx: ref Ctx) -> (String, String) {
+    let filter = t.name == "filter";
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    let mut cur = t.find(chain).unwrap_or(0);
+    let mut i = 0;
+    loop {
+        let cname = t.chains[cur].name.clone();
+        if i >= t.chains[cur].rules.len() {
+            if not t.chains[cur].policy.is_empty() {
+                t.chains[cur].pkts += 1;
+                t.chains[cur].bytes += p.length;
+                let policy = t.chains[cur].policy.clone();
+                if filter {
+                    println(f"  filter {cname} policy {policy}");
+                }
+                return (policy, String.new());
+            }
+            match stack.pop() {
+                Some((c, k)) => {
+                    cur = c;
+                    i = k;
+                }
+                None => return ("ACCEPT".to_string(), String.new()),
+            }
+            continue;
+        }
+        let k = i;
+        i += 1;
+        if not matches(mut t.chains[cur].rules[k], p, ctx) {
+            continue;
+        }
+        t.chains[cur].rules[k].pkts += 1;
+        t.chains[cur].rules[k].bytes += p.length;
+        let r = t.chains[cur].rules[k].clone();
+        let where = f"  {t.name} {cname} #{i}";
+        let tg = r.target.as_str();
+        if tg.is_empty() {
+            continue;
+        }
+        if tg == "ACCEPT" or tg == "DROP" {
+            println(f"{where} {tg}");
+            return (tg.to_string(), String.new());
+        }
+        if tg == "REJECT" {
+            println(f"{where} REJECT ({r.reject_with})");
+            return ("REJECT".to_string(), r.reject_with.clone());
+        }
+        if tg == "LOG" {
+            println(f"{where} LOG");
+            println(f"  kernel: {log_line(r, p, ctx)}");
+            continue;
+        }
+        if tg == "RETURN" {
+            println(f"{where} RETURN");
+            match stack.pop() {
+                Some((c, n)) => {
+                    cur = c;
+                    i = n;
+                }
+                None => i = t.chains[cur].rules.len(),
+            }
+            continue;
+        }
+        if tg == "DNAT" {
+            p.dst = ip_num(r.to_addr.as_str()).unwrap_or(0);
+            if r.to_port != 0 {
+                p.dport = r.to_port;
+            }
+            println(f"{where} DNAT to {addr(p.dst, p.dport)}");
+            return ("ACCEPT".to_string(), String.new());
+        }
+        if tg == "SNAT" or tg == "MASQUERADE" {
+            p.src = if tg == "SNAT" { ip_num(r.to_addr.as_str()).unwrap_or(0) } else { iface_addr(ctx.out_if.as_str()) };
+            println(f"{where} {tg} to {ip_str(p.src)}");
+            return ("ACCEPT".to_string(), String.new());
+        }
+        println(f"{where} -> {tg}");
+        if not r.goto {
+            stack.push((cur, i));
+        }
+        cur = t.find(tg).unwrap_or(0);
+        i = 0;
+    }
+}
+
+struct Conn {
+    orig: Flow,
+    reply: Flow,
+    replied: bool,
+}
+
+fn packet(tables: mut ref Vec[Table], conns: mut ref Vec[Conn], line: Str) {
+    let mut p = parse_packet(tokenize(line));
+    let tup = p.flow();
+    let mut found: i64 = -1;
+    let mut reply_dir = false;
+    for i in 0..conns.len() {
+        if conns[i].orig.same(tup) {
+            found = i;
+            reply_dir = false;
+        } else if conns[i].reply.same(tup) {
+            found = i;
+            reply_dir = true;
+        }
+    }
+    let state = if found >= 0 {
+        let c = ref conns[found];
+        let st = if reply_dir or c.replied { "ESTABLISHED" } else { "NEW" };
+        let dir = if reply_dir { "reply" } else { "original" };
+        println(f"  conntrack: {st}, {dir} direction");
+        let target = if reply_dir { c.orig.clone() } else { c.reply.clone() };
+        p.dst = target.src;
+        p.dport = target.sport;
+        p.src = target.dst;
+        p.sport = target.dport;
+        if not p.flow().same(tup) {
+            println(f"  conntrack: rewritten to {p.show()}");
+        }
+        st.to_string()
+    } else {
+        let tcp_bad = p.proto == "tcp" and (not p.has_flag("SYN") or p.has_flag("ACK"));
+        let st = if tcp_bad or (p.proto == "icmp" and p.icmp == 0) { "INVALID" } else { "NEW" };
+        println(f"  conntrack: {st}");
+        st.to_string()
+    };
+    let fresh = found < 0 and state == "NEW";
+    let local = p.iface == "local";
+    let mut ctx = Ctx { in_if: if local { String.new() } else { p.iface.clone() }, out_if: String.new(), state: state };
+    if fresh {
+        let _ = traverse(mut tables[0], if local { "OUTPUT" } else { "PREROUTING" }, mut p, ctx);
+    }
+    let chain = if local {
+        ctx.out_if = route(p.dst).to_string();
+        println(f"  route: out {ctx.out_if}");
+        "OUTPUT"
+    } else if is_local(p.dst) {
+        println("  route: local delivery");
+        "INPUT"
+    } else {
+        ctx.out_if = route(p.dst).to_string();
+        println(f"  route: forward via {ctx.out_if}");
+        "FORWARD"
+    };
+    let (verdict, why) = traverse(mut tables[1], chain, mut p, ctx);
+    if verdict == "ACCEPT" and fresh {
+        let _ = traverse(mut tables[0], if chain == "INPUT" { "INPUT" } else { "POSTROUTING" }, mut p, ctx);
+    }
+    if verdict == "ACCEPT" {
+        if chain == "INPUT" {
+            println(f"  => ACCEPT, delivered as {p.show()}");
+        } else {
+            println(f"  => ACCEPT, sent out {ctx.out_if} as {p.show()}");
+        }
+        if fresh {
+            conns.push(Conn { orig: tup.clone(), reply: Flow { proto: p.proto.clone(), src: p.dst, sport: p.dport, dst: p.src, dport: p.sport }, replied: false });
+            println("  conntrack: new entry");
+        } else if found >= 0 and reply_dir {
+            conns[found].replied = true;
+        }
+        if found >= 0 and p.has_flag("RST") {
+            let _ = conns.remove(found);
+            println("  conntrack: entry destroyed");
+        }
+    } else if verdict == "REJECT" {
+        println(f"  => REJECT, answered with {why}");
+    } else {
+        println("  => DROP");
+    }
+}
+
+fn side(t: ref Flow, icmp_type: i64) -> String {
+    let s = f"src={ip_str(t.src)} dst={ip_str(t.dst)}";
+    if t.proto == "icmp" {
+        f"{s} type={icmp_type} code=0 id=0"
+    } else {
+        f"{s} sport={t.sport} dport={t.dport}"
+    }
+}
+
+fn conntrack_list(conns: ref Vec[Conn]) {
+    for c in conns {
+        let proto = c.orig.proto.as_str();
+        let n = if proto == "tcp" { 6 } else if proto == "udp" { 17 } else { 1 };
+        let mut s = f"{rpad(proto, 8)} {n} ";
+        if proto == "tcp" {
+            s.push_str(if c.replied { "ESTABLISHED " } else { "SYN_SENT " });
+        }
+        s.push_str(side(c.orig, 8).as_str());
+        if not c.replied {
+            s.push_str(" [UNREPLIED]");
+        }
+        s.push_str(f" {side(c.reply, 0)}".as_str());
+        if c.replied {
+            s.push_str(" [ASSURED]");
+        }
+        println(s);
+    }
+    println(f"conntrack v1.4.8 (conntrack-tools): {conns.len()} flow entries have been shown.");
+}
+
+fn save(tables: ref Vec[Table]) {
+    println(f"# Generated by iptables-save v1.8.10 on {DATE}");
+    for t in tables {
+        println(f"*{t.name}");
+        for c in t.chains {
+            let policy = if c.policy.is_empty() { "-" } else { c.policy.as_str() };
+            println(f":{c.name} {policy} [{c.pkts}:{c.bytes}]");
+        }
+        for c in t.chains {
+            for r in c.rules {
+                println(f"[{r.pkts}:{r.bytes}] -A {c.name} {spec(r)}");
+            }
+        }
+        println("COMMIT");
+        println(f"# Completed on {DATE}");
+    }
+}
+
+// ------------------------------------------------------------ the data
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("# Generated by iptables-save v1.8.10 on Sat Oct 18 02:00:00 2026\n");
+    s.push_str("*nat\n");
+    s.push_str(":PREROUTING ACCEPT [0:0]\n");
+    s.push_str(":INPUT ACCEPT [0:0]\n");
+    s.push_str(":OUTPUT ACCEPT [0:0]\n");
+    s.push_str(":POSTROUTING ACCEPT [0:0]\n");
+    s.push_str("-A PREROUTING -d 203.0.113.10/32 -i eth0 -p tcp -m tcp --dport 80 -j DNAT --to-destination 10.0.0.20\n");
+    s.push_str("-A PREROUTING -d 203.0.113.10/32 -i eth0 -p tcp -m tcp --dport 2222 -j DNAT --to-destination 10.0.0.30:22\n");
+    s.push_str("-A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE\n");
+    s.push_str("-A POSTROUTING -s 10.0.0.30/32 -d 192.0.2.53/32 -p udp --dport 53 -j SNAT --to-source 203.0.113.11\n");
+    s.push_str("COMMIT\n");
+    s.push_str("*filter\n");
+    s.push_str(":INPUT DROP [0:0]\n");
+    s.push_str(":FORWARD DROP [0:0]\n");
+    s.push_str(":OUTPUT ACCEPT [0:0]\n");
+    s.push_str(":SSH - [0:0]\n");
+    s.push_str(":LOGDROP - [0:0]\n");
+    s.push_str("-A INPUT -i lo -j ACCEPT\n");
+    s.push_str("-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n");
+    s.push_str("-A INPUT -m conntrack --ctstate INVALID -j DROP\n");
+    s.push_str("-A INPUT -p icmp --icmp-type echo-request -m limit --limit 2/sec --limit-burst 2 -j ACCEPT\n");
+    s.push_str("-A INPUT -p tcp --dport 22 --syn -j SSH\n");
+    s.push_str("-A INPUT -p tcp -m multiport --dports 443,8000:8099 -m comment --comment \"web and admin\" -j ACCEPT\n");
+    s.push_str("-A INPUT ! -s 10.0.0.0/24 -p udp --dport 161 -j REJECT --reject-with icmp-port-unreachable\n");
+    s.push_str("-A INPUT -j LOGDROP\n");
+    s.push_str("-A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT\n");
+    s.push_str("-A FORWARD -i eth0 -o eth1 -d 10.0.0.20 -p tcp --dport 80 -j ACCEPT\n");
+    s.push_str("-A FORWARD -i eth0 -o eth1 -d 10.0.0.30 -p tcp --dport 22 -j SSH\n");
+    s.push_str("-A FORWARD -i eth1 -o eth+ -j ACCEPT\n");
+    s.push_str("-A SSH -s 10.0.0.0/24 -j ACCEPT\n");
+    s.push_str("-A SSH -s 198.51.100.0/25 -j ACCEPT\n");
+    s.push_str("-A SSH -m limit --limit 3/min --limit-burst 1 -j LOG --log-prefix \"ssh denied: \"\n");
+    s.push_str("-A SSH -p tcp -j REJECT --reject-with tcp-reset\n");
+    s.push_str("-A LOGDROP -m limit --limit 1/sec --limit-burst 2 -j LOG --log-prefix \"drop: \"\n");
+    s.push_str("-A LOGDROP -j DROP\n");
+    s.push_str("COMMIT\n");
+    s.push_str("# Completed on Sat Oct 18 02:00:00 2026\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("*filter\n");
+    s.push_str(":INPUT ACCEPT [0:0]\n");
+    s.push_str(":FORWARD ACCEPT [0:0]\n");
+    s.push_str(":OUTPUT ACCEPT [0:0]\n");
+    s.push_str("-A INPUT -i lo -j ACCEPT\n");
+    s.push_str("-A INPUT -p tcp --dprt 22 -j ACCEPT\n");
+    s.push_str("COMMIT\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("*filter\n");
+    s.push_str(":INPUT ACCEPT [0:0]\n");
+    s.push_str(":FORWARD ACCEPT [0:0]\n");
+    s.push_str(":OUTPUT ACCEPT [0:0]\n");
+    s.push_str("-A INPUT -p tcp --dport 22 -j SHH\n");
+    s.push_str("COMMIT\n");
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("*filter\n");
+    s.push_str(":INPUT ACCEPT [0:0]\n");
+    s.push_str(":FORWARD ACCEPT [0:0]\n");
+    s.push_str(":OUTPUT ACCEPT [0:0]\n");
+    s.push_str("-A INPUT -i lo -j ACCEPT\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("# Each line is a command. `packet @<ms> <in> <proto> <src>[:port] > <dst>[:port] [flags=..] [type=..] len=<n>`\n");
+    s.push_str("# sends a packet; `local` as the interface means a local process sent it.\n");
+    s.push_str("iptables-restore broken-option.v4\n");
+    s.push_str("iptables-restore broken-target.v4\n");
+    s.push_str("iptables-restore broken-commit.v4\n");
+    s.push_str("iptables-restore rules.v4\n");
+    s.push_str("iptables -S\n");
+    s.push_str("iptables -t nat -S\n");
+    s.push_str("packet @0 lo tcp 127.0.0.1:40000 > 127.0.0.1:5432 flags=SYN len=60\n");
+    s.push_str("packet @10 eth0 tcp 198.51.100.7:51000 > 203.0.113.10:22 flags=SYN len=60\n");
+    s.push_str("packet @11 local tcp 203.0.113.10:22 > 198.51.100.7:51000 flags=SYN,ACK len=60\n");
+    s.push_str("packet @12 eth0 tcp 198.51.100.7:51000 > 203.0.113.10:22 flags=ACK len=52\n");
+    s.push_str("packet @20 eth0 tcp 192.0.2.200:40100 > 203.0.113.10:22 flags=SYN len=60\n");
+    s.push_str("packet @21 eth0 tcp 192.0.2.200:40101 > 203.0.113.10:22 flags=SYN len=60\n");
+    s.push_str("packet @30 eth0 tcp 192.0.2.201:33000 > 203.0.113.10:22 flags=ACK len=52\n");
+    s.push_str("packet @100 eth0 tcp 192.0.2.77:55000 > 203.0.113.10:80 flags=SYN len=60\n");
+    s.push_str("packet @101 eth1 tcp 10.0.0.20:80 > 192.0.2.77:55000 flags=SYN,ACK len=60\n");
+    s.push_str("packet @102 eth0 tcp 192.0.2.77:55000 > 203.0.113.10:80 flags=ACK len=52\n");
+    s.push_str("packet @103 eth0 tcp 192.0.2.77:55000 > 203.0.113.10:80 flags=RST len=40\n");
+    s.push_str("packet @104 eth1 tcp 10.0.0.20:80 > 192.0.2.77:55000 flags=ACK len=52\n");
+    s.push_str("packet @200 eth0 tcp 192.0.2.88:60000 > 203.0.113.10:2222 flags=SYN len=60\n");
+    s.push_str("packet @201 eth0 tcp 198.51.100.20:60001 > 203.0.113.10:2222 flags=SYN len=60\n");
+    s.push_str("packet @202 eth1 tcp 10.0.0.30:22 > 198.51.100.20:60001 flags=SYN,ACK len=60\n");
+    s.push_str("packet @300 eth1 udp 10.0.0.30:5353 > 192.0.2.53:53 len=72\n");
+    s.push_str("packet @301 eth0 udp 192.0.2.53:53 > 203.0.113.11:5353 len=120\n");
+    s.push_str("packet @302 eth1 udp 10.0.0.31:41000 > 192.0.2.53:53 len=72\n");
+    s.push_str("packet @400 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84\n");
+    s.push_str("packet @401 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84\n");
+    s.push_str("packet @402 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84\n");
+    s.push_str("packet @1500 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84\n");
+    s.push_str("packet @1501 local icmp 203.0.113.10 > 192.0.2.9 type=0 len=84\n");
+    s.push_str("packet @1600 eth0 udp 192.0.2.44:9999 > 203.0.113.10:161 len=80\n");
+    s.push_str("packet @1601 eth1 udp 10.0.0.44:9999 > 10.0.0.1:161 len=80\n");
+    s.push_str("packet @1700 eth0 tcp 192.0.2.50:41234 > 203.0.113.10:8080 flags=SYN len=60\n");
+    s.push_str("packet @1701 eth0 tcp 192.0.2.50:41235 > 203.0.113.10:9000 flags=SYN len=60\n");
+    s.push_str("packet @1702 eth0 udp 192.0.2.50:41236 > 203.0.113.10:9001 len=60\n");
+    s.push_str("packet @1703 eth0 udp 192.0.2.50:41237 > 203.0.113.10:9002 len=60\n");
+    s.push_str("packet @3000 eth0 udp 192.0.2.50:41238 > 203.0.113.10:9003 len=60\n");
+    s.push_str("iptables -L INPUT -n -v --line-numbers\n");
+    s.push_str("iptables -I INPUT 3 -s 192.0.2.50 -j DROP\n");
+    s.push_str("packet @3100 eth0 tcp 192.0.2.50:41300 > 203.0.113.10:443 flags=SYN len=60\n");
+    s.push_str("iptables -D INPUT -s 192.0.2.50/32 -j DROP\n");
+    s.push_str("iptables -D INPUT -s 192.0.2.51 -j DROP\n");
+    s.push_str("iptables -D INPUT 42\n");
+    s.push_str("iptables -X SSH\n");
+    s.push_str("iptables -N SSH\n");
+    s.push_str("iptables -A NOPE -j ACCEPT\n");
+    s.push_str("iptables -A INPUT -p tcp --dport 3306 -j SQL\n");
+    s.push_str("iptables -P SSH ACCEPT\n");
+    s.push_str("iptables -N TEMP\n");
+    s.push_str("iptables -A TEMP -j RETURN\n");
+    s.push_str("iptables -F TEMP\n");
+    s.push_str("iptables -X TEMP\n");
+    s.push_str("iptables -L SSH -n -v --line-numbers\n");
+    s.push_str("iptables -L FORWARD -n -v\n");
+    s.push_str("iptables -t nat -L -n -v\n");
+    s.push_str("conntrack -L\n");
+    s.push_str("iptables -Z INPUT\n");
+    s.push_str("iptables-save -c\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("rules.v4".to_string(), file_0()));
+    v.push(("broken-option.v4".to_string(), file_1()));
+    v.push(("broken-target.v4".to_string(), file_2()));
+    v.push(("broken-commit.v4".to_string(), file_3()));
+    v.push(("jobs.txt".to_string(), file_4()));
+    v
+}
+
+fn write_data() -> Result[(), String] {
+    let _ = fs.remove_dir_all("data".to_string());
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"{e}");
+    }
+    for (name, text) in data_files() {
+        if let Err(e) = fs.write(f"data/{name}", text) {
+            return Err(f"{e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut tables: Vec[Table] = Vec.new();
+    tables.push(new_table("nat"));
+    tables.push(new_table("filter"));
+    let mut conns: Vec[Conn] = Vec.new();
+    for line in read_file("data/jobs.txt").split("\n") {
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        println(f"$ {line}");
+        let words = tokenize(line.as_str());
+        let mut code = 0;
+        let cmd = words[0].as_str();
+        if cmd == "iptables-restore" {
+            code = restore(mut tables, f"data/{words[1]}".as_str());
+        } else if cmd == "iptables" {
+            if let Err(e) = cmd_iptables(mut tables, words[1..].to_vec()) {
+                if e.code == 2 {
+                    println(f"iptables {VERSION}: {e.msg}");
+                    println("");
+                    println("Try `iptables -h' or 'iptables --help' for more information.");
+                } else {
+                    println(f"iptables: {e.msg}");
+                }
+                code = e.code;
+            }
+        } else if cmd == "iptables-save" {
+            save(tables);
+        } else if cmd == "conntrack" {
+            conntrack_list(conns);
+        } else if cmd == "packet" {
+            packet(mut tables, mut conns, line.as_str());
+        }
+        if code != 0 {
+            println(f"(exit status {code})");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(f"error: {e}");
+    }
+}

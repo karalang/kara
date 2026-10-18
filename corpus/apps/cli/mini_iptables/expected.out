@@ -1,0 +1,360 @@
+$ iptables-restore broken-option.v4
+iptables-restore v1.8.10 (legacy): unknown option "--dprt"
+Error occurred at line: 6
+Try `iptables-restore -h' or 'iptables-restore --help' for more information.
+(exit status 2)
+$ iptables-restore broken-target.v4
+iptables-restore v1.8.10 (legacy): Couldn't load target `SHH':No such file or directory
+Error occurred at line: 5
+Try `iptables-restore -h' or 'iptables-restore --help' for more information.
+(exit status 2)
+$ iptables-restore broken-commit.v4
+iptables-restore: COMMIT expected at line 6
+(exit status 1)
+$ iptables-restore rules.v4
+$ iptables -S
+-P INPUT DROP
+-P FORWARD DROP
+-P OUTPUT ACCEPT
+-N SSH
+-N LOGDROP
+-A INPUT -i lo -j ACCEPT
+-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -m conntrack --ctstate INVALID -j DROP
+-A INPUT -p icmp -m icmp --icmp-type 8 -m limit --limit 2/sec --limit-burst 2 -j ACCEPT
+-A INPUT -p tcp -m tcp --dport 22 --tcp-flags FIN,SYN,RST,ACK SYN -j SSH
+-A INPUT -p tcp -m multiport --dports 443,8000:8099 -m comment --comment "web and admin" -j ACCEPT
+-A INPUT ! -s 10.0.0.0/24 -p udp -m udp --dport 161 -j REJECT --reject-with icmp-port-unreachable
+-A INPUT -j LOGDROP
+-A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -d 10.0.0.20/32 -i eth0 -o eth1 -p tcp -m tcp --dport 80 -j ACCEPT
+-A FORWARD -d 10.0.0.30/32 -i eth0 -o eth1 -p tcp -m tcp --dport 22 -j SSH
+-A FORWARD -i eth1 -o eth+ -j ACCEPT
+-A SSH -s 10.0.0.0/24 -j ACCEPT
+-A SSH -s 198.51.100.0/25 -j ACCEPT
+-A SSH -m limit --limit 3/min --limit-burst 1 -j LOG --log-prefix "ssh denied: "
+-A SSH -p tcp -j REJECT --reject-with tcp-reset
+-A LOGDROP -m limit --limit 1/sec --limit-burst 2 -j LOG --log-prefix "drop: "
+-A LOGDROP -j DROP
+$ iptables -t nat -S
+-P PREROUTING ACCEPT
+-P INPUT ACCEPT
+-P OUTPUT ACCEPT
+-P POSTROUTING ACCEPT
+-A PREROUTING -d 203.0.113.10/32 -i eth0 -p tcp -m tcp --dport 80 -j DNAT --to-destination 10.0.0.20
+-A PREROUTING -d 203.0.113.10/32 -i eth0 -p tcp -m tcp --dport 2222 -j DNAT --to-destination 10.0.0.30:22
+-A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+-A POSTROUTING -s 10.0.0.30/32 -d 192.0.2.53/32 -p udp -m udp --dport 53 -j SNAT --to-source 203.0.113.11
+$ packet @0 lo tcp 127.0.0.1:40000 > 127.0.0.1:5432 flags=SYN len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #1 ACCEPT
+  => ACCEPT, delivered as 127.0.0.1:40000 > 127.0.0.1:5432
+  conntrack: new entry
+$ packet @10 eth0 tcp 198.51.100.7:51000 > 203.0.113.10:22 flags=SYN len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #5 -> SSH
+  filter SSH #2 ACCEPT
+  => ACCEPT, delivered as 198.51.100.7:51000 > 203.0.113.10:22
+  conntrack: new entry
+$ packet @11 local tcp 203.0.113.10:22 > 198.51.100.7:51000 flags=SYN,ACK len=60
+  conntrack: ESTABLISHED, reply direction
+  route: out eth0
+  filter OUTPUT policy ACCEPT
+  => ACCEPT, sent out eth0 as 203.0.113.10:22 > 198.51.100.7:51000
+$ packet @12 eth0 tcp 198.51.100.7:51000 > 203.0.113.10:22 flags=ACK len=52
+  conntrack: ESTABLISHED, original direction
+  route: local delivery
+  filter INPUT #2 ACCEPT
+  => ACCEPT, delivered as 198.51.100.7:51000 > 203.0.113.10:22
+$ packet @20 eth0 tcp 192.0.2.200:40100 > 203.0.113.10:22 flags=SYN len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #5 -> SSH
+  filter SSH #3 LOG
+  kernel: ssh denied: IN=eth0 OUT= SRC=192.0.2.200 DST=203.0.113.10 LEN=60 PROTO=TCP SPT=40100 DPT=22 SYN
+  filter SSH #4 REJECT (tcp-reset)
+  => REJECT, answered with tcp-reset
+$ packet @21 eth0 tcp 192.0.2.200:40101 > 203.0.113.10:22 flags=SYN len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #5 -> SSH
+  filter SSH #4 REJECT (tcp-reset)
+  => REJECT, answered with tcp-reset
+$ packet @30 eth0 tcp 192.0.2.201:33000 > 203.0.113.10:22 flags=ACK len=52
+  conntrack: INVALID
+  route: local delivery
+  filter INPUT #3 DROP
+  => DROP
+$ packet @100 eth0 tcp 192.0.2.77:55000 > 203.0.113.10:80 flags=SYN len=60
+  conntrack: NEW
+  nat PREROUTING #1 DNAT to 10.0.0.20:80
+  route: forward via eth1
+  filter FORWARD #2 ACCEPT
+  => ACCEPT, sent out eth1 as 192.0.2.77:55000 > 10.0.0.20:80
+  conntrack: new entry
+$ packet @101 eth1 tcp 10.0.0.20:80 > 192.0.2.77:55000 flags=SYN,ACK len=60
+  conntrack: ESTABLISHED, reply direction
+  conntrack: rewritten to 203.0.113.10:80 > 192.0.2.77:55000
+  route: forward via eth0
+  filter FORWARD #1 ACCEPT
+  => ACCEPT, sent out eth0 as 203.0.113.10:80 > 192.0.2.77:55000
+$ packet @102 eth0 tcp 192.0.2.77:55000 > 203.0.113.10:80 flags=ACK len=52
+  conntrack: ESTABLISHED, original direction
+  conntrack: rewritten to 192.0.2.77:55000 > 10.0.0.20:80
+  route: forward via eth1
+  filter FORWARD #1 ACCEPT
+  => ACCEPT, sent out eth1 as 192.0.2.77:55000 > 10.0.0.20:80
+$ packet @103 eth0 tcp 192.0.2.77:55000 > 203.0.113.10:80 flags=RST len=40
+  conntrack: ESTABLISHED, original direction
+  conntrack: rewritten to 192.0.2.77:55000 > 10.0.0.20:80
+  route: forward via eth1
+  filter FORWARD #1 ACCEPT
+  => ACCEPT, sent out eth1 as 192.0.2.77:55000 > 10.0.0.20:80
+  conntrack: entry destroyed
+$ packet @104 eth1 tcp 10.0.0.20:80 > 192.0.2.77:55000 flags=ACK len=52
+  conntrack: INVALID
+  route: forward via eth0
+  filter FORWARD #4 ACCEPT
+  => ACCEPT, sent out eth0 as 10.0.0.20:80 > 192.0.2.77:55000
+$ packet @200 eth0 tcp 192.0.2.88:60000 > 203.0.113.10:2222 flags=SYN len=60
+  conntrack: NEW
+  nat PREROUTING #2 DNAT to 10.0.0.30:22
+  route: forward via eth1
+  filter FORWARD #3 -> SSH
+  filter SSH #4 REJECT (tcp-reset)
+  => REJECT, answered with tcp-reset
+$ packet @201 eth0 tcp 198.51.100.20:60001 > 203.0.113.10:2222 flags=SYN len=60
+  conntrack: NEW
+  nat PREROUTING #2 DNAT to 10.0.0.30:22
+  route: forward via eth1
+  filter FORWARD #3 -> SSH
+  filter SSH #2 ACCEPT
+  => ACCEPT, sent out eth1 as 198.51.100.20:60001 > 10.0.0.30:22
+  conntrack: new entry
+$ packet @202 eth1 tcp 10.0.0.30:22 > 198.51.100.20:60001 flags=SYN,ACK len=60
+  conntrack: ESTABLISHED, reply direction
+  conntrack: rewritten to 203.0.113.10:2222 > 198.51.100.20:60001
+  route: forward via eth0
+  filter FORWARD #1 ACCEPT
+  => ACCEPT, sent out eth0 as 203.0.113.10:2222 > 198.51.100.20:60001
+$ packet @300 eth1 udp 10.0.0.30:5353 > 192.0.2.53:53 len=72
+  conntrack: NEW
+  route: forward via eth0
+  filter FORWARD #4 ACCEPT
+  nat POSTROUTING #1 MASQUERADE to 203.0.113.10
+  => ACCEPT, sent out eth0 as 203.0.113.10:5353 > 192.0.2.53:53
+  conntrack: new entry
+$ packet @301 eth0 udp 192.0.2.53:53 > 203.0.113.11:5353 len=120
+  conntrack: NEW
+  route: forward via eth0
+  filter FORWARD policy DROP
+  => DROP
+$ packet @302 eth1 udp 10.0.0.31:41000 > 192.0.2.53:53 len=72
+  conntrack: NEW
+  route: forward via eth0
+  filter FORWARD #4 ACCEPT
+  nat POSTROUTING #1 MASQUERADE to 203.0.113.10
+  => ACCEPT, sent out eth0 as 203.0.113.10:41000 > 192.0.2.53:53
+  conntrack: new entry
+$ packet @400 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #4 ACCEPT
+  => ACCEPT, delivered as 192.0.2.9 > 203.0.113.10
+  conntrack: new entry
+$ packet @401 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84
+  conntrack: NEW, original direction
+  route: local delivery
+  filter INPUT #4 ACCEPT
+  => ACCEPT, delivered as 192.0.2.9 > 203.0.113.10
+$ packet @402 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84
+  conntrack: NEW, original direction
+  route: local delivery
+  filter INPUT #8 -> LOGDROP
+  filter LOGDROP #1 LOG
+  kernel: drop: IN=eth0 OUT= SRC=192.0.2.9 DST=203.0.113.10 LEN=84 PROTO=ICMP TYPE=8
+  filter LOGDROP #2 DROP
+  => DROP
+$ packet @1500 eth0 icmp 192.0.2.9 > 203.0.113.10 type=8 len=84
+  conntrack: NEW, original direction
+  route: local delivery
+  filter INPUT #4 ACCEPT
+  => ACCEPT, delivered as 192.0.2.9 > 203.0.113.10
+$ packet @1501 local icmp 203.0.113.10 > 192.0.2.9 type=0 len=84
+  conntrack: ESTABLISHED, reply direction
+  route: out eth0
+  filter OUTPUT policy ACCEPT
+  => ACCEPT, sent out eth0 as 203.0.113.10 > 192.0.2.9
+$ packet @1600 eth0 udp 192.0.2.44:9999 > 203.0.113.10:161 len=80
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #7 REJECT (icmp-port-unreachable)
+  => REJECT, answered with icmp-port-unreachable
+$ packet @1601 eth1 udp 10.0.0.44:9999 > 10.0.0.1:161 len=80
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #8 -> LOGDROP
+  filter LOGDROP #1 LOG
+  kernel: drop: IN=eth1 OUT= SRC=10.0.0.44 DST=10.0.0.1 LEN=80 PROTO=UDP SPT=9999 DPT=161
+  filter LOGDROP #2 DROP
+  => DROP
+$ packet @1700 eth0 tcp 192.0.2.50:41234 > 203.0.113.10:8080 flags=SYN len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #6 ACCEPT
+  => ACCEPT, delivered as 192.0.2.50:41234 > 203.0.113.10:8080
+  conntrack: new entry
+$ packet @1701 eth0 tcp 192.0.2.50:41235 > 203.0.113.10:9000 flags=SYN len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #8 -> LOGDROP
+  filter LOGDROP #1 LOG
+  kernel: drop: IN=eth0 OUT= SRC=192.0.2.50 DST=203.0.113.10 LEN=60 PROTO=TCP SPT=41235 DPT=9000 SYN
+  filter LOGDROP #2 DROP
+  => DROP
+$ packet @1702 eth0 udp 192.0.2.50:41236 > 203.0.113.10:9001 len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #8 -> LOGDROP
+  filter LOGDROP #2 DROP
+  => DROP
+$ packet @1703 eth0 udp 192.0.2.50:41237 > 203.0.113.10:9002 len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #8 -> LOGDROP
+  filter LOGDROP #2 DROP
+  => DROP
+$ packet @3000 eth0 udp 192.0.2.50:41238 > 203.0.113.10:9003 len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #8 -> LOGDROP
+  filter LOGDROP #1 LOG
+  kernel: drop: IN=eth0 OUT= SRC=192.0.2.50 DST=203.0.113.10 LEN=60 PROTO=UDP SPT=41238 DPT=9003
+  filter LOGDROP #2 DROP
+  => DROP
+$ iptables -L INPUT -n -v --line-numbers
+Chain INPUT (policy DROP 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out    source               destination
+1        1    60 ACCEPT     all  --  lo     *      0.0.0.0/0            0.0.0.0/0
+2        1    52 ACCEPT     all  --  *      *      0.0.0.0/0            0.0.0.0/0 ctstate RELATED,ESTABLISHED
+3        1    52 DROP       all  --  *      *      0.0.0.0/0            0.0.0.0/0 ctstate INVALID
+4        3   252 ACCEPT     icmp --  *      *      0.0.0.0/0            0.0.0.0/0 icmptype 8 limit: avg 2/sec burst 2
+5        3   180 SSH        tcp  --  *      *      0.0.0.0/0            0.0.0.0/0 tcp dpt:22 flags:0x17/0x02
+6        1    60 ACCEPT     tcp  --  *      *      0.0.0.0/0            0.0.0.0/0 multiport dports 443,8000:8099 /* web and admin */
+7        1    80 REJECT     udp  --  *      *      !10.0.0.0/24         0.0.0.0/0 udp dpt:161 reject-with icmp-port-unreachable
+8        6   404 LOGDROP    all  --  *      *      0.0.0.0/0            0.0.0.0/0
+$ iptables -I INPUT 3 -s 192.0.2.50 -j DROP
+$ packet @3100 eth0 tcp 192.0.2.50:41300 > 203.0.113.10:443 flags=SYN len=60
+  conntrack: NEW
+  route: local delivery
+  filter INPUT #3 DROP
+  => DROP
+$ iptables -D INPUT -s 192.0.2.50/32 -j DROP
+$ iptables -D INPUT -s 192.0.2.51 -j DROP
+iptables: Bad rule (does a matching rule exist in that chain?).
+(exit status 1)
+$ iptables -D INPUT 42
+iptables: Index of deletion too big.
+(exit status 1)
+$ iptables -X SSH
+iptables: Too many links.
+(exit status 1)
+$ iptables -N SSH
+iptables: Chain already exists.
+(exit status 1)
+$ iptables -A NOPE -j ACCEPT
+iptables: No chain/target/match by that name.
+(exit status 1)
+$ iptables -A INPUT -p tcp --dport 3306 -j SQL
+iptables v1.8.10 (legacy): Couldn't load target `SQL':No such file or directory
+
+Try `iptables -h' or 'iptables --help' for more information.
+(exit status 2)
+$ iptables -P SSH ACCEPT
+iptables: Bad built-in chain name.
+(exit status 1)
+$ iptables -N TEMP
+$ iptables -A TEMP -j RETURN
+$ iptables -F TEMP
+$ iptables -X TEMP
+$ iptables -L SSH -n -v --line-numbers
+Chain SSH (2 references)
+num   pkts bytes target     prot opt in     out    source               destination
+1        0     0 ACCEPT     all  --  *      *      10.0.0.0/24          0.0.0.0/0
+2        2   120 ACCEPT     all  --  *      *      198.51.100.0/25      0.0.0.0/0
+3        1    60 LOG        all  --  *      *      0.0.0.0/0            0.0.0.0/0 limit: avg 3/min burst 1 LOG flags 0 level 4 prefix "ssh denied: "
+4        3   180 REJECT     tcp  --  *      *      0.0.0.0/0            0.0.0.0/0 reject-with tcp-reset
+$ iptables -L FORWARD -n -v
+Chain FORWARD (policy DROP 1 packets, 120 bytes)
+ pkts bytes target     prot opt in     out    source               destination
+    4   212 ACCEPT     all  --  *      *      0.0.0.0/0            0.0.0.0/0 state RELATED,ESTABLISHED
+    1    60 ACCEPT     tcp  --  eth0   eth1   0.0.0.0/0            10.0.0.20/32 tcp dpt:80
+    2   120 SSH        tcp  --  eth0   eth1   0.0.0.0/0            10.0.0.30/32 tcp dpt:22
+    3   196 ACCEPT     all  --  eth1   eth+   0.0.0.0/0            0.0.0.0/0
+$ iptables -t nat -L -n -v
+Chain PREROUTING (policy ACCEPT 16 packets, 1108 bytes)
+ pkts bytes target     prot opt in     out    source               destination
+    1    60 DNAT       tcp  --  eth0   *      0.0.0.0/0            203.0.113.10/32 tcp dpt:80 to:10.0.0.20
+    2   120 DNAT       tcp  --  eth0   *      0.0.0.0/0            203.0.113.10/32 tcp dpt:2222 to:10.0.0.30:22
+
+Chain INPUT (policy ACCEPT 4 packets, 264 bytes)
+ pkts bytes target     prot opt in     out    source               destination
+
+Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out    source               destination
+
+Chain POSTROUTING (policy ACCEPT 2 packets, 120 bytes)
+ pkts bytes target     prot opt in     out    source               destination
+    2   144 MASQUERADE all  --  *      eth0   10.0.0.0/24          0.0.0.0/0
+    0     0 SNAT       udp  --  *      *      10.0.0.30/32         192.0.2.53/32 udp dpt:53 to:203.0.113.11
+$ conntrack -L
+tcp      6 SYN_SENT src=127.0.0.1 dst=127.0.0.1 sport=40000 dport=5432 [UNREPLIED] src=127.0.0.1 dst=127.0.0.1 sport=5432 dport=40000
+tcp      6 ESTABLISHED src=198.51.100.7 dst=203.0.113.10 sport=51000 dport=22 src=203.0.113.10 dst=198.51.100.7 sport=22 dport=51000 [ASSURED]
+tcp      6 ESTABLISHED src=198.51.100.20 dst=203.0.113.10 sport=60001 dport=2222 src=10.0.0.30 dst=198.51.100.20 sport=22 dport=60001 [ASSURED]
+udp      17 src=10.0.0.30 dst=192.0.2.53 sport=5353 dport=53 [UNREPLIED] src=192.0.2.53 dst=203.0.113.10 sport=53 dport=5353
+udp      17 src=10.0.0.31 dst=192.0.2.53 sport=41000 dport=53 [UNREPLIED] src=192.0.2.53 dst=203.0.113.10 sport=53 dport=41000
+icmp     1 src=192.0.2.9 dst=203.0.113.10 type=8 code=0 id=0 src=203.0.113.10 dst=192.0.2.9 type=0 code=0 id=0 [ASSURED]
+tcp      6 SYN_SENT src=192.0.2.50 dst=203.0.113.10 sport=41234 dport=8080 [UNREPLIED] src=203.0.113.10 dst=192.0.2.50 sport=8080 dport=41234
+conntrack v1.4.8 (conntrack-tools): 7 flow entries have been shown.
+$ iptables -Z INPUT
+$ iptables-save -c
+# Generated by iptables-save v1.8.10 on Sat Oct 18 02:00:00 2026
+*nat
+:PREROUTING ACCEPT [16:1108]
+:INPUT ACCEPT [4:264]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [2:120]
+[1:60] -A PREROUTING -d 203.0.113.10/32 -i eth0 -p tcp -m tcp --dport 80 -j DNAT --to-destination 10.0.0.20
+[2:120] -A PREROUTING -d 203.0.113.10/32 -i eth0 -p tcp -m tcp --dport 2222 -j DNAT --to-destination 10.0.0.30:22
+[2:144] -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+[0:0] -A POSTROUTING -s 10.0.0.30/32 -d 192.0.2.53/32 -p udp -m udp --dport 53 -j SNAT --to-source 203.0.113.11
+COMMIT
+# Completed on Sat Oct 18 02:00:00 2026
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [1:120]
+:OUTPUT ACCEPT [2:144]
+:SSH - [0:0]
+:LOGDROP - [0:0]
+[0:0] -A INPUT -i lo -j ACCEPT
+[0:0] -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+[0:0] -A INPUT -m conntrack --ctstate INVALID -j DROP
+[0:0] -A INPUT -p icmp -m icmp --icmp-type 8 -m limit --limit 2/sec --limit-burst 2 -j ACCEPT
+[0:0] -A INPUT -p tcp -m tcp --dport 22 --tcp-flags FIN,SYN,RST,ACK SYN -j SSH
+[0:0] -A INPUT -p tcp -m multiport --dports 443,8000:8099 -m comment --comment "web and admin" -j ACCEPT
+[0:0] -A INPUT ! -s 10.0.0.0/24 -p udp -m udp --dport 161 -j REJECT --reject-with icmp-port-unreachable
+[0:0] -A INPUT -j LOGDROP
+[4:212] -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+[1:60] -A FORWARD -d 10.0.0.20/32 -i eth0 -o eth1 -p tcp -m tcp --dport 80 -j ACCEPT
+[2:120] -A FORWARD -d 10.0.0.30/32 -i eth0 -o eth1 -p tcp -m tcp --dport 22 -j SSH
+[3:196] -A FORWARD -i eth1 -o eth+ -j ACCEPT
+[0:0] -A SSH -s 10.0.0.0/24 -j ACCEPT
+[2:120] -A SSH -s 198.51.100.0/25 -j ACCEPT
+[1:60] -A SSH -m limit --limit 3/min --limit-burst 1 -j LOG --log-prefix "ssh denied: "
+[3:180] -A SSH -p tcp -j REJECT --reject-with tcp-reset
+[4:284] -A LOGDROP -m limit --limit 1/sec --limit-burst 2 -j LOG --log-prefix "drop: "
+[6:404] -A LOGDROP -j DROP
+COMMIT
+# Completed on Sat Oct 18 02:00:00 2026
