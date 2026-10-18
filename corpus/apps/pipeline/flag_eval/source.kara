@@ -16,7 +16,6 @@
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag: "op")]
-#[derive(Clone)]
 enum Rule {
     Equals { attr: String, value: String },
     OneOf { attr: String, values: Vec[String] },
@@ -24,7 +23,6 @@ enum Rule {
 }
 
 #[derive(Serialize, Deserialize)]
-#[derive(Clone)]
 struct Flag {
     name: String,
     #[serde(default: true)]
@@ -109,7 +107,7 @@ fn evaluate(cfg: ref Config, req: ref EvalRequest) -> Decision {
     let mut found: Option[ref Flag] = None;
     for f in cfg.flags.iter() {
         if f.name == req.flag {
-            found = Some(f.clone());
+            found = Some(f);
         }
     }
     let flag = match found {

@@ -240,7 +240,7 @@ fn main() {
                 nodes += 1;
             }
         }
-        leaves += text.split("[1,").len() - 1;
+        leaves += text.split("[1,").count() - 1;
     }
     // The outer bracket of each list is counted as a node above.
     println(f"300 random pairs: {nodes - 300} nodes, {leaves} leaves, checksum {checksum}");

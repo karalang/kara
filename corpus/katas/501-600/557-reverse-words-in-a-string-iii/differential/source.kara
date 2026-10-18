@@ -69,7 +69,7 @@ fn reverse_words_stack(s: String) -> String {
 // ---- chain: reverse_words_in_a_string_iii_chain.kara
 
 fn reverse_words_chain(s: String) -> String {
-    let words: Vec[String] = s.split(" ").iter().map(|w| w.chars().rev().collect()).collect();
+    let words: Vec[String] = s.split(" ").map(|w| w.chars().rev().collect()).collect();
     words.join(" ")
 }
 

@@ -5,7 +5,7 @@
 // Vec[String], and that is joined with single spaces.
 
 fn reverse_words(s: String) -> String {
-    let words: Vec[String] = s.split(" ").iter().map(|w| w.chars().rev().collect()).collect();
+    let words: Vec[String] = s.split(" ").map(|w| w.chars().rev().collect()).collect();
     words.join(" ")
 }
 
