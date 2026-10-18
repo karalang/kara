@@ -1,0 +1,595 @@
+// mini_graphlib: Python 3.13's `graphlib.TopologicalSorter`, ported from
+// graphlib.py, and two programs that use it: a CI runner that schedules a
+// pipeline's jobs on N workers as their needs finish, and a package
+// installer that orders a package's dependencies.
+//
+// The run writes the pipeline and a package index into data/, then runs
+// data/jobs.tsv. Each job prints `== ` and its fields joined by ` | `,
+// then its output.
+
+// ------------------------------------------------------------ TopologicalSorter
+
+// A node's npredecessors once get_ready has passed it out, and once done.
+const NODE_OUT: i64 = -1;
+const NODE_DONE: i64 = -2;
+
+struct NodeInfo[N] {
+    node: N,
+    // Predecessors not yet done; NODE_OUT or NODE_DONE after that.
+    npredecessors: i64,
+    // Indices of the successors; a successor may repeat, as long as its
+    // npredecessors counts it as often.
+    successors: Vec[i64],
+}
+
+enum GraphError[N] {
+    Cycle(Vec[N]),
+    AddAfterPrepare,
+    PrepareTwice,
+    NotPrepared,
+    NotAdded(N),
+    NotReady(N),
+    AlreadyDone(N),
+}
+
+// The nodes live in `infos` in the order they were first seen, as
+// graphlib's dict keeps them; `index` finds a node's place.
+struct TopologicalSorter[N] {
+    infos: Vec[NodeInfo[N]],
+    index: Map[N, i64],
+    ready: Option[Vec[i64]],
+    npassedout: i64,
+    nfinished: i64,
+}
+
+impl[N: Hash + Eq + Clone] TopologicalSorter[N] {
+    fn new() -> TopologicalSorter[N] {
+        TopologicalSorter { infos: Vec.new(), index: Map.new(), ready: None, npassedout: 0, nfinished: 0 }
+    }
+
+    fn nodeinfo(mut ref self, node: ref N) -> i64 {
+        if let Some(i) = self.index.get(node) {
+            return *i;
+        }
+        let i = self.infos.len();
+        self.infos.push(NodeInfo { node: node.clone(), npredecessors: 0, successors: Vec.new() });
+        self.index.insert(node.clone(), i);
+        i
+    }
+
+    // Adds node with the given predecessors; adding a node again adds to
+    // its predecessors.
+    fn add(mut ref self, node: ref N, predecessors: ref Vec[N]) -> Result[(), GraphError[N]] {
+        if self.ready.is_some() {
+            return Err(GraphError.AddAfterPrepare);
+        }
+        let i = self.nodeinfo(node);
+        self.infos[i].npredecessors += predecessors.len();
+        for pred in predecessors.iter() {
+            let p = self.nodeinfo(pred);
+            self.infos[p].successors.push(i);
+        }
+        Ok(())
+    }
+
+    // Marks the nodes with no predecessors ready, then looks for a cycle.
+    // The ready list is set first, so after a Cycle error get_ready still
+    // hands out what it can.
+    fn prepare(mut ref self) -> Result[(), GraphError[N]] {
+        if self.ready.is_some() {
+            return Err(GraphError.PrepareTwice);
+        }
+        let mut ready: Vec[i64] = Vec.new();
+        for i in 0..self.infos.len() {
+            if self.infos[i].npredecessors == 0 {
+                ready.push(i);
+            }
+        }
+        self.ready = Some(ready);
+        match self.find_cycle() {
+            Some(cycle) => Err(GraphError.Cycle(cycle)),
+            None => Ok(()),
+        }
+    }
+
+    fn get_ready(mut ref self) -> Result[Vec[N], GraphError[N]] {
+        let ready = match self.ready.take() {
+            Some(r) => r,
+            None => return Err(GraphError.NotPrepared),
+        };
+        let mut out: Vec[N] = Vec.new();
+        for i in ready.iter() {
+            self.infos[*i].npredecessors = NODE_OUT;
+            out.push(self.infos[*i].node.clone());
+        }
+        self.npassedout += ready.len();
+        self.ready = Some(Vec.new());
+        Ok(out)
+    }
+
+    fn is_active(ref self) -> Result[bool, GraphError[N]] {
+        match self.ready {
+            Some(ref r) => Ok(self.nfinished < self.npassedout or not r.is_empty()),
+            None => Err(GraphError.NotPrepared),
+        }
+    }
+
+    // Marks nodes done, making ready each successor whose last
+    // predecessor this was.
+    fn done(mut ref self, nodes: ref Vec[N]) -> Result[(), GraphError[N]] {
+        let mut ready = match self.ready.take() {
+            Some(r) => r,
+            None => return Err(GraphError.NotPrepared),
+        };
+        let mut result: Result[(), GraphError[N]] = Ok(());
+        for node in nodes.iter() {
+            let i = match self.index.get(node) {
+                Some(i) => *i,
+                None => {
+                    result = Err(GraphError.NotAdded(node.clone()));
+                    break;
+                }
+            };
+            let stat = self.infos[i].npredecessors;
+            if stat != NODE_OUT {
+                result = if stat >= 0 { Err(GraphError.NotReady(node.clone())) } else { Err(GraphError.AlreadyDone(node.clone())) };
+                break;
+            }
+            self.infos[i].npredecessors = NODE_DONE;
+            for k in 0..self.infos[i].successors.len() {
+                let s = self.infos[i].successors[k];
+                self.infos[s].npredecessors -= 1;
+                if self.infos[s].npredecessors == 0 {
+                    ready.push(s);
+                }
+            }
+            self.nfinished += 1;
+        }
+        self.ready = Some(ready);
+        result
+    }
+
+    // A depth-first walk over the successors, from each node in turn,
+    // keeping the path on a stack; meeting a node already on the path is a
+    // cycle, returned from that node round to itself.
+    fn find_cycle(ref self) -> Option[Vec[N]] {
+        let n = self.infos.len();
+        let mut seen: Vec[bool] = Vec.new();
+        let mut stacki: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seen.push(false);
+            stacki.push(-1);
+        }
+        let mut stack: Vec[i64] = Vec.new();
+        let mut itstack: Vec[i64] = Vec.new();
+        for start in 0..n {
+            if seen[start] {
+                continue;
+            }
+            let mut node = start;
+            loop {
+                if seen[node] {
+                    if stacki[node] >= 0 {
+                        let mut cycle: Vec[N] = Vec.new();
+                        for k in stacki[node]..stack.len() {
+                            cycle.push(self.infos[stack[k]].node.clone());
+                        }
+                        cycle.push(self.infos[node].node.clone());
+                        return Some(cycle);
+                    }
+                } else {
+                    seen[node] = true;
+                    itstack.push(0);
+                    stacki[node] = stack.len();
+                    stack.push(node);
+                }
+                // Back up to the topmost entry with another successor.
+                let mut advanced = false;
+                while not stack.is_empty() {
+                    let top = stack[stack.len() - 1];
+                    let pos = itstack[itstack.len() - 1];
+                    if pos < self.infos[top].successors.len() {
+                        let last = itstack.len() - 1;
+                        itstack[last] = pos + 1;
+                        node = self.infos[top].successors[pos];
+                        advanced = true;
+                        break;
+                    }
+                    let gone = stack.len() - 1;
+                    stacki[stack[gone]] = -1;
+                    stack.remove(gone);
+                    itstack.remove(gone);
+                }
+                if not advanced {
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    fn static_order(mut ref self) -> Result[Vec[N], GraphError[N]] {
+        self.prepare()?;
+        let mut out: Vec[N] = Vec.new();
+        while self.is_active()? {
+            let group = self.get_ready()?;
+            for x in group.iter() {
+                out.push(x.clone());
+            }
+            self.done(group)?;
+        }
+        Ok(out)
+    }
+}
+
+// ------------------------------------------------------------ reprs
+
+fn str_repr(s: ref String) -> String {
+    f"'{s}'"
+}
+
+fn list_repr(v: ref Vec[String]) -> String {
+    let parts: Vec[String] = v.iter().map(|s| str_repr(s)).collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn tuple_repr(v: ref Vec[String]) -> String {
+    if v.len() == 1 {
+        return f"({str_repr(v[0])},)";
+    }
+    let parts: Vec[String] = v.iter().map(|s| str_repr(s)).collect();
+    f"({parts.join(", ")})"
+}
+
+fn error_text(e: ref GraphError[String]) -> String {
+    match e {
+        GraphError.Cycle(c) => f"CycleError: nodes are in a cycle {list_repr(c)}",
+        GraphError.AddAfterPrepare => "ValueError: Nodes cannot be added after a call to prepare()".to_string(),
+        GraphError.PrepareTwice => "ValueError: cannot prepare() more than once".to_string(),
+        GraphError.NotPrepared => "ValueError: prepare() must be called first".to_string(),
+        GraphError.NotAdded(n) => f"ValueError: node {str_repr(n)} was not added using add()",
+        GraphError.NotReady(n) => f"ValueError: node {str_repr(n)} was not passed out (still not ready)",
+        GraphError.AlreadyDone(n) => f"ValueError: node {str_repr(n)} was already marked done",
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+// "d:b,c;b:a" -> d after b and c, b after a; "-" is the empty graph.
+fn graph(spec: ref String) -> TopologicalSorter[String] {
+    let mut ts: TopologicalSorter[String] = TopologicalSorter.new();
+    if spec == "-" {
+        return ts;
+    }
+    for part in spec.split(";") {
+        let f: Vec[String] = part.split(":");
+        let mut preds: Vec[String] = Vec.new();
+        for p in f[1].split(",") {
+            if not p.is_empty() {
+                preds.push(p);
+            }
+        }
+        match ts.add(f[0], preds) {
+            Ok(()) => {}
+            Err(_) => {}
+        }
+    }
+    ts
+}
+
+fn order(spec: ref String, out: mut ref String) {
+    let mut ts = graph(spec);
+    match ts.static_order() {
+        Ok(v) => out.push_str(f"  {list_repr(v)}\n"),
+        Err(e) => out.push_str(f"  {error_text(e)}\n"),
+    }
+}
+
+fn waves(spec: ref String, out: mut ref String) -> Result[(), String] {
+    let mut ts = graph(spec);
+    match ts.prepare() {
+        Ok(()) => {}
+        Err(e) => return Err(error_text(e)),
+    }
+    let mut n = 1;
+    while ts.is_active().unwrap_or(false) {
+        let group = match ts.get_ready() {
+            Ok(g) => g,
+            Err(e) => return Err(error_text(e)),
+        };
+        out.push_str(f"  wave {n}: {tuple_repr(group)}\n");
+        match ts.done(group) {
+            Ok(()) => {}
+            Err(e) => return Err(error_text(e)),
+        }
+        n += 1;
+    }
+    Ok(())
+}
+
+fn steps(spec: ref String, ops: ref String, out: mut ref String) {
+    let mut ts = graph(spec);
+    for op in ops.split(" ") {
+        let line: Result[String, GraphError[String]] = if op == "prepare" {
+            ts.prepare().map(|_| "prepare".to_string())
+        } else if op == "ready" {
+            ts.get_ready().map(|g| f"ready {tuple_repr(g)}")
+        } else if op == "active" {
+            ts.is_active().map(|a| if a { "active True".to_string() } else { "active False".to_string() })
+        } else if op.starts_with("done:") {
+            let node = op[5..].to_string();
+            ts.done(vec![node.clone()]).map(|_| f"done {node}")
+        } else if op.starts_with("add:") {
+            let f: Vec[String] = op.split(":");
+            ts.add(f[1], vec![f[2].clone()]).map(|_| f"add {f[1]}")
+        } else {
+            Ok(f"unknown op {op}")
+        };
+        match line {
+            Ok(s) => out.push_str(f"  {s}\n"),
+            Err(e) => out.push_str(f"  {error_text(e)}\n"),
+        }
+    }
+}
+
+fn read_data(path: ref String) -> Result[String, String] {
+    let name = path[1..].to_string();
+    match fs.read_to_string(f"data/{name}") {
+        Ok(s) => Ok(s),
+        Err(e) => Err(f"cannot read {name}: {e}"),
+    }
+}
+
+fn graph_err(e: GraphError[String]) -> String {
+    error_text(e)
+}
+
+// Runs the pipeline on `workers` workers: whenever a worker is free it
+// takes the oldest ready job; time jumps to the next job to finish.
+fn ci(path: ref String, workers: i64, out: mut ref String) -> Result[(), String] {
+    let text = read_data(path)?;
+    let mut secs: Map[String, i64] = Map.new();
+    let mut ts: TopologicalSorter[String] = TopologicalSorter.new();
+    for line in text.lines() {
+        let f: Vec[String] = line.split("\t");
+        let n = match i64.parse(f[1].clone()) {
+            Some(n) => n,
+            None => return Err(f"bad seconds in: {line}"),
+        };
+        secs.insert(f[0].clone(), n);
+        let needs: Vec[String] = if f[2] == "-" { Vec.new() } else { f[2].split(",") };
+        ts.add(f[0], needs).map_err(graph_err)?;
+    }
+    ts.prepare().map_err(graph_err)?;
+    let mut queue: Vec[String] = Vec.new();
+    // (finish time, start order, job)
+    let mut running: Vec[(i64, i64, String)] = Vec.new();
+    let mut now = 0;
+    let mut busy = 0;
+    let mut seq = 0;
+    while ts.is_active().map_err(graph_err)? {
+        for j in ts.get_ready().map_err(graph_err)? {
+            queue.push(j);
+        }
+        while not queue.is_empty() and running.len() < workers {
+            let name = queue.remove(0);
+            let s = match secs.get(name) {
+                Some(s) => *s,
+                None => 0,
+            };
+            out.push_str(f"  t={now:>3} start {name}\n");
+            running.push((now + s, seq, name));
+            seq += 1;
+        }
+        let mut best = 0;
+        for k in 1..running.len() {
+            let (f, q, _) = running[k];
+            let (bf, bq, _) = running[best];
+            if f < bf or (f == bf and q < bq) {
+                best = k;
+            }
+        }
+        let (finish, _, name) = running.remove(best);
+        busy += match secs.get(name) {
+            Some(s) => *s,
+            None => 0,
+        };
+        now = finish;
+        out.push_str(f"  t={now:>3} done  {name}\n");
+        ts.done(vec![name]).map_err(graph_err)?;
+    }
+    out.push_str(f"  {workers} workers: {now}s wall, {busy}s of work, {100 * busy / (now * workers)}% busy\n");
+    Ok(())
+}
+
+// Orders a package's dependencies, read from an index of
+// `name: dep, dep` lines, so that each comes before what needs it.
+fn install(path: ref String, target: ref String, out: mut ref String) -> Result[(), String] {
+    let text = read_data(path)?;
+    let mut deps: Map[String, Vec[String]] = Map.new();
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let colon = match line.find(":") {
+            Some(i) => i,
+            None => return Err(f"bad line: {line}"),
+        };
+        let name = line[0..colon].to_string();
+        let mut ds: Vec[String] = Vec.new();
+        for d in line[colon + 1..].split(",") {
+            let d = d.trim().to_string();
+            if not d.is_empty() {
+                ds.push(d);
+            }
+        }
+        deps.insert(name, ds);
+    }
+    if not deps.contains_key(target) {
+        out.push_str(f"  error: unknown package {str_repr(target)}\n");
+        return Ok(());
+    }
+    let mut ts: TopologicalSorter[String] = TopologicalSorter.new();
+    let mut todo: Vec[String] = vec![target.clone()];
+    let mut seen: Set[String] = Set.new();
+    while not todo.is_empty() {
+        let p = todo.remove(0);
+        if seen.contains(p) {
+            continue;
+        }
+        seen.insert(p.clone());
+        let ds = match deps.get(p) {
+            Some(ds) => ds.clone(),
+            None => Vec.new(),
+        };
+        ts.add(p, ds).map_err(graph_err)?;
+        for d in ds.iter() {
+            todo.push(d.clone());
+        }
+    }
+    match ts.static_order() {
+        Ok(order) => out.push_str(f"  install {order.len()}: {order.join(" ")}\n"),
+        Err(GraphError.Cycle(c)) => {
+            let mut back: Vec[String] = Vec.new();
+            let mut k = c.len() - 1;
+            while k >= 0 {
+                back.push(c[k].clone());
+                k -= 1;
+            }
+            out.push_str(f"  error: dependency cycle {back.join(" -> ")}\n");
+        }
+        Err(e) => return Err(error_text(e)),
+    }
+    Ok(())
+}
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    if kind == "order" {
+        order(f[1], mut out);
+    } else if kind == "waves" {
+        waves(f[1], mut out)?;
+    } else if kind == "steps" {
+        steps(f[1], f[2], mut out);
+    } else if kind == "ci" {
+        let workers = match i64.parse(f[2].clone()) {
+            Some(n) => n,
+            None => return Err(f"bad worker count {f[2]}"),
+        };
+        ci(f[1], workers, mut out)?;
+    } else if kind == "install" {
+        install(f[1], f[2], mut out)?;
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    for (path, contents) in data_files() {
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        if let Err(e) = run(f, mut out) {
+            out.push_str(f"error: {e}\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("app: web-framework, orm, logging, config\n");
+    t.push_str("web-framework: http, templates, logging\n");
+    t.push_str("orm: db-driver, logging\n");
+    t.push_str("db-driver: sockets, tls\n");
+    t.push_str("http: sockets, tls\n");
+    t.push_str("tls: crypto\n");
+    t.push_str("crypto:\n");
+    t.push_str("sockets:\n");
+    t.push_str("templates: escaping\n");
+    t.push_str("escaping:\n");
+    t.push_str("logging: config\n");
+    t.push_str("config:\n");
+    t.push_str("cli: config, logging\n");
+    t.push_str("broken-a: broken-b\n");
+    t.push_str("broken-b: broken-c\n");
+    t.push_str("broken-c: broken-a, logging\n");
+    v.push(("packages.txt".to_string(), t));
+    let mut t = String.new();
+    t.push_str("checkout\t5\t-\n");
+    t.push_str("deps\t40\tcheckout\n");
+    t.push_str("lint\t15\tdeps\n");
+    t.push_str("typecheck\t25\tdeps\n");
+    t.push_str("build-linux\t90\tdeps\n");
+    t.push_str("build-mac\t120\tdeps\n");
+    t.push_str("unit\t60\tbuild-linux\n");
+    t.push_str("integration\t150\tbuild-linux,typecheck\n");
+    t.push_str("ui\t80\tbuild-mac\n");
+    t.push_str("docs\t30\tcheckout\n");
+    t.push_str("package\t20\tbuild-linux,build-mac\n");
+    t.push_str("sign\t10\tpackage\n");
+    t.push_str("release\t5\tsign,unit,integration,ui,lint,docs\n");
+    v.push(("pipeline.tsv".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("order\td:b,c;b:a;c:a\n");
+    s.push_str("order\ta:;b:;c:\n");
+    s.push_str("order\tc:a,b;a:;b:a\n");
+    s.push_str("order\t-\n");
+    s.push_str("order\tx:x\n");
+    s.push_str("order\ta:b;b:c;c:a\n");
+    s.push_str("order\tq:p;p:o;o:n;n:p\n");
+    s.push_str("order\tz:y;y:x;w:v;v:z\n");
+    s.push_str("order\tb:a,a;c:b;a:\n");
+    s.push_str("waves\td:b,c;b:a;c:a;e:a\n");
+    s.push_str("waves\tlib:base;app:lib,ui;ui:base;tests:app;base:\n");
+    s.push_str("steps\ta:;b:a\tready ready done:a ready done:b active\n");
+    s.push_str("steps\ta:;b:a\tdone:a\n");
+    s.push_str("steps\ta:;b:a\tprepare ready done:b\n");
+    s.push_str("steps\ta:;b:a\tprepare ready done:a done:a\n");
+    s.push_str("steps\ta:;b:a\tprepare ready done:zz\n");
+    s.push_str("steps\ta:;b:a\tprepare add:c:a\n");
+    s.push_str("steps\ta:;b:a\tprepare prepare\n");
+    s.push_str("steps\ta:;b:a;c:b\tprepare active ready active done:a active ready done:b ready done:c active ready\n");
+    s.push_str("steps\ta:b;b:a;c:\tprepare ready done:c ready active\n");
+    s.push_str("ci\t@pipeline.tsv\t1\n");
+    s.push_str("ci\t@pipeline.tsv\t3\n");
+    s.push_str("ci\t@pipeline.tsv\t8\n");
+    s.push_str("install\t@packages.txt\tapp\n");
+    s.push_str("install\t@packages.txt\tcli\n");
+    s.push_str("install\t@packages.txt\tescaping\n");
+    s.push_str("install\t@packages.txt\tbroken-a\n");
+    s.push_str("install\t@packages.txt\tnope\n");
+    s
+}

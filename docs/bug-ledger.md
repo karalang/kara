@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 276 |
-| codegen-gap | 269 |
+| codegen-gap | 270 |
 | false-positive | 218 |
 | other | 173 |
 | perf | 171 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2930 |
-| interp | 947 |
+| codegen | 2931 |
+| interp | 948 |
 | typecheck | 457 |
 | other | 115 |
 | ownership | 110 |
@@ -213,6 +213,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-23 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces a generic struct with an `I.Item` field is not lowered when a generic function builds it: `fn last[I: Iterator](it: own I) -> Last[I] { Last { it: it, prev: None } }` for `struct Last[I: Iterator] { it: I, prev: Option[I.Item] }`, called as `last(VecIter {..})`, stops with "an associated type of `I` is not lowered yet"; check passes, and a struct literal written in `main` works | — |
 | B-2026-10-18-24 | 2026-10-18 | interp+codegen | high | On the MIR compiled backends a bare `None` passed for an `Option[T]` parameter, where `T` is fixed by another argument, is lowered with the wrong type: `fold_from(VecIter {..}, |a: i64, b: i64| a + b, None)` for `fn fold_from[I: Iterator[Item = T], T](it: own I, f: Fn(own T, own T) -> T, start: own Option[T]) -> Option[T]` prints `()` instead of 6 on `__mir-llvm-run` and `karac build --mir`, and `__mir-llvm-asan` reports a stack-buffer-overflow; `__mir-run`, `karac build` and `run --interp` print 6 | — |
 | B-2026-10-18-25 | 2026-10-18 | parser | medium | design.md's remedy for postfix on a block-like expression in statement position does not parse: `(if c { a } else { b }).len()` as a function's tail, design.md § Statements' own example, and `(match d { .. }).to_string()` both fail "Expected expression, found Dot", the same error as without the parentheses; bound in a `let` the parenthesized form works | — |
+| B-2026-10-18-26 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces `check(n).map_err(text)?` with a NAMED function stops with "'?' cannot propagate error 'F' as 'String': target is not a named type": `map_err[F]`'s `F` is not taken from the function's return type; check, `run --interp` and legacy build pass, and a closure `.map_err(|e| text(e))?` or a typed `let r: Result[i64, String] = ...` works | — |
 
 ### Relocated
 

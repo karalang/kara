@@ -1,0 +1,168 @@
+== order | d:b,c;b:a;c:a
+  ['a', 'b', 'c', 'd']
+== order | a:;b:;c:
+  ['a', 'b', 'c']
+== order | c:a,b;a:;b:a
+  ['a', 'b', 'c']
+== order | -
+  []
+== order | x:x
+  CycleError: nodes are in a cycle ['x', 'x']
+== order | a:b;b:c;c:a
+  CycleError: nodes are in a cycle ['a', 'c', 'b', 'a']
+== order | q:p;p:o;o:n;n:p
+  CycleError: nodes are in a cycle ['p', 'n', 'o', 'p']
+== order | z:y;y:x;w:v;v:z
+  ['x', 'y', 'z', 'v', 'w']
+== order | b:a,a;c:b;a:
+  ['a', 'b', 'c']
+== waves | d:b,c;b:a;c:a;e:a
+  wave 1: ('a',)
+  wave 2: ('b', 'c', 'e')
+  wave 3: ('d',)
+== waves | lib:base;app:lib,ui;ui:base;tests:app;base:
+  wave 1: ('base',)
+  wave 2: ('lib', 'ui')
+  wave 3: ('app',)
+  wave 4: ('tests',)
+== steps | a:;b:a | ready ready done:a ready done:b active
+  ValueError: prepare() must be called first
+  ValueError: prepare() must be called first
+  ValueError: prepare() must be called first
+  ValueError: prepare() must be called first
+  ValueError: prepare() must be called first
+  ValueError: prepare() must be called first
+== steps | a:;b:a | done:a
+  ValueError: prepare() must be called first
+== steps | a:;b:a | prepare ready done:b
+  prepare
+  ready ('a',)
+  ValueError: node 'b' was not passed out (still not ready)
+== steps | a:;b:a | prepare ready done:a done:a
+  prepare
+  ready ('a',)
+  done a
+  ValueError: node 'a' was already marked done
+== steps | a:;b:a | prepare ready done:zz
+  prepare
+  ready ('a',)
+  ValueError: node 'zz' was not added using add()
+== steps | a:;b:a | prepare add:c:a
+  prepare
+  ValueError: Nodes cannot be added after a call to prepare()
+== steps | a:;b:a | prepare prepare
+  prepare
+  ValueError: cannot prepare() more than once
+== steps | a:;b:a;c:b | prepare active ready active done:a active ready done:b ready done:c active ready
+  prepare
+  active True
+  ready ('a',)
+  active True
+  done a
+  active True
+  ready ('b',)
+  done b
+  ready ('c',)
+  done c
+  active False
+  ready ()
+== steps | a:b;b:a;c: | prepare ready done:c ready active
+  CycleError: nodes are in a cycle ['a', 'b', 'a']
+  ready ('c',)
+  done c
+  ready ()
+  active False
+== ci | @pipeline.tsv | 1
+  t=  0 start checkout
+  t=  5 done  checkout
+  t=  5 start deps
+  t= 45 done  deps
+  t= 45 start docs
+  t= 75 done  docs
+  t= 75 start lint
+  t= 90 done  lint
+  t= 90 start typecheck
+  t=115 done  typecheck
+  t=115 start build-linux
+  t=205 done  build-linux
+  t=205 start build-mac
+  t=325 done  build-mac
+  t=325 start unit
+  t=385 done  unit
+  t=385 start integration
+  t=535 done  integration
+  t=535 start ui
+  t=615 done  ui
+  t=615 start package
+  t=635 done  package
+  t=635 start sign
+  t=645 done  sign
+  t=645 start release
+  t=650 done  release
+  1 workers: 650s wall, 650s of work, 100% busy
+== ci | @pipeline.tsv | 3
+  t=  0 start checkout
+  t=  5 done  checkout
+  t=  5 start deps
+  t=  5 start docs
+  t= 35 done  docs
+  t= 45 done  deps
+  t= 45 start lint
+  t= 45 start typecheck
+  t= 45 start build-linux
+  t= 60 done  lint
+  t= 60 start build-mac
+  t= 70 done  typecheck
+  t=135 done  build-linux
+  t=135 start unit
+  t=135 start integration
+  t=180 done  build-mac
+  t=180 start ui
+  t=195 done  unit
+  t=195 start package
+  t=215 done  package
+  t=215 start sign
+  t=225 done  sign
+  t=260 done  ui
+  t=285 done  integration
+  t=285 start release
+  t=290 done  release
+  3 workers: 290s wall, 650s of work, 74% busy
+== ci | @pipeline.tsv | 8
+  t=  0 start checkout
+  t=  5 done  checkout
+  t=  5 start deps
+  t=  5 start docs
+  t= 35 done  docs
+  t= 45 done  deps
+  t= 45 start lint
+  t= 45 start typecheck
+  t= 45 start build-linux
+  t= 45 start build-mac
+  t= 60 done  lint
+  t= 70 done  typecheck
+  t=135 done  build-linux
+  t=135 start unit
+  t=135 start integration
+  t=165 done  build-mac
+  t=165 start ui
+  t=165 start package
+  t=185 done  package
+  t=185 start sign
+  t=195 done  unit
+  t=195 done  sign
+  t=245 done  ui
+  t=285 done  integration
+  t=285 start release
+  t=290 done  release
+  8 workers: 290s wall, 650s of work, 28% busy
+== install | @packages.txt | app
+  install 12: config sockets escaping crypto logging templates tls http db-driver web-framework orm app
+== install | @packages.txt | cli
+  install 3: config logging cli
+== install | @packages.txt | escaping
+  install 1: escaping
+== install | @packages.txt | broken-a
+  error: dependency cycle broken-a -> broken-b -> broken-c -> broken-a
+== install | @packages.txt | nope
+  error: unknown package 'nope'
