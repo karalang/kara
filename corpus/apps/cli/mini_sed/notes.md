@@ -80,10 +80,11 @@ Author errors (the diagnostics were right):
 - Three methods that store their argument (`add`, `push`, `wfile`) had
   bare parameters, which borrow since D5. They are `own`.
 
+`Out` once had a `copy()` method so `r.out.text.clone()` would not be
+written, a workaround for B-2026-10-14-70. It was dropped after the fix
+in 0bacd9912b.
+
 Compiler gaps, worked around:
-- B-2026-10-14-70: `karac check` refuses `r.out.text.clone()` as a
-  chained field receiver, a legacy-codegen deferral that the v2 surfaces
-  don't need. `Out` has a `copy()` method.
 - The `Regex` struct is `Pattern`. `karac check` warns that it shadows
   the prelude `Regex`, and B-2026-10-15-8 and B-2026-10-15-41 show that
   such a shadow can break library code on v2.

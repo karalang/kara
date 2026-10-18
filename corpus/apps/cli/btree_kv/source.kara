@@ -30,8 +30,6 @@
 //                    tears the WAL by rewriting it shorter
 //   B-2026-10-14-68  `[DB, WAL, "kv.db.tmp"]` types the literal as String
 //                    against the Str consts, so the array is annotated
-//   B-2026-10-14-70  check refuses `self.tree.pages.len()`, so Tree has
-//                    npages() and leaf_len() accessors
 
 const PAGE: i64 = 256;
 const DB: Str = "kv.db";
@@ -199,14 +197,6 @@ fn new_tree() -> Tree {
 }
 
 impl Tree {
-    fn npages(ref self) -> i64 {
-        self.pages.len()
-    }
-
-    fn leaf_len(ref self, pid: i64) -> i64 {
-        self.pages[pid].keys.len()
-    }
-
     fn alloc(mut ref self, node: own Node) -> i64 {
         self.pages.push(node);
         self.pages.len() - 1
@@ -458,7 +448,7 @@ fn open_store(crc: own Vec[u32]) -> Result[Store, String] {
             Err(_) => return Err("cannot read the database".to_string()),
         };
         s.tree = load(data)?;
-        println(f"  opened {DB}: {s.tree.npages()} pages, {s.tree.count} keys, commit {s.tree.commits}");
+        println(f"  opened {DB}: {s.tree.pages.len()} pages, {s.tree.count} keys, commit {s.tree.commits}");
     } else {
         println("  created a new store");
     }
@@ -517,7 +507,7 @@ impl Store {
         write_file(f"{DB}.tmp", data)?;
         fs.rename(f"{DB}.tmp", DB)?;
         write_file(WAL, Vec.new())?;
-        println(f"  commit {self.tree.commits}: {self.tree.npages()} pages, {self.tree.count} keys, {self.tree.splits} splits this session, crc {hex8(crc32(self.crc, data, 0, data.len()))}");
+        println(f"  commit {self.tree.commits}: {self.tree.pages.len()} pages, {self.tree.count} keys, {self.tree.splits} splits this session, crc {hex8(crc32(self.crc, data, 0, data.len()))}");
         Ok(())
     }
 }
@@ -732,7 +722,7 @@ fn scenario() -> Result[(), String] {
     }
     let mut empty = 0;
     for p in w.leaves.iter() {
-        if s2.tree.leaf_len(*p) == 0 {
+        if s2.tree.pages[*p].keys.len() == 0 {
             empty += 1;
         }
     }

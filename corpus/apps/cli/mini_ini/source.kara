@@ -309,14 +309,6 @@ impl Section {
         }
     }
 
-    fn len(ref self) -> i64 {
-        self.keys.len()
-    }
-
-    fn val_at(ref self, i: i64) -> Option[String] {
-        self.vals[i].clone()
-    }
-
     fn remove(mut ref self, k: Str) -> bool {
         let i = self.find(k);
         if i < 0 {
@@ -633,7 +625,7 @@ impl Config {
         }
         let i = self.defaults.find(option);
         if i >= 0 {
-            return Ok(self.defaults.val_at(i));
+            return Ok(self.defaults.vals[i].clone());
         }
         Err(f"NoOptionError: No option {py_repr(option)} in section: {py_repr(section)}")
     }
@@ -999,7 +991,7 @@ impl Config {
     fn write(ref self) -> String {
         let delim = f" {self.delimiters[0]} ";
         let mut out = String.new();
-        if self.defaults.len() > 0 {
+        if self.defaults.keys.len() > 0 {
             let mut d = self.defaults.clone();
             d.name = self.default_section.clone();
             self.write_section(mut out, d, delim);

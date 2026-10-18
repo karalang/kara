@@ -100,12 +100,12 @@ Compiler gaps:
   `karac check` found none of its methods, because it sends every
   method call on a type named `Client`, `Response`, `HttpError` or
   `RequestBuilder` to the library's HTTP types. It became `PkgClient`.
-- B-2026-10-14-70: `karac check` refuses chained field receivers like
-  `self.c.out`, although the v2 surfaces run them. main()'s later half
-  was a `Run` struct holding the client; its fields moved into the
-  client.
 - B-2026-10-15-15: there is no `rfind`. `last_index` finds the last
   slash or dot.
+
+B-2026-10-14-70 (chained field receivers like `self.c.out`) was worked
+around by folding main()'s `Run` struct into the client until its fix
+in 0bacd9912b; the `Run` struct is back.
 
 After those edits the program matched expected.out on the first run on
 both MIR surfaces.

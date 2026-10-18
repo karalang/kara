@@ -559,19 +559,15 @@ impl Po {
             key.push(4);
         }
         append(mut key, self.msgid);
-        add_msg(mut self.out, key, self.msgstr.clone());
-    }
-}
-
-// A later entry with the same key replaces the earlier one.
-fn add_msg(c: mut ref Compiled, key: own Vec[u8], value: own Vec[u8]) {
-    for i in 0..c.msgs.len() {
-        if c.msgs[i].key == key {
-            c.msgs[i].value = value;
-            return;
+        // a later entry with the same key replaces the earlier one
+        for i in 0..self.out.msgs.len() {
+            if self.out.msgs[i].key == key {
+                self.out.msgs[i].value = self.msgstr.clone();
+                return;
+            }
         }
+        self.out.msgs.push(Msg { key: key, value: self.msgstr.clone() });
     }
-    c.msgs.push(Msg { key: key, value: value });
 }
 
 fn msgfmt(text: ref Vec[u8]) -> Result[Compiled, String] {

@@ -26,7 +26,6 @@
 // does.
 //
 // Workarounds for compiler gaps, each marked where it is applied:
-// B-2026-10-14-70 (the Ast's own methods, not `self.ast.exprs.push`),
 // B-2026-10-15-31 (token fields read before the branches of `simple`),
 // B-2026-10-15-32 (a `ref` binding to match an owned Value and use it
 // again), B-2026-10-06-86 (`Place` is a struct, not an enum carrying
@@ -285,38 +284,6 @@ struct Ast {
     protos: Vec[Proto],
 }
 
-impl Ast {
-    fn add_expr(mut ref self, e: own Expr) -> i64 {
-        self.exprs.push(e);
-        self.exprs.len() - 1
-    }
-
-    fn add_stmt(mut ref self, s: own Stmt, line: i64) -> i64 {
-        self.stmts.push(s);
-        self.lines.push(line);
-        self.stmts.len() - 1
-    }
-
-    fn add_block(mut ref self, list: own Vec[i64]) -> i64 {
-        self.blocks.push(list);
-        self.blocks.len() - 1
-    }
-
-    fn add_proto(mut ref self, p: own Proto) -> i64 {
-        self.protos.push(p);
-        self.protos.len() - 1
-    }
-
-    fn is_call(ref self, e: i64) -> bool {
-        let x = ref self.exprs[e];
-        match x {
-            Expr.Call(_, _, _) => true,
-            Expr.Method(_, _, _, _) => true,
-            _ => false,
-        }
-    }
-}
-
 // ------------------------------------------------------------ parser
 
 struct Parser { toks: Vec[Token], p: i64, ast: Ast }
@@ -392,14 +359,15 @@ impl Parser {
         Ok(s)
     }
 
-    // The Ast does the pushing: `karac check` refuses `self.ast.exprs.push`
-    // (B-2026-10-14-70).
     fn add_expr(mut ref self, e: own Expr) -> i64 {
-        self.ast.add_expr(e)
+        self.ast.exprs.push(e);
+        self.ast.exprs.len() - 1
     }
 
     fn add_stmt(mut ref self, s: own Stmt, line: i64) -> i64 {
-        self.ast.add_stmt(s, line)
+        self.ast.stmts.push(s);
+        self.ast.lines.push(line);
+        self.ast.stmts.len() - 1
     }
 
     fn block_ends(ref self) -> bool {
@@ -426,7 +394,8 @@ impl Parser {
             }
             list.push(self.statement()?);
         }
-        Ok(self.ast.add_block(list))
+        self.ast.blocks.push(list);
+        Ok(self.ast.blocks.len() - 1)
     }
 
     fn statement(mut ref self) -> Result[i64, String] {
@@ -569,7 +538,12 @@ impl Parser {
     }
 
     fn is_call(ref self, e: i64) -> bool {
-        self.ast.is_call(e)
+        let x = ref self.ast.exprs[e];
+        match x {
+            Expr.Call(_, _, _) => true,
+            Expr.Method(_, _, _, _) => true,
+            _ => false,
+        }
     }
 
     fn func_body(mut ref self, name: own String, method: bool) -> Result[i64, String] {
@@ -587,7 +561,8 @@ impl Parser {
         self.expect(")")?;
         let body = self.block()?;
         self.expect("end")?;
-        Ok(self.ast.add_proto(Proto { name: name, params: params, body: body }))
+        self.ast.protos.push(Proto { name: name, params: params, body: body });
+        Ok(self.ast.protos.len() - 1)
     }
 
     fn expr_list(mut ref self) -> Result[Vec[i64], String] {
@@ -767,7 +742,7 @@ fn parse(src: Str) -> Result[Ast, String] {
     if p.toks[p.p].kind != T_EOF {
         return Err(p.err("'<eof>' expected"));
     }
-    p.ast.add_proto(Proto { name: "main chunk".to_string(), params: Vec.new(), body: body });
+    p.ast.protos.push(Proto { name: "main chunk".to_string(), params: Vec.new(), body: body });
     Ok(p.ast)
 }
 // ------------------------------------------------------------ values

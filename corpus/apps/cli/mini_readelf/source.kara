@@ -2091,22 +2091,19 @@ fn load_dso(e: own Elf) -> Option[Dso] {
 }
 
 fn dso_name(d: ref Dso, k: i64) -> String {
-    let syms = ref d.syms;
-    sym_name(d.e, syms, syms.rows[k])
+    sym_name(d.e, d.syms, d.syms.rows[k])
 }
 
 // Does symbol k define name, in the asked version or the default one?
 fn defines(d: ref Dso, k: i64, name: Str, version: Str) -> bool {
-    let syms = ref d.syms;
-    let r = ref syms.rows[k];
+    let r = ref d.syms.rows[k];
     if r.shndx == 0 or r.info >> 4 == 0 or dso_name(d, k) != name {
         return false;
     }
     if not d.v.has_versym {
         return true;
     }
-    let v = ref d.v;
-    let data = v.versym[k];
+    let data = d.v.versym[k];
     if version.len() == 0 {
         return data & 0x8000 == 0;
     }
@@ -2174,8 +2171,7 @@ fn lookup(d: ref Dso, name: Str, version: Str) -> (i64, String) {
 }
 
 fn describe(d: ref Dso, k: i64) -> String {
-    let syms = ref d.syms;
-    let r = ref syms.rows[k];
+    let r = ref d.syms.rows[k];
     let mut nm = dso_name(d, k);
     if let Some(h) = sym_version(d.v, k, r, nm) {
         nm.push_str(if h.kind == VER_HIDDEN { "@" } else { "@@" });
@@ -2371,9 +2367,8 @@ fn ldcheck(out: mut ref String, f: Str) {
             all_system = false;
         }
     }
-    let my_syms = ref me.syms;
-    for i in 1..my_syms.rows.len() {
-        let r = my_syms.rows[i].clone();
+    for i in 1..me.syms.rows.len() {
+        let r = me.syms.rows[i].clone();
         if r.shndx != 0 {
             continue;
         }

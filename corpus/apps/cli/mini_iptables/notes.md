@@ -60,5 +60,7 @@ These are workarounds for gaps:
   shape in `save` were refused: the literal branch stays a `String`
   instead of taking its sibling's `Str` (B-2026-10-18-6). Both now
   annotate `let policy: Str`.
-- `c.orig.proto.as_str()` is refused as a chained field receiver
-  (B-2026-10-14-70). `conntrack_list` binds `c.orig` first.
+
+`conntrack_list` once bound `c.orig` before reading `c.orig.proto`, a
+workaround for B-2026-10-14-70. It was dropped after the fix in
+0bacd9912b.

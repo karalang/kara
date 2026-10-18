@@ -55,13 +55,6 @@ program as this one in Python, and its output is byte-identical.
 ## Edits from mini_statsd.orig.kara to mini_statsd.kara
 
 Compiler gaps:
-- B-2026-10-14-70: check refuses `self.counters.vals[i]` and its
-  neighbours as chained field receivers in 15 places. The reads bind
-  `let c = ref self.counters;` first. The writes would bind
-  `mut ref self.counters`, but there is no `mut ref place` expression yet
-  (B-2026-10-15-14; the spec added it today), so they go through three
-  small helpers, `add_at`, `push_at` and `insert_at`, called with
-  `mut self.<field>`;
 - B-2026-10-15-68: `f64.partial_cmp` runs on no v2 surface, so the timer
   sort compares with `<` and `>`;
 - B-2026-10-15-69: binding a `TcpListener` to port 0 prints a
@@ -76,6 +69,11 @@ matches.
 
 After that, the output matched `expected.out` on `__mir-run`,
 `__mir-llvm-run` and `__mir-llvm-asan` on the first run.
+
+The B-2026-10-14-70 workaround (`ref` rebinds and the `add_at`, `push_at`
+and `insert_at` helpers) was dropped after the fix in 0bacd9912b. The
+original `self.counters.vals[i]` reads and writes need no `mut ref place`
+binding, so nothing of B-2026-10-15-14 remains either.
 
 Written 2026-10-15 by the real-world apps thread; karac at 7e52125b4c.
 

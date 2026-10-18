@@ -1159,19 +1159,6 @@ fn percent_name(k: Str) -> String {
     k.to_string()
 }
 
-// Updates through a field's element, which check refuses in place.
-fn add_at(o: mut ref Obj[f64], i: i64, dv: f64) {
-    o.vals[i] += dv;
-}
-
-fn push_at(o: mut ref Obj[Vec[f64]], i: i64, v: f64) {
-    o.vals[i].push(v);
-}
-
-fn insert_at(o: mut ref Obj[Obj[bool]], i: i64, member: own String) {
-    o.vals[i].set(member, true);
-}
-
 impl Daemon {
     fn new(cfg: ref Vec[Field]) -> Daemon {
         let mut ttl_max = num_or(cfg, "gaugesMaxTTL", 1.0);
@@ -1240,7 +1227,7 @@ impl Daemon {
         if i < 0 {
             self.counters.set(key, not_a_number());
         } else {
-            add_at(mut self.counters, i, 1.0); // B-2026-10-14-70, B-2026-10-15-14
+            self.counters.vals[i] += 1.0;
         }
     }
 
@@ -1291,20 +1278,18 @@ impl Daemon {
                         self.timers.set(key, Vec.new());
                         self.tcount.set(key, 0.0);
                     }
-                    // B-2026-10-14-70, B-2026-10-15-14
                     let i = self.timers.find(key);
-                    push_at(mut self.timers, i, js_number(f[0]));
+                    self.timers.vals[i].push(js_number(f[0]));
                     let j = self.tcount.find(key);
-                    add_at(mut self.tcount, j, inv);
+                    self.tcount.vals[j] += inv;
                 } else if kind == "g" {
                     if self.del_gauges {
                         self.ttl.set(key, self.ttl_max);
                     }
                     let i = self.gauges.find(key);
                     let delta = first_byte(f[0]) == b'+' or first_byte(f[0]) == b'-';
-                    let g = ref self.gauges; // B-2026-10-14-70
-                    if i >= 0 and truthy(g.vals[i]) and delta {
-                        add_at(mut self.gauges, i, js_number(f[0])); // B-2026-10-15-14
+                    if i >= 0 and truthy(self.gauges.vals[i]) and delta {
+                        self.gauges.vals[i] += js_number(f[0]);
                     } else {
                         self.gauges.set(key, js_number(f[0]));
                     }
@@ -1314,16 +1299,15 @@ impl Daemon {
                     }
                     let i = self.sets.find(key);
                     let member = if f[0] == "" { "0".to_string() } else { f[0].clone() };
-                    insert_at(mut self.sets, i, member); // B-2026-10-14-70, B-2026-10-15-14
+                    self.sets.vals[i].set(member, true);
                 } else {
                     let i = self.counters.find(key);
-                    let c = ref self.counters; // B-2026-10-14-70
-                    if i < 0 or not truthy(c.vals[i]) {
+                    if i < 0 or not truthy(self.counters.vals[i]) {
                         self.counters.set(key, 0.0);
                     }
                     let v = if f[0] == "" { 1.0 } else { js_number(f[0]) };
                     let i = self.counters.find(key);
-                    add_at(mut self.counters, i, v * inv); // B-2026-10-15-14
+                    self.counters.vals[i] += v * inv;
                 }
             }
         }
@@ -1331,8 +1315,7 @@ impl Daemon {
 
     // process_metrics for one timer, filtered by calculatedTimerMetrics.
     fn timer_data(ref self, key: Str) -> Vec[Stat] {
-        let t = ref self.timers; // B-2026-10-14-70
-        let mut vals = t.vals[t.find(key)].clone();
+        let mut vals = self.timers.vals[self.timers.find(key)].clone();
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut d: Vec[Stat] = Vec.new();
         let n = vals.len();
@@ -1387,8 +1370,7 @@ impl Daemon {
             }
             let mid = n / 2;
             let median = if n % 2 == 1 { vals[mid] } else { (vals[mid - 1] + vals[mid]) / 2.0 };
-            let tcs = ref self.tcount; // B-2026-10-14-70
-            let tc = tcs.vals[tcs.find(key)];
+            let tc = self.tcount.vals[self.tcount.find(key)];
             d.push(Stat { name: "std".to_string(), v: (diffs / n as f64).sqrt() });
             d.push(Stat { name: "upper".to_string(), v: vals[n - 1] });
             d.push(Stat { name: "lower".to_string(), v: vals[0] });
@@ -1471,8 +1453,7 @@ impl Daemon {
         let mut text = String.new();
         let mut num: i64 = 0;
         for k in self.counters.order().iter() {
-            let c = ref self.counters; // B-2026-10-14-70
-            let v = c.vals[c.find(k)];
+            let v = self.counters.vals[self.counters.find(k)];
             let r = v / self.interval;
             if self.legacy {
                 text.push_str(f"{self.fmt(self.ns_counter, k, "")} {js_num(r)} {ts}\n");
@@ -1494,14 +1475,12 @@ impl Daemon {
             num += 1;
         }
         for k in self.gauges.order().iter() {
-            let g = ref self.gauges; // B-2026-10-14-70
-            let v = g.vals[g.find(k)];
+            let v = self.gauges.vals[self.gauges.find(k)];
             text.push_str(f"{self.fmt(self.ns_gauge, k, "")} {js_num(v)} {ts}\n");
             num += 1;
         }
         for k in self.sets.order().iter() {
-            let st = ref self.sets; // B-2026-10-14-70
-            let size = st.vals[st.find(k)].len();
+            let size = self.sets.vals[self.sets.find(k)].len();
             text.push_str(f"{self.fmt(self.ns_set, k, "count")} {size} {ts}\n");
             num += 1;
         }
@@ -1560,9 +1539,8 @@ impl Daemon {
         if self.del_gauges {
             for k in self.ttl.order().iter() {
                 let i = self.ttl.find(k);
-                add_at(mut self.ttl, i, -1.0); // B-2026-10-14-70, B-2026-10-15-14
-                let t = ref self.ttl;
-                if t.vals[i] < 1.0 {
+                self.ttl.vals[i] -= 1.0;
+                if self.ttl.vals[i] < 1.0 {
                     self.gauges.delete(k);
                     self.ttl.delete(k);
                 }

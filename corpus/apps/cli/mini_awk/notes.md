@@ -81,13 +81,13 @@ files, made by `oracle.py`, which is run from this directory after
 ## Edits from mini_awk.orig.kara to mini_awk.kara
 
 Compiler gaps, worked around:
-- B-2026-10-14-70: `karac check` refuses chained field receivers like
-  `self.prog.exprs[e]` (75 of them here), a legacy-codegen deferral that
-  the v2 surfaces don't need. The interpreter holds the program's
-  tables as its own fields instead of a `prog` field.
 - The parser struct is `AwkParser`, not `Parser`. `karac check` warns
   that `Parser` shadows a prelude type, and B-2026-10-15-8 and
   B-2026-10-15-41 show that such a shadow can break library code on v2.
+
+An earlier workaround for B-2026-10-14-70, which moved the program's
+tables out of the interpreter's `prog` field to avoid chained receivers
+like `self.prog.exprs[e]`, was dropped after the fix in 0bacd9912b.
 
 There were no author errors. The program matched expected.out on the
 first run on all three MIR surfaces.

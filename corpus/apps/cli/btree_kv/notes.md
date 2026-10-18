@@ -55,8 +55,8 @@ Compiler and library gaps, worked around and listed in the source header:
 - **B-2026-10-14-68:** `[DB, WAL, "kv.db.tmp"]` types the literal as
   `String` against the `Str` consts. The array is annotated
   `Array[Str, 3]`. I added this case to that row.
-- **B-2026-10-14-70:** check refuses `s.tree.pages.len()` with the legacy
-  chained-receiver lint. `Tree` has `npages()` and `leaf_len()`
-  accessors.
+
+An earlier workaround for B-2026-10-14-70 (accessor methods in place of
+`s.tree.pages.len()`) was dropped after the fix in 0bacd9912b.
 
 Written 2026-10-15 by the real-world apps thread; karac at fee58fc7e2.

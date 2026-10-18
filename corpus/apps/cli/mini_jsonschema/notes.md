@@ -52,9 +52,10 @@ Its output is byte-identical to `expected.out`.
 Compiler gaps:
 - B-2026-10-12-6: `f64.parse` and `i64.parse` return an `Option` on v2,
   not the spec's `Result`, so the number decoder matches `Some`/`None`.
-- B-2026-10-14-70: check refuses `v.a.nodes[..]` as a chained field
-  receiver in four places, so `resolve`, `errors` and `descend` bind
-  `let a = ref v.a;` first.
+
+`resolve`, `errors` and `descend` once bound `let a = ref v.a;` to
+avoid B-2026-10-14-70. That workaround was dropped after the fix in
+0bacd9912b.
 
 After that, the output matched `expected.out` on `__mir-run`,
 `__mir-llvm-run` and `__mir-llvm-asan` on the first run.

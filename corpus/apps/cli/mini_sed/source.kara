@@ -1595,10 +1595,6 @@ impl Out {
         self.missing = not ends_with_nl(s);
     }
 
-    fn copy(ref self) -> Out {
-        Out { text: self.text.clone(), missing: self.missing }
-    }
-
     fn line(mut ref self, s: Str, nl: bool) {
         if self.missing {
             self.text.push_str("\n");
@@ -2212,12 +2208,12 @@ fn run_sed(args: ref Vec[String], dir: Str) -> Result3 {
             r.bp = 0;
             if inplace {
                 let name = r.files[r.fi].clone();
-                let keep = r.out.copy();
+                let keep = Out { text: r.out.text.clone(), missing: r.out.missing };
                 r.out = new_out();
                 run_unit(sc, mut r);
                 if fs.exists(f"{dir}/{name}") {
-                    let o = r.out.copy();
-                    if let Err(e) = fs.write(f"{dir}/{name}", o.text) {
+                    let t = r.out.text.clone();
+                    if let Err(e) = fs.write(f"{dir}/{name}", t) {
                         r.err.push_str(f"sed: couldn't write {name}: {e}\n");
                         r.status = 4;
                     }
@@ -2231,16 +2227,15 @@ fn run_sed(args: ref Vec[String], dir: Str) -> Result3 {
     for k in 0..sc.wnames.len() {
         let name = sc.wnames[k].clone();
         if name != "/dev/stdout" {
-            let o = r.wouts[k].copy();
-            if let Err(e) = fs.write(f"{dir}/{name}", o.text) {
+            let t = r.wouts[k].text.clone();
+            if let Err(e) = fs.write(f"{dir}/{name}", t) {
                 r.err.push_str(f"sed: couldn't open file {name}: {e}\n");
                 r.status = 4;
             }
         }
     }
     let status = if r.exit != 0 { r.exit } else { r.status };
-    let o = r.out.copy();
-    Result3 { out: o.text, err: r.err.clone(), status: status }
+    Result3 { out: r.out.text.clone(), err: r.err.clone(), status: status }
 }
 
 // ------------------------------------------------------------ the files

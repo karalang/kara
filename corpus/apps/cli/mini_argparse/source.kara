@@ -1663,22 +1663,6 @@ impl Namespace {
         -1
     }
 
-    fn len(ref self) -> i64 {
-        self.keys.len()
-    }
-
-    fn key(ref self, i: i64) -> String {
-        self.keys[i].clone()
-    }
-
-    fn val(ref self, i: i64) -> Value {
-        self.vals[i].clone()
-    }
-
-    fn origin_of(ref self, i: i64) -> i64 {
-        self.origin[i]
-    }
-
     fn has(ref self, k: Str) -> bool {
         self.find(k) >= 0
     }
@@ -2231,8 +2215,8 @@ impl Parser {
                 Ok(p) => p,
                 Err(e) => return Err(Fail.Exit(e)),
             };
-            for i in 0..parsed.ns.len() {
-                st.ns.set(parsed.ns.key(i), parsed.ns.val(i));
+            for i in 0..parsed.ns.keys.len() {
+                st.ns.set(parsed.ns.keys[i], parsed.ns.vals[i].clone());
             }
             for i in 0..parsed.extras.len() {
                 st.extras.push(parsed.extras[i].clone());
@@ -2492,7 +2476,7 @@ impl Parser {
                 required.push(action_name(a).unwrap_or("None".to_string()));
             } else if let Value.Str(d) = a.default.clone() {
                 let at = st.ns.find(a.dest);
-                if at >= 0 and st.ns.origin_of(at) == ai {
+                if at >= 0 and st.ns.origin[at] == ai {
                     let v = self.get_value(a, d)?;
                     st.ns.set(a.dest, v);
                 }

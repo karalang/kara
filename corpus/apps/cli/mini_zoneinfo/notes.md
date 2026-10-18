@@ -55,9 +55,9 @@ only with the tzdata the files were taken from (2026c, Ubuntu 24.04).
 
 ## Edits from mini_zoneinfo.orig.kara to mini_zoneinfo.kara
 
-Compiler gaps:
-- B-2026-10-14-70: `z.after.std.clone()` is refused as a chained field
-  receiver, three times. The port reads it through a helper, `std_of`.
+The `std_of` helper that worked around B-2026-10-14-70 was dropped after
+the fix in 0bacd9912b; the port calls `z.after.std.clone()` directly, as
+the original did.
 
 Author errors:
 - A closure was written with a return type, `|a, b| -> i64 { .. }`,

@@ -19,9 +19,6 @@
 // - B-2026-10-18-10: a struct named `Client` has none of its methods
 //   found, because `karac check` dispatches that name to the library's
 //   HTTP client; the client struct is `PkgClient`.
-// - B-2026-10-14-70: `karac check` refuses chained field receivers such
-//   as `self.c.out`, so what main() was asked for lives in `PkgClient`
-//   itself rather than in a `Run` struct holding one.
 // - B-2026-10-15-15: there is no `rfind`; `last_index` finds the last
 //   slash or dot.
 
@@ -1085,11 +1082,6 @@ struct PkgClient {
     sent_notice: bool,
     collected: Vec[Frag],
     found_uninstalled: bool,
-    // What main() was asked for.
-    want: i64,
-    fragment_filter: Option[String],
-    maxdepth: i64,
-    queue: Vec[String],
 }
 
 fn split_path(s: Str) -> Vec[String] {
@@ -1130,10 +1122,6 @@ fn new_client() -> PkgClient {
         sent_notice: false,
         collected: Vec.new(),
         found_uninstalled: false,
-        want: 0,
-        fragment_filter: None,
-        maxdepth: 2000,
-        queue: Vec.new(),
     };
     c.pkgs.push(builtin_pkg("pkg-config"));
     c.pkgs.push(builtin_pkg("pkgconf"));
@@ -1880,8 +1868,17 @@ fn getenv(env: ref Vec[(String, String)], name: Str) -> Option[String] {
     None
 }
 
-// The rest of main(), once the options are read.
-impl PkgClient {
+// The rest of main(), once the options are read: everything that needs
+// the client, which sends its errors where the options say.
+struct Run {
+    c: PkgClient,
+    want: i64,
+    fragment_filter: Option[String],
+    maxdepth: i64,
+    queue: Vec[String],
+}
+
+impl Run {
     // pkgconf_queue_apply() and pkgconf_queue_validate(): a virtual
     // package requiring everything asked for, checked, then handed to
     // `then`.
@@ -1890,15 +1887,15 @@ impl PkgClient {
         w.realname = Some("virtual world package".to_string());
         w.is_virtual = true;
         for i in 0..self.queue.len() {
-            let d = self.expand(w.vars, self.queue[i]);
+            let d = self.c.expand(w.vars, self.queue[i]);
             parse_deps(mut w.required, d, 0);
         }
         if w.required.len() == 0 {
             return None;
         }
-        let i = self.add_pkg(w);
+        let i = self.c.add_pkg(w);
         let depth = if self.maxdepth == 0 { -1 } else { self.maxdepth };
-        if self.traverse(i, Visit.Verify, depth, 0) != 0 {
+        if self.c.traverse(i, Visit.Verify, depth, 0) != 0 {
             return None;
         }
         Some(i)
@@ -1911,7 +1908,7 @@ impl PkgClient {
     // The packages the world matched, in the order asked for.
     fn roots(ref self, w: i64) -> Vec[i64] {
         let mut out: Vec[i64] = Vec.new();
-        let world = self.pkgs[w].required.clone();
+        let world = self.c.pkgs[w].required.clone();
         for k in 0..world.len() {
             if let Some(m) = world[k].matched {
                 out.push(m);
@@ -1921,7 +1918,7 @@ impl PkgClient {
     }
 
     fn keep_cflag(ref self, f: ref Frag) -> bool {
-        if self.want & P_KEEP_SYSTEM_CFLAGS == 0 and self.has_system_dir(f) {
+        if self.want & P_KEEP_SYSTEM_CFLAGS == 0 and self.c.has_system_dir(f) {
             return false;
         }
         if let Some(filter) = self.fragment_filter {
@@ -1934,7 +1931,7 @@ impl PkgClient {
     }
 
     fn keep_lib(ref self, f: ref Frag) -> bool {
-        if self.want & P_KEEP_SYSTEM_LIBS == 0 and self.has_system_dir(f) {
+        if self.want & P_KEEP_SYSTEM_LIBS == 0 and self.c.has_system_dir(f) {
             return false;
         }
         if let Some(filter) = self.fragment_filter {
@@ -1955,7 +1952,7 @@ impl PkgClient {
     // The rendered flags, or None when the walk failed.
     fn flags_text(mut ref self, w: i64, libs: bool) -> Option[String] {
         let depth = self.depth();
-        let (list, e) = if libs { self.libs(w, depth) } else { self.cflags(w, depth) };
+        let (list, e) = if libs { self.c.libs(w, depth) } else { self.c.cflags(w, depth) };
         if e != 0 {
             return None;
         }
@@ -1972,7 +1969,7 @@ impl PkgClient {
     fn print_deps(mut ref self, deps: ref Vec[Dep]) {
         for i in 0..deps.len() {
             let line = dep_string(deps[i]);
-            self.out.push_str(f"{line}\n");
+            self.c.out.push_str(f"{line}\n");
         }
     }
 
@@ -1986,14 +1983,14 @@ impl PkgClient {
             return 0;
         }
         if self.want & P_UNINSTALLED != 0 {
-            self.found_uninstalled = false;
+            self.c.found_uninstalled = false;
             let w = match self.world() {
                 Some(w) => w,
                 None => return 1,
             };
             let depth = self.depth();
-            self.traverse(w, Visit.Uninstalled, depth, 0);
-            return if self.found_uninstalled { 0 } else { 1 };
+            self.c.traverse(w, Visit.Uninstalled, depth, 0);
+            return if self.c.found_uninstalled { 0 } else { 1 };
         }
         if let Some(prefix) = env_prefix {
             let w = match self.world() {
@@ -2008,7 +2005,7 @@ impl PkgClient {
             match self.flags_text(w, false) {
                 Some(t) => {
                     if t.len() > 0 {
-                        self.out.push_str(f"{prefix}_CFLAGS='{t}'\n");
+                        self.c.out.push_str(f"{prefix}_CFLAGS='{t}'\n");
                     }
                 }
                 None => return 1,
@@ -2016,7 +2013,7 @@ impl PkgClient {
             match self.flags_text(w, true) {
                 Some(t) => {
                     if t.len() > 0 {
-                        self.out.push_str(f"{prefix}_LIBS='{t}'\n");
+                        self.c.out.push_str(f"{prefix}_LIBS='{t}'\n");
                     }
                 }
                 None => return 1,
@@ -2031,7 +2028,7 @@ impl PkgClient {
             };
             let roots = self.roots(w);
             for r in roots {
-                let deps = self.pkgs[r].provides.clone();
+                let deps = self.c.pkgs[r].provides.clone();
                 self.print_deps(deps);
             }
         }
@@ -2041,14 +2038,14 @@ impl PkgClient {
                 Some(w) => w,
                 None => return 1,
             };
-            self.out.push_str("graph deptree {\n");
-            self.out.push_str("edge [color=blue len=7.5 fontname=Sans fontsize=8]\n");
-            self.out.push_str("node [fontname=Sans fontsize=8]\n");
+            self.c.out.push_str("graph deptree {\n");
+            self.c.out.push_str("edge [color=blue len=7.5 fontname=Sans fontsize=8]\n");
+            self.c.out.push_str("node [fontname=Sans fontsize=8]\n");
             let depth = self.depth();
-            if self.traverse(w, Visit.Digraph, depth, 0) != 0 {
+            if self.c.traverse(w, Visit.Digraph, depth, 0) != 0 {
                 return 1;
             }
-            self.out.push_str("}\n");
+            self.c.out.push_str("}\n");
         }
         if self.want & P_MODVERSION != 0 {
             self.want = self.want & ~(P_CFLAGS | P_LIBS);
@@ -2057,21 +2054,21 @@ impl PkgClient {
                 None => return 1,
             };
             for r in self.roots(w) {
-                if let Some(v) = self.pkgs[r].version.clone() {
-                    self.out.push_str(f"{v}\n");
+                if let Some(v) = self.c.pkgs[r].version.clone() {
+                    self.c.out.push_str(f"{v}\n");
                 }
             }
         }
         if self.want & P_PATH != 0 {
             self.want = self.want & ~(P_CFLAGS | P_LIBS);
-            self.flags = want_client | F_SKIP_ROOT_VIRTUAL;
+            self.c.flags = want_client | F_SKIP_ROOT_VIRTUAL;
             let w = match self.world() {
                 Some(w) => w,
                 None => return 1,
             };
             for r in self.roots(w) {
-                if let Some(f) = self.pkgs[r].filename.clone() {
-                    self.out.push_str(f"{f}\n");
+                if let Some(f) = self.c.pkgs[r].filename.clone() {
+                    self.c.out.push_str(f"{f}\n");
                 }
             }
         }
@@ -2082,15 +2079,15 @@ impl PkgClient {
                 None => return 1,
             };
             for r in self.roots(w) {
-                let vars = self.pkgs[r].vars.clone();
+                let vars = self.c.pkgs[r].vars.clone();
                 for t in vars {
-                    self.out.push_str(f"{t.key}\n");
+                    self.c.out.push_str(f"{t.key}\n");
                 }
             }
         }
         if let Some(name) = variable {
             self.want = self.want & ~(P_CFLAGS | P_LIBS);
-            self.flags = want_client | F_SKIP_ROOT_VIRTUAL;
+            self.c.flags = want_client | F_SKIP_ROOT_VIRTUAL;
             let w = match self.world() {
                 Some(w) => w,
                 None => return 1,
@@ -2098,14 +2095,14 @@ impl PkgClient {
             let roots = self.roots(w);
             for i in 0..roots.len() {
                 if i > 0 {
-                    self.out.push_str(" ");
+                    self.c.out.push_str(" ");
                 }
-                let vars = self.pkgs[roots[i]].vars.clone();
-                if let Some(v) = self.find_var(vars, name) {
-                    self.out.push_str(v);
+                let vars = self.c.pkgs[roots[i]].vars.clone();
+                if let Some(v) = self.c.find_var(vars, name) {
+                    self.c.out.push_str(v);
                 }
             }
-            self.out.push_str("\n");
+            self.c.out.push_str("\n");
         }
         if self.want & P_REQUIRES != 0 {
             self.want = self.want & ~(P_CFLAGS | P_LIBS);
@@ -2114,37 +2111,37 @@ impl PkgClient {
                 None => return 1,
             };
             for r in self.roots(w) {
-                let deps = self.pkgs[r].required.clone();
+                let deps = self.c.pkgs[r].required.clone();
                 self.print_deps(deps);
             }
         }
         if self.want & P_REQUIRES_PRIVATE != 0 {
             self.want = self.want & ~(P_CFLAGS | P_LIBS);
-            self.flags = want_client | F_SEARCH_PRIVATE;
+            self.c.flags = want_client | F_SEARCH_PRIVATE;
             let w = match self.world() {
                 Some(w) => w,
                 None => return 1,
             };
             for r in self.roots(w) {
-                let deps = self.pkgs[r].requires_private.clone();
+                let deps = self.c.pkgs[r].requires_private.clone();
                 self.print_deps(deps);
             }
-            self.flags = want_client;
+            self.c.flags = want_client;
         }
         if self.want & P_CFLAGS != 0 {
-            self.flags = want_client | F_SEARCH_PRIVATE;
+            self.c.flags = want_client | F_SEARCH_PRIVATE;
             let text = match self.world() {
                 Some(w) => self.flags_text(w, false),
                 None => None,
             };
             match text {
-                Some(t) => self.out.push_str(t),
+                Some(t) => self.c.out.push_str(t),
                 None => {
-                    self.out.push_str("\n");
+                    self.c.out.push_str("\n");
                     return 1;
                 }
             }
-            self.flags = want_client;
+            self.c.flags = want_client;
         }
         if self.want & P_LIBS != 0 {
             let text = match self.world() {
@@ -2152,15 +2149,15 @@ impl PkgClient {
                 None => None,
             };
             match text {
-                Some(t) => self.out.push_str(t),
+                Some(t) => self.c.out.push_str(t),
                 None => {
-                    self.out.push_str("\n");
+                    self.c.out.push_str("\n");
                     return 1;
                 }
             }
         }
         if self.want & (P_CFLAGS | P_LIBS) != 0 {
-            self.out.push_str("\n");
+            self.c.out.push_str("\n");
         }
         0
     }
@@ -2455,12 +2452,9 @@ fn pkg_config(env: ref Vec[(String, String)], argv: ref Vec[String]) -> Io {
         c.err.push_str("Please specify at least one package name on the command line.\n");
         return io_of(c, 1);
     }
-    c.want = want;
-    c.fragment_filter = fragment_filter;
-    c.maxdepth = maxdepth;
-    c.queue = queue;
-    let status = c.actions(env_prefix, variable, flags);
-    io_of(c, status)
+    let mut run = Run { c: c, want: want, fragment_filter: fragment_filter, maxdepth: maxdepth, queue: queue };
+    let status = run.actions(env_prefix, variable, flags);
+    io_of(run.c, status)
 }
 
 // ------------------------------------------------------------ the data

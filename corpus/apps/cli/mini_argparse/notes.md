@@ -65,16 +65,17 @@ One edit is for a new compiler gap:
   and the compiled program emitted no drop call
   (B-2026-10-15-48). The struct is now `ExclusiveGroup`.
 
-Two edits are for existing rows:
-- `parsed.ns.keys[i]` and `st.ns.origin[at]` are chained field receivers,
-  which check refuses (B-2026-10-14-70). They are now the `Namespace`
-  methods `key`, `val`, `len` and `origin_of`.
+One edit is for an existing row:
 - `if let Value.Str(s) = v { .. return .. }` followed by `Ok(v)` is
   called a use after move (B-2026-10-15-32). The match is now on
   `v.clone()`.
 
 The rest were author errors: the `Option[String]` parameters that are
 stored needed `own`.
+
+An earlier workaround for B-2026-10-14-70 (`Namespace` accessor methods in
+place of `parsed.ns.keys[i]` and `st.ns.origin[at]`) was dropped after the
+fix in 0bacd9912b.
 
 After that, `karac check` passed. The output matched expected.out on
 the first run on all three MIR surfaces; only the leak report above

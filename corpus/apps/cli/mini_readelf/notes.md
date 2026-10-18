@@ -71,11 +71,9 @@ bytes, so the committed `data/` is the input.
 
 ## Edits from mini_readelf.orig.kara to mini_readelf.kara
 
-Compiler gaps:
-- B-2026-10-14-70: `karac check` refuses `d.syms.rows[k]` and
-  `me.syms.rows.len()` with the legacy backend's chained-field lint,
-  though v2 runs them. Six uses now borrow the inner field first, as in
-  `let syms = ref d.syms;`.
+Six uses of `d.syms.rows[k]` and `me.syms.rows.len()` once borrowed the
+inner field first, a workaround for B-2026-10-14-70. It was dropped
+after the fix in 0bacd9912b.
 
 Author errors:
 - `dyn` is a reserved word, so the field holding the dynamic entries is

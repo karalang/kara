@@ -17,8 +17,6 @@
 // with the mirror's renderer and finds the same leaves.
 //
 // Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-14-70  check refuses `p.flags.pending.push(..)`, so Flags
-//                    has a `defer` method
 //   B-2026-10-15-20  check refuses reading a loop-body binding in an
 //                    early-return branch before a later method-call move,
 //                    so `cont` is cloned and the duplicate-key message
@@ -260,10 +258,6 @@ impl Flags {
         for x in gone2.iter() {
             self.rec.remove(x);
         }
-    }
-
-    fn defer(mut ref self, path: own Vec[String]) {
-        self.pending.push(path);
     }
 
     fn finalize(mut ref self) {
@@ -1093,9 +1087,8 @@ fn parse(src: Str) -> Result[Doc, String] {
                 if p.flags.is_set(cont, EXPLICIT) {
                     return Err(p.err(f"cannot redefine table {dotted(cont)} with a dotted key"));
                 }
-                // B-2026-10-14-70: `p.flags.pending.push(cont)` is refused by check;
-                // B-2026-10-15-20: so is moving `cont` after the read above
-                p.flags.defer(cont.clone());
+                // B-2026-10-15-20: check refuses moving `cont` after the read above
+                p.flags.pending.push(cont.clone());
             }
             let full = joined(header, k);
             let parent_path = prefix(full, full.len() - 1);

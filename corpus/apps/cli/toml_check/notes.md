@@ -38,9 +38,10 @@ one it prints the line and the reason it was rejected.
 There were no author errors. The original runs correctly on every MIR
 surface; only `karac check` refuses it.
 
+The `Flags.defer` workaround for B-2026-10-14-70 was dropped after the fix
+in 0bacd9912b; the parser calls `p.flags.pending.push(..)` again.
+
 Compiler gaps, worked around and listed in the source header:
-- **B-2026-10-14-70:** check refuses `p.flags.pending.push(cont)` with the
-  legacy chained-receiver lint, so `Flags` has a `defer` method.
 - **B-2026-10-15-20:** check says a binding declared inside the loop body
   "is moved inside a loop and not assigned again", when it is read in an
   early-return branch and then moved into a method's `own` parameter. The

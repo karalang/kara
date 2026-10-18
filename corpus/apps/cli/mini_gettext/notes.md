@@ -46,10 +46,9 @@ Run it from this directory after `mk.py` writes `data/`.
 
 ## Edits from mini_gettext.orig.kara to mini_gettext.kara
 
-Compiler gaps:
-- B-2026-10-14-70: `self.out.msgs` is refused as a chained field
-  receiver in `Po.add`. The port moves the loop into a helper,
-  `add_msg`, that takes `mut self.out`.
+An earlier workaround for B-2026-10-14-70 (an `add_msg` helper in place
+of the `self.out.msgs` loop in `Po.add`) was dropped after the fix in
+0bacd9912b.
 
 Author errors:
 - A `for` element of `lines_of(..)` was pushed into a `Vec` without

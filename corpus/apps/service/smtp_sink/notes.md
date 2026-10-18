@@ -26,10 +26,6 @@ Author errors (the diagnostics were right, or the spec says so):
 - `struct Server` shadows the prelude's `Server` (a warning); renamed `Smtp`.
 
 Compiler gaps, worked around and listed in the source header:
-- B-2026-10-14-70: `self.env.to.len()` and `self.env.to.push(..)` are
-  refused by `karac check` with the `chained_field_receiver` lint, a legacy
-  codegen deferral, though every v2 surface runs them. `Envelope` got
-  `count`, `add` and `list` methods.
 - B-2026-10-14-43: `match verb.as_str() { "EHLO" | "HELO" => .. }` is
   refused; the verb is matched as the `String` it is.
 - B-2026-10-12-7: `split`/`lines` give a `Vec[String]`, so no `.collect()`,
@@ -44,3 +40,7 @@ Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
 `TcpStream.connect` and `TcpListener.bind` take the `Str` address. Each
 of these is the original line again, and the app still matches on all
 four MIR surfaces.
+
+B-2026-10-14-70 was fixed in 0bacd9912b, so `Envelope` lost its `count`,
+`add` and `list` methods and the server calls `self.env.to.len()`,
+`self.env.to.push(..)` and `self.env.to.join(..)` as the original did.

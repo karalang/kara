@@ -22,7 +22,6 @@
 //
 // Workarounds for v2 gaps, each to revert once its row is fixed:
 //   B-2026-10-18-6   `let policy: Str = if .. { "-" } else { s.as_str() }` needs the annotation
-//   B-2026-10-14-70  `conntrack_list` binds `c.orig` before calling a method on its field
 
 const VERSION: Str = "v1.8.10 (legacy)";
 const DATE: Str = "Sat Oct 18 02:00:00 2026";
@@ -1263,9 +1262,7 @@ fn side(t: ref Flow, icmp_type: i64) -> String {
 
 fn conntrack_list(conns: ref Vec[Conn]) {
     for c in conns {
-        // B-2026-10-14-70: no chained field receiver; bind the inner field.
-        let orig = ref c.orig;
-        let proto = orig.proto.as_str();
+        let proto = c.orig.proto.as_str();
         let n = if proto == "tcp" { 6 } else if proto == "udp" { 17 } else { 1 };
         let mut s = f"{rpad(proto, 8)} {n} ";
         if proto == "tcp" {

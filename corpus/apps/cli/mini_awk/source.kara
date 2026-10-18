@@ -2755,12 +2755,7 @@ struct Reader {
 }
 
 struct Interp {
-    items: Vec[Item],
-    funcs: Vec[Func],
-    exprs: Vec[Ex],
-    stmts: Vec[St],
-    regexes: Vec[Re],
-    global_names: Vec[String],
+    prog: Program,
     dir: String,
     globals: Vec[Cell],
     garr: Vec[i64],
@@ -3054,7 +3049,7 @@ impl Interp {
         let mut st: i64 = 0;
         let mut from: i64 = 0;
         while from <= b.len() {
-            let (s, e) = search(self.regexes[r], b, from);
+            let (s, e) = search(self.prog.regexes[r], b, from);
             if s < 0 {
                 break;
             }
@@ -3133,8 +3128,8 @@ impl Interp {
         }
         match compile_regex(src) {
             Ok(re) => {
-                self.regexes.push(re);
-                let r = self.regexes.len() - 1;
+                self.prog.regexes.push(re);
+                let r = self.prog.regexes.len() - 1;
                 self.dyn_regex.insert(src.to_string(), r);
                 r
             }
@@ -3147,8 +3142,8 @@ impl Interp {
 
     // The regex an operand stands for: a literal, or a string's value.
     fn regex_of(mut ref self, e: i64) -> i64 {
-        if self.exprs[e].kind == E_REGEX {
-            return self.exprs[e].v;
+        if self.prog.exprs[e].kind == E_REGEX {
+            return self.prog.exprs[e].v;
         }
         let c = self.eval(e);
         let s = self.to_str(c);
@@ -3157,7 +3152,7 @@ impl Interp {
 
     fn find(ref self, r: i64, s: Str, from: i64) -> (i64, i64) {
         let b = to_bytes(s);
-        search(self.regexes[r], b, from)
+        search(self.prog.regexes[r], b, from)
     }
 
     fn fail(mut ref self, msg: Str) {
@@ -3169,19 +3164,19 @@ impl Interp {
     // ---------------------------------------------------------- assignment
 
     fn assign(mut ref self, lv: i64, c: own Cell) {
-        let kind = self.exprs[lv].kind;
-        let v = self.exprs[lv].v;
-        let local = self.exprs[lv].local;
+        let kind = self.prog.exprs[lv].kind;
+        let v = self.prog.exprs[lv].v;
+        let local = self.prog.exprs[lv].local;
         if kind == E_VAR {
             self.set_var(v, local, c);
         } else if kind == E_INDEX {
-            let subs = self.exprs[lv].args.clone();
+            let subs = self.prog.exprs[lv].args.clone();
             let key = self.subscript(subs);
             let id = self.arr_id(v, local);
             let slot = self.arrays[id].slot(key);
             self.arrays[id].vals[slot] = c;
         } else if kind == E_FIELD {
-            let a = self.exprs[lv].a;
+            let a = self.prog.exprs[lv].a;
             let k = to_int(to_num(self.eval(a)));
             let s = self.to_str(c);
             self.set_field(k, s);
@@ -3311,12 +3306,12 @@ impl Interp {
 
     // A global's slot by name, added when the program never named it.
     fn global_of(mut ref self, name: Str) -> (i64, bool) {
-        for i in 0..self.global_names.len() {
-            if self.global_names[i] == name {
+        for i in 0..self.prog.global_names.len() {
+            if self.prog.global_names[i] == name {
                 return (i, false);
             }
         }
-        self.global_names.push(name.to_string());
+        self.prog.global_names.push(name.to_string());
         self.globals.push(uninit());
         self.garr.push(-1);
         (self.globals.len() - 1, false)
@@ -3370,31 +3365,31 @@ impl Interp {
     }
 
     fn eval(mut ref self, e: i64) -> Cell {
-        let kind = self.exprs[e].kind;
-        let a = self.exprs[e].a;
-        let b = self.exprs[e].b;
-        let op = self.exprs[e].op;
+        let kind = self.prog.exprs[e].kind;
+        let a = self.prog.exprs[e].a;
+        let b = self.prog.exprs[e].b;
+        let op = self.prog.exprs[e].op;
         if kind == E_NUM {
-            return num_cell(self.exprs[e].n);
+            return num_cell(self.prog.exprs[e].n);
         }
         if kind == E_STR {
-            return str_cell(self.exprs[e].s.clone());
+            return str_cell(self.prog.exprs[e].s.clone());
         }
         if kind == E_REGEX {
-            let r = self.exprs[e].v;
+            let r = self.prog.exprs[e].v;
             let rec = self.rec.clone();
             let (s, _) = self.find(r, rec, 0);
             return bool_cell(s >= 0);
         }
         if kind == E_VAR {
-            let v = self.exprs[e].v;
-            let local = self.exprs[e].local;
+            let v = self.prog.exprs[e].v;
+            let local = self.prog.exprs[e].local;
             return self.get_var(v, local);
         }
         if kind == E_INDEX {
-            let v = self.exprs[e].v;
-            let local = self.exprs[e].local;
-            let subs = self.exprs[e].args.clone();
+            let v = self.prog.exprs[e].v;
+            let local = self.prog.exprs[e].local;
+            let subs = self.prog.exprs[e].args.clone();
             let key = self.subscript(subs);
             let id = self.arr_id(v, local);
             let slot = self.arrays[id].slot(key);
@@ -3422,7 +3417,7 @@ impl Interp {
         }
         if kind == E_COND {
             let c = self.eval(a);
-            return if truth(c) { self.eval(b) } else { self.eval(self.exprs[e].c) };
+            return if truth(c) { self.eval(b) } else { self.eval(self.prog.exprs[e].c) };
         }
         if kind == E_AND {
             if not truth(self.eval(a)) {
@@ -3488,9 +3483,9 @@ impl Interp {
             return str_cell(s);
         }
         if kind == E_IN {
-            let v = self.exprs[e].v;
-            let local = self.exprs[e].local;
-            let subs = self.exprs[e].args.clone();
+            let v = self.prog.exprs[e].v;
+            let local = self.prog.exprs[e].local;
+            let subs = self.prog.exprs[e].args.clone();
             let key = self.subscript(subs);
             let id = self.arr_id(v, local);
             return bool_cell(self.arrays[id].find(key) >= 0);
@@ -3541,18 +3536,18 @@ impl Interp {
     }
 
     fn call(mut ref self, e: i64) -> Cell {
-        let f = self.exprs[e].v;
-        let args = self.exprs[e].args.clone();
-        let nparams = self.funcs[f].nparams;
-        let body = self.funcs[f].body;
+        let f = self.prog.exprs[e].v;
+        let args = self.prog.exprs[e].args.clone();
+        let nparams = self.prog.funcs[f].nparams;
+        let body = self.prog.funcs[f].body;
         let mut cells: Vec[Cell] = Vec.new();
         let mut arrs: Vec[i64] = Vec.new();
         for i in 0..nparams {
             if i < args.len() {
                 let ae = args[i];
-                if self.exprs[ae].kind == E_VAR {
-                    let v = self.exprs[ae].v;
-                    let local = self.exprs[ae].local;
+                if self.prog.exprs[ae].kind == E_VAR {
+                    let v = self.prog.exprs[ae].v;
+                    let local = self.prog.exprs[ae].local;
                     let c = self.get_var(v, local);
                     let mut id: i64 = -1;
                     if self.has_arr(v, local) or c.kind == C_UNINIT {
@@ -3601,17 +3596,17 @@ impl Interp {
     }
 
     fn builtin(mut ref self, e: i64) -> Cell {
-        let name = self.exprs[e].s.clone();
-        let args = self.exprs[e].args.clone();
+        let name = self.prog.exprs[e].s.clone();
+        let args = self.prog.exprs[e].args.clone();
         let n = args.len();
         if name == "length" {
             if n == 0 {
                 return num_cell(self.rec.len() as f64);
             }
             let ae = args[0];
-            if self.exprs[ae].kind == E_VAR {
-                let v = self.exprs[ae].v;
-                let local = self.exprs[ae].local;
+            if self.prog.exprs[ae].kind == E_VAR {
+                let v = self.prog.exprs[ae].v;
+                let local = self.prog.exprs[ae].local;
                 if self.has_arr(v, local) {
                     let id = self.arr_id(v, local);
                     return num_cell(self.arrays[id].keys.len() as f64);
@@ -3657,11 +3652,11 @@ impl Interp {
         if name == "split" {
             let s = self.arg_str(args, 0);
             let ae = args[1];
-            let v = self.exprs[ae].v;
-            let local = self.exprs[ae].local;
+            let v = self.prog.exprs[ae].v;
+            let local = self.prog.exprs[ae].local;
             let parts = if n > 2 {
-                if self.exprs[args[2]].kind == E_REGEX {
-                    let r = self.exprs[args[2]].v;
+                if self.prog.exprs[args[2]].kind == E_REGEX {
+                    let r = self.prog.exprs[args[2]].v;
                     self.split_regex(to_bytes(s), r)
                 } else {
                     let fs = self.arg_str(args, 2);
@@ -3777,7 +3772,7 @@ impl Interp {
         let mut count: i64 = 0;
         let mut last_end: i64 = -1;
         while pos <= t.len() {
-            let (s, e) = search(self.regexes[r], t, pos);
+            let (s, e) = search(self.prog.regexes[r], t, pos);
             if s < 0 {
                 break;
             }
@@ -3831,11 +3826,11 @@ impl Interp {
     // ---------------------------------------------------------- statements
 
     fn exec(mut ref self, s: i64) -> i64 {
-        let kind = self.stmts[s].kind;
-        let a = self.stmts[s].a;
-        let d = self.stmts[s].d;
+        let kind = self.prog.stmts[s].kind;
+        let a = self.prog.stmts[s].a;
+        let d = self.prog.stmts[s].d;
         if kind == S_BLOCK {
-            let body = self.stmts[s].body.clone();
+            let body = self.prog.stmts[s].body.clone();
             for i in 0..body.len() {
                 let sig = self.exec(body[i]);
                 if sig != SIG_NONE {
@@ -3849,7 +3844,7 @@ impl Interp {
             return if self.unwinding { SIG_EXIT } else { SIG_NONE };
         }
         if kind == S_PRINT or kind == S_PRINTF {
-            let args = self.stmts[s].args.clone();
+            let args = self.prog.stmts[s].args.clone();
             let mut text = String.new();
             if kind == S_PRINT {
                 if args.len() == 0 {
@@ -3874,10 +3869,10 @@ impl Interp {
                 }
                 text = self.format(fmt, vals);
             }
-            let mode = self.stmts[s].dest_mode;
+            let mode = self.prog.stmts[s].dest_mode;
             let mut dest = String.new();
             if mode > 0 {
-                let dc = self.eval(self.stmts[s].dest);
+                let dc = self.eval(self.prog.stmts[s].dest);
                 dest = self.to_str(dc);
             }
             if self.unwinding {
@@ -3894,7 +3889,7 @@ impl Interp {
             if truth(c) {
                 return self.exec(d);
             }
-            let other = self.stmts[s].e;
+            let other = self.prog.stmts[s].e;
             if other >= 0 {
                 return self.exec(other);
             }
@@ -3924,9 +3919,9 @@ impl Interp {
             return SIG_NONE;
         }
         if kind == S_FOR {
-            let init = self.stmts[s].c;
-            let cond = self.stmts[s].b;
-            let step = self.stmts[s].e;
+            let init = self.prog.stmts[s].c;
+            let cond = self.prog.stmts[s].b;
+            let step = self.prog.stmts[s].e;
             if init >= 0 {
                 let sig = self.exec(init);
                 if sig != SIG_NONE {
@@ -3960,10 +3955,10 @@ impl Interp {
             return SIG_NONE;
         }
         if kind == S_FORIN {
-            let v = self.stmts[s].v;
-            let local = self.stmts[s].local;
-            let v2 = self.stmts[s].v2;
-            let local2 = self.stmts[s].local2;
+            let v = self.prog.stmts[s].v;
+            let local = self.prog.stmts[s].local;
+            let v2 = self.prog.stmts[s].v2;
+            let local2 = self.prog.stmts[s].local2;
             let id = self.arr_id(v2, local2);
             let keys = self.arrays[id].keys.clone();
             for i in 0..keys.len() {
@@ -4007,9 +4002,9 @@ impl Interp {
             return if self.unwinding { SIG_EXIT } else { SIG_RETURN };
         }
         if kind == S_DELETE {
-            let v = self.stmts[s].v;
-            let local = self.stmts[s].local;
-            let subs = self.stmts[s].args.clone();
+            let v = self.prog.stmts[s].v;
+            let local = self.prog.stmts[s].local;
+            let subs = self.prog.stmts[s].args.clone();
             let id = self.arr_id(v, local);
             if subs.len() == 0 {
                 self.arrays[id].clear();
@@ -4025,9 +4020,9 @@ impl Interp {
     // ---------------------------------------------------------- the run
 
     fn run_items(mut ref self, phase: i64) {
-        for i in 0..self.items.len() {
-            if self.items[i].kind == phase {
-                let action = self.items[i].action;
+        for i in 0..self.prog.items.len() {
+            if self.prog.items[i].kind == phase {
+                let action = self.prog.items[i].action;
                 let sig = self.exec(action);
                 if sig == SIG_EXIT or self.unwinding {
                     return;
@@ -4038,13 +4033,13 @@ impl Interp {
 
     // One record through the main items; false when the run must stop.
     fn run_record(mut ref self) -> bool {
-        for i in 0..self.items.len() {
-            let kind = self.items[i].kind;
+        for i in 0..self.prog.items.len() {
+            let kind = self.prog.items[i].kind;
             if kind != P_MAIN and kind != P_RANGE {
                 continue;
             }
-            let pat = self.items[i].pat;
-            let pat2 = self.items[i].pat2;
+            let pat = self.prog.items[i].pat;
+            let pat2 = self.prog.items[i].pat2;
             let mut matched = true;
             if kind == P_RANGE {
                 if self.range_on[i] {
@@ -4067,7 +4062,7 @@ impl Interp {
             if not matched {
                 continue;
             }
-            let action = self.items[i].action;
+            let action = self.prog.items[i].action;
             let sig = if action < 0 {
                 let mut text = self.rec.clone();
                 text.push_str(self.global_str(V_ORS));
@@ -4089,8 +4084,8 @@ impl Interp {
     fn run(mut ref self) {
         self.run_items(P_BEGIN);
         let mut needs_input = false;
-        for i in 0..self.items.len() {
-            if self.items[i].kind != P_BEGIN {
+        for i in 0..self.prog.items.len() {
+            if self.prog.items[i].kind != P_BEGIN {
                 needs_input = true;
             }
         }
@@ -4501,12 +4496,7 @@ fn run_awk(args: ref Vec[String], dir: Str) -> RunResult {
     let nglobals = prog.global_names.len();
     let nitems = prog.items.len();
     let mut it = Interp {
-        items: prog.items,
-        funcs: prog.funcs,
-        exprs: prog.exprs,
-        stmts: prog.stmts,
-        regexes: prog.regexes,
-        global_names: prog.global_names,
+        prog: prog,
         dir: dir.to_string(),
         globals: Vec.new(),
         garr: Vec.new(),

@@ -55,14 +55,13 @@ directory after `mk.py` writes `data/`.
 
 ## Edits from mini_ini.orig.kara to mini_ini.kara
 
-Two edits:
-- **For an existing row.** `karac check` refuses the chained field
-  receivers `self.defaults.vals[i]` and `self.defaults.keys.len()` with
-  the legacy codegen's `chained_field_receiver` error
-  (B-2026-10-14-70). They are now the methods `Section.val_at` and
-  `Section.len`.
+One edit:
 - **For a warning.** The two `Vec.remove` results in `Section.remove`
   are discarded with `let _ =`.
+
+An earlier workaround for B-2026-10-14-70 (the methods `Section.val_at`
+and `Section.len` in place of `self.defaults.vals[i]` and
+`self.defaults.keys.len()`) was dropped after the fix in 0bacd9912b.
 
 All three MIR surfaces run the original.
 

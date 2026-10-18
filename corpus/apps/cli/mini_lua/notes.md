@@ -54,9 +54,11 @@ Author errors (the diagnostics were right):
   `ref Vec[u8]` take `Slice[u8]`, and the matcher stores
   `s.bytes().to_vec()`.
 
+The `Ast` once had its own `add_*` methods so the parser would not call
+`self.ast.exprs.push(e)`, a workaround for B-2026-10-14-70. They were
+dropped after the fix in 0bacd9912b.
+
 Compiler gaps, worked around and cited in the source:
-- B-2026-10-14-70: `karac check` refuses chained field receivers
-  (`self.ast.exprs.push(e)`), so the `Ast` has its own `add_*` methods.
 - B-2026-10-15-31 (new): `karac check` keeps a `ref t` borrow live past a
   `return`. The parser read the token once with `let t = ref
   self.toks[self.p]` and returned from each branch. It now reads the

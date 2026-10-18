@@ -1022,10 +1022,6 @@ fn rule_info_fromutc(a: ref After, ts: i64, year: i64) -> (Tti, bool) {
     (if isdst { a.dst.clone() } else { a.std.clone() }, fold)
 }
 
-fn std_of(a: ref After) -> Tti {
-    a.std.clone()
-}
-
 // ------------------------------------------------------------ the zone
 
 #[derive(Clone)]
@@ -1201,7 +1197,7 @@ fn find_trans(z: ref Zone, ts: i64, fold: i64) -> Tti {
         if z.after.is_rule {
             return rule_info(z.after, ts, year_of(ts), fold);
         }
-        return std_of(z.after);
+        return z.after.std.clone();
     }
     let idx = bisect_right(lt, ts) - 1;
     z.ttinfos[idx].clone()
@@ -1218,7 +1214,7 @@ fn from_utc(z: ref Zone, ts: i64) -> (Tti, bool) {
         return rule_info_fromutc(z.after, ts, year_of(ts));
     }
     if n == 0 {
-        return (std_of(z.after), false);
+        return (z.after.std.clone(), false);
     }
     let idx = bisect_right(z.trans_utc, ts);
     let mut prev = before_tti(z);
@@ -1228,7 +1224,7 @@ fn from_utc(z: ref Zone, ts: i64) -> (Tti, bool) {
         tti = z.ttinfos[idx - 1].clone();
     } else if ts > z.trans_utc[n - 1] {
         prev = z.ttinfos[n - 1].clone();
-        tti = std_of(z.after);
+        tti = z.after.std.clone();
     }
     let shift = prev.utcoff - tti.utcoff;
     let fold = shift > ts - z.trans_utc[idx - 1];

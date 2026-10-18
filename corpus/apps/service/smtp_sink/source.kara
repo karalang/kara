@@ -14,9 +14,6 @@
 // replies and pairs them with what it sent.
 //
 // Workarounds for compiler gaps (revert when the row is fixed):
-//   B-2026-10-14-70  check refuses `self.env.to.len()` (chained field
-//                    receiver, a legacy codegen deferral): Envelope has
-//                    count/add/list methods
 //   B-2026-10-14-43  a string literal pattern can't match a Str: the verb
 //                    is matched as a String
 //   B-2026-10-12-7   split / lines are eager Vec[String]: no collect, and
@@ -32,14 +29,6 @@ const MAX_SIZE: i64 = 600;
 enum Phase { Connected, Greeted, InMail, InRcpt }
 
 struct Envelope { from: String, to: Vec[String] }
-
-// `self.env.to.len()` is refused by check (B-2026-10-14-70), so the
-// envelope answers for its recipient list.
-impl Envelope {
-    fn count(self) -> i64 { self.to.len() }
-    fn add(mut ref self, addr: own String) { self.to.push(addr); }
-    fn list(self) -> String { self.to.join(", ") }
-}
 
 struct Smtp { phase: Phase, helo: String, env: Envelope, next_id: i64, stored: Vec[String] }
 
@@ -102,10 +91,10 @@ impl Smtp {
                 if not addr.ends_with(f"@{DOMAIN}") {
                     return f"550 5.1.1 <{addr}>: Recipient address rejected: not local\r\n";
                 }
-                if self.env.count() >= MAX_RCPT {
+                if self.env.to.len() >= MAX_RCPT {
                     return "452 4.5.3 Error: too many recipients\r\n".to_string();
                 }
-                self.env.add(addr);
+                self.env.to.push(addr);
                 self.phase = Phase.InRcpt;
                 "250 2.1.5 Ok\r\n".to_string()
             }
@@ -139,7 +128,7 @@ impl Smtp {
         self.next_id += 1;
         let mut text = f"Return-Path: <{self.env.from}>\r\n";
         text.push_str(f"Received: from {self.helo} by {DOMAIN} with ESMTP id {id}\r\n");
-        text.push_str(f"Delivered-To: {self.env.list()}\r\n");
+        text.push_str(f"Delivered-To: {self.env.to.join(", ")}\r\n");
         text.push_str(body);
         let path = f"{MAILDIR}/new/{id}.eml";
         match fs.write(path, text) {

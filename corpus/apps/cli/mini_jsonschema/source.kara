@@ -1387,8 +1387,6 @@ struct V {
 
 // A local `$ref`: `#` or a JSON pointer into the root schema.
 fn resolve(v: ref V, r: Str) -> i64 {
-    // `a` rather than `v.a.nodes[..]`: check refuses the chained receiver (B-2026-10-14-70)
-    let a = ref v.a;
     let mut node = v.root;
     if r == "#" {
         return node;
@@ -1396,10 +1394,10 @@ fn resolve(v: ref V, r: Str) -> i64 {
     let segs = split_on(slice_from(r, 2), b'/');
     for raw in segs {
         let seg = replace_all(replace_all(raw, "~1", "/"), "~0", "~");
-        if a.nodes[node].kind == K_OBJ {
-            node = get(a, node, seg);
+        if v.a.nodes[node].kind == K_OBJ {
+            node = get(v.a, node, seg);
         } else {
-            node = a.nodes[node].kids[py_int(seg).unwrap_or(0)];
+            node = v.a.nodes[node].kids[py_int(seg).unwrap_or(0)];
         }
         if node < 0 {
             return -1;
@@ -1427,8 +1425,7 @@ fn replace_all(s: Str, from: Str, to: Str) -> String {
 // jsonschema's iter_errors and descend: each keyword of the schema, in the
 // schema's order, with the keyword stamped onto its errors.
 fn errors(v: ref V, p: mut ref ErrPool, inst: i64, schema: i64) -> Vec[i64] {
-    let a = ref v.a;
-    let sn = ref a.nodes[schema];
+    let sn = ref v.a.nodes[schema];
     if sn.kind == K_BOOL {
         if sn.b {
             return Vec.new();
@@ -1465,8 +1462,7 @@ fn errors(v: ref V, p: mut ref ErrPool, inst: i64, schema: i64) -> Vec[i64] {
 
 fn descend(v: ref V, p: mut ref ErrPool, inst: i64, schema: i64, path: Option[Step], schema_path: Option[Step]) -> Vec[i64] {
     let errs = errors(v, p, inst, schema);
-    let a = ref v.a;
-    if a.nodes[schema].kind == K_BOOL {
+    if v.a.nodes[schema].kind == K_BOOL {
         return errs;
     }
     for e in errs {
